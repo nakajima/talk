@@ -85,6 +85,7 @@ pub struct InferencePass<'a> {
     ast: &'a mut AST<NameResolved>,
     types_by_node: FxHashMap<NodeID, Ty>,
     snapshots: Vec<TypeSnapshot>,
+    #[allow(dead_code)]
     protocols: FxHashMap<TypeId, TypeDef<Ty>>,
 
     pub(crate) session: TypeSession<SCCResolved>,
@@ -103,18 +104,6 @@ impl<'a> InferencePass<'a> {
             snapshots: Default::default(),
             protocols: Default::default(),
         };
-
-        let type_ids: Vec<TypeId> = pass
-            .session
-            .phase
-            .type_constructors
-            .keys()
-            .copied()
-            .collect();
-        for id in type_ids {
-            let mut wants = Wants::default();
-            pass.define_type(id, Level(1), &mut wants);
-        }
 
         // Handle protocol conformances
         let mut conformances = std::mem::take(&mut pass.session.phase.conformances);
@@ -178,179 +167,6 @@ impl<'a> InferencePass<'a> {
         conformance: &mut Conformance,
         wants: &mut Wants,
     ) {
-        let Some(TypeDef {
-            fields:
-                TypeFields::Protocol {
-                    method_requirements,
-                    ..
-                },
-            ..
-        }) = self.protocols.get(protocol_id).cloned()
-        else {
-            panic!("didn't get protocol");
-        };
-
-        let Some(TypeDef {
-            fields: TypeFields::Struct { methods, .. } | TypeFields::Enum { methods, .. },
-            ..
-        }) = self.session.phase.type_constructors.get(type_id).cloned()
-        else {
-            panic!(
-                "didn't get conforming type with id: {type_id:?}, {:?}",
-                self.session.phase.type_constructors.get(type_id)
-            );
-        };
-
-        for (label, req) in method_requirements {
-            let req = req.clone();
-            let Some(method) = methods.get(&label).cloned() else {
-                self.ast.diagnostics.push(AnyDiagnostic::Typing(Diagnostic {
-                    path: self.ast.path.clone(),
-                    span: conformance.span,
-                    kind: TypeError::MissingConformanceRequirement(format!(
-                        "{} not implemented: {methods:?}",
-                        label
-                    )),
-                }));
-
-                continue;
-            };
-
-            let Some(method_entry) = self.session.term_env.lookup(&method.symbol) else {
-                panic!("didn't find method for req: {req:?}");
-            };
-
-            // Record witness for later dispatch:
-            conformance.methods.insert(label.clone(), method.symbol);
-
-            // Build expected type from requirement (+Self for instance methods):
-            let self_ty = Ty::Struct(
-                Some(Name::Resolved(Symbol::Type(*type_id), "".into())),
-                Box::new(Row::Var(self.session.vars.row_metas.next_id())),
-            );
-            let expected = {
-                let mut ps = Vec::with_capacity(1 + req.params.len());
-                ps.push(self_ty);
-                ps.extend(req.params.clone());
-                curry(ps, req.ret.clone())
-            };
-
-            // Instantiate actual witness type:
-            let mut substitutions = UnificationSubstitutions::default();
-            let actual = method_entry.clone().solver_instantiate(
-                &mut self.session,
-                Level(1),
-                &mut substitutions,
-                wants,
-                conformance.span,
-            );
-
-            // Check equality:
-            wants.equals(
-                actual,
-                expected,
-                ConstraintCause::Internal,
-                conformance.span,
-            );
-        }
-    }
-
-    #[instrument(skip(self))]
-    fn define_type(&mut self, type_id: TypeId, level: Level, wants: &mut Wants) {
-        let mut type_def = self
-            .session
-            .phase
-            .type_constructors
-            .remove(&type_id)
-            .expect("didn't find type for type id");
-
-        let foralls = type_def
-            .generics
-            .iter()
-            .map(|(_, g)| {
-                let Ty::Param(id) = g else {
-                    unreachable!();
-                };
-
-                ForAll::Ty(*id)
-            })
-            .collect();
-
-        let methods = match &mut type_def.fields {
-            TypeFields::Struct {
-                properties,
-                methods,
-                ..
-            } => {
-                // Build the struct row first
-                let row = properties.iter().fold(
-                    Row::Empty(TypeDefKind::Struct),
-                    |mut acc, (label, property)| {
-                        acc = Row::Extend {
-                            row: Box::new(acc),
-                            label: label.clone(),
-                            ty: property.ty_repr.clone(),
-                        };
-                        acc
-                    },
-                );
-
-                let struct_ty = Ty::Struct(Some(type_def.name.clone()), Box::new(row.clone()));
-                let scheme = Scheme::new(foralls, vec![], struct_ty);
-                self.session
-                    .term_env
-                    .promote(Symbol::Type(type_id), EnvEntry::Scheme(scheme));
-
-                methods
-            }
-            TypeFields::Enum {
-                variants, methods, ..
-            } => {
-                // CLOSED row: label -> payload(Params). No row meta, no HasField predicates.
-                let row =
-                    variants
-                        .iter()
-                        .fold(Row::Empty(TypeDefKind::Enum), |acc, (label, variant)| {
-                            let payload = if variant.fields.is_empty() {
-                                Ty::Void
-                            } else if variant.fields.len() == 1 {
-                                variant.fields[0].clone()
-                            } else {
-                                Ty::Tuple(variant.fields.clone())
-                            };
-                            Row::Extend {
-                                row: Box::new(acc),
-                                label: label.clone(),
-                                ty: payload,
-                            }
-                        });
-
-                let sum_ty = Ty::Sum(Some(type_def.name.clone()), Box::new(row.clone()));
-
-                // Export the nominal enum type scheme: ∀… . Opt<…>
-                self.session.term_env.promote(
-                    Symbol::Type(type_id),
-                    EnvEntry::Scheme(Scheme::new(foralls.clone(), vec![], sum_ty.clone())),
-                );
-
-                methods
-            }
-
-            _ => unimplemented!(),
-        };
-
-        for method in methods.values_mut() {
-            // Don't generalize yet - let the method body inference determine the actual return type
-            let method_ty = curry(method.params.clone(), method.ret.clone());
-            let entry = EnvEntry::Mono(method_ty);
-
-            self.session.term_env.promote(method.symbol, entry);
-        }
-
-        self.session
-            .phase
-            .type_constructors
-            .insert(type_id, type_def);
     }
 
     #[instrument(skip(self))]
@@ -438,7 +254,7 @@ impl<'a> InferencePass<'a> {
                     };
                 }
 
-                Ty::Struct(None, Box::new(row))
+                Ty::Record(Box::new(row))
             }
             _ => unreachable!(),
         }
@@ -486,11 +302,12 @@ impl<'a> InferencePass<'a> {
                                     path: self.ast.path.clone(),
                                     span: has_field.span,
                                     kind: TypeError::MemberNotFound(
-                                        if kind == TypeDefKind::Struct {
-                                            Ty::Struct(None, Box::new(has_field.row.clone()))
-                                        } else {
-                                            Ty::Sum(None, Box::new(has_field.row.clone()))
-                                        },
+                                        Ty::Void,
+                                        // if kind == TypeDefKind::Struct {
+                                        //     Ty::Struct(None, Box::new(has_field.row.clone()))
+                                        // } else {
+                                        //     Ty::Enum(None, Box::new(has_field.row.clone()))
+                                        // },
                                         has_field.label.to_string(),
                                     ),
                                 }));
@@ -501,7 +318,7 @@ impl<'a> InferencePass<'a> {
                                     path: self.ast.path.clone(),
                                     span: has_field.span,
                                     kind: TypeError::MemberNotFound(
-                                        Ty::Struct(None, Box::new(has_field.row.clone())),
+                                        Ty::Record(Box::new(has_field.row.clone())),
                                         has_field.label.to_string(),
                                     ),
                                 }));
@@ -660,7 +477,7 @@ impl<'a> InferencePass<'a> {
                     foralls.push(ForAll::Ty(param_id));
                     substitutions.ty.insert(*id, Ty::Param(param_id));
                 }
-                Ty::Struct(None, box Row::Var(id)) => {
+                Ty::Record(box Row::Var(id)) => {
                     let level = self
                         .session
                         .meta_levels
@@ -927,28 +744,9 @@ impl<'a> InferencePass<'a> {
         kind: TypeDefKind,
     ) -> Row {
         match expected {
-            Ty::Struct(_, box row) => row.clone(),
-            Ty::Sum(_, box row) => row.clone(),
+            Ty::Record(box row) => row.clone(),
             _ => {
-                let row = Box::new(self.session.new_row_meta_var(level));
-                let rho = if kind == TypeDefKind::Struct {
-                    Ty::Struct(None, row)
-                } else {
-                    Ty::Sum(None, row)
-                };
-
-                wants.equals(
-                    expected.clone(),
-                    rho.clone(),
-                    ConstraintCause::Pattern(id),
-                    span,
-                );
-
-                let (Ty::Struct(_, row) | Ty::Sum(_, row)) = rho else {
-                    unreachable!()
-                };
-
-                *row
+                todo!()
             }
         }
     }
@@ -1066,44 +864,45 @@ impl<'a> InferencePass<'a> {
                     }
                 };
 
-                let type_def = self
-                    .session
-                    .phase
-                    .type_constructors
-                    .get(id)
-                    .cloned()
-                    .expect("didn't get type def");
+                ty
 
-                match &type_def.fields {
-                    TypeFields::Struct { initializers, .. } => {
-                        // TODO: handle multiple initializers
-                        let (_, initializer) = initializers.first().expect("no initializer found");
+                // let type_def = self
+                //     .session
+                //     .phase
+                //     .type_constructors
+                //     .get(id)
+                //     .expect("didn't get type def");
 
-                        // Apply the same substitutions to params that we applied to properties
-                        let ty = initializer
-                            .params
-                            .iter()
-                            .collect::<Vec<_>>()
-                            .into_iter()
-                            .rfold(ty, |acc, p| Ty::Constructor {
-                                type_id: *id,
-                                param: Box::new(p.clone()),
-                                ret: Box::new(acc),
-                            });
+                //         match &type_def.fields {
+                //             TypeFields::Struct { initializers, .. } => {
+                //                 // TODO: handle multiple initializers
+                //                 let (_, initializer) = initializers.first().expect("no initializer found");
 
-                        instantiate_ty(ty, &substitutions, level)
-                    }
-                    TypeFields::Enum { .. } => ty,
-                    _ => todo!(),
-                }
+                //                 // Apply the same substitutions to params that we applied to properties
+                //                 let ty = initializer
+                //                     .params
+                //                     .iter()
+                //                     .collect::<Vec<_>>()
+                //                     .into_iter()
+                //                     .rfold(ty, |acc, p| Ty::Constructor {
+                //                         type_id: *id,
+                //                         param: Box::new(p.clone()),
+                //                         ret: Box::new(acc),
+                //                     });
+
+                //                 instantiate_ty(ty, &substitutions, level)
+                //             }
+                //             TypeFields::Enum { .. } => ty,
+                //             _ => todo!(),
+                //         }
             }
             ExprKind::RowVariable(..) => todo!(),
 
             _ => todo!(),
         };
 
-        // record the type for this expression node
-        self.types_by_node.insert(expr.id, ty.clone());
+        // // record the type for this expression node
+        // self.types_by_node.insert(expr.id, ty.clone());
         ty
     }
 
@@ -1155,7 +954,7 @@ impl<'a> InferencePass<'a> {
             };
         }
 
-        Ty::Struct(None, Box::new(row))
+        Ty::Record(Box::new(row))
     }
 
     #[instrument(skip(self))]
@@ -1391,7 +1190,7 @@ pub fn collect_meta(ty: &Ty, out: &mut FxHashSet<Ty>) {
                 collect_meta(item, out);
             }
         }
-        Ty::Struct(_, box row) | Ty::Sum(_, box row) => match row {
+        Ty::Record(box row) => match row {
             Row::Empty(..) => (),
             Row::Var(..) => {
                 out.insert(ty.clone());
@@ -1399,9 +1198,10 @@ pub fn collect_meta(ty: &Ty, out: &mut FxHashSet<Ty>) {
             Row::Param(..) => (),
             Row::Extend { row, ty, .. } => {
                 collect_meta(ty, out);
-                collect_meta(&Ty::Struct(None, row.clone()), out);
+                collect_meta(&Ty::Record(row.clone()), out);
             }
         },
+        Ty::Nominal { id, type_args } => (),
         Ty::Constructor { param, ret, .. } => {
             collect_meta(param, out);
             collect_meta(ret, out);

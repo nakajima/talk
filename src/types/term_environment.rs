@@ -72,6 +72,10 @@ impl TermEnv {
         self.symbols.get(sym)
     }
 
+    pub fn lookup_mut(&mut self, sym: &Symbol) -> Option<&mut EnvEntry> {
+        self.symbols.get_mut(sym)
+    }
+
     pub fn promote(&mut self, sym: Symbol, entry: EnvEntry) {
         self.symbols.insert(sym, entry);
     }

@@ -1,12 +1,10 @@
 use crate::{
-    label::Label,
     node_id::NodeID,
     span::Span,
     types::{
-        constraints::{call::Call, member::Member},
+        constraints::{call::Call, equals::Equals, has_field::HasField, member::Member},
         row::Row,
         scheme::Predicate,
-        ty::Ty,
         type_operations::{UnificationSubstitutions, apply, apply_row},
     },
 };
@@ -24,23 +22,6 @@ pub enum ConstraintCause {
     CallTypeArg(NodeID),
     Conformance { node: NodeID, requirement: NodeID },
     Internal,
-}
-
-#[derive(Debug, Clone)]
-pub struct Equals {
-    pub lhs: Ty,
-    pub rhs: Ty,
-    pub cause: ConstraintCause,
-    pub span: Span,
-}
-
-#[derive(Debug, Clone)]
-pub struct HasField {
-    pub row: Row,
-    pub label: Label,
-    pub ty: Ty,
-    pub cause: ConstraintCause,
-    pub span: Span,
 }
 
 #[derive(Debug, Clone)]

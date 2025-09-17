@@ -11,6 +11,9 @@ pub enum TypeFields<T> {
         methods: IndexMap<Label, Method<T>>,
         properties: IndexMap<Label, Property<T>>,
     },
+    Extension {
+        methods: IndexMap<Label, Method<T>>,
+    },
     Protocol {
         initializers: IndexMap<Name, Initializer<T>>,
         methods: IndexMap<Label, Method<T>>,

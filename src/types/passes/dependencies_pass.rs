@@ -21,9 +21,10 @@ use crate::{
     },
     span::Span,
     types::{
-        passes::{inference_pass::Inferenced, type_header_resolve_pass::HeadersResolved},
+        passes::{inference_pass::Inferenced, type_resolve_pass::HeadersResolved},
         ty::Ty,
-        type_session::{ASTTyRepr, TypeDef, TypeSession, TypingPhase},
+        type_catalog::TypeCatalog,
+        type_session::{TypeDef, TypeSession, TypingPhase},
     },
 };
 
@@ -35,13 +36,12 @@ pub struct Conformance {
     pub span: Span,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct SCCResolved {
     pub graph: DiGraphMap<Binder, ()>,
     pub annotation_map: FxHashMap<Binder, NodeID>,
     pub rhs_map: FxHashMap<Binder, NodeID>,
-    pub type_constructors: FxHashMap<TypeId, TypeDef<Ty>>,
-    pub protocols: FxHashMap<TypeId, TypeDef<Ty>>,
+    pub type_catalog: TypeCatalog,
     pub conformances: FxHashMap<TypeId, FxHashMap<TypeId, Conformance>>,
 }
 
@@ -106,15 +106,12 @@ impl DependenciesPass {
             root.drive(&mut pass);
         }
 
-        let type_constructors = std::mem::take(&mut session.phase.type_constructors);
-        let protocols = std::mem::take(&mut session.phase.protocols);
-
+        let type_catalog = std::mem::take(&mut session.phase.type_catalog);
         let phase = SCCResolved {
             graph: pass.graph,
             annotation_map: pass.annotation_map,
             rhs_map: pass.rhs_map,
-            type_constructors,
-            protocols,
+            type_catalog,
             conformances: pass.conformances,
         };
 
@@ -254,7 +251,7 @@ pub mod tests {
         types::{
             passes::{
                 dependencies_pass::{Binder, Conformance, DependenciesPass, SCCResolved},
-                type_header_resolve_pass::tests::type_header_resolve_pass,
+                type_resolve_pass::tests::type_header_resolve_pass,
             },
             type_session::TypeSession,
         },

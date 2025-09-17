@@ -23,7 +23,7 @@ pub mod tests {
             parameter::Parameter,
             pattern::{Pattern, PatternKind},
             stmt::StmtKind,
-            type_annotation::{TypeAnnotation, TypeAnnotationKind},
+            type_annotation::TypeAnnotationKind,
         },
         parsing::parser_tests::tests::parse,
         span::Span,

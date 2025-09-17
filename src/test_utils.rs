@@ -1,12 +1,10 @@
 #[macro_export]
 macro_rules! fxhashmap {
-    ($($k:expr => $v:expr),* $(,)?) => {
-        ($k, $v) => {
-            let mut m = rustc_hash::FxHashMap::default();
-            $( m.insert($k, $v); )*
-            m
-        }
-    };
+    ($($k:expr => $v:expr),* $(,)?) => {{
+        let mut m = rustc_hash::FxHashMap::default();
+        $( m.insert($k, $v); )*
+        m
+    }};
 }
 
 #[macro_export]

@@ -2,8 +2,8 @@ use crate::{
     label::Label,
     span::Span,
     types::{
-        constraint::{Constraint, ConstraintCause, Equals, HasField},
-        constraints::{call::Call, member::Member},
+        constraint::{Constraint, ConstraintCause},
+        constraints::{call::Call, equals::Equals, has_field::HasField, member::Member},
         row::Row,
         ty::Ty,
     },

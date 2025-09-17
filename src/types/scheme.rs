@@ -3,9 +3,9 @@ use crate::{
     node_kinds::type_annotation::TypeAnnotation,
     span::Span,
     types::{
-        constraint::{Constraint, ConstraintCause, HasField},
-        constraints::{call::Call, member::Member},
-        passes::inference_pass::{InferencePass, Meta},
+        constraint::{Constraint, ConstraintCause},
+        constraints::{call::Call, has_field::HasField, member::Member},
+        passes::inference_pass::Meta,
         row::{Row, RowParamId},
         ty::{Level, Ty, TypeParamId},
         type_operations::{
@@ -206,7 +206,7 @@ impl Scheme {
 
     pub fn instantiate_with_args<P: TypingPhase>(
         &self,
-        args: &[TypeAnnotation],
+        _args: &[TypeAnnotation],
         session: &mut TypeSession<P>,
         level: Level,
         wants: &mut Wants,
@@ -214,7 +214,7 @@ impl Scheme {
     ) -> Ty {
         // Map each quantified meta id to a fresh meta at this use-site level
         let mut substitutions = InstantiationSubstitutions::default();
-        let (ty_foralls, row_foralls): (Vec<ForAll>, Vec<ForAll>) = self
+        let (_ty_foralls, row_foralls): (Vec<ForAll>, Vec<ForAll>) = self
             .foralls
             .iter()
             .partition(|fa| matches!(fa, ForAll::Ty(_)));

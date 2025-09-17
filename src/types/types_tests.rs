@@ -3,20 +3,15 @@ pub mod tests {
     use crate::{
         ast::AST,
         diagnostic::Diagnostic,
-        name::Name,
-        name_resolution::{
-            name_resolver::NameResolved,
-            symbol::{Symbol, TypeId},
-        },
+        name_resolution::{name_resolver::NameResolved, symbol::TypeId},
         types::{
             passes::{
                 dependencies_pass::tests::resolve_dependencies,
                 inference_pass::{InferencePass, Inferenced},
             },
-            row::Row,
-            ty::{Level, Ty},
+            ty::Ty,
             type_error::TypeError,
-            type_session::{TypeDefKind, TypeSession},
+            type_session::TypeSession,
         },
     };
 
@@ -682,7 +677,7 @@ pub mod tests {
         "#,
         );
 
-        let Ty::Struct(_, row) = ty(1, &ast, &session) else {
+        let Ty::Record(row) = ty(1, &ast, &session) else {
             panic!("did not get record");
         };
 
@@ -707,7 +702,7 @@ pub mod tests {
         ",
         );
 
-        let Ty::Struct(_, row) = ty(1, &ast, &session) else {
+        let Ty::Record(row) = ty(1, &ast, &session) else {
             panic!("Didn't get row");
         };
 
@@ -1023,13 +1018,12 @@ pub mod tests {
         ",
         );
 
-        let Ty::Struct(Some(Name::Resolved(..)), row) = ty(1, &ast, &session) else {
-            panic!("didn't get struct");
-        };
-
         assert_eq!(
-            row.close(),
-            [("age".into(), Ty::Int), ("height".into(), Ty::Float)].into()
+            ty(1, &ast, &session),
+            Ty::Nominal {
+                id: TypeId(1),
+                type_args: vec![]
+            }
         );
     }
 
@@ -1240,34 +1234,17 @@ pub mod tests {
 
         assert_eq!(
             ty(1, &ast, &session),
-            Ty::Sum(
-                Some(Name::Resolved(Symbol::Type(TypeId(1)), "Fizz".into())),
-                Box::new(Row::Extend {
-                    row: Box::new(Row::Extend {
-                        row: Box::new(Row::Empty(TypeDefKind::Enum)),
-                        label: "foo".into(),
-                        ty: Ty::Void
-                    }),
-                    label: "bar".into(),
-                    ty: Ty::Void
-                })
-            )
+            Ty::Nominal {
+                id: TypeId(1),
+                type_args: vec![]
+            }
         );
-
         assert_eq!(
             ty(2, &ast, &session),
-            Ty::Sum(
-                Some(Name::Resolved(Symbol::Type(TypeId(1)), "Fizz".into())),
-                Box::new(Row::Extend {
-                    row: Box::new(Row::Extend {
-                        row: Box::new(Row::Empty(TypeDefKind::Enum)),
-                        label: "foo".into(),
-                        ty: Ty::Void
-                    }),
-                    label: "bar".into(),
-                    ty: Ty::Void
-                })
-            )
+            Ty::Nominal {
+                id: TypeId(1),
+                type_args: vec![]
+            }
         );
     }
 
@@ -1284,21 +1261,20 @@ pub mod tests {
         ",
         );
 
-        let expected = Ty::Sum(
-            Some(Name::Resolved(Symbol::Type(TypeId(1)), "Fizz".into())),
-            Box::new(Row::Extend {
-                row: Box::new(Row::Extend {
-                    row: Box::new(Row::Empty(TypeDefKind::Enum)),
-                    label: "foo".into(),
-                    ty: Ty::Tuple(vec![Ty::Int, Ty::Bool]),
-                }),
-                label: "bar".into(),
-                ty: Ty::Float,
-            }),
+        assert_eq!(
+            ty(1, &ast, &session),
+            Ty::Nominal {
+                id: TypeId(1),
+                type_args: vec![]
+            }
         );
-
-        assert_eq!(ty(1, &ast, &session), expected);
-        assert_eq!(ty(2, &ast, &session), expected);
+        assert_eq!(
+            ty(2, &ast, &session),
+            Ty::Nominal {
+                id: TypeId(1),
+                type_args: vec![]
+            }
+        );
     }
 
     #[test]
@@ -1315,29 +1291,26 @@ pub mod tests {
         ",
         );
 
-        fn sum_ty(ty: Ty) -> Ty {
-            Ty::Sum(
-                Some(Name::Resolved(Symbol::Type(TypeId(1)), "Opt".into())),
-                Box::new(Row::Extend {
-                    row: Box::new(Row::Extend {
-                        row: Box::new(Row::Empty(TypeDefKind::Enum)),
-                        label: "some".into(),
-                        ty,
-                    }),
-                    label: "none".into(),
-                    ty: Ty::Void,
-                }),
-            )
-        }
-
-        assert_eq!(ty(1, &ast, &session), sum_ty(Ty::Int));
-        assert_eq!(ty(2, &ast, &session), sum_ty(Ty::Float));
+        assert_eq!(
+            ty(1, &ast, &session),
+            Ty::Nominal {
+                id: TypeId(1),
+                type_args: vec![Ty::Int]
+            }
+        );
+        assert_eq!(
+            ty(2, &ast, &session),
+            Ty::Nominal {
+                id: TypeId(1),
+                type_args: vec![Ty::Float]
+            }
+        );
         assert_eq!(
             ty(3, &ast, &session),
-            sum_ty(Ty::UnificationVar {
-                id: 9.into(),
-                level: Level(1)
-            })
+            Ty::Nominal {
+                id: TypeId(1),
+                type_args: vec![]
+            }
         );
     }
 

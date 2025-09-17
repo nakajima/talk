@@ -85,8 +85,8 @@ fn occurs_in(id: UnificationVarId, ty: &Ty) -> bool {
         Ty::UnificationVar { id: mid, .. } => *mid == id,
         Ty::Func(a, b) => occurs_in(id, a) || occurs_in(id, b),
         Ty::Tuple(items) => items.iter().any(|t| occurs_in(id, t)),
-        Ty::Struct(_, row) => occurs_in_row(id, row),
-        Ty::Sum(_, row) => occurs_in_row(id, row),
+        Ty::Record(row) => occurs_in_row(id, row),
+        Ty::Nominal { .. } => false,
         Ty::Hole(..) => false,
         Ty::Param(..) => false,
         Ty::Rigid(..) => false,
@@ -101,7 +101,7 @@ fn row_occurs(target: RowMetaId, row: &Row, subs: &mut UnificationSubstitutions)
         Row::Var(id) => subs.canon_row(id) == subs.canon_row(target),
         Row::Extend { row, ty, .. } => {
             row_occurs(target, &row, subs)
-                || matches!(apply(ty.clone(), subs), Ty::Struct(_, r) if row_occurs(target, &r, subs))
+                || matches!(apply(ty.clone(), subs), Ty::Record(r) if row_occurs(target, &r, subs))
         }
     }
 }
@@ -165,7 +165,7 @@ fn unify_rows(
                 };
             }
             if row_occurs(tail_id, &acc, subs) {
-                return Err(TypeError::OccursCheck(Ty::Struct(None, Box::new(acc))));
+                return Err(TypeError::OccursCheck(Ty::Record(Box::new(acc))));
             }
 
             let can = subs.canon_row(tail_id);
@@ -181,14 +181,14 @@ fn unify_rows(
             }
             RowTail::Empty => {
                 return Err(TypeError::InvalidUnification(
-                    Ty::Struct(None, Box::new(lhs.clone())),
-                    Ty::Struct(None, Box::new(rhs.clone())),
+                    Ty::Record(Box::new(lhs.clone())),
+                    Ty::Record(Box::new(rhs.clone())),
                 ));
             }
             RowTail::Param(_) => {
                 return Err(TypeError::InvalidUnification(
-                    Ty::Struct(None, Box::new(lhs.clone())),
-                    Ty::Struct(None, Box::new(rhs.clone())),
+                    Ty::Record(Box::new(lhs.clone())),
+                    Ty::Record(Box::new(rhs.clone())),
                 ));
             }
         }
@@ -202,14 +202,14 @@ fn unify_rows(
             }
             RowTail::Empty => {
                 return Err(TypeError::InvalidUnification(
-                    Ty::Struct(None, Box::new(lhs.clone())),
-                    Ty::Struct(None, Box::new(rhs.clone())),
+                    Ty::Record(Box::new(lhs.clone())),
+                    Ty::Record(Box::new(rhs.clone())),
                 ));
             }
             RowTail::Param(_) => {
                 return Err(TypeError::InvalidUnification(
-                    Ty::Struct(None, Box::new(lhs.clone())),
-                    Ty::Struct(None, Box::new(rhs.clone())),
+                    Ty::Record(Box::new(lhs.clone())),
+                    Ty::Record(Box::new(rhs.clone())),
                 ));
             }
         }
@@ -226,8 +226,8 @@ fn unify_rows(
         (RowTail::Param(a), RowTail::Param(b)) if a == b => {}
         (RowTail::Param(_), RowTail::Param(_)) => {
             return Err(TypeError::InvalidUnification(
-                Ty::Struct(None, Box::new(lhs.clone())),
-                Ty::Struct(None, Box::new(rhs.clone())),
+                Ty::Record(Box::new(lhs.clone())),
+                Ty::Record(Box::new(rhs.clone())),
             ));
         }
         _ => {}
@@ -285,12 +285,27 @@ pub(super) fn unify(
             let ret = unify(constructor_ret, func_ret, substitutions, vars)?;
             Ok(param || ret)
         }
-        (Ty::Sum(lhs_name, lhs_row), Ty::Sum(rhs_name, rhs_row)) => {
-            if lhs_name != rhs_name {
+        (
+            Ty::Nominal {
+                id: lhs_id,
+                type_args: lhs_type_args,
+            },
+            Ty::Nominal {
+                id: rhs_id,
+                type_args: rhs_type_args,
+            },
+        ) => {
+            if lhs_id != rhs_id {
                 return Err(TypeError::InvalidUnification(lhs, rhs));
             }
 
-            unify_rows(TypeDefKind::Enum, lhs_row, rhs_row, substitutions, vars)
+            let mut made_progress = false;
+
+            for (lhs, rhs) in lhs_type_args.iter().zip(rhs_type_args) {
+                made_progress |= unify(lhs, rhs, substitutions, vars)?;
+            }
+
+            Ok(made_progress)
         }
         (Ty::Func(lhs_param, lhs_ret), Ty::Func(rhs_param, rhs_ret)) => {
             let param = unify(lhs_param, rhs_param, substitutions, vars)?;
@@ -330,7 +345,7 @@ pub(super) fn unify(
 
             Ok(true)
         }
-        (Ty::Struct(_, lhs_row), Ty::Struct(_, rhs_row)) => {
+        (Ty::Record(lhs_row), Ty::Record(rhs_row)) => {
             unify_rows(TypeDefKind::Struct, lhs_row, rhs_row, substitutions, vars)
         }
         (_, Ty::Rigid(_)) | (Ty::Rigid(_), _) => Err(TypeError::InvalidUnification(lhs, rhs)),
@@ -385,8 +400,8 @@ pub(super) fn substitute(ty: Ty, substitutions: &FxHashMap<Ty, Ty>) -> Ty {
                 .map(|t| substitute(t, substitutions))
                 .collect(),
         ),
-        Ty::Struct(name, row) => Ty::Struct(name, Box::new(substitute_row(*row, substitutions))),
-        Ty::Sum(name, row) => Ty::Sum(name, Box::new(substitute_row(*row, substitutions))),
+        Ty::Record(row) => Ty::Record(Box::new(substitute_row(*row, substitutions))),
+        Ty::Nominal { .. } => ty,
     }
 }
 
@@ -449,8 +464,8 @@ pub(super) fn apply(ty: Ty, substitutions: &mut UnificationSubstitutions) -> Ty 
             Box::new(apply(*ret, substitutions)),
         ),
         Ty::Tuple(items) => Ty::Tuple(items.into_iter().map(|t| apply(t, substitutions)).collect()),
-        Ty::Struct(name, row) => Ty::Struct(name, Box::new(apply_row(*row, substitutions))),
-        Ty::Sum(name, row) => Ty::Sum(name, Box::new(apply_row(*row, substitutions))),
+        Ty::Record(row) => Ty::Record(Box::new(apply_row(*row, substitutions))),
+        Ty::Nominal { .. } => ty,
     }
 }
 
@@ -525,9 +540,7 @@ pub(super) fn instantiate_ty(
                 .map(|t| instantiate_ty(t, substitutions, level))
                 .collect(),
         ),
-        Ty::Struct(name, row) => {
-            Ty::Struct(name, Box::new(instantiate_row(*row, substitutions, level)))
-        }
-        Ty::Sum(name, row) => Ty::Sum(name, Box::new(instantiate_row(*row, substitutions, level))),
+        Ty::Record(row) => Ty::Record(Box::new(instantiate_row(*row, substitutions, level))),
+        Ty::Nominal { .. } => ty,
     }
 }

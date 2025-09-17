@@ -4,7 +4,7 @@ use crate::{
     name::Name,
     name_resolution::{
         name_resolver::NameResolved,
-        symbol::{Symbol, SynthesizedId},
+        symbol::{Symbol, SynthesizedId, TypeId},
     },
     node::Node,
     node_id::NodeID,
@@ -13,6 +13,7 @@ use crate::{
         decl::{Decl, DeclKind},
         func::Func,
         func_signature::FuncSignature,
+        type_annotation::TypeAnnotationKind,
     },
     span::Span,
     types::{
@@ -20,11 +21,12 @@ use crate::{
             Associated, Initializer, Method, MethodRequirement, Property, TypeFields, Variant,
         },
         kind::Kind,
-        type_session::{ASTTyRepr, Raw, TypeDef, TypeDefKind, TypeSession},
+        type_session::{ASTTyRepr, Raw, TypeDef, TypeDefKind, TypeExtension, TypeSession},
     },
 };
 use derive_visitor::{Drive, Visitor};
 use indexmap::IndexMap;
+use rustc_hash::FxHashMap;
 
 // Helper for n-ary arrows when all args are the same:
 pub fn arrow_n(arg: Kind, n: usize, ret: Kind) -> Kind {
@@ -36,15 +38,27 @@ pub fn arrow_n(arg: Kind, n: usize, ret: Kind) -> Kind {
 
 #[derive(Debug, Visitor)]
 #[visitor(Decl(enter))]
-pub struct TypeHeaderDeclPass<'a> {
+pub struct TypeHeaderPass<'a> {
     session: &'a mut TypeSession<Raw>,
+    extensions: FxHashMap<TypeId, Vec<TypeExtension<ASTTyRepr>>>,
 }
 
-impl<'a> TypeHeaderDeclPass<'a> {
+impl<'a> TypeHeaderPass<'a> {
     pub fn drive(session: &'a mut TypeSession<Raw>, ast: &AST<NameResolved>) {
-        let mut instance = TypeHeaderDeclPass { session };
+        let mut instance = TypeHeaderPass {
+            session,
+            extensions: Default::default(),
+        };
+
         for root in ast.roots.iter() {
             root.drive(&mut instance);
+        }
+
+        let mut extensions = std::mem::take(&mut instance.extensions);
+        for (id, type_constructor) in instance.session.phase.type_constructors.iter_mut() {
+            if let Some(extensions) = extensions.remove(id) {
+                type_constructor.extensions = extensions
+            }
         }
     }
 
@@ -61,8 +75,9 @@ impl<'a> TypeHeaderDeclPass<'a> {
                 self.session.phase.type_constructors.insert(
                     *decl_id,
                     TypeDef {
+                        extensions: Default::default(),
                         name: name.clone(),
-                        span: decl.span,
+                        node_id: decl.id,
                         kind: arrow_n(Kind::Type, generics.len(), Kind::Type),
                         def: TypeDefKind::Struct,
                         generics: generics
@@ -72,6 +87,38 @@ impl<'a> TypeHeaderDeclPass<'a> {
                         fields,
                     },
                 );
+            }
+            DeclKind::Extend {
+                name: name @ Name::Resolved(Symbol::Type(type_id), _),
+                body: Block { body, .. },
+                conformances,
+                ..
+            } => {
+                let TypeFields::Extension { methods } =
+                    self.collect_fields(name, decl.id, decl.span, TypeDefKind::Extension, body)
+                else {
+                    unreachable!()
+                };
+
+                let protocol_ids = conformances.iter().filter_map(|c| {
+                    if let TypeAnnotationKind::Nominal {
+                        name: Name::Resolved(Symbol::Type(type_id), _),
+                        ..
+                    } = &c.kind
+                    {
+                        Some(*type_id)
+                    } else {
+                        None
+                    }
+                });
+                self.extensions
+                    .entry(*type_id)
+                    .or_default()
+                    .push(TypeExtension {
+                        node_id: decl.id,
+                        conformances: protocol_ids.collect(),
+                        methods,
+                    });
             }
             DeclKind::Protocol {
                 name: name @ Name::Resolved(Symbol::Type(decl_id), _),
@@ -84,8 +131,9 @@ impl<'a> TypeHeaderDeclPass<'a> {
                 self.session.phase.protocols.insert(
                     *decl_id,
                     TypeDef {
+                        extensions: Default::default(),
                         name: name.clone(),
-                        span: decl.span,
+                        node_id: decl.id,
                         kind: arrow_n(Kind::Type, generics.len(), Kind::Type),
                         def: TypeDefKind::Protocol,
                         generics: generics
@@ -107,8 +155,9 @@ impl<'a> TypeHeaderDeclPass<'a> {
                 self.session.phase.type_constructors.insert(
                     *decl_id,
                     TypeDef {
+                        extensions: Default::default(),
                         name: name.clone(),
-                        span: decl.span,
+                        node_id: decl.id,
                         kind: arrow_n(Kind::Type, generics.len(), Kind::Type),
                         def: TypeDefKind::Enum,
                         generics: generics
@@ -300,6 +349,7 @@ impl<'a> TypeHeaderDeclPass<'a> {
         }
 
         match type_kind {
+            TypeDefKind::Extension => TypeFields::Extension { methods },
             TypeDefKind::Struct => TypeFields::Struct {
                 initializers,
                 methods,
@@ -336,15 +386,15 @@ pub mod tests {
         types::{
             fields::{Associated, Initializer, MethodRequirement, Property, TypeFields, Variant},
             kind::Kind,
-            passes::type_header_decl_pass::TypeHeaderDeclPass,
-            type_session::{ASTTyRepr, Raw, TypeDef, TypeDefKind, TypeSession},
+            passes::type_headers_pass::TypeHeaderPass,
+            type_session::{ASTTyRepr, Raw, TypeDef, TypeDefKind, TypeExtension, TypeSession},
         },
     };
 
     pub fn type_header_decl_pass(code: &'static str) -> (AST<NameResolved>, TypeSession<Raw>) {
         let resolved = resolve(code);
         let mut session = TypeSession::<Raw>::default();
-        TypeHeaderDeclPass::drive(&mut session, &resolved);
+        TypeHeaderPass::drive(&mut session, &resolved);
         (resolved, session)
     }
 
@@ -362,9 +412,10 @@ pub mod tests {
         assert_eq_diff!(
             *session.phase.type_constructors.get(&TypeId(1)).unwrap(),
             TypeDef::<ASTTyRepr> {
+                extensions: Default::default(),
                 name: Name::Resolved(Symbol::Type(TypeId(1)), "Person".into()),
                 kind: Kind::Type,
-                span: Span::ANY,
+                node_id: NodeID::ANY,
                 def: TypeDefKind::Struct,
                 generics: Default::default(),
                 fields: TypeFields::Struct {
@@ -390,6 +441,42 @@ pub mod tests {
     }
 
     #[test]
+    fn struct_extension() {
+        let session = type_header_decl_pass(
+            "
+        struct Person {}
+        extend Person {}
+        ",
+        )
+        .1;
+
+        assert_eq_diff!(
+            *session.phase.type_constructors.get(&TypeId(1)).unwrap(),
+            TypeDef::<ASTTyRepr> {
+                extensions: vec![TypeExtension::<ASTTyRepr> {
+                    node_id: NodeID::ANY,
+                    conformances: Default::default(),
+                    methods: Default::default()
+                }],
+                name: Name::Resolved(Symbol::Type(TypeId(1)), "Person".into()),
+                kind: Kind::Type,
+                node_id: NodeID::ANY,
+                def: TypeDefKind::Struct,
+                generics: Default::default(),
+                fields: TypeFields::Struct {
+                    initializers: indexmap! {
+                        Name::Resolved(Symbol::Synthesized(SynthesizedId(1)), "init".into()) => Initializer { params: vec![
+                            ASTTyRepr::SelfType(Name::Resolved(TypeId(1).into(), "Person".into()), NodeID::ANY, Span::ANY),
+                        ] }
+                    },
+                    methods: Default::default(),
+                    properties: Default::default()
+                }
+            }
+        );
+    }
+
+    #[test]
     fn generic_struct() {
         let session = type_header_decl_pass(
             "
@@ -407,12 +494,13 @@ pub mod tests {
         assert_eq_diff!(
             *session.phase.type_constructors.get(&TypeId(1)).unwrap(),
             TypeDef::<ASTTyRepr> {
+                extensions: Default::default(),
                 name: Name::Resolved(Symbol::Type(TypeId(1)), "Wrapper".into()),
                 kind: Kind::Arrow {
                     in_kind: Box::new(Kind::Type),
                     out_kind: Box::new(Kind::Type)
                 },
-                span: Span::ANY,
+                node_id: NodeID::ANY,
                 def: TypeDefKind::Struct,
                 generics: crate::indexmap!(Name::Resolved(Symbol::Type(TypeId(2)), "T".into()) => ASTTyRepr::Generic(GenericDecl {
                     id: NodeID::ANY,
@@ -455,6 +543,7 @@ pub mod tests {
         assert_eq_diff!(
             *session.phase.type_constructors.get(&TypeId(1)).unwrap(),
             TypeDef::<ASTTyRepr> {
+                extensions: Default::default(),
                 name: Name::Resolved(Symbol::Type(TypeId(1)), "Wrapper".into()),
                 kind: Kind::Arrow {
                     in_kind: Box::new(Kind::Type),
@@ -464,7 +553,7 @@ pub mod tests {
                     }
                     .into()
                 },
-                span: Span::ANY,
+                node_id: NodeID::ANY,
                 def: TypeDefKind::Struct,
                 generics: crate::indexmap!(
                   Name::Resolved(Symbol::Type(TypeId(2)), "T".into()) =>  ASTTyRepr::Generic(GenericDecl {
@@ -521,9 +610,10 @@ pub mod tests {
         assert_eq_diff!(
             *session.phase.type_constructors.get(&TypeId(1)).unwrap(),
             TypeDef::<ASTTyRepr> {
+                extensions: Default::default(),
                 name: Name::Resolved(Symbol::Type(TypeId(1)), "Fizz".into()),
                 kind: Kind::Type,
-                span: Span::ANY,
+                node_id: NodeID::ANY,
                 def: TypeDefKind::Enum,
                 generics: Default::default(),
                 fields: TypeFields::Enum {
@@ -562,9 +652,10 @@ pub mod tests {
         assert_eq_diff!(
             *session.phase.protocols.get(&TypeId(1)).unwrap(),
             TypeDef {
+                extensions: Default::default(),
                 name: Name::Resolved(Symbol::Type(TypeId(1)), "Fizz".into()),
                 kind: Kind::Type,
-                span: Span::ANY,
+                node_id: NodeID::ANY,
                 def: TypeDefKind::Protocol,
                 generics: Default::default(),
                 fields: TypeFields::Protocol {

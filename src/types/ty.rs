@@ -4,7 +4,7 @@ use crate::{
     name::Name,
     name_resolution::symbol::TypeId,
     node_id::NodeID,
-    types::{row::Row, scheme::ForAll},
+    types::{row::Row, scheme::ForAll, type_catalog::Nominal},
 };
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord)]
@@ -69,10 +69,13 @@ pub enum Ty {
 
     Tuple(Vec<Ty>),
 
-    // Nominal types
-    Struct(Option<Name>, Box<Row>),
-    Sum(Option<Name>, Box<Row>), // Row for variants
-                                 // Variant(Label, Box<Ty>),     // Attached value can be either Record or Tuple
+    Record(Box<Row>),
+
+    // Nominal types (we look up their information from the TypeCatalog)
+    Nominal {
+        id: TypeId,
+        type_args: Vec<Ty>,
+    },
 }
 
 #[allow(non_upper_case_globals)]
@@ -103,10 +106,11 @@ impl Ty {
                     result.extend(item.collect_foralls());
                 }
             }
-            Ty::Struct(_, box row) | Ty::Sum(_, box row) => match row {
+            Ty::Nominal { .. } => (),
+            Ty::Record(box row) => match row {
                 Row::Empty(..) => (),
                 Row::Extend { row, ty, .. } => {
-                    result.extend(Ty::Struct(None, row.clone()).collect_foralls());
+                    result.extend(Ty::Record(row.clone()).collect_foralls());
                     result.extend(ty.collect_foralls());
                 }
                 Row::Param(id) => {
@@ -128,22 +132,14 @@ impl Ty {
             Ty::Constructor { param, ret, .. } => param.contains_var() || ret.contains_var(),
             Ty::Func(ty, ty1) => ty.contains_var() || ty1.contains_var(),
             Ty::Tuple(items) => items.iter().any(|i| i.contains_var()),
-            Ty::Sum(name, box variants) => match variants {
-                Row::Empty(..) => false,
+            Ty::Record(box row) => match row {
                 Row::Extend { row, ty, .. } => {
-                    Ty::Struct(name.clone(), row.clone()).contains_var() || ty.contains_var()
+                    Ty::Record(row.clone()).contains_var() || ty.contains_var()
                 }
-                Row::Param(..) => false,
                 Row::Var(_) => true,
+                _ => false,
             },
-            Ty::Struct(name, box row) => match row {
-                Row::Empty(..) => false,
-                Row::Extend { row, ty, .. } => {
-                    Ty::Struct(name.clone(), row.clone()).contains_var() || ty.contains_var()
-                }
-                Row::Param(..) => false,
-                Row::Var(_) => true,
-            },
+            Ty::Nominal { .. } => false,
         }
     }
 }
@@ -163,7 +159,8 @@ impl std::fmt::Debug for Ty {
             Ty::Tuple(items) => {
                 write!(f, "({})", items.iter().map(|i| format!("{i:?}")).join(", "))
             }
-            Ty::Struct(name, box row) | Ty::Sum(name, box row) => {
+            Ty::Nominal { id, type_args } => write!(f, "Type({id:?}, {type_args:?})"),
+            Ty::Record(box row) => {
                 let row_debug = match row {
                     Row::Empty(..) => "".to_string(),
                     Row::Param(id) => format!("rowparam(π{})", id.0),
@@ -178,20 +175,7 @@ impl std::fmt::Debug for Ty {
                     Row::Var(row_meta_id) => format!("rowmeta(π{})", row_meta_id.0),
                 };
 
-                write!(
-                    f,
-                    "{}{}{{{row_debug}}}",
-                    if matches!(self, Ty::Struct(..)) {
-                        "struct"
-                    } else {
-                        "enum"
-                    },
-                    if let Some(name) = name {
-                        format!(" {:?} ", name)
-                    } else {
-                        "".into()
-                    }
-                )
+                write!(f, "{{{row_debug}}}",)
             }
         }
     }

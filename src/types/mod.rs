@@ -9,6 +9,7 @@ pub mod row;
 pub mod scheme;
 pub mod term_environment;
 pub mod ty;
+pub mod type_catalog;
 pub mod type_error;
 pub mod type_operations;
 pub mod type_session;

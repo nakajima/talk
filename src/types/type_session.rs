@@ -4,6 +4,7 @@ use rustc_hash::FxHashMap;
 use crate::{
     ast::AST,
     id_generator::IDGenerator,
+    label::Label,
     name::Name,
     name_resolution::{name_resolver::NameResolved, symbol::TypeId},
     node_id::NodeID,
@@ -11,17 +12,16 @@ use crate::{
     span::Span,
     types::{
         builtins::builtin_scope,
-        fields::TypeFields,
+        fields::{Method, TypeFields},
         kind::Kind,
         passes::{
             dependencies_pass::DependenciesPass,
             inference_pass::{InferencePass, Inferenced, Meta},
-            type_header_decl_pass::TypeHeaderDeclPass,
-            type_header_resolve_pass::{HeadersResolved, TypeHeaderResolvePass},
+            type_headers_pass::TypeHeaderPass,
+            type_resolve_pass::{HeadersResolved, TypeResolvePass},
         },
         row::Row,
-        scheme::Scheme,
-        term_environment::{EnvEntry, TermEnv},
+        term_environment::TermEnv,
         ty::{Level, Ty},
         vars::Vars,
     },
@@ -55,9 +55,10 @@ pub enum TypeDefKind {
     Struct,
     Enum,
     Protocol,
+    Extension,
 }
 
-#[derive(Debug, PartialEq, Default, Clone)]
+#[derive(Debug, PartialEq, Default)]
 pub struct Raw {
     pub type_constructors: FxHashMap<TypeId, TypeDef<ASTTyRepr>>,
     pub protocols: FxHashMap<TypeId, TypeDef<ASTTyRepr>>,
@@ -68,42 +69,21 @@ impl TypingPhase for Raw {
 }
 
 #[derive(Debug, PartialEq, Clone)]
+pub struct TypeExtension<T> {
+    pub node_id: NodeID,
+    pub conformances: Vec<TypeId>,
+    pub methods: IndexMap<Label, Method<T>>,
+}
+
+#[derive(Debug, PartialEq, Clone)]
 pub struct TypeDef<T> {
     pub name: Name,
-    pub span: Span,
+    pub node_id: NodeID,
     pub kind: Kind,
     pub def: TypeDefKind,
     pub generics: IndexMap<Name, T>,
     pub fields: TypeFields<T>,
-}
-
-impl TypeDef<Ty> {
-    pub fn to_env_entry(&self) -> EnvEntry {
-        match &self.fields {
-            TypeFields::Struct { properties, .. } => {
-                let mut foralls = vec![];
-                let row = properties.iter().fold(
-                    Row::Empty(TypeDefKind::Struct),
-                    |mut acc, (label, property)| {
-                        foralls.extend(property.ty_repr.collect_foralls());
-                        acc = Row::Extend {
-                            row: Box::new(acc),
-                            label: label.clone(),
-                            ty: property.ty_repr.clone(),
-                        };
-                        acc
-                    },
-                );
-
-                EnvEntry::Scheme(Scheme::new(
-                    foralls,
-                    vec![],
-                    Ty::Struct(Some(self.name.clone()), Box::new(row)),
-                ))
-            }
-            _ => todo!(),
-        }
-    }
+    pub extensions: Vec<TypeExtension<T>>,
 }
 
 #[derive(Debug)]
@@ -143,8 +123,8 @@ pub struct Typed {}
 impl<Phase: TypingPhase> TypeSession<Phase> {
     pub fn drive(ast: &mut AST<NameResolved>) -> TypeSession<Inferenced> {
         let mut session = TypeSession::<Raw>::default();
-        TypeHeaderDeclPass::drive(&mut session, ast);
-        let session = TypeHeaderResolvePass::drive(ast, session);
+        TypeHeaderPass::drive(&mut session, ast);
+        let session = TypeResolvePass::drive(ast, session);
         let session = DependenciesPass::drive(session, ast);
         InferencePass::perform(session, ast)
     }
