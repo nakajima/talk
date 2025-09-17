@@ -91,7 +91,7 @@ fn occurs_in(id: UnificationVarId, ty: &Ty) -> bool {
         Ty::Param(..) => false,
         Ty::Rigid(..) => false,
         Ty::Primitive(..) => false,
-        Ty::Constructor { param, ret, .. } => occurs_in(id, param) || occurs_in(id, ret),
+        Ty::Constructor { func_ty, .. } => occurs_in(id, func_ty),
     }
 }
 
@@ -265,26 +265,13 @@ pub(super) fn unify(
             Ok(did_change)
         }
         (Ty::Rigid(lhs), Ty::Rigid(rhs)) if lhs == rhs => Ok(false),
-        (
-            Ty::Constructor {
-                param: constructor_param,
-                ret: constructor_ret,
-                ..
-            },
-            Ty::Func(func_param, func_ret),
-        )
-        | (
-            Ty::Func(func_param, func_ret),
-            Ty::Constructor {
-                param: constructor_param,
-                ret: constructor_ret,
-                ..
-            },
-        ) => {
-            let param = unify(constructor_param, func_param, substitutions, vars)?;
-            let ret = unify(constructor_ret, func_ret, substitutions, vars)?;
-            Ok(param || ret)
-        }
+        (Ty::Constructor { box func_ty, .. }, Ty::Func(func_param, func_ret))
+        | (Ty::Func(func_param, func_ret), Ty::Constructor { box func_ty, .. }) => unify(
+            func_ty,
+            &Ty::Func(func_param.clone(), func_ret.clone()),
+            substitutions,
+            vars,
+        ),
         (
             Ty::Nominal {
                 id: lhs_id,
@@ -381,14 +368,9 @@ pub(super) fn substitute(ty: Ty, substitutions: &FxHashMap<Ty, Ty>) -> Ty {
         Ty::Rigid(..) => ty,
         Ty::UnificationVar { .. } => ty,
         Ty::Primitive(..) => ty,
-        Ty::Constructor {
+        Ty::Constructor { type_id, func_ty } => Ty::Constructor {
             type_id,
-            param,
-            ret,
-        } => Ty::Constructor {
-            type_id,
-            param: Box::new(substitute(*param, substitutions)),
-            ret: Box::new(substitute(*ret, substitutions)),
+            func_ty: Box::new(substitute(*func_ty, substitutions)),
         },
         Ty::Func(params, ret) => Ty::Func(
             Box::new(substitute(*params, substitutions)),
@@ -401,7 +383,13 @@ pub(super) fn substitute(ty: Ty, substitutions: &FxHashMap<Ty, Ty>) -> Ty {
                 .collect(),
         ),
         Ty::Record(row) => Ty::Record(Box::new(substitute_row(*row, substitutions))),
-        Ty::Nominal { .. } => ty,
+        Ty::Nominal { id, type_args } => Ty::Nominal {
+            id,
+            type_args: type_args
+                .into_iter()
+                .map(|t| substitute(t, substitutions))
+                .collect(),
+        },
     }
 }
 
@@ -449,14 +437,9 @@ pub(super) fn apply(ty: Ty, substitutions: &mut UnificationSubstitutions) -> Ty 
                 } // normalize id to the representative
             }
         }
-        Ty::Constructor {
+        Ty::Constructor { type_id, func_ty } => Ty::Constructor {
             type_id,
-            param,
-            ret,
-        } => Ty::Constructor {
-            type_id,
-            param: Box::new(apply(*param, substitutions)),
-            ret: Box::new(apply(*ret, substitutions)),
+            func_ty: Box::new(apply(*func_ty, substitutions)),
         },
         Ty::Primitive(..) => ty,
         Ty::Func(params, ret) => Ty::Func(
@@ -465,7 +448,13 @@ pub(super) fn apply(ty: Ty, substitutions: &mut UnificationSubstitutions) -> Ty 
         ),
         Ty::Tuple(items) => Ty::Tuple(items.into_iter().map(|t| apply(t, substitutions)).collect()),
         Ty::Record(row) => Ty::Record(Box::new(apply_row(*row, substitutions))),
-        Ty::Nominal { .. } => ty,
+        Ty::Nominal { id, type_args } => Ty::Nominal {
+            id,
+            type_args: type_args
+                .into_iter()
+                .map(|t| apply(t, substitutions))
+                .collect(),
+        },
     }
 }
 
@@ -521,14 +510,9 @@ pub(super) fn instantiate_ty(
         Ty::Rigid(..) => ty,
         Ty::UnificationVar { .. } => ty,
         Ty::Primitive(..) => ty,
-        Ty::Constructor {
+        Ty::Constructor { type_id, func_ty } => Ty::Constructor {
             type_id,
-            param,
-            ret,
-        } => Ty::Constructor {
-            type_id,
-            param: Box::new(instantiate_ty(*param, substitutions, level)),
-            ret: Box::new(instantiate_ty(*ret, substitutions, level)),
+            func_ty: Box::new(instantiate_ty(*func_ty, substitutions, level)),
         },
         Ty::Func(params, ret) => Ty::Func(
             Box::new(instantiate_ty(*params, substitutions, level)),
@@ -541,6 +525,12 @@ pub(super) fn instantiate_ty(
                 .collect(),
         ),
         Ty::Record(row) => Ty::Record(Box::new(instantiate_row(*row, substitutions, level))),
-        Ty::Nominal { .. } => ty,
+        Ty::Nominal { id, type_args } => Ty::Nominal {
+            id,
+            type_args: type_args
+                .into_iter()
+                .map(|t| instantiate_ty(t, substitutions, level))
+                .collect(),
+        },
     }
 }

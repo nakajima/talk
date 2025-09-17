@@ -12,6 +12,7 @@ pub enum TypeError {
     CalleeNotCallable(Ty),
     MemberNotFound(Ty, String),
     MissingConformanceRequirement(String),
+    TypeNotFound(String),
 }
 
 impl Error for TypeError {}
@@ -35,6 +36,7 @@ impl Display for TypeError {
                 write!(f, "{ty:?} has no member: {name}")
             }
             Self::CalleeNotCallable(ty) => write!(f, "Callee not callable: {ty:?}"),
+            Self::TypeNotFound(string) => write!(f, "{string}"),
             Self::MissingConformanceRequirement(string) => {
                 write!(f, "Missing conformance requirement: {string:?}")
             }

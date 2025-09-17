@@ -1,16 +1,14 @@
 use crate::{
     label::Label,
-    name::Name,
-    name_resolution::symbol::Symbol,
     span::Span,
     types::{
         constraint::{Constraint, ConstraintCause},
-        fields::TypeFields,
-        passes::{dependencies_pass::SCCResolved, inference_pass::curry},
-        ty::{Level, Primitive, Ty},
+        passes::dependencies_pass::SCCResolved,
+        term_environment::EnvEntry,
+        ty::{Level, Ty},
         type_error::TypeError,
-        type_operations::{UnificationSubstitutions, apply, apply_row, unify},
-        type_session::{TypeDef, TypeSession},
+        type_operations::{UnificationSubstitutions, apply, unify},
+        type_session::TypeSession,
         wants::Wants,
     },
 };
@@ -28,118 +26,92 @@ impl Member {
     pub fn solve(
         &self,
         session: &mut TypeSession<SCCResolved>,
+        level: Level,
         next_wants: &mut Wants,
         substitutions: &mut UnificationSubstitutions,
     ) -> Result<bool, TypeError> {
         let receiver = apply(self.receiver.clone(), substitutions);
         let ty = apply(self.ty.clone(), substitutions);
 
-        if matches!(receiver, Ty::UnificationVar { .. } | Ty::Rigid(..)) {
+        if matches!(receiver, Ty::UnificationVar { .. }) {
             // If we don't know what the receiver is yet, we can't do much
             next_wants.push(Constraint::Member(self.clone()));
             return Ok(false);
         }
 
-        // if let Ty::Struct(Some(Name::Resolved(Symbol::Type(type_id), _)), _)
-        // | Ty::Enum(Some(Name::Resolved(Symbol::Type(type_id), _)), _) = &receiver
-        // {
-        // If it's a nominal type, check methods first
-        // if let Some(TypeDef {
-        //     fields: TypeFields::Struct { methods, .. } | TypeFields::Enum { methods, .. },
-        //     ..
-        // }) = session.phase.type_constructors.get(type_id)
-        //     && let Some(method) = methods.get(&self.label)
-        //     && !method.is_static
-        // {
-        //     let Some(method_entry) = session.term_env.lookup(&method.symbol).cloned() else {
-        //         panic!("did not find type for method named {:?}", self.label);
-        //     };
+        if let Ty::Nominal { id: type_id, .. } = &receiver
+            && let Some(nominal) = session.phase.type_catalog.nominals.get(type_id).cloned()
+            && let Some(sym) = nominal.member_symbol(&self.label)
+            && let Some(entry) = session.term_env.lookup(sym).cloned()
+        {
+            // Remember where next_wants currently ends,
+            // so we can consume only the constraints emitted during instantiation.
+            let start_ix = next_wants.0.len();
 
-        //     let method_ty = method_entry.solver_instantiate(
-        //         session,
-        //         Level(1),
-        //         substitutions,
-        //         next_wants,
-        //         self.span,
-        //     );
+            // Instantiate as you already do (keep your type-arg substitution if you want).
+            let member_ty = match entry {
+                EnvEntry::Mono(ty) => ty.clone(),
+                EnvEntry::Scheme(scheme) => {
+                    scheme
+                        .solver_instantiate(session, level, next_wants, self.span, substitutions)
+                        .0
+                }
+            };
 
-        //     // For instance methods, the method_ty looks like: self -> arg1 -> arg2 -> ret
-        //     // We need to apply the receiver to get: arg1 -> arg2 -> ret
-        //     // Or for zero-arg instance methods: self -> ret, we need to return func() -> ret
-        //     let applied_method_ty = if let Ty::Func(param, rest) = method_ty {
-        //         // Unify the receiver with the self parameter
-        //         unify(&receiver, &param, substitutions, &mut session.vars)?;
-        //         // Return the rest of the function type (without self)
-        //         // If rest is not a function, it means this was a zero-arg method (only had self)
-        //         // In that case, we need to wrap it in a zero-arg function
-        //         if !matches!(*rest, Ty::Func(..)) {
-        //             // Zero-arg method: wrap return type in func(void) -> ret
-        //             Ty::Func(Box::new(Ty::Void), rest)
-        //         } else {
-        //             *rest
-        //         }
-        //     } else {
-        //         unreachable!()
-        //     };
+            // If it's a function (method or property-getter), tie Self := receiver.
+            if let Ty::Func(self_param, ret) = &member_ty {
+                let _ = unify(self_param, &receiver, substitutions, &mut session.vars)?;
+                // For a property-as-getter, we want the *value* of the projection:
+                // unifying `ty` with the function’s *return* type makes that happen.
+                let _ = unify(&ty, ret, substitutions, &mut session.vars)?;
+            } else {
+                // Property-as-value encoding (if you move to that later).
+                let _ = unify(&ty, &member_ty, substitutions, &mut session.vars)?;
+            }
 
-        //     return unify(&ty, &applied_method_ty, substitutions, &mut session.vars);
-        // }
-        // }
+            // Consume any freshly-emitted Member predicates equivalent to this one,
+            // and solve them inline to avoid re-queuing/looping.
+            // (Keep unrelated predicates in the queue.)
+            let mut i = start_ix;
+            while i < next_wants.0.len() {
+                match &next_wants.0[i] {
+                    Constraint::Member(m) if m.label == self.label => {
+                        // Tie the scheme’s Self and result to *our* receiver/result.
+                        let _ = unify(
+                            &apply(m.receiver.clone(), substitutions),
+                            &receiver,
+                            substitutions,
+                            &mut session.vars,
+                        )?;
+                        let _ = unify(
+                            &apply(m.ty.clone(), substitutions),
+                            &ty,
+                            substitutions,
+                            &mut session.vars,
+                        )?;
+                        next_wants.0.remove(i);
+                        continue;
+                    }
+                    _ => {}
+                }
+                i += 1;
+            }
 
-        // See if it's a static method or enum variant constructor
-        // if let Ty::Constructor { type_id, .. } = &receiver
-        //     && let Some(TypeDef {
-        //         fields: TypeFields::Struct { methods, .. },
-        //         ..
-        //     }) = session.phase.type_constructors.get(type_id)
-        //     && let Some(method) = methods.get(&self.label)
-        //     && method.is_static
-        // {
-        //     // If it's a nominal type, check methods first
-        //     let Some(method_entry) = session.term_env.lookup(&method.symbol).cloned() else {
-        //         panic!("did not find type for method named {:?}", self.label);
-        //     };
-
-        //     let method_ty = method_entry.solver_instantiate(
-        //         session,
-        //         Level(1),
-        //         substitutions,
-        //         next_wants,
-        //         self.span,
-        //     );
-
-        //     return unify(&ty, &method_ty, substitutions, &mut session.vars);
-        // }
-
-        // // See if it's an enum constructor
-        // if let Ty::Enum(Some(Name::Resolved(Symbol::Type(..), _)), box row) = &receiver
-        //     && let Some(variant_ty) = apply_row(row.clone(), substitutions)
-        //         .close()
-        //         .get(&self.label)
-        // {
-        //     let constructor_ty = match variant_ty {
-        //         Ty::Tuple(vals) => curry(vals.clone(), receiver),
-        //         Ty::Primitive(Primitive::Void) => receiver.clone(),
-        //         ty => Ty::Func(Box::new(ty.clone()), receiver.into()),
-        //     };
-
-        //     next_wants.equals(self.ty.clone(), constructor_ty, self.cause, self.span);
-
-        //     return Ok(true);
-        // }
+            return Ok(true);
+        }
 
         // If it's not a method, figure out the row and emit a has field constraint
-        // let (Ty::Struct(_, row) | Ty::Enum(_, row)) = receiver else {
-        //     return Err(TypeError::ExpectedRow(receiver));
-        // };
+        let Ty::Record(row) = receiver else {
+            return Err(TypeError::ExpectedRow(receiver));
+        };
 
-        // next_wants._has_field(
-        //     *row,
-        //     self.label.clone(),
-        //     self.ty.clone(),
-        //     self.cause,
-        //     self.span,
-        // );
+        next_wants._has_field(
+            *row,
+            self.label.clone(),
+            self.ty.clone(),
+            self.cause,
+            self.span,
+        );
 
         Ok(true)
     }

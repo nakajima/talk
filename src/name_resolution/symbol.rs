@@ -8,6 +8,7 @@ pub enum Symbol {
     PatternBindLocal(PatternBindLocalId),
     ParamLocal(ParamLocalId),
     BuiltinType(BuiltinId),
+    Property(PropertyId),
     Synthesized(SynthesizedId),
 }
 
@@ -23,6 +24,9 @@ pub struct GlobalId(pub u32);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TypeId(pub u32);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct PropertyId(pub u32);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct DeclaredLocalId(pub u32);
@@ -72,6 +76,7 @@ pub struct Symbols {
     pattern_binds: IDGenerator,
     locals: IDGenerator,
     fields: IDGenerator,
+    properties: IDGenerator,
     synthesized: IDGenerator,
     builtins: IDGenerator,
 }
@@ -79,6 +84,10 @@ pub struct Symbols {
 impl Symbols {
     pub fn next_decl(&mut self) -> TypeId {
         TypeId(self.decls.next_id())
+    }
+
+    pub fn next_property(&mut self) -> PropertyId {
+        PropertyId(self.properties.next_id())
     }
 
     pub fn next_value(&mut self) -> GlobalId {

@@ -191,7 +191,7 @@ impl<'a> DeclDeclarer<'a> {
     #[instrument(skip(self))]
     fn enter_func_signature(&mut self, func: &mut FuncSignature) {
         on!(func, FuncSignature { name, .. }, {
-            *name = self.resolver.declare_type(name);
+            *name = self.resolver.declare_global(name);
         })
     }
 
@@ -238,9 +238,13 @@ impl<'a> DeclDeclarer<'a> {
             &mut decl.kind,
             DeclKind::FuncSignature(FuncSignature { name, .. }),
             {
-                *name = self.resolver.declare_type(name);
+                *name = self.resolver.declare_global(name);
             }
         );
+
+        on!(&mut decl.kind, DeclKind::Property { name, .. }, {
+            *name = self.resolver.declare_property(name);
+        });
 
         on!(&mut decl.kind, DeclKind::Init { name, .. }, {
             *name = self.resolver.declare_type(name);

@@ -4,39 +4,38 @@ use crate::{
     label::Label,
     name_resolution::symbol::{Symbol, TypeId},
     node_id::NodeID,
-    span::Span,
-    types::row::Row,
 };
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum NominalForm {
     Struct {
         initializers: FxHashMap<Label, Symbol>,
-        properties: Box<Row>,
+        properties: FxHashMap<Label, Symbol>,
         methods: FxHashMap<Label, Symbol>,
         static_methods: FxHashMap<Label, Symbol>,
     },
     Enum {
-        variants: Box<Row>,
+        variants: FxHashMap<Label, Symbol>,
         methods: FxHashMap<Label, Symbol>,
         static_methods: FxHashMap<Label, Symbol>,
     },
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct Extension {
     pub node_id: NodeID,
     pub methods: FxHashMap<Label, Symbol>,
     pub conformances: Vec<TypeId>,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct Protocol {
     pub node_id: NodeID,
     pub methods: FxHashMap<Label, Symbol>,
+    pub method_requirements: FxHashMap<Label, Symbol>,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct Nominal {
     pub form: NominalForm,
     pub node_id: NodeID,
@@ -47,4 +46,42 @@ pub struct Nominal {
 pub struct TypeCatalog {
     pub nominals: FxHashMap<TypeId, Nominal>,
     pub protocols: FxHashMap<TypeId, Protocol>,
+}
+
+impl Nominal {
+    pub fn member_symbol(&self, label: &Label) -> Option<&Symbol> {
+        match &self.form {
+            NominalForm::Enum {
+                variants,
+                methods,
+                static_methods: _,
+            } => {
+                if let Some(sym) = variants.get(label) {
+                    return Some(sym);
+                }
+
+                if let Some(sym) = methods.get(label) {
+                    return Some(sym);
+                }
+
+                None
+            }
+            NominalForm::Struct {
+                properties,
+                methods,
+                static_methods: _,
+                ..
+            } => {
+                if let Some(sym) = properties.get(label) {
+                    return Some(sym);
+                }
+
+                if let Some(sym) = methods.get(label) {
+                    return Some(sym);
+                }
+
+                None
+            }
+        }
+    }
 }

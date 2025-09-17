@@ -303,12 +303,12 @@ impl<'a> Formatter<'a> {
             } => self.format_protocol(name, generics, conformances, body),
             DeclKind::Init { name, params, body } => self.format_init(name, params, body),
             DeclKind::Property {
-                label,
+                name,
                 is_static,
                 type_annotation,
                 default_value,
             } => self.format_property(
-                label,
+                name,
                 *is_static,
                 type_annotation.as_ref(),
                 default_value.as_ref(),
@@ -793,12 +793,12 @@ impl<'a> Formatter<'a> {
 
     fn format_property(
         &self,
-        label: &Label,
+        name: &Name,
         _is_static: bool,
         type_annotation: Option<&TypeAnnotation>,
         default_value: Option<&Expr>,
     ) -> Doc {
-        let mut result = concat_space(text("let"), text(label.to_string()));
+        let mut result = concat_space(text("let"), self.format_name(name));
 
         if let Some(ty) = type_annotation {
             result = concat(

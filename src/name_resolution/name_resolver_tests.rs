@@ -9,7 +9,9 @@ pub mod tests {
         name::Name,
         name_resolution::{
             name_resolver::{NameResolved, NameResolver, NameResolverError},
-            symbol::{BuiltinId, DeclaredLocalId, GlobalId, ParamLocalId, Symbol, TypeId},
+            symbol::{
+                BuiltinId, DeclaredLocalId, GlobalId, ParamLocalId, PropertyId, Symbol, TypeId,
+            },
         },
         node::Node,
         node_id::NodeID,
@@ -445,7 +447,7 @@ pub mod tests {
                 generics: vec![],
                 conformances: vec![],
                 body: any_block!(vec![Node::Decl(any_decl!(DeclKind::Property {
-                    label: "me".into(),
+                    name: Name::Resolved(Symbol::Property(PropertyId(1)), "me".into()),
                     is_static: false,
                     type_annotation: Some(annotation!(TypeAnnotationKind::Nominal {
                         name: Name::Resolved(TypeId(1).into(), "Person".into()),
@@ -490,7 +492,7 @@ pub mod tests {
         }
         ",
         );
-        assert_eq!(
+        assert_eq_diff!(
             *resolved.roots[0].as_decl(),
             any_decl!(DeclKind::Struct {
                 name: Name::Resolved(TypeId(1).into(), "Person".into()),
@@ -503,7 +505,7 @@ pub mod tests {
                 }],
                 conformances: vec![],
                 body: any_block!(vec![Node::Decl(any_decl!(DeclKind::Property {
-                    label: "me".into(),
+                    name: Name::Resolved(Symbol::Property(PropertyId(1)), "me".into()),
                     is_static: false,
                     type_annotation: Some(annotation!(TypeAnnotationKind::Nominal {
                         name: Name::Resolved(Symbol::Type(TypeId(2)), "T".into()),
@@ -712,7 +714,7 @@ pub mod tests {
                 generics: vec![],
                 body: any_block!(vec![Node::Decl(any_decl!(DeclKind::MethodRequirement(
                     FuncSignature {
-                        name: Name::Resolved(Symbol::Type(TypeId(2)), "buzz".into()),
+                        name: Name::Resolved(Symbol::Global(GlobalId(1)), "buzz".into()),
                         params: vec![],
                         generics: vec![],
                         ret: Box::new(annotation!(TypeAnnotationKind::Tuple(vec![])))
@@ -751,7 +753,7 @@ pub mod tests {
                         }
                     })),
                     Node::Decl(any_decl!(DeclKind::MethodRequirement(FuncSignature {
-                        name: Name::Resolved(Symbol::Type(TypeId(3)), "buzz".into()),
+                        name: Name::Resolved(Symbol::Global(GlobalId(1)), "buzz".into()),
                         params: vec![],
                         generics: vec![],
                         ret: Box::new(annotation!(TypeAnnotationKind::Nominal {

@@ -22,9 +22,8 @@ use crate::{
     span::Span,
     types::{
         passes::{inference_pass::Inferenced, type_resolve_pass::HeadersResolved},
-        ty::Ty,
         type_catalog::TypeCatalog,
-        type_session::{TypeDef, TypeSession, TypingPhase},
+        type_session::{TypeSession, TypingPhase},
     },
 };
 
@@ -176,8 +175,7 @@ impl DependenciesPass {
                 return;
             }
 
-            nope => {
-                println!("nope: {nope:?}");
+            _ => {
                 return;
             }
         };

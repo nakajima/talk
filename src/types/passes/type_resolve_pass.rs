@@ -21,11 +21,10 @@ use crate::{
         row::Row,
         scheme::Scheme,
         term_environment::EnvEntry,
-        ty::{Level, Ty},
+        ty::Ty,
         type_catalog::{Extension, Nominal, NominalForm, Protocol, TypeCatalog},
         type_error::TypeError,
         type_session::{ASTTyRepr, Raw, TypeDef, TypeDefKind, TypeSession, TypingPhase},
-        wants::Wants,
     },
 };
 
@@ -108,7 +107,7 @@ impl<'a> TypeResolvePass<'a> {
         }
     }
 
-    fn resolve_form(&mut self, type_def: &TypeDef<ASTTyRepr>) -> NominalForm {
+    fn resolve_form(&mut self, type_def: &TypeDef<ASTTyRepr>, generics: Vec<Ty>) -> NominalForm {
         match &type_def.fields {
             TypeFields::Enum { variants, methods } => {
                 let variants = self.resolve_variants(variants);
@@ -124,10 +123,12 @@ impl<'a> TypeResolvePass<'a> {
                 methods,
                 properties,
             } => {
-                let properties = self.resolve_properties(properties);
+                let properties = self.resolve_properties(type_def, properties, generics.clone());
+                let initializers =
+                    self.resolve_initializers(type_def, initializers, generics.clone());
 
                 NominalForm::Struct {
-                    initializers: Default::default(),
+                    initializers,
                     properties,
                     methods: self.resolve_methods(methods),
                     static_methods: Default::default(),
@@ -144,10 +145,8 @@ impl<'a> TypeResolvePass<'a> {
         };
 
         let TypeFields::Protocol {
-            initializers,
             methods,
             method_requirements,
-            properties,
             associated_types,
         } = &type_def.fields
         else {
@@ -155,21 +154,12 @@ impl<'a> TypeResolvePass<'a> {
         };
 
         let methods = self.resolve_methods(methods);
-        //  TypeFields::<Ty>::Protocol {
-        //     initializers: self.resolve_initializers(initializers),
-        //     methods: self.resolve_methods(methods),
-        //     properties: self.resolve_properties(properties),
-        //     method_requirements: self.resolve_method_requirements(
-        //         method_requirements,
-        //         level,
-        //         wants,
-        //     ),
-        //     associated_types: self.resolve_associated_types(associated_types),
-        // },
+        let method_requirements = self.resolve_method_requirements(method_requirements);
 
         Ok(Protocol {
             node_id: type_def.node_id,
             methods,
+            method_requirements,
         })
     }
 
@@ -185,13 +175,12 @@ impl<'a> TypeResolvePass<'a> {
                 continue;
             };
 
-            println!("defining generic {name:?} {generic:?}");
             let ty_repr = self.infer_ast_ty_repr(generic);
             generics.push(ty_repr.clone());
             self.generics.insert(*type_id, ty_repr);
         }
 
-        let form = self.resolve_form(type_def);
+        let form = self.resolve_form(type_def, generics.clone());
 
         // Promote forward declared monotype into a scheme
         let symbol = type_def.name.symbol().unwrap();
@@ -228,8 +217,11 @@ impl<'a> TypeResolvePass<'a> {
         })
     }
 
-    fn resolve_variants(&mut self, variants: &IndexMap<Label, Variant<ASTTyRepr>>) -> Box<Row> {
-        let mut row = Row::Empty(TypeDefKind::Enum);
+    fn resolve_variants(
+        &mut self,
+        variants: &IndexMap<Label, Variant<ASTTyRepr>>,
+    ) -> FxHashMap<Label, Symbol> {
+        let mut resolved_variants = FxHashMap::<Label, Symbol>::default();
         for (name, variant) in variants {
             let ty = match variant.fields.len() {
                 0 => Ty::Void,
@@ -242,14 +234,17 @@ impl<'a> TypeResolvePass<'a> {
                         .collect(),
                 ),
             };
-            row = Row::Extend {
-                row: Box::new(row),
-                label: name.clone(),
-                ty,
-            };
+
+            let foralls = ty.collect_foralls();
+            let scheme = Scheme::new(foralls, vec![], ty);
+            self.session
+                .term_env
+                .promote(variant.symbol, EnvEntry::Scheme(scheme));
+
+            resolved_variants.insert(name.clone(), variant.symbol);
         }
 
-        Box::new(row)
+        resolved_variants
     }
 
     fn resolve_methods(
@@ -258,6 +253,7 @@ impl<'a> TypeResolvePass<'a> {
     ) -> FxHashMap<Label, Symbol> {
         let mut resolved_methods = FxHashMap::default();
         for (name, method) in methods {
+            println!("method params: {:?}", method.params);
             let params: Vec<_> = method
                 .params
                 .iter()
@@ -279,40 +275,61 @@ impl<'a> TypeResolvePass<'a> {
 
     fn resolve_properties(
         &mut self,
+        type_def: &TypeDef<ASTTyRepr>,
         properties: &IndexMap<Label, Property<ASTTyRepr>>,
-    ) -> Box<Row> {
-        let mut row = Row::Empty(TypeDefKind::Struct);
-        for (name, prop) in properties {
-            let ty_repr = self.infer_ast_ty_repr(&prop.ty_repr);
-            row = Row::Extend {
-                row: Box::new(row),
-                label: name.clone(),
-                ty: ty_repr,
-            };
+        generics: Vec<Ty>,
+    ) -> FxHashMap<Label, Ty> {
+        let mut out = FxHashMap::default();
+        let Name::Resolved(Symbol::Type(type_id), _) = &type_def.name else {
+            unreachable!()
+        };
+
+        for (label, prop) in properties {
+            if prop.is_static {
+                continue;
+            }
+
+            // Keep monotypes here
+            out.insert(label.clone(), self.infer_ast_ty_repr(&prop.ty_repr));
         }
 
-        Box::new(row)
+        out
     }
 
     fn resolve_initializers(
         &mut self,
-        initializers: &IndexMap<Name, Initializer<ASTTyRepr>>,
-    ) -> IndexMap<Name, Initializer<Ty>> {
-        let mut resolved_initializers = IndexMap::default();
-        for (name, initializer) in initializers {
-            resolved_initializers.insert(
-                name.clone(),
-                Initializer {
-                    params: initializer
-                        .params
-                        .iter()
-                        .map(|f| self.infer_ast_ty_repr(f))
-                        .collect(),
-                },
+        type_def: &TypeDef<ASTTyRepr>,
+        initializers: &IndexMap<Label, Initializer<ASTTyRepr>>,
+        generics: Vec<Ty>,
+    ) -> FxHashMap<Label, Symbol> {
+        let mut out = FxHashMap::default();
+        let Name::Resolved(Symbol::Type(type_id), _) = &type_def.name else {
+            unreachable!()
+        };
+
+        let result_self = Ty::Nominal {
+            id: *type_id,
+            type_args: generics,
+        };
+
+        for (label, init) in initializers {
+            let params: Vec<Ty> = init.params[1..]
+                .iter()
+                .map(|p| self.infer_ast_ty_repr(p))
+                .collect();
+
+            let ctor_fn = curry(params, result_self.clone());
+            let foralls = ctor_fn.collect_foralls();
+
+            self.session.term_env.promote(
+                init.symbol,
+                EnvEntry::Scheme(Scheme::new(foralls, vec![], ctor_fn)),
             );
+
+            out.insert(label.clone(), init.symbol);
         }
 
-        resolved_initializers
+        out
     }
 
     fn resolve_associated_types(
@@ -330,26 +347,25 @@ impl<'a> TypeResolvePass<'a> {
     fn resolve_method_requirements(
         &mut self,
         requirements: &IndexMap<Label, MethodRequirement<ASTTyRepr>>,
-    ) -> IndexMap<Label, MethodRequirement<Ty>> {
-        let mut resolved_method_requirements = IndexMap::default();
-        for (name, method_requirement) in requirements {
-            let ret = self.infer_ast_ty_repr(&method_requirement.ret);
+    ) -> FxHashMap<Label, Symbol> {
+        let mut resolved_methods = FxHashMap::default();
+        for (name, method) in requirements {
+            let params: Vec<_> = method
+                .params
+                .iter()
+                .map(|f| self.infer_ast_ty_repr(f))
+                .collect();
+            let ret = self.infer_ast_ty_repr(&method.ret);
+            let fn_ty = curry(params.clone(), ret.clone());
 
-            resolved_method_requirements.insert(
-                name.clone(),
-                MethodRequirement {
-                    params: method_requirement
-                        .params
-                        .iter()
-                        .map(|f| self.infer_ast_ty_repr(f))
-                        .collect(),
-                    ret,
-                    id: method_requirement.id,
-                },
+            self.session.term_env.promote(
+                method.symbol,
+                EnvEntry::Scheme(Scheme::new(fn_ty.collect_foralls(), vec![], fn_ty)),
             );
-        }
 
-        resolved_method_requirements
+            resolved_methods.insert(name.clone(), method.symbol);
+        }
+        resolved_methods
     }
 
     #[instrument(skip(self))]
@@ -386,7 +402,7 @@ impl<'a> TypeResolvePass<'a> {
                             .map(|g| self.infer_type_annotation(g))
                             .collect(),
                     },
-                    kind => {
+                    _ => {
                         if let Some(generic) = self.generics.get(type_id) {
                             return generic.clone();
                         }
@@ -464,13 +480,13 @@ impl<'a> TypeResolvePass<'a> {
 pub mod tests {
     use crate::{
         ast::AST,
-        fxhashmap, make_row,
+        fxhashmap,
         name_resolution::{
             name_resolver::NameResolved,
             name_resolver_tests::tests::resolve,
-            symbol::{GlobalId, TypeId},
+            symbol::{GlobalId, PropertyId, TypeId},
         },
-        types::{passes::type_headers_pass::TypeHeaderPass, type_session::TypeDefKind},
+        types::passes::type_headers_pass::TypeHeaderPass,
     };
 
     use super::*;
@@ -517,7 +533,7 @@ pub mod tests {
                 .form,
             NominalForm::Struct {
                 initializers: Default::default(),
-                properties: Box::new(make_row!(Struct, "age" => Ty::Int)),
+                properties: fxhashmap!("age".into() => Symbol::Property(PropertyId(1))),
                 methods: Default::default(),
                 static_methods: Default::default()
             }
@@ -544,7 +560,7 @@ pub mod tests {
                 .form,
             NominalForm::Struct {
                 initializers: Default::default(),
-                properties: Box::new(Row::Empty(TypeDefKind::Struct)),
+                properties: Default::default(),
                 methods: fxhashmap!(Label::Named("fizz".into()) => Symbol::Global(GlobalId(1))),
                 static_methods: Default::default()
             }
@@ -570,7 +586,7 @@ pub mod tests {
                 .form,
             NominalForm::Struct {
                 initializers: Default::default(),
-                properties: Box::new(make_row!(Struct, "t" => Ty::Param(1.into()))),
+                properties: fxhashmap!("t".into() => Symbol::Property(PropertyId(1))),
                 methods: Default::default(),
                 static_methods: Default::default()
             }
@@ -603,9 +619,8 @@ pub mod tests {
                 .form,
             NominalForm::Struct {
                 initializers: Default::default(),
-                properties: Box::new(
-                    make_row!(Struct, "b" => Ty::Nominal { id: TypeId(3), type_args: vec![Ty::Nominal { id: TypeId(1), type_args: vec![Ty::Int] }] })
-                ),
+                properties: fxhashmap!("b".into() => Symbol::Property(PropertyId(1))),
+
                 methods: Default::default(),
                 static_methods: Default::default()
             }

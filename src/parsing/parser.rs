@@ -254,7 +254,7 @@ impl<'a> Parser<'a> {
             id,
             span,
             kind: DeclKind::Property {
-                label: name.into(),
+                name: name.into(),
                 is_static,
                 type_annotation,
                 default_value,

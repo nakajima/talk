@@ -2,7 +2,6 @@ use derive_visitor::{Drive, DriveMut};
 
 use crate::{
     impl_into_node,
-    label::Label,
     name::Name,
     node_id::NodeID,
     node_kinds::{
@@ -47,7 +46,7 @@ pub enum DeclKind {
 
     Property {
         #[drive(skip)]
-        label: Label,
+        name: Name,
         #[drive(skip)]
         is_static: bool,
         type_annotation: Option<TypeAnnotation>,

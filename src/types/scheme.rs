@@ -91,7 +91,7 @@ impl Predicate {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Scheme {
     pub(super) foralls: Vec<ForAll>,
-    predicates: Vec<Predicate>,
+    pub(super) predicates: Vec<Predicate>,
     pub(super) ty: Ty,
 }
 

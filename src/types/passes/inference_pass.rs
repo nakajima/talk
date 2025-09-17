@@ -4,6 +4,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::instrument;
 
 use crate::types::passes::dependencies_pass::Conformance;
+use crate::types::type_catalog::{Nominal, NominalForm};
 use crate::types::type_session::TypeDef;
 use crate::types::wants::Wants;
 use crate::{
@@ -32,16 +33,13 @@ use crate::{
     span::Span,
     types::{
         constraint::{Constraint, ConstraintCause},
-        fields::TypeFields,
         passes::dependencies_pass::{Binder, SCCResolved},
         row::{Row, RowMetaId},
         scheme::{ForAll, Scheme},
         term_environment::{EnvEntry, TermEnv},
         ty::{Level, Ty, UnificationVarId},
         type_error::TypeError,
-        type_operations::{
-            UnificationSubstitutions, apply, apply_row, instantiate_ty, substitute, unify,
-        },
+        type_operations::{UnificationSubstitutions, apply, apply_row, substitute, unify},
         type_session::{TypeDefKind, TypeSession, TypingPhase},
         type_snapshot::TypeSnapshot,
     },
@@ -130,7 +128,7 @@ impl<'a> InferencePass<'a> {
             };
 
             let wants = pass.infer_group(&group);
-            let (mut subs, unsolved) = pass.solve(wants);
+            let (mut subs, unsolved) = pass.solve(Level(1), wants);
             pass.promote_group(&group, &mut subs, unsolved);
             pass.apply_to_self(&mut subs);
         }
@@ -145,7 +143,7 @@ impl<'a> InferencePass<'a> {
             let mut wants = Wants::default();
             let ty = pass.infer_node(root, Level(1), &mut wants);
             pass.types_by_node.insert(root.node_id(), ty);
-            let (mut subs, _) = pass.solve(wants);
+            let (mut subs, _) = pass.solve(Level(1), wants);
             pass.apply_to_self(&mut subs);
         }
 
@@ -272,7 +270,11 @@ impl<'a> InferencePass<'a> {
     }
 
     #[instrument(skip(self))]
-    fn solve(&mut self, mut wants: Wants) -> (UnificationSubstitutions, Vec<Constraint>) {
+    fn solve(
+        &mut self,
+        level: Level,
+        mut wants: Wants,
+    ) -> (UnificationSubstitutions, Vec<Constraint>) {
         let mut substitutions = UnificationSubstitutions::new(self.session.meta_levels.clone());
         let mut unsolved = vec![];
         loop {
@@ -289,11 +291,14 @@ impl<'a> InferencePass<'a> {
                         &mut self.session.vars,
                     ),
                     Constraint::Call(ref call) => {
-                        call.solve(self, &mut next_wants, &mut substitutions)
+                        call.solve(&mut self.session, &mut next_wants, &mut substitutions)
                     }
-                    Constraint::Member(ref member) => {
-                        member.solve(&mut self.session, &mut next_wants, &mut substitutions)
-                    }
+                    Constraint::Member(ref member) => member.solve(
+                        &mut self.session,
+                        level,
+                        &mut next_wants,
+                        &mut substitutions,
+                    ),
                     Constraint::HasField(ref has_field) => {
                         let row = apply_row(has_field.row.clone(), &mut substitutions);
                         match row {
@@ -302,7 +307,7 @@ impl<'a> InferencePass<'a> {
                                     path: self.ast.path.clone(),
                                     span: has_field.span,
                                     kind: TypeError::MemberNotFound(
-                                        Ty::Void,
+                                        has_field.ty.clone(),
                                         // if kind == TypeDefKind::Struct {
                                         //     Ty::Struct(None, Box::new(has_field.row.clone()))
                                         // } else {
@@ -546,7 +551,7 @@ impl<'a> InferencePass<'a> {
                     );
                 }
 
-                let (mut subs, unsolved) = self.solve(rhs_wants);
+                let (mut subs, unsolved) = self.solve(level, rhs_wants);
                 let applied_ty = apply(ty.clone(), &mut subs);
 
                 if let PatternKind::Bind(Name::Resolved(sym, _)) = lhs.kind {
@@ -850,51 +855,28 @@ impl<'a> InferencePass<'a> {
                 self.infer_record_literal(fields, spread, level, wants)
             }
             ExprKind::Constructor(Name::Resolved(sym @ Symbol::Type(id), _)) => {
-                let entry = self
+                let ctor_sym = self
                     .session
-                    .term_env
-                    .lookup(sym)
-                    .cloned()
-                    .expect("did not find type for sym in env");
+                    .phase
+                    .type_catalog
+                    .nominals
+                    .get(id)
+                    .and_then(|n| match &n.form {
+                        NominalForm::Struct { initializers, .. } => {
+                            initializers.values().next().copied()
+                        }
+                        _ => None,
+                    })
+                    .expect("no constructor symbol for nominal type");
 
-                let (ty, substitutions) = match &entry {
-                    EnvEntry::Mono(ty) => (ty.clone(), Default::default()),
-                    EnvEntry::Scheme(scheme) => {
-                        scheme.inference_instantiate(&mut self.session, level, wants, expr.span)
-                    }
+                let scheme = match self.session.term_env.lookup(&ctor_sym) {
+                    Some(EnvEntry::Scheme(s)) => s.clone(),
+                    _ => panic!("ctor scheme missing"),
                 };
 
-                ty
-
-                // let type_def = self
-                //     .session
-                //     .phase
-                //     .type_constructors
-                //     .get(id)
-                //     .expect("didn't get type def");
-
-                //         match &type_def.fields {
-                //             TypeFields::Struct { initializers, .. } => {
-                //                 // TODO: handle multiple initializers
-                //                 let (_, initializer) = initializers.first().expect("no initializer found");
-
-                //                 // Apply the same substitutions to params that we applied to properties
-                //                 let ty = initializer
-                //                     .params
-                //                     .iter()
-                //                     .collect::<Vec<_>>()
-                //                     .into_iter()
-                //                     .rfold(ty, |acc, p| Ty::Constructor {
-                //                         type_id: *id,
-                //                         param: Box::new(p.clone()),
-                //                         ret: Box::new(acc),
-                //                     });
-
-                //                 instantiate_ty(ty, &substitutions, level)
-                //             }
-                //             TypeFields::Enum { .. } => ty,
-                //             _ => todo!(),
-                //         }
+                let (fn_ty, _subs) =
+                    scheme.inference_instantiate(&mut self.session, level, wants, expr.span);
+                fn_ty // a Ty::Func(...), so infer_call emits a Call constraint
             }
             ExprKind::RowVariable(..) => todo!(),
 
@@ -902,7 +884,7 @@ impl<'a> InferencePass<'a> {
         };
 
         // // record the type for this expression node
-        // self.types_by_node.insert(expr.id, ty.clone());
+        self.types_by_node.insert(expr.id, ty.clone());
         ty
     }
 
@@ -1201,10 +1183,9 @@ pub fn collect_meta(ty: &Ty, out: &mut FxHashSet<Ty>) {
                 collect_meta(&Ty::Record(row.clone()), out);
             }
         },
-        Ty::Nominal { id, type_args } => (),
-        Ty::Constructor { param, ret, .. } => {
-            collect_meta(param, out);
-            collect_meta(ret, out);
+        Ty::Nominal { .. } => (),
+        Ty::Constructor { func_ty, .. } => {
+            collect_meta(func_ty, out);
         }
         Ty::Primitive(_) | Ty::Rigid(_) | Ty::Hole(_) => {}
     }

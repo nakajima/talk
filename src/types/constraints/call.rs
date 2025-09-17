@@ -2,10 +2,11 @@ use crate::{
     span::Span,
     types::{
         constraint::{Constraint, ConstraintCause},
-        passes::inference_pass::{InferencePass, curry},
+        passes::{dependencies_pass::SCCResolved, inference_pass::curry},
         ty::Ty,
         type_error::TypeError,
         type_operations::{UnificationSubstitutions, apply, apply_mult, unify},
+        type_session::TypeSession,
         wants::Wants,
     },
 };
@@ -23,7 +24,7 @@ pub struct Call {
 impl Call {
     pub fn solve(
         &self,
-        pass: &mut InferencePass,
+        session: &mut TypeSession<SCCResolved>,
         next_wants: &mut Wants,
         substitutions: &mut UnificationSubstitutions,
     ) -> Result<bool, TypeError> {
@@ -42,16 +43,22 @@ impl Call {
         let mut args = apply_mult(self.args.to_vec(), substitutions);
         let returns = apply(self.returns.clone(), substitutions);
 
+        if let Some(receiver) = &self.receiver {
+            let receiver = apply(receiver.clone(), substitutions);
+            // receiver is the first parameter for instance methods
+            args.insert(0, receiver);
+        }
+
         tracing::debug!("callee: {callee:?} {args:?} {returns:?}");
 
         match &callee {
-            Ty::Constructor { param, ret, .. } => {
+            Ty::Constructor { func_ty, .. } => {
                 args.insert(0, returns.clone());
                 unify(
-                    &Ty::Func(Box::new(*param.clone()), Box::new(*ret.clone())),
+                    func_ty,
                     &curry(args, returns),
                     substitutions,
-                    &mut pass.session.vars,
+                    &mut session.vars,
                 )
             }
             Ty::Func(..) => {
@@ -60,14 +67,14 @@ impl Call {
                         &callee,
                         &Ty::Func(Ty::Void.into(), returns.into()),
                         substitutions,
-                        &mut pass.session.vars,
+                        &mut session.vars,
                     )
                 } else {
                     unify(
                         &callee,
                         &curry(args, returns),
                         substitutions,
-                        &mut pass.session.vars,
+                        &mut session.vars,
                     )
                 }
             }

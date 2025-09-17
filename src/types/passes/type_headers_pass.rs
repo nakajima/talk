@@ -187,11 +187,15 @@ impl<'a> TypeHeaderPass<'a> {
         // Collect properties
         let mut properties: IndexMap<Label, Property<ASTTyRepr>> = Default::default();
         let mut methods: IndexMap<Label, Method<ASTTyRepr>> = Default::default();
-        let mut initializers: IndexMap<Name, Initializer<ASTTyRepr>> = Default::default();
+        let mut initializers: IndexMap<Label, Initializer<ASTTyRepr>> = Default::default();
         let mut variants: IndexMap<Label, Variant<ASTTyRepr>> = Default::default();
         let mut associated_types: IndexMap<Name, Associated> = Default::default();
         let mut method_requirements: IndexMap<Label, MethodRequirement<ASTTyRepr>> =
             Default::default();
+
+        let Name::Resolved(Symbol::Type(type_id), _) = &type_name else {
+            unreachable!("didn't resolve type");
+        };
 
         for node in body {
             let Node::Decl(Decl {
@@ -206,7 +210,7 @@ impl<'a> TypeHeaderPass<'a> {
 
             match &kind {
                 DeclKind::Property {
-                    label: name,
+                    name: Name::Resolved(sym, name),
                     is_static,
                     type_annotation,
                     ..
@@ -218,8 +222,9 @@ impl<'a> TypeHeaderPass<'a> {
                     };
 
                     properties.insert(
-                        name.clone(),
+                        name.into(),
                         Property {
+                            symbol: *sym,
                             is_static: *is_static,
                             ty_repr,
                         },
@@ -279,12 +284,16 @@ impl<'a> TypeHeaderPass<'a> {
                     );
                 }
                 DeclKind::MethodRequirement(FuncSignature {
-                    name, params, ret, ..
+                    name: Name::Resolved(symbol, name),
+                    params,
+                    ret,
+                    ..
                 }) => {
                     method_requirements.insert(
-                        name.name_str().into(),
+                        name.into(),
                         MethodRequirement {
                             id,
+                            symbol: *symbol,
                             params: params
                                 .iter()
                                 .map(|p| {
@@ -301,8 +310,10 @@ impl<'a> TypeHeaderPass<'a> {
                 }
                 DeclKind::Init { name, params, .. } => {
                     initializers.insert(
-                        name.clone(),
+                        name.name_str().into(),
                         Initializer {
+                            symbol: name.symbol().unwrap(),
+                            initializes_type_id: *type_id,
                             params: params
                                 .iter()
                                 .enumerate()
@@ -339,12 +350,15 @@ impl<'a> TypeHeaderPass<'a> {
             // At this point, we've already prepend `self` to param lists so we need to do so here as well
             params.insert(0, ASTTyRepr::SelfType(type_name.clone(), id, span));
 
+            let sym = Symbol::Synthesized(SynthesizedId(self.session.synthsized_ids.next_id()));
+
             initializers.insert(
-                Name::Resolved(
-                    Symbol::Synthesized(SynthesizedId(self.session.synthsized_ids.next_id())),
-                    "init".into(),
-                ),
-                Initializer { params },
+                "init".into(),
+                Initializer {
+                    initializes_type_id: *type_id,
+                    symbol: sym,
+                    params,
+                },
             );
         }
 
@@ -357,9 +371,7 @@ impl<'a> TypeHeaderPass<'a> {
             },
             TypeDefKind::Enum => TypeFields::Enum { variants, methods },
             TypeDefKind::Protocol => TypeFields::Protocol {
-                initializers,
                 methods,
-                properties,
                 associated_types,
                 method_requirements,
             },
@@ -374,11 +386,12 @@ pub mod tests {
     use crate::{
         annotation, assert_eq_diff,
         ast::AST,
+        label::Label,
         name::Name,
         name_resolution::{
             name_resolver::NameResolved,
             name_resolver_tests::tests::resolve,
-            symbol::{BuiltinId, Symbol, SynthesizedId, TypeId},
+            symbol::{BuiltinId, GlobalId, PropertyId, Symbol, TypeId},
         },
         node_id::NodeID,
         node_kinds::{generic_decl::GenericDecl, type_annotation::*},
@@ -420,14 +433,19 @@ pub mod tests {
                 generics: Default::default(),
                 fields: TypeFields::Struct {
                     initializers: indexmap! {
-                        Name::Resolved(Symbol::Synthesized(SynthesizedId(1)), "init".into()) => Initializer { params: vec![
-                            ASTTyRepr::SelfType(Name::Resolved(TypeId(1).into(), "Person".into()), NodeID::ANY, Span::ANY),
-                            ASTTyRepr::Annotated(annotation!(TypeAnnotationKind::Nominal { name: Name::Resolved(Symbol::Int, "Int".into()), generics: vec!{} }))
-                        ] }
+                        Label::Named("init".into()) => Initializer {
+                            symbol: Symbol::Global(GlobalId(1)),
+                            initializes_type_id: TypeId(1),
+                            params: vec![
+                                ASTTyRepr::SelfType(Name::Resolved(TypeId(1).into(), "Person".into()), NodeID::ANY, Span::ANY),
+                                ASTTyRepr::Annotated(annotation!(TypeAnnotationKind::Nominal { name: Name::Resolved(Symbol::Int, "Int".into()), generics: vec!{} }))
+                            ]
+                        }
                     },
                     methods: Default::default(),
                     properties: crate::indexmap!(
                         "age".into() => Property {
+                            symbol: Symbol::Property(PropertyId(1)),
                             is_static: false,
                             ty_repr: ASTTyRepr::Annotated(annotation!(TypeAnnotationKind::Nominal {
                                 name: Name::Resolved(Symbol::BuiltinType(BuiltinId(1)), "Int".into()),
@@ -465,9 +483,13 @@ pub mod tests {
                 generics: Default::default(),
                 fields: TypeFields::Struct {
                     initializers: indexmap! {
-                        Name::Resolved(Symbol::Synthesized(SynthesizedId(1)), "init".into()) => Initializer { params: vec![
-                            ASTTyRepr::SelfType(Name::Resolved(TypeId(1).into(), "Person".into()), NodeID::ANY, Span::ANY),
-                        ] }
+                        "init".into() => Initializer {
+                            symbol: Symbol::Global(GlobalId(1)),
+                            initializes_type_id: TypeId(1),
+                            params: vec![
+                                ASTTyRepr::SelfType(Name::Resolved(TypeId(1).into(), "Person".into()), NodeID::ANY, Span::ANY),
+                            ]
+                        }
                     },
                     methods: Default::default(),
                     properties: Default::default()
@@ -510,7 +532,9 @@ pub mod tests {
                     span: Span::ANY,
                 })),
                 fields: TypeFields::Struct {
-                    initializers: crate::indexmap!(Name::Resolved(Symbol::Type(TypeId(5)), "init".into()) => Initializer {
+                    initializers: crate::indexmap!("init".into() => Initializer {
+                        symbol: Symbol::Global(GlobalId(1)),
+                        initializes_type_id: TypeId(1),
                         params: vec![
                             ASTTyRepr::SelfType(Name::Resolved(Symbol::Type(TypeId(1)), "Wrapper".into()), NodeID::ANY, Span::ANY),
                             ASTTyRepr::Hole(NodeID(4), Span::ANY)
@@ -518,6 +542,7 @@ pub mod tests {
                     }),
                     methods: Default::default(),
                     properties: crate::indexmap!("wrapped".into() => Property {
+                        symbol: Symbol::Property(PropertyId(1)),
                         is_static: false,
                         ty_repr: ASTTyRepr::Annotated(annotation!(TypeAnnotationKind::Nominal {
                             name: Name::Resolved(Symbol::Type(TypeId(2)), "T".into()),
@@ -573,15 +598,20 @@ pub mod tests {
                 ),
                 fields: TypeFields::Struct {
                     initializers: indexmap! {
-                        Name::Resolved(Symbol::Synthesized(SynthesizedId(1)), "init".into()) => Initializer { params: vec![
+                        "init".into() => Initializer {
+                            symbol: Symbol::Global(GlobalId(1)),
+                            initializes_type_id: TypeId(1),
+                            params: vec![
                             ASTTyRepr::SelfType(Name::Resolved(TypeId(1).into(), "Wrapper".into()), NodeID::ANY, Span::ANY),
                             ASTTyRepr::Annotated(annotation!(TypeAnnotationKind::Nominal { name: Name::Resolved(Symbol::Type(TypeId(2)), "T".into()), generics: vec![
                                 annotation!(TypeAnnotationKind::Nominal { name: Name::Resolved(TypeId(3).into(), "U".into()), generics: vec![] })
                             ] }))
-                        ] }
+                            ]
+                        }
                     },
                     methods: Default::default(),
                     properties: crate::indexmap!("wrapped".into() => Property {
+                        symbol: Symbol::Property(PropertyId(1)),
                         is_static: false,
                         ty_repr: ASTTyRepr::Annotated(annotation!(TypeAnnotationKind::Nominal {
                             name: Name::Resolved(Symbol::Type(TypeId(2)), "T".into()),
@@ -659,11 +689,10 @@ pub mod tests {
                 def: TypeDefKind::Protocol,
                 generics: Default::default(),
                 fields: TypeFields::Protocol {
-                    initializers: Default::default(),
                     methods: Default::default(),
-                    properties: Default::default(),
                     method_requirements: crate::indexmap!("foo".into() => MethodRequirement {
                         id: NodeID::ANY,
+                        symbol: Symbol::Global(GlobalId(1)),
                         params: vec![],
                         ret: ASTTyRepr::Annotated(annotation!(TypeAnnotationKind::Nominal {
                             name: Name::Resolved(Symbol::Int, "Int".into()),

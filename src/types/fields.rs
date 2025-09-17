@@ -1,13 +1,17 @@
 use indexmap::IndexMap;
 
 use crate::{
-    label::Label, name::Name, name_resolution::symbol::Symbol, node_id::NodeID, span::Span,
+    label::Label,
+    name::Name,
+    name_resolution::symbol::{Symbol, TypeId},
+    node_id::NodeID,
+    span::Span,
 };
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum TypeFields<T> {
     Struct {
-        initializers: IndexMap<Name, Initializer<T>>,
+        initializers: IndexMap<Label, Initializer<T>>,
         methods: IndexMap<Label, Method<T>>,
         properties: IndexMap<Label, Property<T>>,
     },
@@ -15,10 +19,8 @@ pub enum TypeFields<T> {
         methods: IndexMap<Label, Method<T>>,
     },
     Protocol {
-        initializers: IndexMap<Name, Initializer<T>>,
         methods: IndexMap<Label, Method<T>>,
         method_requirements: IndexMap<Label, MethodRequirement<T>>,
-        properties: IndexMap<Label, Property<T>>,
         associated_types: IndexMap<Name, Associated>,
     },
     Enum {
@@ -30,6 +32,7 @@ pub enum TypeFields<T> {
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct Property<T> {
+    pub symbol: Symbol,
     pub is_static: bool,
     pub ty_repr: T,
 }
@@ -47,12 +50,15 @@ pub struct Method<T> {
 #[derive(Debug, PartialEq, Clone)]
 pub struct MethodRequirement<T> {
     pub id: NodeID,
+    pub symbol: Symbol,
     pub params: Vec<T>,
     pub ret: T,
 }
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct Initializer<T> {
+    pub symbol: Symbol,
+    pub initializes_type_id: TypeId,
     pub params: Vec<T>,
 }
 

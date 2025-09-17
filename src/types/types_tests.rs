@@ -1,6 +1,7 @@
 #[cfg(test)]
 pub mod tests {
     use crate::{
+        assert_eq_diff,
         ast::AST,
         diagnostic::Diagnostic,
         name_resolution::{name_resolver::NameResolved, symbol::TypeId},

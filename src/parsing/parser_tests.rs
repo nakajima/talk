@@ -8,6 +8,7 @@ pub mod tests {
         label::Label,
         lexer::Lexer,
         name::Name,
+        name_resolution::symbol::{PropertyId, Symbol},
         node::Node,
         node_kinds::{
             block::Block,
@@ -1705,7 +1706,7 @@ pub mod tests {
                 conformances: vec![],
                 body: any_block!(vec![
                     any_decl!(DeclKind::Property {
-                        label: "age".into(),
+                        name: Name::Resolved(Symbol::Property(PropertyId(1)), "age".into()),
                         is_static: false,
                         default_value: None,
                         type_annotation: Some(annotation!(TypeAnnotationKind::Nominal {
@@ -1715,7 +1716,7 @@ pub mod tests {
                     })
                     .into(),
                     any_decl!(DeclKind::Property {
-                        label: "count".into(),
+                        name: Name::Resolved(Symbol::Property(PropertyId(1)), "count".into()),
                         is_static: false,
                         default_value: Some(any_expr!(ExprKind::LiteralInt("123".into()))),
                         type_annotation: Some(annotation!(TypeAnnotationKind::Nominal {
@@ -1725,7 +1726,7 @@ pub mod tests {
                     })
                     .into(),
                     any_decl!(DeclKind::Property {
-                        label: "height".into(),
+                        name: Name::Resolved(Symbol::Property(PropertyId(1)), "height".into()),
                         is_static: false,
                         default_value: Some(any_expr!(ExprKind::LiteralInt("456".into()))),
                         type_annotation: None
@@ -1756,7 +1757,7 @@ pub mod tests {
                 conformances: vec![],
                 body: any_block!(vec![
                     any_decl!(DeclKind::Property {
-                        label: "age".into(),
+                        name: Name::Resolved(Symbol::Property(PropertyId(1)), "age".into()),
                         is_static: true,
                         default_value: None,
                         type_annotation: Some(annotation!(TypeAnnotationKind::Nominal {
@@ -1766,7 +1767,7 @@ pub mod tests {
                     })
                     .into(),
                     any_decl!(DeclKind::Property {
-                        label: "count".into(),
+                        name: Name::Resolved(Symbol::Property(PropertyId(1)), "count".into()),
                         is_static: true,
                         default_value: Some(any_expr!(ExprKind::LiteralInt("123".into()))),
                         type_annotation: Some(annotation!(TypeAnnotationKind::Nominal {
@@ -1776,7 +1777,7 @@ pub mod tests {
                     })
                     .into(),
                     any_decl!(DeclKind::Property {
-                        label: "height".into(),
+                        name: Name::Resolved(Symbol::Property(PropertyId(1)), "height".into()),
                         is_static: true,
                         default_value: Some(any_expr!(ExprKind::LiteralInt("456".into()))),
                         type_annotation: None
