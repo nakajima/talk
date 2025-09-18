@@ -140,14 +140,14 @@ impl<'a> TypeResolvePass<'a> {
     }
 
     fn resolve_protocol(&mut self, type_def: &TypeDef<ASTTyRepr>) -> Result<Protocol, TypeError> {
-        let Symbol::Type(id) = type_def.name.symbol().unwrap() else {
+        let Symbol::Type(_id) = type_def.name.symbol().unwrap() else {
             unreachable!()
         };
 
         let TypeFields::Protocol {
             methods,
             method_requirements,
-            associated_types,
+            associated_types: _,
         } = &type_def.fields
         else {
             unreachable!()
@@ -277,23 +277,24 @@ impl<'a> TypeResolvePass<'a> {
         &mut self,
         type_def: &TypeDef<ASTTyRepr>,
         properties: &IndexMap<Label, Property<ASTTyRepr>>,
-        generics: Vec<Ty>,
-    ) -> FxHashMap<Label, Ty> {
-        let mut out = FxHashMap::default();
-        let Name::Resolved(Symbol::Type(type_id), _) = &type_def.name else {
-            unreachable!()
-        };
+        _generics: Vec<Ty>,
+    ) -> Row {
+        let mut row = Row::Empty(type_def.def);
 
         for (label, prop) in properties {
             if prop.is_static {
                 continue;
             }
 
-            // Keep monotypes here
-            out.insert(label.clone(), self.infer_ast_ty_repr(&prop.ty_repr));
+            let ty = self.infer_ast_ty_repr(&prop.ty_repr);
+            row = Row::Extend {
+                row: Box::new(row),
+                label: label.clone(),
+                ty,
+            }
         }
 
-        out
+        row
     }
 
     fn resolve_initializers(
@@ -480,13 +481,13 @@ impl<'a> TypeResolvePass<'a> {
 pub mod tests {
     use crate::{
         ast::AST,
-        fxhashmap,
+        fxhashmap, make_row,
         name_resolution::{
             name_resolver::NameResolved,
             name_resolver_tests::tests::resolve,
             symbol::{GlobalId, PropertyId, TypeId},
         },
-        types::passes::type_headers_pass::TypeHeaderPass,
+        types::{passes::type_headers_pass::TypeHeaderPass, ty::TypeParamId},
     };
 
     use super::*;
@@ -533,7 +534,7 @@ pub mod tests {
                 .form,
             NominalForm::Struct {
                 initializers: Default::default(),
-                properties: fxhashmap!("age".into() => Symbol::Property(PropertyId(1))),
+                properties: make_row!(Struct, "age" => Ty::Int),
                 methods: Default::default(),
                 static_methods: Default::default()
             }
@@ -560,7 +561,7 @@ pub mod tests {
                 .form,
             NominalForm::Struct {
                 initializers: Default::default(),
-                properties: Default::default(),
+                properties: Row::Empty(TypeDefKind::Struct),
                 methods: fxhashmap!(Label::Named("fizz".into()) => Symbol::Global(GlobalId(1))),
                 static_methods: Default::default()
             }
@@ -586,7 +587,7 @@ pub mod tests {
                 .form,
             NominalForm::Struct {
                 initializers: Default::default(),
-                properties: fxhashmap!("t".into() => Symbol::Property(PropertyId(1))),
+                properties: make_row!(Struct, "t" => Ty::Param(1.into())),
                 methods: Default::default(),
                 static_methods: Default::default()
             }
@@ -619,8 +620,9 @@ pub mod tests {
                 .form,
             NominalForm::Struct {
                 initializers: Default::default(),
-                properties: fxhashmap!("b".into() => Symbol::Property(PropertyId(1))),
-
+                properties: make_row!(Struct,
+                    "b" => Ty::Nominal { id: TypeId(1), type_args: vec![]}
+                ),
                 methods: Default::default(),
                 static_methods: Default::default()
             }

@@ -4,13 +4,14 @@ use crate::{
     label::Label,
     name_resolution::symbol::{Symbol, TypeId},
     node_id::NodeID,
+    types::row::Row,
 };
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum NominalForm {
     Struct {
         initializers: FxHashMap<Label, Symbol>,
-        properties: FxHashMap<Label, Symbol>,
+        properties: Row,
         methods: FxHashMap<Label, Symbol>,
         static_methods: FxHashMap<Label, Symbol>,
     },
@@ -67,15 +68,10 @@ impl Nominal {
                 None
             }
             NominalForm::Struct {
-                properties,
                 methods,
                 static_methods: _,
                 ..
             } => {
-                if let Some(sym) = properties.get(label) {
-                    return Some(sym);
-                }
-
                 if let Some(sym) = methods.get(label) {
                     return Some(sym);
                 }

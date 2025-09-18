@@ -440,82 +440,13 @@ impl<'a> InferencePass<'a> {
             match self.session.term_env.lookup(&sym).cloned() {
                 Some(EnvEntry::Mono(ty)) => {
                     let applied = apply(ty, subs);
-                    let scheme = self.generalize(group.level, applied, &predicates);
+                    let scheme = self.session.generalize(group.level, applied, &predicates);
                     self.session.term_env.promote(sym, scheme);
                 }
                 Some(EnvEntry::Scheme(_scheme)) => {}
                 None => panic!("didn't find {sym:?} in term env"),
             }
         }
-    }
-
-    #[instrument(skip(self))]
-    fn generalize(&mut self, inner: Level, ty: Ty, unsolved: &[Constraint]) -> EnvEntry {
-        // collect metas in ty
-        let mut metas = FxHashSet::default();
-        collect_meta(&ty, &mut metas);
-
-        // keep only metas born at or above inner
-        let mut foralls = vec![];
-        let mut substitutions = UnificationSubstitutions::new(self.session.meta_levels.clone());
-        for m in &metas {
-            match m {
-                Ty::Param(p) => {
-                    // No substitution needed (the ty already contains Ty::Param(p)),
-                    // but we must record it in `foralls`, so instantiate() knows what to replace.
-                    if !foralls
-                        .iter()
-                        .any(|fa| matches!(fa, ForAll::Ty(q) if *q == *p))
-                    {
-                        foralls.push(ForAll::Ty(*p));
-                    }
-                }
-
-                Ty::UnificationVar { level, id } => {
-                    if *level <= inner {
-                        tracing::warn!("discarding {m:?} due to level ({level:?} < {inner:?})");
-                        continue;
-                    }
-
-                    let param_id = self.session.vars.type_params.next_id();
-                    tracing::trace!("generalizing {m:?} to {param_id:?}");
-                    foralls.push(ForAll::Ty(param_id));
-                    substitutions.ty.insert(*id, Ty::Param(param_id));
-                }
-                Ty::Record(box Row::Var(id)) => {
-                    let level = self
-                        .session
-                        .meta_levels
-                        .get(&Meta::Row(*id))
-                        .expect("didn't get level for row meta");
-                    if *level <= inner {
-                        tracing::trace!("discarding {m:?} due to level ({level:?} < {inner:?})");
-                        continue;
-                    }
-
-                    let param_id = self.session.vars.row_params.next_id();
-                    tracing::trace!("generalizing {m:?} to {param_id:?}");
-                    foralls.push(ForAll::Row(param_id));
-                    substitutions.row.insert(*id, Row::Param(param_id));
-                }
-                _ => {
-                    tracing::warn!("got {m:?} for var while generalizing")
-                }
-            }
-        }
-
-        let ty = apply(ty, &mut substitutions);
-
-        if foralls.is_empty() {
-            return EnvEntry::Mono(ty);
-        }
-
-        let predicates = unsolved
-            .iter()
-            .map(|c| c.into_predicate(&mut substitutions))
-            .collect();
-
-        EnvEntry::Scheme(Scheme::new(foralls, predicates, ty))
     }
 
     #[instrument(skip(self))]
@@ -555,7 +486,9 @@ impl<'a> InferencePass<'a> {
                 let applied_ty = apply(ty.clone(), &mut subs);
 
                 if let PatternKind::Bind(Name::Resolved(sym, _)) = lhs.kind {
-                    let scheme = self.generalize(level, applied_ty.clone(), &unsolved);
+                    let scheme = self
+                        .session
+                        .generalize(level, applied_ty.clone(), &unsolved);
                     self.session.term_env.promote(sym, scheme);
                 }
 
@@ -876,7 +809,7 @@ impl<'a> InferencePass<'a> {
 
                 let (fn_ty, _subs) =
                     scheme.inference_instantiate(&mut self.session, level, wants, expr.span);
-                fn_ty // a Ty::Func(...), so infer_call emits a Call constraint
+                fn_ty
             }
             ExprKind::RowVariable(..) => todo!(),
 

@@ -1,5 +1,6 @@
 use indexmap::IndexMap;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
+use tracing::instrument;
 
 use crate::{
     ast::AST,
@@ -12,17 +13,20 @@ use crate::{
     span::Span,
     types::{
         builtins::builtin_scope,
+        constraint::Constraint,
         fields::{Method, TypeFields},
         kind::Kind,
         passes::{
             dependencies_pass::DependenciesPass,
-            inference_pass::{InferencePass, Inferenced, Meta},
+            inference_pass::{InferencePass, Inferenced, Meta, collect_meta},
             type_headers_pass::TypeHeaderPass,
             type_resolve_pass::{HeadersResolved, TypeResolvePass},
         },
         row::Row,
-        term_environment::TermEnv,
+        scheme::{ForAll, Scheme},
+        term_environment::{EnvEntry, TermEnv},
         ty::{Level, Ty},
+        type_operations::{UnificationSubstitutions, apply},
         vars::Vars,
     },
 };
@@ -127,6 +131,74 @@ impl<Phase: TypingPhase> TypeSession<Phase> {
         let session = TypeResolvePass::drive(ast, session);
         let session = DependenciesPass::drive(session, ast);
         InferencePass::perform(session, ast)
+    }
+
+    #[instrument(skip(self))]
+    pub fn generalize(&mut self, inner: Level, ty: Ty, unsolved: &[Constraint]) -> EnvEntry {
+        // collect metas in ty
+        let mut metas = FxHashSet::default();
+        collect_meta(&ty, &mut metas);
+
+        // keep only metas born at or above inner
+        let mut foralls = vec![];
+        let mut substitutions = UnificationSubstitutions::new(self.meta_levels.clone());
+        for m in &metas {
+            match m {
+                Ty::Param(p) => {
+                    // No substitution needed (the ty already contains Ty::Param(p)),
+                    // but we must record it in `foralls`, so instantiate() knows what to replace.
+                    if !foralls
+                        .iter()
+                        .any(|fa| matches!(fa, ForAll::Ty(q) if *q == *p))
+                    {
+                        foralls.push(ForAll::Ty(*p));
+                    }
+                }
+
+                Ty::UnificationVar { level, id } => {
+                    if *level <= inner {
+                        tracing::warn!("discarding {m:?} due to level ({level:?} < {inner:?})");
+                        continue;
+                    }
+
+                    let param_id = self.vars.type_params.next_id();
+                    tracing::trace!("generalizing {m:?} to {param_id:?}");
+                    foralls.push(ForAll::Ty(param_id));
+                    substitutions.ty.insert(*id, Ty::Param(param_id));
+                }
+                Ty::Record(box Row::Var(id)) => {
+                    let level = self
+                        .meta_levels
+                        .get(&Meta::Row(*id))
+                        .expect("didn't get level for row meta");
+                    if *level <= inner {
+                        tracing::trace!("discarding {m:?} due to level ({level:?} < {inner:?})");
+                        continue;
+                    }
+
+                    let param_id = self.vars.row_params.next_id();
+                    tracing::trace!("generalizing {m:?} to {param_id:?}");
+                    foralls.push(ForAll::Row(param_id));
+                    substitutions.row.insert(*id, Row::Param(param_id));
+                }
+                _ => {
+                    tracing::warn!("got {m:?} for var while generalizing")
+                }
+            }
+        }
+
+        let ty = apply(ty, &mut substitutions);
+
+        if foralls.is_empty() {
+            return EnvEntry::Mono(ty);
+        }
+
+        let predicates = unsolved
+            .iter()
+            .map(|c| c.into_predicate(&mut substitutions))
+            .collect();
+
+        EnvEntry::Scheme(Scheme::new(foralls, predicates, ty))
     }
 
     pub fn advance(self, phase: Phase::Next) -> TypeSession<Phase::Next> {
