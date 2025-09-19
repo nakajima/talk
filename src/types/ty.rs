@@ -53,9 +53,16 @@ pub enum Ty {
 
     Param(TypeParamId),
     Rigid(SkolemId),
-    UnificationVar { id: UnificationVarId, level: Level },
+    UnificationVar {
+        id: UnificationVarId,
+        level: Level,
+    },
 
-    Constructor { type_id: TypeId, func_ty: Box<Ty> },
+    Constructor {
+        type_id: TypeId,
+        params: Vec<Ty>,
+        ret: Box<Ty>,
+    },
 
     Func(Box<Ty>, Box<Ty>),
 
@@ -64,7 +71,10 @@ pub enum Ty {
     Record(Box<Row>),
 
     // Nominal types (we look up their information from the TypeCatalog)
-    Nominal { id: TypeId, type_args: Vec<Ty> },
+    Nominal {
+        id: TypeId,
+        row: Box<Row>,
+    },
 }
 
 #[allow(non_upper_case_globals)]
@@ -82,8 +92,10 @@ impl Ty {
             Ty::Rigid(..) => (),
             Ty::UnificationVar { .. } => (),
             Ty::Primitive(..) => (),
-            Ty::Constructor { func_ty, .. } => {
-                result.extend(func_ty.collect_foralls());
+            Ty::Constructor { params, .. } => {
+                for item in params {
+                    result.extend(item.collect_foralls());
+                }
             }
             Ty::Func(ty, ty1) => {
                 result.extend(ty.collect_foralls());
@@ -94,12 +106,7 @@ impl Ty {
                     result.extend(item.collect_foralls());
                 }
             }
-            Ty::Nominal { type_args, .. } => {
-                for arg in type_args {
-                    result.extend(arg.collect_foralls());
-                }
-            }
-            Ty::Record(box row) => match row {
+            Ty::Nominal { box row, .. } | Ty::Record(box row) => match row {
                 Row::Empty(..) => (),
                 Row::Extend { row, ty, .. } => {
                     result.extend(Ty::Record(row.clone()).collect_foralls());
@@ -121,7 +128,7 @@ impl Ty {
             Ty::Rigid(..) => false,
             Ty::UnificationVar { .. } => true,
             Ty::Primitive(..) => false,
-            Ty::Constructor { func_ty, .. } => func_ty.contains_var(),
+            Ty::Constructor { params, .. } => params.iter().any(|p| p.contains_var()),
             Ty::Func(ty, ty1) => ty.contains_var() || ty1.contains_var(),
             Ty::Tuple(items) => items.iter().any(|i| i.contains_var()),
             Ty::Record(box row) => match row {
@@ -144,14 +151,14 @@ impl std::fmt::Debug for Ty {
             Ty::Rigid(id) => write!(f, "rigid(α{})", id.0),
             Ty::UnificationVar { id, level } => write!(f, "meta(α{}, {})", id.0, level.0),
             Ty::Primitive(primitive) => write!(f, "{primitive:?}"),
-            Ty::Constructor { func_ty, .. } => {
-                write!(f, "Constructor({func_ty:?})")
+            Ty::Constructor { params, .. } => {
+                write!(f, "Constructor({params:?})")
             }
             Ty::Func(param, ret) => write!(f, "func({param:?}) -> {ret:?}"),
             Ty::Tuple(items) => {
                 write!(f, "({})", items.iter().map(|i| format!("{i:?}")).join(", "))
             }
-            Ty::Nominal { id, type_args } => write!(f, "Type({id:?}, {type_args:?})"),
+            Ty::Nominal { id, row } => write!(f, "Type({id:?}, {row:?})"),
             Ty::Record(box row) => {
                 let row_debug = match row {
                     Row::Empty(..) => "".to_string(),

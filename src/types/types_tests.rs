@@ -1,16 +1,16 @@
 #[cfg(test)]
 pub mod tests {
     use crate::{
-        assert_eq_diff,
         ast::AST,
         diagnostic::Diagnostic,
+        make_row,
         name_resolution::{name_resolver::NameResolved, symbol::TypeId},
         types::{
             passes::{
                 dependencies_pass::tests::resolve_dependencies,
                 inference_pass::{InferencePass, Inferenced},
             },
-            ty::Ty,
+            ty::{Level, Ty},
             type_error::TypeError,
             type_session::TypeSession,
         },
@@ -1023,7 +1023,7 @@ pub mod tests {
             ty(1, &ast, &session),
             Ty::Nominal {
                 id: TypeId(1),
-                type_args: vec![]
+                row: Box::new(make_row!(Struct, "age" => Ty::Int, "height" => Ty::Float)),
             }
         );
     }
@@ -1237,14 +1237,14 @@ pub mod tests {
             ty(1, &ast, &session),
             Ty::Nominal {
                 id: TypeId(1),
-                type_args: vec![]
+                row: Box::new(make_row!(Enum, "foo" => Ty::Void, "bar" => Ty::Void))
             }
         );
         assert_eq!(
             ty(2, &ast, &session),
             Ty::Nominal {
                 id: TypeId(1),
-                type_args: vec![]
+                row: Box::new(make_row!(Enum, "foo" => Ty::Void, "bar" => Ty::Void))
             }
         );
     }
@@ -1266,14 +1266,18 @@ pub mod tests {
             ty(1, &ast, &session),
             Ty::Nominal {
                 id: TypeId(1),
-                type_args: vec![]
+                row: Box::new(
+                    make_row!(Enum, "foo" => Ty::Tuple(vec![Ty::Int, Ty::Bool]), "bar" => Ty::Float)
+                )
             }
         );
         assert_eq!(
             ty(2, &ast, &session),
             Ty::Nominal {
                 id: TypeId(1),
-                type_args: vec![]
+                row: Box::new(
+                    make_row!(Enum, "foo" => Ty::Tuple(vec![Ty::Int, Ty::Bool]), "bar" => Ty::Float)
+                )
             }
         );
     }
@@ -1296,21 +1300,24 @@ pub mod tests {
             ty(1, &ast, &session),
             Ty::Nominal {
                 id: TypeId(1),
-                type_args: vec![Ty::Int]
+                row: Box::new(make_row!(Enum, "some" => Ty::Int, "none" => Ty::Void))
             }
         );
         assert_eq!(
             ty(2, &ast, &session),
             Ty::Nominal {
                 id: TypeId(1),
-                type_args: vec![Ty::Float]
+                row: Box::new(make_row!(Enum, "some" => Ty::Float, "none" => Ty::Void))
             }
         );
         assert_eq!(
             ty(3, &ast, &session),
             Ty::Nominal {
                 id: TypeId(1),
-                type_args: vec![]
+                row: Box::new(make_row!(Enum, "some" => Ty::UnificationVar {
+                        id: 1.into(),
+                        level: Level(1)
+                    }, "none" => Ty::Void))
             }
         );
     }

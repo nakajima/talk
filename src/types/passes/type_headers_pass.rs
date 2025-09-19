@@ -448,7 +448,7 @@ pub mod tests {
                             symbol: Symbol::Property(PropertyId(1)),
                             is_static: false,
                             ty_repr: ASTTyRepr::Annotated(annotation!(TypeAnnotationKind::Nominal {
-                                name: Name::Resolved(Symbol::BuiltinType(BuiltinId(1)), "Int".into()),
+                                name: Name::Resolved(Symbol::Builtin(BuiltinId(1)), "Int".into()),
                                 generics: vec![]
                             })),
                         }

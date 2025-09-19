@@ -201,6 +201,81 @@ impl<Phase: TypingPhase> TypeSession<Phase> {
         EnvEntry::Scheme(Scheme::new(foralls, predicates, ty))
     }
 
+    #[instrument(skip(self))]
+    pub fn generalize_with_substitutions(
+        &mut self,
+        inner: Level,
+        ty: Ty,
+        unsolved: &[Constraint],
+        substitutions: &mut UnificationSubstitutions,
+    ) -> EnvEntry {
+        let ty = apply(ty, substitutions);
+
+        // collect metas in ty
+        let mut metas = FxHashSet::default();
+        collect_meta(&ty, &mut metas);
+
+        // keep only metas born at or above inner
+        let mut foralls = vec![];
+        for m in &metas {
+            match m {
+                Ty::Param(p) => {
+                    // No substitution needed (the ty already contains Ty::Param(p)),
+                    // but we must record it in `foralls`, so instantiate() knows what to replace.
+                    if !foralls
+                        .iter()
+                        .any(|fa| matches!(fa, ForAll::Ty(q) if *q == *p))
+                    {
+                        foralls.push(ForAll::Ty(*p));
+                    }
+                }
+
+                Ty::UnificationVar { level, id } => {
+                    if *level <= inner {
+                        tracing::warn!("discarding {m:?} due to level ({level:?} < {inner:?})");
+                        continue;
+                    }
+
+                    let param_id = self.vars.type_params.next_id();
+                    tracing::trace!("generalizing {m:?} to {param_id:?}");
+                    foralls.push(ForAll::Ty(param_id));
+                    substitutions.ty.insert(*id, Ty::Param(param_id));
+                }
+                Ty::Record(box Row::Var(id)) => {
+                    let level = self
+                        .meta_levels
+                        .get(&Meta::Row(*id))
+                        .expect("didn't get level for row meta");
+                    if *level <= inner {
+                        tracing::trace!("discarding {m:?} due to level ({level:?} < {inner:?})");
+                        continue;
+                    }
+
+                    let param_id = self.vars.row_params.next_id();
+                    tracing::trace!("generalizing {m:?} to {param_id:?}");
+                    foralls.push(ForAll::Row(param_id));
+                    substitutions.row.insert(*id, Row::Param(param_id));
+                }
+                _ => {
+                    tracing::warn!("got {m:?} for var while generalizing")
+                }
+            }
+        }
+
+        let ty = apply(ty, substitutions);
+
+        if foralls.is_empty() {
+            return EnvEntry::Mono(ty);
+        }
+
+        let predicates = unsolved
+            .iter()
+            .map(|c| c.into_predicate(substitutions))
+            .collect();
+
+        EnvEntry::Scheme(Scheme::new(foralls, predicates, ty))
+    }
+
     pub fn advance(self, phase: Phase::Next) -> TypeSession<Phase::Next> {
         TypeSession::<Phase::Next> {
             vars: self.vars,

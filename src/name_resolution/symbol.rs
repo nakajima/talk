@@ -1,53 +1,10 @@
 use crate::id_generator::IDGenerator;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum Symbol {
-    Type(TypeId),
-    Global(GlobalId),
-    DeclaredLocal(DeclaredLocalId),
-    PatternBindLocal(PatternBindLocalId),
-    ParamLocal(ParamLocalId),
-    BuiltinType(BuiltinId),
-    Property(PropertyId),
-    Synthesized(SynthesizedId),
-}
-
-#[allow(non_upper_case_globals)]
-impl Symbol {
-    pub const Int: Symbol = Symbol::BuiltinType(BuiltinId(1));
-    pub const Float: Symbol = Symbol::BuiltinType(BuiltinId(2));
-    pub const Bool: Symbol = Symbol::BuiltinType(BuiltinId(3));
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct GlobalId(pub u32);
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct TypeId(pub u32);
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct PropertyId(pub u32);
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct DeclaredLocalId(pub u32);
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct PatternBindLocalId(pub u32);
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct ParamLocalId(pub u32);
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct FieldId(pub u32);
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct BuiltinId(pub u32);
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct SynthesizedId(pub u32);
-
 macro_rules! impl_symbol_id {
     ($case:ident, $ty: ident) => {
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+        pub struct $ty(pub u32);
+
         impl<T: Into<u32>> From<T> for $ty {
             fn from(value: T) -> Self {
                 $ty(value.into())
@@ -62,11 +19,37 @@ macro_rules! impl_symbol_id {
     };
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Symbol {
+    Type(TypeId),
+    Global(GlobalId),
+    DeclaredLocal(DeclaredLocalId),
+    PatternBindLocal(PatternBindLocalId),
+    ParamLocal(ParamLocalId),
+    Builtin(BuiltinId),
+    Property(PropertyId),
+    Synthesized(SynthesizedId),
+    InstanceMethod(InstanceMethodId),
+    Variant(VariantId),
+}
+
+#[allow(non_upper_case_globals)]
+impl Symbol {
+    pub const Int: Symbol = Symbol::Builtin(BuiltinId(1));
+    pub const Float: Symbol = Symbol::Builtin(BuiltinId(2));
+    pub const Bool: Symbol = Symbol::Builtin(BuiltinId(3));
+}
+
 impl_symbol_id!(Type, TypeId);
 impl_symbol_id!(DeclaredLocal, DeclaredLocalId);
 impl_symbol_id!(Global, GlobalId);
 impl_symbol_id!(ParamLocal, ParamLocalId);
 impl_symbol_id!(PatternBindLocal, PatternBindLocalId);
+impl_symbol_id!(Property, PropertyId);
+impl_symbol_id!(InstanceMethod, InstanceMethodId);
+impl_symbol_id!(Builtin, BuiltinId);
+impl_symbol_id!(Variant, VariantId);
+impl_symbol_id!(Synthesized, SynthesizedId);
 
 #[derive(Debug, Clone, Default)]
 pub struct Symbols {
@@ -75,8 +58,9 @@ pub struct Symbols {
     params: IDGenerator,
     pattern_binds: IDGenerator,
     locals: IDGenerator,
-    fields: IDGenerator,
     properties: IDGenerator,
+    instance_methods: IDGenerator,
+    variants: IDGenerator,
     synthesized: IDGenerator,
     builtins: IDGenerator,
 }
@@ -106,8 +90,12 @@ impl Symbols {
         DeclaredLocalId(self.locals.next_id())
     }
 
-    pub fn next_field(&mut self) -> FieldId {
-        FieldId(self.fields.next_id())
+    pub fn next_variant(&mut self) -> VariantId {
+        VariantId(self.variants.next_id())
+    }
+
+    pub fn next_instance_method(&mut self) -> InstanceMethodId {
+        InstanceMethodId(self.instance_methods.next_id())
     }
 
     pub fn next_builtin(&mut self) -> BuiltinId {

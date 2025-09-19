@@ -117,4 +117,39 @@ pub mod tests {
             })
         )
     }
+
+    #[test]
+    fn ignores_methods() {
+        let mut parsed = parse(
+            "
+            struct Person { func fizz() {} }
+        ",
+        );
+
+        LowerFuncsToLets::run(&mut parsed);
+
+        assert_eq_diff!(
+            *parsed.roots[0].as_decl(),
+            any_decl!(DeclKind::Struct {
+                name: "Person".into(),
+                generics: vec![],
+                conformances: vec![],
+                body: any_block!(vec![
+                    any_decl!(DeclKind::Method {
+                        func: Box::new(Func {
+                            id: NodeID::ANY,
+                            name: "fizz".into(),
+                            generics: vec![],
+                            params: vec![],
+                            body: any_block!(vec![]),
+                            ret: None,
+                            attributes: vec![]
+                        }),
+                        is_static: false
+                    })
+                    .into()
+                ])
+            })
+        )
+    }
 }

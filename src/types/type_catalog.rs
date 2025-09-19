@@ -1,17 +1,17 @@
+use indexmap::IndexMap;
 use rustc_hash::FxHashMap;
 
 use crate::{
     label::Label,
     name_resolution::symbol::{Symbol, TypeId},
     node_id::NodeID,
-    types::row::Row,
 };
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum NominalForm {
     Struct {
         initializers: FxHashMap<Label, Symbol>,
-        properties: Row,
+        properties: IndexMap<Label, Symbol>,
         methods: FxHashMap<Label, Symbol>,
         static_methods: FxHashMap<Label, Symbol>,
     },

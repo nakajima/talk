@@ -191,7 +191,7 @@ impl<'a> DeclDeclarer<'a> {
     #[instrument(skip(self))]
     fn enter_func_signature(&mut self, func: &mut FuncSignature) {
         on!(func, FuncSignature { name, .. }, {
-            *name = self.resolver.declare_global(name);
+            *name = self.resolver.declare_instance_method(name);
         })
     }
 
@@ -227,8 +227,19 @@ impl<'a> DeclDeclarer<'a> {
         });
 
         on!(&mut decl.kind, DeclKind::EnumVariant(name, ..), {
-            *name = self.resolver.declare_type(name);
+            *name = self.resolver.declare_variant(name);
         });
+
+        on!(
+            &mut decl.kind,
+            DeclKind::Method {
+                func: box Func { name, .. },
+                is_static: false
+            },
+            {
+                *name = self.resolver.declare_instance_method(name);
+            }
+        );
 
         on!(&mut decl.kind, DeclKind::Associated { generic }, {
             generic.name = self.resolver.declare_type(&generic.name);

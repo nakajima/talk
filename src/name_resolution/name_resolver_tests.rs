@@ -10,7 +10,8 @@ pub mod tests {
         name_resolution::{
             name_resolver::{NameResolved, NameResolver, NameResolverError},
             symbol::{
-                BuiltinId, DeclaredLocalId, GlobalId, ParamLocalId, PropertyId, Symbol, TypeId,
+                BuiltinId, DeclaredLocalId, GlobalId, InstanceMethodId, ParamLocalId, PropertyId,
+                Symbol, TypeId, VariantId,
             },
         },
         node::Node,
@@ -119,7 +120,7 @@ pub mod tests {
                     ))
                 },
                 type_annotation: Some(annotation!(TypeAnnotationKind::Nominal {
-                    name: Name::Resolved(Symbol::BuiltinType(BuiltinId(1)), "Int".into()),
+                    name: Name::Resolved(Symbol::Builtin(BuiltinId(1)), "Int".into()),
                     generics: vec![]
                 })),
                 value: None
@@ -572,7 +573,10 @@ pub mod tests {
                     any_decl!(DeclKind::Method {
                         func: Box::new(Func {
                             id: NodeID::ANY,
-                            name: Name::Resolved(Symbol::Global(GlobalId(1)), "fizz".into()),
+                            name: Name::Resolved(
+                                Symbol::InstanceMethod(InstanceMethodId(1)),
+                                "fizz".into()
+                            ),
                             generics: vec![],
                             params: vec![param!(Symbol::ParamLocal(ParamLocalId(1)), "self")],
                             body: any_block!(vec![any_expr_stmt!(ExprKind::Call {
@@ -599,7 +603,10 @@ pub mod tests {
                     any_decl!(DeclKind::Method {
                         func: Box::new(Func {
                             id: NodeID::ANY,
-                            name: Name::Resolved(Symbol::Global(GlobalId(2)), "buzz".into()),
+                            name: Name::Resolved(
+                                Symbol::InstanceMethod(InstanceMethodId(2)),
+                                "buzz".into()
+                            ),
                             generics: vec![],
                             params: vec![param!(Symbol::ParamLocal(ParamLocalId(2)), "self")],
                             body: any_block!(vec![any_expr_stmt!(ExprKind::Call {
@@ -684,11 +691,11 @@ pub mod tests {
                 generics: vec![],
                 body: any_block!(vec![
                     Node::Decl(any_decl!(DeclKind::EnumVariant(
-                        Name::Resolved(Symbol::Type(TypeId(2)), "foo".into()),
+                        Name::Resolved(Symbol::Variant(VariantId(1)), "foo".into()),
                         vec![]
                     ))),
                     Node::Decl(any_decl!(DeclKind::EnumVariant(
-                        Name::Resolved(Symbol::Type(TypeId(3)), "bar".into()),
+                        Name::Resolved(Symbol::Variant(VariantId(2)), "bar".into()),
                         vec![]
                     ))),
                 ])
@@ -714,7 +721,10 @@ pub mod tests {
                 generics: vec![],
                 body: any_block!(vec![Node::Decl(any_decl!(DeclKind::MethodRequirement(
                     FuncSignature {
-                        name: Name::Resolved(Symbol::Global(GlobalId(1)), "buzz".into()),
+                        name: Name::Resolved(
+                            Symbol::InstanceMethod(InstanceMethodId(1)),
+                            "buzz".into()
+                        ),
                         params: vec![],
                         generics: vec![],
                         ret: Box::new(annotation!(TypeAnnotationKind::Tuple(vec![])))
@@ -753,7 +763,10 @@ pub mod tests {
                         }
                     })),
                     Node::Decl(any_decl!(DeclKind::MethodRequirement(FuncSignature {
-                        name: Name::Resolved(Symbol::Global(GlobalId(1)), "buzz".into()),
+                        name: Name::Resolved(
+                            Symbol::InstanceMethod(InstanceMethodId(1)),
+                            "buzz".into()
+                        ),
                         params: vec![],
                         generics: vec![],
                         ret: Box::new(annotation!(TypeAnnotationKind::Nominal {

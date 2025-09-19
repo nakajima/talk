@@ -4,7 +4,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::instrument;
 
 use crate::types::passes::dependencies_pass::Conformance;
-use crate::types::type_catalog::{Nominal, NominalForm};
+use crate::types::type_catalog::NominalForm;
 use crate::types::type_session::TypeDef;
 use crate::types::wants::Wants;
 use crate::{
@@ -35,7 +35,7 @@ use crate::{
         constraint::{Constraint, ConstraintCause},
         passes::dependencies_pass::{Binder, SCCResolved},
         row::{Row, RowMetaId},
-        scheme::{ForAll, Scheme},
+        scheme::Scheme,
         term_environment::{EnvEntry, TermEnv},
         ty::{Level, Ty, UnificationVarId},
         type_error::TypeError,
@@ -787,29 +787,65 @@ impl<'a> InferencePass<'a> {
             ExprKind::RecordLiteral { fields, spread } => {
                 self.infer_record_literal(fields, spread, level, wants)
             }
-            ExprKind::Constructor(Name::Resolved(sym @ Symbol::Type(id), _)) => {
-                let ctor_sym = self
-                    .session
-                    .phase
-                    .type_catalog
-                    .nominals
-                    .get(id)
-                    .and_then(|n| match &n.form {
-                        NominalForm::Struct { initializers, .. } => {
-                            initializers.values().next().copied()
-                        }
-                        _ => None,
-                    })
-                    .expect("no constructor symbol for nominal type");
+            ExprKind::Constructor(Name::Resolved(Symbol::Type(id), _)) => {
+                // let ctor_sym = self
+                //     .session
+                //     .phase
+                //     .type_catalog
+                //     .nominals
+                //     .get(id)
+                //     .and_then(|n| match &n.form {
+                //         NominalForm::Struct { initializers, .. } => {
+                //             initializers.values().next().copied()
+                //         }
+                //         _ => None,
+                //     })
+                //     .expect("no constructor symbol for nominal type");
 
-                let scheme = match self.session.term_env.lookup(&ctor_sym) {
-                    Some(EnvEntry::Scheme(s)) => s.clone(),
-                    _ => panic!("ctor scheme missing"),
+                // let Some(entry) = self.session.term_env.lookup(&ctor_sym).cloned() else {
+                //     panic!(
+                //         "constructor scheme missing: {:?}",
+                //         self.session.term_env.lookup(&ctor_sym)
+                //     );
+                // };
+
+                // entry.inference_instantiate(&mut self.session, level, wants, expr.span)
+                // Look up the nominal to see its form
+                let Some(nominal) = self.session.phase.type_catalog.nominals.get(id) else {
+                    panic!("type not found in catalog");
                 };
 
-                let (fn_ty, _subs) =
-                    scheme.inference_instantiate(&mut self.session, level, wants, expr.span);
-                fn_ty
+                match &nominal.form {
+                    NominalForm::Struct { initializers, .. } => {
+                        // EXISTING struct path (unchanged)
+                        let ctor_sym = initializers
+                            .values()
+                            .next()
+                            .copied()
+                            .expect("struct must have an initializer symbol");
+                        let entry = self
+                            .session
+                            .term_env
+                            .lookup(&ctor_sym)
+                            .cloned()
+                            .expect("constructor scheme missing");
+                        entry.inference_instantiate(&mut self.session, level, wants, expr.span)
+                    }
+                    NominalForm::Enum { .. } => {
+                        // For enums, the “type value” is just the type itself,
+                        // not a callable constructor. Use the type already in the env.
+                        match self
+                            .session
+                            .term_env
+                            .lookup(&Symbol::Type(*id))
+                            .cloned()
+                            .expect("enum type missing from env")
+                        {
+                            EnvEntry::Mono(ty) => ty,
+                            EnvEntry::Scheme(s) => s.ty.clone(),
+                        }
+                    }
+                }
             }
             ExprKind::RowVariable(..) => todo!(),
 
@@ -925,8 +961,31 @@ impl<'a> InferencePass<'a> {
             arg_tys.push(self.infer_expr(&arg.value, level, wants));
         }
 
-        let returns = self.session.new_ty_meta_var(level);
-        tracing::trace!("adding returns meta: {returns:?}");
+        let returns = match &callee_ty {
+            Ty::Constructor { type_id, .. } => {
+                // Build { label_i : arg_ty_i } as a *closed* row
+                let mut row = Row::Empty(TypeDefKind::Struct);
+                for (arg, ty) in args.iter().zip(arg_tys.iter()) {
+                    let Label::Named(name) = &arg.label else {
+                        // TODO: handle unlabled args
+                        continue;
+                    };
+                    row = Row::Extend {
+                        row: Box::new(row),
+                        label: Label::Named(name.clone()),
+                        ty: ty.clone(),
+                    };
+                }
+                Ty::Nominal {
+                    id: *type_id,
+                    row: Box::new(row),
+                }
+            }
+            _ => {
+                // Regular call: unknown return until solved
+                self.session.new_ty_meta_var(level)
+            }
+        };
 
         let receiver = if let Expr {
             kind: ExprKind::Member(receiver, _),
@@ -1117,8 +1176,10 @@ pub fn collect_meta(ty: &Ty, out: &mut FxHashSet<Ty>) {
             }
         },
         Ty::Nominal { .. } => (),
-        Ty::Constructor { func_ty, .. } => {
-            collect_meta(func_ty, out);
+        Ty::Constructor { params, .. } => {
+            for param in params {
+                collect_meta(param, out);
+            }
         }
         Ty::Primitive(_) | Ty::Rigid(_) | Ty::Hole(_) => {}
     }

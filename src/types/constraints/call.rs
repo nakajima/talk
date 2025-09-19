@@ -43,24 +43,56 @@ impl Call {
         let mut args = apply_mult(self.args.to_vec(), substitutions);
         let returns = apply(self.returns.clone(), substitutions);
 
-        if let Some(receiver) = &self.receiver {
-            let receiver = apply(receiver.clone(), substitutions);
-            // receiver is the first parameter for instance methods
-            args.insert(0, receiver);
-        }
+        // if let Some(receiver) = &self.receiver {
+        //     let receiver = apply(receiver.clone(), substitutions);
+        //     // receiver is the first parameter for instance methods
+        //     args.insert(0, receiver);
+        // }
 
         tracing::debug!("callee: {callee:?} {args:?} {returns:?}");
 
+        // match &callee {
+        //     Ty::Constructor {
+        //         params, box ret, ..
+        //     } => unify(
+        //         &curry(params.clone(), ret.clone()),
+        //         &curry(args, returns),
+        //         substitutions,
+        //         &mut session.vars,
+        //     ),
+        //     Ty::Func(..) => {
+        //         if args.is_empty() {
+        //             unify(
+        //                 &callee,
+        //                 &Ty::Func(Ty::Void.into(), returns.into()),
+        //                 substitutions,
+        //                 &mut session.vars,
+        //             )
+        //         } else {
+        //             unify(
+        //                 &callee,
+        //                 &curry(args, returns),
+        //                 substitutions,
+        //                 &mut session.vars,
+        //             )
+        //         }
+        //     }
+        //     ty => Err(TypeError::CalleeNotCallable(ty.clone())),
+        // }
+        if let Some(r) = &self.receiver {
+            let r = apply(r.clone(), substitutions);
+            args.insert(0, r);
+        }
+
         match &callee {
-            Ty::Constructor { func_ty, .. } => {
-                args.insert(0, returns.clone());
-                unify(
-                    func_ty,
-                    &curry(args, returns),
-                    substitutions,
-                    &mut session.vars,
-                )
-            }
+            Ty::Constructor {
+                params, box ret, ..
+            } => unify(
+                &curry(params.clone(), ret.clone()),
+                &curry(args, returns),
+                substitutions,
+                &mut session.vars,
+            ),
             Ty::Func(..) => {
                 if args.is_empty() {
                     unify(
