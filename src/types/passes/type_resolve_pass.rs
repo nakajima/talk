@@ -185,12 +185,12 @@ impl<'a> TypeResolvePass<'a> {
         }
 
         let form = self.resolve_form(type_def);
-
-        let (symbols_to_generalize) = match &form {
+        let symbols_to_generalize = match &form {
             NominalForm::Enum {
                 variants,
-                methods,
                 static_methods,
+                methods,
+                ..
             } => {
                 let mut result: Vec<Symbol> = vec![];
                 result.extend(variants.values());
@@ -201,13 +201,14 @@ impl<'a> TypeResolvePass<'a> {
             NominalForm::Struct {
                 initializers,
                 properties,
-                methods,
                 static_methods,
+                methods,
+                ..
             } => {
                 let mut result: Vec<Symbol> = vec![];
                 result.extend(initializers.values());
-                result.extend(properties.values());
                 result.extend(methods.values());
+                result.extend(properties.values());
                 result.extend(static_methods.values());
                 result
             }

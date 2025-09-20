@@ -1,10 +1,12 @@
 use crate::{
     label::Label,
+    name_resolution::symbol::Symbol,
     span::Span,
     types::{
         constraint::{Constraint, ConstraintCause},
         passes::{dependencies_pass::SCCResolved, inference_pass::curry},
         row::Row,
+        scheme::Scheme,
         term_environment::EnvEntry,
         ty::{Level, Primitive, Ty},
         type_catalog::NominalForm,
@@ -46,32 +48,31 @@ impl Member {
             && let Some(sym) = nominal.member_symbol(&self.label)
             && let Some(entry) = session.term_env.lookup(sym).cloned()
         {
-            match &nominal.form {
-                NominalForm::Struct { .. } => {
-                    // EXISTING method logic (strip self, etc.)
-                    let method_ty = entry.solver_instantiate(
+            match sym {
+                Symbol::InstanceMethod(_) => {
+                    let scheme_ty = entry.solver_instantiate(
                         session,
-                        Level(1),
+                        level,
                         substitutions,
                         next_wants,
                         self.span,
                     );
-
-                    let applied_method_ty = if let Ty::Func(param, rest) = method_ty {
-                        unify(&receiver, &param, substitutions, &mut session.vars)?;
-                        if !matches!(*rest, Ty::Func(..)) {
-                            Ty::Func(Box::new(Ty::Void), rest)
+                    if let Ty::Func(first, box rest) = scheme_ty.clone() {
+                        unify(&receiver, &first, substitutions, &mut session.vars)?;
+                        tracing::info!(
+                            "INSTANCE METHOD: entry:{entry:?} receiver: {receiver:?} first:{first:?} rest:{rest:?}"
+                        );
+                        let applied = if matches!(rest, Ty::Func(..)) {
+                            rest
                         } else {
-                            *rest
-                        }
+                            Ty::Func(Box::new(Ty::Void), Box::new(rest))
+                        };
+                        unify(&ty, &applied, substitutions, &mut session.vars)
                     } else {
-                        unreachable!()
-                    };
-
-                    return unify(&ty, &applied_method_ty, substitutions, &mut session.vars);
+                        unreachable!("instance method must be a function")
+                    }
                 }
-
-                NominalForm::Enum { variants, .. } => {
+                Symbol::Variant(_) => {
                     // Variant constructor: build (payload) -> Fizz{ all variants }
                     // 1) payload type is what resolve_variants stored under the variant symbol:
                     let payload_ty = entry.solver_instantiate(
@@ -81,6 +82,10 @@ impl Member {
                         next_wants,
                         self.span,
                     );
+
+                    let NominalForm::Enum { variants, .. } = &nominal.form else {
+                        unreachable!()
+                    };
 
                     if let Ty::Func(param, rest) = payload_ty {
                         // It's an instance method on the enum. Strip `self` like struct methods.
@@ -136,24 +141,26 @@ impl Member {
                         other => Ty::Func(Box::new(other.clone()), Box::new(result_enum.clone())),
                     };
 
-                    return unify(&ty, &ctor_ty, substitutions, &mut session.vars);
+                    unify(&ty, &ctor_ty, substitutions, &mut session.vars)
                 }
+                _ => {
+                    // for value fields: emit HasField
+                    let (Ty::Record(row) | Ty::Nominal { row, .. }) = receiver else {
+                        return Err(TypeError::ExpectedRow(receiver));
+                    };
+                    next_wants._has_field(
+                        *row,
+                        self.label.clone(),
+                        ty.clone(),
+                        self.cause,
+                        self.span,
+                    );
+                    Ok(true)
+                }
+                _ => unreachable!("huh"),
             }
+        } else {
+            Ok(false)
         }
-
-        // If it's not a method, figure out the row and emit a has field constraint
-        let (Ty::Record(row) | Ty::Nominal { row, .. }) = receiver else {
-            return Err(TypeError::ExpectedRow(receiver));
-        };
-
-        next_wants._has_field(
-            *row,
-            self.label.clone(),
-            self.ty.clone(),
-            self.cause,
-            self.span,
-        );
-
-        Ok(true)
     }
 }
