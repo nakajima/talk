@@ -6,6 +6,7 @@ use crate::{
     node_kinds::{
         decl::{Decl, DeclKind},
         parameter::Parameter,
+        type_annotation::{TypeAnnotation, TypeAnnotationKind},
     },
 };
 
@@ -36,7 +37,12 @@ impl PrependSelfToMethods {
                 Parameter {
                     id: self.node_ids.next_id(),
                     name: "self".into(),
-                    type_annotation: None,
+                    type_annotation: Some(TypeAnnotation {
+                        id: self.node_ids.next_id(),
+                        span: decl.span,
+                        kind: TypeAnnotationKind::SelfType("Self".into()),
+                    }),
+                    // type_annotation: None,
                     span: decl.span,
                 },
             );
@@ -48,7 +54,12 @@ impl PrependSelfToMethods {
                 Parameter {
                     id: self.node_ids.next_id(),
                     name: "self".into(),
-                    type_annotation: None,
+                    type_annotation: Some(TypeAnnotation {
+                        id: self.node_ids.next_id(),
+                        span: decl.span,
+                        kind: TypeAnnotationKind::SelfType("Self".into()),
+                    }),
+                    // type_annotation: None,
                     span: decl.span,
                 },
             );
@@ -59,10 +70,12 @@ impl PrependSelfToMethods {
 #[cfg(test)]
 pub mod tests {
     use crate::{
-        any_block, any_decl, assert_eq_diff,
+        annotation, any_block, any_decl, assert_eq_diff,
         name_resolution::transforms::prepend_self_to_methods::PrependSelfToMethods,
         node_id::NodeID,
-        node_kinds::{decl::DeclKind, func::Func, parameter::Parameter},
+        node_kinds::{
+            decl::DeclKind, func::Func, parameter::Parameter, type_annotation::TypeAnnotationKind,
+        },
         parser_tests::tests::parse,
         span::Span,
     };
@@ -97,7 +110,9 @@ pub mod tests {
                                     id: NodeID::ANY,
                                     span: Span::ANY,
                                     name: "self".into(),
-                                    type_annotation: None
+                                    type_annotation: Some(annotation!(
+                                        TypeAnnotationKind::SelfType("Self".into())
+                                    ))
                                 },
                                 Parameter {
                                     id: NodeID::ANY,
@@ -143,7 +158,9 @@ pub mod tests {
                             id: NodeID::ANY,
                             span: Span::ANY,
                             name: "self".into(),
-                            type_annotation: None
+                            type_annotation: Some(annotation!(TypeAnnotationKind::SelfType(
+                                "Self".into()
+                            )))
                         },],
                         body: any_block!(vec![]),
                     })

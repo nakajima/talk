@@ -69,10 +69,15 @@ impl Nominal {
             }
             NominalForm::Struct {
                 methods,
+                properties,
                 static_methods: _,
                 ..
             } => {
                 if let Some(sym) = methods.get(label) {
+                    return Some(sym);
+                }
+
+                if let Some(sym) = properties.get(label) {
                     return Some(sym);
                 }
 

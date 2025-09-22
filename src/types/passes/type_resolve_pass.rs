@@ -42,6 +42,7 @@ pub struct TypeResolvePass<'a> {
     session: TypeSession<Raw>,
     // This is what we return
     type_catalog: TypeCatalog,
+    current_type_stack: Vec<TypeId>,
     generics: IndexMap<TypeId, Ty>,
     #[allow(dead_code)]
     ast: &'a mut AST<NameResolved>,
@@ -55,6 +56,7 @@ impl<'a> TypeResolvePass<'a> {
         let resolver = TypeResolvePass {
             session,
             type_catalog: Default::default(),
+            current_type_stack: Default::default(),
             generics: Default::default(),
             ast,
         };
@@ -185,34 +187,34 @@ impl<'a> TypeResolvePass<'a> {
         }
 
         let form = self.resolve_form(type_def);
-        let symbols_to_generalize = match &form {
-            NominalForm::Enum {
-                variants,
-                static_methods,
-                methods,
-                ..
-            } => {
-                let mut result: Vec<Symbol> = vec![];
-                result.extend(variants.values());
-                result.extend(methods.values());
-                result.extend(static_methods.values());
-                result
-            }
-            NominalForm::Struct {
-                initializers,
-                properties,
-                static_methods,
-                methods,
-                ..
-            } => {
-                let mut result: Vec<Symbol> = vec![];
-                result.extend(initializers.values());
-                result.extend(methods.values());
-                result.extend(properties.values());
-                result.extend(static_methods.values());
-                result
-            }
-        };
+        // let symbols_to_generalize = match &form {
+        //     NominalForm::Enum {
+        //         variants,
+        //         static_methods,
+        //         methods,
+        //         ..
+        //     } => {
+        //         let mut result: Vec<Symbol> = vec![];
+        //         result.extend(variants.values());
+        //         // result.extend(methods.values());
+        //         result.extend(static_methods.values());
+        //         result
+        //     }
+        //     NominalForm::Struct {
+        //         initializers,
+        //         properties,
+        //         static_methods,
+        //         methods,
+        //         ..
+        //     } => {
+        //         let mut result: Vec<Symbol> = vec![];
+        //         result.extend(initializers.values());
+        //         // result.extend(methods.values());
+        //         result.extend(properties.values());
+        //         result.extend(static_methods.values());
+        //         result
+        //     }
+        // };
 
         // Promote forward declared monotype into a scheme
         let symbol = type_def.name.symbol().unwrap();
@@ -237,20 +239,20 @@ impl<'a> TypeResolvePass<'a> {
 
             self.session.term_env.promote(symbol, type_scheme);
 
-            for symbol in symbols_to_generalize {
-                let Some(EnvEntry::Mono(ty)) = self.session.term_env.lookup(&symbol) else {
-                    panic!("didn't get ty");
-                };
+            // for symbol in symbols_to_generalize {
+            //     let Some(EnvEntry::Mono(ty)) = self.session.term_env.lookup(&symbol) else {
+            //         panic!("didn't get ty");
+            //     };
 
-                let ty = self.session.generalize_with_substitutions(
-                    Level(2),
-                    ty.clone(),
-                    &[],
-                    &mut substitutions,
-                );
+            //     let ty = self.session.generalize_with_substitutions(
+            //         Level(1),
+            //         ty.clone(),
+            //         &[],
+            //         &mut substitutions,
+            //     );
 
-                self.session.term_env.promote(symbol, ty);
-            }
+            //     self.session.term_env.promote(symbol, ty);
+            // }
 
             self.session.term_env.promote(
                 symbol,
@@ -315,7 +317,19 @@ impl<'a> TypeResolvePass<'a> {
             let ret = self.infer_ast_ty_repr(&method.ret);
             let fn_ty = curry(params.clone(), ret.clone());
 
-            self.session.term_env.insert_mono(method.symbol, fn_ty);
+            let foralls = fn_ty.collect_foralls();
+
+            if foralls.is_empty() {
+                // No quantification necessary
+                self.session.term_env.insert_mono(method.symbol, fn_ty);
+            } else {
+                use crate::types::{scheme::Scheme, term_environment::EnvEntry};
+                self.session.term_env.promote(
+                    method.symbol,
+                    EnvEntry::Scheme(Scheme::new(foralls, vec![], fn_ty)),
+                );
+            }
+
             resolved_methods.insert(name.clone(), method.symbol);
         }
 
@@ -406,6 +420,7 @@ impl<'a> TypeResolvePass<'a> {
     #[instrument(skip(self))]
     pub(crate) fn infer_type_annotation(&mut self, annotation: &TypeAnnotation) -> Ty {
         match &annotation.kind {
+            TypeAnnotationKind::SelfType(id) => todo!("wat"),
             TypeAnnotationKind::Func { .. } => todo!(),
             TypeAnnotationKind::Tuple(..) => todo!(),
             TypeAnnotationKind::Nominal {
@@ -453,7 +468,7 @@ impl<'a> TypeResolvePass<'a> {
                     None => unreachable!("define_type didn't work: {ty_repr:?}"),
                 }
             }
-            ASTTyRepr::Hole(..) => Ty::Param(self.session.vars.type_params.next_id()),
+            ASTTyRepr::Hole(id, ..) => Ty::Hole(*id),
             ASTTyRepr::Generic(decl) => {
                 let ty = Ty::Param(self.session.vars.type_params.next_id());
                 self.session.term_env.promote(
@@ -473,12 +488,13 @@ pub mod tests {
     use indexmap::indexmap;
 
     use crate::{
+        assert_eq_diff,
         ast::AST,
-        fxhashmap, make_row,
+        fxhashmap,
         name_resolution::{
             name_resolver::NameResolved,
             name_resolver_tests::tests::resolve,
-            symbol::{GlobalId, TypeId},
+            symbol::{InstanceMethodId, PropertyId, SynthesizedId, TypeId},
         },
         types::passes::type_headers_pass::TypeHeaderPass,
     };
@@ -517,7 +533,7 @@ pub mod tests {
         ",
         );
 
-        assert_eq!(
+        assert_eq_diff!(
             session
                 .phase
                 .type_catalog
@@ -526,9 +542,9 @@ pub mod tests {
                 .unwrap()
                 .form,
             NominalForm::Struct {
-                initializers: Default::default(),
+                initializers: fxhashmap!(Label::Named("init".into()) => Symbol::Synthesized(SynthesizedId(1))),
                 properties: indexmap! {
-                    "age".into() => Symbol::Global(GlobalId(1))
+                    "age".into() => Symbol::Property(PropertyId(1))
                 },
                 methods: Default::default(),
                 static_methods: Default::default()
@@ -546,7 +562,7 @@ pub mod tests {
         ",
         );
 
-        assert_eq!(
+        assert_eq_diff!(
             session
                 .phase
                 .type_catalog
@@ -555,9 +571,9 @@ pub mod tests {
                 .unwrap()
                 .form,
             NominalForm::Struct {
-                initializers: Default::default(),
+                initializers: fxhashmap!(Label::Named("init".into()) => Symbol::Synthesized(SynthesizedId(1))),
                 properties: Default::default(),
-                methods: fxhashmap!(Label::Named("fizz".into()) => Symbol::Global(GlobalId(1))),
+                methods: fxhashmap!(Label::Named("fizz".into()) => Symbol::InstanceMethod(InstanceMethodId(1))),
                 static_methods: Default::default()
             }
         )
@@ -581,8 +597,8 @@ pub mod tests {
                 .unwrap()
                 .form,
             NominalForm::Struct {
-                initializers: Default::default(),
-                properties: indexmap! { "t".into() => Symbol::Type(TypeId(2)) },
+                initializers: fxhashmap!(Label::Named("init".into()) => Symbol::Synthesized(SynthesizedId(1))),
+                properties: indexmap! { "t".into() => Symbol::Property(PropertyId(1)) },
                 methods: Default::default(),
                 static_methods: Default::default()
             }
@@ -605,7 +621,7 @@ pub mod tests {
             ",
         );
 
-        assert_eq!(
+        assert_eq_diff!(
             session
                 .phase
                 .type_catalog
@@ -614,9 +630,9 @@ pub mod tests {
                 .unwrap()
                 .form,
             NominalForm::Struct {
-                initializers: Default::default(),
+                initializers: fxhashmap!(Label::Named("init".into()) => Symbol::Synthesized(SynthesizedId(3))),
                 properties: indexmap! {
-                    "b".into() => Symbol::Type(TypeId(3))
+                    "b".into() => Symbol::Property(PropertyId(3))
                 },
                 methods: Default::default(),
                 static_methods: Default::default()

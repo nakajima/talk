@@ -578,7 +578,14 @@ pub mod tests {
                                 "fizz".into()
                             ),
                             generics: vec![],
-                            params: vec![param!(Symbol::ParamLocal(ParamLocalId(1)), "self")],
+                            params: vec![param!(
+                                Symbol::ParamLocal(ParamLocalId(1)),
+                                "self",
+                                annotation!(TypeAnnotationKind::SelfType(Name::Resolved(
+                                    TypeId(1).into(),
+                                    "Self".into()
+                                )))
+                            )],
                             body: any_block!(vec![any_expr_stmt!(ExprKind::Call {
                                 callee: any_expr!(ExprKind::Member(
                                     Some(
@@ -608,7 +615,14 @@ pub mod tests {
                                 "buzz".into()
                             ),
                             generics: vec![],
-                            params: vec![param!(Symbol::ParamLocal(ParamLocalId(2)), "self")],
+                            params: vec![param!(
+                                Symbol::ParamLocal(ParamLocalId(2)),
+                                "self",
+                                annotation!(TypeAnnotationKind::SelfType(Name::Resolved(
+                                    TypeId(1).into(),
+                                    "Self".into()
+                                )))
+                            )],
                             body: any_block!(vec![any_expr_stmt!(ExprKind::Call {
                                 callee: any_expr!(ExprKind::Member(
                                     Some(Box::new(any_expr!(ExprKind::Variable(Name::Resolved(

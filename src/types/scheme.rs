@@ -196,6 +196,14 @@ impl Scheme {
             wants.push(constraint);
         }
 
+        let ty = self.ty.map(|ty| {
+            if matches!(ty, Ty::Hole(..)) {
+                session.new_ty_meta_var(level)
+            } else {
+                ty
+            }
+        });
+
         tracing::trace!("solver_instantiate ret subs: {substitutions:?}");
 
         (

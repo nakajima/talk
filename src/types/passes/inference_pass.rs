@@ -78,6 +78,8 @@ pub struct InferenceSolution {
     pub types_by_node: FxHashMap<NodeID, Ty>,
 }
 
+/// Perform the rest of type inference for this AST. By now we shouldn't care about
+/// scope stacks since everything should already be in the flat term env.
 #[derive(Debug)]
 pub struct InferencePass<'a> {
     ast: &'a mut AST<NameResolved>,
@@ -234,14 +236,17 @@ impl<'a> InferencePass<'a> {
             TypeAnnotationKind::Nominal {
                 name: Name::Resolved(sym, _),
                 ..
-            } => match self.session.term_env.lookup(sym).unwrap().clone() {
-                EnvEntry::Mono(ty) => ty.clone(),
-                EnvEntry::Scheme(scheme) => {
-                    scheme
-                        .inference_instantiate(&mut self.session, level, wants, annotation.span)
-                        .0
+            }
+            | TypeAnnotationKind::SelfType(Name::Resolved(sym, _)) => {
+                match self.session.term_env.lookup(sym).unwrap().clone() {
+                    EnvEntry::Mono(ty) => ty.clone(),
+                    EnvEntry::Scheme(scheme) => {
+                        scheme
+                            .inference_instantiate(&mut self.session, level, wants, annotation.span)
+                            .0
+                    }
                 }
-            },
+            }
             TypeAnnotationKind::Record { fields } => {
                 let mut row = Row::Empty(TypeDefKind::Struct);
                 for field in fields.iter().rev() {
@@ -302,7 +307,7 @@ impl<'a> InferencePass<'a> {
                     Constraint::HasField(ref has_field) => {
                         let row = apply_row(has_field.row.clone(), &mut substitutions);
                         match row {
-                            Row::Empty(kind) => {
+                            Row::Empty(..) => {
                                 self.ast.diagnostics.push(AnyDiagnostic::Typing(Diagnostic {
                                     path: self.ast.path.clone(),
                                     span: has_field.span,
@@ -332,7 +337,7 @@ impl<'a> InferencePass<'a> {
                             Row::Var(..) => {
                                 // Keep the constraint for the next iteration with the applied row
                                 next_wants._has_field(
-                                    row,
+                                    apply_row(row, &mut substitutions),
                                     has_field.label.clone(),
                                     has_field.ty.clone(),
                                     ConstraintCause::Internal,
@@ -495,18 +500,16 @@ impl<'a> InferencePass<'a> {
                 ty
             }
             DeclKind::Method { func, .. } => {
-                // Type the method body just like a regular function
-                // This ensures the body type is constrained to match the return type
-                let Name::Resolved(func_sym, _) = func.name else {
-                    unreachable!("didn't get method name");
-                };
-
-                let ty = self.infer_func(func, level, wants);
+                let func_ty = self.infer_func(func, level, wants);
+                let entry = self.session.generalize(level, func_ty.clone(), &[]);
                 self.session
                     .term_env
-                    .promote(func_sym, EnvEntry::Mono(ty.clone()));
-                ty
+                    .promote(func.name.symbol().unwrap(), entry);
+                func_ty
             }
+            DeclKind::Struct { body, .. } => self.infer_block(body, level, wants),
+            DeclKind::Property { .. } => Ty::Void,
+
             _ => todo!("unhandled: {decl:?}"),
         }
     }
@@ -817,7 +820,6 @@ impl<'a> InferencePass<'a> {
 
                 match &nominal.form {
                     NominalForm::Struct { initializers, .. } => {
-                        // EXISTING struct path (unchanged)
                         let ctor_sym = initializers
                             .values()
                             .next()
@@ -832,8 +834,6 @@ impl<'a> InferencePass<'a> {
                         entry.inference_instantiate(&mut self.session, level, wants, expr.span)
                     }
                     NominalForm::Enum { .. } => {
-                        // For enums, the “type value” is just the type itself,
-                        // not a callable constructor. Use the type already in the env.
                         match self
                             .session
                             .term_env
@@ -873,6 +873,7 @@ impl<'a> InferencePass<'a> {
         };
 
         let member_ty = self.session.new_ty_meta_var(level);
+        println!("new member ty meta: {label:?} {member_ty:?}");
 
         wants.member(
             receiver_ty,
@@ -999,8 +1000,6 @@ impl<'a> InferencePass<'a> {
             };
 
             Some(receiver_ty)
-
-            // arg_tys.insert(0, receiver_ty.clone());
         } else {
             None
         };
@@ -1041,10 +1040,12 @@ impl<'a> InferencePass<'a> {
             param_tys.push(ty);
         }
 
+        println!("infer_func params: {:?}, {param_tys:?}", func.params);
+
         let ret_ty = if let Some(ret) = &func.ret {
             self.infer_type_annotation(ret, level, wants)
         } else {
-            self.session.new_ty_meta_var(level)
+            self.session.new_ty_meta_var(level.next())
         };
 
         for (p, ty) in func.params.iter().zip(param_tys.iter()) {

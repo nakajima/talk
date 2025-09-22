@@ -816,6 +816,7 @@ impl<'a> Formatter<'a> {
 
     fn format_type_annotation(&self, ty: &TypeAnnotation) -> Doc {
         match &ty.kind {
+            TypeAnnotationKind::SelfType(..) => text("Self"),
             TypeAnnotationKind::Record { fields } => self.format_record_type_annotation(fields),
             TypeAnnotationKind::Func { params, returns } => {
                 let param_docs: Vec<_> = params

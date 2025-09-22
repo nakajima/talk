@@ -384,6 +384,14 @@ impl NameResolver {
                 self.diagnostic(ty.span, NameResolverError::UndefinedName(name.name_str()));
             }
         }
+
+        if let TypeAnnotationKind::SelfType(name) = &mut ty.kind {
+            if let Some(resolved_name) = self.lookup(name) {
+                *name = resolved_name
+            } else {
+                self.diagnostic(ty.span, NameResolverError::UndefinedName(name.name_str()));
+            }
+        }
     }
 
     ///////////////////////////////////////////////////////////////////////////

@@ -46,10 +46,10 @@ impl Call {
         if let Some(receiver) = &self.receiver {
             let receiver = apply(receiver.clone(), substitutions);
             // receiver is the first parameter for instance methods
-            //args.insert(0, receiver);
+            args.insert(0, receiver);
         }
 
-        tracing::debug!("callee: {callee:?} {args:?} {returns:?}");
+        println!("callee: {callee:?} {args:?} {returns:?}, subs: {substitutions:?}");
 
         match &callee {
             Ty::Constructor {

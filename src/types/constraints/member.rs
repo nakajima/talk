@@ -6,12 +6,11 @@ use crate::{
         constraint::{Constraint, ConstraintCause},
         passes::{dependencies_pass::SCCResolved, inference_pass::curry},
         row::Row,
-        scheme::Scheme,
         term_environment::EnvEntry,
         ty::{Level, Primitive, Ty},
         type_catalog::NominalForm,
         type_error::TypeError,
-        type_operations::{UnificationSubstitutions, apply, unify},
+        type_operations::{UnificationSubstitutions, apply, apply_row, unify},
         type_session::{TypeDefKind, TypeSession},
         wants::Wants,
     },
@@ -58,19 +57,19 @@ impl Member {
                         self.span,
                     );
                     if let Ty::Func(first, box rest) = scheme_ty.clone() {
+                        let first = apply(*first, substitutions);
                         unify(&receiver, &first, substitutions, &mut session.vars)?;
-                        tracing::info!(
-                            "INSTANCE METHOD: entry:{entry:?} receiver: {receiver:?} first:{first:?} rest:{rest:?}"
-                        );
-                        let applied = if matches!(rest, Ty::Func(..)) {
-                            rest
-                        } else {
-                            Ty::Func(Box::new(Ty::Void), Box::new(rest))
-                        };
-                        unify(&ty, &applied, substitutions, &mut session.vars)
+                        unify(&ty, &scheme_ty, substitutions, &mut session.vars)
                     } else {
                         unreachable!("instance method must be a function")
                     }
+                }
+                Symbol::Property(..) => {
+                    tracing::trace!("got a property");
+                    let property_ty =
+                        entry.inference_instantiate(session, Level(1), next_wants, self.span);
+
+                    unify(&ty, &property_ty, substitutions, &mut session.vars)
                 }
                 Symbol::Variant(_) => {
                     // Variant constructor: build (payload) -> Fizz{ all variants }
@@ -144,6 +143,7 @@ impl Member {
                     unify(&ty, &ctor_ty, substitutions, &mut session.vars)
                 }
                 _ => {
+                    println!("guess it's a property. receiver: {receiver:?}");
                     // for value fields: emit HasField
                     let (Ty::Record(row) | Ty::Nominal { row, .. }) = receiver else {
                         return Err(TypeError::ExpectedRow(receiver));
@@ -157,10 +157,14 @@ impl Member {
                     );
                     Ok(true)
                 }
-                _ => unreachable!("huh"),
             }
         } else {
-            Ok(false)
+            let (Ty::Record(row) | Ty::Nominal { row, .. }) = receiver else {
+                return Err(TypeError::ExpectedRow(receiver));
+            };
+            let row = apply_row(*row, substitutions);
+            next_wants._has_field(row, self.label.clone(), ty.clone(), self.cause, self.span);
+            Ok(true)
         }
     }
 }

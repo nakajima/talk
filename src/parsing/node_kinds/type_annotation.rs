@@ -7,6 +7,7 @@ use crate::{
 
 #[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
 pub enum TypeAnnotationKind {
+    SelfType(#[drive(skip)] Name),
     Func {
         params: Vec<TypeAnnotation>,
         returns: Box<TypeAnnotation>,

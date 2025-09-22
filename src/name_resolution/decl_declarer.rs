@@ -72,6 +72,16 @@ impl<'a> DeclDeclarer<'a> {
     fn enter_nominal(&mut self, id: NodeID, name: &mut Name, generics: &mut [GenericDecl]) {
         *name = self.resolver.declare_type(name);
 
+        let Name::Resolved(Symbol::Type(type_id), _) = name else {
+            unreachable!()
+        };
+
+        self.resolver
+            .current_scope_mut()
+            .unwrap()
+            .types
+            .insert("Self".into(), Symbol::Type(*type_id));
+
         self.start_scope(id);
 
         for generic in generics {
