@@ -1,10 +1,3 @@
-use derive_visitor::{Drive, Visitor};
-use petgraph::algo::kosaraju_scc;
-use rustc_hash::{FxHashMap, FxHashSet};
-use tracing::instrument;
-
-use crate::types::passes::dependencies_pass::Conformance;
-use crate::types::type_catalog::NominalForm;
 use crate::types::type_session::TypeDef;
 use crate::types::wants::Wants;
 use crate::{
@@ -44,6 +37,10 @@ use crate::{
         type_snapshot::TypeSnapshot,
     },
 };
+use derive_visitor::{Drive, Visitor};
+use petgraph::algo::kosaraju_scc;
+use rustc_hash::{FxHashMap, FxHashSet};
+use tracing::instrument;
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct Inferenced {
@@ -105,15 +102,6 @@ impl<'a> InferencePass<'a> {
             protocols: Default::default(),
         };
 
-        // Handle protocol conformances
-        let mut conformances = std::mem::take(&mut pass.session.phase.conformances);
-        for (protocol_id, types) in conformances.iter_mut() {
-            let mut wants = Wants::default();
-            for (type_id, conformance) in types {
-                pass.check_conformance(protocol_id, type_id, conformance, &mut wants);
-            }
-        }
-
         // Handle binders
         for binders in groups {
             let globals: Vec<_> = binders
@@ -163,115 +151,6 @@ impl<'a> InferencePass<'a> {
         };
 
         pass.session.advance(phase)
-    }
-
-    fn check_conformance(
-        &mut self,
-        protocol_id: &TypeId,
-        type_id: &TypeId,
-        conformance: &mut Conformance,
-        wants: &mut Wants,
-    ) {
-        // 1) Fetch protocol + gather requirement types
-        let Some(proto) = self
-            .session
-            .phase
-            .type_catalog
-            .protocols
-            .get(protocol_id)
-            .cloned()
-        else {
-            return;
-        };
-
-        // 2) Collect instance methods available on this type (base + extensions)
-        let Some(nom) = self.session.phase.type_catalog.nominals.get(type_id) else {
-            return;
-        };
-
-        // Build a label -> symbol map of concrete instance methods
-        let mut impls: FxHashMap<Label, Symbol> = FxHashMap::default();
-        let (NominalForm::Struct {
-            instance_methods, ..
-        }
-        | NominalForm::Enum {
-            instance_methods, ..
-        }) = &nom.form;
-
-        impls.extend(instance_methods.clone());
-
-        for ext in &nom.extensions {
-            impls.extend(ext.methods.clone().into_iter());
-        }
-
-        // 3) For each requirement, find impl and verify types
-        for (label, req_sym) in &proto.method_requirements {
-            // Required type from env:
-            let req_ty = match self.session.term_env.lookup(req_sym).cloned() {
-                Some(EnvEntry::Mono(t)) => t,
-                Some(EnvEntry::Scheme(s)) => s.ty, // fine
-                None => {
-                    tracing::error!("did not get conformance method: {label:?}");
-                    continue;
-                }
-            };
-
-            // Expected instance method type: prepend Self param if needed
-            // Self := Type(type_id, fresh row var)
-            let self_row = self.session.new_row_meta_var(Level(1));
-            let self_ty = Ty::Nominal {
-                id: *type_id,
-                row: Box::new(self_row),
-            };
-
-            let expected = match req_ty {
-                // If requirement is "()->R", instance method is "Self -> R"
-                Ty::Func(_, _) => {
-                    // your protocol requirements seem to be params=[]; ret=Int,
-                    // so we expect a function Self -> Int
-                    Ty::Func(Box::new(self_ty.clone()), Box::new(req_ty))
-                }
-                other => Ty::Func(Box::new(self_ty.clone()), Box::new(other)),
-            };
-
-            // Find concrete impl
-            let Some(impl_sym) = impls.get(label).cloned() else {
-                // Missing impl: emit diagnostic and continue
-                self.ast.diagnostics.push(AnyDiagnostic::Typing(Diagnostic {
-                    path: self.ast.path.clone(),
-                    span: conformance.span,
-                    kind: TypeError::MissingConformanceRequirement(label.to_string()),
-                }));
-                continue;
-            };
-
-            // Impl type from env
-            let impl_ty = match self.session.term_env.lookup(&impl_sym).cloned() {
-                Some(EnvEntry::Mono(t)) => t,
-                Some(EnvEntry::Scheme(s)) => s.ty, // ok
-                None => continue,
-            };
-
-            // Check impl matches expected: unify(expected, impl_ty)
-            let mut subs = UnificationSubstitutions::new(self.session.meta_levels.clone());
-            if let Err(e) = crate::types::type_operations::unify(
-                &expected,
-                &impl_ty,
-                &mut subs,
-                &mut self.session.vars,
-            ) {
-                self.ast.diagnostics.push(AnyDiagnostic::Typing(Diagnostic {
-                    path: self.ast.path.clone(),
-                    span: conformance.span,
-                    kind: e,
-                }));
-            }
-
-            // Record witness
-            conformance.methods.insert(label.clone(), impl_sym);
-        }
-
-        println!("conformance: {conformance:?}");
     }
 
     #[instrument(skip(self))]
@@ -726,30 +605,11 @@ impl<'a> InferencePass<'a> {
                 }
             }
             PatternKind::Variant {
-                enum_name,
+                enum_name: _,
                 variant_name,
                 fields,
+                ..
             } => {
-                let receiver = if let Some(enum_name) = enum_name {
-                    let entry = self
-                        .session
-                        .term_env
-                        .lookup(&enum_name.symbol().unwrap())
-                        .cloned()
-                        .expect("didn't get enum for name");
-
-                    entry.inference_instantiate(&mut self.session, level, wants, pattern.span)
-                } else {
-                    self.session.new_ty_meta_var(level)
-                };
-
-                // wants.equals(
-                //     expected.clone(),
-                //     receiver.clone(),
-                //     ConstraintCause::Pattern(pattern.id),
-                //     pattern.span,
-                // );
-
                 let field_metas: Vec<Ty> = fields
                     .iter()
                     .map(|_| self.session.new_ty_meta_var(level))
@@ -782,9 +642,6 @@ impl<'a> InferencePass<'a> {
         }
     }
 
-    /// Ensure we have a row to talk about for `expected`.
-    /// If `expected` is Ty::Record(row), return that row.
-    /// Otherwise create a fresh row var row_var and add Eq(expected, Record(row_var)).
     #[instrument(skip(self), ret)]
     fn ensure_row_record(
         &mut self,
@@ -1054,37 +911,24 @@ impl<'a> InferencePass<'a> {
             None
         };
 
-        match &callee.kind {
-            ExprKind::Member(..) => {
-                wants.call(
-                    callee_ty,
-                    arg_tys,
-                    returns.clone(),
-                    receiver,
-                    ConstraintCause::Call(callee.id),
-                    callee.span,
-                );
-            }
-            ExprKind::Constructor(Name::Resolved(sym, _)) => {
-                wants.construction(
-                    callee_ty,
-                    arg_tys,
-                    returns.clone(),
-                    *sym,
-                    ConstraintCause::Call(callee.id),
-                    callee.span,
-                );
-            }
-            _ => {
-                wants.call(
-                    callee_ty,
-                    arg_tys,
-                    returns.clone(),
-                    receiver,
-                    ConstraintCause::Call(callee.id),
-                    callee.span,
-                );
-            }
+        if let ExprKind::Constructor(Name::Resolved(sym, _)) = &callee.kind {
+            wants.construction(
+                callee_ty,
+                arg_tys,
+                returns.clone(),
+                *sym,
+                ConstraintCause::Call(callee.id),
+                callee.span,
+            );
+        } else {
+            wants.call(
+                callee_ty,
+                arg_tys,
+                returns.clone(),
+                receiver,
+                ConstraintCause::Call(callee.id),
+                callee.span,
+            );
         }
 
         returns

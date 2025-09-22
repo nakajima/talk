@@ -23,7 +23,6 @@ use crate::{
         ty::{Level, Ty},
         type_catalog::{Extension, Nominal, NominalForm, Protocol, TypeCatalog},
         type_error::TypeError,
-        type_operations::UnificationSubstitutions,
         type_session::{ASTTyRepr, Raw, TypeDef, TypeDefKind, TypeSession, TypingPhase},
     },
 };

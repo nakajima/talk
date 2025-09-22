@@ -10,7 +10,7 @@ pub mod tests {
                 dependencies_pass::tests::resolve_dependencies,
                 inference_pass::{InferencePass, Inferenced},
             },
-            ty::{Level, Ty},
+            ty::Ty,
             type_error::TypeError,
             type_session::TypeSession,
         },

@@ -8,7 +8,6 @@ pub mod tests {
         label::Label,
         lexer::Lexer,
         name::Name,
-        name_resolution::symbol::{PropertyId, Symbol},
         node::Node,
         node_kinds::{
             block::Block,
