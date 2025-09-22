@@ -10,7 +10,10 @@ use crate::{
         ty::{Level, Primitive, Ty},
         type_catalog::NominalForm,
         type_error::TypeError,
-        type_operations::{UnificationSubstitutions, apply, apply_row, unify},
+        type_operations::{
+            InstantiationSubstitutions, UnificationSubstitutions, apply, apply_row, instantiate_ty,
+            unify,
+        },
         type_session::{TypeDefKind, TypeSession},
         wants::Wants,
     },
@@ -36,13 +39,16 @@ impl Member {
         let receiver = apply(self.receiver.clone(), substitutions);
         let ty = apply(self.ty.clone(), substitutions);
 
-        if matches!(receiver, Ty::UnificationVar { .. }) {
+        if matches!(
+            receiver,
+            Ty::UnificationVar { .. } | Ty::Rigid(_) | Ty::Param(_)
+        ) {
             // If we don't know what the receiver is yet, we can't do much
             next_wants.push(Constraint::Member(self.clone()));
             return Ok(false);
         }
 
-        if let Ty::Nominal { id: type_id, .. } = &receiver
+        if let Ty::Nominal { id: type_id, .. } | Ty::Constructor { type_id, .. } = &receiver
             && let Some(nominal) = session.phase.type_catalog.nominals.get(type_id).cloned()
             && let Some(sym) = nominal.member_symbol(&self.label)
             && let Some(entry) = session.term_env.lookup(sym).cloned()
@@ -56,7 +62,7 @@ impl Member {
                         next_wants,
                         self.span,
                     );
-                    if let Ty::Func(first, box rest) = scheme_ty.clone() {
+                    if let Ty::Func(first, box _rest) = scheme_ty.clone() {
                         let first = apply(*first, substitutions);
                         unify(&receiver, &first, substitutions, &mut session.vars)?;
                         unify(&ty, &scheme_ty, substitutions, &mut session.vars)
@@ -64,23 +70,46 @@ impl Member {
                         unreachable!("instance method must be a function")
                     }
                 }
-                Symbol::Property(..) => {
-                    tracing::trace!("got a property");
-                    let property_ty =
-                        entry.inference_instantiate(session, Level(1), next_wants, self.span);
-
-                    unify(&ty, &property_ty, substitutions, &mut session.vars)
-                }
-                Symbol::Variant(_) => {
-                    // Variant constructor: build (payload) -> Fizz{ all variants }
-                    // 1) payload type is what resolve_variants stored under the variant symbol:
-                    let payload_ty = entry.solver_instantiate(
+                Symbol::StaticMethod(_) => {
+                    let scheme_ty = entry.solver_instantiate(
                         session,
-                        Level(1),
+                        level,
                         substitutions,
                         next_wants,
                         self.span,
                     );
+
+                    unify(&ty, &scheme_ty, substitutions, &mut session.vars)
+                }
+                Symbol::Property(..) => {
+                    tracing::trace!("got a property (row lookup)");
+                    // Use the *receiver’s* row so we pick up the ctor’s instantiation.
+                    let (Ty::Record(row) | Ty::Nominal { row, .. }) = &receiver else {
+                        return Err(TypeError::ExpectedRow(receiver));
+                    };
+
+                    // Apply current subs to normalize any Row::Var links produced by the ctor unification.
+                    let row = apply_row((**row).clone(), substitutions);
+                    next_wants._has_field(
+                        row,
+                        self.label.clone(),
+                        ty.clone(),
+                        self.cause,
+                        self.span,
+                    );
+                    Ok(true)
+                }
+                Symbol::Variant(_) => {
+                    let (payload_ty, inst_subs) = match entry {
+                        EnvEntry::Mono(t) => (t, InstantiationSubstitutions::default()),
+                        EnvEntry::Scheme(s) => s.solver_instantiate(
+                            session,
+                            level,
+                            next_wants,
+                            self.span,
+                            substitutions,
+                        ),
+                    };
 
                     let NominalForm::Enum { variants, .. } = &nominal.form else {
                         unreachable!()
@@ -97,19 +126,18 @@ impl Member {
                         return unify(&ty, &applied, substitutions, &mut session.vars);
                     }
 
-                    // 2) build the CLOSED enum row from the catalog (all variants):
                     let mut row = Row::Empty(TypeDefKind::Enum);
-                    // iter in reverse to produce left-extended row
                     for (label, sym) in variants.iter() {
-                        let vty = match session
+                        let base_vty = match session
                             .term_env
                             .lookup(sym)
                             .expect("variant missing")
                             .clone()
                         {
                             EnvEntry::Mono(t) => t,
-                            EnvEntry::Scheme(s) => s.ty, // should be Mono in your setup
+                            EnvEntry::Scheme(s) => s.ty,
                         };
+                        let vty = instantiate_ty(base_vty, &inst_subs, level);
                         row = Row::Extend {
                             row: Box::new(row),
                             label: label.clone(),
@@ -122,28 +150,20 @@ impl Member {
                         row: Box::new(row),
                     };
 
-                    // 3) constructor function type from payload to enum result:
+                    // 3) Build the constructor’s type from payload → result_enum
                     let ctor_ty = match &payload_ty {
-                        // No payload → the member *is a value* of the enum type
                         Ty::Primitive(Primitive::Void) => result_enum.clone(),
                         Ty::Tuple(items) if items.is_empty() => result_enum.clone(),
-
-                        // One argument → simple function
                         Ty::Tuple(items) if items.len() == 1 => {
                             Ty::Func(Box::new(items[0].clone()), Box::new(result_enum.clone()))
                         }
-
-                        // Multiple arguments packed in a tuple → curry them
                         Ty::Tuple(items) => curry(items.clone(), result_enum.clone()),
-
-                        // Single non-tuple payload
                         other => Ty::Func(Box::new(other.clone()), Box::new(result_enum.clone())),
                     };
 
                     unify(&ty, &ctor_ty, substitutions, &mut session.vars)
                 }
                 _ => {
-                    println!("guess it's a property. receiver: {receiver:?}");
                     // for value fields: emit HasField
                     let (Ty::Record(row) | Ty::Nominal { row, .. }) = receiver else {
                         return Err(TypeError::ExpectedRow(receiver));

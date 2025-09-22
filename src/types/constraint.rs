@@ -2,10 +2,13 @@ use crate::{
     node_id::NodeID,
     span::Span,
     types::{
-        constraints::{call::Call, equals::Equals, has_field::HasField, member::Member},
+        constraints::{
+            call::Call, construction::Construction, equals::Equals, has_field::HasField,
+            member::Member,
+        },
         row::Row,
         scheme::Predicate,
-        type_operations::{UnificationSubstitutions, apply, apply_row},
+        type_operations::{UnificationSubstitutions, apply, apply_mult, apply_row},
     },
 };
 
@@ -30,6 +33,7 @@ pub enum Constraint {
     Equals(Equals),
     HasField(HasField),
     Member(Member),
+    Construction(Construction),
 }
 
 impl Constraint {
@@ -39,6 +43,7 @@ impl Constraint {
             Constraint::Equals(c) => c.span,
             Constraint::HasField(c) => c.span,
             Constraint::Member(c) => c.span,
+            Constraint::Construction(c) => c.span,
         }
     }
 
@@ -65,6 +70,11 @@ impl Constraint {
                 member.ty = apply(member.ty.clone(), substitutions);
                 member.receiver = apply(member.receiver.clone(), substitutions)
             }
+            Constraint::Construction(construction) => {
+                construction.callee = apply(construction.callee.clone(), substitutions);
+                construction.args = apply_mult(construction.args.clone(), substitutions);
+                construction.returns = apply(construction.returns.clone(), substitutions);
+            }
         }
         self
     }
@@ -73,7 +83,10 @@ impl Constraint {
         match self {
             Self::HasField(has_field) => {
                 let Row::Param(row_param) = apply_row(has_field.row.clone(), substitutions) else {
-                    panic!("HasField predicate must be for row")
+                    panic!(
+                        "HasField predicate must be for row, got: {:?}",
+                        apply_row(has_field.row.clone(), substitutions)
+                    )
                 };
                 Predicate::HasField {
                     row: row_param,

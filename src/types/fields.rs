@@ -12,20 +12,24 @@ use crate::{
 pub enum TypeFields<T> {
     Struct {
         initializers: IndexMap<Label, Initializer<T>>,
-        methods: IndexMap<Label, Method<T>>,
+        instance_methods: IndexMap<Label, Method<T>>,
+        static_methods: IndexMap<Label, Method<T>>,
         properties: IndexMap<Label, Property<T>>,
     },
     Extension {
-        methods: IndexMap<Label, Method<T>>,
+        instance_methods: IndexMap<Label, Method<T>>,
+        static_methods: IndexMap<Label, Method<T>>,
     },
     Protocol {
-        methods: IndexMap<Label, Method<T>>,
+        instance_methods: IndexMap<Label, Method<T>>,
         method_requirements: IndexMap<Label, MethodRequirement<T>>,
+        static_methods: IndexMap<Label, Method<T>>,
         associated_types: IndexMap<Name, Associated>,
     },
     Enum {
         variants: IndexMap<Label, Variant<T>>,
-        methods: IndexMap<Label, Method<T>>,
+        instance_methods: IndexMap<Label, Method<T>>,
+        static_methods: IndexMap<Label, Method<T>>,
     },
     Primitive,
 }

@@ -265,6 +265,7 @@ pub(super) fn unify(
             Ok(did_change)
         }
         (Ty::Rigid(lhs), Ty::Rigid(rhs)) if lhs == rhs => Ok(false),
+        (Ty::Param(lhs), Ty::Param(rhs)) if lhs == rhs => Ok(false),
         (
             Ty::Constructor {
                 params, box ret, ..
@@ -296,7 +297,18 @@ pub(super) fn unify(
                 return Err(TypeError::InvalidUnification(lhs, rhs));
             }
 
-            unify_rows(TypeDefKind::Struct, lhs_row, rhs_row, substitutions, vars)
+            // Pick the correct row kind (Enum vs Struct) from the rows themselves.
+            fn row_kind(r: &Row) -> Option<TypeDefKind> {
+                match r {
+                    Row::Empty(k) => Some(*k),
+                    Row::Extend { row, .. } => row_kind(row),
+                    Row::Var(_) | Row::Param(_) => None,
+                }
+            }
+            let kind = row_kind(lhs_row)
+                .or_else(|| row_kind(rhs_row))
+                .unwrap_or(TypeDefKind::Struct);
+            unify_rows(kind, lhs_row, rhs_row, substitutions, vars)
         }
         (Ty::Func(lhs_param, lhs_ret), Ty::Func(rhs_param, rhs_ret)) => {
             let param = unify(lhs_param, rhs_param, substitutions, vars)?;
@@ -339,6 +351,7 @@ pub(super) fn unify(
         (Ty::Record(lhs_row), Ty::Record(rhs_row)) => {
             unify_rows(TypeDefKind::Struct, lhs_row, rhs_row, substitutions, vars)
         }
+
         (_, Ty::Rigid(_)) | (Ty::Rigid(_), _) => Err(TypeError::InvalidUnification(lhs, rhs)),
         _ => {
             tracing::error!("attempted to unify {lhs:?} <> {rhs:?}");

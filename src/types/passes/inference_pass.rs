@@ -118,7 +118,12 @@ impl<'a> InferencePass<'a> {
         for binders in groups {
             let globals: Vec<_> = binders
                 .into_iter()
-                .filter(|b| matches!(b, Binder::Global(_)))
+                .filter(|b| {
+                    matches!(
+                        b,
+                        Binder::Global(_) | Binder::InstanceMethod(..) | Binder::StaticMethod(..)
+                    )
+                })
                 .collect();
             if globals.is_empty() {
                 continue;
@@ -167,6 +172,106 @@ impl<'a> InferencePass<'a> {
         conformance: &mut Conformance,
         wants: &mut Wants,
     ) {
+        // 1) Fetch protocol + gather requirement types
+        let Some(proto) = self
+            .session
+            .phase
+            .type_catalog
+            .protocols
+            .get(protocol_id)
+            .cloned()
+        else {
+            return;
+        };
+
+        // 2) Collect instance methods available on this type (base + extensions)
+        let Some(nom) = self.session.phase.type_catalog.nominals.get(type_id) else {
+            return;
+        };
+
+        // Build a label -> symbol map of concrete instance methods
+        let mut impls: FxHashMap<Label, Symbol> = FxHashMap::default();
+        let (NominalForm::Struct {
+            instance_methods, ..
+        }
+        | NominalForm::Enum {
+            instance_methods, ..
+        }) = &nom.form;
+
+        impls.extend(instance_methods.clone());
+
+        for ext in &nom.extensions {
+            impls.extend(ext.methods.clone().into_iter());
+        }
+
+        // 3) For each requirement, find impl and verify types
+        for (label, req_sym) in &proto.method_requirements {
+            // Required type from env:
+            let req_ty = match self.session.term_env.lookup(req_sym).cloned() {
+                Some(EnvEntry::Mono(t)) => t,
+                Some(EnvEntry::Scheme(s)) => s.ty, // fine
+                None => {
+                    tracing::error!("did not get conformance method: {label:?}");
+                    continue;
+                }
+            };
+
+            // Expected instance method type: prepend Self param if needed
+            // Self := Type(type_id, fresh row var)
+            let self_row = self.session.new_row_meta_var(Level(1));
+            let self_ty = Ty::Nominal {
+                id: *type_id,
+                row: Box::new(self_row),
+            };
+
+            let expected = match req_ty {
+                // If requirement is "()->R", instance method is "Self -> R"
+                Ty::Func(_, _) => {
+                    // your protocol requirements seem to be params=[]; ret=Int,
+                    // so we expect a function Self -> Int
+                    Ty::Func(Box::new(self_ty.clone()), Box::new(req_ty))
+                }
+                other => Ty::Func(Box::new(self_ty.clone()), Box::new(other)),
+            };
+
+            // Find concrete impl
+            let Some(impl_sym) = impls.get(label).cloned() else {
+                // Missing impl: emit diagnostic and continue
+                self.ast.diagnostics.push(AnyDiagnostic::Typing(Diagnostic {
+                    path: self.ast.path.clone(),
+                    span: conformance.span,
+                    kind: TypeError::MissingConformanceRequirement(label.to_string()),
+                }));
+                continue;
+            };
+
+            // Impl type from env
+            let impl_ty = match self.session.term_env.lookup(&impl_sym).cloned() {
+                Some(EnvEntry::Mono(t)) => t,
+                Some(EnvEntry::Scheme(s)) => s.ty, // ok
+                None => continue,
+            };
+
+            // Check impl matches expected: unify(expected, impl_ty)
+            let mut subs = UnificationSubstitutions::new(self.session.meta_levels.clone());
+            if let Err(e) = crate::types::type_operations::unify(
+                &expected,
+                &impl_ty,
+                &mut subs,
+                &mut self.session.vars,
+            ) {
+                self.ast.diagnostics.push(AnyDiagnostic::Typing(Diagnostic {
+                    path: self.ast.path.clone(),
+                    span: conformance.span,
+                    kind: e,
+                }));
+            }
+
+            // Record witness
+            conformance.methods.insert(label.clone(), impl_sym);
+        }
+
+        println!("conformance: {conformance:?}");
     }
 
     #[instrument(skip(self))]
@@ -289,6 +394,12 @@ impl<'a> InferencePass<'a> {
                 tracing::trace!("solving {want:?}");
 
                 let solution = match want {
+                    Constraint::Construction(ref construction) => construction.solve(
+                        &mut self.session,
+                        level,
+                        &mut next_wants,
+                        &mut substitutions,
+                    ),
                     Constraint::Equals(ref equals) => unify(
                         &equals.lhs,
                         &equals.rhs,
@@ -569,7 +680,7 @@ impl<'a> InferencePass<'a> {
                 }
             }
             PatternKind::Record { fields } => {
-                let expected_row = self.ensure_row(
+                let expected_row = self.ensure_row_record(
                     pattern.id,
                     pattern.span,
                     expected,
@@ -632,12 +743,12 @@ impl<'a> InferencePass<'a> {
                     self.session.new_ty_meta_var(level)
                 };
 
-                wants.equals(
-                    expected.clone(),
-                    receiver.clone(),
-                    ConstraintCause::Pattern(pattern.id),
-                    pattern.span,
-                );
+                // wants.equals(
+                //     expected.clone(),
+                //     receiver.clone(),
+                //     ConstraintCause::Pattern(pattern.id),
+                //     pattern.span,
+                // );
 
                 let field_metas: Vec<Ty> = fields
                     .iter()
@@ -675,7 +786,7 @@ impl<'a> InferencePass<'a> {
     /// If `expected` is Ty::Record(row), return that row.
     /// Otherwise create a fresh row var row_var and add Eq(expected, Record(row_var)).
     #[instrument(skip(self), ret)]
-    fn ensure_row(
+    fn ensure_row_record(
         &mut self,
         id: NodeID,
         span: Span,
@@ -687,7 +798,14 @@ impl<'a> InferencePass<'a> {
         match expected {
             Ty::Record(box row) => row.clone(),
             _ => {
-                todo!()
+                let row = self.session.new_row_meta_var(level);
+                wants.equals(
+                    expected.clone(),
+                    Ty::Record(Box::new(row.clone())),
+                    ConstraintCause::Member(id),
+                    span,
+                );
+                row
             }
         }
     }
@@ -790,63 +908,11 @@ impl<'a> InferencePass<'a> {
             ExprKind::RecordLiteral { fields, spread } => {
                 self.infer_record_literal(fields, spread, level, wants)
             }
-            ExprKind::Constructor(Name::Resolved(Symbol::Type(id), _)) => {
-                // let ctor_sym = self
-                //     .session
-                //     .phase
-                //     .type_catalog
-                //     .nominals
-                //     .get(id)
-                //     .and_then(|n| match &n.form {
-                //         NominalForm::Struct { initializers, .. } => {
-                //             initializers.values().next().copied()
-                //         }
-                //         _ => None,
-                //     })
-                //     .expect("no constructor symbol for nominal type");
-
-                // let Some(entry) = self.session.term_env.lookup(&ctor_sym).cloned() else {
-                //     panic!(
-                //         "constructor scheme missing: {:?}",
-                //         self.session.term_env.lookup(&ctor_sym)
-                //     );
-                // };
-
-                // entry.inference_instantiate(&mut self.session, level, wants, expr.span)
-                // Look up the nominal to see its form
-                let Some(nominal) = self.session.phase.type_catalog.nominals.get(id) else {
-                    panic!("type not found in catalog");
-                };
-
-                match &nominal.form {
-                    NominalForm::Struct { initializers, .. } => {
-                        let ctor_sym = initializers
-                            .values()
-                            .next()
-                            .copied()
-                            .expect("struct must have an initializer symbol");
-                        let entry = self
-                            .session
-                            .term_env
-                            .lookup(&ctor_sym)
-                            .cloned()
-                            .expect("constructor scheme missing");
-                        entry.inference_instantiate(&mut self.session, level, wants, expr.span)
-                    }
-                    NominalForm::Enum { .. } => {
-                        match self
-                            .session
-                            .term_env
-                            .lookup(&Symbol::Type(*id))
-                            .cloned()
-                            .expect("enum type missing from env")
-                        {
-                            EnvEntry::Mono(ty) => ty,
-                            EnvEntry::Scheme(s) => s.ty.clone(),
-                        }
-                    }
-                }
-            }
+            ExprKind::Constructor(Name::Resolved(Symbol::Type(id), _)) => Ty::Constructor {
+                type_id: *id,
+                params: vec![],
+                ret: Ty::Void.into(),
+            },
             ExprKind::RowVariable(..) => todo!(),
 
             _ => todo!(),
@@ -873,7 +939,6 @@ impl<'a> InferencePass<'a> {
         };
 
         let member_ty = self.session.new_ty_meta_var(level);
-        println!("new member ty meta: {label:?} {member_ty:?}");
 
         wants.member(
             receiver_ty,
@@ -951,7 +1016,17 @@ impl<'a> InferencePass<'a> {
         let callee_ty = if !type_args.is_empty()
             && let Some(scheme) = self.lookup_named_scheme(callee)
         {
-            scheme.instantiate_with_args(type_args, &mut self.session, level, wants, callee.span)
+            let type_args_tys: Vec<(Ty, NodeID)> = type_args
+                .iter()
+                .map(|arg| (self.infer_type_annotation(arg, level, wants), arg.id))
+                .collect();
+            scheme.instantiate_with_args(
+                &type_args_tys,
+                &mut self.session,
+                level,
+                wants,
+                callee.span,
+            )
         } else {
             self.infer_expr(callee, level, wants)
         };
@@ -962,32 +1037,7 @@ impl<'a> InferencePass<'a> {
             arg_tys.push(self.infer_expr(&arg.value, level, wants));
         }
 
-        let returns = match &callee_ty {
-            Ty::Constructor { type_id, .. } => {
-                // Build { label_i : arg_ty_i } as a *closed* row
-                let mut row = Row::Empty(TypeDefKind::Struct);
-                for (arg, ty) in args.iter().zip(arg_tys.iter()) {
-                    let Label::Named(name) = &arg.label else {
-                        // TODO: handle unlabled args
-                        continue;
-                    };
-                    row = Row::Extend {
-                        row: Box::new(row),
-                        label: Label::Named(name.clone()),
-                        ty: ty.clone(),
-                    };
-                }
-                Ty::Nominal {
-                    id: *type_id,
-                    row: Box::new(row),
-                }
-            }
-            _ => {
-                // Regular call: unknown return until solved
-                self.session.new_ty_meta_var(level)
-            }
-        };
-
+        let returns = self.session.new_ty_meta_var(level);
         let receiver = if let Expr {
             kind: ExprKind::Member(receiver, _),
             ..
@@ -1004,14 +1054,38 @@ impl<'a> InferencePass<'a> {
             None
         };
 
-        wants.call(
-            callee_ty,
-            arg_tys,
-            returns.clone(),
-            receiver,
-            ConstraintCause::Call(callee.id),
-            callee.span,
-        );
+        match &callee.kind {
+            ExprKind::Member(..) => {
+                wants.call(
+                    callee_ty,
+                    arg_tys,
+                    returns.clone(),
+                    receiver,
+                    ConstraintCause::Call(callee.id),
+                    callee.span,
+                );
+            }
+            ExprKind::Constructor(Name::Resolved(sym, _)) => {
+                wants.construction(
+                    callee_ty,
+                    arg_tys,
+                    returns.clone(),
+                    *sym,
+                    ConstraintCause::Call(callee.id),
+                    callee.span,
+                );
+            }
+            _ => {
+                wants.call(
+                    callee_ty,
+                    arg_tys,
+                    returns.clone(),
+                    receiver,
+                    ConstraintCause::Call(callee.id),
+                    callee.span,
+                );
+            }
+        }
 
         returns
     }
@@ -1023,10 +1097,53 @@ impl<'a> InferencePass<'a> {
             let skolem_id = self.session.vars.skolems.next_id();
             let param_id = self.session.vars.type_params.next_id();
             skolem_map.insert(Ty::Rigid(skolem_id), Ty::Param(param_id));
+
             self.session.term_env.insert_mono(
                 generic.name.symbol().expect("did not get symbol"),
                 Ty::Rigid(skolem_id),
             );
+
+            for conf in &generic.conformances {
+                use crate::name::Name;
+                use crate::name_resolution::symbol::Symbol;
+                use crate::node_kinds::type_annotation::TypeAnnotationKind;
+
+                let Some(proto_id) = (match &conf.kind {
+                    TypeAnnotationKind::Nominal {
+                        name: Name::Resolved(Symbol::Type(id), _),
+                        ..
+                    } => Some(*id),
+                    _ => None,
+                }) else {
+                    continue;
+                };
+
+                let Some(protocol) = self.session.phase.type_catalog.protocols.get(&proto_id)
+                else {
+                    continue;
+                };
+
+                for (label, req_sym) in &protocol.method_requirements {
+                    // requirement result type from env (e.g., Int for `func getCount() -> Int`)
+                    let req_ret = match self.session.term_env.lookup(req_sym).cloned() {
+                        Some(EnvEntry::Mono(t)) => t,
+                        Some(EnvEntry::Scheme(s)) => s.ty,
+                        None => continue,
+                    };
+
+                    // instance method on the generic: (T) -> ReqRet
+                    let method_ty = Ty::Func(Box::new(Ty::Rigid(skolem_id)), Box::new(req_ret));
+
+                    // tell the solver: a T that conforms to this protocol has that member with that type
+                    wants.member(
+                        Ty::Rigid(skolem_id),
+                        label.clone(),
+                        method_ty,
+                        ConstraintCause::Internal,
+                        generic.span,
+                    );
+                }
+            }
         }
 
         let mut param_tys: Vec<Ty> = Vec::with_capacity(func.params.len());
@@ -1040,14 +1157,6 @@ impl<'a> InferencePass<'a> {
             param_tys.push(ty);
         }
 
-        println!("infer_func params: {:?}, {param_tys:?}", func.params);
-
-        let ret_ty = if let Some(ret) = &func.ret {
-            self.infer_type_annotation(ret, level, wants)
-        } else {
-            self.session.new_ty_meta_var(level.next())
-        };
-
         for (p, ty) in func.params.iter().zip(param_tys.iter()) {
             let Name::Resolved(sym, _) = &p.name else {
                 panic!("unresolved param");
@@ -1057,13 +1166,18 @@ impl<'a> InferencePass<'a> {
         }
 
         let body_ty = self.infer_block(&func.body, level, wants);
-
-        wants.equals(
-            body_ty,
-            ret_ty.clone(),
-            ConstraintCause::Internal,
-            func.body.span,
-        );
+        let ret_ty = if let Some(ret) = &func.ret {
+            let annotated_ty = self.infer_type_annotation(ret, level, wants);
+            wants.equals(
+                body_ty,
+                annotated_ty.clone(),
+                ConstraintCause::Internal,
+                ret.span,
+            );
+            annotated_ty
+        } else {
+            body_ty
+        };
 
         // Build function type
         let func_ty = if param_tys.is_empty() {
@@ -1084,29 +1198,7 @@ impl<'a> InferencePass<'a> {
         match &stmt.kind {
             StmtKind::Expr(expr) => self.infer_expr(expr, level, wants),
             StmtKind::If(cond, conseq, alt) => {
-                let cond_ty = self.infer_expr(cond, level, wants);
-                wants.equals(
-                    cond_ty,
-                    Ty::Bool,
-                    ConstraintCause::Condition(cond.id),
-                    cond.span,
-                );
-
-                let conseq_ty = self.infer_block(conseq, level, wants);
-                if let Some(alt) = alt {
-                    let alt_ty = self.infer_block(alt, level, wants);
-                    // If both branches exist, unify their types and return the result
-                    wants.equals(
-                        conseq_ty.clone(),
-                        alt_ty,
-                        ConstraintCause::Condition(stmt.id),
-                        conseq.span,
-                    );
-                    conseq_ty
-                } else {
-                    // If no else branch, it's a statement that returns void
-                    Ty::Void
-                }
+                self.infer_if_stmt(stmt.id, cond, conseq, alt, level, wants)
             }
             StmtKind::Return(..) => todo!(),
             StmtKind::Break => Ty::Void,
@@ -1136,6 +1228,40 @@ impl<'a> InferencePass<'a> {
 
                 Ty::Void
             }
+        }
+    }
+
+    fn infer_if_stmt(
+        &mut self,
+        id: NodeID,
+        cond: &Expr,
+        conseq: &Block,
+        alt: &Option<Block>,
+        level: Level,
+        wants: &mut Wants,
+    ) -> Ty {
+        let cond_ty = self.infer_expr(cond, level, wants);
+        wants.equals(
+            cond_ty,
+            Ty::Bool,
+            ConstraintCause::Condition(cond.id),
+            cond.span,
+        );
+
+        let conseq_ty = self.infer_block(conseq, level, wants);
+        if let Some(alt) = alt {
+            let alt_ty = self.infer_block(alt, level, wants);
+            // If both branches exist, unify their types and return the result
+            wants.equals(
+                conseq_ty.clone(),
+                alt_ty,
+                ConstraintCause::Condition(id),
+                conseq.span,
+            );
+            conseq_ty
+        } else {
+            // If no else branch, it's a statement that returns void
+            Ty::Void
         }
     }
 }

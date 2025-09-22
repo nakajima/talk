@@ -304,6 +304,24 @@ impl NameResolver {
         Name::Resolved(sym, name.name_str())
     }
 
+    pub(super) fn declare_static_method(&mut self, name: &Name) -> Name {
+        let scope = self
+            .scopes
+            .get_mut(&self.current_scope_id.expect("no scope to declare in"))
+            .expect("scope not found");
+
+        let id = self.symbols.next_static_method();
+        let sym = Symbol::StaticMethod(id);
+        tracing::debug!(
+            "declare static method {} -> {sym:?} {:?}",
+            name.name_str(),
+            self.current_scope_id
+        );
+        scope.values.insert(name.name_str(), sym);
+
+        Name::Resolved(sym, name.name_str())
+    }
+
     pub(super) fn declare_property(&mut self, name: &Name) -> Name {
         let scope = self
             .scopes
@@ -508,9 +526,7 @@ impl NameResolver {
             }
         );
 
-        on!(&mut decl.kind, DeclKind::Init { name, .. }, {
-            *name = self.declare_type(name);
-
+        on!(&mut decl.kind, DeclKind::Init { .. }, {
             self.exit_scope();
         })
     }

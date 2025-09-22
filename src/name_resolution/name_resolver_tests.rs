@@ -11,7 +11,7 @@ pub mod tests {
             name_resolver::{NameResolved, NameResolver, NameResolverError},
             symbol::{
                 BuiltinId, DeclaredLocalId, GlobalId, InstanceMethodId, ParamLocalId, PropertyId,
-                Symbol, TypeId, VariantId,
+                StaticMethodId, Symbol, TypeId, VariantId,
             },
         },
         node::Node,
@@ -476,8 +476,15 @@ pub mod tests {
                 generics: vec![],
                 conformances: vec![],
                 body: any_block!(vec![Node::Decl(any_decl!(DeclKind::Init {
-                    name: Name::Resolved(Symbol::Type(TypeId(4)), "init".into()),
-                    params: vec![param!(Symbol::ParamLocal(ParamLocalId(1)), "self")],
+                    name: Name::Resolved(Symbol::Global(GlobalId(1)), "init".into()),
+                    params: vec![param!(
+                        Symbol::ParamLocal(ParamLocalId(1)),
+                        "self",
+                        annotation!(TypeAnnotationKind::SelfType(Name::Resolved(
+                            Symbol::Type(TypeId(1)),
+                            "Self".into()
+                        )))
+                    )],
                     body: any_block!(vec![])
                 }))])
             })
@@ -535,7 +542,10 @@ pub mod tests {
                     any_decl!(DeclKind::Method {
                         func: Box::new(Func {
                             id: NodeID::ANY,
-                            name: Name::Resolved(Symbol::Global(GlobalId(1)), "fizz".into()),
+                            name: Name::Resolved(
+                                Symbol::StaticMethod(StaticMethodId(1)),
+                                "fizz".into()
+                            ),
                             generics: vec![],
                             params: vec![],
                             body: any_block!(vec![]),

@@ -1,9 +1,13 @@
 use crate::{
     label::Label,
+    name_resolution::symbol::Symbol,
     span::Span,
     types::{
         constraint::{Constraint, ConstraintCause},
-        constraints::{call::Call, equals::Equals, has_field::HasField, member::Member},
+        constraints::{
+            call::Call, construction::Construction, equals::Equals, has_field::HasField,
+            member::Member,
+        },
         row::Row,
         ty::Ty,
     },
@@ -27,6 +31,26 @@ impl Wants {
     pub fn push(&mut self, constraint: Constraint) {
         tracing::debug!("constraining {constraint:?}");
         self.0.push(constraint)
+    }
+
+    pub fn construction(
+        &mut self,
+        callee: Ty,
+        args: Vec<Ty>,
+        returns: Ty,
+        type_symbol: Symbol,
+        cause: ConstraintCause,
+        span: Span,
+    ) {
+        tracing::debug!("constraining constructor {callee:?}({args:?}) = {type_symbol:?}");
+        self.0.push(Constraint::Construction(Construction {
+            callee,
+            args,
+            returns,
+            type_symbol,
+            cause,
+            span,
+        }))
     }
 
     pub fn call(

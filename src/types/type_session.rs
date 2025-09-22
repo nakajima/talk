@@ -26,7 +26,7 @@ use crate::{
         scheme::{ForAll, Scheme},
         term_environment::{EnvEntry, TermEnv},
         ty::{Level, Ty},
-        type_operations::{UnificationSubstitutions, apply},
+        type_operations::{UnificationSubstitutions, apply, apply_row},
         vars::Vars,
     },
 };
@@ -77,6 +77,7 @@ pub struct TypeExtension<T> {
     pub node_id: NodeID,
     pub conformances: Vec<TypeId>,
     pub methods: IndexMap<Label, Method<T>>,
+    pub static_methods: IndexMap<Label, Method<T>>,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -166,7 +167,11 @@ impl<Phase: TypingPhase> TypeSession<Phase> {
                     foralls.push(ForAll::Ty(param_id));
                     substitutions.ty.insert(*id, Ty::Param(param_id));
                 }
-                Ty::Record(box Row::Var(id)) => {
+                Ty::Record(box Row::Var(id))
+                | Ty::Nominal {
+                    row: box Row::Var(id),
+                    ..
+                } => {
                     let level = self
                         .meta_levels
                         .get(&Meta::Row(*id))
@@ -183,6 +188,27 @@ impl<Phase: TypingPhase> TypeSession<Phase> {
                 }
                 _ => {
                     tracing::warn!("got {m:?} for var while generalizing")
+                }
+            }
+        }
+
+        // NEW: quantify row metas that appear only in predicates (e.g. HasField.row)
+        for c in unsolved {
+            if let Constraint::HasField(h) = c {
+                tracing::info!("got unsolved hasfield: {c:?}");
+                // normalize first (collapses DSU reps)
+                let r = apply_row(h.row.clone(), &mut substitutions);
+                if let Row::Var(row_meta) = r {
+                    // quantify if its level is above the binder's level
+                    let lvl = *self
+                        .meta_levels
+                        .get(&Meta::Row(row_meta))
+                        .unwrap_or(&Level(0));
+                    if lvl >= inner {
+                        let param_id = self.vars.row_params.next_id();
+                        foralls.push(ForAll::Row(param_id));
+                        substitutions.row.insert(row_meta, Row::Param(param_id));
+                    }
                 }
             }
         }

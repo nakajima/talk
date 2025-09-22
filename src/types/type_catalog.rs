@@ -12,12 +12,12 @@ pub enum NominalForm {
     Struct {
         initializers: FxHashMap<Label, Symbol>,
         properties: IndexMap<Label, Symbol>,
-        methods: FxHashMap<Label, Symbol>,
+        instance_methods: FxHashMap<Label, Symbol>,
         static_methods: FxHashMap<Label, Symbol>,
     },
     Enum {
         variants: FxHashMap<Label, Symbol>,
-        methods: FxHashMap<Label, Symbol>,
+        instance_methods: FxHashMap<Label, Symbol>,
         static_methods: FxHashMap<Label, Symbol>,
     },
 }
@@ -33,6 +33,7 @@ pub struct Extension {
 pub struct Protocol {
     pub node_id: NodeID,
     pub methods: FxHashMap<Label, Symbol>,
+    pub static_methods: FxHashMap<Label, Symbol>,
     pub method_requirements: FxHashMap<Label, Symbol>,
 }
 
@@ -54,8 +55,8 @@ impl Nominal {
         match &self.form {
             NominalForm::Enum {
                 variants,
-                methods,
-                static_methods: _,
+                instance_methods: methods,
+                static_methods,
             } => {
                 if let Some(sym) = variants.get(label) {
                     return Some(sym);
@@ -65,12 +66,16 @@ impl Nominal {
                     return Some(sym);
                 }
 
+                if let Some(sym) = static_methods.get(label) {
+                    return Some(sym);
+                }
+
                 None
             }
             NominalForm::Struct {
-                methods,
+                instance_methods: methods,
                 properties,
-                static_methods: _,
+                static_methods,
                 ..
             } => {
                 if let Some(sym) = methods.get(label) {
@@ -78,6 +83,10 @@ impl Nominal {
                 }
 
                 if let Some(sym) = properties.get(label) {
+                    return Some(sym);
+                }
+
+                if let Some(sym) = static_methods.get(label) {
                     return Some(sym);
                 }
 

@@ -1242,7 +1242,7 @@ impl<'a> Formatter<'a> {
             let conformance_docs: Vec<_> = generic
                 .conformances
                 .iter()
-                .map(|c| self.format_generic_decl(c))
+                .map(|c| self.format_type_annotation(c))
                 .collect();
             result = concat(
                 result,

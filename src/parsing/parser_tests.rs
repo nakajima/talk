@@ -1698,7 +1698,7 @@ pub mod tests {
         ",
         );
 
-        assert_eq!(
+        assert_eq_diff!(
             *parsed.roots[0].as_decl(),
             any_decl!(DeclKind::Struct {
                 name: "Person".into(),
@@ -1706,7 +1706,7 @@ pub mod tests {
                 conformances: vec![],
                 body: any_block!(vec![
                     any_decl!(DeclKind::Property {
-                        name: Name::Resolved(Symbol::Property(PropertyId(1)), "age".into()),
+                        name: "age".into(),
                         is_static: false,
                         default_value: None,
                         type_annotation: Some(annotation!(TypeAnnotationKind::Nominal {
@@ -1716,7 +1716,7 @@ pub mod tests {
                     })
                     .into(),
                     any_decl!(DeclKind::Property {
-                        name: Name::Resolved(Symbol::Property(PropertyId(1)), "count".into()),
+                        name: "count".into(),
                         is_static: false,
                         default_value: Some(any_expr!(ExprKind::LiteralInt("123".into()))),
                         type_annotation: Some(annotation!(TypeAnnotationKind::Nominal {
@@ -1726,7 +1726,7 @@ pub mod tests {
                     })
                     .into(),
                     any_decl!(DeclKind::Property {
-                        name: Name::Resolved(Symbol::Property(PropertyId(1)), "height".into()),
+                        name: "height".into(),
                         is_static: false,
                         default_value: Some(any_expr!(ExprKind::LiteralInt("456".into()))),
                         type_annotation: None
@@ -1749,7 +1749,7 @@ pub mod tests {
         ",
         );
 
-        assert_eq!(
+        assert_eq_diff!(
             *parsed.roots[0].as_decl(),
             any_decl!(DeclKind::Struct {
                 name: "Person".into(),
@@ -1757,7 +1757,7 @@ pub mod tests {
                 conformances: vec![],
                 body: any_block!(vec![
                     any_decl!(DeclKind::Property {
-                        name: Name::Resolved(Symbol::Property(PropertyId(1)), "age".into()),
+                        name: "age".into(),
                         is_static: true,
                         default_value: None,
                         type_annotation: Some(annotation!(TypeAnnotationKind::Nominal {
@@ -1767,7 +1767,7 @@ pub mod tests {
                     })
                     .into(),
                     any_decl!(DeclKind::Property {
-                        name: Name::Resolved(Symbol::Property(PropertyId(1)), "count".into()),
+                        name: "count".into(),
                         is_static: true,
                         default_value: Some(any_expr!(ExprKind::LiteralInt("123".into()))),
                         type_annotation: Some(annotation!(TypeAnnotationKind::Nominal {
@@ -1777,7 +1777,7 @@ pub mod tests {
                     })
                     .into(),
                     any_decl!(DeclKind::Property {
-                        name: Name::Resolved(Symbol::Property(PropertyId(1)), "height".into()),
+                        name: "height".into(),
                         is_static: true,
                         default_value: Some(any_expr!(ExprKind::LiteralInt("456".into()))),
                         type_annotation: None

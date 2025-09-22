@@ -46,6 +46,17 @@ impl Row {
     pub fn close(&self) -> ClosedRow {
         close(self, ClosedRow::default())
     }
+
+    pub fn map<F: FnMut(Ty) -> Ty>(&self, f: &mut F) -> Row {
+        match self.clone() {
+            Row::Extend { row, label, ty } => Row::Extend {
+                row: row.map(f).into(),
+                label,
+                ty: f(ty),
+            },
+            ty => ty,
+        }
+    }
 }
 
 fn close(row: &Row, mut closed_row: ClosedRow) -> ClosedRow {

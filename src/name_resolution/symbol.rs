@@ -30,6 +30,7 @@ pub enum Symbol {
     Property(PropertyId),
     Synthesized(SynthesizedId),
     InstanceMethod(InstanceMethodId),
+    StaticMethod(StaticMethodId),
     Variant(VariantId),
 }
 
@@ -50,6 +51,7 @@ impl_symbol_id!(InstanceMethod, InstanceMethodId);
 impl_symbol_id!(Builtin, BuiltinId);
 impl_symbol_id!(Variant, VariantId);
 impl_symbol_id!(Synthesized, SynthesizedId);
+impl_symbol_id!(StaticMethod, StaticMethodId);
 
 #[derive(Debug, Clone, Default)]
 pub struct Symbols {
@@ -60,6 +62,7 @@ pub struct Symbols {
     locals: IDGenerator,
     properties: IDGenerator,
     instance_methods: IDGenerator,
+    static_methods: IDGenerator,
     variants: IDGenerator,
     synthesized: IDGenerator,
     builtins: IDGenerator,
@@ -96,6 +99,10 @@ impl Symbols {
 
     pub fn next_instance_method(&mut self) -> InstanceMethodId {
         InstanceMethodId(self.instance_methods.next_id())
+    }
+
+    pub fn next_static_method(&mut self) -> StaticMethodId {
+        StaticMethodId(self.static_methods.next_id())
     }
 
     pub fn next_builtin(&mut self) -> BuiltinId {

@@ -1280,64 +1280,6 @@ impl<'a> Parser<'a> {
         })
     }
 
-    // fn record_type_repr(
-    //     &mut self,
-    //     is_type_parameter: bool,
-    //     tok: LocToken,
-    // ) -> Result<Expr, ParserError> {
-    //     let mut fields: Vec<Expr> = vec![];
-    //     let mut row_var: Option<Box<Expr>> = None;
-
-    //     while !self.did_match(TokenKind::RightBrace)? {
-    //         self.skip_newlines();
-
-    //         // Check for row variable: ..R
-    //         if self.did_match(TokenKind::DotDot)? {
-    //             let row_tok = self.push_source_location();
-    //             let name = self.identifier()?;
-    //             row_var = Some(Box::new(
-    //                 self.add_expr(RowVariable(Name::Raw(name)), row_tok)?,
-    //             ));
-
-    //             // Row variable should be the last element
-    //             self.consume(TokenKind::Comma).ok();
-    //             self.skip_newlines();
-    //             self.consume(TokenKind::RightBrace)?;
-    //             break;
-    //         }
-
-    //         // Regular field: label: Type
-    //         let field_tok = self.push_source_location();
-    //         let label = self.identifier()?;
-    //         self.consume(TokenKind::Colon)?;
-    //         let ty = self.type_repr(false)?; // Fields are not type parameters
-    //         fields.push(self.add_expr(
-    //             RecordTypeField {
-    //                 label: Name::Raw(label),
-    //                 ty: Box::new(ty),
-    //             },
-    //             field_tok,
-    //         )?);
-
-    //         // Handle comma
-    //         if !self.peek_is(TokenKind::RightBrace) && !self.peek_is(TokenKind::DotDot) {
-    //             self.consume(TokenKind::Comma)?;
-    //         } else {
-    //             self.consume(TokenKind::Comma).ok(); // Optional trailing comma
-    //         }
-    //         self.skip_newlines();
-    //     }
-
-    //     self.add_expr(
-    //         RecordTypeRepr {
-    //             fields,
-    //             row_var,
-    //             introduces_type: is_type_parameter,
-    //         },
-    //         tok,
-    //     )
-    // }
-
     #[instrument(skip(self))]
     fn conformances(&mut self) -> Result<Vec<TypeAnnotation>, ParserError> {
         let mut conformances: Vec<TypeAnnotation> = vec![];
@@ -1521,7 +1463,7 @@ impl<'a> Parser<'a> {
         let generics = self.generics()?;
 
         let conformances = if self.did_match(TokenKind::Colon)? {
-            self.generics()?
+            self.conformances()?
         } else {
             vec![]
         };

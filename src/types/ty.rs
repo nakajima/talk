@@ -121,39 +121,6 @@ impl Ty {
         result
     }
 
-    pub fn map<F: FnMut(Ty) -> Ty>(&self, f: F) -> Ty {
-        let copy = self.clone();
-        match copy {
-            Ty::Hole(..) => f(copy),
-            Ty::Param(..) => f(copy),
-            Ty::Rigid(..) => f(copy),
-            Ty::UnificationVar { .. } => f(copy),
-            Ty::Primitive(..) => f(copy),
-            Ty::Constructor {
-                type_id,
-                params,
-                ret,
-            } => {
-                let copy = Ty::Constructor {
-                    type_id,
-                    params: params.into_iter().map(f).collect(),
-                    ret,
-                };
-                f(copy)
-            }
-            Ty::Func(box ty, box ty1) => f(Ty::Func(f(ty).into(), f(ty1).into())),
-            Ty::Tuple(items) => f(Ty::Tuple(items.into_iter().map(f).collect())),
-            Ty::Record(box row) => match row {
-                Row::Extend { row, ty, label } => {
-                    Ty::Record(row.clone()).contains_var() || ty.contains_var()
-                }
-                Row::Var(_) => true,
-                _ => false,
-            },
-            Ty::Nominal { .. } => false,
-        }
-    }
-
     pub fn contains_var(&self) -> bool {
         match self {
             Ty::Hole(..) => false,

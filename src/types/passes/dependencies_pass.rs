@@ -9,7 +9,7 @@ use crate::{
     name::Name,
     name_resolution::{
         name_resolver::NameResolved,
-        symbol::{DeclaredLocalId, GlobalId, Symbol, TypeId},
+        symbol::{DeclaredLocalId, GlobalId, InstanceMethodId, StaticMethodId, Symbol, TypeId},
     },
     node_id::NodeID,
     node_kinds::{
@@ -52,6 +52,8 @@ impl TypingPhase for SCCResolved {
 pub enum Binder {
     Global(GlobalId),
     LocalDecl(DeclaredLocalId),
+    InstanceMethod(InstanceMethodId),
+    StaticMethod(StaticMethodId),
 }
 
 impl From<Binder> for Symbol {
@@ -59,6 +61,8 @@ impl From<Binder> for Symbol {
         match value {
             Binder::Global(id) => Symbol::Global(id),
             Binder::LocalDecl(id) => Symbol::DeclaredLocal(id),
+            Binder::InstanceMethod(id) => Symbol::InstanceMethod(id),
+            Binder::StaticMethod(id) => Symbol::StaticMethod(id),
         }
     }
 }
@@ -198,7 +202,19 @@ impl DependenciesPass {
                 self.rhs_map.insert(binder, rhs_id.id());
                 self.binder_stack.push((decl.id, binder));
             }
-            _ => (),
+            Symbol::InstanceMethod(method_id) => {
+                let binder = Binder::InstanceMethod(*method_id);
+                self.graph.add_node(binder);
+                self.rhs_map.insert(binder, rhs_id.id());
+                self.binder_stack.push((decl.id, binder));
+            }
+            Symbol::StaticMethod(method_id) => {
+                let binder = Binder::StaticMethod(*method_id);
+                self.graph.add_node(binder);
+                self.rhs_map.insert(binder, rhs_id.id());
+                self.binder_stack.push((decl.id, binder));
+            }
+            _ => unreachable!(),
         }
     }
 

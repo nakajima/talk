@@ -1,9 +1,12 @@
 use crate::{
+    name_resolution::symbol::Symbol,
     span::Span,
     types::{
         constraint::{Constraint, ConstraintCause},
         passes::{dependencies_pass::SCCResolved, inference_pass::curry},
-        ty::Ty,
+        term_environment::EnvEntry,
+        ty::{Level, Ty},
+        type_catalog::NominalForm,
         type_error::TypeError,
         type_operations::{UnificationSubstitutions, apply, apply_mult, unify},
         type_session::TypeSession,
@@ -46,20 +49,51 @@ impl Call {
         if let Some(receiver) = &self.receiver {
             let receiver = apply(receiver.clone(), substitutions);
             // receiver is the first parameter for instance methods
-            args.insert(0, receiver);
+
+            if !matches!(receiver, Ty::Constructor { .. }) {
+                args.insert(0, receiver);
+            }
         }
 
-        println!("callee: {callee:?} {args:?} {returns:?}, subs: {substitutions:?}");
-
         match &callee {
-            Ty::Constructor {
-                params, box ret, ..
-            } => unify(
-                &curry(params.clone(), ret.clone()),
-                &curry(args, returns),
-                substitutions,
-                &mut session.vars,
-            ),
+            Ty::Constructor { type_id: id, .. } => {
+                let Some(nominal) = session.phase.type_catalog.nominals.get(id) else {
+                    panic!("type not found in catalog");
+                };
+
+                let init_ty = match &nominal.form {
+                    NominalForm::Struct { initializers, .. } => {
+                        let ctor_sym = initializers
+                            .values()
+                            .next()
+                            .copied()
+                            .expect("struct must have an initializer symbol");
+                        let entry = session
+                            .term_env
+                            .lookup(&ctor_sym)
+                            .cloned()
+                            .expect("constructor scheme missing");
+                        entry.inference_instantiate(session, Level(1), next_wants, self.span)
+                    }
+                    NominalForm::Enum { .. } => {
+                        match session
+                            .term_env
+                            .lookup(&Symbol::Type(*id))
+                            .cloned()
+                            .expect("enum type missing from env")
+                        {
+                            EnvEntry::Mono(ty) => ty,
+                            EnvEntry::Scheme(s) => s.ty.clone(),
+                        }
+                    }
+                };
+                unify(
+                    &init_ty,
+                    &curry(args, returns),
+                    substitutions,
+                    &mut session.vars,
+                )
+            }
             Ty::Func(..) => {
                 if args.is_empty() {
                     unify(

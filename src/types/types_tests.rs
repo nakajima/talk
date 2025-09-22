@@ -1045,7 +1045,7 @@ pub mod tests {
     }
 
     #[test]
-    fn types_generic_struct() {
+    fn type_generic_struct() {
         let (ast, session) = typecheck(
             "
         struct Person<T> {
@@ -1314,10 +1314,7 @@ pub mod tests {
             ty(3, &ast, &session),
             Ty::Nominal {
                 id: TypeId(1),
-                row: Box::new(make_row!(Enum, "some" => Ty::UnificationVar {
-                        id: 1.into(),
-                        level: Level(1)
-                    }, "none" => Ty::Void))
+                row: Box::new(make_row!(Enum, "some" => Ty::Param(1.into()), "none" => Ty::Void))
             }
         );
     }
@@ -1446,6 +1443,6 @@ pub mod tests {
             ",
         );
 
-        assert_eq!(ty(4, &ast, &session), Ty::Int)
+        assert_eq!(ty(5, &ast, &session), Ty::Int)
     }
 }

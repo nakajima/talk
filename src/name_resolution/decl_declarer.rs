@@ -244,10 +244,14 @@ impl<'a> DeclDeclarer<'a> {
             &mut decl.kind,
             DeclKind::Method {
                 func: box Func { name, .. },
-                is_static: false
+                is_static
             },
             {
-                *name = self.resolver.declare_instance_method(name);
+                *name = if *is_static {
+                    self.resolver.declare_static_method(name)
+                } else {
+                    self.resolver.declare_instance_method(name)
+                };
             }
         );
 
@@ -268,9 +272,9 @@ impl<'a> DeclDeclarer<'a> {
         });
 
         on!(&mut decl.kind, DeclKind::Init { name, .. }, {
-            *name = self.resolver.declare_type(name);
+            *name = self.resolver.declare_global(name);
 
-            let Name::Resolved(Symbol::Type(..), _) = &name else {
+            let Name::Resolved(Symbol::Global(..), _) = &name else {
                 unreachable!()
             };
 
@@ -290,9 +294,7 @@ impl<'a> DeclDeclarer<'a> {
             }
         );
 
-        on!(&mut decl.kind, DeclKind::Init { name, .. }, {
-            *name = self.resolver.declare_type(name);
-
+        on!(&mut decl.kind, DeclKind::Init { .. }, {
             self.end_scope();
         });
     }

@@ -1,6 +1,6 @@
 use crate::{
     label::Label,
-    node_kinds::type_annotation::TypeAnnotation,
+    node_id::NodeID,
     span::Span,
     types::{
         constraint::{Constraint, ConstraintCause},
@@ -170,7 +170,6 @@ impl Scheme {
                     };
 
                     tracing::trace!("instantiating {param:?} with {meta:?}");
-
                     unification_substitutions
                         .meta_levels
                         .insert(Meta::Ty(meta), level);
@@ -181,7 +180,6 @@ impl Scheme {
                         unreachable!()
                     };
                     tracing::trace!("instantiating {param:?} with {meta:?}");
-
                     unification_substitutions
                         .meta_levels
                         .insert(Meta::Row(meta), level);
@@ -196,14 +194,6 @@ impl Scheme {
             wants.push(constraint);
         }
 
-        let ty = self.ty.map(|ty| {
-            if matches!(ty, Ty::Hole(..)) {
-                session.new_ty_meta_var(level)
-            } else {
-                ty
-            }
-        });
-
         tracing::trace!("solver_instantiate ret subs: {substitutions:?}");
 
         (
@@ -214,7 +204,7 @@ impl Scheme {
 
     pub fn instantiate_with_args<P: TypingPhase>(
         &self,
-        _args: &[TypeAnnotation],
+        args: &[(Ty, NodeID)],
         session: &mut TypeSession<P>,
         level: Level,
         wants: &mut Wants,
@@ -222,30 +212,30 @@ impl Scheme {
     ) -> Ty {
         // Map each quantified meta id to a fresh meta at this use-site level
         let mut substitutions = InstantiationSubstitutions::default();
-        let (_ty_foralls, row_foralls): (Vec<ForAll>, Vec<ForAll>) = self
+        let (ty_foralls, row_foralls): (Vec<ForAll>, Vec<ForAll>) = self
             .foralls
             .iter()
             .partition(|fa| matches!(fa, ForAll::Ty(_)));
 
-        // for (param, arg) in ty_foralls.iter().zip(args) {
-        //     let ForAll::Ty(param) = param else {
-        //         unreachable!()
-        //     };
+        for (param, (arg_ty, id)) in ty_foralls.iter().zip(args) {
+            let ForAll::Ty(param) = param else {
+                unreachable!()
+            };
 
-        //     let arg_ty = pass.infer_type_annotation(arg, level, wants);
-        //     let ty @ Ty::UnificationVar { id: meta_var, .. } = pass.new_ty_meta_var(level) else {
-        //         unreachable!();
-        //     };
+            let ty @ Ty::UnificationVar { id: meta_var, .. } = session.new_ty_meta_var(level)
+            else {
+                unreachable!();
+            };
 
-        //     wants.equals(
-        //         ty.clone(),
-        //         arg_ty,
-        //         ConstraintCause::CallTypeArg(arg.id),
-        //         span,
-        //     );
+            wants.equals(
+                ty.clone(),
+                arg_ty.clone(),
+                ConstraintCause::CallTypeArg(*id),
+                span,
+            );
 
-        //     substitutions.ty.insert(*param, meta_var);
-        // }
+            substitutions.ty.insert(*param, meta_var);
+        }
 
         for row_forall in row_foralls {
             let ForAll::Row(row_param) = row_forall else {
