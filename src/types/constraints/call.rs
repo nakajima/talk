@@ -8,7 +8,7 @@ use crate::{
         ty::{Level, Ty},
         type_catalog::NominalForm,
         type_error::TypeError,
-        type_operations::{UnificationSubstitutions, apply, apply_mult, unify},
+        type_operations::{UnificationSubstitutions, unify},
         type_session::TypeSession,
         wants::Wants,
     },
@@ -31,31 +31,25 @@ impl Call {
         next_wants: &mut Wants,
         substitutions: &mut UnificationSubstitutions,
     ) -> Result<bool, TypeError> {
-        // Get everything up to date
-        let callee = apply(self.callee.clone(), substitutions);
-
-        if matches!(callee, Ty::UnificationVar { .. }) {
+        if matches!(&self.callee, Ty::UnificationVar { .. }) {
             tracing::warn!(
-                "unable to determine callee type: {callee:?}, substitutions: {substitutions:?}"
+                "unable to determine callee type: {:?}, substitutions: {substitutions:?}",
+                self.callee
             );
             // We don't know the callee yet, defer
             next_wants.push(Constraint::Call(self.clone()));
             return Ok(false);
         }
 
-        let mut args = apply_mult(self.args.to_vec(), substitutions);
-        let returns = apply(self.returns.clone(), substitutions);
+        let mut args = self.args.to_vec();
 
-        if let Some(receiver) = &self.receiver {
-            let receiver = apply(receiver.clone(), substitutions);
-            // receiver is the first parameter for instance methods
-
-            if !matches!(receiver, Ty::Constructor { .. }) {
-                args.insert(0, receiver);
-            }
+        if let Some(receiver) = &self.receiver
+            && !matches!(receiver, Ty::Constructor { .. })
+        {
+            args.insert(0, receiver.clone());
         }
 
-        match &callee {
+        match &self.callee {
             Ty::Constructor { type_id: id, .. } => {
                 let Some(nominal) = session.phase.type_catalog.nominals.get(id) else {
                     panic!("type not found in catalog");
@@ -89,7 +83,7 @@ impl Call {
                 };
                 unify(
                     &init_ty,
-                    &curry(args, returns),
+                    &curry(args, self.returns.clone()),
                     substitutions,
                     &mut session.vars,
                 )
@@ -97,15 +91,15 @@ impl Call {
             Ty::Func(..) => {
                 if args.is_empty() {
                     unify(
-                        &callee,
-                        &Ty::Func(Ty::Void.into(), returns.into()),
+                        &self.callee,
+                        &Ty::Func(Ty::Void.into(), self.returns.clone().into()),
                         substitutions,
                         &mut session.vars,
                     )
                 } else {
                     unify(
-                        &callee,
-                        &curry(args, returns),
+                        &self.callee,
+                        &curry(args, self.returns.clone()),
                         substitutions,
                         &mut session.vars,
                     )

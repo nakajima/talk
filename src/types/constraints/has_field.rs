@@ -7,7 +7,7 @@ use crate::{
         row::Row,
         ty::{Level, Ty},
         type_error::TypeError,
-        type_operations::{UnificationSubstitutions, apply_row},
+        type_operations::UnificationSubstitutions,
         type_session::TypeSession,
         wants::Wants,
     },
@@ -28,7 +28,7 @@ impl HasField {
         _session: &mut TypeSession<SCCResolved>,
         _level: Level,
         next_wants: &mut Wants,
-        substitutions: &mut UnificationSubstitutions,
+        _substitutions: &mut UnificationSubstitutions,
     ) -> Result<bool, TypeError> {
         match &self.row {
             Row::Empty(..) => Err(TypeError::MemberNotFound(
@@ -42,7 +42,7 @@ impl HasField {
             Row::Var(..) => {
                 // Keep the constraint for the next iteration with the applied row
                 next_wants._has_field(
-                    apply_row(self.row.clone(), substitutions),
+                    self.row.clone(),
                     self.label.clone(),
                     self.ty.clone(),
                     ConstraintCause::Internal,

@@ -11,8 +11,7 @@ use crate::{
         type_catalog::NominalForm,
         type_error::TypeError,
         type_operations::{
-            InstantiationSubstitutions, UnificationSubstitutions, apply, apply_row, instantiate_ty,
-            unify,
+            InstantiationSubstitutions, UnificationSubstitutions, instantiate_ty, unify,
         },
         type_session::{TypeDefKind, TypeSession},
         wants::Wants,
@@ -36,8 +35,8 @@ impl Member {
         next_wants: &mut Wants,
         substitutions: &mut UnificationSubstitutions,
     ) -> Result<bool, TypeError> {
-        let receiver = apply(self.receiver.clone(), substitutions);
-        let ty = apply(self.ty.clone(), substitutions);
+        let receiver = self.receiver.clone();
+        let ty = self.ty.clone();
 
         if matches!(
             receiver,
@@ -63,7 +62,6 @@ impl Member {
                         self.span,
                     );
                     if let Ty::Func(first, box _rest) = scheme_ty.clone() {
-                        let first = apply(*first, substitutions);
                         unify(&receiver, &first, substitutions, &mut session.vars)?;
                         unify(&ty, &scheme_ty, substitutions, &mut session.vars)
                     } else {
@@ -89,9 +87,8 @@ impl Member {
                     };
 
                     // Apply current subs to normalize any Row::Var links produced by the ctor unification.
-                    let row = apply_row((**row).clone(), substitutions);
                     next_wants._has_field(
-                        row,
+                        *row.clone(),
                         self.label.clone(),
                         ty.clone(),
                         self.cause,
@@ -164,7 +161,6 @@ impl Member {
                     unify(&ty, &ctor_ty, substitutions, &mut session.vars)
                 }
                 _ => {
-                    // for value fields: emit HasField
                     let (Ty::Record(row) | Ty::Nominal { row, .. }) = receiver else {
                         return Err(TypeError::ExpectedRow(receiver));
                     };
@@ -182,8 +178,13 @@ impl Member {
             let (Ty::Record(row) | Ty::Nominal { row, .. }) = receiver else {
                 return Err(TypeError::ExpectedRow(receiver));
             };
-            let row = apply_row(*row, substitutions);
-            next_wants._has_field(row, self.label.clone(), ty.clone(), self.cause, self.span);
+            next_wants._has_field(
+                *row.clone(),
+                self.label.clone(),
+                ty.clone(),
+                self.cause,
+                self.span,
+            );
             Ok(true)
         }
     }
