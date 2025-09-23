@@ -2,7 +2,7 @@ use crate::types::type_session::TypeDef;
 use crate::types::wants::Wants;
 use crate::{
     ast::{AST, ASTPhase},
-    diagnostic::{AnyDiagnostic, Diagnostic},
+    diagnostic::Diagnostic,
     label::Label,
     name::Name,
     name_resolution::{
@@ -32,7 +32,7 @@ use crate::{
         term_environment::{EnvEntry, TermEnv},
         ty::{Level, Ty, UnificationVarId},
         type_error::TypeError,
-        type_operations::{UnificationSubstitutions, apply, apply_row, substitute, unify},
+        type_operations::{UnificationSubstitutions, apply, substitute, unify},
         type_session::{TypeDefKind, TypeSession, TypingPhase},
         type_snapshot::TypeSnapshot,
     },
@@ -270,6 +270,7 @@ impl<'a> InferencePass<'a> {
             let mut made_progress = false;
             let mut next_wants = Wants::default();
             for want in wants.drain() {
+                let want = want.apply(&mut substitutions);
                 tracing::trace!("solving {want:?}");
 
                 let solution = match want {
@@ -294,71 +295,12 @@ impl<'a> InferencePass<'a> {
                         &mut next_wants,
                         &mut substitutions,
                     ),
-                    Constraint::HasField(ref has_field) => {
-                        let row = apply_row(has_field.row.clone(), &mut substitutions);
-                        match row {
-                            Row::Empty(..) => {
-                                self.ast.diagnostics.push(AnyDiagnostic::Typing(Diagnostic {
-                                    path: self.ast.path.clone(),
-                                    span: has_field.span,
-                                    kind: TypeError::MemberNotFound(
-                                        has_field.ty.clone(),
-                                        // if kind == TypeDefKind::Struct {
-                                        //     Ty::Struct(None, Box::new(has_field.row.clone()))
-                                        // } else {
-                                        //     Ty::Enum(None, Box::new(has_field.row.clone()))
-                                        // },
-                                        has_field.label.to_string(),
-                                    ),
-                                }));
-                                Ok(false)
-                            }
-                            Row::Param(..) => {
-                                self.ast.diagnostics.push(AnyDiagnostic::Typing(Diagnostic {
-                                    path: self.ast.path.clone(),
-                                    span: has_field.span,
-                                    kind: TypeError::MemberNotFound(
-                                        Ty::Record(Box::new(has_field.row.clone())),
-                                        has_field.label.to_string(),
-                                    ),
-                                }));
-                                Ok(false)
-                            }
-                            Row::Var(..) => {
-                                // Keep the constraint for the next iteration with the applied row
-                                next_wants._has_field(
-                                    apply_row(row, &mut substitutions),
-                                    has_field.label.clone(),
-                                    has_field.ty.clone(),
-                                    ConstraintCause::Internal,
-                                    has_field.span,
-                                );
-                                Ok(false)
-                            }
-                            Row::Extend { row, label, ty } => {
-                                if has_field.label == label {
-                                    next_wants.equals(
-                                        has_field.ty.clone(),
-                                        ty,
-                                        ConstraintCause::Internal,
-                                        want.span(),
-                                    );
-                                    tracing::trace!("found match for {label:?}");
-                                    Ok(true)
-                                } else {
-                                    next_wants._has_field(
-                                        *row,
-                                        has_field.label.clone(),
-                                        has_field.ty.clone(),
-                                        ConstraintCause::Internal,
-                                        has_field.span,
-                                    );
-
-                                    Ok(true)
-                                }
-                            }
-                        }
-                    }
+                    Constraint::HasField(ref has_field) => has_field.solve(
+                        &mut self.session,
+                        level,
+                        &mut next_wants,
+                        &mut substitutions,
+                    ),
                 };
 
                 match solution {
