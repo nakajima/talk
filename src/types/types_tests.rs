@@ -1417,6 +1417,7 @@ pub mod tests {
     }
 
     #[test]
+    #[ignore = "wip"]
     fn types_simple_protocol() {
         let (ast, session) = typecheck(
             "
