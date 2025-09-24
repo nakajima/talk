@@ -25,7 +25,7 @@ use crate::{
     },
     span::Span,
     types::{
-        constraint::{Constraint, ConstraintCause},
+        constraints::constraint::{Constraint, ConstraintCause},
         passes::dependencies_pass::{Binder, SCCResolved},
         row::{Row, RowMetaId},
         scheme::Scheme,
@@ -269,7 +269,7 @@ impl<'a> InferencePass<'a> {
         loop {
             let mut made_progress = false;
             let mut next_wants = Wants::default();
-            for want in wants.drain() {
+            while let Some(want) = wants.pop() {
                 let want = want.apply(&mut substitutions);
                 tracing::trace!("solving {want:?}");
 
@@ -321,7 +321,7 @@ impl<'a> InferencePass<'a> {
             }
 
             if !made_progress || next_wants.is_empty() {
-                unsolved.extend(next_wants.0);
+                unsolved.extend(next_wants.to_vec());
                 break;
             }
 

@@ -1,6 +1,6 @@
 use crate::{
     span::Span,
-    types::{constraint::ConstraintCause, ty::Ty},
+    types::{constraints::constraint::ConstraintCause, ty::Ty},
 };
 
 #[derive(Debug, Clone)]

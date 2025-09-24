@@ -1,9 +1,11 @@
+use std::collections::VecDeque;
+
 use crate::{
     label::Label,
     name_resolution::symbol::Symbol,
     span::Span,
     types::{
-        constraint::{Constraint, ConstraintCause},
+        constraints::constraint::{Constraint, ConstraintCause},
         constraints::{
             call::Call, construction::Construction, equals::Equals, has_field::HasField,
             member::Member,
@@ -14,23 +16,33 @@ use crate::{
 };
 
 #[derive(Debug, Default)]
-pub struct Wants(pub Vec<Constraint>);
+pub struct Wants {
+    pub simple: VecDeque<Constraint>,
+    pub defer: VecDeque<Constraint>,
+}
+
 impl Wants {
-    pub fn iter(&self) -> std::slice::Iter<'_, Constraint> {
-        self.0.iter()
+    pub fn pop(&mut self) -> Option<Constraint> {
+        self.simple.pop_front().or_else(|| self.defer.pop_front())
     }
 
     pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        self.simple.is_empty() && self.defer.is_empty()
     }
 
-    pub fn drain(&mut self) -> std::vec::Drain<'_, Constraint> {
-        self.0.drain(..)
+    pub fn to_vec(self) -> Vec<Constraint> {
+        self.simple.into_iter().chain(self.defer).collect()
     }
 
     pub fn push(&mut self, constraint: Constraint) {
         tracing::debug!("constraining {constraint:?}");
-        self.0.push(constraint)
+        match &constraint {
+            Constraint::Call(..) => self.defer.push_back(constraint),
+            Constraint::Equals(..) => self.simple.push_back(constraint),
+            Constraint::HasField(..) => self.simple.push_back(constraint),
+            Constraint::Member(..) => self.defer.push_back(constraint),
+            Constraint::Construction(..) => self.defer.push_back(constraint),
+        }
     }
 
     pub fn construction(
@@ -43,7 +55,7 @@ impl Wants {
         span: Span,
     ) {
         tracing::debug!("constraining constructor {callee:?}({args:?}) = {type_symbol:?}");
-        self.0.push(Constraint::Construction(Construction {
+        self.defer.push_back(Constraint::Construction(Construction {
             callee,
             args,
             returns,
@@ -63,7 +75,7 @@ impl Wants {
         span: Span,
     ) {
         tracing::debug!("constraining call {callee:?}({args:?}) = {returns:?}");
-        self.0.push(Constraint::Call(Call {
+        self.defer.push_back(Constraint::Call(Call {
             callee,
             args,
             returns,
@@ -75,7 +87,7 @@ impl Wants {
 
     pub fn equals(&mut self, lhs: Ty, rhs: Ty, cause: ConstraintCause, span: Span) {
         tracing::debug!("constraining equals {lhs:?} = {rhs:?}");
-        self.0.push(Constraint::Equals(Equals {
+        self.simple.push_back(Constraint::Equals(Equals {
             lhs,
             rhs,
             cause,
@@ -92,7 +104,7 @@ impl Wants {
         span: Span,
     ) {
         tracing::debug!("constraining member {receiver:?}.{label:?} <> {ty:?}");
-        self.0.push(Constraint::Member(Member {
+        self.defer.push_back(Constraint::Member(Member {
             receiver,
             label,
             ty,
@@ -110,7 +122,7 @@ impl Wants {
         span: Span,
     ) {
         tracing::debug!("constraining has_field {row:?}.{label:?} <> {ty:?}");
-        self.0.push(Constraint::HasField(HasField {
+        self.simple.push_back(Constraint::HasField(HasField {
             row,
             label,
             ty,

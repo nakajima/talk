@@ -3,7 +3,7 @@ use crate::{
     node_id::NodeID,
     span::Span,
     types::{
-        constraint::{Constraint, ConstraintCause},
+        constraints::constraint::{Constraint, ConstraintCause},
         constraints::{call::Call, has_field::HasField, member::Member},
         passes::inference_pass::Meta,
         row::{Row, RowParamId},

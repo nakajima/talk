@@ -2,7 +2,7 @@ use crate::{
     label::Label,
     span::Span,
     types::{
-        constraint::ConstraintCause,
+        constraints::constraint::ConstraintCause,
         passes::dependencies_pass::SCCResolved,
         row::Row,
         ty::{Level, Ty},

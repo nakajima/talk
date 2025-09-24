@@ -13,7 +13,7 @@ use crate::{
     span::Span,
     types::{
         builtins::builtin_scope,
-        constraint::Constraint,
+        constraints::constraint::Constraint,
         fields::{Method, TypeFields},
         kind::Kind,
         passes::{
@@ -146,8 +146,6 @@ impl<Phase: TypingPhase> TypeSession<Phase> {
         for m in &metas {
             match m {
                 Ty::Param(p) => {
-                    // No substitution needed (the ty already contains Ty::Param(p)),
-                    // but we must record it in `foralls`, so instantiate() knows what to replace.
                     if !foralls
                         .iter()
                         .any(|fa| matches!(fa, ForAll::Ty(q) if *q == *p))
@@ -192,11 +190,9 @@ impl<Phase: TypingPhase> TypeSession<Phase> {
             }
         }
 
-        // NEW: quantify row metas that appear only in predicates (e.g. HasField.row)
         for c in unsolved {
             if let Constraint::HasField(h) = c {
                 tracing::info!("got unsolved hasfield: {c:?}");
-                // normalize first (collapses DSU reps)
                 let r = apply_row(h.row.clone(), &mut substitutions);
                 if let Row::Var(row_meta) = r {
                     // quantify if its level is above the binder's level

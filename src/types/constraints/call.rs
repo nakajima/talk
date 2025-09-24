@@ -2,7 +2,7 @@ use crate::{
     name_resolution::symbol::Symbol,
     span::Span,
     types::{
-        constraint::{Constraint, ConstraintCause},
+        constraints::constraint::{Constraint, ConstraintCause},
         passes::{dependencies_pass::SCCResolved, inference_pass::curry},
         term_environment::EnvEntry,
         ty::{Level, Ty},
