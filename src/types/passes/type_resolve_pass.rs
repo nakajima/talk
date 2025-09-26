@@ -16,7 +16,10 @@ use crate::{
         fields::{
             Associated, Initializer, Method, MethodRequirement, Property, TypeFields, Variant,
         },
-        passes::{dependencies_pass::SCCResolved, inference_pass::curry},
+        passes::{
+            dependencies_pass::{ConformanceRequirement, SCCResolved},
+            inference_pass::curry,
+        },
         row::Row,
         scheme::Scheme,
         term_environment::EnvEntry,
@@ -36,14 +39,13 @@ impl TypingPhase for HeadersResolved {
     type Next = SCCResolved;
 }
 
+// Takes the raw types from the headers pass and starts turning them into actual types in the type catalog
 #[derive(Debug)]
 pub struct TypeResolvePass<'a> {
     session: TypeSession<Raw>,
-    // This is what we return
     type_catalog: TypeCatalog,
     generics: IndexMap<TypeId, Ty>,
-    #[allow(dead_code)]
-    ast: &'a mut AST<NameResolved>,
+    _ast: &'a mut AST<NameResolved>,
 }
 
 impl<'a> TypeResolvePass<'a> {
@@ -55,7 +57,7 @@ impl<'a> TypeResolvePass<'a> {
             session,
             type_catalog: Default::default(),
             generics: Default::default(),
-            ast,
+            _ast: ast,
         };
 
         resolver.solve()
@@ -108,10 +110,13 @@ impl<'a> TypeResolvePass<'a> {
             },
             term_env: self.session.term_env,
             meta_levels: self.session.meta_levels,
+            skolem_map: self.session.skolem_map,
+            type_param_bounds: self.session.type_param_bounds,
+            skolem_bounds: self.session.skolem_bounds,
         }
     }
 
-    fn resolve_form(&mut self, type_def: &TypeDef<ASTTyRepr>) -> NominalForm {
+    fn resolve_form(&mut self, type_def: &TypeDef) -> NominalForm {
         match &type_def.fields {
             TypeFields::Enum {
                 variants,
@@ -147,7 +152,7 @@ impl<'a> TypeResolvePass<'a> {
         }
     }
 
-    fn resolve_protocol(&mut self, type_def: &TypeDef<ASTTyRepr>) -> Result<Protocol, TypeError> {
+    fn resolve_protocol(&mut self, type_def: &TypeDef) -> Result<Protocol, TypeError> {
         let Symbol::Type(_id) = type_def.name.symbol().unwrap() else {
             unreachable!()
         };
@@ -165,16 +170,24 @@ impl<'a> TypeResolvePass<'a> {
         let methods = self.resolve_methods(methods);
         let method_requirements = self.resolve_method_requirements(method_requirements);
 
+        let mut requirements = FxHashMap::default();
+        for method_requirement in method_requirements {
+            requirements.insert(
+                method_requirement.0,
+                ConformanceRequirement::Unfulfilled(method_requirement.1),
+            );
+        }
+
         Ok(Protocol {
             node_id: type_def.node_id,
             methods,
-            method_requirements,
+            requirements,
             static_methods: self.resolve_methods(static_methods),
         })
     }
 
     #[instrument(skip(self))]
-    fn resolve_type_def(&mut self, type_def: &TypeDef<ASTTyRepr>) -> Result<Nominal, TypeError> {
+    fn resolve_type_def(&mut self, type_def: &TypeDef) -> Result<Nominal, TypeError> {
         let _s = trace_span!("resolve", type_def = format!("{type_def:?}")).entered();
 
         let mut generics = vec![];
@@ -190,8 +203,11 @@ impl<'a> TypeResolvePass<'a> {
             self.generics.insert(*type_id, ty_repr);
         }
 
-        let form = self.resolve_form(type_def);
+        let mut form = self.resolve_form(type_def);
         let symbol = type_def.name.symbol().unwrap();
+        let Symbol::Type(type_id) = &symbol else {
+            unreachable!();
+        };
 
         // Protocols aren't actually ever terms
         if type_def.def != TypeDefKind::Protocol {
@@ -206,14 +222,17 @@ impl<'a> TypeResolvePass<'a> {
         let extensions = type_def
             .extensions
             .iter()
-            .map(|extension| Extension {
-                node_id: extension.node_id,
-                conformances: extension.conformances.clone(),
-                methods: self.resolve_methods(&extension.methods),
+            .map(|extension| {
+                form.extend_methods(self.resolve_methods(&extension.methods));
+                Extension {
+                    conformances: extension.conformances.clone(),
+                    node_id: extension.node_id,
+                }
             })
             .collect();
 
         Ok(Nominal {
+            type_id: *type_id,
             node_id: type_def.node_id,
             form,
             extensions,
@@ -222,7 +241,7 @@ impl<'a> TypeResolvePass<'a> {
 
     fn resolve_variants(
         &mut self,
-        variants: &IndexMap<Label, Variant<ASTTyRepr>>,
+        variants: &IndexMap<Label, Variant>,
     ) -> FxHashMap<Label, Symbol> {
         let mut resolved_variants = FxHashMap::<Label, Symbol>::default();
         for (name, variant) in variants {
@@ -254,10 +273,7 @@ impl<'a> TypeResolvePass<'a> {
         resolved_variants
     }
 
-    fn resolve_methods(
-        &mut self,
-        methods: &IndexMap<Label, Method<ASTTyRepr>>,
-    ) -> FxHashMap<Label, Symbol> {
+    fn resolve_methods(&mut self, methods: &IndexMap<Label, Method>) -> FxHashMap<Label, Symbol> {
         let mut resolved_methods = FxHashMap::default();
         for (name, method) in methods {
             let params: Vec<_> = method
@@ -293,7 +309,7 @@ impl<'a> TypeResolvePass<'a> {
 
     fn resolve_properties(
         &mut self,
-        properties: &IndexMap<Label, Property<ASTTyRepr>>,
+        properties: &IndexMap<Label, Property>,
     ) -> IndexMap<Label, Symbol> {
         let mut result: IndexMap<Label, Symbol> = Default::default();
 
@@ -312,8 +328,8 @@ impl<'a> TypeResolvePass<'a> {
 
     fn resolve_initializers(
         &mut self,
-        type_def: &TypeDef<ASTTyRepr>,
-        initializers: &IndexMap<Label, Initializer<ASTTyRepr>>,
+        type_def: &TypeDef,
+        initializers: &IndexMap<Label, Initializer>,
     ) -> FxHashMap<Label, Symbol> {
         let mut out = FxHashMap::default();
         let Name::Resolved(Symbol::Type(type_id), _) = &type_def.name else {
@@ -364,7 +380,7 @@ impl<'a> TypeResolvePass<'a> {
 
     fn resolve_method_requirements(
         &mut self,
-        requirements: &IndexMap<Label, MethodRequirement<ASTTyRepr>>,
+        requirements: &IndexMap<Label, MethodRequirement>,
     ) -> FxHashMap<Label, Symbol> {
         let mut resolved_methods = FxHashMap::default();
         for (name, method) in requirements {
@@ -385,7 +401,7 @@ impl<'a> TypeResolvePass<'a> {
     #[instrument(skip(self))]
     pub(crate) fn infer_type_annotation(&mut self, annotation: &TypeAnnotation) -> Ty {
         match &annotation.kind {
-            TypeAnnotationKind::SelfType(_id) => todo!("wat"),
+            TypeAnnotationKind::SelfType(_id) => self.session.new_ty_meta_var(Level(0)),
             TypeAnnotationKind::Func { .. } => todo!(),
             TypeAnnotationKind::Tuple(..) => todo!(),
             TypeAnnotationKind::Nominal {
@@ -526,6 +542,34 @@ pub mod tests {
         let (_, session) = type_header_resolve_pass(
             "
         struct Person {
+            func fizz(a: Int) -> Int { a }
+        }
+        ",
+        );
+
+        assert_eq_diff!(
+            session
+                .phase
+                .type_catalog
+                .nominals
+                .get(&TypeId(1))
+                .unwrap()
+                .form,
+            NominalForm::Struct {
+                initializers: fxhashmap!(Label::Named("init".into()) => Symbol::Synthesized(SynthesizedId(1))),
+                properties: Default::default(),
+                instance_methods: fxhashmap!(Label::Named("fizz".into()) => Symbol::InstanceMethod(InstanceMethodId(1))),
+                static_methods: Default::default(),
+            }
+        )
+    }
+
+    #[test]
+    fn resolves_extended_members() {
+        let (_, session) = type_header_resolve_pass(
+            "
+        struct Person {}
+        extend Person {
             func fizz(a: Int) -> Int { a }
         }
         ",

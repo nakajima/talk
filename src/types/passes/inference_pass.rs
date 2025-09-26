@@ -1,14 +1,11 @@
-use crate::types::type_session::TypeDef;
+use crate::types::type_catalog::TypeCatalog;
 use crate::types::wants::Wants;
 use crate::{
     ast::{AST, ASTPhase},
     diagnostic::Diagnostic,
     label::Label,
     name::Name,
-    name_resolution::{
-        name_resolver::NameResolved,
-        symbol::{Symbol, TypeId},
-    },
+    name_resolution::{name_resolver::NameResolved, symbol::Symbol},
     node::Node,
     node_id::NodeID,
     node_kinds::{
@@ -42,9 +39,18 @@ use petgraph::algo::kosaraju_scc;
 use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::instrument;
 
-#[derive(Debug, PartialEq, Clone)]
+macro_rules! guard_found_ty {
+    ($self: expr, $id: expr) => {
+        if let Some(ty) = $self.types_by_node.get(&$id) {
+            return ty.clone();
+        }
+    };
+}
+
+#[derive(Debug, PartialEq)]
 pub struct Inferenced {
     pub types_by_node: FxHashMap<NodeID, Ty>,
+    pub type_catalog: TypeCatalog,
 }
 
 impl TypingPhase for Inferenced {
@@ -82,8 +88,6 @@ pub struct InferencePass<'a> {
     ast: &'a mut AST<NameResolved>,
     types_by_node: FxHashMap<NodeID, Ty>,
     snapshots: Vec<TypeSnapshot>,
-    #[allow(dead_code)]
-    protocols: FxHashMap<TypeId, TypeDef<Ty>>,
 
     pub(crate) session: TypeSession<SCCResolved>,
 }
@@ -99,10 +103,9 @@ impl<'a> InferencePass<'a> {
             types_by_node: Default::default(),
             session,
             snapshots: Default::default(),
-            protocols: Default::default(),
         };
 
-        // Handle binders
+        // Handle dependent binders first. This makes sure mutual recursion works.
         for binders in groups {
             let globals: Vec<_> = binders
                 .into_iter()
@@ -113,6 +116,7 @@ impl<'a> InferencePass<'a> {
                     )
                 })
                 .collect();
+
             if globals.is_empty() {
                 continue;
             }
@@ -128,29 +132,56 @@ impl<'a> InferencePass<'a> {
             pass.apply_to_self(&mut subs);
         }
 
-        let roots = pass.ast.roots.clone();
-
+        // Handle the rest of the AST
+        let roots = std::mem::take(&mut pass.ast.roots);
+        let mut last_unsolved = vec![];
         for root in roots.iter() {
-            if !matches!(root, Node::Stmt(_)) {
+            if !matches!(
+                root,
+                Node::Stmt(_)
+                    | Node::Decl(Decl {
+                        kind: DeclKind::Struct { .. },
+                        ..
+                    })
+            ) {
                 continue;
             }
 
             let mut wants = Wants::default();
             let ty = pass.infer_node(root, Level(1), &mut wants);
             pass.types_by_node.insert(root.node_id(), ty);
-            let (mut subs, _) = pass.solve(Level(1), wants);
+            let (mut subs, unsolved) = pass.solve(Level(1), wants);
+            last_unsolved = unsolved;
             pass.apply_to_self(&mut subs);
         }
 
         _ = std::mem::replace(&mut pass.ast.roots, roots);
 
+        // Update everything now that we know as much as we're gonna
         pass.annotate_uses_after_inference();
 
-        let phase = Inferenced {
-            types_by_node: pass.types_by_node,
-        };
+        let type_catalog = std::mem::take(&mut pass.session.phase.type_catalog);
 
-        pass.session.advance(phase)
+        for unsolved in last_unsolved {
+            if let Constraint::Conforms(conforms) = unsolved {
+                pass.ast
+                    .diagnostics
+                    .push(crate::diagnostic::AnyDiagnostic::Typing(Diagnostic {
+                        path: pass.ast.path.clone(),
+                        span: conforms.span,
+                        kind: TypeError::TypesDoesNotConform {
+                            protocol_id: conforms.protocol_id,
+                            type_id: conforms.type_id,
+                        },
+                    }))
+            }
+        }
+
+        // Move along, move along
+        pass.session.advance(Inferenced {
+            types_by_node: pass.types_by_node,
+            type_catalog,
+        })
     }
 
     #[instrument(skip(self))]
@@ -174,10 +205,10 @@ impl<'a> InferencePass<'a> {
             };
 
             let rhs_expr = self.ast.find(rhs_expr_id).clone().unwrap();
-            let got = self.infer_node(&rhs_expr, inner_level, &mut wants);
-            self.types_by_node.insert(rhs_expr_id, got.clone());
+            let inferred = self.infer_node(&rhs_expr, inner_level, &mut wants);
+            self.types_by_node.insert(rhs_expr_id, inferred.clone());
 
-            let tv = match self.session.term_env.lookup(&symbol).cloned() {
+            let type_var = match self.session.term_env.lookup(&symbol).cloned() {
                 Some(EnvEntry::Mono(t)) => t.clone(),
                 Some(EnvEntry::Scheme(scheme)) => scheme.ty,
                 _ => unreachable!(
@@ -194,14 +225,19 @@ impl<'a> InferencePass<'a> {
                 let annotation_ty =
                     self.infer_type_annotation(&annotation, inner_level, &mut wants);
                 wants.equals(
-                    got.clone(),
+                    inferred.clone(),
                     annotation_ty,
                     ConstraintCause::Annotation(annotation_id),
                     annotation.span,
                 );
             }
 
-            wants.equals(got, tv, ConstraintCause::Internal, rhs_expr.span());
+            wants.equals(
+                inferred,
+                type_var,
+                ConstraintCause::Internal,
+                rhs_expr.span(),
+            );
         }
 
         wants
@@ -214,7 +250,9 @@ impl<'a> InferencePass<'a> {
         level: Level,
         wants: &mut Wants,
     ) -> Ty {
-        match &annotation.kind {
+        guard_found_ty!(self, annotation.id);
+
+        let ty = match &annotation.kind {
             TypeAnnotationKind::Func { .. } => todo!(),
             TypeAnnotationKind::Tuple(..) => todo!(),
             TypeAnnotationKind::Nominal {
@@ -244,7 +282,11 @@ impl<'a> InferencePass<'a> {
                 Ty::Record(Box::new(row))
             }
             _ => unreachable!(),
-        }
+        };
+
+        self.types_by_node.insert(annotation.id, ty.clone());
+
+        ty
     }
 
     #[instrument(skip(self), level = tracing::Level::TRACE)]
@@ -288,6 +330,9 @@ impl<'a> InferencePass<'a> {
                     ),
                     Constraint::Call(ref call) => {
                         call.solve(&mut self.session, &mut next_wants, &mut substitutions)
+                    }
+                    Constraint::Conforms(ref conforms) => {
+                        conforms.solve(&mut self.session, &mut next_wants, &mut substitutions)
                     }
                     Constraint::Member(ref member) => member.solve(
                         &mut self.session,
@@ -399,7 +444,9 @@ impl<'a> InferencePass<'a> {
 
     #[instrument(skip(self))]
     fn infer_decl(&mut self, decl: &Decl, level: Level, wants: &mut Wants) -> Ty {
-        match &decl.kind {
+        guard_found_ty!(self, decl.id);
+
+        let ty = match &decl.kind {
             DeclKind::Let {
                 lhs,
                 value,
@@ -439,11 +486,44 @@ impl<'a> InferencePass<'a> {
                     .promote(func.name.symbol().unwrap(), entry);
                 func_ty
             }
-            DeclKind::Struct { body, .. } => self.infer_block(body, level, wants),
+            DeclKind::Struct {
+                body,
+                name: Name::Resolved(Symbol::Type(id), name),
+                ..
+            } => {
+                let Some(struct_type) = self.session.phase.type_catalog.nominals.get(id) else {
+                    self.ast
+                        .diagnostics
+                        .push(crate::diagnostic::AnyDiagnostic::Typing(Diagnostic {
+                            path: self.ast.path.clone(),
+                            span: decl.span,
+                            kind: TypeError::TypeNotFound(name.to_string()),
+                        }));
+
+                    return Ty::Void;
+                };
+
+                for conformance in struct_type.extensions.iter().flat_map(|e| &e.conformances) {
+                    wants.conforms(
+                        struct_type.type_id,
+                        conformance.protocol_id,
+                        conformance.span,
+                    );
+                }
+
+                self.infer_block(body, level, wants)
+            }
             DeclKind::Property { .. } => Ty::Void,
 
-            _ => todo!("unhandled: {decl:?}"),
-        }
+            _ => {
+                tracing::warn!("unhandled: {decl:?}");
+                Ty::Void
+            }
+        };
+
+        self.types_by_node.insert(decl.id, ty.clone());
+
+        ty
     }
 
     #[instrument(skip(self))]
@@ -611,6 +691,8 @@ impl<'a> InferencePass<'a> {
 
     #[instrument(skip(self))]
     fn infer_block(&mut self, block: &Block, level: Level, wants: &mut Wants) -> Ty {
+        guard_found_ty!(self, block.id);
+
         // Very simple semantics: return the type of the last expression statement, else Void.
         // TODO: Handle explicit returns
         let mut last_ty = Ty::Void;
@@ -625,6 +707,9 @@ impl<'a> InferencePass<'a> {
                 _ => unreachable!("no {node:?} allowed in block body"),
             }
         }
+
+        self.types_by_node.insert(block.id, last_ty.clone());
+
         last_ty
     }
 
@@ -641,6 +726,8 @@ impl<'a> InferencePass<'a> {
 
     #[instrument(skip(self))]
     fn infer_expr(&mut self, expr: &Expr, level: Level, wants: &mut Wants) -> Ty {
+        guard_found_ty!(self, expr.id);
+
         let ty = match &expr.kind {
             ExprKind::Incomplete(..) => Ty::Void,
             ExprKind::LiteralArray(..) => todo!(),
@@ -830,6 +917,8 @@ impl<'a> InferencePass<'a> {
             self.infer_expr(callee, level, wants)
         };
 
+        println!("infer_call callee: {callee_ty:?}");
+
         let mut arg_tys = Vec::with_capacity(args.len() + 1);
 
         for arg in args {
@@ -863,6 +952,8 @@ impl<'a> InferencePass<'a> {
                 callee.span,
             );
         } else {
+            println!("receiver: {receiver:?}");
+
             wants.call(
                 callee_ty,
                 arg_tys,
@@ -878,58 +969,42 @@ impl<'a> InferencePass<'a> {
 
     #[instrument(skip(self))]
     fn infer_func(&mut self, func: &Func, level: Level, wants: &mut Wants) -> Ty {
-        let mut skolem_map = FxHashMap::default();
+        guard_found_ty!(self, func.id);
+
         for generic in func.generics.iter() {
             let skolem_id = self.session.vars.skolems.next_id();
             let param_id = self.session.vars.type_params.next_id();
-            skolem_map.insert(Ty::Rigid(skolem_id), Ty::Param(param_id));
+            self.session
+                .skolem_map
+                .insert(Ty::Rigid(skolem_id), Ty::Param(param_id));
+
+            for conformance in generic.conformances.iter() {
+                let TypeAnnotationKind::Nominal {
+                    name: Name::Resolved(Symbol::Type(id), _),
+                    ..
+                } = &conformance.kind
+                else {
+                    unreachable!();
+                };
+
+                self.session
+                    .skolem_bounds
+                    .entry(skolem_id)
+                    .or_default()
+                    .push(*id);
+                self.session
+                    .type_param_bounds
+                    .entry(param_id)
+                    .or_default()
+                    .push(*id);
+
+                println!("got conformance ty: {id:?}");
+            }
 
             self.session.term_env.insert_mono(
                 generic.name.symbol().expect("did not get symbol"),
                 Ty::Rigid(skolem_id),
             );
-
-            for conf in &generic.conformances {
-                use crate::name::Name;
-                use crate::name_resolution::symbol::Symbol;
-                use crate::node_kinds::type_annotation::TypeAnnotationKind;
-
-                let Some(proto_id) = (match &conf.kind {
-                    TypeAnnotationKind::Nominal {
-                        name: Name::Resolved(Symbol::Type(id), _),
-                        ..
-                    } => Some(*id),
-                    _ => None,
-                }) else {
-                    continue;
-                };
-
-                let Some(protocol) = self.session.phase.type_catalog.protocols.get(&proto_id)
-                else {
-                    continue;
-                };
-
-                for (label, req_sym) in &protocol.method_requirements {
-                    // requirement result type from env (e.g., Int for `func getCount() -> Int`)
-                    let req_ret = match self.session.term_env.lookup(req_sym).cloned() {
-                        Some(EnvEntry::Mono(t)) => t,
-                        Some(EnvEntry::Scheme(s)) => s.ty,
-                        None => continue,
-                    };
-
-                    // instance method on the generic: (T) -> ReqRet
-                    let method_ty = Ty::Func(Box::new(Ty::Rigid(skolem_id)), Box::new(req_ret));
-
-                    // tell the solver: a T that conforms to this protocol has that member with that type
-                    wants.member(
-                        Ty::Rigid(skolem_id),
-                        label.clone(),
-                        method_ty,
-                        ConstraintCause::Internal,
-                        generic.span,
-                    );
-                }
-            }
         }
 
         let mut param_tys: Vec<Ty> = Vec::with_capacity(func.params.len());
@@ -939,6 +1014,8 @@ impl<'a> InferencePass<'a> {
             } else {
                 self.session.new_ty_meta_var(level)
             };
+
+            println!("infer_param: {ty:?}");
 
             param_tys.push(ty);
         }
@@ -976,12 +1053,16 @@ impl<'a> InferencePass<'a> {
             curry(param_tys, ret_ty.clone())
         };
 
-        substitute(func_ty, &skolem_map)
+        let ty = substitute(func_ty, &self.session.skolem_map);
+        self.types_by_node.insert(func.id, ty.clone());
+        ty
     }
 
     #[instrument(skip(self))]
     fn infer_stmt(&mut self, stmt: &Stmt, level: Level, wants: &mut Wants) -> Ty {
-        match &stmt.kind {
+        guard_found_ty!(self, stmt.id);
+
+        let ty = match &stmt.kind {
             StmtKind::Expr(expr) => self.infer_expr(expr, level, wants),
             StmtKind::If(cond, conseq, alt) => {
                 self.infer_if_stmt(stmt.id, cond, conseq, alt, level, wants)
@@ -1014,7 +1095,10 @@ impl<'a> InferencePass<'a> {
 
                 Ty::Void
             }
-        }
+        };
+
+        self.types_by_node.insert(stmt.id, ty.clone());
+        ty
     }
 
     fn infer_if_stmt(
@@ -1104,6 +1188,7 @@ struct AnnotateUsesAfterInferenceVisitor<'a> {
     term_env: &'a TermEnv,
     types_by_node: &'a mut FxHashMap<NodeID, Ty>,
 }
+
 impl<'a> AnnotateUsesAfterInferenceVisitor<'a> {
     fn enter_expr(&mut self, expr: &Expr) {
         match &expr.kind {

@@ -141,6 +141,44 @@ impl Ty {
             Ty::Nominal { .. } => false,
         }
     }
+
+    pub fn fold<T, F: FnMut(&Ty) -> T>(&self, f: &mut F) -> T {
+        match self {
+            Ty::Hole(..) => f(self),
+            Ty::Primitive(..) => f(self),
+            Ty::Param(..) => f(self),
+            Ty::Rigid(..) => f(self),
+            Ty::UnificationVar { .. } => f(self),
+            Ty::Constructor { params, ret, .. } => {
+                _ = params.iter().map(&mut *f);
+                _ = f(ret);
+                f(self)
+            }
+            Ty::Func(ty, ty1) => {
+                f(ty);
+                f(ty1);
+                f(self)
+            }
+            Ty::Tuple(items) => {
+                _ = items.iter().map(&mut *f);
+                f(self)
+            }
+            Ty::Record(box row) => match row {
+                Row::Extend { ty, .. } => {
+                    f(ty);
+                    f(self)
+                }
+                _ => f(self),
+            },
+            Ty::Nominal { box row, .. } => match row {
+                Row::Extend { ty, .. } => {
+                    f(ty);
+                    f(self)
+                }
+                _ => f(self),
+            },
+        }
+    }
 }
 
 impl std::fmt::Debug for Ty {

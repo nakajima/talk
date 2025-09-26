@@ -21,6 +21,7 @@ use crate::{
             Associated, Initializer, Method, MethodRequirement, Property, TypeFields, Variant,
         },
         kind::Kind,
+        type_catalog::ConformanceStub,
         type_session::{ASTTyRepr, Raw, TypeDef, TypeDefKind, TypeExtension, TypeSession},
     },
 };
@@ -36,11 +37,12 @@ pub fn arrow_n(arg: Kind, n: usize, ret: Kind) -> Kind {
     })
 }
 
+// Gathers up all the raw types from the AST
 #[derive(Debug, Visitor)]
 #[visitor(Decl(enter))]
 pub struct TypeHeaderPass<'a> {
     session: &'a mut TypeSession<Raw>,
-    extensions: FxHashMap<TypeId, Vec<TypeExtension<ASTTyRepr>>>,
+    extensions: FxHashMap<TypeId, Vec<TypeExtension>>,
 }
 
 impl<'a> TypeHeaderPass<'a> {
@@ -108,7 +110,10 @@ impl<'a> TypeHeaderPass<'a> {
                         ..
                     } = &c.kind
                     {
-                        Some(*type_id)
+                        Some(ConformanceStub {
+                            protocol_id: *type_id,
+                            span: c.span,
+                        })
                     } else {
                         None
                     }
@@ -186,16 +191,15 @@ impl<'a> TypeHeaderPass<'a> {
         span: Span,
         type_kind: TypeDefKind,
         body: &[Node],
-    ) -> TypeFields<ASTTyRepr> {
+    ) -> TypeFields {
         // Collect properties
-        let mut properties: IndexMap<Label, Property<ASTTyRepr>> = Default::default();
-        let mut instance_methods: IndexMap<Label, Method<ASTTyRepr>> = Default::default();
-        let mut static_methods: IndexMap<Label, Method<ASTTyRepr>> = Default::default();
-        let mut initializers: IndexMap<Label, Initializer<ASTTyRepr>> = Default::default();
-        let mut variants: IndexMap<Label, Variant<ASTTyRepr>> = Default::default();
+        let mut properties: IndexMap<Label, Property> = Default::default();
+        let mut instance_methods: IndexMap<Label, Method> = Default::default();
+        let mut static_methods: IndexMap<Label, Method> = Default::default();
+        let mut initializers: IndexMap<Label, Initializer> = Default::default();
+        let mut variants: IndexMap<Label, Variant> = Default::default();
         let mut associated_types: IndexMap<Name, Associated> = Default::default();
-        let mut method_requirements: IndexMap<Label, MethodRequirement<ASTTyRepr>> =
-            Default::default();
+        let mut method_requirements: IndexMap<Label, MethodRequirement> = Default::default();
 
         let Name::Resolved(Symbol::Type(type_id), _) = &type_name else {
             unreachable!("didn't resolve type");
@@ -469,7 +473,7 @@ pub mod tests {
 
         assert_eq_diff!(
             *session.phase.type_constructors.get(&TypeId(1)).unwrap(),
-            TypeDef::<ASTTyRepr> {
+            TypeDef {
                 extensions: Default::default(),
                 name: Name::Resolved(Symbol::Type(TypeId(1)), "Person".into()),
                 kind: Kind::Type,
@@ -516,8 +520,8 @@ pub mod tests {
 
         assert_eq_diff!(
             *session.phase.type_constructors.get(&TypeId(1)).unwrap(),
-            TypeDef::<ASTTyRepr> {
-                extensions: vec![TypeExtension::<ASTTyRepr> {
+            TypeDef {
+                extensions: vec![TypeExtension {
                     node_id: NodeID::ANY,
                     conformances: Default::default(),
                     methods: Default::default(),
@@ -563,7 +567,7 @@ pub mod tests {
 
         assert_eq_diff!(
             *session.phase.type_constructors.get(&TypeId(1)).unwrap(),
-            TypeDef::<ASTTyRepr> {
+            TypeDef {
                 extensions: Default::default(),
                 name: Name::Resolved(Symbol::Type(TypeId(1)), "Wrapper".into()),
                 kind: Kind::Arrow {
@@ -616,7 +620,7 @@ pub mod tests {
 
         assert_eq_diff!(
             *session.phase.type_constructors.get(&TypeId(1)).unwrap(),
-            TypeDef::<ASTTyRepr> {
+            TypeDef {
                 extensions: Default::default(),
                 name: Name::Resolved(Symbol::Type(TypeId(1)), "Wrapper".into()),
                 kind: Kind::Arrow {
@@ -689,7 +693,7 @@ pub mod tests {
 
         assert_eq_diff!(
             *session.phase.type_constructors.get(&TypeId(1)).unwrap(),
-            TypeDef::<ASTTyRepr> {
+            TypeDef {
                 extensions: Default::default(),
                 name: Name::Resolved(Symbol::Type(TypeId(1)), "Fizz".into()),
                 kind: Kind::Type,
@@ -745,7 +749,7 @@ pub mod tests {
                     method_requirements: crate::indexmap!("foo".into() => MethodRequirement {
                         id: NodeID::ANY,
                         symbol: Symbol::InstanceMethod(InstanceMethodId(1)),
-                        params: vec![],
+                        params: vec![ASTTyRepr::Annotated(annotation!(TypeAnnotationKind::SelfType(Name::Resolved(TypeId(1).into(), "Self".into()))))],
                         ret: ASTTyRepr::Annotated(annotation!(TypeAnnotationKind::Nominal {
                             name: Name::Resolved(Symbol::Int, "Int".into()),
                             generics: vec![]

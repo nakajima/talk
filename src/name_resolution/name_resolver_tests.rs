@@ -749,7 +749,14 @@ pub mod tests {
                             Symbol::InstanceMethod(InstanceMethodId(1)),
                             "buzz".into()
                         ),
-                        params: vec![],
+                        params: vec![Parameter {
+                            id: NodeID::ANY,
+                            name: "self".into(),
+                            type_annotation: Some(annotation!(TypeAnnotationKind::SelfType(
+                                Name::Resolved(TypeId(1).into(), "Self".into())
+                            ))),
+                            span: Span::ANY
+                        }],
                         generics: vec![],
                         ret: Box::new(annotation!(TypeAnnotationKind::Tuple(vec![])))
                     }
@@ -791,7 +798,14 @@ pub mod tests {
                             Symbol::InstanceMethod(InstanceMethodId(1)),
                             "buzz".into()
                         ),
-                        params: vec![],
+                        params: vec![Parameter {
+                            id: NodeID::ANY,
+                            name: "self".into(),
+                            type_annotation: Some(annotation!(TypeAnnotationKind::SelfType(
+                                Name::Resolved(TypeId(1).into(), "Self".into())
+                            ))),
+                            span: Span::ANY
+                        }],
                         generics: vec![],
                         ret: Box::new(annotation!(TypeAnnotationKind::Nominal {
                             name: Name::Resolved(Symbol::Type(TypeId(2)), "T".into()),

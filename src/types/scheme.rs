@@ -1,15 +1,26 @@
+use rustc_hash::FxHashMap;
+
 use crate::{
     label::Label,
     node_id::NodeID,
     span::Span,
     types::{
-        constraints::constraint::{Constraint, ConstraintCause},
-        constraints::{call::Call, has_field::HasField, member::Member},
-        passes::inference_pass::Meta,
+        constraints::{
+            call::Call,
+            constraint::{Constraint, ConstraintCause},
+            has_field::HasField,
+            member::Member,
+        },
+        passes::{
+            dependencies_pass::{ConformanceRequirement, SCCResolved},
+            inference_pass::Meta,
+        },
         row::{Row, RowParamId},
+        term_environment::EnvEntry,
         ty::{Level, Ty, TypeParamId},
         type_operations::{
             InstantiationSubstitutions, UnificationSubstitutions, instantiate_row, instantiate_ty,
+            substitute,
         },
         type_session::{TypeSession, TypingPhase},
         wants::Wants,
@@ -109,9 +120,9 @@ impl Scheme {
         }
     }
 
-    pub fn inference_instantiate<P: TypingPhase>(
+    pub fn inference_instantiate(
         &self,
-        session: &mut TypeSession<P>,
+        session: &mut TypeSession<SCCResolved>,
         level: Level,
         wants: &mut Wants,
         span: Span,
@@ -127,6 +138,51 @@ impl Scheme {
                     };
                     tracing::trace!("instantiating {param:?} with {meta:?}");
                     substitutions.ty.insert(*param, meta);
+
+                    if let Some(bounds) = session.type_param_bounds.get(param).cloned() {
+                        for bound in bounds {
+                            let protocol = session
+                                .phase
+                                .type_catalog
+                                .protocols
+                                .get(&bound)
+                                .cloned()
+                                .expect("didn't get protocol bound");
+
+                            let mut substitutions = FxHashMap::default();
+                            substitutions
+                                .insert(Ty::Param(*param), Ty::UnificationVar { id: meta, level });
+
+                            for (label, requirement) in &protocol.requirements {
+                                tracing::trace!("adding {label} requirement to {meta:?}");
+
+                                let ConformanceRequirement::Unfulfilled(sym) = requirement else {
+                                    unreachable!(
+                                        "protocol.requirements must always be unfulfilled"
+                                    );
+                                };
+
+                                let entry = session
+                                    .term_env
+                                    .lookup(sym)
+                                    .cloned()
+                                    .expect("didn't get requirement entry");
+
+                                let ty = match entry {
+                                    EnvEntry::Mono(ty) => ty.clone(),
+                                    EnvEntry::Scheme(scheme) => scheme.ty.clone(),
+                                };
+
+                                wants.member(
+                                    Ty::UnificationVar { id: meta, level },
+                                    label.clone(),
+                                    substitute(ty, &substitutions),
+                                    ConstraintCause::Internal,
+                                    span,
+                                );
+                            }
+                        }
+                    }
                 }
                 ForAll::Row(param) => {
                     let Row::Var(meta) = session.new_row_meta_var(level) else {

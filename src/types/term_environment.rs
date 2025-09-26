@@ -5,6 +5,7 @@ use crate::{
     span::Span,
     types::{
         builtins::builtin_scope,
+        passes::dependencies_pass::SCCResolved,
         scheme::Scheme,
         ty::{Level, Ty},
         type_operations::UnificationSubstitutions,
@@ -38,9 +39,9 @@ impl EnvEntry {
         }
     }
 
-    pub fn inference_instantiate<P: TypingPhase>(
+    pub fn inference_instantiate(
         &self,
-        session: &mut TypeSession<P>,
+        session: &mut TypeSession<SCCResolved>,
         level: Level,
         wants: &mut Wants,
         span: Span,

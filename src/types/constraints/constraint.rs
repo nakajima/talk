@@ -1,14 +1,19 @@
+use rustc_hash::FxHashMap;
+
 use crate::{
     node_id::NodeID,
     span::Span,
     types::{
         constraints::{
-            call::Call, construction::Construction, equals::Equals, has_field::HasField,
-            member::Member,
+            call::Call, conforms::Conforms, construction::Construction, equals::Equals,
+            has_field::HasField, member::Member,
         },
         row::Row,
         scheme::Predicate,
-        type_operations::{UnificationSubstitutions, apply, apply_mult, apply_row},
+        ty::Ty,
+        type_operations::{
+            UnificationSubstitutions, apply, apply_mult, apply_row, substitute, substitute_row,
+        },
     },
 };
 
@@ -34,6 +39,7 @@ pub enum Constraint {
     HasField(HasField),
     Member(Member),
     Construction(Construction),
+    Conforms(Conforms),
 }
 
 impl Constraint {
@@ -44,12 +50,14 @@ impl Constraint {
             Constraint::HasField(c) => c.span,
             Constraint::Member(c) => c.span,
             Constraint::Construction(c) => c.span,
+            Constraint::Conforms(c) => c.span,
         }
     }
 
     pub fn apply(mut self, substitutions: &mut UnificationSubstitutions) -> Constraint {
         match &mut self {
             Constraint::Call(call) => {
+                call.receiver = call.receiver.clone().map(|r| apply(r, substitutions));
                 call.callee = apply(call.callee.clone(), substitutions);
                 call.args = call
                     .args
@@ -58,6 +66,7 @@ impl Constraint {
                     .collect();
                 call.returns = apply(call.returns.clone(), substitutions);
             }
+            Constraint::Conforms(..) => (),
             Constraint::Equals(e) => {
                 e.lhs = apply(e.lhs.clone(), substitutions);
                 e.rhs = apply(e.rhs.clone(), substitutions);
@@ -77,6 +86,47 @@ impl Constraint {
             }
         }
         self
+    }
+
+    pub fn substitute(&self, substitutions: &FxHashMap<Ty, Ty>) -> Constraint {
+        let mut copy = self.clone();
+
+        match &mut copy {
+            Constraint::Call(call) => {
+                call.receiver = call.receiver.clone().map(|r| substitute(r, substitutions));
+                call.callee = substitute(call.callee.clone(), substitutions);
+                call.args = call
+                    .args
+                    .iter()
+                    .map(|f| substitute(f.clone(), substitutions))
+                    .collect();
+                call.returns = substitute(call.returns.clone(), substitutions);
+            }
+            Constraint::Conforms(..) => (),
+            Constraint::Equals(e) => {
+                e.lhs = substitute(e.lhs.clone(), substitutions);
+                e.rhs = substitute(e.rhs.clone(), substitutions);
+            }
+            Constraint::HasField(h) => {
+                h.row = substitute_row(h.row.clone(), substitutions);
+                h.ty = substitute(h.ty.clone(), substitutions);
+            }
+            Constraint::Member(member) => {
+                member.ty = substitute(member.ty.clone(), substitutions);
+                member.receiver = substitute(member.receiver.clone(), substitutions)
+            }
+            Constraint::Construction(construction) => {
+                construction.callee = substitute(construction.callee.clone(), substitutions);
+                construction.args = construction
+                    .args
+                    .iter()
+                    .map(|a| substitute(a.clone(), substitutions))
+                    .collect();
+                construction.returns = substitute(construction.returns.clone(), substitutions);
+            }
+        }
+
+        copy
     }
 
     pub fn into_predicate(&self, substitutions: &mut UnificationSubstitutions) -> Predicate {

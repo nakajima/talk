@@ -48,6 +48,23 @@ impl PrependSelfToMethods {
             );
         }
 
+        if let DeclKind::MethodRequirement(signature) = &mut decl.kind {
+            signature.params.insert(
+                0,
+                Parameter {
+                    id: self.node_ids.next_id(),
+                    name: "self".into(),
+                    type_annotation: Some(TypeAnnotation {
+                        id: self.node_ids.next_id(),
+                        span: decl.span,
+                        kind: TypeAnnotationKind::SelfType("Self".into()),
+                    }),
+                    // type_annotation: None,
+                    span: decl.span,
+                },
+            );
+        }
+
         if let DeclKind::Init { params, .. } = &mut decl.kind {
             params.insert(
                 0,

@@ -2,12 +2,16 @@ use std::collections::VecDeque;
 
 use crate::{
     label::Label,
-    name_resolution::symbol::Symbol,
+    name_resolution::symbol::{Symbol, TypeId},
     span::Span,
     types::{
-        constraints::constraint::{Constraint, ConstraintCause},
         constraints::{
-            call::Call, construction::Construction, equals::Equals, has_field::HasField,
+            call::Call,
+            conforms::Conforms,
+            constraint::{Constraint, ConstraintCause},
+            construction::Construction,
+            equals::Equals,
+            has_field::HasField,
             member::Member,
         },
         row::Row,
@@ -42,6 +46,7 @@ impl Wants {
             Constraint::HasField(..) => self.simple.push_back(constraint),
             Constraint::Member(..) => self.defer.push_back(constraint),
             Constraint::Construction(..) => self.defer.push_back(constraint),
+            Constraint::Conforms(..) => self.defer.push_back(constraint),
         }
     }
 
@@ -63,6 +68,15 @@ impl Wants {
             cause,
             span,
         }))
+    }
+
+    pub fn conforms(&mut self, type_id: TypeId, protocol_id: TypeId, span: Span) {
+        tracing::debug!("constraining conforms {type_id:?} < {protocol_id:?}");
+        self.defer.push_back(Constraint::Conforms(Conforms {
+            type_id,
+            protocol_id,
+            span,
+        }));
     }
 
     pub fn call(

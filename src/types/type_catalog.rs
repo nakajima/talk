@@ -5,6 +5,8 @@ use crate::{
     label::Label,
     name_resolution::symbol::{Symbol, TypeId},
     node_id::NodeID,
+    span::Span,
+    types::passes::dependencies_pass::{Conformance, ConformanceRequirement},
 };
 
 #[derive(Debug, PartialEq, Clone)]
@@ -22,11 +24,29 @@ pub enum NominalForm {
     },
 }
 
+impl NominalForm {
+    pub fn extend_methods(&mut self, methods: FxHashMap<Label, Symbol>) {
+        let (Self::Struct {
+            instance_methods, ..
+        }
+        | Self::Enum {
+            instance_methods, ..
+        }) = self;
+
+        instance_methods.extend(methods);
+    }
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub struct ConformanceStub {
+    pub protocol_id: TypeId,
+    pub span: Span,
+}
+
 #[derive(Debug, PartialEq, Clone)]
 pub struct Extension {
     pub node_id: NodeID,
-    pub methods: FxHashMap<Label, Symbol>,
-    pub conformances: Vec<TypeId>,
+    pub conformances: Vec<ConformanceStub>,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -34,20 +54,28 @@ pub struct Protocol {
     pub node_id: NodeID,
     pub methods: FxHashMap<Label, Symbol>,
     pub static_methods: FxHashMap<Label, Symbol>,
-    pub method_requirements: FxHashMap<Label, Symbol>,
+    pub requirements: FxHashMap<Label, ConformanceRequirement>,
 }
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct Nominal {
+    pub type_id: TypeId,
     pub form: NominalForm,
     pub node_id: NodeID,
     pub extensions: Vec<Extension>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ConformanceKey {
+    pub protocol_id: TypeId,
+    pub conforming_id: TypeId,
 }
 
 #[derive(Debug, PartialEq, Default)]
 pub struct TypeCatalog {
     pub nominals: FxHashMap<TypeId, Nominal>,
     pub protocols: FxHashMap<TypeId, Protocol>,
+    pub conformances: FxHashMap<ConformanceKey, Conformance>,
 }
 
 impl Nominal {

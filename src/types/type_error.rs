@@ -6,13 +6,20 @@ use crate::{name_resolution::symbol::TypeId, types::ty::Ty};
 pub enum TypeError {
     TypeConstructorNotFound(TypeId),
     ExpectedRow(Ty),
-    GenericArgCount { expected: u8, actual: u8 },
+    GenericArgCount {
+        expected: u8,
+        actual: u8,
+    },
     InvalidUnification(Ty, Ty),
     OccursCheck(Ty),
     CalleeNotCallable(Ty),
     MemberNotFound(Ty, String),
     MissingConformanceRequirement(String),
     TypeNotFound(String),
+    TypesDoesNotConform {
+        type_id: TypeId,
+        protocol_id: TypeId,
+    },
 }
 
 impl Error for TypeError {}
@@ -39,6 +46,9 @@ impl Display for TypeError {
             Self::TypeNotFound(string) => write!(f, "{string}"),
             Self::MissingConformanceRequirement(string) => {
                 write!(f, "Missing conformance requirement: {string:?}")
+            }
+            Self::TypesDoesNotConform { .. } => {
+                write!(f, "Type does not conform wip")
             }
         }
     }

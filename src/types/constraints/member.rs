@@ -94,6 +94,7 @@ impl Member {
                         self.cause,
                         self.span,
                     );
+
                     Ok(true)
                 }
                 Symbol::Variant(_) => {

@@ -1,5 +1,4 @@
 use derive_visitor::{Drive, Visitor};
-use indexmap::IndexMap;
 use petgraph::prelude::DiGraphMap;
 use rustc_hash::FxHashMap;
 
@@ -28,10 +27,16 @@ use crate::{
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConformanceRequirement {
+    Unfulfilled(Symbol),
+    Fulfilled { symbol: Symbol },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Conformance {
     pub conforming_id: TypeId,
     pub protocol_id: TypeId,
-    pub methods: IndexMap<Label, Symbol>,
+    pub requirements: FxHashMap<Label, ConformanceRequirement>,
     pub span: Span,
 }
 
@@ -85,6 +90,7 @@ impl BoundRHS {
 #[derive(Debug, Visitor)]
 #[visitor(Decl(enter, exit), Expr(enter))]
 pub struct DependenciesPass {
+    session: TypeSession<HeadersResolved>,
     pub graph: DiGraphMap<Binder, ()>,
     pub rhs_map: FxHashMap<Binder, NodeID>,
     pub annotation_map: FxHashMap<Binder, NodeID>,
@@ -94,10 +100,11 @@ pub struct DependenciesPass {
 
 impl DependenciesPass {
     pub fn drive(
-        mut session: TypeSession<HeadersResolved>,
+        session: TypeSession<HeadersResolved>,
         ast: &mut AST<NameResolved>,
     ) -> TypeSession<SCCResolved> {
         let mut pass = DependenciesPass {
+            session,
             graph: Default::default(),
             rhs_map: Default::default(),
             annotation_map: Default::default(),
@@ -109,7 +116,7 @@ impl DependenciesPass {
             root.drive(&mut pass);
         }
 
-        let type_catalog = std::mem::take(&mut session.phase.type_catalog);
+        let type_catalog = std::mem::take(&mut pass.session.phase.type_catalog);
         let phase = SCCResolved {
             graph: pass.graph,
             annotation_map: pass.annotation_map,
@@ -118,7 +125,7 @@ impl DependenciesPass {
             conformances: pass.conformances,
         };
 
-        session.advance(phase)
+        pass.session.advance(phase)
     }
 
     fn enter_decl(&mut self, decl: &Decl) {
@@ -164,6 +171,14 @@ impl DependenciesPass {
                         panic!("can't conform to {conformance:?}");
                     };
 
+                    let protocol = self
+                        .session
+                        .phase
+                        .type_catalog
+                        .protocols
+                        .get(protocol_id)
+                        .expect("didn't get protocol");
+
                     self.conformances
                         .entry(*protocol_id)
                         .or_default()
@@ -171,7 +186,7 @@ impl DependenciesPass {
                         .or_insert(Conformance {
                             conforming_id: *type_id,
                             protocol_id: *protocol_id,
-                            methods: Default::default(),
+                            requirements: protocol.requirements.clone(),
                             span: conformance.span,
                         });
                 }
@@ -230,23 +245,41 @@ impl DependenciesPass {
 
     fn enter_expr(&mut self, expr: &Expr) {
         if let ExprKind::Variable(Name::Resolved(sym, _)) = &expr.kind {
-            match sym {
-                Symbol::Global(global_id) => {
-                    let binder = Binder::Global(*global_id);
+            self.handle_symbol(sym);
+        }
+    }
 
-                    if let Some((_, scope_binder)) = self.binder_stack.last() {
-                        self.graph.add_edge(*scope_binder, binder, ());
-                    }
-                }
-                Symbol::DeclaredLocal(declared_local_id) => {
-                    let binder = Binder::LocalDecl(*declared_local_id);
+    fn handle_symbol(&mut self, sym: &Symbol) {
+        match sym {
+            Symbol::Global(global_id) => {
+                let binder = Binder::Global(*global_id);
 
-                    if let Some((_, scope_binder)) = self.binder_stack.last() {
-                        self.graph.add_edge(*scope_binder, binder, ());
-                    }
+                if let Some((_, scope_binder)) = self.binder_stack.last() {
+                    self.graph.add_edge(*scope_binder, binder, ());
                 }
-                _ => (),
             }
+            Symbol::DeclaredLocal(declared_local_id) => {
+                let binder = Binder::LocalDecl(*declared_local_id);
+
+                if let Some((_, scope_binder)) = self.binder_stack.last() {
+                    self.graph.add_edge(*scope_binder, binder, ());
+                }
+            }
+            Symbol::StaticMethod(id) => {
+                let binder = Binder::StaticMethod(*id);
+
+                if let Some((_, scope_binder)) = self.binder_stack.last() {
+                    self.graph.add_edge(*scope_binder, binder, ());
+                }
+            }
+            Symbol::InstanceMethod(id) => {
+                let binder = Binder::InstanceMethod(*id);
+
+                if let Some((_, scope_binder)) = self.binder_stack.last() {
+                    self.graph.add_edge(*scope_binder, binder, ());
+                }
+            }
+            _ => (),
         }
     }
 }
@@ -257,14 +290,17 @@ pub mod tests {
 
     use crate::{
         ast::AST,
+        fxhashmap,
         name_resolution::{
             name_resolver::NameResolved,
-            symbol::{GlobalId, TypeId},
+            symbol::{GlobalId, InstanceMethodId, Symbol, TypeId},
         },
         span::Span,
         types::{
             passes::{
-                dependencies_pass::{Binder, Conformance, DependenciesPass, SCCResolved},
+                dependencies_pass::{
+                    Binder, Conformance, ConformanceRequirement, DependenciesPass, SCCResolved,
+                },
                 type_resolve_pass::tests::type_header_resolve_pass,
             },
             type_session::TypeSession,
@@ -276,6 +312,7 @@ pub mod tests {
     ) -> (AST<NameResolved>, TypeSession<SCCResolved>) {
         let (mut ast, session) = type_header_resolve_pass(code);
         let session = DependenciesPass::drive(session, &mut ast);
+
         (ast, session)
     }
 
@@ -398,7 +435,9 @@ pub mod tests {
         // Field access is a projection, not a term ref; no edges.
         let (_ast, session) = resolve_dependencies(
             "
-            protocol Count {}
+            protocol Count {
+                func count() -> Int
+            }
             struct Person {}
             extend Person: Count {}
             ",
@@ -415,9 +454,135 @@ pub mod tests {
             Conformance {
                 conforming_id: TypeId(2),
                 protocol_id: TypeId(1),
-                methods: Default::default(),
+                requirements: fxhashmap!("count".into() => ConformanceRequirement::Unfulfilled(Symbol::InstanceMethod(InstanceMethodId(1)))),
                 span: Span::ANY,
             }
         )
+    }
+
+    #[test]
+    fn graph_static_methods_mutual_recursion_creates_cycle_edges() {
+        let edges = graph_edges(
+            r#"
+        struct Person {
+            static func first()  { second() }
+            static func second() { first() }
+        }
+        "#,
+        );
+
+        use super::Binder;
+        use crate::name_resolution::symbol::StaticMethodId;
+
+        let expected = FxHashSet::from_iter([
+            (
+                Binder::StaticMethod(StaticMethodId(1)),
+                Binder::StaticMethod(StaticMethodId(2)),
+            ),
+            (
+                Binder::StaticMethod(StaticMethodId(2)),
+                Binder::StaticMethod(StaticMethodId(1)),
+            ),
+        ]);
+
+        assert_eq!(edges, expected, "{edges:?}");
+    }
+
+    #[test]
+    #[ignore = "need to handle members"]
+    fn graph_instance_methods_mutual_recursion_creates_cycle_edges() {
+        let edges = graph_edges(
+            r#"
+        struct Counter {
+            func first()  { self.second() }
+            func second() { self.first()  }
+        }
+        "#,
+        );
+
+        use super::Binder;
+        use crate::name_resolution::symbol::InstanceMethodId;
+
+        let expected = FxHashSet::from_iter([
+            (
+                Binder::InstanceMethod(InstanceMethodId(1)),
+                Binder::InstanceMethod(InstanceMethodId(2)),
+            ),
+            (
+                Binder::InstanceMethod(InstanceMethodId(2)),
+                Binder::InstanceMethod(InstanceMethodId(1)),
+            ),
+        ]);
+
+        assert_eq!(edges, expected, "{edges:?}");
+    }
+
+    #[test]
+    #[ignore = "need to handle members"]
+    fn graph_global_calls_static_method_creates_edge() {
+        let edges = graph_edges(
+            r#"
+        struct Math {
+            static func provide() { 123 }
+        }
+        func use() { Math.provide() }
+        "#,
+        );
+
+        use super::Binder;
+        use crate::name_resolution::symbol::{GlobalId, StaticMethodId};
+
+        let expected = FxHashSet::from_iter([(
+            Binder::Global(GlobalId(1)),
+            Binder::StaticMethod(StaticMethodId(1)),
+        )]);
+
+        assert_eq!(edges, expected, "{edges:?}");
+    }
+
+    #[test]
+    #[ignore = "need to handle members"]
+    fn graph_member_static_call_creates_edge() {
+        let edges = graph_edges(
+            r#"
+        struct Person {
+            static func get() { 123 }
+        }
+        func use() { Person.get() }
+        "#,
+        );
+
+        use super::Binder;
+        use crate::name_resolution::symbol::{GlobalId, StaticMethodId};
+
+        let expected = FxHashSet::from_iter([(
+            Binder::Global(GlobalId(1)),
+            Binder::StaticMethod(StaticMethodId(1)),
+        )]);
+
+        assert_eq!(edges, expected, "{edges:?}");
+    }
+
+    #[test]
+    #[ignore = "need to handle members"]
+    fn graph_member_instance_call_creates_edge() {
+        let edges = graph_edges(
+            r#"
+        struct Chain {
+            func a() { self.b() }
+            func b() { 0 }
+        }
+        "#,
+        );
+
+        use super::Binder;
+        use crate::name_resolution::symbol::InstanceMethodId;
+
+        let expected = FxHashSet::from_iter([(
+            Binder::InstanceMethod(InstanceMethodId(1)),
+            Binder::InstanceMethod(InstanceMethodId(2)),
+        )]);
+
+        assert_eq!(edges, expected, "{edges:?}");
     }
 }

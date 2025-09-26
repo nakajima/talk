@@ -59,7 +59,6 @@ impl std::fmt::Debug for TypeSnapshot {
         let formatter = Formatter::new(&self.ast.meta);
         for (id, ty) in &self.types_by_node {
             let Some(node) = self.ast.find(*id) else {
-                parts.push(format!("  ! didn't find node for id {id} {:#?}", self.ast));
                 continue;
             };
 

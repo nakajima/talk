@@ -25,8 +25,9 @@ use crate::{
         row::Row,
         scheme::{ForAll, Scheme},
         term_environment::{EnvEntry, TermEnv},
-        ty::{Level, Ty},
-        type_operations::{UnificationSubstitutions, apply, apply_row},
+        ty::{Level, SkolemId, Ty, TypeParamId},
+        type_catalog::ConformanceStub,
+        type_operations::{UnificationSubstitutions, apply, apply_row, substitute},
         vars::Vars,
     },
 };
@@ -64,8 +65,8 @@ pub enum TypeDefKind {
 
 #[derive(Debug, PartialEq, Default)]
 pub struct Raw {
-    pub type_constructors: FxHashMap<TypeId, TypeDef<ASTTyRepr>>,
-    pub protocols: FxHashMap<TypeId, TypeDef<ASTTyRepr>>,
+    pub type_constructors: FxHashMap<TypeId, TypeDef>,
+    pub protocols: FxHashMap<TypeId, TypeDef>,
 }
 
 impl TypingPhase for Raw {
@@ -73,22 +74,22 @@ impl TypingPhase for Raw {
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub struct TypeExtension<T> {
+pub struct TypeExtension {
     pub node_id: NodeID,
-    pub conformances: Vec<TypeId>,
-    pub methods: IndexMap<Label, Method<T>>,
-    pub static_methods: IndexMap<Label, Method<T>>,
+    pub conformances: Vec<ConformanceStub>,
+    pub methods: IndexMap<Label, Method>,
+    pub static_methods: IndexMap<Label, Method>,
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub struct TypeDef<T> {
+pub struct TypeDef {
     pub name: Name,
     pub node_id: NodeID,
     pub kind: Kind,
     pub def: TypeDefKind,
-    pub generics: IndexMap<Name, T>,
-    pub fields: TypeFields<T>,
-    pub extensions: Vec<TypeExtension<T>>,
+    pub generics: IndexMap<Name, ASTTyRepr>,
+    pub fields: TypeFields,
+    pub extensions: Vec<TypeExtension>,
 }
 
 #[derive(Debug)]
@@ -98,6 +99,9 @@ pub struct TypeSession<Phase: TypingPhase = Raw> {
     pub phase: Phase,
     pub term_env: TermEnv,
     pub meta_levels: FxHashMap<Meta, Level>,
+    pub skolem_map: FxHashMap<Ty, Ty>,
+    pub skolem_bounds: FxHashMap<SkolemId, Vec<TypeId>>,
+    pub type_param_bounds: FxHashMap<TypeParamId, Vec<TypeId>>,
 }
 
 impl Default for TypeSession<Raw> {
@@ -117,8 +121,11 @@ impl Default for TypeSession<Raw> {
                 type_constructors: Default::default(),
                 protocols: Default::default(),
             },
+            skolem_map: Default::default(),
             meta_levels: Default::default(),
             term_env,
+            type_param_bounds: Default::default(),
+            skolem_bounds: Default::default(),
         }
     }
 }
@@ -139,6 +146,11 @@ impl<Phase: TypingPhase> TypeSession<Phase> {
         // collect metas in ty
         let mut metas = FxHashSet::default();
         collect_meta(&ty, &mut metas);
+
+        // Also collect metas that appear only in constraints
+        for constraint in unsolved {
+            collect_metas_in_constraint(constraint, &mut metas);
+        }
 
         // keep only metas born at or above inner
         let mut foralls = vec![];
@@ -209,6 +221,8 @@ impl<Phase: TypingPhase> TypeSession<Phase> {
             }
         }
 
+        // De-skolemize
+        let ty = substitute(ty, &self.skolem_map);
         let ty = apply(ty, &mut substitutions);
 
         if foralls.is_empty() {
@@ -217,7 +231,10 @@ impl<Phase: TypingPhase> TypeSession<Phase> {
 
         let predicates = unsolved
             .iter()
-            .map(|c| c.into_predicate(&mut substitutions))
+            .map(|c| {
+                let c = c.substitute(&self.skolem_map);
+                c.into_predicate(&mut substitutions)
+            })
             .collect();
 
         EnvEntry::Scheme(Scheme::new(foralls, predicates, ty))
@@ -284,6 +301,8 @@ impl<Phase: TypingPhase> TypeSession<Phase> {
             }
         }
 
+        // De-skolemize
+        let ty = substitute(ty, &self.skolem_map);
         let ty = apply(ty, substitutions);
 
         if foralls.is_empty() {
@@ -292,7 +311,10 @@ impl<Phase: TypingPhase> TypeSession<Phase> {
 
         let predicates = unsolved
             .iter()
-            .map(|c| c.into_predicate(substitutions))
+            .map(|c| {
+                let c = c.substitute(&self.skolem_map);
+                c.into_predicate(substitutions)
+            })
             .collect();
 
         EnvEntry::Scheme(Scheme::new(foralls, predicates, ty))
@@ -300,11 +322,14 @@ impl<Phase: TypingPhase> TypeSession<Phase> {
 
     pub fn advance(self, phase: Phase::Next) -> TypeSession<Phase::Next> {
         TypeSession::<Phase::Next> {
+            phase,
             vars: self.vars,
             synthsized_ids: self.synthsized_ids,
-            phase,
             term_env: self.term_env,
             meta_levels: self.meta_levels,
+            skolem_map: self.skolem_map,
+            skolem_bounds: self.skolem_bounds,
+            type_param_bounds: self.type_param_bounds,
         }
     }
 
@@ -320,5 +345,42 @@ impl<Phase: TypingPhase> TypeSession<Phase> {
         self.meta_levels.insert(Meta::Row(id), level);
         tracing::trace!("Fresh {id:?}");
         Row::Var(id)
+    }
+}
+
+fn collect_metas_in_constraint(constraint: &Constraint, out: &mut FxHashSet<Ty>) {
+    match constraint {
+        Constraint::Equals(equals) => {
+            collect_meta(&equals.lhs, out);
+            collect_meta(&equals.rhs, out);
+        }
+        Constraint::Member(member) => {
+            collect_meta(&member.receiver, out);
+            collect_meta(&member.ty, out);
+        }
+        Constraint::Call(call) => {
+            collect_meta(&call.callee, out);
+            for argument in &call.args {
+                collect_meta(argument, out);
+            }
+            if let Some(receiver) = &call.receiver {
+                collect_meta(receiver, out);
+            }
+            collect_meta(&call.returns, out);
+        }
+        Constraint::Construction(construction) => {
+            collect_meta(&construction.callee, out);
+            for argument in &construction.args {
+                collect_meta(argument, out);
+            }
+            collect_meta(&construction.returns, out);
+        }
+        Constraint::HasField(has_field) => {
+            // The row meta is handled in your existing HasField block later.
+            collect_meta(&has_field.ty, out);
+        }
+        Constraint::Conforms(_) => {
+            // No direct metas to generalize here.
+        }
     }
 }

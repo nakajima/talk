@@ -11,6 +11,7 @@ pub mod tests {
                 inference_pass::{InferencePass, Inferenced},
             },
             ty::Ty,
+            type_catalog::ConformanceKey,
             type_error::TypeError,
             type_session::TypeSession,
         },
@@ -1417,7 +1418,62 @@ pub mod tests {
     }
 
     #[test]
-    #[ignore = "wip"]
+    fn types_simple_conformance() {
+        let (_ast, session) = typecheck(
+            "
+            protocol Countable {
+                func getCount() -> Int
+            }
+
+            struct Person {}
+
+            extend Person: Countable {
+                func getCount() {
+                    123
+                }
+            }
+            ",
+        );
+
+        assert!(
+            session
+                .phase
+                .type_catalog
+                .conformances
+                .contains_key(&ConformanceKey {
+                    protocol_id: TypeId(1),
+                    conforming_id: TypeId(2),
+                })
+        );
+    }
+
+    #[test]
+    fn checks_method_protocol_conformance() {
+        let (ast, _session) = typecheck_err(
+            "
+            protocol Countable {
+                func getCount() -> Int
+            }
+
+            struct Person {}
+
+            extend Person: Countable {
+                func getCount() {
+                    1.123 // This is wrong
+                }
+            }
+        ",
+        );
+
+        assert_eq!(
+            1,
+            ast.diagnostics.len(),
+            "didn't get diagnostic: {:?}",
+            ast.diagnostics
+        );
+    }
+
+    #[test]
     fn types_simple_protocol() {
         let (ast, session) = typecheck(
             "
