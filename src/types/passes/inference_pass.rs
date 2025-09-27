@@ -917,8 +917,6 @@ impl<'a> InferencePass<'a> {
             self.infer_expr(callee, level, wants)
         };
 
-        println!("infer_call callee: {callee_ty:?}");
-
         let mut arg_tys = Vec::with_capacity(args.len() + 1);
 
         for arg in args {
@@ -952,8 +950,6 @@ impl<'a> InferencePass<'a> {
                 callee.span,
             );
         } else {
-            println!("receiver: {receiver:?}");
-
             wants.call(
                 callee_ty,
                 arg_tys,
@@ -997,8 +993,6 @@ impl<'a> InferencePass<'a> {
                     .entry(param_id)
                     .or_default()
                     .push(*id);
-
-                println!("got conformance ty: {id:?}");
             }
 
             self.session.term_env.insert_mono(
@@ -1014,8 +1008,6 @@ impl<'a> InferencePass<'a> {
             } else {
                 self.session.new_ty_meta_var(level)
             };
-
-            println!("infer_param: {ty:?}");
 
             param_tys.push(ty);
         }
