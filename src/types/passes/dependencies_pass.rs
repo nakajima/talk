@@ -8,7 +8,10 @@ use crate::{
     name::Name,
     name_resolution::{
         name_resolver::NameResolved,
-        symbol::{DeclaredLocalId, GlobalId, InstanceMethodId, StaticMethodId, Symbol, TypeId},
+        symbol::{
+            AssociatedTypeId, DeclaredLocalId, GlobalId, InstanceMethodId, StaticMethodId, Symbol,
+            TypeId,
+        },
     },
     node_id::NodeID,
     node_kinds::{
@@ -16,7 +19,6 @@ use crate::{
         expr::{Expr, ExprKind},
         func::Func,
         pattern::{Pattern, PatternKind},
-        type_annotation::TypeAnnotationKind,
     },
     span::Span,
     types::{
@@ -37,6 +39,7 @@ pub struct Conformance {
     pub conforming_id: TypeId,
     pub protocol_id: TypeId,
     pub requirements: FxHashMap<Label, ConformanceRequirement>,
+    pub associated_types: FxHashMap<AssociatedTypeId, Symbol>,
     pub span: Span,
 }
 
@@ -46,7 +49,6 @@ pub struct SCCResolved {
     pub annotation_map: FxHashMap<Binder, NodeID>,
     pub rhs_map: FxHashMap<Binder, NodeID>,
     pub type_catalog: TypeCatalog,
-    pub conformances: FxHashMap<TypeId, FxHashMap<TypeId, Conformance>>,
 }
 
 impl TypingPhase for SCCResolved {
@@ -94,7 +96,6 @@ pub struct DependenciesPass {
     pub graph: DiGraphMap<Binder, ()>,
     pub rhs_map: FxHashMap<Binder, NodeID>,
     pub annotation_map: FxHashMap<Binder, NodeID>,
-    conformances: FxHashMap<TypeId, FxHashMap<TypeId, Conformance>>,
     binder_stack: Vec<(NodeID, Binder)>,
 }
 
@@ -109,7 +110,6 @@ impl DependenciesPass {
             rhs_map: Default::default(),
             annotation_map: Default::default(),
             binder_stack: Default::default(),
-            conformances: Default::default(),
         };
 
         for root in ast.roots.iter() {
@@ -122,7 +122,6 @@ impl DependenciesPass {
             annotation_map: pass.annotation_map,
             rhs_map: pass.rhs_map,
             type_catalog,
-            conformances: pass.conformances,
         };
 
         pass.session.advance(phase)
@@ -152,48 +151,6 @@ impl DependenciesPass {
                     },
                 ..
             } => (sym, None, BoundRHS::Func(func.id)),
-            DeclKind::Struct {
-                name: Name::Resolved(Symbol::Type(type_id), _),
-                conformances,
-                ..
-            }
-            | DeclKind::Extend {
-                name: Name::Resolved(Symbol::Type(type_id), _),
-                conformances,
-                ..
-            } => {
-                for conformance in conformances {
-                    let TypeAnnotationKind::Nominal {
-                        name: Name::Resolved(Symbol::Type(protocol_id), _),
-                        ..
-                    } = &conformance.kind
-                    else {
-                        panic!("can't conform to {conformance:?}");
-                    };
-
-                    let protocol = self
-                        .session
-                        .phase
-                        .type_catalog
-                        .protocols
-                        .get(protocol_id)
-                        .expect("didn't get protocol");
-
-                    self.conformances
-                        .entry(*protocol_id)
-                        .or_default()
-                        .entry(*type_id)
-                        .or_insert(Conformance {
-                            conforming_id: *type_id,
-                            protocol_id: *protocol_id,
-                            requirements: protocol.requirements.clone(),
-                            span: conformance.span,
-                        });
-                }
-
-                return;
-            }
-
             _ => {
                 return;
             }
@@ -290,17 +247,10 @@ pub mod tests {
 
     use crate::{
         ast::AST,
-        fxhashmap,
-        name_resolution::{
-            name_resolver::NameResolved,
-            symbol::{GlobalId, InstanceMethodId, Symbol, TypeId},
-        },
-        span::Span,
+        name_resolution::{name_resolver::NameResolved, symbol::GlobalId},
         types::{
             passes::{
-                dependencies_pass::{
-                    Binder, Conformance, ConformanceRequirement, DependenciesPass, SCCResolved,
-                },
+                dependencies_pass::{Binder, DependenciesPass, SCCResolved},
                 type_resolve_pass::tests::type_header_resolve_pass,
             },
             type_session::TypeSession,
@@ -428,36 +378,6 @@ pub mod tests {
     "#,
         );
         assert!(es.is_empty(), "{es:?}");
-    }
-
-    #[test]
-    fn maps_conformances() {
-        // Field access is a projection, not a term ref; no edges.
-        let (_ast, session) = resolve_dependencies(
-            "
-            protocol Count {
-                func count() -> Int
-            }
-            struct Person {}
-            extend Person: Count {}
-            ",
-        );
-
-        assert_eq!(
-            *session
-                .phase
-                .conformances
-                .get(&TypeId(1))
-                .unwrap()
-                .get(&TypeId(2))
-                .unwrap(),
-            Conformance {
-                conforming_id: TypeId(2),
-                protocol_id: TypeId(1),
-                requirements: fxhashmap!("count".into() => ConformanceRequirement::Unfulfilled(Symbol::InstanceMethod(InstanceMethodId(1)))),
-                span: Span::ANY,
-            }
-        )
     }
 
     #[test]

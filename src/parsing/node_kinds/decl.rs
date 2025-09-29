@@ -91,6 +91,8 @@ pub enum DeclKind {
 
     FuncSignature(FuncSignature),
     MethodRequirement(FuncSignature),
+
+    TypeAlias(TypeAnnotation, TypeAnnotation),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]

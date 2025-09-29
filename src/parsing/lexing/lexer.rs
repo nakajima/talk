@@ -299,6 +299,7 @@ impl<'a> Lexer<'a> {
             "import" => Import,
             "static" => Static,
             "associated" => Associated,
+            "typealias" => Typealias,
             _ => Identifier(string),
         }
     }
@@ -611,6 +612,13 @@ mod tests {
     fn handles_semicolons() {
         let mut lexer = Lexer::new(";");
         assert_eq!(lexer.next().unwrap().kind, Semicolon);
+        assert_eq!(lexer.next().unwrap().kind, EOF);
+    }
+
+    #[test]
+    fn handles_typealias() {
+        let mut lexer = Lexer::new("typealias");
+        assert_eq!(lexer.next().unwrap().kind, Typealias);
         assert_eq!(lexer.next().unwrap().kind, EOF);
     }
 

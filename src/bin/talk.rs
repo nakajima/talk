@@ -59,7 +59,7 @@ async fn main() {
                 vec![
                     Box::new(DebugHTMLFormatter {}),
                     Box::new(TypesDecorator {
-                        types_by_node: session.phase.types_by_node,
+                        types_by_node: session.types_by_node,
                     }),
                 ],
             );

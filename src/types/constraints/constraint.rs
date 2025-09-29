@@ -5,14 +5,16 @@ use crate::{
     span::Span,
     types::{
         constraints::{
-            call::Call, conforms::Conforms, construction::Construction, equals::Equals,
-            has_field::HasField, member::Member,
+            associated_equals::AssociatedEquals, call::Call, conforms::Conforms,
+            construction::Construction, equals::Equals, has_field::HasField, member::Member,
+            type_member::TypeMember,
         },
+        predicate::Predicate,
         row::Row,
-        scheme::Predicate,
         ty::Ty,
         type_operations::{
-            UnificationSubstitutions, apply, apply_mult, apply_row, substitute, substitute_row,
+            UnificationSubstitutions, apply, apply_mult, apply_row, substitute, substitute_mult,
+            substitute_row,
         },
     },
 };
@@ -40,6 +42,8 @@ pub enum Constraint {
     Member(Member),
     Construction(Construction),
     Conforms(Conforms),
+    AssociatedEquals(AssociatedEquals),
+    TypeMember(TypeMember),
 }
 
 impl Constraint {
@@ -51,6 +55,8 @@ impl Constraint {
             Constraint::Member(c) => c.span,
             Constraint::Construction(c) => c.span,
             Constraint::Conforms(c) => c.span,
+            Constraint::AssociatedEquals(c) => c.span,
+            Constraint::TypeMember(c) => c.span,
         }
     }
 
@@ -83,6 +89,15 @@ impl Constraint {
                 construction.callee = apply(construction.callee.clone(), substitutions);
                 construction.args = apply_mult(construction.args.clone(), substitutions);
                 construction.returns = apply(construction.returns.clone(), substitutions);
+            }
+            Constraint::AssociatedEquals(associated_equals) => {
+                associated_equals.subject = apply(associated_equals.subject.clone(), substitutions);
+                associated_equals.output = apply(associated_equals.output.clone(), substitutions);
+            }
+            Constraint::TypeMember(c) => {
+                c.base = apply(c.base.clone(), substitutions);
+                c.result = apply(c.result.clone(), substitutions);
+                c.generics = apply_mult(c.generics.clone(), substitutions);
             }
         }
         self
@@ -123,6 +138,17 @@ impl Constraint {
                     .map(|a| substitute(a.clone(), substitutions))
                     .collect();
                 construction.returns = substitute(construction.returns.clone(), substitutions);
+            }
+            Constraint::AssociatedEquals(associated_equals) => {
+                associated_equals.subject =
+                    substitute(associated_equals.subject.clone(), substitutions);
+                associated_equals.output =
+                    substitute(associated_equals.output.clone(), substitutions);
+            }
+            Constraint::TypeMember(c) => {
+                c.base = substitute(c.base.clone(), substitutions);
+                c.result = substitute(c.result.clone(), substitutions);
+                c.generics = substitute_mult(&c.generics, substitutions);
             }
         }
 

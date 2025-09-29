@@ -4,35 +4,44 @@ use tracing::{instrument, trace_span};
 
 use crate::{
     ast::AST,
+    guard_found_ty,
     label::Label,
     name::Name,
     name_resolution::{
         name_resolver::NameResolved,
         symbol::{Symbol, TypeId},
     },
+    node_id::NodeID,
     node_kinds::type_annotation::{TypeAnnotation, TypeAnnotationKind},
+    span::Span,
     types::{
         builtins::resolve_builtin_type,
+        constraints::{
+            constraint::{Constraint, ConstraintCause},
+            type_member::TypeMember,
+        },
         fields::{
             Associated, Initializer, Method, MethodRequirement, Property, TypeFields, Variant,
         },
         passes::{
-            dependencies_pass::{ConformanceRequirement, SCCResolved},
+            dependencies_pass::{Conformance, ConformanceRequirement, SCCResolved},
             inference_pass::curry,
         },
+        predicate::Predicate,
         row::Row,
         scheme::Scheme,
         term_environment::EnvEntry,
         ty::{Level, Ty},
-        type_catalog::{Extension, Nominal, NominalForm, Protocol, TypeCatalog},
+        type_catalog::{ConformanceKey, Extension, Nominal, NominalForm, Protocol, TypeCatalog},
         type_error::TypeError,
         type_session::{ASTTyRepr, Raw, TypeDef, TypeDefKind, TypeSession, TypingPhase},
     },
 };
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 pub struct HeadersResolved {
     pub type_catalog: TypeCatalog,
+    pub resolver_constraints: Vec<Constraint>,
 }
 
 impl TypingPhase for HeadersResolved {
@@ -44,7 +53,12 @@ impl TypingPhase for HeadersResolved {
 pub struct TypeResolvePass<'a> {
     session: TypeSession<Raw>,
     type_catalog: TypeCatalog,
-    generics: IndexMap<TypeId, Ty>,
+    generics: IndexMap<Symbol, Ty>,
+    conformance_keys: Vec<(ConformanceKey, Span)>,
+    resolver_constraints: Vec<Constraint>,
+    self_symbols: Vec<Symbol>,
+    self_tys: Vec<Ty>,
+    types_by_node: FxHashMap<NodeID, Ty>,
     _ast: &'a mut AST<NameResolved>,
 }
 
@@ -56,7 +70,12 @@ impl<'a> TypeResolvePass<'a> {
         let resolver = TypeResolvePass {
             session,
             type_catalog: Default::default(),
+            resolver_constraints: Default::default(),
             generics: Default::default(),
+            conformance_keys: Default::default(),
+            self_symbols: Default::default(),
+            self_tys: Default::default(),
+            types_by_node: Default::default(),
             _ast: ast,
         };
 
@@ -69,9 +88,9 @@ impl<'a> TypeResolvePass<'a> {
         let mut row_vars: Vec<Row> = (0..self.session.phase.type_constructors.len())
             .map(|_| self.session.new_row_meta_var(Level(1)))
             .collect();
-        for (decl_id, type_def) in self.session.phase.type_constructors.iter() {
+        for (decl_id, ty) in self.session.phase.type_constructors.iter() {
             // Forward declare types with empty rows
-            match type_def.def {
+            match ty.def {
                 TypeDefKind::Struct => self.session.term_env.insert_mono(
                     Symbol::Type(*decl_id),
                     Ty::Nominal {
@@ -90,22 +109,66 @@ impl<'a> TypeResolvePass<'a> {
             }
         }
 
-        for (decl_id, type_def) in self.session.phase.type_constructors.clone() {
+        for (decl_id, type_def) in std::mem::take(&mut self.session.phase.type_constructors) {
             if let Ok(resolved) = self.resolve_type_def(&type_def) {
                 self.type_catalog.nominals.insert(decl_id, resolved);
             }
         }
 
-        for (decl_id, type_def) in self.session.phase.protocols.clone() {
+        for (decl_id, type_def) in std::mem::take(&mut self.session.phase.protocols) {
             if let Ok(resolved) = self.resolve_protocol(&type_def) {
                 self.type_catalog.protocols.insert(decl_id, resolved);
             }
+        }
+
+        // Resolve associated types for conforming types
+        for (conformance_key, span) in self.conformance_keys.iter() {
+            let ty = self
+                .type_catalog
+                .nominals
+                .get(&conformance_key.conforming_id)
+                .unwrap();
+
+            let protocol = self
+                .type_catalog
+                .protocols
+                .get(&conformance_key.protocol_id)
+                .unwrap();
+
+            let associated_types = protocol
+                .associated_types
+                .iter()
+                .map(|t| {
+                    let Name::Resolved(Symbol::AssociatedType(id), name) = t.0 else {
+                        unreachable!()
+                    };
+
+                    let symbol = ty
+                        .child_types
+                        .get(name)
+                        .unwrap_or_else(|| panic!("did not get child type named: {name}"));
+
+                    (*id, *symbol)
+                })
+                .collect();
+
+            self.type_catalog.conformances.insert(
+                *conformance_key,
+                Conformance {
+                    conforming_id: conformance_key.conforming_id,
+                    protocol_id: conformance_key.protocol_id,
+                    requirements: protocol.requirements.clone(),
+                    associated_types,
+                    span: *span,
+                },
+            );
         }
 
         TypeSession::<HeadersResolved> {
             vars: self.session.vars,
             synthsized_ids: self.session.synthsized_ids,
             phase: HeadersResolved {
+                resolver_constraints: self.resolver_constraints,
                 type_catalog: self.type_catalog,
             },
             term_env: self.session.term_env,
@@ -113,6 +176,7 @@ impl<'a> TypeResolvePass<'a> {
             skolem_map: self.session.skolem_map,
             type_param_bounds: self.session.type_param_bounds,
             skolem_bounds: self.session.skolem_bounds,
+            types_by_node: self.types_by_node,
         }
     }
 
@@ -127,8 +191,8 @@ impl<'a> TypeResolvePass<'a> {
 
                 NominalForm::Enum {
                     variants,
-                    instance_methods: self.resolve_methods(methods),
-                    static_methods: self.resolve_methods(static_methods),
+                    instance_methods: self.resolve_instance_methods(methods),
+                    static_methods: self.resolve_static_methods(static_methods),
                 }
             }
             TypeFields::Struct {
@@ -143,8 +207,8 @@ impl<'a> TypeResolvePass<'a> {
                 NominalForm::Struct {
                     initializers,
                     properties,
-                    instance_methods: self.resolve_methods(methods),
-                    static_methods: self.resolve_methods(static_methods),
+                    instance_methods: self.resolve_instance_methods(methods),
+                    static_methods: self.resolve_static_methods(static_methods),
                 }
             }
             TypeFields::Primitive => todo!(),
@@ -153,23 +217,22 @@ impl<'a> TypeResolvePass<'a> {
     }
 
     fn resolve_protocol(&mut self, type_def: &TypeDef) -> Result<Protocol, TypeError> {
-        let Symbol::Type(_id) = type_def.name.symbol().unwrap() else {
-            unreachable!()
-        };
+        let ty = Ty::Param(self.session.vars.type_params.next_id());
+        self.self_symbols.push(type_def.name.symbol().unwrap());
+        self.self_tys.push(ty);
 
         let TypeFields::Protocol {
             static_methods,
             instance_methods: methods,
             method_requirements,
-            associated_types: _,
+            associated_types,
         } = &type_def.fields
         else {
             unreachable!()
         };
 
-        let methods = self.resolve_methods(methods);
+        let methods = self.resolve_instance_methods(methods);
         let method_requirements = self.resolve_method_requirements(method_requirements);
-
         let mut requirements = FxHashMap::default();
         for method_requirement in method_requirements {
             requirements.insert(
@@ -178,11 +241,15 @@ impl<'a> TypeResolvePass<'a> {
             );
         }
 
+        self.self_symbols.pop();
+        self.self_tys.pop();
+
         Ok(Protocol {
             node_id: type_def.node_id,
             methods,
             requirements,
-            static_methods: self.resolve_methods(static_methods),
+            static_methods: self.resolve_static_methods(static_methods),
+            associated_types: associated_types.clone(),
         })
     }
 
@@ -190,17 +257,25 @@ impl<'a> TypeResolvePass<'a> {
     fn resolve_type_def(&mut self, type_def: &TypeDef) -> Result<Nominal, TypeError> {
         let _s = trace_span!("resolve", type_def = format!("{type_def:?}")).entered();
 
+        let sym = type_def.name.symbol().unwrap();
+        let EnvEntry::Mono(ty) = self.session.term_env.lookup(&sym).unwrap() else {
+            unreachable!()
+        };
+
+        self.self_symbols.push(sym);
+        self.self_tys.push(ty.clone());
+
         let mut generics = vec![];
 
         for (name, generic) in type_def.generics.iter() {
-            let Name::Resolved(Symbol::Type(type_id), _) = name else {
+            let Name::Resolved(sym, _) = name else {
                 tracing::error!("didn't resolve {name:?}");
                 continue;
             };
 
             let ty_repr = self.infer_ast_ty_repr(generic);
             generics.push(ty_repr.clone());
-            self.generics.insert(*type_id, ty_repr);
+            self.generics.insert(*sym, ty_repr);
         }
 
         let mut form = self.resolve_form(type_def);
@@ -209,21 +284,28 @@ impl<'a> TypeResolvePass<'a> {
             unreachable!();
         };
 
-        // Protocols aren't actually ever terms
-        if type_def.def != TypeDefKind::Protocol {
-            let Some(EnvEntry::Mono(ty)) = self.session.term_env.lookup(&symbol).cloned() else {
-                panic!("didn't get ty");
-            };
-
-            let type_scheme = self.session.generalize(Level(0), ty.clone(), &[]);
-            self.session.term_env.promote(symbol, type_scheme);
+        for c in type_def.conformances.iter() {
+            self.conformance_keys.push((
+                ConformanceKey {
+                    protocol_id: c.protocol_id,
+                    conforming_id: *type_id,
+                },
+                c.span,
+            ));
         }
+
+        let Some(EnvEntry::Mono(ty)) = self.session.term_env.lookup(&symbol).cloned() else {
+            panic!("didn't get ty");
+        };
+
+        let type_scheme = self.session.generalize(Level(0), ty.clone(), &[]);
+        self.session.term_env.promote(symbol, type_scheme);
 
         let extensions = type_def
             .extensions
             .iter()
             .map(|extension| {
-                form.extend_methods(self.resolve_methods(&extension.methods));
+                form.extend_methods(self.resolve_instance_methods(&extension.methods));
                 Extension {
                     conformances: extension.conformances.clone(),
                     node_id: extension.node_id,
@@ -231,11 +313,16 @@ impl<'a> TypeResolvePass<'a> {
             })
             .collect();
 
+        self.self_symbols.pop();
+        self.self_tys.pop();
+
         Ok(Nominal {
             type_id: *type_id,
             node_id: type_def.node_id,
             form,
             extensions,
+            child_types: type_def.child_types.clone(),
+            conformances: type_def.conformances.clone(),
         })
     }
 
@@ -273,7 +360,10 @@ impl<'a> TypeResolvePass<'a> {
         resolved_variants
     }
 
-    fn resolve_methods(&mut self, methods: &IndexMap<Label, Method>) -> FxHashMap<Label, Symbol> {
+    fn resolve_static_methods(
+        &mut self,
+        methods: &IndexMap<Label, Method>,
+    ) -> FxHashMap<Label, Symbol> {
         let mut resolved_methods = FxHashMap::default();
         for (name, method) in methods {
             let params: Vec<_> = method
@@ -298,6 +388,51 @@ impl<'a> TypeResolvePass<'a> {
                 self.session.term_env.promote(
                     method.symbol,
                     EnvEntry::Scheme(Scheme::new(foralls, vec![], fn_ty)),
+                );
+            }
+
+            resolved_methods.insert(name.clone(), method.symbol);
+        }
+
+        resolved_methods
+    }
+
+    fn resolve_instance_methods(
+        &mut self,
+        methods: &IndexMap<Label, Method>,
+    ) -> FxHashMap<Label, Symbol> {
+        let mut resolved_methods = FxHashMap::default();
+        for (name, method) in methods {
+            let params: Vec<_> = method
+                .params
+                .iter()
+                .map(|f| self.infer_ast_ty_repr(f))
+                .collect();
+            let ret = self.infer_ast_ty_repr(&method.ret);
+            let fn_ty = if params.is_empty() {
+                Ty::Func(Box::new(Ty::Void), Box::new(ret.clone()))
+            } else {
+                curry(params.clone(), ret.clone())
+            };
+
+            let foralls = fn_ty.collect_foralls();
+
+            if foralls.is_empty() {
+                self.session.term_env.insert_mono(method.symbol, fn_ty);
+            } else {
+                let mut predicates = Vec::new();
+                let self_ty = params
+                    .first()
+                    .expect("did not create `self` param for instance method");
+                predicates.push(Predicate::Member {
+                    receiver: self_ty.clone(),
+                    label: name.clone(),
+                    ty: fn_ty.clone(),
+                });
+
+                self.session.term_env.promote(
+                    method.symbol,
+                    EnvEntry::Scheme(Scheme::new(foralls, predicates, fn_ty)),
                 );
             }
 
@@ -368,11 +503,18 @@ impl<'a> TypeResolvePass<'a> {
 
     fn _resolve_associated_types(
         &mut self,
+        protocol_id: TypeId,
         associated_types: &IndexMap<Name, Associated>,
     ) -> IndexMap<Name, Associated> {
         let mut resolved_associated_types = IndexMap::default();
         for name in associated_types.keys() {
-            resolved_associated_types.insert(name.clone(), Associated {});
+            resolved_associated_types.insert(
+                name.clone(),
+                Associated {
+                    protocol_id,
+                    symbol: name.symbol().unwrap(),
+                },
+            );
         }
 
         resolved_associated_types
@@ -389,7 +531,11 @@ impl<'a> TypeResolvePass<'a> {
                 .iter()
                 .map(|f| self.infer_ast_ty_repr(f))
                 .collect();
-            let ret = self.infer_ast_ty_repr(&method.ret);
+            let ret = if let Some(ret) = &method.ret {
+                self.infer_ast_ty_repr(ret)
+            } else {
+                Ty::Void
+            };
             let fn_ty = curry(params.clone(), ret.clone());
 
             self.session.term_env.insert_mono(method.symbol, fn_ty);
@@ -400,7 +546,9 @@ impl<'a> TypeResolvePass<'a> {
 
     #[instrument(skip(self))]
     pub(crate) fn infer_type_annotation(&mut self, annotation: &TypeAnnotation) -> Ty {
-        match &annotation.kind {
+        guard_found_ty!(self, annotation.id);
+
+        let ty = match &annotation.kind {
             TypeAnnotationKind::SelfType(_id) => self.session.new_ty_meta_var(Level(0)),
             TypeAnnotationKind::Func { .. } => todo!(),
             TypeAnnotationKind::Tuple(..) => todo!(),
@@ -409,13 +557,49 @@ impl<'a> TypeResolvePass<'a> {
                 ..
             } => resolve_builtin_type(sym),
             TypeAnnotationKind::Nominal {
-                name: Name::Resolved(Symbol::Type(type_id), _),
+                name: Name::Resolved(sym @ Symbol::Type(..), _),
                 ..
             } => self
                 .generics
-                .get(type_id)
+                .get(sym)
                 .cloned()
                 .unwrap_or_else(|| self.session.new_ty_meta_var(Level(1))),
+            TypeAnnotationKind::NominalPath {
+                box base,
+                member: Label::Named(member_name),
+                member_generics,
+            } => {
+                let base_ty = self.infer_type_annotation(base);
+                let result = self.session.new_ty_meta_var(Level(1));
+                let constraint = Constraint::TypeMember(TypeMember {
+                    base: base_ty,
+                    name: member_name.into(),
+                    generics: member_generics
+                        .iter()
+                        .map(|t| self.infer_type_annotation(t))
+                        .collect(),
+                    result: result.clone(),
+                    cause: ConstraintCause::Internal,
+                    span: annotation.span,
+                });
+                tracing::debug!("pushing constraint {constraint:?}");
+                self.resolver_constraints.push(constraint);
+                result
+            }
+            TypeAnnotationKind::Nominal {
+                name: Name::Resolved(Symbol::AssociatedType(..), ..),
+                ..
+            } => {
+                let Symbol::Type(..) = self.self_symbols.last().cloned().unwrap() else {
+                    unreachable!("didn't get protocol id");
+                };
+
+                let Some(..) = self.self_tys.last().cloned() else {
+                    unreachable!("didn't get self_ty");
+                };
+
+                self.session.new_ty_meta_var(Level(1))
+            }
             TypeAnnotationKind::Record { fields } => {
                 let mut row = Row::Empty(TypeDefKind::Struct);
                 for field in fields.iter().rev() {
@@ -429,30 +613,17 @@ impl<'a> TypeResolvePass<'a> {
                 Ty::Record(Box::new(row))
             }
             _ => unreachable!("unhandled type annotation: {annotation:?}"),
-        }
+        };
+
+        self.types_by_node.insert(annotation.id, ty.clone());
+
+        ty
     }
 
     pub(crate) fn infer_ast_ty_repr(&mut self, ty_repr: &ASTTyRepr) -> Ty {
         match &ty_repr {
             ASTTyRepr::Annotated(annotation) => self.infer_type_annotation(annotation),
-            ASTTyRepr::SelfType(name, _, _) => {
-                let Name::Resolved(Symbol::Type(type_id), _) = name else {
-                    panic!("didn't get type id");
-                };
-                // For self parameters in methods, look up the struct type from the environment
-                // The struct type should be in the environment by now
-                let entry = self
-                    .session
-                    .term_env
-                    .lookup(&Symbol::Type(*type_id))
-                    .cloned();
-
-                match entry {
-                    Some(EnvEntry::Mono(ty)) => ty,
-                    Some(EnvEntry::Scheme(scheme)) => scheme.ty.clone(),
-                    None => unreachable!("define_type didn't work: {ty_repr:?}"),
-                }
-            }
+            ASTTyRepr::SelfType(..) => self.self_tys.last().cloned().unwrap(),
             ASTTyRepr::Hole(id, ..) => Ty::Hole(*id),
             ASTTyRepr::Generic(decl) => {
                 let ty = Ty::Param(self.session.vars.type_params.next_id());
@@ -479,9 +650,16 @@ pub mod tests {
         name_resolution::{
             name_resolver::NameResolved,
             name_resolver_tests::tests::resolve,
-            symbol::{InstanceMethodId, PropertyId, StaticMethodId, SynthesizedId, TypeId},
+            symbol::{
+                AssociatedTypeId, InstanceMethodId, PropertyId, StaticMethodId, SynthesizedId,
+                TypeId,
+            },
         },
-        types::passes::type_headers_pass::TypeHeaderPass,
+        span::Span,
+        types::{
+            passes::{dependencies_pass::Conformance, type_headers_pass::TypeHeaderPass},
+            type_catalog::ConformanceKey,
+        },
     };
 
     use super::*;
@@ -681,6 +859,132 @@ pub mod tests {
     }
 
     #[test]
+    fn resolves_conformances() {
+        let (_ast, session) = type_header_resolve_pass(
+            "
+            protocol Count {
+                func count() -> Int
+            }
+            struct Person {}
+            extend Person: Count {}
+            ",
+        );
+
+        assert_eq!(
+            *session
+                .phase
+                .type_catalog
+                .conformances
+                .get(&ConformanceKey {
+                    protocol_id: TypeId(1),
+                    conforming_id: TypeId(2)
+                })
+                .unwrap_or_else(|| panic!(
+                    "didn't get conformance: {:?}",
+                    session.phase.type_catalog.conformances
+                )),
+            Conformance {
+                conforming_id: TypeId(2),
+                protocol_id: TypeId(1),
+                requirements: fxhashmap!("count".into() => ConformanceRequirement::Unfulfilled(Symbol::InstanceMethod(InstanceMethodId(1)))),
+                span: Span::ANY,
+                associated_types: Default::default()
+            }
+        )
+    }
+
+    #[test]
+    fn resolves_nested_types() {
+        let (_ast, session) = type_header_resolve_pass(
+            "
+            struct Fizz {
+                struct Buzz {}
+                typealias Foo = Int
+            }
+            ",
+        );
+
+        assert_eq!(
+            session
+                .phase
+                .type_catalog
+                .nominals
+                .get(&TypeId(1))
+                .unwrap()
+                .child_types,
+            fxhashmap!("Buzz".to_string() => Symbol::Type(TypeId(2)), "Foo".into() => Symbol::Type(TypeId(3)))
+        )
+    }
+
+    #[test]
+    fn resolves_associated_types() {
+        let (_ast, session) = type_header_resolve_pass(
+            "
+            protocol Fizz {
+                associated A
+
+                func getA() -> A
+                func setA(a: A)
+            }
+            struct Person {}
+            extend Person: Fizz {
+                typealias A = Int
+            }
+            ",
+        );
+
+        assert_eq!(
+            *session
+                .phase
+                .type_catalog
+                .conformances
+                .get(&ConformanceKey {
+                    protocol_id: TypeId(1),
+                    conforming_id: TypeId(2)
+                })
+                .unwrap_or_else(|| panic!(
+                    "didn't get conformance: {:?}",
+                    session.phase.type_catalog.conformances
+                )),
+            Conformance {
+                conforming_id: TypeId(2),
+                protocol_id: TypeId(1),
+                requirements: fxhashmap!(
+                    "getA".into() => ConformanceRequirement::Unfulfilled(Symbol::InstanceMethod(InstanceMethodId(1))),
+                    "setA".into() => ConformanceRequirement::Unfulfilled(Symbol::InstanceMethod(InstanceMethodId(2)))
+                ),
+                span: Span::ANY,
+                associated_types: fxhashmap!(AssociatedTypeId(1) => Symbol::Type(TypeId(3)))
+            }
+        )
+    }
+
+    #[test]
+    fn resolves_nominal_path_annotations() {
+        let (_ast, session) = type_header_resolve_pass(
+            "
+            struct C {
+                struct B {}
+                let a: A.B
+            }
+
+            struct A {
+                struct B {}
+                let c: C.B
+            }
+            ",
+        );
+
+        // Make sure constraints are there
+        assert_eq!(
+            session.phase.resolver_constraints.len(),
+            2,
+            "{:#?}",
+            session.phase.resolver_constraints
+        );
+    }
+
+    #[test]
     #[ignore = "we should fix this"]
     fn lowers_type_application_and_checks_arity() {
         let (ast, _session) = type_header_resolve_pass_err(
@@ -692,5 +996,84 @@ pub mod tests {
         .unwrap();
 
         assert_eq!(ast.diagnostics.len(), 1);
+    }
+
+    #[test]
+    fn resolve_instance_method_emits_assoc_eq_predicates_for_param_and_return() {
+        let code = r#"
+        protocol Aged {
+            associated T
+        }
+
+        struct Wrapper<U: Aged> {
+            func use(value: U.T) -> U.T { value }
+        }
+    "#;
+
+        // headers + resolve
+        let resolved =
+            crate::types::passes::type_resolve_pass::tests::type_header_resolve_pass(code);
+        let (_ast, session) = resolved;
+
+        // Sanity: protocol + type exist
+        assert!(
+            session
+                .phase
+                .type_catalog
+                .protocols
+                .contains_key(&TypeId(1)),
+            "Aged protocol missing"
+        );
+        assert!(
+            session.phase.type_catalog.nominals.contains_key(&TypeId(2)),
+            "Wrapper type missing"
+        );
+
+        // Grab the instance method symbol for `use`
+        let method_sym = Symbol::InstanceMethod(InstanceMethodId(1));
+        let entry = session
+            .term_env
+            .lookup(&method_sym)
+            .unwrap_or_else(|| panic!("no term-env entry for instance method"));
+
+        // We expect a generalized scheme with predicates
+        let Scheme { predicates, .. } = match entry {
+            crate::types::term_environment::EnvEntry::Scheme(s) => s.clone(),
+            other => panic!("expected Scheme, got {:?}", other),
+        };
+
+        // Find all AssociatedTypeEquals predicates
+        let assoc_preds: Vec<_> = predicates
+            .into_iter()
+            .filter_map(|p| match p {
+                Predicate::AssociatedEquals {
+                    subject,
+                    protocol_id,
+                    associated_type_id,
+                    output,
+                    ..
+                } => Some((subject, protocol_id, associated_type_id, output)),
+                _ => None,
+            })
+            .collect();
+
+        // There should be *at least* two: one for the param U.T, one for the return U.T
+        assert!(
+            assoc_preds.len() >= 2,
+            "expected at least two AssociatedTypeEquals predicates; got {:?}",
+            assoc_preds
+        );
+
+        // The subject must be the method’s first generic param U (as a Ty::Param)
+        // Protocol id is Aged (TypeId(1)), associated id is T (AssociatedTypeId(1))
+        for (subject, pid, aid, _out) in assoc_preds.iter() {
+            assert!(
+                matches!(subject, crate::types::ty::Ty::Param(_)),
+                "subject should be Ty::Param for U, got {:?}",
+                subject
+            );
+            assert_eq!(*pid, TypeId(1), "protocol id should be Aged");
+            assert_eq!(*aid, AssociatedTypeId(1), "associated id should be T");
+        }
     }
 }

@@ -1,7 +1,7 @@
 use derive_visitor::{Drive, DriveMut};
 
 use crate::{
-    impl_into_node, name::Name, node_id::NodeID,
+    impl_into_node, label::Label, name::Name, node_id::NodeID,
     node_kinds::record_field::RecordFieldTypeAnnotation, parsing::span::Span,
 };
 
@@ -11,6 +11,12 @@ pub enum TypeAnnotationKind {
     Func {
         params: Vec<TypeAnnotation>,
         returns: Box<TypeAnnotation>,
+    },
+    NominalPath {
+        base: Box<TypeAnnotation>,
+        #[drive(skip)]
+        member: Label,
+        member_generics: Vec<TypeAnnotation>,
     },
     Nominal {
         #[drive(skip)]

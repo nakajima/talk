@@ -17,6 +17,7 @@ use crate::{
         match_arm::MatchArm,
         pattern::{Pattern, PatternKind, RecordFieldPatternKind},
         stmt::{Stmt, StmtKind},
+        type_annotation::{TypeAnnotation, TypeAnnotationKind},
     },
     on,
 };
@@ -220,6 +221,27 @@ impl<'a> DeclDeclarer<'a> {
             }
         );
 
+        on!(
+            &mut decl.kind,
+            DeclKind::TypeAlias(
+                TypeAnnotation {
+                    kind: TypeAnnotationKind::Nominal {
+                        name: lhs_name,
+                        generics: lhs_generics,
+                    },
+                    ..
+                },
+                ..
+            ),
+            {
+                if !lhs_generics.is_empty() {
+                    panic!("can't define a typealias with generics");
+                }
+
+                *lhs_name = self.resolver.declare_type(lhs_name);
+            }
+        );
+
         on!(&mut decl.kind, DeclKind::Extend { name, generics, .. }, {
             let Some(type_name) = self.resolver.lookup(name) else {
                 self.resolver
@@ -256,7 +278,7 @@ impl<'a> DeclDeclarer<'a> {
         );
 
         on!(&mut decl.kind, DeclKind::Associated { generic }, {
-            generic.name = self.resolver.declare_type(&generic.name);
+            generic.name = self.resolver.declare_associated_type(&generic.name);
         });
 
         on!(

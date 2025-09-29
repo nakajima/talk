@@ -374,6 +374,12 @@ pub(super) fn substitute_row(row: Row, substitutions: &FxHashMap<Ty, Ty>) -> Row
     }
 }
 
+pub(super) fn substitute_mult(ty: &[Ty], substitutions: &FxHashMap<Ty, Ty>) -> Vec<Ty> {
+    ty.iter()
+        .map(|t| substitute(t.clone(), substitutions))
+        .collect()
+}
+
 #[instrument(ret)]
 pub(super) fn substitute(ty: Ty, substitutions: &FxHashMap<Ty, Ty>) -> Ty {
     if let Some(subst) = substitutions.get(&ty) {
@@ -522,9 +528,7 @@ pub(super) fn instantiate_ty(
         return ty;
     }
 
-    let _s =
-        tracing::trace_span!("instantiate_ty ty={ty:?} subs={substitutions:?} level={level:?}")
-            .entered();
+    let _s = tracing::trace_span!("instantiate_ty").entered();
     match ty {
         Ty::Param(param) => {
             if let Some(meta) = substitutions.ty.get(&param) {

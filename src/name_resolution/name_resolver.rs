@@ -268,6 +268,24 @@ impl NameResolver {
         Name::Resolved(sym, name.name_str())
     }
 
+    pub(super) fn declare_associated_type(&mut self, name: &Name) -> Name {
+        let scope = self
+            .scopes
+            .get_mut(&self.current_scope_id.expect("no scope to declare in"))
+            .expect("scope not found");
+
+        let id = self.symbols.next_associated_type();
+        let sym = Symbol::AssociatedType(id);
+        tracing::debug!(
+            "declare global {} -> {sym:?} {:?}",
+            name.name_str(),
+            self.current_scope_id
+        );
+        scope.values.insert(name.name_str(), sym);
+
+        Name::Resolved(sym, name.name_str())
+    }
+
     pub(super) fn declare_variant(&mut self, name: &Name) -> Name {
         let scope = self
             .scopes

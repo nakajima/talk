@@ -23,6 +23,7 @@ pub enum TokenKind {
 
     Protocol,
     Associated,
+    Typealias,
 
     // More
     At,
@@ -90,6 +91,7 @@ impl Display for TokenKind {
 impl TokenKind {
     pub fn as_str(&self) -> String {
         let text = match &self {
+            TokenKind::Typealias => "typealias",
             TokenKind::LineComment(text) => &format!("// {text}"),
             TokenKind::If => "if",
             TokenKind::Associated => "associated",

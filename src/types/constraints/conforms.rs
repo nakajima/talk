@@ -1,4 +1,5 @@
 use rustc_hash::FxHashMap;
+use tracing::instrument;
 
 use crate::{
     name_resolution::symbol::TypeId,
@@ -35,9 +36,12 @@ impl Conforms {
     ) -> Result<bool, TypeError> {
         let conformance = session
             .phase
+            .type_catalog
             .conformances
-            .get_mut(&self.protocol_id)
-            .and_then(|c| c.get_mut(&self.type_id))
+            .get_mut(&ConformanceKey {
+                protocol_id: self.protocol_id,
+                conforming_id: self.type_id,
+            })
             .expect("didn't get conformance");
 
         let unfulfilled = conformance
@@ -88,16 +92,6 @@ impl Conforms {
         }
 
         if still_unfulfilled.is_empty() {
-            tracing::trace!("conformance verified");
-
-            session.phase.type_catalog.conformances.insert(
-                ConformanceKey {
-                    protocol_id: self.protocol_id,
-                    conforming_id: self.type_id,
-                },
-                conformance.clone(),
-            );
-
             Ok(true)
         } else {
             next_wants.push(Constraint::Conforms(self.clone()));
@@ -105,6 +99,7 @@ impl Conforms {
         }
     }
 
+    #[instrument(skip(self))]
     fn check_method_satisfaction(
         &self,
         requirement: &EnvEntry,
@@ -124,12 +119,12 @@ impl Conforms {
                 annotation_map: Default::default(),
                 rhs_map: Default::default(),
                 type_catalog: Default::default(),
-                conformances: Default::default(),
             },
             term_env: Default::default(),
             meta_levels,
             skolem_bounds: Default::default(),
             type_param_bounds: Default::default(),
+            types_by_node: Default::default(),
         };
 
         // Instantiate both at the same level

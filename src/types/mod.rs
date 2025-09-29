@@ -4,6 +4,7 @@ pub mod dsu;
 pub mod fields;
 pub mod kind;
 pub mod passes;
+pub mod predicate;
 pub mod row;
 pub mod scheme;
 pub mod term_environment;

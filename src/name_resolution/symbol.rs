@@ -32,6 +32,7 @@ pub enum Symbol {
     InstanceMethod(InstanceMethodId),
     StaticMethod(StaticMethodId),
     Variant(VariantId),
+    AssociatedType(AssociatedTypeId),
 }
 
 #[allow(non_upper_case_globals)]
@@ -52,6 +53,7 @@ impl_symbol_id!(Builtin, BuiltinId);
 impl_symbol_id!(Variant, VariantId);
 impl_symbol_id!(Synthesized, SynthesizedId);
 impl_symbol_id!(StaticMethod, StaticMethodId);
+impl_symbol_id!(AssociatedType, AssociatedTypeId);
 
 #[derive(Debug, Clone, Default)]
 pub struct Symbols {
@@ -66,6 +68,7 @@ pub struct Symbols {
     variants: IDGenerator,
     synthesized: IDGenerator,
     builtins: IDGenerator,
+    associated_types: IDGenerator,
 }
 
 impl Symbols {
@@ -83,6 +86,10 @@ impl Symbols {
 
     pub fn next_param(&mut self) -> ParamLocalId {
         ParamLocalId(self.params.next_id())
+    }
+
+    pub fn next_associated_type(&mut self) -> AssociatedTypeId {
+        AssociatedTypeId(self.associated_types.next_id())
     }
 
     pub fn next_pattern_bind(&mut self) -> PatternBindLocalId {

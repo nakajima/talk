@@ -2,10 +2,11 @@ use std::collections::VecDeque;
 
 use crate::{
     label::Label,
-    name_resolution::symbol::{Symbol, TypeId},
+    name_resolution::symbol::{AssociatedTypeId, Symbol, TypeId},
     span::Span,
     types::{
         constraints::{
+            associated_equals::AssociatedEquals,
             call::Call,
             conforms::Conforms,
             constraint::{Constraint, ConstraintCause},
@@ -47,6 +48,8 @@ impl Wants {
             Constraint::Member(..) => self.defer.push_back(constraint),
             Constraint::Construction(..) => self.defer.push_back(constraint),
             Constraint::Conforms(..) => self.defer.push_back(constraint),
+            Constraint::AssociatedEquals(..) => self.defer.push_back(constraint),
+            Constraint::TypeMember(..) => self.defer.push_back(constraint),
         }
     }
 
@@ -77,6 +80,29 @@ impl Wants {
             protocol_id,
             span,
         }));
+    }
+    pub fn associated_equals(
+        &mut self,
+        subject: Ty,
+        protocol_id: TypeId,
+        associated_type_id: AssociatedTypeId,
+        output: Ty,
+        cause: ConstraintCause,
+        span: Span,
+    ) {
+        tracing::debug!(
+            "constraining associated_equals {subject:?} = ({protocol_id:?}.{associated_type_id:?}) = {output:?}"
+        );
+
+        self.defer
+            .push_back(Constraint::AssociatedEquals(AssociatedEquals {
+                subject,
+                protocol_id,
+                associated_type_id,
+                output,
+                cause,
+                span,
+            }));
     }
 
     pub fn call(

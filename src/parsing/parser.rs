@@ -128,7 +128,10 @@ impl<'a> Parser<'a> {
 
     fn next_root(&mut self, kind: &TokenKind) -> Result<Node, ParserError> {
         use TokenKind::*;
-        if matches!(kind, Protocol | Struct | Enum | Let | Func | Case | Extend) {
+        if matches!(
+            kind,
+            Protocol | Struct | Enum | Let | Func | Case | Extend | Typealias
+        ) {
             self.decl(BlockContext::None, false)
         } else {
             Ok(Node::Stmt(self.stmt()?))
@@ -145,12 +148,14 @@ impl<'a> Parser<'a> {
             unreachable!()
         };
 
+        // Make sure to update next_root if adding a case here.
         use TokenKind::*;
         let node: Node = match &current.kind {
             Static => {
                 self.consume(TokenKind::Static)?;
                 self.decl(context, true)?
             }
+            Typealias => self.typealias()?.into(),
             Protocol => self
                 .nominal_decl(TokenKind::Protocol, BlockContext::Protocol)?
                 .into(),
@@ -188,6 +193,22 @@ impl<'a> Parser<'a> {
         };
 
         Ok(node)
+    }
+
+    #[instrument(skip(self))]
+    fn typealias(&mut self) -> Result<Decl, ParserError> {
+        let tok = self.push_source_location();
+        self.consume(TokenKind::Typealias)?;
+        let lhs = self.type_annotation()?;
+        self.consume(TokenKind::Equals)?;
+        let rhs = self.type_annotation()?;
+        let (id, span) = self.save_meta(tok)?;
+
+        Ok(Decl {
+            id,
+            span,
+            kind: DeclKind::TypeAlias(lhs, rhs),
+        })
     }
 
     #[instrument(skip(self))]
@@ -408,17 +429,13 @@ impl<'a> Parser<'a> {
         };
 
         if context == BlockContext::Protocol && !self.peek_is(TokenKind::LeftBrace) {
-            let Some(ret) = ret else {
-                return Err(ParserError::IncompleteFuncSignature(
-                    "return value not specified".into(),
-                ));
-            };
+            let ret = ret.map(Box::new);
 
             return Ok(FuncOrFuncSignature::FuncSignature(FuncSignature {
                 name: name.into(),
                 generics,
                 params,
-                ret: Box::new(ret),
+                ret,
             }));
         }
 
@@ -1252,12 +1269,7 @@ impl<'a> Parser<'a> {
             });
         }
 
-        // // Check for row variable: ..R
-        // if self.did_match(TokenKind::DotDot)? {
-        //     let name = self.identifier()?;
-        //     return self.add_expr(RowVariable(Name::Raw(name)), tok);
-        // }
-
+        // It's a nominal.
         let name = self.identifier()?;
         let mut generics = vec![];
         if self.did_match(TokenKind::Less)? {
@@ -1270,14 +1282,47 @@ impl<'a> Parser<'a> {
 
         let (id, span) = self.save_meta(tok)?;
 
-        Ok(TypeAnnotation {
+        let mut base = TypeAnnotation {
             id,
             span,
             kind: TypeAnnotationKind::Nominal {
                 name: name.into(),
                 generics,
             },
-        })
+        };
+
+        if !self.did_match(TokenKind::Dot)? {
+            return Ok(base);
+        }
+
+        loop {
+            let tok = self.push_source_location();
+            let member: Label = self.identifier()?.into();
+            let member_generics = if self.did_match(TokenKind::Less)? {
+                self.type_annotations(TokenKind::Greater)?
+            } else {
+                vec![]
+            };
+
+            let (id, span) = self.save_meta(tok)?;
+            base = TypeAnnotation {
+                id,
+                span,
+                kind: TypeAnnotationKind::NominalPath {
+                    base: Box::new(base),
+                    member,
+                    member_generics,
+                },
+            };
+
+            if self.did_match(TokenKind::Dot)? {
+                continue;
+            }
+
+            break;
+        }
+
+        Ok(base)
     }
 
     #[instrument(skip(self))]

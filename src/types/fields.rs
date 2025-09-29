@@ -1,4 +1,5 @@
 use indexmap::IndexMap;
+use rustc_hash::FxHashMap;
 
 use crate::{
     label::Label,
@@ -25,7 +26,7 @@ pub enum TypeFields {
         instance_methods: IndexMap<Label, Method>,
         method_requirements: IndexMap<Label, MethodRequirement>,
         static_methods: IndexMap<Label, Method>,
-        associated_types: IndexMap<Name, Associated>,
+        associated_types: FxHashMap<Name, Associated>,
     },
     Enum {
         variants: IndexMap<Label, Variant>,
@@ -57,7 +58,7 @@ pub struct MethodRequirement {
     pub id: NodeID,
     pub symbol: Symbol,
     pub params: Vec<ASTTyRepr>,
-    pub ret: ASTTyRepr,
+    pub ret: Option<ASTTyRepr>,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -75,4 +76,7 @@ pub struct Variant {
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub struct Associated {}
+pub struct Associated {
+    pub protocol_id: TypeId,
+    pub symbol: Symbol,
+}

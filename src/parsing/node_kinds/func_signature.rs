@@ -13,5 +13,5 @@ pub struct FuncSignature {
     pub name: Name,
     pub params: Vec<Parameter>,
     pub generics: Vec<GenericDecl>,
-    pub ret: Box<TypeAnnotation>,
+    pub ret: Option<Box<TypeAnnotation>>,
 }

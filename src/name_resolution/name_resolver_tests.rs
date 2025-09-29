@@ -10,8 +10,8 @@ pub mod tests {
         name_resolution::{
             name_resolver::{NameResolved, NameResolver, NameResolverError},
             symbol::{
-                BuiltinId, DeclaredLocalId, GlobalId, InstanceMethodId, ParamLocalId, PropertyId,
-                StaticMethodId, Symbol, TypeId, VariantId,
+                AssociatedTypeId, BuiltinId, DeclaredLocalId, GlobalId, InstanceMethodId,
+                ParamLocalId, PropertyId, StaticMethodId, Symbol, TypeId, VariantId,
             },
         },
         node::Node,
@@ -32,6 +32,7 @@ pub mod tests {
         span::Span,
     };
 
+    #[macro_export]
     macro_rules! param {
         ($id:expr, $name:expr) => {
             Parameter {
@@ -419,6 +420,32 @@ pub mod tests {
     }
 
     #[test]
+    fn resolves_type_alias() {
+        let resolved = resolve("typealias Intyfresh = Int ; Intyfresh");
+        assert_eq!(
+            *resolved.roots[0].as_decl(),
+            any_decl!(DeclKind::TypeAlias(
+                annotation!(TypeAnnotationKind::Nominal {
+                    name: Name::Resolved(Symbol::Type(TypeId(1)), "Intyfresh".into()),
+                    generics: vec![]
+                }),
+                annotation!(TypeAnnotationKind::Nominal {
+                    name: Name::Resolved(Symbol::Int, "Int".into()),
+                    generics: vec![]
+                })
+            ))
+        );
+
+        assert_eq!(
+            *resolved.roots[1].as_stmt(),
+            any_expr_stmt!(ExprKind::Constructor(Name::Resolved(
+                Symbol::Type(TypeId(1)),
+                "Intyfresh".into()
+            )))
+        );
+    }
+
+    #[test]
     fn resolves_struct() {
         let resolved = resolve("struct Person {}");
         assert_eq!(
@@ -758,7 +785,7 @@ pub mod tests {
                             span: Span::ANY
                         }],
                         generics: vec![],
-                        ret: Box::new(annotation!(TypeAnnotationKind::Tuple(vec![])))
+                        ret: Some(Box::new(annotation!(TypeAnnotationKind::Tuple(vec![]))))
                     }
                 )))])
             })
@@ -787,7 +814,10 @@ pub mod tests {
                     Node::Decl(any_decl!(DeclKind::Associated {
                         generic: GenericDecl {
                             id: NodeID::ANY,
-                            name: Name::Resolved(Symbol::Type(TypeId(2)), "T".into()),
+                            name: Name::Resolved(
+                                Symbol::AssociatedType(AssociatedTypeId(1)),
+                                "T".into()
+                            ),
                             generics: vec![],
                             conformances: vec![],
                             span: Span::ANY
@@ -807,10 +837,13 @@ pub mod tests {
                             span: Span::ANY
                         }],
                         generics: vec![],
-                        ret: Box::new(annotation!(TypeAnnotationKind::Nominal {
-                            name: Name::Resolved(Symbol::Type(TypeId(2)), "T".into()),
+                        ret: Some(Box::new(annotation!(TypeAnnotationKind::Nominal {
+                            name: Name::Resolved(
+                                Symbol::AssociatedType(AssociatedTypeId(1)),
+                                "T".into()
+                            ),
                             generics: vec![]
-                        }))
+                        })))
                     }))),
                 ])
             })

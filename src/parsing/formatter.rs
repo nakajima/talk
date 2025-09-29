@@ -331,11 +331,25 @@ impl<'a> Formatter<'a> {
             DeclKind::EnumVariant(name, types) => self.format_enum_variant(name, types),
             DeclKind::FuncSignature(sig) => self.format_func_signature(sig),
             DeclKind::MethodRequirement(sig) => self.format_func_signature(sig),
+            DeclKind::TypeAlias(lhs, rhs) => self.format_type_alias(lhs, rhs),
         };
 
         self.decorators
             .iter()
             .fold(doc, |acc, decorator| decorator.wrap_decl(decl, acc))
+    }
+
+    fn format_type_alias(&self, lhs: &TypeAnnotation, rhs: &TypeAnnotation) -> Doc {
+        concat_space(
+            text("type"),
+            join(
+                vec![
+                    self.format_type_annotation(lhs),
+                    self.format_type_annotation(rhs),
+                ],
+                text("="),
+            ),
+        )
     }
 
     fn format_stmt(&self, stmt: &Stmt) -> Doc {
@@ -818,6 +832,20 @@ impl<'a> Formatter<'a> {
         match &ty.kind {
             TypeAnnotationKind::SelfType(..) => text("Self"),
             TypeAnnotationKind::Record { fields } => self.format_record_type_annotation(fields),
+            TypeAnnotationKind::NominalPath {
+                base,
+                member,
+                member_generics,
+            } => join(
+                vec![
+                    self.format_type_annotation(base),
+                    self.format_nominal_type_annotation(
+                        member.to_string().clone(),
+                        member_generics,
+                    ),
+                ],
+                text("."),
+            ),
             TypeAnnotationKind::Func { params, returns } => {
                 let param_docs: Vec<_> = params
                     .iter()
@@ -833,24 +861,7 @@ impl<'a> Formatter<'a> {
                 )
             }
             TypeAnnotationKind::Nominal { name, generics } => {
-                let mut result = self.format_name(name);
-
-                if !generics.is_empty() {
-                    let generic_docs: Vec<_> = generics
-                        .iter()
-                        .map(|g| self.format_type_annotation(g))
-                        .collect();
-
-                    result = concat(
-                        result,
-                        concat(
-                            text("<"),
-                            concat(join(generic_docs, concat(text(","), text(" "))), text(">")),
-                        ),
-                    );
-                }
-
-                result
+                self.format_nominal_type_annotation(name.name_str(), generics)
             }
             TypeAnnotationKind::Tuple(types) => {
                 let type_docs: Vec<_> = types
@@ -864,6 +875,31 @@ impl<'a> Formatter<'a> {
                 )
             }
         }
+    }
+
+    fn format_nominal_type_annotation<T: Into<String>>(
+        &self,
+        name: T,
+        generics: &[TypeAnnotation],
+    ) -> Doc {
+        let mut result = text(name);
+
+        if !generics.is_empty() {
+            let generic_docs: Vec<_> = generics
+                .iter()
+                .map(|g| self.format_type_annotation(g))
+                .collect();
+
+            result = concat(
+                result,
+                concat(
+                    text("<"),
+                    concat(join(generic_docs, concat(text(","), text(" "))), text(">")),
+                ),
+            );
+        }
+
+        result
     }
 
     fn format_member(&self, receiver: &Option<Box<Expr>>, property: &Label) -> Doc {
@@ -1212,10 +1248,14 @@ impl<'a> Formatter<'a> {
             ),
         );
 
-        result = concat_space(
-            result,
-            concat_space(text("->"), self.format_type_annotation(&sig.ret)),
-        );
+        result = if let Some(ret) = &sig.ret {
+            concat_space(
+                result,
+                concat_space(text("->"), self.format_type_annotation(ret)),
+            )
+        } else {
+            empty()
+        };
 
         result
     }

@@ -13,7 +13,8 @@ use crate::{
         decl::{Decl, DeclKind},
         func::Func,
         func_signature::FuncSignature,
-        type_annotation::TypeAnnotationKind,
+        generic_decl::GenericDecl,
+        type_annotation::{TypeAnnotation, TypeAnnotationKind},
     },
     span::Span,
     types::{
@@ -39,8 +40,10 @@ pub fn arrow_n(arg: Kind, n: usize, ret: Kind) -> Kind {
 
 // Gathers up all the raw types from the AST
 #[derive(Debug, Visitor)]
-#[visitor(Decl(enter))]
+#[visitor(Decl)]
 pub struct TypeHeaderPass<'a> {
+    type_stack: Vec<TypeId>,
+    child_types: FxHashMap<TypeId, FxHashMap<String, Symbol>>,
     session: &'a mut TypeSession<Raw>,
     extensions: FxHashMap<TypeId, Vec<TypeExtension>>,
 }
@@ -48,7 +51,9 @@ pub struct TypeHeaderPass<'a> {
 impl<'a> TypeHeaderPass<'a> {
     pub fn drive(session: &'a mut TypeSession<Raw>, ast: &AST<NameResolved>) {
         let mut instance = TypeHeaderPass {
+            type_stack: Default::default(),
             session,
+            child_types: Default::default(),
             extensions: Default::default(),
         };
 
@@ -58,8 +63,15 @@ impl<'a> TypeHeaderPass<'a> {
 
         let mut extensions = std::mem::take(&mut instance.extensions);
         for (id, type_constructor) in instance.session.phase.type_constructors.iter_mut() {
-            if let Some(extensions) = extensions.remove(id) {
-                type_constructor.extensions = extensions
+            type_constructor.child_types =
+                instance.child_types.get(id).cloned().unwrap_or_default();
+
+            if let Some(mut extensions) = extensions.remove(id) {
+                type_constructor.conformances = extensions
+                    .iter_mut()
+                    .flat_map(|e| std::mem::take(&mut e.conformances))
+                    .collect();
+                type_constructor.extensions = extensions;
             }
         }
     }
@@ -67,21 +79,33 @@ impl<'a> TypeHeaderPass<'a> {
     fn enter_decl(&mut self, decl: &Decl) {
         match &decl.kind {
             DeclKind::Struct {
-                name: name @ Name::Resolved(Symbol::Type(decl_id), _),
+                name: name @ Name::Resolved(sym @ Symbol::Type(type_id), type_name),
                 generics,
                 body: Block { body, .. },
+                conformances,
                 ..
             } => {
+                if let Some(parent_id) = self.type_stack.last() {
+                    self.child_types
+                        .entry(*parent_id)
+                        .or_default()
+                        .insert(type_name.to_string(), *sym);
+                }
+
+                self.type_stack.push(*type_id);
+
                 let fields =
                     self.collect_fields(name, decl.id, decl.span, TypeDefKind::Struct, body);
                 self.session.phase.type_constructors.insert(
-                    *decl_id,
+                    *type_id,
                     TypeDef {
                         extensions: Default::default(),
                         name: name.clone(),
                         node_id: decl.id,
                         kind: arrow_n(Kind::Type, generics.len(), Kind::Type),
                         def: TypeDefKind::Struct,
+                        conformances: Self::collect_conformance_stubs(*type_id, conformances),
+                        child_types: Default::default(),
                         generics: generics
                             .iter()
                             .map(|g| (g.name.clone(), ASTTyRepr::Generic(g.clone())))
@@ -91,11 +115,20 @@ impl<'a> TypeHeaderPass<'a> {
                 );
             }
             DeclKind::Extend {
-                name: name @ Name::Resolved(Symbol::Type(type_id), _),
+                name: name @ Name::Resolved(sym @ Symbol::Type(type_id), type_name),
                 body: Block { body, .. },
                 conformances,
                 ..
             } => {
+                if let Some(parent_id) = self.type_stack.last() {
+                    self.child_types
+                        .entry(*parent_id)
+                        .or_default()
+                        .insert(type_name.to_string(), *sym);
+                }
+
+                self.type_stack.push(*type_id);
+
                 let TypeFields::Extension {
                     static_methods,
                     instance_methods: methods,
@@ -104,46 +137,44 @@ impl<'a> TypeHeaderPass<'a> {
                     unreachable!()
                 };
 
-                let protocol_ids = conformances.iter().filter_map(|c| {
-                    if let TypeAnnotationKind::Nominal {
-                        name: Name::Resolved(Symbol::Type(type_id), _),
-                        ..
-                    } = &c.kind
-                    {
-                        Some(ConformanceStub {
-                            protocol_id: *type_id,
-                            span: c.span,
-                        })
-                    } else {
-                        None
-                    }
-                });
                 self.extensions
                     .entry(*type_id)
                     .or_default()
                     .push(TypeExtension {
                         node_id: decl.id,
-                        conformances: protocol_ids.collect(),
+                        conformances: Self::collect_conformance_stubs(*type_id, conformances),
                         methods,
                         static_methods,
                     });
             }
             DeclKind::Protocol {
-                name: name @ Name::Resolved(Symbol::Type(decl_id), _),
+                name: name @ Name::Resolved(sym @ Symbol::Type(type_id), type_name),
                 generics,
+                conformances,
                 body: Block { body, .. },
                 ..
             } => {
+                if let Some(parent_id) = self.type_stack.last() {
+                    self.child_types
+                        .entry(*parent_id)
+                        .or_default()
+                        .insert(type_name.to_string(), *sym);
+                }
+
+                self.type_stack.push(*type_id);
+
                 let fields =
                     self.collect_fields(name, decl.id, decl.span, TypeDefKind::Protocol, body);
                 self.session.phase.protocols.insert(
-                    *decl_id,
+                    *type_id,
                     TypeDef {
                         extensions: Default::default(),
+                        child_types: Default::default(),
                         name: name.clone(),
                         node_id: decl.id,
                         kind: arrow_n(Kind::Type, generics.len(), Kind::Type),
                         def: TypeDefKind::Protocol,
+                        conformances: Self::collect_conformance_stubs(*type_id, conformances),
                         generics: generics
                             .iter()
                             .map(|g| (g.name.clone(), ASTTyRepr::Generic(g.clone())))
@@ -153,21 +184,33 @@ impl<'a> TypeHeaderPass<'a> {
                 );
             }
             DeclKind::Enum {
-                name: name @ Name::Resolved(Symbol::Type(decl_id), _),
+                name: name @ Name::Resolved(sym @ Symbol::Type(type_id), type_name),
                 body: Block { body, .. },
                 generics,
+                conformances,
                 ..
             } => {
+                if let Some(parent_id) = self.type_stack.last() {
+                    self.child_types
+                        .entry(*parent_id)
+                        .or_default()
+                        .insert(type_name.to_string(), *sym);
+                }
+
+                self.type_stack.push(*type_id);
+
                 let fields = self.collect_fields(name, decl.id, decl.span, TypeDefKind::Enum, body);
 
                 self.session.phase.type_constructors.insert(
-                    *decl_id,
+                    *type_id,
                     TypeDef {
                         extensions: Default::default(),
+                        child_types: Default::default(),
                         name: name.clone(),
                         node_id: decl.id,
                         kind: arrow_n(Kind::Type, generics.len(), Kind::Type),
                         def: TypeDefKind::Enum,
+                        conformances: Self::collect_conformance_stubs(*type_id, conformances),
                         generics: generics
                             .iter()
                             .map(|g| (g.name.clone(), ASTTyRepr::Generic(g.clone())))
@@ -176,13 +219,82 @@ impl<'a> TypeHeaderPass<'a> {
                     },
                 );
             }
+            DeclKind::Associated {
+                generic:
+                    GenericDecl {
+                        name: Name::Resolved(sym, name),
+                        ..
+                    },
+            } => {
+                if let Some(parent_id) = self.type_stack.last() {
+                    self.child_types
+                        .entry(*parent_id)
+                        .or_default()
+                        .insert(name.to_string(), *sym);
+                }
+            }
+
+            DeclKind::TypeAlias(
+                TypeAnnotation {
+                    kind:
+                        TypeAnnotationKind::Nominal {
+                            name: Name::Resolved(sym, type_name),
+                            ..
+                        },
+                    ..
+                },
+                _,
+            ) => {
+                if let Some(parent_id) = self.type_stack.last() {
+                    self.child_types
+                        .entry(*parent_id)
+                        .or_default()
+                        .insert(type_name.to_string(), *sym);
+                }
+            }
             _ => (),
+        }
+    }
+
+    fn exit_decl(&mut self, decl: &Decl) {
+        if matches!(
+            &decl.kind,
+            DeclKind::Struct { .. }
+                | DeclKind::Enum { .. }
+                | DeclKind::Extend { .. }
+                | DeclKind::Protocol { .. }
+        ) {
+            self.type_stack.pop();
         }
     }
 
     ///////////////////////////////////////////////////////////////////////////
     // Helpers
     ///////////////////////////////////////////////////////////////////////////
+
+    fn collect_conformance_stubs(
+        conforming_id: TypeId,
+        conformances: &[TypeAnnotation],
+    ) -> Vec<ConformanceStub> {
+        conformances
+            .iter()
+            .map(|c| {
+                let TypeAnnotationKind::Nominal {
+                    name: Name::Resolved(Symbol::Type(protocol_id), _),
+                    ..
+                } = &c.kind
+                else {
+                    unreachable!();
+                };
+
+                ConformanceStub {
+                    conforming_id,
+                    protocol_id: *protocol_id,
+                    span: c.span,
+                }
+            })
+            .collect()
+    }
 
     fn collect_fields(
         &mut self,
@@ -198,7 +310,7 @@ impl<'a> TypeHeaderPass<'a> {
         let mut static_methods: IndexMap<Label, Method> = Default::default();
         let mut initializers: IndexMap<Label, Initializer> = Default::default();
         let mut variants: IndexMap<Label, Variant> = Default::default();
-        let mut associated_types: IndexMap<Name, Associated> = Default::default();
+        let mut associated_types: FxHashMap<Name, Associated> = Default::default();
         let mut method_requirements: IndexMap<Label, MethodRequirement> = Default::default();
 
         let Name::Resolved(Symbol::Type(type_id), _) = &type_name else {
@@ -254,7 +366,13 @@ impl<'a> TypeHeaderPass<'a> {
                     );
                 }
                 DeclKind::Associated { generic } => {
-                    associated_types.insert(generic.name.clone(), Associated {});
+                    associated_types.insert(
+                        generic.name.clone(),
+                        Associated {
+                            protocol_id: *type_id,
+                            symbol: generic.name.symbol().unwrap(),
+                        },
+                    );
                 }
                 DeclKind::Method {
                     func:
@@ -341,7 +459,7 @@ impl<'a> TypeHeaderPass<'a> {
                                     }
                                 })
                                 .collect(),
-                            ret: ASTTyRepr::Annotated(*ret.clone()),
+                            ret: ret.as_ref().map(|ret| ASTTyRepr::Annotated(*ret.clone())),
                         },
                     );
                 }
@@ -432,14 +550,15 @@ pub mod tests {
     use crate::{
         annotation, assert_eq_diff,
         ast::AST,
+        fxhashmap,
         label::Label,
         name::Name,
         name_resolution::{
             name_resolver::NameResolved,
             name_resolver_tests::tests::resolve,
             symbol::{
-                BuiltinId, GlobalId, InstanceMethodId, PropertyId, Symbol, SynthesizedId, TypeId,
-                VariantId,
+                AssociatedTypeId, BuiltinId, GlobalId, InstanceMethodId, PropertyId, Symbol,
+                SynthesizedId, TypeId, VariantId,
             },
         },
         node_id::NodeID,
@@ -449,6 +568,7 @@ pub mod tests {
             fields::{Associated, Initializer, MethodRequirement, Property, TypeFields, Variant},
             kind::Kind,
             passes::type_headers_pass::TypeHeaderPass,
+            type_catalog::ConformanceStub,
             type_session::{ASTTyRepr, Raw, TypeDef, TypeDefKind, TypeExtension, TypeSession},
         },
     };
@@ -475,11 +595,13 @@ pub mod tests {
             *session.phase.type_constructors.get(&TypeId(1)).unwrap(),
             TypeDef {
                 extensions: Default::default(),
+                child_types: Default::default(),
                 name: Name::Resolved(Symbol::Type(TypeId(1)), "Person".into()),
                 kind: Kind::Type,
                 node_id: NodeID::ANY,
                 def: TypeDefKind::Struct,
                 generics: Default::default(),
+                conformances: Default::default(),
                 fields: TypeFields::Struct {
                     static_methods: Default::default(),
                     initializers: indexmap! {
@@ -521,6 +643,7 @@ pub mod tests {
         assert_eq_diff!(
             *session.phase.type_constructors.get(&TypeId(1)).unwrap(),
             TypeDef {
+                child_types: Default::default(),
                 extensions: vec![TypeExtension {
                     node_id: NodeID::ANY,
                     conformances: Default::default(),
@@ -532,6 +655,7 @@ pub mod tests {
                 node_id: NodeID::ANY,
                 def: TypeDefKind::Struct,
                 generics: Default::default(),
+                conformances: Default::default(),
                 fields: TypeFields::Struct {
                     static_methods: Default::default(),
                     initializers: indexmap! {
@@ -568,6 +692,7 @@ pub mod tests {
         assert_eq_diff!(
             *session.phase.type_constructors.get(&TypeId(1)).unwrap(),
             TypeDef {
+                child_types: Default::default(),
                 extensions: Default::default(),
                 name: Name::Resolved(Symbol::Type(TypeId(1)), "Wrapper".into()),
                 kind: Kind::Arrow {
@@ -576,6 +701,7 @@ pub mod tests {
                 },
                 node_id: NodeID::ANY,
                 def: TypeDefKind::Struct,
+                conformances: Default::default(),
                 generics: crate::indexmap!(Name::Resolved(Symbol::Type(TypeId(2)), "T".into()) => ASTTyRepr::Generic(GenericDecl {
                     id: NodeID::ANY,
                     name: Name::Resolved(Symbol::Type(TypeId(2)), "T".into()),
@@ -621,6 +747,7 @@ pub mod tests {
         assert_eq_diff!(
             *session.phase.type_constructors.get(&TypeId(1)).unwrap(),
             TypeDef {
+                child_types: Default::default(),
                 extensions: Default::default(),
                 name: Name::Resolved(Symbol::Type(TypeId(1)), "Wrapper".into()),
                 kind: Kind::Arrow {
@@ -633,6 +760,7 @@ pub mod tests {
                 },
                 node_id: NodeID::ANY,
                 def: TypeDefKind::Struct,
+                conformances: Default::default(),
                 generics: crate::indexmap!(
                   Name::Resolved(Symbol::Type(TypeId(2)), "T".into()) =>  ASTTyRepr::Generic(GenericDecl {
                         id: NodeID::ANY,
@@ -694,12 +822,14 @@ pub mod tests {
         assert_eq_diff!(
             *session.phase.type_constructors.get(&TypeId(1)).unwrap(),
             TypeDef {
+                child_types: Default::default(),
                 extensions: Default::default(),
                 name: Name::Resolved(Symbol::Type(TypeId(1)), "Fizz".into()),
                 kind: Kind::Type,
                 node_id: NodeID::ANY,
                 def: TypeDefKind::Enum,
                 generics: Default::default(),
+                conformances: Default::default(),
                 fields: TypeFields::Enum {
                     static_methods: Default::default(),
                     variants: crate::indexmap!(
@@ -737,12 +867,14 @@ pub mod tests {
         assert_eq_diff!(
             *session.phase.protocols.get(&TypeId(1)).unwrap(),
             TypeDef {
+                child_types: Default::default(),
                 extensions: Default::default(),
                 name: Name::Resolved(Symbol::Type(TypeId(1)), "Fizz".into()),
                 kind: Kind::Type,
                 node_id: NodeID::ANY,
                 def: TypeDefKind::Protocol,
                 generics: Default::default(),
+                conformances: Default::default(),
                 fields: TypeFields::Protocol {
                     instance_methods: Default::default(),
                     static_methods: Default::default(),
@@ -750,12 +882,62 @@ pub mod tests {
                         id: NodeID::ANY,
                         symbol: Symbol::InstanceMethod(InstanceMethodId(1)),
                         params: vec![ASTTyRepr::Annotated(annotation!(TypeAnnotationKind::SelfType(Name::Resolved(TypeId(1).into(), "Self".into()))))],
-                        ret: ASTTyRepr::Annotated(annotation!(TypeAnnotationKind::Nominal {
+                        ret: Some(ASTTyRepr::Annotated(annotation!(TypeAnnotationKind::Nominal {
                             name: Name::Resolved(Symbol::Int, "Int".into()),
                             generics: vec![]
-                        }))
+                        })))
                     }),
-                    associated_types: crate::indexmap!(Name::Resolved(Symbol::Type(TypeId(2)), "Buzz".into()) => Associated {})
+                    associated_types: fxhashmap!(Name::Resolved(Symbol::AssociatedType(AssociatedTypeId(1)), "Buzz".into()) => Associated {
+                        protocol_id: TypeId(1),
+                        symbol: Symbol::AssociatedType(AssociatedTypeId(1))
+                    })
+                }
+            }
+        );
+    }
+
+    #[test]
+    fn basic_conformance() {
+        let session = type_header_decl_pass(
+            "
+        protocol Fizz {}
+        struct Buzz: Fizz {}
+        ",
+        )
+        .1;
+
+        assert_eq_diff!(
+            *session.phase.type_constructors.get(&TypeId(2)).unwrap(),
+            TypeDef {
+                child_types: Default::default(),
+                extensions: Default::default(),
+                name: Name::Resolved(Symbol::Type(TypeId(2)), "Buzz".into()),
+                kind: Kind::Type,
+                node_id: NodeID::ANY,
+                def: TypeDefKind::Struct,
+                generics: Default::default(),
+                conformances: vec![ConformanceStub {
+                    conforming_id: TypeId(2),
+                    protocol_id: TypeId(1),
+                    span: Span::ANY,
+                }],
+                fields: TypeFields::Struct {
+                    initializers: indexmap! {
+                        "init".into() => Initializer {
+                            symbol: Symbol::Synthesized(SynthesizedId(1)),
+                            initializes_type_id: TypeId(2),
+                            params: vec![
+                                ASTTyRepr::SelfType(
+                                    Name::Resolved(Symbol::Type(TypeId(2)), "Buzz".into()),
+                                    NodeID::ANY,
+                                    Span::ANY
+                                ),
+                            ]
+                        }
+                    },
+                    instance_methods: Default::default(),
+                    static_methods: Default::default(),
+                    properties: Default::default()
                 }
             }
         );

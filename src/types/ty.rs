@@ -6,11 +6,17 @@ use crate::{
     types::{row::Row, scheme::ForAll},
 };
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord)]
+#[derive(PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord)]
 pub struct UnificationVarId(u32);
 impl From<u32> for UnificationVarId {
     fn from(value: u32) -> Self {
         UnificationVarId(value)
+    }
+}
+
+impl std::fmt::Debug for UnificationVarId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "meta({})", self.0)
     }
 }
 

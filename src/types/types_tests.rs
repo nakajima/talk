@@ -35,7 +35,6 @@ pub mod tests {
 
     fn ty(i: usize, ast: &AST<NameResolved>, session: &TypeSession<Inferenced>) -> Ty {
         session
-            .phase
             .types_by_node
             .get(&ast.roots[i].as_stmt().clone().as_expr().id)
             .unwrap()
@@ -59,7 +58,6 @@ pub mod tests {
         let (ast, session) = typecheck("let a = 1.23; a");
         assert_eq!(
             *session
-                .phase
                 .types_by_node
                 .get(&ast.roots[1].as_stmt().clone().as_expr().id)
                 .unwrap(),
@@ -107,7 +105,6 @@ pub mod tests {
         );
         assert_eq!(
             *session
-                .phase
                 .types_by_node
                 .get(&ast.roots[1].as_stmt().clone().as_expr().id)
                 .unwrap(),
@@ -115,7 +112,6 @@ pub mod tests {
         );
         assert_eq!(
             *session
-                .phase
                 .types_by_node
                 .get(&ast.roots[2].as_stmt().clone().as_expr().id)
                 .unwrap(),
@@ -170,8 +166,8 @@ pub mod tests {
         let call1 = ast.roots[1].as_stmt().clone().as_expr().id;
         let call2 = ast.roots[2].as_stmt().clone().as_expr().id;
 
-        assert_eq!(*session.phase.types_by_node.get(&call1).unwrap(), Ty::Int);
-        assert_eq!(*session.phase.types_by_node.get(&call2).unwrap(), Ty::Bool);
+        assert_eq!(*session.types_by_node.get(&call1).unwrap(), Ty::Int);
+        assert_eq!(*session.types_by_node.get(&call2).unwrap(), Ty::Bool);
     }
 
     #[test]
@@ -205,7 +201,6 @@ pub mod tests {
 
         assert_eq!(
             *session
-                .phase
                 .types_by_node
                 .get(&ast.roots[1].as_stmt().clone().as_expr().id)
                 .unwrap(),
@@ -226,7 +221,6 @@ pub mod tests {
         );
         assert_eq!(
             *session
-                .phase
                 .types_by_node
                 .get(&ast.roots[3].as_stmt().clone().as_expr().id)
                 .unwrap(),
@@ -234,7 +228,6 @@ pub mod tests {
         );
         assert_eq!(
             *session
-                .phase
                 .types_by_node
                 .get(&ast.roots[4].as_stmt().clone().as_expr().id)
                 .unwrap(),
@@ -253,7 +246,6 @@ pub mod tests {
         );
         assert_eq!(
             *session
-                .phase
                 .types_by_node
                 .get(&ast.roots[1].as_stmt().clone().as_expr().id)
                 .unwrap(),
@@ -261,7 +253,6 @@ pub mod tests {
         );
         assert_eq!(
             *session
-                .phase
                 .types_by_node
                 .get(&ast.roots[2].as_stmt().clone().as_expr().id)
                 .unwrap(),
@@ -283,7 +274,6 @@ pub mod tests {
 
         assert_eq!(
             *session
-                .phase
                 .types_by_node
                 .get(&ast.roots[1].as_stmt().clone().as_expr().id)
                 .unwrap(),
@@ -301,7 +291,6 @@ pub mod tests {
         );
         assert_eq!(
             *session
-                .phase
                 .types_by_node
                 .get(&ast.roots[1].as_stmt().clone().as_expr().id)
                 .unwrap(),
@@ -320,7 +309,6 @@ pub mod tests {
         );
         assert_eq!(
             *session
-                .phase
                 .types_by_node
                 .get(&ast.roots[1].as_stmt().clone().as_expr().id)
                 .unwrap(),
@@ -338,7 +326,6 @@ pub mod tests {
         );
         assert_eq!(
             *session
-                .phase
                 .types_by_node
                 .get(&ast.roots[1].as_stmt().clone().as_expr().id)
                 .unwrap(),
@@ -394,7 +381,6 @@ pub mod tests {
 
         assert_eq!(
             *session
-                .phase
                 .types_by_node
                 .get(&ast.roots[0].as_stmt().clone().as_expr().id)
                 .unwrap(),
@@ -414,7 +400,6 @@ pub mod tests {
 
         assert_eq!(
             *session
-                .phase
                 .types_by_node
                 .get(&ast.roots[0].as_stmt().clone().as_expr().id)
                 .unwrap(),
@@ -464,7 +449,6 @@ pub mod tests {
 
         assert_eq!(
             *session
-                .phase
                 .types_by_node
                 .get(&ast.roots[0].as_stmt().clone().as_expr().id)
                 .unwrap(),
@@ -634,7 +618,7 @@ pub mod tests {
         );
         let pair = ast.roots[1].as_stmt().clone().as_expr().id;
         assert_eq!(
-            *session.phase.types_by_node.get(&pair).unwrap(),
+            *session.types_by_node.get(&pair).unwrap(),
             Ty::Tuple(vec![Ty::Int, Ty::Bool])
         );
     }
@@ -650,7 +634,7 @@ pub mod tests {
         );
         let use_id = ast.roots[1].as_stmt().clone().as_expr().id;
         assert_eq!(
-            *session.phase.types_by_node.get(&use_id).unwrap(),
+            *session.types_by_node.get(&use_id).unwrap(),
             Ty::Tuple(vec![Ty::Int, Ty::Bool])
         );
     }
@@ -665,7 +649,7 @@ pub mod tests {
         );
         let pair = ast.roots[1].as_stmt().clone().as_expr().id;
         assert_eq!(
-            *session.phase.types_by_node.get(&pair).unwrap(),
+            *session.types_by_node.get(&pair).unwrap(),
             Ty::Tuple(vec![Ty::Int, Ty::Bool])
         );
     }
@@ -1458,7 +1442,7 @@ pub mod tests {
             struct Person {}
 
             extend Person: Countable {
-                func getCount() {
+                func getCount() -> Float {
                     1.123 // This is wrong
                 }
             }
@@ -1477,14 +1461,8 @@ pub mod tests {
     fn types_simple_protocol() {
         let (ast, session) = typecheck(
             "
-            protocol Countable {
-                func getCount() -> Int
-            }
-
-            struct Person {
-                let count: Int
-            }
-
+            protocol Countable { func getCount() -> Int }
+            struct Person { let count: Int }
             extend Person: Countable {
                 func getCount() {
                     self.count
@@ -1501,5 +1479,41 @@ pub mod tests {
         );
 
         assert_eq!(ty(5, &ast, &session), Ty::Int)
+    }
+
+    #[test]
+    fn types_protocol_associated_types() {
+        let (ast, session) = typecheck(
+            "
+        protocol Aged {
+            associated T
+
+            func getAge() -> T
+        }
+
+        struct Person<A>: Aged {
+            typealias T = A
+            let age: A
+
+            func getAge() -> A {
+                self.age
+            }
+        }
+
+        func getFloat<T: Aged>(aged: T) {
+            aged.getAge()
+        }
+
+        func getInt<T: Aged>(aged: T) {
+            aged.getAge()
+        }
+
+        getFloat(Person(age: 1.2))
+        getInt(Person(age: 1))
+        ",
+        );
+
+        assert_eq!(ty(4, &ast, &session), Ty::Float);
+        assert_eq!(ty(5, &ast, &session), Ty::Int);
     }
 }

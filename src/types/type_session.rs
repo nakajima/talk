@@ -7,7 +7,10 @@ use crate::{
     id_generator::IDGenerator,
     label::Label,
     name::Name,
-    name_resolution::{name_resolver::NameResolved, symbol::TypeId},
+    name_resolution::{
+        name_resolver::NameResolved,
+        symbol::{Symbol, TypeId},
+    },
     node_id::NodeID,
     node_kinds::{generic_decl::GenericDecl, type_annotation::TypeAnnotation},
     span::Span,
@@ -90,6 +93,15 @@ pub struct TypeDef {
     pub generics: IndexMap<Name, ASTTyRepr>,
     pub fields: TypeFields,
     pub extensions: Vec<TypeExtension>,
+    pub conformances: Vec<ConformanceStub>,
+    pub child_types: FxHashMap<String, Symbol>,
+}
+
+// new helper
+#[derive(Debug, Clone)]
+pub struct ProtocolBound {
+    pub protocol_id: TypeId,
+    pub args: Vec<Ty>, // concrete types the protocol is instantiated with, e.g. [Ty::Float]
 }
 
 #[derive(Debug)]
@@ -101,7 +113,8 @@ pub struct TypeSession<Phase: TypingPhase = Raw> {
     pub meta_levels: FxHashMap<Meta, Level>,
     pub skolem_map: FxHashMap<Ty, Ty>,
     pub skolem_bounds: FxHashMap<SkolemId, Vec<TypeId>>,
-    pub type_param_bounds: FxHashMap<TypeParamId, Vec<TypeId>>,
+    pub type_param_bounds: FxHashMap<TypeParamId, Vec<ProtocolBound>>,
+    pub types_by_node: FxHashMap<NodeID, Ty>,
 }
 
 impl Default for TypeSession<Raw> {
@@ -126,6 +139,7 @@ impl Default for TypeSession<Raw> {
             term_env,
             type_param_bounds: Default::default(),
             skolem_bounds: Default::default(),
+            types_by_node: Default::default(),
         }
     }
 }
@@ -330,6 +344,7 @@ impl<Phase: TypingPhase> TypeSession<Phase> {
             skolem_map: self.skolem_map,
             skolem_bounds: self.skolem_bounds,
             type_param_bounds: self.type_param_bounds,
+            types_by_node: self.types_by_node,
         }
     }
 
@@ -381,6 +396,17 @@ fn collect_metas_in_constraint(constraint: &Constraint, out: &mut FxHashSet<Ty>)
         }
         Constraint::Conforms(_) => {
             // No direct metas to generalize here.
+        }
+        Constraint::AssociatedEquals(associated_equals) => {
+            collect_meta(&associated_equals.output, out);
+            collect_meta(&associated_equals.subject, out);
+        }
+        Constraint::TypeMember(c) => {
+            collect_meta(&c.base, out);
+            collect_meta(&c.result, out);
+            for ty in &c.generics {
+                collect_meta(ty, out);
+            }
         }
     }
 }

@@ -1954,15 +1954,77 @@ pub mod tests {
                         name: "me".into(),
                         params: vec![],
                         generics: vec![],
-                        ret: annotation!(TypeAnnotationKind::Nominal {
-                            name: "Person".into(),
-                            generics: vec![]
-                        })
-                        .into()
+                        ret: Some(
+                            annotation!(TypeAnnotationKind::Nominal {
+                                name: "Person".into(),
+                                generics: vec![]
+                            })
+                            .into()
+                        )
                     }))
                     .into()
                 ])
             })
+        );
+    }
+
+    #[test]
+    fn parses_type_alias() {
+        let parsed = parse(
+            "
+        typealias Foo = Bar<Int>
+        ",
+        );
+
+        assert_eq!(
+            *parsed.roots[0].as_decl(),
+            any_decl!(DeclKind::TypeAlias(
+                annotation!(TypeAnnotationKind::Nominal {
+                    name: "Foo".into(),
+                    generics: vec![]
+                }),
+                annotation!(TypeAnnotationKind::Nominal {
+                    name: "Bar".into(),
+                    generics: vec![annotation!(TypeAnnotationKind::Nominal {
+                        name: "Int".into(),
+                        generics: vec![]
+                    })]
+                })
+            ))
+        );
+    }
+
+    #[test]
+    fn parses_nested_types() {
+        let parsed = parse(
+            "
+        typealias Foo = Fizz<T>.Buzz<U>
+        ",
+        );
+
+        assert_eq!(
+            *parsed.roots[0].as_decl(),
+            any_decl!(DeclKind::TypeAlias(
+                annotation!(TypeAnnotationKind::Nominal {
+                    name: "Foo".into(),
+                    generics: vec![]
+                }),
+                annotation!(TypeAnnotationKind::NominalPath {
+                    base: annotation!(TypeAnnotationKind::Nominal {
+                        name: "Fizz".into(),
+                        generics: vec![annotation!(TypeAnnotationKind::Nominal {
+                            name: "T".into(),
+                            generics: vec![]
+                        })]
+                    })
+                    .into(),
+                    member: "Buzz".into(),
+                    member_generics: vec![annotation!(TypeAnnotationKind::Nominal {
+                        name: "U".into(),
+                        generics: vec![]
+                    })]
+                })
+            ))
         );
     }
 

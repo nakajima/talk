@@ -1,4 +1,4 @@
-use crate::types::type_catalog::TypeCatalog;
+use crate::types::type_catalog::{ConformanceKey, TypeCatalog};
 use crate::types::wants::Wants;
 use crate::{
     ast::{AST, ASTPhase},
@@ -39,9 +39,10 @@ use petgraph::algo::kosaraju_scc;
 use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::instrument;
 
+#[macro_export]
 macro_rules! guard_found_ty {
     ($self: expr, $id: expr) => {
-        if let Some(ty) = $self.types_by_node.get(&$id) {
+        if let Some(ty) = $self.session.types_by_node.get(&$id) {
             return ty.clone();
         }
     };
@@ -49,7 +50,6 @@ macro_rules! guard_found_ty {
 
 #[derive(Debug, PartialEq)]
 pub struct Inferenced {
-    pub types_by_node: FxHashMap<NodeID, Ty>,
     pub type_catalog: TypeCatalog,
 }
 
@@ -86,7 +86,6 @@ pub struct InferenceSolution {
 #[derive(Debug)]
 pub struct InferencePass<'a> {
     ast: &'a mut AST<NameResolved>,
-    types_by_node: FxHashMap<NodeID, Ty>,
     snapshots: Vec<TypeSnapshot>,
 
     pub(crate) session: TypeSession<SCCResolved>,
@@ -100,7 +99,6 @@ impl<'a> InferencePass<'a> {
         let groups = kosaraju_scc(&session.phase.graph);
         let mut pass = InferencePass {
             ast,
-            types_by_node: Default::default(),
             session,
             snapshots: Default::default(),
         };
@@ -149,7 +147,7 @@ impl<'a> InferencePass<'a> {
 
             let mut wants = Wants::default();
             let ty = pass.infer_node(root, Level(1), &mut wants);
-            pass.types_by_node.insert(root.node_id(), ty);
+            pass.session.types_by_node.insert(root.node_id(), ty);
             let (mut subs, unsolved) = pass.solve(Level(1), wants);
             last_unsolved = unsolved;
             pass.apply_to_self(&mut subs);
@@ -178,10 +176,7 @@ impl<'a> InferencePass<'a> {
         }
 
         // Move along, move along
-        pass.session.advance(Inferenced {
-            types_by_node: pass.types_by_node,
-            type_catalog,
-        })
+        pass.session.advance(Inferenced { type_catalog })
     }
 
     #[instrument(skip(self))]
@@ -206,7 +201,9 @@ impl<'a> InferencePass<'a> {
 
             let rhs_expr = self.ast.find(rhs_expr_id).clone().unwrap();
             let inferred = self.infer_node(&rhs_expr, inner_level, &mut wants);
-            self.types_by_node.insert(rhs_expr_id, inferred.clone());
+            self.session
+                .types_by_node
+                .insert(rhs_expr_id, inferred.clone());
 
             let type_var = match self.session.term_env.lookup(&symbol).cloned() {
                 Some(EnvEntry::Mono(t)) => t.clone(),
@@ -284,14 +281,14 @@ impl<'a> InferencePass<'a> {
             _ => unreachable!(),
         };
 
-        self.types_by_node.insert(annotation.id, ty.clone());
+        self.session.types_by_node.insert(annotation.id, ty.clone());
 
         ty
     }
 
     #[instrument(skip(self), level = tracing::Level::TRACE)]
     fn apply_to_self(&mut self, substitutions: &mut UnificationSubstitutions) {
-        for (_, ty) in self.types_by_node.iter_mut() {
+        for (_, ty) in self.session.types_by_node.iter_mut() {
             if matches!(ty, Ty::Primitive(_)) {
                 continue;
             }
@@ -346,6 +343,18 @@ impl<'a> InferencePass<'a> {
                         &mut next_wants,
                         &mut substitutions,
                     ),
+                    Constraint::AssociatedEquals(ref associated_equals) => associated_equals.solve(
+                        &mut self.session,
+                        level,
+                        &mut next_wants,
+                        &mut substitutions,
+                    ),
+                    Constraint::TypeMember(ref c) => c.solve(
+                        &mut self.session,
+                        level,
+                        &mut next_wants,
+                        &mut substitutions,
+                    ),
                 };
 
                 match solution {
@@ -387,7 +396,7 @@ impl<'a> InferencePass<'a> {
                 generation: self.snapshots.len() + 1,
                 ast: self.ast.clone(),
                 substitutions: substitutions.clone(),
-                types_by_node: self.types_by_node.clone(),
+                types_by_node: self.session.types_by_node.clone(),
             };
 
             tracing::trace!("{snapshot:?}");
@@ -401,7 +410,7 @@ impl<'a> InferencePass<'a> {
     fn annotate_uses_after_inference(&mut self) {
         let mut visitor = AnnotateUsesAfterInferenceVisitor {
             term_env: &mut self.session.term_env,
-            types_by_node: &mut self.types_by_node,
+            types_by_node: &mut self.session.types_by_node,
         };
 
         for root in &self.ast.roots {
@@ -503,7 +512,18 @@ impl<'a> InferencePass<'a> {
                     return Ty::Void;
                 };
 
-                for conformance in struct_type.extensions.iter().flat_map(|e| &e.conformances) {
+                for stub in &struct_type.conformances {
+                    let conformance = self
+                        .session
+                        .phase
+                        .type_catalog
+                        .conformances
+                        .get(&ConformanceKey {
+                            protocol_id: stub.protocol_id,
+                            conforming_id: stub.conforming_id,
+                        })
+                        .unwrap();
+
                     wants.conforms(
                         struct_type.type_id,
                         conformance.protocol_id,
@@ -521,7 +541,7 @@ impl<'a> InferencePass<'a> {
             }
         };
 
-        self.types_by_node.insert(decl.id, ty.clone());
+        self.session.types_by_node.insert(decl.id, ty.clone());
 
         ty
     }
@@ -708,7 +728,7 @@ impl<'a> InferencePass<'a> {
             }
         }
 
-        self.types_by_node.insert(block.id, last_ty.clone());
+        self.session.types_by_node.insert(block.id, last_ty.clone());
 
         last_ty
     }
@@ -805,7 +825,7 @@ impl<'a> InferencePass<'a> {
         };
 
         // // record the type for this expression node
-        self.types_by_node.insert(expr.id, ty.clone());
+        self.session.types_by_node.insert(expr.id, ty.clone());
         ty
     }
 
@@ -974,27 +994,6 @@ impl<'a> InferencePass<'a> {
                 .skolem_map
                 .insert(Ty::Rigid(skolem_id), Ty::Param(param_id));
 
-            for conformance in generic.conformances.iter() {
-                let TypeAnnotationKind::Nominal {
-                    name: Name::Resolved(Symbol::Type(id), _),
-                    ..
-                } = &conformance.kind
-                else {
-                    unreachable!();
-                };
-
-                self.session
-                    .skolem_bounds
-                    .entry(skolem_id)
-                    .or_default()
-                    .push(*id);
-                self.session
-                    .type_param_bounds
-                    .entry(param_id)
-                    .or_default()
-                    .push(*id);
-            }
-
             self.session.term_env.insert_mono(
                 generic.name.symbol().expect("did not get symbol"),
                 Ty::Rigid(skolem_id),
@@ -1046,7 +1045,7 @@ impl<'a> InferencePass<'a> {
         };
 
         let ty = substitute(func_ty, &self.session.skolem_map);
-        self.types_by_node.insert(func.id, ty.clone());
+        self.session.types_by_node.insert(func.id, ty.clone());
         ty
     }
 
@@ -1089,7 +1088,7 @@ impl<'a> InferencePass<'a> {
             }
         };
 
-        self.types_by_node.insert(stmt.id, ty.clone());
+        self.session.types_by_node.insert(stmt.id, ty.clone());
         ty
     }
 

@@ -1,26 +1,20 @@
 use rustc_hash::FxHashMap;
 
 use crate::{
-    label::Label,
     node_id::NodeID,
     span::Span,
     types::{
-        constraints::{
-            call::Call,
-            constraint::{Constraint, ConstraintCause},
-            has_field::HasField,
-            member::Member,
-        },
+        constraints::constraint::ConstraintCause,
         passes::{
             dependencies_pass::{ConformanceRequirement, SCCResolved},
             inference_pass::Meta,
         },
+        predicate::Predicate,
         row::{Row, RowParamId},
         term_environment::EnvEntry,
         ty::{Level, Ty, TypeParamId},
         type_operations::{
-            InstantiationSubstitutions, UnificationSubstitutions, instantiate_row, instantiate_ty,
-            substitute,
+            InstantiationSubstitutions, UnificationSubstitutions, instantiate_ty, substitute,
         },
         type_session::{TypeSession, TypingPhase},
         wants::Wants,
@@ -31,72 +25,6 @@ use crate::{
 pub enum ForAll {
     Ty(TypeParamId),
     Row(RowParamId),
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum Predicate {
-    HasField {
-        row: RowParamId,
-        label: Label,
-        ty: Ty,
-    },
-    Member {
-        receiver: Ty,
-        label: Label,
-        ty: Ty,
-    },
-    Call {
-        callee: Ty,
-        args: Vec<Ty>,
-        returns: Ty,
-        receiver: Option<Ty>,
-    },
-}
-
-impl Predicate {
-    pub fn instantiate(
-        &self,
-        substitutions: &InstantiationSubstitutions,
-        span: Span,
-        level: Level,
-    ) -> Constraint {
-        match self.clone() {
-            Self::HasField { row, label, ty } => Constraint::HasField(HasField {
-                row: instantiate_row(Row::Param(row), substitutions, level),
-                label,
-                ty: instantiate_ty(ty, substitutions, level),
-                cause: ConstraintCause::Internal,
-                span,
-            }),
-            Self::Member {
-                receiver,
-                label,
-                ty,
-            } => Constraint::Member(Member {
-                receiver: instantiate_ty(receiver, substitutions, level),
-                label,
-                ty: instantiate_ty(ty, substitutions, level),
-                cause: ConstraintCause::Internal,
-                span,
-            }),
-            Self::Call {
-                callee,
-                args,
-                returns,
-                receiver,
-            } => Constraint::Call(Call {
-                callee: instantiate_ty(callee, substitutions, level),
-                args: args
-                    .iter()
-                    .map(|f| instantiate_ty(f.clone(), substitutions, level))
-                    .collect(),
-                returns: instantiate_ty(returns, substitutions, level),
-                receiver: receiver.map(|r| instantiate_ty(r.clone(), substitutions, level)),
-                span,
-                cause: ConstraintCause::Internal,
-            }),
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -145,7 +73,7 @@ impl Scheme {
                                 .phase
                                 .type_catalog
                                 .protocols
-                                .get(&bound)
+                                .get(&bound.protocol_id)
                                 .cloned()
                                 .expect("didn't get protocol bound");
 
