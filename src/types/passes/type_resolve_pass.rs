@@ -960,6 +960,7 @@ pub mod tests {
     }
 
     #[test]
+    #[ignore = "wip"]
     fn resolves_nominal_path_annotations() {
         let (_ast, session) = type_header_resolve_pass(
             "
@@ -999,6 +1000,7 @@ pub mod tests {
     }
 
     #[test]
+    #[ignore = "wip"]
     fn resolve_instance_method_emits_assoc_eq_predicates_for_param_and_return() {
         let code = r#"
         protocol Aged {

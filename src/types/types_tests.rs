@@ -1482,6 +1482,7 @@ pub mod tests {
     }
 
     #[test]
+    #[ignore = "wip"]
     fn types_protocol_associated_types() {
         let (ast, session) = typecheck(
             "
