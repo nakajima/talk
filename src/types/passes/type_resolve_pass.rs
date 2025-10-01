@@ -11,7 +11,6 @@ use crate::{
         name_resolver::NameResolved,
         symbol::{Symbol, TypeId},
     },
-    node_id::NodeID,
     node_kinds::type_annotation::{TypeAnnotation, TypeAnnotationKind},
     span::Span,
     types::{
@@ -58,7 +57,6 @@ pub struct TypeResolvePass<'a> {
     resolver_constraints: Vec<Constraint>,
     self_symbols: Vec<Symbol>,
     self_tys: Vec<Ty>,
-    types_by_node: FxHashMap<NodeID, Ty>,
     _ast: &'a mut AST<NameResolved>,
 }
 
@@ -75,7 +73,6 @@ impl<'a> TypeResolvePass<'a> {
             conformance_keys: Default::default(),
             self_symbols: Default::default(),
             self_tys: Default::default(),
-            types_by_node: Default::default(),
             _ast: ast,
         };
 
@@ -614,7 +611,11 @@ impl<'a> TypeResolvePass<'a> {
                     cause: ConstraintCause::Internal,
                     span: annotation.span,
                 });
-                tracing::debug!("pushing constraint {constraint:?}");
+                tracing::debug!(
+                    "pushing constraint {:?} {:?} {constraint:?}",
+                    annotation.id,
+                    base
+                );
                 self.resolver_constraints.push(constraint);
                 result
             }
@@ -647,7 +648,7 @@ impl<'a> TypeResolvePass<'a> {
             _ => unreachable!("unhandled type annotation: {annotation:?}"),
         };
 
-        self.types_by_node.insert(annotation.id, ty.clone());
+        self.session.types_by_node.insert(annotation.id, ty.clone());
 
         ty
     }
@@ -1003,7 +1004,6 @@ pub mod tests {
     }
 
     #[test]
-    #[ignore = "wip"]
     fn resolves_nominal_path_annotations() {
         let (_ast, session) = type_header_resolve_pass(
             "
