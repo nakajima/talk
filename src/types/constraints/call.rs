@@ -85,7 +85,7 @@ impl Call {
                     &init_ty,
                     &curry(args, self.returns.clone()),
                     substitutions,
-                    &mut session.vars,
+                    session,
                 )
             }
             Ty::Func(..) => {
@@ -94,14 +94,14 @@ impl Call {
                         &self.callee,
                         &Ty::Func(Ty::Void.into(), self.returns.clone().into()),
                         substitutions,
-                        &mut session.vars,
+                        session,
                     )
                 } else {
                     unify(
                         &self.callee,
                         &curry(args, self.returns.clone()),
                         substitutions,
-                        &mut session.vars,
+                        session,
                     )
                 }
             }

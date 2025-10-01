@@ -35,7 +35,7 @@ impl Member {
         next_wants: &mut Wants,
         substitutions: &mut UnificationSubstitutions,
     ) -> Result<bool, TypeError> {
-        let receiver = self.receiver.clone();
+        let mut receiver = self.receiver.clone();
         let ty = self.ty.clone();
 
         if matches!(
@@ -45,6 +45,14 @@ impl Member {
             // If we don't know what the receiver is yet, we can't do much
             next_wants.push(Constraint::Member(self.clone()));
             return Ok(false);
+        }
+
+        if let Ty::TypeConstructor(type_id) = receiver {
+            receiver = Ty::Nominal {
+                id: type_id,
+                type_args: vec![],
+                row: Box::new(session.new_row_meta_var(level)),
+            };
         }
 
         if let Ty::Nominal { id: type_id, .. } | Ty::Constructor { type_id, .. } = &receiver
@@ -62,8 +70,8 @@ impl Member {
                         self.span,
                     );
                     if let Ty::Func(first, box _rest) = scheme_ty.clone() {
-                        unify(&receiver, &first, substitutions, &mut session.vars)?;
-                        unify(&ty, &scheme_ty, substitutions, &mut session.vars)
+                        unify(&receiver, &first, substitutions, session)?;
+                        unify(&ty, &scheme_ty, substitutions, session)
                     } else {
                         unreachable!("instance method must be a function")
                     }
@@ -77,7 +85,7 @@ impl Member {
                         self.span,
                     );
 
-                    unify(&ty, &scheme_ty, substitutions, &mut session.vars)
+                    unify(&ty, &scheme_ty, substitutions, session)
                 }
                 Symbol::Property(..) => {
                     tracing::trace!("got a property (row lookup)");
@@ -115,13 +123,13 @@ impl Member {
 
                     if let Ty::Func(param, rest) = payload_ty {
                         // It's an instance method on the enum. Strip `self` like struct methods.
-                        unify(&receiver, &param, substitutions, &mut session.vars)?;
+                        unify(&receiver, &param, substitutions, session)?;
                         let applied = if !matches!(*rest, Ty::Func(..)) {
                             Ty::Func(Box::new(Ty::Void), rest)
                         } else {
                             *rest
                         };
-                        return unify(&ty, &applied, substitutions, &mut session.vars);
+                        return unify(&ty, &applied, substitutions, session);
                     }
 
                     let mut row = Row::Empty(TypeDefKind::Enum);
@@ -146,6 +154,7 @@ impl Member {
                     let result_enum = Ty::Nominal {
                         id: *type_id,
                         row: Box::new(row),
+                        type_args: vec![],
                     };
 
                     // 3) Build the constructor’s type from payload → result_enum
@@ -159,7 +168,7 @@ impl Member {
                         other => Ty::Func(Box::new(other.clone()), Box::new(result_enum.clone())),
                     };
 
-                    unify(&ty, &ctor_ty, substitutions, &mut session.vars)
+                    unify(&ty, &ctor_ty, substitutions, session)
                 }
                 _ => {
                     let (Ty::Record(row) | Ty::Nominal { row, .. }) = receiver else {

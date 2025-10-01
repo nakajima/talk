@@ -85,6 +85,11 @@ impl<'a> TypeResolvePass<'a> {
     // Go through all headers and gather up properties/methods/variants/etc. Don't perform
     // any generalization until the very end.
     fn solve(mut self) -> TypeSession<HeadersResolved> {
+        for (id, ty_repr) in std::mem::take(&mut self.session.phase.globals) {
+            let ty = self.infer_ast_ty_repr(&ty_repr);
+            self.session.types_by_node.insert(id, ty);
+        }
+
         let mut row_vars: Vec<Row> = (0..self.session.phase.type_constructors.len())
             .map(|_| self.session.new_row_meta_var(Level(1)))
             .collect();
@@ -96,6 +101,7 @@ impl<'a> TypeResolvePass<'a> {
                     Ty::Nominal {
                         id: *decl_id,
                         row: Box::new(row_vars.pop().unwrap()),
+                        type_args: vec![],
                     },
                 ),
                 TypeDefKind::Enum => self.session.term_env.insert_mono(
@@ -103,6 +109,7 @@ impl<'a> TypeResolvePass<'a> {
                     Ty::Nominal {
                         id: *decl_id,
                         row: Box::new(row_vars.pop().unwrap()),
+                        type_args: vec![],
                     },
                 ),
                 _ => (),
@@ -164,20 +171,10 @@ impl<'a> TypeResolvePass<'a> {
             );
         }
 
-        TypeSession::<HeadersResolved> {
-            vars: self.session.vars,
-            synthsized_ids: self.session.synthsized_ids,
-            phase: HeadersResolved {
-                resolver_constraints: self.resolver_constraints,
-                type_catalog: self.type_catalog,
-            },
-            term_env: self.session.term_env,
-            meta_levels: self.session.meta_levels,
-            skolem_map: self.session.skolem_map,
-            type_param_bounds: self.session.type_param_bounds,
-            skolem_bounds: self.session.skolem_bounds,
-            types_by_node: self.types_by_node,
-        }
+        self.session.advance(HeadersResolved {
+            resolver_constraints: self.resolver_constraints,
+            type_catalog: self.type_catalog,
+        })
     }
 
     fn resolve_form(&mut self, type_def: &TypeDef) -> NominalForm {
@@ -217,7 +214,7 @@ impl<'a> TypeResolvePass<'a> {
     }
 
     fn resolve_protocol(&mut self, type_def: &TypeDef) -> Result<Protocol, TypeError> {
-        let ty = Ty::Param(self.session.vars.type_params.next_id());
+        let ty = self.session.new_type_param();
         self.self_symbols.push(type_def.name.symbol().unwrap());
         self.self_tys.push(ty);
 
@@ -481,6 +478,7 @@ impl<'a> TypeResolvePass<'a> {
             let ret = Ty::Nominal {
                 id: *type_id,
                 row: Box::new(self.session.new_row_meta_var(Level(1))),
+                type_args: vec![],
             };
 
             let ty = curry(params, ret);
@@ -557,13 +555,47 @@ impl<'a> TypeResolvePass<'a> {
                 ..
             } => resolve_builtin_type(sym),
             TypeAnnotationKind::Nominal {
-                name: Name::Resolved(sym @ Symbol::Type(..), _),
-                ..
-            } => self
-                .generics
-                .get(sym)
-                .cloned()
-                .unwrap_or_else(|| self.session.new_ty_meta_var(Level(1))),
+                name: Name::Resolved(sym @ Symbol::TypeParameter(..), ..),
+                generics,
+            } => {
+                let mut base = self.generics.get(sym).cloned().unwrap_or_else(|| {
+                    let ty = self.session.new_type_param();
+                    self.generics.insert(*sym, ty.clone());
+                    ty
+                });
+
+                for g in generics {
+                    base = Ty::TypeApplication(base.into(), self.infer_type_annotation(g).into());
+                }
+
+                base
+            }
+            TypeAnnotationKind::Nominal {
+                name: Name::Resolved(sym @ Symbol::Type(type_id), ..),
+                generics,
+            } => {
+                // Check if this is a generic parameter (from type defs or functions)
+                let mut base = if let Some(generic) = self.generics.get(sym).cloned() {
+                    // Type definition generic (e.g., struct Foo<T>)
+                    generic
+                } else if let Some(entry) = self.session.term_env.lookup(sym) {
+                    // Function generic (e.g., func foo<T>)
+                    match entry {
+                        EnvEntry::Mono(ty) => ty.clone(),
+                        EnvEntry::Scheme(s) => s.ty.clone(),
+                    }
+                } else {
+                    // It's a type constructor
+                    Ty::TypeConstructor(*type_id)
+                };
+
+                // Apply generic arguments if any
+                for g in generics {
+                    base = Ty::TypeApplication(base.into(), self.infer_type_annotation(g).into());
+                }
+
+                base
+            }
             TypeAnnotationKind::NominalPath {
                 box base,
                 member: Label::Named(member_name),
@@ -622,17 +654,28 @@ impl<'a> TypeResolvePass<'a> {
 
     pub(crate) fn infer_ast_ty_repr(&mut self, ty_repr: &ASTTyRepr) -> Ty {
         match &ty_repr {
-            ASTTyRepr::Annotated(annotation) => self.infer_type_annotation(annotation),
+            ASTTyRepr::Annotated(annotation) => {
+                guard_found_ty!(self, annotation.id);
+                self.infer_type_annotation(annotation)
+            }
             ASTTyRepr::SelfType(..) => self.self_tys.last().cloned().unwrap(),
             ASTTyRepr::Hole(id, ..) => Ty::Hole(*id),
             ASTTyRepr::Generic(decl) => {
-                let ty = Ty::Param(self.session.vars.type_params.next_id());
+                guard_found_ty!(self, decl.id);
+
+                let ty = self.session.new_type_param();
+
+                self.generics
+                    .insert(decl.name.symbol().unwrap(), ty.clone());
+
                 self.session.term_env.promote(
                     decl.name
                         .symbol()
                         .expect("didn't resolve name of generic param"),
                     EnvEntry::Mono(ty.clone()),
                 );
+
+                self.session.types_by_node.insert(decl.id, ty.clone());
                 ty
             }
         }
@@ -844,7 +887,7 @@ pub mod tests {
                 .phase
                 .type_catalog
                 .nominals
-                .get(&TypeId(5))
+                .get(&TypeId(3))
                 .unwrap()
                 .form,
             NominalForm::Struct {

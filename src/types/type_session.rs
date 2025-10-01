@@ -70,6 +70,7 @@ pub enum TypeDefKind {
 pub struct Raw {
     pub type_constructors: FxHashMap<TypeId, TypeDef>,
     pub protocols: FxHashMap<TypeId, TypeDef>,
+    pub globals: FxHashMap<NodeID, ASTTyRepr>,
 }
 
 impl TypingPhase for Raw {
@@ -106,7 +107,7 @@ pub struct ProtocolBound {
 
 #[derive(Debug)]
 pub struct TypeSession<Phase: TypingPhase = Raw> {
-    pub vars: Vars,
+    pub(super) vars: Vars,
     pub synthsized_ids: IDGenerator,
     pub phase: Phase,
     pub term_env: TermEnv,
@@ -133,6 +134,7 @@ impl Default for TypeSession<Raw> {
             phase: Raw {
                 type_constructors: Default::default(),
                 protocols: Default::default(),
+                globals: Default::default(),
             },
             skolem_map: Default::default(),
             meta_levels: Default::default(),
@@ -334,6 +336,86 @@ impl<Phase: TypingPhase> TypeSession<Phase> {
         EnvEntry::Scheme(Scheme::new(foralls, predicates, ty))
     }
 
+    // Handle converting Ty::TypeConstructor/Ty::TypeApplication to Ty::Nominal
+    pub(super) fn normalize_nominals(&mut self, ty: &Ty, level: Level) -> Ty {
+        let normalized = match ty.clone() {
+            Ty::TypeConstructor(type_id) => Ty::Nominal {
+                id: type_id,
+                type_args: vec![],
+                row: self.new_row_meta_var(level).into(),
+            },
+            Ty::TypeApplication(box base, box arg) => {
+                let mut args = uncurry_type_application(base);
+                args.push(arg);
+
+                let Ty::TypeConstructor(type_id) = args.remove(0) else {
+                    panic!("didn't get type constructor as base");
+                };
+
+                Ty::Nominal {
+                    id: type_id,
+                    type_args: args,
+                    row: self.new_row_meta_var(level).into(),
+                }
+            }
+            Ty::Constructor {
+                type_id,
+                params,
+                ret,
+            } => Ty::Constructor {
+                type_id,
+                params: params
+                    .into_iter()
+                    .map(|p| self.normalize_nominals(&p, level))
+                    .collect(),
+                ret: self.normalize_nominals(&ret, level).into(),
+            },
+            Ty::Func(box ty, box ty1) => Ty::Func(
+                self.normalize_nominals(&ty, level).into(),
+                self.normalize_nominals(&ty1, level).into(),
+            ),
+            Ty::Tuple(items) => Ty::Tuple(
+                items
+                    .into_iter()
+                    .map(|i| self.normalize_nominals(&i, level))
+                    .collect(),
+            ),
+            Ty::Record(row) => Ty::Record(self.normalize_nominals_row(&row, level).into()),
+            Ty::Nominal { id, type_args, row } => Ty::Nominal {
+                id,
+                type_args: type_args
+                    .into_iter()
+                    .map(|t| self.normalize_nominals(&t, level))
+                    .collect(),
+                row: self.normalize_nominals_row(&row, level).into(),
+            },
+            ty @ (Ty::Hole(..)
+            | Ty::Primitive(..)
+            | Ty::Param(..)
+            | Ty::Rigid(..)
+            | Ty::UnificationVar { .. }) => ty,
+        };
+
+        #[cfg(debug_assertions)]
+        if normalized != *ty {
+            tracing::trace!("normalize_nominal: {ty:?} -> {normalized:?}");
+        }
+
+        normalized
+    }
+
+    pub(super) fn normalize_nominals_row(&mut self, row: &Row, level: Level) -> Row {
+        if let Row::Extend { box row, label, ty } = row.clone() {
+            return Row::Extend {
+                row: self.normalize_nominals_row(&row, level).into(),
+                label,
+                ty: self.normalize_nominals(&ty, level),
+            };
+        }
+
+        row.clone()
+    }
+
     pub fn advance(self, phase: Phase::Next) -> TypeSession<Phase::Next> {
         TypeSession::<Phase::Next> {
             phase,
@@ -346,6 +428,18 @@ impl<Phase: TypingPhase> TypeSession<Phase> {
             type_param_bounds: self.type_param_bounds,
             types_by_node: self.types_by_node,
         }
+    }
+
+    pub(crate) fn new_type_param(&mut self) -> Ty {
+        let id = self.vars.type_params.next_id();
+        tracing::trace!("Fresh type param {id:?}");
+        Ty::Param(id)
+    }
+
+    pub(crate) fn new_skolem(&mut self) -> Ty {
+        let id = self.vars.skolems.next_id();
+        tracing::trace!("Fresh skolem {id:?}");
+        Ty::Rigid(id)
     }
 
     pub(crate) fn new_ty_meta_var(&mut self, level: Level) -> Ty {
@@ -409,4 +503,17 @@ fn collect_metas_in_constraint(constraint: &Constraint, out: &mut FxHashSet<Ty>)
             }
         }
     }
+}
+
+pub fn uncurry_type_application(ty: Ty) -> Vec<Ty> {
+    let mut result = vec![];
+    match ty {
+        Ty::TypeApplication(box base, box arg) => {
+            result.extend(uncurry_type_application(base));
+            result.extend(uncurry_type_application(arg))
+        }
+        Ty::TypeConstructor(..) => result.push(ty),
+        _ => panic!("can't uncurry type application from {ty:?}"),
+    }
+    result
 }

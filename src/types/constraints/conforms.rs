@@ -157,6 +157,7 @@ impl Conforms {
                         Ty::Nominal {
                             id: self.type_id,
                             row: Box::new(row),
+                            type_args: vec![],
                         }
                     }
                 };
@@ -167,7 +168,7 @@ impl Conforms {
 
         // Try to unify in a sandbox
         let mut temp_subs = UnificationSubstitutions::new(session.meta_levels.clone());
-        match unify(&req_ty, &impl_ty, &mut temp_subs, &mut session.vars) {
+        match unify(&req_ty, &impl_ty, &mut temp_subs, &mut session) {
             Ok(_) => Ok(true),
             Err(_) => Ok(false), // Don't propagate error, just say "doesn't conform"
         }

@@ -11,7 +11,8 @@ pub mod tests {
             name_resolver::{NameResolved, NameResolver, NameResolverError},
             symbol::{
                 AssociatedTypeId, BuiltinId, DeclaredLocalId, GlobalId, InstanceMethodId,
-                ParamLocalId, PropertyId, StaticMethodId, Symbol, TypeId, VariantId,
+                ParamLocalId, PropertyId, StaticMethodId, Symbol, TypeId, TypeParameterId,
+                VariantId,
             },
         },
         node::Node,
@@ -394,7 +395,7 @@ pub mod tests {
                     generics: vec![GenericDecl {
                         id: NodeID::ANY,
                         span: Span::ANY,
-                        name: Name::Resolved(Symbol::Type(TypeId(1)), "T".into()),
+                        name: Name::Resolved(Symbol::TypeParameter(TypeParameterId(1)), "T".into()),
                         generics: vec![],
                         conformances: vec![],
                     }],
@@ -402,7 +403,10 @@ pub mod tests {
                         ParamLocalId(1),
                         "t",
                         annotation!(TypeAnnotationKind::Nominal {
-                            name: Name::Resolved(Symbol::Type(TypeId(1)), "T".into()),
+                            name: Name::Resolved(
+                                Symbol::TypeParameter(TypeParameterId(1)),
+                                "T".into()
+                            ),
                             generics: vec![]
                         })
                     ),],
@@ -410,7 +414,7 @@ pub mod tests {
                         any_stmt!(StmtKind::Expr(variable!(ParamLocalId(1), "t"))).into(),
                     ]),
                     ret: Some(annotation!(TypeAnnotationKind::Nominal {
-                        name: Name::Resolved(Symbol::Type(TypeId(1)), "T".into()),
+                        name: Name::Resolved(Symbol::TypeParameter(TypeParameterId(1)), "T".into()),
                         generics: vec![]
                     })),
                     attributes: vec![],
@@ -533,7 +537,7 @@ pub mod tests {
                 name: Name::Resolved(TypeId(1).into(), "Person".into()),
                 generics: vec![GenericDecl {
                     id: NodeID::ANY,
-                    name: Name::Resolved(Symbol::Type(TypeId(2)), "T".into()),
+                    name: Name::Resolved(Symbol::TypeParameter(TypeParameterId(1)), "T".into()),
                     generics: vec![],
                     conformances: vec![],
                     span: Span::ANY
@@ -543,7 +547,7 @@ pub mod tests {
                     name: Name::Resolved(Symbol::Property(PropertyId(1)), "me".into()),
                     is_static: false,
                     type_annotation: Some(annotation!(TypeAnnotationKind::Nominal {
-                        name: Name::Resolved(Symbol::Type(TypeId(2)), "T".into()),
+                        name: Name::Resolved(Symbol::TypeParameter(TypeParameterId(1)), "T".into()),
                         generics: vec![]
                     })),
                     default_value: None

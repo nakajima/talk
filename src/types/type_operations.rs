@@ -7,12 +7,14 @@ use crate::{
     label::Label,
     types::{
         dsu::DSU,
-        passes::inference_pass::{Meta, curry},
+        passes::{
+            dependencies_pass::SCCResolved,
+            inference_pass::{Meta, curry},
+        },
         row::{Row, RowMetaId, RowParamId, RowTail, normalize_row},
         ty::{Level, Ty, TypeParamId, UnificationVarId},
         type_error::TypeError,
-        type_session::TypeDefKind,
-        vars::Vars,
+        type_session::{TypeDefKind, TypeSession},
     },
 };
 
@@ -82,6 +84,8 @@ fn occurs_in_row(id: UnificationVarId, row: &Row) -> bool {
 // Helper: occurs check
 fn occurs_in(id: UnificationVarId, ty: &Ty) -> bool {
     match ty {
+        Ty::TypeConstructor(..) => false,
+        Ty::TypeApplication(base, arg) => occurs_in(id, base) || occurs_in(id, arg),
         Ty::UnificationVar { id: mid, .. } => *mid == id,
         Ty::Func(a, b) => occurs_in(id, a) || occurs_in(id, b),
         Ty::Tuple(items) => items.iter().any(|t| occurs_in(id, t)),
@@ -113,7 +117,7 @@ fn unify_rows(
     lhs: &Row,
     rhs: &Row,
     subs: &mut UnificationSubstitutions,
-    vars: &mut Vars,
+    session: &mut TypeSession<SCCResolved>,
 ) -> Result<bool, TypeError> {
     let (mut lhs_fields, lhs_tail) = normalize_row(lhs.clone(), subs);
     let (mut rhs_fields, rhs_tail) = normalize_row(rhs.clone(), subs);
@@ -145,7 +149,7 @@ fn unify_rows(
     for k in lhs_fields.keys().cloned().collect::<Vec<_>>() {
         if let Some(rv) = rhs_fields.remove(&k) {
             let lv = lhs_fields.remove(&k).unwrap();
-            changed |= unify(&lv, &rv, subs, vars)?;
+            changed |= unify(&lv, &rv, subs, session)?;
         }
     }
 
@@ -155,8 +159,7 @@ fn unify_rows(
             if fields.is_empty() {
                 return Ok(false);
             }
-            let fresh = vars.row_metas.next_id();
-            let mut acc = Row::Var(fresh);
+            let mut acc = session.new_row_meta_var(Level(1));
             for (label, ty) in fields.into_iter().rev() {
                 acc = Row::Extend {
                     row: Box::new(acc),
@@ -238,11 +241,26 @@ fn unify_rows(
 
 // Unify types. Returns true if progress was made.
 #[instrument(level = tracing::Level::DEBUG)]
+pub(super) fn unify_mult(
+    lhs: &[Ty],
+    rhs: &[Ty],
+    substitutions: &mut UnificationSubstitutions,
+    session: &mut TypeSession<SCCResolved>,
+) -> Result<bool, TypeError> {
+    let mut changed = false;
+    for (lhs, rhs) in lhs.iter().zip(rhs) {
+        changed |= unify(lhs, rhs, substitutions, session)?;
+    }
+    Ok(changed)
+}
+
+// Unify types. Returns true if progress was made.
+#[instrument(level = tracing::Level::DEBUG)]
 pub(super) fn unify(
     lhs: &Ty,
     rhs: &Ty,
     substitutions: &mut UnificationSubstitutions,
-    vars: &mut Vars,
+    session: &mut TypeSession<SCCResolved>,
 ) -> Result<bool, TypeError> {
     let lhs = apply(lhs.clone(), substitutions);
     let rhs = apply(rhs.clone(), substitutions);
@@ -260,7 +278,7 @@ pub(super) fn unify(
         (Ty::Tuple(lhs), Ty::Tuple(rhs)) => {
             let mut did_change = false;
             for (lhs, rhs) in lhs.iter().zip(rhs) {
-                did_change |= unify(lhs, rhs, substitutions, vars)?;
+                did_change |= unify(lhs, rhs, substitutions, session)?;
             }
             Ok(did_change)
         }
@@ -281,16 +299,18 @@ pub(super) fn unify(
             &curry(params.clone(), ret.clone()),
             &Ty::Func(func_param.clone(), func_ret.clone()),
             substitutions,
-            vars,
+            session,
         ),
         (
             Ty::Nominal {
                 id: lhs_id,
                 row: box lhs_row,
+                type_args: lhs_type_args,
             },
             Ty::Nominal {
                 id: rhs_id,
                 row: box rhs_row,
+                type_args: rhs_type_args,
             },
         ) => {
             if lhs_id != rhs_id {
@@ -305,14 +325,19 @@ pub(super) fn unify(
                     Row::Var(_) | Row::Param(_) => None,
                 }
             }
+
             let kind = row_kind(lhs_row)
                 .or_else(|| row_kind(rhs_row))
                 .unwrap_or(TypeDefKind::Struct);
-            unify_rows(kind, lhs_row, rhs_row, substitutions, vars)
+
+            let mut changed = unify_rows(kind, lhs_row, rhs_row, substitutions, session)?;
+            changed |= unify_mult(lhs_type_args, rhs_type_args, substitutions, session)?;
+            Ok(changed)
         }
+        (Ty::TypeConstructor(lhs), Ty::TypeConstructor(rhs)) if lhs == rhs => Ok(false),
         (Ty::Func(lhs_param, lhs_ret), Ty::Func(rhs_param, rhs_ret)) => {
-            let param = unify(lhs_param, rhs_param, substitutions, vars)?;
-            let ret = unify(lhs_ret, rhs_ret, substitutions, vars)?;
+            let param = unify(lhs_param, rhs_param, substitutions, session)?;
+            let ret = unify(lhs_ret, rhs_ret, substitutions, session)?;
             Ok(param || ret)
         }
         (
@@ -348,9 +373,13 @@ pub(super) fn unify(
 
             Ok(true)
         }
-        (Ty::Record(lhs_row), Ty::Record(rhs_row)) => {
-            unify_rows(TypeDefKind::Struct, lhs_row, rhs_row, substitutions, vars)
-        }
+        (Ty::Record(lhs_row), Ty::Record(rhs_row)) => unify_rows(
+            TypeDefKind::Struct,
+            lhs_row,
+            rhs_row,
+            substitutions,
+            session,
+        ),
 
         (_, Ty::Rigid(_)) | (Ty::Rigid(_), _) => Err(TypeError::InvalidUnification(lhs, rhs)),
         _ => {
@@ -391,6 +420,11 @@ pub(super) fn substitute(ty: Ty, substitutions: &FxHashMap<Ty, Ty>) -> Ty {
         Ty::Rigid(..) => ty,
         Ty::UnificationVar { .. } => ty,
         Ty::Primitive(..) => ty,
+        Ty::TypeConstructor(..) => ty,
+        Ty::TypeApplication(box base, box arg) => Ty::TypeApplication(
+            substitute(base, substitutions).into(),
+            substitute(arg, substitutions).into(),
+        ),
         Ty::Constructor {
             type_id,
             params,
@@ -414,9 +448,14 @@ pub(super) fn substitute(ty: Ty, substitutions: &FxHashMap<Ty, Ty>) -> Ty {
                 .collect(),
         ),
         Ty::Record(row) => Ty::Record(Box::new(substitute_row(*row, substitutions))),
-        Ty::Nominal { id, box row } => Ty::Nominal {
+        Ty::Nominal {
+            id,
+            box row,
+            type_args,
+        } => Ty::Nominal {
             id,
             row: Box::new(substitute_row(row, substitutions)),
+            type_args: substitute_mult(&type_args, substitutions),
         },
     }
 }
@@ -446,6 +485,11 @@ pub(super) fn apply(ty: Ty, substitutions: &mut UnificationSubstitutions) -> Ty 
         Ty::Param(..) => ty,
         Ty::Hole(..) => ty,
         Ty::Rigid(..) => ty,
+        Ty::TypeConstructor(..) => ty,
+        Ty::TypeApplication(base, arg) => Ty::TypeApplication(
+            apply(*base, substitutions).into(),
+            apply(*arg, substitutions).into(),
+        ),
         Ty::UnificationVar { id, .. } => {
             let rep = substitutions.canon_meta(id);
             if let Some(bound) = substitutions.ty.get(&rep).cloned() {
@@ -484,9 +528,14 @@ pub(super) fn apply(ty: Ty, substitutions: &mut UnificationSubstitutions) -> Ty 
         ),
         Ty::Tuple(items) => Ty::Tuple(items.into_iter().map(|t| apply(t, substitutions)).collect()),
         Ty::Record(row) => Ty::Record(Box::new(apply_row(*row, substitutions))),
-        Ty::Nominal { id, box row } => Ty::Nominal {
+        Ty::Nominal {
+            id,
+            box row,
+            type_args,
+        } => Ty::Nominal {
             id,
             row: Box::new(apply_row(row, substitutions)),
+            type_args: apply_mult(type_args, substitutions),
         },
     }
 }
@@ -553,6 +602,11 @@ pub(super) fn instantiate_ty(
                 .collect(),
             ret: Box::new(instantiate_ty(*ret, substitutions, level)),
         },
+        Ty::TypeConstructor(..) => ty,
+        Ty::TypeApplication(base, arg) => Ty::TypeApplication(
+            instantiate_ty(*base, substitutions, level).into(),
+            instantiate_ty(*arg, substitutions, level).into(),
+        ),
         Ty::Func(params, ret) => Ty::Func(
             Box::new(instantiate_ty(*params, substitutions, level)),
             Box::new(instantiate_ty(*ret, substitutions, level)),
@@ -564,9 +618,17 @@ pub(super) fn instantiate_ty(
                 .collect(),
         ),
         Ty::Record(row) => Ty::Record(Box::new(instantiate_row(*row, substitutions, level))),
-        Ty::Nominal { id, box row } => Ty::Nominal {
+        Ty::Nominal {
+            id,
+            box row,
+            type_args,
+        } => Ty::Nominal {
             id,
             row: Box::new(instantiate_row(row, substitutions, level)),
+            type_args: type_args
+                .iter()
+                .map(|a| instantiate_ty(a.clone(), substitutions, level))
+                .collect(),
         },
     }
 }

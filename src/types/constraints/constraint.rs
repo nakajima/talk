@@ -9,13 +9,15 @@ use crate::{
             construction::Construction, equals::Equals, has_field::HasField, member::Member,
             type_member::TypeMember,
         },
+        passes::dependencies_pass::SCCResolved,
         predicate::Predicate,
         row::Row,
-        ty::Ty,
+        ty::{Level, Ty},
         type_operations::{
             UnificationSubstitutions, apply, apply_mult, apply_row, substitute, substitute_mult,
             substitute_row,
         },
+        type_session::TypeSession,
     },
 };
 
@@ -149,6 +151,69 @@ impl Constraint {
                 c.base = substitute(c.base.clone(), substitutions);
                 c.result = substitute(c.result.clone(), substitutions);
                 c.generics = substitute_mult(&c.generics, substitutions);
+            }
+        }
+
+        copy
+    }
+
+    pub fn normalize_nominals(
+        &self,
+        session: &mut TypeSession<SCCResolved>,
+        level: Level,
+    ) -> Constraint {
+        let mut copy = self.clone();
+
+        match &mut copy {
+            Constraint::Call(call) => {
+                call.receiver = call
+                    .receiver
+                    .as_ref()
+                    .map(|r| session.normalize_nominals(r, level));
+                call.callee = session.normalize_nominals(&call.callee, level);
+                call.args = call
+                    .args
+                    .iter()
+                    .map(|f| session.normalize_nominals(f, level))
+                    .collect();
+                call.returns = session.normalize_nominals(&call.returns, level);
+            }
+            Constraint::Conforms(..) => (),
+            Constraint::Equals(e) => {
+                e.lhs = session.normalize_nominals(&e.lhs, level);
+                e.rhs = session.normalize_nominals(&e.rhs, level);
+            }
+            Constraint::HasField(h) => {
+                h.row = session.normalize_nominals_row(&h.row, level);
+                h.ty = session.normalize_nominals(&h.ty, level);
+            }
+            Constraint::Member(member) => {
+                member.ty = session.normalize_nominals(&member.ty, level);
+                member.receiver = session.normalize_nominals(&member.receiver, level)
+            }
+            Constraint::Construction(construction) => {
+                construction.callee = session.normalize_nominals(&construction.callee, level);
+                construction.args = construction
+                    .args
+                    .iter()
+                    .map(|a| session.normalize_nominals(a, level))
+                    .collect();
+                construction.returns = session.normalize_nominals(&construction.returns, level);
+            }
+            Constraint::AssociatedEquals(associated_equals) => {
+                associated_equals.subject =
+                    session.normalize_nominals(&associated_equals.subject, level);
+                associated_equals.output =
+                    session.normalize_nominals(&associated_equals.output, level);
+            }
+            Constraint::TypeMember(c) => {
+                c.base = session.normalize_nominals(&c.base, level);
+                c.result = session.normalize_nominals(&c.result, level);
+                c.generics = c
+                    .generics
+                    .iter()
+                    .map(|a| session.normalize_nominals(a, level))
+                    .collect();
             }
         }
 

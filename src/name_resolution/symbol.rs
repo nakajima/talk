@@ -22,6 +22,7 @@ macro_rules! impl_symbol_id {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Symbol {
     Type(TypeId),
+    TypeParameter(TypeParameterId),
     Global(GlobalId),
     DeclaredLocal(DeclaredLocalId),
     PatternBindLocal(PatternBindLocalId),
@@ -43,6 +44,7 @@ impl Symbol {
 }
 
 impl_symbol_id!(Type, TypeId);
+impl_symbol_id!(TypeParameter, TypeParameterId);
 impl_symbol_id!(DeclaredLocal, DeclaredLocalId);
 impl_symbol_id!(Global, GlobalId);
 impl_symbol_id!(ParamLocal, ParamLocalId);
@@ -69,18 +71,23 @@ pub struct Symbols {
     synthesized: IDGenerator,
     builtins: IDGenerator,
     associated_types: IDGenerator,
+    type_parameters: IDGenerator,
 }
 
 impl Symbols {
-    pub fn next_decl(&mut self) -> TypeId {
+    pub fn next_type(&mut self) -> TypeId {
         TypeId(self.decls.next_id())
+    }
+
+    pub fn next_type_parameter(&mut self) -> TypeParameterId {
+        TypeParameterId(self.type_parameters.next_id())
     }
 
     pub fn next_property(&mut self) -> PropertyId {
         PropertyId(self.properties.next_id())
     }
 
-    pub fn next_value(&mut self) -> GlobalId {
+    pub fn next_global(&mut self) -> GlobalId {
         GlobalId(self.values.next_id())
     }
 

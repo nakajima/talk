@@ -1,3 +1,4 @@
+use crate::types::builtins;
 use crate::types::type_catalog::{ConformanceKey, TypeCatalog};
 use crate::types::wants::Wants;
 use crate::{
@@ -221,6 +222,7 @@ impl<'a> InferencePass<'a> {
 
                 let annotation_ty =
                     self.infer_type_annotation(&annotation, inner_level, &mut wants);
+
                 wants.equals(
                     inferred.clone(),
                     annotation_ty,
@@ -253,10 +255,19 @@ impl<'a> InferencePass<'a> {
             TypeAnnotationKind::Func { .. } => todo!(),
             TypeAnnotationKind::Tuple(..) => todo!(),
             TypeAnnotationKind::Nominal {
-                name: Name::Resolved(sym, _),
+                name: Name::Resolved(sym @ Symbol::Builtin(..), ..),
                 ..
+            } => builtins::resolve_builtin_type(sym),
+            TypeAnnotationKind::Nominal {
+                name: Name::Resolved(..),
+                ..
+            } => {
+                unreachable!(
+                    "should have been handled by type resolve pass: {:?}: {:?}",
+                    annotation, self.session.types_by_node
+                );
             }
-            | TypeAnnotationKind::SelfType(Name::Resolved(sym, _)) => {
+            TypeAnnotationKind::SelfType(Name::Resolved(sym, _)) => {
                 match self.session.term_env.lookup(sym).unwrap().clone() {
                     EnvEntry::Mono(ty) => ty.clone(),
                     EnvEntry::Scheme(scheme) => {
@@ -278,7 +289,7 @@ impl<'a> InferencePass<'a> {
 
                 Ty::Record(Box::new(row))
             }
-            _ => unreachable!(),
+            _ => unreachable!("{:?}", annotation.kind),
         };
 
         self.session.types_by_node.insert(annotation.id, ty.clone());
@@ -309,6 +320,7 @@ impl<'a> InferencePass<'a> {
             let mut made_progress = false;
             let mut next_wants = Wants::default();
             while let Some(want) = wants.pop() {
+                let want = want.normalize_nominals(&mut self.session, level);
                 let want = want.apply(&mut substitutions);
                 tracing::trace!("solving {want:?}");
 
@@ -323,7 +335,7 @@ impl<'a> InferencePass<'a> {
                         &equals.lhs,
                         &equals.rhs,
                         &mut substitutions,
-                        &mut self.session.vars,
+                        &mut self.session,
                     ),
                     Constraint::Call(ref call) => {
                         call.solve(&mut self.session, &mut next_wants, &mut substitutions)
@@ -557,7 +569,7 @@ impl<'a> InferencePass<'a> {
             PatternKind::Bind(Name::Resolved(sym, _)) => {
                 self.session.term_env.insert_mono(*sym, expected.clone());
             }
-            PatternKind::Bind(Name::SelfType) => {
+            PatternKind::Bind(Name::SelfType(..)) => {
                 todo!()
             }
             PatternKind::LiteralInt(_) => {
@@ -988,16 +1000,13 @@ impl<'a> InferencePass<'a> {
         guard_found_ty!(self, func.id);
 
         for generic in func.generics.iter() {
-            let skolem_id = self.session.vars.skolems.next_id();
-            let param_id = self.session.vars.type_params.next_id();
-            self.session
-                .skolem_map
-                .insert(Ty::Rigid(skolem_id), Ty::Param(param_id));
+            let skolem = self.session.new_skolem();
+            let param = self.session.new_type_param();
+            self.session.skolem_map.insert(skolem.clone(), param);
 
-            self.session.term_env.insert_mono(
-                generic.name.symbol().expect("did not get symbol"),
-                Ty::Rigid(skolem_id),
-            );
+            self.session
+                .term_env
+                .insert_mono(generic.name.symbol().expect("did not get symbol"), skolem);
         }
 
         let mut param_tys: Vec<Ty> = Vec::with_capacity(func.params.len());
@@ -1139,6 +1148,11 @@ pub fn collect_meta(ty: &Ty, out: &mut FxHashSet<Ty>) {
     match ty {
         Ty::Param(_) => {
             out.insert(ty.clone());
+        }
+        Ty::TypeConstructor(..) => (),
+        Ty::TypeApplication(base, arg) => {
+            collect_meta(base, out);
+            collect_meta(arg, out);
         }
         Ty::UnificationVar { .. } => {
             out.insert(ty.clone());

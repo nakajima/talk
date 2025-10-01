@@ -27,7 +27,7 @@ use crate::{
         stmt::{Stmt, StmtKind},
         type_annotation::{TypeAnnotation, TypeAnnotationKind},
     },
-    on,
+    on, some,
     span::Span,
 };
 
@@ -232,165 +232,42 @@ impl NameResolver {
         self.current_scope_id = current_scope.parent_id;
     }
 
-    pub(super) fn declare_type(&mut self, name: &Name) -> Name {
+    pub(super) fn declare(&mut self, name: &Name, kind: Symbol) -> Name {
         let scope = self
             .scopes
             .get_mut(&self.current_scope_id.expect("no scope to declare in"))
             .expect("scope not found");
 
-        let id = self.symbols.next_decl();
-        let sym = Symbol::Type(id);
+        let symbol = match kind {
+            Symbol::Type(..) => Symbol::Type(self.symbols.next_type()),
+            Symbol::TypeParameter(..) => Symbol::TypeParameter(self.symbols.next_type_parameter()),
+            Symbol::Global(..) => Symbol::Global(self.symbols.next_global()),
+            Symbol::DeclaredLocal(..) => Symbol::DeclaredLocal(self.symbols.next_local()),
+            Symbol::PatternBindLocal(..) => {
+                Symbol::PatternBindLocal(self.symbols.next_pattern_bind())
+            }
+            Symbol::ParamLocal(..) => Symbol::ParamLocal(self.symbols.next_param()),
+            Symbol::Builtin(..) => Symbol::Builtin(self.symbols.next_builtin()),
+            Symbol::Property(..) => Symbol::Property(self.symbols.next_property()),
+            Symbol::Synthesized(..) => Symbol::Synthesized(self.symbols.next_synthesized()),
+            Symbol::InstanceMethod(..) => {
+                Symbol::InstanceMethod(self.symbols.next_instance_method())
+            }
+            Symbol::StaticMethod(..) => Symbol::StaticMethod(self.symbols.next_static_method()),
+            Symbol::Variant(..) => Symbol::Variant(self.symbols.next_variant()),
+            Symbol::AssociatedType(..) => {
+                Symbol::AssociatedType(self.symbols.next_associated_type())
+            }
+        };
+
         tracing::debug!(
-            "declare type {} -> {sym:?} {:?}",
+            "declare type {} -> {symbol:?} {:?}",
             name.name_str(),
             self.current_scope_id
         );
-        scope.types.insert(name.name_str(), sym);
+        scope.types.insert(name.name_str(), symbol);
 
-        Name::Resolved(sym, name.name_str())
-    }
-
-    pub(super) fn declare_global(&mut self, name: &Name) -> Name {
-        let scope = self
-            .scopes
-            .get_mut(&self.current_scope_id.expect("no scope to declare in"))
-            .expect("scope not found");
-
-        let id = self.symbols.next_value();
-        let sym = Symbol::Global(id);
-        tracing::debug!(
-            "declare global {} -> {sym:?} {:?}",
-            name.name_str(),
-            self.current_scope_id
-        );
-        scope.values.insert(name.name_str(), sym);
-
-        Name::Resolved(sym, name.name_str())
-    }
-
-    pub(super) fn declare_associated_type(&mut self, name: &Name) -> Name {
-        let scope = self
-            .scopes
-            .get_mut(&self.current_scope_id.expect("no scope to declare in"))
-            .expect("scope not found");
-
-        let id = self.symbols.next_associated_type();
-        let sym = Symbol::AssociatedType(id);
-        tracing::debug!(
-            "declare global {} -> {sym:?} {:?}",
-            name.name_str(),
-            self.current_scope_id
-        );
-        scope.values.insert(name.name_str(), sym);
-
-        Name::Resolved(sym, name.name_str())
-    }
-
-    pub(super) fn declare_variant(&mut self, name: &Name) -> Name {
-        let scope = self
-            .scopes
-            .get_mut(&self.current_scope_id.expect("no scope to declare in"))
-            .expect("scope not found");
-
-        let id = self.symbols.next_variant();
-        let sym = Symbol::Variant(id);
-        tracing::debug!(
-            "declare variant {} -> {sym:?} {:?}",
-            name.name_str(),
-            self.current_scope_id
-        );
-        scope.values.insert(name.name_str(), sym);
-
-        Name::Resolved(sym, name.name_str())
-    }
-
-    pub(super) fn declare_instance_method(&mut self, name: &Name) -> Name {
-        let scope = self
-            .scopes
-            .get_mut(&self.current_scope_id.expect("no scope to declare in"))
-            .expect("scope not found");
-
-        let id = self.symbols.next_instance_method();
-        let sym = Symbol::InstanceMethod(id);
-        tracing::debug!(
-            "declare instance method {} -> {sym:?} {:?}",
-            name.name_str(),
-            self.current_scope_id
-        );
-        scope.values.insert(name.name_str(), sym);
-
-        Name::Resolved(sym, name.name_str())
-    }
-
-    pub(super) fn declare_static_method(&mut self, name: &Name) -> Name {
-        let scope = self
-            .scopes
-            .get_mut(&self.current_scope_id.expect("no scope to declare in"))
-            .expect("scope not found");
-
-        let id = self.symbols.next_static_method();
-        let sym = Symbol::StaticMethod(id);
-        tracing::debug!(
-            "declare static method {} -> {sym:?} {:?}",
-            name.name_str(),
-            self.current_scope_id
-        );
-        scope.values.insert(name.name_str(), sym);
-
-        Name::Resolved(sym, name.name_str())
-    }
-
-    pub(super) fn declare_property(&mut self, name: &Name) -> Name {
-        let scope = self
-            .scopes
-            .get_mut(&self.current_scope_id.expect("no scope to declare in"))
-            .expect("scope not found");
-
-        let id = self.symbols.next_property();
-        let sym = Symbol::Property(id);
-        tracing::debug!(
-            "declare global {} -> {sym:?} {:?}",
-            name.name_str(),
-            self.current_scope_id
-        );
-        scope.values.insert(name.name_str(), sym);
-
-        Name::Resolved(sym, name.name_str())
-    }
-
-    pub(super) fn declare_local(&mut self, name: &Name) -> Name {
-        let scope = self
-            .scopes
-            .get_mut(&self.current_scope_id.expect("no scope to declare in"))
-            .expect("scope not found");
-
-        let id = self.symbols.next_local();
-        let sym = Symbol::DeclaredLocal(id);
-        tracing::debug!(
-            "declare local {} -> {sym:?} {:?}",
-            name.name_str(),
-            self.current_scope_id
-        );
-        scope.values.insert(name.name_str(), sym);
-        Name::Resolved(sym, name.name_str())
-    }
-
-    pub(super) fn declare_param(&mut self, name: &Name) -> Name {
-        let scope = self
-            .scopes
-            .get_mut(&self.current_scope_id.expect("no scope to declare in"))
-            .expect("scope not found");
-
-        let id = self.symbols.next_param();
-        let sym = Symbol::ParamLocal(id);
-        tracing::debug!(
-            "declare param {} -> {sym:?} {:?}",
-            name.name_str(),
-            self.current_scope_id
-        );
-        scope.values.insert(name.name_str(), sym);
-
-        Name::Resolved(sym, name.name_str())
+        Name::Resolved(symbol, name.name_str())
     }
 
     fn enter_pattern(&mut self, pattern: &mut Pattern) {
@@ -527,7 +404,7 @@ impl NameResolver {
             self.enter_scope(decl.id);
 
             for param in params {
-                param.name = self.declare_param(&param.name);
+                param.name = self.declare(&param.name, some!(ParamLocal));
             }
         })
     }

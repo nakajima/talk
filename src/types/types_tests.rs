@@ -5,6 +5,7 @@ pub mod tests {
         diagnostic::Diagnostic,
         make_row,
         name_resolution::{name_resolver::NameResolved, symbol::TypeId},
+        node_kinds::decl::{Decl, DeclKind},
         types::{
             passes::{
                 dependencies_pass::tests::resolve_dependencies,
@@ -1009,6 +1010,7 @@ pub mod tests {
             Ty::Nominal {
                 id: TypeId(1),
                 row: Box::new(make_row!(Struct, "age" => Ty::Int, "height" => Ty::Float)),
+                type_args: vec![],
             }
         );
     }
@@ -1137,6 +1139,44 @@ pub mod tests {
     }
 
     #[test]
+    fn types_explicit_type_application() {
+        let (ast, session) = typecheck(
+            r#"
+          struct Boxy<T> { let value: T }
+
+          // Explicit type application
+          let x: Boxy<Int> = Boxy(value: 42)
+          let y: Boxy<Float> = Boxy(value: 3.14)
+
+          x
+          "#,
+        );
+
+        println!("session: {session:#?}");
+
+        let Decl {
+            kind: DeclKind::Let {
+                type_annotation, ..
+            },
+            ..
+        } = &ast.roots[1].as_decl()
+        else {
+            unreachable!()
+        };
+
+        let ty = session
+            .types_by_node
+            .get(&type_annotation.as_ref().unwrap().id)
+            .unwrap();
+
+        // x should have type Box<Int>, not just Box
+        assert_eq!(
+            *ty,
+            Ty::TypeApplication(Box::new(Ty::TypeConstructor(TypeId(1))), Box::new(Ty::Int))
+        );
+    }
+
+    #[test]
     fn checks_struct_method_on_arg() {
         let (ast, _session) = typecheck_err(
             "
@@ -1222,14 +1262,16 @@ pub mod tests {
             ty(1, &ast, &session),
             Ty::Nominal {
                 id: TypeId(1),
-                row: Box::new(make_row!(Enum, "foo" => Ty::Void, "bar" => Ty::Void))
+                row: Box::new(make_row!(Enum, "foo" => Ty::Void, "bar" => Ty::Void)),
+                type_args: vec![]
             }
         );
         assert_eq!(
             ty(2, &ast, &session),
             Ty::Nominal {
                 id: TypeId(1),
-                row: Box::new(make_row!(Enum, "foo" => Ty::Void, "bar" => Ty::Void))
+                row: Box::new(make_row!(Enum, "foo" => Ty::Void, "bar" => Ty::Void)),
+                type_args: vec![]
             }
         );
     }
@@ -1253,7 +1295,8 @@ pub mod tests {
                 id: TypeId(1),
                 row: Box::new(
                     make_row!(Enum, "foo" => Ty::Tuple(vec![Ty::Int, Ty::Bool]), "bar" => Ty::Float)
-                )
+                ),
+                type_args: vec![]
             }
         );
         assert_eq!(
@@ -1262,7 +1305,8 @@ pub mod tests {
                 id: TypeId(1),
                 row: Box::new(
                     make_row!(Enum, "foo" => Ty::Tuple(vec![Ty::Int, Ty::Bool]), "bar" => Ty::Float)
-                )
+                ),
+                type_args: vec![]
             }
         );
     }
@@ -1285,21 +1329,24 @@ pub mod tests {
             ty(1, &ast, &session),
             Ty::Nominal {
                 id: TypeId(1),
-                row: Box::new(make_row!(Enum, "some" => Ty::Int, "none" => Ty::Void))
+                row: Box::new(make_row!(Enum, "some" => Ty::Int, "none" => Ty::Void)),
+                type_args: vec![]
             }
         );
         assert_eq!(
             ty(2, &ast, &session),
             Ty::Nominal {
                 id: TypeId(1),
-                row: Box::new(make_row!(Enum, "some" => Ty::Float, "none" => Ty::Void))
+                row: Box::new(make_row!(Enum, "some" => Ty::Float, "none" => Ty::Void)),
+                type_args: vec![]
             }
         );
         assert_eq!(
             ty(3, &ast, &session),
             Ty::Nominal {
                 id: TypeId(1),
-                row: Box::new(make_row!(Enum, "some" => Ty::Param(1.into()), "none" => Ty::Void))
+                row: Box::new(make_row!(Enum, "some" => Ty::Param(1.into()), "none" => Ty::Void)),
+                type_args: vec![]
             }
         );
     }

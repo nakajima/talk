@@ -87,18 +87,19 @@ impl Construction {
 
         let instance = Ty::Nominal {
             id: type_id,
+            type_args: vec![],
             row: Box::new(row),
         };
 
         let mut args_with_self = self.args.clone();
         args_with_self.insert(0, instance.clone());
 
-        unify(&self.returns, &instance, substitutions, &mut session.vars)?;
+        unify(&self.returns, &instance, substitutions, session)?;
         unify(
             &curry(args_with_self, instance),
             &init_ty,
             substitutions,
-            &mut session.vars,
+            session,
         )
     }
 }

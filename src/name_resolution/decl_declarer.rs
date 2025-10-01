@@ -5,7 +5,7 @@ use crate::{
     name::Name,
     name_resolution::{
         name_resolver::{NameResolver, NameResolverError, Scope},
-        symbol::Symbol,
+        symbol::{Symbol, TypeId},
     },
     node_id::NodeID,
     node_kinds::{
@@ -33,6 +33,13 @@ use crate::{
 )]
 pub struct DeclDeclarer<'a> {
     pub(super) resolver: &'a mut NameResolver,
+}
+
+#[macro_export]
+macro_rules! some {
+    ($case:ident) => {
+        Symbol::$case(0u32.into())
+    };
 }
 
 impl<'a> DeclDeclarer<'a> {
@@ -71,7 +78,7 @@ impl<'a> DeclDeclarer<'a> {
     }
 
     fn enter_nominal(&mut self, id: NodeID, name: &mut Name, generics: &mut [GenericDecl]) {
-        *name = self.resolver.declare_type(name);
+        *name = self.resolver.declare(name, some!(Type));
 
         let Name::Resolved(Symbol::Type(type_id), _) = name else {
             unreachable!()
@@ -86,7 +93,7 @@ impl<'a> DeclDeclarer<'a> {
         self.start_scope(id);
 
         for generic in generics {
-            generic.name = self.resolver.declare_type(&generic.name);
+            generic.name = self.resolver.declare(&generic.name, some!(TypeParameter));
         }
     }
 
@@ -124,9 +131,9 @@ impl<'a> DeclDeclarer<'a> {
         match kind {
             PatternKind::Bind(name @ Name::Raw(_)) => {
                 *name = if self.at_module_scope() {
-                    self.resolver.declare_global(name)
+                    self.resolver.declare(name, some!(Global))
                 } else {
-                    self.resolver.declare_local(name)
+                    self.resolver.declare(name, some!(DeclaredLocal))
                 }
             }
             PatternKind::Record { fields } => {
@@ -136,9 +143,9 @@ impl<'a> DeclDeclarer<'a> {
                     };
 
                     *name = if self.at_module_scope() {
-                        self.resolver.declare_global(name)
+                        self.resolver.declare(name, some!(Global))
                     } else {
-                        self.resolver.declare_local(name)
+                        self.resolver.declare(name, some!(DeclaredLocal))
                     }
                 }
             }
@@ -180,16 +187,16 @@ impl<'a> DeclDeclarer<'a> {
                 *name = self
                     .resolver
                     .lookup(name)
-                    .unwrap_or_else(|| self.resolver.declare_global(name));
+                    .unwrap_or_else(|| self.resolver.declare(name, some!(Global)));
 
                 self.start_scope(*id);
 
                 for generic in generics {
-                    generic.name = self.resolver.declare_type(&generic.name);
+                    generic.name = self.resolver.declare(&generic.name, some!(TypeParameter));
                 }
 
                 for param in params {
-                    param.name = self.resolver.declare_param(&param.name);
+                    param.name = self.resolver.declare(&param.name, some!(ParamLocal));
                 }
             }
         )
@@ -202,7 +209,7 @@ impl<'a> DeclDeclarer<'a> {
     #[instrument(skip(self))]
     fn enter_func_signature(&mut self, func: &mut FuncSignature) {
         on!(func, FuncSignature { name, .. }, {
-            *name = self.resolver.declare_instance_method(name);
+            *name = self.resolver.declare(name, some!(InstanceMethod));
         })
     }
 
@@ -238,7 +245,7 @@ impl<'a> DeclDeclarer<'a> {
                     panic!("can't define a typealias with generics");
                 }
 
-                *lhs_name = self.resolver.declare_type(lhs_name);
+                *lhs_name = self.resolver.declare(lhs_name, Symbol::Type(TypeId(0)));
             }
         );
 
@@ -254,12 +261,12 @@ impl<'a> DeclDeclarer<'a> {
             self.start_scope(decl.id);
 
             for generic in generics {
-                generic.name = self.resolver.declare_type(&generic.name);
+                generic.name = self.resolver.declare(&generic.name, some!(Type));
             }
         });
 
         on!(&mut decl.kind, DeclKind::EnumVariant(name, ..), {
-            *name = self.resolver.declare_variant(name);
+            *name = self.resolver.declare(name, some!(Variant));
         });
 
         on!(
@@ -270,31 +277,31 @@ impl<'a> DeclDeclarer<'a> {
             },
             {
                 *name = if *is_static {
-                    self.resolver.declare_static_method(name)
+                    self.resolver.declare(name, some!(StaticMethod))
                 } else {
-                    self.resolver.declare_instance_method(name)
+                    self.resolver.declare(name, some!(InstanceMethod))
                 };
             }
         );
 
         on!(&mut decl.kind, DeclKind::Associated { generic }, {
-            generic.name = self.resolver.declare_associated_type(&generic.name);
+            generic.name = self.resolver.declare(&generic.name, some!(AssociatedType));
         });
 
         on!(
             &mut decl.kind,
             DeclKind::FuncSignature(FuncSignature { name, .. }),
             {
-                *name = self.resolver.declare_global(name);
+                *name = self.resolver.declare(name, some!(Global));
             }
         );
 
         on!(&mut decl.kind, DeclKind::Property { name, .. }, {
-            *name = self.resolver.declare_property(name);
+            *name = self.resolver.declare(name, some!(Property));
         });
 
         on!(&mut decl.kind, DeclKind::Init { name, .. }, {
-            *name = self.resolver.declare_global(name);
+            *name = self.resolver.declare(name, some!(Global));
 
             let Name::Resolved(Symbol::Global(..), _) = &name else {
                 unreachable!()

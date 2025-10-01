@@ -11,6 +11,7 @@ use crate::{
     node_kinds::{
         block::Block,
         decl::{Decl, DeclKind},
+        expr::{Expr, ExprKind},
         func::Func,
         func_signature::FuncSignature,
         generic_decl::GenericDecl,
@@ -40,12 +41,13 @@ pub fn arrow_n(arg: Kind, n: usize, ret: Kind) -> Kind {
 
 // Gathers up all the raw types from the AST
 #[derive(Debug, Visitor)]
-#[visitor(Decl)]
+#[visitor(Decl, Expr(enter))]
 pub struct TypeHeaderPass<'a> {
     type_stack: Vec<TypeId>,
     child_types: FxHashMap<TypeId, FxHashMap<String, Symbol>>,
     session: &'a mut TypeSession<Raw>,
     extensions: FxHashMap<TypeId, Vec<TypeExtension>>,
+    globals: FxHashMap<NodeID, ASTTyRepr>,
 }
 
 impl<'a> TypeHeaderPass<'a> {
@@ -55,11 +57,14 @@ impl<'a> TypeHeaderPass<'a> {
             session,
             child_types: Default::default(),
             extensions: Default::default(),
+            globals: Default::default(),
         };
 
         for root in ast.roots.iter() {
             root.drive(&mut instance);
         }
+
+        instance.session.phase.globals = std::mem::take(&mut instance.globals);
 
         let mut extensions = std::mem::take(&mut instance.extensions);
         for (id, type_constructor) in instance.session.phase.type_constructors.iter_mut() {
@@ -72,6 +77,48 @@ impl<'a> TypeHeaderPass<'a> {
                     .flat_map(|e| std::mem::take(&mut e.conformances))
                     .collect();
                 type_constructor.extensions = extensions;
+            }
+        }
+    }
+
+    fn enter_expr(&mut self, expr: &Expr) {
+        if let Expr {
+            kind: ExprKind::Call { type_args, .. },
+            ..
+        } = expr
+        {
+            for arg in type_args {
+                self.globals
+                    .insert(arg.id, ASTTyRepr::Annotated(arg.clone()));
+            }
+        }
+
+        if let Expr {
+            kind:
+                ExprKind::Func(Func {
+                    generics,
+                    params,
+                    ret,
+                    ..
+                }),
+            ..
+        } = expr
+        {
+            if let Some(ret) = ret {
+                self.globals
+                    .insert(ret.id, ASTTyRepr::Annotated(ret.clone()));
+            }
+
+            for generic in generics {
+                self.globals
+                    .insert(generic.id, ASTTyRepr::Generic(generic.clone()));
+            }
+
+            for param in params {
+                if let Some(annotation) = &param.type_annotation {
+                    self.globals
+                        .insert(annotation.id, ASTTyRepr::Annotated(annotation.clone()));
+                }
             }
         }
     }
@@ -251,6 +298,13 @@ impl<'a> TypeHeaderPass<'a> {
                         .or_default()
                         .insert(type_name.to_string(), *sym);
                 }
+            }
+            DeclKind::Let {
+                type_annotation: Some(annotation),
+                ..
+            } => {
+                self.globals
+                    .insert(annotation.id, ASTTyRepr::Annotated(annotation.clone()));
             }
             _ => (),
         }
@@ -558,9 +612,10 @@ pub mod tests {
             name_resolver_tests::tests::resolve,
             symbol::{
                 AssociatedTypeId, BuiltinId, GlobalId, InstanceMethodId, PropertyId, Symbol,
-                SynthesizedId, TypeId, VariantId,
+                SynthesizedId, TypeId, TypeParameterId, VariantId,
             },
         },
+        node::Node,
         node_id::NodeID,
         node_kinds::{generic_decl::GenericDecl, type_annotation::*},
         span::Span,
@@ -702,9 +757,9 @@ pub mod tests {
                 node_id: NodeID::ANY,
                 def: TypeDefKind::Struct,
                 conformances: Default::default(),
-                generics: crate::indexmap!(Name::Resolved(Symbol::Type(TypeId(2)), "T".into()) => ASTTyRepr::Generic(GenericDecl {
+                generics: crate::indexmap!(Name::Resolved(Symbol::TypeParameter(TypeParameterId(1)), "T".into()) => ASTTyRepr::Generic(GenericDecl {
                     id: NodeID::ANY,
-                    name: Name::Resolved(Symbol::Type(TypeId(2)), "T".into()),
+                    name: Name::Resolved(Symbol::TypeParameter(TypeParameterId(1)), "T".into()),
                     generics: vec![],
                     conformances: vec![],
                     span: Span::ANY,
@@ -724,7 +779,7 @@ pub mod tests {
                         symbol: Symbol::Property(PropertyId(1)),
                         is_static: false,
                         ty_repr: ASTTyRepr::Annotated(annotation!(TypeAnnotationKind::Nominal {
-                            name: Name::Resolved(Symbol::Type(TypeId(2)), "T".into()),
+                            name: Name::Resolved(Symbol::TypeParameter(TypeParameterId(1)), "T".into()),
                             generics: vec![]
                         }))
                     })
@@ -762,16 +817,16 @@ pub mod tests {
                 def: TypeDefKind::Struct,
                 conformances: Default::default(),
                 generics: crate::indexmap!(
-                  Name::Resolved(Symbol::Type(TypeId(2)), "T".into()) =>  ASTTyRepr::Generic(GenericDecl {
+                  Name::Resolved(Symbol::TypeParameter(TypeParameterId(1)), "T".into()) =>  ASTTyRepr::Generic(GenericDecl {
                         id: NodeID::ANY,
-                        name: Name::Resolved(Symbol::Type(TypeId(2)), "T".into()),
+                        name: Name::Resolved(Symbol::TypeParameter(TypeParameterId(1)), "T".into()),
                         generics: vec![],
                         conformances: vec![],
                         span: Span::ANY,
                     }),
-                   Name::Resolved(Symbol::Type(TypeId(3)), "U".into()) => ASTTyRepr::Generic(GenericDecl {
+                   Name::Resolved(Symbol::TypeParameter(TypeParameterId(2)), "U".into()) => ASTTyRepr::Generic(GenericDecl {
                         id: NodeID::ANY,
-                        name: Name::Resolved(Symbol::Type(TypeId(3)), "U".into()),
+                        name: Name::Resolved(Symbol::TypeParameter(TypeParameterId(2)), "U".into()),
                         generics: vec![],
                         conformances: vec![],
                         span: Span::ANY,
@@ -785,8 +840,8 @@ pub mod tests {
                             initializes_type_id: TypeId(1),
                             params: vec![
                             ASTTyRepr::SelfType(Name::Resolved(TypeId(1).into(), "Wrapper".into()), NodeID::ANY, Span::ANY),
-                            ASTTyRepr::Annotated(annotation!(TypeAnnotationKind::Nominal { name: Name::Resolved(Symbol::Type(TypeId(2)), "T".into()), generics: vec![
-                                annotation!(TypeAnnotationKind::Nominal { name: Name::Resolved(TypeId(3).into(), "U".into()), generics: vec![] })
+                            ASTTyRepr::Annotated(annotation!(TypeAnnotationKind::Nominal { name: Name::Resolved(Symbol::TypeParameter(TypeParameterId(1)), "T".into()), generics: vec![
+                                annotation!(TypeAnnotationKind::Nominal { name: Name::Resolved(TypeParameterId(2).into(), "U".into()), generics: vec![] })
                             ] }))
                             ]
                         }
@@ -796,9 +851,9 @@ pub mod tests {
                         symbol: Symbol::Property(PropertyId(1)),
                         is_static: false,
                         ty_repr: ASTTyRepr::Annotated(annotation!(TypeAnnotationKind::Nominal {
-                            name: Name::Resolved(Symbol::Type(TypeId(2)), "T".into()),
+                            name: Name::Resolved(Symbol::TypeParameter(TypeParameterId(1)), "T".into()),
                             generics: vec![annotation!(TypeAnnotationKind::Nominal {
-                                name: Name::Resolved(Symbol::Type(TypeId(3)), "U".into()),
+                                name: Name::Resolved(Symbol::TypeParameter(TypeParameterId(2)), "U".into()),
                                 generics: vec![]
                             })]
                         }))
@@ -940,6 +995,58 @@ pub mod tests {
                     properties: Default::default()
                 }
             }
+        );
+    }
+
+    #[test]
+    fn global_let() {
+        let (ast, session) = type_header_decl_pass(
+            "
+        let x: Int = 123
+        ",
+        );
+
+        assert!(matches!(
+            ast.find(NodeID(2)).unwrap(),
+            Node::TypeAnnotation(TypeAnnotation { .. })
+        ));
+
+        assert_eq!(
+            *session.phase.globals.get(&NodeID(2)).unwrap(),
+            ASTTyRepr::Annotated(TypeAnnotation {
+                id: NodeID::ANY,
+                span: Span::ANY,
+                kind: TypeAnnotationKind::Nominal {
+                    name: Name::Resolved(Symbol::Int, "Int".into()),
+                    generics: vec![]
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn global_func() {
+        let (ast, session) = type_header_decl_pass(
+            "
+        func fizz<T>(t: T) {}
+        ",
+        );
+
+        assert!(matches!(
+            ast.find(NodeID(2)).unwrap(),
+            Node::TypeAnnotation(TypeAnnotation { .. })
+        ));
+
+        assert_eq!(
+            *session.phase.globals.get(&NodeID(2)).unwrap(),
+            ASTTyRepr::Annotated(TypeAnnotation {
+                id: NodeID::ANY,
+                span: Span::ANY,
+                kind: TypeAnnotationKind::Nominal {
+                    name: Name::Resolved(Symbol::TypeParameter(TypeParameterId(1)), "T".into()),
+                    generics: vec![]
+                }
+            })
         );
     }
 }

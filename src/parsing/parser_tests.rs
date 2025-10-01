@@ -845,6 +845,33 @@ pub mod tests {
     }
 
     #[test]
+    fn parses_let_with_type_application() {
+        let parsed = parse("let fizz: A<B>");
+        assert_eq!(
+            *parsed.roots[0].as_decl(),
+            Decl {
+                id: NodeID::ANY,
+                span: Span::ANY,
+                kind: DeclKind::Let {
+                    lhs: Pattern {
+                        id: NodeID::ANY,
+                        span: Span::ANY,
+                        kind: PatternKind::Bind("fizz".into())
+                    },
+                    type_annotation: Some(annotation!(TypeAnnotationKind::Nominal {
+                        name: "A".into(),
+                        generics: vec![annotation!(TypeAnnotationKind::Nominal {
+                            name: "B".into(),
+                            generics: vec![]
+                        })]
+                    })),
+                    value: None
+                }
+            }
+        );
+    }
+
+    #[test]
     fn parses_let_with_tuple_type() {
         let parsed = parse("let fizz: (Int, Bool)");
         assert_eq!(
