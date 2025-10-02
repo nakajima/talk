@@ -221,6 +221,10 @@ impl Constraint {
     }
 
     pub fn into_predicate(&self, substitutions: &mut UnificationSubstitutions) -> Predicate {
+        tracing::debug!(
+            "converting {:?} to predicate",
+            self.clone().apply(substitutions)
+        );
         match self {
             Self::HasField(has_field) => {
                 let Row::Param(row_param) = apply_row(has_field.row.clone(), substitutions) else {

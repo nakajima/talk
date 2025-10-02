@@ -290,7 +290,7 @@ impl<'a> TypeHeaderPass<'a> {
                         },
                     ..
                 },
-                _,
+                rhs,
             ) => {
                 if let Some(parent_id) = self.type_stack.last() {
                     self.child_types
@@ -298,6 +298,9 @@ impl<'a> TypeHeaderPass<'a> {
                         .or_default()
                         .insert(type_name.to_string(), *sym);
                 }
+
+                self.globals
+                    .insert(rhs.id, ASTTyRepr::Annotated(rhs.clone()));
             }
             DeclKind::Let {
                 type_annotation: Some(annotation),

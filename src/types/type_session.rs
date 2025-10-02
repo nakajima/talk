@@ -85,7 +85,7 @@ pub struct TypeExtension {
     pub static_methods: IndexMap<Label, Method>,
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(PartialEq, Clone)]
 pub struct TypeDef {
     pub name: Name,
     pub node_id: NodeID,
@@ -96,6 +96,12 @@ pub struct TypeDef {
     pub extensions: Vec<TypeExtension>,
     pub conformances: Vec<ConformanceStub>,
     pub child_types: FxHashMap<String, Symbol>,
+}
+
+impl std::fmt::Debug for TypeDef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "TypeDef({})", self.name.name_str())
+    }
 }
 
 // new helper
@@ -249,6 +255,7 @@ impl<Phase: TypingPhase> TypeSession<Phase> {
             .iter()
             .map(|c| {
                 let c = c.substitute(&self.skolem_map);
+
                 c.into_predicate(&mut substitutions)
             })
             .collect();

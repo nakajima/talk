@@ -18,7 +18,7 @@ use crate::{
 
 // Predicates are kinda like Constraint templates. They ride around with schemes and get instantiated
 // into constraints when the scheme itself is instantiated.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub enum Predicate {
     HasField {
         row: RowParamId,
@@ -45,6 +45,55 @@ pub enum Predicate {
 }
 
 impl Predicate {
+    pub fn apply_substitutions(
+        &self,
+        substitutions: &mut crate::types::type_operations::UnificationSubstitutions,
+    ) -> Self {
+        use crate::types::type_operations::apply;
+
+        match self {
+            Self::HasField { row, label, ty } => Self::HasField {
+                row: *row,
+                label: label.clone(),
+                ty: apply(ty.clone(), substitutions),
+            },
+            Self::Member {
+                receiver,
+                label,
+                ty,
+            } => Self::Member {
+                receiver: apply(receiver.clone(), substitutions),
+                label: label.clone(),
+                ty: apply(ty.clone(), substitutions),
+            },
+            Self::Call {
+                callee,
+                args,
+                returns,
+                receiver,
+            } => Self::Call {
+                callee: apply(callee.clone(), substitutions),
+                args: args
+                    .iter()
+                    .map(|arg| apply(arg.clone(), substitutions))
+                    .collect(),
+                returns: apply(returns.clone(), substitutions),
+                receiver: receiver.as_ref().map(|r| apply(r.clone(), substitutions)),
+            },
+            Self::AssociatedEquals {
+                subject,
+                protocol_id,
+                associated_type_id,
+                output,
+            } => Self::AssociatedEquals {
+                subject: apply(subject.clone(), substitutions),
+                protocol_id: *protocol_id,
+                associated_type_id: *associated_type_id,
+                output: apply(output.clone(), substitutions),
+            },
+        }
+    }
+
     pub fn instantiate(
         &self,
         substitutions: &InstantiationSubstitutions,
@@ -99,6 +148,46 @@ impl Predicate {
                 span,
                 cause: ConstraintCause::Internal,
             }),
+        }
+    }
+}
+
+impl std::fmt::Debug for Predicate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Predicate::HasField { row, label, ty } => {
+                write!(f, "*hasfield({label}: {ty:?}, {row:?})")
+            }
+            Predicate::Member {
+                receiver,
+                label,
+                ty,
+            } => {
+                write!(f, "*member({receiver:?}.{label} = {ty:?})")
+            }
+            Predicate::Call {
+                callee,
+                args,
+                returns,
+                receiver,
+            } => write!(
+                f,
+                "*call({}{callee:?}({args:?}) = {returns:?})",
+                if let Some(rec) = receiver {
+                    format!("{rec:?}")
+                } else {
+                    "".to_string()
+                },
+            ),
+            Predicate::AssociatedEquals {
+                subject,
+                protocol_id,
+                associated_type_id,
+                output,
+            } => write!(
+                f,
+                "*associatedequals({subject:?}, {protocol_id:?}, {associated_type_id:?} = {output:?})"
+            ),
         }
     }
 }

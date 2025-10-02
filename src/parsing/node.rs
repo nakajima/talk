@@ -1,4 +1,5 @@
 use crate::{
+    formatter,
     node_id::NodeID,
     node_kinds::{
         attribute::Attribute, block::Block, call_arg::CallArg, decl::Decl, expr::Expr, func::Func,
@@ -13,7 +14,7 @@ use derive_visitor::{Drive, DriveMut};
 
 pub trait NodeType: Into<Node> + From<Node> {}
 
-#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
+#[derive(Clone, PartialEq, Eq, Drive, DriveMut)]
 pub enum Node {
     Attribute(Attribute),
     Decl(Decl),
@@ -92,5 +93,13 @@ impl Node {
         };
 
         decl
+    }
+}
+
+impl std::fmt::Debug for Node {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let meta = Default::default();
+        let formatter = formatter::Formatter::new(&meta);
+        write!(f, "{}", formatter.format(std::slice::from_ref(self), 80))
     }
 }

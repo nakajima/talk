@@ -546,6 +546,29 @@ impl<'a> InferencePass<'a> {
                 self.infer_block(body, level, wants)
             }
             DeclKind::Property { .. } => Ty::Void,
+            DeclKind::TypeAlias(lhs, rhs) => {
+                // Look up the RHS type from types_by_node (it was resolved during type resolve pass)
+                let ty = self
+                    .session
+                    .types_by_node
+                    .get(&rhs.id)
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        // If not in types_by_node, try to infer it
+                        self.infer_type_annotation(rhs, level, wants)
+                    });
+
+                if let TypeAnnotationKind::Nominal {
+                    name: Name::Resolved(sym, _),
+                    ..
+                } = &lhs.kind
+                {
+                    self.session.term_env.insert_mono(*sym, ty.clone());
+                    tracing::debug!("added typealias {sym:?} = {ty:?} to term_env");
+                }
+
+                Ty::Void
+            }
 
             _ => {
                 tracing::warn!("unhandled: {decl:?}");

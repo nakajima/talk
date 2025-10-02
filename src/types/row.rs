@@ -34,7 +34,7 @@ impl From<u32> for RowParamId {
 pub type ClosedRow = BTreeMap<Label, Ty>;
 
 // TODO: Add Level to Var once we support open rows
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+#[derive(PartialEq, Eq, Hash, Clone)]
 pub enum Row {
     Empty(TypeDefKind),
     Extend { row: Box<Row>, label: Label, ty: Ty },
@@ -97,6 +97,19 @@ pub fn normalize_row(
             Row::Empty(..) => break (map, RowTail::Empty),
             Row::Var(id) => break (map, RowTail::Var(subs.canon_row(id))),
             Row::Param(id) => break (map, RowTail::Param(id)),
+        }
+    }
+}
+
+impl std::fmt::Debug for Row {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Row::Empty(..) => write!(f, "{{}}"),
+            Row::Extend { .. } => {
+                write!(f, "{:?}", self.close())
+            }
+            Row::Param(id) => write!(f, "rowparam{id:?}"),
+            Row::Var(id) => write!(f, "rowvar{id:?}"),
         }
     }
 }

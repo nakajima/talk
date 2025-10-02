@@ -111,7 +111,7 @@ fn row_occurs(target: RowMetaId, row: &Row, subs: &mut UnificationSubstitutions)
 }
 
 // Unify rows. Returns true if progress was made.
-#[instrument(level = tracing::Level::DEBUG)]
+#[instrument(skip(session), level = tracing::Level::DEBUG)]
 fn unify_rows(
     kind: TypeDefKind,
     lhs: &Row,
@@ -240,7 +240,7 @@ fn unify_rows(
 }
 
 // Unify types. Returns true if progress was made.
-#[instrument(level = tracing::Level::DEBUG)]
+#[instrument(skip(session), level = tracing::Level::DEBUG)]
 pub(super) fn unify_mult(
     lhs: &[Ty],
     rhs: &[Ty],
@@ -255,7 +255,7 @@ pub(super) fn unify_mult(
 }
 
 // Unify types. Returns true if progress was made.
-#[instrument(level = tracing::Level::DEBUG)]
+#[instrument(skip(session), level = tracing::Level::DEBUG)]
 pub(super) fn unify(
     lhs: &Ty,
     rhs: &Ty,

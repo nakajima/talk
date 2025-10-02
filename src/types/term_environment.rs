@@ -51,6 +51,13 @@ impl EnvEntry {
             EnvEntry::Scheme(scheme) => scheme.inference_instantiate(session, level, wants, span).0,
         }
     }
+
+    pub fn as_ty(&self) -> Ty {
+        match self {
+            EnvEntry::Mono(ty) => ty.clone(),
+            EnvEntry::Scheme(scheme) => scheme.ty.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Default, PartialEq, Clone)]
@@ -66,6 +73,7 @@ impl TermEnv {
     }
 
     pub fn insert_mono(&mut self, sym: Symbol, ty: Ty) {
+        tracing::debug!("insert_mono {sym:?} = {ty:?}");
         self.symbols.insert(sym, EnvEntry::Mono(ty));
     }
 
@@ -78,6 +86,7 @@ impl TermEnv {
     }
 
     pub fn promote(&mut self, sym: Symbol, entry: EnvEntry) {
+        tracing::debug!("promote {sym:?} = {entry:?}");
         self.symbols.insert(sym, entry);
     }
 }

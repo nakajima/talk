@@ -4,7 +4,10 @@ use crate::{
     span::Span,
     types::{
         constraints::constraint::{Constraint, ConstraintCause},
-        passes::{dependencies_pass::SCCResolved, inference_pass::curry},
+        passes::{
+            dependencies_pass::{ConformanceRequirement, SCCResolved},
+            inference_pass::curry,
+        },
         row::Row,
         term_environment::EnvEntry,
         ty::{Level, Primitive, Ty},
@@ -38,11 +41,17 @@ impl Member {
         let mut receiver = self.receiver.clone();
         let ty = self.ty.clone();
 
+        tracing::debug!(
+            "Member::solve receiver={receiver:?}, label={:?}",
+            self.label
+        );
+
         if matches!(
             receiver,
             Ty::UnificationVar { .. } | Ty::Rigid(_) | Ty::Param(_)
         ) {
             // If we don't know what the receiver is yet, we can't do much
+            tracing::debug!("deferring member constraint");
             next_wants.push(Constraint::Member(self.clone()));
             return Ok(false);
         }
@@ -57,9 +66,43 @@ impl Member {
 
         if let Ty::Nominal { id: type_id, .. } | Ty::Constructor { type_id, .. } = &receiver
             && let Some(nominal) = session.phase.type_catalog.nominals.get(type_id).cloned()
-            && let Some(sym) = nominal.member_symbol(&self.label)
-            && let Some(entry) = session.term_env.lookup(sym).cloned()
         {
+            // First, check if any conforming protocols have this method with predicates
+            let mut protocol_method = None;
+            for conformance_key in session.phase.type_catalog.conformances.keys() {
+                if conformance_key.conforming_id == *type_id {
+                    let protocol_id = conformance_key.protocol_id;
+                    if let Some(protocol) = session.phase.type_catalog.protocols.get(&protocol_id)
+                        && let Some(requirement) = protocol.requirements.get(&self.label)
+                        && let ConformanceRequirement::Unfulfilled(req_sym) = requirement
+                        && let Some(entry) = session.term_env.lookup(req_sym).cloned()
+                    {
+                        // Check if this protocol method has predicates - if so, prefer it
+                        if let crate::types::term_environment::EnvEntry::Scheme(ref scheme) = entry
+                            && !scheme.predicates.is_empty()
+                        {
+                            tracing::debug!("Found protocol method with predicates: {req_sym:?}");
+                            protocol_method = Some((*req_sym, entry));
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // Use protocol method if found, otherwise use the nominal's method
+            let (sym, entry) = if let Some((sym, entry)) = protocol_method {
+                (sym, entry)
+            } else if let Some(sym) = nominal.member_symbol(&self.label) {
+                if let Some(entry) = session.term_env.lookup(sym).cloned() {
+                    (*sym, entry)
+                } else {
+                    return Err(TypeError::MemberNotFound(receiver, self.label.to_string()));
+                }
+            } else {
+                return Err(TypeError::MemberNotFound(receiver, self.label.to_string()));
+            };
+
+            tracing::debug!("Member::solve looking up {sym:?}, got entry: {entry:?}");
             match sym {
                 Symbol::InstanceMethod(_) => {
                     let scheme_ty = entry.solver_instantiate(
@@ -170,24 +213,11 @@ impl Member {
 
                     unify(&ty, &ctor_ty, substitutions, session)
                 }
-                _ => {
-                    let (Ty::Record(row) | Ty::Nominal { row, .. }) = receiver else {
-                        return Err(TypeError::ExpectedRow(receiver));
-                    };
-                    next_wants._has_field(
-                        *row,
-                        self.label.clone(),
-                        ty.clone(),
-                        self.cause,
-                        self.span,
-                    );
-                    Ok(true)
+                other => {
+                    unreachable!("other: {other:?}");
                 }
             }
-        } else {
-            let (Ty::Record(row) | Ty::Nominal { row, .. }) = receiver else {
-                return Err(TypeError::ExpectedRow(receiver));
-            };
+        } else if let Ty::Record(row) = receiver {
             next_wants._has_field(
                 *row.clone(),
                 self.label.clone(),
@@ -196,6 +226,8 @@ impl Member {
                 self.span,
             );
             Ok(true)
+        } else {
+            Err(TypeError::MemberNotFound(receiver, self.label.to_string()))
         }
     }
 }

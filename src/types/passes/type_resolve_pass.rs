@@ -28,11 +28,12 @@ use crate::{
         },
         predicate::Predicate,
         row::Row,
-        scheme::Scheme,
+        scheme::{ForAll, Scheme},
         term_environment::EnvEntry,
-        ty::{Level, Ty},
+        ty::{Level, Ty, TypeParamId},
         type_catalog::{ConformanceKey, Extension, Nominal, NominalForm, Protocol, TypeCatalog},
         type_error::TypeError,
+        type_operations::UnificationSubstitutions,
         type_session::{ASTTyRepr, Raw, TypeDef, TypeDefKind, TypeSession, TypingPhase},
     },
 };
@@ -40,7 +41,6 @@ use crate::{
 #[derive(Debug)]
 pub struct HeadersResolved {
     pub type_catalog: TypeCatalog,
-    pub resolver_constraints: Vec<Constraint>,
 }
 
 impl TypingPhase for HeadersResolved {
@@ -54,7 +54,7 @@ pub struct TypeResolvePass<'a> {
     type_catalog: TypeCatalog,
     generics: IndexMap<Symbol, Ty>,
     conformance_keys: Vec<(ConformanceKey, Span)>,
-    resolver_constraints: Vec<Constraint>,
+    predicates_by_param: FxHashMap<TypeParamId, Vec<Predicate>>,
     self_symbols: Vec<Symbol>,
     self_tys: Vec<Ty>,
     _ast: &'a mut AST<NameResolved>,
@@ -68,9 +68,9 @@ impl<'a> TypeResolvePass<'a> {
         let resolver = TypeResolvePass {
             session,
             type_catalog: Default::default(),
-            resolver_constraints: Default::default(),
             generics: Default::default(),
             conformance_keys: Default::default(),
+            predicates_by_param: Default::default(),
             self_symbols: Default::default(),
             self_tys: Default::default(),
             _ast: ast,
@@ -169,7 +169,6 @@ impl<'a> TypeResolvePass<'a> {
         }
 
         self.session.advance(HeadersResolved {
-            resolver_constraints: self.resolver_constraints,
             type_catalog: self.type_catalog,
         })
     }
@@ -424,10 +423,12 @@ impl<'a> TypeResolvePass<'a> {
                     ty: fn_ty.clone(),
                 });
 
-                self.session.term_env.promote(
-                    method.symbol,
-                    EnvEntry::Scheme(Scheme::new(foralls, predicates, fn_ty)),
+                let scheme = EnvEntry::Scheme(Scheme::new(foralls, predicates, fn_ty));
+                println!(
+                    "[resolve_instance_methods] promoting {:?}: {scheme:?}",
+                    method.symbol
                 );
+                self.session.term_env.promote(method.symbol, scheme);
             }
 
             resolved_methods.insert(name.clone(), method.symbol);
@@ -533,7 +534,47 @@ impl<'a> TypeResolvePass<'a> {
             };
             let fn_ty = curry(params.clone(), ret.clone());
 
-            self.session.term_env.insert_mono(method.symbol, fn_ty);
+            println!("fn_ty : {fn_ty:?}");
+            let mut substitutions = UnificationSubstitutions::new(self.session.meta_levels.clone());
+            let mut entry = self.session.generalize_with_substitutions(
+                Level(0),
+                fn_ty,
+                &[],
+                &mut substitutions,
+            );
+
+            println!("substitutions: {substitutions:?}");
+
+            println!("generalized: {entry:?}");
+
+            if let EnvEntry::Scheme(scheme) = &mut entry {
+                let foralls = scheme.ty.collect_foralls();
+
+                println!("foralls: {foralls:?}");
+
+                // Collect predicates for all type parameters in this method
+                for forall in &foralls {
+                    if let ForAll::Ty(param_id) = forall
+                        && let Some(preds) = self.predicates_by_param.get(param_id)
+                    {
+                        // Apply substitutions to each predicate before adding to scheme
+                        for pred in preds {
+                            let substituted = pred.apply_substitutions(&mut substitutions);
+                            scheme.predicates.push(substituted);
+                        }
+                    }
+                }
+
+                println!(
+                    "predicates: {:?} / {:?}",
+                    scheme.predicates, self.predicates_by_param
+                );
+            }
+
+            println!("about to promote {:?}: {entry:?}", method.symbol);
+            self.session.term_env.promote(method.symbol, entry);
+
+            println!("inserting {} -> {:?}", name, method.symbol);
             resolved_methods.insert(name.clone(), method.symbol);
         }
         resolved_methods
@@ -544,7 +585,7 @@ impl<'a> TypeResolvePass<'a> {
         guard_found_ty!(self, annotation.id);
 
         let ty = match &annotation.kind {
-            TypeAnnotationKind::SelfType(_id) => self.session.new_ty_meta_var(Level(0)),
+            TypeAnnotationKind::SelfType(_id) => self.self_tys.last().unwrap().clone(),
             TypeAnnotationKind::Func { .. } => todo!(),
             TypeAnnotationKind::Tuple(..) => todo!(),
             TypeAnnotationKind::Nominal {
@@ -599,7 +640,7 @@ impl<'a> TypeResolvePass<'a> {
                 member_generics,
             } => {
                 let base_ty = self.infer_type_annotation(base);
-                let result = self.session.new_ty_meta_var(Level(1));
+                let result = self.session.new_type_param();
                 let constraint = Constraint::TypeMember(TypeMember {
                     base: base_ty,
                     name: member_name.into(),
@@ -616,22 +657,38 @@ impl<'a> TypeResolvePass<'a> {
                     annotation.id,
                     base
                 );
-                self.resolver_constraints.push(constraint);
                 result
             }
             TypeAnnotationKind::Nominal {
-                name: Name::Resolved(Symbol::AssociatedType(..), ..),
+                name: Name::Resolved(Symbol::AssociatedType(assoc_id), _),
                 ..
             } => {
-                let Symbol::Type(..) = self.self_symbols.last().cloned().unwrap() else {
+                let Symbol::Type(protocol_id) = self.self_symbols.last().cloned().unwrap() else {
                     unreachable!("didn't get protocol id");
                 };
 
-                let Some(..) = self.self_tys.last().cloned() else {
+                let Some(self_ty) = self.self_tys.last().cloned() else {
                     unreachable!("didn't get self_ty");
                 };
 
-                self.session.new_ty_meta_var(Level(1))
+                let result = self.session.new_ty_meta_var(Level(1));
+
+                // Store predicate indexed by the type parameter (Self)
+                if let Ty::Param(param_id) = self_ty {
+                    let predicate = Predicate::AssociatedEquals {
+                        subject: self_ty.clone(),
+                        protocol_id,
+                        associated_type_id: *assoc_id,
+                        output: result.clone(),
+                    };
+
+                    self.predicates_by_param
+                        .entry(param_id)
+                        .or_default()
+                        .push(predicate);
+                }
+
+                result
             }
             TypeAnnotationKind::Record { fields } => {
                 let mut row = Row::Empty(TypeDefKind::Struct);
@@ -1005,7 +1062,7 @@ pub mod tests {
 
     #[test]
     fn resolves_nominal_path_annotations() {
-        let (_ast, session) = type_header_resolve_pass(
+        let (ast, session) = type_header_resolve_pass(
             "
             struct C {
                 struct B {}
@@ -1019,13 +1076,45 @@ pub mod tests {
             ",
         );
 
-        // Make sure constraints are there
-        assert_eq!(
-            session.phase.resolver_constraints.len(),
-            2,
-            "{:#?}",
-            session.phase.resolver_constraints
-        );
+        // no errors during header/resolve
+        assert!(ast.diagnostics.is_empty(), "{:?}", ast.diagnostics);
+
+        let c_nominal = session
+            .phase
+            .type_catalog
+            .nominals
+            .get(&TypeId(1))
+            .expect("missing C");
+        let a_nominal = session
+            .phase
+            .type_catalog
+            .nominals
+            .get(&TypeId(3))
+            .expect("missing A");
+
+        // child types are registered: C.B and A.B exist and are reachable by name
+        assert!(c_nominal.child_types.contains_key("B"), "C.B not recorded");
+        assert!(a_nominal.child_types.contains_key("B"), "A.B not recorded");
+
+        // properties `a` (in C) and `c` (in A) exist in the catalog
+        match &c_nominal.form {
+            NominalForm::Struct { properties, .. } => {
+                assert!(
+                    properties.contains_key(&Label::Named("a".into())),
+                    "C missing property `a`"
+                );
+            }
+            _ => panic!("C should be a struct"),
+        }
+        match &a_nominal.form {
+            NominalForm::Struct { properties, .. } => {
+                assert!(
+                    properties.contains_key(&Label::Named("c".into())),
+                    "A missing property `c`"
+                );
+            }
+            _ => panic!("A should be a struct"),
+        }
     }
 
     #[test]

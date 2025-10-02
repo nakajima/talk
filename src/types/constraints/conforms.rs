@@ -82,7 +82,12 @@ impl Conforms {
 
             tracing::trace!("checking {label} conformance: {protocol_entry:?} <> {entry:?}");
 
-            if self.check_method_satisfaction(protocol_entry, entry, session.meta_levels.clone())? {
+            if self.check_method_satisfaction(
+                protocol_entry,
+                entry,
+                session.meta_levels.clone(),
+                next_wants,
+            )? {
                 *requirement = ConformanceRequirement::Fulfilled {
                     symbol: *impl_symbol,
                 }
@@ -105,10 +110,8 @@ impl Conforms {
         requirement: &EnvEntry,
         implementation: &EnvEntry,
         meta_levels: FxHashMap<Meta, Level>,
+        next_wants: &mut Wants,
     ) -> Result<bool, TypeError> {
-        // Fresh wants for any generated constraints
-        let mut temp_wants = Wants::default();
-
         // This is gross. We should just make it easier to generate type vars off something that isn't a whole-ass session.
         let mut session = TypeSession::<SCCResolved> {
             vars: Default::default(),
@@ -129,6 +132,9 @@ impl Conforms {
 
         // Instantiate both at the same level
         let level = Level(999); // High level so nothing escapes
+
+        // Use a temporary Wants that we discard - we're just checking unification, not solving constraints
+        let mut temp_wants = Wants::default();
 
         let req_ty = match requirement {
             EnvEntry::Mono(ty) => ty.clone(),

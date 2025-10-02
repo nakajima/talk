@@ -1193,7 +1193,12 @@ pub mod tests {
         ",
         );
 
-        assert_eq!(1, ast.diagnostics.len(), "{:?}", ast.diagnostics);
+        assert_eq!(
+            1,
+            ast.diagnostics.len(),
+            "should have no method error: {:?}",
+            ast.diagnostics
+        );
     }
 
     #[test]
@@ -1529,7 +1534,6 @@ pub mod tests {
     }
 
     #[test]
-    #[ignore = "wip"]
     fn types_protocol_associated_types() {
         let (ast, session) = typecheck(
             "
@@ -1548,11 +1552,12 @@ pub mod tests {
             }
         }
 
-        func getFloat<T: Aged>(aged: T) {
+        func getFloat<A: Aged>(aged: A) {
             aged.getAge()
         }
 
-        func getInt<T: Aged>(aged: T) {
+        // Make sure associated types can be represented
+        func getInt<A: Aged>(aged: A) -> A.T {
             aged.getAge()
         }
 
