@@ -68,8 +68,16 @@ impl<'a> TypeResolvePass<'a> {
     // Go through all headers and gather up properties/methods/variants/etc. Don't perform
     // any generalization until the very end.
     fn solve(&mut self) -> HeadersResolved {
-        for (decl_id, _ty) in self.raw.type_constructors.clone().iter() {
-            let base = Ty::TypeConstructor(*decl_id);
+        for (decl_id, type_def) in self.raw.type_constructors.clone().iter() {
+            let base = Ty::Nominal {
+                id: *decl_id,
+                type_args: type_def
+                    .generics
+                    .iter()
+                    .map(|_| self.session.new_type_param())
+                    .collect(),
+                row: Box::new(self.session.new_row_meta_var(Level(1))),
+            };
 
             self.session
                 .term_env
@@ -661,7 +669,7 @@ impl<'a> TypeResolvePass<'a> {
                 let mut foralls = vec![];
 
                 // Check if this type parameter already has an entry
-                let mut base = if let Some(entry) = self.session.term_env.lookup(sym).cloned() {
+                let base = if let Some(entry) = self.session.term_env.lookup(sym).cloned() {
                     let (ty, preds, fas) = entry.into();
                     predicates.extend(preds);
                     foralls.extend(fas);
@@ -671,10 +679,9 @@ impl<'a> TypeResolvePass<'a> {
                 };
 
                 for g in generics {
-                    let (ty, preds, fas) = self.infer_type_annotation(g);
+                    let (_, preds, fas) = self.infer_type_annotation(g);
                     predicates.extend(preds);
                     foralls.extend(fas);
-                    base = Ty::TypeApplication(base.into(), ty.into());
                 }
 
                 let entry = (base, predicates, foralls);
@@ -689,11 +696,11 @@ impl<'a> TypeResolvePass<'a> {
                 (Ty::Void, vec![], vec![])
             }
             TypeAnnotationKind::Nominal {
-                name: Name::Resolved(sym @ Symbol::Type(type_id), ..),
+                name: Name::Resolved(sym @ Symbol::Type(..), ..),
                 generics,
             } => {
                 // Check if this is a generic parameter (from type defs or functions)
-                let (mut base, mut predicates, mut foralls) =
+                let (base, mut predicates, mut foralls) =
                     if let Some(entry) = self.session.term_env.lookup(sym).cloned() {
                         // Type definition generic (e.g., struct Foo<T>)
                         entry.into()
@@ -702,15 +709,14 @@ impl<'a> TypeResolvePass<'a> {
                         entry.into()
                     } else {
                         // It's a type constructor
-                        (Ty::TypeConstructor(*type_id), vec![], vec![])
+                        (self.session.new_ty_meta_var(Level(1)), vec![], vec![])
                     };
 
                 // Apply generic arguments if any
                 for g in generics {
-                    let (ty, preds, fas) = self.infer_type_annotation(g);
+                    let (_, preds, fas) = self.infer_type_annotation(g);
                     predicates.extend(preds);
                     foralls.extend(fas);
-                    base = Ty::TypeApplication(base.into(), ty.into());
                 }
 
                 (base, predicates, foralls)
@@ -720,7 +726,7 @@ impl<'a> TypeResolvePass<'a> {
                 member: Label::Named(..),
                 member_generics,
             } => {
-                let (mut base_ty, mut predicates, mut foralls) = self.infer_type_annotation(base);
+                let (_, mut predicates, mut foralls) = self.infer_type_annotation(base);
                 let result = self.session.new_type_param();
 
                 let Ty::Param(id) = &result else {
@@ -730,10 +736,9 @@ impl<'a> TypeResolvePass<'a> {
                 foralls.push(ForAll::Ty(*id));
 
                 for g in member_generics {
-                    let (ty, preds, fas) = self.infer_type_annotation(g);
+                    let (_, preds, fas) = self.infer_type_annotation(g);
                     predicates.extend(preds);
                     foralls.extend(fas);
-                    base_ty = Ty::TypeApplication(base_ty.into(), ty.into());
                 }
 
                 (result, predicates, foralls)

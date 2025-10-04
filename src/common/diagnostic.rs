@@ -7,7 +7,6 @@ use crate::{
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Diagnostic<E: Error> {
-    pub path: String,
     pub span: Span,
     pub kind: E,
 }

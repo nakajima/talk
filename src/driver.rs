@@ -41,6 +41,7 @@ pub struct Typed {
     pub type_session: TypeSession,
 }
 
+#[derive(Debug)]
 pub enum CompileError {
     IO(io::Error),
     Parsing(ParserError),
@@ -65,6 +66,7 @@ impl Driver {
         for (i, file) in self.files.iter().enumerate() {
             let input = std::fs::read_to_string(file).map_err(CompileError::IO)?;
             let lexer = Lexer::new(&input);
+            tracing::info!("parsing {file:?}");
             let parser = Parser::new(file.clone().to_string_lossy(), FileID(i as u32), lexer);
             asts.insert(file.clone(), parser.parse().map_err(CompileError::Parsing)?);
         }
@@ -78,12 +80,12 @@ impl Driver {
 
 impl Driver<Parsed> {
     pub fn resolve_names(self) -> Result<Driver<NameResolved>, CompileError> {
-        let mut asts = FxHashMap::default();
+        let resolver = NameResolver::new();
 
-        for (path, ast) in self.phase.asts {
-            let resolved = NameResolver::resolve(ast);
-            asts.insert(path, resolved);
-        }
+        let (paths, asts): (Vec<_>, Vec<_>) = self.phase.asts.into_iter().unzip();
+        let resolved = resolver.resolve(asts);
+
+        let asts = paths.into_iter().zip(resolved).collect();
 
         Ok(Driver {
             files: self.files,
@@ -100,16 +102,19 @@ impl Driver<NameResolved> {
 
         for ast in self.phase.asts.values_mut() {
             // TODO: do a drive_all for resolve pass
+            tracing::info!("resolving types in {:?}", ast.path);
             TypeResolvePass::drive(ast, &mut type_session, raw.clone());
         }
 
         let mut scc = SCCResolved::default();
         for ast in self.phase.asts.values_mut() {
             // TODO: do a drive_all for deps pass
+            tracing::info!("resolving type deps in {:?}", ast.path);
             DependenciesPass::drive(&mut type_session, ast, &mut scc);
         }
 
         for ast in self.phase.asts.values_mut() {
+            tracing::info!("inferencing {:?}", ast.path);
             InferencePass::perform(&mut type_session, &scc, ast);
         }
 
@@ -125,6 +130,40 @@ impl Driver<NameResolved> {
 
 #[cfg(test)]
 pub mod tests {
+    use std::path::PathBuf;
+
+    use crate::{
+        driver::Driver,
+        types::{ty::Ty, types_tests},
+    };
+
     #[test]
-    fn typechecks_multiple_files() {}
+    fn typechecks_multiple_files() {
+        let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let paths = vec![
+            current_dir.join("test/fixtures/a.tlk"),
+            current_dir.join("test/fixtures/b.tlk"),
+        ];
+
+        let driver = Driver::new(paths);
+        let typed = driver
+            .parse()
+            .unwrap()
+            .resolve_names()
+            .unwrap()
+            .typecheck()
+            .unwrap();
+
+        println!("{:?}", typed.phase.asts.keys().collect::<Vec<_>>());
+        let ast = typed
+            .phase
+            .asts
+            .get(&current_dir.join("test/fixtures/b.tlk"))
+            .unwrap();
+
+        assert_eq!(
+            types_tests::tests::ty(1, ast, &typed.phase.type_session),
+            Ty::Int
+        );
+    }
 }

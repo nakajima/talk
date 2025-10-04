@@ -92,7 +92,8 @@ pub mod tests {
 
     fn resolve_err(code: &'static str) -> AST<NameResolved> {
         let parsed = parse(code);
-        NameResolver::resolve(parsed)
+        let name_resolver = NameResolver::new();
+        name_resolver.resolve(vec![parsed]).into_iter().next().unwrap()
     }
 
     #[test]
@@ -144,7 +145,6 @@ pub mod tests {
         assert_eq!(
             resolved.diagnostics[0],
             AnyDiagnostic::NameResolution(Diagnostic::<NameResolverError> {
-                path: "".into(),
                 span: Span::ANY,
                 kind: NameResolverError::UndefinedName("x".into())
             })

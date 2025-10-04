@@ -1,5 +1,8 @@
+use crate::node_id::FileID;
+
 #[derive(Clone, Copy, Eq)]
 pub struct Span {
+    pub file_id: FileID,
     pub start: u32,
     pub end: u32,
 }
@@ -12,6 +15,7 @@ impl std::fmt::Debug for Span {
 
 impl Span {
     pub const ANY: Span = Span {
+        file_id: FileID(u32::MAX),
         start: u32::MAX,
         end: u32::MAX,
     };

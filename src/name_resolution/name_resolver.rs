@@ -88,7 +88,6 @@ pub type ScopeId = Index;
     Pattern(enter)
 )]
 pub struct NameResolver {
-    path: String,
     pub(super) symbols: Symbols,
     diagnostics: Vec<Diagnostic<NameResolverError>>,
     pub(super) phase: NameResolved,
@@ -101,60 +100,83 @@ pub struct NameResolver {
 impl ASTPhase for NameResolved {}
 
 impl NameResolver {
-    pub fn resolve(mut ast: AST<Parsed>) -> AST<NameResolved> {
-        LowerFuncsToLets::run(&mut ast);
-        PrependSelfToMethods::run(&mut ast);
+    pub fn new() -> Self {
+        let mut resolver = Self {
+            symbols: Default::default(),
+            diagnostics: Default::default(),
+            phase: NameResolved::default(),
+            scopes: Default::default(),
+            current_scope_id: None,
+        };
 
-        let AST {
-            path,
-            roots,
-            mut diagnostics,
-            meta,
-            ..
-        } = ast;
+        // Create root scope and import builtins once
+        use crate::node_id::FileID;
+        let root_scope = Scope::new(NodeID(FileID(0), 0), None, 1);
+        resolver.scopes.insert(NodeID(FileID(0), 0), root_scope);
+        resolver.current_scope_id = Some(NodeID(FileID(0), 0));
 
-        let mut resolver = NameResolver::default();
+        let scope = resolver
+            .scopes
+            .get_mut(&NodeID(FileID(0), 0))
+            .expect("root scope");
+        builtins::import_builtins(scope);
 
-        // Declare stuff
-        let mut declarer = DeclDeclarer::new(&mut resolver);
-        declarer.start_scope(NodeID(ast.file_id, 0));
-        let initial_scope = declarer
-            .resolver
-            .current_scope_mut()
-            .expect("didn't get started scope");
-        builtins::import_builtins(initial_scope);
+        resolver
+    }
 
-        let roots: Vec<Node> = roots
-            .into_iter()
-            .map(|mut root| {
+    pub fn resolve(mut self, mut asts: Vec<AST<Parsed>>) -> Vec<AST<NameResolved>> {
+        // First pass: run transforms and declare all types
+        for ast in &mut asts {
+            LowerFuncsToLets::run(ast);
+            PrependSelfToMethods::run(ast);
+        }
+
+        let mut declarer = DeclDeclarer::new(&mut self);
+        for ast in &mut asts {
+            for root in &mut ast.roots {
                 root.drive_mut(&mut declarer);
-                root
-            })
-            .collect();
-
-        resolver.enter_scope(NodeID(ast.file_id, 0));
-        // Resolve stuff
-        let roots: Vec<Node> = roots
-            .into_iter()
-            .map(|mut root| {
-                root.drive_mut(&mut resolver);
-                root
-            })
-            .collect();
-
-        for diagnostic in resolver.diagnostics {
-            diagnostics.push(diagnostic.into());
+            }
         }
 
-        AST {
-            path,
-            roots,
-            diagnostics,
-            meta,
-            phase: resolver.phase,
-            node_ids: ast.node_ids,
-            file_id: ast.file_id,
-        }
+        // Second pass: resolve all names
+        use crate::node_id::FileID;
+        self.current_scope_id = Some(NodeID(FileID(0), 0));
+
+        asts.into_iter()
+            .map(|ast| {
+                let AST {
+                    path,
+                    roots,
+                    mut diagnostics,
+                    meta,
+                    file_id,
+                    node_ids,
+                    ..
+                } = ast;
+
+                let roots: Vec<Node> = roots
+                    .into_iter()
+                    .map(|mut root| {
+                        root.drive_mut(&mut self);
+                        root
+                    })
+                    .collect();
+
+                for diagnostic in std::mem::take(&mut self.diagnostics) {
+                    diagnostics.push(diagnostic.into());
+                }
+
+                AST {
+                    path,
+                    roots,
+                    diagnostics,
+                    meta,
+                    phase: std::mem::take(&mut self.phase),
+                    node_ids,
+                    file_id,
+                }
+            })
+            .collect()
     }
 
     pub(super) fn current_scope(&self) -> Option<&Scope> {
@@ -210,11 +232,8 @@ impl NameResolver {
     }
 
     pub(super) fn diagnostic(&mut self, span: Span, err: NameResolverError) {
-        self.diagnostics.push(Diagnostic::<NameResolverError> {
-            kind: err,
-            path: self.path.clone(),
-            span,
-        });
+        self.diagnostics
+            .push(Diagnostic::<NameResolverError> { kind: err, span });
     }
 
     fn enter_scope(&mut self, node_id: NodeID) {

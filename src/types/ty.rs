@@ -70,13 +70,8 @@ pub enum Ty {
         ret: Box<Ty>,
     },
 
-    TypeConstructor(TypeId),
-    TypeApplication(Box<Ty>, Box<Ty>),
-
     Func(Box<Ty>, Box<Ty>),
-
     Tuple(Vec<Ty>),
-
     Record(Box<Row>),
 
     // Nominal types (we look up their information from the TypeCatalog)
@@ -127,11 +122,6 @@ impl Ty {
                 }
                 Row::Var(_) => (),
             },
-            Ty::TypeConstructor(_) => (),
-            Ty::TypeApplication(base, arg) => {
-                result.extend(base.collect_foralls());
-                result.extend(arg.collect_foralls());
-            }
         }
         result
     }
@@ -154,8 +144,6 @@ impl Ty {
                 _ => false,
             },
             Ty::Nominal { .. } => false,
-            Ty::TypeConstructor(_) => false,
-            Ty::TypeApplication(base, arg) => base.contains_var() || arg.contains_var(),
         }
     }
 
@@ -166,12 +154,6 @@ impl Ty {
             Ty::Param(..) => f(self),
             Ty::Rigid(..) => f(self),
             Ty::UnificationVar { .. } => f(self),
-            Ty::TypeConstructor(..) => f(self),
-            Ty::TypeApplication(base, arg) => {
-                f(base);
-                f(arg);
-                f(self)
-            }
             Ty::Constructor { params, ret, .. } => {
                 _ = params.iter().map(&mut *f);
                 _ = f(ret);
@@ -215,8 +197,6 @@ impl std::fmt::Debug for Ty {
             Ty::Constructor { params, .. } => {
                 write!(f, "Constructor({params:?})")
             }
-            Ty::TypeConstructor(id) => write!(f, "tycon({id:?})"),
-            Ty::TypeApplication(base, arg) => write!(f, "tyapp[{base:?}]({arg:?})"),
             Ty::Func(param, ret) => write!(f, "func({param:?}) -> {ret:?}"),
             Ty::Tuple(items) => {
                 write!(f, "({})", items.iter().map(|i| format!("{i:?}")).join(", "))

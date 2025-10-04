@@ -1,0 +1,5 @@
+struct B {
+  let a: A
+}
+
+B(a: A(count: 1)).a.count

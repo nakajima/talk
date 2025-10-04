@@ -7,9 +7,7 @@ use crate::{
     label::Label,
     types::{
         dsu::DSU,
-        passes::{
-            inference_pass::{Meta, curry},
-        },
+        passes::inference_pass::{Meta, curry},
         row::{Row, RowMetaId, RowParamId, RowTail, normalize_row},
         ty::{Level, Ty, TypeParamId, UnificationVarId},
         type_error::TypeError,
@@ -83,8 +81,6 @@ fn occurs_in_row(id: UnificationVarId, row: &Row) -> bool {
 // Helper: occurs check
 fn occurs_in(id: UnificationVarId, ty: &Ty) -> bool {
     match ty {
-        Ty::TypeConstructor(..) => false,
-        Ty::TypeApplication(base, arg) => occurs_in(id, base) || occurs_in(id, arg),
         Ty::UnificationVar { id: mid, .. } => *mid == id,
         Ty::Func(a, b) => occurs_in(id, a) || occurs_in(id, b),
         Ty::Tuple(items) => items.iter().any(|t| occurs_in(id, t)),
@@ -264,9 +260,6 @@ pub(super) fn unify(
     let lhs = apply(lhs.clone(), substitutions);
     let rhs = apply(rhs.clone(), substitutions);
 
-    let lhs = session.normalize_nominals(&lhs, Level(1));
-    let rhs = session.normalize_nominals(&rhs, Level(1));
-
     match (&lhs, &rhs) {
         (Ty::Primitive(lhs), Ty::Primitive(rhs)) => {
             if lhs == rhs {
@@ -423,11 +416,6 @@ pub(super) fn substitute(ty: Ty, substitutions: &FxHashMap<Ty, Ty>) -> Ty {
         Ty::Rigid(..) => ty,
         Ty::UnificationVar { .. } => ty,
         Ty::Primitive(..) => ty,
-        Ty::TypeConstructor(..) => ty,
-        Ty::TypeApplication(box base, box arg) => Ty::TypeApplication(
-            substitute(base, substitutions).into(),
-            substitute(arg, substitutions).into(),
-        ),
         Ty::Constructor {
             type_id,
             params,
@@ -488,11 +476,6 @@ pub(super) fn apply(ty: Ty, substitutions: &mut UnificationSubstitutions) -> Ty 
         Ty::Param(..) => ty,
         Ty::Hole(..) => ty,
         Ty::Rigid(..) => ty,
-        Ty::TypeConstructor(..) => ty,
-        Ty::TypeApplication(base, arg) => Ty::TypeApplication(
-            apply(*base, substitutions).into(),
-            apply(*arg, substitutions).into(),
-        ),
         Ty::UnificationVar { id, .. } => {
             let rep = substitutions.canon_meta(id);
             if let Some(bound) = substitutions.ty.get(&rep).cloned() {
@@ -603,11 +586,6 @@ pub(super) fn instantiate_ty(
                 .collect(),
             ret: Box::new(instantiate_ty(*ret, substitutions, level)),
         },
-        Ty::TypeConstructor(..) => ty,
-        Ty::TypeApplication(base, arg) => Ty::TypeApplication(
-            instantiate_ty(*base, substitutions, level).into(),
-            instantiate_ty(*arg, substitutions, level).into(),
-        ),
         Ty::Func(params, ret) => Ty::Func(
             Box::new(instantiate_ty(*params, substitutions, level)),
             Box::new(instantiate_ty(*ret, substitutions, level)),

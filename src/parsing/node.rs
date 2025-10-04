@@ -47,7 +47,11 @@ impl Node {
             Node::Block(block) => block.span,
             Node::TypeAnnotation(type_annotation) => type_annotation.span,
             Node::RecordField(record_field) => record_field.span,
-            Node::IncompleteExpr(..) => Span { start: 0, end: 0 },
+            Node::IncompleteExpr(..) => Span {
+                file_id: FileID(0),
+                start: 0,
+                end: 0,
+            },
             Node::CallArg(call_arg) => call_arg.span,
         }
     }

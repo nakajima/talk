@@ -332,26 +332,6 @@ impl TypeSession {
     pub(super) fn normalize_nominals(&mut self, ty: &Ty, level: Level) -> Ty {
         let normalized = match ty.clone() {
             Ty::Nominal { .. } => ty.clone(),
-            Ty::TypeConstructor(type_id) => Ty::Nominal {
-                id: type_id,
-                type_args: vec![],
-                row: self.new_row_meta_var(level).into(),
-            },
-            Ty::TypeApplication(box base, box arg) => {
-                println!("normalize type application: {ty:?}");
-                let mut args = uncurry_type_application(base);
-                args.push(arg);
-
-                let base = args.remove(0);
-                match base {
-                    Ty::TypeConstructor(type_id) => Ty::Nominal {
-                        id: type_id,
-                        type_args: args,
-                        row: self.new_row_meta_var(level).into(),
-                    },
-                    _ => panic!("didn't get type constructor as base: {base:?}"),
-                }
-            }
             Ty::Constructor {
                 type_id,
                 params,
@@ -475,17 +455,4 @@ fn collect_metas_in_constraint(constraint: &Constraint, out: &mut FxHashSet<Ty>)
             }
         }
     }
-}
-
-pub fn uncurry_type_application(ty: Ty) -> Vec<Ty> {
-    let mut result = vec![];
-    match ty {
-        Ty::TypeApplication(box base, box arg) => {
-            result.extend(uncurry_type_application(base));
-            result.extend(uncurry_type_application(arg))
-        }
-        Ty::TypeConstructor(..) => result.push(ty),
-        other => result.push(other),
-    }
-    result
 }

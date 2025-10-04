@@ -36,7 +36,7 @@ pub mod tests {
         (ast, session)
     }
 
-    fn ty(i: usize, ast: &AST<NameResolved>, session: &TypeSession) -> Ty {
+    pub fn ty(i: usize, ast: &AST<NameResolved>, session: &TypeSession) -> Ty {
         session
             .types_by_node
             .get(&ast.roots[i].as_stmt().clone().as_expr().id)
@@ -1028,6 +1028,25 @@ pub mod tests {
     }
 
     #[test]
+    fn types_struct_referencing_another_struct() {
+        let (ast, session) = typecheck(
+            "
+        struct A {
+            let count: Int
+        }
+
+        struct B {
+            let a: A
+        }
+
+        B(a: A(count: 1)).a.count
+        ",
+        );
+
+        assert_eq!(ty(2, &ast, &session), Ty::Int);
+    }
+
+    #[test]
     fn types_struct_member_access() {
         let (ast, session) = typecheck(
             "
@@ -1364,7 +1383,7 @@ pub mod tests {
             ty(3, &ast, &session),
             Ty::Nominal {
                 id: TypeId(1),
-                row: Box::new(make_row!(Enum, "some" => Ty::Param(2.into()), "none" => Ty::Void)),
+                row: Box::new(make_row!(Enum, "some" => Ty::Param(3.into()), "none" => Ty::Void)),
                 type_args: vec![]
             }
         );

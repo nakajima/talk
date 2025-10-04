@@ -35,7 +35,7 @@ impl Member {
         next_wants: &mut Wants,
         substitutions: &mut UnificationSubstitutions,
     ) -> Result<bool, TypeError> {
-        let mut receiver = self.receiver.clone();
+        let receiver = self.receiver.clone();
         let ty = self.ty.clone();
 
         tracing::debug!(
@@ -51,14 +51,6 @@ impl Member {
             tracing::debug!("deferring member constraint");
             next_wants.push(Constraint::Member(self.clone()));
             return Ok(false);
-        }
-
-        if let Ty::TypeConstructor(type_id) = receiver {
-            receiver = Ty::Nominal {
-                id: type_id,
-                type_args: vec![],
-                row: Box::new(session.new_row_meta_var(level)),
-            };
         }
 
         if let Ty::Nominal { id: type_id, .. } | Ty::Constructor { type_id, .. } = &receiver

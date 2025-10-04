@@ -1,3 +1,4 @@
+use crate::node_id::FileID;
 use crate::types::builtins;
 use crate::types::constraints::type_member::TypeMember;
 use crate::types::type_catalog::ConformanceKey;
@@ -169,7 +170,6 @@ impl<'a> InferencePass<'a> {
                 pass.ast
                     .diagnostics
                     .push(crate::diagnostic::AnyDiagnostic::Typing(Diagnostic {
-                        path: pass.ast.path.clone(),
                         span: conforms.span,
                         kind: TypeError::TypesDoesNotConform {
                             protocol_id: conforms.protocol_id,
@@ -335,16 +335,18 @@ impl<'a> InferencePass<'a> {
                 generics,
             } => {
                 // Build Boxy<Int> as TypeApplication(TypeConstructor(Boxy), Int) and normalize.
-                let mut t = Ty::TypeConstructor(*type_id);
-                for g in generics {
-                    let arg = self.infer_type_annotation(g, level, wants);
-                    t = Ty::TypeApplication(Box::new(t), Box::new(arg));
+                Ty::Nominal {
+                    id: *type_id,
+                    type_args: generics
+                        .iter()
+                        .map(|g| self.infer_type_annotation(g, level, wants))
+                        .collect(),
+                    row: Box::new(self.session.new_row_meta_var(Level(1))),
                 }
-                self.session.normalize_nominals(&t, level)
             }
             TypeAnnotationKind::Nominal {
                 name: Name::Resolved(sym @ Symbol::TypeParameter(..), ..),
-                generics,
+                generics: _,
             } => {
                 let entry = self
                     .session
@@ -353,15 +355,7 @@ impl<'a> InferencePass<'a> {
                     .cloned()
                     .expect("did not get type param");
 
-                let mut base =
-                    entry.inference_instantiate(self.session, level, wants, annotation.span);
-
-                for g in generics {
-                    let arg = self.infer_type_annotation(g, level, wants);
-                    base = Ty::TypeApplication(base.into(), arg.into());
-                }
-
-                self.session.normalize_nominals(&base, level)
+                entry.inference_instantiate(self.session, level, wants, annotation.span)
             }
             TypeAnnotationKind::SelfType(Name::Resolved(sym, _)) => self
                 .session
@@ -440,48 +434,33 @@ impl<'a> InferencePass<'a> {
                 tracing::trace!("solving {want:?}");
 
                 let solution = match want {
-                    Constraint::Construction(ref construction) => construction.solve(
-                        self.session,
-                        level,
-                        &mut next_wants,
-                        &mut substitutions,
-                    ),
-                    Constraint::Equals(ref equals) => unify(
-                        &equals.lhs,
-                        &equals.rhs,
-                        &mut substitutions,
-                        self.session,
-                    ),
+                    Constraint::Construction(ref construction) => {
+                        construction.solve(self.session, level, &mut next_wants, &mut substitutions)
+                    }
+                    Constraint::Equals(ref equals) => {
+                        unify(&equals.lhs, &equals.rhs, &mut substitutions, self.session)
+                    }
                     Constraint::Call(ref call) => {
                         call.solve(self.session, &mut next_wants, &mut substitutions)
                     }
                     Constraint::Conforms(ref conforms) => {
                         conforms.solve(self.session, &mut next_wants, &mut substitutions)
                     }
-                    Constraint::Member(ref member) => member.solve(
-                        self.session,
-                        level,
-                        &mut next_wants,
-                        &mut substitutions,
-                    ),
-                    Constraint::HasField(ref has_field) => has_field.solve(
-                        self.session,
-                        level,
-                        &mut next_wants,
-                        &mut substitutions,
-                    ),
+                    Constraint::Member(ref member) => {
+                        member.solve(self.session, level, &mut next_wants, &mut substitutions)
+                    }
+                    Constraint::HasField(ref has_field) => {
+                        has_field.solve(self.session, level, &mut next_wants, &mut substitutions)
+                    }
                     Constraint::AssociatedEquals(ref associated_equals) => associated_equals.solve(
                         self.session,
                         level,
                         &mut next_wants,
                         &mut substitutions,
                     ),
-                    Constraint::TypeMember(ref c) => c.solve(
-                        self.session,
-                        level,
-                        &mut next_wants,
-                        &mut substitutions,
-                    ),
+                    Constraint::TypeMember(ref c) => {
+                        c.solve(self.session, level, &mut next_wants, &mut substitutions)
+                    }
                 };
 
                 match solution {
@@ -492,7 +471,6 @@ impl<'a> InferencePass<'a> {
                         self.ast
                             .diagnostics
                             .push(crate::diagnostic::AnyDiagnostic::Typing(Diagnostic {
-                                path: self.ast.path.clone(),
                                 span: want.span(),
                                 kind: e,
                             }));
@@ -630,7 +608,6 @@ impl<'a> InferencePass<'a> {
                     self.ast
                         .diagnostics
                         .push(crate::diagnostic::AnyDiagnostic::Typing(Diagnostic {
-                            path: self.ast.path.clone(),
                             span: decl.span,
                             kind: TypeError::TypeNotFound(name.to_string()),
                         }));
@@ -1002,10 +979,11 @@ impl<'a> InferencePass<'a> {
             label.clone(),
             member_ty.clone(),
             ConstraintCause::Member(id),
-            receiver
-                .as_ref()
-                .map(|r| r.span)
-                .unwrap_or(Span { start: 0, end: 0 }),
+            receiver.as_ref().map(|r| r.span).unwrap_or(Span {
+                file_id: FileID(0),
+                start: 0,
+                end: 0,
+            }),
         );
 
         member_ty
@@ -1083,13 +1061,7 @@ impl<'a> InferencePass<'a> {
                 .iter()
                 .map(|arg| (self.infer_type_annotation(arg, level, wants), arg.id))
                 .collect();
-            scheme.instantiate_with_args(
-                &type_args_tys,
-                self.session,
-                level,
-                wants,
-                callee.span,
-            )
+            scheme.instantiate_with_args(&type_args_tys, self.session, level, wants, callee.span)
         } else {
             self.infer_expr(callee, level, wants)
         };
@@ -1293,11 +1265,6 @@ pub fn collect_meta(ty: &Ty, out: &mut FxHashSet<Ty>) {
     match ty {
         Ty::Param(_) => {
             out.insert(ty.clone());
-        }
-        Ty::TypeConstructor(..) => (),
-        Ty::TypeApplication(base, arg) => {
-            collect_meta(base, out);
-            collect_meta(arg, out);
         }
         Ty::UnificationVar { .. } => {
             out.insert(ty.clone());

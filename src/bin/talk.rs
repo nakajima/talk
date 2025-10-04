@@ -48,7 +48,8 @@ async fn main() {
             let lexer = Lexer::new(&code);
             let parser = Parser::new(filename, FileID(0), lexer);
             let parsed = parser.parse().unwrap();
-            let mut resolved = NameResolver::resolve(parsed);
+            let resolver = NameResolver::new();
+            let mut resolved = resolver.resolve(vec![parsed]).into_iter().next().unwrap();
 
             let session = TypeSession::drive(&mut resolved);
 

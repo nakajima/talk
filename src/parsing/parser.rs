@@ -1666,6 +1666,7 @@ impl<'a> Parser<'a> {
         Ok((
             next_id,
             Span {
+                file_id: self.file_id,
                 start: start.token.start,
                 end: token.end,
             },
