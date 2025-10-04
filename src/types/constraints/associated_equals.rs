@@ -1,3 +1,5 @@
+//SLOPFILE
+
 use tracing::instrument;
 
 use crate::{
@@ -96,10 +98,10 @@ impl AssociatedEquals {
                             // Quick check: does this property type directly reference that param?
                             let mut mentions_param = false;
                             declared_property_type.fold(&mut |ty| {
-                                if let Ty::Param(pid) = ty {
-                                    if *pid == alias_param {
-                                        mentions_param = true;
-                                    }
+                                if let Ty::Param(pid) = ty
+                                    && *pid == alias_param
+                                {
+                                    mentions_param = true;
                                 }
                                 ty.clone()
                             });
