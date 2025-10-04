@@ -303,12 +303,25 @@ pub mod tests {
     }
 
     #[test]
-    // #[ignore = "waiting on rows"]
     fn types_tuple_assignment() {
         let (ast, session) = typecheck(
             "
         let z = (123, 1.23)
         let (x, y) = z
+        x
+        y
+        ",
+        );
+        assert_eq!(ty(2, &ast, &session), Ty::Int);
+        assert_eq!(ty(3, &ast, &session), Ty::Float);
+    }
+
+    #[test]
+    fn types_record_assignment() {
+        let (ast, session) = typecheck(
+            "
+        let z = { x: 1, y: 1.23 }
+        let { x, y } = z
         x
         y
         ",

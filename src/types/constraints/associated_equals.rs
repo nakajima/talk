@@ -38,7 +38,6 @@ impl AssociatedEquals {
         next_wants: &mut Wants,
         substitutions: &mut UnificationSubstitutions,
     ) -> Result<bool, TypeError> {
-        // 1) We only know how to discharge this when the subject is a concrete nominal.
         let subject = apply(self.subject.clone(), substitutions);
         let Ty::Nominal {
             id: subject_id,
@@ -51,7 +50,6 @@ impl AssociatedEquals {
         };
         let subject_id = *subject_id;
 
-        // 2) Look up the conformance.
         let key = ConformanceKey {
             protocol_id: self.protocol_id,
             conforming_id: subject_id.into(),
@@ -61,60 +59,51 @@ impl AssociatedEquals {
             return Ok(false);
         };
 
-        // 3) Get the associated witness symbol (e.g., the nested type alias symbol).
         let Some(witness_symbol) = conformance.associated_types.get(&self.associated_type_id)
         else {
             next_wants.push(Constraint::AssociatedEquals(self.clone()));
             return Ok(false);
         };
 
-        // 4) Try to reify the alias parameter from the subject row if possible.
-        //    This handles the very common case: `typealias T = A` and a property `let age: A`.
         let mut reified_witness_type: Option<Ty> = None;
 
         if let Some(EnvEntry::Scheme(scheme)) = session.term_env.lookup(witness_symbol)
             && matches!(scheme.ty, Ty::Param(_))
         {
-            // Normalize the subject row so we can read actual field types.
             let (subject_fields, _tail) = normalize_row(subject_row.clone(), substitutions);
 
-            // Load the nominal shape to see declared properties and their types.
-            if let Some(nominal) = session.phase.type_catalog.nominals.get(&subject_id.into()) {
-                // We only try the struct path here; enums will just fall back.
-                if let NominalForm::Struct { properties, .. } = &nominal.form {
-                    // Find a property whose declared type mentions the SAME Ty::Param as the alias scheme.ty
-                    let alias_param = match &scheme.ty {
-                        Ty::Param(p) => *p,
-                        _ => unreachable!(),
-                    };
+            if let Some(nominal) = session.phase.type_catalog.nominals.get(&subject_id.into())
+                && let NominalForm::Struct { properties, .. } = &nominal.form
+            {
+                let alias_param = match &scheme.ty {
+                    Ty::Param(p) => *p,
+                    _ => unreachable!(),
+                };
 
-                    'scan_props: for (label, property_symbol) in properties {
-                        if let Some(property_entry) = session.term_env.lookup(property_symbol) {
-                            let declared_property_type = match property_entry {
-                                EnvEntry::Mono(t) => t.clone(),
-                                EnvEntry::Scheme(s) => s.ty.clone(),
-                            };
+                'scan_props: for (label, property_symbol) in properties {
+                    if let Some(property_entry) = session.term_env.lookup(property_symbol) {
+                        let declared_property_type = match property_entry {
+                            EnvEntry::Mono(t) => t.clone(),
+                            EnvEntry::Scheme(s) => s.ty.clone(),
+                        };
 
-                            // Quick check: does this property type directly reference that param?
-                            let mut mentions_param = false;
-                            declared_property_type.fold(&mut |ty| {
-                                if let Ty::Param(pid) = ty
-                                    && *pid == alias_param
-                                {
-                                    mentions_param = true;
-                                }
-                                ty.clone()
-                            });
-
-                            if !mentions_param {
-                                continue;
+                        let mut mentions_param = false;
+                        declared_property_type.fold(&mut |ty| {
+                            if let Ty::Param(pid) = ty
+                                && *pid == alias_param
+                            {
+                                mentions_param = true;
                             }
+                            ty.clone()
+                        });
 
-                            // If the subject actually has this field, use its concrete type as the witness.
-                            if let Some(actual_field_type) = subject_fields.get(label).cloned() {
-                                reified_witness_type = Some(actual_field_type);
-                                break 'scan_props;
-                            }
+                        if !mentions_param {
+                            continue;
+                        }
+
+                        if let Some(actual_field_type) = subject_fields.get(label).cloned() {
+                            reified_witness_type = Some(actual_field_type);
+                            break 'scan_props;
                         }
                     }
                 }
