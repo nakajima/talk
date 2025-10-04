@@ -39,16 +39,14 @@ async fn main() {
                 formatter::{DebugHTMLFormatter, Formatter},
                 lexer::Lexer,
                 name_resolution::name_resolver::NameResolver,
+                node_id::FileID,
                 parser::Parser,
-                types::{
-                    type_session::TypeSession,
-                    types_decorator::TypesDecorator,
-                },
+                types::{type_session::TypeSession, types_decorator::TypesDecorator},
             };
 
             let code = std::fs::read_to_string(filename).unwrap();
             let lexer = Lexer::new(&code);
-            let parser = Parser::new(filename, lexer);
+            let parser = Parser::new(filename, FileID(0), lexer);
             let parsed = parser.parse().unwrap();
             let mut resolved = NameResolver::resolve(parsed);
 

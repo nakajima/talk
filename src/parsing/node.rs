@@ -1,6 +1,6 @@
 use crate::{
     formatter,
-    node_id::NodeID,
+    node_id::{FileID, NodeID},
     node_kinds::{
         attribute::Attribute, block::Block, call_arg::CallArg, decl::Decl, expr::Expr, func::Func,
         generic_decl::GenericDecl, incomplete_expr::IncompleteExpr, match_arm::MatchArm,
@@ -66,7 +66,7 @@ impl Node {
             Node::Block(block) => block.id,
             Node::TypeAnnotation(type_annotation) => type_annotation.id,
             Node::RecordField(record_field) => record_field.id,
-            Node::IncompleteExpr(..) => NodeID(0),
+            Node::IncompleteExpr(..) => NodeID(FileID(0), 0),
             Node::CallArg(call_arg) => call_arg.id,
         }
     }

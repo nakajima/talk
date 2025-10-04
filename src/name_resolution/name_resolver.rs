@@ -117,7 +117,7 @@ impl NameResolver {
 
         // Declare stuff
         let mut declarer = DeclDeclarer::new(&mut resolver);
-        declarer.start_scope(NodeID(0));
+        declarer.start_scope(NodeID(ast.file_id, 0));
         let initial_scope = declarer
             .resolver
             .current_scope_mut()
@@ -132,7 +132,7 @@ impl NameResolver {
             })
             .collect();
 
-        resolver.enter_scope(NodeID(0));
+        resolver.enter_scope(NodeID(ast.file_id, 0));
         // Resolve stuff
         let roots: Vec<Node> = roots
             .into_iter()
@@ -153,6 +153,7 @@ impl NameResolver {
             meta,
             phase: resolver.phase,
             node_ids: ast.node_ids,
+            file_id: ast.file_id,
         }
     }
 

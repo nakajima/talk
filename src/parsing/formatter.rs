@@ -1412,11 +1412,12 @@ mod formatter_tests {
     use super::*;
     use crate::ast::Parsed;
     use crate::lexer::Lexer;
+    use crate::node_id::FileID;
     use crate::parser::Parser;
 
     fn parse(code: &str) -> AST<Parsed> {
         let lexer = Lexer::new(code);
-        let parser = Parser::new("-", lexer);
+        let parser = Parser::new("-", FileID(0), lexer);
         parser.parse().unwrap()
     }
 

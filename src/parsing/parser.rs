@@ -3,7 +3,7 @@ use crate::label::Label;
 use crate::lexer::Lexer;
 use crate::name::Name;
 use crate::node::Node;
-use crate::node_id::NodeID;
+use crate::node_id::{FileID, NodeID};
 use crate::node_kinds::block::Block;
 use crate::node_kinds::call_arg::CallArg;
 use crate::node_kinds::decl::{Decl, DeclKind};
@@ -66,10 +66,11 @@ pub struct Parser<'a> {
     previous: Option<Token>,
     previous_before_newline: Option<Token>,
     ast: AST,
+    file_id: FileID,
 }
 
 impl<'a> Parser<'a> {
-    pub fn new(path: impl Into<String>, lexer: Lexer<'a>) -> Self {
+    pub fn new(path: impl Into<String>, file_id: FileID, lexer: Lexer<'a>) -> Self {
         Self {
             lexer,
             next: None,
@@ -77,6 +78,7 @@ impl<'a> Parser<'a> {
             previous: None,
             previous_before_newline: None,
             source_location_stack: Default::default(),
+            file_id,
             ast: AST::<NewAST> {
                 path: path.into(),
                 roots: Default::default(),
@@ -84,6 +86,7 @@ impl<'a> Parser<'a> {
                 meta: Default::default(),
                 phase: (),
                 node_ids: Default::default(),
+                file_id,
             },
         }
     }
@@ -121,6 +124,7 @@ impl<'a> Parser<'a> {
             meta: self.ast.meta,
             phase: Parsed,
             node_ids: self.ast.node_ids,
+            file_id: self.file_id,
         };
 
         Ok(ast)
@@ -1656,7 +1660,7 @@ impl<'a> Parser<'a> {
             identifiers: start.identifiers,
         };
 
-        let next_id = self.ast.node_ids.next_id();
+        let next_id = self.next_id();
         self.ast.meta.insert(next_id, meta);
 
         Ok((
@@ -1666,6 +1670,10 @@ impl<'a> Parser<'a> {
                 end: token.end,
             },
         ))
+    }
+
+    fn next_id(&mut self) -> NodeID {
+        NodeID(self.file_id, self.ast.node_ids.next_id())
     }
 
     #[must_use]

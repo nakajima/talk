@@ -16,7 +16,7 @@ pub mod tests {
             },
         },
         node::Node,
-        node_id::NodeID,
+        node_id::{FileID, NodeID},
         node_kinds::{
             decl::DeclKind,
             expr::{Expr, ExprKind},
@@ -362,7 +362,7 @@ pub mod tests {
         expected.insert(Symbol::Global(GlobalId(1)));
 
         assert_eq!(
-            resolved.phase.captures.get(&NodeID(9)),
+            resolved.phase.captures.get(&NodeID(FileID(0), 9)),
             Some(&expected),
             "{:?}",
             resolved.phase.captures

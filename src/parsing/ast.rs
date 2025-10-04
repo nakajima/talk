@@ -4,7 +4,7 @@ use crate::{
     diagnostic::AnyDiagnostic,
     id_generator::IDGenerator,
     node::Node,
-    node_id::NodeID,
+    node_id::{FileID, NodeID},
     node_kinds::{
         attribute::Attribute, block::Block, call_arg::CallArg, decl::Decl, expr::Expr, func::Func,
         generic_decl::GenericDecl, incomplete_expr::IncompleteExpr, match_arm::MatchArm,
@@ -31,6 +31,7 @@ pub struct AST<Phase: ASTPhase = NewAST> {
     pub meta: NodeMetaStorage,
     pub phase: Phase,
     pub node_ids: IDGenerator,
+    pub file_id: FileID,
 }
 
 impl<Phase: ASTPhase> AST<Phase> {

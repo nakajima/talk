@@ -119,7 +119,7 @@ pub struct Expr {
 
 impl std::fmt::Debug for Expr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Expr(id: {}, kind: {:?})", self.id.0, self.kind)
+        write!(f, "Expr(id: {:?}, kind: {:?})", self.id, self.kind)
     }
 }
 

@@ -678,7 +678,7 @@ pub mod tests {
             },
         },
         node::Node,
-        node_id::NodeID,
+        node_id::{FileID, NodeID},
         node_kinds::{generic_decl::GenericDecl, type_annotation::*},
         span::Span,
         types::{
@@ -833,7 +833,7 @@ pub mod tests {
                         initializes_type_id: TypeId(1),
                         params: vec![
                             ASTTyRepr::SelfType(Name::Resolved(Symbol::Type(TypeId(1)), "Wrapper".into()), NodeID::ANY, Span::ANY),
-                            ASTTyRepr::Hole(NodeID(4), Span::ANY)
+                            ASTTyRepr::Hole(NodeID(FileID(0), 4), Span::ANY)
                         ]
                     }),
                     instance_methods: Default::default(),
@@ -1075,12 +1075,12 @@ pub mod tests {
         );
 
         assert!(matches!(
-            ast.find(NodeID(2)).unwrap(),
+            ast.find(NodeID(FileID(0), 2)).unwrap(),
             Node::TypeAnnotation(TypeAnnotation { .. })
         ));
 
         assert_eq!(
-            *raw.annotations.get(&NodeID(2)).unwrap(),
+            *raw.annotations.get(&NodeID(FileID(0), 2)).unwrap(),
             ASTTyRepr::Annotated(TypeAnnotation {
                 id: NodeID::ANY,
                 span: Span::ANY,
@@ -1101,12 +1101,12 @@ pub mod tests {
         );
 
         assert!(matches!(
-            ast.find(NodeID(2)).unwrap(),
+            ast.find(NodeID(FileID(0), 2)).unwrap(),
             Node::TypeAnnotation(TypeAnnotation { .. })
         ));
 
         assert_eq!(
-            *raw.annotations.get(&NodeID(2)).unwrap(),
+            *raw.annotations.get(&NodeID(FileID(0), 2)).unwrap(),
             ASTTyRepr::Annotated(TypeAnnotation {
                 id: NodeID::ANY,
                 span: Span::ANY,

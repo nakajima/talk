@@ -3,6 +3,7 @@ use derive_visitor::{DriveMut, VisitorMut};
 use crate::{
     ast::{AST, Parsed},
     id_generator::IDGenerator,
+    node_id::{FileID, NodeID},
     node_kinds::{
         decl::{Decl, DeclKind},
         parameter::Parameter,
@@ -13,13 +14,17 @@ use crate::{
 #[derive(VisitorMut)]
 #[visitor(Decl(enter))]
 pub struct PrependSelfToMethods {
+    file_id: FileID,
     node_ids: IDGenerator,
 }
 
 impl PrependSelfToMethods {
     pub fn run(ast: &mut AST<Parsed>) {
         let node_ids = std::mem::take(&mut ast.node_ids);
-        let mut pass = PrependSelfToMethods { node_ids };
+        let mut pass = PrependSelfToMethods {
+            file_id: ast.file_id,
+            node_ids,
+        };
         for root in &mut ast.roots {
             root.drive_mut(&mut pass);
         }
@@ -35,10 +40,10 @@ impl PrependSelfToMethods {
             func.params.insert(
                 0,
                 Parameter {
-                    id: self.node_ids.next_id(),
+                    id: NodeID(self.file_id, self.node_ids.next_id()),
                     name: "self".into(),
                     type_annotation: Some(TypeAnnotation {
-                        id: self.node_ids.next_id(),
+                        id: NodeID(self.file_id, self.node_ids.next_id()),
                         span: decl.span,
                         kind: TypeAnnotationKind::SelfType("Self".into()),
                     }),
@@ -52,10 +57,10 @@ impl PrependSelfToMethods {
             signature.params.insert(
                 0,
                 Parameter {
-                    id: self.node_ids.next_id(),
+                    id: NodeID(self.file_id, self.node_ids.next_id()),
                     name: "self".into(),
                     type_annotation: Some(TypeAnnotation {
-                        id: self.node_ids.next_id(),
+                        id: NodeID(self.file_id, self.node_ids.next_id()),
                         span: decl.span,
                         kind: TypeAnnotationKind::SelfType("Self".into()),
                     }),
@@ -69,10 +74,10 @@ impl PrependSelfToMethods {
             params.insert(
                 0,
                 Parameter {
-                    id: self.node_ids.next_id(),
+                    id: NodeID(self.file_id, self.node_ids.next_id()),
                     name: "self".into(),
                     type_annotation: Some(TypeAnnotation {
-                        id: self.node_ids.next_id(),
+                        id: NodeID(self.file_id, self.node_ids.next_id()),
                         span: decl.span,
                         kind: TypeAnnotationKind::SelfType("Self".into()),
                     }),

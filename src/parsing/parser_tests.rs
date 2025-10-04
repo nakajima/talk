@@ -9,6 +9,7 @@ pub mod tests {
         lexer::Lexer,
         name::Name,
         node::Node,
+        node_id::FileID,
         node_kinds::{
             block::Block,
             call_arg::CallArg,
@@ -108,13 +109,13 @@ pub mod tests {
 
     pub fn parse(code: &'static str) -> AST<Parsed> {
         let lexer = Lexer::new(code);
-        let parser = Parser::new("-", lexer);
+        let parser = Parser::new("-", FileID(0), lexer);
         parser.parse().unwrap()
     }
 
     fn parse_pattern(input: &'static str) -> Pattern {
         let lexer = Lexer::new(input);
-        let mut parser = Parser::new("-", lexer);
+        let mut parser = Parser::new("-", FileID(0), lexer);
         parser.advance();
         parser.advance();
         parser.parse_pattern().unwrap()

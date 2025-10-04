@@ -6,6 +6,7 @@ use crate::{
     ast::{self, AST},
     lexer::Lexer,
     name_resolution::name_resolver::{self, NameResolver},
+    node_id::FileID,
     parser::Parser,
     parser_error::ParserError,
     types::{
@@ -61,10 +62,10 @@ impl Driver {
     pub fn parse(self) -> Result<Driver<Parsed>, CompileError> {
         let mut asts = FxHashMap::default();
 
-        for file in &self.files {
+        for (i, file) in self.files.iter().enumerate() {
             let input = std::fs::read_to_string(file).map_err(CompileError::IO)?;
             let lexer = Lexer::new(&input);
-            let parser = Parser::new(file.clone().to_string_lossy(), lexer);
+            let parser = Parser::new(file.clone().to_string_lossy(), FileID(i as u32), lexer);
             asts.insert(file.clone(), parser.parse().map_err(CompileError::Parsing)?);
         }
 
@@ -120,4 +121,10 @@ impl Driver<NameResolved> {
             },
         })
     }
+}
+
+#[cfg(test)]
+pub mod tests {
+    #[test]
+    fn typechecks_multiple_files() {}
 }

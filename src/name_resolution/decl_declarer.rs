@@ -48,7 +48,7 @@ impl<'a> DeclDeclarer<'a> {
     }
 
     pub fn at_module_scope(&self) -> bool {
-        self.resolver.current_scope_id == Some(NodeID(0))
+        matches!(self.resolver.current_scope_id, Some(NodeID(_, 0)))
     }
 
     pub fn start_scope(&mut self, id: NodeID) {
