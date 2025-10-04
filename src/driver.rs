@@ -166,4 +166,34 @@ pub mod tests {
             Ty::Int
         );
     }
+
+    #[test]
+    fn typechecks_multiple_files_out_of_order() {
+        let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let paths = vec![
+            current_dir.join("test/fixtures/b.tlk"),
+            current_dir.join("test/fixtures/a.tlk"),
+        ];
+
+        let driver = Driver::new(paths);
+        let typed = driver
+            .parse()
+            .unwrap()
+            .resolve_names()
+            .unwrap()
+            .typecheck()
+            .unwrap();
+
+        println!("{:?}", typed.phase.asts.keys().collect::<Vec<_>>());
+        let ast = typed
+            .phase
+            .asts
+            .get(&current_dir.join("test/fixtures/b.tlk"))
+            .unwrap();
+
+        assert_eq!(
+            types_tests::tests::ty(1, ast, &typed.phase.type_session),
+            Ty::Int
+        );
+    }
 }
