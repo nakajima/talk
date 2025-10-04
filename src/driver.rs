@@ -21,7 +21,7 @@ use crate::{
 
 pub trait DriverPhase {}
 
-struct Initial {}
+pub struct Initial {}
 impl DriverPhase for Initial {}
 
 impl DriverPhase for Parsed {}
@@ -40,14 +40,14 @@ pub struct Typed {
     pub type_session: TypeSession,
 }
 
-pub struct Driver<Phase: DriverPhase = Initial> {
-    files: Vec<PathBuf>,
-    phase: Phase,
-}
-
 pub enum CompileError {
     IO(io::Error),
     Parsing(ParserError),
+}
+
+pub struct Driver<Phase: DriverPhase = Initial> {
+    files: Vec<PathBuf>,
+    phase: Phase,
 }
 
 impl Driver {
@@ -97,13 +97,13 @@ impl Driver<NameResolved> {
 
         let raw = TypeHeaderPass::drive_all(&mut type_session, &self.phase.asts);
 
-        for mut ast in self.phase.asts.values_mut() {
+        for ast in self.phase.asts.values_mut() {
             // TODO: do a drive_all for resolve pass
             TypeResolvePass::drive(ast, &mut type_session, raw.clone());
         }
 
         let mut scc = SCCResolved::default();
-        for mut ast in self.phase.asts.values_mut() {
+        for ast in self.phase.asts.values_mut() {
             // TODO: do a drive_all for deps pass
             DependenciesPass::drive(&mut type_session, ast, &mut scc);
         }
