@@ -5,7 +5,6 @@ use crate::{
     span::Span,
     types::{
         builtins::builtin_scope,
-        passes::dependencies_pass::SCCResolved,
         predicate::Predicate,
         scheme::{ForAll, Scheme},
         ty::{Level, Ty},

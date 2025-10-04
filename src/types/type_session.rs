@@ -21,7 +21,7 @@ use crate::{
         kind::Kind,
         passes::{
             dependencies_pass::{DependenciesPass, SCCResolved},
-            inference_pass::{InferencePass, Inferenced, Meta, collect_meta},
+            inference_pass::{InferencePass, Meta, collect_meta},
             type_headers_pass::TypeHeaderPass,
             type_resolve_pass::TypeResolvePass,
         },

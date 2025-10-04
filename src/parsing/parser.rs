@@ -99,7 +99,7 @@ impl<'a> Parser<'a> {
             self.skip_semicolons_and_newlines();
 
             if current.start == last_start {
-                return Err(ParserError::InfiniteLoop(Some(current)).into());
+                return Err(ParserError::InfiniteLoop(Some(current)));
             }
 
             last_start = current.start;

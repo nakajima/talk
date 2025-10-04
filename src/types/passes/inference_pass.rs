@@ -1,6 +1,6 @@
 use crate::types::builtins;
 use crate::types::constraints::type_member::TypeMember;
-use crate::types::type_catalog::{ConformanceKey, TypeCatalog};
+use crate::types::type_catalog::ConformanceKey;
 use crate::types::wants::Wants;
 use crate::{
     ast::{AST, ASTPhase},
@@ -354,7 +354,7 @@ impl<'a> InferencePass<'a> {
                     .expect("did not get type param");
 
                 let mut base =
-                    entry.inference_instantiate(&mut self.session, level, wants, annotation.span);
+                    entry.inference_instantiate(self.session, level, wants, annotation.span);
 
                 for g in generics {
                     let arg = self.infer_type_annotation(g, level, wants);
@@ -369,7 +369,7 @@ impl<'a> InferencePass<'a> {
                 .lookup(sym)
                 .unwrap()
                 .clone()
-                .inference_instantiate(&mut self.session, level, wants, annotation.span),
+                .inference_instantiate(self.session, level, wants, annotation.span),
             TypeAnnotationKind::Record { fields } => {
                 let mut row = Row::Empty(TypeDefKind::Struct);
                 for field in fields.iter().rev() {
@@ -436,12 +436,12 @@ impl<'a> InferencePass<'a> {
             let mut next_wants = Wants::default();
             while let Some(want) = wants.pop() {
                 let want = want.apply(&mut substitutions);
-                let want = want.normalize_nominals(&mut self.session, level);
+                let want = want.normalize_nominals(self.session, level);
                 tracing::trace!("solving {want:?}");
 
                 let solution = match want {
                     Constraint::Construction(ref construction) => construction.solve(
-                        &mut self.session,
+                        self.session,
                         level,
                         &mut next_wants,
                         &mut substitutions,
@@ -450,34 +450,34 @@ impl<'a> InferencePass<'a> {
                         &equals.lhs,
                         &equals.rhs,
                         &mut substitutions,
-                        &mut self.session,
+                        self.session,
                     ),
                     Constraint::Call(ref call) => {
-                        call.solve(&mut self.session, &mut next_wants, &mut substitutions)
+                        call.solve(self.session, &mut next_wants, &mut substitutions)
                     }
                     Constraint::Conforms(ref conforms) => {
-                        conforms.solve(&mut self.session, &mut next_wants, &mut substitutions)
+                        conforms.solve(self.session, &mut next_wants, &mut substitutions)
                     }
                     Constraint::Member(ref member) => member.solve(
-                        &mut self.session,
+                        self.session,
                         level,
                         &mut next_wants,
                         &mut substitutions,
                     ),
                     Constraint::HasField(ref has_field) => has_field.solve(
-                        &mut self.session,
+                        self.session,
                         level,
                         &mut next_wants,
                         &mut substitutions,
                     ),
                     Constraint::AssociatedEquals(ref associated_equals) => associated_equals.solve(
-                        &mut self.session,
+                        self.session,
                         level,
                         &mut next_wants,
                         &mut substitutions,
                     ),
                     Constraint::TypeMember(ref c) => c.solve(
-                        &mut self.session,
+                        self.session,
                         level,
                         &mut next_wants,
                         &mut substitutions,
@@ -910,7 +910,7 @@ impl<'a> InferencePass<'a> {
                 match self.session.term_env.lookup(sym).cloned() {
                     Some(EnvEntry::Scheme(scheme)) => {
                         scheme
-                            .inference_instantiate(&mut self.session, level, wants, expr.span)
+                            .inference_instantiate(self.session, level, wants, expr.span)
                             .0
                     } // or pass through
                     Some(EnvEntry::Mono(t)) => t.clone(),
@@ -1085,7 +1085,7 @@ impl<'a> InferencePass<'a> {
                 .collect();
             scheme.instantiate_with_args(
                 &type_args_tys,
-                &mut self.session,
+                self.session,
                 level,
                 wants,
                 callee.span,

@@ -11,7 +11,7 @@ use crate::{
     types::{
         passes::{
             dependencies_pass::{DependenciesPass, SCCResolved},
-            inference_pass::{InferencePass, Inferenced},
+            inference_pass::InferencePass,
             type_headers_pass::TypeHeaderPass,
             type_resolve_pass::TypeResolvePass,
         },
@@ -99,13 +99,13 @@ impl Driver<NameResolved> {
 
         for mut ast in self.phase.asts.values_mut() {
             // TODO: do a drive_all for resolve pass
-            TypeResolvePass::drive(&mut ast, &mut type_session, raw.clone());
+            TypeResolvePass::drive(ast, &mut type_session, raw.clone());
         }
 
         let mut scc = SCCResolved::default();
         for mut ast in self.phase.asts.values_mut() {
             // TODO: do a drive_all for deps pass
-            DependenciesPass::drive(&mut type_session, &mut ast, &mut scc);
+            DependenciesPass::drive(&mut type_session, ast, &mut scc);
         }
 
         for ast in self.phase.asts.values_mut() {

@@ -41,7 +41,7 @@ async fn main() {
                 name_resolution::name_resolver::NameResolver,
                 parser::Parser,
                 types::{
-                    type_session::{Raw, TypeSession},
+                    type_session::TypeSession,
                     types_decorator::TypesDecorator,
                 },
             };

@@ -7,7 +7,7 @@ use crate::{
     types::{
         constraints::constraint::Constraint,
         passes::{
-            dependencies_pass::{ConformanceRequirement, SCCResolved},
+            dependencies_pass::ConformanceRequirement,
             inference_pass::Meta,
         },
         term_environment::EnvEntry,

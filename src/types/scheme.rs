@@ -6,7 +6,7 @@ use crate::{
     types::{
         constraints::constraint::ConstraintCause,
         passes::{
-            dependencies_pass::{ConformanceRequirement, SCCResolved},
+            dependencies_pass::ConformanceRequirement,
             inference_pass::Meta,
         },
         predicate::Predicate,
