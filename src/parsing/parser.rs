@@ -88,7 +88,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    pub fn parse(mut self) -> Result<AST<Parsed>> {
+    pub fn parse(mut self) -> Result<AST<Parsed>, ParserError> {
         self.advance();
         self.advance();
         self.skip_semicolons_and_newlines();

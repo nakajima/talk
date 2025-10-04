@@ -21,11 +21,7 @@ use crate::{
         pattern::{Pattern, PatternKind},
     },
     span::Span,
-    types::{
-        passes::{inference_pass::Inferenced, type_resolve_pass::HeadersResolved},
-        type_catalog::TypeCatalog,
-        type_session::{TypeSession, TypingPhase},
-    },
+    types::type_session::TypeSession,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -43,16 +39,11 @@ pub struct Conformance {
     pub span: Span,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default, Clone)]
 pub struct SCCResolved {
     pub graph: DiGraphMap<Binder, ()>,
     pub annotation_map: FxHashMap<Binder, NodeID>,
     pub rhs_map: FxHashMap<Binder, NodeID>,
-    pub type_catalog: TypeCatalog,
-}
-
-impl TypingPhase for SCCResolved {
-    type Next = Inferenced;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Ord, Eq, Hash)]
@@ -91,40 +82,21 @@ impl BoundRHS {
 
 #[derive(Debug, Visitor)]
 #[visitor(Decl(enter, exit), Expr(enter))]
-pub struct DependenciesPass {
-    session: TypeSession<HeadersResolved>,
-    pub graph: DiGraphMap<Binder, ()>,
-    pub rhs_map: FxHashMap<Binder, NodeID>,
-    pub annotation_map: FxHashMap<Binder, NodeID>,
+pub struct DependenciesPass<'a> {
+    scc: &'a mut SCCResolved,
     binder_stack: Vec<(NodeID, Binder)>,
 }
 
-impl DependenciesPass {
-    pub fn drive(
-        session: TypeSession<HeadersResolved>,
-        ast: &mut AST<NameResolved>,
-    ) -> TypeSession<SCCResolved> {
+impl<'a> DependenciesPass<'a> {
+    pub fn drive(_session: &mut TypeSession, ast: &mut AST<NameResolved>, scc: &mut SCCResolved) {
         let mut pass = DependenciesPass {
-            session,
-            graph: Default::default(),
-            rhs_map: Default::default(),
-            annotation_map: Default::default(),
+            scc,
             binder_stack: Default::default(),
         };
 
         for root in ast.roots.iter() {
             root.drive(&mut pass);
         }
-
-        let type_catalog = std::mem::take(&mut pass.session.phase.type_catalog);
-        let phase = SCCResolved {
-            graph: pass.graph,
-            annotation_map: pass.annotation_map,
-            rhs_map: pass.rhs_map,
-            type_catalog,
-        };
-
-        pass.session.advance(phase)
     }
 
     fn enter_decl(&mut self, decl: &Decl) {
@@ -159,31 +131,31 @@ impl DependenciesPass {
         match sym {
             Symbol::Global(global_id) => {
                 let binder = Binder::Global(*global_id);
-                self.graph.add_node(binder);
+                self.scc.graph.add_node(binder);
 
                 if let Some(id) = annotation_id {
-                    self.annotation_map.insert(binder, id);
+                    self.scc.annotation_map.insert(binder, id);
                 }
 
-                self.rhs_map.insert(binder, rhs_id.id());
+                self.scc.rhs_map.insert(binder, rhs_id.id());
                 self.binder_stack.push((decl.id, binder));
             }
             Symbol::DeclaredLocal(declared_local_id) => {
                 let binder = Binder::LocalDecl(*declared_local_id);
-                self.graph.add_node(binder);
-                self.rhs_map.insert(binder, rhs_id.id());
+                self.scc.graph.add_node(binder);
+                self.scc.rhs_map.insert(binder, rhs_id.id());
                 self.binder_stack.push((decl.id, binder));
             }
             Symbol::InstanceMethod(method_id) => {
                 let binder = Binder::InstanceMethod(*method_id);
-                self.graph.add_node(binder);
-                self.rhs_map.insert(binder, rhs_id.id());
+                self.scc.graph.add_node(binder);
+                self.scc.rhs_map.insert(binder, rhs_id.id());
                 self.binder_stack.push((decl.id, binder));
             }
             Symbol::StaticMethod(method_id) => {
                 let binder = Binder::StaticMethod(*method_id);
-                self.graph.add_node(binder);
-                self.rhs_map.insert(binder, rhs_id.id());
+                self.scc.graph.add_node(binder);
+                self.scc.rhs_map.insert(binder, rhs_id.id());
                 self.binder_stack.push((decl.id, binder));
             }
             _ => unreachable!(),
@@ -212,28 +184,28 @@ impl DependenciesPass {
                 let binder = Binder::Global(*global_id);
 
                 if let Some((_, scope_binder)) = self.binder_stack.last() {
-                    self.graph.add_edge(*scope_binder, binder, ());
+                    self.scc.graph.add_edge(*scope_binder, binder, ());
                 }
             }
             Symbol::DeclaredLocal(declared_local_id) => {
                 let binder = Binder::LocalDecl(*declared_local_id);
 
                 if let Some((_, scope_binder)) = self.binder_stack.last() {
-                    self.graph.add_edge(*scope_binder, binder, ());
+                    self.scc.graph.add_edge(*scope_binder, binder, ());
                 }
             }
             Symbol::StaticMethod(id) => {
                 let binder = Binder::StaticMethod(*id);
 
                 if let Some((_, scope_binder)) = self.binder_stack.last() {
-                    self.graph.add_edge(*scope_binder, binder, ());
+                    self.scc.graph.add_edge(*scope_binder, binder, ());
                 }
             }
             Symbol::InstanceMethod(id) => {
                 let binder = Binder::InstanceMethod(*id);
 
                 if let Some((_, scope_binder)) = self.binder_stack.last() {
-                    self.graph.add_edge(*scope_binder, binder, ());
+                    self.scc.graph.add_edge(*scope_binder, binder, ());
                 }
             }
             _ => (),
@@ -259,28 +231,24 @@ pub mod tests {
 
     pub fn resolve_dependencies(
         code: &'static str,
-    ) -> (AST<NameResolved>, TypeSession<SCCResolved>) {
-        let (mut ast, session) = type_header_resolve_pass(code);
-        let session = DependenciesPass::drive(session, &mut ast);
+    ) -> (AST<NameResolved>, SCCResolved, TypeSession) {
+        let (mut ast, mut session) = type_header_resolve_pass(code);
+        let mut scc = SCCResolved::default();
+        DependenciesPass::drive(&mut session, &mut ast, &mut scc);
 
-        (ast, session)
+        (ast, scc, session)
     }
 
     fn graph_nodes(code: &'static str) -> Vec<Binder> {
-        let (_, session) = resolve_dependencies(code);
-        let mut nodes: Vec<Binder> = session.phase.graph.nodes().collect();
+        let (_, scc, _) = resolve_dependencies(code);
+        let mut nodes: Vec<Binder> = scc.graph.nodes().collect();
         nodes.sort();
         nodes
     }
 
     fn graph_edges(code: &'static str) -> FxHashSet<(Binder, Binder)> {
-        let (_, session) = resolve_dependencies(code);
-        session
-            .phase
-            .graph
-            .all_edges()
-            .map(|(u, v, _)| (u, v))
-            .collect()
+        let (_, scc, _) = resolve_dependencies(code);
+        scc.graph.all_edges().map(|(u, v, _)| (u, v)).collect()
     }
 
     #[test]

@@ -30,12 +30,11 @@ pub struct Conforms {
 impl Conforms {
     pub fn solve(
         &self,
-        session: &mut TypeSession<SCCResolved>,
+        session: &mut TypeSession,
         next_wants: &mut Wants,
         _substitutions: &mut UnificationSubstitutions,
     ) -> Result<bool, TypeError> {
         let conformance = session
-            .phase
             .type_catalog
             .conformances
             .get_mut(&ConformanceKey {
@@ -51,7 +50,6 @@ impl Conforms {
             .collect::<FxHashMap<_, _>>();
 
         let nominal = session
-            .phase
             .type_catalog
             .nominals
             .get(&self.type_id.into())
@@ -113,17 +111,12 @@ impl Conforms {
         next_wants: &mut Wants,
     ) -> Result<bool, TypeError> {
         // This is gross. We should just make it easier to generate type vars off something that isn't a whole-ass session.
-        let mut session = TypeSession::<SCCResolved> {
+        let mut session = TypeSession {
+            term_env: Default::default(),
+            type_catalog: Default::default(),
             vars: Default::default(),
             synthsized_ids: Default::default(),
             skolem_map: Default::default(),
-            phase: SCCResolved {
-                graph: Default::default(),
-                annotation_map: Default::default(),
-                rhs_map: Default::default(),
-                type_catalog: Default::default(),
-            },
-            term_env: Default::default(),
             meta_levels,
             skolem_bounds: Default::default(),
             type_param_bounds: Default::default(),

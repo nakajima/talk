@@ -32,7 +32,7 @@ use crate::{
         ty::{Level, Ty, UnificationVarId},
         type_error::TypeError,
         type_operations::{UnificationSubstitutions, apply, substitute, unify},
-        type_session::{TypeDefKind, TypeSession, TypingPhase},
+        type_session::{TypeDefKind, TypeSession},
         type_snapshot::TypeSnapshot,
     },
 };
@@ -51,13 +51,7 @@ macro_rules! guard_found_ty {
 }
 
 #[derive(Debug, PartialEq)]
-pub struct Inferenced {
-    pub type_catalog: TypeCatalog,
-}
-
-impl TypingPhase for Inferenced {
-    type Next = Inferenced;
-}
+pub struct Inferenced {}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Meta {
@@ -89,18 +83,20 @@ pub struct InferenceSolution {
 pub struct InferencePass<'a> {
     ast: &'a mut AST<NameResolved>,
     snapshots: Vec<TypeSnapshot>,
-
-    pub(crate) session: TypeSession<SCCResolved>,
+    scc: &'a SCCResolved,
+    pub(crate) session: &'a mut TypeSession,
 }
 
 impl<'a> InferencePass<'a> {
     pub fn perform(
-        session: TypeSession<SCCResolved>,
+        session: &'a mut TypeSession,
+        scc: &'a SCCResolved,
         ast: &'a mut AST<NameResolved>,
-    ) -> TypeSession<Inferenced> {
-        let groups = kosaraju_scc(&session.phase.graph);
+    ) -> Inferenced {
+        let groups = kosaraju_scc(&scc.graph);
         let mut pass = InferencePass {
             ast,
+            scc,
             session,
             snapshots: Default::default(),
         };
@@ -168,8 +164,6 @@ impl<'a> InferencePass<'a> {
         // Update everything now that we know as much as we're gonna
         pass.annotate_uses_after_inference();
 
-        let type_catalog = std::mem::take(&mut pass.session.phase.type_catalog);
-
         for unsolved in last_unsolved {
             if let Constraint::Conforms(conforms) = unsolved {
                 pass.ast
@@ -186,7 +180,7 @@ impl<'a> InferencePass<'a> {
         }
 
         // Move along, move along
-        pass.session.advance(Inferenced { type_catalog })
+        Inferenced {}
     }
 
     fn promote_pattern_bindings(
@@ -261,7 +255,7 @@ impl<'a> InferencePass<'a> {
 
         for &binder in &group.binders {
             let symbol = Symbol::from(binder);
-            let Some(rhs_expr_id) = self.session.phase.rhs_map.get(&binder).copied() else {
+            let Some(rhs_expr_id) = self.scc.rhs_map.get(&binder).copied() else {
                 continue;
             };
 
@@ -280,7 +274,7 @@ impl<'a> InferencePass<'a> {
                 ),
             };
 
-            if let Some(annotation_id) = self.session.phase.annotation_map.get(&binder).cloned() {
+            if let Some(annotation_id) = self.scc.annotation_map.get(&binder).cloned() {
                 let Some(Node::TypeAnnotation(annotation)) = self.ast.find(annotation_id) else {
                     panic!("didn't find type annotation for annotation id");
                 };
@@ -632,7 +626,7 @@ impl<'a> InferencePass<'a> {
                 name: Name::Resolved(sym @ Symbol::Type(..), name),
                 ..
             } => {
-                let Some(struct_type) = self.session.phase.type_catalog.nominals.get(sym) else {
+                let Some(struct_type) = self.session.type_catalog.nominals.get(sym) else {
                     self.ast
                         .diagnostics
                         .push(crate::diagnostic::AnyDiagnostic::Typing(Diagnostic {
@@ -647,7 +641,6 @@ impl<'a> InferencePass<'a> {
                 for stub in &struct_type.conformances {
                     let conformance = self
                         .session
-                        .phase
                         .type_catalog
                         .conformances
                         .get(&ConformanceKey {

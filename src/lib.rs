@@ -20,6 +20,7 @@ pub mod parsing;
 pub use parsing::*;
 pub mod common;
 pub use common::*;
+pub mod driver;
 pub mod name_resolution;
 pub mod types;
 

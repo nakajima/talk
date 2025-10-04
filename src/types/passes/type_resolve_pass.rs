@@ -21,7 +21,7 @@ use crate::{
             Associated, Initializer, Method, MethodRequirement, Property, TypeFields, Variant,
         },
         passes::{
-            dependencies_pass::{Conformance, ConformanceRequirement, SCCResolved},
+            dependencies_pass::{Conformance, ConformanceRequirement},
             inference_pass::curry,
         },
         predicate::Predicate,
@@ -29,26 +29,20 @@ use crate::{
         scheme::{ForAll, Scheme},
         term_environment::EnvEntry,
         ty::{Level, Ty},
-        type_catalog::{ConformanceKey, Extension, Nominal, NominalForm, Protocol, TypeCatalog},
+        type_catalog::{ConformanceKey, Extension, Nominal, NominalForm, Protocol},
         type_error::TypeError,
-        type_session::{ASTTyRepr, Raw, TypeDef, TypeDefKind, TypeSession, TypingPhase},
+        type_session::{ASTTyRepr, Raw, TypeDef, TypeDefKind, TypeSession},
     },
 };
 
-#[derive(Debug)]
-pub struct HeadersResolved {
-    pub type_catalog: TypeCatalog,
-}
-
-impl TypingPhase for HeadersResolved {
-    type Next = SCCResolved;
-}
+#[derive(Debug, Clone)]
+pub struct HeadersResolved {}
 
 // Takes the raw types from the headers pass and starts turning them into actual types in the type catalog
 #[derive(Debug)]
 pub struct TypeResolvePass<'a> {
-    session: TypeSession<Raw>,
-    type_catalog: TypeCatalog,
+    session: &'a mut TypeSession,
+    raw: Raw,
     conformance_keys: Vec<(ConformanceKey, Span)>,
     self_symbols: Vec<Symbol>,
     _ast: &'a mut AST<NameResolved>,
@@ -57,11 +51,12 @@ pub struct TypeResolvePass<'a> {
 impl<'a> TypeResolvePass<'a> {
     pub fn drive(
         ast: &mut AST<NameResolved>,
-        session: TypeSession<Raw>,
-    ) -> TypeSession<HeadersResolved> {
-        let resolver = TypeResolvePass {
+        session: &mut TypeSession,
+        raw: Raw,
+    ) -> HeadersResolved {
+        let mut resolver = TypeResolvePass {
             session,
-            type_catalog: Default::default(),
+            raw,
             conformance_keys: Default::default(),
             self_symbols: Default::default(),
             _ast: ast,
@@ -72,8 +67,8 @@ impl<'a> TypeResolvePass<'a> {
 
     // Go through all headers and gather up properties/methods/variants/etc. Don't perform
     // any generalization until the very end.
-    fn solve(mut self) -> TypeSession<HeadersResolved> {
-        for (decl_id, _ty) in self.session.phase.type_constructors.clone().iter() {
+    fn solve(&mut self) -> HeadersResolved {
+        for (decl_id, _ty) in self.raw.type_constructors.clone().iter() {
             let base = Ty::TypeConstructor(*decl_id);
 
             self.session
@@ -81,37 +76,45 @@ impl<'a> TypeResolvePass<'a> {
                 .insert_mono(Symbol::Type(*decl_id), base);
         }
 
-        for (_id, (name, rhs)) in std::mem::take(&mut self.session.phase.typealiases) {
+        for (_id, (name, rhs)) in std::mem::take(&mut self.raw.typealiases) {
             let symbol = name.symbol().unwrap();
             let entry = self.infer_type_annotation(&rhs);
             self.session.term_env.insert(symbol, entry.into());
         }
 
-        for ty_repr in std::mem::take(&mut self.session.phase.annotations).values() {
+        for ty_repr in std::mem::take(&mut self.raw.annotations).values() {
             self.infer_ast_ty_repr(ty_repr);
         }
 
-        for (decl_id, type_def) in self.session.phase.type_constructors.clone().iter() {
+        for (decl_id, type_def) in self.raw.type_constructors.clone().iter() {
             if let Ok(resolved) = self.resolve_type_def(type_def) {
-                self.type_catalog.nominals.insert(decl_id.into(), resolved);
+                self.session
+                    .type_catalog
+                    .nominals
+                    .insert(decl_id.into(), resolved);
             }
         }
 
-        for (decl_id, type_def) in std::mem::take(&mut self.session.phase.protocols) {
+        for (decl_id, type_def) in std::mem::take(&mut self.raw.protocols) {
             if let Ok(resolved) = self.resolve_protocol(&type_def) {
-                self.type_catalog.protocols.insert(decl_id, resolved);
+                self.session
+                    .type_catalog
+                    .protocols
+                    .insert(decl_id, resolved);
             }
         }
 
         // Resolve associated types for conforming types
         for (conformance_key, span) in self.conformance_keys.iter() {
             let ty = self
+                .session
                 .type_catalog
                 .nominals
                 .get(&conformance_key.conforming_id)
                 .unwrap();
 
             let protocol = self
+                .session
                 .type_catalog
                 .protocols
                 .get(&conformance_key.protocol_id)
@@ -134,7 +137,7 @@ impl<'a> TypeResolvePass<'a> {
                 })
                 .collect();
 
-            self.type_catalog.conformances.insert(
+            self.session.type_catalog.conformances.insert(
                 *conformance_key,
                 Conformance {
                     conforming_id: conformance_key.conforming_id,
@@ -146,9 +149,7 @@ impl<'a> TypeResolvePass<'a> {
             );
         }
 
-        self.session.advance(HeadersResolved {
-            type_catalog: self.type_catalog,
-        })
+        HeadersResolved {}
     }
 
     fn resolve_form(&mut self, type_def: &TypeDef) -> NominalForm {
@@ -605,15 +606,14 @@ impl<'a> TypeResolvePass<'a> {
                 let mut foralls = vec![];
 
                 for generic in self
-                    .session
-                    .phase
+                    .raw
                     .type_constructors
                     .get(id)
                     .cloned()
                     .unwrap_or_else(|| {
                         panic!(
                             "did not get type for id: {id:?} in {:?}",
-                            self.session.phase.type_constructors
+                            self.raw.type_constructors
                         )
                     })
                     .generics
@@ -876,9 +876,7 @@ pub mod tests {
 
     use super::*;
 
-    pub fn type_header_resolve_pass(
-        code: &'static str,
-    ) -> (AST<NameResolved>, TypeSession<HeadersResolved>) {
+    pub fn type_header_resolve_pass(code: &'static str) -> (AST<NameResolved>, TypeSession) {
         let (ast, session) = type_header_resolve_pass_err(code).unwrap();
         assert!(
             ast.diagnostics.is_empty(),
@@ -890,12 +888,12 @@ pub mod tests {
 
     pub fn type_header_resolve_pass_err(
         code: &'static str,
-    ) -> Result<(AST<NameResolved>, TypeSession<HeadersResolved>), TypeError> {
+    ) -> Result<(AST<NameResolved>, TypeSession), TypeError> {
         let mut resolved = resolve(code);
         let mut session = TypeSession::default();
-        TypeHeaderPass::drive(&mut session, &resolved);
-        let res = TypeResolvePass::drive(&mut resolved, session);
-        Ok((resolved, res))
+        let raw = TypeHeaderPass::drive(&mut session, &resolved);
+        _ = TypeResolvePass::drive(&mut resolved, &mut session, raw);
+        Ok((resolved, session))
     }
 
     #[test]
@@ -910,7 +908,6 @@ pub mod tests {
 
         assert_eq_diff!(
             session
-                .phase
                 .type_catalog
                 .nominals
                 .get(&TypeId(1).into())
@@ -939,7 +936,6 @@ pub mod tests {
 
         assert_eq_diff!(
             session
-                .phase
                 .type_catalog
                 .nominals
                 .get(&TypeId(1).into())
@@ -967,7 +963,6 @@ pub mod tests {
 
         assert_eq_diff!(
             session
-                .phase
                 .type_catalog
                 .nominals
                 .get(&TypeId(1).into())
@@ -994,7 +989,6 @@ pub mod tests {
 
         assert_eq_diff!(
             session
-                .phase
                 .type_catalog
                 .nominals
                 .get(&TypeId(1).into())
@@ -1020,7 +1014,6 @@ pub mod tests {
 
         assert_eq!(
             session
-                .phase
                 .type_catalog
                 .nominals
                 .get(&TypeId(1).into())
@@ -1053,7 +1046,6 @@ pub mod tests {
 
         assert_eq_diff!(
             session
-                .phase
                 .type_catalog
                 .nominals
                 .get(&TypeId(3).into())
@@ -1084,7 +1076,6 @@ pub mod tests {
 
         assert_eq!(
             *session
-                .phase
                 .type_catalog
                 .conformances
                 .get(&ConformanceKey {
@@ -1093,7 +1084,7 @@ pub mod tests {
                 })
                 .unwrap_or_else(|| panic!(
                     "didn't get conformance: {:?}",
-                    session.phase.type_catalog.conformances
+                    session.type_catalog.conformances
                 )),
             Conformance {
                 conforming_id: TypeId(1).into(),
@@ -1118,7 +1109,6 @@ pub mod tests {
 
         assert_eq!(
             session
-                .phase
                 .type_catalog
                 .nominals
                 .get(&TypeId(1).into())
@@ -1147,7 +1137,6 @@ pub mod tests {
 
         assert_eq!(
             *session
-                .phase
                 .type_catalog
                 .conformances
                 .get(&ConformanceKey {
@@ -1156,7 +1145,7 @@ pub mod tests {
                 })
                 .unwrap_or_else(|| panic!(
                     "didn't get conformance: {:?}",
-                    session.phase.type_catalog.conformances
+                    session.type_catalog.conformances
                 )),
             Conformance {
                 conforming_id: TypeId(1).into(),
@@ -1191,13 +1180,11 @@ pub mod tests {
         assert!(ast.diagnostics.is_empty(), "{:?}", ast.diagnostics);
 
         let c_nominal = session
-            .phase
             .type_catalog
             .nominals
             .get(&TypeId(1).into())
             .expect("missing C");
         let a_nominal = session
-            .phase
             .type_catalog
             .nominals
             .get(&TypeId(3).into())
@@ -1262,16 +1249,11 @@ pub mod tests {
 
         // Sanity: protocol + type exist
         assert!(
-            session
-                .phase
-                .type_catalog
-                .protocols
-                .contains_key(&ProtocolId(1)),
+            session.type_catalog.protocols.contains_key(&ProtocolId(1)),
             "Aged protocol missing"
         );
         assert!(
             session
-                .phase
                 .type_catalog
                 .nominals
                 .contains_key(&TypeId(1).into()),

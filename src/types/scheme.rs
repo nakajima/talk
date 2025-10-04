@@ -16,7 +16,7 @@ use crate::{
         type_operations::{
             InstantiationSubstitutions, UnificationSubstitutions, instantiate_ty, substitute,
         },
-        type_session::{TypeSession, TypingPhase},
+        type_session::TypeSession,
         wants::Wants,
     },
 };
@@ -50,7 +50,7 @@ impl Scheme {
 
     pub fn inference_instantiate(
         &self,
-        session: &mut TypeSession<SCCResolved>,
+        session: &mut TypeSession,
         level: Level,
         wants: &mut Wants,
         span: Span,
@@ -70,7 +70,6 @@ impl Scheme {
                     if let Some(bounds) = session.type_param_bounds.get(param).cloned() {
                         for bound in bounds {
                             let protocol = session
-                                .phase
                                 .type_catalog
                                 .protocols
                                 .get(&bound.protocol_id)
@@ -135,9 +134,9 @@ impl Scheme {
     }
 
     // Used while solving
-    pub fn solver_instantiate<P: TypingPhase>(
+    pub fn solver_instantiate(
         &self,
-        session: &mut TypeSession<P>,
+        session: &mut TypeSession,
         level: Level,
         wants: &mut Wants,
         span: Span,
@@ -186,10 +185,10 @@ impl Scheme {
         )
     }
 
-    pub fn instantiate_with_args<P: TypingPhase>(
+    pub fn instantiate_with_args(
         &self,
         args: &[(Ty, NodeID)],
-        session: &mut TypeSession<P>,
+        session: &mut TypeSession,
         level: Level,
         wants: &mut Wants,
         span: Span,

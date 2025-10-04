@@ -3,7 +3,6 @@ use crate::{
     span::Span,
     types::{
         constraints::constraint::ConstraintCause,
-        passes::dependencies_pass::SCCResolved,
         ty::{Level, Ty},
         type_error::TypeError,
         type_operations::{UnificationSubstitutions, apply},
@@ -25,7 +24,7 @@ pub struct TypeMember {
 impl TypeMember {
     pub fn solve(
         &self,
-        _session: &mut TypeSession<SCCResolved>,
+        _session: &mut TypeSession,
         _level: Level,
         _next_wants: &mut Wants,
         substitutions: &mut UnificationSubstitutions,

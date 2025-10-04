@@ -3,7 +3,7 @@ use crate::{
     span::Span,
     types::{
         constraints::constraint::ConstraintCause,
-        passes::{dependencies_pass::SCCResolved, inference_pass::curry},
+        passes::inference_pass::curry,
         row::Row,
         term_environment::EnvEntry,
         ty::{Level, Ty},
@@ -28,7 +28,7 @@ pub struct Construction {
 impl Construction {
     pub fn solve(
         &self,
-        session: &mut TypeSession<SCCResolved>,
+        session: &mut TypeSession,
         level: Level,
         next_wants: &mut Wants,
         substitutions: &mut UnificationSubstitutions,
@@ -37,13 +37,7 @@ impl Construction {
             todo!()
         };
 
-        let Some(nominal) = session
-            .phase
-            .type_catalog
-            .nominals
-            .get(&type_id.into())
-            .cloned()
-        else {
+        let Some(nominal) = session.type_catalog.nominals.get(&type_id.into()).cloned() else {
             return Err(TypeError::TypeNotFound("".into()));
         };
 

@@ -80,7 +80,7 @@ pub struct ConformanceKey {
     pub conforming_id: Symbol,
 }
 
-#[derive(Debug, PartialEq, Default)]
+#[derive(Debug, PartialEq, Default, Clone)]
 pub struct TypeCatalog {
     pub nominals: FxHashMap<Symbol, Nominal>,
     pub protocols: FxHashMap<ProtocolId, Protocol>,

@@ -3,7 +3,6 @@ use crate::{
     span::Span,
     types::{
         constraints::constraint::ConstraintCause,
-        passes::dependencies_pass::SCCResolved,
         row::Row,
         ty::{Level, Ty},
         type_error::TypeError,
@@ -25,7 +24,7 @@ pub struct HasField {
 impl HasField {
     pub fn solve(
         &self,
-        _session: &mut TypeSession<SCCResolved>,
+        _session: &mut TypeSession,
         _level: Level,
         next_wants: &mut Wants,
         _substitutions: &mut UnificationSubstitutions,

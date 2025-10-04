@@ -11,8 +11,7 @@ pub mod tests {
         node_kinds::decl::{Decl, DeclKind},
         types::{
             passes::{
-                dependencies_pass::tests::resolve_dependencies,
-                inference_pass::{InferencePass, Inferenced},
+                dependencies_pass::tests::resolve_dependencies, inference_pass::InferencePass,
             },
             ty::Ty,
             type_catalog::ConformanceKey,
@@ -21,7 +20,7 @@ pub mod tests {
         },
     };
 
-    fn typecheck(code: &'static str) -> (AST<NameResolved>, TypeSession<Inferenced>) {
+    fn typecheck(code: &'static str) -> (AST<NameResolved>, TypeSession) {
         let (ast, session) = typecheck_err(code);
         assert!(
             ast.diagnostics.is_empty(),
@@ -31,13 +30,13 @@ pub mod tests {
         (ast, session)
     }
 
-    fn typecheck_err(code: &'static str) -> (AST<NameResolved>, TypeSession<Inferenced>) {
-        let (mut ast, session) = resolve_dependencies(code);
-        let session = InferencePass::perform(session, &mut ast);
+    fn typecheck_err(code: &'static str) -> (AST<NameResolved>, TypeSession) {
+        let (mut ast, scc, mut session) = resolve_dependencies(code);
+        InferencePass::perform(&mut session, &scc, &mut ast);
         (ast, session)
     }
 
-    fn ty(i: usize, ast: &AST<NameResolved>, session: &TypeSession<Inferenced>) -> Ty {
+    fn ty(i: usize, ast: &AST<NameResolved>, session: &TypeSession) -> Ty {
         session
             .types_by_node
             .get(&ast.roots[i].as_stmt().clone().as_expr().id)
@@ -1488,7 +1487,6 @@ pub mod tests {
 
         assert!(
             session
-                .phase
                 .type_catalog
                 .conformances
                 .contains_key(&ConformanceKey {

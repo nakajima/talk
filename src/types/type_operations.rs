@@ -8,7 +8,6 @@ use crate::{
     types::{
         dsu::DSU,
         passes::{
-            dependencies_pass::SCCResolved,
             inference_pass::{Meta, curry},
         },
         row::{Row, RowMetaId, RowParamId, RowTail, normalize_row},
@@ -117,7 +116,7 @@ fn unify_rows(
     lhs: &Row,
     rhs: &Row,
     subs: &mut UnificationSubstitutions,
-    session: &mut TypeSession<SCCResolved>,
+    session: &mut TypeSession,
 ) -> Result<bool, TypeError> {
     let (mut lhs_fields, lhs_tail) = normalize_row(lhs.clone(), subs);
     let (mut rhs_fields, rhs_tail) = normalize_row(rhs.clone(), subs);
@@ -245,7 +244,7 @@ pub(super) fn unify_mult(
     lhs: &[Ty],
     rhs: &[Ty],
     substitutions: &mut UnificationSubstitutions,
-    session: &mut TypeSession<SCCResolved>,
+    session: &mut TypeSession,
 ) -> Result<bool, TypeError> {
     let mut changed = false;
     for (lhs, rhs) in lhs.iter().zip(rhs) {
@@ -260,7 +259,7 @@ pub(super) fn unify(
     lhs: &Ty,
     rhs: &Ty,
     substitutions: &mut UnificationSubstitutions,
-    session: &mut TypeSession<SCCResolved>,
+    session: &mut TypeSession,
 ) -> Result<bool, TypeError> {
     let lhs = apply(lhs.clone(), substitutions);
     let rhs = apply(rhs.clone(), substitutions);

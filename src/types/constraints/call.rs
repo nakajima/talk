@@ -3,7 +3,7 @@ use crate::{
     span::Span,
     types::{
         constraints::constraint::{Constraint, ConstraintCause},
-        passes::{dependencies_pass::SCCResolved, inference_pass::curry},
+        passes::inference_pass::curry,
         term_environment::EnvEntry,
         ty::{Level, Ty},
         type_catalog::NominalForm,
@@ -27,7 +27,7 @@ pub struct Call {
 impl Call {
     pub fn solve(
         &self,
-        session: &mut TypeSession<SCCResolved>,
+        session: &mut TypeSession,
         next_wants: &mut Wants,
         substitutions: &mut UnificationSubstitutions,
     ) -> Result<bool, TypeError> {
@@ -51,7 +51,7 @@ impl Call {
 
         match &self.callee {
             Ty::Constructor { type_id: id, .. } => {
-                let Some(nominal) = session.phase.type_catalog.nominals.get(&id.into()) else {
+                let Some(nominal) = session.type_catalog.nominals.get(&id.into()) else {
                     panic!("type not found in catalog");
                 };
 

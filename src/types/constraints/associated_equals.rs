@@ -7,7 +7,6 @@ use crate::{
     span::Span,
     types::{
         constraints::constraint::{Constraint, ConstraintCause},
-        passes::dependencies_pass::SCCResolved,
         row::normalize_row,
         term_environment::EnvEntry,
         ty::{Level, Ty},
@@ -33,7 +32,7 @@ impl AssociatedEquals {
     #[instrument(skip(session, substitutions))]
     pub fn solve(
         &self,
-        session: &mut TypeSession<SCCResolved>,
+        session: &mut TypeSession,
         level: Level,
         next_wants: &mut Wants,
         substitutions: &mut UnificationSubstitutions,
@@ -54,7 +53,7 @@ impl AssociatedEquals {
             protocol_id: self.protocol_id,
             conforming_id: subject_id.into(),
         };
-        let Some(conformance) = session.phase.type_catalog.conformances.get(&key) else {
+        let Some(conformance) = session.type_catalog.conformances.get(&key) else {
             next_wants.push(Constraint::AssociatedEquals(self.clone()));
             return Ok(false);
         };
@@ -72,7 +71,7 @@ impl AssociatedEquals {
         {
             let (subject_fields, _tail) = normalize_row(subject_row.clone(), substitutions);
 
-            if let Some(nominal) = session.phase.type_catalog.nominals.get(&subject_id.into())
+            if let Some(nominal) = session.type_catalog.nominals.get(&subject_id.into())
                 && let NominalForm::Struct { properties, .. } = &nominal.form
             {
                 let alias_param = match &scheme.ty {

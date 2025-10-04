@@ -52,7 +52,7 @@ async fn main() {
             let parsed = parser.parse().unwrap();
             let mut resolved = NameResolver::resolve(parsed);
 
-            let session = TypeSession::<Raw>::drive(&mut resolved);
+            let session = TypeSession::drive(&mut resolved);
 
             let formatter = Formatter::new_with_decorators(
                 &resolved.meta,

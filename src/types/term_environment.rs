@@ -10,7 +10,7 @@ use crate::{
         scheme::{ForAll, Scheme},
         ty::{Level, Ty},
         type_operations::UnificationSubstitutions,
-        type_session::{TypeSession, TypingPhase},
+        type_session::TypeSession,
         wants::Wants,
     },
 };
@@ -47,9 +47,9 @@ impl From<EnvEntry> for (Ty, Vec<Predicate>, Vec<ForAll>) {
 }
 
 impl EnvEntry {
-    pub fn solver_instantiate<P: TypingPhase>(
+    pub fn solver_instantiate(
         &self,
-        session: &mut TypeSession<P>,
+        session: &mut TypeSession,
         level: Level,
         substitutions: &mut UnificationSubstitutions,
         wants: &mut Wants,
@@ -67,7 +67,7 @@ impl EnvEntry {
 
     pub fn inference_instantiate(
         &self,
-        session: &mut TypeSession<SCCResolved>,
+        session: &mut TypeSession,
         level: Level,
         wants: &mut Wants,
         span: Span,

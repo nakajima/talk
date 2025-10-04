@@ -9,7 +9,6 @@ use crate::{
             construction::Construction, equals::Equals, has_field::HasField, member::Member,
             type_member::TypeMember,
         },
-        passes::dependencies_pass::SCCResolved,
         predicate::Predicate,
         row::Row,
         ty::{Level, Ty},
@@ -160,7 +159,7 @@ impl Constraint {
 
     pub fn normalize_nominals(
         &self,
-        session: &mut TypeSession<SCCResolved>,
+        session: &mut TypeSession,
         level: Level,
     ) -> Constraint {
         let mut copy = self.clone();

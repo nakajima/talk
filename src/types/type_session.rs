@@ -20,16 +20,16 @@ use crate::{
         fields::{Method, TypeFields},
         kind::Kind,
         passes::{
-            dependencies_pass::DependenciesPass,
+            dependencies_pass::{DependenciesPass, SCCResolved},
             inference_pass::{InferencePass, Inferenced, Meta, collect_meta},
             type_headers_pass::TypeHeaderPass,
-            type_resolve_pass::{HeadersResolved, TypeResolvePass},
+            type_resolve_pass::TypeResolvePass,
         },
         row::Row,
         scheme::{ForAll, Scheme},
         term_environment::{EnvEntry, TermEnv},
         ty::{Level, SkolemId, Ty, TypeParamId},
-        type_catalog::ConformanceStub,
+        type_catalog::{ConformanceStub, TypeCatalog},
         type_operations::{UnificationSubstitutions, apply, apply_row, substitute},
         vars::Vars,
     },
@@ -54,10 +54,6 @@ impl ASTTyRepr {
     }
 }
 
-pub trait TypingPhase: std::fmt::Debug {
-    type Next: TypingPhase;
-}
-
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum TypeDefKind {
     Struct,
@@ -66,16 +62,12 @@ pub enum TypeDefKind {
     Extension,
 }
 
-#[derive(Debug, PartialEq, Default)]
+#[derive(Debug, PartialEq, Default, Clone)]
 pub struct Raw {
     pub type_constructors: FxHashMap<TypeId, TypeDef>,
     pub protocols: FxHashMap<ProtocolId, TypeDef>,
     pub annotations: FxHashMap<NodeID, ASTTyRepr>,
     pub typealiases: FxHashMap<NodeID, (Name, TypeAnnotation)>,
-}
-
-impl TypingPhase for Raw {
-    type Next = HeadersResolved;
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -107,10 +99,9 @@ pub struct ProtocolBound {
 }
 
 #[derive(Debug)]
-pub struct TypeSession<Phase: TypingPhase = Raw> {
+pub struct TypeSession {
     pub(super) vars: Vars,
     pub synthsized_ids: IDGenerator,
-    pub phase: Phase,
     pub term_env: TermEnv,
     pub meta_levels: FxHashMap<Meta, Level>,
     pub skolem_map: FxHashMap<Ty, Ty>,
@@ -118,9 +109,10 @@ pub struct TypeSession<Phase: TypingPhase = Raw> {
     pub type_param_bounds: FxHashMap<TypeParamId, Vec<ProtocolBound>>,
     pub types_by_node: FxHashMap<NodeID, Ty>,
     pub typealiases: FxHashMap<Symbol, Scheme>,
+    pub type_catalog: TypeCatalog,
 }
 
-impl Default for TypeSession<Raw> {
+impl Default for TypeSession {
     fn default() -> Self {
         let mut term_env = TermEnv {
             symbols: FxHashMap::default(),
@@ -133,12 +125,6 @@ impl Default for TypeSession<Raw> {
         TypeSession {
             vars: Default::default(),
             synthsized_ids: Default::default(),
-            phase: Raw {
-                type_constructors: Default::default(),
-                protocols: Default::default(),
-                annotations: Default::default(),
-                typealiases: Default::default(),
-            },
             skolem_map: Default::default(),
             meta_levels: Default::default(),
             term_env,
@@ -146,19 +132,22 @@ impl Default for TypeSession<Raw> {
             skolem_bounds: Default::default(),
             types_by_node: Default::default(),
             typealiases: Default::default(),
+            type_catalog: Default::default(),
         }
     }
 }
 
 pub struct Typed {}
 
-impl<Phase: TypingPhase> TypeSession<Phase> {
-    pub fn drive(ast: &mut AST<NameResolved>) -> TypeSession<Inferenced> {
-        let mut session = TypeSession::<Raw>::default();
-        TypeHeaderPass::drive(&mut session, ast);
-        let session = TypeResolvePass::drive(ast, session);
-        let session = DependenciesPass::drive(session, ast);
-        InferencePass::perform(session, ast)
+impl TypeSession {
+    pub fn drive(ast: &mut AST<NameResolved>) -> TypeSession {
+        let mut session = TypeSession::default();
+        let raw = TypeHeaderPass::drive(&mut session, ast);
+        let _headers = TypeResolvePass::drive(ast, &mut session, raw);
+        let mut scc = SCCResolved::default();
+        DependenciesPass::drive(&mut session, ast, &mut scc);
+        InferencePass::perform(&mut session, &scc, ast);
+        session
     }
 
     #[instrument(skip(self))]
@@ -411,21 +400,6 @@ impl<Phase: TypingPhase> TypeSession<Phase> {
         }
 
         row.clone()
-    }
-
-    pub fn advance(self, phase: Phase::Next) -> TypeSession<Phase::Next> {
-        TypeSession::<Phase::Next> {
-            phase,
-            vars: self.vars,
-            synthsized_ids: self.synthsized_ids,
-            term_env: self.term_env,
-            meta_levels: self.meta_levels,
-            skolem_map: self.skolem_map,
-            skolem_bounds: self.skolem_bounds,
-            type_param_bounds: self.type_param_bounds,
-            types_by_node: self.types_by_node,
-            typealiases: self.typealiases,
-        }
     }
 
     pub(crate) fn new_type_param(&mut self) -> Ty {

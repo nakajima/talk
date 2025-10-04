@@ -45,17 +45,21 @@ pub fn arrow_n(arg: Kind, n: usize, ret: Kind) -> Kind {
 pub struct TypeHeaderPass<'a> {
     type_stack: Vec<Symbol>,
     child_types: FxHashMap<Symbol, FxHashMap<String, Symbol>>,
-    session: &'a mut TypeSession<Raw>,
+    session: &'a mut TypeSession,
+    raw: &'a mut Raw,
     extensions: FxHashMap<TypeId, Vec<TypeExtension>>,
     annotations: FxHashMap<NodeID, ASTTyRepr>,
     typealiases: FxHashMap<NodeID, (Name, TypeAnnotation)>,
 }
 
 impl<'a> TypeHeaderPass<'a> {
-    pub fn drive(session: &'a mut TypeSession<Raw>, ast: &AST<NameResolved>) {
+    pub fn drive(session: &'a mut TypeSession, ast: &AST<NameResolved>) -> Raw {
+        let mut raw = Raw::default();
+
         let mut instance = TypeHeaderPass {
             type_stack: Default::default(),
             session,
+            raw: &mut raw,
             child_types: Default::default(),
             extensions: Default::default(),
             annotations: Default::default(),
@@ -66,11 +70,11 @@ impl<'a> TypeHeaderPass<'a> {
             root.drive(&mut instance);
         }
 
-        instance.session.phase.annotations = std::mem::take(&mut instance.annotations);
-        instance.session.phase.typealiases = std::mem::take(&mut instance.typealiases);
+        instance.raw.annotations = std::mem::take(&mut instance.annotations);
+        instance.raw.typealiases = std::mem::take(&mut instance.typealiases);
 
         let mut extensions = std::mem::take(&mut instance.extensions);
-        for (id, type_constructor) in instance.session.phase.type_constructors.iter_mut() {
+        for (id, type_constructor) in instance.raw.type_constructors.iter_mut() {
             type_constructor.child_types = instance
                 .child_types
                 .get(&type_constructor.name.symbol().unwrap())
@@ -85,6 +89,25 @@ impl<'a> TypeHeaderPass<'a> {
                 type_constructor.extensions = extensions;
             }
         }
+
+        raw
+    }
+
+    pub fn drive_all(
+        session: &mut TypeSession,
+        asts: &FxHashMap<std::path::PathBuf, AST<NameResolved>>,
+    ) -> Raw {
+        let mut raw = Raw::default();
+
+        for ast in asts.values() {
+            let file_raw = TypeHeaderPass::drive(session, ast);
+            raw.type_constructors.extend(file_raw.type_constructors);
+            raw.protocols.extend(file_raw.protocols);
+            raw.annotations.extend(file_raw.annotations);
+            raw.typealiases.extend(file_raw.typealiases);
+        }
+
+        raw
     }
 
     fn enter_type_annotation(&mut self, annotation: &TypeAnnotation) {
@@ -166,7 +189,7 @@ impl<'a> TypeHeaderPass<'a> {
 
                 let fields =
                     self.collect_fields(name, decl.id, decl.span, TypeDefKind::Struct, body);
-                self.session.phase.type_constructors.insert(
+                self.raw.type_constructors.insert(
                     *type_id,
                     TypeDef {
                         extensions: Default::default(),
@@ -236,7 +259,7 @@ impl<'a> TypeHeaderPass<'a> {
                 let fields =
                     self.collect_fields(name, decl.id, decl.span, TypeDefKind::Protocol, body);
 
-                self.session.phase.protocols.insert(
+                self.raw.protocols.insert(
                     *protocol_id,
                     TypeDef {
                         extensions: Default::default(),
@@ -272,7 +295,7 @@ impl<'a> TypeHeaderPass<'a> {
 
                 let fields = self.collect_fields(name, decl.id, decl.span, TypeDefKind::Enum, body);
 
-                self.session.phase.type_constructors.insert(
+                self.raw.type_constructors.insert(
                     *type_id,
                     TypeDef {
                         extensions: Default::default(),
@@ -667,16 +690,16 @@ pub mod tests {
         },
     };
 
-    pub fn type_header_decl_pass(code: &'static str) -> (AST<NameResolved>, TypeSession<Raw>) {
+    pub fn type_header_decl_pass(code: &'static str) -> (AST<NameResolved>, Raw) {
         let resolved = resolve(code);
-        let mut session = TypeSession::<Raw>::default();
-        TypeHeaderPass::drive(&mut session, &resolved);
-        (resolved, session)
+        let mut session = TypeSession::default();
+        let raw = TypeHeaderPass::drive(&mut session, &resolved);
+        (resolved, raw)
     }
 
     #[test]
     fn basic_struct() {
-        let session = type_header_decl_pass(
+        let raw = type_header_decl_pass(
             "
         struct Person {
             let age: Int
@@ -686,7 +709,7 @@ pub mod tests {
         .1;
 
         assert_eq_diff!(
-            *session.phase.type_constructors.get(&TypeId(1)).unwrap(),
+            *raw.type_constructors.get(&TypeId(1)).unwrap(),
             TypeDef {
                 extensions: Default::default(),
                 child_types: Default::default(),
@@ -726,7 +749,7 @@ pub mod tests {
 
     #[test]
     fn struct_extension() {
-        let session = type_header_decl_pass(
+        let raw = type_header_decl_pass(
             "
         struct Person {}
         extend Person {}
@@ -735,7 +758,7 @@ pub mod tests {
         .1;
 
         assert_eq_diff!(
-            *session.phase.type_constructors.get(&TypeId(1)).unwrap(),
+            *raw.type_constructors.get(&TypeId(1)).unwrap(),
             TypeDef {
                 child_types: Default::default(),
                 extensions: vec![TypeExtension {
@@ -770,7 +793,7 @@ pub mod tests {
 
     #[test]
     fn generic_struct() {
-        let session = type_header_decl_pass(
+        let raw = type_header_decl_pass(
             "
         struct Wrapper<T> {
             let wrapped: T
@@ -784,7 +807,7 @@ pub mod tests {
         .1;
 
         assert_eq_diff!(
-            *session.phase.type_constructors.get(&TypeId(1)).unwrap(),
+            *raw.type_constructors.get(&TypeId(1)).unwrap(),
             TypeDef {
                 child_types: Default::default(),
                 extensions: Default::default(),
@@ -829,7 +852,7 @@ pub mod tests {
 
     #[test]
     fn nested_generic_struct() {
-        let session = type_header_decl_pass(
+        let raw = type_header_decl_pass(
             "
         struct Wrapper<T, U> {
             let wrapped: T<U>
@@ -839,7 +862,7 @@ pub mod tests {
         .1;
 
         assert_eq_diff!(
-            *session.phase.type_constructors.get(&TypeId(1)).unwrap(),
+            *raw.type_constructors.get(&TypeId(1)).unwrap(),
             TypeDef {
                 child_types: Default::default(),
                 extensions: Default::default(),
@@ -904,7 +927,7 @@ pub mod tests {
 
     #[test]
     fn basic_enum() {
-        let session = type_header_decl_pass(
+        let raw = type_header_decl_pass(
             "
         enum Fizz {
             case foo(Int), bar
@@ -914,7 +937,7 @@ pub mod tests {
         .1;
 
         assert_eq_diff!(
-            *session.phase.type_constructors.get(&TypeId(1)).unwrap(),
+            *raw.type_constructors.get(&TypeId(1)).unwrap(),
             TypeDef {
                 child_types: Default::default(),
                 extensions: Default::default(),
@@ -947,7 +970,7 @@ pub mod tests {
 
     #[test]
     fn basic_protocol() {
-        let session = type_header_decl_pass(
+        let raw = type_header_decl_pass(
             "
         protocol Fizz {
             associated Buzz
@@ -959,7 +982,7 @@ pub mod tests {
         .1;
 
         assert_eq_diff!(
-            *session.phase.protocols.get(&ProtocolId(1)).unwrap(),
+            *raw.protocols.get(&ProtocolId(1)).unwrap(),
             TypeDef {
                 child_types: Default::default(),
                 extensions: Default::default(),
@@ -998,7 +1021,7 @@ pub mod tests {
 
     #[test]
     fn basic_conformance() {
-        let session = type_header_decl_pass(
+        let raw = type_header_decl_pass(
             "
         protocol Fizz {}
         struct Buzz: Fizz {}
@@ -1007,7 +1030,7 @@ pub mod tests {
         .1;
 
         assert_eq_diff!(
-            *session.phase.type_constructors.get(&TypeId(1)).unwrap(),
+            *raw.type_constructors.get(&TypeId(1)).unwrap(),
             TypeDef {
                 child_types: Default::default(),
                 extensions: Default::default(),
@@ -1045,7 +1068,7 @@ pub mod tests {
 
     #[test]
     fn global_let() {
-        let (ast, session) = type_header_decl_pass(
+        let (ast, raw) = type_header_decl_pass(
             "
         let x: Int = 123
         ",
@@ -1057,7 +1080,7 @@ pub mod tests {
         ));
 
         assert_eq!(
-            *session.phase.annotations.get(&NodeID(2)).unwrap(),
+            *raw.annotations.get(&NodeID(2)).unwrap(),
             ASTTyRepr::Annotated(TypeAnnotation {
                 id: NodeID::ANY,
                 span: Span::ANY,
@@ -1071,7 +1094,7 @@ pub mod tests {
 
     #[test]
     fn global_func() {
-        let (ast, session) = type_header_decl_pass(
+        let (ast, raw) = type_header_decl_pass(
             "
         func fizz<T>(t: T) {}
         ",
@@ -1083,7 +1106,7 @@ pub mod tests {
         ));
 
         assert_eq!(
-            *session.phase.annotations.get(&NodeID(2)).unwrap(),
+            *raw.annotations.get(&NodeID(2)).unwrap(),
             ASTTyRepr::Annotated(TypeAnnotation {
                 id: NodeID::ANY,
                 span: Span::ANY,
