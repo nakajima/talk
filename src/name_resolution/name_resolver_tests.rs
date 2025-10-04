@@ -11,8 +11,8 @@ pub mod tests {
             name_resolver::{NameResolved, NameResolver, NameResolverError},
             symbol::{
                 AssociatedTypeId, BuiltinId, DeclaredLocalId, GlobalId, InstanceMethodId,
-                ParamLocalId, PropertyId, StaticMethodId, Symbol, TypeId, TypeParameterId,
-                VariantId,
+                ParamLocalId, PropertyId, ProtocolId, StaticMethodId, Symbol, TypeId,
+                TypeParameterId, VariantId,
             },
         },
         node::Node,
@@ -771,7 +771,7 @@ pub mod tests {
         assert_eq_diff!(
             *resolved.roots[0].as_decl(),
             any_decl!(DeclKind::Protocol {
-                name: Name::Resolved(Symbol::Type(TypeId(1)), "Fizzable".into()),
+                name: Name::Resolved(Symbol::Protocol(ProtocolId(1)), "Fizzable".into()),
                 conformances: vec![],
                 generics: vec![],
                 body: any_block!(vec![Node::Decl(any_decl!(DeclKind::MethodRequirement(
@@ -784,7 +784,7 @@ pub mod tests {
                             id: NodeID::ANY,
                             name: "self".into(),
                             type_annotation: Some(annotation!(TypeAnnotationKind::SelfType(
-                                Name::Resolved(TypeId(1).into(), "Self".into())
+                                Name::Resolved(ProtocolId(1).into(), "Self".into())
                             ))),
                             span: Span::ANY
                         }],
@@ -811,7 +811,7 @@ pub mod tests {
         assert_eq_diff!(
             *resolved.roots[0].as_decl(),
             any_decl!(DeclKind::Protocol {
-                name: Name::Resolved(Symbol::Type(TypeId(1)), "Fizzable".into()),
+                name: Name::Resolved(Symbol::Protocol(ProtocolId(1)), "Fizzable".into()),
                 conformances: vec![],
                 generics: vec![],
                 body: any_block!(vec![
@@ -836,7 +836,7 @@ pub mod tests {
                             id: NodeID::ANY,
                             name: "self".into(),
                             type_annotation: Some(annotation!(TypeAnnotationKind::SelfType(
-                                Name::Resolved(TypeId(1).into(), "Self".into())
+                                Name::Resolved(ProtocolId(1).into(), "Self".into())
                             ))),
                             span: Span::ANY
                         }],

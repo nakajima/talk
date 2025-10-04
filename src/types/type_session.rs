@@ -9,7 +9,7 @@ use crate::{
     name::Name,
     name_resolution::{
         name_resolver::NameResolved,
-        symbol::{Symbol, TypeId},
+        symbol::{ProtocolId, Symbol, TypeId},
     },
     node_id::NodeID,
     node_kinds::{generic_decl::GenericDecl, type_annotation::TypeAnnotation},
@@ -69,8 +69,9 @@ pub enum TypeDefKind {
 #[derive(Debug, PartialEq, Default)]
 pub struct Raw {
     pub type_constructors: FxHashMap<TypeId, TypeDef>,
-    pub protocols: FxHashMap<TypeId, TypeDef>,
-    pub globals: FxHashMap<NodeID, ASTTyRepr>,
+    pub protocols: FxHashMap<ProtocolId, TypeDef>,
+    pub annotations: FxHashMap<NodeID, ASTTyRepr>,
+    pub typealiases: FxHashMap<NodeID, (Name, TypeAnnotation)>,
 }
 
 impl TypingPhase for Raw {
@@ -85,7 +86,7 @@ pub struct TypeExtension {
     pub static_methods: IndexMap<Label, Method>,
 }
 
-#[derive(PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct TypeDef {
     pub name: Name,
     pub node_id: NodeID,
@@ -98,16 +99,10 @@ pub struct TypeDef {
     pub child_types: FxHashMap<String, Symbol>,
 }
 
-impl std::fmt::Debug for TypeDef {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "TypeDef({})", self.name.name_str())
-    }
-}
-
 // new helper
 #[derive(Debug, Clone)]
 pub struct ProtocolBound {
-    pub protocol_id: TypeId,
+    pub protocol_id: ProtocolId,
     pub args: Vec<Ty>, // concrete types the protocol is instantiated with, e.g. [Ty::Float]
 }
 
@@ -122,6 +117,7 @@ pub struct TypeSession<Phase: TypingPhase = Raw> {
     pub skolem_bounds: FxHashMap<SkolemId, Vec<TypeId>>,
     pub type_param_bounds: FxHashMap<TypeParamId, Vec<ProtocolBound>>,
     pub types_by_node: FxHashMap<NodeID, Ty>,
+    pub typealiases: FxHashMap<Symbol, Scheme>,
 }
 
 impl Default for TypeSession<Raw> {
@@ -131,7 +127,7 @@ impl Default for TypeSession<Raw> {
         };
 
         for (sym, entry) in builtin_scope() {
-            term_env.promote(sym, entry);
+            term_env.insert(sym, entry);
         }
 
         TypeSession {
@@ -140,7 +136,8 @@ impl Default for TypeSession<Raw> {
             phase: Raw {
                 type_constructors: Default::default(),
                 protocols: Default::default(),
-                globals: Default::default(),
+                annotations: Default::default(),
+                typealiases: Default::default(),
             },
             skolem_map: Default::default(),
             meta_levels: Default::default(),
@@ -148,6 +145,7 @@ impl Default for TypeSession<Raw> {
             type_param_bounds: Default::default(),
             skolem_bounds: Default::default(),
             types_by_node: Default::default(),
+            typealiases: Default::default(),
         }
     }
 }
@@ -324,20 +322,18 @@ impl<Phase: TypingPhase> TypeSession<Phase> {
             }
         }
 
-        // De-skolemize
+        // 3) de-skolemize+apply again
         let ty = substitute(ty, &self.skolem_map);
         let ty = apply(ty, substitutions);
 
+        // 4) build predicates from unsolved using *current substitutions*
         if foralls.is_empty() {
             return EnvEntry::Mono(ty);
         }
-
         let predicates = unsolved
             .iter()
-            .map(|c| {
-                let c = c.substitute(&self.skolem_map);
-                c.into_predicate(substitutions)
-            })
+            .map(|c| c.substitute(&self.skolem_map))
+            .map(|c| c.into_predicate(substitutions))
             .collect();
 
         EnvEntry::Scheme(Scheme::new(foralls, predicates, ty))
@@ -346,23 +342,25 @@ impl<Phase: TypingPhase> TypeSession<Phase> {
     // Handle converting Ty::TypeConstructor/Ty::TypeApplication to Ty::Nominal
     pub(super) fn normalize_nominals(&mut self, ty: &Ty, level: Level) -> Ty {
         let normalized = match ty.clone() {
+            Ty::Nominal { .. } => ty.clone(),
             Ty::TypeConstructor(type_id) => Ty::Nominal {
                 id: type_id,
                 type_args: vec![],
                 row: self.new_row_meta_var(level).into(),
             },
             Ty::TypeApplication(box base, box arg) => {
+                println!("normalize type application: {ty:?}");
                 let mut args = uncurry_type_application(base);
                 args.push(arg);
 
-                let Ty::TypeConstructor(type_id) = args.remove(0) else {
-                    panic!("didn't get type constructor as base");
-                };
-
-                Ty::Nominal {
-                    id: type_id,
-                    type_args: args,
-                    row: self.new_row_meta_var(level).into(),
+                let base = args.remove(0);
+                match base {
+                    Ty::TypeConstructor(type_id) => Ty::Nominal {
+                        id: type_id,
+                        type_args: args,
+                        row: self.new_row_meta_var(level).into(),
+                    },
+                    _ => panic!("didn't get type constructor as base: {base:?}"),
                 }
             }
             Ty::Constructor {
@@ -388,14 +386,6 @@ impl<Phase: TypingPhase> TypeSession<Phase> {
                     .collect(),
             ),
             Ty::Record(row) => Ty::Record(self.normalize_nominals_row(&row, level).into()),
-            Ty::Nominal { id, type_args, row } => Ty::Nominal {
-                id,
-                type_args: type_args
-                    .into_iter()
-                    .map(|t| self.normalize_nominals(&t, level))
-                    .collect(),
-                row: self.normalize_nominals_row(&row, level).into(),
-            },
             ty @ (Ty::Hole(..)
             | Ty::Primitive(..)
             | Ty::Param(..)
@@ -434,6 +424,7 @@ impl<Phase: TypingPhase> TypeSession<Phase> {
             skolem_bounds: self.skolem_bounds,
             type_param_bounds: self.type_param_bounds,
             types_by_node: self.types_by_node,
+            typealiases: self.typealiases,
         }
     }
 
@@ -520,7 +511,7 @@ pub fn uncurry_type_application(ty: Ty) -> Vec<Ty> {
             result.extend(uncurry_type_application(arg))
         }
         Ty::TypeConstructor(..) => result.push(ty),
-        _ => panic!("can't uncurry type application from {ty:?}"),
+        other => result.push(other),
     }
     result
 }

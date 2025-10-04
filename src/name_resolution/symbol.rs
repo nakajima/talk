@@ -16,6 +16,12 @@ macro_rules! impl_symbol_id {
                 Symbol::$case(value)
             }
         }
+
+        impl From<&$ty> for Symbol {
+            fn from(value: &$ty) -> Symbol {
+                Symbol::$case(*value)
+            }
+        }
     };
 }
 
@@ -33,6 +39,7 @@ pub enum Symbol {
     InstanceMethod(InstanceMethodId),
     StaticMethod(StaticMethodId),
     Variant(VariantId),
+    Protocol(ProtocolId),
     AssociatedType(AssociatedTypeId),
 }
 
@@ -56,6 +63,7 @@ impl_symbol_id!(Variant, VariantId);
 impl_symbol_id!(Synthesized, SynthesizedId);
 impl_symbol_id!(StaticMethod, StaticMethodId);
 impl_symbol_id!(AssociatedType, AssociatedTypeId);
+impl_symbol_id!(Protocol, ProtocolId);
 
 #[derive(Debug, Clone, Default)]
 pub struct Symbols {
@@ -72,6 +80,7 @@ pub struct Symbols {
     builtins: IDGenerator,
     associated_types: IDGenerator,
     type_parameters: IDGenerator,
+    protocols: IDGenerator,
 }
 
 impl Symbols {
@@ -125,5 +134,9 @@ impl Symbols {
 
     pub fn next_synthesized(&mut self) -> SynthesizedId {
         SynthesizedId(self.synthesized.next_id())
+    }
+
+    pub fn next_protocol(&mut self) -> ProtocolId {
+        ProtocolId(self.protocols.next_id())
     }
 }

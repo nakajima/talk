@@ -4,7 +4,7 @@ use rustc_hash::FxHashMap;
 use crate::{
     label::Label,
     name::Name,
-    name_resolution::symbol::{Symbol, TypeId},
+    name_resolution::symbol::{ProtocolId, Symbol, TypeId},
     node_id::NodeID,
     span::Span,
     types::type_session::ASTTyRepr,
@@ -77,6 +77,6 @@ pub struct Variant {
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct Associated {
-    pub protocol_id: TypeId,
+    pub protocol_id: ProtocolId,
     pub symbol: Symbol,
 }

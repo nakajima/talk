@@ -1,17 +1,21 @@
 use rustc_hash::FxHashMap;
 
+use crate::types::predicate::Predicate;
+use crate::types::scheme::ForAll;
 use crate::types::term_environment::EnvEntry;
 use crate::types::ty::{Primitive, Ty};
 
 use crate::name_resolution::symbol::Symbol;
 
-pub fn resolve_builtin_type(id: &Symbol) -> Ty {
-    match *id {
+pub fn resolve_builtin_type(id: &Symbol) -> (Ty, Vec<Predicate>, Vec<ForAll>) {
+    let ty = match *id {
         Symbol::Int => Ty::Primitive(Primitive::Int),
         Symbol::Float => Ty::Primitive(Primitive::Float),
         Symbol::Bool => Ty::Primitive(Primitive::Bool),
         _ => unreachable!("no builtin named {id:?}"),
-    }
+    };
+
+    (ty, vec![], vec![])
 }
 
 pub fn builtin_scope() -> FxHashMap<Symbol, EnvEntry> {

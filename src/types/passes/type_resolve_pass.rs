@@ -4,21 +4,19 @@ use tracing::{instrument, trace_span};
 
 use crate::{
     ast::AST,
-    guard_found_ty,
     label::Label,
     name::Name,
     name_resolution::{
         name_resolver::NameResolved,
-        symbol::{Symbol, TypeId},
+        symbol::{ProtocolId, Symbol},
     },
-    node_kinds::type_annotation::{TypeAnnotation, TypeAnnotationKind},
+    node_kinds::{
+        generic_decl::GenericDecl,
+        type_annotation::{TypeAnnotation, TypeAnnotationKind},
+    },
     span::Span,
     types::{
         builtins::resolve_builtin_type,
-        constraints::{
-            constraint::{Constraint, ConstraintCause},
-            type_member::TypeMember,
-        },
         fields::{
             Associated, Initializer, Method, MethodRequirement, Property, TypeFields, Variant,
         },
@@ -30,10 +28,9 @@ use crate::{
         row::Row,
         scheme::{ForAll, Scheme},
         term_environment::EnvEntry,
-        ty::{Level, Ty, TypeParamId},
+        ty::{Level, Ty},
         type_catalog::{ConformanceKey, Extension, Nominal, NominalForm, Protocol, TypeCatalog},
         type_error::TypeError,
-        type_operations::UnificationSubstitutions,
         type_session::{ASTTyRepr, Raw, TypeDef, TypeDefKind, TypeSession, TypingPhase},
     },
 };
@@ -52,11 +49,8 @@ impl TypingPhase for HeadersResolved {
 pub struct TypeResolvePass<'a> {
     session: TypeSession<Raw>,
     type_catalog: TypeCatalog,
-    generics: IndexMap<Symbol, Ty>,
     conformance_keys: Vec<(ConformanceKey, Span)>,
-    predicates_by_param: FxHashMap<TypeParamId, Vec<Predicate>>,
     self_symbols: Vec<Symbol>,
-    self_tys: Vec<Ty>,
     _ast: &'a mut AST<NameResolved>,
 }
 
@@ -68,11 +62,8 @@ impl<'a> TypeResolvePass<'a> {
         let resolver = TypeResolvePass {
             session,
             type_catalog: Default::default(),
-            generics: Default::default(),
             conformance_keys: Default::default(),
-            predicates_by_param: Default::default(),
             self_symbols: Default::default(),
-            self_tys: Default::default(),
             _ast: ast,
         };
 
@@ -82,40 +73,27 @@ impl<'a> TypeResolvePass<'a> {
     // Go through all headers and gather up properties/methods/variants/etc. Don't perform
     // any generalization until the very end.
     fn solve(mut self) -> TypeSession<HeadersResolved> {
-        for (id, ty_repr) in std::mem::take(&mut self.session.phase.globals) {
-            let ty = self.infer_ast_ty_repr(&ty_repr);
-            self.session.types_by_node.insert(id, ty);
+        for (decl_id, _ty) in self.session.phase.type_constructors.clone().iter() {
+            let base = Ty::TypeConstructor(*decl_id);
+
+            self.session
+                .term_env
+                .insert_mono(Symbol::Type(*decl_id), base);
         }
 
-        let mut row_vars: Vec<Row> = (0..self.session.phase.type_constructors.len())
-            .map(|_| self.session.new_row_meta_var(Level(1)))
-            .collect();
-        for (decl_id, ty) in self.session.phase.type_constructors.iter() {
-            // Forward declare types with empty rows
-            match ty.def {
-                TypeDefKind::Struct => self.session.term_env.insert_mono(
-                    Symbol::Type(*decl_id),
-                    Ty::Nominal {
-                        id: *decl_id,
-                        row: Box::new(row_vars.pop().unwrap()),
-                        type_args: vec![],
-                    },
-                ),
-                TypeDefKind::Enum => self.session.term_env.insert_mono(
-                    Symbol::Type(*decl_id),
-                    Ty::Nominal {
-                        id: *decl_id,
-                        row: Box::new(row_vars.pop().unwrap()),
-                        type_args: vec![],
-                    },
-                ),
-                _ => (),
-            }
+        for (_id, (name, rhs)) in std::mem::take(&mut self.session.phase.typealiases) {
+            let symbol = name.symbol().unwrap();
+            let entry = self.infer_type_annotation(&rhs);
+            self.session.term_env.insert(symbol, entry.into());
         }
 
-        for (decl_id, type_def) in std::mem::take(&mut self.session.phase.type_constructors) {
-            if let Ok(resolved) = self.resolve_type_def(&type_def) {
-                self.type_catalog.nominals.insert(decl_id, resolved);
+        for ty_repr in std::mem::take(&mut self.session.phase.annotations).values() {
+            self.infer_ast_ty_repr(ty_repr);
+        }
+
+        for (decl_id, type_def) in self.session.phase.type_constructors.clone().iter() {
+            if let Ok(resolved) = self.resolve_type_def(type_def) {
+                self.type_catalog.nominals.insert(decl_id.into(), resolved);
             }
         }
 
@@ -212,7 +190,21 @@ impl<'a> TypeResolvePass<'a> {
     fn resolve_protocol(&mut self, type_def: &TypeDef) -> Result<Protocol, TypeError> {
         let ty = self.session.new_type_param();
         self.self_symbols.push(type_def.name.symbol().unwrap());
-        self.self_tys.push(ty);
+
+        // The Self type parameter should be quantified in a scheme
+        let entry = if let Ty::Param(param_id) = ty.clone() {
+            EnvEntry::Scheme(Scheme {
+                foralls: vec![ForAll::Ty(param_id)],
+                predicates: vec![],
+                ty,
+            })
+        } else {
+            EnvEntry::Mono(ty)
+        };
+
+        self.session
+            .term_env
+            .insert(type_def.name.symbol().unwrap(), entry);
 
         let TypeFields::Protocol {
             static_methods,
@@ -235,7 +227,6 @@ impl<'a> TypeResolvePass<'a> {
         }
 
         self.self_symbols.pop();
-        self.self_tys.pop();
 
         Ok(Protocol {
             node_id: type_def.node_id,
@@ -251,14 +242,9 @@ impl<'a> TypeResolvePass<'a> {
         let _s = trace_span!("resolve", type_def = format!("{type_def:?}")).entered();
 
         let sym = type_def.name.symbol().unwrap();
-        let EnvEntry::Mono(ty) = self.session.term_env.lookup(&sym).unwrap() else {
-            unreachable!()
-        };
+        let (ty, _, _) = self.session.term_env.lookup(&sym).cloned().unwrap().into();
 
         self.self_symbols.push(sym);
-        self.self_tys.push(ty.clone());
-
-        let mut generics = vec![];
 
         for (name, generic) in type_def.generics.iter() {
             let Name::Resolved(sym, _) = name else {
@@ -266,9 +252,8 @@ impl<'a> TypeResolvePass<'a> {
                 continue;
             };
 
-            let ty_repr = self.infer_ast_ty_repr(generic);
-            generics.push(ty_repr.clone());
-            self.generics.insert(*sym, ty_repr);
+            let entry = self.infer_ast_ty_repr(generic);
+            self.session.term_env.insert(*sym, entry.into());
         }
 
         let mut form = self.resolve_form(type_def);
@@ -281,18 +266,14 @@ impl<'a> TypeResolvePass<'a> {
             self.conformance_keys.push((
                 ConformanceKey {
                     protocol_id: c.protocol_id,
-                    conforming_id: *type_id,
+                    conforming_id: sym,
                 },
                 c.span,
             ));
         }
 
-        let Some(EnvEntry::Mono(ty)) = self.session.term_env.lookup(&symbol).cloned() else {
-            panic!("didn't get ty");
-        };
-
         let type_scheme = self.session.generalize(Level(0), ty.clone(), &[]);
-        self.session.term_env.promote(symbol, type_scheme);
+        self.session.term_env.insert(symbol, type_scheme);
 
         let extensions = type_def
             .extensions
@@ -307,7 +288,6 @@ impl<'a> TypeResolvePass<'a> {
             .collect();
 
         self.self_symbols.pop();
-        self.self_tys.pop();
 
         Ok(Nominal {
             type_id: *type_id,
@@ -325,14 +305,26 @@ impl<'a> TypeResolvePass<'a> {
     ) -> FxHashMap<Label, Symbol> {
         let mut resolved_variants = FxHashMap::<Label, Symbol>::default();
         for (name, variant) in variants {
+            let mut predicates = vec![];
+            let mut foralls = vec![];
             let ty = match variant.fields.len() {
                 0 => Ty::Void,
-                1 => self.infer_ast_ty_repr(&variant.fields[0]),
+                1 => {
+                    let (ty, preds, fas) = self.infer_ast_ty_repr(&variant.fields[0]);
+                    predicates.extend(preds);
+                    foralls.extend(fas);
+                    ty
+                }
                 _ => Ty::Tuple(
                     variant
                         .fields
                         .iter()
-                        .map(|f| self.infer_ast_ty_repr(f))
+                        .map(|f| {
+                            let (ty, preds, fas) = self.infer_ast_ty_repr(f);
+                            predicates.extend(preds);
+                            foralls.extend(fas);
+                            ty
+                        })
                         .collect(),
                 ),
             };
@@ -341,7 +333,7 @@ impl<'a> TypeResolvePass<'a> {
             if foralls.is_empty() {
                 self.session.term_env.insert_mono(variant.symbol, ty);
             } else {
-                self.session.term_env.promote(
+                self.session.term_env.insert(
                     variant.symbol,
                     EnvEntry::Scheme(Scheme::new(foralls, vec![], ty)),
                 );
@@ -359,12 +351,23 @@ impl<'a> TypeResolvePass<'a> {
     ) -> FxHashMap<Label, Symbol> {
         let mut resolved_methods = FxHashMap::default();
         for (name, method) in methods {
+            let mut predicates = vec![];
+            let mut foralls = vec![];
             let params: Vec<_> = method
                 .params
                 .iter()
-                .map(|f| self.infer_ast_ty_repr(f))
+                .map(|f| {
+                    let (ty, preds, fas) = self.infer_ast_ty_repr(f);
+                    predicates.extend(preds);
+                    foralls.extend(fas);
+                    ty
+                })
                 .collect();
-            let ret = self.infer_ast_ty_repr(&method.ret);
+            let (ret, preds, fas) = self.infer_ast_ty_repr(&method.ret);
+
+            predicates.extend(preds);
+            foralls.extend(fas);
+
             let fn_ty = if params.is_empty() {
                 Ty::Func(Box::new(Ty::Void), Box::new(ret.clone()))
             } else {
@@ -378,7 +381,7 @@ impl<'a> TypeResolvePass<'a> {
                 self.session.term_env.insert_mono(method.symbol, fn_ty);
             } else {
                 use crate::types::{scheme::Scheme, term_environment::EnvEntry};
-                self.session.term_env.promote(
+                self.session.term_env.insert(
                     method.symbol,
                     EnvEntry::Scheme(Scheme::new(foralls, vec![], fn_ty)),
                 );
@@ -396,24 +399,31 @@ impl<'a> TypeResolvePass<'a> {
     ) -> FxHashMap<Label, Symbol> {
         let mut resolved_methods = FxHashMap::default();
         for (name, method) in methods {
+            let mut predicates = vec![];
+            let mut foralls = vec![];
             let params: Vec<_> = method
                 .params
                 .iter()
-                .map(|f| self.infer_ast_ty_repr(f))
+                .map(|f| {
+                    let (ty, preds, fas) = self.infer_ast_ty_repr(f);
+                    predicates.extend(preds);
+                    foralls.extend(fas);
+                    ty
+                })
                 .collect();
-            let ret = self.infer_ast_ty_repr(&method.ret);
+            let (ret, preds, fas) = self.infer_ast_ty_repr(&method.ret);
+
+            predicates.extend(preds);
+            foralls.extend(fas);
             let fn_ty = if params.is_empty() {
                 Ty::Func(Box::new(Ty::Void), Box::new(ret.clone()))
             } else {
                 curry(params.clone(), ret.clone())
             };
 
-            let foralls = fn_ty.collect_foralls();
-
             if foralls.is_empty() {
                 self.session.term_env.insert_mono(method.symbol, fn_ty);
             } else {
-                let mut predicates = Vec::new();
                 let self_ty = params
                     .first()
                     .expect("did not create `self` param for instance method");
@@ -424,11 +434,12 @@ impl<'a> TypeResolvePass<'a> {
                 });
 
                 let scheme = EnvEntry::Scheme(Scheme::new(foralls, predicates, fn_ty));
+
                 println!(
                     "[resolve_instance_methods] promoting {:?}: {scheme:?}",
                     method.symbol
                 );
-                self.session.term_env.promote(method.symbol, scheme);
+                self.session.term_env.insert(method.symbol, scheme);
             }
 
             resolved_methods.insert(name.clone(), method.symbol);
@@ -448,8 +459,20 @@ impl<'a> TypeResolvePass<'a> {
                 continue;
             }
 
-            let ty = self.infer_ast_ty_repr(&prop.ty_repr);
-            self.session.term_env.insert_mono(prop.symbol, ty);
+            let (ty, predicates, foralls) = self.infer_ast_ty_repr(&prop.ty_repr);
+
+            if predicates.is_empty() && foralls.is_empty() {
+                self.session.term_env.insert_mono(prop.symbol, ty);
+            } else {
+                self.session.term_env.insert(
+                    prop.symbol,
+                    EnvEntry::Scheme(Scheme {
+                        foralls,
+                        predicates,
+                        ty,
+                    }),
+                );
+            }
             result.insert(label.clone(), prop.symbol);
         }
 
@@ -467,10 +490,18 @@ impl<'a> TypeResolvePass<'a> {
         };
 
         for (label, init) in initializers {
-            let params: Vec<Ty> = init
+            let mut predicates = vec![];
+            let mut foralls = vec![];
+
+            let params: Vec<_> = init
                 .params
                 .iter()
-                .map(|p| self.infer_ast_ty_repr(p))
+                .map(|f| {
+                    let (ty, preds, fas) = self.infer_ast_ty_repr(f);
+                    predicates.extend(preds);
+                    foralls.extend(fas);
+                    ty
+                })
                 .collect();
 
             let ret = Ty::Nominal {
@@ -481,14 +512,12 @@ impl<'a> TypeResolvePass<'a> {
 
             let ty = curry(params, ret);
 
-            let foralls = ty.collect_foralls();
-            if foralls.is_empty() {
+            if foralls.is_empty() && predicates.is_empty() {
                 self.session.term_env.insert_mono(init.symbol, ty);
             } else {
-                use crate::types::{scheme::Scheme, term_environment::EnvEntry};
-                self.session.term_env.promote(
+                self.session.term_env.insert(
                     init.symbol,
-                    EnvEntry::Scheme(Scheme::new(foralls, vec![], ty)),
+                    EnvEntry::Scheme(Scheme::new(foralls, predicates, ty)),
                 );
             }
             out.insert(label.clone(), init.symbol);
@@ -499,7 +528,7 @@ impl<'a> TypeResolvePass<'a> {
 
     fn _resolve_associated_types(
         &mut self,
-        protocol_id: TypeId,
+        protocol_id: ProtocolId,
         associated_types: &IndexMap<Name, Associated>,
     ) -> IndexMap<Name, Associated> {
         let mut resolved_associated_types = IndexMap::default();
@@ -522,57 +551,42 @@ impl<'a> TypeResolvePass<'a> {
     ) -> FxHashMap<Label, Symbol> {
         let mut resolved_methods = FxHashMap::default();
         for (name, method) in requirements {
+            let mut predicates = vec![];
+            let mut foralls = vec![];
             let params: Vec<_> = method
                 .params
                 .iter()
-                .map(|f| self.infer_ast_ty_repr(f))
+                .map(|f| {
+                    let (ty, preds, fas) = self.infer_ast_ty_repr(f);
+                    predicates.extend(preds);
+                    foralls.extend(fas);
+                    ty
+                })
                 .collect();
+
             let ret = if let Some(ret) = &method.ret {
-                self.infer_ast_ty_repr(ret)
+                let (ty, preds, fas) = self.infer_ast_ty_repr(ret);
+                predicates.extend(preds);
+                foralls.extend(fas);
+                ty
             } else {
                 Ty::Void
             };
+
             let fn_ty = curry(params.clone(), ret.clone());
 
-            println!("fn_ty : {fn_ty:?}");
-            let mut substitutions = UnificationSubstitutions::new(self.session.meta_levels.clone());
-            let mut entry = self.session.generalize_with_substitutions(
-                Level(0),
-                fn_ty,
-                &[],
-                &mut substitutions,
-            );
-
-            println!("substitutions: {substitutions:?}");
-
-            println!("generalized: {entry:?}");
-
-            if let EnvEntry::Scheme(scheme) = &mut entry {
-                let foralls = scheme.ty.collect_foralls();
-
-                println!("foralls: {foralls:?}");
-
-                // Collect predicates for all type parameters in this method
-                for forall in &foralls {
-                    if let ForAll::Ty(param_id) = forall
-                        && let Some(preds) = self.predicates_by_param.get(param_id)
-                    {
-                        // Apply substitutions to each predicate before adding to scheme
-                        for pred in preds {
-                            let substituted = pred.apply_substitutions(&mut substitutions);
-                            scheme.predicates.push(substituted);
-                        }
-                    }
-                }
-
-                println!(
-                    "predicates: {:?} / {:?}",
-                    scheme.predicates, self.predicates_by_param
-                );
-            }
+            let entry = if predicates.is_empty() && foralls.is_empty() {
+                EnvEntry::Mono(fn_ty)
+            } else {
+                EnvEntry::Scheme(Scheme {
+                    foralls,
+                    predicates,
+                    ty: fn_ty,
+                })
+            };
 
             println!("about to promote {:?}: {entry:?}", method.symbol);
-            self.session.term_env.promote(method.symbol, entry);
+            self.session.term_env.insert(method.symbol, entry);
 
             println!("inserting {} -> {:?}", name, method.symbol);
             resolved_methods.insert(name.clone(), method.symbol);
@@ -581,11 +595,58 @@ impl<'a> TypeResolvePass<'a> {
     }
 
     #[instrument(skip(self))]
-    pub(crate) fn infer_type_annotation(&mut self, annotation: &TypeAnnotation) -> Ty {
-        guard_found_ty!(self, annotation.id);
+    pub(crate) fn infer_type_annotation(
+        &mut self,
+        annotation: &TypeAnnotation,
+    ) -> (Ty, Vec<Predicate>, Vec<ForAll>) {
+        match &annotation.kind {
+            TypeAnnotationKind::SelfType(Name::Resolved(sym @ Symbol::Type(id), ..)) => {
+                let mut predicates = vec![];
+                let mut foralls = vec![];
 
-        let ty = match &annotation.kind {
-            TypeAnnotationKind::SelfType(_id) => self.self_tys.last().unwrap().clone(),
+                for generic in self
+                    .session
+                    .phase
+                    .type_constructors
+                    .get(id)
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "did not get type for id: {id:?} in {:?}",
+                            self.session.phase.type_constructors
+                        )
+                    })
+                    .generics
+                    .values()
+                {
+                    let (_, preds, fas) = self.infer_ast_ty_repr(generic);
+                    predicates.extend(preds);
+                    foralls.extend(fas);
+                }
+
+                let row = self.session.new_row_meta_var(Level(1)).into();
+                let ty = Ty::Nominal {
+                    id: *id,
+                    type_args: vec![],
+                    row,
+                };
+
+                let entry: EnvEntry = (ty, predicates, foralls).into();
+                self.session.term_env.insert(*sym, entry.clone());
+                entry.into()
+            }
+            TypeAnnotationKind::SelfType(Name::Resolved(Symbol::Protocol(..), ..)) => {
+                let Some(sym) = self.self_symbols.last() else {
+                    unreachable!("didn't get self symbol for protocol");
+                };
+
+                self.session
+                    .term_env
+                    .lookup(sym)
+                    .cloned()
+                    .expect("didn't get self entry")
+                    .into()
+            }
             TypeAnnotationKind::Func { .. } => todo!(),
             TypeAnnotationKind::Tuple(..) => todo!(),
             TypeAnnotationKind::Nominal {
@@ -596,147 +657,197 @@ impl<'a> TypeResolvePass<'a> {
                 name: Name::Resolved(sym @ Symbol::TypeParameter(..), ..),
                 generics,
             } => {
-                let mut base = self.generics.get(sym).cloned().unwrap_or_else(|| {
-                    let ty = self.session.new_type_param();
-                    self.generics.insert(*sym, ty.clone());
+                let mut predicates = vec![];
+                let mut foralls = vec![];
+
+                // Check if this type parameter already has an entry
+                let mut base = if let Some(entry) = self.session.term_env.lookup(sym).cloned() {
+                    let (ty, preds, fas) = entry.into();
+                    predicates.extend(preds);
+                    foralls.extend(fas);
                     ty
-                });
+                } else {
+                    self.session.new_type_param()
+                };
 
                 for g in generics {
-                    base = Ty::TypeApplication(base.into(), self.infer_type_annotation(g).into());
+                    let (ty, preds, fas) = self.infer_type_annotation(g);
+                    predicates.extend(preds);
+                    foralls.extend(fas);
+                    base = Ty::TypeApplication(base.into(), ty.into());
                 }
 
-                base
+                let entry = (base, predicates, foralls);
+                self.session.term_env.insert(*sym, entry.clone().into());
+                entry
+            }
+            TypeAnnotationKind::Nominal {
+                name: Name::Resolved(Symbol::Protocol(..), ..),
+                ..
+            } => {
+                // Protocols aren't values
+                (Ty::Void, vec![], vec![])
             }
             TypeAnnotationKind::Nominal {
                 name: Name::Resolved(sym @ Symbol::Type(type_id), ..),
                 generics,
             } => {
                 // Check if this is a generic parameter (from type defs or functions)
-                let mut base = if let Some(generic) = self.generics.get(sym).cloned() {
-                    // Type definition generic (e.g., struct Foo<T>)
-                    generic
-                } else if let Some(entry) = self.session.term_env.lookup(sym) {
-                    // Function generic (e.g., func foo<T>)
-                    match entry {
-                        EnvEntry::Mono(ty) => ty.clone(),
-                        EnvEntry::Scheme(s) => s.ty.clone(),
-                    }
-                } else {
-                    // It's a type constructor
-                    Ty::TypeConstructor(*type_id)
-                };
+                let (mut base, mut predicates, mut foralls) =
+                    if let Some(entry) = self.session.term_env.lookup(sym).cloned() {
+                        // Type definition generic (e.g., struct Foo<T>)
+                        entry.into()
+                    } else if let Some(entry) = self.session.term_env.lookup(sym).cloned() {
+                        // Function generic (e.g., func foo<T>)
+                        entry.into()
+                    } else {
+                        // It's a type constructor
+                        (Ty::TypeConstructor(*type_id), vec![], vec![])
+                    };
 
                 // Apply generic arguments if any
                 for g in generics {
-                    base = Ty::TypeApplication(base.into(), self.infer_type_annotation(g).into());
+                    let (ty, preds, fas) = self.infer_type_annotation(g);
+                    predicates.extend(preds);
+                    foralls.extend(fas);
+                    base = Ty::TypeApplication(base.into(), ty.into());
                 }
 
-                base
+                (base, predicates, foralls)
             }
             TypeAnnotationKind::NominalPath {
                 box base,
-                member: Label::Named(member_name),
+                member: Label::Named(..),
                 member_generics,
             } => {
-                let base_ty = self.infer_type_annotation(base);
+                let (mut base_ty, mut predicates, mut foralls) = self.infer_type_annotation(base);
                 let result = self.session.new_type_param();
-                let constraint = Constraint::TypeMember(TypeMember {
-                    base: base_ty,
-                    name: member_name.into(),
-                    generics: member_generics
-                        .iter()
-                        .map(|t| self.infer_type_annotation(t))
-                        .collect(),
-                    result: result.clone(),
-                    cause: ConstraintCause::Internal,
-                    span: annotation.span,
-                });
-                tracing::debug!(
-                    "pushing constraint {:?} {:?} {constraint:?}",
-                    annotation.id,
-                    base
-                );
-                result
+
+                let Ty::Param(id) = &result else {
+                    unreachable!()
+                };
+
+                foralls.push(ForAll::Ty(*id));
+
+                for g in member_generics {
+                    let (ty, preds, fas) = self.infer_type_annotation(g);
+                    predicates.extend(preds);
+                    foralls.extend(fas);
+                    base_ty = Ty::TypeApplication(base_ty.into(), ty.into());
+                }
+
+                (result, predicates, foralls)
             }
             TypeAnnotationKind::Nominal {
                 name: Name::Resolved(Symbol::AssociatedType(assoc_id), _),
                 ..
             } => {
-                let Symbol::Type(protocol_id) = self.self_symbols.last().cloned().unwrap() else {
+                let Some(Symbol::Protocol(protocol_id)) = self.self_symbols.last().cloned() else {
+                    println!("nope");
                     unreachable!("didn't get protocol id");
                 };
 
-                let Some(self_ty) = self.self_tys.last().cloned() else {
-                    unreachable!("didn't get self_ty");
+                let Some(self_symbol) = self.self_symbols.last().cloned() else {
+                    unreachable!("didn't get self_symbol");
                 };
 
-                let result = self.session.new_ty_meta_var(Level(1));
+                let result = self.session.new_type_param();
+
+                let (self_ty, mut predicates, mut foralls) = self
+                    .session
+                    .term_env
+                    .lookup(&self_symbol)
+                    .cloned()
+                    .expect("didn't get protocol self")
+                    .into();
 
                 // Store predicate indexed by the type parameter (Self)
-                if let Ty::Param(param_id) = self_ty {
-                    let predicate = Predicate::AssociatedEquals {
+                if let Ty::Param(..) = self_ty {
+                    predicates.push(Predicate::AssociatedEquals {
                         subject: self_ty.clone(),
                         protocol_id,
                         associated_type_id: *assoc_id,
                         output: result.clone(),
-                    };
-
-                    self.predicates_by_param
-                        .entry(param_id)
-                        .or_default()
-                        .push(predicate);
+                    });
                 }
 
-                result
+                // Add the result type parameter to the foralls list
+                if let Ty::Param(param_id) = result.clone() {
+                    foralls.push(ForAll::Ty(param_id));
+                }
+
+                // Update the Self symbol's entry to include the new predicate and forall
+                let updated_self_entry = (self_ty.clone(), predicates.clone(), foralls.clone());
+                self.session
+                    .term_env
+                    .insert(self_symbol, updated_self_entry.into());
+
+                // Return the result type for this associated type reference
+                (result, predicates, foralls)
             }
             TypeAnnotationKind::Record { fields } => {
                 let mut row = Row::Empty(TypeDefKind::Struct);
+                let mut predicates = vec![];
+                let mut foralls = vec![];
                 for field in fields.iter().rev() {
+                    let (ty, preds, fas) = self.infer_type_annotation(&field.value);
+                    predicates.extend(preds);
+                    foralls.extend(fas);
+
                     row = Row::Extend {
                         row: Box::new(row),
                         label: field.label.name_str().into(),
-                        ty: self.infer_type_annotation(&field.value),
+                        ty,
                     };
                 }
 
-                Ty::Record(Box::new(row))
+                (Ty::Record(Box::new(row)), predicates, foralls)
             }
             _ => unreachable!("unhandled type annotation: {annotation:?}"),
-        };
-
-        self.session.types_by_node.insert(annotation.id, ty.clone());
-
-        ty
+        }
     }
 
-    pub(crate) fn infer_ast_ty_repr(&mut self, ty_repr: &ASTTyRepr) -> Ty {
+    pub(crate) fn infer_ast_ty_repr(
+        &mut self,
+        ty_repr: &ASTTyRepr,
+    ) -> (Ty, Vec<Predicate>, Vec<ForAll>) {
         match &ty_repr {
-            ASTTyRepr::Annotated(annotation) => {
-                guard_found_ty!(self, annotation.id);
-                self.infer_type_annotation(annotation)
+            ASTTyRepr::Annotated(annotation) => self.infer_type_annotation(annotation),
+            ASTTyRepr::SelfType(..) => {
+                if let Some(sym) = self.self_symbols.last()
+                    && let Some(entry) = self.session.term_env.lookup(sym).cloned()
+                {
+                    return entry.into();
+                }
+
+                panic!("didn't get self type for protocol");
             }
-            ASTTyRepr::SelfType(..) => self.self_tys.last().cloned().unwrap(),
-            ASTTyRepr::Hole(id, ..) => Ty::Hole(*id),
-            ASTTyRepr::Generic(decl) => {
-                guard_found_ty!(self, decl.id);
-
-                let ty = self.session.new_type_param();
-
-                self.generics
-                    .insert(decl.name.symbol().unwrap(), ty.clone());
-
-                self.session.term_env.promote(
-                    decl.name
-                        .symbol()
-                        .expect("didn't resolve name of generic param"),
-                    EnvEntry::Mono(ty.clone()),
-                );
-
-                self.session.types_by_node.insert(decl.id, ty.clone());
-                ty
-            }
+            ASTTyRepr::Hole(id, ..) => (Ty::Hole(*id), vec![], vec![]),
+            ASTTyRepr::Generic(decl) => self.infer_generic_decl(decl),
         }
+    }
+
+    fn infer_generic_decl(&mut self, decl: &GenericDecl) -> (Ty, Vec<Predicate>, Vec<ForAll>) {
+        let ty = self.session.new_type_param();
+
+        let Ty::Param(id) = ty else {
+            unreachable!();
+        };
+
+        let mut predicates: Vec<Predicate> = vec![];
+        let mut foralls: Vec<ForAll> = vec![ForAll::Ty(id)];
+
+        for generic in decl.generics.iter() {
+            let (_, preds, fas) = self.infer_generic_decl(generic);
+            predicates.extend(preds);
+            foralls.extend(fas);
+        }
+
+        let entry = (ty, predicates, foralls);
+        self.session
+            .term_env
+            .insert(decl.name.symbol().unwrap(), entry.clone().into());
+        entry
     }
 }
 
@@ -752,8 +863,8 @@ pub mod tests {
             name_resolver::NameResolved,
             name_resolver_tests::tests::resolve,
             symbol::{
-                AssociatedTypeId, InstanceMethodId, PropertyId, StaticMethodId, SynthesizedId,
-                TypeId,
+                AssociatedTypeId, InstanceMethodId, PropertyId, ProtocolId, StaticMethodId,
+                SynthesizedId, TypeId,
             },
         },
         span::Span,
@@ -802,7 +913,7 @@ pub mod tests {
                 .phase
                 .type_catalog
                 .nominals
-                .get(&TypeId(1))
+                .get(&TypeId(1).into())
                 .unwrap()
                 .form,
             NominalForm::Struct {
@@ -831,7 +942,7 @@ pub mod tests {
                 .phase
                 .type_catalog
                 .nominals
-                .get(&TypeId(1))
+                .get(&TypeId(1).into())
                 .unwrap()
                 .form,
             NominalForm::Struct {
@@ -859,7 +970,7 @@ pub mod tests {
                 .phase
                 .type_catalog
                 .nominals
-                .get(&TypeId(1))
+                .get(&TypeId(1).into())
                 .unwrap()
                 .form,
             NominalForm::Struct {
@@ -886,7 +997,7 @@ pub mod tests {
                 .phase
                 .type_catalog
                 .nominals
-                .get(&TypeId(1))
+                .get(&TypeId(1).into())
                 .unwrap()
                 .form,
             NominalForm::Struct {
@@ -912,7 +1023,7 @@ pub mod tests {
                 .phase
                 .type_catalog
                 .nominals
-                .get(&TypeId(1))
+                .get(&TypeId(1).into())
                 .unwrap()
                 .form,
             NominalForm::Struct {
@@ -945,7 +1056,7 @@ pub mod tests {
                 .phase
                 .type_catalog
                 .nominals
-                .get(&TypeId(3))
+                .get(&TypeId(3).into())
                 .unwrap()
                 .form,
             NominalForm::Struct {
@@ -977,16 +1088,16 @@ pub mod tests {
                 .type_catalog
                 .conformances
                 .get(&ConformanceKey {
-                    protocol_id: TypeId(1),
-                    conforming_id: TypeId(2)
+                    protocol_id: ProtocolId(1),
+                    conforming_id: TypeId(1).into(),
                 })
                 .unwrap_or_else(|| panic!(
                     "didn't get conformance: {:?}",
                     session.phase.type_catalog.conformances
                 )),
             Conformance {
-                conforming_id: TypeId(2),
-                protocol_id: TypeId(1),
+                conforming_id: TypeId(1).into(),
+                protocol_id: ProtocolId(1),
                 requirements: fxhashmap!("count".into() => ConformanceRequirement::Unfulfilled(Symbol::InstanceMethod(InstanceMethodId(1)))),
                 span: Span::ANY,
                 associated_types: Default::default()
@@ -1010,7 +1121,7 @@ pub mod tests {
                 .phase
                 .type_catalog
                 .nominals
-                .get(&TypeId(1))
+                .get(&TypeId(1).into())
                 .unwrap()
                 .child_types,
             fxhashmap!("Buzz".to_string() => Symbol::Type(TypeId(2)), "Foo".into() => Symbol::Type(TypeId(3)))
@@ -1040,22 +1151,22 @@ pub mod tests {
                 .type_catalog
                 .conformances
                 .get(&ConformanceKey {
-                    protocol_id: TypeId(1),
-                    conforming_id: TypeId(2)
+                    protocol_id: ProtocolId(1),
+                    conforming_id: TypeId(1).into()
                 })
                 .unwrap_or_else(|| panic!(
                     "didn't get conformance: {:?}",
                     session.phase.type_catalog.conformances
                 )),
             Conformance {
-                conforming_id: TypeId(2),
-                protocol_id: TypeId(1),
+                conforming_id: TypeId(1).into(),
+                protocol_id: ProtocolId(1),
                 requirements: fxhashmap!(
                     "getA".into() => ConformanceRequirement::Unfulfilled(Symbol::InstanceMethod(InstanceMethodId(1))),
                     "setA".into() => ConformanceRequirement::Unfulfilled(Symbol::InstanceMethod(InstanceMethodId(2)))
                 ),
                 span: Span::ANY,
-                associated_types: fxhashmap!(AssociatedTypeId(1) => Symbol::Type(TypeId(3)))
+                associated_types: fxhashmap!(AssociatedTypeId(1) => Symbol::Type(TypeId(2)))
             }
         )
     }
@@ -1083,13 +1194,13 @@ pub mod tests {
             .phase
             .type_catalog
             .nominals
-            .get(&TypeId(1))
+            .get(&TypeId(1).into())
             .expect("missing C");
         let a_nominal = session
             .phase
             .type_catalog
             .nominals
-            .get(&TypeId(3))
+            .get(&TypeId(3).into())
             .expect("missing A");
 
         // child types are registered: C.B and A.B exist and are reachable by name
@@ -1155,11 +1266,15 @@ pub mod tests {
                 .phase
                 .type_catalog
                 .protocols
-                .contains_key(&TypeId(1)),
+                .contains_key(&ProtocolId(1)),
             "Aged protocol missing"
         );
         assert!(
-            session.phase.type_catalog.nominals.contains_key(&TypeId(2)),
+            session
+                .phase
+                .type_catalog
+                .nominals
+                .contains_key(&TypeId(1).into()),
             "Wrapper type missing"
         );
 
@@ -1206,7 +1321,7 @@ pub mod tests {
                 "subject should be Ty::Param for U, got {:?}",
                 subject
             );
-            assert_eq!(*pid, TypeId(1), "protocol id should be Aged");
+            assert_eq!(*pid, ProtocolId(1), "protocol id should be Aged");
             assert_eq!(*aid, AssociatedTypeId(1), "associated id should be T");
         }
     }

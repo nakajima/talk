@@ -65,12 +65,17 @@ impl Member {
         }
 
         if let Ty::Nominal { id: type_id, .. } | Ty::Constructor { type_id, .. } = &receiver
-            && let Some(nominal) = session.phase.type_catalog.nominals.get(type_id).cloned()
+            && let Some(nominal) = session
+                .phase
+                .type_catalog
+                .nominals
+                .get(&type_id.into())
+                .cloned()
         {
             // First, check if any conforming protocols have this method with predicates
             let mut protocol_method = None;
             for conformance_key in session.phase.type_catalog.conformances.keys() {
-                if conformance_key.conforming_id == *type_id {
+                if conformance_key.conforming_id == (*type_id).into() {
                     let protocol_id = conformance_key.protocol_id;
                     if let Some(protocol) = session.phase.type_catalog.protocols.get(&protocol_id)
                         && let Some(requirement) = protocol.requirements.get(&self.label)

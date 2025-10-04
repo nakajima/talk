@@ -41,13 +41,14 @@ pub fn arrow_n(arg: Kind, n: usize, ret: Kind) -> Kind {
 
 // Gathers up all the raw types from the AST
 #[derive(Debug, Visitor)]
-#[visitor(Decl, Expr(enter))]
+#[visitor(Decl, Expr(enter), TypeAnnotation(enter))]
 pub struct TypeHeaderPass<'a> {
-    type_stack: Vec<TypeId>,
-    child_types: FxHashMap<TypeId, FxHashMap<String, Symbol>>,
+    type_stack: Vec<Symbol>,
+    child_types: FxHashMap<Symbol, FxHashMap<String, Symbol>>,
     session: &'a mut TypeSession<Raw>,
     extensions: FxHashMap<TypeId, Vec<TypeExtension>>,
-    globals: FxHashMap<NodeID, ASTTyRepr>,
+    annotations: FxHashMap<NodeID, ASTTyRepr>,
+    typealiases: FxHashMap<NodeID, (Name, TypeAnnotation)>,
 }
 
 impl<'a> TypeHeaderPass<'a> {
@@ -57,19 +58,24 @@ impl<'a> TypeHeaderPass<'a> {
             session,
             child_types: Default::default(),
             extensions: Default::default(),
-            globals: Default::default(),
+            annotations: Default::default(),
+            typealiases: Default::default(),
         };
 
         for root in ast.roots.iter() {
             root.drive(&mut instance);
         }
 
-        instance.session.phase.globals = std::mem::take(&mut instance.globals);
+        instance.session.phase.annotations = std::mem::take(&mut instance.annotations);
+        instance.session.phase.typealiases = std::mem::take(&mut instance.typealiases);
 
         let mut extensions = std::mem::take(&mut instance.extensions);
         for (id, type_constructor) in instance.session.phase.type_constructors.iter_mut() {
-            type_constructor.child_types =
-                instance.child_types.get(id).cloned().unwrap_or_default();
+            type_constructor.child_types = instance
+                .child_types
+                .get(&type_constructor.name.symbol().unwrap())
+                .cloned()
+                .unwrap_or_default();
 
             if let Some(mut extensions) = extensions.remove(id) {
                 type_constructor.conformances = extensions
@@ -81,6 +87,23 @@ impl<'a> TypeHeaderPass<'a> {
         }
     }
 
+    fn enter_type_annotation(&mut self, annotation: &TypeAnnotation) {
+        tracing::warn!("stashing annotation: {annotation:?}");
+
+        if matches!(
+            &annotation.kind,
+            TypeAnnotationKind::Nominal {
+                name: Name::Resolved(Symbol::AssociatedType(..), ..),
+                ..
+            }
+        ) {
+            return;
+        }
+
+        self.annotations
+            .insert(annotation.id, ASTTyRepr::Annotated(annotation.clone()));
+    }
+
     fn enter_expr(&mut self, expr: &Expr) {
         if let Expr {
             kind: ExprKind::Call { type_args, .. },
@@ -88,7 +111,7 @@ impl<'a> TypeHeaderPass<'a> {
         } = expr
         {
             for arg in type_args {
-                self.globals
+                self.annotations
                     .insert(arg.id, ASTTyRepr::Annotated(arg.clone()));
             }
         }
@@ -105,18 +128,18 @@ impl<'a> TypeHeaderPass<'a> {
         } = expr
         {
             if let Some(ret) = ret {
-                self.globals
+                self.annotations
                     .insert(ret.id, ASTTyRepr::Annotated(ret.clone()));
             }
 
             for generic in generics {
-                self.globals
+                self.annotations
                     .insert(generic.id, ASTTyRepr::Generic(generic.clone()));
             }
 
             for param in params {
                 if let Some(annotation) = &param.type_annotation {
-                    self.globals
+                    self.annotations
                         .insert(annotation.id, ASTTyRepr::Annotated(annotation.clone()));
                 }
             }
@@ -139,7 +162,7 @@ impl<'a> TypeHeaderPass<'a> {
                         .insert(type_name.to_string(), *sym);
                 }
 
-                self.type_stack.push(*type_id);
+                self.type_stack.push(*sym);
 
                 let fields =
                     self.collect_fields(name, decl.id, decl.span, TypeDefKind::Struct, body);
@@ -151,7 +174,7 @@ impl<'a> TypeHeaderPass<'a> {
                         node_id: decl.id,
                         kind: arrow_n(Kind::Type, generics.len(), Kind::Type),
                         def: TypeDefKind::Struct,
-                        conformances: Self::collect_conformance_stubs(*type_id, conformances),
+                        conformances: Self::collect_conformance_stubs(*sym, conformances),
                         child_types: Default::default(),
                         generics: generics
                             .iter()
@@ -174,7 +197,7 @@ impl<'a> TypeHeaderPass<'a> {
                         .insert(type_name.to_string(), *sym);
                 }
 
-                self.type_stack.push(*type_id);
+                self.type_stack.push(*sym);
 
                 let TypeFields::Extension {
                     static_methods,
@@ -189,13 +212,13 @@ impl<'a> TypeHeaderPass<'a> {
                     .or_default()
                     .push(TypeExtension {
                         node_id: decl.id,
-                        conformances: Self::collect_conformance_stubs(*type_id, conformances),
+                        conformances: Self::collect_conformance_stubs(*sym, conformances),
                         methods,
                         static_methods,
                     });
             }
             DeclKind::Protocol {
-                name: name @ Name::Resolved(sym @ Symbol::Type(type_id), type_name),
+                name: name @ Name::Resolved(sym @ Symbol::Protocol(protocol_id), type_name),
                 generics,
                 conformances,
                 body: Block { body, .. },
@@ -208,12 +231,13 @@ impl<'a> TypeHeaderPass<'a> {
                         .insert(type_name.to_string(), *sym);
                 }
 
-                self.type_stack.push(*type_id);
+                self.type_stack.push(*sym);
 
                 let fields =
                     self.collect_fields(name, decl.id, decl.span, TypeDefKind::Protocol, body);
+
                 self.session.phase.protocols.insert(
-                    *type_id,
+                    *protocol_id,
                     TypeDef {
                         extensions: Default::default(),
                         child_types: Default::default(),
@@ -221,7 +245,7 @@ impl<'a> TypeHeaderPass<'a> {
                         node_id: decl.id,
                         kind: arrow_n(Kind::Type, generics.len(), Kind::Type),
                         def: TypeDefKind::Protocol,
-                        conformances: Self::collect_conformance_stubs(*type_id, conformances),
+                        conformances: Self::collect_conformance_stubs(*sym, conformances),
                         generics: generics
                             .iter()
                             .map(|g| (g.name.clone(), ASTTyRepr::Generic(g.clone())))
@@ -244,7 +268,7 @@ impl<'a> TypeHeaderPass<'a> {
                         .insert(type_name.to_string(), *sym);
                 }
 
-                self.type_stack.push(*type_id);
+                self.type_stack.push(*sym);
 
                 let fields = self.collect_fields(name, decl.id, decl.span, TypeDefKind::Enum, body);
 
@@ -257,7 +281,7 @@ impl<'a> TypeHeaderPass<'a> {
                         node_id: decl.id,
                         kind: arrow_n(Kind::Type, generics.len(), Kind::Type),
                         def: TypeDefKind::Enum,
-                        conformances: Self::collect_conformance_stubs(*type_id, conformances),
+                        conformances: Self::collect_conformance_stubs(*sym, conformances),
                         generics: generics
                             .iter()
                             .map(|g| (g.name.clone(), ASTTyRepr::Generic(g.clone())))
@@ -285,7 +309,7 @@ impl<'a> TypeHeaderPass<'a> {
                 TypeAnnotation {
                     kind:
                         TypeAnnotationKind::Nominal {
-                            name: Name::Resolved(sym, type_name),
+                            name: name @ Name::Resolved(sym, type_name),
                             ..
                         },
                     ..
@@ -299,14 +323,16 @@ impl<'a> TypeHeaderPass<'a> {
                         .insert(type_name.to_string(), *sym);
                 }
 
-                self.globals
+                self.typealiases
+                    .insert(decl.id, (name.clone(), rhs.clone()));
+                self.annotations
                     .insert(rhs.id, ASTTyRepr::Annotated(rhs.clone()));
             }
             DeclKind::Let {
                 type_annotation: Some(annotation),
                 ..
             } => {
-                self.globals
+                self.annotations
                     .insert(annotation.id, ASTTyRepr::Annotated(annotation.clone()));
             }
             _ => (),
@@ -330,14 +356,14 @@ impl<'a> TypeHeaderPass<'a> {
     ///////////////////////////////////////////////////////////////////////////
 
     fn collect_conformance_stubs(
-        conforming_id: TypeId,
+        conforming_id: Symbol,
         conformances: &[TypeAnnotation],
     ) -> Vec<ConformanceStub> {
         conformances
             .iter()
             .map(|c| {
                 let TypeAnnotationKind::Nominal {
-                    name: Name::Resolved(Symbol::Type(protocol_id), _),
+                    name: Name::Resolved(Symbol::Protocol(protocol_id), _),
                     ..
                 } = &c.kind
                 else {
@@ -369,10 +395,6 @@ impl<'a> TypeHeaderPass<'a> {
         let mut variants: IndexMap<Label, Variant> = Default::default();
         let mut associated_types: FxHashMap<Name, Associated> = Default::default();
         let mut method_requirements: IndexMap<Label, MethodRequirement> = Default::default();
-
-        let Name::Resolved(Symbol::Type(type_id), _) = &type_name else {
-            unreachable!("didn't resolve type");
-        };
 
         for node in body {
             let Node::Decl(Decl {
@@ -423,6 +445,10 @@ impl<'a> TypeHeaderPass<'a> {
                     );
                 }
                 DeclKind::Associated { generic } => {
+                    let Name::Resolved(Symbol::Protocol(type_id), _) = &type_name else {
+                        unreachable!("didn't resolve type");
+                    };
+
                     associated_types.insert(
                         generic.name.clone(),
                         Associated {
@@ -508,19 +534,25 @@ impl<'a> TypeHeaderPass<'a> {
                             symbol: *symbol,
                             params: params
                                 .iter()
-                                .map(|p| {
-                                    if let Some(type_annotation) = &p.type_annotation {
-                                        ASTTyRepr::Annotated(type_annotation.clone())
+                                .enumerate()
+                                .map(|(i, p)| {
+                                    if i == 0 {
+                                        ASTTyRepr::SelfType(type_name.clone(), p.id, *span)
+                                    } else if let Some(ann) = &p.type_annotation {
+                                        ASTTyRepr::Annotated(ann.clone())
                                     } else {
                                         ASTTyRepr::Hole(p.id, *span)
                                     }
                                 })
                                 .collect(),
-                            ret: ret.as_ref().map(|ret| ASTTyRepr::Annotated(*ret.clone())),
+                            ret: ret.as_ref().map(|r| ASTTyRepr::Annotated(*r.clone())),
                         },
                     );
                 }
                 DeclKind::Init { name, params, .. } => {
+                    let Name::Resolved(Symbol::Type(type_id), _) = &type_name else {
+                        unreachable!("didn't resolve type");
+                    };
                     initializers.insert(
                         name.name_str().into(),
                         Initializer {
@@ -547,6 +579,10 @@ impl<'a> TypeHeaderPass<'a> {
         }
 
         if type_kind == TypeDefKind::Struct && initializers.is_empty() {
+            let Name::Resolved(Symbol::Type(type_id), _) = &type_name else {
+                unreachable!("didn't resolve type");
+            };
+
             // If we don't have an initializer, synthesize one.
             let mut params: Vec<ASTTyRepr> = properties
                 .values()
@@ -614,8 +650,8 @@ pub mod tests {
             name_resolver::NameResolved,
             name_resolver_tests::tests::resolve,
             symbol::{
-                AssociatedTypeId, BuiltinId, GlobalId, InstanceMethodId, PropertyId, Symbol,
-                SynthesizedId, TypeId, TypeParameterId, VariantId,
+                AssociatedTypeId, BuiltinId, GlobalId, InstanceMethodId, PropertyId, ProtocolId,
+                Symbol, SynthesizedId, TypeId, TypeParameterId, VariantId,
             },
         },
         node::Node,
@@ -923,11 +959,11 @@ pub mod tests {
         .1;
 
         assert_eq_diff!(
-            *session.phase.protocols.get(&TypeId(1)).unwrap(),
+            *session.phase.protocols.get(&ProtocolId(1)).unwrap(),
             TypeDef {
                 child_types: Default::default(),
                 extensions: Default::default(),
-                name: Name::Resolved(Symbol::Type(TypeId(1)), "Fizz".into()),
+                name: Name::Resolved(Symbol::Protocol(ProtocolId(1)), "Fizz".into()),
                 kind: Kind::Type,
                 node_id: NodeID::ANY,
                 def: TypeDefKind::Protocol,
@@ -939,14 +975,20 @@ pub mod tests {
                     method_requirements: crate::indexmap!("foo".into() => MethodRequirement {
                         id: NodeID::ANY,
                         symbol: Symbol::InstanceMethod(InstanceMethodId(1)),
-                        params: vec![ASTTyRepr::Annotated(annotation!(TypeAnnotationKind::SelfType(Name::Resolved(TypeId(1).into(), "Self".into()))))],
+                        params: vec![
+                            ASTTyRepr::SelfType(
+                                Name::Resolved(ProtocolId(1).into(), "Fizz".into()),
+                                NodeID::ANY,
+                                Span::ANY,
+                            )
+                        ],
                         ret: Some(ASTTyRepr::Annotated(annotation!(TypeAnnotationKind::Nominal {
                             name: Name::Resolved(Symbol::Int, "Int".into()),
                             generics: vec![]
                         })))
                     }),
                     associated_types: fxhashmap!(Name::Resolved(Symbol::AssociatedType(AssociatedTypeId(1)), "Buzz".into()) => Associated {
-                        protocol_id: TypeId(1),
+                        protocol_id: ProtocolId(1),
                         symbol: Symbol::AssociatedType(AssociatedTypeId(1))
                     })
                 }
@@ -965,28 +1007,28 @@ pub mod tests {
         .1;
 
         assert_eq_diff!(
-            *session.phase.type_constructors.get(&TypeId(2)).unwrap(),
+            *session.phase.type_constructors.get(&TypeId(1)).unwrap(),
             TypeDef {
                 child_types: Default::default(),
                 extensions: Default::default(),
-                name: Name::Resolved(Symbol::Type(TypeId(2)), "Buzz".into()),
+                name: Name::Resolved(Symbol::Type(TypeId(1)), "Buzz".into()),
                 kind: Kind::Type,
                 node_id: NodeID::ANY,
                 def: TypeDefKind::Struct,
                 generics: Default::default(),
                 conformances: vec![ConformanceStub {
-                    conforming_id: TypeId(2),
-                    protocol_id: TypeId(1),
+                    conforming_id: TypeId(1).into(),
+                    protocol_id: ProtocolId(1),
                     span: Span::ANY,
                 }],
                 fields: TypeFields::Struct {
                     initializers: indexmap! {
                         "init".into() => Initializer {
                             symbol: Symbol::Synthesized(SynthesizedId(1)),
-                            initializes_type_id: TypeId(2),
+                            initializes_type_id: TypeId(1),
                             params: vec![
                                 ASTTyRepr::SelfType(
-                                    Name::Resolved(Symbol::Type(TypeId(2)), "Buzz".into()),
+                                    Name::Resolved(Symbol::Type(TypeId(1)), "Buzz".into()),
                                     NodeID::ANY,
                                     Span::ANY
                                 ),
@@ -1015,7 +1057,7 @@ pub mod tests {
         ));
 
         assert_eq!(
-            *session.phase.globals.get(&NodeID(2)).unwrap(),
+            *session.phase.annotations.get(&NodeID(2)).unwrap(),
             ASTTyRepr::Annotated(TypeAnnotation {
                 id: NodeID::ANY,
                 span: Span::ANY,
@@ -1041,7 +1083,7 @@ pub mod tests {
         ));
 
         assert_eq!(
-            *session.phase.globals.get(&NodeID(2)).unwrap(),
+            *session.phase.annotations.get(&NodeID(2)).unwrap(),
             ASTTyRepr::Annotated(TypeAnnotation {
                 id: NodeID::ANY,
                 span: Span::ANY,

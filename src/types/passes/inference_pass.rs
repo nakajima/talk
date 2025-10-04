@@ -1,4 +1,5 @@
 use crate::types::builtins;
+use crate::types::constraints::type_member::TypeMember;
 use crate::types::type_catalog::{ConformanceKey, TypeCatalog};
 use crate::types::wants::Wants;
 use crate::{
@@ -139,7 +140,15 @@ impl<'a> InferencePass<'a> {
                 root,
                 Node::Stmt(_)
                     | Node::Decl(Decl {
-                        kind: DeclKind::Struct { .. },
+                        kind: DeclKind::Struct { .. }
+                            | DeclKind::Let {
+                                lhs: Pattern {
+                                    // These don't get handled by the binding groups (i'm not sure if they should?)
+                                    kind: PatternKind::Tuple(..) | PatternKind::Record { .. },
+                                    ..
+                                },
+                                ..
+                            },
                         ..
                     })
             ) {
@@ -178,6 +187,62 @@ impl<'a> InferencePass<'a> {
 
         // Move along, move along
         pass.session.advance(Inferenced { type_catalog })
+    }
+
+    fn promote_pattern_bindings(
+        &mut self,
+        pattern: &Pattern,
+        level: Level,
+        unsolved: &[Constraint],
+        subs: &mut UnificationSubstitutions,
+    ) {
+        use crate::node_kinds::pattern::{PatternKind, RecordFieldPatternKind};
+        match &pattern.kind {
+            PatternKind::Bind(Name::Resolved(sym, _)) => {
+                if let Some(entry) = self.session.term_env.lookup(sym).cloned() {
+                    let ty = match entry {
+                        EnvEntry::Mono(t) => t,
+                        EnvEntry::Scheme(s) => s.ty, // unlikely here, but safe
+                    };
+                    // Generalize with the current substitutions so metas turn into concrete types/params.
+                    let scheme = self
+                        .session
+                        .generalize_with_substitutions(level, ty, unsolved, subs);
+                    self.session.term_env.insert(*sym, scheme);
+                }
+            }
+            PatternKind::Tuple(items) => {
+                for p in items {
+                    self.promote_pattern_bindings(p, level, unsolved, subs);
+                }
+            }
+            PatternKind::Record { fields } => {
+                for f in fields {
+                    match &f.kind {
+                        RecordFieldPatternKind::Bind(name) => {
+                            if let Name::Resolved(sym, _) = name
+                                && let Some(entry) = self.session.term_env.lookup(sym).cloned()
+                            {
+                                let ty = match entry {
+                                    EnvEntry::Mono(t) => t,
+                                    EnvEntry::Scheme(s) => s.ty,
+                                };
+                                let scheme = self
+                                    .session
+                                    .generalize_with_substitutions(level, ty, unsolved, subs);
+                                self.session.term_env.insert(*sym, scheme);
+                            }
+                        }
+                        RecordFieldPatternKind::Equals { value, .. } => {
+                            self.promote_pattern_bindings(value, level, unsolved, subs);
+                        }
+                        RecordFieldPatternKind::Rest => {}
+                    }
+                }
+            }
+            // cover any other pattern forms you support
+            _ => {}
+        }
     }
 
     #[instrument(skip(self))]
@@ -257,26 +322,60 @@ impl<'a> InferencePass<'a> {
             TypeAnnotationKind::Nominal {
                 name: Name::Resolved(sym @ Symbol::Builtin(..), ..),
                 ..
-            } => builtins::resolve_builtin_type(sym),
+            } => builtins::resolve_builtin_type(sym).0,
+            // TypeAnnotationKind::Nominal {
+            //     name: Name::Resolved(sym, ..),
+            //     ..
+            // } => {
+            //     let ty = self
+            //         .session
+            //         .term_env
+            //         .lookup(sym)
+            //         .cloned()
+            //         .unwrap_or_else(|| panic!("type_resolve didn't define {sym:?}"))
+            //         .inference_instantiate(&mut self.session, level, wants, annotation.span);
+            //     self.session.normalize_nominals(&ty, level)
+            // }
             TypeAnnotationKind::Nominal {
-                name: Name::Resolved(..),
-                ..
+                name: Name::Resolved(Symbol::Type(type_id), ..),
+                generics,
             } => {
-                unreachable!(
-                    "should have been handled by type resolve pass: {:?}: {:?}",
-                    annotation, self.session.types_by_node
-                );
-            }
-            TypeAnnotationKind::SelfType(Name::Resolved(sym, _)) => {
-                match self.session.term_env.lookup(sym).unwrap().clone() {
-                    EnvEntry::Mono(ty) => ty.clone(),
-                    EnvEntry::Scheme(scheme) => {
-                        scheme
-                            .inference_instantiate(&mut self.session, level, wants, annotation.span)
-                            .0
-                    }
+                // Build Boxy<Int> as TypeApplication(TypeConstructor(Boxy), Int) and normalize.
+                let mut t = Ty::TypeConstructor(*type_id);
+                for g in generics {
+                    let arg = self.infer_type_annotation(g, level, wants);
+                    t = Ty::TypeApplication(Box::new(t), Box::new(arg));
                 }
+                self.session.normalize_nominals(&t, level)
             }
+            TypeAnnotationKind::Nominal {
+                name: Name::Resolved(sym @ Symbol::TypeParameter(..), ..),
+                generics,
+            } => {
+                let entry = self
+                    .session
+                    .term_env
+                    .lookup(sym)
+                    .cloned()
+                    .expect("did not get type param");
+
+                let mut base =
+                    entry.inference_instantiate(&mut self.session, level, wants, annotation.span);
+
+                for g in generics {
+                    let arg = self.infer_type_annotation(g, level, wants);
+                    base = Ty::TypeApplication(base.into(), arg.into());
+                }
+
+                self.session.normalize_nominals(&base, level)
+            }
+            TypeAnnotationKind::SelfType(Name::Resolved(sym, _)) => self
+                .session
+                .term_env
+                .lookup(sym)
+                .unwrap()
+                .clone()
+                .inference_instantiate(&mut self.session, level, wants, annotation.span),
             TypeAnnotationKind::Record { fields } => {
                 let mut row = Row::Empty(TypeDefKind::Struct);
                 for field in fields.iter().rev() {
@@ -289,6 +388,29 @@ impl<'a> InferencePass<'a> {
 
                 Ty::Record(Box::new(row))
             }
+            TypeAnnotationKind::NominalPath {
+                base,
+                member,
+                member_generics,
+            } => {
+                let base = self.infer_type_annotation(base, level, wants);
+                let result = self.session.new_ty_meta_var(level);
+                let generics = member_generics
+                    .iter()
+                    .map(|g| self.infer_type_annotation(g, level, wants))
+                    .collect();
+
+                wants.push(Constraint::TypeMember(TypeMember {
+                    base,
+                    name: member.clone(),
+                    generics,
+                    result: result.clone(),
+                    cause: ConstraintCause::TypeMember(annotation.id),
+                    span: annotation.span,
+                }));
+
+                result
+            }
             _ => unreachable!("{:?}", annotation.kind),
         };
 
@@ -297,7 +419,6 @@ impl<'a> InferencePass<'a> {
         ty
     }
 
-    #[instrument(skip(self), level = tracing::Level::TRACE)]
     fn apply_to_self(&mut self, substitutions: &mut UnificationSubstitutions) {
         for (_, ty) in self.session.types_by_node.iter_mut() {
             if matches!(ty, Ty::Primitive(_)) {
@@ -320,8 +441,8 @@ impl<'a> InferencePass<'a> {
             let mut made_progress = false;
             let mut next_wants = Wants::default();
             while let Some(want) = wants.pop() {
-                let want = want.normalize_nominals(&mut self.session, level);
                 let want = want.apply(&mut substitutions);
+                let want = want.normalize_nominals(&mut self.session, level);
                 tracing::trace!("solving {want:?}");
 
                 let solution = match want {
@@ -418,7 +539,6 @@ impl<'a> InferencePass<'a> {
         (substitutions, unsolved)
     }
 
-    #[instrument(skip(self))]
     fn annotate_uses_after_inference(&mut self) {
         let mut visitor = AnnotateUsesAfterInferenceVisitor {
             term_env: &mut self.session.term_env,
@@ -430,7 +550,6 @@ impl<'a> InferencePass<'a> {
         }
     }
 
-    #[instrument(skip(self))]
     fn promote_group(
         &mut self,
         group: &BindingGroup,
@@ -444,7 +563,7 @@ impl<'a> InferencePass<'a> {
                 Some(EnvEntry::Mono(ty)) => {
                     let applied = apply(ty, subs);
                     let scheme = self.session.generalize(group.level, applied, &predicates);
-                    self.session.term_env.promote(sym, scheme);
+                    self.session.term_env.insert(sym, scheme);
                 }
                 Some(EnvEntry::Scheme(_scheme)) => {}
                 None => panic!("didn't find {sym:?} in term env"),
@@ -452,7 +571,6 @@ impl<'a> InferencePass<'a> {
         }
     }
 
-    #[instrument(skip(self))]
     fn infer_node(&mut self, node: &Node, level: Level, wants: &mut Wants) -> Ty {
         match node {
             Node::Expr(expr) => self.infer_expr(expr, level, wants),
@@ -474,12 +592,12 @@ impl<'a> InferencePass<'a> {
                 type_annotation: _,
             } => {
                 let ty = self.session.new_ty_meta_var(level);
-                self.check_pattern(lhs, &ty, level, wants);
+                let mut local_wants = Wants::default();
+                self.check_pattern(lhs, &ty, level, &mut local_wants);
 
-                let mut rhs_wants = Wants::default();
                 if let Some(expr) = value {
-                    let rhs_ty = self.infer_expr(expr, level.next(), &mut rhs_wants);
-                    rhs_wants.equals(
+                    let rhs_ty = self.infer_expr(expr, level.next(), &mut local_wants);
+                    local_wants.equals(
                         ty.clone(),
                         rhs_ty,
                         ConstraintCause::Assignment(decl.id),
@@ -487,14 +605,16 @@ impl<'a> InferencePass<'a> {
                     );
                 }
 
-                let (mut subs, unsolved) = self.solve(level, rhs_wants);
+                let (mut subs, unsolved) = self.solve(level, local_wants);
                 let applied_ty = apply(ty.clone(), &mut subs);
 
                 if let PatternKind::Bind(Name::Resolved(sym, _)) = lhs.kind {
                     let scheme = self
                         .session
                         .generalize(level, applied_ty.clone(), &unsolved);
-                    self.session.term_env.promote(sym, scheme);
+                    self.session.term_env.insert(sym, scheme);
+                } else {
+                    self.promote_pattern_bindings(lhs, level, &unsolved, &mut subs);
                 }
 
                 ty
@@ -504,15 +624,15 @@ impl<'a> InferencePass<'a> {
                 let entry = self.session.generalize(level, func_ty.clone(), &[]);
                 self.session
                     .term_env
-                    .promote(func.name.symbol().unwrap(), entry);
+                    .insert(func.name.symbol().unwrap(), entry);
                 func_ty
             }
             DeclKind::Struct {
                 body,
-                name: Name::Resolved(Symbol::Type(id), name),
+                name: Name::Resolved(sym @ Symbol::Type(..), name),
                 ..
             } => {
-                let Some(struct_type) = self.session.phase.type_catalog.nominals.get(id) else {
+                let Some(struct_type) = self.session.phase.type_catalog.nominals.get(sym) else {
                     self.ast
                         .diagnostics
                         .push(crate::diagnostic::AnyDiagnostic::Typing(Diagnostic {
@@ -547,26 +667,39 @@ impl<'a> InferencePass<'a> {
             }
             DeclKind::Property { .. } => Ty::Void,
             DeclKind::TypeAlias(lhs, rhs) => {
-                // Look up the RHS type from types_by_node (it was resolved during type resolve pass)
-                let ty = self
-                    .session
-                    .types_by_node
-                    .get(&rhs.id)
-                    .cloned()
-                    .unwrap_or_else(|| {
-                        // If not in types_by_node, try to infer it
-                        self.infer_type_annotation(rhs, level, wants)
-                    });
+                // If RHS is a simple nominal name, alias its EnvEntry directly.
+                if let (
+                    TypeAnnotationKind::Nominal {
+                        name: Name::Resolved(lhs_sym, _),
+                        ..
+                    },
+                    TypeAnnotationKind::Nominal {
+                        name: Name::Resolved(rhs_sym, _),
+                        ..
+                    },
+                ) = (&lhs.kind, &rhs.kind)
+                    && let Some(entry) = self.session.term_env.lookup(rhs_sym).cloned()
+                {
+                    self.session.term_env.insert(*lhs_sym, entry);
+                    return Ty::Void;
+                }
 
+                // Otherwise, infer RHS type and GENERALIZE it before inserting.
+                let level = Level(1);
+                let mut wants = Wants::default();
+                let rhs_ty = self.infer_type_annotation(rhs, level, &mut wants);
+                let (_subs, unsolved) = (
+                    UnificationSubstitutions::new(self.session.meta_levels.clone()),
+                    wants.to_vec(),
+                );
+                let entry = self.session.generalize(level, rhs_ty, &unsolved);
                 if let TypeAnnotationKind::Nominal {
-                    name: Name::Resolved(sym, _),
+                    name: Name::Resolved(lhs_sym, _),
                     ..
                 } = &lhs.kind
                 {
-                    self.session.term_env.insert_mono(*sym, ty.clone());
-                    tracing::debug!("added typealias {sym:?} = {ty:?} to term_env");
+                    self.session.term_env.insert(*lhs_sym, entry);
                 }
-
                 Ty::Void
             }
 
@@ -636,14 +769,8 @@ impl<'a> InferencePass<'a> {
                 }
             }
             PatternKind::Record { fields } => {
-                let expected_row = self.ensure_row_record(
-                    pattern.id,
-                    pattern.span,
-                    expected,
-                    level,
-                    wants,
-                    TypeDefKind::Struct,
-                );
+                let expected_row =
+                    self.ensure_row_record(pattern.id, pattern.span, expected, level, wants);
                 for field in fields {
                     match &field.kind {
                         RecordFieldPatternKind::Bind(name) => {
@@ -719,7 +846,6 @@ impl<'a> InferencePass<'a> {
         }
     }
 
-    #[instrument(skip(self), ret)]
     fn ensure_row_record(
         &mut self,
         id: NodeID,
@@ -727,7 +853,6 @@ impl<'a> InferencePass<'a> {
         expected: &Ty,
         level: Level,
         wants: &mut Wants,
-        kind: TypeDefKind,
     ) -> Row {
         match expected {
             Ty::Record(box row) => row.clone(),
@@ -768,7 +893,6 @@ impl<'a> InferencePass<'a> {
         last_ty
     }
 
-    #[instrument(skip(self))]
     fn lookup_named_scheme(&self, expr: &Expr) -> Option<Scheme> {
         if let ExprKind::Variable(Name::Resolved(sym, _)) = &expr.kind
             && let Some(EnvEntry::Scheme(scheme)) = self.session.term_env.lookup(sym)
@@ -779,7 +903,6 @@ impl<'a> InferencePass<'a> {
         None
     }
 
-    #[instrument(skip(self))]
     fn infer_expr(&mut self, expr: &Expr, level: Level, wants: &mut Wants) -> Ty {
         guard_found_ty!(self, expr.id);
 
@@ -945,7 +1068,6 @@ impl<'a> InferencePass<'a> {
         last_arm_ty.unwrap_or(Ty::Void)
     }
 
-    #[instrument(skip(self))]
     fn infer_call(
         &mut self,
         callee: &Expr,
@@ -954,6 +1076,13 @@ impl<'a> InferencePass<'a> {
         level: Level,
         wants: &mut Wants,
     ) -> Ty {
+        let _s = tracing::info_span!(
+            "infer_call",
+            callee = format!("{callee:?}"),
+            type_args = format!("{:?}", type_args),
+            args = format!("{args:?}")
+        )
+        .entered();
         let callee_ty = if !type_args.is_empty()
             && let Some(scheme) = self.lookup_named_scheme(callee)
         {

@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 
 use crate::{
     label::Label,
-    name_resolution::symbol::{AssociatedTypeId, Symbol, TypeId},
+    name_resolution::symbol::{AssociatedTypeId, ProtocolId, Symbol, TypeId},
     span::Span,
     types::{
         constraints::{
@@ -73,7 +73,7 @@ impl Wants {
         }))
     }
 
-    pub fn conforms(&mut self, type_id: TypeId, protocol_id: TypeId, span: Span) {
+    pub fn conforms(&mut self, type_id: TypeId, protocol_id: ProtocolId, span: Span) {
         tracing::debug!("constraining conforms {type_id:?} < {protocol_id:?}");
         self.defer.push_back(Constraint::Conforms(Conforms {
             type_id,
@@ -84,7 +84,7 @@ impl Wants {
     pub fn associated_equals(
         &mut self,
         subject: Ty,
-        protocol_id: TypeId,
+        protocol_id: ProtocolId,
         associated_type_id: AssociatedTypeId,
         output: Ty,
         cause: ConstraintCause,

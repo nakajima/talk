@@ -173,8 +173,6 @@ impl NameResolver {
     }
 
     fn lookup_in_scope(&mut self, name: &Name, scope_id: NodeID) -> Option<Symbol> {
-        tracing::debug!("looking up {name:?} in scope {:?}", self.current_scope(),);
-
         let scope = self.scopes.get_mut(&scope_id).expect("scope not found");
 
         if let Some(symbol) = scope.types.get(&name.name_str()) {
@@ -255,6 +253,7 @@ impl NameResolver {
             }
             Symbol::StaticMethod(..) => Symbol::StaticMethod(self.symbols.next_static_method()),
             Symbol::Variant(..) => Symbol::Variant(self.symbols.next_variant()),
+            Symbol::Protocol(..) => Symbol::Protocol(self.symbols.next_protocol()),
             Symbol::AssociatedType(..) => {
                 Symbol::AssociatedType(self.symbols.next_associated_type())
             }

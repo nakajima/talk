@@ -32,7 +32,7 @@ impl Call {
         substitutions: &mut UnificationSubstitutions,
     ) -> Result<bool, TypeError> {
         if matches!(&self.callee, Ty::UnificationVar { .. }) {
-            tracing::warn!(
+            tracing::trace!(
                 "unable to determine callee type: {:?}, substitutions: {substitutions:?}",
                 self.callee
             );
@@ -51,7 +51,7 @@ impl Call {
 
         match &self.callee {
             Ty::Constructor { type_id: id, .. } => {
-                let Some(nominal) = session.phase.type_catalog.nominals.get(id) else {
+                let Some(nominal) = session.phase.type_catalog.nominals.get(&id.into()) else {
                     panic!("type not found in catalog");
                 };
 

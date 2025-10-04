@@ -37,7 +37,13 @@ impl Construction {
             todo!()
         };
 
-        let Some(nominal) = session.phase.type_catalog.nominals.get(&type_id).cloned() else {
+        let Some(nominal) = session
+            .phase
+            .type_catalog
+            .nominals
+            .get(&type_id.into())
+            .cloned()
+        else {
             return Err(TypeError::TypeNotFound("".into()));
         };
 

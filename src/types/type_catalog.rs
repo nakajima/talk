@@ -4,12 +4,13 @@ use rustc_hash::FxHashMap;
 use crate::{
     label::Label,
     name::Name,
-    name_resolution::symbol::{Symbol, TypeId},
+    name_resolution::symbol::{ProtocolId, Symbol, TypeId},
     node_id::NodeID,
     span::Span,
     types::{
         fields::Associated,
         passes::dependencies_pass::{Conformance, ConformanceRequirement},
+        scheme::Scheme,
     },
 };
 
@@ -43,8 +44,8 @@ impl NominalForm {
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub struct ConformanceStub {
-    pub protocol_id: TypeId,
-    pub conforming_id: TypeId,
+    pub protocol_id: ProtocolId,
+    pub conforming_id: Symbol,
     pub span: Span,
 }
 
@@ -75,15 +76,16 @@ pub struct Nominal {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ConformanceKey {
-    pub protocol_id: TypeId,
-    pub conforming_id: TypeId,
+    pub protocol_id: ProtocolId,
+    pub conforming_id: Symbol,
 }
 
 #[derive(Debug, PartialEq, Default)]
 pub struct TypeCatalog {
-    pub nominals: FxHashMap<TypeId, Nominal>,
-    pub protocols: FxHashMap<TypeId, Protocol>,
+    pub nominals: FxHashMap<Symbol, Nominal>,
+    pub protocols: FxHashMap<ProtocolId, Protocol>,
     pub conformances: FxHashMap<ConformanceKey, Conformance>,
+    pub aliases: FxHashMap<Symbol, Scheme>,
 }
 
 impl Nominal {

@@ -4,7 +4,10 @@ pub mod tests {
         ast::AST,
         diagnostic::Diagnostic,
         make_row,
-        name_resolution::{name_resolver::NameResolved, symbol::TypeId},
+        name_resolution::{
+            name_resolver::NameResolved,
+            symbol::{ProtocolId, TypeId},
+        },
         node_kinds::decl::{Decl, DeclKind},
         types::{
             passes::{
@@ -300,21 +303,18 @@ pub mod tests {
     }
 
     #[test]
-    #[ignore = "waiting on rows"]
+    // #[ignore = "waiting on rows"]
     fn types_tuple_assignment() {
         let (ast, session) = typecheck(
             "
         let z = (123, 1.23)
         let (x, y) = z
+        x
+        y
         ",
         );
-        assert_eq!(
-            *session
-                .types_by_node
-                .get(&ast.roots[1].as_stmt().clone().as_expr().id)
-                .unwrap(),
-            Ty::Int
-        );
+        assert_eq!(ty(2, &ast, &session), Ty::Int);
+        assert_eq!(ty(3, &ast, &session), Ty::Float);
     }
 
     #[test]
@@ -1152,8 +1152,6 @@ pub mod tests {
           "#,
         );
 
-        println!("session: {session:#?}");
-
         let Decl {
             kind: DeclKind::Let {
                 type_annotation, ..
@@ -1172,7 +1170,11 @@ pub mod tests {
         // x should have type Box<Int>, not just Box
         assert_eq!(
             *ty,
-            Ty::TypeApplication(Box::new(Ty::TypeConstructor(TypeId(1))), Box::new(Ty::Int))
+            Ty::Nominal {
+                id: TypeId(1),
+                type_args: vec![Ty::Int],
+                row: make_row!(Struct, "value" => Ty::Int).into()
+            }
         );
     }
 
@@ -1350,7 +1352,7 @@ pub mod tests {
             ty(3, &ast, &session),
             Ty::Nominal {
                 id: TypeId(1),
-                row: Box::new(make_row!(Enum, "some" => Ty::Param(1.into()), "none" => Ty::Void)),
+                row: Box::new(make_row!(Enum, "some" => Ty::Param(2.into()), "none" => Ty::Void)),
                 type_args: vec![]
             }
         );
@@ -1477,8 +1479,8 @@ pub mod tests {
                 .type_catalog
                 .conformances
                 .contains_key(&ConformanceKey {
-                    protocol_id: TypeId(1),
-                    conforming_id: TypeId(2),
+                    protocol_id: ProtocolId(1),
+                    conforming_id: TypeId(1).into(),
                 })
         );
     }

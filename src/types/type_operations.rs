@@ -111,7 +111,7 @@ fn row_occurs(target: RowMetaId, row: &Row, subs: &mut UnificationSubstitutions)
 }
 
 // Unify rows. Returns true if progress was made.
-#[instrument(skip(session), level = tracing::Level::DEBUG)]
+#[instrument(skip(session, subs), level = tracing::Level::DEBUG)]
 fn unify_rows(
     kind: TypeDefKind,
     lhs: &Row,
@@ -240,7 +240,7 @@ fn unify_rows(
 }
 
 // Unify types. Returns true if progress was made.
-#[instrument(skip(session), level = tracing::Level::DEBUG)]
+#[instrument(skip(session, substitutions), level = tracing::Level::DEBUG)]
 pub(super) fn unify_mult(
     lhs: &[Ty],
     rhs: &[Ty],
@@ -255,7 +255,7 @@ pub(super) fn unify_mult(
 }
 
 // Unify types. Returns true if progress was made.
-#[instrument(skip(session), level = tracing::Level::DEBUG)]
+#[instrument(skip(session, substitutions), level = tracing::Level::DEBUG)]
 pub(super) fn unify(
     lhs: &Ty,
     rhs: &Ty,
@@ -264,6 +264,10 @@ pub(super) fn unify(
 ) -> Result<bool, TypeError> {
     let lhs = apply(lhs.clone(), substitutions);
     let rhs = apply(rhs.clone(), substitutions);
+
+    let lhs = session.normalize_nominals(&lhs, Level(1));
+    let rhs = session.normalize_nominals(&rhs, Level(1));
+
     match (&lhs, &rhs) {
         (Ty::Primitive(lhs), Ty::Primitive(rhs)) => {
             if lhs == rhs {
@@ -334,7 +338,7 @@ pub(super) fn unify(
             changed |= unify_mult(lhs_type_args, rhs_type_args, substitutions, session)?;
             Ok(changed)
         }
-        (Ty::TypeConstructor(lhs), Ty::TypeConstructor(rhs)) if lhs == rhs => Ok(false),
+        // (Ty::TypeConstructor(lhs), Ty::TypeConstructor(rhs)) if lhs == rhs => Ok(false),
         (Ty::Func(lhs_param, lhs_ret), Ty::Func(rhs_param, rhs_ret)) => {
             let param = unify(lhs_param, rhs_param, substitutions, session)?;
             let ret = unify(lhs_ret, rhs_ret, substitutions, session)?;
@@ -544,7 +548,6 @@ pub fn apply_mult(tys: Vec<Ty>, substitutions: &mut UnificationSubstitutions) ->
     tys.into_iter().map(|ty| apply(ty, substitutions)).collect()
 }
 
-#[instrument(level = tracing::Level::TRACE, ret)]
 pub(super) fn instantiate_row(
     row: Row,
     substitutions: &InstantiationSubstitutions,
@@ -577,7 +580,6 @@ pub(super) fn instantiate_ty(
         return ty;
     }
 
-    let _s = tracing::trace_span!("instantiate_ty").entered();
     match ty {
         Ty::Param(param) => {
             if let Some(meta) = substitutions.ty.get(&param) {

@@ -6,7 +6,7 @@ use crate::{
         passes::dependencies_pass::SCCResolved,
         ty::{Level, Ty},
         type_error::TypeError,
-        type_operations::UnificationSubstitutions,
+        type_operations::{UnificationSubstitutions, apply},
         type_session::TypeSession,
         wants::Wants,
     },
@@ -28,8 +28,10 @@ impl TypeMember {
         _session: &mut TypeSession<SCCResolved>,
         _level: Level,
         _next_wants: &mut Wants,
-        _substitutions: &mut UnificationSubstitutions,
+        substitutions: &mut UnificationSubstitutions,
     ) -> Result<bool, TypeError> {
-        todo!()
+        let base = apply(self.base.clone(), substitutions);
+        println!("BASE: {base:?}");
+        Ok(false)
     }
 }

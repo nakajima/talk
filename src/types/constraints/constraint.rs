@@ -33,6 +33,7 @@ pub enum ConstraintCause {
     MatchArm(NodeID),
     CallTypeArg(NodeID),
     Conformance { node: NodeID, requirement: NodeID },
+    TypeMember(NodeID),
     Internal,
 }
 

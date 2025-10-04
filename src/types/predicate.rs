@@ -1,6 +1,6 @@
 use crate::{
     label::Label,
-    name_resolution::symbol::{AssociatedTypeId, TypeId},
+    name_resolution::symbol::{AssociatedTypeId, ProtocolId},
     span::Span,
     types::{
         constraints::{
@@ -9,10 +9,13 @@ use crate::{
             constraint::{Constraint, ConstraintCause},
             has_field::HasField,
             member::Member,
+            type_member::TypeMember,
         },
         row::{Row, RowParamId},
         ty::{Level, Ty},
-        type_operations::{InstantiationSubstitutions, instantiate_row, instantiate_ty},
+        type_operations::{
+            InstantiationSubstitutions, apply_mult, instantiate_row, instantiate_ty,
+        },
     },
 };
 
@@ -36,9 +39,15 @@ pub enum Predicate {
         returns: Ty,
         receiver: Option<Ty>,
     },
+    TypeMember {
+        base: Ty,
+        member: Label,
+        returns: Ty,
+        generics: Vec<Ty>,
+    },
     AssociatedEquals {
-        subject: Ty,         // the type the associated type is relative to
-        protocol_id: TypeId, // protocol that declares the associated type
+        subject: Ty,             // the type the associated type is relative to
+        protocol_id: ProtocolId, // protocol that declares the associated type
         associated_type_id: AssociatedTypeId,
         output: Ty, // a type variable (or any Ty) that must equal the witness
     },
@@ -65,6 +74,17 @@ impl Predicate {
                 receiver: apply(receiver.clone(), substitutions),
                 label: label.clone(),
                 ty: apply(ty.clone(), substitutions),
+            },
+            Self::TypeMember {
+                base: owner,
+                member,
+                returns,
+                generics,
+            } => Self::TypeMember {
+                base: apply(owner.clone(), substitutions),
+                member: member.clone(),
+                returns: apply(returns.clone(), substitutions),
+                generics: apply_mult(generics.clone(), substitutions),
             },
             Self::Call {
                 callee,
@@ -116,6 +136,22 @@ impl Predicate {
                 receiver: instantiate_ty(receiver, substitutions, level),
                 label,
                 ty: instantiate_ty(ty, substitutions, level),
+                cause: ConstraintCause::Internal,
+                span,
+            }),
+            Self::TypeMember {
+                base,
+                member,
+                returns,
+                generics,
+            } => Constraint::TypeMember(TypeMember {
+                base: instantiate_ty(base, substitutions, level),
+                name: member,
+                generics: generics
+                    .iter()
+                    .map(|g| instantiate_ty(g.clone(), substitutions, level))
+                    .collect(),
+                result: instantiate_ty(returns, substitutions, level),
                 cause: ConstraintCause::Internal,
                 span,
             }),
@@ -179,6 +215,17 @@ impl std::fmt::Debug for Predicate {
                     "".to_string()
                 },
             ),
+            Predicate::TypeMember {
+                base,
+                member,
+                returns,
+                generics,
+            } => {
+                write!(
+                    f,
+                    "*typemember({base:?}.{member}<{generics:?}> = {returns:?})"
+                )
+            }
             Predicate::AssociatedEquals {
                 subject,
                 protocol_id,

@@ -9,8 +9,8 @@ use crate::{
     name_resolution::{
         name_resolver::NameResolved,
         symbol::{
-            AssociatedTypeId, DeclaredLocalId, GlobalId, InstanceMethodId, StaticMethodId, Symbol,
-            TypeId,
+            AssociatedTypeId, DeclaredLocalId, GlobalId, InstanceMethodId, ProtocolId,
+            StaticMethodId, Symbol,
         },
     },
     node_id::NodeID,
@@ -36,8 +36,8 @@ pub enum ConformanceRequirement {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Conformance {
-    pub conforming_id: TypeId,
-    pub protocol_id: TypeId,
+    pub conforming_id: Symbol,
+    pub protocol_id: ProtocolId,
     pub requirements: FxHashMap<Label, ConformanceRequirement>,
     pub associated_types: FxHashMap<AssociatedTypeId, Symbol>,
     pub span: Span,

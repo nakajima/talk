@@ -77,18 +77,24 @@ impl<'a> DeclDeclarer<'a> {
         self.resolver.current_scope_id = current.parent_id;
     }
 
-    fn enter_nominal(&mut self, id: NodeID, name: &mut Name, generics: &mut [GenericDecl]) {
-        *name = self.resolver.declare(name, some!(Type));
-
-        let Name::Resolved(Symbol::Type(type_id), _) = name else {
-            unreachable!()
+    fn enter_nominal(
+        &mut self,
+        id: NodeID,
+        name: &mut Name,
+        generics: &mut [GenericDecl],
+        is_protocol: bool,
+    ) {
+        *name = if is_protocol {
+            self.resolver.declare(name, some!(Protocol))
+        } else {
+            self.resolver.declare(name, some!(Type))
         };
 
         self.resolver
             .current_scope_mut()
             .unwrap()
             .types
-            .insert("Self".into(), Symbol::Type(*type_id));
+            .insert("Self".into(), name.symbol().unwrap());
 
         self.start_scope(id);
 
@@ -220,13 +226,15 @@ impl<'a> DeclDeclarer<'a> {
     fn enter_decl(&mut self, decl: &mut Decl) {
         on!(
             &mut decl.kind,
-            DeclKind::Struct { name, generics, .. }
-                | DeclKind::Protocol { name, generics, .. }
-                | DeclKind::Enum { name, generics, .. },
+            DeclKind::Struct { name, generics, .. } | DeclKind::Enum { name, generics, .. },
             {
-                self.enter_nominal(decl.id, name, generics);
+                self.enter_nominal(decl.id, name, generics, false);
             }
         );
+
+        on!(&mut decl.kind, DeclKind::Protocol { name, generics, .. }, {
+            self.enter_nominal(decl.id, name, generics, true);
+        });
 
         on!(
             &mut decl.kind,

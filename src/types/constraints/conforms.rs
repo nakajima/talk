@@ -2,7 +2,7 @@ use rustc_hash::FxHashMap;
 use tracing::instrument;
 
 use crate::{
-    name_resolution::symbol::TypeId,
+    name_resolution::symbol::{ProtocolId, TypeId},
     span::Span,
     types::{
         constraints::constraint::Constraint,
@@ -23,7 +23,7 @@ use crate::{
 #[derive(Debug, Clone)]
 pub struct Conforms {
     pub type_id: TypeId,
-    pub protocol_id: TypeId,
+    pub protocol_id: ProtocolId,
     pub span: Span,
 }
 
@@ -40,7 +40,7 @@ impl Conforms {
             .conformances
             .get_mut(&ConformanceKey {
                 protocol_id: self.protocol_id,
-                conforming_id: self.type_id,
+                conforming_id: self.type_id.into(),
             })
             .expect("didn't get conformance");
 
@@ -54,7 +54,7 @@ impl Conforms {
             .phase
             .type_catalog
             .nominals
-            .get(&self.type_id)
+            .get(&self.type_id.into())
             .expect("didn't get nominal for conformance");
 
         let mut still_unfulfilled = vec![];
@@ -128,6 +128,7 @@ impl Conforms {
             skolem_bounds: Default::default(),
             type_param_bounds: Default::default(),
             types_by_node: Default::default(),
+            typealiases: Default::default(),
         };
 
         // Instantiate both at the same level

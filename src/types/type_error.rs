@@ -1,6 +1,9 @@
 use std::{error::Error, fmt::Display};
 
-use crate::{name_resolution::symbol::TypeId, types::ty::Ty};
+use crate::{
+    name_resolution::symbol::{ProtocolId, TypeId},
+    types::ty::Ty,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TypeError {
@@ -18,7 +21,7 @@ pub enum TypeError {
     TypeNotFound(String),
     TypesDoesNotConform {
         type_id: TypeId,
-        protocol_id: TypeId,
+        protocol_id: ProtocolId,
     },
 }
 

@@ -6,7 +6,8 @@ use crate::{
     types::{
         builtins::builtin_scope,
         passes::dependencies_pass::SCCResolved,
-        scheme::Scheme,
+        predicate::Predicate,
+        scheme::{ForAll, Scheme},
         ty::{Level, Ty},
         type_operations::UnificationSubstitutions,
         type_session::{TypeSession, TypingPhase},
@@ -18,6 +19,31 @@ use crate::{
 pub enum EnvEntry {
     Mono(Ty),
     Scheme(Scheme),
+}
+
+impl From<(Ty, Vec<Predicate>, Vec<ForAll>)> for EnvEntry {
+    fn from(value: (Ty, Vec<Predicate>, Vec<ForAll>)) -> Self {
+        let mut foralls = value.2;
+        foralls.extend(value.0.collect_foralls());
+        if value.1.is_empty() && foralls.is_empty() {
+            EnvEntry::Mono(value.0)
+        } else {
+            EnvEntry::Scheme(Scheme {
+                foralls,
+                predicates: value.1,
+                ty: value.0,
+            })
+        }
+    }
+}
+
+impl From<EnvEntry> for (Ty, Vec<Predicate>, Vec<ForAll>) {
+    fn from(val: EnvEntry) -> Self {
+        match val {
+            EnvEntry::Mono(ty) => (ty, vec![], vec![]),
+            EnvEntry::Scheme(scheme) => (scheme.ty, scheme.predicates, scheme.foralls),
+        }
+    }
 }
 
 impl EnvEntry {
@@ -46,16 +72,10 @@ impl EnvEntry {
         wants: &mut Wants,
         span: Span,
     ) -> Ty {
+        tracing::debug!("inference instantiate: {self:?}");
         match self {
             EnvEntry::Mono(ty) => ty.clone(),
             EnvEntry::Scheme(scheme) => scheme.inference_instantiate(session, level, wants, span).0,
-        }
-    }
-
-    pub fn as_ty(&self) -> Ty {
-        match self {
-            EnvEntry::Mono(ty) => ty.clone(),
-            EnvEntry::Scheme(scheme) => scheme.ty.clone(),
         }
     }
 }
@@ -73,8 +93,7 @@ impl TermEnv {
     }
 
     pub fn insert_mono(&mut self, sym: Symbol, ty: Ty) {
-        tracing::debug!("insert_mono {sym:?} = {ty:?}");
-        self.symbols.insert(sym, EnvEntry::Mono(ty));
+        self.insert(sym, EnvEntry::Mono(ty));
     }
 
     pub fn lookup(&self, sym: &Symbol) -> Option<&EnvEntry> {
@@ -85,7 +104,13 @@ impl TermEnv {
         self.symbols.get_mut(sym)
     }
 
-    pub fn promote(&mut self, sym: Symbol, entry: EnvEntry) {
+    pub fn insert(&mut self, sym: Symbol, entry: EnvEntry) {
+        if let Some(existing) = self.symbols.get(&sym)
+            && *existing != entry
+        {
+            tracing::warn!("overriding {sym:?} with {entry:?}. existing: {existing:?}");
+        }
+
         tracing::debug!("promote {sym:?} = {entry:?}");
         self.symbols.insert(sym, entry);
     }
