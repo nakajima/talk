@@ -7,9 +7,9 @@ use crate::{
     span::Span,
     types::{
         constraints::constraint::{Constraint, ConstraintCause},
-        row::normalize_row,
+        infer_row::normalize_row,
+        infer_ty::{InferTy, Level},
         term_environment::EnvEntry,
-        ty::{Level, Ty},
         type_catalog::{ConformanceKey, NominalForm},
         type_error::TypeError,
         type_operations::{UnificationSubstitutions, apply, unify},
@@ -20,10 +20,10 @@ use crate::{
 
 #[derive(Debug, Clone)]
 pub struct AssociatedEquals {
-    pub subject: Ty,
+    pub subject: InferTy,
     pub protocol_id: ProtocolId,
     pub associated_type_id: AssociatedTypeId,
-    pub output: Ty,
+    pub output: InferTy,
     pub cause: ConstraintCause,
     pub span: Span,
 }
@@ -38,7 +38,7 @@ impl AssociatedEquals {
         substitutions: &mut UnificationSubstitutions,
     ) -> Result<bool, TypeError> {
         let subject = apply(self.subject.clone(), substitutions);
-        let Ty::Nominal {
+        let InferTy::Nominal {
             id: subject_id,
             row: box subject_row,
             ..
@@ -53,7 +53,7 @@ impl AssociatedEquals {
             protocol_id: self.protocol_id,
             conforming_id: subject_id.into(),
         };
-        let Some(conformance) = session.type_catalog.conformances.get(&key) else {
+        let Some(conformance) = session.type_catalog.conformances.get(&key).cloned() else {
             next_wants.push(Constraint::AssociatedEquals(self.clone()));
             return Ok(false);
         };
@@ -64,23 +64,27 @@ impl AssociatedEquals {
             return Ok(false);
         };
 
-        let mut reified_witness_type: Option<Ty> = None;
+        let mut reified_witness_type: Option<InferTy> = None;
 
-        if let Some(EnvEntry::Scheme(scheme)) = session.term_env.lookup(witness_symbol)
-            && matches!(scheme.ty, Ty::Param(_))
+        if let Some(EnvEntry::Scheme(scheme)) = session.lookup(witness_symbol)
+            && matches!(scheme.ty, InferTy::Param(_))
         {
             let (subject_fields, _tail) = normalize_row(subject_row.clone(), substitutions);
 
-            if let Some(nominal) = session.type_catalog.nominals.get(&subject_id.into())
+            if let Some(nominal) = session
+                .type_catalog
+                .nominals
+                .get(&subject_id.into())
+                .cloned()
                 && let NominalForm::Struct { properties, .. } = &nominal.form
             {
                 let alias_param = match &scheme.ty {
-                    Ty::Param(p) => *p,
+                    InferTy::Param(p) => *p,
                     _ => unreachable!(),
                 };
 
                 'scan_props: for (label, property_symbol) in properties {
-                    if let Some(property_entry) = session.term_env.lookup(property_symbol) {
+                    if let Some(property_entry) = session.lookup(property_symbol) {
                         let declared_property_type = match property_entry {
                             EnvEntry::Mono(t) => t.clone(),
                             EnvEntry::Scheme(s) => s.ty.clone(),
@@ -88,7 +92,7 @@ impl AssociatedEquals {
 
                         let mut mentions_param = false;
                         declared_property_type.fold(&mut |ty| {
-                            if let Ty::Param(pid) = ty
+                            if let InferTy::Param(pid) = ty
                                 && *pid == alias_param
                             {
                                 mentions_param = true;
@@ -114,7 +118,7 @@ impl AssociatedEquals {
             concrete
         } else {
             // Fallback: instantiate the alias as you already did.
-            let Some(entry) = session.term_env.lookup(witness_symbol).cloned() else {
+            let Some(entry) = session.lookup(witness_symbol) else {
                 next_wants.push(Constraint::AssociatedEquals(self.clone()));
                 return Ok(false);
             };

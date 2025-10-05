@@ -1,27 +1,28 @@
 use rustc_hash::FxHashMap;
 
 use crate::{
+    compiling::module::ModuleId,
     name_resolution::symbol::Symbol,
     span::Span,
     types::{
         builtins::builtin_scope,
+        infer_ty::{InferTy, Level},
         predicate::Predicate,
         scheme::{ForAll, Scheme},
-        ty::{Level, Ty},
-        type_operations::UnificationSubstitutions,
-        type_session::TypeSession,
+        type_operations::{UnificationSubstitutions, apply},
+        type_session::{TypeEntry, TypeSession},
         wants::Wants,
     },
 };
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum EnvEntry {
-    Mono(Ty),
-    Scheme(Scheme),
+    Mono(InferTy),
+    Scheme(Scheme<InferTy>),
 }
 
-impl From<(Ty, Vec<Predicate>, Vec<ForAll>)> for EnvEntry {
-    fn from(value: (Ty, Vec<Predicate>, Vec<ForAll>)) -> Self {
+impl From<(InferTy, Vec<Predicate<InferTy>>, Vec<ForAll>)> for EnvEntry {
+    fn from(value: (InferTy, Vec<Predicate<InferTy>>, Vec<ForAll>)) -> Self {
         let mut foralls = value.2;
         foralls.extend(value.0.collect_foralls());
         if value.1.is_empty() && foralls.is_empty() {
@@ -36,7 +37,7 @@ impl From<(Ty, Vec<Predicate>, Vec<ForAll>)> for EnvEntry {
     }
 }
 
-impl From<EnvEntry> for (Ty, Vec<Predicate>, Vec<ForAll>) {
+impl From<EnvEntry> for (InferTy, Vec<Predicate<InferTy>>, Vec<ForAll>) {
     fn from(val: EnvEntry) -> Self {
         match val {
             EnvEntry::Mono(ty) => (ty, vec![], vec![]),
@@ -45,7 +46,46 @@ impl From<EnvEntry> for (Ty, Vec<Predicate>, Vec<ForAll>) {
     }
 }
 
+impl From<EnvEntry> for TypeEntry {
+    fn from(value: EnvEntry) -> Self {
+        match value {
+            EnvEntry::Mono(ty) => TypeEntry::Mono(ty.into()),
+            EnvEntry::Scheme(scheme) => TypeEntry::Poly(Scheme {
+                foralls: scheme.foralls,
+                predicates: scheme.predicates.into_iter().map(|p| p.into()).collect(),
+                ty: scheme.ty.into(),
+            }),
+        }
+    }
+}
+
 impl EnvEntry {
+    pub fn apply(&self, substitutions: &mut UnificationSubstitutions) -> Self {
+        match self.clone() {
+            EnvEntry::Mono(ty) => EnvEntry::Mono(apply(ty, substitutions)),
+            EnvEntry::Scheme(scheme) => EnvEntry::Scheme(Scheme {
+                foralls: scheme.foralls,
+                predicates: scheme
+                    .predicates
+                    .into_iter()
+                    .map(|p| p.apply(substitutions))
+                    .collect(),
+                ty: apply(scheme.ty, substitutions),
+            }),
+        }
+    }
+
+    pub fn import(&self, module_id: ModuleId) -> EnvEntry {
+        match self.clone() {
+            EnvEntry::Mono(ty) => EnvEntry::Mono(ty.import(module_id)),
+            EnvEntry::Scheme(scheme) => EnvEntry::Scheme(Scheme {
+                foralls: scheme.foralls,
+                predicates: scheme.predicates,
+                ty: scheme.ty.import(module_id),
+            }),
+        }
+    }
+
     pub fn solver_instantiate(
         &self,
         session: &mut TypeSession,
@@ -53,7 +93,7 @@ impl EnvEntry {
         substitutions: &mut UnificationSubstitutions,
         wants: &mut Wants,
         span: Span,
-    ) -> Ty {
+    ) -> InferTy {
         match self {
             EnvEntry::Mono(ty) => ty.clone(),
             EnvEntry::Scheme(scheme) => {
@@ -70,7 +110,7 @@ impl EnvEntry {
         level: Level,
         wants: &mut Wants,
         span: Span,
-    ) -> Ty {
+    ) -> InferTy {
         tracing::debug!("inference instantiate: {self:?}");
         match self {
             EnvEntry::Mono(ty) => ty.clone(),
@@ -91,7 +131,7 @@ impl TermEnv {
         env
     }
 
-    pub fn insert_mono(&mut self, sym: Symbol, ty: Ty) {
+    pub fn insert_mono(&mut self, sym: Symbol, ty: InferTy) {
         self.insert(sym, EnvEntry::Mono(ty));
     }
 

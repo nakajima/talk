@@ -258,7 +258,7 @@ pub mod tests {
         func a() { 0 }
     "#,
         );
-        assert!(ns.contains(&Binder::Global(GlobalId(1))), "{ns:?}");
+        assert!(ns.contains(&Binder::Global(GlobalId::from(1))), "{ns:?}");
         let es = graph_edges(r#"func a(){ 0 }"#);
         assert!(es.is_empty(), "{es:?}");
     }
@@ -273,7 +273,7 @@ pub mod tests {
         );
         assert_eq!(
             es,
-            FxHashSet::from_iter([(Binder::Global(GlobalId(1)), Binder::Global(GlobalId(2)))]),
+            FxHashSet::from_iter([(Binder::Global(GlobalId::from(1)), Binder::Global(GlobalId::from(2)))]),
             "{es:?}"
         );
     }
@@ -289,8 +289,8 @@ pub mod tests {
         assert_eq!(
             es,
             FxHashSet::from_iter([
-                (Binder::Global(GlobalId(1)), Binder::Global(GlobalId(2))),
-                (Binder::Global(GlobalId(2)), Binder::Global(GlobalId(1)))
+                (Binder::Global(GlobalId::from(1)), Binder::Global(GlobalId::from(2))),
+                (Binder::Global(GlobalId::from(2)), Binder::Global(GlobalId::from(1)))
             ]),
             "{es:?}"
         );
@@ -319,7 +319,7 @@ pub mod tests {
         );
         assert_eq!(
             es,
-            FxHashSet::from_iter([(Binder::Global(GlobalId(1)), Binder::Global(GlobalId(2)))]),
+            FxHashSet::from_iter([(Binder::Global(GlobalId::from(1)), Binder::Global(GlobalId::from(2)))]),
             "{es:?}"
         );
     }
@@ -364,12 +364,12 @@ pub mod tests {
 
         let expected = FxHashSet::from_iter([
             (
-                Binder::StaticMethod(StaticMethodId(1)),
-                Binder::StaticMethod(StaticMethodId(2)),
+                Binder::StaticMethod(StaticMethodId::from(1)),
+                Binder::StaticMethod(StaticMethodId::from(2)),
             ),
             (
-                Binder::StaticMethod(StaticMethodId(2)),
-                Binder::StaticMethod(StaticMethodId(1)),
+                Binder::StaticMethod(StaticMethodId::from(2)),
+                Binder::StaticMethod(StaticMethodId::from(1)),
             ),
         ]);
 
@@ -393,12 +393,12 @@ pub mod tests {
 
         let expected = FxHashSet::from_iter([
             (
-                Binder::InstanceMethod(InstanceMethodId(1)),
-                Binder::InstanceMethod(InstanceMethodId(2)),
+                Binder::InstanceMethod(InstanceMethodId::from(1)),
+                Binder::InstanceMethod(InstanceMethodId::from(2)),
             ),
             (
-                Binder::InstanceMethod(InstanceMethodId(2)),
-                Binder::InstanceMethod(InstanceMethodId(1)),
+                Binder::InstanceMethod(InstanceMethodId::from(2)),
+                Binder::InstanceMethod(InstanceMethodId::from(1)),
             ),
         ]);
 
@@ -421,8 +421,8 @@ pub mod tests {
         use crate::name_resolution::symbol::{GlobalId, StaticMethodId};
 
         let expected = FxHashSet::from_iter([(
-            Binder::Global(GlobalId(1)),
-            Binder::StaticMethod(StaticMethodId(1)),
+            Binder::Global(GlobalId::from(1)),
+            Binder::StaticMethod(StaticMethodId::from(1)),
         )]);
 
         assert_eq!(edges, expected, "{edges:?}");
@@ -444,8 +444,8 @@ pub mod tests {
         use crate::name_resolution::symbol::{GlobalId, StaticMethodId};
 
         let expected = FxHashSet::from_iter([(
-            Binder::Global(GlobalId(1)),
-            Binder::StaticMethod(StaticMethodId(1)),
+            Binder::Global(GlobalId::from(1)),
+            Binder::StaticMethod(StaticMethodId::from(1)),
         )]);
 
         assert_eq!(edges, expected, "{edges:?}");
@@ -467,8 +467,8 @@ pub mod tests {
         use crate::name_resolution::symbol::InstanceMethodId;
 
         let expected = FxHashSet::from_iter([(
-            Binder::InstanceMethod(InstanceMethodId(1)),
-            Binder::InstanceMethod(InstanceMethodId(2)),
+            Binder::InstanceMethod(InstanceMethodId::from(1)),
+            Binder::InstanceMethod(InstanceMethodId::from(2)),
         )]);
 
         assert_eq!(edges, expected, "{edges:?}");

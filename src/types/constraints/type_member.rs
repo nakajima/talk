@@ -3,7 +3,7 @@ use crate::{
     span::Span,
     types::{
         constraints::constraint::ConstraintCause,
-        ty::{Level, Ty},
+        infer_ty::{InferTy, Level},
         type_error::TypeError,
         type_operations::{UnificationSubstitutions, apply},
         type_session::TypeSession,
@@ -13,10 +13,10 @@ use crate::{
 
 #[derive(Debug, Clone)]
 pub struct TypeMember {
-    pub base: Ty,
+    pub base: InferTy,
     pub name: Label,
-    pub generics: Vec<Ty>,
-    pub result: Ty,
+    pub generics: Vec<InferTy>,
+    pub result: InferTy,
     pub cause: ConstraintCause,
     pub span: Span,
 }

@@ -9,9 +9,9 @@ use crate::{
             construction::Construction, equals::Equals, has_field::HasField, member::Member,
             type_member::TypeMember,
         },
+        infer_row::InferRow,
+        infer_ty::{InferTy, Level},
         predicate::Predicate,
-        row::Row,
-        ty::{Level, Ty},
         type_operations::{
             UnificationSubstitutions, apply, apply_mult, apply_row, substitute, substitute_mult,
             substitute_row,
@@ -105,7 +105,7 @@ impl Constraint {
         self
     }
 
-    pub fn substitute(&self, substitutions: &FxHashMap<Ty, Ty>) -> Constraint {
+    pub fn substitute(&self, substitutions: &FxHashMap<InferTy, InferTy>) -> Constraint {
         let mut copy = self.clone();
 
         match &mut copy {
@@ -157,11 +157,7 @@ impl Constraint {
         copy
     }
 
-    pub fn normalize_nominals(
-        &self,
-        session: &mut TypeSession,
-        level: Level,
-    ) -> Constraint {
+    pub fn normalize_nominals(&self, session: &mut TypeSession, level: Level) -> Constraint {
         let mut copy = self.clone();
 
         match &mut copy {
@@ -220,14 +216,18 @@ impl Constraint {
         copy
     }
 
-    pub fn into_predicate(&self, substitutions: &mut UnificationSubstitutions) -> Predicate {
+    pub fn into_predicate(
+        &self,
+        substitutions: &mut UnificationSubstitutions,
+    ) -> Predicate<InferTy> {
         tracing::debug!(
             "converting {:?} to predicate",
             self.clone().apply(substitutions)
         );
         match self {
             Self::HasField(has_field) => {
-                let Row::Param(row_param) = apply_row(has_field.row.clone(), substitutions) else {
+                let InferRow::Param(row_param) = apply_row(has_field.row.clone(), substitutions)
+                else {
                     panic!(
                         "HasField predicate must be for row, got: {:?}",
                         apply_row(has_field.row.clone(), substitutions)

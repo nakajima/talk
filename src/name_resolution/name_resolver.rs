@@ -1,4 +1,4 @@
-use std::{error::Error, fmt::Display};
+use std::{error::Error, fmt::Display, rc::Rc};
 
 use derive_visitor::{DriveMut, VisitorMut};
 use generational_arena::Index;
@@ -6,6 +6,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{
     ast::{AST, ASTPhase, Parsed},
+    compiling::module::ModuleEnvironment,
     diagnostic::Diagnostic,
     name::Name,
     name_resolution::{
@@ -16,8 +17,7 @@ use crate::{
             lower_funcs_to_lets::LowerFuncsToLets, prepend_self_to_methods::PrependSelfToMethods,
         },
     },
-    node::Node,
-    node_id::NodeID,
+    node_id::{FileID, NodeID},
     node_kinds::{
         decl::{Decl, DeclKind},
         expr::{Expr, ExprKind},
@@ -77,7 +77,7 @@ pub struct NameResolved {
 
 pub type ScopeId = Index;
 
-#[derive(Default, Debug, VisitorMut)]
+#[derive(Debug, VisitorMut)]
 #[visitor(
     Func(enter, exit),
     Stmt(enter, exit),
@@ -90,7 +90,11 @@ pub type ScopeId = Index;
 pub struct NameResolver {
     pub(super) symbols: Symbols,
     diagnostics: Vec<Diagnostic<NameResolverError>>,
+
     pub(super) phase: NameResolved,
+
+    pub(super) current_module_id: crate::compiling::module::ModuleId,
+    pub(super) modules: Rc<ModuleEnvironment>,
 
     // Scope stuff
     pub(super) scopes: FxHashMap<NodeID, Scope>,
@@ -100,13 +104,15 @@ pub struct NameResolver {
 impl ASTPhase for NameResolved {}
 
 impl NameResolver {
-    pub fn new() -> Self {
+    pub fn new(modules: Rc<ModuleEnvironment>) -> Self {
         let mut resolver = Self {
             symbols: Default::default(),
             diagnostics: Default::default(),
             phase: NameResolved::default(),
+            current_module_id: crate::compiling::module::ModuleId::Current,
             scopes: Default::default(),
             current_scope_id: None,
+            modules,
         };
 
         // Create root scope and import builtins once
@@ -124,59 +130,62 @@ impl NameResolver {
         resolver
     }
 
-    pub fn resolve(mut self, mut asts: Vec<AST<Parsed>>) -> Vec<AST<NameResolved>> {
+    pub fn resolve(&mut self, mut asts: Vec<AST<Parsed>>) -> Vec<AST<NameResolved>> {
         // First pass: run transforms and declare all types
         for ast in &mut asts {
             LowerFuncsToLets::run(ast);
             PrependSelfToMethods::run(ast);
         }
 
-        let mut declarer = DeclDeclarer::new(&mut self);
-        for ast in &mut asts {
-            for root in &mut ast.roots {
-                root.drive_mut(&mut declarer);
+        {
+            // One declarer per AST so the single &mut self borrow ends after each AST.
+            for ast in &mut asts {
+                let mut declarer = DeclDeclarer::new(self);
+                for root in &mut ast.roots {
+                    root.drive_mut(&mut declarer);
+                }
+                // declarer dropped here before the next AST
             }
-        }
+        } // declarer definitely dropped before second pass
 
         // Second pass: resolve all names
-        use crate::node_id::FileID;
         self.current_scope_id = Some(NodeID(FileID(0), 0));
 
-        asts.into_iter()
-            .map(|ast| {
-                let AST {
-                    path,
-                    roots,
-                    mut diagnostics,
-                    meta,
-                    file_id,
-                    node_ids,
-                    ..
-                } = ast;
+        let mut out: Vec<AST<NameResolved>> = Vec::with_capacity(asts.len());
 
-                let roots: Vec<Node> = roots
-                    .into_iter()
-                    .map(|mut root| {
-                        root.drive_mut(&mut self);
-                        root
-                    })
-                    .collect();
+        for ast in asts.into_iter() {
+            let AST {
+                path,
+                mut roots,
+                mut diagnostics,
+                meta,
+                file_id,
+                node_ids,
+                ..
+            } = ast;
 
-                for diagnostic in std::mem::take(&mut self.diagnostics) {
-                    diagnostics.push(diagnostic.into());
-                }
+            // Borrow &mut self only while walking each root, then drop immediately.
+            for root in &mut roots {
+                root.drive_mut(self);
+            }
 
-                AST {
-                    path,
-                    roots,
-                    diagnostics,
-                    meta,
-                    phase: std::mem::take(&mut self.phase),
-                    node_ids,
-                    file_id,
-                }
-            })
-            .collect()
+            // Move any diagnostics accumulated on self into this AST.
+            for diagnostic in std::mem::take(&mut self.diagnostics) {
+                diagnostics.push(diagnostic.into());
+            }
+
+            out.push(AST {
+                path,
+                roots,
+                diagnostics,
+                meta,
+                phase: std::mem::take(&mut self.phase),
+                node_ids,
+                file_id,
+            });
+        }
+
+        out
     }
 
     pub(super) fn current_scope(&self) -> Option<&Scope> {
@@ -221,6 +230,14 @@ impl NameResolver {
             return Some(captured);
         }
 
+        for (id, module) in self.modules.modules.iter() {
+            if module.name == name.name_str()
+                && let Some(sym) = module.exports.get(&name.name_str())
+            {
+                return Some(sym.import(*id));
+            }
+        }
+
         None
     }
 
@@ -256,26 +273,31 @@ impl NameResolver {
             .get_mut(&self.current_scope_id.expect("no scope to declare in"))
             .expect("scope not found");
 
+        let module_id = self.current_module_id;
         let symbol = match kind {
-            Symbol::Type(..) => Symbol::Type(self.symbols.next_type()),
+            Symbol::Type(..) => Symbol::Type(self.symbols.next_type(module_id)),
             Symbol::TypeParameter(..) => Symbol::TypeParameter(self.symbols.next_type_parameter()),
-            Symbol::Global(..) => Symbol::Global(self.symbols.next_global()),
+            Symbol::Global(..) => Symbol::Global(self.symbols.next_global(module_id)),
             Symbol::DeclaredLocal(..) => Symbol::DeclaredLocal(self.symbols.next_local()),
             Symbol::PatternBindLocal(..) => {
                 Symbol::PatternBindLocal(self.symbols.next_pattern_bind())
             }
             Symbol::ParamLocal(..) => Symbol::ParamLocal(self.symbols.next_param()),
-            Symbol::Builtin(..) => Symbol::Builtin(self.symbols.next_builtin()),
-            Symbol::Property(..) => Symbol::Property(self.symbols.next_property()),
-            Symbol::Synthesized(..) => Symbol::Synthesized(self.symbols.next_synthesized()),
-            Symbol::InstanceMethod(..) => {
-                Symbol::InstanceMethod(self.symbols.next_instance_method())
+            Symbol::Builtin(..) => Symbol::Builtin(self.symbols.next_builtin(module_id)),
+            Symbol::Property(..) => Symbol::Property(self.symbols.next_property(module_id)),
+            Symbol::Synthesized(..) => {
+                Symbol::Synthesized(self.symbols.next_synthesized(module_id))
             }
-            Symbol::StaticMethod(..) => Symbol::StaticMethod(self.symbols.next_static_method()),
-            Symbol::Variant(..) => Symbol::Variant(self.symbols.next_variant()),
-            Symbol::Protocol(..) => Symbol::Protocol(self.symbols.next_protocol()),
+            Symbol::InstanceMethod(..) => {
+                Symbol::InstanceMethod(self.symbols.next_instance_method(module_id))
+            }
+            Symbol::StaticMethod(..) => {
+                Symbol::StaticMethod(self.symbols.next_static_method(module_id))
+            }
+            Symbol::Variant(..) => Symbol::Variant(self.symbols.next_variant(module_id)),
+            Symbol::Protocol(..) => Symbol::Protocol(self.symbols.next_protocol(module_id)),
             Symbol::AssociatedType(..) => {
-                Symbol::AssociatedType(self.symbols.next_associated_type())
+                Symbol::AssociatedType(self.symbols.next_associated_type(module_id))
             }
         };
 

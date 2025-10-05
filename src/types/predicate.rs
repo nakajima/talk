@@ -11,10 +11,12 @@ use crate::{
             member::Member,
             type_member::TypeMember,
         },
-        row::{Row, RowParamId},
-        ty::{Level, Ty},
+        infer_row::{InferRow, RowParamId},
+        infer_ty::{InferTy, Level},
+        ty::{SomeType, Ty},
         type_operations::{
-            InstantiationSubstitutions, apply_mult, instantiate_row, instantiate_ty,
+            InstantiationSubstitutions, UnificationSubstitutions, apply, apply_mult,
+            instantiate_row, instantiate_ty,
         },
     },
 };
@@ -22,44 +24,93 @@ use crate::{
 // Predicates are kinda like Constraint templates. They ride around with schemes and get instantiated
 // into constraints when the scheme itself is instantiated.
 #[derive(Clone, PartialEq)]
-pub enum Predicate {
+pub enum Predicate<T: SomeType> {
     HasField {
         row: RowParamId,
         label: Label,
-        ty: Ty,
+        ty: T,
     },
     Member {
-        receiver: Ty,
+        receiver: T,
         label: Label,
-        ty: Ty,
+        ty: T,
     },
     Call {
-        callee: Ty,
-        args: Vec<Ty>,
-        returns: Ty,
-        receiver: Option<Ty>,
+        callee: T,
+        args: Vec<T>,
+        returns: T,
+        receiver: Option<T>,
     },
     TypeMember {
-        base: Ty,
+        base: T,
         member: Label,
-        returns: Ty,
-        generics: Vec<Ty>,
+        returns: T,
+        generics: Vec<T>,
     },
     AssociatedEquals {
-        subject: Ty,             // the type the associated type is relative to
+        subject: T,              // the type the associated type is relative to
         protocol_id: ProtocolId, // protocol that declares the associated type
         associated_type_id: AssociatedTypeId,
-        output: Ty, // a type variable (or any Ty) that must equal the witness
+        output: T, // a type variable (or any Ty) that must equal the witness
     },
 }
 
-impl Predicate {
-    pub fn apply_substitutions(
-        &self,
-        substitutions: &mut crate::types::type_operations::UnificationSubstitutions,
-    ) -> Self {
-        use crate::types::type_operations::apply;
+impl From<Predicate<InferTy>> for Predicate<Ty> {
+    fn from(value: Predicate<InferTy>) -> Self {
+        match value {
+            Predicate::<InferTy>::HasField { row, label, ty } => Self::HasField {
+                row,
+                label,
+                ty: ty.into(),
+            },
+            Predicate::<InferTy>::Member {
+                receiver,
+                label,
+                ty,
+            } => Self::Member {
+                receiver: receiver.into(),
+                label,
+                ty: ty.into(),
+            },
+            Predicate::<InferTy>::TypeMember {
+                base: owner,
+                member,
+                returns,
+                generics,
+            } => Self::TypeMember {
+                base: owner.into(),
+                member: member.clone(),
+                returns: returns.into(),
+                generics: generics.into_iter().map(|g| g.into()).collect(),
+            },
+            Predicate::<InferTy>::Call {
+                callee,
+                args,
+                returns,
+                receiver,
+            } => Self::Call {
+                callee: callee.into(),
+                args: args.into_iter().map(|arg| arg.into()).collect(),
+                returns: returns.into(),
+                receiver: receiver.map(|r| r.into()),
+            },
+            Predicate::<InferTy>::AssociatedEquals {
+                subject,
+                protocol_id,
+                associated_type_id,
+                output,
+            } => Self::AssociatedEquals {
+                subject: subject.into(),
+                protocol_id,
+                associated_type_id,
+                output: output.into(),
+            },
+        }
+    }
+}
 
+impl Predicate<InferTy> {
+    pub fn apply(&self, substitutions: &mut UnificationSubstitutions) -> Self {
         match self {
             Self::HasField { row, label, ty } => Self::HasField {
                 row: *row,
@@ -122,7 +173,7 @@ impl Predicate {
     ) -> Constraint {
         match self.clone() {
             Self::HasField { row, label, ty } => Constraint::HasField(HasField {
-                row: instantiate_row(Row::Param(row), substitutions, level),
+                row: instantiate_row(InferRow::Param(row), substitutions, level),
                 label,
                 ty: instantiate_ty(ty, substitutions, level),
                 cause: ConstraintCause::Internal,
@@ -188,7 +239,7 @@ impl Predicate {
     }
 }
 
-impl std::fmt::Debug for Predicate {
+impl<T: SomeType> std::fmt::Debug for Predicate<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Predicate::HasField { row, label, ty } => {

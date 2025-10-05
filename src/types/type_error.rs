@@ -2,21 +2,21 @@ use std::{error::Error, fmt::Display};
 
 use crate::{
     name_resolution::symbol::{ProtocolId, TypeId},
-    types::ty::Ty,
+    types::infer_ty::InferTy,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TypeError {
     TypeConstructorNotFound(TypeId),
-    ExpectedRow(Ty),
+    ExpectedRow(InferTy),
     GenericArgCount {
         expected: u8,
         actual: u8,
     },
-    InvalidUnification(Ty, Ty),
-    OccursCheck(Ty),
-    CalleeNotCallable(Ty),
-    MemberNotFound(Ty, String),
+    InvalidUnification(InferTy, InferTy),
+    OccursCheck(InferTy),
+    CalleeNotCallable(InferTy),
+    MemberNotFound(InferTy, String),
     MissingConformanceRequirement(String),
     TypeNotFound(String),
     TypesDoesNotConform {

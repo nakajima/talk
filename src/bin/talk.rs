@@ -35,7 +35,10 @@ async fn main() {
     match &cli.command {
         Commands::Parse { .. } => {}
         Commands::Debug { filename } => {
+            use std::rc::Rc;
+
             use talk::{
+                compiling::module::ModuleEnvironment,
                 formatter::{DebugHTMLFormatter, Formatter},
                 lexer::Lexer,
                 name_resolution::name_resolver::NameResolver,
@@ -48,7 +51,8 @@ async fn main() {
             let lexer = Lexer::new(&code);
             let parser = Parser::new(filename, FileID(0), lexer);
             let parsed = parser.parse().unwrap();
-            let resolver = NameResolver::new();
+            let modules = ModuleEnvironment::default();
+            let mut resolver = NameResolver::new(Rc::new(modules));
             let mut resolved = resolver.resolve(vec![parsed]).into_iter().next().unwrap();
 
             let session = TypeSession::drive(&mut resolved);

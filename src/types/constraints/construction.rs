@@ -3,10 +3,10 @@ use crate::{
     span::Span,
     types::{
         constraints::constraint::ConstraintCause,
+        infer_row::InferRow,
+        infer_ty::{InferTy, Level},
         passes::inference_pass::curry,
-        row::Row,
         term_environment::EnvEntry,
-        ty::{Level, Ty},
         type_catalog::NominalForm,
         type_error::TypeError,
         type_operations::{UnificationSubstitutions, instantiate_ty, unify},
@@ -17,9 +17,9 @@ use crate::{
 
 #[derive(Debug, Clone)]
 pub struct Construction {
-    pub callee: Ty,
-    pub args: Vec<Ty>,
-    pub returns: Ty,
+    pub callee: InferTy,
+    pub args: Vec<InferTy>,
+    pub returns: InferTy,
     pub type_symbol: Symbol,
     pub span: Span,
     pub cause: ConstraintCause,
@@ -54,7 +54,7 @@ impl Construction {
             unreachable!("didn't synthesize init");
         };
 
-        let Some(init_entry) = session.term_env.lookup(init_sym).cloned() else {
+        let Some(init_entry) = session.lookup(init_sym) else {
             unreachable!("didn't synthesize init");
         };
 
@@ -65,9 +65,9 @@ impl Construction {
             }
         };
 
-        let mut row = Row::Empty(TypeDefKind::Struct);
+        let mut row = InferRow::Empty(TypeDefKind::Struct);
         for (label, ty_sym) in properties {
-            let entry = session.term_env.lookup(ty_sym).cloned().ok_or_else(|| {
+            let entry = session.lookup(ty_sym).ok_or_else(|| {
                 TypeError::MemberNotFound(self.returns.clone(), label.to_string())
             })?;
 
@@ -78,14 +78,14 @@ impl Construction {
             };
             let prop_ty = instantiate_ty(base_ty, &inst_subs, level);
 
-            row = Row::Extend {
+            row = InferRow::Extend {
                 row: Box::new(row),
                 label: label.clone(),
                 ty: prop_ty,
             };
         }
 
-        let instance = Ty::Nominal {
+        let instance = InferTy::Nominal {
             id: type_id,
             type_args: vec![],
             row: Box::new(row),

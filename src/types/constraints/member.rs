@@ -3,11 +3,14 @@ use crate::{
     name_resolution::symbol::Symbol,
     span::Span,
     types::{
-        constraints::constraint::{Constraint, ConstraintCause},
+        constraints::{
+            conforms::TakeToSlot,
+            constraint::{Constraint, ConstraintCause},
+        },
+        infer_row::InferRow,
+        infer_ty::{InferTy, Level, Primitive},
         passes::{dependencies_pass::ConformanceRequirement, inference_pass::curry},
-        row::Row,
         term_environment::EnvEntry,
-        ty::{Level, Primitive, Ty},
         type_catalog::NominalForm,
         type_error::TypeError,
         type_operations::{
@@ -20,9 +23,9 @@ use crate::{
 
 #[derive(Debug, Clone)]
 pub struct Member {
-    pub receiver: Ty,
+    pub receiver: InferTy,
     pub label: Label,
-    pub ty: Ty,
+    pub ty: InferTy,
     pub cause: ConstraintCause,
     pub span: Span,
 }
@@ -45,7 +48,7 @@ impl Member {
 
         if matches!(
             receiver,
-            Ty::UnificationVar { .. } | Ty::Rigid(_) | Ty::Param(_)
+            InferTy::UnificationVar { .. } | InferTy::Rigid(_) | InferTy::Param(_)
         ) {
             // If we don't know what the receiver is yet, we can't do much
             tracing::debug!("deferring member constraint");
@@ -53,18 +56,21 @@ impl Member {
             return Ok(false);
         }
 
-        if let Ty::Nominal { id: type_id, .. } | Ty::Constructor { type_id, .. } = &receiver
+        if let InferTy::Nominal { id: type_id, .. } | InferTy::Constructor { type_id, .. } =
+            &receiver
             && let Some(nominal) = session.type_catalog.nominals.get(&type_id.into()).cloned()
         {
             // First, check if any conforming protocols have this method with predicates
             let mut protocol_method = None;
-            for conformance_key in session.type_catalog.conformances.keys() {
+            let conformances = TakeToSlot::new(&mut session.type_catalog.conformances);
+            for conformance_key in conformances.keys() {
                 if conformance_key.conforming_id == (*type_id).into() {
                     let protocol_id = conformance_key.protocol_id;
-                    if let Some(protocol) = session.type_catalog.protocols.get(&protocol_id)
+                    if let Some(protocol) =
+                        session.type_catalog.protocols.get(&protocol_id).cloned()
                         && let Some(requirement) = protocol.requirements.get(&self.label)
                         && let ConformanceRequirement::Unfulfilled(req_sym) = requirement
-                        && let Some(entry) = session.term_env.lookup(req_sym).cloned()
+                        && let Some(entry) = session.lookup(req_sym)
                     {
                         // Check if this protocol method has predicates - if so, prefer it
                         if let crate::types::term_environment::EnvEntry::Scheme(ref scheme) = entry
@@ -82,7 +88,7 @@ impl Member {
             let (sym, entry) = if let Some((sym, entry)) = protocol_method {
                 (sym, entry)
             } else if let Some(sym) = nominal.member_symbol(&self.label) {
-                if let Some(entry) = session.term_env.lookup(sym).cloned() {
+                if let Some(entry) = session.lookup(sym) {
                     (*sym, entry)
                 } else {
                     return Err(TypeError::MemberNotFound(receiver, self.label.to_string()));
@@ -101,7 +107,7 @@ impl Member {
                         next_wants,
                         self.span,
                     );
-                    if let Ty::Func(first, box _rest) = scheme_ty.clone() {
+                    if let InferTy::Func(first, box _rest) = scheme_ty.clone() {
                         unify(&receiver, &first, substitutions, session)?;
                         unify(&ty, &scheme_ty, substitutions, session)
                     } else {
@@ -122,7 +128,7 @@ impl Member {
                 Symbol::Property(..) => {
                     tracing::trace!("got a property (row lookup)");
                     // Use the *receiver’s* row so we pick up the ctor’s instantiation.
-                    let (Ty::Record(row) | Ty::Nominal { row, .. }) = &receiver else {
+                    let (InferTy::Record(row) | InferTy::Nominal { row, .. }) = &receiver else {
                         return Err(TypeError::ExpectedRow(receiver));
                     };
 
@@ -153,37 +159,32 @@ impl Member {
                         unreachable!()
                     };
 
-                    if let Ty::Func(param, rest) = payload_ty {
+                    if let InferTy::Func(param, rest) = payload_ty {
                         // It's an instance method on the enum. Strip `self` like struct methods.
                         unify(&receiver, &param, substitutions, session)?;
-                        let applied = if !matches!(*rest, Ty::Func(..)) {
-                            Ty::Func(Box::new(Ty::Void), rest)
+                        let applied = if !matches!(*rest, InferTy::Func(..)) {
+                            InferTy::Func(Box::new(InferTy::Void), rest)
                         } else {
                             *rest
                         };
                         return unify(&ty, &applied, substitutions, session);
                     }
 
-                    let mut row = Row::Empty(TypeDefKind::Enum);
+                    let mut row = InferRow::Empty(TypeDefKind::Enum);
                     for (label, sym) in variants.iter() {
-                        let base_vty = match session
-                            .term_env
-                            .lookup(sym)
-                            .expect("variant missing")
-                            .clone()
-                        {
+                        let base_vty = match session.lookup(sym).expect("variant missing").clone() {
                             EnvEntry::Mono(t) => t,
                             EnvEntry::Scheme(s) => s.ty,
                         };
                         let vty = instantiate_ty(base_vty, &inst_subs, level);
-                        row = Row::Extend {
+                        row = InferRow::Extend {
                             row: Box::new(row),
                             label: label.clone(),
                             ty: vty,
                         };
                     }
 
-                    let result_enum = Ty::Nominal {
+                    let result_enum = InferTy::Nominal {
                         id: *type_id,
                         row: Box::new(row),
                         type_args: vec![],
@@ -191,13 +192,15 @@ impl Member {
 
                     // 3) Build the constructor’s type from payload → result_enum
                     let ctor_ty = match &payload_ty {
-                        Ty::Primitive(Primitive::Void) => result_enum.clone(),
-                        Ty::Tuple(items) if items.is_empty() => result_enum.clone(),
-                        Ty::Tuple(items) if items.len() == 1 => {
-                            Ty::Func(Box::new(items[0].clone()), Box::new(result_enum.clone()))
+                        InferTy::Primitive(Primitive::Void) => result_enum.clone(),
+                        InferTy::Tuple(items) if items.is_empty() => result_enum.clone(),
+                        InferTy::Tuple(items) if items.len() == 1 => {
+                            InferTy::Func(Box::new(items[0].clone()), Box::new(result_enum.clone()))
                         }
-                        Ty::Tuple(items) => curry(items.clone(), result_enum.clone()),
-                        other => Ty::Func(Box::new(other.clone()), Box::new(result_enum.clone())),
+                        InferTy::Tuple(items) => curry(items.clone(), result_enum.clone()),
+                        other => {
+                            InferTy::Func(Box::new(other.clone()), Box::new(result_enum.clone()))
+                        }
                     };
 
                     unify(&ty, &ctor_ty, substitutions, session)
@@ -206,7 +209,7 @@ impl Member {
                     unreachable!("other: {other:?}");
                 }
             }
-        } else if let Ty::Record(row) = receiver {
+        } else if let InferTy::Record(row) = receiver {
             next_wants._has_field(
                 *row.clone(),
                 self.label.clone(),

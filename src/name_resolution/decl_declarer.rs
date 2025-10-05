@@ -5,7 +5,7 @@ use crate::{
     name::Name,
     name_resolution::{
         name_resolver::{NameResolver, NameResolverError, Scope},
-        symbol::{Symbol, TypeId},
+        symbol::Symbol,
     },
     node_id::NodeID,
     node_kinds::{
@@ -35,10 +35,104 @@ pub struct DeclDeclarer<'a> {
     pub(super) resolver: &'a mut NameResolver,
 }
 
+// Dummy values for symbol type discrimination - actual values created by declare()
 #[macro_export]
 macro_rules! some {
-    ($case:ident) => {
-        Symbol::$case(0u32.into())
+    (Type) => {
+        $crate::name_resolution::symbol::Symbol::Type($crate::name_resolution::symbol::TypeId::new(
+            $crate::compiling::module::ModuleId::Current,
+            0,
+        ))
+    };
+    (Global) => {
+        $crate::name_resolution::symbol::Symbol::Global(
+            $crate::name_resolution::symbol::GlobalId::new(
+                $crate::compiling::module::ModuleId::Current,
+                0,
+            ),
+        )
+    };
+    (Protocol) => {
+        $crate::name_resolution::symbol::Symbol::Protocol(
+            $crate::name_resolution::symbol::ProtocolId::new(
+                $crate::compiling::module::ModuleId::Current,
+                0,
+            ),
+        )
+    };
+    (Variant) => {
+        $crate::name_resolution::symbol::Symbol::Variant(
+            $crate::name_resolution::symbol::VariantId::new(
+                $crate::compiling::module::ModuleId::Current,
+                0,
+            ),
+        )
+    };
+    (Property) => {
+        $crate::name_resolution::symbol::Symbol::Property(
+            $crate::name_resolution::symbol::PropertyId::new(
+                $crate::compiling::module::ModuleId::Current,
+                0,
+            ),
+        )
+    };
+    (InstanceMethod) => {
+        $crate::name_resolution::symbol::Symbol::InstanceMethod(
+            $crate::name_resolution::symbol::InstanceMethodId::new(
+                $crate::compiling::module::ModuleId::Current,
+                0,
+            ),
+        )
+    };
+    (StaticMethod) => {
+        $crate::name_resolution::symbol::Symbol::StaticMethod(
+            $crate::name_resolution::symbol::StaticMethodId::new(
+                $crate::compiling::module::ModuleId::Current,
+                0,
+            ),
+        )
+    };
+    (AssociatedType) => {
+        $crate::name_resolution::symbol::Symbol::AssociatedType(
+            $crate::name_resolution::symbol::AssociatedTypeId::new(
+                $crate::compiling::module::ModuleId::Current,
+                0,
+            ),
+        )
+    };
+    (Builtin) => {
+        $crate::name_resolution::symbol::Symbol::Builtin(
+            $crate::name_resolution::symbol::BuiltinId::new(
+                $crate::compiling::module::ModuleId::Prelude,
+                0,
+            ),
+        )
+    };
+    // Local-only symbols (simple tuple structs)
+    (TypeParameter) => {
+        $crate::name_resolution::symbol::Symbol::TypeParameter(
+            $crate::name_resolution::symbol::TypeParameterId(0),
+        )
+    };
+    (DeclaredLocal) => {
+        $crate::name_resolution::symbol::Symbol::DeclaredLocal(
+            $crate::name_resolution::symbol::DeclaredLocalId(0),
+        )
+    };
+    (ParamLocal) => {
+        $crate::name_resolution::symbol::Symbol::ParamLocal(
+            $crate::name_resolution::symbol::ParamLocalId(0),
+        )
+    };
+    (PatternBindLocal) => {
+        $crate::name_resolution::symbol::Symbol::PatternBindLocal(
+            $crate::name_resolution::symbol::PatternBindLocalId(0),
+        )
+    };
+    (Synthesized) => {
+        $crate::name_resolution::symbol::Symbol::Synthesized(
+            $crate::name_resolution::symbol::SynthesizedId(0),
+        )
     };
 }
 
@@ -253,7 +347,7 @@ impl<'a> DeclDeclarer<'a> {
                     panic!("can't define a typealias with generics");
                 }
 
-                *lhs_name = self.resolver.declare(lhs_name, Symbol::Type(TypeId(0)));
+                *lhs_name = self.resolver.declare(lhs_name, some!(Type));
             }
         );
 

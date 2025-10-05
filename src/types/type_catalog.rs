@@ -10,7 +10,6 @@ use crate::{
     types::{
         fields::Associated,
         passes::dependencies_pass::{Conformance, ConformanceRequirement},
-        scheme::Scheme,
     },
 };
 
@@ -85,7 +84,6 @@ pub struct TypeCatalog {
     pub nominals: FxHashMap<Symbol, Nominal>,
     pub protocols: FxHashMap<ProtocolId, Protocol>,
     pub conformances: FxHashMap<ConformanceKey, Conformance>,
-    pub aliases: FxHashMap<Symbol, Scheme>,
 }
 
 impl Nominal {

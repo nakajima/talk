@@ -5,14 +5,12 @@ use crate::{
     span::Span,
     types::{
         constraints::constraint::ConstraintCause,
-        passes::{
-            dependencies_pass::ConformanceRequirement,
-            inference_pass::Meta,
-        },
+        infer_row::{InferRow, RowParamId},
+        infer_ty::{InferTy, Level, TypeParamId},
+        passes::{dependencies_pass::ConformanceRequirement, inference_pass::Meta},
         predicate::Predicate,
-        row::{Row, RowParamId},
         term_environment::EnvEntry,
-        ty::{Level, Ty, TypeParamId},
+        ty::{SomeType, Ty},
         type_operations::{
             InstantiationSubstitutions, UnificationSubstitutions, instantiate_ty, substitute,
         },
@@ -28,14 +26,24 @@ pub enum ForAll {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Scheme {
+pub struct Scheme<T: SomeType> {
     pub(super) foralls: Vec<ForAll>,
-    pub(super) predicates: Vec<Predicate>,
-    pub(super) ty: Ty,
+    pub(super) predicates: Vec<Predicate<T>>,
+    pub(super) ty: T,
 }
 
-impl Scheme {
-    pub fn new(foralls: Vec<ForAll>, predicates: Vec<Predicate>, ty: Ty) -> Self {
+impl Scheme<InferTy> {
+    pub fn new(foralls: Vec<ForAll>, predicates: Vec<Predicate<InferTy>>, ty: InferTy) -> Self {
+        Self {
+            foralls,
+            predicates,
+            ty,
+        }
+    }
+}
+
+impl Scheme<Ty> {
+    pub fn new(foralls: Vec<ForAll>, predicates: Vec<Predicate<Ty>>, ty: Ty) -> Self {
         assert!(
             !ty.contains_var(),
             "Scheme ty cannot contain type/row meta vars: {ty:?}"
@@ -47,21 +55,24 @@ impl Scheme {
             ty,
         }
     }
+}
 
+impl Scheme<InferTy> {
     pub fn inference_instantiate(
         &self,
         session: &mut TypeSession,
         level: Level,
         wants: &mut Wants,
         span: Span,
-    ) -> (Ty, InstantiationSubstitutions) {
+    ) -> (InferTy, InstantiationSubstitutions) {
         // Map each quantified meta id to a fresh meta at this use-site level
         let mut substitutions = InstantiationSubstitutions::default();
 
         for forall in &self.foralls {
             match forall {
                 ForAll::Ty(param) => {
-                    let Ty::UnificationVar { id: meta, .. } = session.new_ty_meta_var(level) else {
+                    let InferTy::UnificationVar { id: meta, .. } = session.new_ty_meta_var(level)
+                    else {
                         unreachable!()
                     };
                     tracing::trace!("instantiating {param:?} with {meta:?}");
@@ -77,8 +88,10 @@ impl Scheme {
                                 .expect("didn't get protocol bound");
 
                             let mut substitutions = FxHashMap::default();
-                            substitutions
-                                .insert(Ty::Param(*param), Ty::UnificationVar { id: meta, level });
+                            substitutions.insert(
+                                InferTy::Param(*param),
+                                InferTy::UnificationVar { id: meta, level },
+                            );
 
                             for (label, requirement) in &protocol.requirements {
                                 tracing::trace!("adding {label} requirement to {meta:?}");
@@ -89,11 +102,8 @@ impl Scheme {
                                     );
                                 };
 
-                                let entry = session
-                                    .term_env
-                                    .lookup(sym)
-                                    .cloned()
-                                    .expect("didn't get requirement entry");
+                                let entry =
+                                    session.lookup(sym).expect("didn't get requirement entry");
 
                                 let ty = match entry {
                                     EnvEntry::Mono(ty) => ty.clone(),
@@ -101,7 +111,7 @@ impl Scheme {
                                 };
 
                                 wants.member(
-                                    Ty::UnificationVar { id: meta, level },
+                                    InferTy::UnificationVar { id: meta, level },
                                     label.clone(),
                                     substitute(ty, &substitutions),
                                     ConstraintCause::Internal,
@@ -112,7 +122,7 @@ impl Scheme {
                     }
                 }
                 ForAll::Row(param) => {
-                    let Row::Var(meta) = session.new_row_meta_var(level) else {
+                    let InferRow::Var(meta) = session.new_row_meta_var(level) else {
                         unreachable!()
                     };
                     tracing::trace!("instantiating {param:?} with {meta:?}");
@@ -141,14 +151,15 @@ impl Scheme {
         wants: &mut Wants,
         span: Span,
         unification_substitutions: &mut UnificationSubstitutions,
-    ) -> (Ty, InstantiationSubstitutions) {
+    ) -> (InferTy, InstantiationSubstitutions) {
         // Map each quantified meta id to a fresh meta at this use-site level
         let mut substitutions = InstantiationSubstitutions::default();
 
         for forall in &self.foralls {
             match forall {
                 ForAll::Ty(param) => {
-                    let Ty::UnificationVar { id: meta, .. } = session.new_ty_meta_var(level) else {
+                    let InferTy::UnificationVar { id: meta, .. } = session.new_ty_meta_var(level)
+                    else {
                         unreachable!()
                     };
 
@@ -159,7 +170,7 @@ impl Scheme {
                     substitutions.ty.insert(*param, meta);
                 }
                 ForAll::Row(param) => {
-                    let Row::Var(meta) = session.new_row_meta_var(level) else {
+                    let InferRow::Var(meta) = session.new_row_meta_var(level) else {
                         unreachable!()
                     };
                     tracing::trace!("instantiating {param:?} with {meta:?}");
@@ -187,12 +198,12 @@ impl Scheme {
 
     pub fn instantiate_with_args(
         &self,
-        args: &[(Ty, NodeID)],
+        args: &[(InferTy, NodeID)],
         session: &mut TypeSession,
         level: Level,
         wants: &mut Wants,
         span: Span,
-    ) -> Ty {
+    ) -> InferTy {
         // Map each quantified meta id to a fresh meta at this use-site level
         let mut substitutions = InstantiationSubstitutions::default();
         let (ty_foralls, row_foralls): (Vec<ForAll>, Vec<ForAll>) = self
@@ -205,7 +216,7 @@ impl Scheme {
                 unreachable!()
             };
 
-            let ty @ Ty::UnificationVar { id: meta_var, .. } = session.new_ty_meta_var(level)
+            let ty @ InferTy::UnificationVar { id: meta_var, .. } = session.new_ty_meta_var(level)
             else {
                 unreachable!();
             };
@@ -225,7 +236,7 @@ impl Scheme {
                 unreachable!();
             };
 
-            let Row::Var(row_meta) = session.new_row_meta_var(level) else {
+            let InferRow::Var(row_meta) = session.new_row_meta_var(level) else {
                 unreachable!()
             };
             substitutions.row.insert(row_param, row_meta);

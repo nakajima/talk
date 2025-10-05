@@ -1,12 +1,12 @@
 use crate::{
     span::Span,
-    types::{constraints::constraint::ConstraintCause, ty::Ty},
+    types::{constraints::constraint::ConstraintCause, infer_ty::InferTy},
 };
 
 #[derive(Debug, Clone)]
 pub struct Equals {
-    pub lhs: Ty,
-    pub rhs: Ty,
+    pub lhs: InferTy,
+    pub rhs: InferTy,
     pub cause: ConstraintCause,
     pub span: Span,
 }

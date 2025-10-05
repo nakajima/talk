@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use rustc_hash::FxHashMap;
 use tracing::instrument;
 
@@ -6,12 +8,9 @@ use crate::{
     span::Span,
     types::{
         constraints::constraint::Constraint,
-        passes::{
-            dependencies_pass::ConformanceRequirement,
-            inference_pass::Meta,
-        },
+        infer_ty::{InferTy, Level},
+        passes::{dependencies_pass::ConformanceRequirement, inference_pass::Meta},
         term_environment::EnvEntry,
-        ty::{Level, Ty},
         type_catalog::ConformanceKey,
         type_error::TypeError,
         type_operations::{UnificationSubstitutions, unify},
@@ -34,9 +33,16 @@ impl Conforms {
         next_wants: &mut Wants,
         _substitutions: &mut UnificationSubstitutions,
     ) -> Result<bool, TypeError> {
-        let conformance = session
+        let nominal = session
             .type_catalog
-            .conformances
+            .nominals
+            .get(&self.type_id.into())
+            .cloned()
+            .expect("didn't get nominal for conformance");
+
+        let mut conformances = TakeToSlot::new(&mut session.type_catalog.conformances);
+
+        let conformance = conformances
             .get_mut(&ConformanceKey {
                 protocol_id: self.protocol_id,
                 conforming_id: self.type_id.into(),
@@ -49,12 +55,6 @@ impl Conforms {
             .filter(|(_, s)| matches!(s, ConformanceRequirement::Unfulfilled(_)))
             .collect::<FxHashMap<_, _>>();
 
-        let nominal = session
-            .type_catalog
-            .nominals
-            .get(&self.type_id.into())
-            .expect("didn't get nominal for conformance");
-
         let mut still_unfulfilled = vec![];
         for (label, requirement) in unfulfilled {
             let ConformanceRequirement::Unfulfilled(req_symbol) = requirement else {
@@ -65,14 +65,14 @@ impl Conforms {
                 .member_symbol(label)
                 .expect("didn't get member impl symbol");
 
-            let Some(protocol_entry) = session.term_env.lookup(req_symbol) else {
+            let Some(protocol_entry) = session.lookup(req_symbol) else {
                 // We don't have our protocol typed yet
                 tracing::trace!("didn't get {label} requirement entry");
                 next_wants.push(Constraint::Conforms(self.clone()));
                 return Ok(false);
             };
 
-            let Some(entry) = session.term_env.lookup(impl_symbol) else {
+            let Some(entry) = session.lookup(impl_symbol) else {
                 tracing::trace!("didn't get {label} impl entry");
                 still_unfulfilled.push(label);
                 continue;
@@ -81,8 +81,8 @@ impl Conforms {
             tracing::trace!("checking {label} conformance: {protocol_entry:?} <> {entry:?}");
 
             if self.check_method_satisfaction(
-                protocol_entry,
-                entry,
+                &protocol_entry,
+                &entry,
                 session.meta_levels.clone(),
                 next_wants,
             )? {
@@ -111,18 +111,7 @@ impl Conforms {
         next_wants: &mut Wants,
     ) -> Result<bool, TypeError> {
         // This is gross. We should just make it easier to generate type vars off something that isn't a whole-ass session.
-        let mut session = TypeSession {
-            term_env: Default::default(),
-            type_catalog: Default::default(),
-            vars: Default::default(),
-            synthsized_ids: Default::default(),
-            skolem_map: Default::default(),
-            meta_levels,
-            skolem_bounds: Default::default(),
-            type_param_bounds: Default::default(),
-            types_by_node: Default::default(),
-            typealiases: Default::default(),
-        };
+        let mut session = TypeSession::new(Rc::new(Default::default()));
 
         // Instantiate both at the same level
         let level = Level(999); // High level so nothing escapes
@@ -147,21 +136,21 @@ impl Conforms {
         };
 
         let req_ty = match req_ty {
-            Ty::Func(box param, box ret) => {
+            InferTy::Func(box param, box ret) => {
                 // If the parameter is already the correct nominal, keep it;
                 // otherwise replace it with the concrete conforming nominal and a fresh row meta.
                 let adjusted_param = match param {
-                    Ty::Nominal { id, .. } if id == self.type_id => param,
+                    InferTy::Nominal { id, .. } if id == self.type_id => param,
                     _ => {
                         let row = session.new_row_meta_var(level);
-                        Ty::Nominal {
+                        InferTy::Nominal {
                             id: self.type_id,
                             row: Box::new(row),
                             type_args: vec![],
                         }
                     }
                 };
-                Ty::Func(Box::new(adjusted_param), Box::new(ret))
+                InferTy::Func(Box::new(adjusted_param), Box::new(ret))
             }
             other => other,
         };
@@ -171,6 +160,61 @@ impl Conforms {
         match unify(&req_ty, &impl_ty, &mut temp_subs, &mut session) {
             Ok(_) => Ok(true),
             Err(_) => Ok(false), // Don't propagate error, just say "doesn't conform"
+        }
+    }
+}
+use std::{
+    mem,
+    ops::{Deref, DerefMut},
+    ptr,
+};
+
+pub struct TakeToSlot<T> {
+    slot_raw_pointer: *mut T,
+    stored_value: Option<T>,
+}
+
+impl<T: Default> TakeToSlot<T> {
+    pub fn new(slot: &mut T) -> Self {
+        let value = mem::take(slot); // requires T: Default only here
+        Self {
+            slot_raw_pointer: slot as *mut T,
+            stored_value: Some(value),
+        }
+    }
+}
+
+// Optional: support non-Default T by providing a replacement explicitly
+impl<T> TakeToSlot<T> {
+    pub fn with_replacement(slot: &mut T, replacement: T) -> Self {
+        let value = mem::replace(slot, replacement);
+        Self {
+            slot_raw_pointer: slot as *mut T,
+            stored_value: Some(value),
+        }
+    }
+}
+
+impl<T> Deref for TakeToSlot<T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        self.stored_value.as_ref().unwrap()
+    }
+}
+
+impl<T> DerefMut for TakeToSlot<T> {
+    fn deref_mut(&mut self) -> &mut T {
+        self.stored_value.as_mut().unwrap()
+    }
+}
+
+impl<T> Drop for TakeToSlot<T> {
+    fn drop(&mut self) {
+        if let Some(value) = self.stored_value.take() {
+            // Move `value` back into the slot, returning and dropping the placeholder in the slot.
+            unsafe {
+                ptr::replace(self.slot_raw_pointer, value);
+            }
         }
     }
 }

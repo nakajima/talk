@@ -15,8 +15,8 @@ use crate::{
             has_field::HasField,
             member::Member,
         },
-        row::Row,
-        ty::Ty,
+        infer_row::InferRow,
+        infer_ty::InferTy,
     },
 };
 
@@ -55,9 +55,9 @@ impl Wants {
 
     pub fn construction(
         &mut self,
-        callee: Ty,
-        args: Vec<Ty>,
-        returns: Ty,
+        callee: InferTy,
+        args: Vec<InferTy>,
+        returns: InferTy,
         type_symbol: Symbol,
         cause: ConstraintCause,
         span: Span,
@@ -83,10 +83,10 @@ impl Wants {
     }
     pub fn associated_equals(
         &mut self,
-        subject: Ty,
+        subject: InferTy,
         protocol_id: ProtocolId,
         associated_type_id: AssociatedTypeId,
-        output: Ty,
+        output: InferTy,
         cause: ConstraintCause,
         span: Span,
     ) {
@@ -107,10 +107,10 @@ impl Wants {
 
     pub fn call(
         &mut self,
-        callee: Ty,
-        args: Vec<Ty>,
-        returns: Ty,
-        receiver: Option<Ty>,
+        callee: InferTy,
+        args: Vec<InferTy>,
+        returns: InferTy,
+        receiver: Option<InferTy>,
         cause: ConstraintCause,
         span: Span,
     ) {
@@ -125,7 +125,7 @@ impl Wants {
         }))
     }
 
-    pub fn equals(&mut self, lhs: Ty, rhs: Ty, cause: ConstraintCause, span: Span) {
+    pub fn equals(&mut self, lhs: InferTy, rhs: InferTy, cause: ConstraintCause, span: Span) {
         tracing::debug!("constraining equals {lhs:?} = {rhs:?}");
         self.simple.push_back(Constraint::Equals(Equals {
             lhs,
@@ -137,9 +137,9 @@ impl Wants {
 
     pub fn member(
         &mut self,
-        receiver: Ty,
+        receiver: InferTy,
         label: Label,
-        ty: Ty,
+        ty: InferTy,
         cause: ConstraintCause,
         span: Span,
     ) {
@@ -155,9 +155,9 @@ impl Wants {
 
     pub fn _has_field(
         &mut self,
-        row: Row,
+        row: InferRow,
         label: Label,
-        ty: Ty,
+        ty: InferTy,
         cause: ConstraintCause,
         span: Span,
     ) {

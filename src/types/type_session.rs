@@ -1,9 +1,12 @@
+use std::rc::Rc;
+
 use indexmap::IndexMap;
 use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::instrument;
 
 use crate::{
     ast::AST,
+    compiling::module::ModuleEnvironment,
     id_generator::IDGenerator,
     label::Label,
     name::Name,
@@ -18,6 +21,8 @@ use crate::{
         builtins::builtin_scope,
         constraints::constraint::Constraint,
         fields::{Method, TypeFields},
+        infer_row::InferRow,
+        infer_ty::{InferTy, Level, SkolemId, TypeParamId},
         kind::Kind,
         passes::{
             dependencies_pass::{DependenciesPass, SCCResolved},
@@ -25,11 +30,11 @@ use crate::{
             type_headers_pass::TypeHeaderPass,
             type_resolve_pass::TypeResolvePass,
         },
-        row::Row,
         scheme::{ForAll, Scheme},
         term_environment::{EnvEntry, TermEnv},
-        ty::{Level, SkolemId, Ty, TypeParamId},
+        ty::{SomeType, Ty},
         type_catalog::{ConformanceStub, TypeCatalog},
+        type_error::TypeError,
         type_operations::{UnificationSubstitutions, apply, apply_row, substitute},
         vars::Vars,
     },
@@ -95,25 +100,56 @@ pub struct TypeDef {
 #[derive(Debug, Clone)]
 pub struct ProtocolBound {
     pub protocol_id: ProtocolId,
-    pub args: Vec<Ty>, // concrete types the protocol is instantiated with, e.g. [Ty::Float]
+    pub args: Vec<InferTy>, // concrete types the protocol is instantiated with, e.g. [Ty::Float]
 }
 
 #[derive(Debug)]
 pub struct TypeSession {
+    pub types_by_node: FxHashMap<NodeID, InferTy>,
     pub(super) vars: Vars,
-    pub synthsized_ids: IDGenerator,
-    pub term_env: TermEnv,
-    pub meta_levels: FxHashMap<Meta, Level>,
-    pub skolem_map: FxHashMap<Ty, Ty>,
+    pub(super) synthsized_ids: IDGenerator,
+    term_env: TermEnv,
+    pub(super) meta_levels: FxHashMap<Meta, Level>,
+    pub(super) skolem_map: FxHashMap<InferTy, InferTy>,
     pub skolem_bounds: FxHashMap<SkolemId, Vec<TypeId>>,
-    pub type_param_bounds: FxHashMap<TypeParamId, Vec<ProtocolBound>>,
-    pub types_by_node: FxHashMap<NodeID, Ty>,
-    pub typealiases: FxHashMap<Symbol, Scheme>,
-    pub type_catalog: TypeCatalog,
+    pub(super) type_param_bounds: FxHashMap<TypeParamId, Vec<ProtocolBound>>,
+    pub typealiases: FxHashMap<Symbol, Scheme<InferTy>>,
+    pub(super) type_catalog: TypeCatalog,
+    pub(super) modules: Rc<ModuleEnvironment>,
+    pub aliases: FxHashMap<Symbol, Scheme<InferTy>>,
 }
 
-impl Default for TypeSession {
-    fn default() -> Self {
+pub struct Typed {}
+
+#[derive(Debug, PartialEq)]
+pub enum TypeEntry {
+    Mono(Ty),
+    Poly(Scheme<Ty>),
+}
+
+#[derive(Debug, Default)]
+pub struct Types {
+    entries: FxHashMap<NodeID, TypeEntry>,
+    symbols_to_node_ids: FxHashMap<Symbol, NodeID>,
+    pub catalog: TypeCatalog,
+}
+
+impl Types {
+    pub fn get(&self, id: &NodeID) -> Option<&TypeEntry> {
+        self.entries.get(id)
+    }
+
+    pub fn get_symbol(&self, sym: &Symbol) -> Option<&TypeEntry> {
+        let id = self
+            .symbols_to_node_ids
+            .get(sym)
+            .expect("did not get NodeID for symbol");
+        self.get(id)
+    }
+}
+
+impl TypeSession {
+    pub fn new(modules: Rc<ModuleEnvironment>) -> Self {
         let mut term_env = TermEnv {
             symbols: FxHashMap::default(),
         };
@@ -133,15 +169,54 @@ impl Default for TypeSession {
             types_by_node: Default::default(),
             typealiases: Default::default(),
             type_catalog: Default::default(),
+            modules,
+            aliases: Default::default(),
         }
     }
-}
 
-pub struct Typed {}
+    pub fn finalize(mut self) -> Result<Types, TypeError> {
+        let types_by_node = std::mem::take(&mut self.types_by_node);
+        let entries = types_by_node
+            .iter()
+            .map(|(id, ty)| {
+                let ty = substitute(ty.clone(), &self.skolem_map);
 
-impl TypeSession {
+                let ty = if ty.contains_var() {
+                    self.generalize(Level(0), ty.clone(), &[]).into()
+                } else {
+                    TypeEntry::Mono(ty.clone().into())
+                };
+
+                (*id, ty)
+            })
+            .collect();
+
+        let types = Types {
+            catalog: self.type_catalog,
+            entries,
+            ..Default::default()
+        };
+
+        Ok(types)
+    }
+
+    pub fn apply(&mut self, substitutions: &mut UnificationSubstitutions) {
+        for ty in self.types_by_node.values_mut() {
+            if matches!(ty, InferTy::Primitive(_)) {
+                continue;
+            }
+
+            *ty = apply(ty.clone(), substitutions);
+        }
+    }
+
+    pub fn get_term_env(&self) -> &TermEnv {
+        &self.term_env
+    }
+
     pub fn drive(ast: &mut AST<NameResolved>) -> TypeSession {
-        let mut session = TypeSession::default();
+        let modules = ModuleEnvironment::default();
+        let mut session = TypeSession::new(Rc::new(modules));
         let raw = TypeHeaderPass::drive(&mut session, ast);
         let _headers = TypeResolvePass::drive(ast, &mut session, raw);
         let mut scc = SCCResolved::default();
@@ -151,7 +226,7 @@ impl TypeSession {
     }
 
     #[instrument(skip(self))]
-    pub fn generalize(&mut self, inner: Level, ty: Ty, unsolved: &[Constraint]) -> EnvEntry {
+    pub fn generalize(&mut self, inner: Level, ty: InferTy, unsolved: &[Constraint]) -> EnvEntry {
         // collect metas in ty
         let mut metas = FxHashSet::default();
         collect_meta(&ty, &mut metas);
@@ -166,7 +241,7 @@ impl TypeSession {
         let mut substitutions = UnificationSubstitutions::new(self.meta_levels.clone());
         for m in &metas {
             match m {
-                Ty::Param(p) => {
+                InferTy::Param(p) => {
                     if !foralls
                         .iter()
                         .any(|fa| matches!(fa, ForAll::Ty(q) if *q == *p))
@@ -175,7 +250,7 @@ impl TypeSession {
                     }
                 }
 
-                Ty::UnificationVar { level, id } => {
+                InferTy::UnificationVar { level, id } => {
                     if *level <= inner {
                         tracing::warn!("discarding {m:?} due to level ({level:?} < {inner:?})");
                         continue;
@@ -184,11 +259,11 @@ impl TypeSession {
                     let param_id = self.vars.type_params.next_id();
                     tracing::trace!("generalizing {m:?} to {param_id:?}");
                     foralls.push(ForAll::Ty(param_id));
-                    substitutions.ty.insert(*id, Ty::Param(param_id));
+                    substitutions.ty.insert(*id, InferTy::Param(param_id));
                 }
-                Ty::Record(box Row::Var(id))
-                | Ty::Nominal {
-                    row: box Row::Var(id),
+                InferTy::Record(box InferRow::Var(id))
+                | InferTy::Nominal {
+                    row: box InferRow::Var(id),
                     ..
                 } => {
                     let level = self
@@ -203,7 +278,7 @@ impl TypeSession {
                     let param_id = self.vars.row_params.next_id();
                     tracing::trace!("generalizing {m:?} to {param_id:?}");
                     foralls.push(ForAll::Row(param_id));
-                    substitutions.row.insert(*id, Row::Param(param_id));
+                    substitutions.row.insert(*id, InferRow::Param(param_id));
                 }
                 _ => {
                     tracing::warn!("got {m:?} for var while generalizing")
@@ -215,7 +290,7 @@ impl TypeSession {
             if let Constraint::HasField(h) = c {
                 tracing::info!("got unsolved hasfield: {c:?}");
                 let r = apply_row(h.row.clone(), &mut substitutions);
-                if let Row::Var(row_meta) = r {
+                if let InferRow::Var(row_meta) = r {
                     // quantify if its level is above the binder's level
                     let lvl = *self
                         .meta_levels
@@ -224,7 +299,9 @@ impl TypeSession {
                     if lvl >= inner {
                         let param_id = self.vars.row_params.next_id();
                         foralls.push(ForAll::Row(param_id));
-                        substitutions.row.insert(row_meta, Row::Param(param_id));
+                        substitutions
+                            .row
+                            .insert(row_meta, InferRow::Param(param_id));
                     }
                 }
             }
@@ -247,14 +324,14 @@ impl TypeSession {
             })
             .collect();
 
-        EnvEntry::Scheme(Scheme::new(foralls, predicates, ty))
+        EnvEntry::Scheme(Scheme::<InferTy>::new(foralls, predicates, ty))
     }
 
     #[instrument(skip(self))]
     pub fn generalize_with_substitutions(
         &mut self,
         inner: Level,
-        ty: Ty,
+        ty: InferTy,
         unsolved: &[Constraint],
         substitutions: &mut UnificationSubstitutions,
     ) -> EnvEntry {
@@ -268,7 +345,7 @@ impl TypeSession {
         let mut foralls = vec![];
         for m in &metas {
             match m {
-                Ty::Param(p) => {
+                InferTy::Param(p) => {
                     // No substitution needed (the ty already contains Ty::Param(p)),
                     // but we must record it in `foralls`, so instantiate() knows what to replace.
                     if !foralls
@@ -279,7 +356,7 @@ impl TypeSession {
                     }
                 }
 
-                Ty::UnificationVar { level, id } => {
+                InferTy::UnificationVar { level, id } => {
                     if *level <= inner {
                         tracing::warn!("discarding {m:?} due to level ({level:?} < {inner:?})");
                         continue;
@@ -288,9 +365,9 @@ impl TypeSession {
                     let param_id = self.vars.type_params.next_id();
                     tracing::trace!("generalizing {m:?} to {param_id:?}");
                     foralls.push(ForAll::Ty(param_id));
-                    substitutions.ty.insert(*id, Ty::Param(param_id));
+                    substitutions.ty.insert(*id, InferTy::Param(param_id));
                 }
-                Ty::Record(box Row::Var(id)) => {
+                InferTy::Record(box InferRow::Var(id)) => {
                     let level = self
                         .meta_levels
                         .get(&Meta::Row(*id))
@@ -303,7 +380,7 @@ impl TypeSession {
                     let param_id = self.vars.row_params.next_id();
                     tracing::trace!("generalizing {m:?} to {param_id:?}");
                     foralls.push(ForAll::Row(param_id));
-                    substitutions.row.insert(*id, Row::Param(param_id));
+                    substitutions.row.insert(*id, InferRow::Param(param_id));
                 }
                 _ => {
                     tracing::warn!("got {m:?} for var while generalizing")
@@ -325,18 +402,18 @@ impl TypeSession {
             .map(|c| c.into_predicate(substitutions))
             .collect();
 
-        EnvEntry::Scheme(Scheme::new(foralls, predicates, ty))
+        EnvEntry::Scheme(Scheme::<InferTy>::new(foralls, predicates, ty))
     }
 
     // Handle converting Ty::TypeConstructor/Ty::TypeApplication to Ty::Nominal
-    pub(super) fn normalize_nominals(&mut self, ty: &Ty, level: Level) -> Ty {
+    pub(super) fn normalize_nominals(&mut self, ty: &InferTy, level: Level) -> InferTy {
         let normalized = match ty.clone() {
-            Ty::Nominal { .. } => ty.clone(),
-            Ty::Constructor {
+            InferTy::Nominal { .. } => ty.clone(),
+            InferTy::Constructor {
                 type_id,
                 params,
                 ret,
-            } => Ty::Constructor {
+            } => InferTy::Constructor {
                 type_id,
                 params: params
                     .into_iter()
@@ -344,22 +421,24 @@ impl TypeSession {
                     .collect(),
                 ret: self.normalize_nominals(&ret, level).into(),
             },
-            Ty::Func(box ty, box ty1) => Ty::Func(
+            InferTy::Func(box ty, box ty1) => InferTy::Func(
                 self.normalize_nominals(&ty, level).into(),
                 self.normalize_nominals(&ty1, level).into(),
             ),
-            Ty::Tuple(items) => Ty::Tuple(
+            InferTy::Tuple(items) => InferTy::Tuple(
                 items
                     .into_iter()
                     .map(|i| self.normalize_nominals(&i, level))
                     .collect(),
             ),
-            Ty::Record(row) => Ty::Record(self.normalize_nominals_row(&row, level).into()),
-            ty @ (Ty::Hole(..)
-            | Ty::Primitive(..)
-            | Ty::Param(..)
-            | Ty::Rigid(..)
-            | Ty::UnificationVar { .. }) => ty,
+            InferTy::Record(row) => {
+                InferTy::Record(self.normalize_nominals_row(&row, level).into())
+            }
+            ty @ (InferTy::Hole(..)
+            | InferTy::Primitive(..)
+            | InferTy::Param(..)
+            | InferTy::Rigid(..)
+            | InferTy::UnificationVar { .. }) => ty,
         };
 
         #[cfg(debug_assertions)]
@@ -370,9 +449,51 @@ impl TypeSession {
         normalized
     }
 
-    pub(super) fn normalize_nominals_row(&mut self, row: &Row, level: Level) -> Row {
-        if let Row::Extend { box row, label, ty } = row.clone() {
-            return Row::Extend {
+    #[instrument(skip(self))]
+    pub(super) fn lookup(&mut self, sym: &Symbol) -> Option<EnvEntry> {
+        if let Some(entry) = self.term_env.lookup(sym).cloned() {
+            return Some(entry);
+        }
+
+        if let Some(module_id) = sym.module_id()
+            && let Some(module) = self.modules.modules.get(&module_id)
+        {
+            println!("looking up {:?} in {:?}", sym.current(), module.types);
+            let entry = module
+                .types
+                .term_env
+                .lookup(&sym.current())
+                .cloned()
+                .expect("did not get external symbol");
+            println!("found entry: {entry:?}");
+            let entry = match entry.clone() {
+                EnvEntry::Mono(t) => {
+                    println!("generalizing {t:?}");
+                    self.generalize(Level(0), t.clone(), &[])
+                }
+                EnvEntry::Scheme(..) => entry,
+            };
+
+            let entry = entry.import(module_id);
+            self.term_env.insert(*sym, entry.clone());
+            println!("imported ty: {entry:?}");
+            return Some(entry);
+        }
+
+        None
+    }
+
+    pub(super) fn insert_term(&mut self, sym: Symbol, entry: EnvEntry) {
+        self.term_env.insert(sym, entry);
+    }
+
+    pub(super) fn insert_mono(&mut self, sym: Symbol, ty: InferTy) {
+        self.term_env.insert(sym, EnvEntry::Mono(ty));
+    }
+
+    pub(super) fn normalize_nominals_row(&mut self, row: &InferRow, level: Level) -> InferRow {
+        if let InferRow::Extend { box row, label, ty } = row.clone() {
+            return InferRow::Extend {
                 row: self.normalize_nominals_row(&row, level).into(),
                 label,
                 ty: self.normalize_nominals(&ty, level),
@@ -382,34 +503,34 @@ impl TypeSession {
         row.clone()
     }
 
-    pub(crate) fn new_type_param(&mut self) -> Ty {
+    pub(crate) fn new_type_param(&mut self) -> InferTy {
         let id = self.vars.type_params.next_id();
         tracing::trace!("Fresh type param {id:?}");
-        Ty::Param(id)
+        InferTy::Param(id)
     }
 
-    pub(crate) fn new_skolem(&mut self) -> Ty {
+    pub(crate) fn new_skolem(&mut self) -> InferTy {
         let id = self.vars.skolems.next_id();
         tracing::trace!("Fresh skolem {id:?}");
-        Ty::Rigid(id)
+        InferTy::Rigid(id)
     }
 
-    pub(crate) fn new_ty_meta_var(&mut self, level: Level) -> Ty {
+    pub(crate) fn new_ty_meta_var(&mut self, level: Level) -> InferTy {
         let id = self.vars.ty_metas.next_id();
         self.meta_levels.insert(Meta::Ty(id), level);
         tracing::trace!("Fresh {id:?}");
-        Ty::UnificationVar { id, level }
+        InferTy::UnificationVar { id, level }
     }
 
-    pub(crate) fn new_row_meta_var(&mut self, level: Level) -> Row {
+    pub(crate) fn new_row_meta_var(&mut self, level: Level) -> InferRow {
         let id = self.vars.row_metas.next_id();
         self.meta_levels.insert(Meta::Row(id), level);
         tracing::trace!("Fresh {id:?}");
-        Row::Var(id)
+        InferRow::Var(id)
     }
 }
 
-fn collect_metas_in_constraint(constraint: &Constraint, out: &mut FxHashSet<Ty>) {
+fn collect_metas_in_constraint(constraint: &Constraint, out: &mut FxHashSet<InferTy>) {
     match constraint {
         Constraint::Equals(equals) => {
             collect_meta(&equals.lhs, out);
