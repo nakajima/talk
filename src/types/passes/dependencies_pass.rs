@@ -10,7 +10,7 @@ use crate::{
     name_resolution::{
         name_resolver::NameResolved,
         symbol::{
-            self, AssociatedTypeId, DeclaredLocalId, GlobalId, InstanceMethodId, ProtocolId,
+            AssociatedTypeId, DeclaredLocalId, GlobalId, InstanceMethodId, ProtocolId,
             StaticMethodId, Symbol,
         },
     },

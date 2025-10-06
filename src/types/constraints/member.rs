@@ -181,14 +181,14 @@ impl Member {
                             match tail {
                                 RowTail::Var(_) | RowTail::Param(_) => {
                                     next_wants.push(Constraint::Member(self.clone()));
-                                    return Ok(false);
+                                    Ok(false)
                                 }
                                 RowTail::Empty => {
                                     // Closed but label not present → real error.
-                                    return Err(TypeError::MemberNotFound(
+                                    Err(TypeError::MemberNotFound(
                                         receiver.clone(),
                                         self.label.to_string(),
-                                    ));
+                                    ))
                                 }
                             }
                         }
@@ -202,10 +202,10 @@ impl Member {
                                 self.cause,
                                 self.span,
                             );
-                            return Ok(true);
+                            Ok(true)
                         }
 
-                        other => return Err(TypeError::ExpectedRow(other.clone())),
+                        other => Err(TypeError::ExpectedRow(other.clone())),
                     }
                 }
                 Symbol::Variant(_) => {

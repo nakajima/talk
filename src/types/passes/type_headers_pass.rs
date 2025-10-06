@@ -1,6 +1,6 @@
 use crate::{
     ast::AST,
-    compiling::module::ModuleId,
+    compiling::{driver::Source, module::ModuleId},
     label::Label,
     name::Name,
     name_resolution::{
@@ -96,7 +96,7 @@ impl<'a> TypeHeaderPass<'a> {
 
     pub fn drive_all(
         session: &mut TypeSession,
-        asts: &FxHashMap<std::path::PathBuf, AST<NameResolved>>,
+        asts: &FxHashMap<Source, AST<NameResolved>>,
     ) -> Raw {
         let mut raw = Raw::default();
 

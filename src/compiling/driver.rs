@@ -28,17 +28,17 @@ impl DriverPhase for Initial {}
 
 impl DriverPhase for Parsed {}
 pub struct Parsed {
-    pub asts: FxHashMap<PathBuf, AST<ast::Parsed>>,
+    pub asts: FxHashMap<Source, AST<ast::Parsed>>,
 }
 
 impl DriverPhase for NameResolved {}
 pub struct NameResolved {
-    pub asts: FxHashMap<PathBuf, AST<name_resolver::NameResolved>>,
+    pub asts: FxHashMap<Source, AST<name_resolver::NameResolved>>,
 }
 
 impl DriverPhase for Typed {}
 pub struct Typed {
-    pub asts: FxHashMap<PathBuf, AST<name_resolver::NameResolved>>,
+    pub asts: FxHashMap<Source, AST<name_resolver::NameResolved>>,
     pub type_session: TypeSession,
 }
 
@@ -53,14 +53,57 @@ pub struct DriverConfig {
     modules: Rc<ModuleEnvironment>,
 }
 
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+pub enum SourceKind {
+    File(PathBuf),
+    String(String),
+}
+
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+pub struct Source {
+    kind: SourceKind,
+}
+
+impl From<PathBuf> for Source {
+    fn from(value: PathBuf) -> Self {
+        Source {
+            kind: SourceKind::File(value),
+        }
+    }
+}
+
+impl From<&str> for Source {
+    fn from(value: &str) -> Self {
+        Source {
+            kind: SourceKind::String(value.to_string()),
+        }
+    }
+}
+
+impl Source {
+    pub fn path(&self) -> &str {
+        match &self.kind {
+            SourceKind::File(path) => path.to_str().unwrap(),
+            SourceKind::String(..) => ":memory:",
+        }
+    }
+
+    pub fn read(&self) -> Result<String, CompileError> {
+        match &self.kind {
+            SourceKind::File(path) => std::fs::read_to_string(path).map_err(CompileError::IO),
+            SourceKind::String(string) => Ok(string.to_string()),
+        }
+    }
+}
+
 pub struct Driver<Phase: DriverPhase = Initial> {
-    files: Vec<PathBuf>,
+    files: Vec<Source>,
     config: DriverConfig,
     phase: Phase,
 }
 
 impl Driver {
-    pub fn new(files: Vec<PathBuf>, config: DriverConfig) -> Self {
+    pub fn new(files: Vec<Source>, config: DriverConfig) -> Self {
         Self {
             files,
             phase: Initial {},
@@ -69,13 +112,13 @@ impl Driver {
     }
 
     pub fn parse(self) -> Result<Driver<Parsed>, CompileError> {
-        let mut asts = FxHashMap::default();
+        let mut asts: FxHashMap<Source, AST<_>> = FxHashMap::default();
 
         for (i, file) in self.files.iter().enumerate() {
-            let input = std::fs::read_to_string(file).map_err(CompileError::IO)?;
+            let input = file.read()?;
             let lexer = Lexer::new(&input);
             tracing::info!("parsing {file:?}");
-            let parser = Parser::new(file.clone().to_string_lossy(), FileID(i as u32), lexer);
+            let parser = Parser::new(file.path(), FileID(i as u32), lexer);
             asts.insert(file.clone(), parser.parse().map_err(CompileError::Parsing)?);
         }
 
@@ -154,8 +197,8 @@ pub mod tests {
     fn typechecks_multiple_files() {
         let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let paths = vec![
-            current_dir.join("test/fixtures/a.tlk"),
-            current_dir.join("test/fixtures/b.tlk"),
+            Source::from(current_dir.join("test/fixtures/a.tlk")),
+            Source::from(current_dir.join("test/fixtures/b.tlk")),
         ];
 
         let driver = Driver::new(paths, Default::default());
@@ -167,11 +210,10 @@ pub mod tests {
             .typecheck()
             .unwrap();
 
-        println!("{:?}", typed.phase.asts.keys().collect::<Vec<_>>());
         let ast = typed
             .phase
             .asts
-            .get(&current_dir.join("test/fixtures/b.tlk"))
+            .get(&current_dir.join("test/fixtures/b.tlk").into())
             .unwrap();
 
         assert_eq!(
@@ -184,8 +226,8 @@ pub mod tests {
     fn typechecks_multiple_files_out_of_order() {
         let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let paths = vec![
-            current_dir.join("test/fixtures/b.tlk"),
-            current_dir.join("test/fixtures/a.tlk"),
+            Source::from(current_dir.join("test/fixtures/b.tlk")),
+            Source::from(current_dir.join("test/fixtures/a.tlk")),
         ];
 
         let driver = Driver::new(paths, Default::default());
@@ -197,11 +239,10 @@ pub mod tests {
             .typecheck()
             .unwrap();
 
-        println!("{:?}", typed.phase.asts.keys().collect::<Vec<_>>());
         let ast = typed
             .phase
             .asts
-            .get(&current_dir.join("test/fixtures/b.tlk"))
+            .get(&Source::from(current_dir.join("test/fixtures/b.tlk")))
             .unwrap();
 
         assert_eq!(
@@ -215,7 +256,7 @@ pub mod tests {
         let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
         let driver_a = Driver::new(
-            vec![current_dir.join("test/fixtures/protocol.tlk")],
+            vec![Source::from(current_dir.join("test/fixtures/protocol.tlk"))],
             Default::default(),
         );
         let type_session_a = driver_a
@@ -227,8 +268,6 @@ pub mod tests {
             .unwrap()
             .phase
             .type_session;
-
-        println!("type_session_a: {type_session_a:?}");
 
         let module_a = Module {
             name: "A".into(),
@@ -246,7 +285,9 @@ pub mod tests {
         };
 
         let driver_b = Driver::new(
-            vec![current_dir.join("test/fixtures/conformance.tlk")],
+            vec![Source::from(
+                current_dir.join("test/fixtures/conformance.tlk"),
+            )],
             config,
         );
 
@@ -260,7 +301,9 @@ pub mod tests {
         let ast = typed
             .phase
             .asts
-            .get(&current_dir.join("test/fixtures/conformance.tlk"))
+            .get(&Source::from(
+                current_dir.join("test/fixtures/conformance.tlk"),
+            ))
             .unwrap();
 
         assert_eq!(
@@ -274,7 +317,7 @@ pub mod tests {
         let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
         let driver_a = Driver::new(
-            vec![current_dir.join("test/fixtures/a.tlk")],
+            vec![Source::from(current_dir.join("test/fixtures/a.tlk"))],
             Default::default(),
         );
         let type_session_a = driver_a
@@ -286,8 +329,6 @@ pub mod tests {
             .unwrap()
             .phase
             .type_session;
-
-        println!("type_session_a: {type_session_a:?}");
 
         let module_a = Module {
             name: "A".into(),
@@ -301,7 +342,10 @@ pub mod tests {
             modules: Rc::new(module_environment),
         };
 
-        let driver_b = Driver::new(vec![current_dir.join("test/fixtures/b.tlk")], config);
+        let driver_b = Driver::new(
+            vec![Source::from(current_dir.join("test/fixtures/b.tlk"))],
+            config,
+        );
 
         let typed = driver_b
             .parse()
@@ -313,7 +357,7 @@ pub mod tests {
         let ast = typed
             .phase
             .asts
-            .get(&current_dir.join("test/fixtures/b.tlk"))
+            .get(&Source::from(current_dir.join("test/fixtures/b.tlk")))
             .unwrap();
 
         assert_eq!(
