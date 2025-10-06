@@ -51,7 +51,7 @@ impl Call {
 
         match &self.callee {
             InferTy::Constructor { type_id: id, .. } => {
-                let Some(nominal) = session.type_catalog.nominals.get(&id.into()) else {
+                let Some(nominal) = session.lookup_nominal(*id) else {
                     panic!("type not found in catalog");
                 };
 

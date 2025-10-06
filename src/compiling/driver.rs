@@ -189,6 +189,7 @@ pub mod tests {
         compiling::module::{Module, ModuleId},
         fxhashmap,
         name_resolution::symbol::{GlobalId, ProtocolId, Symbol, TypeId},
+        node_id::NodeID,
         types::{ty::Ty, types_tests},
     };
     use std::path::PathBuf;
@@ -362,6 +363,75 @@ pub mod tests {
 
         assert_eq!(
             types_tests::tests::ty(1, ast, &typed.phase.type_session.finalize().unwrap()),
+            Ty::Int
+        );
+    }
+
+    #[test]
+    fn compiles_from_string() {
+        let driver_a = Driver::new(
+            vec![Source::from(
+                "
+            struct Hello {
+                let x: Int
+            }
+            ",
+            )],
+            Default::default(),
+        );
+
+        let name_resolved = driver_a.parse().unwrap().resolve_names().unwrap();
+
+        let exports =
+            name_resolved
+                .phase
+                .asts
+                .values()
+                .fold(FxHashMap::default(), |mut acc, ast| {
+                    println!("scopes: {:?}", ast.phase.scopes);
+                    let root = ast.phase.scopes.get(&NodeID(FileID(0), 0)).unwrap();
+                    for (string, sym) in root.types.iter() {
+                        acc.insert(string.to_string(), *sym);
+                    }
+
+                    for (string, sym) in root.values.iter() {
+                        acc.insert(string.to_string(), *sym);
+                    }
+
+                    acc
+                });
+
+        let type_session_a = name_resolved.typecheck().unwrap().phase.type_session;
+
+        let module_a = Module {
+            name: "A".into(),
+            types: type_session_a.finalize().unwrap(),
+            exports,
+        };
+
+        let mut module_environment = ModuleEnvironment::default();
+        module_environment.import(ModuleId::External(0), module_a);
+        let config = DriverConfig {
+            modules: Rc::new(module_environment),
+        };
+
+        let driver_b = Driver::new(vec![Source::from("Hello(x: 123).x")], config);
+
+        let typed = driver_b
+            .parse()
+            .unwrap()
+            .resolve_names()
+            .unwrap()
+            .typecheck()
+            .unwrap();
+        let ast = typed
+            .phase
+            .asts
+            .get(&Source::from("Hello(x: 123).x"))
+            .unwrap();
+
+        assert_eq!(
+            types_tests::tests::ty(0, ast, &typed.phase.type_session.finalize().unwrap()),
             Ty::Int
         );
     }

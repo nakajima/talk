@@ -37,7 +37,7 @@ impl Construction {
             todo!()
         };
 
-        let Some(nominal) = session.type_catalog.nominals.get(&type_id.into()).cloned() else {
+        let Some(nominal) = session.lookup_nominal(type_id) else {
             return Err(TypeError::TypeNotFound("".into()));
         };
 

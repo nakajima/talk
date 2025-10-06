@@ -572,10 +572,10 @@ impl<'a> InferencePass<'a> {
             }
             DeclKind::Struct {
                 body,
-                name: Name::Resolved(sym @ Symbol::Type(..), name),
+                name: Name::Resolved(Symbol::Type(id), name),
                 ..
             } => {
-                let Some(struct_type) = self.session.type_catalog.nominals.get(sym) else {
+                let Some(struct_type) = self.session.lookup_nominal(*id) else {
                     self.ast
                         .diagnostics
                         .push(crate::diagnostic::AnyDiagnostic::Typing(Diagnostic {
@@ -925,8 +925,7 @@ impl<'a> InferencePass<'a> {
                 ret: InferTy::Void.into(),
             },
             ExprKind::RowVariable(..) => todo!(),
-
-            _ => todo!(),
+            _ => todo!("what is this expr even: {expr:?}"),
         };
 
         // // record the type for this expression node

@@ -116,22 +116,23 @@ impl NameResolver {
             modules,
         };
 
-        // Create root scope and import builtins once
-        use crate::node_id::FileID;
-        let root_scope = Scope::new(NodeID(FileID(0), 0), None, 1);
-        resolver.scopes.insert(NodeID(FileID(0), 0), root_scope);
-        resolver.current_scope_id = Some(NodeID(FileID(0), 0));
+        resolver.init_root_scope();
+        resolver
+    }
 
-        let scope = resolver
+    fn init_root_scope(&mut self) {
+        let root_scope = Scope::new(NodeID(FileID(0), 0), None, 1);
+        self.scopes.insert(NodeID(FileID(0), 0), root_scope);
+        self.current_scope_id = Some(NodeID(FileID(0), 0));
+    }
+
+    pub fn resolve(&mut self, mut asts: Vec<AST<Parsed>>) -> Vec<AST<NameResolved>> {
+        let scope = self
             .scopes
             .get_mut(&NodeID(FileID(0), 0))
             .expect("root scope");
         builtins::import_builtins(scope);
 
-        resolver
-    }
-
-    pub fn resolve(&mut self, mut asts: Vec<AST<Parsed>>) -> Vec<AST<NameResolved>> {
         // First pass: run transforms and declare all types
         for ast in &mut asts {
             LowerFuncsToLets::run(ast);
@@ -175,6 +176,8 @@ impl NameResolver {
                 diagnostics.push(diagnostic.into());
             }
 
+            self.phase.scopes = self.scopes.clone();
+
             out.push(AST {
                 path,
                 roots,
@@ -206,7 +209,10 @@ impl NameResolver {
     }
 
     fn lookup_in_scope(&mut self, name: &Name, scope_id: NodeID) -> Option<Symbol> {
-        let scope = self.scopes.get_mut(&scope_id).expect("scope not found");
+        let scope = self
+            .scopes
+            .get_mut(&scope_id)
+            .unwrap_or_else(|| panic!("scope not found: {scope_id:?}"));
 
         if let Some(symbol) = scope.types.get(&name.name_str()) {
             return Some(*symbol);
