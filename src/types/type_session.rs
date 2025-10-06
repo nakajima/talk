@@ -581,12 +581,7 @@ impl TypeSession {
     }
 
     pub(super) fn lookup_protocol(&mut self, protocol_id: ProtocolId) -> Option<Protocol> {
-        if let Some(entry) = self
-            .type_catalog
-            .protocols
-            .get(&protocol_id.into())
-            .cloned()
-        {
+        if let Some(entry) = self.type_catalog.protocols.get(&protocol_id).cloned() {
             return Some(entry);
         }
 
