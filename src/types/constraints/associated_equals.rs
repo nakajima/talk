@@ -10,7 +10,7 @@ use crate::{
         infer_row::normalize_row,
         infer_ty::{InferTy, Level},
         term_environment::EnvEntry,
-        type_catalog::{ConformanceKey, NominalForm},
+        type_catalog::ConformanceKey,
         type_error::TypeError,
         type_operations::{UnificationSubstitutions, apply, unify},
         type_session::TypeSession,
@@ -39,7 +39,7 @@ impl AssociatedEquals {
     ) -> Result<bool, TypeError> {
         let subject = apply(self.subject.clone(), substitutions);
         let InferTy::Nominal {
-            id: subject_id,
+            symbol: subject_id,
             row: box subject_row,
             ..
         } = &subject
@@ -51,7 +51,7 @@ impl AssociatedEquals {
 
         let key = ConformanceKey {
             protocol_id: self.protocol_id,
-            conforming_id: subject_id.into(),
+            conforming_id: subject_id,
         };
         let Some(conformance) = session.type_catalog.conformances.get(&key).cloned() else {
             next_wants.push(Constraint::AssociatedEquals(self.clone()));
@@ -71,20 +71,14 @@ impl AssociatedEquals {
         {
             let (subject_fields, _tail) = normalize_row(subject_row.clone(), substitutions);
 
-            if let Some(nominal) = session
-                .type_catalog
-                .nominals
-                .get(&subject_id.into())
-                .cloned()
-                && let NominalForm::Struct { properties, .. } = &nominal.form
-            {
+            if let Some(properties) = session.type_catalog.properties.get(&subject_id).cloned() {
                 let alias_param = match &scheme.ty {
                     InferTy::Param(p) => *p,
                     _ => unreachable!(),
                 };
 
                 'scan_props: for (label, property_symbol) in properties {
-                    if let Some(property_entry) = session.lookup(property_symbol) {
+                    if let Some(property_entry) = session.lookup(&property_symbol) {
                         let declared_property_type = match property_entry {
                             EnvEntry::Mono(t) => t.clone(),
                             EnvEntry::Scheme(s) => s.ty.clone(),
@@ -104,7 +98,7 @@ impl AssociatedEquals {
                             continue;
                         }
 
-                        if let Some(actual_field_type) = subject_fields.get(label).cloned() {
+                        if let Some(actual_field_type) = subject_fields.get(&label).cloned() {
                             reified_witness_type = Some(actual_field_type);
                             break 'scan_props;
                         }

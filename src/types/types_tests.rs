@@ -924,7 +924,7 @@ pub mod tests {
         assert_eq!(
             ty(1, &ast, &types),
             Ty::Nominal {
-                id: TypeId::from(1),
+                symbol: TypeId::from(1).into(),
                 row: Box::new(make_row!(Struct, "age" => Ty::Int, "height" => Ty::Float)),
                 type_args: vec![],
             }
@@ -1103,7 +1103,7 @@ pub mod tests {
         assert_eq!(
             *ty,
             TypeEntry::Mono(Ty::Nominal {
-                id: TypeId::from(1),
+                symbol: TypeId::from(1).into(),
                 type_args: vec![Ty::Int],
                 row: make_row!(Struct, "value" => Ty::Int).into()
             })
@@ -1200,7 +1200,7 @@ pub mod tests {
         assert_eq!(
             ty(1, &ast, &types),
             Ty::Nominal {
-                id: TypeId::from(1),
+                symbol: TypeId::from(1).into(),
                 row: Box::new(make_row!(Enum, "foo" => Ty::Void, "bar" => Ty::Void)),
                 type_args: vec![]
             }
@@ -1208,7 +1208,7 @@ pub mod tests {
         assert_eq!(
             ty(2, &ast, &types),
             Ty::Nominal {
-                id: TypeId::from(1),
+                symbol: TypeId::from(1).into(),
                 row: Box::new(make_row!(Enum, "foo" => Ty::Void, "bar" => Ty::Void)),
                 type_args: vec![]
             }
@@ -1231,7 +1231,7 @@ pub mod tests {
         assert_eq!(
             ty(1, &ast, &types),
             Ty::Nominal {
-                id: TypeId::from(1),
+                symbol: TypeId::from(1).into(),
                 row: Box::new(
                     make_row!(Enum, "foo" => Ty::Tuple(vec![Ty::Int, Ty::Bool]), "bar" => Ty::Float)
                 ),
@@ -1241,7 +1241,7 @@ pub mod tests {
         assert_eq!(
             ty(2, &ast, &types),
             Ty::Nominal {
-                id: TypeId::from(1),
+                symbol: TypeId::from(1).into(),
                 row: Box::new(
                     make_row!(Enum, "foo" => Ty::Tuple(vec![Ty::Int, Ty::Bool]), "bar" => Ty::Float)
                 ),
@@ -1267,7 +1267,7 @@ pub mod tests {
         assert_eq!(
             ty(1, &ast, &types),
             Ty::Nominal {
-                id: TypeId::from(1),
+                symbol: TypeId::from(1).into(),
                 row: Box::new(make_row!(Enum, "some" => Ty::Int, "none" => Ty::Void)),
                 type_args: vec![]
             }
@@ -1275,7 +1275,7 @@ pub mod tests {
         assert_eq!(
             ty(2, &ast, &types),
             Ty::Nominal {
-                id: TypeId::from(1),
+                symbol: TypeId::from(1).into(),
                 row: Box::new(make_row!(Enum, "some" => Ty::Float, "none" => Ty::Void)),
                 type_args: vec![]
             }
@@ -1283,7 +1283,7 @@ pub mod tests {
         assert_eq!(
             ty(3, &ast, &types),
             Ty::Nominal {
-                id: TypeId::from(1),
+                symbol: TypeId::from(1).into(),
                 row: Box::new(make_row!(Enum, "some" => Ty::Param(3.into()), "none" => Ty::Void)),
                 type_args: vec![]
             }
@@ -1496,5 +1496,22 @@ pub mod tests {
 
         assert_eq!(ty(4, &ast, &types), Ty::Float);
         assert_eq!(ty(5, &ast, &types), Ty::Int);
+    }
+
+    #[test]
+    fn can_extend_builtins() {
+        let (ast, types) = typecheck(
+            "
+        protocol Foo {
+            func foo() -> Int
+        }
+        extend Int: Foo {
+            func foo() { 123 }
+        }
+        1.foo()
+        ",
+        );
+
+        assert_eq!(ty(2, &ast, &types), Ty::Int);
     }
 }

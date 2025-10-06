@@ -4,7 +4,7 @@ use rustc_hash::FxHashMap;
 use tracing::instrument;
 
 use crate::{
-    name_resolution::symbol::{ProtocolId, TypeId},
+    name_resolution::symbol::{ProtocolId, Symbol},
     span::Span,
     types::{
         constraints::constraint::Constraint,
@@ -21,7 +21,7 @@ use crate::{
 
 #[derive(Debug, Clone)]
 pub struct Conforms {
-    pub type_id: TypeId,
+    pub symbol: Symbol,
     pub protocol_id: ProtocolId,
     pub span: Span,
 }
@@ -33,19 +33,11 @@ impl Conforms {
         next_wants: &mut Wants,
         _substitutions: &mut UnificationSubstitutions,
     ) -> Result<bool, TypeError> {
-        let nominal = session
-            .type_catalog
-            .nominals
-            .get(&self.type_id.into())
-            .cloned()
-            .expect("didn't get nominal for conformance");
-
         let mut conformances = TakeToSlot::new(&mut session.type_catalog.conformances);
-
         let conformance = conformances
             .get_mut(&ConformanceKey {
                 protocol_id: self.protocol_id,
-                conforming_id: self.type_id.into(),
+                conforming_id: self.symbol,
             })
             .expect("didn't get conformance");
 
@@ -61,8 +53,8 @@ impl Conforms {
                 unreachable!()
             };
 
-            let impl_symbol = nominal
-                .member_symbol(label)
+            let impl_symbol = session
+                .lookup_member(&self.symbol, label)
                 .expect("didn't get member impl symbol");
 
             let Some(protocol_entry) = session.lookup(req_symbol) else {
@@ -72,7 +64,7 @@ impl Conforms {
                 return Ok(false);
             };
 
-            let Some(entry) = session.lookup(impl_symbol) else {
+            let Some(entry) = session.lookup(&impl_symbol) else {
                 tracing::trace!("didn't get {label} impl entry");
                 still_unfulfilled.push(label);
                 continue;
@@ -87,7 +79,7 @@ impl Conforms {
                 next_wants,
             )? {
                 *requirement = ConformanceRequirement::Fulfilled {
-                    symbol: *impl_symbol,
+                    symbol: impl_symbol,
                 }
             } else {
                 still_unfulfilled.push(label)
@@ -140,11 +132,11 @@ impl Conforms {
                 // If the parameter is already the correct nominal, keep it;
                 // otherwise replace it with the concrete conforming nominal and a fresh row meta.
                 let adjusted_param = match param {
-                    InferTy::Nominal { id, .. } if id == self.type_id => param,
+                    InferTy::Nominal { symbol, .. } if symbol == self.symbol => param,
                     _ => {
                         let row = session.new_row_meta_var(level);
                         InferTy::Nominal {
-                            id: self.type_id,
+                            symbol: self.symbol,
                             row: Box::new(row),
                             type_args: vec![],
                         }

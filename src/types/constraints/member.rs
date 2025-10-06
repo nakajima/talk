@@ -8,10 +8,9 @@ use crate::{
             constraint::{Constraint, ConstraintCause},
         },
         infer_row::{InferRow, RowTail, normalize_row},
-        infer_ty::{InferTy, Level, Primitive},
+        infer_ty::{InferTy, Level},
         passes::{dependencies_pass::ConformanceRequirement, inference_pass::curry},
         term_environment::EnvEntry,
-        type_catalog::NominalForm,
         type_error::TypeError,
         type_operations::{
             InstantiationSubstitutions, UnificationSubstitutions, instantiate_ty, unify,
@@ -56,15 +55,15 @@ impl Member {
             return Ok(false);
         }
 
-        if let InferTy::Nominal { id: type_id, .. } | InferTy::Constructor { type_id, .. } =
-            &receiver
-            && let Some(nominal) = session.lookup_nominal(*type_id)
+        if let InferTy::Nominal { symbol, .. }
+        | InferTy::Constructor { symbol, .. }
+        | InferTy::Primitive(symbol) = &receiver
         {
             // First, check if any conforming protocols have this method with predicates
             let mut protocol_method = None;
             let conformances = TakeToSlot::new(&mut session.type_catalog.conformances);
             for conformance_key in conformances.keys() {
-                if conformance_key.conforming_id == (*type_id).into() {
+                if conformance_key.conforming_id == *symbol {
                     let protocol_id = conformance_key.protocol_id;
                     if let Some(protocol) = session.lookup_protocol(protocol_id)
                         && let Some(requirement) = protocol.requirements.get(&self.label)
@@ -86,9 +85,9 @@ impl Member {
             // Use protocol method if found, otherwise use the nominal's method
             let (sym, entry) = if let Some((sym, entry)) = protocol_method {
                 (sym, entry)
-            } else if let Some(sym) = nominal.member_symbol(&self.label) {
-                if let Some(entry) = session.lookup(sym) {
-                    (*sym, entry)
+            } else if let Some(sym) = session.lookup_member(symbol, &self.label) {
+                if let Some(entry) = session.lookup(&sym) {
+                    (sym, entry)
                 } else {
                     return Err(TypeError::MemberNotFound(receiver, self.label.to_string()));
                 }
@@ -220,10 +219,6 @@ impl Member {
                         ),
                     };
 
-                    let NominalForm::Enum { variants, .. } = &nominal.form else {
-                        unreachable!()
-                    };
-
                     if let InferTy::Func(param, rest) = payload_ty {
                         // It's an instance method on the enum. Strip `self` like struct methods.
                         unify(&receiver, &param, substitutions, session)?;
@@ -234,6 +229,13 @@ impl Member {
                         };
                         return unify(&ty, &applied, substitutions, session);
                     }
+
+                    let variants = session
+                        .type_catalog
+                        .variants
+                        .get(symbol)
+                        .cloned()
+                        .unwrap_or_default();
 
                     let mut row = InferRow::Empty(TypeDefKind::Enum);
                     for (label, sym) in variants.iter() {
@@ -250,14 +252,14 @@ impl Member {
                     }
 
                     let result_enum = InferTy::Nominal {
-                        id: *type_id,
+                        symbol: *symbol,
                         row: Box::new(row),
                         type_args: vec![],
                     };
 
                     // 3) Build the constructor’s type from payload → result_enum
                     let ctor_ty = match &payload_ty {
-                        InferTy::Primitive(Primitive::Void) => result_enum.clone(),
+                        InferTy::Primitive(Symbol::Void) => result_enum.clone(),
                         InferTy::Tuple(items) if items.is_empty() => result_enum.clone(),
                         InferTy::Tuple(items) if items.len() == 1 => {
                             InferTy::Func(Box::new(items[0].clone()), Box::new(result_enum.clone()))

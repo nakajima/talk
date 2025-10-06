@@ -7,7 +7,6 @@ use crate::{
         infer_ty::{InferTy, Level},
         passes::inference_pass::curry,
         term_environment::EnvEntry,
-        type_catalog::NominalForm,
         type_error::TypeError,
         type_operations::{UnificationSubstitutions, instantiate_ty, unify},
         type_session::{TypeDefKind, TypeSession},
@@ -33,22 +32,13 @@ impl Construction {
         next_wants: &mut Wants,
         substitutions: &mut UnificationSubstitutions,
     ) -> Result<bool, TypeError> {
-        let Symbol::Type(type_id) = self.type_symbol else {
-            todo!()
-        };
+        let initializers = session
+            .lookup_initializers(&self.type_symbol)
+            .unwrap_or_else(|| panic!("didn't get initializers for {:?}", self.type_symbol));
 
-        let Some(nominal) = session.lookup_nominal(type_id) else {
-            return Err(TypeError::TypeNotFound("".into()));
-        };
-
-        let NominalForm::Struct {
-            initializers,
-            properties,
-            ..
-        } = &nominal.form
-        else {
-            return Err(TypeError::TypeConstructorNotFound(type_id));
-        };
+        let properties = session
+            .lookup_properties(&self.type_symbol)
+            .expect("didn't get properties");
 
         let Some((_, init_sym)) = initializers.iter().next() else {
             unreachable!("didn't synthesize init");
@@ -67,7 +57,7 @@ impl Construction {
 
         let mut row = InferRow::Empty(TypeDefKind::Struct);
         for (label, ty_sym) in properties {
-            let entry = session.lookup(ty_sym).ok_or_else(|| {
+            let entry = session.lookup(&ty_sym).ok_or_else(|| {
                 TypeError::MemberNotFound(self.returns.clone(), label.to_string())
             })?;
 
@@ -86,7 +76,7 @@ impl Construction {
         }
 
         let instance = InferTy::Nominal {
-            id: type_id,
+            symbol: self.type_symbol,
             type_args: vec![],
             row: Box::new(row),
         };

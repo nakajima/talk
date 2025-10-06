@@ -1,9 +1,6 @@
 use crate::{
-    name_resolution::symbol::TypeId,
-    types::{
-        infer_ty::{Primitive, TypeParamId},
-        row::Row,
-    },
+    name_resolution::symbol::Symbol,
+    types::{infer_ty::TypeParamId, row::Row},
 };
 
 pub trait SomeType: std::fmt::Debug + PartialEq + Clone {
@@ -19,10 +16,10 @@ impl SomeType for Ty {
 // Finalized type info
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub enum Ty {
-    Primitive(Primitive),
+    Primitive(Symbol),
     Param(TypeParamId),
     Constructor {
-        type_id: TypeId,
+        symbol: Symbol,
         params: Vec<Ty>,
         ret: Box<Ty>,
     },
@@ -33,7 +30,7 @@ pub enum Ty {
 
     // Nominal types (we look up their information from the TypeCatalog)
     Nominal {
-        id: TypeId,
+        symbol: Symbol,
         type_args: Vec<Ty>,
         row: Box<Row>,
     },
@@ -41,8 +38,8 @@ pub enum Ty {
 
 #[allow(non_upper_case_globals)]
 impl Ty {
-    pub const Int: Ty = Ty::Primitive(Primitive::Int);
-    pub const Float: Ty = Ty::Primitive(Primitive::Float);
-    pub const Bool: Ty = Ty::Primitive(Primitive::Bool);
-    pub const Void: Ty = Ty::Primitive(Primitive::Void);
+    pub const Int: Ty = Ty::Primitive(Symbol::Int);
+    pub const Float: Ty = Ty::Primitive(Symbol::Float);
+    pub const Bool: Ty = Ty::Primitive(Symbol::Bool);
+    pub const Void: Ty = Ty::Primitive(Symbol::Void);
 }
