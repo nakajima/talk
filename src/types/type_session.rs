@@ -74,13 +74,13 @@ pub struct Raw {
     pub annotations: FxHashMap<NodeID, ASTTyRepr>,
     pub typealiases: FxHashMap<NodeID, (Name, TypeAnnotation)>,
     pub extensions: FxHashMap<Symbol, Vec<TypeExtension>>,
+    pub instance_methods: IndexMap<Symbol, FxHashMap<Label, Method>>,
 }
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct TypeExtension {
     pub node_id: NodeID,
     pub conformances: Vec<ConformanceStub>,
-    pub methods: IndexMap<Label, Method>,
     pub static_methods: IndexMap<Label, Method>,
 }
 

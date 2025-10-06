@@ -159,29 +159,31 @@ impl<'a> TypeResolvePass<'a> {
             TypeFields::Enum {
                 variants,
                 static_methods,
-                instance_methods: methods,
             } => {
                 let variants = self.resolve_variants(variants);
+                let instance_methods =
+                    self.resolve_instance_methods(type_def.name.symbol().unwrap());
 
                 NominalForm::Enum {
                     variants,
-                    instance_methods: self.resolve_instance_methods(methods),
+                    instance_methods,
                     static_methods: self.resolve_static_methods(static_methods),
                 }
             }
             TypeFields::Struct {
                 initializers,
                 static_methods,
-                instance_methods: methods,
                 properties,
             } => {
                 let properties = self.resolve_properties(properties);
                 let initializers = self.resolve_initializers(type_def, initializers);
+                let instance_methods =
+                    self.resolve_instance_methods(type_def.name.symbol().unwrap());
 
                 NominalForm::Struct {
                     initializers,
                     properties,
-                    instance_methods: self.resolve_instance_methods(methods),
+                    instance_methods,
                     static_methods: self.resolve_static_methods(static_methods),
                 }
             }
@@ -210,7 +212,6 @@ impl<'a> TypeResolvePass<'a> {
 
         let TypeFields::Protocol {
             static_methods,
-            instance_methods: methods,
             method_requirements,
             associated_types,
         } = &type_def.fields
@@ -218,7 +219,7 @@ impl<'a> TypeResolvePass<'a> {
             unreachable!()
         };
 
-        let methods = self.resolve_instance_methods(methods);
+        let instance_methods = self.resolve_instance_methods(type_def.name.symbol().unwrap());
         let method_requirements = self.resolve_method_requirements(method_requirements);
         let mut requirements = FxHashMap::default();
         for method_requirement in method_requirements {
@@ -232,7 +233,7 @@ impl<'a> TypeResolvePass<'a> {
 
         Ok(Protocol {
             node_id: type_def.node_id,
-            methods,
+            methods: instance_methods,
             requirements,
             static_methods: self.resolve_static_methods(static_methods),
             associated_types: associated_types.clone(),
@@ -258,7 +259,7 @@ impl<'a> TypeResolvePass<'a> {
             self.session.insert_term(*sym, entry.into());
         }
 
-        let mut form = self.resolve_form(type_def);
+        let form = self.resolve_form(type_def);
         let symbol = type_def.name.symbol().unwrap();
         let Symbol::Type(type_id) = &symbol else {
             unreachable!();
@@ -283,11 +284,10 @@ impl<'a> TypeResolvePass<'a> {
             .get(&symbol)
             .cloned()
             .unwrap_or_default();
-        println!("extensions: {extensions:?}");
         let extensions = extensions
             .iter()
             .map(|extension| {
-                form.extend_methods(self.resolve_instance_methods(&extension.methods));
+                // form.extend_methods(self.resolve_instance_methods(&extension.methods));
                 Extension {
                     conformances: extension.conformances.clone(),
                     node_id: extension.node_id,
@@ -401,12 +401,16 @@ impl<'a> TypeResolvePass<'a> {
         resolved_methods
     }
 
-    fn resolve_instance_methods(
-        &mut self,
-        methods: &IndexMap<Label, Method>,
-    ) -> FxHashMap<Label, Symbol> {
+    fn resolve_instance_methods(&mut self, symbol: Symbol) -> FxHashMap<Label, Symbol> {
+        let Some(instance_methods) = self.raw.instance_methods.get(&symbol) else {
+            panic!(
+                "didn't get instance methods for symbol: {symbol:?} in {:?}",
+                self.raw.instance_methods
+            );
+        };
+
         let mut resolved_methods = FxHashMap::default();
-        for (name, method) in methods {
+        for (name, method) in instance_methods.clone() {
             let mut predicates = vec![];
             let mut foralls = vec![];
             let params: Vec<_> = method

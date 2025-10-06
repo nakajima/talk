@@ -103,6 +103,7 @@ impl<'a> TypeHeaderPass<'a> {
             raw.annotations.extend(file_raw.annotations);
             raw.typealiases.extend(file_raw.typealiases);
             raw.extensions.extend(file_raw.extensions);
+            raw.instance_methods.extend(file_raw.instance_methods);
         }
 
         raw
@@ -220,10 +221,8 @@ impl<'a> TypeHeaderPass<'a> {
 
                 self.type_stack.push(*sym);
 
-                let TypeFields::Extension {
-                    static_methods,
-                    instance_methods: methods,
-                } = self.collect_fields(name, decl.id, decl.span, TypeDefKind::Extension, body)
+                let TypeFields::Extension { static_methods } =
+                    self.collect_fields(name, decl.id, decl.span, TypeDefKind::Extension, body)
                 else {
                     unreachable!()
                 };
@@ -235,7 +234,6 @@ impl<'a> TypeHeaderPass<'a> {
                     .push(TypeExtension {
                         node_id: decl.id,
                         conformances: Self::collect_conformance_stubs(*sym, conformances),
-                        methods,
                         static_methods,
                     });
             }
@@ -633,24 +631,32 @@ impl<'a> TypeHeaderPass<'a> {
             );
         }
 
+        println!(
+            "inserting instance methods for {:?}: {instance_methods:?}",
+            type_name.symbol()
+        );
+
+        let methods = self
+            .raw
+            .instance_methods
+            .entry(type_name.symbol().unwrap())
+            .or_default();
+        methods.extend(instance_methods);
+
+        println!("{:?}", self.raw.instance_methods);
+
         match type_kind {
-            TypeDefKind::Extension => TypeFields::Extension {
-                instance_methods,
-                static_methods,
-            },
+            TypeDefKind::Extension => TypeFields::Extension { static_methods },
             TypeDefKind::Struct => TypeFields::Struct {
                 initializers,
-                instance_methods,
                 static_methods,
                 properties,
             },
             TypeDefKind::Enum => TypeFields::Enum {
                 variants,
-                instance_methods,
                 static_methods,
             },
             TypeDefKind::Protocol => TypeFields::Protocol {
-                instance_methods,
                 static_methods,
                 associated_types,
                 method_requirements,
@@ -735,7 +741,6 @@ pub mod tests {
                             ]
                         }
                     },
-                    instance_methods: Default::default(),
                     properties: crate::indexmap!(
                         "age".into() => Property {
                             symbol: Symbol::Property(PropertyId::from(1)),
@@ -766,7 +771,6 @@ pub mod tests {
             vec![TypeExtension {
                 node_id: NodeID::ANY,
                 conformances: Default::default(),
-                methods: Default::default(),
                 static_methods: Default::default(),
             }]
         );
@@ -792,7 +796,6 @@ pub mod tests {
                             ]
                         }
                     },
-                    instance_methods: Default::default(),
                     properties: Default::default()
                 }
             }
@@ -843,7 +846,6 @@ pub mod tests {
                             ASTTyRepr::Hole(NodeID(FileID(0), 4), Span::ANY)
                         ]
                     }),
-                    instance_methods: Default::default(),
                     properties: crate::indexmap!("wrapped".into() => Property {
                         symbol: Symbol::Property(PropertyId::from(1)),
                         is_static: false,
@@ -914,7 +916,6 @@ pub mod tests {
                             ]
                         }
                     },
-                    instance_methods: Default::default(),
                     properties: crate::indexmap!("wrapped".into() => Property {
                         symbol: Symbol::Property(PropertyId::from(1)),
                         is_static: false,
@@ -967,7 +968,6 @@ pub mod tests {
                         },
                         "bar".into() =>  Variant { symbol: Symbol::Variant(VariantId::from(2)), tag: "bar".into(), fields: vec![] }
                     ),
-                    instance_methods: Default::default()
                 }
             }
         );
@@ -997,7 +997,6 @@ pub mod tests {
                 generics: Default::default(),
                 conformances: Default::default(),
                 fields: TypeFields::Protocol {
-                    instance_methods: Default::default(),
                     static_methods: Default::default(),
                     method_requirements: crate::indexmap!("foo".into() => MethodRequirement {
                         id: NodeID::ANY,
@@ -1061,7 +1060,6 @@ pub mod tests {
                             ]
                         }
                     },
-                    instance_methods: Default::default(),
                     static_methods: Default::default(),
                     properties: Default::default()
                 }
