@@ -7,7 +7,7 @@ use crate::{
             conforms::TakeToSlot,
             constraint::{Constraint, ConstraintCause},
         },
-        infer_row::InferRow,
+        infer_row::{InferRow, RowTail, normalize_row},
         infer_ty::{InferTy, Level, Primitive},
         passes::{dependencies_pass::ConformanceRequirement, inference_pass::curry},
         term_environment::EnvEntry,
@@ -58,7 +58,7 @@ impl Member {
 
         if let InferTy::Nominal { id: type_id, .. } | InferTy::Constructor { type_id, .. } =
             &receiver
-            && let Some(nominal) = session.type_catalog.nominals.get(&type_id.into()).cloned()
+            && let Some(nominal) = session.lookup_nominal(*type_id)
         {
             // First, check if any conforming protocols have this method with predicates
             let mut protocol_method = None;
@@ -66,8 +66,7 @@ impl Member {
             for conformance_key in conformances.keys() {
                 if conformance_key.conforming_id == (*type_id).into() {
                     let protocol_id = conformance_key.protocol_id;
-                    if let Some(protocol) =
-                        session.type_catalog.protocols.get(&protocol_id).cloned()
+                    if let Some(protocol) = session.lookup_protocol(protocol_id)
                         && let Some(requirement) = protocol.requirements.get(&self.label)
                         && let ConformanceRequirement::Unfulfilled(req_sym) = requirement
                         && let Some(entry) = session.lookup(req_sym)
@@ -126,22 +125,88 @@ impl Member {
                     unify(&ty, &scheme_ty, substitutions, session)
                 }
                 Symbol::Property(..) => {
-                    tracing::trace!("got a property (row lookup)");
-                    // Use the *receiver’s* row so we pick up the ctor’s instantiation.
-                    let (InferTy::Record(row) | InferTy::Nominal { row, .. }) = &receiver else {
-                        return Err(TypeError::ExpectedRow(receiver));
-                    };
-
-                    // Apply current subs to normalize any Row::Var links produced by the ctor unification.
-                    next_wants._has_field(
-                        *row.clone(),
-                        self.label.clone(),
-                        ty.clone(),
-                        self.cause,
+                    // Instantiate the declared property type (generic-aware).
+                    let scheme_ty = entry.solver_instantiate(
+                        session,
+                        level,
+                        substitutions,
+                        next_wants,
                         self.span,
                     );
 
-                    Ok(true)
+                    use crate::types::ty::SomeType;
+
+                    // If the property entry instantiated to a fully concrete type (no metas/params),
+                    // just solve now: result == scheme_ty. This covers cross-module monomorphic props like A.count : Int.
+                    let is_concrete = match &scheme_ty {
+                        InferTy::Primitive(_) => true,
+                        InferTy::Tuple(items) => items.iter().all(|t| !t.contains_var()),
+                        InferTy::Nominal { row, type_args, .. } => {
+                            !InferTy::Record(row.clone()).contains_var()
+                                && type_args.iter().all(|t| !t.contains_var())
+                        }
+                        _ => !scheme_ty.contains_var(),
+                    };
+
+                    if is_concrete {
+                        // Optional: if receiver is a nominal and its row already exposes a concrete field,
+                        // keep scheme and row consistent too.
+                        if let InferTy::Nominal { row, .. } = &receiver {
+                            let (fields, _tail) = crate::types::infer_row::normalize_row(
+                                (**row).clone(),
+                                substitutions,
+                            );
+                            if let Some(field_ty) = fields.get(&self.label).cloned() {
+                                let _ = unify(&scheme_ty, &field_ty, substitutions, session);
+                            }
+                        }
+                        return unify(&ty, &scheme_ty, substitutions, session);
+                    }
+
+                    match &receiver {
+                        // 1) Nominal receiver: prefer the row when it’s informative.
+                        InferTy::Nominal { row, .. } => {
+                            let (fields, tail) = normalize_row((**row).clone(), substitutions);
+
+                            if let Some(field_ty) = fields.get(&self.label).cloned() {
+                                // We know the concrete field type now → solve eagerly.
+                                unify(&ty, &field_ty, substitutions, session)?;
+                                // Keep scheme_ty consistent with the concrete field (handles generic T).
+                                unify(&scheme_ty, &field_ty, substitutions, session)?;
+                                return Ok(true);
+                            }
+
+                            // Row is still open (e.g., Self inside the method), so DO NOT collapse to an
+                            // unconstrained fresh meta. Defer to become a predicate on the method scheme.
+                            match tail {
+                                RowTail::Var(_) | RowTail::Param(_) => {
+                                    next_wants.push(Constraint::Member(self.clone()));
+                                    return Ok(false);
+                                }
+                                RowTail::Empty => {
+                                    // Closed but label not present → real error.
+                                    return Err(TypeError::MemberNotFound(
+                                        receiver.clone(),
+                                        self.label.to_string(),
+                                    ));
+                                }
+                            }
+                        }
+
+                        // 2) Record receiver: use row constraints as before.
+                        InferTy::Record(row) => {
+                            next_wants._has_field(
+                                *row.clone(),
+                                self.label.clone(),
+                                ty.clone(),
+                                self.cause,
+                                self.span,
+                            );
+                            return Ok(true);
+                        }
+
+                        other => return Err(TypeError::ExpectedRow(other.clone())),
+                    }
                 }
                 Symbol::Variant(_) => {
                     let (payload_ty, inst_subs) = match entry {

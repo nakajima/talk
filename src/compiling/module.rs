@@ -1,6 +1,6 @@
 use rustc_hash::FxHashMap;
 
-use crate::{name_resolution::symbol::Symbol, types::type_session::TypeSession};
+use crate::{name_resolution::symbol::Symbol, types::type_session::Types};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
 pub enum ModuleId {
@@ -26,6 +26,6 @@ impl ModuleEnvironment {
 #[derive(Debug)]
 pub struct Module {
     pub name: String,
-    pub types: TypeSession,
+    pub types: Types,
     pub exports: FxHashMap<String, Symbol>,
 }

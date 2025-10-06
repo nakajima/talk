@@ -116,10 +116,11 @@ impl<'a> TypeHeaderPass<'a> {
 
         if matches!(
             &annotation.kind,
-            TypeAnnotationKind::Nominal {
-                name: Name::Resolved(Symbol::AssociatedType(..), ..),
-                ..
-            }
+            TypeAnnotationKind::SelfType(..)
+                | TypeAnnotationKind::Nominal {
+                    name: Name::Resolved(Symbol::AssociatedType(..), ..),
+                    ..
+                }
         ) {
             return;
         }

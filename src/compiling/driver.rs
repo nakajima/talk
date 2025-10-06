@@ -145,7 +145,7 @@ pub mod tests {
     use crate::{
         compiling::module::{Module, ModuleId},
         fxhashmap,
-        name_resolution::symbol::{Symbol, TypeId},
+        name_resolution::symbol::{GlobalId, ProtocolId, Symbol, TypeId},
         types::{ty::Ty, types_tests},
     };
     use std::path::PathBuf;
@@ -211,7 +211,65 @@ pub mod tests {
     }
 
     #[test]
-    #[ignore = "stack overflowing for now"]
+    fn conformances_across_modules() {
+        let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+
+        let driver_a = Driver::new(
+            vec![current_dir.join("test/fixtures/protocol.tlk")],
+            Default::default(),
+        );
+        let type_session_a = driver_a
+            .parse()
+            .unwrap()
+            .resolve_names()
+            .unwrap()
+            .typecheck()
+            .unwrap()
+            .phase
+            .type_session;
+
+        println!("type_session_a: {type_session_a:?}");
+
+        let module_a = Module {
+            name: "A".into(),
+            types: type_session_a.finalize().unwrap(),
+            exports: fxhashmap!(
+                "P".into() => Symbol::Protocol(ProtocolId::from(1)),
+                "getRequired".into() => Symbol::Global(GlobalId::from(1))
+            ),
+        };
+
+        let mut module_environment = ModuleEnvironment::default();
+        module_environment.import(ModuleId::External(0), module_a);
+        let config = DriverConfig {
+            modules: Rc::new(module_environment),
+        };
+
+        let driver_b = Driver::new(
+            vec![current_dir.join("test/fixtures/conformance.tlk")],
+            config,
+        );
+
+        let typed = driver_b
+            .parse()
+            .unwrap()
+            .resolve_names()
+            .unwrap()
+            .typecheck()
+            .unwrap();
+        let ast = typed
+            .phase
+            .asts
+            .get(&current_dir.join("test/fixtures/conformance.tlk"))
+            .unwrap();
+
+        assert_eq!(
+            types_tests::tests::ty(2, ast, &typed.phase.type_session.finalize().unwrap()),
+            Ty::Int
+        );
+    }
+
+    #[test]
     fn compiles_module() {
         let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
@@ -233,7 +291,7 @@ pub mod tests {
 
         let module_a = Module {
             name: "A".into(),
-            types: type_session_a,
+            types: type_session_a.finalize().unwrap(),
             exports: fxhashmap!("A".into() => Symbol::Type(TypeId::from(1))),
         };
 

@@ -114,6 +114,15 @@ pub mod tests {
                 "hello".into()
             )))
         );
+
+        assert_eq!(
+            *tree
+                .phase
+                .symbols_to_node
+                .get(&Symbol::Global(GlobalId::from(1)))
+                .unwrap(),
+            NodeID(FileID(0), 1)
+        );
     }
 
     #[test]

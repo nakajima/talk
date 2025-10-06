@@ -73,6 +73,7 @@ pub struct NameResolved {
     pub captures: FxHashMap<NodeID, FxHashSet<Symbol>>,
     pub is_captured: FxHashSet<Symbol>,
     pub scopes: FxHashMap<NodeID, Scope>,
+    pub symbols_to_node: FxHashMap<Symbol, NodeID>,
 }
 
 pub type ScopeId = Index;
@@ -231,9 +232,7 @@ impl NameResolver {
         }
 
         for (id, module) in self.modules.modules.iter() {
-            if module.name == name.name_str()
-                && let Some(sym) = module.exports.get(&name.name_str())
-            {
+            if let Some(sym) = module.exports.get(&name.name_str()) {
                 return Some(sym.import(*id));
             }
         }
@@ -267,7 +266,7 @@ impl NameResolver {
         self.current_scope_id = current_scope.parent_id;
     }
 
-    pub(super) fn declare(&mut self, name: &Name, kind: Symbol) -> Name {
+    pub(super) fn declare(&mut self, name: &Name, kind: Symbol, node_id: NodeID) -> Name {
         let scope = self
             .scopes
             .get_mut(&self.current_scope_id.expect("no scope to declare in"))
@@ -301,11 +300,14 @@ impl NameResolver {
             }
         };
 
+        self.phase.symbols_to_node.insert(symbol, node_id);
+
         tracing::debug!(
             "declare type {} -> {symbol:?} {:?}",
             name.name_str(),
             self.current_scope_id
         );
+
         scope.types.insert(name.name_str(), symbol);
 
         Name::Resolved(symbol, name.name_str())
@@ -445,7 +447,7 @@ impl NameResolver {
             self.enter_scope(decl.id);
 
             for param in params {
-                param.name = self.declare(&param.name, some!(ParamLocal));
+                param.name = self.declare(&param.name, some!(ParamLocal), param.id);
             }
         })
     }

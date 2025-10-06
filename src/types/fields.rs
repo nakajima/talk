@@ -2,6 +2,7 @@ use indexmap::IndexMap;
 use rustc_hash::FxHashMap;
 
 use crate::{
+    compiling::module::ModuleId,
     label::Label,
     name::Name,
     name_resolution::symbol::{ProtocolId, Symbol, TypeId},
@@ -79,4 +80,13 @@ pub struct Variant {
 pub struct Associated {
     pub protocol_id: ProtocolId,
     pub symbol: Symbol,
+}
+
+impl Associated {
+    pub fn import(self, module_id: ModuleId) -> Associated {
+        Self {
+            protocol_id: self.protocol_id.import(module_id),
+            symbol: self.symbol.import(module_id),
+        }
+    }
 }

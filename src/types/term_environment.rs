@@ -59,6 +59,19 @@ impl From<EnvEntry> for TypeEntry {
     }
 }
 
+impl From<TypeEntry> for EnvEntry {
+    fn from(value: TypeEntry) -> Self {
+        match value {
+            TypeEntry::Mono(ty) => EnvEntry::Mono(ty.into()),
+            TypeEntry::Poly(scheme) => EnvEntry::Scheme(Scheme {
+                foralls: scheme.foralls,
+                predicates: scheme.predicates.into_iter().map(|p| p.into()).collect(),
+                ty: scheme.ty.into(),
+            }),
+        }
+    }
+}
+
 impl EnvEntry {
     pub fn apply(&self, substitutions: &mut UnificationSubstitutions) -> Self {
         match self.clone() {
@@ -101,6 +114,13 @@ impl EnvEntry {
                     .solver_instantiate(session, level, wants, span, substitutions)
                     .0
             }
+        }
+    }
+
+    pub(super) fn _as_ty(&self) -> InferTy {
+        match self {
+            EnvEntry::Mono(ty) => ty.clone(),
+            EnvEntry::Scheme(scheme) => scheme.ty.clone(),
         }
     }
 

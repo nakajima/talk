@@ -114,16 +114,12 @@ impl<'a> TypeResolvePass<'a> {
         for (conformance_key, span) in self.conformance_keys.iter() {
             let ty = self
                 .session
-                .type_catalog
-                .nominals
-                .get(&conformance_key.conforming_id)
+                .lookup_nominal(conformance_key.conforming_id.into())
                 .unwrap();
 
             let protocol = self
                 .session
-                .type_catalog
-                .protocols
-                .get(&conformance_key.protocol_id)
+                .lookup_protocol(conformance_key.protocol_id)
                 .unwrap();
 
             let associated_types = protocol
@@ -640,16 +636,11 @@ impl<'a> TypeResolvePass<'a> {
                 self.session.insert_term(*sym, entry.clone());
                 entry.into()
             }
-            TypeAnnotationKind::SelfType(Name::Resolved(Symbol::Protocol(..), ..)) => {
-                let Some(sym) = self.self_symbols.last() else {
-                    unreachable!("didn't get self symbol for protocol");
-                };
-
-                self.session
-                    .lookup(sym)
-                    .expect("didn't get self entry")
-                    .into()
-            }
+            TypeAnnotationKind::SelfType(Name::Resolved(sym @ Symbol::Protocol(..), ..)) => self
+                .session
+                .lookup(sym)
+                .expect("didn't get self entry")
+                .into(),
             TypeAnnotationKind::Func { .. } => todo!(),
             TypeAnnotationKind::Tuple(..) => todo!(),
             TypeAnnotationKind::Nominal {

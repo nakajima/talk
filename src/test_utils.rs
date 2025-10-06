@@ -29,7 +29,9 @@ macro_rules! make_infer_row {
 macro_rules! make_row {
      // entrypoint with a kind and fields
     ($kind:ident, $($label:expr => $ty:expr),* $(,)?) => {{
-        let mut row = $crate::types::row::Row::Empty;
+        let mut row = $crate::types::row::Row::Empty(
+            $crate::types::type_session::TypeDefKind::$kind,
+        );
         $(
             row = $crate::types::row::Row::Extend {
                 row: Box::new(row),

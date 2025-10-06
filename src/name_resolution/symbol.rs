@@ -35,6 +35,16 @@ macro_rules! impl_module_symbol_id {
             }
         }
 
+        impl From<Symbol> for $ty {
+            fn from(value: Symbol) -> $ty {
+                if let Symbol::$case(value) = value {
+                    return value;
+                }
+
+                panic!("unable to convert from symbol: {:?}", value);
+            }
+        }
+
         impl From<$ty> for Symbol {
             fn from(value: $ty) -> Symbol {
                 Symbol::$case(value)

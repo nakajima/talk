@@ -4,12 +4,13 @@ use rustc_hash::FxHashMap;
 
 use crate::{
     ast::AST,
+    compiling::module::ModuleId,
     label::Label,
     name::Name,
     name_resolution::{
         name_resolver::NameResolved,
         symbol::{
-            AssociatedTypeId, DeclaredLocalId, GlobalId, InstanceMethodId, ProtocolId,
+            self, AssociatedTypeId, DeclaredLocalId, GlobalId, InstanceMethodId, ProtocolId,
             StaticMethodId, Symbol,
         },
     },
@@ -28,6 +29,19 @@ use crate::{
 pub enum ConformanceRequirement {
     Unfulfilled(Symbol),
     Fulfilled { symbol: Symbol },
+}
+
+impl ConformanceRequirement {
+    pub fn import(self, module_id: ModuleId) -> ConformanceRequirement {
+        match self {
+            ConformanceRequirement::Unfulfilled(symbol) => {
+                ConformanceRequirement::Unfulfilled(symbol.import(module_id))
+            }
+            ConformanceRequirement::Fulfilled { symbol } => ConformanceRequirement::Fulfilled {
+                symbol: symbol.import(module_id),
+            },
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -273,7 +287,10 @@ pub mod tests {
         );
         assert_eq!(
             es,
-            FxHashSet::from_iter([(Binder::Global(GlobalId::from(1)), Binder::Global(GlobalId::from(2)))]),
+            FxHashSet::from_iter([(
+                Binder::Global(GlobalId::from(1)),
+                Binder::Global(GlobalId::from(2))
+            )]),
             "{es:?}"
         );
     }
@@ -289,8 +306,14 @@ pub mod tests {
         assert_eq!(
             es,
             FxHashSet::from_iter([
-                (Binder::Global(GlobalId::from(1)), Binder::Global(GlobalId::from(2))),
-                (Binder::Global(GlobalId::from(2)), Binder::Global(GlobalId::from(1)))
+                (
+                    Binder::Global(GlobalId::from(1)),
+                    Binder::Global(GlobalId::from(2))
+                ),
+                (
+                    Binder::Global(GlobalId::from(2)),
+                    Binder::Global(GlobalId::from(1))
+                )
             ]),
             "{es:?}"
         );
@@ -319,7 +342,10 @@ pub mod tests {
         );
         assert_eq!(
             es,
-            FxHashSet::from_iter([(Binder::Global(GlobalId::from(1)), Binder::Global(GlobalId::from(2)))]),
+            FxHashSet::from_iter([(
+                Binder::Global(GlobalId::from(1)),
+                Binder::Global(GlobalId::from(2))
+            )]),
             "{es:?}"
         );
     }

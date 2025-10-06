@@ -109,6 +109,60 @@ impl From<Predicate<InferTy>> for Predicate<Ty> {
     }
 }
 
+impl From<Predicate<Ty>> for Predicate<InferTy> {
+    fn from(value: Predicate<Ty>) -> Self {
+        match value {
+            Predicate::<Ty>::HasField { row, label, ty } => Self::HasField {
+                row,
+                label,
+                ty: ty.into(),
+            },
+            Predicate::<Ty>::Member {
+                receiver,
+                label,
+                ty,
+            } => Self::Member {
+                receiver: receiver.into(),
+                label,
+                ty: ty.into(),
+            },
+            Predicate::<Ty>::TypeMember {
+                base: owner,
+                member,
+                returns,
+                generics,
+            } => Self::TypeMember {
+                base: owner.into(),
+                member: member.clone(),
+                returns: returns.into(),
+                generics: generics.into_iter().map(|g| g.into()).collect(),
+            },
+            Predicate::<Ty>::Call {
+                callee,
+                args,
+                returns,
+                receiver,
+            } => Self::Call {
+                callee: callee.into(),
+                args: args.into_iter().map(|arg| arg.into()).collect(),
+                returns: returns.into(),
+                receiver: receiver.map(|r| r.into()),
+            },
+            Predicate::<Ty>::AssociatedEquals {
+                subject,
+                protocol_id,
+                associated_type_id,
+                output,
+            } => Self::AssociatedEquals {
+                subject: subject.into(),
+                protocol_id,
+                associated_type_id,
+                output: output.into(),
+            },
+        }
+    }
+}
+
 impl Predicate<InferTy> {
     pub fn apply(&self, substitutions: &mut UnificationSubstitutions) -> Self {
         match self {

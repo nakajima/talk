@@ -51,7 +51,7 @@ pub enum InferRow {
 impl From<InferRow> for Row {
     fn from(value: InferRow) -> Self {
         match value {
-            InferRow::Empty(..) => Row::Empty,
+            InferRow::Empty(t) => Row::Empty(t),
             InferRow::Param(param) => Row::Param(param),
             InferRow::Extend { box row, label, ty } => Row::Extend {
                 row: Box::new(row.into()),
@@ -59,6 +59,20 @@ impl From<InferRow> for Row {
                 ty: ty.into(),
             },
             row => panic!("Row cannot contain vars: {row:?}"),
+        }
+    }
+}
+
+impl From<Row> for InferRow {
+    fn from(value: Row) -> Self {
+        match value {
+            Row::Empty(t) => InferRow::Empty(t),
+            Row::Param(param) => InferRow::Param(param),
+            Row::Extend { box row, label, ty } => InferRow::Extend {
+                row: Box::new(row.into()),
+                label,
+                ty: ty.into(),
+            },
         }
     }
 }

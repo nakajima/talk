@@ -3,12 +3,13 @@ use crate::{
     types::{
         infer_row::{ClosedRow, RowParamId},
         ty::Ty,
+        type_session::TypeDefKind,
     },
 };
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub enum Row {
-    Empty,
+    Empty(TypeDefKind),
     Param(RowParamId),
     Extend { row: Box<Row>, label: Label, ty: Ty },
 }
@@ -21,7 +22,7 @@ impl Row {
 
 fn close(row: &Row, mut closed_row: ClosedRow<Ty>) -> ClosedRow<Ty> {
     match row {
-        Row::Empty => closed_row,
+        Row::Empty(..) => closed_row,
         Row::Param(_) => panic!("Cannot close param"),
         Row::Extend { row, label, ty } => {
             closed_row.insert(label.clone(), ty.clone());

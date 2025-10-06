@@ -120,6 +120,38 @@ impl From<InferTy> for Ty {
     }
 }
 
+impl From<Ty> for InferTy {
+    fn from(value: Ty) -> Self {
+        match value {
+            Ty::Primitive(primitive) => InferTy::Primitive(primitive),
+            Ty::Param(type_param_id) => InferTy::Param(type_param_id),
+            Ty::Constructor {
+                type_id,
+                params,
+                box ret,
+            } => InferTy::Constructor {
+                type_id,
+                params: params.into_iter().map(|p| p.into()).collect(),
+                ret: Box::new(ret.into()),
+            },
+            Ty::Func(box param, box ret) => {
+                InferTy::Func(Box::new(param.into()), Box::new(ret.into()))
+            }
+            Ty::Tuple(items) => InferTy::Tuple(items.into_iter().map(|t| t.into()).collect()),
+            Ty::Record(box infer_row) => InferTy::Record(Box::new(infer_row.into())),
+            Ty::Nominal {
+                id,
+                type_args,
+                box row,
+            } => InferTy::Nominal {
+                id,
+                type_args: type_args.into_iter().map(|t| t.into()).collect(),
+                row: Box::new(row.into()),
+            },
+        }
+    }
+}
+
 impl SomeType for InferTy {
     fn contains_var(&self) -> bool {
         match self {

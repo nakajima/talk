@@ -6,7 +6,7 @@ use tracing::instrument;
 
 use crate::{
     ast::AST,
-    compiling::module::ModuleEnvironment,
+    compiling::module::{ModuleEnvironment, ModuleId},
     id_generator::IDGenerator,
     label::Label,
     name::Name,
@@ -33,7 +33,7 @@ use crate::{
         scheme::{ForAll, Scheme},
         term_environment::{EnvEntry, TermEnv},
         ty::{SomeType, Ty},
-        type_catalog::{ConformanceStub, TypeCatalog},
+        type_catalog::{ConformanceStub, Nominal, Protocol, TypeCatalog},
         type_error::TypeError,
         type_operations::{UnificationSubstitutions, apply, apply_row, substitute},
         vars::Vars,
@@ -121,7 +121,7 @@ pub struct TypeSession {
 
 pub struct Typed {}
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum TypeEntry {
     Mono(Ty),
     Poly(Scheme<Ty>),
@@ -129,22 +129,18 @@ pub enum TypeEntry {
 
 #[derive(Debug, Default)]
 pub struct Types {
-    entries: FxHashMap<NodeID, TypeEntry>,
-    symbols_to_node_ids: FxHashMap<Symbol, NodeID>,
+    types_by_node: FxHashMap<NodeID, TypeEntry>,
+    types_by_symbol: FxHashMap<Symbol, TypeEntry>,
     pub catalog: TypeCatalog,
 }
 
 impl Types {
     pub fn get(&self, id: &NodeID) -> Option<&TypeEntry> {
-        self.entries.get(id)
+        self.types_by_node.get(id)
     }
 
     pub fn get_symbol(&self, sym: &Symbol) -> Option<&TypeEntry> {
-        let id = self
-            .symbols_to_node_ids
-            .get(sym)
-            .expect("did not get NodeID for symbol");
-        self.get(id)
+        self.types_by_symbol.get(sym)
     }
 }
 
@@ -177,27 +173,83 @@ impl TypeSession {
     pub fn finalize(mut self) -> Result<Types, TypeError> {
         let types_by_node = std::mem::take(&mut self.types_by_node);
         let entries = types_by_node
-            .iter()
+            .into_iter()
             .map(|(id, ty)| {
-                let ty = substitute(ty.clone(), &self.skolem_map);
+                let ty = self.finalize_ty(ty);
 
-                let ty = if ty.contains_var() {
-                    self.generalize(Level(0), ty.clone(), &[]).into()
-                } else {
-                    TypeEntry::Mono(ty.clone().into())
+                (id, ty)
+            })
+            .collect();
+
+        let term_env = std::mem::take(&mut self.term_env);
+        let types_by_symbol = term_env
+            .symbols
+            .into_iter()
+            .map(|(sym, entry)| {
+                let entry = match entry {
+                    EnvEntry::Mono(ty) => self.finalize_ty(ty),
+                    EnvEntry::Scheme(scheme) => {
+                        if scheme.ty.contains_var() {
+                            // Merge with existing scheme's foralls/predicates
+                            let EnvEntry::Scheme(generalized) =
+                                self.generalize(Level(0), scheme.ty, &[])
+                            else {
+                                unreachable!(
+                                    "generalize returned Mono when scheme.ty.contains_var()"
+                                );
+                            };
+
+                            TypeEntry::Poly(Scheme {
+                                foralls: [scheme.foralls, generalized.foralls].concat(),
+                                predicates: [
+                                    scheme
+                                        .predicates
+                                        .into_iter()
+                                        .map(|p| p.into())
+                                        .collect::<Vec<_>>(),
+                                    generalized
+                                        .predicates
+                                        .into_iter()
+                                        .map(|p| p.into())
+                                        .collect::<Vec<_>>(),
+                                ]
+                                .concat(),
+                                ty: generalized.ty.into(),
+                            })
+                        } else {
+                            TypeEntry::Poly(Scheme {
+                                foralls: scheme.foralls,
+                                predicates: scheme
+                                    .predicates
+                                    .into_iter()
+                                    .map(|p| p.into())
+                                    .collect(),
+                                ty: scheme.ty.into(),
+                            })
+                        }
+                    }
                 };
-
-                (*id, ty)
+                (sym, entry)
             })
             .collect();
 
         let types = Types {
             catalog: self.type_catalog,
-            entries,
-            ..Default::default()
+            types_by_node: entries,
+            types_by_symbol,
         };
 
         Ok(types)
+    }
+
+    fn finalize_ty(&mut self, ty: InferTy) -> TypeEntry {
+        let ty = substitute(ty.clone(), &self.skolem_map);
+
+        if ty.contains_var() {
+            self.generalize(Level(0), ty.clone(), &[]).into()
+        } else {
+            TypeEntry::Mono(ty.clone().into())
+        }
     }
 
     pub fn apply(&mut self, substitutions: &mut UnificationSubstitutions) {
@@ -458,20 +510,20 @@ impl TypeSession {
         if let Some(module_id) = sym.module_id()
             && let Some(module) = self.modules.modules.get(&module_id)
         {
-            println!("looking up {:?} in {:?}", sym.current(), module.types);
+            println!(
+                "looking up {:?} in {:?}",
+                sym.current(),
+                module.types.types_by_symbol
+            );
             let entry = module
                 .types
-                .term_env
-                .lookup(&sym.current())
+                .get_symbol(&sym.current())
                 .cloned()
                 .expect("did not get external symbol");
             println!("found entry: {entry:?}");
-            let entry = match entry.clone() {
-                EnvEntry::Mono(t) => {
-                    println!("generalizing {t:?}");
-                    self.generalize(Level(0), t.clone(), &[])
-                }
-                EnvEntry::Scheme(..) => entry,
+            let entry: EnvEntry = match entry.clone() {
+                TypeEntry::Mono(t) => EnvEntry::Mono(t.into()),
+                TypeEntry::Poly(..) => entry.into(),
             };
 
             let entry = entry.import(module_id);
@@ -489,6 +541,85 @@ impl TypeSession {
 
     pub(super) fn insert_mono(&mut self, sym: Symbol, ty: InferTy) {
         self.term_env.insert(sym, EnvEntry::Mono(ty));
+    }
+
+    pub(super) fn lookup_nominal(&mut self, type_id: TypeId) -> Option<Nominal> {
+        if let Some(entry) = self.type_catalog.nominals.get(&type_id.into()).cloned() {
+            return Some(entry);
+        }
+
+        if let TypeId {
+            module_id: module_id @ ModuleId::External(..),
+            local_id,
+        } = type_id
+            && let Some(module) = self.modules.modules.get(&module_id)
+        {
+            println!(
+                "looking up {:?} in {:?}",
+                type_id, module.types.types_by_symbol
+            );
+            let nominal = module
+                .types
+                .catalog
+                .nominals
+                .get(&Symbol::Type(TypeId {
+                    module_id: ModuleId::Current,
+                    local_id,
+                }))
+                .cloned()
+                .expect("did not get external symbol");
+
+            let nominal = nominal.import(module_id);
+            self.type_catalog
+                .nominals
+                .insert(type_id.into(), nominal.clone());
+            println!("imported nominal: {nominal:?}");
+            return Some(nominal);
+        }
+
+        None
+    }
+
+    pub(super) fn lookup_protocol(&mut self, protocol_id: ProtocolId) -> Option<Protocol> {
+        if let Some(entry) = self
+            .type_catalog
+            .protocols
+            .get(&protocol_id.into())
+            .cloned()
+        {
+            return Some(entry);
+        }
+
+        if let ProtocolId {
+            module_id: module_id @ ModuleId::External(..),
+            local_id,
+        } = protocol_id
+            && let Some(module) = self.modules.modules.get(&module_id)
+        {
+            println!(
+                "looking up {:?} in {:?}",
+                protocol_id, module.types.types_by_symbol
+            );
+            let protocol = module
+                .types
+                .catalog
+                .protocols
+                .get(&ProtocolId {
+                    module_id: ModuleId::Current,
+                    local_id,
+                })
+                .cloned()
+                .expect("did not get external symbol");
+
+            let protocol = protocol.import(module_id);
+            self.type_catalog
+                .protocols
+                .insert(protocol_id, protocol.clone());
+            println!("imported protocols: {protocol:?}");
+            return Some(protocol);
+        }
+
+        None
     }
 
     pub(super) fn normalize_nominals_row(&mut self, row: &InferRow, level: Level) -> InferRow {
