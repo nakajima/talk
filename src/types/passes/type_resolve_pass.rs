@@ -277,8 +277,14 @@ impl<'a> TypeResolvePass<'a> {
         let type_scheme = self.session.generalize(Level(0), ty.clone(), &[]);
         self.session.insert_term(symbol, type_scheme);
 
-        let extensions = type_def
+        let extensions = self
+            .raw
             .extensions
+            .get(&symbol)
+            .cloned()
+            .unwrap_or_default();
+        println!("extensions: {extensions:?}");
+        let extensions = extensions
             .iter()
             .map(|extension| {
                 form.extend_methods(self.resolve_instance_methods(&extension.methods));
@@ -436,11 +442,6 @@ impl<'a> TypeResolvePass<'a> {
                 });
 
                 let scheme = EnvEntry::Scheme(Scheme::<InferTy>::new(foralls, predicates, fn_ty));
-
-                println!(
-                    "[resolve_instance_methods] promoting {:?}: {scheme:?}",
-                    method.symbol
-                );
                 self.session.insert_term(method.symbol, scheme);
             }
 
@@ -587,10 +588,7 @@ impl<'a> TypeResolvePass<'a> {
                 })
             };
 
-            println!("about to promote {:?}: {entry:?}", method.symbol);
             self.session.insert_term(method.symbol, entry);
-
-            println!("inserting {} -> {:?}", name, method.symbol);
             resolved_methods.insert(name.clone(), method.symbol);
         }
         resolved_methods
@@ -734,7 +732,6 @@ impl<'a> TypeResolvePass<'a> {
                 ..
             } => {
                 let Some(Symbol::Protocol(protocol_id)) = self.self_symbols.last().cloned() else {
-                    println!("nope");
                     unreachable!("didn't get protocol id");
                 };
 

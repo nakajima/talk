@@ -5,7 +5,7 @@ use crate::{
     name::Name,
     name_resolution::{
         name_resolver::NameResolved,
-        symbol::{Symbol, SynthesizedId, TypeId},
+        symbol::{Symbol, SynthesizedId},
     },
     node::Node,
     node_id::NodeID,
@@ -48,7 +48,6 @@ pub struct TypeHeaderPass<'a> {
     child_types: FxHashMap<Symbol, FxHashMap<String, Symbol>>,
     session: &'a mut TypeSession,
     raw: &'a mut Raw,
-    extensions: FxHashMap<TypeId, Vec<TypeExtension>>,
     annotations: FxHashMap<NodeID, ASTTyRepr>,
     typealiases: FxHashMap<NodeID, (Name, TypeAnnotation)>,
 }
@@ -62,7 +61,6 @@ impl<'a> TypeHeaderPass<'a> {
             session,
             raw: &mut raw,
             child_types: Default::default(),
-            extensions: Default::default(),
             annotations: Default::default(),
             typealiases: Default::default(),
         };
@@ -74,7 +72,6 @@ impl<'a> TypeHeaderPass<'a> {
         instance.raw.annotations = std::mem::take(&mut instance.annotations);
         instance.raw.typealiases = std::mem::take(&mut instance.typealiases);
 
-        let mut extensions = std::mem::take(&mut instance.extensions);
         for (id, type_constructor) in instance.raw.type_constructors.iter_mut() {
             type_constructor.child_types = instance
                 .child_types
@@ -82,12 +79,11 @@ impl<'a> TypeHeaderPass<'a> {
                 .cloned()
                 .unwrap_or_default();
 
-            if let Some(mut extensions) = extensions.remove(id) {
+            if let Some(extensions) = instance.raw.extensions.get(&id.into()) {
                 type_constructor.conformances = extensions
-                    .iter_mut()
-                    .flat_map(|e| std::mem::take(&mut e.conformances))
+                    .iter()
+                    .flat_map(|e| e.conformances.clone())
                     .collect();
-                type_constructor.extensions = extensions;
             }
         }
 
@@ -106,6 +102,7 @@ impl<'a> TypeHeaderPass<'a> {
             raw.protocols.extend(file_raw.protocols);
             raw.annotations.extend(file_raw.annotations);
             raw.typealiases.extend(file_raw.typealiases);
+            raw.extensions.extend(file_raw.extensions);
         }
 
         raw
@@ -194,7 +191,6 @@ impl<'a> TypeHeaderPass<'a> {
                 self.raw.type_constructors.insert(
                     *type_id,
                     TypeDef {
-                        extensions: Default::default(),
                         name: name.clone(),
                         node_id: decl.id,
                         kind: arrow_n(Kind::Type, generics.len(), Kind::Type),
@@ -232,8 +228,9 @@ impl<'a> TypeHeaderPass<'a> {
                     unreachable!()
                 };
 
-                self.extensions
-                    .entry(*type_id)
+                self.raw
+                    .extensions
+                    .entry(Symbol::Type(*type_id))
                     .or_default()
                     .push(TypeExtension {
                         node_id: decl.id,
@@ -264,7 +261,6 @@ impl<'a> TypeHeaderPass<'a> {
                 self.raw.protocols.insert(
                     *protocol_id,
                     TypeDef {
-                        extensions: Default::default(),
                         child_types: Default::default(),
                         name: name.clone(),
                         node_id: decl.id,
@@ -300,7 +296,6 @@ impl<'a> TypeHeaderPass<'a> {
                 self.raw.type_constructors.insert(
                     *type_id,
                     TypeDef {
-                        extensions: Default::default(),
                         child_types: Default::default(),
                         name: name.clone(),
                         node_id: decl.id,
@@ -721,7 +716,6 @@ pub mod tests {
         assert_eq_diff!(
             *raw.type_constructors.get(&TypeId::from(1)).unwrap(),
             TypeDef {
-                extensions: Default::default(),
                 child_types: Default::default(),
                 name: Name::Resolved(Symbol::Type(TypeId::from(1)), "Person".into()),
                 kind: Kind::Type,
@@ -767,16 +761,20 @@ pub mod tests {
         )
         .1;
 
+        assert_eq!(
+            *raw.extensions.get(&Symbol::Type(TypeId::from(1))).unwrap(),
+            vec![TypeExtension {
+                node_id: NodeID::ANY,
+                conformances: Default::default(),
+                methods: Default::default(),
+                static_methods: Default::default(),
+            }]
+        );
+
         assert_eq_diff!(
             *raw.type_constructors.get(&TypeId::from(1)).unwrap(),
             TypeDef {
                 child_types: Default::default(),
-                extensions: vec![TypeExtension {
-                    node_id: NodeID::ANY,
-                    conformances: Default::default(),
-                    methods: Default::default(),
-                    static_methods: Default::default(),
-                }],
                 name: Name::Resolved(Symbol::Type(TypeId::from(1)), "Person".into()),
                 kind: Kind::Type,
                 node_id: NodeID::ANY,
@@ -820,7 +818,6 @@ pub mod tests {
             *raw.type_constructors.get(&TypeId::from(1)).unwrap(),
             TypeDef {
                 child_types: Default::default(),
-                extensions: Default::default(),
                 name: Name::Resolved(Symbol::Type(TypeId::from(1)), "Wrapper".into()),
                 kind: Kind::Arrow {
                     in_kind: Box::new(Kind::Type),
@@ -875,7 +872,6 @@ pub mod tests {
             *raw.type_constructors.get(&TypeId::from(1)).unwrap(),
             TypeDef {
                 child_types: Default::default(),
-                extensions: Default::default(),
                 name: Name::Resolved(Symbol::Type(TypeId::from(1)), "Wrapper".into()),
                 kind: Kind::Arrow {
                     in_kind: Box::new(Kind::Type),
@@ -950,7 +946,6 @@ pub mod tests {
             *raw.type_constructors.get(&TypeId::from(1)).unwrap(),
             TypeDef {
                 child_types: Default::default(),
-                extensions: Default::default(),
                 name: Name::Resolved(Symbol::Type(TypeId::from(1)), "Fizz".into()),
                 kind: Kind::Type,
                 node_id: NodeID::ANY,
@@ -995,7 +990,6 @@ pub mod tests {
             *raw.protocols.get(&ProtocolId::from(1)).unwrap(),
             TypeDef {
                 child_types: Default::default(),
-                extensions: Default::default(),
                 name: Name::Resolved(Symbol::Protocol(ProtocolId::from(1)), "Fizz".into()),
                 kind: Kind::Type,
                 node_id: NodeID::ANY,
@@ -1043,7 +1037,6 @@ pub mod tests {
             *raw.type_constructors.get(&TypeId::from(1)).unwrap(),
             TypeDef {
                 child_types: Default::default(),
-                extensions: Default::default(),
                 name: Name::Resolved(Symbol::Type(TypeId::from(1)), "Buzz".into()),
                 kind: Kind::Type,
                 node_id: NodeID::ANY,
@@ -1126,5 +1119,22 @@ pub mod tests {
                 }
             })
         );
+    }
+
+    #[test]
+    fn extend_builtin() {
+        let (_ast, _raw) = type_header_decl_pass(
+            "
+        protocol Foo {
+            func foo() -> Int
+        }
+        extend Int: Foo {
+            func foo() { 123 }
+        }
+        1.foo()
+        ",
+        );
+
+        // Fill this in.
     }
 }

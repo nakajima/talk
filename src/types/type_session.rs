@@ -73,6 +73,7 @@ pub struct Raw {
     pub protocols: FxHashMap<ProtocolId, TypeDef>,
     pub annotations: FxHashMap<NodeID, ASTTyRepr>,
     pub typealiases: FxHashMap<NodeID, (Name, TypeAnnotation)>,
+    pub extensions: FxHashMap<Symbol, Vec<TypeExtension>>,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -91,7 +92,6 @@ pub struct TypeDef {
     pub def: TypeDefKind,
     pub generics: IndexMap<Name, ASTTyRepr>,
     pub fields: TypeFields,
-    pub extensions: Vec<TypeExtension>,
     pub conformances: Vec<ConformanceStub>,
     pub child_types: FxHashMap<String, Symbol>,
 }
