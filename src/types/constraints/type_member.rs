@@ -29,8 +29,7 @@ impl TypeMember {
         _next_wants: &mut Wants,
         substitutions: &mut UnificationSubstitutions,
     ) -> Result<bool, TypeError> {
-        let base = apply(self.base.clone(), substitutions);
-        println!("BASE: {base:?}");
+        let _base = apply(self.base.clone(), substitutions);
         Ok(false)
     }
 }

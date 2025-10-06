@@ -510,17 +510,11 @@ impl TypeSession {
         if let Some(module_id) = sym.module_id()
             && let Some(module) = self.modules.modules.get(&module_id)
         {
-            println!(
-                "looking up {:?} in {:?}",
-                sym.current(),
-                module.types.types_by_symbol
-            );
             let entry = module
                 .types
                 .get_symbol(&sym.current())
                 .cloned()
                 .expect("did not get external symbol");
-            println!("found entry: {entry:?}");
             let entry: EnvEntry = match entry.clone() {
                 TypeEntry::Mono(t) => EnvEntry::Mono(t.into()),
                 TypeEntry::Poly(..) => entry.into(),
@@ -528,7 +522,6 @@ impl TypeSession {
 
             let entry = entry.import(module_id);
             self.term_env.insert(*sym, entry.clone());
-            println!("imported ty: {entry:?}");
             return Some(entry);
         }
 
@@ -554,10 +547,6 @@ impl TypeSession {
         } = type_id
             && let Some(module) = self.modules.modules.get(&module_id)
         {
-            println!(
-                "looking up {:?} in {:?}",
-                type_id, module.types.types_by_symbol
-            );
             let nominal = module
                 .types
                 .catalog
@@ -573,7 +562,6 @@ impl TypeSession {
             self.type_catalog
                 .nominals
                 .insert(type_id.into(), nominal.clone());
-            println!("imported nominal: {nominal:?}");
             return Some(nominal);
         }
 
@@ -591,10 +579,6 @@ impl TypeSession {
         } = protocol_id
             && let Some(module) = self.modules.modules.get(&module_id)
         {
-            println!(
-                "looking up {:?} in {:?}",
-                protocol_id, module.types.types_by_symbol
-            );
             let protocol = module
                 .types
                 .catalog
@@ -610,7 +594,6 @@ impl TypeSession {
             self.type_catalog
                 .protocols
                 .insert(protocol_id, protocol.clone());
-            println!("imported protocols: {protocol:?}");
             return Some(protocol);
         }
 

@@ -631,19 +631,12 @@ impl<'a> TypeHeaderPass<'a> {
             );
         }
 
-        println!(
-            "inserting instance methods for {:?}: {instance_methods:?}",
-            type_name.symbol()
-        );
-
         let methods = self
             .raw
             .instance_methods
             .entry(type_name.symbol().unwrap())
             .or_default();
         methods.extend(instance_methods);
-
-        println!("{:?}", self.raw.instance_methods);
 
         match type_kind {
             TypeDefKind::Extension => TypeFields::Extension { static_methods },

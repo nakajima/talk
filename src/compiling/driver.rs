@@ -388,7 +388,6 @@ pub mod tests {
                 .asts
                 .values()
                 .fold(FxHashMap::default(), |mut acc, ast| {
-                    println!("scopes: {:?}", ast.phase.scopes);
                     let root = ast.phase.scopes.get(&NodeID(FileID(0), 0)).unwrap();
                     for (string, sym) in root.types.iter() {
                         acc.insert(string.to_string(), *sym);
