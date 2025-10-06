@@ -69,24 +69,27 @@ pub enum TypeDefKind {
 
 #[derive(Debug, PartialEq, Default, Clone)]
 pub struct Raw {
-    pub type_constructors: FxHashMap<TypeId, TypeDef>,
+    pub type_constructors: FxHashMap<Symbol, TypeDef>,
     pub protocols: FxHashMap<ProtocolId, TypeDef>,
+    pub extensions: FxHashMap<Symbol, Vec<TypeExtension>>,
     pub annotations: FxHashMap<NodeID, ASTTyRepr>,
     pub typealiases: FxHashMap<NodeID, (Name, TypeAnnotation)>,
-    pub extensions: FxHashMap<Symbol, Vec<TypeExtension>>,
-    pub instance_methods: IndexMap<Symbol, FxHashMap<Label, Method>>,
-    pub static_methods: IndexMap<Symbol, FxHashMap<Label, Method>>,
-    pub initializers: IndexMap<Symbol, FxHashMap<Label, Initializer>>,
-    pub properties: IndexMap<Symbol, IndexMap<Label, Property>>,
-    pub variants: IndexMap<Symbol, IndexMap<Label, Variant>>,
-    pub associated_types: IndexMap<Symbol, IndexMap<Name, Associated>>,
-    pub method_requirements: IndexMap<Symbol, IndexMap<Label, MethodRequirement>>,
+    pub instance_methods: FxHashMap<Symbol, FxHashMap<Label, Method>>,
+    pub static_methods: FxHashMap<Symbol, FxHashMap<Label, Method>>,
+    pub initializers: FxHashMap<Symbol, FxHashMap<Label, Initializer>>,
+    pub properties: FxHashMap<Symbol, IndexMap<Label, Property>>,
+    pub variants: FxHashMap<Symbol, IndexMap<Label, Variant>>,
+    pub associated_types: FxHashMap<Symbol, IndexMap<Name, Associated>>,
+    pub method_requirements: FxHashMap<Symbol, IndexMap<Label, MethodRequirement>>,
+
+    pub generics: FxHashMap<Symbol, IndexMap<Name, ASTTyRepr>>,
+    pub conformances: FxHashMap<Symbol, Vec<ConformanceStub>>,
+    pub child_types: FxHashMap<Symbol, FxHashMap<String, Symbol>>,
 }
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct TypeExtension {
     pub node_id: NodeID,
-    pub conformances: Vec<ConformanceStub>,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -95,9 +98,6 @@ pub struct TypeDef {
     pub node_id: NodeID,
     pub kind: Kind,
     pub def: TypeDefKind,
-    pub generics: IndexMap<Name, ASTTyRepr>,
-    pub conformances: Vec<ConformanceStub>,
-    pub child_types: FxHashMap<String, Symbol>,
 }
 
 // new helper
@@ -466,11 +466,11 @@ impl TypeSession {
         let normalized = match ty.clone() {
             InferTy::Nominal { .. } => ty.clone(),
             InferTy::Constructor {
-                type_id,
+                symbol,
                 params,
                 ret,
             } => InferTy::Constructor {
-                type_id,
+                symbol,
                 params: params
                     .into_iter()
                     .map(|p| self.normalize_nominals(&p, level))
@@ -529,6 +529,10 @@ impl TypeSession {
             return Some(entry);
         }
 
+        if let Some(entry) = builtin_scope().get(sym).cloned() {
+            return Some(entry);
+        }
+
         None
     }
 
@@ -540,15 +544,15 @@ impl TypeSession {
         self.term_env.insert(sym, EnvEntry::Mono(ty));
     }
 
-    pub(super) fn lookup_nominal(&mut self, type_id: TypeId) -> Option<Nominal> {
-        if let Some(entry) = self.type_catalog.nominals.get(&type_id.into()).cloned() {
+    pub(super) fn lookup_nominal(&mut self, symbol: &Symbol) -> Option<Nominal> {
+        if let Some(entry) = self.type_catalog.nominals.get(symbol).cloned() {
             return Some(entry);
         }
 
-        if let TypeId {
+        if let Symbol::Type(TypeId {
             module_id: module_id @ ModuleId::External(..),
             local_id,
-        } = type_id
+        }) = *symbol
             && let Some(module) = self.modules.modules.get(&module_id)
         {
             let nominal = module
@@ -563,10 +567,36 @@ impl TypeSession {
                 .expect("did not get external symbol");
 
             let nominal = nominal.import(module_id);
-            self.type_catalog
-                .nominals
-                .insert(type_id.into(), nominal.clone());
+            self.type_catalog.nominals.insert(*symbol, nominal.clone());
             return Some(nominal);
+        }
+
+        None
+    }
+
+    pub(super) fn lookup_member(&mut self, receiver: &Symbol, label: &Label) -> Option<Symbol> {
+        if let Some(methods) = self.type_catalog.properties.get(receiver) {
+            if let Some(sym) = methods.get(label) {
+                return Some(*sym);
+            }
+        }
+
+        if let Some(methods) = self.type_catalog.instance_methods.get(receiver) {
+            if let Some(sym) = methods.get(label) {
+                return Some(*sym);
+            }
+        }
+
+        if let Some(methods) = self.type_catalog.static_methods.get(receiver) {
+            if let Some(sym) = methods.get(label) {
+                return Some(*sym);
+            }
+        }
+
+        if let Some(methods) = self.type_catalog.variants.get(receiver) {
+            if let Some(sym) = methods.get(label) {
+                return Some(*sym);
+            }
         }
 
         None
@@ -599,6 +629,82 @@ impl TypeSession {
                 .protocols
                 .insert(protocol_id, protocol.clone());
             return Some(protocol);
+        }
+
+        None
+    }
+
+    pub(super) fn lookup_initializers(
+        &mut self,
+        symbol: &Symbol,
+    ) -> Option<FxHashMap<Label, Symbol>> {
+        if let Some(initializers) = self.type_catalog.initializers.get(symbol).cloned() {
+            return Some(initializers);
+        }
+
+        if let Symbol::Type(TypeId {
+            module_id: module_id @ ModuleId::External(..),
+            local_id,
+        }) = *symbol
+            && let Some(module) = self.modules.modules.get(&module_id)
+        {
+            let initializers = module
+                .types
+                .catalog
+                .initializers
+                .get(&Symbol::Type(TypeId {
+                    module_id: ModuleId::Current,
+                    local_id,
+                }))
+                .cloned()?;
+
+            let imported: FxHashMap<Label, Symbol> = initializers
+                .into_iter()
+                .map(|(label, sym)| (label, sym.import(module_id)))
+                .collect();
+
+            self.type_catalog
+                .initializers
+                .insert(*symbol, imported.clone());
+            return Some(imported);
+        }
+
+        None
+    }
+
+    pub(super) fn lookup_properties(
+        &mut self,
+        symbol: &Symbol,
+    ) -> Option<IndexMap<Label, Symbol>> {
+        if let Some(properties) = self.type_catalog.properties.get(symbol).cloned() {
+            return Some(properties);
+        }
+
+        if let Symbol::Type(TypeId {
+            module_id: module_id @ ModuleId::External(..),
+            local_id,
+        }) = *symbol
+            && let Some(module) = self.modules.modules.get(&module_id)
+        {
+            let properties = module
+                .types
+                .catalog
+                .properties
+                .get(&Symbol::Type(TypeId {
+                    module_id: ModuleId::Current,
+                    local_id,
+                }))
+                .cloned()?;
+
+            let imported: IndexMap<Label, Symbol> = properties
+                .into_iter()
+                .map(|(label, sym)| (label, sym.import(module_id)))
+                .collect();
+
+            self.type_catalog
+                .properties
+                .insert(*symbol, imported.clone());
+            return Some(imported);
         }
 
         None

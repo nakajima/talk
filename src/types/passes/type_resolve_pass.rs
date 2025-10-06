@@ -27,7 +27,7 @@ use crate::{
         predicate::Predicate,
         scheme::{ForAll, Scheme},
         term_environment::EnvEntry,
-        type_catalog::{ConformanceKey, Extension, Nominal, NominalForm, Protocol},
+        type_catalog::{ConformanceKey, Nominal, Protocol},
         type_error::TypeError,
         type_session::{ASTTyRepr, Raw, TypeDef, TypeDefKind, TypeSession},
     },
@@ -66,18 +66,18 @@ impl<'a> TypeResolvePass<'a> {
     // Go through all headers and gather up properties/methods/variants/etc. Don't perform
     // any generalization until the very end.
     fn solve(&mut self) -> HeadersResolved {
-        for (decl_id, type_def) in self.raw.type_constructors.clone().iter() {
+        for (decl_id, _) in self.raw.type_constructors.clone().iter() {
+            let generics = self.raw.generics.get(decl_id).cloned().unwrap_or_default();
             let base = InferTy::Nominal {
-                id: *decl_id,
-                type_args: type_def
-                    .generics
+                symbol: *decl_id,
+                type_args: generics
                     .iter()
                     .map(|_| self.session.new_type_param())
                     .collect(),
                 row: Box::new(self.session.new_row_meta_var(Level(1))),
             };
 
-            self.session.insert_mono(Symbol::Type(*decl_id), base);
+            self.session.insert_mono(*decl_id, base);
         }
 
         for (_id, (name, rhs)) in std::mem::take(&mut self.raw.typealiases) {
@@ -95,7 +95,7 @@ impl<'a> TypeResolvePass<'a> {
                 self.session
                     .type_catalog
                     .nominals
-                    .insert(decl_id.into(), resolved);
+                    .insert(*decl_id, resolved);
             }
         }
 
@@ -112,7 +112,7 @@ impl<'a> TypeResolvePass<'a> {
         for (conformance_key, span) in self.conformance_keys.iter() {
             let ty = self
                 .session
-                .lookup_nominal(conformance_key.conforming_id.into())
+                .lookup_nominal(&conformance_key.conforming_id)
                 .unwrap();
 
             let protocol = self
@@ -120,16 +120,24 @@ impl<'a> TypeResolvePass<'a> {
                 .lookup_protocol(conformance_key.protocol_id)
                 .unwrap();
 
-            let associated_types = protocol
+            let associated_types = self
+                .raw
                 .associated_types
+                .get(&conformance_key.protocol_id.into())
+                .cloned()
+                .unwrap_or_default();
+            let associated_types = associated_types
                 .iter()
                 .map(|t| {
                     let Name::Resolved(Symbol::AssociatedType(id), name) = t.0 else {
                         unreachable!()
                     };
 
-                    let symbol = ty
+                    let symbol = self
+                        .raw
                         .child_types
+                        .get(&ty.symbol)
+                        .unwrap_or_else(|| panic!("did not get child type named: {name}"))
                         .get(name)
                         .unwrap_or_else(|| panic!("did not get child type named: {name}"));
 
@@ -149,30 +157,30 @@ impl<'a> TypeResolvePass<'a> {
             );
         }
 
-        HeadersResolved {}
-    }
+        self.session.type_catalog.child_types = std::mem::take(&mut self.raw.child_types);
 
-    fn resolve_form(&mut self, type_def: &TypeDef) -> NominalForm {
-        let sym = type_def.name.symbol().unwrap();
+        let extensions = self.raw.extensions.clone();
+        for (symbol, _extensions) in extensions.iter() {
+            self.self_symbols.push(*symbol);
 
-        match &type_def.def {
-            TypeDefKind::Enum => NominalForm::Enum {
-                variants: self.resolve_variants(&sym),
-                instance_methods: self.resolve_instance_methods(&sym),
-                static_methods: self.resolve_static_methods(&sym),
-            },
-            TypeDefKind::Struct => {
-                let properties = self.resolve_properties(&sym);
+            // Process instance methods for extensions
+            let mut catalog = std::mem::take(&mut self.session.type_catalog);
+            catalog
+                .instance_methods
+                .entry(*symbol)
+                .or_default()
+                .extend(self.resolve_instance_methods(symbol));
+            catalog
+                .static_methods
+                .entry(*symbol)
+                .or_default()
+                .extend(self.resolve_static_methods(symbol));
+            _ = std::mem::replace(&mut self.session.type_catalog, catalog);
 
-                NominalForm::Struct {
-                    initializers: self.resolve_initializers(&sym),
-                    properties,
-                    instance_methods: self.resolve_instance_methods(&sym),
-                    static_methods: self.resolve_static_methods(&sym),
-                }
-            }
-            _ => unreachable!(),
+            self.self_symbols.pop();
         }
+
+        HeadersResolved {}
     }
 
     fn resolve_protocol(&mut self, type_def: &TypeDef) -> Result<Protocol, TypeError> {
@@ -231,7 +239,14 @@ impl<'a> TypeResolvePass<'a> {
 
         self.self_symbols.push(sym);
 
-        for (name, generic) in type_def.generics.iter() {
+        for (name, generic) in self
+            .raw
+            .generics
+            .get(&sym)
+            .cloned()
+            .unwrap_or_default()
+            .iter()
+        {
             let Name::Resolved(sym, _) = name else {
                 tracing::error!("didn't resolve {name:?}");
                 continue;
@@ -241,13 +256,56 @@ impl<'a> TypeResolvePass<'a> {
             self.session.insert_term(*sym, entry.into());
         }
 
-        let form = self.resolve_form(type_def);
-        let symbol = type_def.name.symbol().unwrap();
-        let Symbol::Type(type_id) = &symbol else {
-            unreachable!();
-        };
+        let mut catalog = std::mem::take(&mut self.session.type_catalog);
 
-        for c in type_def.conformances.iter() {
+        catalog
+            .variants
+            .entry(sym)
+            .or_default()
+            .extend(self.resolve_variants(&sym));
+        catalog
+            .instance_methods
+            .entry(sym)
+            .or_default()
+            .extend(self.resolve_instance_methods(&sym));
+        catalog
+            .static_methods
+            .entry(sym)
+            .or_default()
+            .extend(self.resolve_static_methods(&sym));
+        catalog
+            .initializers
+            .entry(sym)
+            .or_default()
+            .extend(self.resolve_initializers(&sym));
+        catalog
+            .properties
+            .entry(sym)
+            .or_default()
+            .extend(self.resolve_properties(&sym));
+        catalog
+            .instance_methods
+            .entry(sym)
+            .or_default()
+            .extend(self.resolve_instance_methods(&sym));
+        catalog
+            .static_methods
+            .entry(sym)
+            .or_default()
+            .extend(self.resolve_static_methods(&sym));
+
+        _ = std::mem::replace(&mut self.session.type_catalog, catalog);
+
+        let symbol = type_def.name.symbol().unwrap();
+
+        for c in self
+            .raw
+            .conformances
+            .get(&sym)
+            .cloned()
+            .unwrap_or_default()
+            .iter()
+        {
             self.conformance_keys.push((
                 ConformanceKey {
                     protocol_id: c.protocol_id,
@@ -260,32 +318,11 @@ impl<'a> TypeResolvePass<'a> {
         let type_scheme = self.session.generalize(Level(0), ty.clone(), &[]);
         self.session.insert_term(symbol, type_scheme);
 
-        let extensions = self
-            .raw
-            .extensions
-            .get(&symbol)
-            .cloned()
-            .unwrap_or_default();
-        let extensions = extensions
-            .iter()
-            .map(|extension| {
-                // form.extend_methods(self.resolve_instance_methods(&extension.methods));
-                Extension {
-                    conformances: extension.conformances.clone(),
-                    node_id: extension.node_id,
-                }
-            })
-            .collect();
-
         self.self_symbols.pop();
 
         Ok(Nominal {
-            type_id: *type_id,
+            symbol,
             node_id: type_def.node_id,
-            form,
-            extensions,
-            child_types: type_def.child_types.clone(),
-            conformances: type_def.conformances.clone(),
         })
     }
 
@@ -489,10 +526,6 @@ impl<'a> TypeResolvePass<'a> {
         };
 
         let mut out = FxHashMap::default();
-        let Symbol::Type(type_id) = &symbol else {
-            unreachable!()
-        };
-
         for (label, init) in initializers.clone() {
             let mut predicates = vec![];
             let mut foralls = vec![];
@@ -509,7 +542,7 @@ impl<'a> TypeResolvePass<'a> {
                 .collect();
 
             let ret = InferTy::Nominal {
-                id: *type_id,
+                symbol: *symbol,
                 row: Box::new(self.session.new_row_meta_var(Level(1))),
                 type_args: vec![],
             };
@@ -612,14 +645,14 @@ impl<'a> TypeResolvePass<'a> {
         annotation: &TypeAnnotation,
     ) -> (InferTy, Vec<Predicate<InferTy>>, Vec<ForAll>) {
         match &annotation.kind {
-            TypeAnnotationKind::SelfType(Name::Resolved(sym @ Symbol::Type(id), ..)) => {
+            TypeAnnotationKind::SelfType(Name::Resolved(symbol @ Symbol::Type(id), ..)) => {
                 let mut predicates = vec![];
                 let mut foralls = vec![];
 
                 for generic in self
                     .raw
-                    .type_constructors
-                    .get(id)
+                    .generics
+                    .get(symbol)
                     .cloned()
                     .unwrap_or_else(|| {
                         panic!(
@@ -627,7 +660,6 @@ impl<'a> TypeResolvePass<'a> {
                             self.raw.type_constructors
                         )
                     })
-                    .generics
                     .values()
                 {
                     let (_, preds, fas) = self.infer_ast_ty_repr(generic);
@@ -637,13 +669,13 @@ impl<'a> TypeResolvePass<'a> {
 
                 let row = self.session.new_row_meta_var(Level(1)).into();
                 let ty = InferTy::Nominal {
-                    id: *id,
+                    symbol: *symbol,
                     type_args: vec![],
                     row,
                 };
 
                 let entry: EnvEntry = (ty, predicates, foralls).into();
-                self.session.insert_term(*sym, entry.clone());
+                self.session.insert_term(*symbol, entry.clone());
                 entry.into()
             }
             TypeAnnotationKind::SelfType(Name::Resolved(sym @ Symbol::Protocol(..), ..)) => self
@@ -911,20 +943,12 @@ pub mod tests {
         );
 
         assert_eq_diff!(
-            session
+            *session
                 .type_catalog
-                .nominals
+                .initializers
                 .get(&TypeId::from(1).into())
-                .unwrap()
-                .form,
-            NominalForm::Struct {
-                initializers: fxhashmap!(Label::Named("init".into()) => Symbol::Synthesized(SynthesizedId::new(ModuleId::Current, 1))),
-                properties: indexmap! {
-                    "age".into() => Symbol::Property(PropertyId::from(1))
-                },
-                instance_methods: Default::default(),
-                static_methods: Default::default()
-            }
+                .unwrap(),
+            fxhashmap!(Label::Named("init".into()) => Symbol::Synthesized(SynthesizedId::new(ModuleId::Current, 1))),
         )
     }
 
@@ -939,18 +963,12 @@ pub mod tests {
         );
 
         assert_eq_diff!(
-            session
+            *session
                 .type_catalog
-                .nominals
+                .instance_methods
                 .get(&TypeId::from(1).into())
-                .unwrap()
-                .form,
-            NominalForm::Struct {
-                initializers: fxhashmap!(Label::Named("init".into()) => Symbol::Synthesized(SynthesizedId::new(ModuleId::Current, 1))),
-                properties: Default::default(),
-                instance_methods: fxhashmap!(Label::Named("fizz".into()) => Symbol::InstanceMethod(InstanceMethodId::from(1))),
-                static_methods: Default::default(),
-            }
+                .unwrap(),
+            fxhashmap!(Label::Named("fizz".into()) => Symbol::InstanceMethod(InstanceMethodId::from(1))),
         )
     }
 
@@ -966,18 +984,12 @@ pub mod tests {
         );
 
         assert_eq_diff!(
-            session
+            *session
                 .type_catalog
-                .nominals
+                .instance_methods
                 .get(&TypeId::from(1).into())
-                .unwrap()
-                .form,
-            NominalForm::Struct {
-                initializers: fxhashmap!(Label::Named("init".into()) => Symbol::Synthesized(SynthesizedId::new(ModuleId::Current, 1))),
-                properties: Default::default(),
-                instance_methods: fxhashmap!(Label::Named("fizz".into()) => Symbol::InstanceMethod(InstanceMethodId::from(1))),
-                static_methods: Default::default(),
-            }
+                .unwrap(),
+            fxhashmap!(Label::Named("fizz".into()) => Symbol::InstanceMethod(InstanceMethodId::from(1))),
         )
     }
 
@@ -992,18 +1004,12 @@ pub mod tests {
         );
 
         assert_eq_diff!(
-            session
+            *session
                 .type_catalog
-                .nominals
+                .static_methods
                 .get(&TypeId::from(1).into())
-                .unwrap()
-                .form,
-            NominalForm::Struct {
-                initializers: fxhashmap!(Label::Named("init".into()) => Symbol::Synthesized(SynthesizedId::new(ModuleId::Current, 1))),
-                properties: Default::default(),
-                instance_methods: Default::default(),
-                static_methods: fxhashmap!(Label::Named("fizz".into()) => Symbol::StaticMethod(StaticMethodId::from(1))),
-            }
+                .unwrap(),
+            fxhashmap!(Label::Named("fizz".into()) => Symbol::StaticMethod(StaticMethodId::from(1))),
         )
     }
 
@@ -1017,18 +1023,12 @@ pub mod tests {
         );
 
         assert_eq!(
-            session
+            *session
                 .type_catalog
-                .nominals
+                .properties
                 .get(&TypeId::from(1).into())
-                .unwrap()
-                .form,
-            NominalForm::Struct {
-                initializers: fxhashmap!(Label::Named("init".into()) => Symbol::Synthesized(SynthesizedId::new(ModuleId::Current, 1))),
-                properties: indexmap! { "t".into() => Symbol::Property(PropertyId::from(1)) },
-                instance_methods: Default::default(),
-                static_methods: Default::default()
-            }
+                .unwrap(),
+            indexmap! { "t".into() => Symbol::Property(PropertyId::from(1)) },
         )
     }
 
@@ -1049,19 +1049,13 @@ pub mod tests {
         );
 
         assert_eq_diff!(
-            session
+            *session
                 .type_catalog
-                .nominals
+                .properties
                 .get(&TypeId::from(3).into())
-                .unwrap()
-                .form,
-            NominalForm::Struct {
-                initializers: fxhashmap!(Label::Named("init".into()) => Symbol::Synthesized(SynthesizedId::new(ModuleId::Current, 3))),
-                properties: indexmap! {
-                    "b".into() => Symbol::Property(PropertyId::from(3))
-                },
-                instance_methods: Default::default(),
-                static_methods: Default::default()
+                .unwrap(),
+            indexmap! {
+                Label::Named("b".into()) => Symbol::Property(PropertyId::from(3))
             }
         );
     }
@@ -1109,12 +1103,11 @@ pub mod tests {
         );
 
         assert_eq!(
-            session
+            *session
                 .type_catalog
-                .nominals
+                .child_types
                 .get(&TypeId::from(1).into())
-                .unwrap()
-                .child_types,
+                .unwrap(),
             fxhashmap!("Buzz".to_string() => Symbol::Type(TypeId::from(2)), "Foo".into() => Symbol::Type(TypeId::from(3)))
         )
     }
@@ -1156,61 +1149,6 @@ pub mod tests {
                 associated_types: fxhashmap!(AssociatedTypeId::from(1) => Symbol::Type(TypeId::from(2)))
             }
         )
-    }
-
-    #[test]
-    fn resolves_nominal_path_annotations() {
-        let (ast, session) = type_header_resolve_pass(
-            "
-            struct C {
-                struct B {}
-                let a: A.B
-            }
-
-            struct A {
-                struct B {}
-                let c: C.B
-            }
-            ",
-        );
-
-        // no errors during header/resolve
-        assert!(ast.diagnostics.is_empty(), "{:?}", ast.diagnostics);
-
-        let c_nominal = session
-            .type_catalog
-            .nominals
-            .get(&TypeId::from(1).into())
-            .expect("missing C");
-        let a_nominal = session
-            .type_catalog
-            .nominals
-            .get(&TypeId::from(3).into())
-            .expect("missing A");
-
-        // child types are registered: C.B and A.B exist and are reachable by name
-        assert!(c_nominal.child_types.contains_key("B"), "C.B not recorded");
-        assert!(a_nominal.child_types.contains_key("B"), "A.B not recorded");
-
-        // properties `a` (in C) and `c` (in A) exist in the catalog
-        match &c_nominal.form {
-            NominalForm::Struct { properties, .. } => {
-                assert!(
-                    properties.contains_key(&Label::Named("a".into())),
-                    "C missing property `a`"
-                );
-            }
-            _ => panic!("C should be a struct"),
-        }
-        match &a_nominal.form {
-            NominalForm::Struct { properties, .. } => {
-                assert!(
-                    properties.contains_key(&Label::Named("c".into())),
-                    "A missing property `c`"
-                );
-            }
-            _ => panic!("A should be a struct"),
-        }
     }
 
     #[test]

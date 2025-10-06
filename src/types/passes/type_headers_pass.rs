@@ -43,11 +43,9 @@ pub fn arrow_n(arg: Kind, n: usize, ret: Kind) -> Kind {
 #[visitor(Decl, Expr(enter), TypeAnnotation(enter))]
 pub struct TypeHeaderPass<'a> {
     type_stack: Vec<Symbol>,
-    child_types: FxHashMap<Symbol, FxHashMap<String, Symbol>>,
     session: &'a mut TypeSession,
     raw: &'a mut Raw,
     annotations: FxHashMap<NodeID, ASTTyRepr>,
-    typealiases: FxHashMap<NodeID, (Name, TypeAnnotation)>,
 }
 
 impl<'a> TypeHeaderPass<'a> {
@@ -58,9 +56,7 @@ impl<'a> TypeHeaderPass<'a> {
             type_stack: Default::default(),
             session,
             raw: &mut raw,
-            child_types: Default::default(),
             annotations: Default::default(),
-            typealiases: Default::default(),
         };
 
         for root in ast.roots.iter() {
@@ -68,22 +64,6 @@ impl<'a> TypeHeaderPass<'a> {
         }
 
         instance.raw.annotations = std::mem::take(&mut instance.annotations);
-        instance.raw.typealiases = std::mem::take(&mut instance.typealiases);
-
-        for (id, type_constructor) in instance.raw.type_constructors.iter_mut() {
-            type_constructor.child_types = instance
-                .child_types
-                .get(&type_constructor.name.symbol().unwrap())
-                .cloned()
-                .unwrap_or_default();
-
-            if let Some(extensions) = instance.raw.extensions.get(&id.into()) {
-                type_constructor.conformances = extensions
-                    .iter()
-                    .flat_map(|e| e.conformances.clone())
-                    .collect();
-            }
-        }
 
         raw
     }
@@ -108,6 +88,9 @@ impl<'a> TypeHeaderPass<'a> {
             raw.method_requirements.extend(file_raw.method_requirements);
             raw.associated_types.extend(file_raw.associated_types);
             raw.variants.extend(file_raw.variants);
+            raw.generics.extend(file_raw.generics);
+            raw.conformances.extend(file_raw.conformances);
+            raw.child_types.extend(file_raw.child_types);
         }
 
         raw
@@ -176,34 +159,43 @@ impl<'a> TypeHeaderPass<'a> {
     fn enter_decl(&mut self, decl: &Decl) {
         match &decl.kind {
             DeclKind::Struct {
-                name: name @ Name::Resolved(sym @ Symbol::Type(type_id), type_name),
+                name: name @ Name::Resolved(sym @ Symbol::Type(..), type_name),
                 generics,
                 body: Block { body, .. },
                 conformances,
                 ..
             } => {
                 if let Some(parent_id) = self.type_stack.last() {
-                    self.child_types
+                    self.raw
+                        .child_types
                         .entry(*parent_id)
                         .or_default()
                         .insert(type_name.to_string(), *sym);
                 }
 
                 self.type_stack.push(*sym);
+
+                self.raw
+                    .conformances
+                    .entry(*sym)
+                    .or_default()
+                    .extend(Self::collect_conformance_stubs(*sym, conformances));
+
+                self.raw.generics.entry(*sym).or_default().extend(
+                    generics
+                        .iter()
+                        .map(|g| (g.name.clone(), ASTTyRepr::Generic(g.clone())))
+                        .collect::<IndexMap<Name, ASTTyRepr>>(),
+                );
+
                 self.collect_fields(name, decl.id, decl.span, TypeDefKind::Struct, body);
                 self.raw.type_constructors.insert(
-                    *type_id,
+                    *sym,
                     TypeDef {
                         name: name.clone(),
                         node_id: decl.id,
                         kind: arrow_n(Kind::Type, generics.len(), Kind::Type),
                         def: TypeDefKind::Struct,
-                        conformances: Self::collect_conformance_stubs(*sym, conformances),
-                        child_types: Default::default(),
-                        generics: generics
-                            .iter()
-                            .map(|g| (g.name.clone(), ASTTyRepr::Generic(g.clone())))
-                            .collect(),
                     },
                 );
             }
@@ -214,7 +206,8 @@ impl<'a> TypeHeaderPass<'a> {
                 ..
             } => {
                 if let Some(parent_id) = self.type_stack.last() {
-                    self.child_types
+                    self.raw
+                        .child_types
                         .entry(*parent_id)
                         .or_default()
                         .insert(type_name.to_string(), *sym);
@@ -224,13 +217,45 @@ impl<'a> TypeHeaderPass<'a> {
                 self.collect_fields(name, decl.id, decl.span, TypeDefKind::Extension, body);
 
                 self.raw
+                    .conformances
+                    .entry(*sym)
+                    .or_default()
+                    .extend(Self::collect_conformance_stubs(*sym, conformances));
+
+                self.raw
                     .extensions
                     .entry(Symbol::Type(*type_id))
                     .or_default()
-                    .push(TypeExtension {
-                        node_id: decl.id,
-                        conformances: Self::collect_conformance_stubs(*sym, conformances),
-                    });
+                    .push(TypeExtension { node_id: decl.id });
+            }
+            DeclKind::Extend {
+                name: name @ Name::Resolved(sym @ Symbol::Builtin(builtin_id), type_name),
+                body: Block { body, .. },
+                conformances,
+                ..
+            } => {
+                if let Some(parent_id) = self.type_stack.last() {
+                    self.raw
+                        .child_types
+                        .entry(*parent_id)
+                        .or_default()
+                        .insert(type_name.to_string(), *sym);
+                }
+
+                self.type_stack.push(*sym);
+                self.collect_fields(name, decl.id, decl.span, TypeDefKind::Extension, body);
+
+                self.raw
+                    .conformances
+                    .entry(*sym)
+                    .or_default()
+                    .extend(Self::collect_conformance_stubs(*sym, conformances));
+
+                self.raw
+                    .extensions
+                    .entry(Symbol::Builtin(*builtin_id))
+                    .or_default()
+                    .push(TypeExtension { node_id: decl.id });
             }
             DeclKind::Protocol {
                 name: name @ Name::Resolved(sym @ Symbol::Protocol(protocol_id), type_name),
@@ -240,7 +265,8 @@ impl<'a> TypeHeaderPass<'a> {
                 ..
             } => {
                 if let Some(parent_id) = self.type_stack.last() {
-                    self.child_types
+                    self.raw
+                        .child_types
                         .entry(*parent_id)
                         .or_default()
                         .insert(type_name.to_string(), *sym);
@@ -249,31 +275,39 @@ impl<'a> TypeHeaderPass<'a> {
                 self.type_stack.push(*sym);
                 self.collect_fields(name, decl.id, decl.span, TypeDefKind::Protocol, body);
 
+                self.raw
+                    .conformances
+                    .entry(*sym)
+                    .or_default()
+                    .extend(Self::collect_conformance_stubs(*sym, conformances));
+
+                self.raw.generics.entry(*sym).or_default().extend(
+                    generics
+                        .iter()
+                        .map(|g| (g.name.clone(), ASTTyRepr::Generic(g.clone())))
+                        .collect::<IndexMap<Name, ASTTyRepr>>(),
+                );
+
                 self.raw.protocols.insert(
                     *protocol_id,
                     TypeDef {
-                        child_types: Default::default(),
                         name: name.clone(),
                         node_id: decl.id,
                         kind: arrow_n(Kind::Type, generics.len(), Kind::Type),
                         def: TypeDefKind::Protocol,
-                        conformances: Self::collect_conformance_stubs(*sym, conformances),
-                        generics: generics
-                            .iter()
-                            .map(|g| (g.name.clone(), ASTTyRepr::Generic(g.clone())))
-                            .collect(),
                     },
                 );
             }
             DeclKind::Enum {
-                name: name @ Name::Resolved(sym @ Symbol::Type(type_id), type_name),
+                name: name @ Name::Resolved(sym @ Symbol::Type(..), type_name),
                 body: Block { body, .. },
                 generics,
                 conformances,
                 ..
             } => {
                 if let Some(parent_id) = self.type_stack.last() {
-                    self.child_types
+                    self.raw
+                        .child_types
                         .entry(*parent_id)
                         .or_default()
                         .insert(type_name.to_string(), *sym);
@@ -282,19 +316,26 @@ impl<'a> TypeHeaderPass<'a> {
                 self.type_stack.push(*sym);
                 self.collect_fields(name, decl.id, decl.span, TypeDefKind::Enum, body);
 
+                self.raw
+                    .conformances
+                    .entry(*sym)
+                    .or_default()
+                    .extend(Self::collect_conformance_stubs(*sym, conformances));
+
+                self.raw.generics.entry(*sym).or_default().extend(
+                    generics
+                        .iter()
+                        .map(|g| (g.name.clone(), ASTTyRepr::Generic(g.clone())))
+                        .collect::<FxHashMap<Name, ASTTyRepr>>(),
+                );
+
                 self.raw.type_constructors.insert(
-                    *type_id,
+                    *sym,
                     TypeDef {
-                        child_types: Default::default(),
                         name: name.clone(),
                         node_id: decl.id,
                         kind: arrow_n(Kind::Type, generics.len(), Kind::Type),
                         def: TypeDefKind::Enum,
-                        conformances: Self::collect_conformance_stubs(*sym, conformances),
-                        generics: generics
-                            .iter()
-                            .map(|g| (g.name.clone(), ASTTyRepr::Generic(g.clone())))
-                            .collect(),
                     },
                 );
             }
@@ -306,7 +347,8 @@ impl<'a> TypeHeaderPass<'a> {
                     },
             } => {
                 if let Some(parent_id) = self.type_stack.last() {
-                    self.child_types
+                    self.raw
+                        .child_types
                         .entry(*parent_id)
                         .or_default()
                         .insert(name.to_string(), *sym);
@@ -325,14 +367,17 @@ impl<'a> TypeHeaderPass<'a> {
                 rhs,
             ) => {
                 if let Some(parent_id) = self.type_stack.last() {
-                    self.child_types
+                    self.raw
+                        .child_types
                         .entry(*parent_id)
                         .or_default()
                         .insert(type_name.to_string(), *sym);
                 }
 
-                self.typealiases
-                    .insert(decl.id, (name.clone(), rhs.clone()));
+                self.raw
+                    .typealiases
+                    .entry(decl.id)
+                    .or_insert((name.clone(), rhs.clone()));
                 self.annotations
                     .insert(rhs.id, ASTTyRepr::Annotated(rhs.clone()));
             }
@@ -656,14 +701,12 @@ impl<'a> TypeHeaderPass<'a> {
             .or_default();
         vars.extend(variants);
 
-        println!("method requirements: {method_requirements:?}");
         let reqs = self
             .raw
             .method_requirements
             .entry(type_name.symbol().unwrap())
             .or_default();
         reqs.extend(method_requirements);
-        println!("self.raw: {:#?}", self.raw);
 
         let associates = self
             .raw
@@ -753,15 +796,12 @@ pub mod tests {
         );
 
         assert_eq_diff!(
-            *raw.type_constructors.get(&TypeId::from(1)).unwrap(),
+            *raw.type_constructors.get(&TypeId::from(1).into()).unwrap(),
             TypeDef {
-                child_types: Default::default(),
                 name: Name::Resolved(Symbol::Type(TypeId::from(1)), "Person".into()),
                 kind: Kind::Type,
                 node_id: NodeID::ANY,
                 def: TypeDefKind::Struct,
-                generics: Default::default(),
-                conformances: Default::default(),
             }
         );
     }
@@ -780,20 +820,16 @@ pub mod tests {
             *raw.extensions.get(&Symbol::Type(TypeId::from(1))).unwrap(),
             vec![TypeExtension {
                 node_id: NodeID::ANY,
-                conformances: Default::default(),
             }]
         );
 
         assert_eq_diff!(
-            *raw.type_constructors.get(&TypeId::from(1)).unwrap(),
+            *raw.type_constructors.get(&TypeId::from(1).into()).unwrap(),
             TypeDef {
-                child_types: Default::default(),
                 name: Name::Resolved(Symbol::Type(TypeId::from(1)), "Person".into()),
                 kind: Kind::Type,
                 node_id: NodeID::ANY,
                 def: TypeDefKind::Struct,
-                generics: Default::default(),
-                conformances: Default::default(),
             }
         );
     }
@@ -840,9 +876,19 @@ pub mod tests {
         );
 
         assert_eq_diff!(
-            *raw.type_constructors.get(&TypeId::from(1)).unwrap(),
+            *raw.generics.get(&Symbol::Type(TypeId::from(1))).unwrap(),
+            crate::indexmap!(Name::Resolved(Symbol::TypeParameter(TypeParameterId(1)), "T".into()) => ASTTyRepr::Generic(GenericDecl {
+                id: NodeID::ANY,
+                name: Name::Resolved(Symbol::TypeParameter(TypeParameterId(1)), "T".into()),
+                generics: vec![],
+                conformances: vec![],
+                span: Span::ANY,
+            }))
+        );
+
+        assert_eq_diff!(
+            *raw.type_constructors.get(&TypeId::from(1).into()).unwrap(),
             TypeDef {
-                child_types: Default::default(),
                 name: Name::Resolved(Symbol::Type(TypeId::from(1)), "Wrapper".into()),
                 kind: Kind::Arrow {
                     in_kind: Box::new(Kind::Type),
@@ -850,14 +896,6 @@ pub mod tests {
                 },
                 node_id: NodeID::ANY,
                 def: TypeDefKind::Struct,
-                conformances: Default::default(),
-                generics: crate::indexmap!(Name::Resolved(Symbol::TypeParameter(TypeParameterId(1)), "T".into()) => ASTTyRepr::Generic(GenericDecl {
-                    id: NodeID::ANY,
-                    name: Name::Resolved(Symbol::TypeParameter(TypeParameterId(1)), "T".into()),
-                    generics: vec![],
-                    conformances: vec![],
-                    span: Span::ANY,
-                })),
             }
         );
     }
@@ -904,10 +942,29 @@ pub mod tests {
             })
         );
 
+        assert_eq!(
+            *raw.generics.get(&Symbol::Type(TypeId::from(1))).unwrap(),
+            crate::indexmap!(
+              Name::Resolved(Symbol::TypeParameter(TypeParameterId(1)), "T".into()) =>  ASTTyRepr::Generic(GenericDecl {
+                    id: NodeID::ANY,
+                    name: Name::Resolved(Symbol::TypeParameter(TypeParameterId(1)), "T".into()),
+                    generics: vec![],
+                    conformances: vec![],
+                    span: Span::ANY,
+                }),
+               Name::Resolved(Symbol::TypeParameter(TypeParameterId(2)), "U".into()) => ASTTyRepr::Generic(GenericDecl {
+                    id: NodeID::ANY,
+                    name: Name::Resolved(Symbol::TypeParameter(TypeParameterId(2)), "U".into()),
+                    generics: vec![],
+                    conformances: vec![],
+                    span: Span::ANY,
+                })
+            )
+        );
+
         assert_eq_diff!(
-            *raw.type_constructors.get(&TypeId::from(1)).unwrap(),
+            *raw.type_constructors.get(&TypeId::from(1).into()).unwrap(),
             TypeDef {
-                child_types: Default::default(),
                 name: Name::Resolved(Symbol::Type(TypeId::from(1)), "Wrapper".into()),
                 kind: Kind::Arrow {
                     in_kind: Box::new(Kind::Type),
@@ -919,23 +976,6 @@ pub mod tests {
                 },
                 node_id: NodeID::ANY,
                 def: TypeDefKind::Struct,
-                conformances: Default::default(),
-                generics: crate::indexmap!(
-                  Name::Resolved(Symbol::TypeParameter(TypeParameterId(1)), "T".into()) =>  ASTTyRepr::Generic(GenericDecl {
-                        id: NodeID::ANY,
-                        name: Name::Resolved(Symbol::TypeParameter(TypeParameterId(1)), "T".into()),
-                        generics: vec![],
-                        conformances: vec![],
-                        span: Span::ANY,
-                    }),
-                   Name::Resolved(Symbol::TypeParameter(TypeParameterId(2)), "U".into()) => ASTTyRepr::Generic(GenericDecl {
-                        id: NodeID::ANY,
-                        name: Name::Resolved(Symbol::TypeParameter(TypeParameterId(2)), "U".into()),
-                        generics: vec![],
-                        conformances: vec![],
-                        span: Span::ANY,
-                    })
-                ),
             }
         );
     }
@@ -969,15 +1009,12 @@ pub mod tests {
         );
 
         assert_eq_diff!(
-            *raw.type_constructors.get(&TypeId::from(1)).unwrap(),
+            *raw.type_constructors.get(&TypeId::from(1).into()).unwrap(),
             TypeDef {
-                child_types: Default::default(),
                 name: Name::Resolved(Symbol::Type(TypeId::from(1)), "Fizz".into()),
                 kind: Kind::Type,
                 node_id: NodeID::ANY,
                 def: TypeDefKind::Enum,
-                generics: Default::default(),
-                conformances: Default::default(),
             }
         );
     }
@@ -994,8 +1031,6 @@ pub mod tests {
         ",
         )
         .1;
-
-        println!("raw in test: {raw:#?}");
 
         assert_eq_diff!(
             *raw.method_requirements
@@ -1030,13 +1065,10 @@ pub mod tests {
         assert_eq_diff!(
             *raw.protocols.get(&ProtocolId::from(1)).unwrap(),
             TypeDef {
-                child_types: Default::default(),
                 name: Name::Resolved(Symbol::Protocol(ProtocolId::from(1)), "Fizz".into()),
                 kind: Kind::Type,
                 node_id: NodeID::ANY,
                 def: TypeDefKind::Protocol,
-                generics: Default::default(),
-                conformances: Default::default(),
             }
         );
     }
@@ -1068,20 +1100,22 @@ pub mod tests {
             })
         );
 
+        assert_eq!(
+            *raw.conformances.get(&TypeId::from(1).into()).unwrap(),
+            vec![ConformanceStub {
+                conforming_id: TypeId::from(1).into(),
+                protocol_id: ProtocolId::from(1),
+                span: Span::ANY,
+            }]
+        );
+
         assert_eq_diff!(
-            *raw.type_constructors.get(&TypeId::from(1)).unwrap(),
+            *raw.type_constructors.get(&TypeId::from(1).into()).unwrap(),
             TypeDef {
-                child_types: Default::default(),
                 name: Name::Resolved(Symbol::Type(TypeId::from(1)), "Buzz".into()),
                 kind: Kind::Type,
                 node_id: NodeID::ANY,
                 def: TypeDefKind::Struct,
-                generics: Default::default(),
-                conformances: vec![ConformanceStub {
-                    conforming_id: TypeId::from(1).into(),
-                    protocol_id: ProtocolId::from(1),
-                    span: Span::ANY,
-                }],
             }
         );
     }
@@ -1136,22 +1170,5 @@ pub mod tests {
                 }
             })
         );
-    }
-
-    #[test]
-    fn extend_builtin() {
-        let (_ast, _raw) = type_header_decl_pass(
-            "
-        protocol Foo {
-            func foo() -> Int
-        }
-        extend Int: Foo {
-            func foo() { 123 }
-        }
-        1.foo()
-        ",
-        );
-
-        // Fill this in.
     }
 }

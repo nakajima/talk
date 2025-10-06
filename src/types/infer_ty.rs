@@ -2,7 +2,7 @@ use itertools::Itertools;
 
 use crate::{
     compiling::module::ModuleId,
-    name_resolution::symbol::TypeId,
+    name_resolution::symbol::Symbol,
     node_id::NodeID,
     types::{
         infer_row::InferRow,
@@ -51,16 +51,16 @@ impl Level {
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub enum Primitive {
-    Int,
-    Float,
-    Bool,
-    Void,
+    Int(Symbol),
+    Float(Symbol),
+    Bool(Symbol),
+    Void(Symbol),
 }
 
 #[derive(PartialEq, Eq, Hash, Clone)]
 pub enum InferTy {
     Hole(NodeID),
-    Primitive(Primitive),
+    Primitive(Symbol),
 
     Param(TypeParamId),
     Rigid(SkolemId),
@@ -70,7 +70,7 @@ pub enum InferTy {
     },
 
     Constructor {
-        type_id: TypeId,
+        symbol: Symbol,
         params: Vec<InferTy>,
         ret: Box<InferTy>,
     },
@@ -81,7 +81,7 @@ pub enum InferTy {
 
     // Nominal types (we look up their information from the TypeCatalog)
     Nominal {
-        id: TypeId,
+        symbol: Symbol,
         type_args: Vec<InferTy>,
         row: Box<InferRow>,
     },
@@ -93,11 +93,11 @@ impl From<InferTy> for Ty {
             InferTy::Primitive(primitive) => Ty::Primitive(primitive),
             InferTy::Param(type_param_id) => Ty::Param(type_param_id),
             InferTy::Constructor {
-                type_id,
+                symbol,
                 params,
                 box ret,
             } => Ty::Constructor {
-                type_id,
+                symbol,
                 params: params.into_iter().map(|p| p.into()).collect(),
                 ret: Box::new(ret.into()),
             },
@@ -107,11 +107,11 @@ impl From<InferTy> for Ty {
             InferTy::Tuple(items) => Ty::Tuple(items.into_iter().map(|t| t.into()).collect()),
             InferTy::Record(box infer_row) => Ty::Record(Box::new(infer_row.into())),
             InferTy::Nominal {
-                id,
+                symbol,
                 type_args,
                 box row,
             } => Ty::Nominal {
-                id,
+                symbol,
                 type_args: type_args.into_iter().map(|t| t.into()).collect(),
                 row: Box::new(row.into()),
             },
@@ -126,11 +126,11 @@ impl From<Ty> for InferTy {
             Ty::Primitive(primitive) => InferTy::Primitive(primitive),
             Ty::Param(type_param_id) => InferTy::Param(type_param_id),
             Ty::Constructor {
-                type_id,
+                symbol,
                 params,
                 box ret,
             } => InferTy::Constructor {
-                type_id,
+                symbol,
                 params: params.into_iter().map(|p| p.into()).collect(),
                 ret: Box::new(ret.into()),
             },
@@ -140,11 +140,11 @@ impl From<Ty> for InferTy {
             Ty::Tuple(items) => InferTy::Tuple(items.into_iter().map(|t| t.into()).collect()),
             Ty::Record(box infer_row) => InferTy::Record(Box::new(infer_row.into())),
             Ty::Nominal {
-                id,
+                symbol,
                 type_args,
                 box row,
             } => InferTy::Nominal {
-                id,
+                symbol,
                 type_args: type_args.into_iter().map(|t| t.into()).collect(),
                 row: Box::new(row.into()),
             },
@@ -193,10 +193,10 @@ impl SomeType for InferTy {
 
 #[allow(non_upper_case_globals)]
 impl InferTy {
-    pub const Int: InferTy = InferTy::Primitive(Primitive::Int);
-    pub const Float: InferTy = InferTy::Primitive(Primitive::Float);
-    pub const Bool: InferTy = InferTy::Primitive(Primitive::Bool);
-    pub const Void: InferTy = InferTy::Primitive(Primitive::Void);
+    pub const Int: InferTy = InferTy::Primitive(Symbol::Int);
+    pub const Float: InferTy = InferTy::Primitive(Symbol::Float);
+    pub const Bool: InferTy = InferTy::Primitive(Symbol::Bool);
+    pub const Void: InferTy = InferTy::Primitive(Symbol::Void);
 
     pub fn collect_foralls(&self) -> Vec<ForAll> {
         let mut result = vec![];
@@ -281,11 +281,11 @@ impl InferTy {
             InferTy::Rigid(..) => self,
             InferTy::UnificationVar { .. } => self,
             InferTy::Constructor {
-                type_id,
+                symbol,
                 params,
                 ret,
             } => InferTy::Constructor {
-                type_id: type_id.import(module_id),
+                symbol: symbol.import(module_id),
                 params,
                 ret,
             },
@@ -296,8 +296,12 @@ impl InferTy {
                 InferTy::Tuple(items.into_iter().map(|i| i.import(module_id)).collect())
             }
             InferTy::Record(row) => InferTy::Record(row.import(module_id).into()),
-            InferTy::Nominal { id, type_args, row } => InferTy::Nominal {
-                id: id.import(module_id),
+            InferTy::Nominal {
+                symbol,
+                type_args,
+                row,
+            } => InferTy::Nominal {
+                symbol: symbol.import(module_id),
                 type_args: type_args.into_iter().map(|t| t.import(module_id)).collect(),
                 row: row.import(module_id).into(),
             },
@@ -320,8 +324,12 @@ impl std::fmt::Debug for InferTy {
             InferTy::Tuple(items) => {
                 write!(f, "({})", items.iter().map(|i| format!("{i:?}")).join(", "))
             }
-            InferTy::Nominal { id, row, type_args } => {
-                write!(f, "Type({id:?}, {type_args:?}, {row:?})")
+            InferTy::Nominal {
+                symbol,
+                row,
+                type_args,
+            } => {
+                write!(f, "Type({symbol:?}, {type_args:?}, {row:?})")
             }
             InferTy::Record(box row) => {
                 let row_debug = match row {

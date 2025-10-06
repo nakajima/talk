@@ -1,7 +1,6 @@
 use crate::node_id::FileID;
 use crate::types::builtins;
 use crate::types::constraints::type_member::TypeMember;
-use crate::types::type_catalog::ConformanceKey;
 use crate::types::wants::Wants;
 use crate::{
     ast::{AST, ASTPhase},
@@ -155,9 +154,21 @@ impl<'a> InferencePass<'a> {
             let ty = pass.infer_node(root, Level(1), &mut wants);
             pass.session.types_by_node.insert(root.node_id(), ty);
             let (mut subs, unsolved) = pass.solve(Level(1), wants);
-            last_unsolved = unsolved;
+            last_unsolved.extend(unsolved);
             pass.apply_to_self(&mut subs);
         }
+
+        let mut wants = Wants::default();
+        for conformance in pass.session.type_catalog.conformances.values() {
+            wants.conforms(
+                conformance.conforming_id,
+                conformance.protocol_id,
+                conformance.span,
+            );
+        }
+        let (mut subs, unsolved) = pass.solve(Level(1), wants);
+        last_unsolved.extend(unsolved);
+        pass.apply_to_self(&mut subs);
 
         _ = std::mem::replace(&mut pass.ast.roots, roots);
 
@@ -169,7 +180,7 @@ impl<'a> InferencePass<'a> {
                         span: conforms.span,
                         kind: TypeError::TypesDoesNotConform {
                             protocol_id: conforms.protocol_id,
-                            type_id: conforms.type_id,
+                            symbol: conforms.symbol,
                         },
                     }))
             }
@@ -310,33 +321,6 @@ impl<'a> InferencePass<'a> {
                 name: Name::Resolved(sym @ Symbol::Builtin(..), ..),
                 ..
             } => builtins::resolve_builtin_type(sym).0,
-            // TypeAnnotationKind::Nominal {
-            //     name: Name::Resolved(sym, ..),
-            //     ..
-            // } => {
-            //     let ty = self
-            //         .session
-            //         .term_env
-            //         .lookup(sym)
-            //         .cloned()
-            //         .unwrap_or_else(|| panic!("type_resolve didn't define {sym:?}"))
-            //         .inference_instantiate(&mut self.session, level, wants, annotation.span);
-            //     self.session.normalize_nominals(&ty, level)
-            // }
-            TypeAnnotationKind::Nominal {
-                name: Name::Resolved(Symbol::Type(type_id), ..),
-                generics,
-            } => {
-                // Build Boxy<Int> as TypeApplication(TypeConstructor(Boxy), Int) and normalize.
-                InferTy::Nominal {
-                    id: *type_id,
-                    type_args: generics
-                        .iter()
-                        .map(|g| self.infer_type_annotation(g, level, wants))
-                        .collect(),
-                    row: Box::new(self.session.new_row_meta_var(Level(1))),
-                }
-            }
             TypeAnnotationKind::Nominal {
                 name: Name::Resolved(sym @ Symbol::TypeParameter(..), ..),
                 generics: _,
@@ -344,6 +328,20 @@ impl<'a> InferencePass<'a> {
                 let entry = self.session.lookup(sym).expect("did not get type param");
 
                 entry.inference_instantiate(self.session, level, wants, annotation.span)
+            }
+            TypeAnnotationKind::Nominal {
+                name: Name::Resolved(symbol, ..),
+                generics,
+            } => {
+                // Build Boxy<Int> as TypeApplication(TypeConstructor(Boxy), Int) and normalize.
+                InferTy::Nominal {
+                    symbol: *symbol,
+                    type_args: generics
+                        .iter()
+                        .map(|g| self.infer_type_annotation(g, level, wants))
+                        .collect(),
+                    row: Box::new(self.session.new_row_meta_var(Level(1))),
+                }
             }
             TypeAnnotationKind::SelfType(Name::Resolved(sym, _)) => self
                 .session
@@ -572,10 +570,10 @@ impl<'a> InferencePass<'a> {
             }
             DeclKind::Struct {
                 body,
-                name: Name::Resolved(Symbol::Type(id), name),
+                name: Name::Resolved(symbol, name),
                 ..
             } => {
-                let Some(struct_type) = self.session.lookup_nominal(*id) else {
+                let Some(_) = self.session.lookup_nominal(symbol) else {
                     self.ast
                         .diagnostics
                         .push(crate::diagnostic::AnyDiagnostic::Typing(Diagnostic {
@@ -585,24 +583,6 @@ impl<'a> InferencePass<'a> {
 
                     return InferTy::Void;
                 };
-
-                for stub in &struct_type.conformances {
-                    let conformance = self
-                        .session
-                        .type_catalog
-                        .conformances
-                        .get(&ConformanceKey {
-                            protocol_id: stub.protocol_id,
-                            conforming_id: stub.conforming_id,
-                        })
-                        .unwrap();
-
-                    wants.conforms(
-                        struct_type.type_id,
-                        conformance.protocol_id,
-                        conformance.span,
-                    );
-                }
 
                 self.infer_block(body, level, wants)
             }
@@ -919,8 +899,8 @@ impl<'a> InferencePass<'a> {
             ExprKind::RecordLiteral { fields, spread } => {
                 self.infer_record_literal(fields, spread, level, wants)
             }
-            ExprKind::Constructor(Name::Resolved(Symbol::Type(id), _)) => InferTy::Constructor {
-                type_id: *id,
+            ExprKind::Constructor(Name::Resolved(symbol, _)) => InferTy::Constructor {
+                symbol: *symbol,
                 params: vec![],
                 ret: InferTy::Void.into(),
             },

@@ -299,12 +299,12 @@ pub(super) fn unify(
         ),
         (
             InferTy::Nominal {
-                id: lhs_id,
+                symbol: lhs_id,
                 row: box lhs_row,
                 type_args: lhs_type_args,
             },
             InferTy::Nominal {
-                id: rhs_id,
+                symbol: rhs_id,
                 row: box rhs_row,
                 type_args: rhs_type_args,
             },
@@ -425,11 +425,11 @@ pub(super) fn substitute(ty: InferTy, substitutions: &FxHashMap<InferTy, InferTy
         InferTy::UnificationVar { .. } => ty,
         InferTy::Primitive(..) => ty,
         InferTy::Constructor {
-            type_id,
+            symbol,
             params,
             ret,
         } => InferTy::Constructor {
-            type_id,
+            symbol,
             params: params
                 .into_iter()
                 .map(|p| substitute(p, substitutions))
@@ -448,11 +448,11 @@ pub(super) fn substitute(ty: InferTy, substitutions: &FxHashMap<InferTy, InferTy
         ),
         InferTy::Record(row) => InferTy::Record(Box::new(substitute_row(*row, substitutions))),
         InferTy::Nominal {
-            id,
+            symbol,
             box row,
             type_args,
         } => InferTy::Nominal {
-            id,
+            symbol,
             row: Box::new(substitute_row(row, substitutions)),
             type_args: substitute_mult(&type_args, substitutions),
         },
@@ -504,11 +504,11 @@ pub(super) fn apply(ty: InferTy, substitutions: &mut UnificationSubstitutions) -
             }
         }
         InferTy::Constructor {
-            type_id,
+            symbol,
             params,
             ret,
         } => InferTy::Constructor {
-            type_id,
+            symbol,
             params: params
                 .into_iter()
                 .map(|p| apply(p, substitutions))
@@ -525,11 +525,11 @@ pub(super) fn apply(ty: InferTy, substitutions: &mut UnificationSubstitutions) -
         }
         InferTy::Record(row) => InferTy::Record(Box::new(apply_row(*row, substitutions))),
         InferTy::Nominal {
-            id,
+            symbol,
             box row,
             type_args,
         } => InferTy::Nominal {
-            id,
+            symbol,
             row: Box::new(apply_row(row, substitutions)),
             type_args: apply_mult(type_args, substitutions),
         },
@@ -585,11 +585,11 @@ pub(super) fn instantiate_ty(
         InferTy::UnificationVar { .. } => ty,
         InferTy::Primitive(..) => ty,
         InferTy::Constructor {
-            type_id,
+            symbol,
             params,
             ret,
         } => InferTy::Constructor {
-            type_id,
+            symbol,
             params: params
                 .into_iter()
                 .map(|p| instantiate_ty(p, substitutions, level))
@@ -610,11 +610,11 @@ pub(super) fn instantiate_ty(
             InferTy::Record(Box::new(instantiate_row(*row, substitutions, level)))
         }
         InferTy::Nominal {
-            id,
+            symbol,
             box row,
             type_args,
         } => InferTy::Nominal {
-            id,
+            symbol,
             row: Box::new(instantiate_row(row, substitutions, level)),
             type_args: type_args
                 .iter()

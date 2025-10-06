@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 
 use crate::{
     label::Label,
-    name_resolution::symbol::{AssociatedTypeId, ProtocolId, Symbol, TypeId},
+    name_resolution::symbol::{AssociatedTypeId, ProtocolId, Symbol},
     span::Span,
     types::{
         constraints::{
@@ -73,10 +73,10 @@ impl Wants {
         }))
     }
 
-    pub fn conforms(&mut self, type_id: TypeId, protocol_id: ProtocolId, span: Span) {
-        tracing::debug!("constraining conforms {type_id:?} < {protocol_id:?}");
+    pub fn conforms(&mut self, symbol: Symbol, protocol_id: ProtocolId, span: Span) {
+        tracing::debug!("constraining conforms {symbol:?} < {protocol_id:?}");
         self.defer.push_back(Constraint::Conforms(Conforms {
-            type_id,
+            symbol,
             protocol_id,
             span,
         }));

@@ -1,13 +1,13 @@
 use std::{error::Error, fmt::Display};
 
 use crate::{
-    name_resolution::symbol::{ProtocolId, TypeId},
+    name_resolution::symbol::{ProtocolId, Symbol},
     types::infer_ty::InferTy,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TypeError {
-    TypeConstructorNotFound(TypeId),
+    TypeConstructorNotFound(Symbol),
     ExpectedRow(InferTy),
     GenericArgCount {
         expected: u8,
@@ -20,7 +20,7 @@ pub enum TypeError {
     MissingConformanceRequirement(String),
     TypeNotFound(String),
     TypesDoesNotConform {
-        type_id: TypeId,
+        symbol: Symbol,
         protocol_id: ProtocolId,
     },
 }

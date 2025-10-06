@@ -1,12 +1,10 @@
 use crate::{
-    name_resolution::symbol::Symbol,
     span::Span,
     types::{
         constraints::constraint::{Constraint, ConstraintCause},
         infer_ty::{InferTy, Level},
         passes::inference_pass::curry,
         term_environment::EnvEntry,
-        type_catalog::NominalForm,
         type_error::TypeError,
         type_operations::{UnificationSubstitutions, unify},
         type_session::TypeSession,
@@ -50,33 +48,26 @@ impl Call {
         }
 
         match &self.callee {
-            InferTy::Constructor { type_id: id, .. } => {
-                let Some(nominal) = session.lookup_nominal(*id) else {
-                    panic!("type not found in catalog");
+            InferTy::Constructor { symbol, .. } => {
+                // TODO: Figure out if we're dealing with a struct vs an enum here and be more explicit.
+                // This is ok for now since enums can't have initializers and structs always have them.
+                let init_ty = if let Some(initializer) = session
+                    .type_catalog
+                    .initializers
+                    .get(symbol)
+                    .and_then(|i| i.values().next().copied())
+                {
+                    let entry = session
+                        .lookup(&initializer)
+                        .expect("constructor scheme missing");
+                    entry.inference_instantiate(session, Level(1), next_wants, self.span)
+                } else {
+                    match session.lookup(symbol).expect("enum type missing from env") {
+                        EnvEntry::Mono(ty) => ty,
+                        EnvEntry::Scheme(s) => s.ty.clone(),
+                    }
                 };
 
-                let init_ty = match &nominal.form {
-                    NominalForm::Struct { initializers, .. } => {
-                        let ctor_sym = initializers
-                            .values()
-                            .next()
-                            .copied()
-                            .expect("struct must have an initializer symbol");
-                        let entry = session
-                            .lookup(&ctor_sym)
-                            .expect("constructor scheme missing");
-                        entry.inference_instantiate(session, Level(1), next_wants, self.span)
-                    }
-                    NominalForm::Enum { .. } => {
-                        match session
-                            .lookup(&Symbol::Type(*id))
-                            .expect("enum type missing from env")
-                        {
-                            EnvEntry::Mono(ty) => ty,
-                            EnvEntry::Scheme(s) => s.ty.clone(),
-                        }
-                    }
-                };
                 unify(
                     &init_ty,
                     &curry(args, self.returns.clone()),
