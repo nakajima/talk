@@ -575,28 +575,28 @@ impl TypeSession {
     }
 
     pub(super) fn lookup_member(&mut self, receiver: &Symbol, label: &Label) -> Option<Symbol> {
-        if let Some(methods) = self.type_catalog.properties.get(receiver) {
-            if let Some(sym) = methods.get(label) {
-                return Some(*sym);
-            }
+        if let Some(methods) = self.type_catalog.properties.get(receiver)
+            && let Some(sym) = methods.get(label)
+        {
+            return Some(*sym);
         }
 
-        if let Some(methods) = self.type_catalog.instance_methods.get(receiver) {
-            if let Some(sym) = methods.get(label) {
-                return Some(*sym);
-            }
+        if let Some(methods) = self.type_catalog.instance_methods.get(receiver)
+            && let Some(sym) = methods.get(label)
+        {
+            return Some(*sym);
         }
 
-        if let Some(methods) = self.type_catalog.static_methods.get(receiver) {
-            if let Some(sym) = methods.get(label) {
-                return Some(*sym);
-            }
+        if let Some(methods) = self.type_catalog.static_methods.get(receiver)
+            && let Some(sym) = methods.get(label)
+        {
+            return Some(*sym);
         }
 
-        if let Some(methods) = self.type_catalog.variants.get(receiver) {
-            if let Some(sym) = methods.get(label) {
-                return Some(*sym);
-            }
+        if let Some(methods) = self.type_catalog.variants.get(receiver)
+            && let Some(sym) = methods.get(label)
+        {
+            return Some(*sym);
         }
 
         None
@@ -672,10 +672,7 @@ impl TypeSession {
         None
     }
 
-    pub(super) fn lookup_properties(
-        &mut self,
-        symbol: &Symbol,
-    ) -> Option<IndexMap<Label, Symbol>> {
+    pub(super) fn lookup_properties(&mut self, symbol: &Symbol) -> Option<IndexMap<Label, Symbol>> {
         if let Some(properties) = self.type_catalog.properties.get(symbol).cloned() {
             return Some(properties);
         }
