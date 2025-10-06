@@ -123,7 +123,7 @@ pub struct Protocol {
     pub node_id: NodeID,
     pub methods: FxHashMap<Label, Symbol>,
     pub static_methods: FxHashMap<Label, Symbol>,
-    pub associated_types: FxHashMap<Name, Associated>,
+    pub associated_types: IndexMap<Name, Associated>,
     pub requirements: FxHashMap<Label, ConformanceRequirement>,
 }
 

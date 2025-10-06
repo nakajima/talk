@@ -20,9 +20,7 @@ use crate::{
     },
     span::Span,
     types::{
-        fields::{
-            Associated, Initializer, Method, MethodRequirement, Property, TypeFields, Variant,
-        },
+        fields::{Associated, Initializer, Method, MethodRequirement, Property, Variant},
         kind::Kind,
         type_catalog::ConformanceStub,
         type_session::{ASTTyRepr, Raw, TypeDef, TypeDefKind, TypeExtension, TypeSession},
@@ -104,6 +102,12 @@ impl<'a> TypeHeaderPass<'a> {
             raw.typealiases.extend(file_raw.typealiases);
             raw.extensions.extend(file_raw.extensions);
             raw.instance_methods.extend(file_raw.instance_methods);
+            raw.static_methods.extend(file_raw.static_methods);
+            raw.initializers.extend(file_raw.initializers);
+            raw.properties.extend(file_raw.properties);
+            raw.method_requirements.extend(file_raw.method_requirements);
+            raw.associated_types.extend(file_raw.associated_types);
+            raw.variants.extend(file_raw.variants);
         }
 
         raw
@@ -186,9 +190,7 @@ impl<'a> TypeHeaderPass<'a> {
                 }
 
                 self.type_stack.push(*sym);
-
-                let fields =
-                    self.collect_fields(name, decl.id, decl.span, TypeDefKind::Struct, body);
+                self.collect_fields(name, decl.id, decl.span, TypeDefKind::Struct, body);
                 self.raw.type_constructors.insert(
                     *type_id,
                     TypeDef {
@@ -202,7 +204,6 @@ impl<'a> TypeHeaderPass<'a> {
                             .iter()
                             .map(|g| (g.name.clone(), ASTTyRepr::Generic(g.clone())))
                             .collect(),
-                        fields,
                     },
                 );
             }
@@ -220,12 +221,7 @@ impl<'a> TypeHeaderPass<'a> {
                 }
 
                 self.type_stack.push(*sym);
-
-                let TypeFields::Extension { static_methods } =
-                    self.collect_fields(name, decl.id, decl.span, TypeDefKind::Extension, body)
-                else {
-                    unreachable!()
-                };
+                self.collect_fields(name, decl.id, decl.span, TypeDefKind::Extension, body);
 
                 self.raw
                     .extensions
@@ -234,7 +230,6 @@ impl<'a> TypeHeaderPass<'a> {
                     .push(TypeExtension {
                         node_id: decl.id,
                         conformances: Self::collect_conformance_stubs(*sym, conformances),
-                        static_methods,
                     });
             }
             DeclKind::Protocol {
@@ -252,9 +247,7 @@ impl<'a> TypeHeaderPass<'a> {
                 }
 
                 self.type_stack.push(*sym);
-
-                let fields =
-                    self.collect_fields(name, decl.id, decl.span, TypeDefKind::Protocol, body);
+                self.collect_fields(name, decl.id, decl.span, TypeDefKind::Protocol, body);
 
                 self.raw.protocols.insert(
                     *protocol_id,
@@ -269,7 +262,6 @@ impl<'a> TypeHeaderPass<'a> {
                             .iter()
                             .map(|g| (g.name.clone(), ASTTyRepr::Generic(g.clone())))
                             .collect(),
-                        fields,
                     },
                 );
             }
@@ -288,8 +280,7 @@ impl<'a> TypeHeaderPass<'a> {
                 }
 
                 self.type_stack.push(*sym);
-
-                let fields = self.collect_fields(name, decl.id, decl.span, TypeDefKind::Enum, body);
+                self.collect_fields(name, decl.id, decl.span, TypeDefKind::Enum, body);
 
                 self.raw.type_constructors.insert(
                     *type_id,
@@ -304,7 +295,6 @@ impl<'a> TypeHeaderPass<'a> {
                             .iter()
                             .map(|g| (g.name.clone(), ASTTyRepr::Generic(g.clone())))
                             .collect(),
-                        fields,
                     },
                 );
             }
@@ -404,7 +394,7 @@ impl<'a> TypeHeaderPass<'a> {
         span: Span,
         type_kind: TypeDefKind,
         body: &[Node],
-    ) -> TypeFields {
+    ) {
         // Collect properties
         let mut properties: IndexMap<Label, Property> = Default::default();
         let mut instance_methods: IndexMap<Label, Method> = Default::default();
@@ -638,33 +628,54 @@ impl<'a> TypeHeaderPass<'a> {
             .or_default();
         methods.extend(instance_methods);
 
-        match type_kind {
-            TypeDefKind::Extension => TypeFields::Extension { static_methods },
-            TypeDefKind::Struct => TypeFields::Struct {
-                initializers,
-                static_methods,
-                properties,
-            },
-            TypeDefKind::Enum => TypeFields::Enum {
-                variants,
-                static_methods,
-            },
-            TypeDefKind::Protocol => TypeFields::Protocol {
-                static_methods,
-                associated_types,
-                method_requirements,
-            },
-        }
+        let methods = self
+            .raw
+            .static_methods
+            .entry(type_name.symbol().unwrap())
+            .or_default();
+        methods.extend(static_methods);
+
+        let inits = self
+            .raw
+            .initializers
+            .entry(type_name.symbol().unwrap())
+            .or_default();
+        inits.extend(initializers);
+
+        let props = self
+            .raw
+            .properties
+            .entry(type_name.symbol().unwrap())
+            .or_default();
+        props.extend(properties);
+
+        let vars = self
+            .raw
+            .variants
+            .entry(type_name.symbol().unwrap())
+            .or_default();
+        vars.extend(variants);
+
+        println!("method requirements: {method_requirements:?}");
+        let reqs = self
+            .raw
+            .method_requirements
+            .entry(type_name.symbol().unwrap())
+            .or_default();
+        reqs.extend(method_requirements);
+        println!("self.raw: {:#?}", self.raw);
+
+        let associates = self
+            .raw
+            .associated_types
+            .entry(type_name.symbol().unwrap())
+            .or_default();
+        associates.extend(associated_types);
     }
 }
 
 #[cfg(test)]
 pub mod tests {
-
-    use std::rc::Rc;
-
-    use indexmap::indexmap;
-
     use crate::{
         annotation, assert_eq_diff,
         ast::AST,
@@ -685,13 +696,14 @@ pub mod tests {
         node_kinds::{generic_decl::GenericDecl, type_annotation::*},
         span::Span,
         types::{
-            fields::{Associated, Initializer, MethodRequirement, Property, TypeFields, Variant},
+            fields::{Associated, Initializer, MethodRequirement, Property, Variant},
             kind::Kind,
             passes::type_headers_pass::TypeHeaderPass,
             type_catalog::ConformanceStub,
             type_session::{ASTTyRepr, Raw, TypeDef, TypeDefKind, TypeExtension, TypeSession},
         },
     };
+    use std::rc::Rc;
 
     pub fn type_header_decl_pass(code: &'static str) -> (AST<NameResolved>, Raw) {
         let resolved = resolve(code);
@@ -713,6 +725,34 @@ pub mod tests {
         .1;
 
         assert_eq_diff!(
+            *raw.initializers
+                .get(&Symbol::Type(TypeId::from(1)))
+                .unwrap(),
+            fxhashmap! {
+                Label::Named("init".into()) => Initializer {
+                    symbol: Symbol::Synthesized(SynthesizedId::new(ModuleId::Current, 1)),
+                    initializes_type_id: TypeId::from(1),
+                    params: vec![
+                        ASTTyRepr::SelfType(Name::Resolved(TypeId::from(1).into(), "Person".into()), NodeID::ANY, Span::ANY),
+                        ASTTyRepr::Annotated(annotation!(TypeAnnotationKind::Nominal { name: Name::Resolved(Symbol::Int, "Int".into()), generics: vec!{} }))
+                    ]
+                }
+            }
+        );
+
+        assert_eq_diff!(
+            *raw.properties.get(&Symbol::Type(TypeId::from(1))).unwrap(),
+            crate::indexmap!(Label::Named("age".into()) => Property {
+                symbol: Symbol::Property(PropertyId::from(1)),
+                is_static: false,
+                ty_repr: ASTTyRepr::Annotated(annotation!(TypeAnnotationKind::Nominal {
+                    name: Name::Resolved(Symbol::Builtin(BuiltinId::new(crate::compiling::module::ModuleId::Prelude, 1)), "Int".into()),
+                    generics: vec![]
+                })),
+            })
+        );
+
+        assert_eq_diff!(
             *raw.type_constructors.get(&TypeId::from(1)).unwrap(),
             TypeDef {
                 child_types: Default::default(),
@@ -722,29 +762,6 @@ pub mod tests {
                 def: TypeDefKind::Struct,
                 generics: Default::default(),
                 conformances: Default::default(),
-                fields: TypeFields::Struct {
-                    static_methods: Default::default(),
-                    initializers: indexmap! {
-                        Label::Named("init".into()) => Initializer {
-                            symbol: Symbol::Synthesized(SynthesizedId::new(ModuleId::Current, 1)),
-                            initializes_type_id: TypeId::from(1),
-                            params: vec![
-                                ASTTyRepr::SelfType(Name::Resolved(TypeId::from(1).into(), "Person".into()), NodeID::ANY, Span::ANY),
-                                ASTTyRepr::Annotated(annotation!(TypeAnnotationKind::Nominal { name: Name::Resolved(Symbol::Int, "Int".into()), generics: vec!{} }))
-                            ]
-                        }
-                    },
-                    properties: crate::indexmap!(
-                        "age".into() => Property {
-                            symbol: Symbol::Property(PropertyId::from(1)),
-                            is_static: false,
-                            ty_repr: ASTTyRepr::Annotated(annotation!(TypeAnnotationKind::Nominal {
-                                name: Name::Resolved(Symbol::Builtin(BuiltinId::new(crate::compiling::module::ModuleId::Prelude, 1)), "Int".into()),
-                                generics: vec![]
-                            })),
-                        }
-                    )
-                }
             }
         );
     }
@@ -764,7 +781,6 @@ pub mod tests {
             vec![TypeExtension {
                 node_id: NodeID::ANY,
                 conformances: Default::default(),
-                static_methods: Default::default(),
             }]
         );
 
@@ -778,19 +794,6 @@ pub mod tests {
                 def: TypeDefKind::Struct,
                 generics: Default::default(),
                 conformances: Default::default(),
-                fields: TypeFields::Struct {
-                    static_methods: Default::default(),
-                    initializers: indexmap! {
-                        "init".into() => Initializer {
-                            symbol: Symbol::Synthesized(SynthesizedId::new(ModuleId::Current, 1)),
-                            initializes_type_id: TypeId::from(1),
-                            params: vec![
-                                ASTTyRepr::SelfType(Name::Resolved(TypeId::from(1).into(), "Person".into()), NodeID::ANY, Span::ANY),
-                            ]
-                        }
-                    },
-                    properties: Default::default()
-                }
             }
         );
     }
@@ -811,6 +814,32 @@ pub mod tests {
         .1;
 
         assert_eq_diff!(
+            *raw.initializers
+                .get(&Symbol::Type(TypeId::from(1)))
+                .unwrap(),
+            fxhashmap!(Label::Named("init".into()) => Initializer {
+                symbol: Symbol::Global(GlobalId::from(1)),
+                initializes_type_id: TypeId::from(1),
+                params: vec![
+                    ASTTyRepr::SelfType(Name::Resolved(Symbol::Type(TypeId::from(1)), "Wrapper".into()), NodeID::ANY, Span::ANY),
+                    ASTTyRepr::Hole(NodeID(FileID(0), 4), Span::ANY)
+                ]
+            })
+        );
+
+        assert_eq_diff!(
+            *raw.properties.get(&Symbol::Type(TypeId::from(1))).unwrap(),
+            crate::indexmap!(Label::Named("wrapped".into()) => Property {
+                symbol: Symbol::Property(PropertyId::from(1)),
+                is_static: false,
+                ty_repr: ASTTyRepr::Annotated(annotation!(TypeAnnotationKind::Nominal {
+                    name: Name::Resolved(Symbol::TypeParameter(TypeParameterId(1)), "T".into()),
+                    generics: vec![]
+                }))
+            })
+        );
+
+        assert_eq_diff!(
             *raw.type_constructors.get(&TypeId::from(1)).unwrap(),
             TypeDef {
                 child_types: Default::default(),
@@ -829,25 +858,6 @@ pub mod tests {
                     conformances: vec![],
                     span: Span::ANY,
                 })),
-                fields: TypeFields::Struct {
-                    static_methods: Default::default(),
-                    initializers: crate::indexmap!("init".into() => Initializer {
-                        symbol: Symbol::Global(GlobalId::from(1)),
-                        initializes_type_id: TypeId::from(1),
-                        params: vec![
-                            ASTTyRepr::SelfType(Name::Resolved(Symbol::Type(TypeId::from(1)), "Wrapper".into()), NodeID::ANY, Span::ANY),
-                            ASTTyRepr::Hole(NodeID(FileID(0), 4), Span::ANY)
-                        ]
-                    }),
-                    properties: crate::indexmap!("wrapped".into() => Property {
-                        symbol: Symbol::Property(PropertyId::from(1)),
-                        is_static: false,
-                        ty_repr: ASTTyRepr::Annotated(annotation!(TypeAnnotationKind::Nominal {
-                            name: Name::Resolved(Symbol::TypeParameter(TypeParameterId(1)), "T".into()),
-                            generics: vec![]
-                        }))
-                    })
-                }
             }
         );
     }
@@ -862,6 +872,37 @@ pub mod tests {
         ",
         )
         .1;
+
+        assert_eq_diff!(
+            *raw.initializers
+                .get(&Symbol::Type(TypeId::from(1)))
+                .unwrap(),
+            fxhashmap!(Label::Named("init".into()) => Initializer {
+                symbol: Symbol::Synthesized(SynthesizedId::new(ModuleId::Current, 1)),
+                initializes_type_id: TypeId::from(1),
+                params: vec![
+                ASTTyRepr::SelfType(Name::Resolved(TypeId::from(1).into(), "Wrapper".into()), NodeID::ANY, Span::ANY),
+                ASTTyRepr::Annotated(annotation!(TypeAnnotationKind::Nominal { name: Name::Resolved(Symbol::TypeParameter(TypeParameterId(1)), "T".into()), generics: vec![
+                    annotation!(TypeAnnotationKind::Nominal { name: Name::Resolved(TypeParameterId(2).into(), "U".into()), generics: vec![] })
+                ] }))
+                ]
+            })
+        );
+
+        assert_eq_diff!(
+            *raw.properties.get(&Symbol::Type(TypeId::from(1))).unwrap(),
+            crate::indexmap!(Label::Named("wrapped".into()) => Property {
+                symbol: Symbol::Property(PropertyId::from(1)),
+                is_static: false,
+                ty_repr: ASTTyRepr::Annotated(annotation!(TypeAnnotationKind::Nominal {
+                    name: Name::Resolved(Symbol::TypeParameter(TypeParameterId(1)), "T".into()),
+                    generics: vec![annotation!(TypeAnnotationKind::Nominal {
+                        name: Name::Resolved(Symbol::TypeParameter(TypeParameterId(2)), "U".into()),
+                        generics: vec![]
+                    })]
+                }))
+            })
+        );
 
         assert_eq_diff!(
             *raw.type_constructors.get(&TypeId::from(1)).unwrap(),
@@ -895,32 +936,6 @@ pub mod tests {
                         span: Span::ANY,
                     })
                 ),
-                fields: TypeFields::Struct {
-                    static_methods: Default::default(),
-                    initializers: indexmap! {
-                        "init".into() => Initializer {
-                            symbol: Symbol::Synthesized(SynthesizedId::new(ModuleId::Current, 1)),
-                            initializes_type_id: TypeId::from(1),
-                            params: vec![
-                            ASTTyRepr::SelfType(Name::Resolved(TypeId::from(1).into(), "Wrapper".into()), NodeID::ANY, Span::ANY),
-                            ASTTyRepr::Annotated(annotation!(TypeAnnotationKind::Nominal { name: Name::Resolved(Symbol::TypeParameter(TypeParameterId(1)), "T".into()), generics: vec![
-                                annotation!(TypeAnnotationKind::Nominal { name: Name::Resolved(TypeParameterId(2).into(), "U".into()), generics: vec![] })
-                            ] }))
-                            ]
-                        }
-                    },
-                    properties: crate::indexmap!("wrapped".into() => Property {
-                        symbol: Symbol::Property(PropertyId::from(1)),
-                        is_static: false,
-                        ty_repr: ASTTyRepr::Annotated(annotation!(TypeAnnotationKind::Nominal {
-                            name: Name::Resolved(Symbol::TypeParameter(TypeParameterId(1)), "T".into()),
-                            generics: vec![annotation!(TypeAnnotationKind::Nominal {
-                                name: Name::Resolved(Symbol::TypeParameter(TypeParameterId(2)), "U".into()),
-                                generics: vec![]
-                            })]
-                        }))
-                    })
-                }
             }
         );
     }
@@ -936,6 +951,23 @@ pub mod tests {
         )
         .1;
 
+        assert_eq!(
+            *raw.variants.get(&Symbol::Type(TypeId::from(1))).unwrap(),
+            crate::indexmap!(
+                Label::Named("foo".into()) => Variant {
+                    symbol: Symbol::Variant(VariantId::from(1)),
+                    tag: "foo".into(),
+                    fields: vec![ASTTyRepr::Annotated(annotation!(
+                        TypeAnnotationKind::Nominal {
+                            name: Name::Resolved(Symbol::Int, "Int".into()),
+                            generics: vec![]
+                        }
+                    ))]
+                },
+                "bar".into() =>  Variant { symbol: Symbol::Variant(VariantId::from(2)), tag: "bar".into(), fields: vec![] }
+            )
+        );
+
         assert_eq_diff!(
             *raw.type_constructors.get(&TypeId::from(1)).unwrap(),
             TypeDef {
@@ -946,22 +978,6 @@ pub mod tests {
                 def: TypeDefKind::Enum,
                 generics: Default::default(),
                 conformances: Default::default(),
-                fields: TypeFields::Enum {
-                    static_methods: Default::default(),
-                    variants: crate::indexmap!(
-                        "foo".into() => Variant {
-                            symbol: Symbol::Variant(VariantId::from(1)),
-                            tag: "foo".into(),
-                            fields: vec![ASTTyRepr::Annotated(annotation!(
-                                TypeAnnotationKind::Nominal {
-                                    name: Name::Resolved(Symbol::Int, "Int".into()),
-                                    generics: vec![]
-                                }
-                            ))]
-                        },
-                        "bar".into() =>  Variant { symbol: Symbol::Variant(VariantId::from(2)), tag: "bar".into(), fields: vec![] }
-                    ),
-                }
             }
         );
     }
@@ -979,6 +995,38 @@ pub mod tests {
         )
         .1;
 
+        println!("raw in test: {raw:#?}");
+
+        assert_eq_diff!(
+            *raw.method_requirements
+                .get(&Symbol::Protocol(ProtocolId::from(1)))
+                .unwrap(),
+            crate::indexmap!(Label::Named("foo".into()) => MethodRequirement {
+                id: NodeID::ANY,
+                symbol: Symbol::InstanceMethod(InstanceMethodId::from(1)),
+                params: vec![
+                    ASTTyRepr::SelfType(
+                        Name::Resolved(ProtocolId::from(1).into(), "Fizz".into()),
+                        NodeID::ANY,
+                        Span::ANY,
+                    )
+                ],
+                ret: Some(ASTTyRepr::Annotated(annotation!(TypeAnnotationKind::Nominal {
+                    name: Name::Resolved(Symbol::Int, "Int".into()),
+                    generics: vec![]
+                })))
+            })
+        );
+        assert_eq_diff!(
+            *raw.associated_types
+                .get(&Symbol::Protocol(ProtocolId::from(1)))
+                .unwrap(),
+            crate::indexmap!(Name::Resolved(Symbol::AssociatedType(AssociatedTypeId::from(1)), "Buzz".into()) => Associated {
+                protocol_id: ProtocolId::from(1),
+                symbol: Symbol::AssociatedType(AssociatedTypeId::from(1))
+            })
+        );
+
         assert_eq_diff!(
             *raw.protocols.get(&ProtocolId::from(1)).unwrap(),
             TypeDef {
@@ -989,28 +1037,6 @@ pub mod tests {
                 def: TypeDefKind::Protocol,
                 generics: Default::default(),
                 conformances: Default::default(),
-                fields: TypeFields::Protocol {
-                    static_methods: Default::default(),
-                    method_requirements: crate::indexmap!("foo".into() => MethodRequirement {
-                        id: NodeID::ANY,
-                        symbol: Symbol::InstanceMethod(InstanceMethodId::from(1)),
-                        params: vec![
-                            ASTTyRepr::SelfType(
-                                Name::Resolved(ProtocolId::from(1).into(), "Fizz".into()),
-                                NodeID::ANY,
-                                Span::ANY,
-                            )
-                        ],
-                        ret: Some(ASTTyRepr::Annotated(annotation!(TypeAnnotationKind::Nominal {
-                            name: Name::Resolved(Symbol::Int, "Int".into()),
-                            generics: vec![]
-                        })))
-                    }),
-                    associated_types: fxhashmap!(Name::Resolved(Symbol::AssociatedType(AssociatedTypeId::from(1)), "Buzz".into()) => Associated {
-                        protocol_id: ProtocolId::from(1),
-                        symbol: Symbol::AssociatedType(AssociatedTypeId::from(1))
-                    })
-                }
             }
         );
     }
@@ -1026,6 +1052,23 @@ pub mod tests {
         .1;
 
         assert_eq_diff!(
+            *raw.initializers
+                .get(&Symbol::Type(TypeId::from(1)))
+                .unwrap(),
+            fxhashmap!(Label::Named("init".into()) => Initializer {
+                symbol: Symbol::Synthesized(SynthesizedId::new(ModuleId::Current, 1)),
+                initializes_type_id: TypeId::from(1),
+                params: vec![
+                    ASTTyRepr::SelfType(
+                        Name::Resolved(Symbol::Type(TypeId::from(1)), "Buzz".into()),
+                        NodeID::ANY,
+                        Span::ANY
+                    ),
+                ]
+            })
+        );
+
+        assert_eq_diff!(
             *raw.type_constructors.get(&TypeId::from(1)).unwrap(),
             TypeDef {
                 child_types: Default::default(),
@@ -1039,23 +1082,6 @@ pub mod tests {
                     protocol_id: ProtocolId::from(1),
                     span: Span::ANY,
                 }],
-                fields: TypeFields::Struct {
-                    initializers: indexmap! {
-                        "init".into() => Initializer {
-                            symbol: Symbol::Synthesized(SynthesizedId::new(ModuleId::Current, 1)),
-                            initializes_type_id: TypeId::from(1),
-                            params: vec![
-                                ASTTyRepr::SelfType(
-                                    Name::Resolved(Symbol::Type(TypeId::from(1)), "Buzz".into()),
-                                    NodeID::ANY,
-                                    Span::ANY
-                                ),
-                            ]
-                        }
-                    },
-                    static_methods: Default::default(),
-                    properties: Default::default()
-                }
             }
         );
     }

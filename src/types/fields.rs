@@ -1,37 +1,11 @@
-use indexmap::IndexMap;
-use rustc_hash::FxHashMap;
-
 use crate::{
     compiling::module::ModuleId,
     label::Label,
-    name::Name,
     name_resolution::symbol::{ProtocolId, Symbol, TypeId},
     node_id::NodeID,
     span::Span,
     types::type_session::ASTTyRepr,
 };
-
-#[derive(Debug, PartialEq, Clone)]
-pub enum TypeFields {
-    Struct {
-        initializers: IndexMap<Label, Initializer>,
-        static_methods: IndexMap<Label, Method>,
-        properties: IndexMap<Label, Property>,
-    },
-    Extension {
-        static_methods: IndexMap<Label, Method>,
-    },
-    Protocol {
-        method_requirements: IndexMap<Label, MethodRequirement>,
-        static_methods: IndexMap<Label, Method>,
-        associated_types: FxHashMap<Name, Associated>,
-    },
-    Enum {
-        variants: IndexMap<Label, Variant>,
-        static_methods: IndexMap<Label, Method>,
-    },
-    Primitive,
-}
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct Property {

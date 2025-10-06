@@ -20,7 +20,7 @@ use crate::{
     types::{
         builtins::builtin_scope,
         constraints::constraint::Constraint,
-        fields::{Method, TypeFields},
+        fields::{Associated, Initializer, Method, MethodRequirement, Property, Variant},
         infer_row::InferRow,
         infer_ty::{InferTy, Level, SkolemId, TypeParamId},
         kind::Kind,
@@ -75,13 +75,18 @@ pub struct Raw {
     pub typealiases: FxHashMap<NodeID, (Name, TypeAnnotation)>,
     pub extensions: FxHashMap<Symbol, Vec<TypeExtension>>,
     pub instance_methods: IndexMap<Symbol, FxHashMap<Label, Method>>,
+    pub static_methods: IndexMap<Symbol, FxHashMap<Label, Method>>,
+    pub initializers: IndexMap<Symbol, FxHashMap<Label, Initializer>>,
+    pub properties: IndexMap<Symbol, IndexMap<Label, Property>>,
+    pub variants: IndexMap<Symbol, IndexMap<Label, Variant>>,
+    pub associated_types: IndexMap<Symbol, IndexMap<Name, Associated>>,
+    pub method_requirements: IndexMap<Symbol, IndexMap<Label, MethodRequirement>>,
 }
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct TypeExtension {
     pub node_id: NodeID,
     pub conformances: Vec<ConformanceStub>,
-    pub static_methods: IndexMap<Label, Method>,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -91,7 +96,6 @@ pub struct TypeDef {
     pub kind: Kind,
     pub def: TypeDefKind,
     pub generics: IndexMap<Name, ASTTyRepr>,
-    pub fields: TypeFields,
     pub conformances: Vec<ConformanceStub>,
     pub child_types: FxHashMap<String, Symbol>,
 }

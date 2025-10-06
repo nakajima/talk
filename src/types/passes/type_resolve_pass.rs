@@ -17,9 +17,7 @@ use crate::{
     span::Span,
     types::{
         builtins::resolve_builtin_type,
-        fields::{
-            Associated, Initializer, Method, MethodRequirement, Property, TypeFields, Variant,
-        },
+        fields::Associated,
         infer_row::InferRow,
         infer_ty::{InferTy, Level},
         passes::{
@@ -155,39 +153,24 @@ impl<'a> TypeResolvePass<'a> {
     }
 
     fn resolve_form(&mut self, type_def: &TypeDef) -> NominalForm {
-        match &type_def.fields {
-            TypeFields::Enum {
-                variants,
-                static_methods,
-            } => {
-                let variants = self.resolve_variants(variants);
-                let instance_methods =
-                    self.resolve_instance_methods(type_def.name.symbol().unwrap());
+        let sym = type_def.name.symbol().unwrap();
 
-                NominalForm::Enum {
-                    variants,
-                    instance_methods,
-                    static_methods: self.resolve_static_methods(static_methods),
-                }
-            }
-            TypeFields::Struct {
-                initializers,
-                static_methods,
-                properties,
-            } => {
-                let properties = self.resolve_properties(properties);
-                let initializers = self.resolve_initializers(type_def, initializers);
-                let instance_methods =
-                    self.resolve_instance_methods(type_def.name.symbol().unwrap());
+        match &type_def.def {
+            TypeDefKind::Enum => NominalForm::Enum {
+                variants: self.resolve_variants(&sym),
+                instance_methods: self.resolve_instance_methods(&sym),
+                static_methods: self.resolve_static_methods(&sym),
+            },
+            TypeDefKind::Struct => {
+                let properties = self.resolve_properties(&sym);
 
                 NominalForm::Struct {
-                    initializers,
+                    initializers: self.resolve_initializers(&sym),
                     properties,
-                    instance_methods,
-                    static_methods: self.resolve_static_methods(static_methods),
+                    instance_methods: self.resolve_instance_methods(&sym),
+                    static_methods: self.resolve_static_methods(&sym),
                 }
             }
-            TypeFields::Primitive => todo!(),
             _ => unreachable!(),
         }
     }
@@ -210,17 +193,16 @@ impl<'a> TypeResolvePass<'a> {
         self.session
             .insert_term(type_def.name.symbol().unwrap(), entry);
 
-        let TypeFields::Protocol {
-            static_methods,
-            method_requirements,
-            associated_types,
-        } = &type_def.fields
-        else {
-            unreachable!()
-        };
-
-        let instance_methods = self.resolve_instance_methods(type_def.name.symbol().unwrap());
-        let method_requirements = self.resolve_method_requirements(method_requirements);
+        let sym = type_def.name.symbol().unwrap();
+        let static_methods = self.resolve_static_methods(&sym);
+        let instance_methods = self.resolve_instance_methods(&sym);
+        let method_requirements = self.resolve_method_requirements(&sym);
+        let associated_types = self
+            .raw
+            .associated_types
+            .get(&sym)
+            .cloned()
+            .unwrap_or_default();
         let mut requirements = FxHashMap::default();
         for method_requirement in method_requirements {
             requirements.insert(
@@ -234,9 +216,9 @@ impl<'a> TypeResolvePass<'a> {
         Ok(Protocol {
             node_id: type_def.node_id,
             methods: instance_methods,
+            static_methods,
             requirements,
-            static_methods: self.resolve_static_methods(static_methods),
-            associated_types: associated_types.clone(),
+            associated_types,
         })
     }
 
@@ -307,12 +289,16 @@ impl<'a> TypeResolvePass<'a> {
         })
     }
 
-    fn resolve_variants(
-        &mut self,
-        variants: &IndexMap<Label, Variant>,
-    ) -> FxHashMap<Label, Symbol> {
+    fn resolve_variants(&mut self, symbol: &Symbol) -> FxHashMap<Label, Symbol> {
+        let Some(variants) = self.raw.variants.get(symbol) else {
+            panic!(
+                "didn't get instance methods for symbol: {symbol:?} in {:?}",
+                self.raw.variants
+            );
+        };
+
         let mut resolved_variants = FxHashMap::<Label, Symbol>::default();
-        for (name, variant) in variants {
+        for (name, variant) in variants.clone() {
             let mut predicates = vec![];
             let mut foralls = vec![];
             let ty = match variant.fields.len() {
@@ -353,12 +339,16 @@ impl<'a> TypeResolvePass<'a> {
         resolved_variants
     }
 
-    fn resolve_static_methods(
-        &mut self,
-        methods: &IndexMap<Label, Method>,
-    ) -> FxHashMap<Label, Symbol> {
+    fn resolve_static_methods(&mut self, symbol: &Symbol) -> FxHashMap<Label, Symbol> {
+        let Some(methods) = self.raw.static_methods.get(symbol) else {
+            panic!(
+                "didn't get instance methods for symbol: {symbol:?} in {:?}",
+                self.raw.static_methods
+            );
+        };
+
         let mut resolved_methods = FxHashMap::default();
-        for (name, method) in methods {
+        for (name, method) in methods.clone() {
             let mut predicates = vec![];
             let mut foralls = vec![];
             let params: Vec<_> = method
@@ -401,8 +391,8 @@ impl<'a> TypeResolvePass<'a> {
         resolved_methods
     }
 
-    fn resolve_instance_methods(&mut self, symbol: Symbol) -> FxHashMap<Label, Symbol> {
-        let Some(instance_methods) = self.raw.instance_methods.get(&symbol) else {
+    fn resolve_instance_methods(&mut self, symbol: &Symbol) -> FxHashMap<Label, Symbol> {
+        let Some(instance_methods) = self.raw.instance_methods.get(symbol) else {
             panic!(
                 "didn't get instance methods for symbol: {symbol:?} in {:?}",
                 self.raw.instance_methods
@@ -455,13 +445,17 @@ impl<'a> TypeResolvePass<'a> {
         resolved_methods
     }
 
-    fn resolve_properties(
-        &mut self,
-        properties: &IndexMap<Label, Property>,
-    ) -> IndexMap<Label, Symbol> {
+    fn resolve_properties(&mut self, symbol: &Symbol) -> IndexMap<Label, Symbol> {
+        let Some(properties) = self.raw.properties.get(symbol) else {
+            panic!(
+                "didn't get instance methods for symbol: {symbol:?} in {:?}",
+                self.raw.properties
+            );
+        };
+
         let mut result: IndexMap<Label, Symbol> = Default::default();
 
-        for (label, prop) in properties {
+        for (label, prop) in properties.clone() {
             if prop.is_static {
                 continue;
             }
@@ -486,17 +480,20 @@ impl<'a> TypeResolvePass<'a> {
         result
     }
 
-    fn resolve_initializers(
-        &mut self,
-        type_def: &TypeDef,
-        initializers: &IndexMap<Label, Initializer>,
-    ) -> FxHashMap<Label, Symbol> {
+    fn resolve_initializers(&mut self, symbol: &Symbol) -> FxHashMap<Label, Symbol> {
+        let Some(initializers) = self.raw.initializers.get(symbol) else {
+            panic!(
+                "didn't get instance methods for symbol: {symbol:?} in {:?}",
+                self.raw.initializers
+            );
+        };
+
         let mut out = FxHashMap::default();
-        let Name::Resolved(Symbol::Type(type_id), _) = &type_def.name else {
+        let Symbol::Type(type_id) = &symbol else {
             unreachable!()
         };
 
-        for (label, init) in initializers {
+        for (label, init) in initializers.clone() {
             let mut predicates = vec![];
             let mut foralls = vec![];
 
@@ -536,8 +533,15 @@ impl<'a> TypeResolvePass<'a> {
     fn _resolve_associated_types(
         &mut self,
         protocol_id: ProtocolId,
-        associated_types: &IndexMap<Name, Associated>,
+        symbol: &Symbol,
     ) -> IndexMap<Name, Associated> {
+        let Some(associated_types) = self.raw.associated_types.get(symbol) else {
+            panic!(
+                "didn't get instance methods for symbol: {symbol:?} in {:?}",
+                self.raw.associated_types
+            );
+        };
+
         let mut resolved_associated_types = IndexMap::default();
         for name in associated_types.keys() {
             resolved_associated_types.insert(
@@ -552,12 +556,16 @@ impl<'a> TypeResolvePass<'a> {
         resolved_associated_types
     }
 
-    fn resolve_method_requirements(
-        &mut self,
-        requirements: &IndexMap<Label, MethodRequirement>,
-    ) -> FxHashMap<Label, Symbol> {
+    fn resolve_method_requirements(&mut self, symbol: &Symbol) -> FxHashMap<Label, Symbol> {
+        let Some(method_requirements) = self.raw.method_requirements.get(symbol) else {
+            panic!(
+                "didn't get method requirements for symbol: {symbol:?} in {:?}",
+                self.raw.method_requirements
+            );
+        };
+
         let mut resolved_methods = FxHashMap::default();
-        for (name, method) in requirements {
+        for (name, method) in method_requirements.clone() {
             let mut predicates = vec![];
             let mut foralls = vec![];
             let params: Vec<_> = method
