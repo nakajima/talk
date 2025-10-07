@@ -7,7 +7,7 @@ pub mod tests {
     use crate::{
         annotation, any_block, any_decl, any_expr, any_expr_stmt, any_stmt, assert_eq_diff,
         ast::AST,
-        compiling::module::ModuleEnvironment,
+        compiling::module::{ModuleEnvironment, ModuleId},
         diagnostic::{AnyDiagnostic, Diagnostic},
         name::Name,
         name_resolution::{
@@ -96,7 +96,7 @@ pub mod tests {
     fn resolve_err(code: &'static str) -> AST<NameResolved> {
         let parsed = parse(code);
         let modules = ModuleEnvironment::default();
-        let mut name_resolver = NameResolver::new(Rc::new(modules));
+        let mut name_resolver = NameResolver::new(Rc::new(modules), ModuleId::Current);
         name_resolver
             .resolve(vec![parsed])
             .into_iter()

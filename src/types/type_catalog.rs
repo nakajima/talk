@@ -129,3 +129,33 @@ pub struct TypeCatalog {
     pub static_methods: FxHashMap<Symbol, FxHashMap<Label, Symbol>>,
     pub variants: FxHashMap<Symbol, FxHashMap<Label, Symbol>>,
 }
+
+impl TypeCatalog {
+    pub fn lookup_member(&self, receiver: &Symbol, label: &Label) -> Option<Symbol> {
+        if let Some(methods) = self.properties.get(receiver)
+            && let Some(sym) = methods.get(label)
+        {
+            return Some(*sym);
+        }
+
+        if let Some(methods) = self.instance_methods.get(receiver)
+            && let Some(sym) = methods.get(label)
+        {
+            return Some(*sym);
+        }
+
+        if let Some(methods) = self.static_methods.get(receiver)
+            && let Some(sym) = methods.get(label)
+        {
+            return Some(*sym);
+        }
+
+        if let Some(methods) = self.variants.get(receiver)
+            && let Some(sym) = methods.get(label)
+        {
+            return Some(*sym);
+        }
+
+        None
+    }
+}

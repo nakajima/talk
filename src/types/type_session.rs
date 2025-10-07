@@ -514,9 +514,12 @@ impl TypeSession {
         if let Some(module_id) = sym.module_id()
             && let Some(module) = self.modules.modules.get(&module_id)
         {
+            // Try looking up with the symbol's current module_id first (for Core/Prelude),
+            // then fall back to Current (for External modules)
             let entry = module
                 .types
-                .get_symbol(&sym.current())
+                .get_symbol(sym)
+                .or_else(|| module.types.get_symbol(&sym.current()))
                 .cloned()
                 .expect("did not get external symbol");
             let entry: EnvEntry = match entry.clone() {
@@ -575,28 +578,28 @@ impl TypeSession {
     }
 
     pub(super) fn lookup_member(&mut self, receiver: &Symbol, label: &Label) -> Option<Symbol> {
-        if let Some(methods) = self.type_catalog.properties.get(receiver)
-            && let Some(sym) = methods.get(label)
-        {
-            return Some(*sym);
+        if let Some(sym) = self.type_catalog.lookup_member(receiver, label) {
+            return Some(sym);
         }
 
-        if let Some(methods) = self.type_catalog.instance_methods.get(receiver)
-            && let Some(sym) = methods.get(label)
-        {
-            return Some(*sym);
+        for module in self.modules.modules.values() {
+            if let Some(sym) = module.types.catalog.lookup_member(receiver, label) {
+                return Some(sym);
+            }
         }
 
-        if let Some(methods) = self.type_catalog.static_methods.get(receiver)
-            && let Some(sym) = methods.get(label)
-        {
-            return Some(*sym);
+        None
+    }
+
+    pub(super) fn lookup_variants(&self, receiver: &Symbol) -> Option<FxHashMap<Label, Symbol>> {
+        if let Some(variants) = self.type_catalog.variants.get(receiver).cloned() {
+            return Some(variants);
         }
 
-        if let Some(methods) = self.type_catalog.variants.get(receiver)
-            && let Some(sym) = methods.get(label)
-        {
-            return Some(*sym);
+        for module in self.modules.modules.values() {
+            if let Some(variants) = module.types.catalog.variants.get(receiver).cloned() {
+                return Some(variants);
+            }
         }
 
         None

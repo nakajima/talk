@@ -231,10 +231,7 @@ impl Member {
                     }
 
                     let variants = session
-                        .type_catalog
-                        .variants
-                        .get(symbol)
-                        .cloned()
+                        .lookup_variants(symbol)
                         .unwrap_or_default();
 
                     let mut row = InferRow::Empty(TypeDefKind::Enum);

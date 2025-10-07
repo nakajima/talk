@@ -123,51 +123,24 @@ impl Symbol {
     });
 
     pub fn module_id(&self) -> Option<ModuleId> {
-        if let Symbol::Type(TypeId {
-            module_id: module_id @ ModuleId::External(..),
-            ..
-        })
-        | Symbol::Global(GlobalId {
-            module_id: module_id @ ModuleId::External(..),
-            ..
-        })
-        | Symbol::Builtin(BuiltinId {
-            module_id: module_id @ ModuleId::External(..),
-            ..
-        })
-        | Symbol::Property(PropertyId {
-            module_id: module_id @ ModuleId::External(..),
-            ..
-        })
-        | Symbol::Synthesized(SynthesizedId {
-            module_id: module_id @ ModuleId::External(..),
-            ..
-        })
-        | Symbol::InstanceMethod(InstanceMethodId {
-            module_id: module_id @ ModuleId::External(..),
-            ..
-        })
-        | Symbol::StaticMethod(StaticMethodId {
-            module_id: module_id @ ModuleId::External(..),
-            ..
-        })
-        | Symbol::Variant(VariantId {
-            module_id: module_id @ ModuleId::External(..),
-            ..
-        })
-        | Symbol::Protocol(ProtocolId {
-            module_id: module_id @ ModuleId::External(..),
-            ..
-        })
-        | Symbol::AssociatedType(AssociatedTypeId {
-            module_id: module_id @ ModuleId::External(..),
-            ..
-        }) = self
-        {
-            return Some(*module_id);
-        }
+        let module_id = match self {
+            Symbol::Type(TypeId { module_id, .. })
+            | Symbol::Global(GlobalId { module_id, .. })
+            | Symbol::Builtin(BuiltinId { module_id, .. })
+            | Symbol::Property(PropertyId { module_id, .. })
+            | Symbol::Synthesized(SynthesizedId { module_id, .. })
+            | Symbol::InstanceMethod(InstanceMethodId { module_id, .. })
+            | Symbol::StaticMethod(StaticMethodId { module_id, .. })
+            | Symbol::Variant(VariantId { module_id, .. })
+            | Symbol::Protocol(ProtocolId { module_id, .. })
+            | Symbol::AssociatedType(AssociatedTypeId { module_id, .. }) => module_id,
+            _ => return None,
+        };
 
-        None
+        match module_id {
+            ModuleId::Current | ModuleId::Prelude => None,
+            _ => Some(*module_id),
+        }
     }
 
     pub fn import(self, module_id: ModuleId) -> Symbol {

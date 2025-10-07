@@ -2,17 +2,18 @@
 pub mod tests {
     use crate::{
         ast::AST,
+        compiling::{
+            driver::{Driver, DriverConfig, Source},
+            module::ModuleId,
+        },
         diagnostic::Diagnostic,
         make_row,
         name_resolution::{
             name_resolver::NameResolved,
-            symbol::{ProtocolId, TypeId},
+            symbol::{ProtocolId, Symbol, TypeId},
         },
         node_kinds::decl::{Decl, DeclKind},
         types::{
-            passes::{
-                dependencies_pass::tests::resolve_dependencies, inference_pass::InferencePass,
-            },
             ty::Ty,
             type_catalog::ConformanceKey,
             type_error::TypeError,
@@ -31,9 +32,19 @@ pub mod tests {
     }
 
     fn typecheck_err(code: &'static str) -> (AST<NameResolved>, Types) {
-        let (mut ast, scc, mut session) = resolve_dependencies(code);
-        InferencePass::perform(&mut session, &scc, &mut ast);
-        (ast, session.finalize().expect("unable to finalize"))
+        let driver = Driver::new(vec![Source::from(code)], DriverConfig::default());
+        let typed = driver
+            .parse()
+            .unwrap()
+            .resolve_names()
+            .unwrap()
+            .typecheck()
+            .unwrap();
+
+        let types = typed.phase.type_session.finalize().unwrap();
+        let ast = typed.phase.asts.into_iter().next().unwrap().1;
+
+        (ast, types)
     }
 
     pub fn ty(i: usize, ast: &AST<NameResolved>, session: &Types) -> Ty {
@@ -1549,5 +1560,44 @@ pub mod tests {
         );
 
         assert_eq!(ty(2, &ast, &session), Ty::Int);
+    }
+
+    #[test]
+    fn includes_core_optional() {
+        let (ast, session) = typecheck(
+            "
+        enum Opt<T> {
+            case some(T), none
+        }
+
+        Optional.some(123)
+        Opt.some(1.23)
+        ",
+        );
+
+        assert_eq!(
+            ty(1, &ast, &session),
+            Ty::Nominal {
+                symbol: Symbol::Type(TypeId {
+                    module_id: ModuleId::Core,
+                    local_id: 1
+                }),
+                type_args: vec![],
+                row: make_row!(Enum, "some" => Ty::Int, "none" => Ty::Void).into()
+            }
+        );
+
+        // Make sure it doesn't clash
+        assert_eq!(
+            ty(2, &ast, &session),
+            Ty::Nominal {
+                symbol: Symbol::Type(TypeId {
+                    module_id: ModuleId::Current,
+                    local_id: 1
+                }),
+                type_args: vec![],
+                row: make_row!(Enum, "some" => Ty::Float, "none" => Ty::Void).into()
+            }
+        );
     }
 }

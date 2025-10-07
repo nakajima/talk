@@ -6,7 +6,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{
     ast::{AST, ASTPhase, Parsed},
-    compiling::module::ModuleEnvironment,
+    compiling::module::{ModuleEnvironment, ModuleId},
     diagnostic::Diagnostic,
     name::Name,
     name_resolution::{
@@ -107,12 +107,12 @@ pub struct NameResolver {
 impl ASTPhase for NameResolved {}
 
 impl NameResolver {
-    pub fn new(modules: Rc<ModuleEnvironment>) -> Self {
+    pub fn new(modules: Rc<ModuleEnvironment>, current_module_id: ModuleId) -> Self {
         let mut resolver = Self {
             symbols: Default::default(),
             diagnostics: Default::default(),
             phase: NameResolved::default(),
-            current_module_id: crate::compiling::module::ModuleId::Current,
+            current_module_id,
             scopes: Default::default(),
             current_scope_id: None,
             modules,

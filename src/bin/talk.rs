@@ -38,7 +38,7 @@ async fn main() {
             use std::rc::Rc;
 
             use talk::{
-                compiling::module::ModuleEnvironment,
+                compiling::module::{ModuleEnvironment, ModuleId},
                 formatter::{DebugHTMLFormatter, Formatter},
                 lexer::Lexer,
                 name_resolution::name_resolver::NameResolver,
@@ -52,7 +52,7 @@ async fn main() {
             let parser = Parser::new(filename, FileID(0), lexer);
             let parsed = parser.parse().unwrap();
             let modules = ModuleEnvironment::default();
-            let mut resolver = NameResolver::new(Rc::new(modules));
+            let mut resolver = NameResolver::new(Rc::new(modules), ModuleId::Current);
             let mut resolved = resolver.resolve(vec![parsed]).into_iter().next().unwrap();
 
             let session = TypeSession::drive(&mut resolved);

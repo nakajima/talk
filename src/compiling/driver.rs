@@ -4,10 +4,13 @@ use rustc_hash::FxHashMap;
 
 use crate::{
     ast::{self, AST},
-    compiling::module::ModuleEnvironment,
+    compiling::module::{ModuleEnvironment, ModuleId},
     lexer::Lexer,
-    name_resolution::name_resolver::{self, NameResolver},
-    node_id::FileID,
+    name_resolution::{
+        name_resolver::{self, NameResolver},
+        symbol::Symbol,
+    },
+    node_id::{FileID, NodeID},
     parser::Parser,
     parser_error::ParserError,
     types::{
@@ -50,7 +53,8 @@ pub enum CompileError {
 
 #[derive(Debug, Default)]
 pub struct DriverConfig {
-    modules: Rc<ModuleEnvironment>,
+    pub module_id: ModuleId,
+    pub modules: Rc<ModuleEnvironment>,
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
@@ -99,11 +103,23 @@ impl Source {
 pub struct Driver<Phase: DriverPhase = Initial> {
     files: Vec<Source>,
     config: DriverConfig,
-    phase: Phase,
+    pub phase: Phase,
 }
 
 impl Driver {
-    pub fn new(files: Vec<Source>, config: DriverConfig) -> Self {
+    pub fn new(files: Vec<Source>, mut config: DriverConfig) -> Self {
+        let mut modules = Rc::into_inner(config.modules).unwrap();
+        modules.import(ModuleId::Core, super::core::compile());
+        config.modules = Rc::new(modules);
+
+        Self {
+            files,
+            phase: Initial {},
+            config,
+        }
+    }
+
+    pub fn new_bare(files: Vec<Source>, config: DriverConfig) -> Self {
         Self {
             files,
             phase: Initial {},
@@ -132,7 +148,7 @@ impl Driver {
 
 impl Driver<Parsed> {
     pub fn resolve_names(self) -> Result<Driver<NameResolved>, CompileError> {
-        let mut resolver = NameResolver::new(self.config.modules.clone());
+        let mut resolver = NameResolver::new(self.config.modules.clone(), self.config.module_id);
 
         let (paths, asts): (Vec<_>, Vec<_>) = self.phase.asts.into_iter().unzip();
         let resolved = resolver.resolve(asts);
@@ -148,6 +164,24 @@ impl Driver<Parsed> {
 }
 
 impl Driver<NameResolved> {
+    pub fn exports(&self) -> FxHashMap<String, Symbol> {
+        self.phase
+            .asts
+            .values()
+            .fold(FxHashMap::default(), |mut acc, ast| {
+                let root = ast.phase.scopes.get(&NodeID(FileID(0), 0)).unwrap();
+                for (string, sym) in root.types.iter() {
+                    acc.insert(string.to_string(), *sym);
+                }
+
+                for (string, sym) in root.values.iter() {
+                    acc.insert(string.to_string(), *sym);
+                }
+
+                acc
+            })
+    }
+
     pub fn typecheck(mut self) -> Result<Driver<Typed>, CompileError> {
         let mut type_session = TypeSession::new(self.config.modules.clone());
 
@@ -282,6 +316,7 @@ pub mod tests {
         let mut module_environment = ModuleEnvironment::default();
         module_environment.import(ModuleId::External(0), module_a);
         let config = DriverConfig {
+            module_id: ModuleId::Current,
             modules: Rc::new(module_environment),
         };
 
@@ -340,6 +375,7 @@ pub mod tests {
         let mut module_environment = ModuleEnvironment::default();
         module_environment.import(ModuleId::External(0), module_a);
         let config = DriverConfig {
+            module_id: ModuleId::Current,
             modules: Rc::new(module_environment),
         };
 
@@ -411,6 +447,7 @@ pub mod tests {
         let mut module_environment = ModuleEnvironment::default();
         module_environment.import(ModuleId::External(0), module_a);
         let config = DriverConfig {
+            module_id: ModuleId::Current,
             modules: Rc::new(module_environment),
         };
 
