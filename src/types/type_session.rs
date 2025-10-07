@@ -733,17 +733,6 @@ impl TypeSession {
         None
     }
 
-    pub(super) fn take_conformances(&mut self) -> FxHashMap<ConformanceKey, Conformance> {
-        std::mem::take(&mut self.type_catalog.conformances)
-    }
-
-    pub(super) fn replace_conformances(
-        &mut self,
-        conformances: FxHashMap<ConformanceKey, Conformance>,
-    ) {
-        _ = std::mem::replace(&mut self.type_catalog.conformances, conformances);
-    }
-
     pub(super) fn normalize_nominals_row(&mut self, row: &InferRow, level: Level) -> InferRow {
         if let InferRow::Extend { box row, label, ty } = row.clone() {
             return InferRow::Extend {
