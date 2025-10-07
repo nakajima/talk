@@ -98,8 +98,9 @@ pub mod tests {
 
     #[test]
     fn types_array_literal() {
-        let (ast, types) = typecheck("[1,2,3]");
+        let (ast, types) = typecheck("[1,2,3]; [1.2, 3.4, 5.6]");
         assert_eq!(ty(0, &ast, &types), Ty::Array(Ty::Int));
+        assert_eq!(ty(1, &ast, &types), Ty::Array(Ty::Float));
     }
 
     #[test]
