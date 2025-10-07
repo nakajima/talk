@@ -799,13 +799,15 @@ pub mod tests {
                 generics: vec![],
                 body: any_block!(vec![Node::Decl(any_decl!(DeclKind::MethodRequirement(
                     FuncSignature {
+                        id: NodeID::ANY,
+                        span: Span::ANY,
                         name: Name::Resolved(
                             Symbol::InstanceMethod(InstanceMethodId::from(1)),
                             "buzz".into()
                         ),
                         params: vec![Parameter {
                             id: NodeID::ANY,
-                            name: "self".into(),
+                            name: Name::Resolved(ParamLocalId::from(1u32).into(), "self".into()),
                             type_annotation: Some(annotation!(TypeAnnotationKind::SelfType(
                                 Name::Resolved(ProtocolId::from(1).into(), "Self".into())
                             ))),
@@ -851,13 +853,15 @@ pub mod tests {
                         }
                     })),
                     Node::Decl(any_decl!(DeclKind::MethodRequirement(FuncSignature {
+                        id: NodeID::ANY,
+                        span: Span::ANY,
                         name: Name::Resolved(
                             Symbol::InstanceMethod(InstanceMethodId::from(1)),
                             "buzz".into()
                         ),
                         params: vec![Parameter {
                             id: NodeID::ANY,
-                            name: "self".into(),
+                            name: Name::Resolved(ParamLocalId::from(1u32).into(), "self".into()),
                             type_annotation: Some(annotation!(TypeAnnotationKind::SelfType(
                                 Name::Resolved(ProtocolId::from(1).into(), "Self".into())
                             ))),

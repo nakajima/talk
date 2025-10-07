@@ -7,7 +7,7 @@ use crate::{
         name_resolver::{NameResolver, NameResolverError, Scope},
         symbol::Symbol,
     },
-    node_id::{FileID, NodeID},
+    node_id::NodeID,
     node_kinds::{
         decl::{Decl, DeclKind},
         expr::{Expr, ExprKind},
@@ -25,10 +25,10 @@ use crate::{
 #[derive(VisitorMut)]
 #[visitor(
     Stmt(enter, exit),
-    FuncSignature(enter),
+    FuncSignature,
     Pattern(enter),
     MatchArm(enter, exit),
-    Func(enter, exit),
+    Func,
     Decl(enter, exit)
 )]
 pub struct DeclDeclarer<'a> {
@@ -317,11 +317,36 @@ impl<'a> DeclDeclarer<'a> {
 
     #[instrument(skip(self))]
     fn enter_func_signature(&mut self, func: &mut FuncSignature) {
-        on!(func, FuncSignature { name, .. }, {
-            *name = self
-                .resolver
-                .declare(name, some!(InstanceMethod), NodeID(FileID(0), 0));
-        })
+        on!(
+            func,
+            FuncSignature {
+                name,
+                params,
+                generics,
+                ..
+            },
+            {
+                *name = self.resolver.declare(name, some!(InstanceMethod), func.id);
+
+                self.start_scope(func.id);
+
+                for generic in generics {
+                    generic.name =
+                        self.resolver
+                            .declare(&generic.name, some!(TypeParameter), generic.id);
+                }
+
+                for param in params {
+                    param.name = self
+                        .resolver
+                        .declare(&param.name, some!(ParamLocal), param.id);
+                }
+            }
+        )
+    }
+
+    fn exit_func_signature(&mut self, _func: &mut FuncSignature) {
+        self.end_scope();
     }
 
     ///////////////////////////////////////////////////////////////////////////
@@ -387,7 +412,7 @@ impl<'a> DeclDeclarer<'a> {
         on!(
             &mut decl.kind,
             DeclKind::Method {
-                func: box Func { name, .. },
+                func: box Func { name, generics, .. },
                 is_static
             },
             {
@@ -396,6 +421,10 @@ impl<'a> DeclDeclarer<'a> {
                 } else {
                     self.resolver.declare(name, some!(InstanceMethod), decl.id)
                 };
+
+                for generic in generics {
+                    generic.name = self.resolver.declare(&generic.name, some!(TypeParameter), decl.id);
+                }
             }
         );
 
@@ -407,9 +436,15 @@ impl<'a> DeclDeclarer<'a> {
 
         on!(
             &mut decl.kind,
-            DeclKind::FuncSignature(FuncSignature { name, .. }),
+            DeclKind::FuncSignature(FuncSignature { name, generics, .. }),
             {
                 *name = self.resolver.declare(name, some!(Global), decl.id);
+
+                for generic in generics {
+                    generic.name =
+                        self.resolver
+                            .declare(&generic.name, some!(TypeParameter), decl.id);
+                }
             }
         );
 

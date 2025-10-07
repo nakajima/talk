@@ -435,7 +435,10 @@ impl<'a> Parser<'a> {
         if context == BlockContext::Protocol && !self.peek_is(TokenKind::LeftBrace) {
             let ret = ret.map(Box::new);
 
+            let (id, span) = self.save_meta(tok)?;
             return Ok(FuncOrFuncSignature::FuncSignature(FuncSignature {
+                id,
+                span,
                 name: name.into(),
                 generics,
                 params,

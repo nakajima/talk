@@ -46,7 +46,7 @@ impl PartialEq for NodeID {
 #[cfg(test)]
 impl PartialEq for NodeID {
     fn eq(&self, other: &Self) -> bool {
-        if other.1 == Self::ANY.1 || self.1 == Self::ANY.1 {
+        if other.1 == u32::MAX || self.1 == u32::MAX {
             true
         } else {
             other.0 == self.0 && other.1 == self.1

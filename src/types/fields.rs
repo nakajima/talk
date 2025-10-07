@@ -28,6 +28,7 @@ pub struct Method {
 pub struct MethodRequirement {
     pub id: NodeID,
     pub symbol: Symbol,
+    pub generics: Vec<ASTTyRepr>,
     pub params: Vec<ASTTyRepr>,
     pub ret: Option<ASTTyRepr>,
 }

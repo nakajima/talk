@@ -22,6 +22,7 @@ use crate::{
         decl::{Decl, DeclKind},
         expr::{Expr, ExprKind},
         func::Func,
+        func_signature::FuncSignature,
         match_arm::MatchArm,
         pattern::{Pattern, PatternKind},
         stmt::{Stmt, StmtKind},
@@ -81,6 +82,7 @@ pub type ScopeId = Index;
 #[derive(Debug, VisitorMut)]
 #[visitor(
     Func(enter, exit),
+    FuncSignature,
     Stmt(enter, exit),
     MatchArm(enter, exit),
     Decl(enter, exit),
@@ -431,6 +433,14 @@ impl NameResolver {
             panic!("Did not resolve func")
         };
 
+        self.exit_scope();
+    }
+
+    fn enter_func_signature(&mut self, func: &mut FuncSignature) {
+        self.enter_scope(func.id);
+    }
+
+    fn exit_func_signature(&mut self, _func: &mut FuncSignature) {
         self.exit_scope();
     }
 

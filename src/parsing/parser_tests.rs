@@ -1979,6 +1979,8 @@ pub mod tests {
                 conformances: vec![],
                 body: any_block!(vec![
                     any_decl!(DeclKind::MethodRequirement(FuncSignature {
+                        id: NodeID::ANY,
+                        span: Span::ANY,
                         name: "me".into(),
                         params: vec![],
                         generics: vec![],

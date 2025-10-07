@@ -576,6 +576,7 @@ impl<'a> TypeHeaderPass<'a> {
                 }
                 DeclKind::MethodRequirement(FuncSignature {
                     name: Name::Resolved(symbol, name),
+                    generics,
                     params,
                     ret,
                     ..
@@ -585,6 +586,10 @@ impl<'a> TypeHeaderPass<'a> {
                         MethodRequirement {
                             id,
                             symbol: *symbol,
+                            generics: generics
+                                .iter()
+                                .map(|g| ASTTyRepr::Generic(g.clone()))
+                                .collect(),
                             params: params
                                 .iter()
                                 .enumerate()
@@ -720,7 +725,7 @@ impl<'a> TypeHeaderPass<'a> {
 #[cfg(test)]
 pub mod tests {
     use crate::{
-        annotation, assert_eq_diff,
+        annotation, any, assert_eq_diff,
         ast::AST,
         compiling::module::{ModuleEnvironment, ModuleId},
         fxhashmap,
@@ -1026,7 +1031,7 @@ pub mod tests {
         protocol Fizz {
             associated Buzz
 
-            func foo() -> Int
+            func foo<G>(g: G) -> Int
         }
         ",
         )
@@ -1039,11 +1044,24 @@ pub mod tests {
             crate::indexmap!(Label::Named("foo".into()) => MethodRequirement {
                 id: NodeID::ANY,
                 symbol: Symbol::InstanceMethod(InstanceMethodId::from(1)),
+                generics: vec![
+                    ASTTyRepr::Generic(any!(GenericDecl, {
+                        name: Name::Resolved(Symbol::TypeParameter(TypeParameterId::from(1u32)), "G".into()),
+                        generics: vec![],
+                        conformances: vec![],
+                    }))
+                ],
                 params: vec![
                     ASTTyRepr::SelfType(
                         Name::Resolved(ProtocolId::from(1).into(), "Fizz".into()),
                         NodeID::ANY,
                         Span::ANY,
+                    ),
+                    ASTTyRepr::Annotated(
+                        annotation!(TypeAnnotationKind::Nominal {
+                            name: Name::Resolved(TypeParameterId::from(1u32).into(), "G".into()),
+                            generics: vec![],
+                        })
                     )
                 ],
                 ret: Some(ASTTyRepr::Annotated(annotation!(TypeAnnotationKind::Nominal {

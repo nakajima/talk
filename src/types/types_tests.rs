@@ -1136,6 +1136,23 @@ pub mod tests {
     }
 
     #[test]
+    fn checks_generic_struct_arg() {
+        let (ast, types) = typecheck(
+            "
+        struct Person {
+            func getAge<T>(t: T) -> T { t }
+        }
+
+        Person().getAge(123)
+        Person().getAge(1.23)
+        ",
+        );
+
+        assert_eq!(ty(1, &ast, &types), Ty::Int);
+        assert_eq!(ty(2, &ast, &types), Ty::Float);
+    }
+
+    #[test]
     fn types_generic_struct_method() {
         let (ast, types) = typecheck(
             "
@@ -1513,5 +1530,24 @@ pub mod tests {
         );
 
         assert_eq!(ty(2, &ast, &types), Ty::Int);
+    }
+
+    #[test]
+    fn add_protocol_prototype() {
+        let (ast, session) = typecheck(
+            "
+        protocol Addy { func addy<Ret, RHS>(rhs: RHS) -> Ret }
+
+        extend Int: Addy {
+            func addy(rhs: Int) -> Int {
+                self
+            }
+        }
+
+        1.addy(2)
+        ",
+        );
+
+        assert_eq!(ty(2, &ast, &session), Ty::Int);
     }
 }
