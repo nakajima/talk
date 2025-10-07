@@ -1600,4 +1600,69 @@ pub mod tests {
             }
         );
     }
+
+    #[test]
+    fn types_plus() {
+        let (ast, types) = typecheck(
+            "
+        1 + 2
+        1.0 + 2.0
+        ",
+        );
+
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
+        assert_eq!(ty(1, &ast, &types), Ty::Float);
+    }
+
+    #[test]
+    fn types_minus() {
+        let (ast, types) = typecheck(
+            "
+        1 - 2
+        1.0 - 2.0
+        ",
+        );
+
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
+        assert_eq!(ty(1, &ast, &types), Ty::Float);
+    }
+
+    #[test]
+    fn types_multiplication() {
+        let (ast, types) = typecheck(
+            "
+        1 * 2
+        1.0 * 2.0
+        ",
+        );
+
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
+        assert_eq!(ty(1, &ast, &types), Ty::Float);
+    }
+
+    #[test]
+    fn types_division() {
+        let (ast, types) = typecheck(
+            "
+        1 / 2
+        1.0 / 2.0
+        ",
+        );
+
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
+        assert_eq!(ty(1, &ast, &types), Ty::Float);
+    }
+
+    #[test]
+    fn types_comparisons() {
+        let (ast, types) = typecheck(
+            "
+        1 == 2
+        1.0 == 2.0
+        ",
+        );
+
+        assert_eq!(ty(0, &ast, &types), Ty::Bool);
+        assert_eq!(ty(1, &ast, &types), Ty::Bool);
+    }
 }

@@ -142,6 +142,11 @@ impl<'a> DependenciesPass<'a> {
             }
         };
 
+        // Skip symbols from external modules - they're already typed
+        if sym.module_id().is_some() {
+            return;
+        }
+
         match sym {
             Symbol::Global(global_id) => {
                 let binder = Binder::Global(*global_id);

@@ -1,7 +1,30 @@
-protocol Add { func add<Ret, RHS>(rhs: RHS) -> Ret }
-protocol Subtract { func subtract<Ret, RHS>(rhs: RHS) -> Ret }
-protocol Multiply { func multiply<Ret, RHS>(rhs: RHS) -> Ret }
-protocol Divide { func divide<Ret, RHS>(rhs: RHS) -> Ret }
+protocol Add {
+  associated RHS
+  associated Ret
+  
+  func add(rhs: RHS) -> Ret
+}
+
+protocol Subtract {
+  associated RHS
+  associated Ret
+
+  func minus(rhs: RHS) -> Ret
+}
+
+protocol Multiply {
+  associated RHS
+  associated Ret
+
+  func times(rhs: RHS) -> Ret
+}
+
+protocol Divide {
+  associated RHS
+  associated Ret
+
+  func divide(rhs: RHS) -> Ret
+}
 
 extend Int: Add {
   func add(rhs: Int) -> Int {
@@ -16,25 +39,25 @@ extend Float: Add {
 }
 
 extend Int: Subtract {
-  func subtract(rhs: Int) -> Int {
+  func minus(rhs: Int) -> Int {
     self
   }
 }
 
 extend Float: Subtract {
-  func subtract(rhs: Float) -> Float {
+  func minus(rhs: Float) -> Float {
     self
   }
 }
 
 extend Int: Multiply {
-  func multiply(rhs: Int) -> Int {
+  func times(rhs: Int) -> Int {
     self
   }
 }
 
 extend Float: Multiply {
-  func multiply(rhs: Float) -> Float {
+  func times(rhs: Float) -> Float {
     self
   }
 }

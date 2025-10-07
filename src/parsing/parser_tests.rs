@@ -44,6 +44,27 @@ pub mod tests {
     }
 
     #[macro_export]
+    macro_rules! invocation {
+        // type_args: Vec<TypeAnnotation>,
+        // args: Vec<CallArg>,
+        ($receiver:expr, $member:expr, $args:expr) => {
+            $crate::node_kinds::expr::Expr {
+                id: NodeID::ANY,
+                span: Span::ANY,
+                kind: ExprKind::Call {
+                    callee: any_expr!($crate::node_kinds::expr::ExprKind::Member(
+                        Some(any_expr!($receiver).into()),
+                        $member.into()
+                    ))
+                    .into(),
+                    type_args: vec![],
+                    args: $args,
+                },
+            }
+        };
+    }
+
+    #[macro_export]
     macro_rules! expr_stmt {
         ($expr:pat) => {
             Stmt {
@@ -64,11 +85,13 @@ pub mod tests {
             $crate::node_kinds::stmt::Stmt {
                 id: $crate::node_id::NodeID::ANY,
                 span: $crate::parsing::span::Span::ANY,
-                kind: $crate::node_kinds::stmt::StmtKind::Expr(Expr {
-                    id: $crate::node_id::NodeID::ANY,
-                    span: $crate::parsing::span::Span::ANY,
-                    kind: $expr,
-                }),
+                kind: $crate::node_kinds::stmt::StmtKind::Expr(
+                    $crate::parsing::node_kinds::expr::Expr {
+                        id: $crate::node_id::NodeID::ANY,
+                        span: $crate::parsing::span::Span::ANY,
+                        kind: $expr,
+                    },
+                ),
             }
             .into()
         };

@@ -12,7 +12,11 @@ pub fn compile() -> Module {
         ..Default::default()
     };
     let driver = Driver::new_bare(
-        vec![Source::from(current_dir.join("core/Optional.tlk"))],
+        vec![
+            Source::from(current_dir.join("core/Optional.tlk")),
+            Source::from(current_dir.join("core/Operators.tlk")),
+            Source::from(current_dir.join("core/Equals.tlk")),
+        ],
         config,
     );
     let name_resolved = driver.parse().unwrap().resolve_names().unwrap();

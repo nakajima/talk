@@ -266,7 +266,11 @@ impl<'a> InferencePass<'a> {
                 continue;
             };
 
-            let rhs_expr = self.ast.find(rhs_expr_id).clone().unwrap();
+            let rhs_expr = self
+                .ast
+                .find(rhs_expr_id)
+                .clone()
+                .unwrap_or_else(|| panic!("didn't find rhs_expr_id: {:?}", rhs_expr_id));
             let inferred = self.infer_node(&rhs_expr, inner_level, &mut wants);
             self.session
                 .types_by_node
