@@ -209,6 +209,16 @@ impl InferTy {
             row: Box::new(InferRow::Empty(TypeDefKind::Struct)),
         }
     }
+    pub fn Array(t: InferTy) -> InferTy {
+        InferTy::Nominal {
+            symbol: Symbol::Type(TypeId {
+                module_id: ModuleId::Core,
+                local_id: 3,
+            }),
+            type_args: vec![t],
+            row: Box::new(InferRow::Empty(TypeDefKind::Struct)),
+        }
+    }
 
     pub fn collect_foralls(&self) -> Vec<ForAll> {
         let mut result = vec![];

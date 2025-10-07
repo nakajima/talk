@@ -54,4 +54,14 @@ impl Ty {
             row: Box::new(Row::Empty(TypeDefKind::Struct)),
         }
     }
+    pub fn Array(t: Ty) -> Ty {
+        Ty::Nominal {
+            symbol: Symbol::Type(TypeId {
+                module_id: ModuleId::Core,
+                local_id: 3,
+            }),
+            type_args: vec![t],
+            row: Box::new(Row::Empty(TypeDefKind::Struct)),
+        }
+    }
 }

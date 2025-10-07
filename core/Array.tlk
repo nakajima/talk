@@ -1,46 +1,5 @@
 struct Array<Element> {
 	let count: Int  
 	let capacity: Int
-	let storage: Pointer
-
-	init(capacity: Int) {
-		self.count = 0
-		self.capacity = capacity
-		self.storage = __alloc<Element>(capacity)
-	}
-
-	@export
-	func push(element: Element) {
-		self.resizeIfNeeded()
-		__store<Element>(self.storage, self.count, element)
-		self.count = self.count + 1
-	}
-
-	func get(index: Int) -> Element {
-		__load<Element>(self.storage, index)
-	}
-
-	func pop() -> Element {
-		let popped = __load<Element>(self.storage, self.count - 1)
-		self.count = self.count - 1
-		return popped
-	}
-
-	func resizeIfNeeded() {
-		if self.count + 1 < self.capacity {
-			return
-		}
-
-		let newStorage = __alloc<Element>(self.capacity * 2)
-		let i = 0
-		loop i < self.count {
-			__store<Element>(newStorage, i, self.get(i))
-			i = i + 1
-		}
-		__free(self.storage)
-		self.storage = newStorage
-		self.capacity = self.capacity * 2
-
-		return
-	}
+	let storage: Int
 }

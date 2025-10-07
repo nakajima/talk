@@ -839,7 +839,7 @@ impl<'a> InferencePass<'a> {
 
         let ty = match &expr.kind {
             ExprKind::Incomplete(..) => InferTy::Void,
-            ExprKind::LiteralArray(..) => todo!(),
+            ExprKind::LiteralArray(items) => self.infer_array(items, level, wants),
             ExprKind::LiteralInt(_) => InferTy::Int,
             ExprKind::LiteralFloat(_) => InferTy::Float,
             ExprKind::LiteralTrue => InferTy::Bool,
@@ -915,6 +915,18 @@ impl<'a> InferencePass<'a> {
         // // record the type for this expression node
         self.session.types_by_node.insert(expr.id, ty.clone());
         ty
+    }
+
+    #[instrument(skip(self))]
+    fn infer_array(&mut self, items: &[Expr], level: Level, wants: &mut Wants) -> InferTy {
+        // TODO: Make sure items are the same type
+        let item_ty = if let Some(first) = items.first() {
+            self.infer_expr(first, level, wants)
+        } else {
+            self.session.new_ty_meta_var(level)
+        };
+
+        InferTy::Array(item_ty)
     }
 
     #[instrument(skip(self))]
