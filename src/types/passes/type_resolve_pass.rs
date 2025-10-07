@@ -159,11 +159,6 @@ impl<'a> TypeResolvePass<'a> {
                 })
                 .collect();
 
-            println!(
-                "Inserting conformance: {:?} -> associated_types: {:?}",
-                conformance_key, associated_types
-            );
-
             self.session.type_catalog.conformances.insert(
                 *conformance_key,
                 Conformance {
