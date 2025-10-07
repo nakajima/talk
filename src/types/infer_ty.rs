@@ -2,12 +2,13 @@ use itertools::Itertools;
 
 use crate::{
     compiling::module::ModuleId,
-    name_resolution::symbol::Symbol,
+    name_resolution::symbol::{Symbol, TypeId},
     node_id::NodeID,
     types::{
         infer_row::InferRow,
         scheme::ForAll,
         ty::{SomeType, Ty},
+        type_session::TypeDefKind,
     },
 };
 
@@ -192,11 +193,22 @@ impl SomeType for InferTy {
 }
 
 #[allow(non_upper_case_globals)]
+#[allow(non_snake_case)]
 impl InferTy {
     pub const Int: InferTy = InferTy::Primitive(Symbol::Int);
     pub const Float: InferTy = InferTy::Primitive(Symbol::Float);
     pub const Bool: InferTy = InferTy::Primitive(Symbol::Bool);
     pub const Void: InferTy = InferTy::Primitive(Symbol::Void);
+    pub fn String() -> InferTy {
+        InferTy::Nominal {
+            symbol: Symbol::Type(TypeId {
+                module_id: ModuleId::Core,
+                local_id: 2,
+            }),
+            type_args: vec![],
+            row: Box::new(InferRow::Empty(TypeDefKind::Struct)),
+        }
+    }
 
     pub fn collect_foralls(&self) -> Vec<ForAll> {
         let mut result = vec![];

@@ -860,7 +860,7 @@ impl<'a> InferencePass<'a> {
                     }
                 }
             }
-            ExprKind::LiteralString(_) => todo!(),
+            ExprKind::LiteralString(_) => InferTy::String(),
             ExprKind::Unary(..) => todo!(),
             ExprKind::Binary(..) => todo!(),
             ExprKind::Tuple(items) => InferTy::Tuple(

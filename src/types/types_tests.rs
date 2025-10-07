@@ -85,6 +85,24 @@ pub mod tests {
     }
 
     #[test]
+    fn types_string() {
+        let (ast, types) = typecheck("\"hello\"");
+        assert_eq!(ty(0, &ast, &types), Ty::String());
+    }
+
+    #[test]
+    fn types_string_concat() {
+        let (ast, types) = typecheck("\"hello\" + \"world\"");
+        assert_eq!(ty(0, &ast, &types), Ty::String());
+    }
+
+    #[test]
+    fn types_basic_binary() {
+        let (ast, types) = typecheck("func a(x) { x + 1 } ; a(123)");
+        assert_eq!(ty(1, &ast, &types), Ty::Int);
+    }
+
+    #[test]
     fn monomorphic_let_annotation() {
         let (ast, types) = typecheck(
             r#"

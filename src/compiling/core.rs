@@ -17,6 +17,7 @@ pub fn compile() -> Module {
             Source::from(current_dir.join("core/Optional.tlk")),
             Source::from(current_dir.join("core/Operators.tlk")),
             Source::from(current_dir.join("core/Equals.tlk")),
+            Source::from(current_dir.join("core/String.tlk")),
         ],
         config,
     );
