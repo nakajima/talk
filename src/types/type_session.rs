@@ -25,7 +25,7 @@ use crate::{
         infer_ty::{InferTy, Level, SkolemId, TypeParamId},
         kind::Kind,
         passes::{
-            dependencies_pass::{DependenciesPass, SCCResolved},
+            dependencies_pass::{Conformance, DependenciesPass, SCCResolved},
             inference_pass::{InferencePass, Meta, collect_meta},
             type_headers_pass::TypeHeaderPass,
             type_resolve_pass::TypeResolvePass,
@@ -33,7 +33,7 @@ use crate::{
         scheme::{ForAll, Scheme},
         term_environment::{EnvEntry, TermEnv},
         ty::{SomeType, Ty},
-        type_catalog::{ConformanceStub, Nominal, Protocol, TypeCatalog},
+        type_catalog::{ConformanceKey, ConformanceStub, Nominal, Protocol, TypeCatalog},
         type_error::TypeError,
         type_operations::{UnificationSubstitutions, apply, apply_row, substitute},
         vars::Vars,
@@ -553,7 +553,7 @@ impl TypeSession {
         }
 
         if let Symbol::Type(TypeId {
-            module_id: module_id @ ModuleId::External(..),
+            module_id: module_id @ (ModuleId::External(..) | ModuleId::Core | ModuleId::Prelude),
             local_id,
         }) = *symbol
             && let Some(module) = self.modules.modules.get(&module_id)
@@ -605,23 +605,36 @@ impl TypeSession {
         None
     }
 
+    pub(super) fn clone_conformances(&self) -> FxHashMap<ConformanceKey, Conformance> {
+        self.type_catalog.conformances.clone()
+    }
+
+    pub(super) fn lookup_conformance(&self, key: &ConformanceKey) -> Option<&Conformance> {
+        self.type_catalog.conformances.get(key)
+    }
+
     pub(super) fn lookup_protocol(&mut self, protocol_id: ProtocolId) -> Option<Protocol> {
         if let Some(entry) = self.type_catalog.protocols.get(&protocol_id).cloned() {
             return Some(entry);
         }
 
         if let ProtocolId {
-            module_id: module_id @ ModuleId::External(..),
+            module_id: module_id @ (ModuleId::External(..) | ModuleId::Core | ModuleId::Prelude),
             local_id,
         } = protocol_id
             && let Some(module) = self.modules.modules.get(&module_id)
         {
+            let module_key = if matches!(module_id, ModuleId::External(..)) {
+                ModuleId::Current
+            } else {
+                module_id
+            };
             let protocol = module
                 .types
                 .catalog
                 .protocols
                 .get(&ProtocolId {
-                    module_id: ModuleId::Current,
+                    module_id: module_key,
                     local_id,
                 })
                 .cloned()
@@ -646,17 +659,22 @@ impl TypeSession {
         }
 
         if let Symbol::Type(TypeId {
-            module_id: module_id @ ModuleId::External(..),
+            module_id: module_id @ (ModuleId::External(..) | ModuleId::Core | ModuleId::Prelude),
             local_id,
         }) = *symbol
             && let Some(module) = self.modules.modules.get(&module_id)
         {
+            let module_key = if matches!(module_id, ModuleId::External(..)) {
+                ModuleId::Current
+            } else {
+                module_id
+            };
             let initializers = module
                 .types
                 .catalog
                 .initializers
                 .get(&Symbol::Type(TypeId {
-                    module_id: ModuleId::Current,
+                    module_id: module_key,
                     local_id,
                 }))
                 .cloned()?;
@@ -681,17 +699,22 @@ impl TypeSession {
         }
 
         if let Symbol::Type(TypeId {
-            module_id: module_id @ ModuleId::External(..),
+            module_id: module_id @ (ModuleId::External(..) | ModuleId::Core | ModuleId::Prelude),
             local_id,
         }) = *symbol
             && let Some(module) = self.modules.modules.get(&module_id)
         {
+            let module_key = if matches!(module_id, ModuleId::External(..)) {
+                ModuleId::Current
+            } else {
+                module_id
+            };
             let properties = module
                 .types
                 .catalog
                 .properties
                 .get(&Symbol::Type(TypeId {
-                    module_id: ModuleId::Current,
+                    module_id: module_key,
                     local_id,
                 }))
                 .cloned()?;
@@ -708,6 +731,17 @@ impl TypeSession {
         }
 
         None
+    }
+
+    pub(super) fn take_conformances(&mut self) -> FxHashMap<ConformanceKey, Conformance> {
+        std::mem::take(&mut self.type_catalog.conformances)
+    }
+
+    pub(super) fn replace_conformances(
+        &mut self,
+        conformances: FxHashMap<ConformanceKey, Conformance>,
+    ) {
+        _ = std::mem::replace(&mut self.type_catalog.conformances, conformances);
     }
 
     pub(super) fn normalize_nominals_row(&mut self, row: &InferRow, level: Level) -> InferRow {

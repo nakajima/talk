@@ -53,7 +53,7 @@ impl AssociatedEquals {
             protocol_id: self.protocol_id,
             conforming_id: subject_id,
         };
-        let Some(conformance) = session.type_catalog.conformances.get(&key).cloned() else {
+        let Some(conformance) = session.lookup_conformance(&key).cloned() else {
             next_wants.push(Constraint::AssociatedEquals(self.clone()));
             return Ok(false);
         };
@@ -71,7 +71,7 @@ impl AssociatedEquals {
         {
             let (subject_fields, _tail) = normalize_row(subject_row.clone(), substitutions);
 
-            if let Some(properties) = session.type_catalog.properties.get(&subject_id).cloned() {
+            if let Some(properties) = session.lookup_properties(&subject_id) {
                 let alias_param = match &scheme.ty {
                     InferTy::Param(p) => *p,
                     _ => unreachable!(),

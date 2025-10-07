@@ -387,7 +387,6 @@ pub(super) fn unify(
     }
 }
 
-#[instrument(ret)]
 pub(super) fn substitute_row(
     row: InferRow,
     substitutions: &FxHashMap<InferTy, InferTy>,
@@ -413,7 +412,6 @@ pub(super) fn substitute_mult(
         .collect()
 }
 
-#[instrument(ret)]
 pub(super) fn substitute(ty: InferTy, substitutions: &FxHashMap<InferTy, InferTy>) -> InferTy {
     if let Some(subst) = substitutions.get(&ty) {
         return subst.clone();

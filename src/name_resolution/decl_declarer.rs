@@ -398,6 +398,12 @@ impl<'a> DeclDeclarer<'a> {
 
             self.start_scope(decl.id);
 
+            self.resolver
+                .current_scope_mut()
+                .unwrap()
+                .types
+                .insert("Self".into(), name.symbol().unwrap());
+
             for generic in generics {
                 generic.name = self
                     .resolver

@@ -14,10 +14,11 @@ pub mod tests {
         },
         node_kinds::decl::{Decl, DeclKind},
         types::{
+            row::Row,
             ty::Ty,
             type_catalog::ConformanceKey,
             type_error::TypeError,
-            type_session::{TypeEntry, Types},
+            type_session::{TypeDefKind, TypeEntry, Types},
         },
     };
 
@@ -1664,5 +1665,33 @@ pub mod tests {
 
         assert_eq!(ty(0, &ast, &types), Ty::Bool);
         assert_eq!(ty(1, &ast, &types), Ty::Bool);
+    }
+
+    #[test]
+    fn types_custom_add() {
+        let (ast, types) = typecheck(
+            "
+        struct A {}
+        struct B {}
+        struct C {}
+        extend A: Add {
+            typealias RHS = B
+            typealias Ret = C
+            func add(rhs: B) -> C {
+                C()
+            }
+        }
+        A() + B()
+        ",
+        );
+
+        assert_eq!(
+            ty(4, &ast, &types),
+            Ty::Nominal {
+                symbol: TypeId::from(3).into(),
+                type_args: vec![],
+                row: Row::Empty(TypeDefKind::Struct).into()
+            }
+        );
     }
 }

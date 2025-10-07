@@ -8,7 +8,7 @@ use crate::{
     name::Name,
     name_resolution::{
         name_resolver::NameResolved,
-        symbol::{ProtocolId, Symbol},
+        symbol::{AssociatedTypeId, ProtocolId, Symbol},
     },
     node_kinds::{
         generic_decl::GenericDecl,
@@ -66,7 +66,28 @@ impl<'a> TypeResolvePass<'a> {
     // Go through all headers and gather up properties/methods/variants/etc. Don't perform
     // any generalization until the very end.
     fn solve(&mut self) -> HeadersResolved {
-        for (decl_id, _) in self.raw.type_constructors.clone().iter() {
+        for (decl_id, type_def) in self.raw.type_constructors.clone().iter() {
+            let row = if self
+                .raw
+                .properties
+                .get(decl_id)
+                .map(|g| g.is_empty())
+                .unwrap_or(true)
+                && type_def.def == TypeDefKind::Struct
+            {
+                Box::new(InferRow::Empty(TypeDefKind::Struct))
+            } else if self
+                .raw
+                .variants
+                .get(decl_id)
+                .map(|g| g.is_empty())
+                .unwrap_or(true)
+                && type_def.def == TypeDefKind::Enum
+            {
+                Box::new(InferRow::Empty(TypeDefKind::Enum))
+            } else {
+                Box::new(self.session.new_row_meta_var(Level(1)))
+            };
             let generics = self.raw.generics.get(decl_id).cloned().unwrap_or_default();
             let base = InferTy::Nominal {
                 symbol: *decl_id,
@@ -74,7 +95,7 @@ impl<'a> TypeResolvePass<'a> {
                     .iter()
                     .map(|_| self.session.new_type_param())
                     .collect(),
-                row: Box::new(self.session.new_row_meta_var(Level(1))),
+                row,
             };
 
             self.session.insert_mono(*decl_id, base);
@@ -120,30 +141,28 @@ impl<'a> TypeResolvePass<'a> {
                 .lookup_protocol(conformance_key.protocol_id)
                 .unwrap();
 
-            let associated_types = self
-                .raw
-                .associated_types
-                .get(&conformance_key.protocol_id.into())
-                .cloned()
-                .unwrap_or_default();
-            let associated_types = associated_types
+            // Get the protocol's associated types from the protocol definition
+            let protocol_associated_types = protocol.associated_types.clone();
+
+            // Map each protocol associated type to the conforming type's witness
+            let associated_types: FxHashMap<AssociatedTypeId, Symbol> = protocol_associated_types
                 .iter()
-                .map(|t| {
-                    let Name::Resolved(Symbol::AssociatedType(id), name) = t.0 else {
-                        unreachable!()
+                .filter_map(|(name, _associated)| {
+                    let Name::Resolved(Symbol::AssociatedType(id), type_name) = name else {
+                        return None;
                     };
 
-                    let symbol = self
-                        .raw
-                        .child_types
-                        .get(&ty.symbol)
-                        .unwrap_or_else(|| panic!("did not get child type named: {name}"))
-                        .get(name)
-                        .unwrap_or_else(|| panic!("did not get child type named: {name}"));
+                    // Look up the witness type in the conforming type's child_types
+                    let witness_symbol = self.raw.child_types.get(&ty.symbol)?.get(type_name)?;
 
-                    (*id, *symbol)
+                    Some((*id, *witness_symbol))
                 })
                 .collect();
+
+            println!(
+                "Inserting conformance: {:?} -> associated_types: {:?}",
+                conformance_key, associated_types
+            );
 
             self.session.type_catalog.conformances.insert(
                 *conformance_key,

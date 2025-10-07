@@ -18,6 +18,10 @@ macro_rules! impl_module_symbol_id {
             }
 
             pub fn import(self, module_id: ModuleId) -> Self {
+                if matches!(module_id, ModuleId::Core | ModuleId::Prelude) {
+                    return self;
+                }
+
                 Self {
                     module_id,
                     local_id: self.local_id,

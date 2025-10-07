@@ -83,7 +83,13 @@ impl Protocol {
             associated_types: self
                 .associated_types
                 .into_iter()
-                .map(|(name, associated)| (name, associated.import(module_id)))
+                .map(|(name, associated)| {
+                    println!(
+                        "import {name:?}, associated: {associated:?} {:?}",
+                        associated.clone().import(module_id)
+                    );
+                    (name, associated.import(module_id))
+                })
                 .collect(),
             requirements: self
                 .requirements

@@ -52,9 +52,7 @@ impl Call {
                 // TODO: Figure out if we're dealing with a struct vs an enum here and be more explicit.
                 // This is ok for now since enums can't have initializers and structs always have them.
                 let init_ty = if let Some(initializer) = session
-                    .type_catalog
-                    .initializers
-                    .get(symbol)
+                    .lookup_initializers(symbol)
                     .and_then(|i| i.values().next().copied())
                 {
                     let entry = session

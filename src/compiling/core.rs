@@ -6,6 +6,7 @@ use crate::compiling::{
 };
 
 pub fn compile() -> Module {
+    let _s = tracing::trace_span!("compile_prelude", prelude = true).entered();
     let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let config = DriverConfig {
         module_id: ModuleId::Core,

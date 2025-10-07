@@ -81,10 +81,7 @@ impl Scheme<InferTy> {
                     if let Some(bounds) = session.type_param_bounds.get(param).cloned() {
                         for bound in bounds {
                             let protocol = session
-                                .type_catalog
-                                .protocols
-                                .get(&bound.protocol_id)
-                                .cloned()
+                                .lookup_protocol(bound.protocol_id)
                                 .expect("didn't get protocol bound");
 
                             let mut substitutions = FxHashMap::default();

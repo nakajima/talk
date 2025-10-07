@@ -159,7 +159,7 @@ impl<'a> InferencePass<'a> {
         }
 
         let mut wants = Wants::default();
-        for conformance in pass.session.type_catalog.conformances.values() {
+        for conformance in pass.session.clone_conformances().values() {
             wants.conforms(
                 conformance.conforming_id,
                 conformance.protocol_id,

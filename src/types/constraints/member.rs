@@ -3,10 +3,7 @@ use crate::{
     name_resolution::symbol::Symbol,
     span::Span,
     types::{
-        constraints::{
-            conforms::TakeToSlot,
-            constraint::{Constraint, ConstraintCause},
-        },
+        constraints::constraint::{Constraint, ConstraintCause},
         infer_row::{InferRow, RowTail, normalize_row},
         infer_ty::{InferTy, Level},
         passes::{dependencies_pass::ConformanceRequirement, inference_pass::curry},
@@ -61,7 +58,7 @@ impl Member {
         {
             // First, check if any conforming protocols have this method with predicates
             let mut protocol_method = None;
-            let conformances = TakeToSlot::new(&mut session.type_catalog.conformances);
+            let conformances = session.clone_conformances();
             for conformance_key in conformances.keys() {
                 if conformance_key.conforming_id == *symbol {
                     let protocol_id = conformance_key.protocol_id;
@@ -230,9 +227,7 @@ impl Member {
                         return unify(&ty, &applied, substitutions, session);
                     }
 
-                    let variants = session
-                        .lookup_variants(symbol)
-                        .unwrap_or_default();
+                    let variants = session.lookup_variants(symbol).unwrap_or_default();
 
                     let mut row = InferRow::Empty(TypeDefKind::Enum);
                     for (label, sym) in variants.iter() {
