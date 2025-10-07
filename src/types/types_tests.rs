@@ -104,6 +104,12 @@ pub mod tests {
     }
 
     #[test]
+    fn types_array_properties() {
+        let (ast, types) = typecheck("[1,2,3].count");
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
+    }
+
+    #[test]
     fn types_basic_binary() {
         let (ast, types) = typecheck("func a(x) { x + 1 } ; a(123)");
         assert_eq!(ty(1, &ast, &types), Ty::Int);
