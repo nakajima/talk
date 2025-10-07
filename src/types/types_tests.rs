@@ -120,6 +120,22 @@ pub mod tests {
     }
 
     #[test]
+    fn types_nested_generalized_funcs() {
+        let (ast, types) = typecheck(
+            "
+            func foo() {
+                func id(x) { x } 
+                (id(123), id(1.23))
+            };
+
+            foo()
+            ",
+        );
+
+        assert_eq!(ty(1, &ast, &types), Ty::Tuple(vec![Ty::Int, Ty::Float]));
+    }
+
+    #[test]
     fn types_nested_func() {
         let (ast, types) = typecheck(
             r#"

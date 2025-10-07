@@ -1,6 +1,9 @@
 use crate::{
     compiling::module::ModuleId,
-    name_resolution::{name_resolver::Scope, symbol::{BuiltinId, Symbol}},
+    name_resolution::{
+        name_resolver::Scope,
+        symbol::{BuiltinId, Symbol},
+    },
 };
 
 pub fn import_builtins(scope: &mut Scope) {

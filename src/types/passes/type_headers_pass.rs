@@ -84,12 +84,18 @@ impl<'a> TypeHeaderPass<'a> {
 
             // Merge nested maps for instance_methods
             for (symbol, methods) in file_raw.instance_methods {
-                raw.instance_methods.entry(symbol).or_default().extend(methods);
+                raw.instance_methods
+                    .entry(symbol)
+                    .or_default()
+                    .extend(methods);
             }
 
             // Merge nested maps for static_methods
             for (symbol, methods) in file_raw.static_methods {
-                raw.static_methods.entry(symbol).or_default().extend(methods);
+                raw.static_methods
+                    .entry(symbol)
+                    .or_default()
+                    .extend(methods);
             }
 
             // Merge nested maps for initializers
@@ -104,12 +110,18 @@ impl<'a> TypeHeaderPass<'a> {
 
             // Merge nested maps for method_requirements
             for (symbol, reqs) in file_raw.method_requirements {
-                raw.method_requirements.entry(symbol).or_default().extend(reqs);
+                raw.method_requirements
+                    .entry(symbol)
+                    .or_default()
+                    .extend(reqs);
             }
 
             // Merge nested maps for associated_types
             for (symbol, types) in file_raw.associated_types {
-                raw.associated_types.entry(symbol).or_default().extend(types);
+                raw.associated_types
+                    .entry(symbol)
+                    .or_default()
+                    .extend(types);
             }
 
             // Merge nested maps for variants
