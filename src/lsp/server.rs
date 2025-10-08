@@ -2,8 +2,8 @@ struct TickEvent;
 
 use async_lsp::LanguageClient;
 use async_lsp::lsp_types::{
-    Diagnostic, SemanticTokens, SemanticTokensResult, TextDocumentSyncCapability,
-    TextDocumentSyncKind, TextDocumentSyncOptions, TextDocumentSyncSaveOptions,
+    Diagnostic, Position, Range, SemanticTokens, SemanticTokensResult, TextDocumentSyncCapability,
+    TextDocumentSyncKind, TextDocumentSyncOptions, TextDocumentSyncSaveOptions, TextEdit,
 };
 use async_lsp::{
     ClientSocket,
@@ -28,6 +28,7 @@ use tower::ServiceBuilder;
 use tracing::Level;
 
 use crate::compiling::driver::{Driver, DriverConfig, Source};
+use crate::formatter;
 use crate::lsp::semantic_tokens::collect;
 use crate::lsp::{document::Document, semantic_tokens::TOKEN_TYPES};
 
@@ -61,6 +62,40 @@ pub async fn start() {
         });
 
         router
+            .request::<request::Initialize, _>(|_, params| async move {
+                tracing::trace!("Initialize with {params:?}");
+                Ok(InitializeResult {
+                    capabilities: ServerCapabilities {
+                        hover_provider: Some(HoverProviderCapability::Simple(true)),
+                        definition_provider: Some(OneOf::Left(true)),
+                        document_formatting_provider: Some(OneOf::Left(true)),
+                        semantic_tokens_provider: Some(
+                            SemanticTokensServerCapabilities::SemanticTokensOptions(
+                                SemanticTokensOptions {
+                                    legend: SemanticTokensLegend {
+                                        token_types: TOKEN_TYPES.to_vec(),
+                                        token_modifiers: vec![],
+                                    },
+                                    full: Some(SemanticTokensFullOptions::Bool(true)),
+                                    range: Some(false),
+                                    ..Default::default()
+                                },
+                            ),
+                        ),
+                        text_document_sync: Some(TextDocumentSyncCapability::Options(
+                            TextDocumentSyncOptions {
+                                open_close: Some(true),
+                                change: Some(TextDocumentSyncKind::INCREMENTAL),
+                                will_save: None,
+                                will_save_wait_until: None,
+                                save: Some(TextDocumentSyncSaveOptions::Supported(true)),
+                            },
+                        )),
+                        ..ServerCapabilities::default()
+                    },
+                    server_info: None,
+                })
+            })
             .notification::<notification::DidOpenTextDocument>(|state, params| {
                 let TextDocumentItem {
                     uri: document_url,
@@ -109,38 +144,29 @@ pub async fn start() {
                 state.dirty_documents.remove(&document_url);
                 std::ops::ControlFlow::Continue(())
             })
-            .request::<request::Initialize, _>(|_, params| async move {
-                tracing::trace!("Initialize with {params:?}");
-                Ok(InitializeResult {
-                    capabilities: ServerCapabilities {
-                        hover_provider: Some(HoverProviderCapability::Simple(true)),
-                        definition_provider: Some(OneOf::Left(true)),
-                        semantic_tokens_provider: Some(
-                            SemanticTokensServerCapabilities::SemanticTokensOptions(
-                                SemanticTokensOptions {
-                                    legend: SemanticTokensLegend {
-                                        token_types: TOKEN_TYPES.to_vec(),
-                                        token_modifiers: vec![],
-                                    },
-                                    full: Some(SemanticTokensFullOptions::Bool(true)),
-                                    range: Some(false),
-                                    ..Default::default()
-                                },
-                            ),
+            .request::<request::Formatting, _>(|st, params| {
+                let uri = params.text_document.uri;
+                let result = if let Some(result) = st.documents.get(&uri) {
+                    let formatted = formatter::format_string(&result.text);
+                    let last_line = result.text.lines().count() as u32;
+                    let last_char = result
+                        .text
+                        .lines()
+                        .last()
+                        .map(|line| line.len().saturating_sub(1));
+
+                    Ok(Some(vec![TextEdit::new(
+                        Range::new(
+                            Position::new(0, 0),
+                            Position::new(last_line, last_char.unwrap_or(0) as u32),
                         ),
-                        text_document_sync: Some(TextDocumentSyncCapability::Options(
-                            TextDocumentSyncOptions {
-                                open_close: Some(true),
-                                change: Some(TextDocumentSyncKind::INCREMENTAL),
-                                will_save: None,
-                                will_save_wait_until: None,
-                                save: Some(TextDocumentSyncSaveOptions::Supported(true)),
-                            },
-                        )),
-                        ..ServerCapabilities::default()
-                    },
-                    server_info: None,
-                })
+                        formatted,
+                    )]))
+                } else {
+                    Ok(None)
+                };
+
+                async move { result }
             })
             .request::<request::SemanticTokensFullRequest, _>(|st, params| {
                 let uri = params.text_document.uri;
@@ -272,7 +298,9 @@ pub async fn start() {
         .with_max_level(Level::TRACE)
         .with_ansi(false)
         .with_writer(file)
-        .with_target(true)
+        .with_target(false)
+        .with_file(false)
+        .with_line_number(false)
         .init();
 
     // Prefer truly asynchronous piped stdin/stdout without blocking tasks.

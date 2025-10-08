@@ -1,8 +1,10 @@
 use crate::{
     ast::{AST, ASTPhase},
     label::Label,
+    lexer::Lexer,
     name::Name,
     node::Node,
+    node_id::FileID,
     node_kinds::{
         attribute::Attribute,
         block::Block,
@@ -21,6 +23,7 @@ use crate::{
     },
     node_meta::NodeMeta,
     node_meta_storage::NodeMetaStorage,
+    parser::Parser,
     token_kind::TokenKind,
 };
 
@@ -1407,6 +1410,12 @@ impl<'a> Formatter<'a> {
 
         width >= 0
     }
+}
+
+pub fn format_string(string: &str) -> String {
+    let lexer = Lexer::new(string);
+    let ast = Parser::new("", FileID(0), lexer).parse().unwrap();
+    format(&ast, 80)
 }
 
 // Public API

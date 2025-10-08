@@ -21,6 +21,7 @@ pub use parsing::*;
 pub mod common;
 pub mod compiling;
 pub use common::*;
+pub mod ir;
 pub mod name_resolution;
 pub mod types;
 
