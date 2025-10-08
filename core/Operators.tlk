@@ -1,7 +1,6 @@
 protocol Add {
   associated RHS
   associated Ret
-  
   func add(rhs: RHS) -> Ret
 }
 

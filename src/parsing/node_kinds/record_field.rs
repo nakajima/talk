@@ -14,6 +14,8 @@ pub struct RecordFieldTypeAnnotation {
     pub id: NodeID,
     #[drive(skip)]
     pub label: Name,
+    #[drive(skip)]
+    pub label_span: Span,
     pub value: TypeAnnotation,
     #[drive(skip)]
     pub span: Span,
@@ -26,6 +28,8 @@ pub struct RecordField {
     pub id: NodeID,
     #[drive(skip)]
     pub label: Name,
+    #[drive(skip)]
+    pub label_span: Span,
     pub value: Expr,
     #[drive(skip)]
     pub span: Span,

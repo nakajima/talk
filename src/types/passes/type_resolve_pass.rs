@@ -706,6 +706,7 @@ impl<'a> TypeResolvePass<'a> {
             TypeAnnotationKind::Nominal {
                 name: Name::Resolved(sym @ Symbol::TypeParameter(..), ..),
                 generics,
+                ..
             } => {
                 let mut predicates = vec![];
                 let mut foralls = vec![];
@@ -740,6 +741,7 @@ impl<'a> TypeResolvePass<'a> {
             TypeAnnotationKind::Nominal {
                 name: Name::Resolved(sym @ Symbol::Type(..), ..),
                 generics,
+                ..
             } => {
                 // Check if this is a generic parameter (from type defs or functions)
                 let (base, mut predicates, mut foralls) =
@@ -767,6 +769,7 @@ impl<'a> TypeResolvePass<'a> {
                 box base,
                 member: Label::Named(..),
                 member_generics,
+                ..
             } => {
                 let (_, mut predicates, mut foralls) = self.infer_type_annotation(base);
                 let result = self.session.new_type_param();

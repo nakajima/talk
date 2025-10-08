@@ -9,6 +9,7 @@ use crate::{
         parameter::Parameter,
         type_annotation::{TypeAnnotation, TypeAnnotationKind},
     },
+    span::Span,
 };
 
 #[derive(VisitorMut)]
@@ -42,6 +43,7 @@ impl PrependSelfToMethods {
                 Parameter {
                     id: NodeID(self.file_id, self.node_ids.next_id()),
                     name: "self".into(),
+                    name_span: Span::ANY,
                     type_annotation: Some(TypeAnnotation {
                         id: NodeID(self.file_id, self.node_ids.next_id()),
                         span: decl.span,
@@ -59,6 +61,7 @@ impl PrependSelfToMethods {
                 Parameter {
                     id: NodeID(self.file_id, self.node_ids.next_id()),
                     name: "self".into(),
+                    name_span: signature.span,
                     type_annotation: Some(TypeAnnotation {
                         id: NodeID(self.file_id, self.node_ids.next_id()),
                         span: decl.span,
@@ -76,6 +79,7 @@ impl PrependSelfToMethods {
                 Parameter {
                     id: NodeID(self.file_id, self.node_ids.next_id()),
                     name: "self".into(),
+                    name_span: decl.span,
                     type_annotation: Some(TypeAnnotation {
                         id: NodeID(self.file_id, self.node_ids.next_id()),
                         span: decl.span,
@@ -119,6 +123,7 @@ pub mod tests {
             *parsed.roots[0].as_decl(),
             any_decl!(DeclKind::Struct {
                 name: "Person".into(),
+                name_span: Span::ANY,
                 generics: vec![],
                 conformances: vec![],
                 body: any_block!(vec![
@@ -126,12 +131,14 @@ pub mod tests {
                         func: Box::new(Func {
                             id: NodeID::ANY,
                             name: "fizz".into(),
+                            name_span: Span::ANY,
                             generics: vec![],
                             params: vec![
                                 Parameter {
                                     id: NodeID::ANY,
                                     span: Span::ANY,
                                     name: "self".into(),
+                                    name_span: Span::ANY,
                                     type_annotation: Some(annotation!(
                                         TypeAnnotationKind::SelfType("Self".into())
                                     ))
@@ -140,6 +147,7 @@ pub mod tests {
                                     id: NodeID::ANY,
                                     span: Span::ANY,
                                     name: "x".into(),
+                                    name_span: Span::ANY,
                                     type_annotation: None
                                 }
                             ],
@@ -171,6 +179,7 @@ pub mod tests {
             *parsed.roots[0].as_decl(),
             any_decl!(DeclKind::Struct {
                 name: "Person".into(),
+                name_span: Span::ANY,
                 generics: vec![],
                 conformances: vec![],
                 body: any_block!(vec![
@@ -180,6 +189,7 @@ pub mod tests {
                             id: NodeID::ANY,
                             span: Span::ANY,
                             name: "self".into(),
+                            name_span: Span::ANY,
                             type_annotation: Some(annotation!(TypeAnnotationKind::SelfType(
                                 "Self".into()
                             )))

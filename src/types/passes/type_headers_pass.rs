@@ -527,7 +527,7 @@ impl<'a> TypeHeaderPass<'a> {
                         },
                     );
                 }
-                DeclKind::EnumVariant(variant_name, values) => {
+                DeclKind::EnumVariant(variant_name, .., values) => {
                     variants.insert(
                         variant_name.name_str().into(),
                         Variant {
@@ -827,7 +827,15 @@ pub mod tests {
                     initializes_type_id: TypeId::from(1),
                     params: vec![
                         ASTTyRepr::SelfType(Name::Resolved(TypeId::from(1).into(), "Person".into()), NodeID::ANY, Span::ANY),
-                        ASTTyRepr::Annotated(annotation!(TypeAnnotationKind::Nominal { name: Name::Resolved(Symbol::Int, "Int".into()), generics: vec!{} }))
+                        ASTTyRepr::Annotated(
+                            annotation!(
+                                TypeAnnotationKind::Nominal {
+                                    name: Name::Resolved(Symbol::Int, "Int".into()),
+                                    name_span: Span::ANY,
+                                    generics: vec!{}
+                                }
+                            )
+                        )
                     ]
                 }
             }
@@ -840,6 +848,7 @@ pub mod tests {
                 is_static: false,
                 ty_repr: ASTTyRepr::Annotated(annotation!(TypeAnnotationKind::Nominal {
                     name: Name::Resolved(Symbol::Builtin(BuiltinId::new(crate::compiling::module::ModuleId::Prelude, 1)), "Int".into()),
+                    name_span: Span::ANY,
                     generics: vec![]
                 })),
             })
@@ -920,6 +929,7 @@ pub mod tests {
                 is_static: false,
                 ty_repr: ASTTyRepr::Annotated(annotation!(TypeAnnotationKind::Nominal {
                     name: Name::Resolved(Symbol::TypeParameter(TypeParameterId(1)), "T".into()),
+                    name_span: Span::ANY,
                     generics: vec![]
                 }))
             })
@@ -930,6 +940,7 @@ pub mod tests {
             crate::indexmap!(Name::Resolved(Symbol::TypeParameter(TypeParameterId(1)), "T".into()) => ASTTyRepr::Generic(GenericDecl {
                 id: NodeID::ANY,
                 name: Name::Resolved(Symbol::TypeParameter(TypeParameterId(1)), "T".into()),
+                name_span: Span::ANY,
                 generics: vec![],
                 conformances: vec![],
                 span: Span::ANY,
@@ -970,8 +981,9 @@ pub mod tests {
                 initializes_type_id: TypeId::from(1),
                 params: vec![
                 ASTTyRepr::SelfType(Name::Resolved(TypeId::from(1).into(), "Wrapper".into()), NodeID::ANY, Span::ANY),
-                ASTTyRepr::Annotated(annotation!(TypeAnnotationKind::Nominal { name: Name::Resolved(Symbol::TypeParameter(TypeParameterId(1)), "T".into()), generics: vec![
-                    annotation!(TypeAnnotationKind::Nominal { name: Name::Resolved(TypeParameterId(2).into(), "U".into()), generics: vec![] })
+                ASTTyRepr::Annotated(
+                    annotation!(TypeAnnotationKind::Nominal { name: Name::Resolved(Symbol::TypeParameter(TypeParameterId(1)), "T".into()), name_span: Span::ANY, generics: vec![
+                    annotation!(TypeAnnotationKind::Nominal { name: Name::Resolved(TypeParameterId(2).into(), "U".into()), name_span: Span::ANY, generics: vec![] })
                 ] }))
                 ]
             })
@@ -984,8 +996,10 @@ pub mod tests {
                 is_static: false,
                 ty_repr: ASTTyRepr::Annotated(annotation!(TypeAnnotationKind::Nominal {
                     name: Name::Resolved(Symbol::TypeParameter(TypeParameterId(1)), "T".into()),
+                    name_span: Span::ANY,
                     generics: vec![annotation!(TypeAnnotationKind::Nominal {
                         name: Name::Resolved(Symbol::TypeParameter(TypeParameterId(2)), "U".into()),
+                        name_span: Span::ANY,
                         generics: vec![]
                     })]
                 }))
@@ -998,6 +1012,7 @@ pub mod tests {
               Name::Resolved(Symbol::TypeParameter(TypeParameterId(1)), "T".into()) =>  ASTTyRepr::Generic(GenericDecl {
                     id: NodeID::ANY,
                     name: Name::Resolved(Symbol::TypeParameter(TypeParameterId(1)), "T".into()),
+                    name_span: Span::ANY,
                     generics: vec![],
                     conformances: vec![],
                     span: Span::ANY,
@@ -1005,6 +1020,7 @@ pub mod tests {
                Name::Resolved(Symbol::TypeParameter(TypeParameterId(2)), "U".into()) => ASTTyRepr::Generic(GenericDecl {
                     id: NodeID::ANY,
                     name: Name::Resolved(Symbol::TypeParameter(TypeParameterId(2)), "U".into()),
+                    name_span: Span::ANY,
                     generics: vec![],
                     conformances: vec![],
                     span: Span::ANY,
@@ -1050,6 +1066,7 @@ pub mod tests {
                     fields: vec![ASTTyRepr::Annotated(annotation!(
                         TypeAnnotationKind::Nominal {
                             name: Name::Resolved(Symbol::Int, "Int".into()),
+                            name_span: Span::ANY,
                             generics: vec![]
                         }
                     ))]
@@ -1092,6 +1109,7 @@ pub mod tests {
                 generics: vec![
                     ASTTyRepr::Generic(any!(GenericDecl, {
                         name: Name::Resolved(Symbol::TypeParameter(TypeParameterId::from(1u32)), "G".into()),
+                        name_span: Span::ANY,
                         generics: vec![],
                         conformances: vec![],
                     }))
@@ -1105,12 +1123,14 @@ pub mod tests {
                     ASTTyRepr::Annotated(
                         annotation!(TypeAnnotationKind::Nominal {
                             name: Name::Resolved(TypeParameterId::from(1u32).into(), "G".into()),
+                            name_span: Span::ANY,
                             generics: vec![],
                         })
                     )
                 ],
                 ret: Some(ASTTyRepr::Annotated(annotation!(TypeAnnotationKind::Nominal {
                     name: Name::Resolved(Symbol::Int, "Int".into()),
+                    name_span: Span::ANY,
                     generics: vec![]
                 })))
             })
@@ -1203,6 +1223,7 @@ pub mod tests {
                 span: Span::ANY,
                 kind: TypeAnnotationKind::Nominal {
                     name: Name::Resolved(Symbol::Int, "Int".into()),
+                    name_span: Span::ANY,
                     generics: vec![]
                 }
             })
@@ -1229,6 +1250,7 @@ pub mod tests {
                 span: Span::ANY,
                 kind: TypeAnnotationKind::Nominal {
                     name: Name::Resolved(Symbol::TypeParameter(TypeParameterId(1)), "T".into()),
+                    name_span: Span::ANY,
                     generics: vec![]
                 }
             })

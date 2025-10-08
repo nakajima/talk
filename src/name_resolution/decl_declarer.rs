@@ -287,6 +287,7 @@ impl<'a> DeclDeclarer<'a> {
                 body: _,
                 ret: _,
                 attributes: _,
+                ..
             },
             {
                 *name = self
@@ -373,6 +374,7 @@ impl<'a> DeclDeclarer<'a> {
                     kind: TypeAnnotationKind::Nominal {
                         name: lhs_name,
                         generics: lhs_generics,
+                        ..
                     },
                     ..
                 },

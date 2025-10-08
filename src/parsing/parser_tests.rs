@@ -54,7 +54,8 @@ pub mod tests {
                 kind: ExprKind::Call {
                     callee: any_expr!($crate::node_kinds::expr::ExprKind::Member(
                         Some(any_expr!($receiver).into()),
-                        $member.into()
+                        $member.into(),
+                        Span::ANY,
                     ))
                     .into(),
                     type_args: vec![],
@@ -199,6 +200,7 @@ pub mod tests {
             *parsed.roots[0].as_decl(),
             any_decl!(DeclKind::Struct {
                 name: "Person".into(),
+                name_span: Span::ANY,
                 generics: vec![],
                 conformances: vec![],
                 body: any_block!(vec![])
@@ -549,6 +551,7 @@ pub mod tests {
                 kind: DeclKind::Func(Func {
                     id: NodeID::ANY,
                     name: "foo".into(),
+                    name_span: Span::ANY,
                     generics: vec![],
                     params: vec![],
                     body: Block {
@@ -577,11 +580,13 @@ pub mod tests {
             params[0].type_annotation.clone().unwrap().kind,
             TypeAnnotationKind::Nominal {
                 name: "Array".into(),
+                name_span: Span::ANY,
                 generics: vec![TypeAnnotation {
                     id: NodeID::ANY,
                     span: Span::ANY,
                     kind: TypeAnnotationKind::Nominal {
                         name: "Int".into(),
+                        name_span: Span::ANY,
                         generics: vec![]
                     }
                 }]
@@ -602,11 +607,13 @@ pub mod tests {
             any_decl!(DeclKind::Func(Func {
                 id: NodeID::ANY,
                 name: Name::Raw("greet".to_string()),
+                name_span: Span::ANY,
                 generics: vec![],
                 params: vec![Parameter {
                     id: NodeID::ANY,
                     span: Span::ANY,
                     name: "a".into(),
+                    name_span: Span::ANY,
                     type_annotation: None
                 }],
                 body: Block {
@@ -634,14 +641,22 @@ pub mod tests {
             any_decl!(DeclKind::Func(Func {
                 id: NodeID::ANY,
                 name: Name::Raw("greet".to_string()),
+                name_span: Span::ANY,
                 generics: vec![GenericDecl {
                     id: NodeID::ANY,
                     span: Span::ANY,
                     name: "T".into(),
+                    name_span: Span::ANY,
                     generics: vec![],
                     conformances: vec![],
                 }],
-                params: vec![Parameter::new(NodeID::ANY, "t".into(), None, Span::ANY)],
+                params: vec![Parameter::new(
+                    NodeID::ANY,
+                    "t".into(),
+                    Span::ANY,
+                    None,
+                    Span::ANY
+                )],
                 body: Block {
                     id: NodeID::ANY,
                     span: Span::ANY,
@@ -653,6 +668,7 @@ pub mod tests {
                     span: Span::ANY,
                     kind: TypeAnnotationKind::Nominal {
                         name: "T".into(),
+                        name_span: Span::ANY,
                         generics: vec![]
                     }
                 }),
@@ -673,6 +689,7 @@ pub mod tests {
                     span: Span::ANY,
                     kind: TypeAnnotationKind::Nominal {
                         name: "T".into(),
+                        name_span: Span::ANY,
                         generics: vec![]
                     }
                 }],
@@ -690,6 +707,7 @@ pub mod tests {
             any_decl!(DeclKind::Func(Func {
                 id: NodeID::ANY,
                 name: Name::Raw("hello".to_string()),
+                name_span: Span::ANY,
                 generics: vec![],
                 params: vec![],
                 body: Block {
@@ -708,6 +726,7 @@ pub mod tests {
             any_decl!(DeclKind::Func(Func {
                 id: NodeID::ANY,
                 name: Name::Raw("world".to_string()),
+                name_span: Span::ANY,
                 generics: vec![],
                 params: vec![],
                 body: Block {
@@ -731,11 +750,13 @@ pub mod tests {
             any_decl!(DeclKind::Func(Func {
                 id: NodeID::ANY,
                 name: Name::Raw("greet".to_string()),
+                name_span: Span::ANY,
                 generics: vec![],
                 params: vec![
                     Parameter {
                         id: NodeID::ANY,
                         span: Span::ANY,
+                        name_span: Span::ANY,
                         name: "one".into(),
                         type_annotation: None,
                     },
@@ -743,6 +764,7 @@ pub mod tests {
                         id: NodeID::ANY,
                         span: Span::ANY,
                         name: "two".into(),
+                        name_span: Span::ANY,
                         type_annotation: None,
                     },
                 ],
@@ -766,16 +788,19 @@ pub mod tests {
             any_decl!(DeclKind::Func(Func {
                 id: NodeID::ANY,
                 name: Name::Raw("greet".to_string()),
+                name_span: Span::ANY,
                 generics: vec![],
                 params: vec![Parameter {
                     id: NodeID::ANY,
                     span: Span::ANY,
                     name: "name".into(),
+                    name_span: Span::ANY,
                     type_annotation: Some(TypeAnnotation {
                         id: NodeID::ANY,
                         span: Span::ANY,
                         kind: TypeAnnotationKind::Nominal {
                             name: "Int".into(),
+                            name_span: Span::ANY,
                             generics: vec![]
                         }
                     }),
@@ -817,6 +842,7 @@ pub mod tests {
                     id: NodeID::ANY,
                     span: Span::ANY,
                     label: "foo".into(),
+                    label_span: Span::ANY,
                     value: any_expr!(ExprKind::LiteralInt("123".into()))
                 }]
             })
@@ -860,6 +886,7 @@ pub mod tests {
                     },
                     type_annotation: Some(annotation!(TypeAnnotationKind::Nominal {
                         name: "Int".into(),
+                        name_span: Span::ANY,
                         generics: vec![]
                     })),
                     value: None
@@ -884,8 +911,10 @@ pub mod tests {
                     },
                     type_annotation: Some(annotation!(TypeAnnotationKind::Nominal {
                         name: "A".into(),
+                        name_span: Span::ANY,
                         generics: vec![annotation!(TypeAnnotationKind::Nominal {
                             name: "B".into(),
+                            name_span: Span::ANY,
                             generics: vec![]
                         })]
                     })),
@@ -918,6 +947,7 @@ pub mod tests {
                                 span: Span::ANY,
                                 kind: TypeAnnotationKind::Nominal {
                                     name: "Int".into(),
+                                    name_span: Span::ANY,
                                     generics: vec![]
                                 },
                             },
@@ -926,6 +956,7 @@ pub mod tests {
                                 span: Span::ANY,
                                 kind: TypeAnnotationKind::Nominal {
                                     name: "Bool".into(),
+                                    name_span: Span::ANY,
                                     generics: vec![]
                                 },
                             },
@@ -945,6 +976,7 @@ pub mod tests {
             any_decl!(DeclKind::Func(Func {
                 id: NodeID::ANY,
                 name: Name::Raw("fizz".to_string()),
+                name_span: Span::ANY,
                 generics: vec![],
                 params: vec![],
                 body: Block {
@@ -958,6 +990,7 @@ pub mod tests {
                     span: Span::ANY,
                     kind: TypeAnnotationKind::Nominal {
                         name: "Int".into(),
+                        name_span: Span::ANY,
                         generics: vec![]
                     }
                 }),
@@ -1106,7 +1139,8 @@ pub mod tests {
                         TokenKind::Less,
                         Box::new(any_expr!(ExprKind::Member(
                             Some(Box::new(any_expr!(ExprKind::Variable("self".into())))),
-                            "count".into()
+                            "count".into(),
+                            Span::ANY,
                         )))
                     ))),
                     any_block!(vec![any_expr_stmt!(ExprKind::LiteralInt("123".into()))])
@@ -1123,6 +1157,7 @@ pub mod tests {
             *parsed.roots[0].as_decl(),
             any_decl!(DeclKind::Enum {
                 name: "Fizz".into(),
+                name_span: Span::ANY,
                 generics: vec![],
                 conformances: vec![],
                 body: any_block!(vec![])
@@ -1138,7 +1173,8 @@ pub mod tests {
             *parsed.roots[1].as_stmt(),
             any_expr_stmt!(ExprKind::Member(
                 Some(any_expr!(ExprKind::Variable("Fizz".into())).into()),
-                "foo".into()
+                "foo".into(),
+                Span::ANY,
             ))
         );
     }
@@ -1152,7 +1188,8 @@ pub mod tests {
             any_expr_stmt!(ExprKind::Call {
                 callee: any_expr!(ExprKind::Member(
                     Some(any_expr!(ExprKind::Variable("Fizz".into())).into()),
-                    "foo".into()
+                    "foo".into(),
+                    Span::ANY,
                 ))
                 .into(),
                 type_args: vec![],
@@ -1160,6 +1197,7 @@ pub mod tests {
                     id: NodeID::ANY,
                     span: Span::ANY,
                     label: Label::Positional(0),
+                    label_span: Span::ANY,
                     value: any_expr!(ExprKind::LiteralInt("123".into()))
                 }]
             })
@@ -1182,11 +1220,13 @@ pub mod tests {
             *parsed.roots[0].as_decl(),
             any_decl!(DeclKind::Enum {
                 name: "Fizz".into(),
+                name_span: Span::ANY,
                 generics: vec![
                     GenericDecl {
                         id: NodeID::ANY,
                         span: Span::ANY,
                         name: "T".into(),
+                        name_span: Span::ANY,
                         generics: vec![],
                         conformances: vec![]
                     },
@@ -1194,6 +1234,7 @@ pub mod tests {
                         id: NodeID::ANY,
                         span: Span::ANY,
                         name: "Y".into(),
+                        name_span: Span::ANY,
                         generics: vec![],
                         conformances: vec![]
                     },
@@ -1202,12 +1243,14 @@ pub mod tests {
                 body: any_block!(vec![
                     any_decl!(DeclKind::EnumVariant(
                         Name::Raw("foo".into()),
+                        Span::ANY,
                         vec![
                             TypeAnnotation {
                                 id: NodeID::ANY,
                                 span: Span::ANY,
                                 kind: TypeAnnotationKind::Nominal {
                                     name: "T".into(),
+                                    name_span: Span::ANY,
                                     generics: vec![]
                                 }
                             },
@@ -1216,13 +1259,19 @@ pub mod tests {
                                 span: Span::ANY,
                                 kind: TypeAnnotationKind::Nominal {
                                     name: "Y".into(),
+                                    name_span: Span::ANY,
                                     generics: vec![]
                                 }
                             }
                         ]
                     ))
                     .into(),
-                    any_decl!(DeclKind::EnumVariant(Name::Raw("bar".into()), vec![])).into()
+                    any_decl!(DeclKind::EnumVariant(
+                        Name::Raw("bar".into()),
+                        Span::ANY,
+                        vec![]
+                    ))
+                    .into()
                 ])
             })
         );
@@ -1240,13 +1289,29 @@ pub mod tests {
             *parsed.roots[0].as_decl(),
             any_decl!(DeclKind::Enum {
                 name: "Fizz".into(),
+                name_span: Span::ANY,
                 generics: vec![],
                 conformances: vec![],
                 body: any_block!(
                     (vec![
-                        any_decl!(DeclKind::EnumVariant(Name::Raw("foo".into()), vec![])).into(),
-                        any_decl!(DeclKind::EnumVariant(Name::Raw("bar".into()), vec![])).into(),
-                        any_decl!(DeclKind::EnumVariant(Name::Raw("fizz".into()), vec![])).into(),
+                        any_decl!(DeclKind::EnumVariant(
+                            Name::Raw("foo".into()),
+                            Span::ANY,
+                            vec![]
+                        ))
+                        .into(),
+                        any_decl!(DeclKind::EnumVariant(
+                            Name::Raw("bar".into()),
+                            Span::ANY,
+                            vec![]
+                        ))
+                        .into(),
+                        any_decl!(DeclKind::EnumVariant(
+                            Name::Raw("fizz".into()),
+                            Span::ANY,
+                            vec![]
+                        ))
+                        .into(),
                     ])
                 )
             })
@@ -1264,17 +1329,20 @@ pub mod tests {
             *parsed.roots[0].as_decl(),
             any_decl!(DeclKind::Enum {
                 name: "Fizz".into(),
+                name_span: Span::ANY,
                 generics: vec![],
                 conformances: vec![],
                 body: any_block!(vec![
                     any_decl!(DeclKind::EnumVariant(
                         Name::Raw("foo".into()),
+                        Span::ANY,
                         vec![
                             TypeAnnotation {
                                 id: NodeID::ANY,
                                 span: Span::ANY,
                                 kind: TypeAnnotationKind::Nominal {
                                     name: "Int".into(),
+                                    name_span: Span::ANY,
                                     generics: vec![]
                                 },
                             },
@@ -1283,6 +1351,7 @@ pub mod tests {
                                 span: Span::ANY,
                                 kind: TypeAnnotationKind::Nominal {
                                     name: "Float".into(),
+                                    name_span: Span::ANY,
                                     generics: vec![]
                                 },
                             },
@@ -1291,12 +1360,14 @@ pub mod tests {
                     .into(),
                     any_decl!(DeclKind::EnumVariant(
                         Name::Raw("bar".into()),
+                        Span::ANY,
                         vec![
                             TypeAnnotation {
                                 id: NodeID::ANY,
                                 span: Span::ANY,
                                 kind: TypeAnnotationKind::Nominal {
                                     name: "Float".into(),
+                                    name_span: Span::ANY,
                                     generics: vec![]
                                 },
                             },
@@ -1305,6 +1376,7 @@ pub mod tests {
                                 span: Span::ANY,
                                 kind: TypeAnnotationKind::Nominal {
                                     name: "Int".into(),
+                                    name_span: Span::ANY,
                                     generics: vec![]
                                 },
                             },
@@ -1417,6 +1489,7 @@ pub mod tests {
                             kind: PatternKind::Variant {
                                 enum_name: None,
                                 variant_name: "foo".into(),
+                                variant_name_span: Span::ANY,
                                 fields: vec![Pattern {
                                     id: NodeID::ANY,
                                     span: Span::ANY,
@@ -1437,6 +1510,7 @@ pub mod tests {
                             kind: PatternKind::Variant {
                                 enum_name: None,
                                 variant_name: "bar".into(),
+                                variant_name_span: Span::ANY,
                                 fields: vec![]
                             }
                         },
@@ -1460,11 +1534,13 @@ pub mod tests {
             any_decl!(DeclKind::Func(Func {
                 id: NodeID::ANY,
                 name: Name::Raw("greet".into()),
+                name_span: Span::ANY,
                 generics: vec![],
                 params: vec![Parameter {
                     id: NodeID::ANY,
                     span: Span::ANY,
                     name: Name::Raw("using".into()),
+                    name_span: Span::ANY,
                     type_annotation: Some(TypeAnnotation {
                         id: NodeID::ANY,
                         span: Span::ANY,
@@ -1474,6 +1550,7 @@ pub mod tests {
                                 span: Span::ANY,
                                 kind: TypeAnnotationKind::Nominal {
                                     name: "T".into(),
+                                    name_span: Span::ANY,
                                     generics: vec![]
                                 }
                             }],
@@ -1482,6 +1559,7 @@ pub mod tests {
                                 span: Span::ANY,
                                 kind: TypeAnnotationKind::Nominal {
                                     name: "Y".into(),
+                                    name_span: Span::ANY,
                                     generics: vec![]
                                 }
                             })
@@ -1513,27 +1591,36 @@ pub mod tests {
             *parsed.roots[0].as_decl(),
             any_decl!(DeclKind::Enum {
                 name: "MyEnum".into(),
+                name_span: Span::ANY,
                 generics: vec![],
                 conformances: vec![],
                 body: any_block!(vec![
                     any_decl!(DeclKind::EnumVariant(
                         Name::Raw("val".into()),
+                        Span::ANY,
                         vec![TypeAnnotation {
                             id: NodeID::ANY,
                             span: Span::ANY,
                             kind: TypeAnnotationKind::Nominal {
                                 name: "Int".into(),
+                                name_span: Span::ANY,
                                 generics: vec! {}
                             }
                         }]
                     ))
                     .into(),
-                    any_decl!(DeclKind::EnumVariant(Name::Raw("nope".into()), vec![])).into(),
+                    any_decl!(DeclKind::EnumVariant(
+                        Name::Raw("nope".into()),
+                        Span::ANY,
+                        vec![]
+                    ))
+                    .into(),
                     any_decl!(DeclKind::Method {
                         is_static: false,
                         func: Box::new(Func {
                             id: NodeID::ANY,
                             name: Name::Raw("fizz".into()),
+                            name_span: Span::ANY,
                             generics: vec![],
                             params: vec![],
                             body: any_block!(vec![any_expr_stmt!(ExprKind::LiteralInt(
@@ -1622,6 +1709,7 @@ pub mod tests {
             PatternKind::Variant {
                 enum_name: Some(Name::Raw("Fizz".into())),
                 variant_name: "buzz".into(),
+                variant_name_span: Span::ANY,
                 fields: vec![]
             }
         );
@@ -1631,6 +1719,7 @@ pub mod tests {
             PatternKind::Variant {
                 enum_name: None,
                 variant_name: "foo".into(),
+                variant_name_span: Span::ANY,
                 fields: vec![]
             }
         );
@@ -1682,17 +1771,20 @@ pub mod tests {
             *parsed.roots[0].as_decl(),
             any_decl!(DeclKind::Extend {
                 name: Name::Raw("Person".into()),
+                name_span: Span::ANY,
                 generics: vec![],
                 conformances: vec![TypeAnnotation {
                     id: NodeID::ANY,
                     span: Span::ANY,
                     kind: TypeAnnotationKind::Nominal {
                         name: "Something".into(),
+                        name_span: Span::ANY,
                         generics: vec![TypeAnnotation {
                             id: NodeID::ANY,
                             span: Span::ANY,
                             kind: TypeAnnotationKind::Nominal {
                                 name: "String".into(),
+                                name_span: Span::ANY,
                                 generics: vec![]
                             }
                         }]
@@ -1703,6 +1795,7 @@ pub mod tests {
                         func: Box::new(Func {
                             id: NodeID::ANY,
                             name: "foo".into(),
+                            name_span: Span::ANY,
                             generics: vec![],
                             params: vec![],
                             body: any_block!(vec![]),
@@ -1729,6 +1822,7 @@ pub mod tests {
             *parsed.roots[0].as_decl(),
             any_decl!(DeclKind::Struct {
                 name: "Person".into(),
+                name_span: Span::ANY,
                 generics: vec![],
                 conformances: vec![],
                 body: any_block!(vec![])
@@ -1752,31 +1846,37 @@ pub mod tests {
             *parsed.roots[0].as_decl(),
             any_decl!(DeclKind::Struct {
                 name: "Person".into(),
+                name_span: Span::ANY,
                 generics: vec![],
                 conformances: vec![],
                 body: any_block!(vec![
                     any_decl!(DeclKind::Property {
                         name: "age".into(),
+                        name_span: Span::ANY,
                         is_static: false,
                         default_value: None,
                         type_annotation: Some(annotation!(TypeAnnotationKind::Nominal {
                             name: "Int".into(),
+                            name_span: Span::ANY,
                             generics: vec![],
                         }))
                     })
                     .into(),
                     any_decl!(DeclKind::Property {
                         name: "count".into(),
+                        name_span: Span::ANY,
                         is_static: false,
                         default_value: Some(any_expr!(ExprKind::LiteralInt("123".into()))),
                         type_annotation: Some(annotation!(TypeAnnotationKind::Nominal {
                             name: "Int".into(),
+                            name_span: Span::ANY,
                             generics: vec![],
                         }))
                     })
                     .into(),
                     any_decl!(DeclKind::Property {
                         name: "height".into(),
+                        name_span: Span::ANY,
                         is_static: false,
                         default_value: Some(any_expr!(ExprKind::LiteralInt("456".into()))),
                         type_annotation: None
@@ -1803,31 +1903,37 @@ pub mod tests {
             *parsed.roots[0].as_decl(),
             any_decl!(DeclKind::Struct {
                 name: "Person".into(),
+                name_span: Span::ANY,
                 generics: vec![],
                 conformances: vec![],
                 body: any_block!(vec![
                     any_decl!(DeclKind::Property {
                         name: "age".into(),
+                        name_span: Span::ANY,
                         is_static: true,
                         default_value: None,
                         type_annotation: Some(annotation!(TypeAnnotationKind::Nominal {
                             name: "Int".into(),
+                            name_span: Span::ANY,
                             generics: vec![],
                         }))
                     })
                     .into(),
                     any_decl!(DeclKind::Property {
                         name: "count".into(),
+                        name_span: Span::ANY,
                         is_static: true,
                         default_value: Some(any_expr!(ExprKind::LiteralInt("123".into()))),
                         type_annotation: Some(annotation!(TypeAnnotationKind::Nominal {
                             name: "Int".into(),
+                            name_span: Span::ANY,
                             generics: vec![],
                         }))
                     })
                     .into(),
                     any_decl!(DeclKind::Property {
                         name: "height".into(),
+                        name_span: Span::ANY,
                         is_static: true,
                         default_value: Some(any_expr!(ExprKind::LiteralInt("456".into()))),
                         type_annotation: None
@@ -1854,6 +1960,7 @@ pub mod tests {
             *parsed.roots[0].as_decl(),
             any_decl!(DeclKind::Struct {
                 name: "Person".into(),
+                name_span: Span::ANY,
                 generics: vec![],
                 conformances: vec![],
                 body: any_block!(vec![
@@ -1862,6 +1969,7 @@ pub mod tests {
                         func: Func {
                             id: NodeID::ANY,
                             name: "getAge".into(),
+                            name_span: Span::ANY,
                             generics: vec![],
                             params: vec![],
                             body: any_block!(vec![any_expr_stmt!(ExprKind::LiteralInt(
@@ -1894,6 +2002,7 @@ pub mod tests {
             *parsed.roots[0].as_decl(),
             any_decl!(DeclKind::Struct {
                 name: "Person".into(),
+                name_span: Span::ANY,
                 generics: vec![],
                 conformances: vec![],
                 body: any_block!(vec![
@@ -1902,6 +2011,7 @@ pub mod tests {
                         func: Func {
                             id: NodeID::ANY,
                             name: "getAge".into(),
+                            name_span: Span::ANY,
                             generics: vec![],
                             params: vec![],
                             body: any_block!(vec![any_expr_stmt!(ExprKind::LiteralInt(
@@ -1934,6 +2044,7 @@ pub mod tests {
             *parsed.roots[0].as_decl(),
             any_decl!(DeclKind::Struct {
                 name: "Person".into(),
+                name_span: Span::ANY,
                 generics: vec![],
                 conformances: vec![],
                 body: any_block!(vec![
@@ -1943,8 +2054,10 @@ pub mod tests {
                             id: NodeID::ANY,
                             span: Span::ANY,
                             name: Name::Raw("age".into()),
+                            name_span: Span::ANY,
                             type_annotation: Some(annotation!(TypeAnnotationKind::Nominal {
                                 name: "Int".into(),
+                                name_span: Span::ANY,
                                 generics: vec![]
                             }))
                         }],
@@ -1952,7 +2065,8 @@ pub mod tests {
                             any_stmt!(StmtKind::Assignment(
                                 any_expr!(ExprKind::Member(
                                     Some(any_expr!(ExprKind::Variable("self".into())).into()),
-                                    "age".into()
+                                    "age".into(),
+                                    Span::ANY,
                                 )),
                                 any_expr!(ExprKind::Variable("age".into()))
                             ))
@@ -1977,6 +2091,7 @@ pub mod tests {
             *parsed.roots[0].as_decl(),
             any_decl!(DeclKind::Protocol {
                 name: "Person".into(),
+                name_span: Span::ANY,
                 generics: vec![],
                 conformances: vec![],
                 body: any_block!(vec![])
@@ -1998,6 +2113,7 @@ pub mod tests {
             *parsed.roots[0].as_decl(),
             any_decl!(DeclKind::Protocol {
                 name: "Person".into(),
+                name_span: Span::ANY,
                 generics: vec![],
                 conformances: vec![],
                 body: any_block!(vec![
@@ -2010,6 +2126,7 @@ pub mod tests {
                         ret: Some(
                             annotation!(TypeAnnotationKind::Nominal {
                                 name: "Person".into(),
+                                name_span: Span::ANY,
                                 generics: vec![]
                             })
                             .into()
@@ -2034,12 +2151,15 @@ pub mod tests {
             any_decl!(DeclKind::TypeAlias(
                 annotation!(TypeAnnotationKind::Nominal {
                     name: "Foo".into(),
+                    name_span: Span::ANY,
                     generics: vec![]
                 }),
                 annotation!(TypeAnnotationKind::Nominal {
                     name: "Bar".into(),
+                    name_span: Span::ANY,
                     generics: vec![annotation!(TypeAnnotationKind::Nominal {
                         name: "Int".into(),
+                        name_span: Span::ANY,
                         generics: vec![]
                     })]
                 })
@@ -2060,20 +2180,25 @@ pub mod tests {
             any_decl!(DeclKind::TypeAlias(
                 annotation!(TypeAnnotationKind::Nominal {
                     name: "Foo".into(),
+                    name_span: Span::ANY,
                     generics: vec![]
                 }),
                 annotation!(TypeAnnotationKind::NominalPath {
                     base: annotation!(TypeAnnotationKind::Nominal {
                         name: "Fizz".into(),
+                        name_span: Span::ANY,
                         generics: vec![annotation!(TypeAnnotationKind::Nominal {
                             name: "T".into(),
+                            name_span: Span::ANY,
                             generics: vec![]
                         })]
                     })
                     .into(),
                     member: "Buzz".into(),
+                    member_span: Span::ANY,
                     member_generics: vec![annotation!(TypeAnnotationKind::Nominal {
                         name: "U".into(),
+                        name_span: Span::ANY,
                         generics: vec![]
                     })]
                 })
@@ -2095,6 +2220,7 @@ pub mod tests {
             *parsed.roots[0].as_decl(),
             any_decl!(DeclKind::Protocol {
                 name: "Person".into(),
+                name_span: Span::ANY,
                 generics: vec![],
                 conformances: vec![],
                 body: any_block!(vec![
@@ -2102,6 +2228,7 @@ pub mod tests {
                         generic: GenericDecl {
                             id: NodeID::ANY,
                             name: "T".into(),
+                            name_span: Span::ANY,
                             generics: vec![],
                             conformances: vec![],
                             span: Span::ANY
@@ -2167,7 +2294,7 @@ pub mod tests {
                     pattern: any!(Pattern, {
                         kind: PatternKind::Record { fields: vec![
                             any!(RecordFieldPattern, {
-                                kind: RecordFieldPatternKind::Equals { name: "x".into(), value: any!(Pattern, {
+                                kind: RecordFieldPatternKind::Equals { name: "x".into(), name_span: Span::ANY, value: any!(Pattern, {
                                     kind: PatternKind::LiteralInt("123".into())
                                 }) }
                             }),
@@ -2202,7 +2329,7 @@ pub mod tests {
                     pattern: any!(Pattern, {
                         kind: PatternKind::Record { fields: vec![
                             any!(RecordFieldPattern, {
-                                kind: RecordFieldPatternKind::Equals { name: "x".into(), value: any!(Pattern, {
+                                kind: RecordFieldPatternKind::Equals { name: "x".into(), name_span: Span::ANY, value: any!(Pattern, {
                                     kind: PatternKind::LiteralInt("123".into())
                                 }) }
                             }),
@@ -2233,11 +2360,13 @@ pub mod tests {
                         fields: vec![
                             any!(RecordFieldTypeAnnotation, {
                                 label: "y".into(),
-                                value: annotation!(TypeAnnotationKind::Nominal { name: "Int".into(), generics: vec![] })
+                                label_span: Span::ANY,
+                                value: annotation!(TypeAnnotationKind::Nominal { name: "Int".into(), name_span: Span::ANY, generics: vec![] })
                             }),
                             any!(RecordFieldTypeAnnotation, {
                                 label: "z".into(),
-                                value: annotation!(TypeAnnotationKind::Nominal { name: "Float".into(), generics: vec![] })
+                                label_span: Span::ANY,
+                                value: annotation!(TypeAnnotationKind::Nominal { name: "Float".into(), name_span: Span::ANY, generics: vec![] })
                             }),
                         ]
                     }
@@ -2603,12 +2732,14 @@ pub mod tests {
                         id: NodeID::ANY,
                         span: Span::ANY,
                         label: Name::Raw("x".into()),
+                        label_span: Span::ANY,
                         value: any_expr!(ExprKind::LiteralInt("1".into()))
                     },
                     RecordField {
                         id: NodeID::ANY,
                         span: Span::ANY,
                         label: Name::Raw("y".into()),
+                        label_span: Span::ANY,
                         value: any_expr!(ExprKind::LiteralInt("2".into()))
                     }
                 ],

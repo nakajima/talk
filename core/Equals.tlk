@@ -1,7 +1,7 @@
 protocol Equals {
   associated RHS
   associated Ret
-  
+
   func equals(rhs: RHS) -> Bool
 }
 

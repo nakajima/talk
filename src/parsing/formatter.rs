@@ -238,6 +238,7 @@ impl<'a> Formatter<'a> {
             Node::RecordField(field) => self.format_record_field(field),
             Node::IncompleteExpr(_) => Doc::Empty,
             Node::CallArg(arg) => self.format_call_arg(arg),
+            Node::FuncSignature(sig) => self.format_func_signature(sig),
         }
     }
 
@@ -263,7 +264,7 @@ impl<'a> Formatter<'a> {
                 type_args,
                 args,
             } => self.format_call(callee, type_args, args),
-            ExprKind::Member(receiver, property) => self.format_member(receiver, property),
+            ExprKind::Member(receiver, property, ..) => self.format_member(receiver, property),
             ExprKind::Func(func) => self.format_func(func),
             ExprKind::Variable(name) | ExprKind::Constructor(name) => self.format_name(name),
             ExprKind::If(cond, then_block, else_block) => {
@@ -289,6 +290,7 @@ impl<'a> Formatter<'a> {
                 generics,
                 conformances,
                 body,
+                ..
             } => self.format_struct(name, generics, conformances, body),
             DeclKind::Let {
                 lhs,
@@ -300,6 +302,7 @@ impl<'a> Formatter<'a> {
                 generics,
                 body,
                 conformances,
+                ..
             } => self.format_protocol(name, generics, conformances, body),
             DeclKind::Init { name, params, body } => self.format_init(name, params, body),
             DeclKind::Property {
@@ -307,6 +310,7 @@ impl<'a> Formatter<'a> {
                 is_static,
                 type_annotation,
                 default_value,
+                ..
             } => self.format_property(
                 name,
                 *is_static,
@@ -321,14 +325,16 @@ impl<'a> Formatter<'a> {
                 conformances,
                 generics,
                 body,
+                ..
             } => self.format_extend(name, generics, conformances, body),
             DeclKind::Enum {
                 name,
                 conformances,
                 generics,
                 body,
+                ..
             } => self.format_enum_decl(name, generics, conformances, body),
-            DeclKind::EnumVariant(name, types) => self.format_enum_variant(name, types),
+            DeclKind::EnumVariant(name, .., types) => self.format_enum_variant(name, types),
             DeclKind::FuncSignature(sig) => self.format_func_signature(sig),
             DeclKind::MethodRequirement(sig) => self.format_func_signature(sig),
             DeclKind::TypeAlias(lhs, rhs) => self.format_type_alias(lhs, rhs),
@@ -583,6 +589,7 @@ impl<'a> Formatter<'a> {
                 enum_name,
                 variant_name,
                 fields,
+                ..
             } => {
                 let mut result = if let Some(name) = enum_name {
                     concat(
@@ -614,7 +621,7 @@ impl<'a> Formatter<'a> {
                     .map(|field| match &field.kind {
                         RecordFieldPatternKind::Rest => text(".."),
                         RecordFieldPatternKind::Bind(name) => self.format_name(name),
-                        RecordFieldPatternKind::Equals { name, value } => concat_space(
+                        RecordFieldPatternKind::Equals { name, value, .. } => concat_space(
                             concat(self.format_name(name), text(":")),
                             self.format_pattern(value),
                         ),
@@ -836,6 +843,7 @@ impl<'a> Formatter<'a> {
                 base,
                 member,
                 member_generics,
+                ..
             } => join(
                 vec![
                     self.format_type_annotation(base),
@@ -860,7 +868,7 @@ impl<'a> Formatter<'a> {
                     ),
                 )
             }
-            TypeAnnotationKind::Nominal { name, generics } => {
+            TypeAnnotationKind::Nominal { name, generics, .. } => {
                 self.format_nominal_type_annotation(name.name_str(), generics)
             }
             TypeAnnotationKind::Tuple(types) => {

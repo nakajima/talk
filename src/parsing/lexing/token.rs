@@ -1,3 +1,5 @@
+use crate::{node_id::FileID, span::Span};
+
 use super::token_kind::TokenKind;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -30,7 +32,11 @@ impl Token {
         self.kind.as_str()
     }
 
-    pub fn span(&self) -> (usize, usize) {
-        (self.start as usize, self.end as usize)
+    pub fn span(&self, file_id: FileID) -> Span {
+        Span {
+            start: self.start,
+            end: self.end,
+            file_id,
+        }
     }
 }

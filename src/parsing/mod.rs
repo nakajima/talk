@@ -11,6 +11,7 @@ pub mod node_meta_storage;
 pub mod parser;
 pub mod precedence;
 pub use lexing::*;
+pub mod highlighter;
 pub mod parser_error;
 pub mod span;
 

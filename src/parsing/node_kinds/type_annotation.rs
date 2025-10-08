@@ -16,11 +16,15 @@ pub enum TypeAnnotationKind {
         base: Box<TypeAnnotation>,
         #[drive(skip)]
         member: Label,
+        #[drive(skip)]
+        member_span: Span,
         member_generics: Vec<TypeAnnotation>,
     },
     Nominal {
         #[drive(skip)]
         name: Name,
+        #[drive(skip)]
+        name_span: Span,
         generics: Vec<TypeAnnotation>,
     },
     Tuple(Vec<TypeAnnotation>),

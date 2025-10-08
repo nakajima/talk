@@ -262,7 +262,7 @@ impl<'a> Parser<'a> {
     fn property_decl(&mut self, is_static: bool) -> Result<Decl, ParserError> {
         let tok = self.push_source_location();
         self.consume(TokenKind::Let)?;
-        let name = self.identifier()?;
+        let (name, name_span) = self.identifier()?;
         let type_annotation = if self.did_match(TokenKind::Colon)? {
             Some(self.type_annotation()?)
         } else {
@@ -280,6 +280,7 @@ impl<'a> Parser<'a> {
             span,
             kind: DeclKind::Property {
                 name: name.into(),
+                name_span,
                 is_static,
                 type_annotation,
                 default_value,
@@ -293,7 +294,7 @@ impl<'a> Parser<'a> {
         if expect_case {
             self.consume(TokenKind::Case)?;
         }
-        let name = self.identifier()?;
+        let (name, name_span) = self.identifier()?;
         let values = if self.did_match(TokenKind::LeftParen)? {
             self.type_annotations(TokenKind::RightParen)?
         } else {
@@ -303,7 +304,7 @@ impl<'a> Parser<'a> {
         Ok(Decl {
             id,
             span,
-            kind: DeclKind::EnumVariant(name.into(), values),
+            kind: DeclKind::EnumVariant(name.into(), name_span, values),
         })
     }
 
@@ -315,7 +316,7 @@ impl<'a> Parser<'a> {
     ) -> Result<Decl, ParserError> {
         let tok = self.push_source_location();
         self.consume(entry)?;
-        let name = self.identifier()?;
+        let (name, name_span) = self.identifier()?;
         let generics = self.generics()?;
 
         let conformances = if self.did_match(TokenKind::Colon)? {
@@ -330,24 +331,28 @@ impl<'a> Parser<'a> {
         let kind = match context {
             BlockContext::Enum => DeclKind::Enum {
                 name: name.into(),
+                name_span,
                 conformances,
                 generics,
                 body,
             },
             BlockContext::Struct => DeclKind::Struct {
                 name: name.into(),
+                name_span,
                 conformances,
                 generics,
                 body,
             },
             BlockContext::Extend => DeclKind::Extend {
                 name: name.into(),
+                name_span,
                 conformances,
                 generics,
                 body,
             },
             BlockContext::Protocol => DeclKind::Protocol {
                 name: name.into(),
+                name_span,
                 conformances,
                 generics,
                 body,
@@ -416,9 +421,12 @@ impl<'a> Parser<'a> {
             self.consume(TokenKind::Func)?;
         }
 
-        let name = self
-            .identifier()
-            .unwrap_or_else(|_| format!("#fn_{:?}", self.current));
+        let (name, name_span) = self.identifier().unwrap_or_else(|_| {
+            (
+                format!("#fn_{:?}", self.current),
+                self.current.as_ref().unwrap().span(self.file_id),
+            )
+        });
 
         let generics = self.generics()?;
 
@@ -452,6 +460,7 @@ impl<'a> Parser<'a> {
         Ok(FuncOrFuncSignature::Func(Func {
             id,
             name: name.into(),
+            name_span,
             generics,
             params,
             body,
@@ -687,11 +696,12 @@ impl<'a> Parser<'a> {
             TokenKind::Identifier(name) => {
                 self.advance();
                 if self.did_match(TokenKind::Dot)? {
-                    let member_name = self.identifier()?;
+                    let (member_name, member_name_span) = self.identifier()?;
                     let fields = self.pattern_fields()?;
                     PatternKind::Variant {
                         enum_name: Some(name.into()),
                         variant_name: member_name.to_string(),
+                        variant_name_span: member_name_span,
                         fields,
                     }
                 } else {
@@ -704,12 +714,13 @@ impl<'a> Parser<'a> {
             }
             TokenKind::Dot => {
                 self.advance();
-                let member_name = self.identifier()?;
+                let (member_name, member_name_span) = self.identifier()?;
                 let fields = self.pattern_fields()?;
 
                 PatternKind::Variant {
                     enum_name: None,
                     variant_name: member_name.to_string(),
+                    variant_name_span: member_name_span,
                     fields,
                 }
             }
@@ -773,11 +784,16 @@ impl<'a> Parser<'a> {
                     break;
                 }
                 TokenKind::Identifier(_) => {
-                    let name = Name::Raw(self.identifier()?);
+                    let (name, name_span) = self.identifier()?;
+                    let name = Name::Raw(name);
                     let kind = if self.peek_is(TokenKind::Colon) {
                         self.consume(TokenKind::Colon).ok();
                         let value = self.parse_pattern()?;
-                        RecordFieldPatternKind::Equals { name, value }
+                        RecordFieldPatternKind::Equals {
+                            name,
+                            name_span,
+                            value,
+                        }
                     } else {
                         RecordFieldPatternKind::Bind(name)
                     };
@@ -810,9 +826,9 @@ impl<'a> Parser<'a> {
         let tok = self.push_source_location();
         self.consume(TokenKind::Dot)?;
 
-        let name = match self.current.clone().map(|c| c.kind) {
+        let (name, name_span) = match self.current.clone().map(|c| c.kind) {
             Some(TokenKind::Identifier(_)) => match self.identifier() {
-                Ok(name) => Label::Named(name),
+                Ok((name, span)) => (Label::Named(name), span),
                 Err(_) => {
                     let incomplete_member = ExprKind::Incomplete(IncompleteExpr::Member(None));
                     return Ok(Node::Expr(self.add_expr(incomplete_member, tok)?));
@@ -820,14 +836,17 @@ impl<'a> Parser<'a> {
             },
             Some(TokenKind::Int(val)) => {
                 self.advance();
-                Label::Positional(str::parse(&val).map_err(|_| ParserError::BadLabel(val))?)
+                (
+                    Label::Positional(str::parse(&val).map_err(|_| ParserError::BadLabel(val))?),
+                    self.current.as_ref().unwrap().span(self.file_id),
+                )
             }
             Some(_) | None => {
                 return Err(ParserError::ExpectedIdentifier(self.current.clone()));
             }
         };
 
-        let member = self.add_expr(ExprKind::Member(None, name), tok)?;
+        let member = self.add_expr(ExprKind::Member(None, name, name_span), tok)?;
 
         self.skip_semicolons_and_newlines();
 
@@ -864,9 +883,9 @@ impl<'a> Parser<'a> {
         let tok = self.push_lhs_location(lhs.id);
         self.consume(TokenKind::Dot)?;
 
-        let name = match self.current.clone().map(|c| c.kind) {
+        let (name, name_span) = match self.current.clone().map(|c| c.kind) {
             Some(TokenKind::Identifier(_)) => match self.identifier() {
-                Ok(name) => Label::Named(name),
+                Ok((name, span)) => (Label::Named(name), span),
                 Err(_) => {
                     let incomplete_member =
                         ExprKind::Incomplete(IncompleteExpr::Member(Some(Box::new(lhs))));
@@ -875,14 +894,17 @@ impl<'a> Parser<'a> {
             },
             Some(TokenKind::Int(val)) => {
                 self.advance();
-                Label::Positional(str::parse(&val).map_err(|_| ParserError::BadLabel(val))?)
+                (
+                    Label::Positional(str::parse(&val).map_err(|_| ParserError::BadLabel(val))?),
+                    self.current.as_ref().unwrap().span(self.file_id),
+                )
             }
             Some(_) | None => {
                 return Err(ParserError::ExpectedIdentifier(self.current.clone()));
             }
         };
 
-        let member = self.add_expr(ExprKind::Member(Some(Box::new(lhs)), name), tok)?;
+        let member = self.add_expr(ExprKind::Member(Some(Box::new(lhs)), name, name_span), tok)?;
 
         self.skip_semicolons_and_newlines();
 
@@ -989,7 +1011,7 @@ impl<'a> Parser<'a> {
     #[instrument(skip(self))]
     pub(crate) fn variable(&mut self, can_assign: bool) -> Result<Node, ParserError> {
         let tok = self.push_source_location();
-        let name = self.identifier()?;
+        let (name, _span) = self.identifier()?;
         let variable = self.add_expr(ExprKind::Variable(Name::Raw(name.to_string())), tok)?;
 
         self.skip_newlines();
@@ -1185,7 +1207,7 @@ impl<'a> Parser<'a> {
                 })
             ) {
                 // we've got an argument label
-                let Some(label) = self.identifier().ok() else {
+                let Some((label, label_span)) = self.identifier().ok() else {
                     return Err(ParserError::ExpectedIdentifier(self.current.clone()));
                 };
                 let tok = self.push_source_location();
@@ -1196,6 +1218,7 @@ impl<'a> Parser<'a> {
                     id,
                     span,
                     label: label.into(),
+                    label_span,
                     value: value.as_expr(),
                 })
             } else {
@@ -1206,6 +1229,7 @@ impl<'a> Parser<'a> {
                     id,
                     span,
                     label: Label::Positional(i),
+                    label_span: span,
                     value: value.as_expr(),
                 })
             }
@@ -1255,13 +1279,15 @@ impl<'a> Parser<'a> {
 
             while !self.did_match(TokenKind::RightBrace)? {
                 let tok = self.push_source_location();
-                let label = Name::Raw(self.identifier()?);
+                let (label, label_span) = self.identifier()?;
+                let label = Name::Raw(label);
                 self.consume(TokenKind::Colon)?;
                 let value = self.type_annotation()?;
                 let (id, span) = self.save_meta(tok)?;
                 fields.push(RecordFieldTypeAnnotation {
                     id,
                     label,
+                    label_span,
                     value,
                     span,
                 });
@@ -1277,7 +1303,7 @@ impl<'a> Parser<'a> {
         }
 
         // It's a nominal.
-        let name = self.identifier()?;
+        let (name, name_span) = self.identifier()?;
         let mut generics = vec![];
         if self.did_match(TokenKind::Less)? {
             while !self.did_match(TokenKind::Greater)? {
@@ -1294,6 +1320,7 @@ impl<'a> Parser<'a> {
             span,
             kind: TypeAnnotationKind::Nominal {
                 name: name.into(),
+                name_span,
                 generics,
             },
         };
@@ -1304,7 +1331,8 @@ impl<'a> Parser<'a> {
 
         loop {
             let tok = self.push_source_location();
-            let member: Label = self.identifier()?.into();
+            let (member_name, member_span) = self.identifier()?;
+            let member: Label = member_name.into();
             let member_generics = if self.did_match(TokenKind::Less)? {
                 self.type_annotations(TokenKind::Greater)?
             } else {
@@ -1318,6 +1346,7 @@ impl<'a> Parser<'a> {
                 kind: TypeAnnotationKind::NominalPath {
                     base: Box::new(base),
                     member,
+                    member_span,
                     member_generics,
                 },
             };
@@ -1472,7 +1501,7 @@ impl<'a> Parser<'a> {
             } else {
                 // Regular field: label: expr
                 let field_tok = self.push_source_location();
-                let label = self.identifier()?;
+                let (label, label_span) = self.identifier()?;
                 self.consume(TokenKind::Colon)?;
                 let value = self.expr_with_precedence(Precedence::Assignment)?;
                 let (id, span) = self.save_meta(field_tok)?;
@@ -1480,6 +1509,7 @@ impl<'a> Parser<'a> {
                     id,
                     span,
                     label: Name::Raw(label),
+                    label_span,
                     value: value.into(),
                 });
             }
@@ -1511,7 +1541,7 @@ impl<'a> Parser<'a> {
     #[instrument(skip(self))]
     fn generic(&mut self) -> Result<GenericDecl, ParserError> {
         let tok = self.push_source_location();
-        let name = self.identifier()?;
+        let (name, name_span) = self.identifier()?;
         let generics = self.generics()?;
 
         let conformances = if self.did_match(TokenKind::Colon)? {
@@ -1525,6 +1555,7 @@ impl<'a> Parser<'a> {
             id,
             span,
             name: name.into(),
+            name_span,
             generics,
             conformances,
         })
@@ -1545,7 +1576,7 @@ impl<'a> Parser<'a> {
     #[instrument(skip(self))]
     fn parameters(&mut self) -> Result<Vec<Parameter>, ParserError> {
         let mut params: Vec<Parameter> = vec![];
-        while let Ok(name) = self.identifier() {
+        while let Ok((name, name_span)) = self.identifier() {
             let tok = self.push_source_location();
             let type_annotation = if self.did_match(TokenKind::Colon)? {
                 Some(self.type_annotation()?)
@@ -1558,6 +1589,7 @@ impl<'a> Parser<'a> {
                 id,
                 span,
                 name: name.into(),
+                name_span,
                 type_annotation,
             };
             params.push(param);
@@ -1573,14 +1605,21 @@ impl<'a> Parser<'a> {
     }
 
     #[instrument(skip(self))]
-    pub(super) fn identifier(&mut self) -> Result<String, ParserError> {
+    pub(super) fn identifier(&mut self) -> Result<(String, Span), ParserError> {
         self.skip_semicolons_and_newlines();
         if let Some(current) = self.current.clone()
             && let TokenKind::Identifier(ref name) = current.kind
         {
             self.push_identifier(current.clone());
             self.advance();
-            return Ok(name.to_string());
+            return Ok((
+                name.to_string(),
+                Span {
+                    start: current.start,
+                    end: current.end,
+                    file_id: self.file_id,
+                },
+            ));
         };
 
         Err(ParserError::ExpectedIdentifier(self.current.clone()))

@@ -31,7 +31,7 @@ impl LexerError {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Lexer<'a> {
     pub code: &'a str,
     preserve_comments: bool,

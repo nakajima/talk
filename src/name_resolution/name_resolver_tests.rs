@@ -42,6 +42,7 @@ pub mod tests {
             Parameter {
                 id: NodeID::ANY,
                 name: Name::Resolved($id.into(), $name.into()),
+                name_span: Span::ANY,
                 type_annotation: None,
                 span: Span::ANY,
             }
@@ -50,6 +51,7 @@ pub mod tests {
             Parameter {
                 id: NodeID::ANY,
                 name: Name::Resolved($id.into(), $name.into()),
+                name_span: Span::ANY,
                 type_annotation: Some($ty),
                 span: Span::ANY,
             }
@@ -147,6 +149,7 @@ pub mod tests {
                         )),
                         "Int".into()
                     ),
+                    name_span: Span::ANY,
                     generics: vec![]
                 })),
                 value: None
@@ -193,6 +196,7 @@ pub mod tests {
                 value: Some(any_expr!(ExprKind::Func(Func {
                     id: NodeID::ANY,
                     name: Name::Resolved(Symbol::Global(GlobalId::from(1)), "foo".into()),
+                    name_span: Span::ANY,
                     generics: vec![],
                     params: vec![param!(ParamLocalId(1), "x"), param!(ParamLocalId(2), "y"),],
                     body: any_block!(vec![
@@ -230,6 +234,7 @@ pub mod tests {
                 value: Some(any_expr!(ExprKind::Func(Func {
                     id: NodeID::ANY,
                     name: Name::Resolved(Symbol::Global(GlobalId::from(1)), "odd".into()),
+                    name_span: Span::ANY,
                     generics: vec![],
                     params: vec![],
                     body: any_block!(vec![any_expr_stmt!(ExprKind::Call {
@@ -258,6 +263,7 @@ pub mod tests {
                 value: Some(any_expr!(ExprKind::Func(Func {
                     id: NodeID::ANY,
                     name: Name::Resolved(Symbol::Global(GlobalId::from(2)), "even".into()),
+                    name_span: Span::ANY,
                     generics: vec![],
                     params: vec![],
                     body: any_block!(vec![any_expr_stmt!(ExprKind::Call {
@@ -291,6 +297,7 @@ pub mod tests {
                 value: Some(any_expr!(ExprKind::Func(Func {
                     id: NodeID::ANY,
                     name: Name::Resolved(Symbol::Global(GlobalId::from(1)), "foo".into()),
+                    name_span: Span::ANY,
                     generics: vec![],
                     params: vec![param!(ParamLocalId(1), "x"), param!(ParamLocalId(2), "y")],
                     body: any_block!(vec![
@@ -310,6 +317,7 @@ pub mod tests {
                                     Symbol::DeclaredLocal(DeclaredLocalId(1)),
                                     "bar".into()
                                 ),
+                                name_span: Span::ANY,
                                 generics: vec![],
                                 params: vec![param!(ParamLocalId(3), "x")],
                                 body: any_block!(vec![
@@ -368,6 +376,7 @@ pub mod tests {
                 value: Some(any_expr!(ExprKind::Func(Func {
                     id: NodeID::ANY,
                     name: Name::Resolved(Symbol::Global(GlobalId::from(2)), "counter".into()),
+                    name_span: Span::ANY,
                     generics: vec![],
                     params: vec![param!(ParamLocalId(1), "x")],
                     body: any_block!(vec![
@@ -415,10 +424,12 @@ pub mod tests {
                 value: Some(any_expr!(ExprKind::Func(Func {
                     id: NodeID::ANY,
                     name: Name::Resolved(Symbol::Global(GlobalId::from(1)), "fizz".into()),
+                    name_span: Span::ANY,
                     generics: vec![GenericDecl {
                         id: NodeID::ANY,
                         span: Span::ANY,
                         name: Name::Resolved(Symbol::TypeParameter(TypeParameterId(1)), "T".into()),
+                        name_span: Span::ANY,
                         generics: vec![],
                         conformances: vec![],
                     }],
@@ -430,6 +441,7 @@ pub mod tests {
                                 Symbol::TypeParameter(TypeParameterId(1)),
                                 "T".into()
                             ),
+                            name_span: Span::ANY,
                             generics: vec![]
                         })
                     ),],
@@ -438,6 +450,7 @@ pub mod tests {
                     ]),
                     ret: Some(annotation!(TypeAnnotationKind::Nominal {
                         name: Name::Resolved(Symbol::TypeParameter(TypeParameterId(1)), "T".into()),
+                        name_span: Span::ANY,
                         generics: vec![]
                     })),
                     attributes: vec![],
@@ -454,10 +467,12 @@ pub mod tests {
             any_decl!(DeclKind::TypeAlias(
                 annotation!(TypeAnnotationKind::Nominal {
                     name: Name::Resolved(Symbol::Type(TypeId::from(1)), "Intyfresh".into()),
+                    name_span: Span::ANY,
                     generics: vec![]
                 }),
                 annotation!(TypeAnnotationKind::Nominal {
                     name: Name::Resolved(Symbol::Int, "Int".into()),
+                    name_span: Span::ANY,
                     generics: vec![]
                 })
             ))
@@ -479,6 +494,7 @@ pub mod tests {
             *resolved.roots[0].as_decl(),
             any_decl!(DeclKind::Struct {
                 name: Name::Resolved(TypeId::from(1).into(), "Person".into()),
+                name_span: Span::ANY,
                 generics: vec![],
                 conformances: vec![],
                 body: any_block!(vec![])
@@ -499,13 +515,16 @@ pub mod tests {
             *resolved.roots[0].as_decl(),
             any_decl!(DeclKind::Struct {
                 name: Name::Resolved(TypeId::from(1).into(), "Person".into()),
+                name_span: Span::ANY,
                 generics: vec![],
                 conformances: vec![],
                 body: any_block!(vec![Node::Decl(any_decl!(DeclKind::Property {
                     name: Name::Resolved(Symbol::Property(PropertyId::from(1)), "me".into()),
+                    name_span: Span::ANY,
                     is_static: false,
                     type_annotation: Some(annotation!(TypeAnnotationKind::Nominal {
                         name: Name::Resolved(TypeId::from(1).into(), "Person".into()),
+                        name_span: Span::ANY,
                         generics: vec![]
                     })),
                     default_value: None
@@ -527,6 +546,7 @@ pub mod tests {
             *resolved.roots[0].as_decl(),
             any_decl!(DeclKind::Struct {
                 name: Name::Resolved(TypeId::from(1).into(), "Person".into()),
+                name_span: Span::ANY,
                 generics: vec![],
                 conformances: vec![],
                 body: any_block!(vec![Node::Decl(any_decl!(DeclKind::Init {
@@ -558,9 +578,11 @@ pub mod tests {
             *resolved.roots[0].as_decl(),
             any_decl!(DeclKind::Struct {
                 name: Name::Resolved(TypeId::from(1).into(), "Person".into()),
+                name_span: Span::ANY,
                 generics: vec![GenericDecl {
                     id: NodeID::ANY,
                     name: Name::Resolved(Symbol::TypeParameter(TypeParameterId(1)), "T".into()),
+                    name_span: Span::ANY,
                     generics: vec![],
                     conformances: vec![],
                     span: Span::ANY
@@ -568,9 +590,11 @@ pub mod tests {
                 conformances: vec![],
                 body: any_block!(vec![Node::Decl(any_decl!(DeclKind::Property {
                     name: Name::Resolved(Symbol::Property(PropertyId::from(1)), "me".into()),
+                    name_span: Span::ANY,
                     is_static: false,
                     type_annotation: Some(annotation!(TypeAnnotationKind::Nominal {
                         name: Name::Resolved(Symbol::TypeParameter(TypeParameterId(1)), "T".into()),
+                        name_span: Span::ANY,
                         generics: vec![]
                     })),
                     default_value: None
@@ -590,6 +614,7 @@ pub mod tests {
             *resolved.roots[0].as_decl(),
             any_decl!(DeclKind::Struct {
                 name: Name::Resolved(TypeId::from(1).into(), "Person".into()),
+                name_span: Span::ANY,
                 generics: vec![],
                 conformances: vec![],
                 body: any_block!(vec![
@@ -600,6 +625,7 @@ pub mod tests {
                                 Symbol::StaticMethod(StaticMethodId::from(1)),
                                 "fizz".into()
                             ),
+                            name_span: Span::ANY,
                             generics: vec![],
                             params: vec![],
                             body: any_block!(vec![]),
@@ -631,6 +657,7 @@ pub mod tests {
             *resolved.roots[0].as_decl(),
             any_decl!(DeclKind::Struct {
                 name: Name::Resolved(TypeId::from(1).into(), "Person".into()),
+                name_span: Span::ANY,
                 generics: vec![],
                 conformances: vec![],
                 body: any_block!(vec![
@@ -641,6 +668,7 @@ pub mod tests {
                                 Symbol::InstanceMethod(InstanceMethodId::from(1)),
                                 "fizz".into()
                             ),
+                            name_span: Span::ANY,
                             generics: vec![],
                             params: vec![param!(
                                 Symbol::ParamLocal(ParamLocalId(1)),
@@ -659,7 +687,8 @@ pub mod tests {
                                         )))
                                         .into()
                                     ),
-                                    "buzz".into()
+                                    "buzz".into(),
+                                    Span::ANY,
                                 ))
                                 .into(),
                                 type_args: vec![],
@@ -678,6 +707,7 @@ pub mod tests {
                                 Symbol::InstanceMethod(InstanceMethodId::from(2)),
                                 "buzz".into()
                             ),
+                            name_span: Span::ANY,
                             generics: vec![],
                             params: vec![param!(
                                 Symbol::ParamLocal(ParamLocalId(2)),
@@ -693,7 +723,8 @@ pub mod tests {
                                         Symbol::ParamLocal(ParamLocalId(2)),
                                         "self".into()
                                     ))))),
-                                    "fizz".into()
+                                    "fizz".into(),
+                                    Span::ANY,
                                 ))
                                 .into(),
                                 type_args: vec![],
@@ -744,6 +775,7 @@ pub mod tests {
             *resolved.roots[1].as_decl(),
             any_decl!(DeclKind::Extend {
                 name: Name::Resolved(Symbol::Type(TypeId::from(1)), "Person".into()),
+                name_span: Span::ANY,
                 conformances: vec![],
                 generics: vec![],
                 body: any_block!(vec![])
@@ -765,15 +797,18 @@ pub mod tests {
             *resolved.roots[0].as_decl(),
             any_decl!(DeclKind::Enum {
                 name: Name::Resolved(Symbol::Type(TypeId::from(1)), "Fizz".into()),
+                name_span: Span::ANY,
                 conformances: vec![],
                 generics: vec![],
                 body: any_block!(vec![
                     Node::Decl(any_decl!(DeclKind::EnumVariant(
                         Name::Resolved(Symbol::Variant(VariantId::from(1)), "foo".into()),
+                        Span::ANY,
                         vec![]
                     ))),
                     Node::Decl(any_decl!(DeclKind::EnumVariant(
                         Name::Resolved(Symbol::Variant(VariantId::from(2)), "bar".into()),
+                        Span::ANY,
                         vec![]
                     ))),
                 ])
@@ -795,6 +830,7 @@ pub mod tests {
             *resolved.roots[0].as_decl(),
             any_decl!(DeclKind::Protocol {
                 name: Name::Resolved(Symbol::Protocol(ProtocolId::from(1)), "Fizzable".into()),
+                name_span: Span::ANY,
                 conformances: vec![],
                 generics: vec![],
                 body: any_block!(vec![Node::Decl(any_decl!(DeclKind::MethodRequirement(
@@ -808,6 +844,7 @@ pub mod tests {
                         params: vec![Parameter {
                             id: NodeID::ANY,
                             name: Name::Resolved(ParamLocalId::from(1u32).into(), "self".into()),
+                            name_span: Span::ANY,
                             type_annotation: Some(annotation!(TypeAnnotationKind::SelfType(
                                 Name::Resolved(ProtocolId::from(1).into(), "Self".into())
                             ))),
@@ -837,6 +874,7 @@ pub mod tests {
             *resolved.roots[0].as_decl(),
             any_decl!(DeclKind::Protocol {
                 name: Name::Resolved(Symbol::Protocol(ProtocolId::from(1)), "Fizzable".into()),
+                name_span: Span::ANY,
                 conformances: vec![],
                 generics: vec![],
                 body: any_block!(vec![
@@ -847,6 +885,7 @@ pub mod tests {
                                 Symbol::AssociatedType(AssociatedTypeId::from(1)),
                                 "T".into()
                             ),
+                            name_span: Span::ANY,
                             generics: vec![],
                             conformances: vec![],
                             span: Span::ANY
@@ -862,6 +901,7 @@ pub mod tests {
                         params: vec![Parameter {
                             id: NodeID::ANY,
                             name: Name::Resolved(ParamLocalId::from(1u32).into(), "self".into()),
+                            name_span: Span::ANY,
                             type_annotation: Some(annotation!(TypeAnnotationKind::SelfType(
                                 Name::Resolved(ProtocolId::from(1).into(), "Self".into())
                             ))),
@@ -873,6 +913,7 @@ pub mod tests {
                                 Symbol::AssociatedType(AssociatedTypeId::from(1)),
                                 "T".into()
                             ),
+                            name_span: Span::ANY,
                             generics: vec![]
                         })))
                     }))),

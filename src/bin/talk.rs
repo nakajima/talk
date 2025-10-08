@@ -17,7 +17,7 @@ async fn main() {
         Parse { filename: String },
         Debug { filename: String },
         // Run { filename: PathBuf },
-        // Lsp(LspArgs),
+        Lsp(LspArgs),
     }
 
     #[derive(Debug, Args)]
@@ -26,16 +26,18 @@ async fn main() {
         stdio: bool,
     }
 
-    init();
-
     let cli = Cli::parse();
 
     // You can check for the existence of subcommands, and if found use their
     // matches just as you would the top level cmd
     match &cli.command {
         Commands::Parse { .. } => {}
+        Commands::Lsp(_) => {
+            talk::lsp::server::start().await;
+        }
         Commands::Debug { filename } => {
             use std::rc::Rc;
+            init();
 
             use talk::{
                 compiling::module::{ModuleEnvironment, ModuleId},

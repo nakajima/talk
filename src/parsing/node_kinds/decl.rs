@@ -18,6 +18,8 @@ pub enum DeclKind {
     Struct {
         #[drive(skip)]
         name: Name, /* name */
+        #[drive(skip)]
+        name_span: Span,
         generics: Vec<GenericDecl>, /* generics */
         conformances: Vec<TypeAnnotation>,
         body: Block, /* body */
@@ -32,6 +34,8 @@ pub enum DeclKind {
     Protocol {
         #[drive(skip)]
         name: Name,
+        #[drive(skip)]
+        name_span: Span,
         generics: Vec<GenericDecl>,
         body: Block,
         conformances: Vec<TypeAnnotation>,
@@ -47,6 +51,8 @@ pub enum DeclKind {
     Property {
         #[drive(skip)]
         name: Name,
+        #[drive(skip)]
+        name_span: Span,
         #[drive(skip)]
         is_static: bool,
         type_annotation: Option<TypeAnnotation>,
@@ -69,6 +75,8 @@ pub enum DeclKind {
     Extend {
         #[drive(skip)]
         name: Name, // TypeRepr name: Option
+        #[drive(skip)]
+        name_span: Span,
         conformances: Vec<TypeAnnotation>,
         generics: Vec<GenericDecl>, // Generics TypeParams <T>
         body: Block,
@@ -78,6 +86,8 @@ pub enum DeclKind {
     Enum {
         #[drive(skip)]
         name: Name, // TypeRepr name: Option
+        #[drive(skip)]
+        name_span: Span,
         conformances: Vec<TypeAnnotation>,
         generics: Vec<GenericDecl>, // Generics TypeParams <T>
         body: Block,
@@ -86,6 +96,7 @@ pub enum DeclKind {
     // Individual enum variant in declaration
     EnumVariant(
         #[drive(skip)] Name, // name: "some"
+        #[drive(skip)] Span, // name_span
         Vec<TypeAnnotation>, // associated types: [TypeRepr("T")]
     ),
 

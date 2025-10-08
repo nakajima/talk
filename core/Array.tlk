@@ -1,5 +1,5 @@
 struct Array<Element> {
-	let count: Int  
+	let count: Int 
 	let capacity: Int
 	let storage: Int
 }

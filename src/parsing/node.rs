@@ -2,9 +2,9 @@ use crate::{
     node_id::{FileID, NodeID},
     node_kinds::{
         attribute::Attribute, block::Block, call_arg::CallArg, decl::Decl, expr::Expr, func::Func,
-        generic_decl::GenericDecl, incomplete_expr::IncompleteExpr, match_arm::MatchArm,
-        parameter::Parameter, pattern::Pattern, record_field::RecordField, stmt::Stmt,
-        type_annotation::TypeAnnotation,
+        func_signature::FuncSignature, generic_decl::GenericDecl, incomplete_expr::IncompleteExpr,
+        match_arm::MatchArm, parameter::Parameter, pattern::Pattern, record_field::RecordField,
+        stmt::Stmt, type_annotation::TypeAnnotation,
     },
     span::Span,
 };
@@ -29,6 +29,7 @@ pub enum Node {
     RecordField(RecordField),
     IncompleteExpr(IncompleteExpr),
     CallArg(CallArg),
+    FuncSignature(FuncSignature),
 }
 
 impl Node {
@@ -52,6 +53,7 @@ impl Node {
                 end: 0,
             },
             Node::CallArg(call_arg) => call_arg.span,
+            Node::FuncSignature(sig) => sig.span,
         }
     }
 
@@ -71,6 +73,7 @@ impl Node {
             Node::RecordField(record_field) => record_field.id,
             Node::IncompleteExpr(..) => NodeID(FileID(0), 0),
             Node::CallArg(call_arg) => call_arg.id,
+            Node::FuncSignature(sig) => sig.id,
         }
     }
 
@@ -96,6 +99,12 @@ impl Node {
         };
 
         decl
+    }
+}
+
+impl From<&Node> for Node {
+    fn from(val: &Node) -> Self {
+        val.clone()
     }
 }
 

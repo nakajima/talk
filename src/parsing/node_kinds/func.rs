@@ -8,6 +8,7 @@ use crate::{
         attribute::Attribute, block::Block, generic_decl::GenericDecl, parameter::Parameter,
         type_annotation::TypeAnnotation,
     },
+    span::Span,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
@@ -16,6 +17,8 @@ pub struct Func {
     pub id: NodeID,
     #[drive(skip)]
     pub name: Name,
+    #[drive(skip)]
+    pub name_span: Span,
     pub generics: Vec<GenericDecl>,
     pub params: Vec<Parameter>, /* params tuple */
     pub body: Block,

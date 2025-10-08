@@ -38,6 +38,7 @@ impl LowerFuncsToLets {
         if let DeclKind::Func(Func {
             id,
             name,
+            name_span,
             generics,
             params,
             body,
@@ -52,6 +53,7 @@ impl LowerFuncsToLets {
                 kind: ExprKind::Func(Func {
                     id,
                     name: name.clone(),
+                    name_span,
                     generics,
                     params,
                     body,
@@ -113,6 +115,7 @@ pub mod tests {
                 value: Some(any_expr!(ExprKind::Func(Func {
                     id: NodeID(FileID(0), 2),
                     name: Name::Raw("fizz".into()),
+                    name_span: Span::ANY,
                     generics: vec![],
                     params: vec![],
                     body: any_block!(vec![]),
@@ -137,6 +140,7 @@ pub mod tests {
             *parsed.roots[0].as_decl(),
             any_decl!(DeclKind::Struct {
                 name: "Person".into(),
+                name_span: Span::ANY,
                 generics: vec![],
                 conformances: vec![],
                 body: any_block!(vec![
@@ -144,6 +148,7 @@ pub mod tests {
                         func: Box::new(Func {
                             id: NodeID::ANY,
                             name: "fizz".into(),
+                            name_span: Span::ANY,
                             generics: vec![],
                             params: vec![],
                             body: any_block!(vec![]),

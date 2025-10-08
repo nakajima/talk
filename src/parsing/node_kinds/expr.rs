@@ -39,7 +39,11 @@ pub enum ExprKind {
     },
 
     // A dot thing
-    Member(Option<Box<Expr>> /* receiver */, #[drive(skip)] Label),
+    Member(
+        Option<Box<Expr>>, /* receiver */
+        #[drive(skip)] Label,
+        #[drive(skip)] Span,
+    ),
 
     // Function stuff
     Func(Func),

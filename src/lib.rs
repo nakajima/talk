@@ -24,8 +24,8 @@ pub use common::*;
 pub mod name_resolution;
 pub mod types;
 
-// #[cfg(feature = "cli")]
-// pub mod lsp;
+#[cfg(feature = "cli")]
+pub mod lsp;
 
 #[cfg(test)]
 pub mod test_utils;

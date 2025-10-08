@@ -11,6 +11,8 @@ pub struct GenericDecl {
     pub id: NodeID,
     #[drive(skip)]
     pub name: Name,
+    #[drive(skip)]
+    pub name_span: Span,
     pub generics: Vec<GenericDecl>,
     pub conformances: Vec<TypeAnnotation>,
     #[drive(skip)]

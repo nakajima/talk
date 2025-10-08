@@ -8,6 +8,8 @@ pub enum RecordFieldPatternKind {
     Equals {
         #[drive(skip)]
         name: Name,
+        #[drive(skip)]
+        name_span: Span,
         value: Pattern,
     },
     Rest,
@@ -43,6 +45,8 @@ pub enum PatternKind {
         enum_name: Option<Name>, // None for .some, Some for Option.some
         #[drive(skip)]
         variant_name: String,
+        #[drive(skip)]
+        variant_name_span: Span,
         fields: Vec<Pattern>, // Recursive patterns for fields
     },
 

@@ -1,6 +1,7 @@
 use derive_visitor::{Drive, DriveMut};
 
 use crate::{
+    impl_into_node,
     name::Name,
     node_id::NodeID,
     node_kinds::{
@@ -21,3 +22,5 @@ pub struct FuncSignature {
     pub generics: Vec<GenericDecl>,
     pub ret: Option<Box<TypeAnnotation>>,
 }
+
+impl_into_node!(FuncSignature);

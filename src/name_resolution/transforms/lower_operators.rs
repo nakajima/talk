@@ -42,10 +42,11 @@ impl LowerOperators {
                     _ => return,
                 };
 
+                let span = lhs.span;
                 let member = Expr {
                     id: NodeID(expr.id.0, self.node_ids.next_id()),
-                    span: lhs.span,
-                    kind: ExprKind::Member(Some(lhs), label),
+                    span,
+                    kind: ExprKind::Member(Some(lhs), label, span),
                 };
 
                 ExprKind::Call {
@@ -54,6 +55,7 @@ impl LowerOperators {
                     args: vec![CallArg {
                         id: NodeID(expr.id.0, self.node_ids.next_id()),
                         label: Label::Positional(0),
+                        label_span: expr.span,
                         value: rhs,
                         span: expr.span,
                     }],
@@ -91,6 +93,7 @@ pub mod tests {
                 vec![CallArg {
                     id: NodeID::ANY,
                     label: Label::Positional(0),
+                    label_span: Span::ANY,
                     value: any_expr!(ExprKind::LiteralInt("2".into())),
                     span: Span::ANY,
                 }]
@@ -111,6 +114,7 @@ pub mod tests {
                 vec![CallArg {
                     id: NodeID::ANY,
                     label: Label::Positional(0),
+                    label_span: Span::ANY,
                     value: any_expr!(ExprKind::LiteralInt("2".into())),
                     span: Span::ANY,
                 }]
@@ -131,6 +135,7 @@ pub mod tests {
                 vec![CallArg {
                     id: NodeID::ANY,
                     label: Label::Positional(0),
+                    label_span: Span::ANY,
                     value: any_expr!(ExprKind::LiteralInt("2".into())),
                     span: Span::ANY,
                 }]
@@ -151,6 +156,7 @@ pub mod tests {
                 vec![CallArg {
                     id: NodeID::ANY,
                     label: Label::Positional(0),
+                    label_span: Span::ANY,
                     value: any_expr!(ExprKind::LiteralInt("2".into())),
                     span: Span::ANY,
                 }]

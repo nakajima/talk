@@ -327,6 +327,7 @@ impl<'a> InferencePass<'a> {
             } => builtins::resolve_builtin_type(sym).0,
             TypeAnnotationKind::Nominal {
                 name: Name::Resolved(sym @ Symbol::TypeParameter(..), ..),
+                name_span: _,
                 generics: _,
             } => {
                 let entry = self.session.lookup(sym).expect("did not get type param");
@@ -335,6 +336,7 @@ impl<'a> InferencePass<'a> {
             }
             TypeAnnotationKind::Nominal {
                 name: Name::Resolved(symbol, ..),
+                name_span: _,
                 generics,
             } => {
                 // Build Boxy<Int> as TypeApplication(TypeConstructor(Boxy), Int) and normalize.
@@ -368,6 +370,7 @@ impl<'a> InferencePass<'a> {
             TypeAnnotationKind::NominalPath {
                 base,
                 member,
+                member_span: _,
                 member_generics,
             } => {
                 let base = self.infer_type_annotation(base, level, wants);
@@ -524,7 +527,7 @@ impl<'a> InferencePass<'a> {
             Node::Stmt(stmt) => self.infer_stmt(stmt, level, wants),
             Node::Decl(decl) => self.infer_decl(decl, level, wants),
             Node::Block(block) => self.infer_block(block, level, wants),
-            _ => todo!("don't know how to handle {node:?}"),
+            _ => InferTy::Hole(node.node_id()),
         }
     }
 
@@ -656,9 +659,7 @@ impl<'a> InferencePass<'a> {
             PatternKind::Bind(Name::Resolved(sym, _)) => {
                 self.session.insert_mono(*sym, expected.clone());
             }
-            PatternKind::Bind(Name::SelfType(..)) => {
-                todo!()
-            }
+            PatternKind::Bind(Name::SelfType(..)) => (),
             PatternKind::LiteralInt(_) => {
                 wants.equals(
                     expected.clone(),
@@ -723,7 +724,7 @@ impl<'a> InferencePass<'a> {
                                 pattern.span,
                             );
                         }
-                        RecordFieldPatternKind::Equals { name, value } => {
+                        RecordFieldPatternKind::Equals { name, value, .. } => {
                             // optional: pattern field = subpattern; same RowHas then recurse on value
                             let field_ty = self.session.new_ty_meta_var(level);
                             wants._has_field(
@@ -772,7 +773,7 @@ impl<'a> InferencePass<'a> {
                     self.check_pattern(field_pattern, &field_ty, level, wants);
                 }
             }
-            PatternKind::Wildcard => todo!(),
+            PatternKind::Wildcard => (),
             PatternKind::Struct { .. } => todo!(),
         }
     }
@@ -815,7 +816,7 @@ impl<'a> InferencePass<'a> {
                 Node::Decl(decl) => {
                     self.infer_decl(decl, level, wants);
                 }
-                _ => unreachable!("no {node:?} allowed in block body"),
+                _ => continue,
             }
         }
 
@@ -861,8 +862,8 @@ impl<'a> InferencePass<'a> {
                 }
             }
             ExprKind::LiteralString(_) => InferTy::String(),
-            ExprKind::Unary(..) => todo!(),
-            ExprKind::Binary(..) => todo!(),
+            ExprKind::Unary(..) => InferTy::Hole(expr.id),
+            ExprKind::Binary(..) => InferTy::Hole(expr.id),
             ExprKind::Tuple(items) => InferTy::Tuple(
                 items
                     .iter()
@@ -875,7 +876,7 @@ impl<'a> InferencePass<'a> {
                 type_args,
                 args,
             } => self.infer_call(callee, type_args, args, level, wants),
-            ExprKind::Member(receiver, label) => {
+            ExprKind::Member(receiver, label, ..) => {
                 self.infer_member(expr.id, receiver, label, level, wants)
             }
             ExprKind::Func(func) => self.infer_func(func, level, wants),
@@ -908,8 +909,8 @@ impl<'a> InferencePass<'a> {
                 params: vec![],
                 ret: InferTy::Void.into(),
             },
-            ExprKind::RowVariable(..) => todo!(),
-            _ => todo!("what is this expr even: {expr:?}"),
+            ExprKind::RowVariable(..) => InferTy::Hole(expr.id),
+            _ => InferTy::Hole(expr.id),
         };
 
         // // record the type for this expression node
@@ -1046,7 +1047,7 @@ impl<'a> InferencePass<'a> {
 
         let returns = self.session.new_ty_meta_var(level);
         let receiver = if let Expr {
-            kind: ExprKind::Member(receiver, _),
+            kind: ExprKind::Member(receiver, ..),
             ..
         } = &callee
         {
@@ -1155,7 +1156,7 @@ impl<'a> InferencePass<'a> {
             StmtKind::If(cond, conseq, alt) => {
                 self.infer_if_stmt(stmt.id, cond, conseq, alt, level, wants)
             }
-            StmtKind::Return(..) => todo!(),
+            StmtKind::Return(..) => InferTy::Hole(stmt.id),
             StmtKind::Break => InferTy::Void,
             StmtKind::Assignment(lhs, rhs) => {
                 let lhs_ty = self.infer_expr(lhs, level, wants);
