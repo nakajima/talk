@@ -7,3 +7,4 @@ talk-ex/index.wit
 *.png
 .docs-cache
 /documents
+server.log
