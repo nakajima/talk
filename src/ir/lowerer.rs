@@ -13,7 +13,7 @@ use crate::{
         value::Value,
     },
     name::Name,
-    name_resolution::{name_resolver::NameResolved, symbol::Symbol},
+    name_resolution::name_resolver::NameResolved,
     node::Node,
     node_id::NodeID,
     node_kinds::{
@@ -32,17 +32,14 @@ use crate::{
 #[derive(Debug)]
 pub(super) struct CurrentFunction {
     current_block_idx: usize,
-    next_block_id: usize,
     blocks: Vec<BasicBlock<Ty>>,
     pub registers: RegisterAllocator,
-    pub symbols: FxHashMap<Symbol, Value>,
 }
 
 impl Default for CurrentFunction {
     fn default() -> Self {
         CurrentFunction {
             current_block_idx: 0,
-            next_block_id: 1,
             blocks: vec![BasicBlock::<Ty> {
                 id: BasicBlockId(0),
                 instructions: Default::default(),
@@ -52,7 +49,6 @@ impl Default for CurrentFunction {
                 },
             }],
             registers: Default::default(),
-            symbols: Default::default(),
         }
     }
 }
@@ -61,7 +57,7 @@ impl Default for CurrentFunction {
 pub enum IRError {}
 
 #[derive(Debug, PartialEq, Eq, Clone, Default)]
-struct RegisterAllocator {
+pub(super) struct RegisterAllocator {
     next: u32,
 }
 
@@ -76,7 +72,7 @@ impl RegisterAllocator {
 #[derive(Clone)]
 pub(super) struct PolyFunction {
     pub name: Name,
-    pub foralls: Vec<ForAll>,
+    pub _foralls: Vec<ForAll>,
     pub blocks: Vec<BasicBlock<Ty>>,
     pub ty: Ty,
 }
@@ -128,41 +124,21 @@ impl<'a> Lowerer<'a> {
     fn lower_decl(&mut self, decl: &Decl) -> Result<Value, IRError> {
         match &decl.kind {
             DeclKind::Let {
-                lhs,
-                value: Some(value),
-                ..
+                value: Some(value), ..
             } => {
                 self.lower_expr(value)?;
             }
-            DeclKind::Init { name, params, body } => todo!(),
-            DeclKind::Property {
-                name,
-                name_span,
-                is_static,
-                type_annotation,
-                default_value,
-            } => todo!(),
-            DeclKind::Method { func, is_static } => todo!(),
-            DeclKind::Associated { generic } => todo!(),
-            DeclKind::Func(func) => todo!(),
-            DeclKind::Extend {
-                name,
-                name_span,
-                conformances,
-                generics,
-                body,
-            } => todo!(),
-            DeclKind::Enum {
-                name,
-                name_span,
-                conformances,
-                generics,
-                body,
-            } => todo!(),
-            DeclKind::EnumVariant(name, span, type_annotations) => todo!(),
-            DeclKind::FuncSignature(func_signature) => todo!(),
-            DeclKind::MethodRequirement(func_signature) => todo!(),
-            DeclKind::TypeAlias(type_annotation, type_annotation1) => todo!(),
+            DeclKind::Init { .. } => todo!(),
+            DeclKind::Property { .. } => todo!(),
+            DeclKind::Method { .. } => todo!(),
+            DeclKind::Associated { .. } => todo!(),
+            DeclKind::Func(..) => todo!(),
+            DeclKind::Extend { .. } => todo!(),
+            DeclKind::Enum { .. } => todo!(),
+            DeclKind::EnumVariant(..) => todo!(),
+            DeclKind::FuncSignature(..) => todo!(),
+            DeclKind::MethodRequirement(..) => todo!(),
+            DeclKind::TypeAlias(..) => todo!(),
             _ => (), // Nothing to do
         }
 
@@ -172,11 +148,11 @@ impl<'a> Lowerer<'a> {
     fn lower_stmt(&mut self, stmt: &Stmt) -> Result<Value, IRError> {
         match &stmt.kind {
             StmtKind::Expr(expr) => self.lower_expr(expr),
-            StmtKind::If(expr, block, block1) => todo!(),
-            StmtKind::Return(expr) => todo!(),
+            StmtKind::If(_expr, _block, _block1) => todo!(),
+            StmtKind::Return(_expr) => todo!(),
             StmtKind::Break => todo!(),
-            StmtKind::Assignment(expr, expr1) => todo!(),
-            StmtKind::Loop(expr, block) => todo!(),
+            StmtKind::Assignment(_expr, _expr1) => todo!(),
+            StmtKind::Loop(_expr, _block) => todo!(),
         }
     }
 
@@ -184,7 +160,7 @@ impl<'a> Lowerer<'a> {
         match &expr.kind {
             ExprKind::Func(func) => self.lower_func(func),
 
-            ExprKind::LiteralArray(exprs) => todo!(),
+            ExprKind::LiteralArray(_exprs) => todo!(),
             ExprKind::LiteralInt(val) => {
                 let ret = self.next_register();
                 self.push_instr(Instruction::ConstantInt(
@@ -206,22 +182,18 @@ impl<'a> Lowerer<'a> {
             ExprKind::LiteralTrue => todo!(),
             ExprKind::LiteralFalse => todo!(),
             ExprKind::LiteralString(_) => todo!(),
-            ExprKind::Unary(token_kind, expr) => todo!(),
-            ExprKind::Binary(expr, token_kind, expr1) => todo!(),
-            ExprKind::Tuple(exprs) => todo!(),
-            ExprKind::Block(block) => todo!(),
-            ExprKind::Call {
-                callee,
-                type_args,
-                args,
-            } => todo!(),
-            ExprKind::Member(expr, label, span) => todo!(),
-            ExprKind::Variable(name) => todo!(),
-            ExprKind::Constructor(name) => todo!(),
-            ExprKind::If(expr, block, block1) => todo!(),
-            ExprKind::Match(expr, match_arms) => todo!(),
-            ExprKind::RecordLiteral { fields, spread } => todo!(),
-            ExprKind::RowVariable(name) => todo!(),
+            ExprKind::Unary(..) => todo!(),
+            ExprKind::Binary(..) => todo!(),
+            ExprKind::Tuple(..) => todo!(),
+            ExprKind::Block(..) => todo!(),
+            ExprKind::Call { .. } => todo!(),
+            ExprKind::Member(..) => todo!(),
+            ExprKind::Variable(..) => todo!(),
+            ExprKind::Constructor(..) => todo!(),
+            ExprKind::If(..) => todo!(),
+            ExprKind::Match(..) => todo!(),
+            ExprKind::RecordLiteral { .. } => todo!(),
+            ExprKind::RowVariable(..) => todo!(),
             _ => unreachable!("cannot lower expr: {expr:?}"),
         }
     }
@@ -237,7 +209,7 @@ impl<'a> Lowerer<'a> {
             TypeEntry::Poly(scheme) => (scheme.ty, scheme.foralls),
         };
 
-        let (Ty::Func(params, box ret_ty), foralls) = ty else {
+        let (Ty::Func(params, box ret_ty), _foralls) = ty else {
             panic!("didn't get func ty");
         };
 
@@ -261,7 +233,7 @@ impl<'a> Lowerer<'a> {
             PolyFunction {
                 name: func.name.clone(),
                 blocks: current_function.blocks,
-                foralls,
+                _foralls: Default::default(),
                 ty: Ty::Func(params, ret_ty.into()),
             },
         );

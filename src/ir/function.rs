@@ -1,5 +1,5 @@
 use crate::{
-    ir::{basic_block::BasicBlock, ir_ty::IrTy, terminator::Terminator},
+    ir::{basic_block::BasicBlock, ir_ty::IrTy},
     name::Name,
 };
 

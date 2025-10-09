@@ -17,6 +17,7 @@ use crate::{
     types::{scheme::ForAll, ty::Ty, type_session::Types},
 };
 
+#[allow(dead_code)]
 pub struct Monomorphizer<'a> {
     asts: &'a FxHashMap<Source, AST<NameResolved>>,
     types: &'a Types,
@@ -81,37 +82,14 @@ impl<'a> Monomorphizer<'a> {
         match instruction {
             Instruction::ConstantInt(r, v, m) => Instruction::ConstantInt(r, v, m),
             Instruction::ConstantFloat(r, v, m) => Instruction::ConstantFloat(r, v, m),
-            Instruction::Add {
-                dest,
-                ty,
-                a,
-                b,
-                meta,
-            } => todo!(),
-            Instruction::Sub {
-                dest,
-                ty,
-                a,
-                b,
-                meta,
-            } => todo!(),
-            Instruction::Mul {
-                dest,
-                ty,
-                a,
-                b,
-                meta,
-            } => todo!(),
-            Instruction::Div {
-                dest,
-                ty,
-                a,
-                b,
-                meta,
-            } => todo!(),
+            Instruction::Add { .. } => todo!(),
+            Instruction::Sub { .. } => todo!(),
+            Instruction::Mul { .. } => todo!(),
+            Instruction::Div { .. } => todo!(),
         }
     }
 
+    #[allow(clippy::only_used_in_recursion)]
     fn monomorphize_ty(&mut self, ty: Ty) -> IrTy {
         match ty {
             Ty::Primitive(symbol) => match symbol {
@@ -121,12 +99,8 @@ impl<'a> Monomorphizer<'a> {
                 Symbol::Void => IrTy::Void,
                 _ => unreachable!(),
             },
-            Ty::Param(type_param_id) => todo!(),
-            Ty::Constructor {
-                symbol,
-                params,
-                ret,
-            } => todo!(),
+            Ty::Param(..) => todo!(),
+            Ty::Constructor { .. } => todo!(),
             Ty::Func(param, ret) => IrTy::Func(
                 param
                     .uncurry_params()
@@ -135,13 +109,9 @@ impl<'a> Monomorphizer<'a> {
                     .collect(),
                 self.monomorphize_ty(*ret).into(),
             ),
-            Ty::Tuple(items) => todo!(),
-            Ty::Record(row) => todo!(),
-            Ty::Nominal {
-                symbol,
-                type_args,
-                row,
-            } => todo!(),
+            Ty::Tuple(..) => todo!(),
+            Ty::Record(..) => todo!(),
+            Ty::Nominal { .. } => todo!(),
         }
     }
 }
