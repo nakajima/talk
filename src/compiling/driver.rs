@@ -56,10 +56,23 @@ pub enum CompileError {
     Typing(TypeError),
 }
 
+#[derive(Debug)]
+pub enum CompilationMode {
+    Executable,
+    Library,
+}
+
+impl Default for CompilationMode {
+    fn default() -> Self {
+        CompilationMode::Library
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct DriverConfig {
     pub module_id: ModuleId,
     pub modules: Rc<ModuleEnvironment>,
+    pub mode: CompilationMode,
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
@@ -320,6 +333,7 @@ pub mod tests {
         let config = DriverConfig {
             module_id: ModuleId::Current,
             modules: Rc::new(module_environment),
+            mode: CompilationMode::Library,
         };
 
         let driver_b = Driver::new(
@@ -376,6 +390,7 @@ pub mod tests {
         let config = DriverConfig {
             module_id: ModuleId::Current,
             modules: Rc::new(module_environment),
+            mode: CompilationMode::Library,
         };
 
         let driver_b = Driver::new(
@@ -445,6 +460,7 @@ pub mod tests {
         let config = DriverConfig {
             module_id: ModuleId::Current,
             modules: Rc::new(module_environment),
+            mode: CompilationMode::Library,
         };
 
         let driver_b = Driver::new(vec![Source::from("Hello(x: 123).x")], config);

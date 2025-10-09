@@ -13,15 +13,21 @@ use crate::{
         value::Value,
     },
     name::Name,
-    name_resolution::name_resolver::NameResolved,
+    name_resolution::{
+        name_resolver::NameResolved,
+        symbol::{Symbol, SynthesizedId},
+    },
     node::Node,
-    node_id::NodeID,
+    node_id::{FileID, NodeID},
     node_kinds::{
+        block::Block,
         decl::{Decl, DeclKind},
         expr::{Expr, ExprKind},
         func::Func,
+        pattern::{Pattern, PatternKind},
         stmt::{Stmt, StmtKind},
     },
+    span::Span,
     types::{
         scheme::ForAll,
         ty::Ty,
@@ -43,10 +49,7 @@ impl Default for CurrentFunction {
             blocks: vec![BasicBlock::<Ty> {
                 id: BasicBlockId(0),
                 instructions: Default::default(),
-                terminator: Terminator::Ret {
-                    val: Value::Void,
-                    ty: Ty::Void,
-                },
+                terminator: Terminator::Unreachable,
             }],
             registers: Default::default(),
         }
@@ -78,17 +81,17 @@ pub(super) struct PolyFunction {
 }
 
 // Lowers an AST with Types to a monomorphized IR
-pub struct Lowerer<'a> {
-    pub(super) asts: &'a FxHashMap<Source, AST<NameResolved>>,
-    pub(super) types: &'a Types,
+pub struct Lowerer {
+    pub(super) asts: FxHashMap<Source, AST<NameResolved>>,
+    pub(super) types: Types,
     pub(super) functions: FxHashMap<Name, PolyFunction>,
     pub(super) current_functions: Vec<CurrentFunction>,
     pub(super) needs_monomorphization: Vec<Name>,
     pub(super) instantiations: FxHashMap<NodeID, FxHashMap<ForAll, Ty>>,
 }
 
-impl<'a> Lowerer<'a> {
-    pub fn new(asts: &'a FxHashMap<Source, AST<NameResolved>>, types: &'a Types) -> Self {
+impl Lowerer {
+    pub fn new(asts: FxHashMap<Source, AST<NameResolved>>, types: Types) -> Self {
         Self {
             asts,
             types,
@@ -100,7 +103,82 @@ impl<'a> Lowerer<'a> {
     }
 
     pub fn lower(mut self) -> Result<Program, IRError> {
-        for ast in self.asts.values() {
+        if self.asts.is_empty() {
+            return Ok(Program::default());
+        }
+
+        // Do we have a main func?
+        let mut asts = std::mem::take(&mut self.asts);
+        let has_main_func = asts.iter_mut().flat_map(|a| &a.1.roots).any(is_main_func);
+        if !has_main_func {
+            let mut ret_ty = Ty::Void;
+            let func = Func {
+                id: NodeID(FileID::SYNTHESIZED, 0),
+                name: Name::Resolved(Symbol::Synthesized(SynthesizedId::from(0)), "main".into()),
+                name_span: Span {
+                    start: 0,
+                    end: 0,
+                    file_id: FileID(0),
+                },
+                generics: vec![],
+                params: vec![],
+                body: Block {
+                    id: NodeID(FileID(0), 0),
+                    args: vec![],
+                    span: Span {
+                        start: 0,
+                        end: 0,
+                        file_id: FileID(0),
+                    },
+                    body: {
+                        let roots: Vec<Node> = asts
+                            .values_mut()
+                            .flat_map(|a| std::mem::take(&mut a.roots))
+                            .collect();
+
+                        if let Some(last) = roots.last() {
+                            ret_ty = match self.types.get(&last.node_id()).unwrap() {
+                                TypeEntry::Mono(ty) => ty.clone(),
+                                TypeEntry::Poly(scheme) => scheme.ty.clone(),
+                            };
+                        }
+
+                        roots
+                    },
+                },
+                ret: None,
+                attributes: vec![],
+            };
+
+            let ast = asts.iter_mut().next().unwrap();
+            ast.1.roots.push(Node::Decl(Decl {
+                id: NodeID(FileID::SYNTHESIZED, 0),
+                span: Span::SYNTHESIZED,
+                kind: DeclKind::Let {
+                    lhs: Pattern {
+                        id: NodeID(FileID::SYNTHESIZED, 0),
+                        span: Span::SYNTHESIZED,
+                        kind: PatternKind::Bind(Name::Resolved(
+                            SynthesizedId::from(0).into(),
+                            "main".into(),
+                        )),
+                    },
+                    type_annotation: None,
+                    value: Some(Expr {
+                        id: NodeID(FileID::SYNTHESIZED, 0),
+                        span: Span::SYNTHESIZED,
+                        kind: ExprKind::Func(func),
+                    }),
+                },
+            }));
+
+            self.types.define(
+                NodeID(FileID::SYNTHESIZED, 0),
+                TypeEntry::Mono(Ty::Func(Ty::Void.into(), ret_ty.into())),
+            );
+        }
+
+        for ast in asts.values_mut() {
             for root in ast.roots.iter() {
                 self.lower_node(root)?;
             }
@@ -159,7 +237,6 @@ impl<'a> Lowerer<'a> {
     fn lower_expr(&mut self, expr: &Expr) -> Result<Value, IRError> {
         match &expr.kind {
             ExprKind::Func(func) => self.lower_func(func),
-
             ExprKind::LiteralArray(_exprs) => todo!(),
             ExprKind::LiteralInt(val) => {
                 let ret = self.next_register();
@@ -202,7 +279,7 @@ impl<'a> Lowerer<'a> {
         let ty = match self
             .types
             .get(&func.id)
-            .expect("didn't get func ty")
+            .unwrap_or_else(|| panic!("didn't get func ty: {:?}", func.id))
             .clone()
         {
             TypeEntry::Mono(ty) => (ty, vec![]),
@@ -259,6 +336,31 @@ impl<'a> Lowerer<'a> {
     }
 }
 
+fn is_main_func(node: &Node) -> bool {
+    if let Node::Decl(Decl {
+        kind:
+            DeclKind::Let {
+                value:
+                    Some(Expr {
+                        kind:
+                            ExprKind::Func(Func {
+                                name: Name::Resolved(_, name),
+                                ..
+                            }),
+                        ..
+                    }),
+                ..
+            },
+        ..
+    }) = node
+        && name == "main"
+    {
+        return true;
+    }
+
+    false
+}
+
 #[cfg(test)]
 pub mod tests {
     use crate::{
@@ -275,7 +377,7 @@ pub mod tests {
             value::Value,
         },
         name::Name,
-        name_resolution::symbol::GlobalId,
+        name_resolution::symbol::{GlobalId, SynthesizedId},
         node_id::NodeID,
     };
 
@@ -289,7 +391,7 @@ pub mod tests {
             .typecheck()
             .unwrap();
 
-        let lowerer = Lowerer::new(&typed.phase.asts, &typed.phase.types);
+        let lowerer = Lowerer::new(typed.phase.asts, typed.phase.types);
         lowerer.lower().unwrap()
     }
 
@@ -327,6 +429,26 @@ pub mod tests {
                     terminator: Terminator::Ret {
                         val: Value::Reg(0),
                         ty: IrTy::Float
+                    }
+                }],
+            })
+        );
+    }
+
+    #[test]
+    fn synthesizes_main() {
+        let program = lower("123");
+        assert_eq!(
+            program.functions,
+            fxhashmap!(Name::Resolved(SynthesizedId::from(0).into(), "main".into()) => Function {
+                name: Name::Resolved(SynthesizedId::from(0).into(), "main".into()),
+                ty: IrTy::Func(vec![], IrTy::Int.into()),
+                blocks: vec![BasicBlock {
+                    id: BasicBlockId(0),
+                    instructions: vec![Instruction::ConstantInt(0.into(), 123, vec![InstructionMeta::NodeID(NodeID::ANY)])],
+                    terminator: Terminator::Ret {
+                        val: Value::Reg(0),
+                        ty: IrTy::Int
                     }
                 }],
             })

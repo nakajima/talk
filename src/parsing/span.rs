@@ -14,6 +14,11 @@ impl std::fmt::Debug for Span {
 }
 
 impl Span {
+    pub const SYNTHESIZED: Span = Span {
+        file_id: FileID::SYNTHESIZED,
+        start: u32::MAX - 1,
+        end: u32::MAX - 1,
+    };
     pub const ANY: Span = Span {
         file_id: FileID(u32::MAX),
         start: u32::MAX,

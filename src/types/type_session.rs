@@ -139,6 +139,10 @@ pub struct Types {
 }
 
 impl Types {
+    pub fn define(&mut self, id: NodeID, ty: TypeEntry) {
+        self.types_by_node.insert(id, ty);
+    }
+
     pub fn get(&self, id: &NodeID) -> Option<&TypeEntry> {
         self.types_by_node.get(id)
     }

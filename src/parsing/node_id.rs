@@ -1,6 +1,10 @@
 #[derive(Default, Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct FileID(pub u32);
 
+impl FileID {
+    pub const SYNTHESIZED: FileID = FileID(u32::MAX - 1);
+}
+
 #[allow(clippy::derived_hash_with_manual_eq)]
 #[derive(Default, Clone, Copy, Hash, Eq, PartialOrd, Ord)]
 pub struct NodeID(pub FileID, pub u32);

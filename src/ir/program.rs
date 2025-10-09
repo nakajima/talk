@@ -5,6 +5,7 @@ use crate::{
     name::Name,
 };
 
+#[derive(Default)]
 pub struct Program {
     pub functions: FxHashMap<Name, Function<IrTy>>,
 }

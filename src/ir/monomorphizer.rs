@@ -18,16 +18,16 @@ use crate::{
 };
 
 #[allow(dead_code)]
-pub struct Monomorphizer<'a> {
-    asts: &'a FxHashMap<Source, AST<NameResolved>>,
-    types: &'a Types,
+pub struct Monomorphizer {
+    asts: FxHashMap<Source, AST<NameResolved>>,
+    types: Types,
     functions: FxHashMap<Name, PolyFunction>,
     needs_monomorphization: Vec<Name>,
     instantiations: FxHashMap<NodeID, FxHashMap<ForAll, Ty>>,
 }
 
-impl<'a> Monomorphizer<'a> {
-    pub fn new(lowerer: Lowerer<'a>) -> Self {
+impl Monomorphizer {
+    pub fn new(lowerer: Lowerer) -> Self {
         Monomorphizer {
             asts: lowerer.asts,
             types: lowerer.types,
@@ -75,6 +75,7 @@ impl<'a> Monomorphizer<'a> {
                 val,
                 ty: self.monomorphize_ty(ty),
             },
+            Terminator::Unreachable => Terminator::Unreachable,
         }
     }
 
