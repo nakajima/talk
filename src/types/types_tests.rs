@@ -42,7 +42,7 @@ pub mod tests {
             .typecheck()
             .unwrap();
 
-        let types = typed.phase.type_session.finalize().unwrap();
+        let types = typed.phase.types;
         let ast = typed.phase.asts.into_iter().next().unwrap().1;
 
         (ast, types)

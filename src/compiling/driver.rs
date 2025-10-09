@@ -20,7 +20,8 @@ use crate::{
             type_headers_pass::TypeHeaderPass,
             type_resolve_pass::TypeResolvePass,
         },
-        type_session::TypeSession,
+        type_error::TypeError,
+        type_session::{TypeSession, Types},
     },
 };
 
@@ -34,6 +35,8 @@ pub struct Parsed {
     pub asts: FxHashMap<Source, AST<ast::Parsed>>,
 }
 
+type Exports = FxHashMap<String, Symbol>;
+
 impl DriverPhase for NameResolved {}
 pub struct NameResolved {
     pub asts: FxHashMap<Source, AST<name_resolver::NameResolved>>,
@@ -42,13 +45,15 @@ pub struct NameResolved {
 impl DriverPhase for Typed {}
 pub struct Typed {
     pub asts: FxHashMap<Source, AST<name_resolver::NameResolved>>,
-    pub type_session: TypeSession,
+    pub types: Types,
+    pub exports: Exports,
 }
 
 #[derive(Debug)]
 pub enum CompileError {
     IO(io::Error),
     Parsing(ParserError),
+    Typing(TypeError),
 }
 
 #[derive(Debug, Default)]
@@ -164,7 +169,7 @@ impl Driver<Parsed> {
 }
 
 impl Driver<NameResolved> {
-    pub fn exports(&self) -> FxHashMap<String, Symbol> {
+    pub fn exports(&self) -> Exports {
         self.phase
             .asts
             .values()
@@ -205,12 +210,15 @@ impl Driver<NameResolved> {
             InferencePass::perform(&mut type_session, &scc, ast);
         }
 
+        let exports = self.exports();
+
         Ok(Driver {
             files: self.files,
             config: self.config,
             phase: Typed {
                 asts: self.phase.asts,
-                type_session,
+                types: type_session.finalize().map_err(CompileError::Typing)?,
+                exports,
             },
         })
     }
@@ -251,10 +259,7 @@ pub mod tests {
             .get(&current_dir.join("test/fixtures/b.tlk").into())
             .unwrap();
 
-        assert_eq!(
-            types_tests::tests::ty(1, ast, &typed.phase.type_session.finalize().unwrap()),
-            Ty::Int
-        );
+        assert_eq!(types_tests::tests::ty(1, ast, &typed.phase.types), Ty::Int);
     }
 
     #[test]
@@ -280,10 +285,7 @@ pub mod tests {
             .get(&Source::from(current_dir.join("test/fixtures/b.tlk")))
             .unwrap();
 
-        assert_eq!(
-            types_tests::tests::ty(1, ast, &typed.phase.type_session.finalize().unwrap()),
-            Ty::Int
-        );
+        assert_eq!(types_tests::tests::ty(1, ast, &typed.phase.types), Ty::Int);
     }
 
     #[test]
@@ -302,11 +304,11 @@ pub mod tests {
             .typecheck()
             .unwrap()
             .phase
-            .type_session;
+            .types;
 
         let module_a = Module {
             name: "A".into(),
-            types: type_session_a.finalize().unwrap(),
+            types: type_session_a,
             exports: fxhashmap!(
                 "P".into() => Symbol::Protocol(ProtocolId::from(1)),
                 "getRequired".into() => Symbol::Global(GlobalId::from(1))
@@ -342,10 +344,7 @@ pub mod tests {
             ))
             .unwrap();
 
-        assert_eq!(
-            types_tests::tests::ty(2, ast, &typed.phase.type_session.finalize().unwrap()),
-            Ty::Int
-        );
+        assert_eq!(types_tests::tests::ty(2, ast, &typed.phase.types), Ty::Int);
     }
 
     #[test]
@@ -364,11 +363,11 @@ pub mod tests {
             .typecheck()
             .unwrap()
             .phase
-            .type_session;
+            .types;
 
         let module_a = Module {
             name: "A".into(),
-            types: type_session_a.finalize().unwrap(),
+            types: type_session_a,
             exports: fxhashmap!("A".into() => Symbol::Type(TypeId::from(1))),
         };
 
@@ -397,10 +396,7 @@ pub mod tests {
             .get(&Source::from(current_dir.join("test/fixtures/b.tlk")))
             .unwrap();
 
-        assert_eq!(
-            types_tests::tests::ty(1, ast, &typed.phase.type_session.finalize().unwrap()),
-            Ty::Int
-        );
+        assert_eq!(types_tests::tests::ty(1, ast, &typed.phase.types), Ty::Int);
     }
 
     #[test]
@@ -436,11 +432,11 @@ pub mod tests {
                     acc
                 });
 
-        let type_session_a = name_resolved.typecheck().unwrap().phase.type_session;
+        let type_session_a = name_resolved.typecheck().unwrap().phase.types;
 
         let module_a = Module {
             name: "A".into(),
-            types: type_session_a.finalize().unwrap(),
+            types: type_session_a,
             exports,
         };
 
@@ -466,9 +462,6 @@ pub mod tests {
             .get(&Source::from("Hello(x: 123).x"))
             .unwrap();
 
-        assert_eq!(
-            types_tests::tests::ty(0, ast, &typed.phase.type_session.finalize().unwrap()),
-            Ty::Int
-        );
+        assert_eq!(types_tests::tests::ty(0, ast, &typed.phase.types), Ty::Int);
     }
 }

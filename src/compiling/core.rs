@@ -25,7 +25,7 @@ pub fn compile() -> Module {
     let name_resolved = driver.parse().unwrap().resolve_names().unwrap();
     let exports = name_resolved.exports();
     let typed = name_resolved.typecheck().unwrap();
-    let types = typed.phase.type_session.finalize().unwrap();
+    let types = typed.phase.types;
 
     Module {
         name: "Core".into(),

@@ -14,7 +14,6 @@ impl SomeType for Ty {
     }
 }
 
-// Finalized type info
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub enum Ty {
     Primitive(Symbol),
@@ -63,5 +62,22 @@ impl Ty {
             type_args: vec![t],
             row: Box::new(Row::Empty(TypeDefKind::Struct)),
         }
+    }
+
+    pub(crate) fn uncurry_params(self) -> Vec<Ty> {
+        let mut result = vec![];
+
+        match self {
+            Ty::Void => (),
+            Ty::Primitive(..) => result.push(self),
+            Ty::Param(..) => result.push(self),
+            Ty::Constructor { .. } => result.push(self),
+            Ty::Func(param, ..) => result.extend(param.uncurry_params()),
+            Ty::Tuple(..) => result.push(self),
+            Ty::Record(..) => result.push(self),
+            Ty::Nominal { .. } => result.push(self),
+        }
+
+        result
     }
 }

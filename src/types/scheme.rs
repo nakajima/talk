@@ -27,9 +27,9 @@ pub enum ForAll {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Scheme<T: SomeType> {
-    pub(super) foralls: Vec<ForAll>,
+    pub(crate) foralls: Vec<ForAll>,
     pub(super) predicates: Vec<Predicate<T>>,
-    pub(super) ty: T,
+    pub(crate) ty: T,
 }
 
 impl Scheme<InferTy> {

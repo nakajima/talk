@@ -1,3 +1,10 @@
+pub mod basic_block;
+pub mod function;
 pub mod instruction;
+pub mod ir_ty;
 pub mod lowerer;
+pub mod monomorphizer;
+pub mod program;
 pub mod register;
+pub mod terminator;
+pub mod value;
