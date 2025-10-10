@@ -1,11 +1,12 @@
-use rustc_hash::FxHashMap;
-
+use crate::ir::ir_ty::IrTy;
+use crate::ir::parse_instruction;
 use crate::{
     ast::AST,
     compiling::driver::Source,
     ir::{
         basic_block::{BasicBlock, BasicBlockId},
         instruction::{Instruction, InstructionMeta},
+        ir_error::IRError,
         monomorphizer::Monomorphizer,
         program::Program,
         register::Register,
@@ -21,6 +22,7 @@ use crate::{
     node_id::{FileID, NodeID},
     node_kinds::{
         block::Block,
+        call_arg::CallArg,
         decl::{Decl, DeclKind},
         expr::{Expr, ExprKind},
         func::Func,
@@ -34,6 +36,7 @@ use crate::{
         type_session::{TypeEntry, Types},
     },
 };
+use rustc_hash::FxHashMap;
 
 #[derive(Debug)]
 pub(super) struct CurrentFunction {
@@ -55,9 +58,6 @@ impl Default for CurrentFunction {
         }
     }
 }
-
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub enum IRError {}
 
 #[derive(Debug, PartialEq, Eq, Clone, Default)]
 pub(super) struct RegisterAllocator {
@@ -240,20 +240,20 @@ impl Lowerer {
             ExprKind::LiteralArray(_exprs) => todo!(),
             ExprKind::LiteralInt(val) => {
                 let ret = self.next_register();
-                self.push_instr(Instruction::ConstantInt(
-                    ret,
-                    str::parse(val).unwrap(),
-                    vec![InstructionMeta::NodeID(expr.id)],
-                ));
+                self.push_instr(Instruction::ConstantInt {
+                    dest: ret,
+                    val: str::parse(val).unwrap(),
+                    meta: vec![InstructionMeta::Source(expr.id)].into(),
+                });
                 Ok(ret.into())
             }
             ExprKind::LiteralFloat(val) => {
                 let ret = self.next_register();
-                self.push_instr(Instruction::ConstantFloat(
-                    ret,
-                    str::parse(val).unwrap(),
-                    vec![InstructionMeta::NodeID(expr.id)],
-                ));
+                self.push_instr(Instruction::ConstantFloat {
+                    dest: ret,
+                    val: str::parse(val).unwrap(),
+                    meta: vec![InstructionMeta::Source(expr.id)].into(),
+                });
                 Ok(ret.into())
             }
             ExprKind::LiteralTrue => todo!(),
@@ -263,7 +263,9 @@ impl Lowerer {
             ExprKind::Binary(..) => todo!(),
             ExprKind::Tuple(..) => todo!(),
             ExprKind::Block(..) => todo!(),
-            ExprKind::Call { .. } => todo!(),
+            ExprKind::Call {
+                box callee, args, ..
+            } => self.lower_call(callee, args),
             ExprKind::Member(..) => todo!(),
             ExprKind::Variable(..) => todo!(),
             ExprKind::Constructor(..) => todo!(),
@@ -273,6 +275,31 @@ impl Lowerer {
             ExprKind::RowVariable(..) => todo!(),
             _ => unreachable!("cannot lower expr: {expr:?}"),
         }
+    }
+
+    fn lower_call(&mut self, callee: &Expr, args: &[CallArg]) -> Result<Value, IRError> {
+        let ret = self.next_register();
+
+        // Handle embedded IR call
+        if let ExprKind::Variable(name) = &callee.kind
+            && name.symbol().unwrap() == Symbol::IR
+        {
+            let ExprKind::LiteralString(string) = &args[0].value.kind else {
+                unreachable!()
+            };
+
+            let mut string = string.clone();
+
+            if string.contains("$?") {
+                string = string.replace("$?", &format!("%{}", ret.0));
+            }
+
+            self.push_instr(parse_instruction::<IrTy>(&string).into());
+
+            return Ok(Value::Reg(ret.0));
+        }
+
+        Ok(Value::Void)
     }
 
     fn lower_func(&mut self, func: &Func) -> Result<Value, IRError> {
@@ -405,8 +432,10 @@ pub mod tests {
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
                 blocks: vec![BasicBlock {
                     id: BasicBlockId(0),
-                    instructions: vec![Instruction::ConstantInt(0.into(), 123, vec![InstructionMeta::NodeID(NodeID::ANY)])],
-                        terminator: Terminator::Ret {
+                    instructions: vec![
+                        Instruction::ConstantInt { dest: 0.into(), val: 123, meta: vec![InstructionMeta::Source(NodeID::ANY)].into(), }
+                    ],
+                    terminator: Terminator::Ret {
                         val: Value::Reg(0),
                         ty: IrTy::Int
                     }
@@ -424,12 +453,14 @@ pub mod tests {
                 name: Name::Resolved(GlobalId::from(1).into(), "main".into()),
                 ty: IrTy::Func(vec![], IrTy::Float.into()),
                 blocks: vec![BasicBlock {
-                    id: BasicBlockId(0),
-                    instructions: vec![Instruction::ConstantFloat(0.into(), 1.23, vec![InstructionMeta::NodeID(NodeID::ANY)])],
-                    terminator: Terminator::Ret {
-                        val: Value::Reg(0),
-                        ty: IrTy::Float
-                    }
+                id: BasicBlockId(0),
+                instructions: vec![
+                    Instruction::ConstantFloat { dest: 0.into(), val: 1.23, meta: vec![InstructionMeta::Source(NodeID::ANY)].into() }
+                ],
+                terminator: Terminator::Ret {
+                    val: Value::Reg(0),
+                    ty: IrTy::Float
+                }
                 }],
             })
         );
@@ -443,9 +474,41 @@ pub mod tests {
             fxhashmap!(Name::Resolved(SynthesizedId::from(0).into(), "main".into()) => Function {
                 name: Name::Resolved(SynthesizedId::from(0).into(), "main".into()),
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
+                    blocks: vec![BasicBlock {
+                    id: BasicBlockId(0),
+                    instructions: vec![
+                        Instruction::ConstantInt { dest: 0.into(), val: 123, meta: vec![InstructionMeta::Source(NodeID::ANY)].into(), }
+                    ],
+                    terminator: Terminator::Ret {
+                        val: Value::Reg(0),
+                        ty: IrTy::Int
+                    }
+                }],
+            })
+        );
+    }
+
+    #[test]
+    fn intrinsics() {
+        let program = lower(
+            "
+        __IR<Int>(\"$? = add int 1 2\")
+        ",
+        );
+        assert_eq!(
+            program.functions,
+            fxhashmap!(Name::Resolved(SynthesizedId::from(0).into(), "main".into()) => Function {
+                name: Name::Resolved(SynthesizedId::from(0).into(), "main".into()),
+                ty: IrTy::Func(vec![], IrTy::Int.into()),
                 blocks: vec![BasicBlock {
                     id: BasicBlockId(0),
-                    instructions: vec![Instruction::ConstantInt(0.into(), 123, vec![InstructionMeta::NodeID(NodeID::ANY)])],
+                    instructions: vec![Instruction::Add {
+                        dest: 0.into(),
+                        ty: IrTy::Int,
+                        a: Value::Int(1),
+                        b: Value::Int(2),
+                        meta: vec![].into(),
+                    }],
                     terminator: Terminator::Ret {
                         val: Value::Reg(0),
                         ty: IrTy::Int

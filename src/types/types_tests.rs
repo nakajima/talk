@@ -104,6 +104,13 @@ pub mod tests {
     }
 
     #[test]
+    fn types_ir_builtin() {
+        let (ast, types) = typecheck("__IR<Int>(\"add int 1 2\"); __IR<Float>(\"add int 1 2\")");
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
+        assert_eq!(ty(1, &ast, &types), Ty::Float);
+    }
+
+    #[test]
     fn types_array_properties() {
         let (ast, types) = typecheck("[1,2,3].count");
         assert_eq!(ty(0, &ast, &types), Ty::Int);

@@ -125,6 +125,10 @@ impl Symbol {
         module_id: ModuleId::Prelude,
         local_id: 4,
     });
+    pub const IR: Symbol = Symbol::Builtin(BuiltinId {
+        module_id: ModuleId::Prelude,
+        local_id: 5,
+    });
 
     pub fn module_id(&self) -> Option<ModuleId> {
         let module_id = match self {

@@ -1,8 +1,8 @@
 use rustc_hash::FxHashMap;
 
-use crate::types::infer_ty::InferTy;
+use crate::types::infer_ty::{InferTy, TypeParamId};
 use crate::types::predicate::Predicate;
-use crate::types::scheme::ForAll;
+use crate::types::scheme::{ForAll, Scheme};
 use crate::types::term_environment::EnvEntry;
 
 use crate::name_resolution::symbol::Symbol;
@@ -25,6 +25,18 @@ pub fn builtin_scope() -> FxHashMap<Symbol, EnvEntry> {
     res.insert(Symbol::Int, EnvEntry::Mono(InferTy::Int));
     res.insert(Symbol::Float, EnvEntry::Mono(InferTy::Float));
     res.insert(Symbol::Bool, EnvEntry::Mono(InferTy::Bool));
+    res.insert(Symbol::Void, EnvEntry::Mono(InferTy::Void));
+    res.insert(
+        Symbol::IR,
+        EnvEntry::Scheme(Scheme::<InferTy>::new(
+            vec![ForAll::Ty(TypeParamId::IR_TYPE_PARAM)],
+            vec![],
+            InferTy::Func(
+                InferTy::String().into(),
+                InferTy::Param(TypeParamId::IR_TYPE_PARAM).into(),
+            ),
+        )),
+    );
 
     res
 }

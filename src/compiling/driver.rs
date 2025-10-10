@@ -56,16 +56,11 @@ pub enum CompileError {
     Typing(TypeError),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub enum CompilationMode {
     Executable,
+    #[default]
     Library,
-}
-
-impl Default for CompilationMode {
-    fn default() -> Self {
-        CompilationMode::Library
-    }
 }
 
 #[derive(Debug, Default)]

@@ -28,6 +28,9 @@ impl std::fmt::Debug for UnificationVarId {
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord)]
 pub struct TypeParamId(u32);
+impl TypeParamId {
+    pub const IR_TYPE_PARAM: TypeParamId = TypeParamId(u32::MAX - 1);
+}
 impl From<u32> for TypeParamId {
     fn from(value: u32) -> Self {
         TypeParamId(value)

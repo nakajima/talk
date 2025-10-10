@@ -81,12 +81,64 @@ impl Monomorphizer {
 
     fn monomorphize_instruction(&mut self, instruction: Instruction<Ty>) -> Instruction<IrTy> {
         match instruction {
-            Instruction::ConstantInt(r, v, m) => Instruction::ConstantInt(r, v, m),
-            Instruction::ConstantFloat(r, v, m) => Instruction::ConstantFloat(r, v, m),
-            Instruction::Add { .. } => todo!(),
-            Instruction::Sub { .. } => todo!(),
-            Instruction::Mul { .. } => todo!(),
-            Instruction::Div { .. } => todo!(),
+            Instruction::ConstantInt { dest, val, meta } => {
+                Instruction::ConstantInt { dest, val, meta }
+            }
+            Instruction::ConstantFloat { dest, val, meta } => {
+                Instruction::ConstantFloat { dest, val, meta }
+            }
+            Instruction::Add {
+                dest,
+                ty,
+                a,
+                b,
+                meta,
+            } => Instruction::Add {
+                dest,
+                ty: self.monomorphize_ty(ty),
+                a,
+                b,
+                meta,
+            },
+            Instruction::Sub {
+                dest,
+                ty,
+                a,
+                b,
+                meta,
+            } => Instruction::Sub {
+                dest,
+                ty: self.monomorphize_ty(ty),
+                a,
+                b,
+                meta,
+            },
+            Instruction::Mul {
+                dest,
+                ty,
+                a,
+                b,
+                meta,
+            } => Instruction::Mul {
+                dest,
+                ty: self.monomorphize_ty(ty),
+                a,
+                b,
+                meta,
+            },
+            Instruction::Div {
+                dest,
+                ty,
+                a,
+                b,
+                meta,
+            } => Instruction::Div {
+                dest,
+                ty: self.monomorphize_ty(ty),
+                a,
+                b,
+                meta,
+            },
         }
     }
 
