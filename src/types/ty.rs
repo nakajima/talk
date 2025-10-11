@@ -36,6 +36,12 @@ pub enum Ty {
     },
 }
 
+impl std::fmt::Display for Ty {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{self:?}")
+    }
+}
+
 #[allow(non_upper_case_globals)]
 #[allow(non_snake_case)]
 impl Ty {

@@ -28,7 +28,7 @@ impl std::fmt::Debug for NodeID {
 
 impl std::fmt::Display for NodeID {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self.0)
+        write!(f, "{}:{}", self.0.0, self.1)
     }
 }
 

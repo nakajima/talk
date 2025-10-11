@@ -34,7 +34,7 @@ fn generate_impls(
         })
         .ok_or_else(|| panic!("Could not find 'enum Instr' in {INSTRUCTIONS_SRC_PATH}"))?;
 
-    // let display_impl = generate_display_impl(instr_enum);
+    let display_impl = generate_display_impl(instr_enum);
     let from_str_impl = generate_from_str_impl(instr_enum);
 
     Ok(quote::quote! {
@@ -50,6 +50,7 @@ fn generate_impls(
             clippy::all
         )]
         #from_str_impl
+        #display_impl
     })
 }
 fn generate_from_str_impl(instr_enum: &syn::ItemEnum) -> proc_macro2::TokenStream {
@@ -258,6 +259,91 @@ fn generate_from_str_impl(instr_enum: &syn::ItemEnum) -> proc_macro2::TokenStrea
             <crate::ir::list::List<crate::ir::instruction::InstructionMeta> as FromStr>::Err: std::fmt::Display,
         {
             line.parse().unwrap()
+        }
+    }
+}
+
+fn generate_display_impl(instr_enum: &syn::ItemEnum) -> proc_macro2::TokenStream {
+    use quote::{format_ident, quote};
+    use syn::Fields;
+
+    let enum_ident = &instr_enum.ident;
+    let mut arms = Vec::new();
+
+    for v in &instr_enum.variants {
+        let v_ident = &v.ident;
+        let doc =
+            get_doc_attr(&v.attrs).unwrap_or_else(|| panic!("missing #[doc] on variant {v_ident}"));
+
+        // Named fields only (matches your enum)
+        let field_idents: Vec<_> = match &v.fields {
+            Fields::Named(named) => named
+                .named
+                .iter()
+                .map(|f| f.ident.clone().unwrap())
+                .collect(),
+            _ => panic!("variant {v_ident} must use named fields"),
+        };
+
+        // Tokenize doc by whitespace.
+        // Literal tokens are printed verbatim,
+        // $name tokens are formatted via Display on that field.
+        let tokens: Vec<String> = doc.split_whitespace().map(|s| s.to_string()).collect();
+
+        // Build code that pushes each piece into a Vec<String>
+        let mut pushes = Vec::new();
+        for t in &tokens {
+            if let Some(name) = t.strip_prefix('$') {
+                let id = format_ident!("{}", name);
+                // format field as string
+                pushes.push(quote! {
+                    parts.push(format!("{}", #id));
+                });
+            } else {
+                // literal piece
+                let lit = t.clone();
+                pushes.push(quote! {
+                    parts.push(#lit.to_string());
+                });
+            }
+        }
+
+        // Pattern: destructure all fields so we can use shorthand names
+        let pat_fields = quote! { { #( #field_idents ),* } };
+
+        // One match arm
+        arms.push(quote! {
+            Self::#v_ident #pat_fields => {
+                // Build string parts from template
+                let mut parts: Vec<String> = Vec::new();
+                #(#pushes)*
+
+                // Drop empty pieces (e.g., when last field formats to "")
+                // and join with single spaces to avoid trailing space.
+                let s = parts.into_iter()
+                    .filter(|p| !p.is_empty())
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                write!(f, "{}", s)
+            }
+        });
+    }
+
+    quote! {
+        impl<T> std::fmt::Display for crate::ir::#enum_ident<T>
+        where
+            T: std::fmt::Display,
+            crate::ir::register::Register: std::fmt::Display,
+            crate::ir::value::Value: std::fmt::Display,
+            crate::ir::instruction::InstructionMeta: std::fmt::Display,
+            // If you print a List<InstructionMeta>, make sure List<T>: Display in your crate.
+            crate::ir::list::List<crate::ir::instruction::InstructionMeta>: std::fmt::Display,
+        {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                match self {
+                    #(#arms),*
+                }
+            }
         }
     }
 }

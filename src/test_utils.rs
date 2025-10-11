@@ -109,6 +109,21 @@ macro_rules! any_typed {
 }
 
 #[macro_export]
+macro_rules! assert_eq_diff_display {
+    ($lhs:expr, $rhs:expr $(,)?) => {{
+        if $lhs != $rhs {
+            use prettydiff::diff_lines;
+            panic!(
+                "Assertion failed, {} != {}\nDiff:\n{}",
+                $lhs,
+                $rhs,
+                diff_lines(format!("{}", $lhs).as_str(), format!("{}", $rhs).as_str())
+            );
+        }
+    }};
+}
+
+#[macro_export]
 macro_rules! assert_eq_diff {
     ($lhs:expr, $rhs:expr $(,)?) => {{
         if $lhs != $rhs {

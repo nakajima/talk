@@ -41,3 +41,17 @@ where
         Ok(List { items })
     }
 }
+
+impl<T> std::fmt::Display for List<T>
+where
+    T: std::fmt::Debug + Clone + PartialEq + FromStr + std::fmt::Display,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let parts = self
+            .items
+            .iter()
+            .map(|i| format!("{i}"))
+            .collect::<Vec<_>>();
+        write!(f, "({})", parts.join(", "))
+    }
+}

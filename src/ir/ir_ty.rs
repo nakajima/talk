@@ -89,6 +89,46 @@ impl FromStr for IrTy {
     }
 }
 
+impl std::fmt::Display for IrTy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            IrTy::Int => write!(f, "int"),
+            IrTy::Float => write!(f, "float"),
+            IrTy::Bool => write!(f, "bool"),
+            IrTy::Func(items, ir_ty) => write!(
+                f,
+                "({}) -> {}",
+                items
+                    .iter()
+                    .map(|i| format!("{i}"))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                ir_ty
+            ),
+            IrTy::Record(index_map) => {
+                let mut items = vec![];
+                for (key, val) in index_map {
+                    items.push(format!("{key}: {val}"));
+                }
+                write!(f, "{{ {} }}", items.join(", "))
+            }
+            IrTy::Enum { tag, values } => {
+                write!(
+                    f,
+                    "{{ {} ; {} }}",
+                    tag,
+                    values
+                        .iter()
+                        .map(|v| format!("{v}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            }
+            IrTy::Void => write!(f, "void"),
+        }
+    }
+}
+
 fn split_simple(s: &str, sep: char) -> Vec<&str> {
     s.split(sep)
         .map(|t| t.trim())

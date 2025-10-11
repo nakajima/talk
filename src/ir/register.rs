@@ -17,11 +17,23 @@ impl From<Register> for Value {
     }
 }
 
+impl From<&Register> for Value {
+    fn from(value: &Register) -> Self {
+        Value::Reg(value.0)
+    }
+}
+
 impl FromStr for Register {
     type Err = IRError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(str::parse::<u32>(&s[1..])
             .map_err(|e| IRError::CouldNotParse(format!("{e:?}")))?
             .into())
+    }
+}
+
+impl std::fmt::Display for Register {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "%{}", self.0)
     }
 }

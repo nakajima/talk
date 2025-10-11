@@ -12,6 +12,14 @@ pub enum InstructionMeta {
     Source(NodeID),
 }
 
+impl std::fmt::Display for InstructionMeta {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Source(id) => write!(f, "id:{}:{}", id.0.0, id.1),
+        }
+    }
+}
+
 impl FromStr for InstructionMeta {
     type Err = IRError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -78,11 +86,20 @@ pub enum Instruction<T> {
         b: Value,
         meta: List<InstructionMeta>,
     },
+    #[doc = "$dest = ref $ty $val"]
+    Ref { dest: Register, ty: T, val: Value },
+    #[doc = "$dest = call $ty $callee $args $meta"]
+    Call {
+        dest: Register,
+        ty: T,
+        callee: Value,
+        args: List<Value>,
+        meta: List<InstructionMeta>,
+    },
 }
 
-#[allow(clippy::from_over_into)]
-impl Into<Instruction<Ty>> for Instruction<IrTy> {
-    fn into(self) -> Instruction<Ty> {
+impl<T> Instruction<T> {
+    pub fn map_type<U>(self, mut map: impl FnMut(T) -> U) -> Instruction<U> {
         match self {
             Instruction::ConstantInt { dest, val, meta } => {
                 Instruction::ConstantInt { dest, val, meta }
@@ -90,6 +107,11 @@ impl Into<Instruction<Ty>> for Instruction<IrTy> {
             Instruction::ConstantFloat { dest, val, meta } => {
                 Instruction::ConstantFloat { dest, val, meta }
             }
+            Instruction::Ref { dest, ty, val } => Instruction::Ref {
+                dest,
+                ty: map(ty),
+                val,
+            },
             Instruction::Add {
                 dest,
                 ty,
@@ -98,7 +120,7 @@ impl Into<Instruction<Ty>> for Instruction<IrTy> {
                 meta,
             } => Instruction::Add {
                 dest,
-                ty: ty.into(),
+                ty: map(ty),
                 a,
                 b,
                 meta,
@@ -111,7 +133,7 @@ impl Into<Instruction<Ty>> for Instruction<IrTy> {
                 meta,
             } => Instruction::Sub {
                 dest,
-                ty: ty.into(),
+                ty: map(ty),
                 a,
                 b,
                 meta,
@@ -124,7 +146,7 @@ impl Into<Instruction<Ty>> for Instruction<IrTy> {
                 meta,
             } => Instruction::Mul {
                 dest,
-                ty: ty.into(),
+                ty: map(ty),
                 a,
                 b,
                 meta,
@@ -137,12 +159,33 @@ impl Into<Instruction<Ty>> for Instruction<IrTy> {
                 meta,
             } => Instruction::Div {
                 dest,
-                ty: ty.into(),
+                ty: map(ty),
                 a,
                 b,
                 meta,
             },
+
+            Instruction::Call {
+                dest,
+                ty,
+                callee,
+                args,
+                meta,
+            } => Instruction::Call {
+                dest,
+                ty: map(ty),
+                callee,
+                args,
+                meta,
+            },
         }
+    }
+}
+
+#[allow(clippy::from_over_into)]
+impl Into<Instruction<Ty>> for Instruction<IrTy> {
+    fn into(self) -> Instruction<Ty> {
+        self.map_type(Into::into)
     }
 }
 

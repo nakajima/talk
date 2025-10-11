@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 use crate::name_resolution::{
     name_resolver::NameResolverError,
     symbol::{Symbol, TypeId},
@@ -8,6 +10,16 @@ pub enum Name {
     Raw(String),
     Resolved(Symbol, String),
     SelfType(TypeId),
+}
+
+impl Display for Name {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Raw(name) => write!(f, "@{}", name),
+            Self::Resolved(sym, name) => write!(f, "@{name}:{sym}"),
+            Self::SelfType(id) => write!(f, "Self({id})"),
+        }
+    }
 }
 
 impl Name {

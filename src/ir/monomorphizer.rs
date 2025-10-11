@@ -21,7 +21,7 @@ use crate::{
 pub struct Monomorphizer {
     asts: FxHashMap<Source, AST<NameResolved>>,
     types: Types,
-    functions: FxHashMap<Name, PolyFunction>,
+    functions: FxHashMap<Symbol, PolyFunction>,
     needs_monomorphization: Vec<Name>,
     instantiations: FxHashMap<NodeID, FxHashMap<ForAll, Ty>>,
 }
@@ -37,8 +37,8 @@ impl Monomorphizer {
         }
     }
 
-    pub fn monomorphize(&mut self) -> FxHashMap<Name, Function<IrTy>> {
-        let mut result = FxHashMap::<Name, Function<IrTy>>::default();
+    pub fn monomorphize(&mut self) -> FxHashMap<Symbol, Function<IrTy>> {
+        let mut result = FxHashMap::<Symbol, Function<IrTy>>::default();
         for (name, func) in self.functions.clone() {
             result.insert(name, self.monomorphize_func(func));
         }
@@ -49,6 +49,7 @@ impl Monomorphizer {
         Function {
             name: func.name,
             ty: self.monomorphize_ty(func.ty),
+            params: func.params.into(),
             blocks: func
                 .blocks
                 .into_iter()
@@ -80,66 +81,7 @@ impl Monomorphizer {
     }
 
     fn monomorphize_instruction(&mut self, instruction: Instruction<Ty>) -> Instruction<IrTy> {
-        match instruction {
-            Instruction::ConstantInt { dest, val, meta } => {
-                Instruction::ConstantInt { dest, val, meta }
-            }
-            Instruction::ConstantFloat { dest, val, meta } => {
-                Instruction::ConstantFloat { dest, val, meta }
-            }
-            Instruction::Add {
-                dest,
-                ty,
-                a,
-                b,
-                meta,
-            } => Instruction::Add {
-                dest,
-                ty: self.monomorphize_ty(ty),
-                a,
-                b,
-                meta,
-            },
-            Instruction::Sub {
-                dest,
-                ty,
-                a,
-                b,
-                meta,
-            } => Instruction::Sub {
-                dest,
-                ty: self.monomorphize_ty(ty),
-                a,
-                b,
-                meta,
-            },
-            Instruction::Mul {
-                dest,
-                ty,
-                a,
-                b,
-                meta,
-            } => Instruction::Mul {
-                dest,
-                ty: self.monomorphize_ty(ty),
-                a,
-                b,
-                meta,
-            },
-            Instruction::Div {
-                dest,
-                ty,
-                a,
-                b,
-                meta,
-            } => Instruction::Div {
-                dest,
-                ty: self.monomorphize_ty(ty),
-                a,
-                b,
-                meta,
-            },
-        }
+        instruction.map_type(|ty| self.monomorphize_ty(ty))
     }
 
     #[allow(clippy::only_used_in_recursion)]

@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 use crate::{compiling::module::ModuleId, id_generator::IDGenerator};
 
 // Macro for cross-module IDs (with ModuleId)
@@ -7,6 +9,18 @@ macro_rules! impl_module_symbol_id {
         pub struct $ty {
             pub module_id: ModuleId,
             pub local_id: u32,
+        }
+
+        impl std::fmt::Display for $ty {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(
+                    f,
+                    "{:?}({:?}:{:?})",
+                    stringify!($ty),
+                    self.module_id,
+                    self.local_id
+                )
+            }
         }
 
         impl $ty {
@@ -68,6 +82,12 @@ macro_rules! impl_local_symbol_id {
     ($case:ident, $ty: ident) => {
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
         pub struct $ty(pub u32);
+
+        impl std::fmt::Display for $ty {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "{:?}", self)
+            }
+        }
 
         impl<T: Into<u32>> From<T> for $ty {
             fn from(value: T) -> Self {
@@ -221,6 +241,29 @@ impl_local_symbol_id!(TypeParameter, TypeParameterId);
 impl_local_symbol_id!(DeclaredLocal, DeclaredLocalId);
 impl_local_symbol_id!(ParamLocal, ParamLocalId);
 impl_local_symbol_id!(PatternBindLocal, PatternBindLocalId);
+
+impl Display for Symbol {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Symbol::Type(type_id) => write!(f, "S_{}", type_id),
+            Symbol::TypeParameter(type_parameter_id) => write!(f, "S_{}", type_parameter_id),
+            Symbol::Global(global_id) => write!(f, "S_{}", global_id),
+            Symbol::DeclaredLocal(declared_local_id) => write!(f, "S_{}", declared_local_id),
+            Symbol::PatternBindLocal(pattern_bind_local_id) => {
+                write!(f, "S_{}", pattern_bind_local_id)
+            }
+            Symbol::ParamLocal(param_local_id) => write!(f, "S_{}", param_local_id),
+            Symbol::Builtin(builtin_id) => write!(f, "S_{}", builtin_id),
+            Symbol::Property(property_id) => write!(f, "S_{}", property_id),
+            Symbol::Synthesized(synthesized_id) => write!(f, "S_{}", synthesized_id),
+            Symbol::InstanceMethod(instance_method_id) => write!(f, "S_{}", instance_method_id),
+            Symbol::StaticMethod(static_method_id) => write!(f, "S_{}", static_method_id),
+            Symbol::Variant(variant_id) => write!(f, "S_{}", variant_id),
+            Symbol::Protocol(protocol_id) => write!(f, "S_{}", protocol_id),
+            Symbol::AssociatedType(associated_type_id) => write!(f, "S_{}", associated_type_id),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct Symbols {
