@@ -77,6 +77,7 @@ impl Default for CurrentFunction {
 enum Bind {
     Assigned(Register),
     Fresh,
+    Discard,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Default)]
@@ -249,7 +250,9 @@ impl Lowerer {
                 self.lower_init(decl, name, params, body)?;
             }
             DeclKind::Property { .. } => (),
-            DeclKind::Method { .. } => todo!(),
+            DeclKind::Method { func, .. } => {
+                self.lower_method(func)?;
+            }
             DeclKind::Associated { .. } => todo!(),
             DeclKind::Func(..) => todo!(),
             DeclKind::Extend { .. } => todo!(),
@@ -262,6 +265,10 @@ impl Lowerer {
         }
 
         Ok(Value::Void)
+    }
+
+    fn lower_method(&mut self, func: &Func) -> Result<Value, IRError> {
+        self.lower_func(func, Bind::Discard)
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
@@ -526,28 +533,45 @@ impl Lowerer {
         Ok(dest.into())
     }
 
-    #[instrument(level = tracing::Level::TRACE, skip(self, member))]
+    #[instrument(level = tracing::Level::TRACE, skip(self, receiver))]
     fn lower_member(
         &mut self,
         id: NodeID,
-        member: &Option<Box<Expr>>,
+        receiver: &Option<Box<Expr>>,
         label: &Label,
         bind: Bind,
     ) -> Result<Value, IRError> {
-        if let Some(box member) = &member {
+        if let Some(box receiver) = &receiver {
             let reg = self.next_register();
             let member_bind = Bind::Assigned(reg);
-            let receiver = self.lower_expr(member, member_bind)?;
-
-            let dest = self.ret(bind);
+            let receiver_val = self.lower_expr(receiver, member_bind)?;
             let ty = self.ty_from_id(&id)?;
-            self.push_instr(Instruction::GetField {
-                dest,
-                ty,
-                record: receiver.as_register()?,
-                field: label.clone(),
-                meta: vec![InstructionMeta::Source(id)].into(),
-            });
+            let dest = self.ret(bind);
+
+            let receiver_ty = self.ty_from_id(&receiver.id)?;
+
+            if let Ty::Nominal { symbol, .. } = &receiver_ty
+                && let Some(method) = self
+                    .types
+                    .catalog
+                    .instance_methods
+                    .get(symbol)
+                    .and_then(|m| m.get(label))
+            {
+                self.push_instr(Instruction::Ref {
+                    dest,
+                    ty,
+                    val: Value::Func(Name::Resolved(*method, label.to_string())),
+                });
+            } else {
+                self.push_instr(Instruction::GetField {
+                    dest,
+                    ty,
+                    record: receiver_val.as_register()?,
+                    field: label.clone(),
+                    meta: vec![InstructionMeta::Source(id)].into(),
+                });
+            };
 
             Ok(dest.into())
         } else {
@@ -619,15 +643,16 @@ impl Lowerer {
             .get(&Label::Named("init".into()))
             .unwrap();
 
-        let ty @ Ty::Func(param, box ret) = &self.ty_from_symbol(&init_sym).unwrap() else {
+        let ty @ Ty::Func(..) = &self.ty_from_symbol(&init_sym).unwrap() else {
             unreachable!("{:?}", self.ty_from_symbol(&init_sym).unwrap());
         };
-        let mut params = param.clone().uncurry_params();
+        let mut params = ty.clone().uncurry_params();
+        let ret = params.pop().unwrap();
         params.insert(0, ret.clone());
 
         self.push_instr(Instruction::Call {
             dest,
-            ty: ty.clone(),
+            ty: ret.clone(),
             callee: Value::Func(Name::Resolved(
                 init_sym,
                 format!("{}_init", name.name_str()),
@@ -653,31 +678,26 @@ impl Lowerer {
         if let ExprKind::Variable(name) = &callee.kind
             && name.symbol().unwrap() == Symbol::IR
         {
-            let ExprKind::LiteralString(string) = &args[0].value.kind else {
-                unreachable!()
-            };
-
-            let mut string = string.clone();
-
-            if string.contains("$?") {
-                string = string.replace("$?", &format!("%{}", dest.0));
-            }
-
-            self.push_instr(parse_instruction::<IrTy, Label>(&string).into());
-
-            return Ok(dest.into());
+            return self.lower_embedded_ir_call(args, dest);
         }
 
-        let ty = match self.types.get(&id).unwrap() {
-            TypeEntry::Mono(ty) => ty.clone(),
-            TypeEntry::Poly(scheme) => scheme.ty.clone(),
-        };
-
-        let callee_ir = self.lower_expr(callee, Bind::Fresh)?;
-        let args = args
+        let ty = self.ty_from_id(&id)?;
+        let mut args = args
             .iter()
             .map(|arg| self.lower_expr(&arg.value, Bind::Fresh))
             .collect::<Result<Vec<Value>, _>>()?;
+
+        let callee_ir = if let ExprKind::Member(Some(box receiver), member, ..) = &callee.kind
+            && let Some(method_sym) = self.lookup_instance_method(receiver, member)?
+        {
+            // Handle method calls. It'd be nice if we could re-use lower_member here but i'm not sure
+            // how we'd get the receiver value, which we need to pass as the first arg..
+            let receiver_ir = self.lower_expr(receiver, Bind::Fresh)?;
+            args.insert(0, receiver_ir);
+            Value::Func(Name::Resolved(method_sym, member.to_string()))
+        } else {
+            self.lower_expr(callee, Bind::Fresh)?
+        };
 
         if let ExprKind::Constructor(name) = &callee.kind {
             return self.lower_constructor_call(callee.id, name, &callee_ir, args, dest);
@@ -738,13 +758,35 @@ impl Lowerer {
         );
 
         let func = Value::Func(func.name.clone());
-        let dest = self.ret(bind);
-        self.push_instr(Instruction::Ref {
-            dest,
-            ty: Ty::Func(param_tys, ret_ty.into()),
-            val: func.clone(),
-        });
+        if bind != Bind::Discard {
+            let dest = self.ret(bind);
+            self.push_instr(Instruction::Ref {
+                dest,
+                ty: Ty::Func(param_tys, ret_ty.into()),
+                val: func.clone(),
+            });
+        }
         Ok(func)
+    }
+
+    fn lower_embedded_ir_call(
+        &mut self,
+        args: &[CallArg],
+        dest: Register,
+    ) -> Result<Value, IRError> {
+        let ExprKind::LiteralString(string) = &args[0].value.kind else {
+            unreachable!()
+        };
+
+        let mut string = string.clone();
+
+        if string.contains("$?") {
+            string = string.replace("$?", &format!("%{}", dest.0));
+        }
+
+        self.push_instr(parse_instruction::<IrTy, Label>(&string).into());
+
+        Ok(dest.into())
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
@@ -772,7 +814,26 @@ impl Lowerer {
         match bind {
             Bind::Assigned(value) => value,
             Bind::Fresh => self.next_register(),
+            Bind::Discard => Register::DROP,
         }
+    }
+
+    fn lookup_instance_method(
+        &self,
+        expr: &Expr,
+        label: &Label,
+    ) -> Result<Option<Symbol>, IRError> {
+        let Ty::Nominal { symbol, .. } = self.ty_from_id(&expr.id)? else {
+            return Ok(None);
+        };
+
+        if let Some(methods) = self.types.catalog.instance_methods.get(&symbol)
+            && let Some(method) = methods.get(label)
+        {
+            return Ok(Some(*method));
+        }
+
+        Ok(None)
     }
 
     fn ty_from_id(&self, id: &NodeID) -> Result<Ty, IRError> {
@@ -845,7 +906,7 @@ pub mod tests {
         },
         label::Label,
         name::Name,
-        name_resolution::symbol::{GlobalId, Symbol, SynthesizedId},
+        name_resolution::symbol::{GlobalId, InstanceMethodId, Symbol, SynthesizedId},
         node_id::NodeID,
     };
 
@@ -1041,8 +1102,6 @@ pub mod tests {
         ",
         );
 
-        println!("{program}");
-
         assert_eq_diff!(
             *program
                 .functions
@@ -1055,8 +1114,13 @@ pub mod tests {
                 blocks: vec![BasicBlock {
                     id: BasicBlockId(0),
                     instructions: vec![
-                        Instruction::Ref {
+                        Instruction::ConstantInt {
                             dest: 1.into(),
+                            val: 123,
+                            meta: meta()
+                        },
+                        Instruction::Ref {
+                            dest: 2.into(),
                             ty: IrTy::Func(
                                 vec![IrTy::Record(vec![IrTy::Int]), IrTy::Int],
                                 IrTy::Record(vec![IrTy::Int]).into()
@@ -1066,11 +1130,6 @@ pub mod tests {
                                 "Foo_init".into()
                             ))
                         },
-                        Instruction::ConstantInt {
-                            dest: 2.into(),
-                            val: 123,
-                            meta: meta()
-                        },
                         Instruction::Record {
                             dest: 3.into(),
                             ty: IrTy::Record(vec![IrTy::Int]),
@@ -1079,15 +1138,12 @@ pub mod tests {
                         },
                         Instruction::Call {
                             dest: 0.into(),
-                            ty: IrTy::Func(
-                                vec![IrTy::Record(vec![IrTy::Int]), IrTy::Int],
-                                IrTy::Record(vec![IrTy::Int]).into(),
-                            ),
+                            ty: IrTy::Record(vec![IrTy::Int]),
                             callee: Value::Func(Name::Resolved(
                                 Symbol::from(SynthesizedId::from(1)),
                                 "Foo_init".into()
                             )),
-                            args: vec![Register(3).into(), Register(2).into()].into(),
+                            args: vec![Register(3).into(), Register(1).into()].into(),
                             meta: meta(),
                         },
                         Instruction::GetField {
@@ -1100,6 +1156,86 @@ pub mod tests {
                     ],
                     terminator: Terminator::Ret {
                         val: Value::Reg(4),
+                        ty: IrTy::Int
+                    }
+                }],
+            }
+        );
+    }
+
+    #[test]
+    fn lowers_struct_method() {
+        let program = lower(
+            "
+        struct Foo {
+            let bar: Int
+
+            func getBar() {
+                self.bar
+            }
+        }
+
+        Foo(bar: 123).getBar()
+        ",
+        );
+
+        assert_eq_diff!(
+            *program
+                .functions
+                .get(&SynthesizedId::from(0).into())
+                .unwrap(),
+            Function {
+                name: Name::Resolved(SynthesizedId::from(0).into(), "main".into()),
+                params: vec![].into(),
+                ty: IrTy::Func(vec![], IrTy::Int.into()),
+                blocks: vec![BasicBlock::<IrTy, Label> {
+                    id: BasicBlockId(0),
+                    instructions: vec![
+                        Instruction::ConstantInt {
+                            dest: 2.into(),
+                            val: 123,
+                            meta: meta()
+                        },
+                        Instruction::Ref {
+                            dest: 3.into(),
+                            ty: IrTy::Func(
+                                vec![IrTy::Record(vec![IrTy::Int]), IrTy::Int],
+                                IrTy::Record(vec![IrTy::Int]).into()
+                            ),
+                            val: Value::Func(Name::Resolved(
+                                SynthesizedId::from(1).into(),
+                                "Foo_init".into()
+                            ))
+                        },
+                        Instruction::Record {
+                            dest: 4.into(),
+                            ty: IrTy::Record(vec![IrTy::Int]),
+                            record: vec![Value::Uninit].into(),
+                            meta: meta()
+                        },
+                        Instruction::Call {
+                            dest: 1.into(),
+                            ty: IrTy::Record(vec![IrTy::Int]),
+                            callee: Value::Func(Name::Resolved(
+                                Symbol::from(SynthesizedId::from(1)),
+                                "Foo_init".into()
+                            )),
+                            args: vec![Register(4).into(), Register(2).into()].into(),
+                            meta: meta(),
+                        },
+                        Instruction::Call {
+                            dest: 0.into(),
+                            ty: IrTy::Int,
+                            callee: Value::Func(Name::Resolved(
+                                InstanceMethodId::from(1).into(),
+                                "getBar".into()
+                            )),
+                            args: vec![Register(1).into()].into(),
+                            meta: meta(),
+                        },
+                    ],
+                    terminator: Terminator::Ret {
+                        val: Value::Reg(0),
                         ty: IrTy::Int
                     }
                 }],
