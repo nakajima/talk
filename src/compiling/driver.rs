@@ -1,6 +1,6 @@
 use std::{io, path::PathBuf, rc::Rc};
 
-use rustc_hash::FxHashMap;
+use indexmap::IndexMap;
 
 use crate::{
     ast::{self, AST},
@@ -32,19 +32,19 @@ impl DriverPhase for Initial {}
 
 impl DriverPhase for Parsed {}
 pub struct Parsed {
-    pub asts: FxHashMap<Source, AST<ast::Parsed>>,
+    pub asts: IndexMap<Source, AST<ast::Parsed>>,
 }
 
-type Exports = FxHashMap<String, Symbol>;
+type Exports = IndexMap<String, Symbol>;
 
 impl DriverPhase for NameResolved {}
 pub struct NameResolved {
-    pub asts: FxHashMap<Source, AST<name_resolver::NameResolved>>,
+    pub asts: IndexMap<Source, AST<name_resolver::NameResolved>>,
 }
 
 impl DriverPhase for Typed {}
 pub struct Typed {
-    pub asts: FxHashMap<Source, AST<name_resolver::NameResolved>>,
+    pub asts: IndexMap<Source, AST<name_resolver::NameResolved>>,
     pub types: Types,
     pub exports: Exports,
 }
@@ -141,7 +141,7 @@ impl Driver {
     }
 
     pub fn parse(self) -> Result<Driver<Parsed>, CompileError> {
-        let mut asts: FxHashMap<Source, AST<_>> = FxHashMap::default();
+        let mut asts: IndexMap<Source, AST<_>> = IndexMap::default();
 
         for (i, file) in self.files.iter().enumerate() {
             let input = file.read()?;
@@ -181,7 +181,7 @@ impl Driver<NameResolved> {
         self.phase
             .asts
             .values()
-            .fold(FxHashMap::default(), |mut acc, ast| {
+            .fold(IndexMap::default(), |mut acc, ast| {
                 let root = ast.phase.scopes.get(&NodeID(FileID(0), 0)).unwrap();
                 for (string, sym) in root.types.iter() {
                     acc.insert(string.to_string(), *sym);
@@ -237,7 +237,6 @@ pub mod tests {
     use super::*;
     use crate::{
         compiling::module::{Module, ModuleId},
-        fxhashmap,
         name_resolution::symbol::{GlobalId, ProtocolId, Symbol, TypeId},
         node_id::NodeID,
         types::{ty::Ty, types_tests},
@@ -264,7 +263,7 @@ pub mod tests {
         let ast = typed
             .phase
             .asts
-            .get(&current_dir.join("test/fixtures/b.tlk").into())
+            .get(&Source::from(current_dir.join("test/fixtures/b.tlk")))
             .unwrap();
 
         assert_eq!(types_tests::tests::ty(1, ast, &typed.phase.types), Ty::Int);
@@ -317,7 +316,7 @@ pub mod tests {
         let module_a = Module {
             name: "A".into(),
             types: type_session_a,
-            exports: fxhashmap!(
+            exports: indexmap::indexmap!(
                 "P".into() => Symbol::Protocol(ProtocolId::from(1)),
                 "getRequired".into() => Symbol::Global(GlobalId::from(1))
             ),
@@ -377,7 +376,7 @@ pub mod tests {
         let module_a = Module {
             name: "A".into(),
             types: type_session_a,
-            exports: fxhashmap!("A".into() => Symbol::Type(TypeId::from(1))),
+            exports: indexmap::indexmap!("A".into() => Symbol::Type(TypeId::from(1))),
         };
 
         let mut module_environment = ModuleEnvironment::default();
@@ -429,7 +428,7 @@ pub mod tests {
                 .phase
                 .asts
                 .values()
-                .fold(FxHashMap::default(), |mut acc, ast| {
+                .fold(IndexMap::default(), |mut acc, ast| {
                     let root = ast.phase.scopes.get(&NodeID(FileID(0), 0)).unwrap();
                     for (string, sym) in root.types.iter() {
                         acc.insert(string.to_string(), *sym);

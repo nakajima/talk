@@ -62,7 +62,7 @@ impl<'a> TypeHeaderPass<'a> {
         raw
     }
 
-    pub fn drive_all(asts: &FxHashMap<Source, AST<NameResolved>>) -> Raw {
+    pub fn drive_all(asts: &IndexMap<Source, AST<NameResolved>>) -> Raw {
         let mut raw = Raw::default();
 
         for ast in asts.values() {

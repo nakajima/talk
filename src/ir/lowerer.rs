@@ -40,6 +40,7 @@ use crate::{
         type_session::{TypeEntry, Types},
     },
 };
+use indexmap::IndexMap;
 use rustc_hash::FxHashMap;
 use tracing::instrument;
 
@@ -104,7 +105,7 @@ pub(super) struct PolyFunction {
 
 // Lowers an AST with Types to a monomorphized IR
 pub struct Lowerer {
-    pub(super) asts: FxHashMap<Source, AST<NameResolved>>,
+    pub(super) asts: IndexMap<Source, AST<NameResolved>>,
     pub(super) types: Types,
     pub(super) functions: FxHashMap<Symbol, PolyFunction>,
     pub(super) current_function_stack: Vec<CurrentFunction>,
@@ -115,7 +116,7 @@ pub struct Lowerer {
 }
 
 impl Lowerer {
-    pub fn new(asts: FxHashMap<Source, AST<NameResolved>>, types: Types) -> Self {
+    pub fn new(asts: IndexMap<Source, AST<NameResolved>>, types: Types) -> Self {
         Self {
             asts,
             types,

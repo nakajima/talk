@@ -1,3 +1,4 @@
+use indexmap::IndexMap;
 use rustc_hash::FxHashMap;
 
 use crate::{name_resolution::symbol::Symbol, types::type_session::Types};
@@ -28,5 +29,5 @@ impl ModuleEnvironment {
 pub struct Module {
     pub name: String,
     pub types: Types,
-    pub exports: FxHashMap<String, Symbol>,
+    pub exports: IndexMap<String, Symbol>,
 }

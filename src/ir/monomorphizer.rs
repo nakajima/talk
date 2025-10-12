@@ -1,3 +1,4 @@
+use indexmap::IndexMap;
 use rustc_hash::FxHashMap;
 
 use crate::{
@@ -24,7 +25,7 @@ use crate::{
 
 #[allow(dead_code)]
 pub struct Monomorphizer {
-    asts: FxHashMap<Source, AST<NameResolved>>,
+    asts: IndexMap<Source, AST<NameResolved>>,
     types: Types,
     functions: FxHashMap<Symbol, PolyFunction>,
     needs_monomorphization: Vec<Name>,
