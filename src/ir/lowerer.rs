@@ -1,5 +1,8 @@
+use crate::formatter;
 use crate::ir::ir_ty::IrTy;
 use crate::ir::parse_instruction;
+use crate::label::Label;
+use crate::node_kinds::parameter::Parameter;
 use crate::types::scheme::Scheme;
 use crate::{
     ast::AST,
@@ -40,10 +43,19 @@ use crate::{
 use rustc_hash::FxHashMap;
 use tracing::instrument;
 
+enum LValue<F> {
+    Field {
+        base: Box<LValue<F>>,
+        field: F,
+        ty: Ty,
+    },
+    Variable(Symbol),
+}
+
 #[derive(Debug)]
 pub(super) struct CurrentFunction {
     current_block_idx: usize,
-    blocks: Vec<BasicBlock<Ty>>,
+    blocks: Vec<BasicBlock<Ty, Label>>,
     pub registers: RegisterAllocator,
 }
 
@@ -51,7 +63,7 @@ impl Default for CurrentFunction {
     fn default() -> Self {
         CurrentFunction {
             current_block_idx: 0,
-            blocks: vec![BasicBlock::<Ty> {
+            blocks: vec![BasicBlock::<Ty, Label> {
                 id: BasicBlockId(0),
                 instructions: Default::default(),
                 terminator: Terminator::Unreachable,
@@ -85,7 +97,7 @@ pub(super) struct PolyFunction {
     pub name: Name,
     pub _foralls: Vec<ForAll>,
     pub params: Vec<Value>,
-    pub blocks: Vec<BasicBlock<Ty>>,
+    pub blocks: Vec<BasicBlock<Ty, Label>>,
     pub ty: Ty,
 }
 
@@ -94,9 +106,10 @@ pub struct Lowerer {
     pub(super) asts: FxHashMap<Source, AST<NameResolved>>,
     pub(super) types: Types,
     pub(super) functions: FxHashMap<Symbol, PolyFunction>,
-    pub(super) current_functions: Vec<CurrentFunction>,
+    pub(super) current_function_stack: Vec<CurrentFunction>,
     pub(super) needs_monomorphization: Vec<Name>,
     pub(super) instantiations: FxHashMap<NodeID, FxHashMap<ForAll, Ty>>,
+
     bindings: FxHashMap<Symbol, Register>,
 }
 
@@ -106,7 +119,7 @@ impl Lowerer {
             asts,
             types,
             functions: Default::default(),
-            current_functions: Default::default(),
+            current_function_stack: Default::default(),
             needs_monomorphization: Default::default(),
             instantiations: Default::default(),
             bindings: Default::default(),
@@ -193,7 +206,7 @@ impl Lowerer {
             );
         }
 
-        self.current_functions.push(CurrentFunction::default());
+        self.current_function_stack.push(CurrentFunction::default());
 
         for ast in asts.values_mut() {
             for root in ast.roots.iter() {
@@ -227,8 +240,15 @@ impl Lowerer {
                 let bind = self.lower_pattern(lhs)?;
                 self.lower_expr(value, bind)?;
             }
-            DeclKind::Init { .. } => todo!(),
-            DeclKind::Property { .. } => todo!(),
+            DeclKind::Struct { body, .. } => {
+                for node in &body.body {
+                    self.lower_node(node)?;
+                }
+            }
+            DeclKind::Init { name, params, body } => {
+                self.lower_init(decl, name, params, body)?;
+            }
+            DeclKind::Property { .. } => (),
             DeclKind::Method { .. } => todo!(),
             DeclKind::Associated { .. } => todo!(),
             DeclKind::Func(..) => todo!(),
@@ -244,6 +264,68 @@ impl Lowerer {
         Ok(Value::Void)
     }
 
+    #[instrument(skip(self))]
+    fn lower_init(
+        &mut self,
+        decl: &Decl,
+        name: &Name,
+        params: &[Parameter],
+        body: &Block,
+    ) -> Result<Value, IRError> {
+        let Ty::Func(param_ty, box ret_ty) =
+            (match self.types.get_symbol(&name.symbol().unwrap()).unwrap() {
+                TypeEntry::Mono(ty) => ty.clone(),
+                TypeEntry::Poly(scheme) => scheme.ty.clone(),
+            })
+        else {
+            let meta = Default::default();
+            let formatter = formatter::Formatter::new(&meta);
+            unreachable!(
+                "id: {:?}, sym: {:?}, ty: {:?}, {:?}",
+                decl.id,
+                self.types.get_symbol(&name.symbol().unwrap()).unwrap(),
+                self.types.get(&decl.id).unwrap(),
+                formatter.format(&[Node::Decl(decl.clone())], 80)
+            );
+        };
+
+        self.current_function_stack.push(CurrentFunction::default());
+
+        let mut param_values = vec![];
+        for param in params.iter() {
+            let register = self.next_register();
+            param_values.push(Value::Reg(register.0));
+            self.bindings.insert(param.name.symbol().unwrap(), register);
+        }
+
+        let mut ret = Value::Void;
+        for node in body.body.iter() {
+            ret = self.lower_node(node)?;
+        }
+        self.push_terminator(Terminator::Ret {
+            val: ret,
+            ty: ret_ty.clone(),
+        });
+
+        let current_function = self
+            .current_function_stack
+            .pop()
+            .expect("did not get current function");
+
+        self.functions.insert(
+            name.symbol().unwrap(),
+            PolyFunction {
+                name: name.clone(),
+                params: param_values,
+                blocks: current_function.blocks,
+                _foralls: Default::default(),
+                ty: Ty::Func(param_ty.clone(), ret_ty.clone().into()),
+            },
+        );
+
+        Ok(Value::Void)
+    }
+
     #[instrument(skip(self, stmt), fields(stmt.id = %stmt.id))]
     fn lower_stmt(&mut self, stmt: &Stmt) -> Result<Value, IRError> {
         match &stmt.kind {
@@ -251,8 +333,97 @@ impl Lowerer {
             StmtKind::If(_expr, _block, _block1) => todo!(),
             StmtKind::Return(_expr) => todo!(),
             StmtKind::Break => todo!(),
-            StmtKind::Assignment(_expr, _expr1) => todo!(),
+            StmtKind::Assignment(lhs, rhs) => self.lower_assignment(lhs, rhs),
             StmtKind::Loop(_expr, _block) => todo!(),
+        }
+    }
+
+    #[instrument(skip(self, lhs, rhs), fields(lhs.id = %lhs.id, rhs.id = %rhs.id))]
+    fn lower_assignment(&mut self, lhs: &Expr, rhs: &Expr) -> Result<Value, IRError> {
+        println!("lower assignment: {lhs:?}");
+        let lvalue = self.lower_lvalue(lhs)?;
+        let value = self.lower_expr(rhs, Bind::Fresh)?;
+
+        self.emit_lvalue_store(lvalue, value)?;
+
+        Ok(Value::Void)
+    }
+
+    fn emit_load_lvalue(&mut self, lvalue: &LValue<Label>) -> Result<Register, IRError> {
+        match lvalue {
+            LValue::Variable(sym) => {
+                // Variable is already in a register
+                Ok(*self.bindings.get(sym).unwrap())
+            }
+            LValue::Field { base, field, ty } => {
+                // Recursively load base, then extract field
+                let base_val = self.emit_load_lvalue(base)?;
+                let dest = self.next_register();
+
+                self.push_instr(Instruction::GetField {
+                    dest,
+                    record: base_val,
+                    field: field.clone(),
+                    ty: ty.clone(),
+                    meta: vec![].into(),
+                });
+
+                Ok(dest)
+            }
+        }
+    }
+
+    fn emit_lvalue_store(&mut self, lvalue: LValue<Label>, value: Value) -> Result<(), IRError> {
+        match lvalue {
+            LValue::Variable(sym) => {
+                // Simple rebind
+                let reg = value.as_register()?;
+                self.bindings.insert(sym, reg);
+                Ok(())
+            }
+            LValue::Field {
+                box base,
+                field,
+                ty,
+            } => {
+                // This is the tricky part - need to rebuild the chain
+
+                // 1. Load the base (to get what we're inserting into)
+                let base_val = self.emit_load_lvalue(&base)?;
+
+                // 2. Insert the new value at this level
+                let dest = self.next_register();
+                self.push_instr(Instruction::SetField {
+                    dest,
+                    record: base_val,
+                    field: field.clone(),
+                    val: value,
+                    ty,
+                    meta: vec![].into(),
+                });
+
+                // 3. Recursively store the updated value back into base!
+                self.emit_lvalue_store(base, dest.into())?;
+
+                Ok(())
+            }
+        }
+    }
+
+    fn lower_lvalue(&mut self, expr: &Expr) -> Result<LValue<Label>, IRError> {
+        match &expr.kind {
+            ExprKind::Variable(name) => Ok(LValue::Variable(name.symbol().unwrap())),
+            ExprKind::Member(Some(box base), label, _span) => {
+                let base_lvalue = self.lower_lvalue(base)?;
+                let base_ty = self.ty_from_id(&base.id).expect("didn't get base ty");
+
+                Ok(LValue::Field {
+                    base: base_lvalue.into(),
+                    ty: self.ty_from_id(&expr.id)?,
+                    field: label.clone(),
+                })
+            }
+            _ => Err(IRError::InvalidAssignmentTarget(format!("{expr:?}"))),
         }
     }
 
@@ -310,7 +481,7 @@ impl Lowerer {
             ExprKind::Call {
                 box callee, args, ..
             } => self.lower_call(expr.id, callee, args, bind),
-            ExprKind::Member(..) => todo!(),
+            ExprKind::Member(member, label, ..) => self.lower_member(expr.id, member, label),
             ExprKind::Variable(name) => self.lower_variable(name),
             ExprKind::Constructor(..) => todo!(),
             ExprKind::If(..) => todo!(),
@@ -319,6 +490,17 @@ impl Lowerer {
             ExprKind::RowVariable(..) => todo!(),
             _ => unreachable!("cannot lower expr: {expr:?}"),
         }
+    }
+
+    #[instrument(skip(self, member))]
+    fn lower_member(
+        &mut self,
+        id: NodeID,
+        member: &Option<Box<Expr>>,
+        label: &Label,
+    ) -> Result<Value, IRError> {
+        println!("Types: {:#?}", self.types);
+        Ok(Value::Void)
     }
 
     #[instrument(skip(self))]
@@ -369,7 +551,7 @@ impl Lowerer {
                 string = string.replace("$?", &format!("%{}", dest.0));
             }
 
-            self.push_instr(parse_instruction::<IrTy>(&string).into());
+            self.push_instr(parse_instruction::<IrTy, Label>(&string).into());
 
             return Ok(dest.into());
         }
@@ -414,7 +596,7 @@ impl Lowerer {
         };
 
         let _s = tracing::trace_span!("pushing new current function");
-        self.current_functions.push(CurrentFunction::default());
+        self.current_function_stack.push(CurrentFunction::default());
 
         let mut params = vec![];
         for param in func.params.iter() {
@@ -433,7 +615,7 @@ impl Lowerer {
         });
 
         let current_function = self
-            .current_functions
+            .current_function_stack
             .pop()
             .expect("did not get current function");
         drop(_s);
@@ -459,8 +641,8 @@ impl Lowerer {
     }
 
     #[instrument(skip(self))]
-    fn push_instr(&mut self, instruction: Instruction<Ty>) {
-        let current_function = self.current_functions.last_mut().unwrap();
+    fn push_instr(&mut self, instruction: Instruction<Ty, Label>) {
+        let current_function = self.current_function_stack.last_mut().unwrap();
         current_function.blocks[current_function.current_block_idx]
             .instructions
             .push(instruction);
@@ -468,21 +650,46 @@ impl Lowerer {
 
     #[instrument(skip(self))]
     fn push_terminator(&mut self, terminator: Terminator<Ty>) {
-        let current_function = self.current_functions.last_mut().unwrap();
+        let current_function = self.current_function_stack.last_mut().unwrap();
         current_function.blocks[current_function.current_block_idx].terminator = terminator;
     }
 
     fn next_register(&mut self) -> Register {
-        let current_function = self.current_functions.last_mut().unwrap();
+        let current_function = self.current_function_stack.last_mut().unwrap();
         let register = current_function.registers.next();
         tracing::trace!("allocated register: {register}");
         register
+    }
+
+    fn get_field_index(&self, ty: &Ty, field_label: &Label) -> Result<u32, IRError> {
+        let (Ty::Record(row) | Ty::Nominal { row, .. }) = &ty else {
+            return Err(IRError::InvalidFieldAccess(format!("{ty:?}")));
+        };
+
+        let closed = row.close();
+        for (i, (label, _)) in (&closed).into_iter().enumerate() {
+            if label == field_label {
+                return Ok(i as u32);
+            }
+        }
+
+        Err(IRError::InvalidFieldAccess(format!(
+            "Field `{field_label:?}` not found in {ty:?}"
+        )))
     }
 
     fn ret(&mut self, bind: Bind) -> Register {
         match bind {
             Bind::Named { value, .. } => value,
             Bind::Fresh => self.next_register(),
+        }
+    }
+
+    fn ty_from_id(&self, id: &NodeID) -> Result<Ty, IRError> {
+        match self.types.get(id) {
+            Some(TypeEntry::Mono(ty)) => Ok(ty.clone()),
+            Some(TypeEntry::Poly(scheme)) => Ok(scheme.ty.clone()),
+            None => Err(IRError::TypeNotFound(*id)),
         }
     }
 }
@@ -523,15 +730,22 @@ pub mod tests {
             function::Function,
             instruction::{Instruction, InstructionMeta},
             ir_ty::IrTy,
+            list::List,
             lowerer::Lowerer,
             program::Program,
+            register::Register,
             terminator::Terminator,
             value::Value,
         },
+        label::Label,
         name::Name,
         name_resolution::symbol::{GlobalId, Symbol, SynthesizedId},
-        node_id::{FileID, NodeID},
+        node_id::NodeID,
     };
+
+    fn meta() -> List<InstructionMeta> {
+        vec![InstructionMeta::Source(NodeID::ANY)].into()
+    }
 
     pub fn lower(input: &str) -> Program {
         let driver = Driver::new_bare(vec![Source::from(input)], Default::default());
@@ -657,7 +871,7 @@ pub mod tests {
                 name: Name::Resolved(SynthesizedId::from(0).into(), "main".into()),
                 params: vec![].into(),
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
-                blocks: vec![BasicBlock {
+                blocks: vec![BasicBlock::<IrTy, Label> {
                     id: BasicBlockId(0),
                     instructions: vec![
                         Instruction::Ref {
@@ -671,7 +885,7 @@ pub mod tests {
                         Instruction::ConstantInt {
                             dest: 2.into(),
                             val: 123,
-                            meta: vec![InstructionMeta::Source(NodeID(FileID(0), 8))].into(),
+                            meta: meta(),
                         },
                         Instruction::Call {
                             dest: 1.into(),
@@ -681,7 +895,7 @@ pub mod tests {
                                 "foo".into()
                             )),
                             args: vec![Value::Reg(2)].into(),
-                            meta: vec![InstructionMeta::Source(NodeID(FileID(0), 10))].into(),
+                            meta: meta()
                         }
                     ],
                     terminator: Terminator::Ret {
@@ -709,6 +923,58 @@ pub mod tests {
                     }
                 }],
             }
+        );
+    }
+
+    #[test]
+    fn lowers_struct_init_and_member() {
+        let program = lower(
+            "
+        struct Foo { let bar: Int }
+        Foo(bar: 123).bar
+        ",
+        );
+
+        assert_eq_diff!(
+            program.functions,
+            fxhashmap!(Symbol::from(SynthesizedId::from(0)) => Function {
+                name: Name::Resolved(SynthesizedId::from(0).into(), "main".into()),
+                params: vec![].into(),
+                ty: IrTy::Func(vec![], IrTy::Int.into()),
+                blocks: vec![BasicBlock {
+                    id: BasicBlockId(0),
+                    instructions: vec![
+                        Instruction::ConstantInt { dest: 0.into(), val: 123, meta: meta() },
+                        Instruction::Record {
+                            dest: 1.into(),
+                            ty: IrTy::Record(vec![IrTy::Int]),
+                            record: vec![Value::Uninit].into(),
+                            meta: meta()
+                        },
+                        Instruction::Call {
+                            dest: 2.into(),
+                            ty: IrTy::Func(
+                                vec![IrTy::Record(vec![IrTy::Int])],
+                                IrTy::Record(vec![IrTy::Int]).into(),
+                            ),
+                            callee: Value::Func(Name::Resolved(Symbol::from(GlobalId::from(2)), "Foo_init".into())),
+                            args: vec![Register(0).into()].into(),
+                            meta: meta(),
+                        },
+                        Instruction::GetField {
+                            dest: 3.into(),
+                            ty: IrTy::Int,
+                            record: Register(1),
+                            field: Label::Named("bar".into()),
+                            meta: meta(),
+                        }
+                    ],
+                    terminator: Terminator::Ret {
+                        val: Value::Reg(0),
+                        ty: IrTy::Int
+                    }
+                }],
+            })
         );
     }
 

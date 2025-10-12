@@ -575,6 +575,22 @@ impl<'a> InferencePass<'a> {
                 self.session.insert_term(func.name.symbol().unwrap(), entry);
                 func_ty
             }
+            DeclKind::Init { params, body, .. } => {
+                for param in params {
+                    let ty = if let Some(type_annotation) = &param.type_annotation {
+                        self.infer_type_annotation(type_annotation, level, wants)
+                    } else {
+                        self.session.new_ty_meta_var(level)
+                    };
+
+                    self.session
+                        .insert_mono(param.name.symbol().unwrap(), ty.clone());
+                }
+
+                _ = self.infer_block(body, level, wants);
+
+                InferTy::Void
+            }
             DeclKind::Struct {
                 body,
                 name: Name::Resolved(symbol, name),

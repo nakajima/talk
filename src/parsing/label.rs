@@ -1,4 +1,4 @@
-use std::fmt::Display;
+use std::{convert::Infallible, fmt::Display, str::FromStr};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Label {
@@ -18,5 +18,17 @@ impl Display for Label {
             Self::Named(name) => write!(f, "{name}"),
             Self::Positional(i) => write!(f, "{i}"),
         }
+    }
+}
+
+impl FromStr for Label {
+    type Err = Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if let Ok(i) = str::parse::<usize>(s) {
+            return Ok(Label::Positional(i));
+        }
+
+        Ok(Label::Named(s.into()))
     }
 }

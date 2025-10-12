@@ -41,7 +41,7 @@ impl FromStr for InstructionMeta {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Instruction<T> {
+pub enum Instruction<T, F> {
     #[doc = "$dest = int $val $meta"]
     ConstantInt {
         dest: Register,
@@ -96,14 +96,77 @@ pub enum Instruction<T> {
         args: List<Value>,
         meta: List<InstructionMeta>,
     },
+    #[doc = "$dest = record $ty $record $meta"]
+    Record {
+        dest: Register,
+        ty: T,
+        record: List<Value>,
+        meta: List<InstructionMeta>,
+    },
+    #[doc = "$dest = getfield $ty $record $field $meta"]
+    GetField {
+        dest: Register,
+        ty: T,
+        record: Register,
+        field: F,
+        meta: List<InstructionMeta>,
+    },
+    #[doc = "$dest = setfield $ty $record $field $val $meta"]
+    SetField {
+        dest: Register,
+        val: Value,
+        ty: T,
+        record: Register,
+        field: F,
+        meta: List<InstructionMeta>,
+    },
 }
 
-impl<T> Instruction<T> {
-    pub fn map_type<U>(self, mut map: impl FnMut(T) -> U) -> Instruction<U> {
+impl<T, F> Instruction<T, F> {
+    pub fn map_type<U>(self, mut map: impl FnMut(T) -> U) -> Instruction<U, F> {
         match self {
             Instruction::ConstantInt { dest, val, meta } => {
                 Instruction::ConstantInt { dest, val, meta }
             }
+            Instruction::Record {
+                dest,
+                ty,
+                record,
+                meta,
+            } => Instruction::Record {
+                dest,
+                ty: map(ty),
+                record,
+                meta,
+            },
+            Instruction::GetField {
+                dest,
+                ty,
+                record,
+                field,
+                meta,
+            } => Instruction::GetField {
+                dest,
+                ty: map(ty),
+                record,
+                field,
+                meta,
+            },
+            Instruction::SetField {
+                dest,
+                val,
+                ty,
+                record,
+                field,
+                meta,
+            } => Instruction::SetField {
+                dest,
+                val,
+                ty: map(ty),
+                record,
+                field,
+                meta,
+            },
             Instruction::ConstantFloat { dest, val, meta } => {
                 Instruction::ConstantFloat { dest, val, meta }
             }
@@ -164,7 +227,6 @@ impl<T> Instruction<T> {
                 b,
                 meta,
             },
-
             Instruction::Call {
                 dest,
                 ty,
@@ -183,8 +245,8 @@ impl<T> Instruction<T> {
 }
 
 #[allow(clippy::from_over_into)]
-impl Into<Instruction<Ty>> for Instruction<IrTy> {
-    fn into(self) -> Instruction<Ty> {
+impl<F> Into<Instruction<Ty, F>> for Instruction<IrTy, F> {
+    fn into(self) -> Instruction<Ty, F> {
         self.map_type(Into::into)
     }
 }
@@ -222,14 +284,18 @@ where
 
 #[cfg(test)]
 pub mod tests {
-    use crate::ir::{
-        instruction::Instruction, ir_ty::IrTy, parse_instruction, register::Register, value::Value,
+    use crate::{
+        ir::{
+            instruction::Instruction, ir_ty::IrTy, parse_instruction, register::Register,
+            value::Value,
+        },
+        label::Label,
     };
 
     #[test]
     fn parses_constant_int() {
         assert_eq!(
-            parse_instruction::<IrTy>("%1 = int 123"),
+            parse_instruction::<IrTy, Label>("%1 = int 123"),
             Instruction::ConstantInt {
                 dest: Register(1),
                 val: 123,
@@ -241,7 +307,7 @@ pub mod tests {
     #[test]
     fn parses_constant_float() {
         assert_eq!(
-            parse_instruction::<IrTy>("%1 = float 1.23"),
+            parse_instruction::<IrTy, Label>("%1 = float 1.23"),
             Instruction::ConstantFloat {
                 dest: Register(1),
                 val: 1.23,
@@ -253,7 +319,7 @@ pub mod tests {
     #[test]
     fn parses_add() {
         assert_eq!(
-            parse_instruction::<IrTy>("%1 = add int %2 %3"),
+            parse_instruction::<IrTy, Label>("%1 = add int %2 %3"),
             Instruction::Add {
                 dest: 1.into(),
                 ty: IrTy::Int,
@@ -267,7 +333,7 @@ pub mod tests {
     #[test]
     fn parses_sub() {
         assert_eq!(
-            parse_instruction::<IrTy>("%1 = sub int %2 %3"),
+            parse_instruction::<IrTy, Label>("%1 = sub int %2 %3"),
             Instruction::Sub {
                 dest: 1.into(),
                 ty: IrTy::Int,
@@ -281,7 +347,7 @@ pub mod tests {
     #[test]
     fn parses_mul() {
         assert_eq!(
-            parse_instruction::<IrTy>("%1 = mul int %2 %3"),
+            parse_instruction::<IrTy, Label>("%1 = mul int %2 %3"),
             Instruction::Mul {
                 dest: 1.into(),
                 ty: IrTy::Int,
@@ -295,7 +361,7 @@ pub mod tests {
     #[test]
     fn parses_div() {
         assert_eq!(
-            parse_instruction::<IrTy>("%1 = div int %2 %3"),
+            parse_instruction::<IrTy, Label>("%1 = div int %2 %3"),
             Instruction::Div {
                 dest: 1.into(),
                 ty: IrTy::Int,

@@ -11,6 +11,7 @@ use crate::{
         lowerer::{Lowerer, PolyFunction},
         terminator::Terminator,
     },
+    label::Label,
     name::Name,
     name_resolution::{name_resolver::NameResolved, symbol::Symbol},
     node_id::NodeID,
@@ -37,15 +38,15 @@ impl Monomorphizer {
         }
     }
 
-    pub fn monomorphize(&mut self) -> FxHashMap<Symbol, Function<IrTy>> {
-        let mut result = FxHashMap::<Symbol, Function<IrTy>>::default();
+    pub fn monomorphize(&mut self) -> FxHashMap<Symbol, Function<IrTy, Label>> {
+        let mut result = FxHashMap::<Symbol, Function<IrTy, Label>>::default();
         for (name, func) in self.functions.clone() {
             result.insert(name, self.monomorphize_func(func));
         }
         result
     }
 
-    fn monomorphize_func(&mut self, func: PolyFunction) -> Function<IrTy> {
+    fn monomorphize_func(&mut self, func: PolyFunction) -> Function<IrTy, Label> {
         Function {
             name: func.name,
             ty: self.monomorphize_ty(func.ty),
@@ -58,7 +59,7 @@ impl Monomorphizer {
         }
     }
 
-    fn monomorphize_block(&mut self, block: BasicBlock<Ty>) -> BasicBlock<IrTy> {
+    fn monomorphize_block(&mut self, block: BasicBlock<Ty, Label>) -> BasicBlock<IrTy, Label> {
         BasicBlock {
             id: block.id,
             instructions: block
@@ -80,7 +81,10 @@ impl Monomorphizer {
         }
     }
 
-    fn monomorphize_instruction(&mut self, instruction: Instruction<Ty>) -> Instruction<IrTy> {
+    fn monomorphize_instruction(
+        &mut self,
+        instruction: Instruction<Ty, Label>,
+    ) -> Instruction<IrTy, Label> {
         instruction.map_type(|ty| self.monomorphize_ty(ty))
     }
 
@@ -106,7 +110,12 @@ impl Monomorphizer {
             ),
             Ty::Tuple(..) => todo!(),
             Ty::Record(..) => todo!(),
-            Ty::Nominal { .. } => todo!(),
+            Ty::Nominal { row, .. } => IrTy::Record(
+                row.close()
+                    .values()
+                    .map(|v| self.monomorphize_ty(v.clone()))
+                    .collect::<Vec<_>>(),
+            ),
         }
     }
 }

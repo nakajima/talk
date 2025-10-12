@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 
+use indexmap::IndexMap;
+
 use crate::{
     compiling::module::ModuleId,
     label::Label,
@@ -33,7 +35,7 @@ impl From<u32> for RowParamId {
     }
 }
 
-pub type ClosedRow<T> = BTreeMap<Label, T>;
+pub type ClosedRow<T> = IndexMap<Label, T>;
 
 // TODO: Add Level to Var once we support open rows
 #[derive(PartialEq, Eq, Hash, Clone)]

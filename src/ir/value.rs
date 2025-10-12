@@ -1,6 +1,9 @@
 use std::str::FromStr;
 
-use crate::{ir::ir_error::IRError, name::Name};
+use crate::{
+    ir::{ir_error::IRError, register::Register},
+    name::Name,
+};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
@@ -9,6 +12,19 @@ pub enum Value {
     Float(f64),
     Func(Name),
     Void,
+    Uninit,
+}
+
+impl Value {
+    pub fn as_register(&self) -> Result<Register, IRError> {
+        if let Value::Reg(i) = self {
+            return Ok(Register(*i));
+        }
+
+        return Err(IRError::InvalidValueConversion(format!(
+            "Cannot convert {self:?} to register"
+        )));
+    }
 }
 
 impl FromStr for Value {
@@ -45,6 +61,7 @@ impl std::fmt::Display for Value {
             Value::Float(i) => write!(f, "{i}"),
             Value::Func(name) => write!(f, "@{}", name.name_str()),
             Value::Void => write!(f, "void"),
+            Value::Uninit => write!(f, "uninit"),
         }
     }
 }

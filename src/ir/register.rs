@@ -5,6 +5,10 @@ use crate::ir::{ir_error::IRError, value::Value};
 #[derive(Debug, Clone, Copy, PartialEq, Hash, Eq)]
 pub struct Register(pub u32);
 
+impl Register {
+    pub const DROP: Register = Register(u32::MAX);
+}
+
 impl From<u32> for Register {
     fn from(value: u32) -> Self {
         Register(value)

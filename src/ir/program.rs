@@ -2,12 +2,13 @@ use rustc_hash::FxHashMap;
 
 use crate::{
     ir::{function::Function, ir_ty::IrTy},
+    label::Label,
     name_resolution::symbol::Symbol,
 };
 
 #[derive(Debug, Default, PartialEq)]
 pub struct Program {
-    pub functions: FxHashMap<Symbol, Function<IrTy>>,
+    pub functions: FxHashMap<Symbol, Function<IrTy, Label>>,
 }
 
 impl std::fmt::Display for Program {

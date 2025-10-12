@@ -944,7 +944,7 @@ pub mod tests {
         let mut resolved = resolve(code);
         let modules = ModuleEnvironment::default();
         let mut session = TypeSession::new(Rc::new(modules));
-        let raw = TypeHeaderPass::drive(&mut session, &resolved);
+        let raw = TypeHeaderPass::drive(&resolved);
         _ = TypeResolvePass::drive(&mut resolved, &mut session, raw);
         Ok((resolved, session))
     }

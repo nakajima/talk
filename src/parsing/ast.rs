@@ -31,6 +31,7 @@ pub struct AST<Phase: ASTPhase = NewAST> {
     pub meta: NodeMetaStorage,
     pub phase: Phase,
     pub node_ids: IDGenerator,
+    pub synthsized_ids: IDGenerator,
     pub file_id: FileID,
 }
 

@@ -6,16 +6,17 @@ use crate::{
 };
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Function<T: Debug + Display> {
+pub struct Function<T: Debug + Display, F: Debug + Display> {
     pub name: Name,
     pub params: List<Value>,
-    pub blocks: Vec<BasicBlock<T>>,
+    pub blocks: Vec<BasicBlock<T, F>>,
     pub ty: IrTy,
 }
 
-impl<T> Display for Function<T>
+impl<T, F> Display for Function<T, F>
 where
     T: Display + Debug,
+    F: Display + Debug,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut parts = vec![];

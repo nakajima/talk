@@ -7,7 +7,6 @@ use tracing::instrument;
 use crate::{
     ast::AST,
     compiling::module::{ModuleEnvironment, ModuleId},
-    id_generator::IDGenerator,
     label::Label,
     name::Name,
     name_resolution::{
@@ -111,7 +110,6 @@ pub struct ProtocolBound {
 pub struct TypeSession {
     pub types_by_node: FxHashMap<NodeID, InferTy>,
     pub(super) vars: Vars,
-    pub(super) synthsized_ids: IDGenerator,
     term_env: TermEnv,
     pub(super) meta_levels: FxHashMap<Meta, Level>,
     pub(super) skolem_map: FxHashMap<InferTy, InferTy>,
@@ -164,7 +162,6 @@ impl TypeSession {
 
         TypeSession {
             vars: Default::default(),
-            synthsized_ids: Default::default(),
             skolem_map: Default::default(),
             meta_levels: Default::default(),
             term_env,
@@ -277,7 +274,7 @@ impl TypeSession {
     pub fn drive(ast: &mut AST<NameResolved>) -> TypeSession {
         let modules = ModuleEnvironment::default();
         let mut session = TypeSession::new(Rc::new(modules));
-        let raw = TypeHeaderPass::drive(&mut session, ast);
+        let raw = TypeHeaderPass::drive(ast);
         let _headers = TypeResolvePass::drive(ast, &mut session, raw);
         let mut scc = SCCResolved::default();
         DependenciesPass::drive(&mut session, ast, &mut scc);

@@ -214,10 +214,12 @@ fn generate_from_str_impl(instr_enum: &syn::ItemEnum) -> proc_macro2::TokenStrea
             non_upper_case_globals,
             clippy::all
         )]
-        impl<T> FromStr for crate::ir::#enum_ident<T>
+        impl<T, F> FromStr for crate::ir::#enum_ident<T, F>
         where
             T: FromStr,
+            F: FromStr,
             <T as FromStr>::Err: std::fmt::Display,
+            <F as FromStr>::Err: std::fmt::Display,
             crate::ir::register::Register: FromStr,
             <crate::ir::register::Register as FromStr>::Err: std::fmt::Display,
             crate::ir::value::Value: FromStr,
@@ -245,10 +247,12 @@ fn generate_from_str_impl(instr_enum: &syn::ItemEnum) -> proc_macro2::TokenStrea
             non_upper_case_globals,
             clippy::all
         )]
-        pub fn parse_instruction<T>(line: &str) -> crate::ir::#enum_ident<T>
+        pub fn parse_instruction<T, F>(line: &str) -> crate::ir::#enum_ident<T, F>
         where
             T: FromStr,
+            F: FromStr,
             <T as FromStr>::Err: std::fmt::Display,
+            <F as FromStr>::Err: std::fmt::Display,
             crate::ir::register::Register: FromStr,
             <crate::ir::register::Register as FromStr>::Err: std::fmt::Display,
             crate::ir::value::Value: FromStr,
@@ -330,9 +334,10 @@ fn generate_display_impl(instr_enum: &syn::ItemEnum) -> proc_macro2::TokenStream
     }
 
     quote! {
-        impl<T> std::fmt::Display for crate::ir::#enum_ident<T>
+        impl<T, F> std::fmt::Display for crate::ir::#enum_ident<T, F>
         where
             T: std::fmt::Display,
+            F: std::fmt::Display,
             crate::ir::register::Register: std::fmt::Display,
             crate::ir::value::Value: std::fmt::Display,
             crate::ir::instruction::InstructionMeta: std::fmt::Display,

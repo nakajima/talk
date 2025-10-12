@@ -9,13 +9,14 @@ pub mod tests {
         ast::AST,
         compiling::module::{ModuleEnvironment, ModuleId},
         diagnostic::{AnyDiagnostic, Diagnostic},
+        label::Label,
         name::Name,
         name_resolution::{
             name_resolver::{NameResolved, NameResolver, NameResolverError},
             symbol::{
                 AssociatedTypeId, BuiltinId, DeclaredLocalId, GlobalId, InstanceMethodId,
-                ParamLocalId, PropertyId, ProtocolId, StaticMethodId, Symbol, TypeId,
-                TypeParameterId, VariantId,
+                ParamLocalId, PropertyId, ProtocolId, StaticMethodId, Symbol, SynthesizedId,
+                TypeId, TypeParameterId, VariantId,
             },
         },
         node::Node,
@@ -490,14 +491,31 @@ pub mod tests {
     #[test]
     fn resolves_struct() {
         let resolved = resolve("struct Person {}");
-        assert_eq!(
+        assert_eq_diff!(
             *resolved.roots[0].as_decl(),
             any_decl!(DeclKind::Struct {
                 name: Name::Resolved(TypeId::from(1).into(), "Person".into()),
                 name_span: Span::ANY,
                 generics: vec![],
                 conformances: vec![],
-                body: any_block!(vec![])
+                body: any_block!(vec![
+                    any_decl!(DeclKind::Init {
+                        name: Name::Resolved(SynthesizedId::from(1).into(), "init".into()),
+                        params: vec![param!(
+                            ParamLocalId(2),
+                            "self",
+                            annotation!(TypeAnnotationKind::SelfType(Name::Resolved(
+                                TypeId::from(1).into(),
+                                "Self".into()
+                            )))
+                        )],
+                        body: any_block!(vec![any_expr_stmt!(ExprKind::Variable(Name::Resolved(
+                            ParamLocalId(2).into(),
+                            "self".into()
+                        )))])
+                    })
+                    .into()
+                ])
             })
         )
     }
@@ -511,24 +529,64 @@ pub mod tests {
         }
         ",
         );
-        assert_eq!(
+        assert_eq_diff!(
             *resolved.roots[0].as_decl(),
             any_decl!(DeclKind::Struct {
                 name: Name::Resolved(TypeId::from(1).into(), "Person".into()),
                 name_span: Span::ANY,
                 generics: vec![],
                 conformances: vec![],
-                body: any_block!(vec![Node::Decl(any_decl!(DeclKind::Property {
-                    name: Name::Resolved(Symbol::Property(PropertyId::from(1)), "me".into()),
-                    name_span: Span::ANY,
-                    is_static: false,
-                    type_annotation: Some(annotation!(TypeAnnotationKind::Nominal {
-                        name: Name::Resolved(TypeId::from(1).into(), "Person".into()),
+                body: any_block!(vec![
+                    any_decl!(DeclKind::Init {
+                        name: Name::Resolved(SynthesizedId::from(1).into(), "init".into()),
+                        params: vec![
+                            param!(
+                                ParamLocalId(3),
+                                "self",
+                                annotation!(TypeAnnotationKind::SelfType(Name::Resolved(
+                                    TypeId::from(1).into(),
+                                    "Self".into()
+                                )))
+                            ),
+                            param!(
+                                ParamLocalId(4),
+                                "me",
+                                annotation!(TypeAnnotationKind::Nominal {
+                                    name: Name::Resolved(TypeId::from(1).into(), "Person".into()),
+                                    name_span: Span::ANY,
+                                    generics: vec![],
+                                })
+                            )
+                        ],
+                        body: any_block!(vec![
+                            any_stmt!(StmtKind::Assignment(
+                                any_expr!(ExprKind::Member(
+                                    Some(variable!(ParamLocalId(3), "self").into()),
+                                    Label::Named("me".into()),
+                                    Span::ANY
+                                )),
+                                variable!(ParamLocalId(4), "me")
+                            ))
+                            .into(),
+                            any_expr_stmt!(ExprKind::Variable(Name::Resolved(
+                                ParamLocalId(3).into(),
+                                "self".into()
+                            )))
+                        ])
+                    })
+                    .into(),
+                    Node::Decl(any_decl!(DeclKind::Property {
+                        name: Name::Resolved(Symbol::Property(PropertyId::from(1)), "me".into()),
                         name_span: Span::ANY,
-                        generics: vec![]
-                    })),
-                    default_value: None
-                }))])
+                        is_static: false,
+                        type_annotation: Some(annotation!(TypeAnnotationKind::Nominal {
+                            name: Name::Resolved(TypeId::from(1).into(), "Person".into()),
+                            name_span: Span::ANY,
+                            generics: vec![]
+                        })),
+                        default_value: None
+                    }))
+                ])
             })
         )
     }
@@ -588,17 +646,60 @@ pub mod tests {
                     span: Span::ANY
                 }],
                 conformances: vec![],
-                body: any_block!(vec![Node::Decl(any_decl!(DeclKind::Property {
-                    name: Name::Resolved(Symbol::Property(PropertyId::from(1)), "me".into()),
-                    name_span: Span::ANY,
-                    is_static: false,
-                    type_annotation: Some(annotation!(TypeAnnotationKind::Nominal {
-                        name: Name::Resolved(Symbol::TypeParameter(TypeParameterId(1)), "T".into()),
+                body: any_block!(vec![
+                    any_decl!(DeclKind::Init {
+                        name: Name::Resolved(SynthesizedId::from(1).into(), "init".into()),
+                        params: vec![
+                            param!(
+                                ParamLocalId(3),
+                                "self",
+                                annotation!(TypeAnnotationKind::SelfType(Name::Resolved(
+                                    TypeId::from(1).into(),
+                                    "Self".into()
+                                )))
+                            ),
+                            param!(
+                                ParamLocalId(4),
+                                "me",
+                                annotation!(TypeAnnotationKind::Nominal {
+                                    name: Name::Resolved(TypeParameterId(1).into(), "T".into()),
+                                    name_span: Span::ANY,
+                                    generics: vec![],
+                                })
+                            )
+                        ],
+                        body: any_block!(vec![
+                            any_stmt!(StmtKind::Assignment(
+                                any_expr!(ExprKind::Member(
+                                    Some(variable!(ParamLocalId(3), "self").into()),
+                                    Label::Named("me".into()),
+                                    Span::ANY
+                                )),
+                                variable!(ParamLocalId(4), "me")
+                            ))
+                            .into(),
+                            any_expr_stmt!(ExprKind::Variable(Name::Resolved(
+                                ParamLocalId(3).into(),
+                                "self".into()
+                            )))
+                        ])
+                    })
+                    .into(),
+                    Node::Decl(any_decl!(DeclKind::Property {
+                        name: Name::Resolved(Symbol::Property(PropertyId::from(1)), "me".into()),
                         name_span: Span::ANY,
-                        generics: vec![]
-                    })),
-                    default_value: None
-                }))])
+                        is_static: false,
+                        type_annotation: Some(annotation!(TypeAnnotationKind::Nominal {
+                            name: Name::Resolved(
+                                Symbol::TypeParameter(TypeParameterId(1)),
+                                "T".into()
+                            ),
+                            name_span: Span::ANY,
+                            generics: vec![]
+                        })),
+                        default_value: None
+                    }))
+                ])
             })
         )
     }
@@ -618,6 +719,22 @@ pub mod tests {
                 generics: vec![],
                 conformances: vec![],
                 body: any_block!(vec![
+                    any_decl!(DeclKind::Init {
+                        name: Name::Resolved(SynthesizedId::from(1).into(), "init".into()),
+                        params: vec![param!(
+                            ParamLocalId(2),
+                            "self",
+                            annotation!(TypeAnnotationKind::SelfType(Name::Resolved(
+                                TypeId::from(1).into(),
+                                "Self".into()
+                            )))
+                        )],
+                        body: any_block!(vec![any_expr_stmt!(ExprKind::Variable(Name::Resolved(
+                            ParamLocalId(2).into(),
+                            "self".into()
+                        )))])
+                    })
+                    .into(),
                     any_decl!(DeclKind::Method {
                         func: Box::new(Func {
                             id: NodeID::ANY,
@@ -661,6 +778,22 @@ pub mod tests {
                 generics: vec![],
                 conformances: vec![],
                 body: any_block!(vec![
+                    any_decl!(DeclKind::Init {
+                        name: Name::Resolved(SynthesizedId::from(1).into(), "init".into()),
+                        params: vec![param!(
+                            ParamLocalId(4),
+                            "self",
+                            annotation!(TypeAnnotationKind::SelfType(Name::Resolved(
+                                TypeId::from(1).into(),
+                                "Self".into()
+                            )))
+                        )],
+                        body: any_block!(vec![any_expr_stmt!(ExprKind::Variable(Name::Resolved(
+                            ParamLocalId(4).into(),
+                            "self".into()
+                        )))])
+                    })
+                    .into(),
                     any_decl!(DeclKind::Method {
                         func: Box::new(Func {
                             id: NodeID::ANY,

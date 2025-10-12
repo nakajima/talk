@@ -146,7 +146,7 @@ impl NameResolver {
         {
             // One declarer per AST so the single &mut self borrow ends after each AST.
             for ast in &mut asts {
-                let mut declarer = DeclDeclarer::new(self);
+                let mut declarer = DeclDeclarer::new(self, &mut ast.node_ids);
                 for root in &mut ast.roots {
                     root.drive_mut(&mut declarer);
                 }
@@ -167,6 +167,7 @@ impl NameResolver {
                 meta,
                 file_id,
                 node_ids,
+                synthsized_ids,
                 ..
             } = ast;
 
@@ -190,6 +191,7 @@ impl NameResolver {
                 phase: std::mem::take(&mut self.phase),
                 node_ids,
                 file_id,
+                synthsized_ids,
             });
         }
 
@@ -280,7 +282,7 @@ impl NameResolver {
         let scope = self
             .scopes
             .get_mut(&self.current_scope_id.expect("no scope to declare in"))
-            .expect("scope not found");
+            .unwrap_or_else(|| panic!("scope not found: {:?}", self.current_scope_id));
 
         let module_id = self.current_module_id;
         let symbol = match kind {

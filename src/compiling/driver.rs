@@ -198,7 +198,7 @@ impl Driver<NameResolved> {
     pub fn typecheck(mut self) -> Result<Driver<Typed>, CompileError> {
         let mut type_session = TypeSession::new(self.config.modules.clone());
 
-        let raw = TypeHeaderPass::drive_all(&mut type_session, &self.phase.asts);
+        let raw = TypeHeaderPass::drive_all(&self.phase.asts);
 
         for ast in self.phase.asts.values_mut() {
             // TODO: do a drive_all for resolve pass

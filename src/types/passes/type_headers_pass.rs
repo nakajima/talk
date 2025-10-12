@@ -1,12 +1,9 @@
 use crate::{
     ast::AST,
-    compiling::{driver::Source, module::ModuleId},
+    compiling::driver::Source,
     label::Label,
     name::Name,
-    name_resolution::{
-        name_resolver::NameResolved,
-        symbol::{Symbol, SynthesizedId},
-    },
+    name_resolution::{name_resolver::NameResolved, symbol::Symbol},
     node::Node,
     node_id::NodeID,
     node_kinds::{
@@ -18,12 +15,11 @@ use crate::{
         generic_decl::GenericDecl,
         type_annotation::{TypeAnnotation, TypeAnnotationKind},
     },
-    span::Span,
     types::{
         fields::{Associated, Initializer, Method, MethodRequirement, Property, Variant},
         kind::Kind,
         type_catalog::ConformanceStub,
-        type_session::{ASTTyRepr, Raw, TypeDef, TypeDefKind, TypeExtension, TypeSession},
+        type_session::{ASTTyRepr, Raw, TypeDef, TypeDefKind, TypeExtension},
     },
 };
 use derive_visitor::{Drive, Visitor};
@@ -43,18 +39,16 @@ pub fn arrow_n(arg: Kind, n: usize, ret: Kind) -> Kind {
 #[visitor(Decl, Expr(enter), TypeAnnotation(enter))]
 pub struct TypeHeaderPass<'a> {
     type_stack: Vec<Symbol>,
-    session: &'a mut TypeSession,
     raw: &'a mut Raw,
     annotations: FxHashMap<NodeID, ASTTyRepr>,
 }
 
 impl<'a> TypeHeaderPass<'a> {
-    pub fn drive(session: &'a mut TypeSession, ast: &AST<NameResolved>) -> Raw {
+    pub fn drive(ast: &AST<NameResolved>) -> Raw {
         let mut raw = Raw::default();
 
         let mut instance = TypeHeaderPass {
             type_stack: Default::default(),
-            session,
             raw: &mut raw,
             annotations: Default::default(),
         };
@@ -68,14 +62,11 @@ impl<'a> TypeHeaderPass<'a> {
         raw
     }
 
-    pub fn drive_all(
-        session: &mut TypeSession,
-        asts: &FxHashMap<Source, AST<NameResolved>>,
-    ) -> Raw {
+    pub fn drive_all(asts: &FxHashMap<Source, AST<NameResolved>>) -> Raw {
         let mut raw = Raw::default();
 
         for ast in asts.values() {
-            let file_raw = TypeHeaderPass::drive(session, ast);
+            let file_raw = TypeHeaderPass::drive(ast);
             raw.type_constructors.extend(file_raw.type_constructors);
             raw.protocols.extend(file_raw.protocols);
             raw.annotations.extend(file_raw.annotations);
@@ -233,7 +224,7 @@ impl<'a> TypeHeaderPass<'a> {
                         .collect::<IndexMap<Name, ASTTyRepr>>(),
                 );
 
-                self.collect_fields(name, decl.id, decl.span, TypeDefKind::Struct, body);
+                self.collect_fields(name, decl.id, body);
                 self.raw.type_constructors.insert(
                     *sym,
                     TypeDef {
@@ -259,7 +250,7 @@ impl<'a> TypeHeaderPass<'a> {
                 }
 
                 self.type_stack.push(*sym);
-                self.collect_fields(name, decl.id, decl.span, TypeDefKind::Extension, body);
+                self.collect_fields(name, decl.id, body);
 
                 self.raw
                     .conformances
@@ -288,7 +279,7 @@ impl<'a> TypeHeaderPass<'a> {
                 }
 
                 self.type_stack.push(*sym);
-                self.collect_fields(name, decl.id, decl.span, TypeDefKind::Extension, body);
+                self.collect_fields(name, decl.id, body);
 
                 self.raw
                     .conformances
@@ -318,7 +309,7 @@ impl<'a> TypeHeaderPass<'a> {
                 }
 
                 self.type_stack.push(*sym);
-                self.collect_fields(name, decl.id, decl.span, TypeDefKind::Protocol, body);
+                self.collect_fields(name, decl.id, body);
 
                 self.raw
                     .conformances
@@ -359,7 +350,7 @@ impl<'a> TypeHeaderPass<'a> {
                 }
 
                 self.type_stack.push(*sym);
-                self.collect_fields(name, decl.id, decl.span, TypeDefKind::Enum, body);
+                self.collect_fields(name, decl.id, body);
 
                 self.raw
                     .conformances
@@ -477,14 +468,7 @@ impl<'a> TypeHeaderPass<'a> {
             .collect()
     }
 
-    fn collect_fields(
-        &mut self,
-        type_name: &Name,
-        id: NodeID,
-        span: Span,
-        type_kind: TypeDefKind,
-        body: &[Node],
-    ) {
+    fn collect_fields(&mut self, type_name: &Name, id: NodeID, body: &[Node]) {
         // Collect properties
         let mut properties: IndexMap<Label, Property> = Default::default();
         let mut instance_methods: IndexMap<Label, Method> = Default::default();
@@ -681,40 +665,40 @@ impl<'a> TypeHeaderPass<'a> {
             };
         }
 
-        if type_kind == TypeDefKind::Struct && initializers.is_empty() {
-            let Name::Resolved(Symbol::Type(type_id), _) = &type_name else {
-                unreachable!("didn't resolve type");
-            };
+        // if type_kind == TypeDefKind::Struct && initializers.is_empty() {
+        //     let Name::Resolved(Symbol::Type(type_id), _) = &type_name else {
+        //         unreachable!("didn't resolve type");
+        //     };
 
-            // If we don't have an initializer, synthesize one.
-            let mut params: Vec<ASTTyRepr> = properties
-                .values()
-                .filter_map(|p| {
-                    if p.is_static {
-                        None
-                    } else {
-                        Some(p.ty_repr.clone())
-                    }
-                })
-                .collect();
+        //     // If we don't have an initializer, synthesize one.
+        //     let mut params: Vec<ASTTyRepr> = properties
+        //         .values()
+        //         .filter_map(|p| {
+        //             if p.is_static {
+        //                 None
+        //             } else {
+        //                 Some(p.ty_repr.clone())
+        //             }
+        //         })
+        //         .collect();
 
-            // At this point, we've already prepend `self` to param lists so we need to do so here as well
-            params.insert(0, ASTTyRepr::SelfType(type_name.clone(), id, span));
+        //     // At this point, we've already prepend `self` to param lists so we need to do so here as well
+        //     params.insert(0, ASTTyRepr::SelfType(type_name.clone(), id, span));
 
-            let sym = Symbol::Synthesized(SynthesizedId::new(
-                ModuleId::Current,
-                self.session.synthsized_ids.next_id(),
-            ));
+        //     let sym = Symbol::Synthesized(SynthesizedId::new(
+        //         ModuleId::Current,
+        //         self.session.synthsized_ids.next_id(),
+        //     ));
 
-            initializers.insert(
-                "init".into(),
-                Initializer {
-                    initializes_type_id: *type_id,
-                    symbol: sym,
-                    params,
-                },
-            );
-        }
+        //     initializers.insert(
+        //         "init".into(),
+        //         Initializer {
+        //             initializes_type_id: *type_id,
+        //             symbol: sym,
+        //             params,
+        //         },
+        //     );
+        // }
 
         let methods = self
             .raw
@@ -772,7 +756,7 @@ pub mod tests {
     use crate::{
         annotation, any, assert_eq_diff,
         ast::AST,
-        compiling::module::{ModuleEnvironment, ModuleId},
+        compiling::module::ModuleId,
         fxhashmap,
         label::Label,
         name::Name,
@@ -793,16 +777,13 @@ pub mod tests {
             kind::Kind,
             passes::type_headers_pass::TypeHeaderPass,
             type_catalog::ConformanceStub,
-            type_session::{ASTTyRepr, Raw, TypeDef, TypeDefKind, TypeExtension, TypeSession},
+            type_session::{ASTTyRepr, Raw, TypeDef, TypeDefKind, TypeExtension},
         },
     };
-    use std::rc::Rc;
 
     pub fn type_header_decl_pass(code: &'static str) -> (AST<NameResolved>, Raw) {
         let resolved = resolve(code);
-        let modules = ModuleEnvironment::default();
-        let mut session = TypeSession::new(Rc::new(modules));
-        let raw = TypeHeaderPass::drive(&mut session, &resolved);
+        let raw = TypeHeaderPass::drive(&resolved);
         (resolved, raw)
     }
 

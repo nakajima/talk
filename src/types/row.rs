@@ -23,7 +23,7 @@ impl Row {
 fn close(row: &Row, mut closed_row: ClosedRow<Ty>) -> ClosedRow<Ty> {
     match row {
         Row::Empty(..) => closed_row,
-        Row::Param(_) => panic!("Cannot close param"),
+        Row::Param(_) => panic!("Cannot close param: {row:?}"),
         Row::Extend { row, label, ty } => {
             closed_row.insert(label.clone(), ty.clone());
             close(row, closed_row)

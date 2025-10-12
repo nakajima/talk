@@ -1,7 +1,5 @@
 use std::str::FromStr;
 
-use indexmap::IndexMap;
-
 use crate::{
     ir::ir_error::IRError,
     label::Label,
@@ -16,7 +14,7 @@ pub enum IrTy {
     // (123, true) -> false
     Func(Vec<IrTy>, Box<IrTy>),
     // { 123, 4.56, true }
-    Record(IndexMap<Label, IrTy>),
+    Record(Vec<IrTy>),
     // { 1 ; 123, true }
     Enum { tag: u16, values: Vec<IrTy> },
     Void,
@@ -76,11 +74,11 @@ impl FromStr for IrTy {
                 return Ok(IrTy::Enum { tag, values });
             }
 
-            // record: "{ a, b, c }"  (labels ignored at IR; use positional)
-            let mut map: IndexMap<Label, IrTy> = IndexMap::new();
-            for (i, part) in split_simple(inner, ',').into_iter().enumerate() {
+            // record: "{ a, b, c }"
+            let mut map: Vec<IrTy> = Vec::new();
+            for part in split_simple(inner, ',').into_iter() {
                 // adjust this line if your Label has a different constructor
-                map.insert(Label::from(i.to_string()), part.parse()?);
+                map.push(part.parse()?);
             }
             return Ok(IrTy::Record(map));
         }
@@ -105,10 +103,10 @@ impl std::fmt::Display for IrTy {
                     .join(", "),
                 ir_ty
             ),
-            IrTy::Record(index_map) => {
+            IrTy::Record(fields) => {
                 let mut items = vec![];
-                for (key, val) in index_map {
-                    items.push(format!("{key}: {val}"));
+                for item in fields {
+                    items.push(format!("{item}"));
                 }
                 write!(f, "{{ {} }}", items.join(", "))
             }
@@ -151,11 +149,11 @@ impl From<IrTy> for Ty {
                 }),
             IrTy::Record(tys) => {
                 let mut row = Row::Empty(TypeDefKind::Struct);
-                for (label, ty) in tys {
+                for (i, ty) in tys.iter().enumerate() {
                     row = Row::Extend {
                         row: row.into(),
-                        label,
-                        ty: ty.into(),
+                        label: Label::Positional(i),
+                        ty: ty.clone().into(),
                     }
                 }
 

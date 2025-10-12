@@ -1,39 +1,33 @@
 use derive_visitor::VisitorMut;
+use rustc_hash::FxHashMap;
 use tracing::instrument;
 
 use crate::{
+    id_generator::IDGenerator,
     name::Name,
     name_resolution::{
         name_resolver::{NameResolver, NameResolverError, Scope},
-        symbol::Symbol,
+        symbol::{Symbol, TypeId},
     },
-    node_id::NodeID,
+    node::Node,
+    node_id::{FileID, NodeID},
     node_kinds::{
+        block::Block,
         decl::{Decl, DeclKind},
         expr::{Expr, ExprKind},
         func::Func,
         func_signature::FuncSignature,
         generic_decl::GenericDecl,
         match_arm::MatchArm,
+        parameter::Parameter,
         pattern::{Pattern, PatternKind, RecordFieldPatternKind},
         stmt::{Stmt, StmtKind},
         type_annotation::{TypeAnnotation, TypeAnnotationKind},
     },
     on,
+    span::Span,
+    types::type_session::TypeDefKind,
 };
-
-#[derive(VisitorMut)]
-#[visitor(
-    Stmt(enter, exit),
-    FuncSignature,
-    Pattern(enter),
-    MatchArm(enter, exit),
-    Func,
-    Decl(enter, exit)
-)]
-pub struct DeclDeclarer<'a> {
-    pub(super) resolver: &'a mut NameResolver,
-}
 
 // Dummy values for symbol type discrimination - actual values created by declare()
 #[macro_export]
@@ -131,14 +125,44 @@ macro_rules! some {
     };
     (Synthesized) => {
         $crate::name_resolution::symbol::Symbol::Synthesized(
-            $crate::name_resolution::symbol::SynthesizedId(0),
+            $crate::name_resolution::symbol::SynthesizedId::new(
+                $crate::compiling::module::ModuleId::Current,
+                0,
+            ),
         )
     };
 }
 
+#[derive(VisitorMut)]
+#[visitor(
+    Stmt(enter, exit),
+    FuncSignature,
+    Pattern(enter),
+    MatchArm(enter, exit),
+    Func,
+    Decl(enter, exit)
+)]
+pub struct DeclDeclarer<'a> {
+    pub(super) resolver: &'a mut NameResolver,
+    // For determining whether we need to synth an init
+    type_members: FxHashMap<NodeID, TypeMembers>,
+    // For synthesizing
+    node_ids: &'a mut IDGenerator,
+}
+
+#[derive(Default)]
+struct TypeMembers {
+    initializers: Vec<DeclKind>,
+    properties: Vec<DeclKind>,
+}
+
 impl<'a> DeclDeclarer<'a> {
-    pub fn new(resolver: &'a mut NameResolver) -> Self {
-        Self { resolver }
+    pub fn new(resolver: &'a mut NameResolver, node_ids: &'a mut IDGenerator) -> Self {
+        Self {
+            resolver,
+            type_members: Default::default(),
+            node_ids,
+        }
     }
 
     pub fn at_module_scope(&self) -> bool {
@@ -176,13 +200,15 @@ impl<'a> DeclDeclarer<'a> {
         id: NodeID,
         name: &mut Name,
         generics: &mut [GenericDecl],
-        is_protocol: bool,
+        kind: TypeDefKind,
     ) {
-        *name = if is_protocol {
+        *name = if kind == TypeDefKind::Protocol {
             self.resolver.declare(name, some!(Protocol), id)
         } else {
             self.resolver.declare(name, some!(Type), id)
         };
+
+        self.type_members.insert(id, TypeMembers::default());
 
         self.resolver
             .current_scope_mut()
@@ -355,16 +381,16 @@ impl<'a> DeclDeclarer<'a> {
     ///////////////////////////////////////////////////////////////////////////
     #[instrument(skip(self))]
     fn enter_decl(&mut self, decl: &mut Decl) {
-        on!(
-            &mut decl.kind,
-            DeclKind::Struct { name, generics, .. } | DeclKind::Enum { name, generics, .. },
-            {
-                self.enter_nominal(decl.id, name, generics, false);
-            }
-        );
+        on!(&mut decl.kind, DeclKind::Struct { name, generics, .. }, {
+            self.enter_nominal(decl.id, name, generics, TypeDefKind::Struct);
+        });
+
+        on!(&mut decl.kind, DeclKind::Enum { name, generics, .. }, {
+            self.enter_nominal(decl.id, name, generics, TypeDefKind::Enum);
+        });
 
         on!(&mut decl.kind, DeclKind::Protocol { name, generics, .. }, {
-            self.enter_nominal(decl.id, name, generics, true);
+            self.enter_nominal(decl.id, name, generics, TypeDefKind::Protocol);
         });
 
         on!(
@@ -456,11 +482,32 @@ impl<'a> DeclDeclarer<'a> {
             }
         );
 
+        let decl_kind = decl.kind.clone();
+
         on!(&mut decl.kind, DeclKind::Property { name, .. }, {
             *name = self.resolver.declare(name, some!(Property), decl.id);
+            let id = self
+                .resolver
+                .current_scope_id
+                .expect("didn't get current scope id");
+            self.type_members
+                .get_mut(&id)
+                .expect("didn't get type members")
+                .properties
+                .push(decl_kind.clone());
         });
 
         on!(&mut decl.kind, DeclKind::Init { name, .. }, {
+            let id = self
+                .resolver
+                .current_scope_id
+                .expect("didn't get current scope id");
+            self.type_members
+                .get_mut(&id)
+                .expect("didn't get type members")
+                .initializers
+                .push(decl_kind);
+
             *name = self.resolver.declare(name, some!(Global), decl.id);
 
             let Name::Resolved(Symbol::Global(..), _) = &name else {
@@ -474,10 +521,28 @@ impl<'a> DeclDeclarer<'a> {
     fn exit_decl(&mut self, decl: &mut Decl) {
         on!(
             &mut decl.kind,
-            DeclKind::Struct { .. }
-                | DeclKind::Protocol { .. }
-                | DeclKind::Enum { .. }
-                | DeclKind::Extend { .. },
+            DeclKind::Struct {
+                name: Name::Resolved(Symbol::Type(type_id), _),
+                body,
+                ..
+            },
+            {
+                let type_members = self
+                    .type_members
+                    .remove(&decl.id)
+                    .expect("didn't get type members");
+
+                if type_members.initializers.is_empty() {
+                    self.synthesize_init(decl.id, body, &type_members, *type_id);
+                }
+
+                self.end_scope();
+            }
+        );
+
+        on!(
+            &mut decl.kind,
+            DeclKind::Protocol { .. } | DeclKind::Enum { .. } | DeclKind::Extend { .. },
             {
                 self.end_scope();
             }
@@ -486,5 +551,132 @@ impl<'a> DeclDeclarer<'a> {
         on!(&mut decl.kind, DeclKind::Init { .. }, {
             self.end_scope();
         });
+    }
+
+    fn synthesize_init(
+        &mut self,
+        decl_id: NodeID,
+        body: &mut Block,
+        type_members: &TypeMembers,
+        type_id: TypeId,
+    ) {
+        let init_id = NodeID(FileID::SYNTHESIZED, self.node_ids.next_id());
+        let init_name = self
+            .resolver
+            .declare(&"init".into(), some!(Synthesized), init_id);
+
+        self.start_scope(init_id);
+
+        // Need to synthesize an init
+        println!("creating self_param_name");
+        let self_param_name = self.resolver.declare(
+            &Name::Raw("self".into()),
+            some!(ParamLocal),
+            NodeID(FileID::SYNTHESIZED, self.node_ids.next_id()),
+        );
+        let mut params: Vec<Parameter> = vec![Parameter {
+            id: NodeID(FileID::SYNTHESIZED, self.node_ids.next_id()),
+            span: Span::SYNTHESIZED,
+            name: self_param_name.clone(),
+            name_span: Span::SYNTHESIZED,
+            type_annotation: Some(TypeAnnotation {
+                id: NodeID(FileID::SYNTHESIZED, self.node_ids.next_id()),
+                span: Span::SYNTHESIZED,
+                kind: TypeAnnotationKind::SelfType(Name::SelfType(type_id)),
+            }),
+        }];
+        let mut assignments: Vec<Node> = vec![];
+        for property in type_members.properties.iter() {
+            let DeclKind::Property {
+                name,
+                is_static,
+                type_annotation,
+                ..
+            } = &property
+            else {
+                continue;
+            };
+
+            if *is_static {
+                continue;
+            }
+
+            println!("creating property: {:?}", property);
+
+            let name = self.resolver.declare(
+                &Name::Raw(name.name_str()),
+                some!(ParamLocal),
+                NodeID(FileID::SYNTHESIZED, self.node_ids.next_id()),
+            );
+            params.push(Parameter {
+                id: NodeID(FileID::SYNTHESIZED, self.node_ids.next_id()),
+                name: name.clone(),
+                name_span: Span::SYNTHESIZED,
+                type_annotation: type_annotation.clone(),
+                span: Span::SYNTHESIZED,
+            });
+
+            let assignment = Node::Stmt(Stmt {
+                id: NodeID(FileID::SYNTHESIZED, self.node_ids.next_id()),
+                span: Span::SYNTHESIZED,
+                kind: StmtKind::Assignment(
+                    Expr {
+                        id: NodeID(FileID::SYNTHESIZED, self.node_ids.next_id()),
+                        kind: ExprKind::Member(
+                            Some(
+                                Expr {
+                                    id: NodeID(FileID::SYNTHESIZED, self.node_ids.next_id()),
+                                    span: Span::SYNTHESIZED,
+                                    kind: ExprKind::Variable(self_param_name.clone()),
+                                }
+                                .into(),
+                            ),
+                            name.name_str().into(),
+                            Span::SYNTHESIZED,
+                        ),
+                        span: Span::SYNTHESIZED,
+                    },
+                    Expr {
+                        id: NodeID(FileID::SYNTHESIZED, self.node_ids.next_id()),
+                        kind: ExprKind::Variable(name),
+                        span: Span::SYNTHESIZED,
+                    },
+                ),
+            });
+
+            println!("creating assignment: {:?}", assignment);
+            assignments.push(assignment);
+        }
+
+        let self_ret = Node::Stmt(Stmt {
+            id: NodeID(FileID::SYNTHESIZED, self.node_ids.next_id()),
+            kind: StmtKind::Expr(Expr {
+                id: NodeID(FileID::SYNTHESIZED, self.node_ids.next_id()),
+                span: Span::SYNTHESIZED,
+                kind: ExprKind::Variable(self_param_name.clone()),
+            }),
+            span: Span::SYNTHESIZED,
+        });
+
+        assignments.push(self_ret);
+
+        let init = Decl {
+            id: init_id,
+            span: Span::SYNTHESIZED,
+            kind: DeclKind::Init {
+                name: init_name,
+                params,
+                body: Block {
+                    id: NodeID(FileID::SYNTHESIZED, self.node_ids.next_id()),
+                    span: Span::SYNTHESIZED,
+                    args: vec![],
+                    body: assignments,
+                },
+            },
+        };
+
+        self.end_scope();
+
+        body.body.insert(0, init.into());
     }
 }
