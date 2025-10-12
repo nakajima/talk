@@ -1,7 +1,5 @@
 use std::error::Error;
 
-use crate::node_id::NodeID;
-
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum IRError {
     CouldNotParse(String),
