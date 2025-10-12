@@ -2,6 +2,7 @@ use itertools::Itertools;
 
 use crate::{
     compiling::module::ModuleId,
+    name::Name,
     name_resolution::symbol::{Symbol, TypeId},
     node_id::NodeID,
     types::{
@@ -74,7 +75,7 @@ pub enum InferTy {
     },
 
     Constructor {
-        symbol: Symbol,
+        name: Name,
         params: Vec<InferTy>,
         ret: Box<InferTy>,
     },
@@ -97,11 +98,11 @@ impl From<InferTy> for Ty {
             InferTy::Primitive(primitive) => Ty::Primitive(primitive),
             InferTy::Param(type_param_id) => Ty::Param(type_param_id),
             InferTy::Constructor {
-                symbol,
+                name,
                 params,
                 box ret,
             } => Ty::Constructor {
-                symbol,
+                name,
                 params: params.into_iter().map(|p| p.into()).collect(),
                 ret: Box::new(ret.into()),
             },
@@ -130,11 +131,11 @@ impl From<Ty> for InferTy {
             Ty::Primitive(primitive) => InferTy::Primitive(primitive),
             Ty::Param(type_param_id) => InferTy::Param(type_param_id),
             Ty::Constructor {
-                symbol,
+                name,
                 params,
                 box ret,
             } => InferTy::Constructor {
-                symbol,
+                name,
                 params: params.into_iter().map(|p| p.into()).collect(),
                 ret: Box::new(ret.into()),
             },
@@ -305,12 +306,8 @@ impl InferTy {
             InferTy::Param(..) => self,
             InferTy::Rigid(..) => self,
             InferTy::UnificationVar { .. } => self,
-            InferTy::Constructor {
-                symbol,
-                params,
-                ret,
-            } => InferTy::Constructor {
-                symbol: symbol.import(module_id),
+            InferTy::Constructor { name, params, ret } => InferTy::Constructor {
+                name: Name::Resolved(name.symbol().unwrap().import(module_id), name.name_str()),
                 params,
                 ret,
             },

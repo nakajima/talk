@@ -29,7 +29,7 @@ pub struct AssociatedEquals {
 }
 
 impl AssociatedEquals {
-    #[instrument(skip(session, substitutions))]
+    #[instrument(level = tracing::Level::TRACE, skip(session, substitutions))]
     pub fn solve(
         &self,
         session: &mut TypeSession,

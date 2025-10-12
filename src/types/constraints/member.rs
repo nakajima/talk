@@ -1,5 +1,6 @@
 use crate::{
     label::Label,
+    name::Name,
     name_resolution::symbol::Symbol,
     span::Span,
     types::{
@@ -53,7 +54,10 @@ impl Member {
         }
 
         if let InferTy::Nominal { symbol, .. }
-        | InferTy::Constructor { symbol, .. }
+        | InferTy::Constructor {
+            name: Name::Resolved(symbol, _),
+            ..
+        }
         | InferTy::Primitive(symbol) = &receiver
         {
             // First, check if any conforming protocols have this method with predicates

@@ -106,7 +106,7 @@ fn row_occurs(target: RowMetaId, row: &InferRow, subs: &mut UnificationSubstitut
 }
 
 // Unify rows. Returns true if progress was made.
-#[instrument(skip(session, subs), level = tracing::Level::DEBUG)]
+#[instrument(level = tracing::Level::TRACE, skip(session, subs))]
 fn unify_rows(
     kind: TypeDefKind,
     lhs: &InferRow,
@@ -179,14 +179,14 @@ fn unify_rows(
             }
             RowTail::Empty => {
                 return Err(TypeError::InvalidUnification(
-                    InferTy::Record(Box::new(lhs.clone())),
-                    InferTy::Record(Box::new(rhs.clone())),
+                    InferTy::Record(Box::new(lhs.clone())).into(),
+                    InferTy::Record(Box::new(rhs.clone())).into(),
                 ));
             }
             RowTail::Param(_) => {
                 return Err(TypeError::InvalidUnification(
-                    InferTy::Record(Box::new(lhs.clone())),
-                    InferTy::Record(Box::new(rhs.clone())),
+                    InferTy::Record(Box::new(lhs.clone())).into(),
+                    InferTy::Record(Box::new(rhs.clone())).into(),
                 ));
             }
         }
@@ -200,14 +200,14 @@ fn unify_rows(
             }
             RowTail::Empty => {
                 return Err(TypeError::InvalidUnification(
-                    InferTy::Record(Box::new(lhs.clone())),
-                    InferTy::Record(Box::new(rhs.clone())),
+                    InferTy::Record(Box::new(lhs.clone())).into(),
+                    InferTy::Record(Box::new(rhs.clone())).into(),
                 ));
             }
             RowTail::Param(_) => {
                 return Err(TypeError::InvalidUnification(
-                    InferTy::Record(Box::new(lhs.clone())),
-                    InferTy::Record(Box::new(rhs.clone())),
+                    InferTy::Record(Box::new(lhs.clone())).into(),
+                    InferTy::Record(Box::new(rhs.clone())).into(),
                 ));
             }
         }
@@ -224,8 +224,8 @@ fn unify_rows(
         (RowTail::Param(a), RowTail::Param(b)) if a == b => {}
         (RowTail::Param(_), RowTail::Param(_)) => {
             return Err(TypeError::InvalidUnification(
-                InferTy::Record(Box::new(lhs.clone())),
-                InferTy::Record(Box::new(rhs.clone())),
+                InferTy::Record(Box::new(lhs.clone())).into(),
+                InferTy::Record(Box::new(rhs.clone())).into(),
             ));
         }
         _ => {}
@@ -235,7 +235,7 @@ fn unify_rows(
 }
 
 // Unify types. Returns true if progress was made.
-#[instrument(skip(session, substitutions), level = tracing::Level::DEBUG)]
+#[instrument(level = tracing::Level::TRACE, skip(session, substitutions))]
 pub(super) fn unify_mult(
     lhs: &[InferTy],
     rhs: &[InferTy],
@@ -250,7 +250,7 @@ pub(super) fn unify_mult(
 }
 
 // Unify types. Returns true if progress was made.
-#[instrument(skip(session, substitutions), level = tracing::Level::DEBUG)]
+#[instrument(level = tracing::Level::TRACE, skip(session, substitutions))]
 pub(super) fn unify(
     lhs: &InferTy,
     rhs: &InferTy,
@@ -266,8 +266,8 @@ pub(super) fn unify(
                 Ok(false)
             } else {
                 Err(TypeError::InvalidUnification(
-                    InferTy::Primitive(*lhs),
-                    InferTy::Primitive(*rhs),
+                    InferTy::Primitive(*lhs).into(),
+                    InferTy::Primitive(*rhs).into(),
                 ))
             }
         }
@@ -310,7 +310,7 @@ pub(super) fn unify(
             },
         ) => {
             if lhs_id != rhs_id {
-                return Err(TypeError::InvalidUnification(lhs, rhs));
+                return Err(TypeError::InvalidUnification(lhs.into(), rhs.into()));
             }
 
             // Pick the correct row kind (Enum vs Struct) from the rows themselves.
@@ -378,11 +378,11 @@ pub(super) fn unify(
         ),
 
         (_, InferTy::Rigid(_)) | (InferTy::Rigid(_), _) => {
-            Err(TypeError::InvalidUnification(lhs, rhs))
+            Err(TypeError::InvalidUnification(lhs.into(), rhs.into()))
         }
         _ => {
             tracing::error!("attempted to unify {lhs:?} <> {rhs:?}");
-            Err(TypeError::InvalidUnification(lhs, rhs))
+            Err(TypeError::InvalidUnification(lhs.into(), rhs.into()))
         }
     }
 }
@@ -422,12 +422,8 @@ pub(super) fn substitute(ty: InferTy, substitutions: &FxHashMap<InferTy, InferTy
         InferTy::Rigid(..) => ty,
         InferTy::UnificationVar { .. } => ty,
         InferTy::Primitive(..) => ty,
-        InferTy::Constructor {
-            symbol,
-            params,
-            ret,
-        } => InferTy::Constructor {
-            symbol,
+        InferTy::Constructor { name, params, ret } => InferTy::Constructor {
+            name,
             params: params
                 .into_iter()
                 .map(|p| substitute(p, substitutions))
@@ -501,12 +497,8 @@ pub(super) fn apply(ty: InferTy, substitutions: &mut UnificationSubstitutions) -
                 } // normalize id to the representative
             }
         }
-        InferTy::Constructor {
-            symbol,
-            params,
-            ret,
-        } => InferTy::Constructor {
-            symbol,
+        InferTy::Constructor { name, params, ret } => InferTy::Constructor {
+            name,
             params: params
                 .into_iter()
                 .map(|p| apply(p, substitutions))
@@ -582,12 +574,8 @@ pub(super) fn instantiate_ty(
         InferTy::Rigid(..) => ty,
         InferTy::UnificationVar { .. } => ty,
         InferTy::Primitive(..) => ty,
-        InferTy::Constructor {
-            symbol,
-            params,
-            ret,
-        } => InferTy::Constructor {
-            symbol,
+        InferTy::Constructor { name, params, ret } => InferTy::Constructor {
+            name,
             params: params
                 .into_iter()
                 .map(|p| instantiate_ty(p, substitutions, level))

@@ -8,7 +8,7 @@ pub enum IRError {
     InvalidValueConversion(String),
     InvalidAssignmentTarget(String),
     InvalidFieldAccess(String),
-    TypeNotFound(NodeID),
+    TypeNotFound(String),
 }
 
 impl Error for IRError {}

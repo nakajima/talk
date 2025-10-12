@@ -146,7 +146,7 @@ impl<'a> Parser<'a> {
 
     // MARK: Decls
 
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn decl(&mut self, context: BlockContext, is_static: bool) -> Result<Node, ParserError> {
         self.skip_semicolons_and_newlines();
 
@@ -201,7 +201,7 @@ impl<'a> Parser<'a> {
         Ok(node)
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn typealias(&mut self) -> Result<Decl, ParserError> {
         let tok = self.push_source_location();
         self.consume(TokenKind::Typealias)?;
@@ -217,7 +217,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn init_decl(&mut self) -> Result<Decl, ParserError> {
         let tok = self.push_source_location();
         self.consume(TokenKind::Init)?;
@@ -239,7 +239,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn method_decl(&mut self, context: BlockContext, is_static: bool) -> Result<Decl, ParserError> {
         let func_decl = self.func_decl(context, true)?;
         match func_decl.kind {
@@ -260,7 +260,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn property_decl(&mut self, is_static: bool) -> Result<Decl, ParserError> {
         let tok = self.push_source_location();
         self.consume(TokenKind::Let)?;
@@ -290,7 +290,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn variant_decl(&mut self, expect_case: bool) -> Result<Decl, ParserError> {
         let tok = self.push_source_location();
         if expect_case {
@@ -310,7 +310,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     pub(crate) fn nominal_decl(
         &mut self,
         entry: TokenKind,
@@ -364,7 +364,7 @@ impl<'a> Parser<'a> {
         Ok(Decl { id, span, kind })
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     pub(crate) fn let_decl(&mut self) -> Result<Decl, ParserError> {
         let tok = self.push_source_location();
         self.consume(TokenKind::Let)?;
@@ -394,7 +394,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     pub(crate) fn func_decl(
         &mut self,
         context: BlockContext,
@@ -473,7 +473,7 @@ impl<'a> Parser<'a> {
 
     // MARK: Statements
 
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     pub(crate) fn stmt(&mut self) -> Result<Stmt, ParserError> {
         self.skip_semicolons_and_newlines();
 
@@ -507,7 +507,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     pub(super) fn if_expr(&mut self, _can_assign: bool) -> Result<Node, ParserError> {
         let tok = self.push_source_location();
         self.consume(TokenKind::If)?;
@@ -525,7 +525,7 @@ impl<'a> Parser<'a> {
         .into())
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     pub(super) fn func_expr(&mut self, _can_assign: bool) -> Result<Node, ParserError> {
         let tok = self.push_source_location();
         let FuncOrFuncSignature::Func(func) = self.func(BlockContext::None, true)? else {
@@ -543,7 +543,7 @@ impl<'a> Parser<'a> {
         .into())
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn if_stmt(&mut self) -> Result<Stmt, ParserError> {
         let tok = self.push_source_location();
         self.consume(TokenKind::If)?;
@@ -568,7 +568,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn loop_stmt(&mut self) -> Result<Stmt, ParserError> {
         let tok = self.push_source_location();
         self.consume(TokenKind::Loop)?;
@@ -588,7 +588,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     pub(crate) fn return_stmt(&mut self) -> Result<Stmt, ParserError> {
         let tok = self.push_source_location();
         self.consume(TokenKind::Return)?;
@@ -614,7 +614,7 @@ impl<'a> Parser<'a> {
 
     // MARK: Exprs
 
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     pub(super) fn array(&mut self, _can_assign: bool) -> Result<Node, ParserError> {
         let tok = self.push_source_location();
         self.consume(TokenKind::LeftBracket)?;
@@ -632,7 +632,7 @@ impl<'a> Parser<'a> {
         .into())
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     pub(crate) fn match_expr(&mut self, _can_assign: bool) -> Result<Node, ParserError> {
         let tok = self.push_source_location();
         self.consume(TokenKind::Match)?;
@@ -669,7 +669,7 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     pub(super) fn parse_pattern(&mut self) -> Result<Pattern, ParserError> {
         let tok = self.push_source_location();
         let Some(current) = self.current.clone() else {
@@ -823,7 +823,7 @@ impl<'a> Parser<'a> {
         Ok(fields)
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     pub(crate) fn member_prefix(&mut self, can_assign: bool) -> Result<Node, ParserError> {
         let tok = self.push_source_location();
         self.consume(TokenKind::Dot)?;
@@ -876,7 +876,7 @@ impl<'a> Parser<'a> {
         Ok(Node::Expr(expr))
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     pub(crate) fn member_infix(
         &mut self,
         can_assign: bool,
@@ -934,7 +934,7 @@ impl<'a> Parser<'a> {
         Ok(Node::Expr(expr))
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     pub(super) fn unary(&mut self, _can_assign: bool) -> Result<Node, ParserError> {
         let tok = self.push_source_location();
         let op = self.consume_any(vec![TokenKind::Minus, TokenKind::Bang])?;
@@ -946,7 +946,7 @@ impl<'a> Parser<'a> {
             .into())
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     pub fn binary(&mut self, _can_assign: bool, lhs: Expr) -> Result<Node, ParserError> {
         let tok = self.push_lhs_location(lhs.id);
 
@@ -976,7 +976,7 @@ impl<'a> Parser<'a> {
             .into())
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     pub(crate) fn block_expr(&mut self, _can_assign: bool) -> Result<Node, ParserError> {
         let tok = self.push_source_location();
         self.consume(TokenKind::LeftBrace)?;
@@ -992,7 +992,7 @@ impl<'a> Parser<'a> {
         Ok(Node::Expr(Expr { id, span, kind }))
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     pub fn literal(&mut self, _can_assign: bool) -> Result<Node, ParserError> {
         let tok = self.push_source_location();
         let current = self.advance().expect("unreachable");
@@ -1010,7 +1010,7 @@ impl<'a> Parser<'a> {
         Ok(expr?.into())
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     pub(crate) fn variable(&mut self, can_assign: bool) -> Result<Node, ParserError> {
         let tok = self.push_source_location();
         let (name, _span) = self.identifier()?;
@@ -1035,7 +1035,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     pub(crate) fn tuple(&mut self, _can_assign: bool) -> Result<Node, ParserError> {
         let tok = self.push_source_location();
 
@@ -1064,12 +1064,12 @@ impl<'a> Parser<'a> {
         Ok(self.add_expr(ExprKind::Tuple(items), tok)?.into())
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn expr(&mut self) -> Result<Node, ParserError> {
         self.expr_with_precedence(Precedence::Assignment)
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn expr_with_precedence(&mut self, precedence: Precedence) -> Result<Node, ParserError> {
         tracing::trace!(
             "Parsing {:?} with precedence: {:?}",
@@ -1129,7 +1129,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     pub(super) fn check_call(
         &mut self,
         callee: &Expr,
@@ -1159,7 +1159,7 @@ impl<'a> Parser<'a> {
         Ok(None)
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     pub(crate) fn call(
         &mut self,
         _can_assign: bool,
@@ -1243,7 +1243,7 @@ impl<'a> Parser<'a> {
         Ok(args)
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn type_annotation(&mut self) -> Result<TypeAnnotation, ParserError> {
         let tok = self.push_source_location();
 
@@ -1363,7 +1363,7 @@ impl<'a> Parser<'a> {
         Ok(base)
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn conformances(&mut self) -> Result<Vec<TypeAnnotation>, ParserError> {
         let mut conformances: Vec<TypeAnnotation> = vec![];
 
@@ -1375,7 +1375,7 @@ impl<'a> Parser<'a> {
         Ok(conformances)
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn type_annotations(&mut self, closer: TokenKind) -> Result<Vec<TypeAnnotation>, ParserError> {
         let mut annotations: Vec<TypeAnnotation> = vec![];
 
@@ -1391,7 +1391,7 @@ impl<'a> Parser<'a> {
         self.block(context, true)
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn block(
         &mut self,
         context: BlockContext,
@@ -1540,7 +1540,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn generic(&mut self) -> Result<GenericDecl, ParserError> {
         let tok = self.push_source_location();
         let (name, name_span) = self.identifier()?;
@@ -1563,7 +1563,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn generics(&mut self) -> Result<Vec<GenericDecl>, ParserError> {
         let mut generics = vec![];
         if self.did_match(TokenKind::Less)? {
@@ -1575,7 +1575,7 @@ impl<'a> Parser<'a> {
         Ok(generics)
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn parameters(&mut self) -> Result<Vec<Parameter>, ParserError> {
         let mut params: Vec<Parameter> = vec![];
         while let Ok((name, name_span)) = self.identifier() {
@@ -1606,7 +1606,7 @@ impl<'a> Parser<'a> {
         Ok(params)
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     pub(super) fn identifier(&mut self) -> Result<(String, Span), ParserError> {
         self.skip_semicolons_and_newlines();
         if let Some(current) = self.current.clone()
@@ -1746,7 +1746,7 @@ impl<'a> Parser<'a> {
         LocToken
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     pub(super) fn consume(&mut self, expected: TokenKind) -> Result<Token, ParserError> {
         self.skip_newlines();
 
@@ -1767,7 +1767,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn consume_any(&mut self, possible_tokens: Vec<TokenKind>) -> Result<Token, ParserError> {
         self.skip_semicolons_and_newlines();
 
@@ -1797,7 +1797,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn push_identifier(&mut self, identifier: Token) {
         if let Some(loc) = self.source_location_stack.last_mut() {
             loc.identifiers.push(identifier);

@@ -75,7 +75,7 @@ impl Default for CurrentFunction {
 
 #[derive(Debug, PartialEq, Eq)]
 enum Bind {
-    Named { symbol: Symbol, value: Register },
+    Assigned(Register),
     Fresh,
 }
 
@@ -229,7 +229,7 @@ impl Lowerer {
         }
     }
 
-    #[instrument(skip(self, decl), fields(decl.id = %decl.id))]
+    #[instrument(level = tracing::Level::TRACE, skip(self, decl), fields(decl.id = %decl.id))]
     fn lower_decl(&mut self, decl: &Decl) -> Result<Value, IRError> {
         match &decl.kind {
             DeclKind::Let {
@@ -264,7 +264,7 @@ impl Lowerer {
         Ok(Value::Void)
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn lower_init(
         &mut self,
         decl: &Decl,
@@ -272,16 +272,23 @@ impl Lowerer {
         params: &[Parameter],
         body: &Block,
     ) -> Result<Value, IRError> {
-        let Ty::Func(param_ty, box ret_ty) =
-            (match self.types.get_symbol(&name.symbol().unwrap()).unwrap() {
-                TypeEntry::Mono(ty) => ty.clone(),
-                TypeEntry::Poly(scheme) => scheme.ty.clone(),
-            })
-        else {
+        let func_ty = self.ty_from_symbol(&name.symbol().unwrap())?;
+
+        // Uncurry the function type to extract all param types and the final return type
+
+        let Ty::Func(param, box ret_ty) = func_ty else {
+            unreachable!();
+        };
+        let param_tys = param.uncurry_params();
+
+        // Build param_ty from all params (for now, just use the first one for compatibility)
+        let param_ty = if !param_tys.is_empty() {
+            param_tys[0].clone()
+        } else {
             let meta = Default::default();
             let formatter = formatter::Formatter::new(&meta);
             unreachable!(
-                "id: {:?}, sym: {:?}, ty: {:?}, {:?}",
+                "init has no params - id: {:?}, sym: {:?}, ty: {:?}, {:?}",
                 decl.id,
                 self.types.get_symbol(&name.symbol().unwrap()).unwrap(),
                 self.types.get(&decl.id).unwrap(),
@@ -303,7 +310,7 @@ impl Lowerer {
             ret = self.lower_node(node)?;
         }
         self.push_terminator(Terminator::Ret {
-            val: ret,
+            val: ret.clone(),
             ty: ret_ty.clone(),
         });
 
@@ -319,14 +326,14 @@ impl Lowerer {
                 params: param_values,
                 blocks: current_function.blocks,
                 _foralls: Default::default(),
-                ty: Ty::Func(param_ty.clone(), ret_ty.clone().into()),
+                ty: Ty::Func(Box::new(param_ty.clone()), Box::new(ret_ty.clone())),
             },
         );
 
-        Ok(Value::Void)
+        Ok(ret)
     }
 
-    #[instrument(skip(self, stmt), fields(stmt.id = %stmt.id))]
+    #[instrument(level = tracing::Level::TRACE, skip(self, stmt), fields(stmt.id = %stmt.id))]
     fn lower_stmt(&mut self, stmt: &Stmt) -> Result<Value, IRError> {
         match &stmt.kind {
             StmtKind::Expr(expr) => self.lower_expr(expr, Bind::Fresh),
@@ -338,9 +345,8 @@ impl Lowerer {
         }
     }
 
-    #[instrument(skip(self, lhs, rhs), fields(lhs.id = %lhs.id, rhs.id = %rhs.id))]
+    #[instrument(level = tracing::Level::TRACE, skip(self, lhs, rhs), fields(lhs.id = %lhs.id, rhs.id = %rhs.id))]
     fn lower_assignment(&mut self, lhs: &Expr, rhs: &Expr) -> Result<Value, IRError> {
-        println!("lower assignment: {lhs:?}");
         let lvalue = self.lower_lvalue(lhs)?;
         let value = self.lower_expr(rhs, Bind::Fresh)?;
 
@@ -419,7 +425,7 @@ impl Lowerer {
 
                 Ok(LValue::Field {
                     base: base_lvalue.into(),
-                    ty: self.ty_from_id(&expr.id)?,
+                    ty: base_ty,
                     field: label.clone(),
                 })
             }
@@ -427,14 +433,14 @@ impl Lowerer {
         }
     }
 
-    #[instrument(skip(self, pattern), fields(pattern.id = %pattern.id))]
+    #[instrument(level = tracing::Level::TRACE, skip(self, pattern), fields(pattern.id = %pattern.id))]
     fn lower_pattern(&mut self, pattern: &Pattern) -> Result<Bind, IRError> {
         match &pattern.kind {
             PatternKind::Bind(name) => {
                 let value = self.next_register();
                 let symbol = name.symbol().unwrap();
                 self.bindings.insert(symbol, value);
-                Ok(Bind::Named { symbol, value })
+                Ok(Bind::Assigned(value))
             }
             PatternKind::LiteralInt(_) => todo!(),
             PatternKind::LiteralFloat(_) => todo!(),
@@ -448,7 +454,7 @@ impl Lowerer {
         }
     }
 
-    #[instrument(skip(self, expr), fields(expr.id = %expr.id))]
+    #[instrument(level = tracing::Level::TRACE, skip(self, expr), fields(expr.id = %expr.id))]
     fn lower_expr(&mut self, expr: &Expr, bind: Bind) -> Result<Value, IRError> {
         match &expr.kind {
             ExprKind::Func(func) => self.lower_func(func, bind),
@@ -481,9 +487,9 @@ impl Lowerer {
             ExprKind::Call {
                 box callee, args, ..
             } => self.lower_call(expr.id, callee, args, bind),
-            ExprKind::Member(member, label, ..) => self.lower_member(expr.id, member, label),
+            ExprKind::Member(member, label, ..) => self.lower_member(expr.id, member, label, bind),
             ExprKind::Variable(name) => self.lower_variable(name),
-            ExprKind::Constructor(..) => todo!(),
+            ExprKind::Constructor(name) => self.lower_constructor(name, bind),
             ExprKind::If(..) => todo!(),
             ExprKind::Match(..) => todo!(),
             ExprKind::RecordLiteral { .. } => todo!(),
@@ -492,18 +498,64 @@ impl Lowerer {
         }
     }
 
-    #[instrument(skip(self, member))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
+    fn lower_constructor(&mut self, name: &Name, bind: Bind) -> Result<Value, IRError> {
+        let init_sym = *self
+            .types
+            .catalog
+            .initializers
+            .get(&name.symbol().unwrap())
+            .unwrap()
+            .get(&Label::Named("init".into()))
+            .unwrap();
+
+        let dest = self.ret(bind);
+        let ty = self.types.get_symbol(&init_sym).unwrap();
+        self.push_instr(Instruction::Ref {
+            dest,
+            ty: match ty {
+                TypeEntry::Mono(ty) => ty.clone(),
+                TypeEntry::Poly(scheme) => scheme.ty.clone(),
+            },
+            val: Value::Func(Name::Resolved(
+                init_sym,
+                format!("{}_init", name.name_str()),
+            )),
+        });
+
+        Ok(dest.into())
+    }
+
+    #[instrument(level = tracing::Level::TRACE, skip(self, member))]
     fn lower_member(
         &mut self,
         id: NodeID,
         member: &Option<Box<Expr>>,
         label: &Label,
+        bind: Bind,
     ) -> Result<Value, IRError> {
-        println!("Types: {:#?}", self.types);
-        Ok(Value::Void)
+        if let Some(box member) = &member {
+            let reg = self.next_register();
+            let member_bind = Bind::Assigned(reg);
+            let receiver = self.lower_expr(member, member_bind)?;
+
+            let dest = self.ret(bind);
+            let ty = self.ty_from_id(&id)?;
+            self.push_instr(Instruction::GetField {
+                dest,
+                ty,
+                record: receiver.as_register()?,
+                field: label.clone(),
+                meta: vec![InstructionMeta::Source(id)].into(),
+            });
+
+            Ok(dest.into())
+        } else {
+            todo!("gotta handle unqualified lookups")
+        }
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn lower_variable(&mut self, name: &Name) -> Result<Value, IRError> {
         let ty = self
             .types
@@ -527,7 +579,67 @@ impl Lowerer {
         Ok(ret)
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
+    fn lower_constructor_call(
+        &mut self,
+        id: NodeID,
+        name: &Name,
+        callee: &Value,
+        mut args: Vec<Value>,
+        dest: Register,
+    ) -> Result<Value, IRError> {
+        let record_dest = self.next_register();
+        let ty = self.ty_from_symbol(&name.symbol().unwrap())?;
+
+        let properties = self
+            .types
+            .catalog
+            .properties
+            .get(&name.symbol().unwrap())
+            .unwrap();
+
+        self.push_instr(Instruction::Record {
+            dest: record_dest,
+            ty: ty.clone(),
+            record: properties
+                .iter()
+                .map(|_| Value::Uninit)
+                .collect::<Vec<_>>()
+                .into(),
+            meta: vec![InstructionMeta::Source(id)].into(),
+        });
+        args.insert(0, record_dest.into());
+
+        let init_sym = *self
+            .types
+            .catalog
+            .initializers
+            .get(&name.symbol().unwrap())
+            .unwrap()
+            .get(&Label::Named("init".into()))
+            .unwrap();
+
+        let ty @ Ty::Func(param, box ret) = &self.ty_from_symbol(&init_sym).unwrap() else {
+            unreachable!("{:?}", self.ty_from_symbol(&init_sym).unwrap());
+        };
+        let mut params = param.clone().uncurry_params();
+        params.insert(0, ret.clone());
+
+        self.push_instr(Instruction::Call {
+            dest,
+            ty: ty.clone(),
+            callee: Value::Func(Name::Resolved(
+                init_sym,
+                format!("{}_init", name.name_str()),
+            )),
+            args: args.into(),
+            meta: vec![InstructionMeta::Source(id)].into(),
+        });
+
+        Ok(dest.into())
+    }
+
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn lower_call(
         &mut self,
         id: NodeID,
@@ -561,37 +673,32 @@ impl Lowerer {
             TypeEntry::Poly(scheme) => scheme.ty.clone(),
         };
 
-        let callee = self.lower_expr(callee, Bind::Fresh)?;
+        let callee_ir = self.lower_expr(callee, Bind::Fresh)?;
         let args = args
             .iter()
             .map(|arg| self.lower_expr(&arg.value, Bind::Fresh))
-            .collect::<Result<Vec<_>, _>>()?
-            .into();
+            .collect::<Result<Vec<Value>, _>>()?;
+
+        if let ExprKind::Constructor(name) = &callee.kind {
+            return self.lower_constructor_call(callee.id, name, &callee_ir, args, dest);
+        }
 
         self.push_instr(Instruction::Call {
             dest,
             ty,
-            callee,
-            args,
+            callee: callee_ir,
+            args: args.into(),
             meta: vec![InstructionMeta::Source(id)].into(),
         });
 
         Ok(dest.into())
     }
 
-    #[instrument(skip(self, func), fields(func = %func.name))]
+    #[instrument(level = tracing::Level::TRACE, skip(self, func), fields(func = %func.name))]
     fn lower_func(&mut self, func: &Func, bind: Bind) -> Result<Value, IRError> {
-        let ty = match self
-            .types
-            .get(&func.id)
-            .unwrap_or_else(|| panic!("didn't get func ty: {:?}", func.id))
-            .clone()
-        {
-            TypeEntry::Mono(ty) => (ty, vec![]),
-            TypeEntry::Poly(scheme) => (scheme.ty, scheme.foralls),
-        };
+        let ty = self.ty_from_id(&func.id)?;
 
-        let (Ty::Func(param_tys, box ret_ty), _foralls) = ty else {
+        let Ty::Func(param_tys, box ret_ty) = ty else {
             panic!("didn't get func ty");
         };
 
@@ -640,7 +747,7 @@ impl Lowerer {
         Ok(func)
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn push_instr(&mut self, instruction: Instruction<Ty, Label>) {
         let current_function = self.current_function_stack.last_mut().unwrap();
         current_function.blocks[current_function.current_block_idx]
@@ -648,7 +755,7 @@ impl Lowerer {
             .push(instruction);
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn push_terminator(&mut self, terminator: Terminator<Ty>) {
         let current_function = self.current_function_stack.last_mut().unwrap();
         current_function.blocks[current_function.current_block_idx].terminator = terminator;
@@ -661,26 +768,9 @@ impl Lowerer {
         register
     }
 
-    fn get_field_index(&self, ty: &Ty, field_label: &Label) -> Result<u32, IRError> {
-        let (Ty::Record(row) | Ty::Nominal { row, .. }) = &ty else {
-            return Err(IRError::InvalidFieldAccess(format!("{ty:?}")));
-        };
-
-        let closed = row.close();
-        for (i, (label, _)) in (&closed).into_iter().enumerate() {
-            if label == field_label {
-                return Ok(i as u32);
-            }
-        }
-
-        Err(IRError::InvalidFieldAccess(format!(
-            "Field `{field_label:?}` not found in {ty:?}"
-        )))
-    }
-
     fn ret(&mut self, bind: Bind) -> Register {
         match bind {
-            Bind::Named { value, .. } => value,
+            Bind::Assigned(value) => value,
             Bind::Fresh => self.next_register(),
         }
     }
@@ -689,7 +779,15 @@ impl Lowerer {
         match self.types.get(id) {
             Some(TypeEntry::Mono(ty)) => Ok(ty.clone()),
             Some(TypeEntry::Poly(scheme)) => Ok(scheme.ty.clone()),
-            None => Err(IRError::TypeNotFound(*id)),
+            None => Err(IRError::TypeNotFound(format!("{id:?}"))),
+        }
+    }
+
+    fn ty_from_symbol(&self, symbol: &Symbol) -> Result<Ty, IRError> {
+        match self.types.get_symbol(symbol) {
+            Some(TypeEntry::Mono(ty)) => Ok(ty.clone()),
+            Some(TypeEntry::Poly(scheme)) => Ok(scheme.ty.clone()),
+            None => Err(IRError::TypeNotFound(format!("{symbol}"))),
         }
     }
 }
@@ -717,6 +815,14 @@ fn is_main_func(node: &Node) -> bool {
     }
 
     false
+}
+
+pub fn curry_ty<'a, I: IntoIterator<Item = &'a Ty>>(params: I, ret: Ty) -> Ty {
+    params
+        .into_iter()
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rfold(ret, |acc, p| Ty::Func(Box::new(p.clone()), Box::new(acc)))
 }
 
 #[cfg(test)]
@@ -935,46 +1041,69 @@ pub mod tests {
         ",
         );
 
+        println!("{program}");
+
         assert_eq_diff!(
-            program.functions,
-            fxhashmap!(Symbol::from(SynthesizedId::from(0)) => Function {
+            *program
+                .functions
+                .get(&SynthesizedId::from(0).into())
+                .unwrap(),
+            Function {
                 name: Name::Resolved(SynthesizedId::from(0).into(), "main".into()),
                 params: vec![].into(),
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
                 blocks: vec![BasicBlock {
                     id: BasicBlockId(0),
                     instructions: vec![
-                        Instruction::ConstantInt { dest: 0.into(), val: 123, meta: meta() },
-                        Instruction::Record {
+                        Instruction::Ref {
                             dest: 1.into(),
+                            ty: IrTy::Func(
+                                vec![IrTy::Record(vec![IrTy::Int]), IrTy::Int],
+                                IrTy::Record(vec![IrTy::Int]).into()
+                            ),
+                            val: Value::Func(Name::Resolved(
+                                SynthesizedId::from(1).into(),
+                                "Foo_init".into()
+                            ))
+                        },
+                        Instruction::ConstantInt {
+                            dest: 2.into(),
+                            val: 123,
+                            meta: meta()
+                        },
+                        Instruction::Record {
+                            dest: 3.into(),
                             ty: IrTy::Record(vec![IrTy::Int]),
                             record: vec![Value::Uninit].into(),
                             meta: meta()
                         },
                         Instruction::Call {
-                            dest: 2.into(),
+                            dest: 0.into(),
                             ty: IrTy::Func(
-                                vec![IrTy::Record(vec![IrTy::Int])],
+                                vec![IrTy::Record(vec![IrTy::Int]), IrTy::Int],
                                 IrTy::Record(vec![IrTy::Int]).into(),
                             ),
-                            callee: Value::Func(Name::Resolved(Symbol::from(GlobalId::from(2)), "Foo_init".into())),
-                            args: vec![Register(0).into()].into(),
+                            callee: Value::Func(Name::Resolved(
+                                Symbol::from(SynthesizedId::from(1)),
+                                "Foo_init".into()
+                            )),
+                            args: vec![Register(3).into(), Register(2).into()].into(),
                             meta: meta(),
                         },
                         Instruction::GetField {
-                            dest: 3.into(),
+                            dest: 4.into(),
                             ty: IrTy::Int,
-                            record: Register(1),
+                            record: Register(0),
                             field: Label::Named("bar".into()),
                             meta: meta(),
                         }
                     ],
                     terminator: Terminator::Ret {
-                        val: Value::Reg(0),
+                        val: Value::Reg(4),
                         ty: IrTy::Int
                     }
                 }],
-            })
+            }
         );
     }
 

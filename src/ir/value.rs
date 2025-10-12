@@ -21,9 +21,9 @@ impl Value {
             return Ok(Register(*i));
         }
 
-        return Err(IRError::InvalidValueConversion(format!(
+        Err(IRError::InvalidValueConversion(format!(
             "Cannot convert {self:?} to register"
-        )));
+        )))
     }
 }
 

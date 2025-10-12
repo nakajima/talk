@@ -94,7 +94,7 @@ impl Conforms {
         }
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn check_method_satisfaction(
         &self,
         requirement: &EnvEntry,

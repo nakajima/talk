@@ -244,7 +244,7 @@ impl<'a> TypeResolvePass<'a> {
         })
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn resolve_type_def(&mut self, type_def: &TypeDef) -> Result<Nominal, TypeError> {
         let _s = trace_span!("resolve", type_def = format!("{type_def:?}")).entered();
 
@@ -331,7 +331,6 @@ impl<'a> TypeResolvePass<'a> {
 
         let type_scheme = self.session.generalize(Level(0), ty.clone(), &[]);
         self.session.insert_term(symbol, type_scheme);
-
         self.self_symbols.pop();
 
         Ok(Nominal {
@@ -555,9 +554,18 @@ impl<'a> TypeResolvePass<'a> {
                 })
                 .collect();
 
+            let row = match self.session.lookup(symbol).expect("wtf") {
+                EnvEntry::Mono(InferTy::Nominal { row, .. }) => row.clone(),
+                EnvEntry::Scheme(Scheme {
+                    ty: InferTy::Nominal { row, .. },
+                    ..
+                }) => row.clone(),
+                _ => unreachable!("didn't get nominal for initializer type"),
+            };
+
             let ret = InferTy::Nominal {
                 symbol: *symbol,
-                row: Box::new(self.session.new_row_meta_var(Level(1))),
+                row,
                 type_args: vec![],
             };
 
@@ -653,7 +661,7 @@ impl<'a> TypeResolvePass<'a> {
         resolved_methods
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     pub(crate) fn infer_type_annotation(
         &mut self,
         annotation: &TypeAnnotation,
@@ -681,7 +689,10 @@ impl<'a> TypeResolvePass<'a> {
                     foralls.extend(fas);
                 }
 
-                let row = self.session.new_row_meta_var(Level(1)).into();
+                let InferTy::Nominal { row, .. } = self.session.lookup(symbol).unwrap()._as_ty()
+                else {
+                    unreachable!()
+                };
                 let ty = InferTy::Nominal {
                     symbol: *symbol,
                     type_args: vec![],

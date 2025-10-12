@@ -15,7 +15,11 @@ use crate::{
     name::Name,
     name_resolution::{name_resolver::NameResolved, symbol::Symbol},
     node_id::NodeID,
-    types::{scheme::ForAll, ty::Ty, type_session::Types},
+    types::{
+        scheme::ForAll,
+        ty::Ty,
+        type_session::{TypeEntry, Types},
+    },
 };
 
 #[allow(dead_code)]
@@ -99,23 +103,55 @@ impl Monomorphizer {
                 _ => unreachable!(),
             },
             Ty::Param(..) => todo!(),
-            Ty::Constructor { .. } => todo!(),
-            Ty::Func(param, ret) => IrTy::Func(
-                param
-                    .uncurry_params()
+            Ty::Constructor {
+                params, box ret, ..
+            } => IrTy::Func(
+                params
                     .into_iter()
                     .map(|p| self.monomorphize_ty(p))
                     .collect(),
-                self.monomorphize_ty(*ret).into(),
+                self.monomorphize_ty(ret).into(),
             ),
+            Ty::Func(param, ret) => {
+                let (params, final_ret) = uncurry_function(Ty::Func(param, ret));
+                IrTy::Func(
+                    params
+                        .into_iter()
+                        .map(|p| self.monomorphize_ty(p))
+                        .collect(),
+                    self.monomorphize_ty(final_ret).into(),
+                )
+            }
             Ty::Tuple(..) => todo!(),
             Ty::Record(..) => todo!(),
-            Ty::Nominal { row, .. } => IrTy::Record(
-                row.close()
-                    .values()
-                    .map(|v| self.monomorphize_ty(v.clone()))
-                    .collect::<Vec<_>>(),
-            ),
+            Ty::Nominal { symbol, .. } => {
+                if let Some(properties) = self.types.catalog.properties.get(&symbol).cloned() {
+                    IrTy::Record(
+                        properties
+                            .values()
+                            .map(|v| match self.types.get_symbol(v).unwrap() {
+                                TypeEntry::Mono(ty) => self.monomorphize_ty(ty.clone()),
+                                TypeEntry::Poly(scheme) => self.monomorphize_ty(scheme.ty.clone()),
+                            })
+                            .collect(),
+                    )
+                } else {
+                    todo!("don't know how to handle {ty:?}");
+                }
+            }
         }
+    }
+}
+
+fn uncurry_function(ty: Ty) -> (Vec<Ty>, Ty) {
+    match ty {
+        Ty::Func(box param, box ret) => {
+            let (mut params, final_ret) = uncurry_function(ret);
+            if param != Ty::Void {
+                params.insert(0, param);
+            }
+            (params, final_ret)
+        }
+        other => (vec![], other),
     }
 }

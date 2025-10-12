@@ -22,7 +22,7 @@ where
         let mut parts = vec![];
         parts.push(format!("func @{}{}", self.name.name_str(), self.params));
         for block in self.blocks.iter() {
-            parts.push(format!("{block:?}"));
+            parts.push(format!("{block}"));
         }
         write!(f, "{}", parts.join("\n"))
     }

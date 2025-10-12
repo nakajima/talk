@@ -13,7 +13,7 @@ pub enum TypeError {
         expected: u8,
         actual: u8,
     },
-    InvalidUnification(InferTy, InferTy),
+    InvalidUnification(Box<InferTy>, Box<InferTy>),
     OccursCheck(InferTy),
     CalleeNotCallable(InferTy),
     MemberNotFound(InferTy, String),

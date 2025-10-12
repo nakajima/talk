@@ -246,7 +246,7 @@ impl<'a> InferencePass<'a> {
         }
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn infer_group(&mut self, group: &BindingGroup) -> Wants {
         let mut wants = Wants::default();
         let inner_level = group.level.next();
@@ -309,7 +309,7 @@ impl<'a> InferencePass<'a> {
         wants
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     pub(crate) fn infer_type_annotation(
         &mut self,
         annotation: &TypeAnnotation,
@@ -403,7 +403,7 @@ impl<'a> InferencePass<'a> {
         self.session.apply(substitutions);
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn solve(
         &mut self,
         level: Level,
@@ -416,7 +416,6 @@ impl<'a> InferencePass<'a> {
             let mut next_wants = Wants::default();
             while let Some(want) = wants.pop() {
                 let want = want.apply(&mut substitutions);
-                let want = want.normalize_nominals(self.session, level);
                 tracing::trace!("solving {want:?}");
 
                 let solution = match want {
@@ -531,7 +530,7 @@ impl<'a> InferencePass<'a> {
         }
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn infer_decl(&mut self, decl: &Decl, level: Level, wants: &mut Wants) -> InferTy {
         guard_found_ty!(self, decl.id);
 
@@ -575,20 +574,32 @@ impl<'a> InferencePass<'a> {
                 self.session.insert_term(func.name.symbol().unwrap(), entry);
                 func_ty
             }
-            DeclKind::Init { params, body, .. } => {
-                for param in params {
-                    let ty = if let Some(type_annotation) = &param.type_annotation {
-                        self.infer_type_annotation(type_annotation, level, wants)
-                    } else {
-                        self.session.new_ty_meta_var(level)
-                    };
+            DeclKind::Init { name, params, body } => {
+                // Look up the Init symbol's pre-computed type from type resolve pass
+                let init_symbol = name.symbol().unwrap();
 
-                    self.session
-                        .insert_mono(param.name.symbol().unwrap(), ty.clone());
+                if let Some(entry) = self.session.lookup(&init_symbol) {
+                    // Instantiate the scheme to get the function type
+                    let func_ty =
+                        entry.inference_instantiate(self.session, level, wants, decl.span);
+
+                    // Extract parameter types from the curried function
+                    let mut param_tys = Vec::new();
+                    let mut current = func_ty;
+                    while let InferTy::Func(param_ty, rest) = current {
+                        param_tys.push(*param_ty);
+                        current = *rest;
+                    }
+
+                    // Bind parameters to their types
+                    for (param, param_ty) in params.iter().zip(param_tys) {
+                        self.session
+                            .insert_mono(param.name.symbol().unwrap(), param_ty.clone());
+                        self.session.types_by_node.insert(param.id, param_ty);
+                    }
                 }
 
                 _ = self.infer_block(body, level, wants);
-
                 InferTy::Void
             }
             DeclKind::Struct {
@@ -658,7 +669,7 @@ impl<'a> InferencePass<'a> {
         ty
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn check_pattern(
         &mut self,
         pattern: &Pattern,
@@ -817,7 +828,7 @@ impl<'a> InferencePass<'a> {
         }
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn infer_block(&mut self, block: &Block, level: Level, wants: &mut Wants) -> InferTy {
         guard_found_ty!(self, block.id);
 
@@ -920,8 +931,8 @@ impl<'a> InferencePass<'a> {
             ExprKind::RecordLiteral { fields, spread } => {
                 self.infer_record_literal(fields, spread, level, wants)
             }
-            ExprKind::Constructor(Name::Resolved(symbol, _)) => InferTy::Constructor {
-                symbol: *symbol,
+            ExprKind::Constructor(name) => InferTy::Constructor {
+                name: name.clone(),
                 params: vec![],
                 ret: InferTy::Void.into(),
             },
@@ -934,7 +945,7 @@ impl<'a> InferencePass<'a> {
         ty
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn infer_array(&mut self, items: &[Expr], level: Level, wants: &mut Wants) -> InferTy {
         // TODO: Make sure items are the same type
         let item_ty = if let Some(first) = items.first() {
@@ -946,7 +957,7 @@ impl<'a> InferencePass<'a> {
         InferTy::Array(item_ty)
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn infer_member(
         &mut self,
         id: NodeID,
@@ -978,7 +989,7 @@ impl<'a> InferencePass<'a> {
         member_ty
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn infer_record_literal(
         &mut self,
         fields: &[RecordField],
@@ -998,7 +1009,7 @@ impl<'a> InferencePass<'a> {
         InferTy::Record(Box::new(row))
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn infer_match(
         &mut self,
         scrutinee: &Expr,
@@ -1101,7 +1112,7 @@ impl<'a> InferencePass<'a> {
         returns
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn infer_func(&mut self, func: &Func, level: Level, wants: &mut Wants) -> InferTy {
         guard_found_ty!(self, func.id);
 
@@ -1163,7 +1174,7 @@ impl<'a> InferencePass<'a> {
         ty
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn infer_stmt(&mut self, stmt: &Stmt, level: Level, wants: &mut Wants) -> InferTy {
         guard_found_ty!(self, stmt.id);
 

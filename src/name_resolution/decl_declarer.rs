@@ -228,7 +228,7 @@ impl<'a> DeclDeclarer<'a> {
     ///////////////////////////////////////////////////////////////////////////
     // Block expr decls
     ///////////////////////////////////////////////////////////////////////////
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn enter_stmt(&mut self, stmt: &mut Stmt) {
         if let StmtKind::Expr(Expr {
             kind: ExprKind::Block(block),
@@ -252,7 +252,7 @@ impl<'a> DeclDeclarer<'a> {
     ///////////////////////////////////////////////////////////////////////////
     // Local decls
     ///////////////////////////////////////////////////////////////////////////
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn enter_pattern(&mut self, pattern: &mut Pattern) {
         let Pattern { kind, .. } = pattern;
 
@@ -288,7 +288,7 @@ impl<'a> DeclDeclarer<'a> {
     ///////////////////////////////////////////////////////////////////////////
     // Block scoping
     ///////////////////////////////////////////////////////////////////////////
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn enter_match_arm(&mut self, arm: &mut MatchArm) {
         self.start_scope(arm.id);
     }
@@ -300,7 +300,7 @@ impl<'a> DeclDeclarer<'a> {
     ///////////////////////////////////////////////////////////////////////////
     // Funcs
     ///////////////////////////////////////////////////////////////////////////
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn enter_func(&mut self, func: &mut Func) {
         let func_id = func.id;
         on!(
@@ -342,7 +342,7 @@ impl<'a> DeclDeclarer<'a> {
         self.end_scope();
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn enter_func_signature(&mut self, func: &mut FuncSignature) {
         on!(
             func,
@@ -379,7 +379,7 @@ impl<'a> DeclDeclarer<'a> {
     ///////////////////////////////////////////////////////////////////////////
     // Struct decls
     ///////////////////////////////////////////////////////////////////////////
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn enter_decl(&mut self, decl: &mut Decl) {
         on!(&mut decl.kind, DeclKind::Struct { name, generics, .. }, {
             self.enter_nominal(decl.id, name, generics, TypeDefKind::Struct);
@@ -533,7 +533,7 @@ impl<'a> DeclDeclarer<'a> {
                     .expect("didn't get type members");
 
                 if type_members.initializers.is_empty() {
-                    self.synthesize_init(decl.id, body, &type_members, *type_id);
+                    self.synthesize_init(body, &type_members, *type_id);
                 }
 
                 self.end_scope();
@@ -553,13 +553,7 @@ impl<'a> DeclDeclarer<'a> {
         });
     }
 
-    fn synthesize_init(
-        &mut self,
-        decl_id: NodeID,
-        body: &mut Block,
-        type_members: &TypeMembers,
-        type_id: TypeId,
-    ) {
+    fn synthesize_init(&mut self, body: &mut Block, type_members: &TypeMembers, type_id: TypeId) {
         let init_id = NodeID(FileID::SYNTHESIZED, self.node_ids.next_id());
         let init_name = self
             .resolver
@@ -568,7 +562,6 @@ impl<'a> DeclDeclarer<'a> {
         self.start_scope(init_id);
 
         // Need to synthesize an init
-        println!("creating self_param_name");
         let self_param_name = self.resolver.declare(
             &Name::Raw("self".into()),
             some!(ParamLocal),
@@ -600,8 +593,6 @@ impl<'a> DeclDeclarer<'a> {
             if *is_static {
                 continue;
             }
-
-            println!("creating property: {:?}", property);
 
             let name = self.resolver.declare(
                 &Name::Raw(name.name_str()),
@@ -644,7 +635,6 @@ impl<'a> DeclDeclarer<'a> {
                 ),
             });
 
-            println!("creating assignment: {:?}", assignment);
             assignments.push(assignment);
         }
 

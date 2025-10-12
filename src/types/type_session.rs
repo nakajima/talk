@@ -282,7 +282,7 @@ impl TypeSession {
         session
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     pub fn generalize(&mut self, inner: Level, ty: InferTy, unsolved: &[Constraint]) -> EnvEntry {
         // collect metas in ty
         let mut metas = FxHashSet::default();
@@ -384,7 +384,7 @@ impl TypeSession {
         EnvEntry::Scheme(Scheme::<InferTy>::new(foralls, predicates, ty))
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     pub fn generalize_with_substitutions(
         &mut self,
         inner: Level,
@@ -462,51 +462,7 @@ impl TypeSession {
         EnvEntry::Scheme(Scheme::<InferTy>::new(foralls, predicates, ty))
     }
 
-    // Handle converting Ty::TypeConstructor/Ty::TypeApplication to Ty::Nominal
-    pub(super) fn normalize_nominals(&mut self, ty: &InferTy, level: Level) -> InferTy {
-        let normalized = match ty.clone() {
-            InferTy::Nominal { .. } => ty.clone(),
-            InferTy::Constructor {
-                symbol,
-                params,
-                ret,
-            } => InferTy::Constructor {
-                symbol,
-                params: params
-                    .into_iter()
-                    .map(|p| self.normalize_nominals(&p, level))
-                    .collect(),
-                ret: self.normalize_nominals(&ret, level).into(),
-            },
-            InferTy::Func(box ty, box ty1) => InferTy::Func(
-                self.normalize_nominals(&ty, level).into(),
-                self.normalize_nominals(&ty1, level).into(),
-            ),
-            InferTy::Tuple(items) => InferTy::Tuple(
-                items
-                    .into_iter()
-                    .map(|i| self.normalize_nominals(&i, level))
-                    .collect(),
-            ),
-            InferTy::Record(row) => {
-                InferTy::Record(self.normalize_nominals_row(&row, level).into())
-            }
-            ty @ (InferTy::Hole(..)
-            | InferTy::Primitive(..)
-            | InferTy::Param(..)
-            | InferTy::Rigid(..)
-            | InferTy::UnificationVar { .. }) => ty,
-        };
-
-        #[cfg(debug_assertions)]
-        if normalized != *ty {
-            tracing::trace!("normalize_nominal: {ty:?} -> {normalized:?}");
-        }
-
-        normalized
-    }
-
-    #[instrument(skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     pub(super) fn lookup(&mut self, sym: &Symbol) -> Option<EnvEntry> {
         if let Some(entry) = self.term_env.lookup(sym).cloned() {
             return Some(entry);
@@ -732,18 +688,6 @@ impl TypeSession {
         }
 
         None
-    }
-
-    pub(super) fn normalize_nominals_row(&mut self, row: &InferRow, level: Level) -> InferRow {
-        if let InferRow::Extend { box row, label, ty } = row.clone() {
-            return InferRow::Extend {
-                row: self.normalize_nominals_row(&row, level).into(),
-                label,
-                ty: self.normalize_nominals(&ty, level),
-            };
-        }
-
-        row.clone()
     }
 
     pub(crate) fn new_type_param(&mut self) -> InferTy {

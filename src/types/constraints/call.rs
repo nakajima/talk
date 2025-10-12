@@ -48,11 +48,11 @@ impl Call {
         }
 
         match &self.callee {
-            InferTy::Constructor { symbol, .. } => {
+            InferTy::Constructor { name, .. } => {
                 // TODO: Figure out if we're dealing with a struct vs an enum here and be more explicit.
                 // This is ok for now since enums can't have initializers and structs always have them.
                 let init_ty = if let Some(initializer) = session
-                    .lookup_initializers(symbol)
+                    .lookup_initializers(&name.symbol().unwrap())
                     .and_then(|i| i.values().next().copied())
                 {
                     let entry = session
@@ -60,7 +60,10 @@ impl Call {
                         .expect("constructor scheme missing");
                     entry.inference_instantiate(session, Level(1), next_wants, self.span)
                 } else {
-                    match session.lookup(symbol).expect("enum type missing from env") {
+                    match session
+                        .lookup(&name.symbol().unwrap())
+                        .expect("enum type missing from env")
+                    {
                         EnvEntry::Mono(ty) => ty,
                         EnvEntry::Scheme(s) => s.ty.clone(),
                     }

@@ -1,5 +1,6 @@
 use crate::{
     compiling::module::ModuleId,
+    name::Name,
     name_resolution::symbol::{Symbol, TypeId},
     types::{infer_ty::TypeParamId, row::Row, type_session::TypeDefKind},
 };
@@ -19,7 +20,7 @@ pub enum Ty {
     Primitive(Symbol),
     Param(TypeParamId),
     Constructor {
-        symbol: Symbol,
+        name: Name,
         params: Vec<Ty>,
         ret: Box<Ty>,
     },
