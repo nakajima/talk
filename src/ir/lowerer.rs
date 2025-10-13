@@ -3,6 +3,8 @@ use crate::ir::ir_ty::IrTy;
 use crate::ir::parse_instruction;
 use crate::label::Label;
 use crate::node_kinds::parameter::Parameter;
+use crate::types::infer_ty::TypeParamId;
+use crate::types::row::Row;
 use crate::types::scheme::Scheme;
 use crate::{
     ast::AST,
@@ -432,11 +434,11 @@ impl Lowerer {
             ExprKind::Variable(name) => Ok(LValue::Variable(name.symbol().unwrap())),
             ExprKind::Member(Some(box base), label, _span) => {
                 let base_lvalue = self.lower_lvalue(base)?;
-                let base_ty = self.ty_from_id(&base.id).expect("didn't get base ty");
+                let base_ty = self.get_ty(base).expect("didn't get base ty");
 
                 Ok(LValue::Field {
                     base: base_lvalue.into(),
-                    ty: base_ty,
+                    ty: base_ty.clone(),
                     field: label.clone(),
                 })
             }
@@ -552,7 +554,7 @@ impl Lowerer {
             let ty = self.ty_from_id(&id)?;
             let dest = self.ret(bind);
 
-            let receiver_ty = self.ty_from_id(&receiver.id)?;
+            let receiver_ty = self.get_ty(receiver)?;
 
             if let Ty::Nominal { symbol, .. } = &receiver_ty
                 && let Some(method) = self
@@ -612,12 +614,13 @@ impl Lowerer {
         &mut self,
         id: NodeID,
         name: &Name,
-        callee: &Value,
+        callee: &Expr,
+        callee_val: &Value,
         mut args: Vec<Value>,
         dest: Register,
     ) -> Result<Value, IRError> {
         let record_dest = self.next_register();
-        let ty = self.ty_from_symbol(&name.symbol().unwrap())?;
+        let ty = self.get_ty(callee)?;
 
         let properties = self
             .types
@@ -685,6 +688,9 @@ impl Lowerer {
             return self.lower_embedded_ir_call(args, dest);
         }
 
+        let callee_ty = self.get_ty(callee).unwrap();
+        println!("callee_entry: {callee_ty:?}");
+
         let ty = self.ty_from_id(&id)?;
         let mut args = args
             .iter()
@@ -704,7 +710,7 @@ impl Lowerer {
         };
 
         if let ExprKind::Constructor(name) = &callee.kind {
-            return self.lower_constructor_call(callee.id, name, &callee_ir, args, dest);
+            return self.lower_constructor_call(callee.id, name, callee, &callee_ir, args, dest);
         }
 
         self.push_instr(Instruction::Call {
@@ -827,7 +833,7 @@ impl Lowerer {
         expr: &Expr,
         label: &Label,
     ) -> Result<Option<Symbol>, IRError> {
-        let Ty::Nominal { symbol, .. } = self.ty_from_id(&expr.id)? else {
+        let Ty::Nominal { symbol, .. } = self.get_ty(expr)? else {
             return Ok(None);
         };
 
@@ -838,6 +844,46 @@ impl Lowerer {
         }
 
         Ok(None)
+    }
+
+    fn get_ty(&self, expr: &Expr) -> Result<Ty, IRError> {
+        let symbol = match &expr.kind {
+            ExprKind::Variable(name) => name.symbol().unwrap(),
+            ExprKind::Func(func) => func.name.symbol().unwrap(),
+            ExprKind::Constructor(name) => name.symbol().unwrap(),
+            _ => return self.ty_from_id(&expr.id),
+        };
+
+        let entry = self
+            .types
+            .get_symbol(&symbol)
+            .ok_or(IRError::TypeNotFound(format!(
+                "no type found for {symbol:?}"
+            )))
+            .unwrap();
+
+        match entry {
+            TypeEntry::Mono(ty) => Ok(ty.clone()),
+            TypeEntry::Poly(scheme) => {
+                let mut substitutions = FxHashMap::<TypeParamId, Ty>::default();
+                for forall in scheme.foralls.iter() {
+                    let ForAll::Ty(param) = forall else { continue };
+                    let concrete = self
+                        .types
+                        .catalog
+                        .instantiations
+                        .get(&(expr.id, *param))
+                        .unwrap();
+
+                    substitutions.insert(*param, concrete.clone());
+                }
+
+                let ty = substitute(scheme.ty.clone(), &substitutions);
+                println!("BEFORE: {:?}\nAFTER: {ty:?}", scheme.ty);
+
+                Ok(ty)
+            }
+        }
     }
 
     fn ty_from_id(&self, id: &NodeID) -> Result<Ty, IRError> {
@@ -854,6 +900,60 @@ impl Lowerer {
             Some(TypeEntry::Poly(scheme)) => Ok(scheme.ty.clone()),
             None => Err(IRError::TypeNotFound(format!("{symbol}"))),
         }
+    }
+}
+
+fn substitute(ty: Ty, substitutions: &FxHashMap<TypeParamId, Ty>) -> Ty {
+    match ty {
+        Ty::Primitive(..) => ty,
+        Ty::Param(type_param_id) => substitutions.get(&type_param_id).unwrap().clone(),
+        Ty::Constructor {
+            name,
+            params,
+            box ret,
+        } => Ty::Constructor {
+            name,
+            params: params
+                .into_iter()
+                .map(|p| substitute(p, substitutions))
+                .collect(),
+            ret: substitute(ret, substitutions).into(),
+        },
+        Ty::Func(box param, box ret) => Ty::Func(
+            substitute(param, substitutions).into(),
+            substitute(ret, substitutions).into(),
+        ),
+        Ty::Tuple(items) => Ty::Tuple(
+            items
+                .into_iter()
+                .map(|i| substitute(i, substitutions))
+                .collect(),
+        ),
+        Ty::Record(box row) => Ty::Record(substitute_row(row, substitutions).into()),
+        Ty::Nominal {
+            symbol,
+            type_args,
+            box row,
+        } => Ty::Nominal {
+            symbol,
+            type_args: type_args
+                .into_iter()
+                .map(|a| substitute(a, substitutions))
+                .collect(),
+            row: substitute_row(row, substitutions).into(),
+        },
+    }
+}
+
+fn substitute_row(row: Row, substitutions: &FxHashMap<TypeParamId, Ty>) -> Row {
+    match row {
+        Row::Empty(..) => row,
+        Row::Param(..) => row,
+        Row::Extend { box row, label, ty } => Row::Extend {
+            row: substitute_row(row, substitutions).into(),
+            label,
+            ty: substitute(ty, substitutions),
+        },
     }
 }
 

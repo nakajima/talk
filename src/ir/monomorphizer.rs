@@ -103,7 +103,10 @@ impl Monomorphizer {
                 Symbol::Void => IrTy::Void,
                 _ => unreachable!(),
             },
-            Ty::Param(..) => todo!(),
+            Ty::Param(..) => {
+                // todo!("param?? {ty:?}");
+                IrTy::Void
+            }
             Ty::Constructor {
                 params, box ret, ..
             } => IrTy::Func(
