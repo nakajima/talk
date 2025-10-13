@@ -54,6 +54,7 @@ impl Wants {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn construction(
         &mut self,
         callee_id: NodeID,
@@ -84,6 +85,8 @@ impl Wants {
             span,
         }));
     }
+
+    #[allow(clippy::too_many_arguments)]
     pub fn associated_equals(
         &mut self,
         node_id: NodeID,
@@ -110,6 +113,7 @@ impl Wants {
             }));
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn call(
         &mut self,
         callee_id: NodeID,

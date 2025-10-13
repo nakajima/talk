@@ -29,7 +29,7 @@ pub struct Monomorphizer {
     types: Types,
     functions: FxHashMap<Symbol, PolyFunction>,
     needs_monomorphization: Vec<Name>,
-    instantiations: FxHashMap<NodeID, FxHashMap<ForAll, Ty>>,
+    instantiations: FxHashMap<NodeID, IndexMap<ForAll, Ty>>,
 }
 
 impl Monomorphizer {
@@ -44,6 +44,7 @@ impl Monomorphizer {
     }
 
     pub fn monomorphize(&mut self) -> FxHashMap<Symbol, Function<IrTy, Label>> {
+        println!("monomorphizing: {:#?}", self.instantiations);
         let mut result = FxHashMap::<Symbol, Function<IrTy, Label>>::default();
         for (name, func) in self.functions.clone() {
             result.insert(name, self.monomorphize_func(func));

@@ -99,7 +99,6 @@ impl RegisterAllocator {
 #[derive(Clone)]
 pub(super) struct PolyFunction {
     pub name: Name,
-    pub foralls: Vec<ForAll>,
     pub params: Vec<Value>,
     pub blocks: Vec<BasicBlock<Ty, Label>>,
     pub ty: Ty,
@@ -112,7 +111,7 @@ pub struct Lowerer {
     pub(super) functions: FxHashMap<Symbol, PolyFunction>,
     pub(super) current_function_stack: Vec<CurrentFunction>,
     pub(super) needs_monomorphization: Vec<Name>,
-    pub(super) instantiations: FxHashMap<NodeID, FxHashMap<ForAll, Ty>>,
+    pub(super) instantiations: FxHashMap<NodeID, IndexMap<ForAll, Ty>>,
 
     bindings: FxHashMap<Symbol, Register>,
 }
@@ -282,9 +281,9 @@ impl Lowerer {
         params: &[Parameter],
         body: &Block,
     ) -> Result<Value, IRError> {
-        let (func_ty, foralls) = match self.types.get_symbol(&name.symbol().unwrap()).unwrap() {
-            TypeEntry::Mono(ty) => (ty.clone(), vec![]),
-            TypeEntry::Poly(scheme) => (scheme.ty.clone(), scheme.foralls.clone()),
+        let func_ty = match self.types.get_symbol(&name.symbol().unwrap()).unwrap() {
+            TypeEntry::Mono(ty) => ty.clone(),
+            TypeEntry::Poly(scheme) => scheme.ty.clone(),
         };
 
         // Uncurry the function type to extract all param types and the final return type
@@ -338,7 +337,6 @@ impl Lowerer {
                 name: name.clone(),
                 params: param_values,
                 blocks: current_function.blocks,
-                foralls,
                 ty: Ty::Func(Box::new(param_ty.clone()), Box::new(ret_ty.clone())),
             },
         );
@@ -434,7 +432,7 @@ impl Lowerer {
             ExprKind::Variable(name) => Ok(LValue::Variable(name.symbol().unwrap())),
             ExprKind::Member(Some(box base), label, _span) => {
                 let base_lvalue = self.lower_lvalue(base)?;
-                let base_ty = self.get_ty(base).expect("didn't get base ty");
+                let base_ty = self.specialized_ty(base).expect("didn't get base ty");
 
                 Ok(LValue::Field {
                     base: base_lvalue.into(),
@@ -554,7 +552,7 @@ impl Lowerer {
             let ty = self.ty_from_id(&id)?;
             let dest = self.ret(bind);
 
-            let receiver_ty = self.get_ty(receiver)?;
+            let receiver_ty = self.specialized_ty(receiver)?;
 
             if let Ty::Nominal { symbol, .. } = &receiver_ty
                 && let Some(method) = self
@@ -620,7 +618,7 @@ impl Lowerer {
         dest: Register,
     ) -> Result<Value, IRError> {
         let record_dest = self.next_register();
-        let ty = self.get_ty(callee)?;
+        let ty = self.specialized_ty(callee)?;
 
         let properties = self
             .types
@@ -688,7 +686,7 @@ impl Lowerer {
             return self.lower_embedded_ir_call(args, dest);
         }
 
-        let callee_ty = self.get_ty(callee).unwrap();
+        let callee_ty = self.specialized_ty(callee).unwrap();
         println!("callee_entry: {callee_ty:?}");
 
         let ty = self.ty_from_id(&id)?;
@@ -762,7 +760,6 @@ impl Lowerer {
                 name: func.name.clone(),
                 params,
                 blocks: current_function.blocks,
-                foralls: Default::default(),
                 ty: Ty::Func(param_tys.clone(), ret_ty.clone().into()),
             },
         );
@@ -829,11 +826,11 @@ impl Lowerer {
     }
 
     fn lookup_instance_method(
-        &self,
+        &mut self,
         expr: &Expr,
         label: &Label,
     ) -> Result<Option<Symbol>, IRError> {
-        let Ty::Nominal { symbol, .. } = self.get_ty(expr)? else {
+        let Ty::Nominal { symbol, .. } = self.specialized_ty(expr)? else {
             return Ok(None);
         };
 
@@ -846,7 +843,7 @@ impl Lowerer {
         Ok(None)
     }
 
-    fn get_ty(&self, expr: &Expr) -> Result<Ty, IRError> {
+    fn specialized_ty(&mut self, expr: &Expr) -> Result<Ty, IRError> {
         let symbol = match &expr.kind {
             ExprKind::Variable(name) => name.symbol().unwrap(),
             ExprKind::Func(func) => func.name.symbol().unwrap(),
@@ -857,25 +854,32 @@ impl Lowerer {
         let entry = self
             .types
             .get_symbol(&symbol)
+            .cloned()
             .ok_or(IRError::TypeNotFound(format!(
                 "no type found for {symbol:?}"
             )))
             .unwrap();
 
+        self.specialize(&entry, expr.id)
+    }
+
+    fn specialize(&mut self, entry: &TypeEntry, id: NodeID) -> Result<Ty, IRError> {
         match entry {
             TypeEntry::Mono(ty) => Ok(ty.clone()),
             TypeEntry::Poly(scheme) => {
                 let mut substitutions = FxHashMap::<TypeParamId, Ty>::default();
+                let instantiations = self.instantiations.entry(id).or_default();
                 for forall in scheme.foralls.iter() {
                     let ForAll::Ty(param) = forall else { continue };
                     let concrete = self
                         .types
                         .catalog
                         .instantiations
-                        .get(&(expr.id, *param))
+                        .get(&(id, *param))
                         .unwrap();
 
                     substitutions.insert(*param, concrete.clone());
+                    instantiations.insert(*forall, concrete.clone());
                 }
 
                 let ty = substitute(scheme.ty.clone(), &substitutions);
@@ -993,7 +997,7 @@ pub fn curry_ty<'a, I: IntoIterator<Item = &'a Ty>>(params: I, ret: Ty) -> Ty {
 #[cfg(test)]
 pub mod tests {
     use crate::{
-        assert_eq_diff,
+        assert_eq_diff, assert_eq_diff_display,
         compiling::driver::{Driver, Source},
         fxhashmap,
         ir::{
@@ -1436,6 +1440,63 @@ pub mod tests {
         ",
         );
 
-        println!("{program}");
+        assert_eq!(
+            *program
+                .functions
+                .get(&SynthesizedId::from(0).into())
+                .unwrap(),
+            Function {
+                name: Name::Resolved(SynthesizedId::from(0).into(), "main".into()),
+                params: vec![].into(),
+                ty: IrTy::Func(vec![], IrTy::Int.into()),
+                blocks: vec![BasicBlock::<IrTy, Label> {
+                    id: BasicBlockId(0),
+                    instructions: vec![
+                        Instruction::Ref {
+                            dest: 0.into(),
+                            ty: IrTy::Func(vec![IrTy::Void], IrTy::Void.into()),
+                            val: Value::Func(Name::Resolved(
+                                Symbol::Global(GlobalId::from(1)),
+                                "id".into()
+                            ))
+                        },
+                        Instruction::ConstantInt {
+                            dest: 2.into(),
+                            val: 123,
+                            meta: vec![InstructionMeta::Source(NodeID::ANY)].into()
+                        },
+                        Instruction::Call {
+                            dest: 1.into(),
+                            ty: IrTy::Int,
+                            callee: Value::Func(Name::Resolved(
+                                Symbol::Synthesized(SynthesizedId::from(1)),
+                                "id[Int]".into()
+                            )),
+                            args: vec![Value::Reg(2)].into(),
+                            meta: meta(),
+                        },
+                        Instruction::ConstantFloat {
+                            dest: 4.into(),
+                            val: 1.23,
+                            meta: vec![InstructionMeta::Source(NodeID::ANY)].into()
+                        },
+                        Instruction::Call {
+                            dest: 3.into(),
+                            ty: IrTy::Float,
+                            callee: Value::Func(Name::Resolved(
+                                Symbol::Synthesized(SynthesizedId::from(2)),
+                                "id[Float]".into()
+                            )),
+                            args: vec![Value::Reg(4)].into(),
+                            meta: meta(),
+                        },
+                    ],
+                    terminator: Terminator::Ret {
+                        val: Value::Reg(3),
+                        ty: IrTy::Float
+                    }
+                }],
+            }
+        );
     }
 }
