@@ -1,6 +1,7 @@
 use crate::{
     label::Label,
     name_resolution::symbol::{AssociatedTypeId, ProtocolId},
+    node_id::NodeID,
     span::Span,
     types::{
         constraints::{
@@ -221,6 +222,7 @@ impl Predicate<InferTy> {
 
     pub fn instantiate(
         &self,
+        id: NodeID,
         substitutions: &InstantiationSubstitutions,
         span: Span,
         level: Level,
@@ -238,6 +240,7 @@ impl Predicate<InferTy> {
                 label,
                 ty,
             } => Constraint::Member(Member {
+                node_id: id,
                 receiver: instantiate_ty(receiver, substitutions, level),
                 label,
                 ty: instantiate_ty(ty, substitutions, level),
@@ -266,6 +269,7 @@ impl Predicate<InferTy> {
                 returns,
                 receiver,
             } => Constraint::Call(Call {
+                callee_id: id,
                 callee: instantiate_ty(callee, substitutions, level),
                 args: args
                     .iter()
@@ -282,6 +286,7 @@ impl Predicate<InferTy> {
                 associated_type_id,
                 output,
             } => Constraint::AssociatedEquals(AssociatedEquals {
+                node_id: id,
                 subject: instantiate_ty(subject, substitutions, level),
                 protocol_id,
                 associated_type_id,

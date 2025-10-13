@@ -10,11 +10,16 @@ pub mod tests {
         make_row,
         name_resolution::{
             name_resolver::NameResolved,
-            symbol::{ProtocolId, Symbol, TypeId},
+            symbol::{GlobalId, ProtocolId, Symbol, TypeId},
         },
-        node_kinds::decl::{Decl, DeclKind},
+        node_kinds::{
+            decl::{Decl, DeclKind},
+            expr::{Expr, ExprKind},
+            stmt::{Stmt, StmtKind},
+        },
         types::{
             row::Row,
+            scheme::{ForAll, Scheme},
             ty::Ty,
             type_catalog::ConformanceKey,
             type_error::TypeError,
@@ -46,6 +51,16 @@ pub mod tests {
         let ast = typed.phase.asts.into_iter().next().unwrap().1;
 
         (ast, types)
+    }
+
+    pub fn decl_ty(i: usize, ast: &AST<NameResolved>, session: &Types) -> Ty {
+        println!("{:?} {session:#?}", &ast.roots[i].as_decl().id);
+        let entry = session.get(&ast.roots[i].as_decl().id).unwrap();
+
+        match entry {
+            TypeEntry::Mono(ty) => ty.clone(),
+            TypeEntry::Poly(scheme) => scheme.ty.clone(),
+        }
     }
 
     pub fn ty(i: usize, ast: &AST<NameResolved>, session: &Types) -> Ty {
@@ -155,6 +170,246 @@ pub mod tests {
         );
         assert_eq!(ty(1, &ast, &types), Ty::Int);
         assert_eq!(ty(2, &ast, &types), Ty::Bool);
+    }
+
+    #[test]
+    fn stores_func_instantiations() {
+        let (ast, types) = typecheck(
+            "
+        func identity(x) { x }
+        identity(123)
+        identity(true)
+        ",
+        );
+
+        let Stmt {
+            kind:
+                StmtKind::Expr(Expr {
+                    kind:
+                        ExprKind::Call {
+                            callee: box root_1, ..
+                        },
+                    ..
+                }),
+            ..
+        } = ast.roots[1].as_stmt()
+        else {
+            panic!("didn't get expr");
+        };
+        let Stmt {
+            kind:
+                StmtKind::Expr(Expr {
+                    kind:
+                        ExprKind::Call {
+                            callee: box root_2, ..
+                        },
+                    ..
+                }),
+            ..
+        } = ast.roots[2].as_stmt()
+        else {
+            panic!("didn't get expr");
+        };
+
+        let TypeEntry::Poly(Scheme {
+            ty: Ty::Func(box Ty::Param(type_param), ..),
+            ..
+        }) = types
+            .get_symbol(&Symbol::Global(GlobalId::from(1)))
+            .unwrap()
+        else {
+            panic!("didn't get func type param");
+        };
+
+        assert_eq!(
+            *types
+                .catalog
+                .instantiations
+                .get(&(root_1.id, *type_param))
+                .unwrap(),
+            Ty::Int
+        );
+        assert_eq!(
+            *types
+                .catalog
+                .instantiations
+                .get(&(root_2.id, *type_param))
+                .unwrap(),
+            Ty::Bool
+        );
+    }
+
+    #[test]
+    fn stores_struct_instantiations() {
+        let (ast, types) = typecheck(
+            "
+        struct Wrapper<T> {
+            let wrapped: T
+        }
+        Wrapper(wrapped: 123)
+        Wrapper(wrapped: true)
+        ",
+        );
+
+        // Extract the constructor calls
+        let Stmt {
+            kind:
+                StmtKind::Expr(Expr {
+                    kind:
+                        ExprKind::Call {
+                            callee:
+                                box Expr {
+                                    kind: ExprKind::Constructor(_),
+                                    id: constructor_1_id,
+                                    ..
+                                },
+                            ..
+                        },
+                    ..
+                }),
+            ..
+        } = ast.roots[1].as_stmt()
+        else {
+            panic!("didn't get first constructor call");
+        };
+
+        let Stmt {
+            kind:
+                StmtKind::Expr(Expr {
+                    kind:
+                        ExprKind::Call {
+                            callee:
+                                box Expr {
+                                    kind: ExprKind::Constructor(_),
+                                    id: constructor_2_id,
+                                    ..
+                                },
+                            ..
+                        },
+                    ..
+                }),
+            ..
+        } = ast.roots[2].as_stmt()
+        else {
+            panic!("didn't get second constructor call");
+        };
+
+        // Get the struct's type parameter
+        let TypeEntry::Poly(Scheme { foralls, .. }) =
+            types.get_symbol(&Symbol::Type(TypeId::from(1))).unwrap()
+        else {
+            panic!("didn't get struct scheme");
+        };
+
+        let ForAll::Ty(type_param) = foralls.iter().next().unwrap() else {
+            unreachable!()
+        };
+
+        println!("{:?}", types.catalog.instantiations);
+
+        // Check instantiations are stored
+        println!("looking for {:?}", &(*constructor_1_id, *type_param));
+        assert_eq!(
+            *types
+                .catalog
+                .instantiations
+                .get(&(*constructor_1_id, *type_param))
+                .unwrap(),
+            Ty::Int
+        );
+        assert_eq!(
+            *types
+                .catalog
+                .instantiations
+                .get(&(*constructor_2_id, *type_param))
+                .unwrap(),
+            Ty::Bool
+        );
+    }
+
+    #[test]
+    fn stores_enum_instantiations() {
+        let (ast, types) = typecheck(
+            "
+        enum Opt<T> {
+            case some(T), none
+        }
+        Opt.some(123)
+        Opt.some(true)
+        ",
+        );
+
+        // Extract the variant access calls
+        let Stmt {
+            kind:
+                StmtKind::Expr(Expr {
+                    kind:
+                        ExprKind::Call {
+                            callee:
+                                box Expr {
+                                    kind: ExprKind::Member(..),
+                                    id: member_1_id,
+                                    ..
+                                },
+                            ..
+                        },
+                    ..
+                }),
+            ..
+        } = ast.roots[1].as_stmt()
+        else {
+            panic!("didn't get first enum variant call");
+        };
+
+        let Stmt {
+            kind:
+                StmtKind::Expr(Expr {
+                    kind:
+                        ExprKind::Call {
+                            callee:
+                                box Expr {
+                                    kind: ExprKind::Member(..),
+                                    id: member_2_id,
+                                    ..
+                                },
+                            ..
+                        },
+                    ..
+                }),
+            ..
+        } = ast.roots[2].as_stmt()
+        else {
+            panic!("didn't get second enum variant call");
+        };
+
+        // Get the enum's type parameter
+        let TypeEntry::Poly(Scheme { foralls, .. }) =
+            types.get_symbol(&Symbol::Type(TypeId::from(1))).unwrap()
+        else {
+            panic!("didn't get enum scheme");
+        };
+
+        let ForAll::Ty(type_param) = foralls.iter().next().unwrap() else {
+            unreachable!()
+        };
+
+        // Check instantiations are stored
+        assert_eq!(
+            *types
+                .catalog
+                .instantiations
+                .get(&(*member_1_id, *type_param))
+                .unwrap(),
+            Ty::Int
+        );
+        assert_eq!(
+            *types
+                .catalog
+                .instantiations
+                .get(&(*member_2_id, *type_param))
+                .unwrap(),
+            Ty::Bool
+        );
     }
 
     #[test]
@@ -1367,7 +1622,7 @@ pub mod tests {
             ty(3, &ast, &types),
             Ty::Nominal {
                 symbol: TypeId::from(1).into(),
-                row: Box::new(make_row!(Enum, "some" => Ty::Param(3.into()), "none" => Ty::Void)),
+                row: Box::new(make_row!(Enum, "some" => Ty::Param(1.into()), "none" => Ty::Void)),
                 type_args: vec![]
             }
         );

@@ -1,5 +1,6 @@
 use crate::{
     name_resolution::symbol::Symbol,
+    node_id::NodeID,
     span::Span,
     types::{
         constraints::constraint::ConstraintCause,
@@ -16,6 +17,7 @@ use crate::{
 
 #[derive(Debug, Clone)]
 pub struct Construction {
+    pub callee_id: NodeID,
     pub callee: InferTy,
     pub args: Vec<InferTy>,
     pub returns: InferTy,
@@ -50,9 +52,14 @@ impl Construction {
 
         let (init_ty, inst_subs) = match init_entry {
             EnvEntry::Mono(ty) => (ty, Default::default()),
-            EnvEntry::Scheme(s) => {
-                s.solver_instantiate(session, level, next_wants, self.span, substitutions)
-            }
+            EnvEntry::Scheme(s) => s.solver_instantiate(
+                self.callee_id,
+                session,
+                level,
+                next_wants,
+                self.span,
+                substitutions,
+            ),
         };
 
         let mut row = InferRow::Empty(TypeDefKind::Struct);

@@ -4,6 +4,7 @@ use tracing::instrument;
 
 use crate::{
     name_resolution::symbol::{AssociatedTypeId, ProtocolId},
+    node_id::NodeID,
     span::Span,
     types::{
         constraints::constraint::{Constraint, ConstraintCause},
@@ -20,6 +21,7 @@ use crate::{
 
 #[derive(Debug, Clone)]
 pub struct AssociatedEquals {
+    pub node_id: NodeID,
     pub subject: InferTy,
     pub protocol_id: ProtocolId,
     pub associated_type_id: AssociatedTypeId,
@@ -119,8 +121,15 @@ impl AssociatedEquals {
             match entry {
                 EnvEntry::Mono(t) => t,
                 EnvEntry::Scheme(s) => {
-                    s.solver_instantiate(session, level, next_wants, self.span, substitutions)
-                        .0
+                    s.solver_instantiate(
+                        self.node_id,
+                        session,
+                        level,
+                        next_wants,
+                        self.span,
+                        substitutions,
+                    )
+                    .0
                 }
             }
         };

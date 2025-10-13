@@ -60,6 +60,7 @@ impl Scheme<Ty> {
 impl Scheme<InferTy> {
     pub fn inference_instantiate(
         &self,
+        id: NodeID,
         session: &mut TypeSession,
         level: Level,
         wants: &mut Wants,
@@ -77,6 +78,10 @@ impl Scheme<InferTy> {
                     };
                     tracing::trace!("instantiating {param:?} with {meta:?}");
                     substitutions.ty.insert(*param, meta);
+                    session
+                        .type_catalog
+                        .instantiations
+                        .insert((id, *param), InferTy::UnificationVar { id: meta, level });
 
                     if let Some(bounds) = session.type_param_bounds.get(param).cloned() {
                         for bound in bounds {
@@ -108,6 +113,7 @@ impl Scheme<InferTy> {
                                 };
 
                                 wants.member(
+                                    id,
                                     InferTy::UnificationVar { id: meta, level },
                                     label.clone(),
                                     substitute(ty, &substitutions),
@@ -129,7 +135,7 @@ impl Scheme<InferTy> {
         }
 
         for predicate in &self.predicates {
-            let constraint = predicate.instantiate(&substitutions, span, level);
+            let constraint = predicate.instantiate(id, &substitutions, span, level);
             tracing::trace!("predicate instantiated: {predicate:?} -> {constraint:?}");
             wants.push(constraint);
         }
@@ -143,6 +149,7 @@ impl Scheme<InferTy> {
     // Used while solving
     pub fn solver_instantiate(
         &self,
+        id: NodeID,
         session: &mut TypeSession,
         level: Level,
         wants: &mut Wants,
@@ -165,6 +172,10 @@ impl Scheme<InferTy> {
                         .meta_levels
                         .insert(Meta::Ty(meta), level);
                     substitutions.ty.insert(*param, meta);
+                    session
+                        .type_catalog
+                        .instantiations
+                        .insert((id, *param), InferTy::UnificationVar { id: meta, level });
                 }
                 ForAll::Row(param) => {
                     let InferRow::Var(meta) = session.new_row_meta_var(level) else {
@@ -180,7 +191,7 @@ impl Scheme<InferTy> {
         }
 
         for predicate in &self.predicates {
-            let constraint = predicate.instantiate(&substitutions, span, level);
+            let constraint = predicate.instantiate(id, &substitutions, span, level);
             tracing::trace!("predicate instantiated: {predicate:?} -> {constraint:?}");
             wants.push(constraint);
         }
@@ -195,6 +206,7 @@ impl Scheme<InferTy> {
 
     pub fn instantiate_with_args(
         &self,
+        id: NodeID,
         args: &[(InferTy, NodeID)],
         session: &mut TypeSession,
         level: Level,
@@ -240,7 +252,7 @@ impl Scheme<InferTy> {
         }
 
         for predicate in &self.predicates {
-            let constraint = predicate.instantiate(&substitutions, span, level);
+            let constraint = predicate.instantiate(id, &substitutions, span, level);
             tracing::trace!("predicate instantiated: {predicate:?} -> {constraint:?}");
             wants.push(constraint);
         }

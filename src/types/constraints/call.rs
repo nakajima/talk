@@ -1,4 +1,5 @@
 use crate::{
+    node_id::NodeID,
     span::Span,
     types::{
         constraints::constraint::{Constraint, ConstraintCause},
@@ -14,6 +15,7 @@ use crate::{
 
 #[derive(Debug, Clone)]
 pub struct Call {
+    pub callee_id: NodeID,
     pub callee: InferTy,
     pub args: Vec<InferTy>,
     pub returns: InferTy,
@@ -58,7 +60,13 @@ impl Call {
                     let entry = session
                         .lookup(&initializer)
                         .expect("constructor scheme missing");
-                    entry.inference_instantiate(session, Level(1), next_wants, self.span)
+                    entry.inference_instantiate(
+                        self.callee_id,
+                        session,
+                        Level(1),
+                        next_wants,
+                        self.span,
+                    )
                 } else {
                     match session
                         .lookup(&name.symbol().unwrap())

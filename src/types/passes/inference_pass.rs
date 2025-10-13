@@ -329,11 +329,11 @@ impl<'a> InferencePass<'a> {
                 name: Name::Resolved(sym @ Symbol::TypeParameter(..), ..),
                 name_span: _,
                 generics: _,
-            } => {
-                let entry = self.session.lookup(sym).expect("did not get type param");
-
-                entry.inference_instantiate(self.session, level, wants, annotation.span)
-            }
+            } => self
+                .session
+                .lookup(sym)
+                .expect("did not get type param")
+                .inference_instantiate(annotation.id, self.session, level, wants, annotation.span),
             TypeAnnotationKind::Nominal {
                 name: Name::Resolved(symbol, ..),
                 name_span: _,
@@ -354,7 +354,7 @@ impl<'a> InferencePass<'a> {
                 .lookup(sym)
                 .unwrap()
                 .clone()
-                .inference_instantiate(self.session, level, wants, annotation.span),
+                .inference_instantiate(annotation.id, self.session, level, wants, annotation.span),
             TypeAnnotationKind::Record { fields } => {
                 let mut row = InferRow::Empty(TypeDefKind::Struct);
                 for field in fields.iter().rev() {
@@ -581,7 +581,7 @@ impl<'a> InferencePass<'a> {
                 if let Some(entry) = self.session.lookup(&init_symbol) {
                     // Instantiate the scheme to get the function type
                     let func_ty =
-                        entry.inference_instantiate(self.session, level, wants, decl.span);
+                        entry.inference_instantiate(decl.id, self.session, level, wants, decl.span);
 
                     // Extract parameter types from the curried function
                     let mut param_tys = Vec::new();
@@ -786,6 +786,7 @@ impl<'a> InferencePass<'a> {
                 };
 
                 wants.member(
+                    pattern.id,
                     expected.clone(),
                     variant_name.into(),
                     payload,
@@ -876,7 +877,7 @@ impl<'a> InferencePass<'a> {
                 match self.session.lookup(sym) {
                     Some(EnvEntry::Scheme(scheme)) => {
                         scheme
-                            .inference_instantiate(self.session, level, wants, expr.span)
+                            .inference_instantiate(expr.id, self.session, level, wants, expr.span)
                             .0
                     } // or pass through
                     Some(EnvEntry::Mono(t)) => t.clone(),
@@ -975,6 +976,7 @@ impl<'a> InferencePass<'a> {
         let member_ty = self.session.new_ty_meta_var(level);
 
         wants.member(
+            id,
             receiver_ty,
             label.clone(),
             member_ty.clone(),
@@ -1061,7 +1063,14 @@ impl<'a> InferencePass<'a> {
                 .iter()
                 .map(|arg| (self.infer_type_annotation(arg, level, wants), arg.id))
                 .collect();
-            scheme.instantiate_with_args(&type_args_tys, self.session, level, wants, callee.span)
+            scheme.instantiate_with_args(
+                callee.id,
+                &type_args_tys,
+                self.session,
+                level,
+                wants,
+                callee.span,
+            )
         } else {
             self.infer_expr(callee, level, wants)
         };
@@ -1091,6 +1100,7 @@ impl<'a> InferencePass<'a> {
 
         if let ExprKind::Constructor(Name::Resolved(sym, _)) = &callee.kind {
             wants.construction(
+                callee.id,
                 callee_ty,
                 arg_tys,
                 returns.clone(),
@@ -1100,6 +1110,7 @@ impl<'a> InferencePass<'a> {
             );
         } else {
             wants.call(
+                callee.id,
                 callee_ty,
                 arg_tys,
                 returns.clone(),

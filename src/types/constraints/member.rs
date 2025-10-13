@@ -2,6 +2,7 @@ use crate::{
     label::Label,
     name::Name,
     name_resolution::symbol::Symbol,
+    node_id::NodeID,
     span::Span,
     types::{
         constraints::constraint::{Constraint, ConstraintCause},
@@ -20,6 +21,7 @@ use crate::{
 
 #[derive(Debug, Clone)]
 pub struct Member {
+    pub node_id: NodeID,
     pub receiver: InferTy,
     pub label: Label,
     pub ty: InferTy,
@@ -100,6 +102,7 @@ impl Member {
             match sym {
                 Symbol::InstanceMethod(_) => {
                     let scheme_ty = entry.solver_instantiate(
+                        self.node_id,
                         session,
                         level,
                         substitutions,
@@ -115,6 +118,7 @@ impl Member {
                 }
                 Symbol::StaticMethod(_) => {
                     let scheme_ty = entry.solver_instantiate(
+                        self.node_id,
                         session,
                         level,
                         substitutions,
@@ -127,6 +131,7 @@ impl Member {
                 Symbol::Property(..) => {
                     // Instantiate the declared property type (generic-aware).
                     let scheme_ty = entry.solver_instantiate(
+                        self.node_id,
                         session,
                         level,
                         substitutions,
@@ -212,6 +217,7 @@ impl Member {
                     let (payload_ty, inst_subs) = match entry {
                         EnvEntry::Mono(t) => (t, InstantiationSubstitutions::default()),
                         EnvEntry::Scheme(s) => s.solver_instantiate(
+                            self.node_id,
                             session,
                             level,
                             next_wants,

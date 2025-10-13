@@ -5,6 +5,7 @@ use tracing::instrument;
 
 use crate::{
     name_resolution::symbol::{ProtocolId, Symbol},
+    node_id::NodeID,
     span::Span,
     types::{
         constraints::constraint::Constraint,
@@ -114,16 +115,28 @@ impl Conforms {
         let req_ty = match requirement {
             EnvEntry::Mono(ty) => ty.clone(),
             EnvEntry::Scheme(s) => {
-                s.inference_instantiate(&mut session, level, &mut temp_wants, self.span)
-                    .0
+                s.inference_instantiate(
+                    NodeID::SYNTHESIZED,
+                    &mut session,
+                    level,
+                    &mut temp_wants,
+                    self.span,
+                )
+                .0
             }
         };
 
         let impl_ty = match implementation {
             EnvEntry::Mono(ty) => ty.clone(),
             EnvEntry::Scheme(s) => {
-                s.inference_instantiate(&mut session, level, &mut temp_wants, self.span)
-                    .0
+                s.inference_instantiate(
+                    NodeID::SYNTHESIZED,
+                    &mut session,
+                    level,
+                    &mut temp_wants,
+                    self.span,
+                )
+                .0
             }
         };
 

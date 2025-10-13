@@ -10,7 +10,10 @@ use crate::{
     span::Span,
     types::{
         fields::Associated,
+        infer_ty::{InferTy, TypeParamId},
         passes::dependencies_pass::{Conformance, ConformanceRequirement},
+        ty::Ty,
+        type_session::{TypeEntry, TypeSession},
     },
 };
 
@@ -115,8 +118,8 @@ pub struct ConformanceKey {
     pub conforming_id: Symbol,
 }
 
-#[derive(Debug, PartialEq, Default, Clone)]
-pub struct TypeCatalog {
+#[derive(Debug, PartialEq, Clone)]
+pub struct TypeCatalog<T> {
     pub nominals: FxHashMap<Symbol, Nominal>,
     pub protocols: FxHashMap<ProtocolId, Protocol>,
     pub conformances: FxHashMap<ConformanceKey, Conformance>,
@@ -128,9 +131,57 @@ pub struct TypeCatalog {
     pub instance_methods: FxHashMap<Symbol, FxHashMap<Label, Symbol>>,
     pub static_methods: FxHashMap<Symbol, FxHashMap<Label, Symbol>>,
     pub variants: FxHashMap<Symbol, FxHashMap<Label, Symbol>>,
+
+    pub instantiations: FxHashMap<(NodeID, TypeParamId), T>,
 }
 
-impl TypeCatalog {
+impl<T> Default for TypeCatalog<T> {
+    fn default() -> Self {
+        Self {
+            nominals: Default::default(),
+            protocols: Default::default(),
+            conformances: Default::default(),
+            extensions: Default::default(),
+            child_types: Default::default(),
+
+            initializers: Default::default(),
+            properties: Default::default(),
+            instance_methods: Default::default(),
+            static_methods: Default::default(),
+            variants: Default::default(),
+
+            instantiations: Default::default(),
+        }
+    }
+}
+
+impl TypeCatalog<InferTy> {
+    pub fn finalize(self, session: &mut TypeSession) -> TypeCatalog<Ty> {
+        let mut instantiations: FxHashMap<(NodeID, TypeParamId), Ty> = FxHashMap::default();
+        for (key, infer_ty) in self.instantiations {
+            let ty = match session.finalize_ty(infer_ty) {
+                TypeEntry::Mono(ty) => ty.clone(),
+                TypeEntry::Poly(scheme) => scheme.ty.clone(),
+            };
+            instantiations.insert(key, ty);
+        }
+        TypeCatalog {
+            nominals: self.nominals,
+            protocols: self.protocols,
+            conformances: self.conformances,
+            extensions: self.extensions,
+            child_types: self.child_types,
+            initializers: self.initializers,
+            properties: self.properties,
+            instance_methods: self.instance_methods,
+            static_methods: self.static_methods,
+            variants: self.variants,
+            instantiations,
+        }
+    }
+}
+
+impl<T> TypeCatalog<T> {
     pub fn lookup_member(&self, receiver: &Symbol, label: &Label) -> Option<Symbol> {
         if let Some(methods) = self.properties.get(receiver)
             && let Some(sym) = methods.get(label)

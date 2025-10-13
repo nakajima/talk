@@ -3,6 +3,7 @@ use std::collections::VecDeque;
 use crate::{
     label::Label,
     name_resolution::symbol::{AssociatedTypeId, ProtocolId, Symbol},
+    node_id::NodeID,
     span::Span,
     types::{
         constraints::{
@@ -55,6 +56,7 @@ impl Wants {
 
     pub fn construction(
         &mut self,
+        callee_id: NodeID,
         callee: InferTy,
         args: Vec<InferTy>,
         returns: InferTy,
@@ -64,6 +66,7 @@ impl Wants {
     ) {
         tracing::debug!("constraining constructor {callee:?}({args:?}) = {type_symbol:?}");
         self.defer.push_back(Constraint::Construction(Construction {
+            callee_id,
             callee,
             args,
             returns,
@@ -83,6 +86,7 @@ impl Wants {
     }
     pub fn associated_equals(
         &mut self,
+        node_id: NodeID,
         subject: InferTy,
         protocol_id: ProtocolId,
         associated_type_id: AssociatedTypeId,
@@ -96,6 +100,7 @@ impl Wants {
 
         self.defer
             .push_back(Constraint::AssociatedEquals(AssociatedEquals {
+                node_id,
                 subject,
                 protocol_id,
                 associated_type_id,
@@ -107,6 +112,7 @@ impl Wants {
 
     pub fn call(
         &mut self,
+        callee_id: NodeID,
         callee: InferTy,
         args: Vec<InferTy>,
         returns: InferTy,
@@ -116,6 +122,7 @@ impl Wants {
     ) {
         tracing::debug!("constraining call {callee:?}({args:?}) = {returns:?}");
         self.defer.push_back(Constraint::Call(Call {
+            callee_id,
             callee,
             args,
             returns,
@@ -137,6 +144,7 @@ impl Wants {
 
     pub fn member(
         &mut self,
+        node_id: NodeID,
         receiver: InferTy,
         label: Label,
         ty: InferTy,
@@ -145,6 +153,7 @@ impl Wants {
     ) {
         tracing::debug!("constraining member {receiver:?}.{label:?} <> {ty:?}");
         self.defer.push_back(Constraint::Member(Member {
+            node_id,
             receiver,
             label,
             ty,

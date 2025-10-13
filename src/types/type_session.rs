@@ -116,7 +116,7 @@ pub struct TypeSession {
     pub skolem_bounds: FxHashMap<SkolemId, Vec<TypeId>>,
     pub(super) type_param_bounds: FxHashMap<TypeParamId, Vec<ProtocolBound>>,
     pub typealiases: FxHashMap<Symbol, Scheme<InferTy>>,
-    pub(super) type_catalog: TypeCatalog,
+    pub(super) type_catalog: TypeCatalog<InferTy>,
     pub(super) modules: Rc<ModuleEnvironment>,
     pub aliases: FxHashMap<Symbol, Scheme<InferTy>>,
 }
@@ -133,7 +133,7 @@ pub enum TypeEntry {
 pub struct Types {
     types_by_node: FxHashMap<NodeID, TypeEntry>,
     types_by_symbol: FxHashMap<Symbol, TypeEntry>,
-    pub catalog: TypeCatalog,
+    pub catalog: TypeCatalog<Ty>,
 }
 
 impl Types {
@@ -238,8 +238,10 @@ impl TypeSession {
             })
             .collect();
 
+        let catalog = std::mem::take(&mut self.type_catalog);
+        let catalog = catalog.finalize(&mut self);
         let types = Types {
-            catalog: self.type_catalog,
+            catalog,
             types_by_node: entries,
             types_by_symbol,
         };
@@ -247,7 +249,7 @@ impl TypeSession {
         Ok(types)
     }
 
-    fn finalize_ty(&mut self, ty: InferTy) -> TypeEntry {
+    pub(super) fn finalize_ty(&mut self, ty: InferTy) -> TypeEntry {
         let ty = substitute(ty.clone(), &self.skolem_map);
 
         if ty.contains_var() {
@@ -259,6 +261,14 @@ impl TypeSession {
 
     pub fn apply(&mut self, substitutions: &mut UnificationSubstitutions) {
         for ty in self.types_by_node.values_mut() {
+            if matches!(ty, InferTy::Primitive(_)) {
+                continue;
+            }
+
+            *ty = apply(ty.clone(), substitutions);
+        }
+
+        for ty in self.type_catalog.instantiations.values_mut() {
             if matches!(ty, InferTy::Primitive(_)) {
                 continue;
             }

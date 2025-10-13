@@ -97,7 +97,7 @@ impl RegisterAllocator {
 #[derive(Clone)]
 pub(super) struct PolyFunction {
     pub name: Name,
-    pub _foralls: Vec<ForAll>,
+    pub foralls: Vec<ForAll>,
     pub params: Vec<Value>,
     pub blocks: Vec<BasicBlock<Ty, Label>>,
     pub ty: Ty,
@@ -280,7 +280,10 @@ impl Lowerer {
         params: &[Parameter],
         body: &Block,
     ) -> Result<Value, IRError> {
-        let func_ty = self.ty_from_symbol(&name.symbol().unwrap())?;
+        let (func_ty, foralls) = match self.types.get_symbol(&name.symbol().unwrap()).unwrap() {
+            TypeEntry::Mono(ty) => (ty.clone(), vec![]),
+            TypeEntry::Poly(scheme) => (scheme.ty.clone(), scheme.foralls.clone()),
+        };
 
         // Uncurry the function type to extract all param types and the final return type
 
@@ -333,7 +336,7 @@ impl Lowerer {
                 name: name.clone(),
                 params: param_values,
                 blocks: current_function.blocks,
-                _foralls: Default::default(),
+                foralls,
                 ty: Ty::Func(Box::new(param_ty.clone()), Box::new(ret_ty.clone())),
             },
         );
@@ -753,7 +756,7 @@ impl Lowerer {
                 name: func.name.clone(),
                 params,
                 blocks: current_function.blocks,
-                _foralls: Default::default(),
+                foralls: Default::default(),
                 ty: Ty::Func(param_tys.clone(), ret_ty.clone().into()),
             },
         );
@@ -1321,5 +1324,18 @@ pub mod tests {
                 }],
             }
         );
+    }
+
+    #[test]
+    fn monomorphizes_simple_generic_func() {
+        let program = lower(
+            "
+            func id(x) { x }
+            id(123)
+            id(1.23)
+        ",
+        );
+
+        println!("{program}");
     }
 }

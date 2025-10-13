@@ -10,6 +10,7 @@ impl FileID {
 pub struct NodeID(pub FileID, pub u32);
 
 impl NodeID {
+    pub const SYNTHESIZED: NodeID = NodeID(FileID(u32::MAX - 1), u32::MAX - 1);
     #[cfg(test)]
     pub const ANY: NodeID = NodeID(FileID(u32::MAX), u32::MAX);
 }

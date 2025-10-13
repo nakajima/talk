@@ -93,10 +93,31 @@ impl<'a> TypeResolvePass<'a> {
                 symbol: *decl_id,
                 type_args: generics
                     .iter()
-                    .map(|_| self.session.new_type_param())
+                    .map(|(name, _)| {
+                        let param = self.session.new_type_param();
+                        self.session
+                            .insert_mono(name.symbol().unwrap(), param.clone());
+                        param
+                    })
                     .collect(),
                 row,
             };
+
+            // Immediately associate the generic symbols with the created type parameters
+            // if let InferTy::Nominal { type_args, .. } = &base {
+            //     for ((name, _), type_arg) in generics.iter().zip(type_args.iter()) {
+            //         if let (Name::Resolved(sym, _), InferTy::Param(param_id)) = (name, type_arg) {
+            //             self.session.insert_term(
+            //                 *sym,
+            //                 EnvEntry::Scheme(Scheme {
+            //                     foralls: vec![ForAll::Ty(*param_id)],
+            //                     predicates: vec![],
+            //                     ty: type_arg.clone(),
+            //                 }),
+            //             );
+            //         }
+            //     }
+            // }
 
             self.session.insert_mono(*decl_id, base);
         }
@@ -198,18 +219,18 @@ impl<'a> TypeResolvePass<'a> {
     }
 
     fn resolve_protocol(&mut self, type_def: &TypeDef) -> Result<Protocol, TypeError> {
-        let ty = self.session.new_type_param();
+        let self_ty = self.session.new_type_param();
         self.self_symbols.push(type_def.name.symbol().unwrap());
 
         // The Self type parameter should be quantified in a scheme
-        let entry = if let InferTy::Param(param_id) = ty.clone() {
+        let entry = if let InferTy::Param(param_id) = self_ty.clone() {
             EnvEntry::Scheme(Scheme {
                 foralls: vec![ForAll::Ty(param_id)],
                 predicates: vec![],
-                ty,
+                ty: self_ty,
             })
         } else {
-            EnvEntry::Mono(ty)
+            EnvEntry::Mono(self_ty)
         };
 
         self.session
@@ -729,6 +750,7 @@ impl<'a> TypeResolvePass<'a> {
                     foralls.extend(fas);
                     ty
                 } else {
+                    // panic!("didn't get type param for {annotation:?}");
                     self.session.new_type_param()
                 };
 
@@ -888,7 +910,11 @@ impl<'a> TypeResolvePass<'a> {
         &mut self,
         decl: &GenericDecl,
     ) -> (InferTy, Vec<Predicate<InferTy>>, Vec<ForAll>) {
-        let ty = self.session.new_type_param();
+        let ty = self
+            .session
+            .lookup(&decl.name.symbol().unwrap())
+            .map(|t| t._as_ty())
+            .unwrap_or_else(|| self.session.new_type_param());
 
         let InferTy::Param(id) = ty else {
             unreachable!();
