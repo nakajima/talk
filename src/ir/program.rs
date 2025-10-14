@@ -1,4 +1,4 @@
-use rustc_hash::FxHashMap;
+use indexmap::IndexMap;
 
 use crate::{
     ir::{function::Function, ir_ty::IrTy},
@@ -8,7 +8,7 @@ use crate::{
 
 #[derive(Debug, Default, PartialEq)]
 pub struct Program {
-    pub functions: FxHashMap<Symbol, Function<IrTy, Label>>,
+    pub functions: IndexMap<Symbol, Function<IrTy, Label>>,
 }
 
 impl std::fmt::Display for Program {

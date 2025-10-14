@@ -7,10 +7,11 @@ pub mod tests {
             module::ModuleId,
         },
         diagnostic::Diagnostic,
+        ir::monomorphizer::uncurry_function,
         make_row,
         name_resolution::{
             name_resolver::NameResolved,
-            symbol::{GlobalId, ProtocolId, Symbol, TypeId},
+            symbol::{GlobalId, ProtocolId, Symbol, SynthesizedId, TypeId},
         },
         node_kinds::{
             decl::{Decl, DeclKind},
@@ -54,7 +55,6 @@ pub mod tests {
     }
 
     pub fn decl_ty(i: usize, ast: &AST<NameResolved>, session: &Types) -> Ty {
-        println!("{:?} {session:#?}", &ast.roots[i].as_decl().id);
         let entry = session.get(&ast.roots[i].as_decl().id).unwrap();
 
         match entry {
@@ -305,10 +305,7 @@ pub mod tests {
             unreachable!()
         };
 
-        println!("{:?}", types.catalog.instantiations);
-
         // Check instantiations are stored
-        println!("looking for {:?}", &(*constructor_1_id, *type_param));
         assert_eq!(
             *types
                 .catalog
@@ -1242,14 +1239,22 @@ pub mod tests {
         ",
         );
 
-        assert_eq!(
-            ty(1, &ast, &types),
-            Ty::Nominal {
-                symbol: TypeId::from(1).into(),
-                row: Box::new(make_row!(Struct, "age" => Ty::Int, "height" => Ty::Float)),
-                type_args: vec![],
-            }
+        let nominal = Ty::Nominal {
+            symbol: TypeId::from(1).into(),
+            row: Box::new(make_row!(Struct, "age" => Ty::Int, "height" => Ty::Float)),
+            type_args: vec![],
+        };
+
+        let (params, _ret) = uncurry_function(
+            types
+                .get_symbol(&Symbol::from(SynthesizedId::from(1)))
+                .unwrap()
+                .clone()
+                .as_mono_ty(),
         );
+
+        assert_eq!(params.len(), 3);
+        assert_eq!(ty(1, &ast, &types), nominal);
     }
 
     #[test]

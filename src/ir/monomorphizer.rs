@@ -9,15 +9,13 @@ use crate::{
         function::Function,
         instruction::Instruction,
         ir_ty::IrTy,
-        lowerer::{Lowerer, PolyFunction},
+        lowerer::{Lowerer, PolyFunction, Specialization},
         terminator::Terminator,
     },
     label::Label,
-    name::Name,
     name_resolution::{name_resolver::NameResolved, symbol::Symbol},
-    node_id::NodeID,
     types::{
-        scheme::ForAll,
+        infer_ty::TypeParamId,
         ty::Ty,
         type_session::{TypeEntry, Types},
     },
@@ -28,8 +26,7 @@ pub struct Monomorphizer {
     asts: IndexMap<Source, AST<NameResolved>>,
     types: Types,
     functions: FxHashMap<Symbol, PolyFunction>,
-    needs_monomorphization: Vec<Name>,
-    instantiations: FxHashMap<NodeID, IndexMap<ForAll, Ty>>,
+    specializations: FxHashMap<Symbol, Vec<Specialization>>,
 }
 
 impl Monomorphizer {
@@ -38,50 +35,71 @@ impl Monomorphizer {
             asts: lowerer.asts,
             types: lowerer.types,
             functions: lowerer.functions,
-            needs_monomorphization: lowerer.needs_monomorphization,
-            instantiations: lowerer.instantiations,
+            specializations: lowerer.specializations,
         }
     }
 
-    pub fn monomorphize(&mut self) -> FxHashMap<Symbol, Function<IrTy, Label>> {
-        println!("monomorphizing: {:#?}", self.instantiations);
-        let mut result = FxHashMap::<Symbol, Function<IrTy, Label>>::default();
-        for (name, func) in self.functions.clone() {
-            result.insert(name, self.monomorphize_func(func));
+    pub fn monomorphize(&mut self) -> IndexMap<Symbol, Function<IrTy, Label>> {
+        let mut result = IndexMap::<Symbol, Function<IrTy, Label>>::default();
+        let functions = self.functions.clone();
+        for func in functions.into_values() {
+            self.monomorphize_func(func, &mut result);
         }
         result
     }
 
-    fn monomorphize_func(&mut self, func: PolyFunction) -> Function<IrTy, Label> {
-        Function {
+    fn monomorphize_func(
+        &mut self,
+        func: PolyFunction,
+        result: &mut IndexMap<Symbol, Function<IrTy, Label>>,
+    ) {
+        for specialization in self
+            .specializations
+            .remove(&func.name.symbol().unwrap())
+            .unwrap_or_default()
+        {
+            self.generate_specialized_function(&func, &specialization, result);
+        }
+
+        let func = Function {
             name: func.name,
-            ty: self.monomorphize_ty(func.ty),
+            ty: self.monomorphize_ty(func.ty, &Default::default()),
             params: func.params.into(),
             blocks: func
                 .blocks
                 .into_iter()
-                .map(|b| self.monomorphize_block(b))
+                .map(|b| self.monomorphize_block(b, &Default::default()))
                 .collect(),
-        }
+        };
+
+        result.insert(func.name.symbol().unwrap(), func);
     }
 
-    fn monomorphize_block(&mut self, block: BasicBlock<Ty, Label>) -> BasicBlock<IrTy, Label> {
+    fn monomorphize_block(
+        &mut self,
+        block: BasicBlock<Ty, Label>,
+        substitutions: &IndexMap<TypeParamId, Ty>,
+    ) -> BasicBlock<IrTy, Label> {
         BasicBlock {
             id: block.id,
             instructions: block
                 .instructions
                 .into_iter()
-                .map(|i| self.monomorphize_instruction(i))
+                .map(|i| self.monomorphize_instruction(i, substitutions))
                 .collect(),
-            terminator: self.monomorphize_terminator(block.terminator),
+            terminator: self.monomorphize_terminator(block.terminator, substitutions),
         }
     }
 
-    fn monomorphize_terminator(&mut self, terminator: Terminator<Ty>) -> Terminator<IrTy> {
+    fn monomorphize_terminator(
+        &mut self,
+        terminator: Terminator<Ty>,
+        substitutions: &IndexMap<TypeParamId, Ty>,
+    ) -> Terminator<IrTy> {
         match terminator {
             Terminator::Ret { val, ty } => Terminator::Ret {
                 val,
-                ty: self.monomorphize_ty(ty),
+                ty: self.monomorphize_ty(ty, substitutions),
             },
             Terminator::Unreachable => Terminator::Unreachable,
         }
@@ -90,12 +108,13 @@ impl Monomorphizer {
     fn monomorphize_instruction(
         &mut self,
         instruction: Instruction<Ty, Label>,
+        substitutions: &IndexMap<TypeParamId, Ty>,
     ) -> Instruction<IrTy, Label> {
-        instruction.map_type(|ty| self.monomorphize_ty(ty))
+        instruction.map_type(|ty| self.monomorphize_ty(ty, substitutions))
     }
 
     #[allow(clippy::only_used_in_recursion)]
-    fn monomorphize_ty(&mut self, ty: Ty) -> IrTy {
+    fn monomorphize_ty(&mut self, ty: Ty, substitutions: &IndexMap<TypeParamId, Ty>) -> IrTy {
         match ty {
             Ty::Primitive(symbol) => match symbol {
                 Symbol::Int => IrTy::Int,
@@ -104,27 +123,30 @@ impl Monomorphizer {
                 Symbol::Void => IrTy::Void,
                 _ => unreachable!(),
             },
-            Ty::Param(..) => {
-                // todo!("param?? {ty:?}");
-                IrTy::Void
+            Ty::Param(param) => {
+                if let Some(replaced) = substitutions.get(&param).cloned() {
+                    self.monomorphize_ty(replaced, substitutions)
+                } else {
+                    IrTy::Void
+                }
             }
             Ty::Constructor {
                 params, box ret, ..
             } => IrTy::Func(
                 params
                     .into_iter()
-                    .map(|p| self.monomorphize_ty(p))
+                    .map(|p| self.monomorphize_ty(p, substitutions))
                     .collect(),
-                self.monomorphize_ty(ret).into(),
+                self.monomorphize_ty(ret, substitutions).into(),
             ),
             Ty::Func(param, ret) => {
                 let (params, final_ret) = uncurry_function(Ty::Func(param, ret));
                 IrTy::Func(
                     params
                         .into_iter()
-                        .map(|p| self.monomorphize_ty(p))
+                        .map(|p| self.monomorphize_ty(p, substitutions))
                         .collect(),
-                    self.monomorphize_ty(final_ret).into(),
+                    self.monomorphize_ty(final_ret, substitutions).into(),
                 )
             }
             Ty::Tuple(..) => todo!(),
@@ -135,8 +157,12 @@ impl Monomorphizer {
                         properties
                             .values()
                             .map(|v| match self.types.get_symbol(v).unwrap() {
-                                TypeEntry::Mono(ty) => self.monomorphize_ty(ty.clone()),
-                                TypeEntry::Poly(scheme) => self.monomorphize_ty(scheme.ty.clone()),
+                                TypeEntry::Mono(ty) => {
+                                    self.monomorphize_ty(ty.clone(), substitutions)
+                                }
+                                TypeEntry::Poly(scheme) => {
+                                    self.monomorphize_ty(scheme.ty.clone(), substitutions)
+                                }
                             })
                             .collect(),
                     )
@@ -146,9 +172,30 @@ impl Monomorphizer {
             }
         }
     }
+
+    fn generate_specialized_function(
+        &mut self,
+        func: &PolyFunction,
+        specialization: &Specialization,
+        result: &mut IndexMap<Symbol, Function<IrTy, Label>>,
+    ) {
+        let specialized_func = Function {
+            name: specialization.name.clone(),
+            ty: self.monomorphize_ty(func.ty.clone(), &specialization.substitutions),
+            params: func.params.clone().into(),
+            blocks: func
+                .blocks
+                .clone()
+                .into_iter()
+                .map(|b| self.monomorphize_block(b, &specialization.substitutions))
+                .collect(),
+        };
+
+        result.insert(specialization.name.symbol().unwrap(), specialized_func);
+    }
 }
 
-fn uncurry_function(ty: Ty) -> (Vec<Ty>, Ty) {
+pub fn uncurry_function(ty: Ty) -> (Vec<Ty>, Ty) {
     match ty {
         Ty::Func(box param, box ret) => {
             let (mut params, final_ret) = uncurry_function(ret);

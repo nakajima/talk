@@ -8,7 +8,7 @@ use crate::{
     lexer::Lexer,
     name_resolution::{
         name_resolver::{self, NameResolver},
-        symbol::Symbol,
+        symbol::{Symbol, Symbols},
     },
     node_id::{FileID, NodeID},
     parser::Parser,
@@ -40,6 +40,7 @@ type Exports = IndexMap<String, Symbol>;
 impl DriverPhase for NameResolved {}
 pub struct NameResolved {
     pub asts: IndexMap<Source, AST<name_resolver::NameResolved>>,
+    pub symbols: Symbols,
 }
 
 impl DriverPhase for Typed {}
@@ -47,6 +48,7 @@ pub struct Typed {
     pub asts: IndexMap<Source, AST<name_resolver::NameResolved>>,
     pub types: Types,
     pub exports: Exports,
+    pub symbols: Symbols,
 }
 
 #[derive(Debug)]
@@ -171,7 +173,10 @@ impl Driver<Parsed> {
         Ok(Driver {
             files: self.files,
             config: self.config,
-            phase: NameResolved { asts },
+            phase: NameResolved {
+                asts,
+                symbols: resolver.symbols,
+            },
         })
     }
 }
@@ -227,6 +232,7 @@ impl Driver<NameResolved> {
                 asts: self.phase.asts,
                 types: type_session.finalize().map_err(CompileError::Typing)?,
                 exports,
+                symbols: self.phase.symbols,
             },
         })
     }

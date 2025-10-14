@@ -1,11 +1,13 @@
+use crate::compiling::module::ModuleId;
 use crate::formatter;
 use crate::ir::ir_ty::IrTy;
+use crate::ir::monomorphizer::uncurry_function;
 use crate::ir::parse_instruction;
 use crate::label::Label;
+use crate::name_resolution::symbol::Symbols;
 use crate::node_kinds::parameter::Parameter;
 use crate::types::infer_ty::TypeParamId;
 use crate::types::row::Row;
-use crate::types::scheme::Scheme;
 use crate::{
     ast::AST,
     compiling::driver::Source,
@@ -104,28 +106,34 @@ pub(super) struct PolyFunction {
     pub ty: Ty,
 }
 
+#[derive(Debug)]
+pub struct Specialization {
+    pub name: Name,
+    pub substitutions: IndexMap<TypeParamId, Ty>,
+}
+
 // Lowers an AST with Types to a monomorphized IR
 pub struct Lowerer {
     pub(super) asts: IndexMap<Source, AST<NameResolved>>,
     pub(super) types: Types,
     pub(super) functions: FxHashMap<Symbol, PolyFunction>,
     pub(super) current_function_stack: Vec<CurrentFunction>,
-    pub(super) needs_monomorphization: Vec<Name>,
-    pub(super) instantiations: FxHashMap<NodeID, IndexMap<ForAll, Ty>>,
 
+    symbols: Symbols,
     bindings: FxHashMap<Symbol, Register>,
+    pub(super) specializations: FxHashMap<Symbol, Vec<Specialization>>,
 }
 
 impl Lowerer {
-    pub fn new(asts: IndexMap<Source, AST<NameResolved>>, types: Types) -> Self {
+    pub fn new(asts: IndexMap<Source, AST<NameResolved>>, types: Types, symbols: Symbols) -> Self {
         Self {
             asts,
             types,
             functions: Default::default(),
             current_function_stack: Default::default(),
-            needs_monomorphization: Default::default(),
-            instantiations: Default::default(),
             bindings: Default::default(),
+            symbols,
+            specializations: Default::default(),
         }
     }
 
@@ -138,10 +146,11 @@ impl Lowerer {
         let mut asts = std::mem::take(&mut self.asts);
         let has_main_func = asts.iter_mut().flat_map(|a| &a.1.roots).any(is_main_func);
         if !has_main_func {
+            let main_symbol = Symbol::Synthesized(self.symbols.next_synthesized(ModuleId::Current));
             let mut ret_ty = Ty::Void;
             let func = Func {
                 id: NodeID(FileID::SYNTHESIZED, 0),
-                name: Name::Resolved(Symbol::Synthesized(SynthesizedId::from(0)), "main".into()),
+                name: Name::Resolved(main_symbol, "main".into()),
                 name_span: Span {
                     start: 0,
                     end: 0,
@@ -204,7 +213,7 @@ impl Lowerer {
             }));
 
             self.types.define(
-                NodeID(FileID::SYNTHESIZED, 0),
+                main_symbol,
                 TypeEntry::Mono(Ty::Func(Ty::Void.into(), ret_ty.into())),
             );
         }
@@ -213,7 +222,7 @@ impl Lowerer {
 
         for ast in asts.values_mut() {
             for root in ast.roots.iter() {
-                self.lower_node(root)?;
+                self.lower_node(root, &Default::default())?;
             }
         }
 
@@ -224,16 +233,24 @@ impl Lowerer {
         })
     }
 
-    fn lower_node(&mut self, node: &Node) -> Result<Value, IRError> {
+    fn lower_node(
+        &mut self,
+        node: &Node,
+        instantiations: &IndexMap<TypeParamId, Ty>,
+    ) -> Result<Value, IRError> {
         match node {
-            Node::Decl(decl) => self.lower_decl(decl),
-            Node::Stmt(stmt) => self.lower_stmt(stmt),
+            Node::Decl(decl) => self.lower_decl(decl, instantiations),
+            Node::Stmt(stmt) => self.lower_stmt(stmt, instantiations),
             _ => unreachable!("node not handled: {node:?}"),
         }
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self, decl), fields(decl.id = %decl.id))]
-    fn lower_decl(&mut self, decl: &Decl) -> Result<Value, IRError> {
+    fn lower_decl(
+        &mut self,
+        decl: &Decl,
+        instantiations: &IndexMap<TypeParamId, Ty>,
+    ) -> Result<Value, IRError> {
         match &decl.kind {
             DeclKind::Let {
                 lhs,
@@ -241,15 +258,15 @@ impl Lowerer {
                 ..
             } => {
                 let bind = self.lower_pattern(lhs)?;
-                self.lower_expr(value, bind)?;
+                self.lower_expr(value, bind, instantiations)?;
             }
             DeclKind::Struct { body, .. } => {
                 for node in &body.body {
-                    self.lower_node(node)?;
+                    self.lower_node(node, instantiations)?;
                 }
             }
             DeclKind::Init { name, params, body } => {
-                self.lower_init(decl, name, params, body)?;
+                self.lower_init(decl, name, params, body, instantiations)?;
             }
             DeclKind::Property { .. } => (),
             DeclKind::Method { func, .. } => {
@@ -270,7 +287,7 @@ impl Lowerer {
     }
 
     fn lower_method(&mut self, func: &Func) -> Result<Value, IRError> {
-        self.lower_func(func, Bind::Discard)
+        self.lower_func(func, Bind::Discard, &Default::default())
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
@@ -280,6 +297,7 @@ impl Lowerer {
         name: &Name,
         params: &[Parameter],
         body: &Block,
+        instantiations: &IndexMap<TypeParamId, Ty>,
     ) -> Result<Value, IRError> {
         let func_ty = match self.types.get_symbol(&name.symbol().unwrap()).unwrap() {
             TypeEntry::Mono(ty) => ty.clone(),
@@ -288,10 +306,11 @@ impl Lowerer {
 
         // Uncurry the function type to extract all param types and the final return type
 
-        let Ty::Func(param, box ret_ty) = func_ty else {
+        let Ty::Func(..) = func_ty else {
             unreachable!();
         };
-        let param_tys = param.uncurry_params();
+
+        let (param_tys, ret_ty) = uncurry_function(func_ty.clone());
 
         // Build param_ty from all params (for now, just use the first one for compatibility)
         let param_ty = if !param_tys.is_empty() {
@@ -300,10 +319,9 @@ impl Lowerer {
             let meta = Default::default();
             let formatter = formatter::Formatter::new(&meta);
             unreachable!(
-                "init has no params - id: {:?}, sym: {:?}, ty: {:?}, {:?}",
-                decl.id,
+                "init has no params - param_tys: {param_tys:?} name: {name:?}, sym: {:?}, ty: {:?}, {:?}",
                 self.types.get_symbol(&name.symbol().unwrap()).unwrap(),
-                self.types.get(&decl.id).unwrap(),
+                func_ty,
                 formatter.format(&[Node::Decl(decl.clone())], 80)
             );
         };
@@ -319,7 +337,7 @@ impl Lowerer {
 
         let mut ret = Value::Void;
         for node in body.body.iter() {
-            ret = self.lower_node(node)?;
+            ret = self.lower_node(node, instantiations)?;
         }
         self.push_terminator(Terminator::Ret {
             val: ret.clone(),
@@ -345,21 +363,30 @@ impl Lowerer {
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self, stmt), fields(stmt.id = %stmt.id))]
-    fn lower_stmt(&mut self, stmt: &Stmt) -> Result<Value, IRError> {
+    fn lower_stmt(
+        &mut self,
+        stmt: &Stmt,
+        instantiations: &IndexMap<TypeParamId, Ty>,
+    ) -> Result<Value, IRError> {
         match &stmt.kind {
-            StmtKind::Expr(expr) => self.lower_expr(expr, Bind::Fresh),
+            StmtKind::Expr(expr) => self.lower_expr(expr, Bind::Fresh, instantiations),
             StmtKind::If(_expr, _block, _block1) => todo!(),
             StmtKind::Return(_expr) => todo!(),
             StmtKind::Break => todo!(),
-            StmtKind::Assignment(lhs, rhs) => self.lower_assignment(lhs, rhs),
+            StmtKind::Assignment(lhs, rhs) => self.lower_assignment(lhs, rhs, instantiations),
             StmtKind::Loop(_expr, _block) => todo!(),
         }
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self, lhs, rhs), fields(lhs.id = %lhs.id, rhs.id = %rhs.id))]
-    fn lower_assignment(&mut self, lhs: &Expr, rhs: &Expr) -> Result<Value, IRError> {
+    fn lower_assignment(
+        &mut self,
+        lhs: &Expr,
+        rhs: &Expr,
+        instantiations: &IndexMap<TypeParamId, Ty>,
+    ) -> Result<Value, IRError> {
         let lvalue = self.lower_lvalue(lhs)?;
-        let value = self.lower_expr(rhs, Bind::Fresh)?;
+        let value = self.lower_expr(rhs, Bind::Fresh, instantiations)?;
 
         self.emit_lvalue_store(lvalue, value)?;
 
@@ -432,7 +459,7 @@ impl Lowerer {
             ExprKind::Variable(name) => Ok(LValue::Variable(name.symbol().unwrap())),
             ExprKind::Member(Some(box base), label, _span) => {
                 let base_lvalue = self.lower_lvalue(base)?;
-                let base_ty = self.specialized_ty(base).expect("didn't get base ty");
+                let (base_ty, ..) = self.specialized_ty(base).expect("didn't get base ty");
 
                 Ok(LValue::Field {
                     base: base_lvalue.into(),
@@ -466,9 +493,14 @@ impl Lowerer {
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self, expr), fields(expr.id = %expr.id))]
-    fn lower_expr(&mut self, expr: &Expr, bind: Bind) -> Result<Value, IRError> {
+    fn lower_expr(
+        &mut self,
+        expr: &Expr,
+        bind: Bind,
+        instantiations: &IndexMap<TypeParamId, Ty>,
+    ) -> Result<Value, IRError> {
         match &expr.kind {
-            ExprKind::Func(func) => self.lower_func(func, bind),
+            ExprKind::Func(func) => self.lower_func(func, bind, instantiations),
             ExprKind::LiteralArray(_exprs) => todo!(),
             ExprKind::LiteralInt(val) => {
                 let ret = self.ret(bind);
@@ -497,9 +529,11 @@ impl Lowerer {
             ExprKind::Block(..) => todo!(),
             ExprKind::Call {
                 box callee, args, ..
-            } => self.lower_call(expr.id, callee, args, bind),
-            ExprKind::Member(member, label, ..) => self.lower_member(expr.id, member, label, bind),
-            ExprKind::Variable(name) => self.lower_variable(name),
+            } => self.lower_call(expr.id, callee, args, bind, instantiations),
+            ExprKind::Member(member, label, ..) => {
+                self.lower_member(expr.id, member, label, bind, instantiations)
+            }
+            ExprKind::Variable(name) => self.lower_variable(name, expr, instantiations),
             ExprKind::Constructor(name) => self.lower_constructor(name, bind),
             ExprKind::If(..) => todo!(),
             ExprKind::Match(..) => todo!(),
@@ -544,15 +578,16 @@ impl Lowerer {
         receiver: &Option<Box<Expr>>,
         label: &Label,
         bind: Bind,
+        instantiations: &IndexMap<TypeParamId, Ty>,
     ) -> Result<Value, IRError> {
         if let Some(box receiver) = &receiver {
             let reg = self.next_register();
             let member_bind = Bind::Assigned(reg);
-            let receiver_val = self.lower_expr(receiver, member_bind)?;
+            let receiver_val = self.lower_expr(receiver, member_bind, instantiations)?;
             let ty = self.ty_from_id(&id)?;
             let dest = self.ret(bind);
 
-            let receiver_ty = self.specialized_ty(receiver)?;
+            let (receiver_ty, _) = self.specialized_ty(receiver)?;
 
             if let Ty::Nominal { symbol, .. } = &receiver_ty
                 && let Some(method) = self
@@ -584,22 +619,31 @@ impl Lowerer {
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
-    fn lower_variable(&mut self, name: &Name) -> Result<Value, IRError> {
-        let ty = self
-            .types
-            .get_symbol(&name.symbol().unwrap())
-            .unwrap_or_else(|| panic!("did not get variable type: {name:?}"));
+    fn lower_variable(
+        &mut self,
+        name: &Name,
+        expr: &Expr,
+        instantiations: &IndexMap<TypeParamId, Ty>,
+    ) -> Result<Value, IRError> {
+        let (ty, instantiations) = self.specialized_ty(expr)?;
+        let monomorphized_ty = substitute(ty, &instantiations);
 
-        let ret = if matches!(
-            ty,
-            TypeEntry::Mono(Ty::Func(..))
-                | TypeEntry::Poly(Scheme {
-                    ty: Ty::Func(..),
-                    ..
-                })
-        ) {
+        let ret = if matches!(monomorphized_ty, Ty::Func(..)) {
             // It's a func reference so we pass the name
-            Value::Func(name.clone())
+            let monomorphized_name = if instantiations.is_empty() {
+                name.clone()
+            } else {
+                let mono_name = self.monomorphize_name(name, &instantiations);
+                self.specializations
+                    .entry(name.symbol().unwrap())
+                    .or_default()
+                    .push(Specialization {
+                        name: mono_name.clone(),
+                        substitutions: instantiations,
+                    });
+                mono_name
+            };
+            Value::Func(monomorphized_name)
         } else {
             self.bindings.get(&name.symbol().unwrap()).unwrap().into()
         };
@@ -618,7 +662,7 @@ impl Lowerer {
         dest: Register,
     ) -> Result<Value, IRError> {
         let record_dest = self.next_register();
-        let ty = self.specialized_ty(callee)?;
+        let (ty, concrete_tys) = self.specialized_ty(callee)?;
 
         let properties = self
             .types
@@ -676,6 +720,7 @@ impl Lowerer {
         callee: &Expr,
         args: &[CallArg],
         bind: Bind,
+        parent_instantiations: &IndexMap<TypeParamId, Ty>,
     ) -> Result<Value, IRError> {
         let dest = self.ret(bind);
 
@@ -686,13 +731,13 @@ impl Lowerer {
             return self.lower_embedded_ir_call(args, dest);
         }
 
-        let callee_ty = self.specialized_ty(callee).unwrap();
-        println!("callee_entry: {callee_ty:?}");
+        let (callee_ty, mut instantiations) = self.specialized_ty(callee).unwrap();
+        instantiations.extend(parent_instantiations.clone());
 
         let ty = self.ty_from_id(&id)?;
         let mut args = args
             .iter()
-            .map(|arg| self.lower_expr(&arg.value, Bind::Fresh))
+            .map(|arg| self.lower_expr(&arg.value, Bind::Fresh, &instantiations))
             .collect::<Result<Vec<Value>, _>>()?;
 
         let callee_ir = if let ExprKind::Member(Some(box receiver), member, ..) = &callee.kind
@@ -700,11 +745,11 @@ impl Lowerer {
         {
             // Handle method calls. It'd be nice if we could re-use lower_member here but i'm not sure
             // how we'd get the receiver value, which we need to pass as the first arg..
-            let receiver_ir = self.lower_expr(receiver, Bind::Fresh)?;
+            let receiver_ir = self.lower_expr(receiver, Bind::Fresh, &instantiations)?;
             args.insert(0, receiver_ir);
             Value::Func(Name::Resolved(method_sym, member.to_string()))
         } else {
-            self.lower_expr(callee, Bind::Fresh)?
+            self.lower_expr(callee, Bind::Fresh, &instantiations)?
         };
 
         if let ExprKind::Constructor(name) = &callee.kind {
@@ -722,9 +767,14 @@ impl Lowerer {
         Ok(dest.into())
     }
 
-    #[instrument(level = tracing::Level::TRACE, skip(self, func), fields(func = %func.name))]
-    fn lower_func(&mut self, func: &Func, bind: Bind) -> Result<Value, IRError> {
-        let ty = self.ty_from_id(&func.id)?;
+    #[instrument(level = tracing::Level::TRACE, skip(self, func), fields(func.name = %func.name))]
+    fn lower_func(
+        &mut self,
+        func: &Func,
+        bind: Bind,
+        instantiations: &IndexMap<TypeParamId, Ty>,
+    ) -> Result<Value, IRError> {
+        let ty = self.ty_from_symbol(&func.name.symbol().unwrap())?;
 
         let Ty::Func(param_tys, box ret_ty) = ty else {
             panic!("didn't get func ty");
@@ -742,7 +792,7 @@ impl Lowerer {
 
         let mut ret = Value::Void;
         for node in func.body.body.iter() {
-            ret = self.lower_node(node)?;
+            ret = self.lower_node(node, instantiations)?;
         }
         self.push_terminator(Terminator::Ret {
             val: ret,
@@ -825,12 +875,31 @@ impl Lowerer {
         }
     }
 
+    fn monomorphize_name(
+        &mut self,
+        name: &Name,
+        instantiations: &IndexMap<TypeParamId, Ty>,
+    ) -> Name {
+        let new_symbol = self.symbols.next_synthesized(ModuleId::Current);
+        let new_name_str = format!(
+            "{}[{}]",
+            name.name_str(),
+            instantiations
+                .values()
+                .map(|v| format!("{v}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+
+        Name::Resolved(new_symbol.into(), new_name_str)
+    }
+
     fn lookup_instance_method(
         &mut self,
         expr: &Expr,
         label: &Label,
     ) -> Result<Option<Symbol>, IRError> {
-        let Ty::Nominal { symbol, .. } = self.specialized_ty(expr)? else {
+        let Ty::Nominal { symbol, .. } = self.specialized_ty(expr)?.0 else {
             return Ok(None);
         };
 
@@ -843,12 +912,15 @@ impl Lowerer {
         Ok(None)
     }
 
-    fn specialized_ty(&mut self, expr: &Expr) -> Result<Ty, IRError> {
+    fn specialized_ty(&mut self, expr: &Expr) -> Result<(Ty, IndexMap<TypeParamId, Ty>), IRError> {
         let symbol = match &expr.kind {
             ExprKind::Variable(name) => name.symbol().unwrap(),
             ExprKind::Func(func) => func.name.symbol().unwrap(),
             ExprKind::Constructor(name) => name.symbol().unwrap(),
-            _ => return self.ty_from_id(&expr.id),
+            _ => {
+                tracing::trace!("expr has no substitutions: {expr:?}");
+                return Ok((self.ty_from_id(&expr.id)?, Default::default()));
+            }
         };
 
         let entry = self
@@ -863,12 +935,15 @@ impl Lowerer {
         self.specialize(&entry, expr.id)
     }
 
-    fn specialize(&mut self, entry: &TypeEntry, id: NodeID) -> Result<Ty, IRError> {
+    fn specialize(
+        &mut self,
+        entry: &TypeEntry,
+        id: NodeID,
+    ) -> Result<(Ty, IndexMap<TypeParamId, Ty>), IRError> {
         match entry {
-            TypeEntry::Mono(ty) => Ok(ty.clone()),
+            TypeEntry::Mono(ty) => Ok((ty.clone(), Default::default())),
             TypeEntry::Poly(scheme) => {
-                let mut substitutions = FxHashMap::<TypeParamId, Ty>::default();
-                let instantiations = self.instantiations.entry(id).or_default();
+                let mut substitutions = IndexMap::<TypeParamId, Ty>::default();
                 for forall in scheme.foralls.iter() {
                     let ForAll::Ty(param) = forall else { continue };
                     let concrete = self
@@ -879,13 +954,11 @@ impl Lowerer {
                         .unwrap();
 
                     substitutions.insert(*param, concrete.clone());
-                    instantiations.insert(*forall, concrete.clone());
                 }
 
                 let ty = substitute(scheme.ty.clone(), &substitutions);
-                println!("BEFORE: {:?}\nAFTER: {ty:?}", scheme.ty);
 
-                Ok(ty)
+                Ok((ty, substitutions))
             }
         }
     }
@@ -902,15 +975,33 @@ impl Lowerer {
         match self.types.get_symbol(symbol) {
             Some(TypeEntry::Mono(ty)) => Ok(ty.clone()),
             Some(TypeEntry::Poly(scheme)) => Ok(scheme.ty.clone()),
-            None => Err(IRError::TypeNotFound(format!("{symbol}"))),
+            None => {
+                if matches!(
+                    symbol,
+                    Symbol::Synthesized(SynthesizedId {
+                        module_id: ModuleId::Current,
+                        local_id: 0
+                    })
+                ) {
+                    Ok(Ty::Func(Ty::Void.into(), Ty::Void.into()))
+                } else {
+                    Err(IRError::TypeNotFound(format!("{symbol}")))
+                }
+            }
         }
     }
 }
 
-fn substitute(ty: Ty, substitutions: &FxHashMap<TypeParamId, Ty>) -> Ty {
+fn substitute(ty: Ty, substitutions: &IndexMap<TypeParamId, Ty>) -> Ty {
     match ty {
         Ty::Primitive(..) => ty,
-        Ty::Param(type_param_id) => substitutions.get(&type_param_id).unwrap().clone(),
+        Ty::Param(type_param_id) => substitutions
+            .get(&type_param_id)
+            .unwrap_or_else(|| {
+                tracing::trace!("didn't find id {type_param_id:?} in {substitutions:?}");
+                &ty
+            })
+            .clone(),
         Ty::Constructor {
             name,
             params,
@@ -949,7 +1040,7 @@ fn substitute(ty: Ty, substitutions: &FxHashMap<TypeParamId, Ty>) -> Ty {
     }
 }
 
-fn substitute_row(row: Row, substitutions: &FxHashMap<TypeParamId, Ty>) -> Row {
+fn substitute_row(row: Row, substitutions: &IndexMap<TypeParamId, Ty>) -> Row {
     match row {
         Row::Empty(..) => row,
         Row::Param(..) => row,
@@ -1032,7 +1123,7 @@ pub mod tests {
             .typecheck()
             .unwrap();
 
-        let lowerer = Lowerer::new(typed.phase.asts, typed.phase.types);
+        let lowerer = Lowerer::new(typed.phase.asts, typed.phase.types, typed.phase.symbols);
         lowerer.lower().unwrap()
     }
 
@@ -1041,7 +1132,7 @@ pub mod tests {
         let program = lower("func main() { 123 }");
         assert_eq!(
             program.functions,
-            fxhashmap!(GlobalId::from(1).into() => Function {
+            indexmap::indexmap!(GlobalId::from(1).into() => Function {
                 name: Name::Resolved(GlobalId::from(1).into(), "main".into()),
                 params: vec![].into(),
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
@@ -1064,7 +1155,7 @@ pub mod tests {
         let program = lower("func main() { 1.23 }");
         assert_eq!(
             program.functions,
-            fxhashmap!(GlobalId::from(1).into() => Function {
+            indexmap::indexmap!(GlobalId::from(1).into() => Function {
                 name: Name::Resolved(GlobalId::from(1).into(), "main".into()),
                 params: vec![].into(),
                 ty: IrTy::Func(vec![], IrTy::Float.into()),
@@ -1087,8 +1178,8 @@ pub mod tests {
         let program = lower("123");
         assert_eq!(
             program.functions,
-            fxhashmap!(SynthesizedId::from(0).into() => Function {
-                name: Name::Resolved(SynthesizedId::from(0).into(), "main".into()),
+            indexmap::indexmap!(SynthesizedId::from(1).into() => Function {
+                name: Name::Resolved(SynthesizedId::from(1).into(), "main".into()),
                 params: vec![].into(),
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
                     blocks: vec![BasicBlock {
@@ -1110,8 +1201,8 @@ pub mod tests {
         let program = lower("let a = 123 ; a");
         assert_eq!(
             program.functions,
-            fxhashmap!(SynthesizedId::from(0).into() => Function {
-                name: Name::Resolved(SynthesizedId::from(0).into(), "main".into()),
+            indexmap::indexmap!(SynthesizedId::from(1).into() => Function {
+                name: Name::Resolved(SynthesizedId::from(1).into(), "main".into()),
                 params: vec![].into(),
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
                     blocks: vec![BasicBlock {
@@ -1140,10 +1231,10 @@ pub mod tests {
         assert_eq_diff!(
             *program
                 .functions
-                .get(&Symbol::from(SynthesizedId::from(0)))
+                .get(&Symbol::from(SynthesizedId::from(1)))
                 .unwrap(),
             Function {
-                name: Name::Resolved(SynthesizedId::from(0).into(), "main".into()),
+                name: Name::Resolved(SynthesizedId::from(1).into(), "main".into()),
                 params: vec![].into(),
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
                 blocks: vec![BasicBlock::<IrTy, Label> {
@@ -1213,10 +1304,10 @@ pub mod tests {
         assert_eq_diff!(
             *program
                 .functions
-                .get(&SynthesizedId::from(0).into())
+                .get(&Symbol::from(SynthesizedId::from(2)))
                 .unwrap(),
             Function {
-                name: Name::Resolved(SynthesizedId::from(0).into(), "main".into()),
+                name: Name::Resolved(SynthesizedId::from(2).into(), "main".into()),
                 params: vec![].into(),
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
                 blocks: vec![BasicBlock {
@@ -1290,10 +1381,10 @@ pub mod tests {
         assert_eq_diff!(
             *program
                 .functions
-                .get(&SynthesizedId::from(0).into())
+                .get(&Symbol::from(SynthesizedId::from(2)))
                 .unwrap(),
             Function {
-                name: Name::Resolved(SynthesizedId::from(0).into(), "main".into()),
+                name: Name::Resolved(SynthesizedId::from(2).into(), "main".into()),
                 params: vec![].into(),
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
                 blocks: vec![BasicBlock::<IrTy, Label> {
@@ -1360,8 +1451,8 @@ pub mod tests {
         );
         assert_eq!(
             program.functions,
-            fxhashmap!(SynthesizedId::from(0).into() => Function {
-                name: Name::Resolved(SynthesizedId::from(0).into(), "main".into()),
+            indexmap::indexmap!(SynthesizedId::from(1).into() => Function {
+                name: Name::Resolved(SynthesizedId::from(1).into(), "main".into()),
                 params: vec![].into(),
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
                 blocks: vec![BasicBlock {
@@ -1394,10 +1485,10 @@ pub mod tests {
         assert_eq!(
             *program
                 .functions
-                .get(&SynthesizedId::from(0).into())
+                .get(&Symbol::from(SynthesizedId::from(1)))
                 .unwrap(),
             Function {
-                name: Name::Resolved(SynthesizedId::from(0).into(), "main".into()),
+                name: Name::Resolved(SynthesizedId::from(1).into(), "main".into()),
                 params: vec![].into(),
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
                 blocks: vec![BasicBlock {
@@ -1440,15 +1531,15 @@ pub mod tests {
         ",
         );
 
-        assert_eq!(
+        assert_eq_diff!(
             *program
                 .functions
-                .get(&SynthesizedId::from(0).into())
+                .get(&Symbol::from(SynthesizedId::from(1)))
                 .unwrap(),
             Function {
-                name: Name::Resolved(SynthesizedId::from(0).into(), "main".into()),
+                name: Name::Resolved(SynthesizedId::from(1).into(), "main".into()),
                 params: vec![].into(),
-                ty: IrTy::Func(vec![], IrTy::Int.into()),
+                ty: IrTy::Func(vec![], IrTy::Float.into()),
                 blocks: vec![BasicBlock::<IrTy, Label> {
                     id: BasicBlockId(0),
                     instructions: vec![
@@ -1469,7 +1560,7 @@ pub mod tests {
                             dest: 1.into(),
                             ty: IrTy::Int,
                             callee: Value::Func(Name::Resolved(
-                                Symbol::Synthesized(SynthesizedId::from(1)),
+                                Symbol::Synthesized(SynthesizedId::from(2)),
                                 "id[Int]".into()
                             )),
                             args: vec![Value::Reg(2)].into(),
@@ -1484,7 +1575,7 @@ pub mod tests {
                             dest: 3.into(),
                             ty: IrTy::Float,
                             callee: Value::Func(Name::Resolved(
-                                Symbol::Synthesized(SynthesizedId::from(2)),
+                                Symbol::Synthesized(SynthesizedId::from(3)),
                                 "id[Float]".into()
                             )),
                             args: vec![Value::Reg(4)].into(),
@@ -1493,6 +1584,46 @@ pub mod tests {
                     ],
                     terminator: Terminator::Ret {
                         val: Value::Reg(3),
+                        ty: IrTy::Float
+                    }
+                }],
+            }
+        );
+
+        assert_eq_diff!(
+            *program
+                .functions
+                .get(&Symbol::from(SynthesizedId::from(2)))
+                .unwrap(),
+            Function {
+                name: Name::Resolved(SynthesizedId::from(2).into(), "id[Int]".into()),
+                params: vec![Value::Reg(0)].into(),
+                ty: IrTy::Func(vec![IrTy::Int], IrTy::Int.into()),
+                blocks: vec![BasicBlock::<IrTy, Label> {
+                    id: BasicBlockId(0),
+                    instructions: vec![],
+                    terminator: Terminator::Ret {
+                        val: Value::Reg(0),
+                        ty: IrTy::Int
+                    }
+                }],
+            }
+        );
+
+        assert_eq_diff!(
+            *program
+                .functions
+                .get(&Symbol::from(SynthesizedId::from(3)))
+                .unwrap(),
+            Function {
+                name: Name::Resolved(SynthesizedId::from(3).into(), "id[Float]".into()),
+                params: vec![Value::Reg(0)].into(),
+                ty: IrTy::Func(vec![IrTy::Float], IrTy::Float.into()),
+                blocks: vec![BasicBlock::<IrTy, Label> {
+                    id: BasicBlockId(0),
+                    instructions: vec![],
+                    terminator: Terminator::Ret {
+                        val: Value::Reg(0),
                         ty: IrTy::Float
                     }
                 }],

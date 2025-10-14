@@ -39,7 +39,55 @@ pub enum Ty {
 
 impl std::fmt::Display for Ty {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{self:?}")
+        match self {
+            Ty::Primitive(symbol) => match *symbol {
+                Symbol::Int => write!(f, "Int"),
+                Symbol::Float => write!(f, "Float"),
+                Symbol::Bool => write!(f, "Bool"),
+                Symbol::Void => write!(f, "Void"),
+                _ => write!(f, "{symbol}"),
+            },
+            Ty::Param(type_param_id) => write!(f, "{:?}", type_param_id),
+            Ty::Constructor { name, .. } => {
+                write!(f, "{}", name.name_str())
+            }
+            Ty::Func(param, ret) => {
+                write!(
+                    f,
+                    "({}) -> {ret}",
+                    param
+                        .clone()
+                        .uncurry_params()
+                        .iter()
+                        .map(|p| format!("{p}"))
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                )
+            }
+            Ty::Tuple(items) => {
+                write!(
+                    f,
+                    "({})",
+                    items
+                        .iter()
+                        .map(|p| format!("{p}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            }
+            Ty::Record(row) => write!(
+                f,
+                "{{ {} }}",
+                row.close()
+                    .iter()
+                    .map(|(k, v)| format!("{k}: {v}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            Ty::Nominal { symbol, .. } => {
+                write!(f, "Nominal({symbol})")
+            }
+        }
     }
 }
 

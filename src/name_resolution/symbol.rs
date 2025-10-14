@@ -109,7 +109,7 @@ macro_rules! impl_local_symbol_id {
     };
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Symbol {
     Type(TypeId),
     TypeParameter(TypeParameterId),
@@ -125,6 +125,27 @@ pub enum Symbol {
     Variant(VariantId),
     Protocol(ProtocolId),
     AssociatedType(AssociatedTypeId),
+}
+
+impl std::fmt::Debug for Symbol {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Symbol::Type(type_id) => write!(f, "@Type({type_id:?})"),
+            Symbol::TypeParameter(id) => write!(f, "@TypeParameter({id})"),
+            Symbol::Global(id) => write!(f, "@Global({id})"),
+            Symbol::DeclaredLocal(id) => write!(f, "@DeclaredLocal({id})"),
+            Symbol::PatternBindLocal(id) => write!(f, "@PatternBindLocal({id})"),
+            Symbol::ParamLocal(id) => write!(f, "@ParamLocal({id})"),
+            Symbol::Builtin(id) => write!(f, "@Builtin({id})"),
+            Symbol::Property(id) => write!(f, "@Property({id})"),
+            Symbol::Synthesized(id) => write!(f, "@Synthesized({id})"),
+            Symbol::InstanceMethod(id) => write!(f, "@InstanceMethod({id})"),
+            Symbol::StaticMethod(id) => write!(f, "@StaticMethod({id})"),
+            Symbol::Variant(id) => write!(f, "@Variant({id})"),
+            Symbol::Protocol(id) => write!(f, "@Protocol({id})"),
+            Symbol::AssociatedType(id) => write!(f, "@AssociatedType({id})"),
+        }
+    }
 }
 
 #[allow(non_upper_case_globals)]

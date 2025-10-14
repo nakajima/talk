@@ -555,6 +555,7 @@ impl<'a> DeclDeclarer<'a> {
 
     fn synthesize_init(&mut self, body: &mut Block, type_members: &TypeMembers, type_id: TypeId) {
         let init_id = NodeID(FileID::SYNTHESIZED, self.node_ids.next_id());
+        tracing::debug!("synthesizing init for type {type_id:?} as: {init_id:?}");
         let init_name = self
             .resolver
             .declare(&"init".into(), some!(Synthesized), init_id);
@@ -578,6 +579,7 @@ impl<'a> DeclDeclarer<'a> {
                 kind: TypeAnnotationKind::SelfType(Name::SelfType(type_id)),
             }),
         }];
+
         let mut assignments: Vec<Node> = vec![];
         for property in type_members.properties.iter() {
             let DeclKind::Property {

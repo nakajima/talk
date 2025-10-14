@@ -156,10 +156,14 @@ impl<T> Default for TypeCatalog<T> {
 }
 
 impl TypeCatalog<InferTy> {
-    pub fn finalize(self, session: &mut TypeSession) -> TypeCatalog<Ty> {
+    pub fn finalize(
+        self,
+        session: &mut TypeSession,
+        metas_to_params: &mut FxHashMap<InferTy, InferTy>,
+    ) -> TypeCatalog<Ty> {
         let mut instantiations: FxHashMap<(NodeID, TypeParamId), Ty> = FxHashMap::default();
         for (key, infer_ty) in self.instantiations {
-            let ty = match session.finalize_ty(infer_ty) {
+            let ty = match session.finalize_ty(infer_ty, metas_to_params) {
                 TypeEntry::Mono(ty) => ty.clone(),
                 TypeEntry::Poly(scheme) => scheme.ty.clone(),
             };

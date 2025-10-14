@@ -92,7 +92,7 @@ pub type ScopeId = Index;
     Pattern(enter)
 )]
 pub struct NameResolver {
-    pub(super) symbols: Symbols,
+    pub symbols: Symbols,
     diagnostics: Vec<Diagnostic<NameResolverError>>,
 
     pub(super) phase: NameResolved,

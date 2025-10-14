@@ -23,10 +23,8 @@ impl std::fmt::Display for InstructionMeta {
 impl FromStr for InstructionMeta {
     type Err = IRError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        println!("s: {s:?}");
         if let Some(s) = s.strip_prefix("id:") {
             let split = s.split(":").collect::<Vec<_>>();
-            println!("s: {s:?} split: {split:?}");
             let file_id: u32 =
                 str::parse(split[0]).map_err(|e| IRError::CouldNotParse(format!("{e:?}")))?;
             let id: u32 =
