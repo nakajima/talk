@@ -129,7 +129,11 @@ pub enum Symbol {
 
 impl std::fmt::Debug for Symbol {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
+        match *self {
+            Symbol::Int => write!(f, "Int"),
+            Symbol::Float => write!(f, "Float"),
+            Symbol::Bool => write!(f, "Bool"),
+            Symbol::Void => write!(f, "Void"),
             Symbol::Type(type_id) => write!(f, "@Type({type_id:?})"),
             Symbol::TypeParameter(id) => write!(f, "@TypeParameter({id})"),
             Symbol::Global(id) => write!(f, "@Global({id})"),

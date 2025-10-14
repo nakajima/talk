@@ -8,6 +8,7 @@ use crate::{
     types::{
         infer_ty::InferTy,
         row::Row,
+        scheme::ForAll,
         type_operations::{UnificationSubstitutions, apply, apply_row},
         type_session::TypeDefKind,
     },
@@ -82,6 +83,22 @@ impl From<Row> for InferRow {
 impl InferRow {
     pub fn close(&self) -> ClosedRow<InferTy> {
         close(self, ClosedRow::default())
+    }
+
+    pub fn collect_foralls(&self) -> Vec<ForAll> {
+        let mut result = vec![];
+        match self {
+            Self::Empty(..) => (),
+            Self::Var(..) => (),
+            Self::Param(id) => {
+                result.push(ForAll::Row(*id));
+            }
+            Self::Extend { row, ty, .. } => {
+                result.extend(ty.collect_foralls());
+                result.extend(row.collect_foralls());
+            }
+        }
+        result
     }
 
     pub fn map<F: FnMut(InferTy) -> InferTy>(&self, f: &mut F) -> InferRow {

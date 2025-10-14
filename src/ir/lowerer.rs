@@ -6,6 +6,7 @@ use crate::ir::parse_instruction;
 use crate::label::Label;
 use crate::name_resolution::symbol::Symbols;
 use crate::node_kinds::parameter::Parameter;
+use crate::types::infer_row::RowParamId;
 use crate::types::infer_ty::TypeParamId;
 use crate::types::row::Row;
 use crate::{
@@ -98,6 +99,12 @@ impl RegisterAllocator {
     }
 }
 
+#[derive(Default, Clone, Debug)]
+pub(super) struct Substitutions {
+    pub ty: FxHashMap<TypeParamId, Ty>,
+    pub row: FxHashMap<RowParamId, Row>,
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct PolyFunction {
     pub name: Name,
@@ -106,10 +113,10 @@ pub(super) struct PolyFunction {
     pub ty: Ty,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Specialization {
     pub name: Name,
-    pub substitutions: IndexMap<TypeParamId, Ty>,
+    pub(super) substitutions: Substitutions,
 }
 
 // Lowers an AST with Types to a monomorphized IR
@@ -236,7 +243,7 @@ impl Lowerer {
     fn lower_node(
         &mut self,
         node: &Node,
-        instantiations: &IndexMap<TypeParamId, Ty>,
+        instantiations: &Substitutions,
     ) -> Result<Value, IRError> {
         match node {
             Node::Decl(decl) => self.lower_decl(decl, instantiations),
@@ -249,7 +256,7 @@ impl Lowerer {
     fn lower_decl(
         &mut self,
         decl: &Decl,
-        instantiations: &IndexMap<TypeParamId, Ty>,
+        instantiations: &Substitutions,
     ) -> Result<Value, IRError> {
         match &decl.kind {
             DeclKind::Let {
@@ -297,14 +304,12 @@ impl Lowerer {
         name: &Name,
         params: &[Parameter],
         body: &Block,
-        instantiations: &IndexMap<TypeParamId, Ty>,
+        instantiations: &Substitutions,
     ) -> Result<Value, IRError> {
         let func_ty = match self.types.get_symbol(&name.symbol().unwrap()).unwrap() {
             TypeEntry::Mono(ty) => ty.clone(),
             TypeEntry::Poly(scheme) => scheme.ty.clone(),
         };
-
-        // Uncurry the function type to extract all param types and the final return type
 
         let Ty::Func(..) = func_ty else {
             unreachable!();
@@ -359,8 +364,6 @@ impl Lowerer {
             },
         );
 
-        println!("self.functions after lower_init: {:#?}", self.functions);
-
         Ok(ret)
     }
 
@@ -368,7 +371,7 @@ impl Lowerer {
     fn lower_stmt(
         &mut self,
         stmt: &Stmt,
-        instantiations: &IndexMap<TypeParamId, Ty>,
+        instantiations: &Substitutions,
     ) -> Result<Value, IRError> {
         match &stmt.kind {
             StmtKind::Expr(expr) => self.lower_expr(expr, Bind::Fresh, instantiations),
@@ -385,7 +388,7 @@ impl Lowerer {
         &mut self,
         lhs: &Expr,
         rhs: &Expr,
-        instantiations: &IndexMap<TypeParamId, Ty>,
+        instantiations: &Substitutions,
     ) -> Result<Value, IRError> {
         let lvalue = self.lower_lvalue(lhs)?;
         let value = self.lower_expr(rhs, Bind::Fresh, instantiations)?;
@@ -499,7 +502,7 @@ impl Lowerer {
         &mut self,
         expr: &Expr,
         bind: Bind,
-        instantiations: &IndexMap<TypeParamId, Ty>,
+        instantiations: &Substitutions,
     ) -> Result<Value, IRError> {
         match &expr.kind {
             ExprKind::Func(func) => self.lower_func(func, bind, instantiations),
@@ -551,7 +554,7 @@ impl Lowerer {
         name: &Name,
         expr: &Expr,
         bind: Bind,
-        old_instantiations: &IndexMap<TypeParamId, Ty>,
+        old_instantiations: &Substitutions,
     ) -> Result<Value, IRError> {
         let init_sym = *self
             .types
@@ -562,10 +565,12 @@ impl Lowerer {
             .get(&Label::Named("init".into()))
             .unwrap();
 
-        let dest = self.ret(bind);
-        let (ty, mut instantiations) = self.specialized_ty(expr)?;
-        instantiations.extend(old_instantiations.clone());
+        let init_entry = self.types.get_symbol(&init_sym).cloned().unwrap();
+        let (ty, mut instantiations) = self.specialize(&init_entry, expr.id)?;
+        instantiations.ty.extend(old_instantiations.ty.clone());
+        instantiations.row.extend(old_instantiations.row.clone());
 
+        let dest = self.ret(bind);
         self.push_instr(Instruction::Ref {
             dest,
             ty,
@@ -585,7 +590,7 @@ impl Lowerer {
         receiver: &Option<Box<Expr>>,
         label: &Label,
         bind: Bind,
-        instantiations: &IndexMap<TypeParamId, Ty>,
+        instantiations: &Substitutions,
     ) -> Result<Value, IRError> {
         if let Some(box receiver) = &receiver {
             let reg = self.next_register();
@@ -630,14 +635,14 @@ impl Lowerer {
         &mut self,
         name: &Name,
         expr: &Expr,
-        instantiations: &IndexMap<TypeParamId, Ty>,
+        instantiations: &Substitutions,
     ) -> Result<Value, IRError> {
         let (ty, instantiations) = self.specialized_ty(expr)?;
         let monomorphized_ty = substitute(ty, &instantiations);
 
         let ret = if matches!(monomorphized_ty, Ty::Func(..)) {
             // It's a func reference so we pass the name
-            let monomorphized_name = self.monomorphize_name(name.clone(), instantiations);
+            let monomorphized_name = self.monomorphize_name(name.clone(), &instantiations);
             Value::Func(monomorphized_name)
         } else {
             self.bindings.get(&name.symbol().unwrap()).unwrap().into()
@@ -658,6 +663,7 @@ impl Lowerer {
     ) -> Result<Value, IRError> {
         let record_dest = self.next_register();
         let (ty, concrete_tys) = self.specialized_ty(callee)?;
+        println!("---------------------- lower constructor call: {ty:?} {concrete_tys:?}");
 
         let properties = self
             .types
@@ -689,7 +695,7 @@ impl Lowerer {
 
         let init = self.monomorphize_name(
             Name::Resolved(init_sym, format!("{}_init", name.name_str())),
-            concrete_tys,
+            &concrete_tys,
         );
 
         println!("monomorphized init: {init:?}");
@@ -716,7 +722,7 @@ impl Lowerer {
         callee: &Expr,
         args: &[CallArg],
         bind: Bind,
-        parent_instantiations: &IndexMap<TypeParamId, Ty>,
+        parent_instantiations: &Substitutions,
     ) -> Result<Value, IRError> {
         let dest = self.ret(bind);
 
@@ -728,7 +734,8 @@ impl Lowerer {
         }
 
         let (_callee_ty, mut instantiations) = self.specialized_ty(callee).unwrap();
-        instantiations.extend(parent_instantiations.clone());
+        instantiations.ty.extend(parent_instantiations.ty.clone());
+        instantiations.row.extend(parent_instantiations.row.clone());
 
         let ty = self.ty_from_id(&id)?;
         let mut args = args
@@ -768,7 +775,7 @@ impl Lowerer {
         &mut self,
         func: &Func,
         bind: Bind,
-        instantiations: &IndexMap<TypeParamId, Ty>,
+        instantiations: &Substitutions,
     ) -> Result<Value, IRError> {
         let ty = self.ty_from_symbol(&func.name.symbol().unwrap())?;
 
@@ -871,8 +878,8 @@ impl Lowerer {
         }
     }
 
-    fn monomorphize_name(&mut self, name: Name, instantiations: IndexMap<TypeParamId, Ty>) -> Name {
-        if instantiations.is_empty() {
+    fn monomorphize_name(&mut self, name: Name, instantiations: &Substitutions) -> Name {
+        if instantiations.ty.is_empty() {
             return name;
         }
 
@@ -881,6 +888,7 @@ impl Lowerer {
             "{}[{}]",
             name.name_str(),
             instantiations
+                .ty
                 .values()
                 .map(|v| format!("{v}"))
                 .collect::<Vec<_>>()
@@ -894,7 +902,7 @@ impl Lowerer {
             .or_default()
             .push(Specialization {
                 name: new_name.clone(),
-                substitutions: instantiations,
+                substitutions: instantiations.clone(),
             });
 
         new_name
@@ -918,7 +926,7 @@ impl Lowerer {
         Ok(None)
     }
 
-    fn specialized_ty(&mut self, expr: &Expr) -> Result<(Ty, IndexMap<TypeParamId, Ty>), IRError> {
+    fn specialized_ty(&mut self, expr: &Expr) -> Result<(Ty, Substitutions), IRError> {
         let symbol = match &expr.kind {
             ExprKind::Variable(name) => name.symbol().unwrap(),
             ExprKind::Func(func) => func.name.symbol().unwrap(),
@@ -945,21 +953,37 @@ impl Lowerer {
         &mut self,
         entry: &TypeEntry,
         id: NodeID,
-    ) -> Result<(Ty, IndexMap<TypeParamId, Ty>), IRError> {
+    ) -> Result<(Ty, Substitutions), IRError> {
         match entry {
             TypeEntry::Mono(ty) => Ok((ty.clone(), Default::default())),
             TypeEntry::Poly(scheme) => {
-                let mut substitutions = IndexMap::<TypeParamId, Ty>::default();
+                let mut substitutions = Substitutions::default();
                 for forall in scheme.foralls.iter() {
-                    let ForAll::Ty(param) = forall else { continue };
-                    let concrete = self
-                        .types
-                        .catalog
-                        .instantiations
-                        .get(&(id, *param))
-                        .unwrap();
+                    match forall {
+                        ForAll::Ty(param) => {
+                            let ty = self
+                                .types
+                                .catalog
+                                .instantiations
+                                .ty
+                                .get(&(id, *param))
+                                .unwrap();
 
-                    substitutions.insert(*param, concrete.clone());
+                            substitutions.ty.insert(*param, ty.clone());
+                        }
+
+                        ForAll::Row(param) => {
+                            let row = self
+                                .types
+                                .catalog
+                                .instantiations
+                                .row
+                                .get(&(id, *param))
+                                .unwrap();
+
+                            substitutions.row.insert(*param, row.clone());
+                        }
+                    };
                 }
 
                 let ty = substitute(scheme.ty.clone(), &substitutions);
@@ -998,10 +1022,11 @@ impl Lowerer {
     }
 }
 
-fn substitute(ty: Ty, substitutions: &IndexMap<TypeParamId, Ty>) -> Ty {
+fn substitute(ty: Ty, substitutions: &Substitutions) -> Ty {
     match ty {
         Ty::Primitive(..) => ty,
         Ty::Param(type_param_id) => substitutions
+            .ty
             .get(&type_param_id)
             .unwrap_or_else(|| {
                 tracing::trace!("didn't find id {type_param_id:?} in {substitutions:?}");
@@ -1046,10 +1071,10 @@ fn substitute(ty: Ty, substitutions: &IndexMap<TypeParamId, Ty>) -> Ty {
     }
 }
 
-fn substitute_row(row: Row, substitutions: &IndexMap<TypeParamId, Ty>) -> Row {
+fn substitute_row(row: Row, substitutions: &Substitutions) -> Row {
     match row {
         Row::Empty(..) => row,
-        Row::Param(..) => row,
+        Row::Param(id) => substitutions.row.get(&id).unwrap_or(&row).clone(),
         Row::Extend { box row, label, ty } => Row::Extend {
             row: substitute_row(row, substitutions).into(),
             label,
@@ -1094,7 +1119,7 @@ pub fn curry_ty<'a, I: IntoIterator<Item = &'a Ty>>(params: I, ret: Ty) -> Ty {
 #[cfg(test)]
 pub mod tests {
     use crate::{
-        assert_eq_diff,
+        assert_eq_diff, assert_eq_diff_display,
         compiling::driver::{Driver, Source},
         ir::{
             basic_block::{BasicBlock, BasicBlockId},
@@ -1372,11 +1397,11 @@ pub mod tests {
         let program = lower(
             "
         struct Foo<T> { let bar: T }
-        Foo(bar: 123)
+        Foo(bar: 123).bar
         ",
         );
 
-        assert_eq!(
+        assert_eq_diff_display!(
             *program
                 .functions
                 .get(&Symbol::from(SynthesizedId::from(2)))

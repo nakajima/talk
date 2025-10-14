@@ -6,10 +6,12 @@ use crate::{
 };
 
 pub trait SomeType: std::fmt::Debug + PartialEq + Clone {
+    type RowType: PartialEq + Clone + std::fmt::Debug;
     fn contains_var(&self) -> bool;
 }
 
 impl SomeType for Ty {
+    type RowType = Row;
     fn contains_var(&self) -> bool {
         false
     }

@@ -74,6 +74,13 @@ impl From<TypeEntry> for EnvEntry {
 }
 
 impl EnvEntry {
+    pub fn foralls(&self) -> FxHashSet<ForAll> {
+        match self {
+            EnvEntry::Mono(..) => Default::default(),
+            EnvEntry::Scheme(scheme) => scheme.foralls.clone(),
+        }
+    }
+
     pub fn apply(&self, substitutions: &mut UnificationSubstitutions) -> Self {
         match self.clone() {
             EnvEntry::Mono(ty) => EnvEntry::Mono(apply(ty, substitutions)),

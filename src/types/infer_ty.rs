@@ -158,6 +158,7 @@ impl From<Ty> for InferTy {
 }
 
 impl SomeType for InferTy {
+    type RowType = InferRow;
     fn contains_var(&self) -> bool {
         match self {
             InferTy::Hole(..) => false,
@@ -246,17 +247,9 @@ impl InferTy {
                     result.extend(item.collect_foralls());
                 }
             }
-            InferTy::Nominal { box row, .. } | InferTy::Record(box row) => match row {
-                InferRow::Empty(..) => (),
-                InferRow::Extend { row, ty, .. } => {
-                    result.extend(InferTy::Record(row.clone()).collect_foralls());
-                    result.extend(ty.collect_foralls());
-                }
-                InferRow::Param(id) => {
-                    result.push(ForAll::Row(*id));
-                }
-                InferRow::Var(_) => (),
-            },
+            InferTy::Nominal { box row, .. } | InferTy::Record(box row) => {
+                result.extend(row.collect_foralls());
+            }
         }
         result
     }

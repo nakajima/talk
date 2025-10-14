@@ -9,7 +9,7 @@ use crate::{
     name::Name,
     name_resolution::{
         name_resolver::NameResolved,
-        symbol::{AssociatedTypeId, ProtocolId, Symbol},
+        symbol::{AssociatedTypeId, ProtocolId, Symbol, SynthesizedId},
     },
     node_kinds::{
         generic_decl::GenericDecl,
@@ -103,22 +103,6 @@ impl<'a> TypeResolvePass<'a> {
                     .collect(),
                 row,
             };
-
-            // Immediately associate the generic symbols with the created type parameters
-            // if let InferTy::Nominal { type_args, .. } = &base {
-            //     for ((name, _), type_arg) in generics.iter().zip(type_args.iter()) {
-            //         if let (Name::Resolved(sym, _), InferTy::Param(param_id)) = (name, type_arg) {
-            //             self.session.insert_term(
-            //                 *sym,
-            //                 EnvEntry::Scheme(Scheme {
-            //                     foralls: vec![ForAll::Ty(*param_id)],
-            //                     predicates: vec![],
-            //                     ty: type_arg.clone(),
-            //                 }),
-            //             );
-            //         }
-            //     }
-            // }
 
             self.session.insert_mono(*decl_id, base);
         }
@@ -309,11 +293,7 @@ impl<'a> TypeResolvePass<'a> {
             .entry(sym)
             .or_default()
             .extend(self.resolve_static_methods(&sym));
-        catalog
-            .initializers
-            .entry(sym)
-            .or_default()
-            .extend(self.resolve_initializers(&sym));
+
         catalog
             .properties
             .entry(sym)
@@ -352,7 +332,23 @@ impl<'a> TypeResolvePass<'a> {
         }
 
         let type_scheme = self.session.generalize(Level(0), ty.clone(), &[]);
+        println!("we've got a type scheme for a type def: {:?}", type_scheme);
         self.session.insert_term(symbol, type_scheme);
+
+        let initializers = self.resolve_initializers(&sym);
+        self.session
+            .type_catalog
+            .initializers
+            .entry(sym)
+            .or_default()
+            .extend(initializers);
+
+        println!(
+            "inits: {:?}",
+            self.session
+                .lookup(&Symbol::Synthesized(SynthesizedId::from(1)))
+        );
+
         self.self_symbols.pop();
 
         Ok(Nominal {
@@ -592,6 +588,8 @@ impl<'a> TypeResolvePass<'a> {
             };
 
             let ty = curry(params, ret);
+
+            foralls.extend(ty.collect_foralls());
 
             if foralls.is_empty() && predicates.is_empty() {
                 self.session.insert_mono(init.symbol, ty);

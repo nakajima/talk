@@ -1,5 +1,6 @@
 use indexmap::IndexMap;
 use rustc_hash::FxHashMap;
+use tracing::instrument;
 
 use crate::{
     ast::AST,
@@ -9,13 +10,12 @@ use crate::{
         function::Function,
         instruction::Instruction,
         ir_ty::IrTy,
-        lowerer::{Lowerer, PolyFunction, Specialization},
+        lowerer::{Lowerer, PolyFunction, Specialization, Substitutions},
         terminator::Terminator,
     },
     label::Label,
     name_resolution::{name_resolver::NameResolved, symbol::Symbol},
     types::{
-        infer_ty::TypeParamId,
         ty::Ty,
         type_session::{TypeEntry, Types},
     },
@@ -39,6 +39,7 @@ impl Monomorphizer {
         }
     }
 
+    #[instrument(skip(self))]
     pub fn monomorphize(&mut self) -> IndexMap<Symbol, Function<IrTy, Label>> {
         let mut result = IndexMap::<Symbol, Function<IrTy, Label>>::default();
         let functions = self.functions.clone();
@@ -48,6 +49,7 @@ impl Monomorphizer {
         result
     }
 
+    #[instrument(skip(self))]
     fn monomorphize_func(
         &mut self,
         func: PolyFunction,
@@ -55,7 +57,8 @@ impl Monomorphizer {
     ) {
         for specialization in self
             .specializations
-            .remove(&func.name.symbol().unwrap())
+            .get(&func.name.symbol().unwrap())
+            .cloned()
             .unwrap_or_default()
         {
             self.generate_specialized_function(&func, &specialization, result);
@@ -75,10 +78,11 @@ impl Monomorphizer {
         result.insert(func.name.symbol().unwrap(), func);
     }
 
+    #[instrument(skip(self, block), fields(block = %block))]
     fn monomorphize_block(
         &mut self,
         block: BasicBlock<Ty, Label>,
-        substitutions: &IndexMap<TypeParamId, Ty>,
+        substitutions: &Substitutions,
     ) -> BasicBlock<IrTy, Label> {
         BasicBlock {
             id: block.id,
@@ -91,10 +95,11 @@ impl Monomorphizer {
         }
     }
 
+    #[instrument(skip(self))]
     fn monomorphize_terminator(
         &mut self,
         terminator: Terminator<Ty>,
-        substitutions: &IndexMap<TypeParamId, Ty>,
+        substitutions: &Substitutions,
     ) -> Terminator<IrTy> {
         match terminator {
             Terminator::Ret { val, ty } => Terminator::Ret {
@@ -105,16 +110,18 @@ impl Monomorphizer {
         }
     }
 
+    #[instrument(skip(self, instruction))]
     fn monomorphize_instruction(
         &mut self,
         instruction: Instruction<Ty, Label>,
-        substitutions: &IndexMap<TypeParamId, Ty>,
+        substitutions: &Substitutions,
     ) -> Instruction<IrTy, Label> {
         instruction.map_type(|ty| self.monomorphize_ty(ty, substitutions))
     }
 
     #[allow(clippy::only_used_in_recursion)]
-    fn monomorphize_ty(&mut self, ty: Ty, substitutions: &IndexMap<TypeParamId, Ty>) -> IrTy {
+    #[instrument(skip(self))]
+    fn monomorphize_ty(&mut self, ty: Ty, substitutions: &Substitutions) -> IrTy {
         match ty {
             Ty::Primitive(symbol) => match symbol {
                 Symbol::Int => IrTy::Int,
@@ -124,7 +131,7 @@ impl Monomorphizer {
                 _ => unreachable!(),
             },
             Ty::Param(param) => {
-                if let Some(replaced) = substitutions.get(&param).cloned() {
+                if let Some(replaced) = substitutions.ty.get(&param).cloned() {
                     self.monomorphize_ty(replaced, substitutions)
                 } else {
                     IrTy::Void
@@ -151,13 +158,7 @@ impl Monomorphizer {
             }
             Ty::Tuple(..) => todo!(),
             Ty::Record(..) => todo!(),
-            Ty::Nominal {
-                symbol,
-                ref type_args,
-                ..
-            } => {
-                println!("substitutions: {substitutions:?}");
-                println!("type_args in mono: {type_args:?}");
+            Ty::Nominal { symbol, .. } => {
                 if let Some(properties) = self.types.catalog.properties.get(&symbol).cloned() {
                     IrTy::Record(
                         properties
@@ -179,6 +180,7 @@ impl Monomorphizer {
         }
     }
 
+    #[instrument(skip(self))]
     fn generate_specialized_function(
         &mut self,
         func: &PolyFunction,

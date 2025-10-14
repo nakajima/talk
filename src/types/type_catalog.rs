@@ -10,9 +10,10 @@ use crate::{
     span::Span,
     types::{
         fields::Associated,
+        infer_row::RowParamId,
         infer_ty::{InferTy, TypeParamId},
         passes::dependencies_pass::{Conformance, ConformanceRequirement},
-        ty::Ty,
+        ty::{SomeType, Ty},
         type_session::{TypeEntry, TypeSession},
     },
 };
@@ -119,7 +120,22 @@ pub struct ConformanceKey {
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub struct TypeCatalog<T> {
+pub struct TrackedInstantiations<T: SomeType> {
+    pub ty: FxHashMap<(NodeID, TypeParamId), T>,
+    pub row: FxHashMap<(NodeID, RowParamId), T::RowType>,
+}
+
+impl<T: SomeType> Default for TrackedInstantiations<T> {
+    fn default() -> Self {
+        Self {
+            ty: Default::default(),
+            row: Default::default(),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub struct TypeCatalog<T: SomeType> {
     pub nominals: FxHashMap<Symbol, Nominal>,
     pub protocols: FxHashMap<ProtocolId, Protocol>,
     pub conformances: FxHashMap<ConformanceKey, Conformance>,
@@ -132,10 +148,10 @@ pub struct TypeCatalog<T> {
     pub static_methods: FxHashMap<Symbol, FxHashMap<Label, Symbol>>,
     pub variants: FxHashMap<Symbol, FxHashMap<Label, Symbol>>,
 
-    pub instantiations: FxHashMap<(NodeID, TypeParamId), T>,
+    pub instantiations: TrackedInstantiations<T>,
 }
 
-impl<T> Default for TypeCatalog<T> {
+impl<T: SomeType> Default for TypeCatalog<T> {
     fn default() -> Self {
         Self {
             nominals: Default::default(),
@@ -156,18 +172,20 @@ impl<T> Default for TypeCatalog<T> {
 }
 
 impl TypeCatalog<InferTy> {
-    pub fn finalize(
-        self,
-        session: &mut TypeSession,
-        metas_to_params: &mut FxHashMap<InferTy, InferTy>,
-    ) -> TypeCatalog<Ty> {
-        let mut instantiations: FxHashMap<(NodeID, TypeParamId), Ty> = FxHashMap::default();
-        for (key, infer_ty) in self.instantiations {
-            let ty = match session.finalize_ty(infer_ty, metas_to_params) {
+    pub fn finalize(self, session: &mut TypeSession) -> TypeCatalog<Ty> {
+        println!("finalize: {:?}", self.instantiations);
+        let mut instantiations = TrackedInstantiations::default();
+        for (key, infer_ty) in self.instantiations.ty {
+            let ty = match session.finalize_ty(infer_ty) {
                 TypeEntry::Mono(ty) => ty.clone(),
                 TypeEntry::Poly(scheme) => scheme.ty.clone(),
             };
-            instantiations.insert(key, ty);
+            instantiations.ty.insert(key, ty);
+        }
+        for (key, infer_row) in self.instantiations.row {
+            instantiations
+                .row
+                .insert(key, session.finalize_row(infer_row));
         }
         TypeCatalog {
             nominals: self.nominals,
@@ -185,7 +203,7 @@ impl TypeCatalog<InferTy> {
     }
 }
 
-impl<T> TypeCatalog<T> {
+impl<T: SomeType> TypeCatalog<T> {
     pub fn lookup_member(&self, receiver: &Symbol, label: &Label) -> Option<Symbol> {
         if let Some(methods) = self.properties.get(receiver)
             && let Some(sym) = methods.get(label)

@@ -225,6 +225,7 @@ pub mod tests {
             *types
                 .catalog
                 .instantiations
+                .ty
                 .get(&(root_1.id, *type_param))
                 .unwrap(),
             Ty::Int
@@ -233,6 +234,7 @@ pub mod tests {
             *types
                 .catalog
                 .instantiations
+                .ty
                 .get(&(root_2.id, *type_param))
                 .unwrap(),
             Ty::Bool
@@ -301,7 +303,16 @@ pub mod tests {
             panic!("didn't get struct scheme");
         };
 
-        let ForAll::Ty(type_param) = foralls.iter().next().unwrap() else {
+        println!(
+            "type symbol: {:?}",
+            types.get_symbol(&Symbol::Type(TypeId::from(1))).unwrap()
+        );
+
+        let ForAll::Ty(type_param) = foralls
+            .iter()
+            .find(|p| matches!(p, ForAll::Ty(..)))
+            .unwrap()
+        else {
             unreachable!()
         };
 
@@ -310,6 +321,7 @@ pub mod tests {
             *types
                 .catalog
                 .instantiations
+                .ty
                 .get(&(*constructor_1_id, *type_param))
                 .unwrap(),
             Ty::Int
@@ -318,6 +330,7 @@ pub mod tests {
             *types
                 .catalog
                 .instantiations
+                .ty
                 .get(&(*constructor_2_id, *type_param))
                 .unwrap(),
             Ty::Bool
@@ -386,7 +399,11 @@ pub mod tests {
             panic!("didn't get enum scheme");
         };
 
-        let ForAll::Ty(type_param) = foralls.iter().next().unwrap() else {
+        let ForAll::Ty(type_param) = foralls
+            .iter()
+            .find(|p| matches!(p, ForAll::Ty(..)))
+            .unwrap()
+        else {
             unreachable!()
         };
 
@@ -395,6 +412,7 @@ pub mod tests {
             *types
                 .catalog
                 .instantiations
+                .ty
                 .get(&(*member_1_id, *type_param))
                 .unwrap(),
             Ty::Int
@@ -403,6 +421,7 @@ pub mod tests {
             *types
                 .catalog
                 .instantiations
+                .ty
                 .get(&(*member_2_id, *type_param))
                 .unwrap(),
             Ty::Bool

@@ -80,12 +80,13 @@ impl Scheme<InferTy> {
                     else {
                         unreachable!()
                     };
-                    session.reverse_generalizations.insert(meta, *param);
+                    session.reverse_instantiations.ty.insert(meta, *param);
                     tracing::trace!("instantiating {param:?} with {meta:?}");
                     substitutions.ty.insert(*param, meta);
                     session
                         .type_catalog
                         .instantiations
+                        .ty
                         .insert((id, *param), InferTy::UnificationVar { id: meta, level });
 
                     if let Some(bounds) = session.type_param_bounds.get(param).cloned() {
@@ -135,6 +136,12 @@ impl Scheme<InferTy> {
                     };
                     tracing::trace!("instantiating {param:?} with {meta:?}");
                     substitutions.row.insert(*param, meta);
+                    session.reverse_instantiations.row.insert(meta, *param);
+                    session
+                        .type_catalog
+                        .instantiations
+                        .row
+                        .insert((id, *param), InferRow::Var(meta));
                 }
             };
         }
@@ -173,7 +180,7 @@ impl Scheme<InferTy> {
                     };
 
                     tracing::trace!("instantiating {param:?} with {meta:?}");
-                    session.reverse_generalizations.insert(meta, *param);
+                    session.reverse_instantiations.ty.insert(meta, *param);
                     unification_substitutions
                         .meta_levels
                         .insert(Meta::Ty(meta), level);
@@ -181,6 +188,7 @@ impl Scheme<InferTy> {
                     session
                         .type_catalog
                         .instantiations
+                        .ty
                         .insert((id, *param), InferTy::UnificationVar { id: meta, level });
                 }
                 ForAll::Row(param) => {
@@ -192,6 +200,12 @@ impl Scheme<InferTy> {
                         .meta_levels
                         .insert(Meta::Row(meta), level);
                     substitutions.row.insert(*param, meta);
+                    session.reverse_instantiations.row.insert(meta, *param);
+                    session
+                        .type_catalog
+                        .instantiations
+                        .row
+                        .insert((id, *param), InferRow::Var(meta));
                 }
             };
         }
@@ -236,7 +250,7 @@ impl Scheme<InferTy> {
                 unreachable!();
             };
 
-            session.reverse_generalizations.insert(meta_var, *param);
+            session.reverse_instantiations.ty.insert(meta_var, *param);
 
             wants.equals(
                 ty.clone(),
@@ -246,6 +260,13 @@ impl Scheme<InferTy> {
             );
 
             substitutions.ty.insert(*param, meta_var);
+            session.type_catalog.instantiations.ty.insert(
+                (*id, *param),
+                InferTy::UnificationVar {
+                    id: meta_var,
+                    level: Level(1),
+                },
+            );
         }
 
         for row_forall in row_foralls {
@@ -257,6 +278,15 @@ impl Scheme<InferTy> {
                 unreachable!()
             };
             substitutions.row.insert(row_param, row_meta);
+            session
+                .reverse_instantiations
+                .row
+                .insert(row_meta, row_param);
+            session
+                .type_catalog
+                .instantiations
+                .row
+                .insert((id, row_param), InferRow::Var(row_meta));
         }
 
         for predicate in &self.predicates {

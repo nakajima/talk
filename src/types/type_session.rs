@@ -20,7 +20,7 @@ use crate::{
         builtins::builtin_scope,
         constraints::constraint::Constraint,
         fields::{Associated, Initializer, Method, MethodRequirement, Property, Variant},
-        infer_row::InferRow,
+        infer_row::{InferRow, RowMetaId, RowParamId},
         infer_ty::{InferTy, Level, MetaVarId, SkolemId, TypeParamId},
         kind::Kind,
         passes::{
@@ -29,6 +29,7 @@ use crate::{
             type_headers_pass::TypeHeaderPass,
             type_resolve_pass::TypeResolvePass,
         },
+        row::Row,
         scheme::{ForAll, Scheme},
         term_environment::{EnvEntry, TermEnv},
         ty::{SomeType, Ty},
@@ -119,7 +120,7 @@ pub struct TypeSession {
     pub(super) type_catalog: TypeCatalog<InferTy>,
     pub(super) modules: Rc<ModuleEnvironment>,
     pub aliases: FxHashMap<Symbol, Scheme<InferTy>>,
-    pub(super) reverse_generalizations: FxHashMap<MetaVarId, TypeParamId>,
+    pub(super) reverse_instantiations: ReverseInstantiations,
 }
 
 pub struct Typed {}
@@ -145,6 +146,12 @@ pub struct Types {
     types_by_node: FxHashMap<NodeID, TypeEntry>,
     types_by_symbol: FxHashMap<Symbol, TypeEntry>,
     pub catalog: TypeCatalog<Ty>,
+}
+
+#[derive(Debug, Default)]
+pub struct ReverseInstantiations {
+    pub ty: FxHashMap<MetaVarId, TypeParamId>,
+    pub row: FxHashMap<RowMetaId, RowParamId>,
 }
 
 impl Types {
@@ -178,7 +185,7 @@ impl TypeSession {
             term_env,
             type_param_bounds: Default::default(),
             skolem_bounds: Default::default(),
-            reverse_generalizations: Default::default(),
+            reverse_instantiations: Default::default(),
             types_by_node: Default::default(),
             typealiases: Default::default(),
             type_catalog: Default::default(),
@@ -188,12 +195,11 @@ impl TypeSession {
     }
 
     pub fn finalize(mut self) -> Result<Types, TypeError> {
-        let mut metas_to_params = FxHashMap::default();
         let types_by_node = std::mem::take(&mut self.types_by_node);
         let entries = types_by_node
             .into_iter()
             .map(|(id, ty)| {
-                let ty = self.finalize_ty(ty, &mut metas_to_params);
+                let ty = self.finalize_ty(ty);
                 (id, ty)
             })
             .collect();
@@ -204,7 +210,7 @@ impl TypeSession {
             .into_iter()
             .map(|(sym, entry)| {
                 let entry = match entry {
-                    EnvEntry::Mono(ty) => self.finalize_ty(ty, &mut metas_to_params),
+                    EnvEntry::Mono(ty) => self.finalize_ty(ty),
                     EnvEntry::Scheme(scheme) => {
                         if scheme.ty.contains_var() {
                             // Merge with existing scheme's foralls/predicates
@@ -254,7 +260,7 @@ impl TypeSession {
             .collect();
 
         let catalog = std::mem::take(&mut self.type_catalog);
-        let catalog = catalog.finalize(&mut self, &mut metas_to_params);
+        let catalog = catalog.finalize(&mut self);
         let types = Types {
             catalog,
             types_by_node: entries,
@@ -264,42 +270,54 @@ impl TypeSession {
         Ok(types)
     }
 
-    fn shallow_generalize_row(
-        &mut self,
-        row: InferRow,
-        substitutions: &mut FxHashMap<InferTy, InferTy>,
-    ) -> InferRow {
+    fn shallow_generalize_row(&mut self, row: InferRow) -> InferRow {
         match row {
             InferRow::Empty(..) => row,
             InferRow::Extend { box row, label, ty } => InferRow::Extend {
-                row: self.shallow_generalize_row(row, substitutions).into(),
+                row: self.shallow_generalize_row(row).into(),
                 label,
-                ty: self.shallow_generalize(ty, substitutions),
+                ty: self.shallow_generalize(ty),
             },
             InferRow::Param(..) => row,
-            InferRow::Var(..) => InferRow::Param(self.vars.row_metas.next_id()),
-        }
-    }
-
-    fn shallow_generalize(
-        &mut self,
-        ty: InferTy,
-        substitutions: &mut FxHashMap<InferTy, InferTy>,
-    ) -> InferTy {
-        match ty {
-            InferTy::UnificationVar { id, .. } => {
+            InferRow::Var(meta) => {
                 let id = self
-                    .reverse_generalizations
-                    .get(&id)
+                    .reverse_instantiations
+                    .row
+                    .get(&meta)
                     .cloned()
                     .unwrap_or_else(|| {
-                        let InferTy::Param(id) = self.new_type_param(Some(id)) else {
+                        let InferRow::Param(id) = self.new_row_type_param(Some(meta)) else {
                             unreachable!()
                         };
 
+                        self.reverse_instantiations.row.insert(meta, id);
+
                         id
                     });
-                substitutions.insert(ty.clone(), InferTy::Param(id));
+
+                InferRow::Param(id)
+            }
+        }
+    }
+
+    fn shallow_generalize(&mut self, ty: InferTy) -> InferTy {
+        match ty {
+            InferTy::UnificationVar { id: meta, .. } => {
+                let id = self
+                    .reverse_instantiations
+                    .ty
+                    .get(&meta)
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        let InferTy::Param(id) = self.new_type_param(Some(meta)) else {
+                            unreachable!()
+                        };
+
+                        self.reverse_instantiations.ty.insert(meta, id);
+
+                        id
+                    });
+
                 InferTy::Param(id)
             }
             InferTy::Constructor {
@@ -310,23 +328,21 @@ impl TypeSession {
                 name,
                 params: params
                     .into_iter()
-                    .map(|p| self.shallow_generalize(p, substitutions))
+                    .map(|p| self.shallow_generalize(p))
                     .collect(),
-                ret: self.shallow_generalize(ret, substitutions).into(),
+                ret: self.shallow_generalize(ret).into(),
             },
             InferTy::Func(box param, box ret) => InferTy::Func(
-                self.shallow_generalize(param, substitutions).into(),
-                self.shallow_generalize(ret, substitutions).into(),
+                self.shallow_generalize(param).into(),
+                self.shallow_generalize(ret).into(),
             ),
             InferTy::Tuple(items) => InferTy::Tuple(
                 items
                     .into_iter()
-                    .map(|p| self.shallow_generalize(p, substitutions))
+                    .map(|p| self.shallow_generalize(p))
                     .collect(),
             ),
-            InferTy::Record(box row) => {
-                InferTy::Record(self.shallow_generalize_row(row, substitutions).into())
-            }
+            InferTy::Record(box row) => InferTy::Record(self.shallow_generalize_row(row).into()),
             InferTy::Nominal {
                 symbol,
                 type_args,
@@ -335,27 +351,40 @@ impl TypeSession {
                 symbol,
                 type_args: type_args
                     .into_iter()
-                    .map(|t| self.shallow_generalize(t, substitutions))
+                    .map(|t| self.shallow_generalize(t))
                     .collect(),
-                row: self.shallow_generalize_row(row, substitutions).into(),
+                row: self.shallow_generalize_row(row).into(),
             },
             ty => ty,
         }
     }
 
-    pub(super) fn finalize_ty(
-        &mut self,
-        ty: InferTy,
-        substitutions: &mut FxHashMap<InferTy, InferTy>,
-    ) -> TypeEntry {
+    pub(super) fn finalize_ty(&mut self, ty: InferTy) -> TypeEntry {
         let ty = substitute(ty.clone(), &self.skolem_map);
-        let ty = substitute(ty, substitutions);
-        let ty = self.shallow_generalize(ty, substitutions);
+        let ty = self.shallow_generalize(ty);
 
         if ty.contains_var() {
             self.generalize(Level(0), ty.clone(), &[]).into()
         } else {
             TypeEntry::Mono(ty.clone().into())
+        }
+    }
+
+    pub(super) fn finalize_row(&mut self, row: InferRow) -> Row {
+        let row = self.shallow_generalize_row(row);
+
+        match row {
+            InferRow::Empty(..) => row.into(),
+            InferRow::Param(..) => row.into(),
+            InferRow::Var(var) => Row::Param(*self.reverse_instantiations.row.get(&var).unwrap()),
+            InferRow::Extend { box row, label, ty } => Row::Extend {
+                row: self.finalize_row(row).into(),
+                label,
+                ty: match self.finalize_ty(ty) {
+                    TypeEntry::Mono(ty) => ty.clone(),
+                    TypeEntry::Poly(scheme) => scheme.ty,
+                },
+            },
         }
     }
 
@@ -368,12 +397,16 @@ impl TypeSession {
             *ty = apply(ty.clone(), substitutions);
         }
 
-        for ty in self.type_catalog.instantiations.values_mut() {
+        for ty in self.type_catalog.instantiations.ty.values_mut() {
             if matches!(ty, InferTy::Primitive(_)) {
                 continue;
             }
 
             *ty = apply(ty.clone(), substitutions);
+        }
+
+        for row in self.type_catalog.instantiations.row.values_mut() {
+            *row = apply_row(row.clone(), substitutions);
         }
     }
 
@@ -424,7 +457,7 @@ impl TypeSession {
                     }
 
                     let param_id = self.vars.type_params.next_id();
-                    self.reverse_generalizations.insert(*id, param_id);
+                    self.reverse_instantiations.ty.insert(*id, param_id);
                     tracing::trace!("generalizing {m:?} to {param_id:?}");
                     foralls.insert(ForAll::Ty(param_id));
                     substitutions.ty.insert(*id, InferTy::Param(param_id));
@@ -447,6 +480,7 @@ impl TypeSession {
                     tracing::trace!("generalizing {m:?} to {param_id:?}");
                     foralls.insert(ForAll::Row(param_id));
                     substitutions.row.insert(*id, InferRow::Param(param_id));
+                    self.reverse_instantiations.row.insert(*id, param_id);
                 }
                 _ => {
                     tracing::warn!("got {m:?} for var while generalizing")
@@ -531,7 +565,7 @@ impl TypeSession {
                     }
 
                     let param_id = self.vars.type_params.next_id();
-                    self.reverse_generalizations.insert(*id, param_id);
+                    self.reverse_instantiations.ty.insert(*id, param_id);
                     tracing::trace!("generalizing {m:?} to {param_id:?}");
                     foralls.insert(ForAll::Ty(param_id));
                     substitutions.ty.insert(*id, InferTy::Param(param_id));
@@ -548,6 +582,7 @@ impl TypeSession {
 
                     let param_id = self.vars.row_params.next_id();
                     tracing::trace!("generalizing {m:?} to {param_id:?}");
+                    self.reverse_instantiations.row.insert(*id, param_id);
                     foralls.insert(ForAll::Row(param_id));
                     substitutions.row.insert(*id, InferRow::Param(param_id));
                 }
@@ -806,11 +841,22 @@ impl TypeSession {
         let id = self.vars.type_params.next_id();
 
         if let Some(meta) = meta {
-            self.reverse_generalizations.insert(meta, id);
+            self.reverse_instantiations.ty.insert(meta, id);
         }
 
         tracing::trace!("Fresh type param {id:?}");
         InferTy::Param(id)
+    }
+
+    pub(crate) fn new_row_type_param(&mut self, meta: Option<RowMetaId>) -> InferRow {
+        let id = self.vars.row_params.next_id();
+
+        if let Some(meta) = meta {
+            self.reverse_instantiations.row.insert(meta, id);
+        }
+
+        tracing::trace!("Fresh type param {id:?}");
+        InferRow::Param(id)
     }
 
     pub(crate) fn new_skolem(&mut self) -> InferTy {
