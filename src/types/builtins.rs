@@ -1,4 +1,4 @@
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::types::infer_ty::{InferTy, TypeParamId};
 use crate::types::predicate::Predicate;
@@ -7,7 +7,16 @@ use crate::types::term_environment::EnvEntry;
 
 use crate::name_resolution::symbol::Symbol;
 
-pub fn resolve_builtin_type(id: &Symbol) -> (InferTy, Vec<Predicate<InferTy>>, Vec<ForAll>) {
+#[macro_export]
+macro_rules! fxhashset {
+    ($($k:expr),* $(,)?) => {{
+        let mut m = rustc_hash::FxHashSet::default();
+        $( m.insert($k); )*
+        m
+    }};
+}
+
+pub fn resolve_builtin_type(id: &Symbol) -> (InferTy, Vec<Predicate<InferTy>>, FxHashSet<ForAll>) {
     let ty = match *id {
         Symbol::Int => InferTy::Primitive(Symbol::Int),
         Symbol::Float => InferTy::Primitive(Symbol::Float),
@@ -16,7 +25,7 @@ pub fn resolve_builtin_type(id: &Symbol) -> (InferTy, Vec<Predicate<InferTy>>, V
         _ => unreachable!("no builtin named {id:?}"),
     };
 
-    (ty, vec![], vec![])
+    (ty, vec![], Default::default())
 }
 
 pub fn builtin_scope() -> FxHashMap<Symbol, EnvEntry> {
@@ -29,7 +38,7 @@ pub fn builtin_scope() -> FxHashMap<Symbol, EnvEntry> {
     res.insert(
         Symbol::IR,
         EnvEntry::Scheme(Scheme::<InferTy>::new(
-            vec![ForAll::Ty(TypeParamId::IR_TYPE_PARAM)],
+            fxhashset!(ForAll::Ty(TypeParamId::IR_TYPE_PARAM)),
             vec![],
             InferTy::Func(
                 InferTy::String().into(),

@@ -151,7 +151,13 @@ impl Monomorphizer {
             }
             Ty::Tuple(..) => todo!(),
             Ty::Record(..) => todo!(),
-            Ty::Nominal { symbol, .. } => {
+            Ty::Nominal {
+                symbol,
+                ref type_args,
+                ..
+            } => {
+                println!("substitutions: {substitutions:?}");
+                println!("type_args in mono: {type_args:?}");
                 if let Some(properties) = self.types.catalog.properties.get(&symbol).cloned() {
                     IrTy::Record(
                         properties

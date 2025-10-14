@@ -8,7 +8,7 @@ use crate::{
     types::{
         dsu::DSU,
         infer_row::{InferRow, RowMetaId, RowParamId, RowTail, normalize_row},
-        infer_ty::{InferTy, Level, TypeParamId, UnificationVarId},
+        infer_ty::{InferTy, Level, MetaVarId, TypeParamId},
         passes::inference_pass::{Meta, curry},
         type_error::TypeError,
         type_session::{TypeDefKind, TypeSession},
@@ -18,8 +18,8 @@ use crate::{
 #[derive(Clone, Default)]
 pub struct UnificationSubstitutions {
     pub row: FxHashMap<RowMetaId, InferRow>,
-    pub ty: FxHashMap<UnificationVarId, InferTy>,
-    ty_dsu: DSU<UnificationVarId>,
+    pub ty: FxHashMap<MetaVarId, InferTy>,
+    ty_dsu: DSU<MetaVarId>,
     row_dsu: DSU<RowMetaId>,
     pub meta_levels: FxHashMap<Meta, Level>,
 }
@@ -27,7 +27,7 @@ pub struct UnificationSubstitutions {
 #[derive(Clone, Debug, Default)]
 pub struct InstantiationSubstitutions {
     pub row: FxHashMap<RowParamId, RowMetaId>,
-    pub ty: FxHashMap<TypeParamId, UnificationVarId>,
+    pub ty: FxHashMap<TypeParamId, MetaVarId>,
 }
 
 impl std::fmt::Debug for UnificationSubstitutions {
@@ -52,7 +52,7 @@ impl UnificationSubstitutions {
     }
 
     #[inline]
-    pub fn canon_meta(&mut self, id: UnificationVarId) -> UnificationVarId {
+    pub fn canon_meta(&mut self, id: MetaVarId) -> MetaVarId {
         self.ty_dsu.find(id)
     }
     #[inline]
@@ -60,7 +60,7 @@ impl UnificationSubstitutions {
         self.row_dsu.find(id)
     }
     #[inline]
-    pub fn link_meta(&mut self, a: UnificationVarId, b: UnificationVarId) -> UnificationVarId {
+    pub fn link_meta(&mut self, a: MetaVarId, b: MetaVarId) -> MetaVarId {
         self.ty_dsu.union(a, b)
     }
     #[inline]
@@ -69,7 +69,7 @@ impl UnificationSubstitutions {
     }
 }
 
-fn occurs_in_row(id: UnificationVarId, row: &InferRow) -> bool {
+fn occurs_in_row(id: MetaVarId, row: &InferRow) -> bool {
     match row {
         InferRow::Empty(..) => false,
         InferRow::Var(_) => false,
@@ -79,7 +79,7 @@ fn occurs_in_row(id: UnificationVarId, row: &InferRow) -> bool {
 }
 
 // Helper: occurs check
-fn occurs_in(id: UnificationVarId, ty: &InferTy) -> bool {
+fn occurs_in(id: MetaVarId, ty: &InferTy) -> bool {
     match ty {
         InferTy::UnificationVar { id: mid, .. } => *mid == id,
         InferTy::Func(a, b) => occurs_in(id, a) || occurs_in(id, b),

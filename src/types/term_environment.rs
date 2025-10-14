@@ -1,4 +1,4 @@
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{
     compiling::module::ModuleId,
@@ -22,8 +22,8 @@ pub enum EnvEntry {
     Scheme(Scheme<InferTy>),
 }
 
-impl From<(InferTy, Vec<Predicate<InferTy>>, Vec<ForAll>)> for EnvEntry {
-    fn from(value: (InferTy, Vec<Predicate<InferTy>>, Vec<ForAll>)) -> Self {
+impl From<(InferTy, Vec<Predicate<InferTy>>, FxHashSet<ForAll>)> for EnvEntry {
+    fn from(value: (InferTy, Vec<Predicate<InferTy>>, FxHashSet<ForAll>)) -> Self {
         let mut foralls = value.2;
         foralls.extend(value.0.collect_foralls());
         if value.1.is_empty() && foralls.is_empty() {
@@ -38,10 +38,10 @@ impl From<(InferTy, Vec<Predicate<InferTy>>, Vec<ForAll>)> for EnvEntry {
     }
 }
 
-impl From<EnvEntry> for (InferTy, Vec<Predicate<InferTy>>, Vec<ForAll>) {
+impl From<EnvEntry> for (InferTy, Vec<Predicate<InferTy>>, FxHashSet<ForAll>) {
     fn from(val: EnvEntry) -> Self {
         match val {
-            EnvEntry::Mono(ty) => (ty, vec![], vec![]),
+            EnvEntry::Mono(ty) => (ty, vec![], Default::default()),
             EnvEntry::Scheme(scheme) => (scheme.ty, scheme.predicates, scheme.foralls),
         }
     }

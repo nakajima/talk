@@ -21,7 +21,7 @@ use crate::{
         constraints::constraint::Constraint,
         fields::{Associated, Initializer, Method, MethodRequirement, Property, Variant},
         infer_row::InferRow,
-        infer_ty::{InferTy, Level, SkolemId, TypeParamId},
+        infer_ty::{InferTy, Level, MetaVarId, SkolemId, TypeParamId},
         kind::Kind,
         passes::{
             dependencies_pass::{Conformance, DependenciesPass, SCCResolved},
@@ -119,6 +119,7 @@ pub struct TypeSession {
     pub(super) type_catalog: TypeCatalog<InferTy>,
     pub(super) modules: Rc<ModuleEnvironment>,
     pub aliases: FxHashMap<Symbol, Scheme<InferTy>>,
+    pub(super) reverse_generalizations: FxHashMap<MetaVarId, TypeParamId>,
 }
 
 pub struct Typed {}
@@ -177,6 +178,7 @@ impl TypeSession {
             term_env,
             type_param_bounds: Default::default(),
             skolem_bounds: Default::default(),
+            reverse_generalizations: Default::default(),
             types_by_node: Default::default(),
             typealiases: Default::default(),
             type_catalog: Default::default(),
@@ -215,7 +217,10 @@ impl TypeSession {
                             };
 
                             TypeEntry::Poly(Scheme {
-                                foralls: [scheme.foralls, generalized.foralls].concat(),
+                                foralls: [scheme.foralls, generalized.foralls]
+                                    .iter()
+                                    .flat_map(|f| f.clone())
+                                    .collect(),
                                 predicates: [
                                     scheme
                                         .predicates
@@ -282,10 +287,20 @@ impl TypeSession {
         substitutions: &mut FxHashMap<InferTy, InferTy>,
     ) -> InferTy {
         match ty {
-            InferTy::UnificationVar { .. } => {
-                let type_param = self.new_type_param();
-                substitutions.insert(ty.clone(), type_param.clone());
-                type_param
+            InferTy::UnificationVar { id, .. } => {
+                let id = self
+                    .reverse_generalizations
+                    .get(&id)
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        let InferTy::Param(id) = self.new_type_param(Some(id)) else {
+                            unreachable!()
+                        };
+
+                        id
+                    });
+                substitutions.insert(ty.clone(), InferTy::Param(id));
+                InferTy::Param(id)
             }
             InferTy::Constructor {
                 name,
@@ -389,7 +404,7 @@ impl TypeSession {
         }
 
         // keep only metas born at or above inner
-        let mut foralls = vec![];
+        let mut foralls = FxHashSet::default();
         let mut substitutions = UnificationSubstitutions::new(self.meta_levels.clone());
         for m in &metas {
             match m {
@@ -398,7 +413,7 @@ impl TypeSession {
                         .iter()
                         .any(|fa| matches!(fa, ForAll::Ty(q) if *q == *p))
                     {
-                        foralls.push(ForAll::Ty(*p));
+                        foralls.insert(ForAll::Ty(*p));
                     }
                 }
 
@@ -409,8 +424,9 @@ impl TypeSession {
                     }
 
                     let param_id = self.vars.type_params.next_id();
+                    self.reverse_generalizations.insert(*id, param_id);
                     tracing::trace!("generalizing {m:?} to {param_id:?}");
-                    foralls.push(ForAll::Ty(param_id));
+                    foralls.insert(ForAll::Ty(param_id));
                     substitutions.ty.insert(*id, InferTy::Param(param_id));
                 }
                 InferTy::Record(box InferRow::Var(id))
@@ -429,7 +445,7 @@ impl TypeSession {
 
                     let param_id = self.vars.row_params.next_id();
                     tracing::trace!("generalizing {m:?} to {param_id:?}");
-                    foralls.push(ForAll::Row(param_id));
+                    foralls.insert(ForAll::Row(param_id));
                     substitutions.row.insert(*id, InferRow::Param(param_id));
                 }
                 _ => {
@@ -450,7 +466,7 @@ impl TypeSession {
                         .unwrap_or(&Level(0));
                     if lvl >= inner {
                         let param_id = self.vars.row_params.next_id();
-                        foralls.push(ForAll::Row(param_id));
+                        foralls.insert(ForAll::Row(param_id));
                         substitutions
                             .row
                             .insert(row_meta, InferRow::Param(param_id));
@@ -494,7 +510,7 @@ impl TypeSession {
         collect_meta(&ty, &mut metas);
 
         // keep only metas born at or above inner
-        let mut foralls = vec![];
+        let mut foralls = FxHashSet::default();
         for m in &metas {
             match m {
                 InferTy::Param(p) => {
@@ -504,7 +520,7 @@ impl TypeSession {
                         .iter()
                         .any(|fa| matches!(fa, ForAll::Ty(q) if *q == *p))
                     {
-                        foralls.push(ForAll::Ty(*p));
+                        foralls.insert(ForAll::Ty(*p));
                     }
                 }
 
@@ -515,8 +531,9 @@ impl TypeSession {
                     }
 
                     let param_id = self.vars.type_params.next_id();
+                    self.reverse_generalizations.insert(*id, param_id);
                     tracing::trace!("generalizing {m:?} to {param_id:?}");
-                    foralls.push(ForAll::Ty(param_id));
+                    foralls.insert(ForAll::Ty(param_id));
                     substitutions.ty.insert(*id, InferTy::Param(param_id));
                 }
                 InferTy::Record(box InferRow::Var(id)) => {
@@ -531,7 +548,7 @@ impl TypeSession {
 
                     let param_id = self.vars.row_params.next_id();
                     tracing::trace!("generalizing {m:?} to {param_id:?}");
-                    foralls.push(ForAll::Row(param_id));
+                    foralls.insert(ForAll::Row(param_id));
                     substitutions.row.insert(*id, InferRow::Param(param_id));
                 }
                 _ => {
@@ -785,8 +802,13 @@ impl TypeSession {
         None
     }
 
-    pub(crate) fn new_type_param(&mut self) -> InferTy {
+    pub(crate) fn new_type_param(&mut self, meta: Option<MetaVarId>) -> InferTy {
         let id = self.vars.type_params.next_id();
+
+        if let Some(meta) = meta {
+            self.reverse_generalizations.insert(meta, id);
+        }
+
         tracing::trace!("Fresh type param {id:?}");
         InferTy::Param(id)
     }

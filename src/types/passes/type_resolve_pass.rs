@@ -1,9 +1,10 @@
 use indexmap::IndexMap;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::{instrument, trace_span};
 
 use crate::{
     ast::AST,
+    fxhashset,
     label::Label,
     name::Name,
     name_resolution::{
@@ -94,7 +95,7 @@ impl<'a> TypeResolvePass<'a> {
                 type_args: generics
                     .iter()
                     .map(|(name, _)| {
-                        let param = self.session.new_type_param();
+                        let param = self.session.new_type_param(None);
                         self.session
                             .insert_mono(name.symbol().unwrap(), param.clone());
                         param
@@ -219,13 +220,13 @@ impl<'a> TypeResolvePass<'a> {
     }
 
     fn resolve_protocol(&mut self, type_def: &TypeDef) -> Result<Protocol, TypeError> {
-        let self_ty = self.session.new_type_param();
+        let self_ty = self.session.new_type_param(None);
         self.self_symbols.push(type_def.name.symbol().unwrap());
 
         // The Self type parameter should be quantified in a scheme
         let entry = if let InferTy::Param(param_id) = self_ty.clone() {
             EnvEntry::Scheme(Scheme {
-                foralls: vec![ForAll::Ty(param_id)],
+                foralls: fxhashset!(ForAll::Ty(param_id)),
                 predicates: vec![],
                 ty: self_ty,
             })
@@ -371,7 +372,7 @@ impl<'a> TypeResolvePass<'a> {
         let mut resolved_variants = FxHashMap::<Label, Symbol>::default();
         for (name, variant) in variants.clone() {
             let mut predicates = vec![];
-            let mut foralls = vec![];
+            let mut foralls = FxHashSet::default();
             let ty = match variant.fields.len() {
                 0 => InferTy::Void,
                 1 => {
@@ -394,7 +395,7 @@ impl<'a> TypeResolvePass<'a> {
                 ),
             };
 
-            let foralls = ty.collect_foralls();
+            let foralls: FxHashSet<ForAll> = ty.collect_foralls().into_iter().collect();
             if foralls.is_empty() {
                 self.session.insert_mono(variant.symbol, ty);
             } else {
@@ -421,7 +422,7 @@ impl<'a> TypeResolvePass<'a> {
         let mut resolved_methods = FxHashMap::default();
         for (name, method) in methods.clone() {
             let mut predicates = vec![];
-            let mut foralls = vec![];
+            let mut foralls = FxHashSet::default();
             let params: Vec<_> = method
                 .params
                 .iter()
@@ -443,7 +444,7 @@ impl<'a> TypeResolvePass<'a> {
                 curry(params.clone(), ret.clone())
             };
 
-            let foralls = fn_ty.collect_foralls();
+            let foralls: FxHashSet<ForAll> = fn_ty.collect_foralls().into_iter().collect();
 
             if foralls.is_empty() {
                 // No quantification necessary
@@ -473,7 +474,7 @@ impl<'a> TypeResolvePass<'a> {
         let mut resolved_methods = FxHashMap::default();
         for (name, method) in instance_methods.clone() {
             let mut predicates = vec![];
-            let mut foralls = vec![];
+            let mut foralls = FxHashSet::default();
             let params: Vec<_> = method
                 .params
                 .iter()
@@ -562,7 +563,7 @@ impl<'a> TypeResolvePass<'a> {
         let mut out = FxHashMap::default();
         for (label, init) in initializers.clone() {
             let mut predicates = vec![];
-            let mut foralls = vec![];
+            let mut foralls = FxHashSet::default();
 
             let params: Vec<_> = init
                 .params
@@ -643,7 +644,7 @@ impl<'a> TypeResolvePass<'a> {
         let mut resolved_methods = FxHashMap::default();
         for (name, method) in method_requirements.clone() {
             let mut predicates = vec![];
-            let mut foralls = vec![];
+            let mut foralls = FxHashSet::default();
             let params: Vec<_> = method
                 .params
                 .iter()
@@ -686,11 +687,11 @@ impl<'a> TypeResolvePass<'a> {
     pub(crate) fn infer_type_annotation(
         &mut self,
         annotation: &TypeAnnotation,
-    ) -> (InferTy, Vec<Predicate<InferTy>>, Vec<ForAll>) {
+    ) -> (InferTy, Vec<Predicate<InferTy>>, FxHashSet<ForAll>) {
         match &annotation.kind {
             TypeAnnotationKind::SelfType(Name::Resolved(symbol @ Symbol::Type(id), ..)) => {
                 let mut predicates = vec![];
-                let mut foralls = vec![];
+                let mut foralls = FxHashSet::default();
 
                 for generic in self
                     .raw
@@ -741,7 +742,7 @@ impl<'a> TypeResolvePass<'a> {
                 ..
             } => {
                 let mut predicates = vec![];
-                let mut foralls = vec![];
+                let mut foralls = FxHashSet::default();
 
                 // Check if this type parameter already has an entry
                 let base = if let Some(entry) = self.session.lookup(sym) {
@@ -751,7 +752,7 @@ impl<'a> TypeResolvePass<'a> {
                     ty
                 } else {
                     // panic!("didn't get type param for {annotation:?}");
-                    self.session.new_type_param()
+                    self.session.new_type_param(None)
                 };
 
                 for g in generics {
@@ -769,7 +770,7 @@ impl<'a> TypeResolvePass<'a> {
                 ..
             } => {
                 // Protocols aren't values
-                (InferTy::Void, vec![], vec![])
+                (InferTy::Void, vec![], Default::default())
             }
             TypeAnnotationKind::Nominal {
                 name: Name::Resolved(sym @ Symbol::Type(..), ..),
@@ -786,7 +787,11 @@ impl<'a> TypeResolvePass<'a> {
                         entry.into()
                     } else {
                         // It's a type constructor
-                        (self.session.new_ty_meta_var(Level(1)), vec![], vec![])
+                        (
+                            self.session.new_ty_meta_var(Level(1)),
+                            vec![],
+                            FxHashSet::default(),
+                        )
                     };
 
                 // Apply generic arguments if any
@@ -805,13 +810,13 @@ impl<'a> TypeResolvePass<'a> {
                 ..
             } => {
                 let (_, mut predicates, mut foralls) = self.infer_type_annotation(base);
-                let result = self.session.new_type_param();
+                let result = self.session.new_type_param(None);
 
                 let InferTy::Param(id) = &result else {
                     unreachable!()
                 };
 
-                foralls.push(ForAll::Ty(*id));
+                foralls.insert(ForAll::Ty(*id));
 
                 for g in member_generics {
                     let (_, preds, fas) = self.infer_type_annotation(g);
@@ -833,7 +838,7 @@ impl<'a> TypeResolvePass<'a> {
                     unreachable!("didn't get self_symbol");
                 };
 
-                let result = self.session.new_type_param();
+                let result = self.session.new_type_param(None);
 
                 let (self_ty, mut predicates, mut foralls) = self
                     .session
@@ -853,7 +858,7 @@ impl<'a> TypeResolvePass<'a> {
 
                 // Add the result type parameter to the foralls list
                 if let InferTy::Param(param_id) = result.clone() {
-                    foralls.push(ForAll::Ty(param_id));
+                    foralls.insert(ForAll::Ty(param_id));
                 }
 
                 // Update the Self symbol's entry to include the new predicate and forall
@@ -867,7 +872,7 @@ impl<'a> TypeResolvePass<'a> {
             TypeAnnotationKind::Record { fields } => {
                 let mut row = InferRow::Empty(TypeDefKind::Struct);
                 let mut predicates = vec![];
-                let mut foralls = vec![];
+                let mut foralls = FxHashSet::default();
                 for field in fields.iter().rev() {
                     let (ty, preds, fas) = self.infer_type_annotation(&field.value);
                     predicates.extend(preds);
@@ -889,7 +894,7 @@ impl<'a> TypeResolvePass<'a> {
     pub(crate) fn infer_ast_ty_repr(
         &mut self,
         ty_repr: &ASTTyRepr,
-    ) -> (InferTy, Vec<Predicate<InferTy>>, Vec<ForAll>) {
+    ) -> (InferTy, Vec<Predicate<InferTy>>, FxHashSet<ForAll>) {
         match &ty_repr {
             ASTTyRepr::Annotated(annotation) => self.infer_type_annotation(annotation),
             ASTTyRepr::SelfType(..) => {
@@ -901,7 +906,7 @@ impl<'a> TypeResolvePass<'a> {
 
                 panic!("didn't get self type for protocol");
             }
-            ASTTyRepr::Hole(id, ..) => (InferTy::Hole(*id), vec![], vec![]),
+            ASTTyRepr::Hole(id, ..) => (InferTy::Hole(*id), vec![], Default::default()),
             ASTTyRepr::Generic(decl) => self.infer_generic_decl(decl),
         }
     }
@@ -909,19 +914,20 @@ impl<'a> TypeResolvePass<'a> {
     fn infer_generic_decl(
         &mut self,
         decl: &GenericDecl,
-    ) -> (InferTy, Vec<Predicate<InferTy>>, Vec<ForAll>) {
+    ) -> (InferTy, Vec<Predicate<InferTy>>, FxHashSet<ForAll>) {
         let ty = self
             .session
             .lookup(&decl.name.symbol().unwrap())
             .map(|t| t._as_ty())
-            .unwrap_or_else(|| self.session.new_type_param());
+            .unwrap_or_else(|| self.session.new_type_param(None));
 
         let InferTy::Param(id) = ty else {
             unreachable!();
         };
 
         let mut predicates: Vec<Predicate<InferTy>> = vec![];
-        let mut foralls: Vec<ForAll> = vec![ForAll::Ty(id)];
+        let mut foralls: FxHashSet<ForAll> = FxHashSet::default();
+        foralls.insert(ForAll::Ty(id));
 
         for generic in decl.generics.iter() {
             let (_, preds, fas) = self.infer_generic_decl(generic);

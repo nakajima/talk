@@ -26,7 +26,7 @@ use crate::{
     types::{
         constraints::constraint::{Constraint, ConstraintCause},
         infer_row::{InferRow, RowMetaId},
-        infer_ty::{InferTy, Level, UnificationVarId},
+        infer_ty::{InferTy, Level, MetaVarId},
         passes::dependencies_pass::{Binder, SCCResolved},
         scheme::Scheme,
         term_environment::EnvEntry,
@@ -54,13 +54,13 @@ pub struct Inferenced {}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Meta {
-    Ty(UnificationVarId),
+    Ty(MetaVarId),
     Row(RowMetaId),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct MetaTag {
-    pub id: UnificationVarId,
+    pub id: MetaVarId,
     pub level: Level,
 }
 
@@ -1129,7 +1129,7 @@ impl<'a> InferencePass<'a> {
 
         for generic in func.generics.iter() {
             let skolem = self.session.new_skolem();
-            let param = self.session.new_type_param();
+            let param = self.session.new_type_param(None);
             self.session.skolem_map.insert(skolem.clone(), param);
 
             self.session

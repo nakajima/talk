@@ -1,4 +1,4 @@
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{
     node_id::NodeID,
@@ -27,13 +27,17 @@ pub enum ForAll {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Scheme<T: SomeType> {
-    pub(crate) foralls: Vec<ForAll>,
+    pub(crate) foralls: FxHashSet<ForAll>,
     pub(super) predicates: Vec<Predicate<T>>,
     pub(crate) ty: T,
 }
 
 impl Scheme<InferTy> {
-    pub fn new(foralls: Vec<ForAll>, predicates: Vec<Predicate<InferTy>>, ty: InferTy) -> Self {
+    pub fn new(
+        foralls: FxHashSet<ForAll>,
+        predicates: Vec<Predicate<InferTy>>,
+        ty: InferTy,
+    ) -> Self {
         Self {
             foralls,
             predicates,
@@ -43,7 +47,7 @@ impl Scheme<InferTy> {
 }
 
 impl Scheme<Ty> {
-    pub fn new(foralls: Vec<ForAll>, predicates: Vec<Predicate<Ty>>, ty: Ty) -> Self {
+    pub fn new(foralls: FxHashSet<ForAll>, predicates: Vec<Predicate<Ty>>, ty: Ty) -> Self {
         assert!(
             !ty.contains_var(),
             "Scheme ty cannot contain type/row meta vars: {ty:?}"
@@ -76,6 +80,7 @@ impl Scheme<InferTy> {
                     else {
                         unreachable!()
                     };
+                    session.reverse_generalizations.insert(meta, *param);
                     tracing::trace!("instantiating {param:?} with {meta:?}");
                     substitutions.ty.insert(*param, meta);
                     session
@@ -168,6 +173,7 @@ impl Scheme<InferTy> {
                     };
 
                     tracing::trace!("instantiating {param:?} with {meta:?}");
+                    session.reverse_generalizations.insert(meta, *param);
                     unification_substitutions
                         .meta_levels
                         .insert(Meta::Ty(meta), level);
@@ -229,6 +235,8 @@ impl Scheme<InferTy> {
             else {
                 unreachable!();
             };
+
+            session.reverse_generalizations.insert(meta_var, *param);
 
             wants.equals(
                 ty.clone(),

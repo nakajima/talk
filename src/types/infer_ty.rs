@@ -14,14 +14,14 @@ use crate::{
 };
 
 #[derive(PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord)]
-pub struct UnificationVarId(u32);
-impl From<u32> for UnificationVarId {
+pub struct MetaVarId(u32);
+impl From<u32> for MetaVarId {
     fn from(value: u32) -> Self {
-        UnificationVarId(value)
+        MetaVarId(value)
     }
 }
 
-impl std::fmt::Debug for UnificationVarId {
+impl std::fmt::Debug for MetaVarId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "meta({})", self.0)
     }
@@ -70,7 +70,7 @@ pub enum InferTy {
     Param(TypeParamId),
     Rigid(SkolemId),
     UnificationVar {
-        id: UnificationVarId,
+        id: MetaVarId,
         level: Level,
     },
 
