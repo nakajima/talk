@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 use indexmap::IndexMap;
 use rustc_hash::FxHashMap;
 
@@ -10,6 +12,17 @@ pub enum ModuleId {
     #[default]
     Current,
     External(u32),
+}
+
+impl Display for ModuleId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Core => write!(f, "C"),
+            Self::Prelude => write!(f, "P"),
+            Self::Current => write!(f, "_"),
+            Self::External(id) => write!(f, "{id}"),
+        }
+    }
 }
 
 #[derive(Debug, Default)]

@@ -336,19 +336,11 @@ impl<'a> InferencePass<'a> {
                 .inference_instantiate(annotation.id, self.session, level, wants, annotation.span),
             TypeAnnotationKind::Nominal {
                 name: Name::Resolved(symbol, ..),
-                name_span: _,
-                generics,
-            } => {
-                // Build Boxy<Int> as TypeApplication(TypeConstructor(Boxy), Int) and normalize.
-                InferTy::Nominal {
-                    symbol: *symbol,
-                    type_args: generics
-                        .iter()
-                        .map(|g| self.infer_type_annotation(g, level, wants))
-                        .collect(),
-                    row: Box::new(self.session.new_row_meta_var(Level(1))),
-                }
-            }
+                ..
+            } => InferTy::Nominal {
+                symbol: *symbol,
+                row: Box::new(self.session.new_row_meta_var(Level(1))),
+            },
             TypeAnnotationKind::SelfType(Name::Resolved(sym, _)) => self
                 .session
                 .lookup(sym)
@@ -1299,11 +1291,7 @@ pub fn collect_meta(ty: &InferTy, out: &mut FxHashSet<InferTy>) {
                 collect_meta(&InferTy::Record(row.clone()), out);
             }
         },
-        InferTy::Nominal { type_args, row, .. } => {
-            for arg in type_args {
-                collect_meta(arg, out);
-            }
-
+        InferTy::Nominal { row, .. } => {
             collect_meta(&InferTy::Record(row.clone()), out);
         }
         InferTy::Constructor { params, .. } => {

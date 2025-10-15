@@ -151,7 +151,6 @@ impl Conforms {
                         InferTy::Nominal {
                             symbol: self.symbol,
                             row: Box::new(row),
-                            type_args: vec![],
                         }
                     }
                 };

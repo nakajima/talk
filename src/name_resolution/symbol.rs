@@ -15,8 +15,8 @@ macro_rules! impl_module_symbol_id {
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 write!(
                     f,
-                    "{:?}({:?}:{:?})",
-                    stringify!($ty),
+                    "{}({}:{:?})",
+                    stringify!($case),
                     self.module_id,
                     self.local_id
                 )
@@ -270,22 +270,22 @@ impl_local_symbol_id!(PatternBindLocal, PatternBindLocalId);
 impl Display for Symbol {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Symbol::Type(type_id) => write!(f, "S_{}", type_id),
-            Symbol::TypeParameter(type_parameter_id) => write!(f, "S_{}", type_parameter_id),
-            Symbol::Global(global_id) => write!(f, "S_{}", global_id),
-            Symbol::DeclaredLocal(declared_local_id) => write!(f, "S_{}", declared_local_id),
+            Symbol::Type(type_id) => write!(f, "{}", type_id),
+            Symbol::TypeParameter(type_parameter_id) => write!(f, "{}", type_parameter_id),
+            Symbol::Global(global_id) => write!(f, "{}", global_id),
+            Symbol::DeclaredLocal(declared_local_id) => write!(f, "{}", declared_local_id),
             Symbol::PatternBindLocal(pattern_bind_local_id) => {
-                write!(f, "S_{}", pattern_bind_local_id)
+                write!(f, "{}", pattern_bind_local_id)
             }
-            Symbol::ParamLocal(param_local_id) => write!(f, "S_{}", param_local_id),
-            Symbol::Builtin(builtin_id) => write!(f, "S_{}", builtin_id),
-            Symbol::Property(property_id) => write!(f, "S_{}", property_id),
-            Symbol::Synthesized(synthesized_id) => write!(f, "S_{}", synthesized_id),
-            Symbol::InstanceMethod(instance_method_id) => write!(f, "S_{}", instance_method_id),
-            Symbol::StaticMethod(static_method_id) => write!(f, "S_{}", static_method_id),
-            Symbol::Variant(variant_id) => write!(f, "S_{}", variant_id),
-            Symbol::Protocol(protocol_id) => write!(f, "S_{}", protocol_id),
-            Symbol::AssociatedType(associated_type_id) => write!(f, "S_{}", associated_type_id),
+            Symbol::ParamLocal(param_local_id) => write!(f, "{}", param_local_id),
+            Symbol::Builtin(builtin_id) => write!(f, "{}", builtin_id),
+            Symbol::Property(property_id) => write!(f, "{}", property_id),
+            Symbol::Synthesized(synthesized_id) => write!(f, "{}", synthesized_id),
+            Symbol::InstanceMethod(instance_method_id) => write!(f, "{}", instance_method_id),
+            Symbol::StaticMethod(static_method_id) => write!(f, "{}", static_method_id),
+            Symbol::Variant(variant_id) => write!(f, "{}", variant_id),
+            Symbol::Protocol(protocol_id) => write!(f, "{}", protocol_id),
+            Symbol::AssociatedType(associated_type_id) => write!(f, "{}", associated_type_id),
         }
     }
 }

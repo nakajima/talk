@@ -1,15 +1,15 @@
-use indexmap::IndexMap;
-use rustc_hash::{FxHashMap, FxHashSet};
+use indexmap::{IndexMap, IndexSet};
+use rustc_hash::FxHashMap;
 use tracing::{instrument, trace_span};
 
 use crate::{
     ast::AST,
-    fxhashset,
+    indexset,
     label::Label,
     name::Name,
     name_resolution::{
         name_resolver::NameResolved,
-        symbol::{AssociatedTypeId, ProtocolId, Symbol, SynthesizedId},
+        symbol::{AssociatedTypeId, ProtocolId, Symbol},
     },
     node_kinds::{
         generic_decl::GenericDecl,
@@ -68,39 +68,83 @@ impl<'a> TypeResolvePass<'a> {
     // any generalization until the very end.
     fn solve(&mut self) -> HeadersResolved {
         for (decl_id, type_def) in self.raw.type_constructors.clone().iter() {
-            let row = if self
-                .raw
-                .properties
-                .get(decl_id)
-                .map(|g| g.is_empty())
-                .unwrap_or(true)
-                && type_def.def == TypeDefKind::Struct
-            {
-                Box::new(InferRow::Empty(TypeDefKind::Struct))
-            } else if self
-                .raw
-                .variants
-                .get(decl_id)
-                .map(|g| g.is_empty())
-                .unwrap_or(true)
-                && type_def.def == TypeDefKind::Enum
-            {
-                Box::new(InferRow::Empty(TypeDefKind::Enum))
+            // First insert type parameters for generics
+            let generics = self.raw.generics.get(decl_id).cloned().unwrap_or_default();
+
+            for (name, _ty_repr) in generics {
+                let InferTy::Param(id) = self.session.new_type_param(None) else {
+                    unreachable!()
+                };
+
+                self.session
+                    .insert_mono(name.symbol().unwrap(), InferTy::Param(id));
+            }
+
+            // Build row based on properties/variants
+            let row = if type_def.def == TypeDefKind::Struct {
+                let properties = self
+                    .raw
+                    .properties
+                    .get(decl_id)
+                    .cloned()
+                    .unwrap_or_default();
+                if properties.is_empty() {
+                    Box::new(InferRow::Empty(TypeDefKind::Struct))
+                } else {
+                    // Build a concrete row from properties (works for both generic and non-generic)
+                    let mut row = InferRow::Empty(TypeDefKind::Struct);
+                    for (label, prop) in properties.iter().rev() {
+                        if prop.is_static {
+                            continue;
+                        }
+                        let (ty, _, _) = self.infer_ast_ty_repr(&prop.ty_repr);
+                        row = InferRow::Extend {
+                            row: Box::new(row),
+                            label: label.clone(),
+                            ty,
+                        };
+                    }
+                    Box::new(row)
+                }
+            } else if type_def.def == TypeDefKind::Enum {
+                let variants = self.raw.variants.get(decl_id).cloned().unwrap_or_default();
+                if variants.is_empty() {
+                    Box::new(InferRow::Empty(TypeDefKind::Enum))
+                } else {
+                    // Build a concrete row from variants
+                    let mut row = InferRow::Empty(TypeDefKind::Enum);
+                    for (tag, variant) in variants.iter().rev() {
+                        let ty = match variant.fields.len() {
+                            0 => InferTy::Void,
+                            1 => {
+                                let (ty, _, _) = self.infer_ast_ty_repr(&variant.fields[0]);
+                                ty
+                            }
+                            _ => InferTy::Tuple(
+                                variant
+                                    .fields
+                                    .iter()
+                                    .map(|f| {
+                                        let (ty, _, _) = self.infer_ast_ty_repr(f);
+                                        ty
+                                    })
+                                    .collect(),
+                            ),
+                        };
+                        row = InferRow::Extend {
+                            row: Box::new(row),
+                            label: tag.clone(),
+                            ty,
+                        };
+                    }
+                    Box::new(row)
+                }
             } else {
                 Box::new(self.session.new_row_meta_var(Level(1)))
             };
-            let generics = self.raw.generics.get(decl_id).cloned().unwrap_or_default();
+
             let base = InferTy::Nominal {
                 symbol: *decl_id,
-                type_args: generics
-                    .iter()
-                    .map(|(name, _)| {
-                        let param = self.session.new_type_param(None);
-                        self.session
-                            .insert_mono(name.symbol().unwrap(), param.clone());
-                        param
-                    })
-                    .collect(),
                 row,
             };
 
@@ -210,7 +254,7 @@ impl<'a> TypeResolvePass<'a> {
         // The Self type parameter should be quantified in a scheme
         let entry = if let InferTy::Param(param_id) = self_ty.clone() {
             EnvEntry::Scheme(Scheme {
-                foralls: fxhashset!(ForAll::Ty(param_id)),
+                foralls: indexset!(ForAll::Ty(param_id)),
                 predicates: vec![],
                 ty: self_ty,
             })
@@ -332,7 +376,6 @@ impl<'a> TypeResolvePass<'a> {
         }
 
         let type_scheme = self.session.generalize(Level(0), ty.clone(), &[]);
-        println!("we've got a type scheme for a type def: {:?}", type_scheme);
         self.session.insert_term(symbol, type_scheme);
 
         let initializers = self.resolve_initializers(&sym);
@@ -342,12 +385,6 @@ impl<'a> TypeResolvePass<'a> {
             .entry(sym)
             .or_default()
             .extend(initializers);
-
-        println!(
-            "inits: {:?}",
-            self.session
-                .lookup(&Symbol::Synthesized(SynthesizedId::from(1)))
-        );
 
         self.self_symbols.pop();
 
@@ -368,7 +405,7 @@ impl<'a> TypeResolvePass<'a> {
         let mut resolved_variants = FxHashMap::<Label, Symbol>::default();
         for (name, variant) in variants.clone() {
             let mut predicates = vec![];
-            let mut foralls = FxHashSet::default();
+            let mut foralls = IndexSet::<ForAll>::default();
             let ty = match variant.fields.len() {
                 0 => InferTy::Void,
                 1 => {
@@ -391,7 +428,7 @@ impl<'a> TypeResolvePass<'a> {
                 ),
             };
 
-            let foralls: FxHashSet<ForAll> = ty.collect_foralls().into_iter().collect();
+            let foralls: IndexSet<ForAll> = ty.collect_foralls().into_iter().collect();
             if foralls.is_empty() {
                 self.session.insert_mono(variant.symbol, ty);
             } else {
@@ -418,7 +455,7 @@ impl<'a> TypeResolvePass<'a> {
         let mut resolved_methods = FxHashMap::default();
         for (name, method) in methods.clone() {
             let mut predicates = vec![];
-            let mut foralls = FxHashSet::default();
+            let mut foralls = IndexSet::<ForAll>::default();
             let params: Vec<_> = method
                 .params
                 .iter()
@@ -440,7 +477,7 @@ impl<'a> TypeResolvePass<'a> {
                 curry(params.clone(), ret.clone())
             };
 
-            let foralls: FxHashSet<ForAll> = fn_ty.collect_foralls().into_iter().collect();
+            let foralls: IndexSet<ForAll> = fn_ty.collect_foralls().into_iter().collect();
 
             if foralls.is_empty() {
                 // No quantification necessary
@@ -470,7 +507,7 @@ impl<'a> TypeResolvePass<'a> {
         let mut resolved_methods = FxHashMap::default();
         for (name, method) in instance_methods.clone() {
             let mut predicates = vec![];
-            let mut foralls = FxHashSet::default();
+            let mut foralls = IndexSet::default();
             let params: Vec<_> = method
                 .params
                 .iter()
@@ -559,7 +596,7 @@ impl<'a> TypeResolvePass<'a> {
         let mut out = FxHashMap::default();
         for (label, init) in initializers.clone() {
             let mut predicates = vec![];
-            let mut foralls = FxHashSet::default();
+            let mut foralls = IndexSet::default();
 
             let params: Vec<_> = init
                 .params
@@ -584,7 +621,6 @@ impl<'a> TypeResolvePass<'a> {
             let ret = InferTy::Nominal {
                 symbol: *symbol,
                 row,
-                type_args: vec![],
             };
 
             let ty = curry(params, ret);
@@ -642,7 +678,7 @@ impl<'a> TypeResolvePass<'a> {
         let mut resolved_methods = FxHashMap::default();
         for (name, method) in method_requirements.clone() {
             let mut predicates = vec![];
-            let mut foralls = FxHashSet::default();
+            let mut foralls = IndexSet::default();
             let params: Vec<_> = method
                 .params
                 .iter()
@@ -685,11 +721,11 @@ impl<'a> TypeResolvePass<'a> {
     pub(crate) fn infer_type_annotation(
         &mut self,
         annotation: &TypeAnnotation,
-    ) -> (InferTy, Vec<Predicate<InferTy>>, FxHashSet<ForAll>) {
+    ) -> (InferTy, Vec<Predicate<InferTy>>, IndexSet<ForAll>) {
         match &annotation.kind {
             TypeAnnotationKind::SelfType(Name::Resolved(symbol @ Symbol::Type(id), ..)) => {
                 let mut predicates = vec![];
-                let mut foralls = FxHashSet::default();
+                let mut foralls = IndexSet::default();
 
                 for generic in self
                     .raw
@@ -715,7 +751,6 @@ impl<'a> TypeResolvePass<'a> {
                 };
                 let ty = InferTy::Nominal {
                     symbol: *symbol,
-                    type_args: vec![],
                     row,
                 };
 
@@ -740,7 +775,7 @@ impl<'a> TypeResolvePass<'a> {
                 ..
             } => {
                 let mut predicates = vec![];
-                let mut foralls = FxHashSet::default();
+                let mut foralls = IndexSet::default();
 
                 // Check if this type parameter already has an entry
                 let base = if let Some(entry) = self.session.lookup(sym) {
@@ -788,7 +823,7 @@ impl<'a> TypeResolvePass<'a> {
                         (
                             self.session.new_ty_meta_var(Level(1)),
                             vec![],
-                            FxHashSet::default(),
+                            IndexSet::default(),
                         )
                     };
 
@@ -870,7 +905,7 @@ impl<'a> TypeResolvePass<'a> {
             TypeAnnotationKind::Record { fields } => {
                 let mut row = InferRow::Empty(TypeDefKind::Struct);
                 let mut predicates = vec![];
-                let mut foralls = FxHashSet::default();
+                let mut foralls = IndexSet::default();
                 for field in fields.iter().rev() {
                     let (ty, preds, fas) = self.infer_type_annotation(&field.value);
                     predicates.extend(preds);
@@ -892,7 +927,7 @@ impl<'a> TypeResolvePass<'a> {
     pub(crate) fn infer_ast_ty_repr(
         &mut self,
         ty_repr: &ASTTyRepr,
-    ) -> (InferTy, Vec<Predicate<InferTy>>, FxHashSet<ForAll>) {
+    ) -> (InferTy, Vec<Predicate<InferTy>>, IndexSet<ForAll>) {
         match &ty_repr {
             ASTTyRepr::Annotated(annotation) => self.infer_type_annotation(annotation),
             ASTTyRepr::SelfType(..) => {
@@ -912,7 +947,7 @@ impl<'a> TypeResolvePass<'a> {
     fn infer_generic_decl(
         &mut self,
         decl: &GenericDecl,
-    ) -> (InferTy, Vec<Predicate<InferTy>>, FxHashSet<ForAll>) {
+    ) -> (InferTy, Vec<Predicate<InferTy>>, IndexSet<ForAll>) {
         let ty = self
             .session
             .lookup(&decl.name.symbol().unwrap())
@@ -924,7 +959,7 @@ impl<'a> TypeResolvePass<'a> {
         };
 
         let mut predicates: Vec<Predicate<InferTy>> = vec![];
-        let mut foralls: FxHashSet<ForAll> = FxHashSet::default();
+        let mut foralls: IndexSet<ForAll> = IndexSet::default();
         foralls.insert(ForAll::Ty(id));
 
         for generic in decl.generics.iter() {

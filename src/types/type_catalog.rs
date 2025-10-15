@@ -173,7 +173,6 @@ impl<T: SomeType> Default for TypeCatalog<T> {
 
 impl TypeCatalog<InferTy> {
     pub fn finalize(self, session: &mut TypeSession) -> TypeCatalog<Ty> {
-        println!("finalize: {:?}", self.instantiations);
         let mut instantiations = TrackedInstantiations::default();
         for (key, infer_ty) in self.instantiations.ty {
             let ty = match session.finalize_ty(infer_ty) {

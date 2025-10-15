@@ -123,12 +123,12 @@ pub struct Specialization {
 pub struct Lowerer {
     pub(super) asts: IndexMap<Source, AST<NameResolved>>,
     pub(super) types: Types,
-    pub(super) functions: FxHashMap<Symbol, PolyFunction>,
+    pub(super) functions: IndexMap<Symbol, PolyFunction>,
     pub(super) current_function_stack: Vec<CurrentFunction>,
 
     symbols: Symbols,
     bindings: FxHashMap<Symbol, Register>,
-    pub(super) specializations: FxHashMap<Symbol, Vec<Specialization>>,
+    pub(super) specializations: IndexMap<Symbol, Vec<Specialization>>,
 }
 
 impl Lowerer {
@@ -297,7 +297,7 @@ impl Lowerer {
         self.lower_func(func, Bind::Discard, &Default::default())
     }
 
-    #[instrument(level = tracing::Level::TRACE, skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self, decl, body))]
     fn lower_init(
         &mut self,
         decl: &Decl,
@@ -574,10 +574,7 @@ impl Lowerer {
         self.push_instr(Instruction::Ref {
             dest,
             ty,
-            val: Value::Func(Name::Resolved(
-                init_sym,
-                format!("{}_init", name.name_str()),
-            )),
+            val: Value::Func(Name::Resolved(init_sym, format!("{}_init", name))),
         });
 
         Ok(dest.into())
@@ -652,38 +649,19 @@ impl Lowerer {
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
+    #[allow(clippy::too_many_arguments)]
     fn lower_constructor_call(
         &mut self,
         id: NodeID,
         name: &Name,
         callee: &Expr,
-        callee_val: &Value,
         mut args: Vec<Value>,
         dest: Register,
+        instantiations: &Substitutions,
     ) -> Result<Value, IRError> {
         let record_dest = self.next_register();
-        let (ty, concrete_tys) = self.specialized_ty(callee)?;
-        println!("---------------------- lower constructor call: {ty:?} {concrete_tys:?}");
 
-        let properties = self
-            .types
-            .catalog
-            .properties
-            .get(&name.symbol().unwrap())
-            .unwrap();
-
-        self.push_instr(Instruction::Record {
-            dest: record_dest,
-            ty: ty.clone(),
-            record: properties
-                .iter()
-                .map(|_| Value::Uninit)
-                .collect::<Vec<_>>()
-                .into(),
-            meta: vec![InstructionMeta::Source(id)].into(),
-        });
-        args.insert(0, record_dest.into());
-
+        // Look up the initializer and specialize it using the already-computed instantiations
         let init_sym = *self
             .types
             .catalog
@@ -693,16 +671,36 @@ impl Lowerer {
             .get(&Label::Named("init".into()))
             .unwrap();
 
+        let init_entry = self.types.get_symbol(&init_sym).cloned().unwrap();
+        let (init_ty, concrete_tys) = self.specialize(&init_entry, callee.id)?;
+
+        let properties = self
+            .types
+            .catalog
+            .properties
+            .get(&name.symbol().unwrap())
+            .unwrap();
+
+        // Extract return type from the initializer function
+        let mut params = init_ty.clone().uncurry_params();
+        let ret = params.pop().unwrap();
+
+        self.push_instr(Instruction::Record {
+            dest: record_dest,
+            ty: ret.clone(),
+            record: properties
+                .iter()
+                .map(|_| Value::Uninit)
+                .collect::<Vec<_>>()
+                .into(),
+            meta: vec![InstructionMeta::Source(id)].into(),
+        });
+        args.insert(0, record_dest.into());
+
         let init = self.monomorphize_name(
-            Name::Resolved(init_sym, format!("{}_init", name.name_str())),
+            Name::Resolved(init_sym, format!("{}_init", name)),
             &concrete_tys,
         );
-
-        println!("monomorphized init: {init:?}");
-
-        let mut params = ty.clone().uncurry_params();
-        let ret = params.pop().unwrap();
-        params.insert(0, ret.clone());
 
         self.push_instr(Instruction::Call {
             dest,
@@ -743,6 +741,10 @@ impl Lowerer {
             .map(|arg| self.lower_expr(&arg.value, Bind::Fresh, &instantiations))
             .collect::<Result<Vec<Value>, _>>()?;
 
+        if let ExprKind::Constructor(name) = &callee.kind {
+            return self.lower_constructor_call(id, name, callee, args, dest, &instantiations);
+        }
+
         let callee_ir = if let ExprKind::Member(Some(box receiver), member, ..) = &callee.kind
             && let Some(method_sym) = self.lookup_instance_method(receiver, member)?
         {
@@ -754,10 +756,6 @@ impl Lowerer {
         } else {
             self.lower_expr(callee, Bind::Fresh, &instantiations)?
         };
-
-        if let ExprKind::Constructor(name) = &callee.kind {
-            return self.lower_constructor_call(callee.id, name, callee, &callee_ir, args, dest);
-        }
 
         self.push_instr(Instruction::Call {
             dest,
@@ -886,7 +884,7 @@ impl Lowerer {
         let new_symbol = self.symbols.next_synthesized(ModuleId::Current);
         let new_name_str = format!(
             "{}[{}]",
-            name.name_str(),
+            name,
             instantiations
                 .ty
                 .values()
@@ -927,15 +925,17 @@ impl Lowerer {
     }
 
     fn specialized_ty(&mut self, expr: &Expr) -> Result<(Ty, Substitutions), IRError> {
-        let symbol = match &expr.kind {
-            ExprKind::Variable(name) => name.symbol().unwrap(),
-            ExprKind::Func(func) => func.name.symbol().unwrap(),
-            ExprKind::Constructor(name) => name.symbol().unwrap(),
+        let name = match &expr.kind {
+            ExprKind::Variable(name) => name,
+            ExprKind::Func(func) => &func.name,
+            ExprKind::Constructor(name) => name,
             _ => {
                 tracing::trace!("expr has no substitutions: {expr:?}");
                 return Ok((self.ty_from_id(&expr.id)?, Default::default()));
             }
         };
+
+        let symbol = name.symbol().unwrap();
 
         let entry = self
             .types
@@ -946,7 +946,10 @@ impl Lowerer {
             )))
             .unwrap();
 
-        self.specialize(&entry, expr.id)
+        let (ty, substitutions) = self.specialize(&entry, expr.id)?;
+        _ = self.monomorphize_name(name.clone(), &substitutions);
+
+        Ok((ty, substitutions))
     }
 
     fn specialize(
@@ -1056,16 +1059,8 @@ fn substitute(ty: Ty, substitutions: &Substitutions) -> Ty {
                 .collect(),
         ),
         Ty::Record(box row) => Ty::Record(substitute_row(row, substitutions).into()),
-        Ty::Nominal {
+        Ty::Nominal { symbol, box row } => Ty::Nominal {
             symbol,
-            type_args,
-            box row,
-        } => Ty::Nominal {
-            symbol,
-            type_args: type_args
-                .into_iter()
-                .map(|a| substitute(a, substitutions))
-                .collect(),
             row: substitute_row(row, substitutions).into(),
         },
     }
@@ -1119,7 +1114,7 @@ pub fn curry_ty<'a, I: IntoIterator<Item = &'a Ty>>(params: I, ret: Ty) -> Ty {
 #[cfg(test)]
 pub mod tests {
     use crate::{
-        assert_eq_diff, assert_eq_diff_display,
+        assert_eq_diff,
         compiling::driver::{Driver, Source},
         ir::{
             basic_block::{BasicBlock, BasicBlockId},
@@ -1348,19 +1343,8 @@ pub mod tests {
                             val: 123,
                             meta: meta()
                         },
-                        Instruction::Ref {
-                            dest: 2.into(),
-                            ty: IrTy::Func(
-                                vec![IrTy::Record(vec![IrTy::Int]), IrTy::Int],
-                                IrTy::Record(vec![IrTy::Int]).into()
-                            ),
-                            val: Value::Func(Name::Resolved(
-                                SynthesizedId::from(1).into(),
-                                "Foo_init".into()
-                            ))
-                        },
                         Instruction::Record {
-                            dest: 3.into(),
+                            dest: 2.into(),
                             ty: IrTy::Record(vec![IrTy::Int]),
                             record: vec![Value::Uninit].into(),
                             meta: meta()
@@ -1370,13 +1354,13 @@ pub mod tests {
                             ty: IrTy::Record(vec![IrTy::Int]),
                             callee: Value::Func(Name::Resolved(
                                 Symbol::from(SynthesizedId::from(1)),
-                                "Foo_init".into()
+                                "@Foo:Type(_:1)_init".into(),
                             )),
-                            args: vec![Register(3).into(), Register(1).into()].into(),
+                            args: vec![Register(2).into(), Register(1).into()].into(),
                             meta: meta(),
                         },
                         Instruction::GetField {
-                            dest: 4.into(),
+                            dest: 3.into(),
                             ty: IrTy::Int,
                             record: Register(0),
                             field: Label::Named("bar".into()),
@@ -1384,7 +1368,7 @@ pub mod tests {
                         }
                     ],
                     terminator: Terminator::Ret {
-                        val: Value::Reg(4),
+                        val: Value::Reg(3),
                         ty: IrTy::Int
                     }
                 }],
@@ -1401,7 +1385,7 @@ pub mod tests {
         ",
         );
 
-        assert_eq_diff_display!(
+        assert_eq_diff!(
             *program
                 .functions
                 .get(&Symbol::from(SynthesizedId::from(2)))
@@ -1418,19 +1402,8 @@ pub mod tests {
                             val: 123,
                             meta: meta()
                         },
-                        Instruction::Ref {
-                            dest: 2.into(),
-                            ty: IrTy::Func(
-                                vec![IrTy::Record(vec![IrTy::Void]), IrTy::Void],
-                                IrTy::Record(vec![IrTy::Void]).into()
-                            ),
-                            val: Value::Func(Name::Resolved(
-                                SynthesizedId::from(1).into(),
-                                "Foo_init".into()
-                            ))
-                        },
                         Instruction::Record {
-                            dest: 3.into(),
+                            dest: 2.into(),
                             ty: IrTy::Record(vec![IrTy::Int]),
                             record: vec![Value::Uninit].into(),
                             meta: meta()
@@ -1439,14 +1412,14 @@ pub mod tests {
                             dest: 0.into(),
                             ty: IrTy::Record(vec![IrTy::Int]),
                             callee: Value::Func(Name::Resolved(
-                                Symbol::from(SynthesizedId::from(3)),
-                                "Foo_init[Int]".into()
+                                Symbol::from(SynthesizedId::from(4)),
+                                "@@Foo:Type(_:1)_init:Synthesized(_:1)[Int]".into()
                             )),
-                            args: vec![Register(3).into(), Register(1).into()].into(),
+                            args: vec![Register(2).into(), Register(1).into()].into(),
                             meta: meta(),
                         },
                         Instruction::GetField {
-                            dest: 4.into(),
+                            dest: 3.into(),
                             ty: IrTy::Int,
                             record: Register(0),
                             field: Label::Named("bar".into()),
@@ -1454,7 +1427,7 @@ pub mod tests {
                         }
                     ],
                     terminator: Terminator::Ret {
-                        val: Value::Reg(4),
+                        val: Value::Reg(3),
                         ty: IrTy::Int
                     }
                 }],
@@ -1495,19 +1468,8 @@ pub mod tests {
                             val: 123,
                             meta: meta()
                         },
-                        Instruction::Ref {
-                            dest: 3.into(),
-                            ty: IrTy::Func(
-                                vec![IrTy::Record(vec![IrTy::Int]), IrTy::Int],
-                                IrTy::Record(vec![IrTy::Int]).into()
-                            ),
-                            val: Value::Func(Name::Resolved(
-                                SynthesizedId::from(1).into(),
-                                "Foo_init".into()
-                            ))
-                        },
                         Instruction::Record {
-                            dest: 4.into(),
+                            dest: 3.into(),
                             ty: IrTy::Record(vec![IrTy::Int]),
                             record: vec![Value::Uninit].into(),
                             meta: meta()
@@ -1517,9 +1479,9 @@ pub mod tests {
                             ty: IrTy::Record(vec![IrTy::Int]),
                             callee: Value::Func(Name::Resolved(
                                 Symbol::from(SynthesizedId::from(1)),
-                                "Foo_init".into()
+                                "@Foo:Type(_:1)_init".into()
                             )),
-                            args: vec![Register(4).into(), Register(2).into()].into(),
+                            args: vec![Register(3).into(), Register(2).into()].into(),
                             meta: meta(),
                         },
                         Instruction::Call {
@@ -1660,8 +1622,8 @@ pub mod tests {
                             dest: 1.into(),
                             ty: IrTy::Int,
                             callee: Value::Func(Name::Resolved(
-                                Symbol::Synthesized(SynthesizedId::from(2)),
-                                "id[Int]".into()
+                                Symbol::Synthesized(SynthesizedId::from(4)),
+                                "@id:Global(_:1)[Int]".into()
                             )),
                             args: vec![Value::Reg(2)].into(),
                             meta: meta(),
@@ -1675,8 +1637,8 @@ pub mod tests {
                             dest: 3.into(),
                             ty: IrTy::Float,
                             callee: Value::Func(Name::Resolved(
-                                Symbol::Synthesized(SynthesizedId::from(3)),
-                                "id[Float]".into()
+                                Symbol::Synthesized(SynthesizedId::from(7)),
+                                "@id:Global(_:1)[Float]".into()
                             )),
                             args: vec![Value::Reg(4)].into(),
                             meta: meta(),
@@ -1693,10 +1655,10 @@ pub mod tests {
         assert_eq_diff!(
             *program
                 .functions
-                .get(&Symbol::from(SynthesizedId::from(2)))
+                .get(&Symbol::from(SynthesizedId::from(3)))
                 .unwrap(),
             Function {
-                name: Name::Resolved(SynthesizedId::from(2).into(), "id[Int]".into()),
+                name: Name::Resolved(SynthesizedId::from(3).into(), "@id:Global(_:1)[Int]".into()),
                 params: vec![Value::Reg(0)].into(),
                 ty: IrTy::Func(vec![IrTy::Int], IrTy::Int.into()),
                 blocks: vec![BasicBlock::<IrTy, Label> {
@@ -1713,10 +1675,13 @@ pub mod tests {
         assert_eq_diff!(
             *program
                 .functions
-                .get(&Symbol::from(SynthesizedId::from(3)))
+                .get(&Symbol::from(SynthesizedId::from(5)))
                 .unwrap(),
             Function {
-                name: Name::Resolved(SynthesizedId::from(3).into(), "id[Float]".into()),
+                name: Name::Resolved(
+                    SynthesizedId::from(5).into(),
+                    "@id:Global(_:1)[Float]".into()
+                ),
                 params: vec![Value::Reg(0)].into(),
                 ty: IrTy::Func(vec![IrTy::Float], IrTy::Float.into()),
                 blocks: vec![BasicBlock::<IrTy, Label> {

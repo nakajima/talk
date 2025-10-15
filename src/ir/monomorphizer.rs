@@ -1,5 +1,4 @@
 use indexmap::IndexMap;
-use rustc_hash::FxHashMap;
 use tracing::instrument;
 
 use crate::{
@@ -15,18 +14,15 @@ use crate::{
     },
     label::Label,
     name_resolution::{name_resolver::NameResolved, symbol::Symbol},
-    types::{
-        ty::Ty,
-        type_session::{TypeEntry, Types},
-    },
+    types::{ty::Ty, type_session::Types},
 };
 
 #[allow(dead_code)]
 pub struct Monomorphizer {
     asts: IndexMap<Source, AST<NameResolved>>,
     types: Types,
-    functions: FxHashMap<Symbol, PolyFunction>,
-    specializations: FxHashMap<Symbol, Vec<Specialization>>,
+    functions: IndexMap<Symbol, PolyFunction>,
+    specializations: IndexMap<Symbol, Vec<Specialization>>,
 }
 
 impl Monomorphizer {
@@ -110,7 +106,7 @@ impl Monomorphizer {
         }
     }
 
-    #[instrument(skip(self, instruction))]
+    #[instrument(skip(self, instruction), fields(instruction = %instruction), ret)]
     fn monomorphize_instruction(
         &mut self,
         instruction: Instruction<Ty, Label>,
@@ -158,24 +154,14 @@ impl Monomorphizer {
             }
             Ty::Tuple(..) => todo!(),
             Ty::Record(..) => todo!(),
-            Ty::Nominal { symbol, .. } => {
-                if let Some(properties) = self.types.catalog.properties.get(&symbol).cloned() {
-                    IrTy::Record(
-                        properties
-                            .values()
-                            .map(|v| match self.types.get_symbol(v).unwrap() {
-                                TypeEntry::Mono(ty) => {
-                                    self.monomorphize_ty(ty.clone(), substitutions)
-                                }
-                                TypeEntry::Poly(scheme) => {
-                                    self.monomorphize_ty(scheme.ty.clone(), substitutions)
-                                }
-                            })
-                            .collect(),
-                    )
-                } else {
-                    todo!("don't know how to handle {ty:?}");
-                }
+            Ty::Nominal { row, .. } => {
+                let closed = row.close();
+                IrTy::Record(
+                    closed
+                        .values()
+                        .map(|v| self.monomorphize_ty(v.clone(), substitutions))
+                        .collect(),
+                )
             }
         }
     }

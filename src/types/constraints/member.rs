@@ -146,9 +146,8 @@ impl Member {
                     let is_concrete = match &scheme_ty {
                         InferTy::Primitive(_) => true,
                         InferTy::Tuple(items) => items.iter().all(|t| !t.contains_var()),
-                        InferTy::Nominal { row, type_args, .. } => {
+                        InferTy::Nominal { row, .. } => {
                             !InferTy::Record(row.clone()).contains_var()
-                                && type_args.iter().all(|t| !t.contains_var())
                         }
                         _ => !scheme_ty.contains_var(),
                     };
@@ -256,7 +255,6 @@ impl Member {
                     let result_enum = InferTy::Nominal {
                         symbol: *symbol,
                         row: Box::new(row),
-                        type_args: vec![],
                     };
 
                     // 3) Build the constructor’s type from payload → result_enum

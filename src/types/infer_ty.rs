@@ -1,4 +1,5 @@
 use itertools::Itertools;
+use std::hash::Hash;
 
 use crate::{
     compiling::module::ModuleId,
@@ -62,7 +63,7 @@ pub enum Primitive {
     Void(Symbol),
 }
 
-#[derive(PartialEq, Eq, Hash, Clone)]
+#[derive(PartialEq, Eq, Clone, Hash)]
 pub enum InferTy {
     Hole(NodeID),
     Primitive(Symbol),
@@ -87,7 +88,6 @@ pub enum InferTy {
     // Nominal types (we look up their information from the TypeCatalog)
     Nominal {
         symbol: Symbol,
-        type_args: Vec<InferTy>,
         row: Box<InferRow>,
     },
 }
@@ -111,13 +111,8 @@ impl From<InferTy> for Ty {
             }
             InferTy::Tuple(items) => Ty::Tuple(items.into_iter().map(|t| t.into()).collect()),
             InferTy::Record(box infer_row) => Ty::Record(Box::new(infer_row.into())),
-            InferTy::Nominal {
+            InferTy::Nominal { symbol, box row } => Ty::Nominal {
                 symbol,
-                type_args,
-                box row,
-            } => Ty::Nominal {
-                symbol,
-                type_args: type_args.into_iter().map(|t| t.into()).collect(),
                 row: Box::new(row.into()),
             },
             ty => panic!("Ty cannot contain variables: {ty:?}"),
@@ -144,13 +139,8 @@ impl From<Ty> for InferTy {
             }
             Ty::Tuple(items) => InferTy::Tuple(items.into_iter().map(|t| t.into()).collect()),
             Ty::Record(box infer_row) => InferTy::Record(Box::new(infer_row.into())),
-            Ty::Nominal {
+            Ty::Nominal { symbol, box row } => InferTy::Nominal {
                 symbol,
-                type_args,
-                box row,
-            } => InferTy::Nominal {
-                symbol,
-                type_args: type_args.into_iter().map(|t| t.into()).collect(),
                 row: Box::new(row.into()),
             },
         }
@@ -176,9 +166,7 @@ impl SomeType for InferTy {
                 InferRow::Var(_) => true,
                 _ => false,
             },
-            InferTy::Nominal {
-                type_args, box row, ..
-            } => {
+            InferTy::Nominal { box row, .. } => {
                 let row_contains = match row {
                     InferRow::Extend { row, ty, .. } => {
                         InferTy::Record(row.clone()).contains_var() || ty.contains_var()
@@ -191,7 +179,7 @@ impl SomeType for InferTy {
                     return true;
                 }
 
-                type_args.iter().any(|t| t.contains_var())
+                false
             }
         }
     }
@@ -210,17 +198,15 @@ impl InferTy {
                 module_id: ModuleId::Core,
                 local_id: 2,
             }),
-            type_args: vec![],
             row: Box::new(InferRow::Empty(TypeDefKind::Struct)),
         }
     }
-    pub fn Array(t: InferTy) -> InferTy {
+    pub fn Array(_t: InferTy) -> InferTy {
         InferTy::Nominal {
             symbol: Symbol::Type(TypeId {
                 module_id: ModuleId::Core,
                 local_id: 3,
             }),
-            type_args: vec![t],
             row: Box::new(InferRow::Empty(TypeDefKind::Struct)),
         }
     }
@@ -311,13 +297,8 @@ impl InferTy {
                 InferTy::Tuple(items.into_iter().map(|i| i.import(module_id)).collect())
             }
             InferTy::Record(row) => InferTy::Record(row.import(module_id).into()),
-            InferTy::Nominal {
-                symbol,
-                type_args,
-                row,
-            } => InferTy::Nominal {
+            InferTy::Nominal { symbol, row } => InferTy::Nominal {
                 symbol: symbol.import(module_id),
-                type_args: type_args.into_iter().map(|t| t.import(module_id)).collect(),
                 row: row.import(module_id).into(),
             },
         }
@@ -339,12 +320,8 @@ impl std::fmt::Debug for InferTy {
             InferTy::Tuple(items) => {
                 write!(f, "({})", items.iter().map(|i| format!("{i:?}")).join(", "))
             }
-            InferTy::Nominal {
-                symbol,
-                row,
-                type_args,
-            } => {
-                write!(f, "Type({symbol:?}, {type_args:?}, {row:?})")
+            InferTy::Nominal { symbol, row } => {
+                write!(f, "Type({symbol:?}, {row:?})")
             }
             InferTy::Record(box row) => {
                 let row_debug = match row {

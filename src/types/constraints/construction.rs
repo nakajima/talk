@@ -84,7 +84,6 @@ impl Construction {
 
         let instance = InferTy::Nominal {
             symbol: self.type_symbol,
-            type_args: vec![],
             row: Box::new(row),
         };
 

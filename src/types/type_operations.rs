@@ -85,12 +85,54 @@ fn occurs_in(id: MetaVarId, ty: &InferTy) -> bool {
         InferTy::Func(a, b) => occurs_in(id, a) || occurs_in(id, b),
         InferTy::Tuple(items) => items.iter().any(|t| occurs_in(id, t)),
         InferTy::Record(row) => occurs_in_row(id, row),
-        InferTy::Nominal { .. } => false,
+        InferTy::Nominal { row, .. } => occurs_in_row(id, row),
         InferTy::Hole(..) => false,
         InferTy::Param(..) => false,
         InferTy::Rigid(..) => false,
         InferTy::Primitive(..) => false,
-        InferTy::Constructor { params, .. } => params.iter().any(|t| occurs_in(id, t)),
+        InferTy::Constructor { params, ret, .. } => {
+            params.iter().any(|t| occurs_in(id, t)) || occurs_in(id, ret)
+        }
+    }
+}
+
+// Structural occurs check for row variables (doesn't follow substitutions to avoid infinite loops)
+fn row_occurs_structural(
+    target: RowMetaId,
+    row: &InferRow,
+    subs: &mut UnificationSubstitutions,
+) -> bool {
+    match row {
+        InferRow::Empty(..) | InferRow::Param(_) => false,
+        InferRow::Var(id) => subs.canon_row(*id) == subs.canon_row(target),
+        InferRow::Extend { row, ty, .. } => {
+            row_occurs_structural(target, row, subs) || ty_occurs_structural_row(target, ty, subs)
+        }
+    }
+}
+
+fn ty_occurs_structural_row(
+    target: RowMetaId,
+    ty: &InferTy,
+    subs: &mut UnificationSubstitutions,
+) -> bool {
+    match ty {
+        InferTy::Record(row) | InferTy::Nominal { row, .. } => {
+            row_occurs_structural(target, row, subs)
+        }
+        InferTy::Func(a, b) => {
+            ty_occurs_structural_row(target, a, subs) || ty_occurs_structural_row(target, b, subs)
+        }
+        InferTy::Tuple(items) => items
+            .iter()
+            .any(|t| ty_occurs_structural_row(target, t, subs)),
+        InferTy::Constructor { params, ret, .. } => {
+            params
+                .iter()
+                .any(|p| ty_occurs_structural_row(target, p, subs))
+                || ty_occurs_structural_row(target, ret, subs)
+        }
+        _ => false,
     }
 }
 
@@ -134,6 +176,9 @@ fn unify_rows(
         }
 
         let var = subs.canon_row(*var);
+        if row_occurs_structural(var, &acc, subs) {
+            return Err(TypeError::OccursCheck(InferTy::Record(Box::new(acc))));
+        }
         subs.row.insert(var, acc);
 
         return Ok(true);
@@ -236,21 +281,6 @@ fn unify_rows(
 
 // Unify types. Returns true if progress was made.
 #[instrument(level = tracing::Level::TRACE, skip(session, substitutions))]
-pub(super) fn unify_mult(
-    lhs: &[InferTy],
-    rhs: &[InferTy],
-    substitutions: &mut UnificationSubstitutions,
-    session: &mut TypeSession,
-) -> Result<bool, TypeError> {
-    let mut changed = false;
-    for (lhs, rhs) in lhs.iter().zip(rhs) {
-        changed |= unify(lhs, rhs, substitutions, session)?;
-    }
-    Ok(changed)
-}
-
-// Unify types. Returns true if progress was made.
-#[instrument(level = tracing::Level::TRACE, skip(session, substitutions))]
 pub(super) fn unify(
     lhs: &InferTy,
     rhs: &InferTy,
@@ -301,12 +331,10 @@ pub(super) fn unify(
             InferTy::Nominal {
                 symbol: lhs_id,
                 row: box lhs_row,
-                type_args: lhs_type_args,
             },
             InferTy::Nominal {
                 symbol: rhs_id,
                 row: box rhs_row,
-                type_args: rhs_type_args,
             },
         ) => {
             if lhs_id != rhs_id {
@@ -326,8 +354,7 @@ pub(super) fn unify(
                 .or_else(|| row_kind(rhs_row))
                 .unwrap_or(TypeDefKind::Struct);
 
-            let mut changed = unify_rows(kind, lhs_row, rhs_row, substitutions, session)?;
-            changed |= unify_mult(lhs_type_args, rhs_type_args, substitutions, session)?;
+            let changed = unify_rows(kind, lhs_row, rhs_row, substitutions, session)?;
             Ok(changed)
         }
         // (Ty::TypeConstructor(lhs), Ty::TypeConstructor(rhs)) if lhs == rhs => Ok(false),
@@ -441,14 +468,9 @@ pub(super) fn substitute(ty: InferTy, substitutions: &FxHashMap<InferTy, InferTy
                 .collect(),
         ),
         InferTy::Record(row) => InferTy::Record(Box::new(substitute_row(*row, substitutions))),
-        InferTy::Nominal {
-            symbol,
-            box row,
-            type_args,
-        } => InferTy::Nominal {
+        InferTy::Nominal { symbol, box row } => InferTy::Nominal {
             symbol,
             row: Box::new(substitute_row(row, substitutions)),
-            type_args: substitute_mult(&type_args, substitutions),
         },
     }
 }
@@ -480,7 +502,9 @@ pub(super) fn apply(ty: InferTy, substitutions: &mut UnificationSubstitutions) -
         InferTy::Rigid(..) => ty,
         InferTy::UnificationVar { id, .. } => {
             let rep = substitutions.canon_meta(id);
-            if let Some(bound) = substitutions.ty.get(&rep).cloned() {
+            if let Some(bound) = substitutions.ty.get(&rep).cloned()
+                && !matches!(bound, InferTy::UnificationVar { id, .. } if rep == id)
+            {
                 apply(bound, substitutions) // keep collapsing
             } else {
                 InferTy::UnificationVar {
@@ -514,14 +538,9 @@ pub(super) fn apply(ty: InferTy, substitutions: &mut UnificationSubstitutions) -
             InferTy::Tuple(items.into_iter().map(|t| apply(t, substitutions)).collect())
         }
         InferTy::Record(row) => InferTy::Record(Box::new(apply_row(*row, substitutions))),
-        InferTy::Nominal {
-            symbol,
-            box row,
-            type_args,
-        } => InferTy::Nominal {
+        InferTy::Nominal { symbol, box row } => InferTy::Nominal {
             symbol,
             row: Box::new(apply_row(row, substitutions)),
-            type_args: apply_mult(type_args, substitutions),
         },
     }
 }
@@ -595,17 +614,9 @@ pub(super) fn instantiate_ty(
         InferTy::Record(row) => {
             InferTy::Record(Box::new(instantiate_row(*row, substitutions, level)))
         }
-        InferTy::Nominal {
-            symbol,
-            box row,
-            type_args,
-        } => InferTy::Nominal {
+        InferTy::Nominal { symbol, box row } => InferTy::Nominal {
             symbol,
             row: Box::new(instantiate_row(row, substitutions, level)),
-            type_args: type_args
-                .iter()
-                .map(|a| instantiate_ty(a.clone(), substitutions, level))
-                .collect(),
         },
     }
 }

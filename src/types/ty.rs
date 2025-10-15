@@ -34,7 +34,6 @@ pub enum Ty {
     // Nominal types (we look up their information from the TypeCatalog)
     Nominal {
         symbol: Symbol,
-        type_args: Vec<Ty>,
         row: Box<Row>,
     },
 }
@@ -106,17 +105,15 @@ impl Ty {
                 module_id: ModuleId::Core,
                 local_id: 2,
             }),
-            type_args: vec![],
             row: Box::new(Row::Empty(TypeDefKind::Struct)),
         }
     }
-    pub fn Array(t: Ty) -> Ty {
+    pub fn Array(_t: Ty) -> Ty {
         Ty::Nominal {
             symbol: Symbol::Type(TypeId {
                 module_id: ModuleId::Core,
                 local_id: 3,
             }),
-            type_args: vec![t],
             row: Box::new(Row::Empty(TypeDefKind::Struct)),
         }
     }

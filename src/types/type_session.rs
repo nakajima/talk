@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use indexmap::IndexMap;
+use indexmap::{IndexMap, IndexSet};
 use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::instrument;
 
@@ -343,16 +343,8 @@ impl TypeSession {
                     .collect(),
             ),
             InferTy::Record(box row) => InferTy::Record(self.shallow_generalize_row(row).into()),
-            InferTy::Nominal {
+            InferTy::Nominal { symbol, box row } => InferTy::Nominal {
                 symbol,
-                type_args,
-                box row,
-            } => InferTy::Nominal {
-                symbol,
-                type_args: type_args
-                    .into_iter()
-                    .map(|t| self.shallow_generalize(t))
-                    .collect(),
                 row: self.shallow_generalize_row(row).into(),
             },
             ty => ty,
@@ -437,7 +429,7 @@ impl TypeSession {
         }
 
         // keep only metas born at or above inner
-        let mut foralls = FxHashSet::default();
+        let mut foralls = IndexSet::default();
         let mut substitutions = UnificationSubstitutions::new(self.meta_levels.clone());
         for m in &metas {
             match m {
@@ -544,7 +536,7 @@ impl TypeSession {
         collect_meta(&ty, &mut metas);
 
         // keep only metas born at or above inner
-        let mut foralls = FxHashSet::default();
+        let mut foralls = IndexSet::default();
         for m in &metas {
             match m {
                 InferTy::Param(p) => {

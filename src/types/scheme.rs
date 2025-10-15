@@ -1,4 +1,6 @@
-use rustc_hash::{FxHashMap, FxHashSet};
+use indexmap::IndexSet;
+use rustc_hash::FxHashMap;
+use tracing::instrument;
 
 use crate::{
     node_id::NodeID,
@@ -27,14 +29,14 @@ pub enum ForAll {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Scheme<T: SomeType> {
-    pub(crate) foralls: FxHashSet<ForAll>,
+    pub(crate) foralls: IndexSet<ForAll>,
     pub(super) predicates: Vec<Predicate<T>>,
     pub(crate) ty: T,
 }
 
 impl Scheme<InferTy> {
     pub fn new(
-        foralls: FxHashSet<ForAll>,
+        foralls: IndexSet<ForAll>,
         predicates: Vec<Predicate<InferTy>>,
         ty: InferTy,
     ) -> Self {
@@ -47,7 +49,7 @@ impl Scheme<InferTy> {
 }
 
 impl Scheme<Ty> {
-    pub fn new(foralls: FxHashSet<ForAll>, predicates: Vec<Predicate<Ty>>, ty: Ty) -> Self {
+    pub fn new(foralls: IndexSet<ForAll>, predicates: Vec<Predicate<Ty>>, ty: Ty) -> Self {
         assert!(
             !ty.contains_var(),
             "Scheme ty cannot contain type/row meta vars: {ty:?}"
@@ -62,6 +64,7 @@ impl Scheme<Ty> {
 }
 
 impl Scheme<InferTy> {
+    #[instrument(skip(self, session, level, wants, span))]
     pub fn inference_instantiate(
         &self,
         id: NodeID,
@@ -159,6 +162,7 @@ impl Scheme<InferTy> {
     }
 
     // Used while solving
+    #[instrument(skip(self, session, level, wants, span, unification_substitutions))]
     pub fn solver_instantiate(
         &self,
         id: NodeID,
@@ -224,6 +228,7 @@ impl Scheme<InferTy> {
         )
     }
 
+    #[instrument(skip(self, session, level, wants, span))]
     pub fn instantiate_with_args(
         &self,
         id: NodeID,
