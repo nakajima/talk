@@ -27,48 +27,48 @@ protocol Divide {
 
 extend Int: Add {
   func add(rhs: Int) -> Int {
-    self
+    __IR("$? = add int %0 %1")
   }
 }
 
 extend Float: Add {
   func add(rhs: Float) -> Float {
-    self
+    __IR("$? = add float %0 %1")
   }
 }
 
 extend Int: Subtract {
   func minus(rhs: Int) -> Int {
-    self
+    __IR("$? = sub int %0 %1")
   }
 }
 
 extend Float: Subtract {
   func minus(rhs: Float) -> Float {
-    self
+    __IR("$? = sub float %0 %1")
   }
 }
 
 extend Int: Multiply {
   func times(rhs: Int) -> Int {
-    self
+    __IR("$? = mul int %0 %1")
   }
 }
 
 extend Float: Multiply {
   func times(rhs: Float) -> Float {
-    self
+    __IR("$? = mul float %0 %1")
   }
 }
 
 extend Int: Divide {
   func divide(rhs: Int) -> Int {
-    self
+    __IR("$? = div int %0 %1")
   }
 }
 
 extend Float: Divide {
   func divide(rhs: Float) -> Float {
-    self
+    __IR("$? = div float %0 %1")
   }
 }

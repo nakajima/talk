@@ -111,6 +111,7 @@ pub(super) struct PolyFunction {
     pub params: Vec<Value>,
     pub blocks: Vec<BasicBlock<Ty, Label>>,
     pub ty: Ty,
+    pub register_count: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -361,6 +362,7 @@ impl Lowerer {
                 params: param_values,
                 blocks: current_function.blocks,
                 ty: Ty::Func(Box::new(param_ty.clone()), Box::new(ret_ty.clone())),
+                register_count: (current_function.registers.next) as usize,
             },
         );
 
@@ -812,6 +814,7 @@ impl Lowerer {
                 params,
                 blocks: current_function.blocks,
                 ty: Ty::Func(param_tys.clone(), ret_ty.clone().into()),
+                register_count: (current_function.registers.next) as usize,
             },
         );
 
@@ -911,8 +914,18 @@ impl Lowerer {
         expr: &Expr,
         label: &Label,
     ) -> Result<Option<Symbol>, IRError> {
-        let Ty::Nominal { symbol, .. } = self.specialized_ty(expr)?.0 else {
-            return Ok(None);
+        println!("looking up instance method for {expr:?}");
+        let symbol = match &expr.kind {
+            ExprKind::LiteralInt(_) => Symbol::Int,
+            ExprKind::LiteralFloat(_) => Symbol::Float,
+            ExprKind::LiteralTrue | ExprKind::LiteralFalse => Symbol::Bool,
+            _ => {
+                let Ty::Nominal { symbol, .. } = self.specialized_ty(expr)?.0 else {
+                    return Ok(None);
+                };
+
+                symbol
+            }
         };
 
         if let Some(methods) = self.types.catalog.instance_methods.get(&symbol)
@@ -920,6 +933,11 @@ impl Lowerer {
         {
             return Ok(Some(*method));
         }
+
+        println!(
+            "didn't get a method: {:?}",
+            self.types.catalog.instance_methods.get(&symbol)
+        );
 
         Ok(None)
     }
@@ -1114,8 +1132,11 @@ pub fn curry_ty<'a, I: IntoIterator<Item = &'a Ty>>(params: I, ret: Ty) -> Ty {
 #[cfg(test)]
 pub mod tests {
     use crate::{
-        assert_eq_diff,
-        compiling::driver::{Driver, Source},
+        assert_eq_diff, assert_eq_diff_display,
+        compiling::{
+            driver::{Driver, Source},
+            module::ModuleId,
+        },
         ir::{
             basic_block::{BasicBlock, BasicBlockId},
             function::Function,
@@ -1132,6 +1153,7 @@ pub mod tests {
         name::Name,
         name_resolution::symbol::{GlobalId, InstanceMethodId, Symbol, SynthesizedId},
         node_id::NodeID,
+        types::ty::Ty,
     };
 
     fn meta() -> List<InstructionMeta> {
@@ -1158,6 +1180,7 @@ pub mod tests {
         assert_eq!(
             program.functions,
             indexmap::indexmap!(GlobalId::from(1).into() => Function {
+                register_count: 1,
                 name: Name::Resolved(GlobalId::from(1).into(), "main".into()),
                 params: vec![].into(),
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
@@ -1182,6 +1205,7 @@ pub mod tests {
             program.functions,
             indexmap::indexmap!(GlobalId::from(1).into() => Function {
                 name: Name::Resolved(GlobalId::from(1).into(), "main".into()),
+                register_count: 1,
                 params: vec![].into(),
                 ty: IrTy::Func(vec![], IrTy::Float.into()),
                 blocks: vec![BasicBlock {
@@ -1206,6 +1230,7 @@ pub mod tests {
             indexmap::indexmap!(SynthesizedId::from(1).into() => Function {
                 name: Name::Resolved(SynthesizedId::from(1).into(), "main".into()),
                 params: vec![].into(),
+                register_count: 1,
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
                     blocks: vec![BasicBlock {
                     id: BasicBlockId(0),
@@ -1229,6 +1254,7 @@ pub mod tests {
             indexmap::indexmap!(SynthesizedId::from(1).into() => Function {
                 name: Name::Resolved(SynthesizedId::from(1).into(), "main".into()),
                 params: vec![].into(),
+                register_count: 1,
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
                     blocks: vec![BasicBlock {
                     id: BasicBlockId(0),
@@ -1262,6 +1288,7 @@ pub mod tests {
                 name: Name::Resolved(SynthesizedId::from(1).into(), "main".into()),
                 params: vec![].into(),
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
+                register_count: 3,
                 blocks: vec![BasicBlock::<IrTy, Label> {
                     id: BasicBlockId(0),
                     instructions: vec![
@@ -1304,6 +1331,7 @@ pub mod tests {
             Function {
                 name: Name::Resolved(GlobalId::from(1).into(), "foo".into()),
                 params: vec![Value::Reg(0)].into(),
+                register_count: 1,
                 ty: IrTy::Func(vec![IrTy::Int], IrTy::Int.into()),
                 blocks: vec![BasicBlock {
                     id: BasicBlockId(0),
@@ -1335,6 +1363,7 @@ pub mod tests {
                 name: Name::Resolved(SynthesizedId::from(2).into(), "main".into()),
                 params: vec![].into(),
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
+                register_count: 4,
                 blocks: vec![BasicBlock {
                     id: BasicBlockId(0),
                     instructions: vec![
@@ -1394,6 +1423,7 @@ pub mod tests {
                 name: Name::Resolved(SynthesizedId::from(2).into(), "main".into()),
                 params: vec![].into(),
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
+                register_count: 4,
                 blocks: vec![BasicBlock {
                     id: BasicBlockId(0),
                     instructions: vec![
@@ -1436,6 +1466,55 @@ pub mod tests {
     }
 
     #[test]
+    fn lowers_add() {
+        let program = lower("1 + 2");
+        assert_eq_diff_display!(
+            *program
+                .functions
+                .get(&Symbol::Synthesized(SynthesizedId::from(1)))
+                .unwrap(),
+            Function {
+                name: Name::Resolved(SynthesizedId::from(1).into(), "main".into()),
+                params: vec![].into(),
+                register_count: 1,
+                ty: IrTy::Func(vec![], IrTy::Int.into()),
+                blocks: vec![BasicBlock::<IrTy, Label> {
+                    id: BasicBlockId(0),
+                    instructions: vec![
+                        Instruction::ConstantInt {
+                            dest: 1.into(),
+                            val: 2,
+                            meta: vec![InstructionMeta::Source(NodeID::ANY)].into(),
+                        },
+                        Instruction::ConstantInt {
+                            dest: 2.into(),
+                            val: 1,
+                            meta: vec![InstructionMeta::Source(NodeID::ANY)].into(),
+                        },
+                        Instruction::Call {
+                            dest: Register(0),
+                            ty: IrTy::Int,
+                            callee: Value::Func(Name::Resolved(
+                                Symbol::Global(GlobalId {
+                                    module_id: ModuleId::Core,
+                                    local_id: 1
+                                }),
+                                "add".into()
+                            )),
+                            args: vec![Register(1).into(), Register(2).into()].into(),
+                            meta: meta()
+                        },
+                    ],
+                    terminator: Terminator::Ret {
+                        val: Value::Reg(0),
+                        ty: IrTy::Int
+                    }
+                }],
+            }
+        );
+    }
+
+    #[test]
     fn lowers_struct_method() {
         let program = lower(
             "
@@ -1460,6 +1539,7 @@ pub mod tests {
                 name: Name::Resolved(SynthesizedId::from(2).into(), "main".into()),
                 params: vec![].into(),
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
+                register_count: 4,
                 blocks: vec![BasicBlock::<IrTy, Label> {
                     id: BasicBlockId(0),
                     instructions: vec![
@@ -1517,6 +1597,7 @@ pub mod tests {
                 name: Name::Resolved(SynthesizedId::from(1).into(), "main".into()),
                 params: vec![].into(),
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
+                register_count: 1,
                 blocks: vec![BasicBlock {
                     id: BasicBlockId(0),
                     instructions: vec![Instruction::Add {
@@ -1553,6 +1634,7 @@ pub mod tests {
                 name: Name::Resolved(SynthesizedId::from(1).into(), "main".into()),
                 params: vec![].into(),
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
+                register_count: 3,
                 blocks: vec![BasicBlock {
                     id: BasicBlockId(0),
                     instructions: vec![
@@ -1602,6 +1684,7 @@ pub mod tests {
                 name: Name::Resolved(SynthesizedId::from(1).into(), "main".into()),
                 params: vec![].into(),
                 ty: IrTy::Func(vec![], IrTy::Float.into()),
+                register_count: 5,
                 blocks: vec![BasicBlock::<IrTy, Label> {
                     id: BasicBlockId(0),
                     instructions: vec![
@@ -1661,6 +1744,7 @@ pub mod tests {
                 name: Name::Resolved(SynthesizedId::from(3).into(), "@id:Global(_:1)[Int]".into()),
                 params: vec![Value::Reg(0)].into(),
                 ty: IrTy::Func(vec![IrTy::Int], IrTy::Int.into()),
+                register_count: 1,
                 blocks: vec![BasicBlock::<IrTy, Label> {
                     id: BasicBlockId(0),
                     instructions: vec![],
@@ -1684,6 +1768,7 @@ pub mod tests {
                 ),
                 params: vec![Value::Reg(0)].into(),
                 ty: IrTy::Func(vec![IrTy::Float], IrTy::Float.into()),
+                register_count: 1,
                 blocks: vec![BasicBlock::<IrTy, Label> {
                     id: BasicBlockId(0),
                     instructions: vec![],

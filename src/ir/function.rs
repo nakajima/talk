@@ -11,6 +11,7 @@ pub struct Function<T: Debug + Display, F: Debug + Display> {
     pub params: List<Value>,
     pub blocks: Vec<BasicBlock<T, F>>,
     pub ty: IrTy,
+    pub register_count: usize,
 }
 
 impl<T, F> Display for Function<T, F>

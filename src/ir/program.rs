@@ -11,6 +11,20 @@ pub struct Program {
     pub functions: IndexMap<Symbol, Function<IrTy, Label>>,
 }
 
+impl Program {
+    pub fn entrypoint(&self) -> Option<&Function<IrTy, Label>> {
+        for (sym, func) in self.functions.iter() {
+            if func.name.name_str() == "main"
+                && matches!(sym, Symbol::Global(..) | Symbol::Synthesized(..))
+            {
+                return Some(func);
+            }
+        }
+
+        None
+    }
+}
+
 impl std::fmt::Display for Program {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut parts = vec![];

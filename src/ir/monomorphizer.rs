@@ -69,6 +69,7 @@ impl Monomorphizer {
                 .into_iter()
                 .map(|b| self.monomorphize_block(b, &Default::default()))
                 .collect(),
+            register_count: func.register_count,
         };
 
         result.insert(func.name.symbol().unwrap(), func);
@@ -177,6 +178,7 @@ impl Monomorphizer {
             name: specialization.name.clone(),
             ty: self.monomorphize_ty(func.ty.clone(), &specialization.substitutions),
             params: func.params.clone().into(),
+            register_count: func.register_count,
             blocks: func
                 .blocks
                 .clone()

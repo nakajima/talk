@@ -7,6 +7,7 @@ pub struct Register(pub u32);
 
 impl Register {
     pub const DROP: Register = Register(u32::MAX);
+    pub const MAIN: Register = Register(u32::MAX - 1);
 }
 
 impl From<u32> for Register {
