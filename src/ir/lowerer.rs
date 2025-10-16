@@ -1034,7 +1034,6 @@ impl<'a> Lowerer<'a> {
         expr: &Expr,
         label: &Label,
     ) -> Result<Option<Symbol>, IRError> {
-        println!("looking up instance method for {expr:?}");
         let symbol = match &expr.kind {
             ExprKind::LiteralInt(_) => Symbol::Int,
             ExprKind::LiteralFloat(_) => Symbol::Float,
@@ -1053,11 +1052,6 @@ impl<'a> Lowerer<'a> {
         {
             return Ok(Some(*method));
         }
-
-        println!(
-            "didn't get a method: {:?}",
-            self.types.catalog.instance_methods.get(&symbol)
-        );
 
         Ok(None)
     }
@@ -1591,7 +1585,7 @@ pub mod tests {
     #[test]
     fn lowers_enum_constructor_with_no_vals() {
         let program = lower("enum Fizz { case foo, bar } ; Fizz.bar");
-        assert_eq_diff_display!(
+        assert_eq_diff!(
             *program
                 .functions
                 .get(&Symbol::Synthesized(SynthesizedId::from(1)))
@@ -1600,7 +1594,7 @@ pub mod tests {
                 name: Name::Resolved(SynthesizedId::from(1).into(), "main".into()),
                 params: vec![].into(),
                 register_count: 1,
-                ty: IrTy::Func(vec![], IrTy::Int.into()),
+                ty: IrTy::Func(vec![], IrTy::Record(vec![IrTy::Int]).into()),
                 blocks: vec![BasicBlock::<IrTy, Label> {
                     id: BasicBlockId(0),
                     instructions: vec![Instruction::Record {

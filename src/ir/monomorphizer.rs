@@ -163,14 +163,19 @@ impl<'a> Monomorphizer<'a> {
                         .collect(),
                 )
             }
-            Ty::Nominal { row, .. } => {
-                let closed = row.close();
-                IrTy::Record(
-                    closed
-                        .values()
-                        .map(|v| self.monomorphize_ty(v.clone(), substitutions))
-                        .collect(),
-                )
+            Ty::Nominal { symbol, row, .. } => {
+                if matches!(symbol, Symbol::Enum(..)) {
+                    // TODO: Handle variants
+                    IrTy::Record(vec![IrTy::Int])
+                } else {
+                    let closed = row.close();
+                    IrTy::Record(
+                        closed
+                            .values()
+                            .map(|v| self.monomorphize_ty(v.clone(), substitutions))
+                            .collect(),
+                    )
+                }
             }
         }
     }
