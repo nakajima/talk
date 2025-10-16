@@ -195,7 +195,7 @@ impl<'a> TypeHeaderPass<'a> {
     fn enter_decl(&mut self, decl: &Decl) {
         match &decl.kind {
             DeclKind::Struct {
-                name: name @ Name::Resolved(sym @ Symbol::Type(..), type_name),
+                name: name @ Name::Resolved(sym @ Symbol::Struct(..), type_name),
                 generics,
                 body: Block { body, .. },
                 conformances,
@@ -236,7 +236,8 @@ impl<'a> TypeHeaderPass<'a> {
                 );
             }
             DeclKind::Extend {
-                name: name @ Name::Resolved(sym @ Symbol::Type(type_id), type_name),
+                name:
+                    name @ Name::Resolved(sym @ (Symbol::Struct(..) | Symbol::Enum(..)), type_name),
                 body: Block { body, .. },
                 conformances,
                 ..
@@ -260,7 +261,7 @@ impl<'a> TypeHeaderPass<'a> {
 
                 self.raw
                     .extensions
-                    .entry(Symbol::Type(*type_id))
+                    .entry(*sym)
                     .or_default()
                     .push(TypeExtension { node_id: decl.id });
             }
@@ -335,7 +336,7 @@ impl<'a> TypeHeaderPass<'a> {
                 );
             }
             DeclKind::Enum {
-                name: name @ Name::Resolved(sym @ Symbol::Type(..), type_name),
+                name: name @ Name::Resolved(sym @ Symbol::Enum(..), type_name),
                 body: Block { body, .. },
                 generics,
                 conformances,
@@ -637,7 +638,7 @@ impl<'a> TypeHeaderPass<'a> {
                     );
                 }
                 DeclKind::Init { name, params, .. } => {
-                    let Name::Resolved(Symbol::Type(type_id), _) = &type_name else {
+                    let Name::Resolved(Symbol::Struct(type_id), _) = &type_name else {
                         unreachable!("didn't resolve type");
                     };
                     initializers.insert(
@@ -664,41 +665,6 @@ impl<'a> TypeHeaderPass<'a> {
                 _ => continue,
             };
         }
-
-        // if type_kind == TypeDefKind::Struct && initializers.is_empty() {
-        //     let Name::Resolved(Symbol::Type(type_id), _) = &type_name else {
-        //         unreachable!("didn't resolve type");
-        //     };
-
-        //     // If we don't have an initializer, synthesize one.
-        //     let mut params: Vec<ASTTyRepr> = properties
-        //         .values()
-        //         .filter_map(|p| {
-        //             if p.is_static {
-        //                 None
-        //             } else {
-        //                 Some(p.ty_repr.clone())
-        //             }
-        //         })
-        //         .collect();
-
-        //     // At this point, we've already prepend `self` to param lists so we need to do so here as well
-        //     params.insert(0, ASTTyRepr::SelfType(type_name.clone(), id, span));
-
-        //     let sym = Symbol::Synthesized(SynthesizedId::new(
-        //         ModuleId::Current,
-        //         self.session.synthsized_ids.next_id(),
-        //     ));
-
-        //     initializers.insert(
-        //         "init".into(),
-        //         Initializer {
-        //             initializes_type_id: *type_id,
-        //             symbol: sym,
-        //             params,
-        //         },
-        //     );
-        // }
 
         let methods = self
             .raw
@@ -764,8 +730,8 @@ pub mod tests {
             name_resolver::NameResolved,
             name_resolver_tests::tests::resolve,
             symbol::{
-                AssociatedTypeId, BuiltinId, GlobalId, InstanceMethodId, PropertyId, ProtocolId,
-                Symbol, SynthesizedId, TypeId, TypeParameterId, VariantId,
+                AssociatedTypeId, BuiltinId, EnumId, GlobalId, InstanceMethodId, PropertyId,
+                ProtocolId, StructId, Symbol, SynthesizedId, TypeParameterId, VariantId,
             },
         },
         node::Node,
@@ -800,14 +766,14 @@ pub mod tests {
 
         assert_eq_diff!(
             *raw.initializers
-                .get(&Symbol::Type(TypeId::from(1)))
+                .get(&Symbol::Struct(StructId::from(1)))
                 .unwrap(),
             fxhashmap! {
                 Label::Named("init".into()) => Initializer {
                     symbol: Symbol::Synthesized(SynthesizedId::new(ModuleId::Current, 1)),
-                    initializes_type_id: TypeId::from(1),
+                    initializes_type_id: StructId::from(1),
                     params: vec![
-                        ASTTyRepr::SelfType(Name::Resolved(TypeId::from(1).into(), "Person".into()), NodeID::ANY, Span::ANY),
+                        ASTTyRepr::SelfType(Name::Resolved(StructId::from(1).into(), "Person".into()), NodeID::ANY, Span::ANY),
                         ASTTyRepr::Annotated(
                             annotation!(
                                 TypeAnnotationKind::Nominal {
@@ -823,7 +789,9 @@ pub mod tests {
         );
 
         assert_eq_diff!(
-            *raw.properties.get(&Symbol::Type(TypeId::from(1))).unwrap(),
+            *raw.properties
+                .get(&Symbol::Struct(StructId::from(1)))
+                .unwrap(),
             crate::indexmap!(Label::Named("age".into()) => Property {
                 symbol: Symbol::Property(PropertyId::from(1)),
                 is_static: false,
@@ -836,9 +804,11 @@ pub mod tests {
         );
 
         assert_eq_diff!(
-            *raw.type_constructors.get(&TypeId::from(1).into()).unwrap(),
+            *raw.type_constructors
+                .get(&StructId::from(1).into())
+                .unwrap(),
             TypeDef {
-                name: Name::Resolved(Symbol::Type(TypeId::from(1)), "Person".into()),
+                name: Name::Resolved(Symbol::Struct(StructId::from(1)), "Person".into()),
                 kind: Kind::Type,
                 node_id: NodeID::ANY,
                 def: TypeDefKind::Struct,
@@ -857,16 +827,20 @@ pub mod tests {
         .1;
 
         assert_eq!(
-            *raw.extensions.get(&Symbol::Type(TypeId::from(1))).unwrap(),
+            *raw.extensions
+                .get(&Symbol::Struct(StructId::from(1)))
+                .unwrap(),
             vec![TypeExtension {
                 node_id: NodeID::ANY,
             }]
         );
 
         assert_eq_diff!(
-            *raw.type_constructors.get(&TypeId::from(1).into()).unwrap(),
+            *raw.type_constructors
+                .get(&StructId::from(1).into())
+                .unwrap(),
             TypeDef {
-                name: Name::Resolved(Symbol::Type(TypeId::from(1)), "Person".into()),
+                name: Name::Resolved(Symbol::Struct(StructId::from(1)), "Person".into()),
                 kind: Kind::Type,
                 node_id: NodeID::ANY,
                 def: TypeDefKind::Struct,
@@ -891,20 +865,22 @@ pub mod tests {
 
         assert_eq_diff!(
             *raw.initializers
-                .get(&Symbol::Type(TypeId::from(1)))
+                .get(&Symbol::Struct(StructId::from(1)))
                 .unwrap(),
             fxhashmap!(Label::Named("init".into()) => Initializer {
                 symbol: Symbol::Global(GlobalId::from(1)),
-                initializes_type_id: TypeId::from(1),
+                initializes_type_id: StructId::from(1),
                 params: vec![
-                    ASTTyRepr::SelfType(Name::Resolved(Symbol::Type(TypeId::from(1)), "Wrapper".into()), NodeID::ANY, Span::ANY),
+                    ASTTyRepr::SelfType(Name::Resolved(Symbol::Struct(StructId::from(1)), "Wrapper".into()), NodeID::ANY, Span::ANY),
                     ASTTyRepr::Hole(NodeID(FileID(0), 4), Span::ANY)
                 ]
             })
         );
 
         assert_eq_diff!(
-            *raw.properties.get(&Symbol::Type(TypeId::from(1))).unwrap(),
+            *raw.properties
+                .get(&Symbol::Struct(StructId::from(1)))
+                .unwrap(),
             crate::indexmap!(Label::Named("wrapped".into()) => Property {
                 symbol: Symbol::Property(PropertyId::from(1)),
                 is_static: false,
@@ -917,7 +893,9 @@ pub mod tests {
         );
 
         assert_eq_diff!(
-            *raw.generics.get(&Symbol::Type(TypeId::from(1))).unwrap(),
+            *raw.generics
+                .get(&Symbol::Struct(StructId::from(1)))
+                .unwrap(),
             crate::indexmap!(Name::Resolved(Symbol::TypeParameter(TypeParameterId(1)), "T".into()) => ASTTyRepr::Generic(GenericDecl {
                 id: NodeID::ANY,
                 name: Name::Resolved(Symbol::TypeParameter(TypeParameterId(1)), "T".into()),
@@ -929,9 +907,11 @@ pub mod tests {
         );
 
         assert_eq_diff!(
-            *raw.type_constructors.get(&TypeId::from(1).into()).unwrap(),
+            *raw.type_constructors
+                .get(&StructId::from(1).into())
+                .unwrap(),
             TypeDef {
-                name: Name::Resolved(Symbol::Type(TypeId::from(1)), "Wrapper".into()),
+                name: Name::Resolved(Symbol::Struct(StructId::from(1)), "Wrapper".into()),
                 kind: Kind::Arrow {
                     in_kind: Box::new(Kind::Type),
                     out_kind: Box::new(Kind::Type)
@@ -955,13 +935,13 @@ pub mod tests {
 
         assert_eq_diff!(
             *raw.initializers
-                .get(&Symbol::Type(TypeId::from(1)))
+                .get(&Symbol::Struct(StructId::from(1)))
                 .unwrap(),
             fxhashmap!(Label::Named("init".into()) => Initializer {
                 symbol: Symbol::Synthesized(SynthesizedId::new(ModuleId::Current, 1)),
-                initializes_type_id: TypeId::from(1),
+                initializes_type_id: StructId::from(1),
                 params: vec![
-                ASTTyRepr::SelfType(Name::Resolved(TypeId::from(1).into(), "Wrapper".into()), NodeID::ANY, Span::ANY),
+                ASTTyRepr::SelfType(Name::Resolved(StructId::from(1).into(), "Wrapper".into()), NodeID::ANY, Span::ANY),
                 ASTTyRepr::Annotated(
                     annotation!(TypeAnnotationKind::Nominal { name: Name::Resolved(Symbol::TypeParameter(TypeParameterId(1)), "T".into()), name_span: Span::ANY, generics: vec![
                     annotation!(TypeAnnotationKind::Nominal { name: Name::Resolved(TypeParameterId(2).into(), "U".into()), name_span: Span::ANY, generics: vec![] })
@@ -971,7 +951,9 @@ pub mod tests {
         );
 
         assert_eq_diff!(
-            *raw.properties.get(&Symbol::Type(TypeId::from(1))).unwrap(),
+            *raw.properties
+                .get(&Symbol::Struct(StructId::from(1)))
+                .unwrap(),
             crate::indexmap!(Label::Named("wrapped".into()) => Property {
                 symbol: Symbol::Property(PropertyId::from(1)),
                 is_static: false,
@@ -988,7 +970,9 @@ pub mod tests {
         );
 
         assert_eq!(
-            *raw.generics.get(&Symbol::Type(TypeId::from(1))).unwrap(),
+            *raw.generics
+                .get(&Symbol::Struct(StructId::from(1)))
+                .unwrap(),
             crate::indexmap!(
               Name::Resolved(Symbol::TypeParameter(TypeParameterId(1)), "T".into()) =>  ASTTyRepr::Generic(GenericDecl {
                     id: NodeID::ANY,
@@ -1010,9 +994,11 @@ pub mod tests {
         );
 
         assert_eq_diff!(
-            *raw.type_constructors.get(&TypeId::from(1).into()).unwrap(),
+            *raw.type_constructors
+                .get(&StructId::from(1).into())
+                .unwrap(),
             TypeDef {
-                name: Name::Resolved(Symbol::Type(TypeId::from(1)), "Wrapper".into()),
+                name: Name::Resolved(Symbol::Struct(StructId::from(1)), "Wrapper".into()),
                 kind: Kind::Arrow {
                     in_kind: Box::new(Kind::Type),
                     out_kind: Kind::Arrow {
@@ -1038,8 +1024,10 @@ pub mod tests {
         )
         .1;
 
+        println!("raw: {raw:#?}");
+
         assert_eq!(
-            *raw.variants.get(&Symbol::Type(TypeId::from(1))).unwrap(),
+            *raw.variants.get(&Symbol::Enum(EnumId::from(1))).unwrap(),
             crate::indexmap!(
                 Label::Named("foo".into()) => Variant {
                     symbol: Symbol::Variant(VariantId::from(1)),
@@ -1057,9 +1045,9 @@ pub mod tests {
         );
 
         assert_eq_diff!(
-            *raw.type_constructors.get(&TypeId::from(1).into()).unwrap(),
+            *raw.type_constructors.get(&EnumId::from(1).into()).unwrap(),
             TypeDef {
-                name: Name::Resolved(Symbol::Type(TypeId::from(1)), "Fizz".into()),
+                name: Name::Resolved(Symbol::Enum(EnumId::from(1)), "Fizz".into()),
                 kind: Kind::Type,
                 node_id: NodeID::ANY,
                 def: TypeDefKind::Enum,
@@ -1149,14 +1137,14 @@ pub mod tests {
 
         assert_eq_diff!(
             *raw.initializers
-                .get(&Symbol::Type(TypeId::from(1)))
+                .get(&Symbol::Struct(StructId::from(1)))
                 .unwrap(),
             fxhashmap!(Label::Named("init".into()) => Initializer {
                 symbol: Symbol::Synthesized(SynthesizedId::new(ModuleId::Current, 1)),
-                initializes_type_id: TypeId::from(1),
+                initializes_type_id: StructId::from(1),
                 params: vec![
                     ASTTyRepr::SelfType(
-                        Name::Resolved(Symbol::Type(TypeId::from(1)), "Buzz".into()),
+                        Name::Resolved(Symbol::Struct(StructId::from(1)), "Buzz".into()),
                         NodeID::ANY,
                         Span::ANY
                     ),
@@ -1165,18 +1153,20 @@ pub mod tests {
         );
 
         assert_eq!(
-            *raw.conformances.get(&TypeId::from(1).into()).unwrap(),
+            *raw.conformances.get(&StructId::from(1).into()).unwrap(),
             vec![ConformanceStub {
-                conforming_id: TypeId::from(1).into(),
+                conforming_id: StructId::from(1).into(),
                 protocol_id: ProtocolId::from(1),
                 span: Span::ANY,
             }]
         );
 
         assert_eq_diff!(
-            *raw.type_constructors.get(&TypeId::from(1).into()).unwrap(),
+            *raw.type_constructors
+                .get(&StructId::from(1).into())
+                .unwrap(),
             TypeDef {
-                name: Name::Resolved(Symbol::Type(TypeId::from(1)), "Buzz".into()),
+                name: Name::Resolved(Symbol::Struct(StructId::from(1)), "Buzz".into()),
                 kind: Kind::Type,
                 node_id: NodeID::ANY,
                 def: TypeDefKind::Struct,

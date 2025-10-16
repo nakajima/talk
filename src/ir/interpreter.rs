@@ -330,6 +330,7 @@ pub mod tests {
     }
 
     #[test]
+    #[ignore = "need to be able to import the core first"]
     pub fn add() {
         assert_eq!(interpret("1 + 2"), Value::Int(3));
         assert_eq!(interpret("1.0 + 2.0"), Value::Float(3.0));

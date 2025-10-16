@@ -11,7 +11,7 @@ pub mod tests {
         make_row,
         name_resolution::{
             name_resolver::NameResolved,
-            symbol::{GlobalId, ProtocolId, Symbol, SynthesizedId, TypeId},
+            symbol::{EnumId, GlobalId, ProtocolId, StructId, Symbol, SynthesizedId},
         },
         node_kinds::{
             decl::{Decl, DeclKind},
@@ -297,8 +297,9 @@ pub mod tests {
         };
 
         // Get the struct's type parameter
-        let TypeEntry::Poly(Scheme { foralls, .. }) =
-            types.get_symbol(&Symbol::Type(TypeId::from(1))).unwrap()
+        let TypeEntry::Poly(Scheme { foralls, .. }) = types
+            .get_symbol(&Symbol::Struct(StructId::from(1)))
+            .unwrap()
         else {
             panic!("didn't get struct scheme");
         };
@@ -389,7 +390,7 @@ pub mod tests {
 
         // Get the enum's type parameter
         let TypeEntry::Poly(Scheme { foralls, .. }) =
-            types.get_symbol(&Symbol::Type(TypeId::from(1))).unwrap()
+            types.get_symbol(&Symbol::Enum(EnumId::from(1))).unwrap()
         else {
             panic!("didn't get enum scheme");
         };
@@ -1254,7 +1255,7 @@ pub mod tests {
         );
 
         let nominal = Ty::Nominal {
-            symbol: TypeId::from(1).into(),
+            symbol: StructId::from(1).into(),
             row: Box::new(make_row!(Struct, "age" => Ty::Int, "height" => Ty::Float)),
         };
 
@@ -1263,7 +1264,8 @@ pub mod tests {
                 .get_symbol(&Symbol::from(SynthesizedId::from(1)))
                 .unwrap()
                 .clone()
-                .as_mono_ty(),
+                .as_mono_ty()
+                .clone(),
         );
 
         assert_eq!(params.len(), 3);
@@ -1442,7 +1444,7 @@ pub mod tests {
         assert_eq!(
             *ty,
             TypeEntry::Mono(Ty::Nominal {
-                symbol: TypeId::from(1).into(),
+                symbol: StructId::from(1).into(),
                 row: make_row!(Struct, "value" => Ty::Int).into()
             })
         );
@@ -1555,14 +1557,14 @@ pub mod tests {
         assert_eq!(
             ty(1, &ast, &types),
             Ty::Nominal {
-                symbol: TypeId::from(1).into(),
+                symbol: EnumId::from(1).into(),
                 row: Box::new(make_row!(Enum, "foo" => Ty::Void, "bar" => Ty::Void)),
             }
         );
         assert_eq!(
             ty(2, &ast, &types),
             Ty::Nominal {
-                symbol: TypeId::from(1).into(),
+                symbol: EnumId::from(1).into(),
                 row: Box::new(make_row!(Enum, "foo" => Ty::Void, "bar" => Ty::Void)),
             }
         );
@@ -1584,7 +1586,7 @@ pub mod tests {
         assert_eq!(
             ty(1, &ast, &types),
             Ty::Nominal {
-                symbol: TypeId::from(1).into(),
+                symbol: EnumId::from(1).into(),
                 row: Box::new(
                     make_row!(Enum, "foo" => Ty::Tuple(vec![Ty::Int, Ty::Bool]), "bar" => Ty::Float)
                 ),
@@ -1593,7 +1595,7 @@ pub mod tests {
         assert_eq!(
             ty(2, &ast, &types),
             Ty::Nominal {
-                symbol: TypeId::from(1).into(),
+                symbol: EnumId::from(1).into(),
                 row: Box::new(
                     make_row!(Enum, "foo" => Ty::Tuple(vec![Ty::Int, Ty::Bool]), "bar" => Ty::Float)
                 ),
@@ -1618,21 +1620,21 @@ pub mod tests {
         assert_eq!(
             ty(1, &ast, &types),
             Ty::Nominal {
-                symbol: TypeId::from(1).into(),
+                symbol: EnumId::from(1).into(),
                 row: Box::new(make_row!(Enum, "some" => Ty::Int, "none" => Ty::Void)),
             }
         );
         assert_eq!(
             ty(2, &ast, &types),
             Ty::Nominal {
-                symbol: TypeId::from(1).into(),
+                symbol: EnumId::from(1).into(),
                 row: Box::new(make_row!(Enum, "some" => Ty::Float, "none" => Ty::Void)),
             }
         );
         assert_eq!(
             ty(3, &ast, &types),
             Ty::Nominal {
-                symbol: TypeId::from(1).into(),
+                symbol: EnumId::from(1).into(),
                 row: Box::new(make_row!(Enum, "some" => Ty::Param(1.into()), "none" => Ty::Void)),
             }
         );
@@ -1755,7 +1757,7 @@ pub mod tests {
 
         assert!(types.catalog.conformances.contains_key(&ConformanceKey {
             protocol_id: ProtocolId::from(1),
-            conforming_id: TypeId::from(1).into(),
+            conforming_id: StructId::from(1).into(),
         }));
     }
 
@@ -1898,7 +1900,7 @@ pub mod tests {
         assert_eq!(
             ty(1, &ast, &session),
             Ty::Nominal {
-                symbol: Symbol::Type(TypeId {
+                symbol: Symbol::Enum(EnumId {
                     module_id: ModuleId::Core,
                     local_id: 1
                 }),
@@ -1910,7 +1912,7 @@ pub mod tests {
         assert_eq!(
             ty(2, &ast, &session),
             Ty::Nominal {
-                symbol: Symbol::Type(TypeId {
+                symbol: Symbol::Enum(EnumId {
                     module_id: ModuleId::Current,
                     local_id: 1
                 }),
@@ -2005,7 +2007,7 @@ pub mod tests {
         assert_eq!(
             ty(4, &ast, &types),
             Ty::Nominal {
-                symbol: TypeId::from(3).into(),
+                symbol: StructId::from(3).into(),
                 row: Row::Empty(TypeDefKind::Struct).into()
             }
         );

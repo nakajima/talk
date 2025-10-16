@@ -18,15 +18,15 @@ use crate::{
 };
 
 #[allow(dead_code)]
-pub struct Monomorphizer {
-    asts: IndexMap<Source, AST<NameResolved>>,
-    types: Types,
+pub struct Monomorphizer<'a> {
+    asts: &'a mut IndexMap<Source, AST<NameResolved>>,
+    types: &'a mut Types,
     functions: IndexMap<Symbol, PolyFunction>,
     specializations: IndexMap<Symbol, Vec<Specialization>>,
 }
 
-impl Monomorphizer {
-    pub fn new(lowerer: Lowerer) -> Self {
+impl<'a> Monomorphizer<'a> {
+    pub fn new(lowerer: Lowerer<'a>) -> Self {
         Monomorphizer {
             asts: lowerer.asts,
             types: lowerer.types,
@@ -154,7 +154,15 @@ impl Monomorphizer {
                 )
             }
             Ty::Tuple(..) => todo!(),
-            Ty::Record(..) => todo!(),
+            Ty::Record(row) => {
+                let closed = row.close();
+                IrTy::Record(
+                    closed
+                        .values()
+                        .map(|v| self.monomorphize_ty(v.clone(), substitutions))
+                        .collect(),
+                )
+            }
             Ty::Nominal { row, .. } => {
                 let closed = row.close();
                 IrTy::Record(

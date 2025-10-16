@@ -286,7 +286,9 @@ impl NameResolver {
 
         let module_id = self.current_module_id;
         let symbol = match kind {
-            Symbol::Type(..) => Symbol::Type(self.symbols.next_type(module_id)),
+            Symbol::Struct(..) => Symbol::Struct(self.symbols.next_struct(module_id)),
+            Symbol::Enum(..) => Symbol::Enum(self.symbols.next_enum(module_id)),
+            Symbol::TypeAlias(..) => Symbol::TypeAlias(self.symbols.next_type_alias(module_id)),
             Symbol::TypeParameter(..) => Symbol::TypeParameter(self.symbols.next_type_parameter()),
             Symbol::Global(..) => Symbol::Global(self.symbols.next_global(module_id)),
             Symbol::DeclaredLocal(..) => Symbol::DeclaredLocal(self.symbols.next_local()),
@@ -406,7 +408,13 @@ impl NameResolver {
 
             *name = resolved_name;
 
-            if matches!(name, Name::Resolved(Symbol::Type(_), _)) {
+            if matches!(
+                name,
+                Name::Resolved(
+                    Symbol::Struct(_) | Symbol::Enum(_) | Symbol::TypeAlias(_),
+                    _
+                )
+            ) {
                 expr.kind = ExprKind::Constructor(name.clone());
             }
         });

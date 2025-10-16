@@ -723,7 +723,10 @@ impl<'a> TypeResolvePass<'a> {
         annotation: &TypeAnnotation,
     ) -> (InferTy, Vec<Predicate<InferTy>>, IndexSet<ForAll>) {
         match &annotation.kind {
-            TypeAnnotationKind::SelfType(Name::Resolved(symbol @ Symbol::Type(id), ..)) => {
+            TypeAnnotationKind::SelfType(Name::Resolved(
+                symbol @ (Symbol::Struct(..) | Symbol::Enum(..)),
+                ..,
+            )) => {
                 let mut predicates = vec![];
                 let mut foralls = IndexSet::default();
 
@@ -734,7 +737,7 @@ impl<'a> TypeResolvePass<'a> {
                     .cloned()
                     .unwrap_or_else(|| {
                         panic!(
-                            "did not get type for id: {id:?} in {:?}",
+                            "did not get type for id: {symbol:?} in {:?}",
                             self.raw.type_constructors
                         )
                     })
@@ -806,7 +809,11 @@ impl<'a> TypeResolvePass<'a> {
                 (InferTy::Void, vec![], Default::default())
             }
             TypeAnnotationKind::Nominal {
-                name: Name::Resolved(sym @ Symbol::Type(..), ..),
+                name:
+                    Name::Resolved(
+                        sym @ (Symbol::Struct(..) | Symbol::Enum(..) | Symbol::TypeAlias(..)),
+                        ..,
+                    ),
                 generics,
                 ..
             } => {
@@ -992,7 +999,7 @@ pub mod tests {
             name_resolver_tests::tests::resolve,
             symbol::{
                 AssociatedTypeId, InstanceMethodId, PropertyId, ProtocolId, StaticMethodId,
-                SynthesizedId, TypeId,
+                StructId, SynthesizedId, TypeAliasId,
             },
         },
         span::Span,
@@ -1039,7 +1046,7 @@ pub mod tests {
             *session
                 .type_catalog
                 .initializers
-                .get(&TypeId::from(1).into())
+                .get(&StructId::from(1).into())
                 .unwrap(),
             fxhashmap!(Label::Named("init".into()) => Symbol::Synthesized(SynthesizedId::new(ModuleId::Current, 1))),
         )
@@ -1059,7 +1066,7 @@ pub mod tests {
             *session
                 .type_catalog
                 .instance_methods
-                .get(&TypeId::from(1).into())
+                .get(&StructId::from(1).into())
                 .unwrap(),
             fxhashmap!(Label::Named("fizz".into()) => Symbol::InstanceMethod(InstanceMethodId::from(1))),
         )
@@ -1080,7 +1087,7 @@ pub mod tests {
             *session
                 .type_catalog
                 .instance_methods
-                .get(&TypeId::from(1).into())
+                .get(&StructId::from(1).into())
                 .unwrap(),
             fxhashmap!(Label::Named("fizz".into()) => Symbol::InstanceMethod(InstanceMethodId::from(1))),
         )
@@ -1100,7 +1107,7 @@ pub mod tests {
             *session
                 .type_catalog
                 .static_methods
-                .get(&TypeId::from(1).into())
+                .get(&StructId::from(1).into())
                 .unwrap(),
             fxhashmap!(Label::Named("fizz".into()) => Symbol::StaticMethod(StaticMethodId::from(1))),
         )
@@ -1119,7 +1126,7 @@ pub mod tests {
             *session
                 .type_catalog
                 .properties
-                .get(&TypeId::from(1).into())
+                .get(&StructId::from(1).into())
                 .unwrap(),
             indexmap! { "t".into() => Symbol::Property(PropertyId::from(1)) },
         )
@@ -1145,7 +1152,7 @@ pub mod tests {
             *session
                 .type_catalog
                 .properties
-                .get(&TypeId::from(3).into())
+                .get(&StructId::from(3).into())
                 .unwrap(),
             indexmap! {
                 Label::Named("b".into()) => Symbol::Property(PropertyId::from(3))
@@ -1171,11 +1178,11 @@ pub mod tests {
                 .conformances
                 .get(&ConformanceKey {
                     protocol_id: ProtocolId::from(1),
-                    conforming_id: TypeId::from(1).into(),
+                    conforming_id: StructId::from(1).into(),
                 })
                 .unwrap_or_else(|| panic!("didn't get conformance: {:?}", session)),
             Conformance {
-                conforming_id: TypeId::from(1).into(),
+                conforming_id: StructId::from(1).into(),
                 protocol_id: ProtocolId::from(1),
                 requirements: fxhashmap!("count".into() => ConformanceRequirement::Unfulfilled(Symbol::InstanceMethod(InstanceMethodId::from(1)))),
                 span: Span::ANY,
@@ -1199,9 +1206,9 @@ pub mod tests {
             *session
                 .type_catalog
                 .child_types
-                .get(&TypeId::from(1).into())
+                .get(&StructId::from(1).into())
                 .unwrap(),
-            fxhashmap!("Buzz".to_string() => Symbol::Type(TypeId::from(2)), "Foo".into() => Symbol::Type(TypeId::from(3)))
+            fxhashmap!("Buzz".to_string() => Symbol::Struct(StructId::from(2)), "Foo".into() => Symbol::TypeAlias(TypeAliasId::from(3)))
         )
     }
 
@@ -1228,18 +1235,18 @@ pub mod tests {
                 .conformances
                 .get(&ConformanceKey {
                     protocol_id: ProtocolId::from(1),
-                    conforming_id: TypeId::from(1).into()
+                    conforming_id: StructId::from(1).into()
                 })
                 .unwrap_or_else(|| panic!("didn't get conformance: {:?}", session)),
             Conformance {
-                conforming_id: TypeId::from(1).into(),
+                conforming_id: StructId::from(1).into(),
                 protocol_id: ProtocolId::from(1),
                 requirements: fxhashmap!(
                     "getA".into() => ConformanceRequirement::Unfulfilled(Symbol::InstanceMethod(InstanceMethodId::from(1))),
                     "setA".into() => ConformanceRequirement::Unfulfilled(Symbol::InstanceMethod(InstanceMethodId::from(2)))
                 ),
                 span: Span::ANY,
-                associated_types: fxhashmap!(AssociatedTypeId::from(1) => Symbol::Type(TypeId::from(2)))
+                associated_types: fxhashmap!(AssociatedTypeId::from(1) => Symbol::TypeAlias(TypeAliasId::from(2)))
             }
         )
     }
@@ -1288,7 +1295,7 @@ pub mod tests {
             session
                 .type_catalog
                 .nominals
-                .contains_key(&TypeId::from(1).into()),
+                .contains_key(&StructId::from(1).into()),
             "Wrapper type missing"
         );
 

@@ -1,8 +1,11 @@
 use std::path::PathBuf;
 
-use crate::compiling::{
-    driver::{Driver, DriverConfig, Source},
-    module::{Module, ModuleId},
+use crate::{
+    compiling::{
+        driver::{Driver, DriverConfig, Source},
+        module::{Module, ModuleId},
+    },
+    ir::program::Program,
 };
 
 pub fn compile() -> Module {
@@ -27,9 +30,14 @@ pub fn compile() -> Module {
     let typed = name_resolved.typecheck().unwrap();
     let types = typed.phase.types;
 
+    // We can't lower everything we need to yet, so we just make a module
+    // ourselves instead of getting it from the driver
     Module {
         name: "Core".into(),
         types,
         exports,
+        program: Program {
+            functions: Default::default(),
+        },
     }
 }

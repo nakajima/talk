@@ -1,6 +1,5 @@
-use std::fmt::Display;
-
 use crate::{compiling::module::ModuleId, id_generator::IDGenerator};
+use std::fmt::Display;
 
 // Macro for cross-module IDs (with ModuleId)
 macro_rules! impl_module_symbol_id {
@@ -111,7 +110,9 @@ macro_rules! impl_local_symbol_id {
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Symbol {
-    Type(TypeId),
+    Struct(StructId),
+    Enum(EnumId),
+    TypeAlias(TypeAliasId),
     TypeParameter(TypeParameterId),
     Global(GlobalId),
     DeclaredLocal(DeclaredLocalId),
@@ -134,7 +135,9 @@ impl std::fmt::Debug for Symbol {
             Symbol::Float => write!(f, "Float"),
             Symbol::Bool => write!(f, "Bool"),
             Symbol::Void => write!(f, "Void"),
-            Symbol::Type(type_id) => write!(f, "@Type({type_id:?})"),
+            Symbol::Struct(type_id) => write!(f, "@Struct({type_id:?})"),
+            Symbol::Enum(type_id) => write!(f, "@Enum({type_id:?})"),
+            Symbol::TypeAlias(type_id) => write!(f, "@TypeAlias({type_id:?})"),
             Symbol::TypeParameter(id) => write!(f, "@TypeParameter({id})"),
             Symbol::Global(id) => write!(f, "@Global({id})"),
             Symbol::DeclaredLocal(id) => write!(f, "@DeclaredLocal({id})"),
@@ -177,7 +180,7 @@ impl Symbol {
 
     pub fn module_id(&self) -> Option<ModuleId> {
         let module_id = match self {
-            Symbol::Type(TypeId { module_id, .. })
+            Symbol::Struct(StructId { module_id, .. })
             | Symbol::Global(GlobalId { module_id, .. })
             | Symbol::Builtin(BuiltinId { module_id, .. })
             | Symbol::Property(PropertyId { module_id, .. })
@@ -198,7 +201,9 @@ impl Symbol {
 
     pub fn import(self, module_id: ModuleId) -> Symbol {
         match self {
-            Symbol::Type(type_id) => Symbol::Type(type_id.import(module_id)),
+            Symbol::Struct(type_id) => Symbol::Struct(type_id.import(module_id)),
+            Symbol::Enum(type_id) => Symbol::Enum(type_id.import(module_id)),
+            Symbol::TypeAlias(type_id) => Symbol::TypeAlias(type_id.import(module_id)),
             Symbol::Global(global_id) => Symbol::Global(global_id.import(module_id)),
             Symbol::Builtin(builtin_id) => Symbol::Builtin(builtin_id.import(module_id)),
             Symbol::Property(property_id) => Symbol::Property(property_id.import(module_id)),
@@ -222,7 +227,7 @@ impl Symbol {
 
     pub fn current(self) -> Symbol {
         match self {
-            Symbol::Type(type_id) => Symbol::Type(type_id.import(ModuleId::Current)),
+            Symbol::Struct(type_id) => Symbol::Struct(type_id.import(ModuleId::Current)),
             Symbol::Global(global_id) => Symbol::Global(global_id.import(ModuleId::Current)),
             Symbol::Builtin(builtin_id) => Symbol::Builtin(builtin_id.import(ModuleId::Current)),
             Symbol::Property(property_id) => {
@@ -250,7 +255,9 @@ impl Symbol {
 }
 
 // Cross-module IDs (include ModuleId)
-impl_module_symbol_id!(Type, TypeId);
+impl_module_symbol_id!(Struct, StructId);
+impl_module_symbol_id!(Enum, EnumId);
+impl_module_symbol_id!(TypeAlias, TypeAliasId);
 impl_module_symbol_id!(Global, GlobalId);
 impl_module_symbol_id!(Protocol, ProtocolId);
 impl_module_symbol_id!(Variant, VariantId);
@@ -270,7 +277,9 @@ impl_local_symbol_id!(PatternBindLocal, PatternBindLocalId);
 impl Display for Symbol {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Symbol::Type(type_id) => write!(f, "{}", type_id),
+            Symbol::Struct(type_id) => write!(f, "{}", type_id),
+            Symbol::Enum(type_id) => write!(f, "{}", type_id),
+            Symbol::TypeAlias(type_id) => write!(f, "{}", type_id),
             Symbol::TypeParameter(type_parameter_id) => write!(f, "{}", type_parameter_id),
             Symbol::Global(global_id) => write!(f, "{}", global_id),
             Symbol::DeclaredLocal(declared_local_id) => write!(f, "{}", declared_local_id),
@@ -310,8 +319,16 @@ pub struct Symbols {
 
 impl Symbols {
     // Cross-module IDs (need ModuleId)
-    pub fn next_type(&mut self, module_id: ModuleId) -> TypeId {
-        TypeId::new(module_id, self.decls.next_id())
+    pub fn next_struct(&mut self, module_id: ModuleId) -> StructId {
+        StructId::new(module_id, self.decls.next_id())
+    }
+
+    pub fn next_type_alias(&mut self, module_id: ModuleId) -> TypeAliasId {
+        TypeAliasId::new(module_id, self.decls.next_id())
+    }
+
+    pub fn next_enum(&mut self, module_id: ModuleId) -> EnumId {
+        EnumId::new(module_id, self.decls.next_id())
     }
 
     pub fn next_property(&mut self, module_id: ModuleId) -> PropertyId {

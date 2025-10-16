@@ -146,7 +146,7 @@ pub struct TypeCatalog<T: SomeType> {
     pub properties: FxHashMap<Symbol, IndexMap<Label, Symbol>>,
     pub instance_methods: FxHashMap<Symbol, FxHashMap<Label, Symbol>>,
     pub static_methods: FxHashMap<Symbol, FxHashMap<Label, Symbol>>,
-    pub variants: FxHashMap<Symbol, FxHashMap<Label, Symbol>>,
+    pub variants: FxHashMap<Symbol, IndexMap<Label, Symbol>>,
 
     pub instantiations: TrackedInstantiations<T>,
 }

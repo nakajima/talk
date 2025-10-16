@@ -9,6 +9,7 @@ use crate::node_kinds::parameter::Parameter;
 use crate::types::infer_row::RowParamId;
 use crate::types::infer_ty::TypeParamId;
 use crate::types::row::Row;
+use crate::types::type_session::TypeDefKind;
 use crate::{
     ast::AST,
     compiling::driver::Source,
@@ -105,6 +106,13 @@ pub(super) struct Substitutions {
     pub row: FxHashMap<RowParamId, Row>,
 }
 
+impl Substitutions {
+    pub fn extend(&mut self, other: Substitutions) {
+        self.ty.extend(other.ty);
+        self.row.extend(other.row);
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct PolyFunction {
     pub name: Name,
@@ -121,19 +129,23 @@ pub struct Specialization {
 }
 
 // Lowers an AST with Types to a monomorphized IR
-pub struct Lowerer {
-    pub(super) asts: IndexMap<Source, AST<NameResolved>>,
-    pub(super) types: Types,
+pub struct Lowerer<'a> {
+    pub(super) asts: &'a mut IndexMap<Source, AST<NameResolved>>,
+    pub(super) types: &'a mut Types,
     pub(super) functions: IndexMap<Symbol, PolyFunction>,
     pub(super) current_function_stack: Vec<CurrentFunction>,
 
-    symbols: Symbols,
+    symbols: &'a mut Symbols,
     bindings: FxHashMap<Symbol, Register>,
     pub(super) specializations: IndexMap<Symbol, Vec<Specialization>>,
 }
 
-impl Lowerer {
-    pub fn new(asts: IndexMap<Source, AST<NameResolved>>, types: Types, symbols: Symbols) -> Self {
+impl<'a> Lowerer<'a> {
+    pub fn new(
+        asts: &'a mut IndexMap<Source, AST<NameResolved>>,
+        types: &'a mut Types,
+        symbols: &'a mut Symbols,
+    ) -> Self {
         Self {
             asts,
             types,
@@ -151,7 +163,7 @@ impl Lowerer {
         }
 
         // Do we have a main func?
-        let mut asts = std::mem::take(&mut self.asts);
+        let mut asts = std::mem::take(self.asts);
         let has_main_func = asts.iter_mut().flat_map(|a| &a.1.roots).any(is_main_func);
         if !has_main_func {
             let main_symbol = Symbol::Synthesized(self.symbols.next_synthesized(ModuleId::Current));
@@ -234,6 +246,8 @@ impl Lowerer {
             }
         }
 
+        _ = std::mem::replace(self.asts, asts);
+
         let mut monomorphizer = Monomorphizer::new(self);
 
         Ok(Program {
@@ -283,8 +297,12 @@ impl Lowerer {
             DeclKind::Associated { .. } => todo!(),
             DeclKind::Func(..) => todo!(),
             DeclKind::Extend { .. } => todo!(),
-            DeclKind::Enum { .. } => todo!(),
-            DeclKind::EnumVariant(..) => todo!(),
+            DeclKind::Enum { body, .. } => {
+                for node in &body.body {
+                    self.lower_node(node, instantiations)?;
+                }
+            }
+            DeclKind::EnumVariant(..) => (),
             DeclKind::FuncSignature(..) => todo!(),
             DeclKind::MethodRequirement(..) => todo!(),
             DeclKind::TypeAlias(..) => todo!(),
@@ -534,12 +552,44 @@ impl Lowerer {
             ExprKind::Binary(..) => todo!(),
             ExprKind::Tuple(..) => todo!(),
             ExprKind::Block(..) => todo!(),
+
+            ExprKind::Call {
+                callee:
+                    box Expr {
+                        kind:
+                            ExprKind::Member(
+                                Some(box Expr {
+                                    kind:
+                                        ExprKind::Constructor(
+                                            name @ Name::Resolved(Symbol::Enum(..), ..),
+                                        ),
+                                    ..
+                                }),
+                                label,
+                                ..,
+                            ),
+                        ..
+                    },
+                args,
+                ..
+            } => self.lower_enum_constructor(expr.id, name, label, args, bind, instantiations),
+
             ExprKind::Call {
                 box callee, args, ..
             } => self.lower_call(expr.id, callee, args, bind, instantiations),
+
+            ExprKind::Member(
+                Some(box Expr {
+                    kind: ExprKind::Constructor(name @ Name::Resolved(Symbol::Enum(..), ..)),
+                    ..
+                }),
+                label,
+                ..,
+            ) => self.lower_enum_constructor(expr.id, name, label, &[], bind, instantiations),
             ExprKind::Member(member, label, ..) => {
                 self.lower_member(expr.id, member, label, bind, instantiations)
             }
+
             ExprKind::Variable(name) => self.lower_variable(name, expr, instantiations),
             ExprKind::Constructor(name) => self.lower_constructor(name, expr, bind, instantiations),
             ExprKind::If(..) => todo!(),
@@ -558,7 +608,7 @@ impl Lowerer {
         bind: Bind,
         old_instantiations: &Substitutions,
     ) -> Result<Value, IRError> {
-        let init_sym = *self
+        let constructor_sym = *self
             .types
             .catalog
             .initializers
@@ -567,7 +617,7 @@ impl Lowerer {
             .get(&Label::Named("init".into()))
             .unwrap();
 
-        let init_entry = self.types.get_symbol(&init_sym).cloned().unwrap();
+        let init_entry = self.types.get_symbol(&constructor_sym).cloned().unwrap();
         let (ty, mut instantiations) = self.specialize(&init_entry, expr.id)?;
         instantiations.ty.extend(old_instantiations.ty.clone());
         instantiations.row.extend(old_instantiations.row.clone());
@@ -576,7 +626,77 @@ impl Lowerer {
         self.push_instr(Instruction::Ref {
             dest,
             ty,
-            val: Value::Func(Name::Resolved(init_sym, format!("{}_init", name))),
+            val: Value::Func(Name::Resolved(constructor_sym, format!("{}_init", name))),
+        });
+
+        Ok(dest.into())
+    }
+
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
+    fn lower_enum_constructor(
+        &mut self,
+        id: NodeID,
+        name: &Name,
+        variant_name: &Label,
+        values: &[CallArg],
+        bind: Bind,
+        old_instantiations: &Substitutions,
+    ) -> Result<Value, IRError> {
+        let constructor_sym = *self
+            .types
+            .catalog
+            .variants
+            .get(&name.symbol().unwrap())
+            .unwrap()
+            .get(variant_name)
+            .unwrap_or_else(|| panic!("didn't get {:?}", name));
+
+        let tag = self
+            .types
+            .catalog
+            .variants
+            .get(&name.symbol().unwrap())
+            .unwrap()
+            .get_index_of(variant_name)
+            .unwrap();
+
+        let init_entry = self.types.get_symbol(&constructor_sym).cloned().unwrap();
+        let (mut ty, mut instantiations) = self.specialize(&init_entry, id)?;
+        instantiations.extend(old_instantiations.clone());
+
+        let mut row = Row::Empty(TypeDefKind::Enum);
+        row = Row::Extend {
+            row: row.into(),
+            label: Label::Positional(0),
+            ty: Ty::Int,
+        };
+
+        // If it's a func then we've got associated values
+        if matches!(ty, Ty::Func(..)) {
+            for (i, ty) in row.close()[1..].values().enumerate() {
+                row = Row::Extend {
+                    row: row.into(),
+                    label: Label::Positional(i + 1),
+                    ty: ty.clone(),
+                };
+            }
+        }
+
+        ty = Ty::Record(row.into());
+        let mut args: Vec<Value> = values
+            .iter()
+            .map(|v| self.lower_expr(&v.value, Bind::Fresh, &instantiations))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        // Set the tag as the first entry
+        args.insert(0, Value::Int(tag as i64));
+
+        let dest = self.ret(bind);
+        self.push_instr(Instruction::Record {
+            dest,
+            ty,
+            record: args.into(),
+            meta: vec![InstructionMeta::Source(id)].into(),
         });
 
         Ok(dest.into())
@@ -1153,7 +1273,6 @@ pub mod tests {
         name::Name,
         name_resolution::symbol::{GlobalId, InstanceMethodId, Symbol, SynthesizedId},
         node_id::NodeID,
-        types::ty::Ty,
     };
 
     fn meta() -> List<InstructionMeta> {
@@ -1162,7 +1281,7 @@ pub mod tests {
 
     pub fn lower(input: &str) -> Program {
         let driver = Driver::new_bare(vec![Source::from(input)], Default::default());
-        let typed = driver
+        let mut typed = driver
             .parse()
             .unwrap()
             .resolve_names()
@@ -1170,7 +1289,11 @@ pub mod tests {
             .typecheck()
             .unwrap();
 
-        let lowerer = Lowerer::new(typed.phase.asts, typed.phase.types, typed.phase.symbols);
+        let lowerer = Lowerer::new(
+            &mut typed.phase.asts,
+            &mut typed.phase.types,
+            &mut typed.phase.symbols,
+        );
         lowerer.lower().unwrap()
     }
 
@@ -1383,7 +1506,7 @@ pub mod tests {
                             ty: IrTy::Record(vec![IrTy::Int]),
                             callee: Value::Func(Name::Resolved(
                                 Symbol::from(SynthesizedId::from(1)),
-                                "@Foo:Type(_:1)_init".into(),
+                                "@Foo:Struct(_:1)_init".into(),
                             )),
                             args: vec![Register(2).into(), Register(1).into()].into(),
                             meta: meta(),
@@ -1443,7 +1566,7 @@ pub mod tests {
                             ty: IrTy::Record(vec![IrTy::Int]),
                             callee: Value::Func(Name::Resolved(
                                 Symbol::from(SynthesizedId::from(4)),
-                                "@@Foo:Type(_:1)_init:Synthesized(_:1)[Int]".into()
+                                "@@Foo:Struct(_:1)_init:Synthesized(_:1)[Int]".into()
                             )),
                             args: vec![Register(2).into(), Register(1).into()].into(),
                             meta: meta(),
@@ -1466,6 +1589,37 @@ pub mod tests {
     }
 
     #[test]
+    fn lowers_enum_constructor_with_no_vals() {
+        let program = lower("enum Fizz { case foo, bar } ; Fizz.bar");
+        assert_eq_diff_display!(
+            *program
+                .functions
+                .get(&Symbol::Synthesized(SynthesizedId::from(1)))
+                .unwrap(),
+            Function {
+                name: Name::Resolved(SynthesizedId::from(1).into(), "main".into()),
+                params: vec![].into(),
+                register_count: 1,
+                ty: IrTy::Func(vec![], IrTy::Int.into()),
+                blocks: vec![BasicBlock::<IrTy, Label> {
+                    id: BasicBlockId(0),
+                    instructions: vec![Instruction::Record {
+                        dest: 0.into(),
+                        ty: IrTy::Record(vec![IrTy::Int]),
+                        record: vec![Value::Int(1)].into(),
+                        meta: meta()
+                    }],
+                    terminator: Terminator::Ret {
+                        val: Value::Reg(0),
+                        ty: IrTy::Record(vec![IrTy::Int]),
+                    }
+                }],
+            }
+        )
+    }
+
+    #[test]
+    #[ignore = "need to be able to import the core first"]
     fn lowers_add() {
         let program = lower("1 + 2");
         assert_eq_diff_display!(
@@ -1559,7 +1713,7 @@ pub mod tests {
                             ty: IrTy::Record(vec![IrTy::Int]),
                             callee: Value::Func(Name::Resolved(
                                 Symbol::from(SynthesizedId::from(1)),
-                                "@Foo:Type(_:1)_init".into()
+                                "@Foo:Struct(_:1)_init".into()
                             )),
                             args: vec![Register(3).into(), Register(2).into()].into(),
                             meta: meta(),

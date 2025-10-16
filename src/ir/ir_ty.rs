@@ -15,8 +15,6 @@ pub enum IrTy {
     Func(Vec<IrTy>, Box<IrTy>),
     // { 123, 4.56, true }
     Record(Vec<IrTy>),
-    // { 1 ; 123, true }
-    Enum { tag: u16, values: Vec<IrTy> },
     Void,
 }
 
@@ -54,25 +52,9 @@ impl FromStr for IrTy {
             return Ok(IrTy::Func(args, ret));
         }
 
-        // record or enum: {...}
+        // record: {...}
         if s.starts_with('{') && s.ends_with('}') {
             let inner = &s[1..s.len() - 1].trim();
-
-            // enum: "{ <tag> ; a, b, c }"
-            if let Some((tag_part, vals_part)) = inner.split_once(';') {
-                let tag: u16 = tag_part
-                    .trim()
-                    .parse()
-                    .map_err(|e| IRError::CouldNotParse(format!("{e:?}")))?;
-                let values = split_simple(vals_part, ',')
-                    .into_iter()
-                    .map(|t| {
-                        t.parse()
-                            .map_err(|e| IRError::CouldNotParse(format!("{e:?}")))
-                    })
-                    .collect::<Result<Vec<_>, IRError>>()?;
-                return Ok(IrTy::Enum { tag, values });
-            }
 
             // record: "{ a, b, c }"
             let mut map: Vec<IrTy> = Vec::new();
@@ -110,18 +92,6 @@ impl std::fmt::Display for IrTy {
                 }
                 write!(f, "{{ {} }}", items.join(", "))
             }
-            IrTy::Enum { tag, values } => {
-                write!(
-                    f,
-                    "{{ {} ; {} }}",
-                    tag,
-                    values
-                        .iter()
-                        .map(|v| format!("{v}"))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
-            }
             IrTy::Void => write!(f, "void"),
         }
     }
@@ -158,9 +128,6 @@ impl From<IrTy> for Ty {
                 }
 
                 Ty::Record(row.into())
-            }
-            IrTy::Enum { .. } => {
-                unimplemented!()
             }
             IrTy::Void => Ty::Void,
         }

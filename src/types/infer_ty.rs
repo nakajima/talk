@@ -4,7 +4,7 @@ use std::hash::Hash;
 use crate::{
     compiling::module::ModuleId,
     name::Name,
-    name_resolution::symbol::{Symbol, TypeId},
+    name_resolution::symbol::{Symbol, StructId},
     node_id::NodeID,
     types::{
         infer_row::InferRow,
@@ -194,7 +194,7 @@ impl InferTy {
     pub const Void: InferTy = InferTy::Primitive(Symbol::Void);
     pub fn String() -> InferTy {
         InferTy::Nominal {
-            symbol: Symbol::Type(TypeId {
+            symbol: Symbol::Struct(StructId {
                 module_id: ModuleId::Core,
                 local_id: 2,
             }),
@@ -203,7 +203,7 @@ impl InferTy {
     }
     pub fn Array(_t: InferTy) -> InferTy {
         InferTy::Nominal {
-            symbol: Symbol::Type(TypeId {
+            symbol: Symbol::Struct(StructId {
                 module_id: ModuleId::Core,
                 local_id: 3,
             }),

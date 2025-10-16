@@ -11,7 +11,7 @@ use crate::{
     name::Name,
     name_resolution::{
         name_resolver::NameResolved,
-        symbol::{ProtocolId, Symbol, TypeId},
+        symbol::{ProtocolId, StructId, Symbol},
     },
     node_id::NodeID,
     node_kinds::{generic_decl::GenericDecl, type_annotation::TypeAnnotation},
@@ -114,7 +114,7 @@ pub struct TypeSession {
     term_env: TermEnv,
     pub(super) meta_levels: FxHashMap<Meta, Level>,
     pub(super) skolem_map: FxHashMap<InferTy, InferTy>,
-    pub skolem_bounds: FxHashMap<SkolemId, Vec<TypeId>>,
+    pub skolem_bounds: FxHashMap<SkolemId, Vec<StructId>>,
     pub(super) type_param_bounds: FxHashMap<TypeParamId, Vec<ProtocolBound>>,
     pub typealiases: FxHashMap<Symbol, Scheme<InferTy>>,
     pub(super) type_catalog: TypeCatalog<InferTy>,
@@ -132,7 +132,7 @@ pub enum TypeEntry {
 }
 
 impl TypeEntry {
-    pub fn as_mono_ty(self) -> Ty {
+    pub fn as_mono_ty(&self) -> &Ty {
         if let Self::Mono(ty) = self {
             return ty;
         }
@@ -141,7 +141,7 @@ impl TypeEntry {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct Types {
     types_by_node: FxHashMap<NodeID, TypeEntry>,
     types_by_symbol: FxHashMap<Symbol, TypeEntry>,
@@ -648,7 +648,7 @@ impl TypeSession {
             return Some(entry);
         }
 
-        if let Symbol::Type(TypeId {
+        if let Symbol::Struct(StructId {
             module_id: module_id @ (ModuleId::External(..) | ModuleId::Core | ModuleId::Prelude),
             local_id,
         }) = *symbol
@@ -658,7 +658,7 @@ impl TypeSession {
                 .types
                 .catalog
                 .nominals
-                .get(&Symbol::Type(TypeId {
+                .get(&Symbol::Struct(StructId {
                     module_id: ModuleId::Current,
                     local_id,
                 }))
@@ -687,7 +687,7 @@ impl TypeSession {
         None
     }
 
-    pub(super) fn lookup_variants(&self, receiver: &Symbol) -> Option<FxHashMap<Label, Symbol>> {
+    pub(super) fn lookup_variants(&self, receiver: &Symbol) -> Option<IndexMap<Label, Symbol>> {
         if let Some(variants) = self.type_catalog.variants.get(receiver).cloned() {
             return Some(variants);
         }
@@ -754,7 +754,7 @@ impl TypeSession {
             return Some(initializers);
         }
 
-        if let Symbol::Type(TypeId {
+        if let Symbol::Struct(StructId {
             module_id: module_id @ (ModuleId::External(..) | ModuleId::Core | ModuleId::Prelude),
             local_id,
         }) = *symbol
@@ -769,7 +769,7 @@ impl TypeSession {
                 .types
                 .catalog
                 .initializers
-                .get(&Symbol::Type(TypeId {
+                .get(&Symbol::Struct(StructId {
                     module_id: module_key,
                     local_id,
                 }))
@@ -794,7 +794,7 @@ impl TypeSession {
             return Some(properties);
         }
 
-        if let Symbol::Type(TypeId {
+        if let Symbol::Struct(StructId {
             module_id: module_id @ (ModuleId::External(..) | ModuleId::Core | ModuleId::Prelude),
             local_id,
         }) = *symbol
@@ -809,7 +809,7 @@ impl TypeSession {
                 .types
                 .catalog
                 .properties
-                .get(&Symbol::Type(TypeId {
+                .get(&Symbol::Struct(StructId {
                     module_id: module_key,
                     local_id,
                 }))

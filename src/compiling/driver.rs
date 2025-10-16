@@ -4,7 +4,8 @@ use indexmap::IndexMap;
 
 use crate::{
     ast::{self, AST},
-    compiling::module::{ModuleEnvironment, ModuleId},
+    compiling::module::{Module, ModuleEnvironment, ModuleId},
+    ir::{ir_error::IRError, lowerer::Lowerer, program::Program},
     lexer::Lexer,
     name_resolution::{
         name_resolver::{self, NameResolver},
@@ -51,11 +52,21 @@ pub struct Typed {
     pub symbols: Symbols,
 }
 
+impl DriverPhase for Lowered {}
+pub struct Lowered {
+    pub asts: IndexMap<Source, AST<name_resolver::NameResolved>>,
+    pub types: Types,
+    pub exports: Exports,
+    pub symbols: Symbols,
+    pub program: Program,
+}
+
 #[derive(Debug)]
 pub enum CompileError {
     IO(io::Error),
     Parsing(ParserError),
     Typing(TypeError),
+    Lowering(IRError),
 }
 
 #[derive(Debug, Default)]
@@ -238,13 +249,44 @@ impl Driver<NameResolved> {
     }
 }
 
+impl Driver<Typed> {
+    pub fn lower(mut self) -> Result<Driver<Lowered>, CompileError> {
+        let lowerer = Lowerer::new(
+            &mut self.phase.asts,
+            &mut self.phase.types,
+            &mut self.phase.symbols,
+        );
+        let program = lowerer.lower().map_err(CompileError::Lowering)?;
+        Ok(Driver {
+            files: self.files,
+            config: self.config,
+            phase: Lowered {
+                asts: self.phase.asts,
+                types: self.phase.types,
+                exports: self.phase.exports,
+                symbols: self.phase.symbols,
+                program,
+            },
+        })
+    }
+}
+
+impl Driver<Lowered> {
+    pub fn module<T: Into<String>>(self, name: T) -> Module {
+        Module {
+            name: name.into(),
+            types: self.phase.types,
+            exports: self.phase.exports,
+            program: self.phase.program,
+        }
+    }
+}
+
 #[cfg(test)]
 pub mod tests {
     use super::*;
     use crate::{
-        compiling::module::{Module, ModuleId},
-        name_resolution::symbol::{GlobalId, ProtocolId, Symbol, TypeId},
-        node_id::NodeID,
+        compiling::module::ModuleId,
         types::{ty::Ty, types_tests},
     };
     use std::path::PathBuf;
@@ -309,25 +351,16 @@ pub mod tests {
             vec![Source::from(current_dir.join("test/fixtures/protocol.tlk"))],
             Default::default(),
         );
-        let type_session_a = driver_a
+
+        let typed_a = driver_a
             .parse()
             .unwrap()
             .resolve_names()
             .unwrap()
             .typecheck()
-            .unwrap()
-            .phase
-            .types;
+            .unwrap();
 
-        let module_a = Module {
-            name: "A".into(),
-            types: type_session_a,
-            exports: indexmap::indexmap!(
-                "P".into() => Symbol::Protocol(ProtocolId::from(1)),
-                "getRequired".into() => Symbol::Global(GlobalId::from(1))
-            ),
-        };
-
+        let module_a = typed_a.lower().unwrap().module("A");
         let mut module_environment = ModuleEnvironment::default();
         module_environment.import(ModuleId::External(0), module_a);
         let config = DriverConfig {
@@ -369,22 +402,15 @@ pub mod tests {
             vec![Source::from(current_dir.join("test/fixtures/a.tlk"))],
             Default::default(),
         );
-        let type_session_a = driver_a
+        let typed_a = driver_a
             .parse()
             .unwrap()
             .resolve_names()
             .unwrap()
             .typecheck()
-            .unwrap()
-            .phase
-            .types;
+            .unwrap();
 
-        let module_a = Module {
-            name: "A".into(),
-            types: type_session_a,
-            exports: indexmap::indexmap!("A".into() => Symbol::Type(TypeId::from(1))),
-        };
-
+        let module_a = typed_a.lower().unwrap().module("A");
         let mut module_environment = ModuleEnvironment::default();
         module_environment.import(ModuleId::External(0), module_a);
         let config = DriverConfig {
@@ -427,33 +453,16 @@ pub mod tests {
             Default::default(),
         );
 
-        let name_resolved = driver_a.parse().unwrap().resolve_names().unwrap();
-
-        let exports =
-            name_resolved
-                .phase
-                .asts
-                .values()
-                .fold(IndexMap::default(), |mut acc, ast| {
-                    let root = ast.phase.scopes.get(&NodeID(FileID(0), 0)).unwrap();
-                    for (string, sym) in root.types.iter() {
-                        acc.insert(string.to_string(), *sym);
-                    }
-
-                    for (string, sym) in root.values.iter() {
-                        acc.insert(string.to_string(), *sym);
-                    }
-
-                    acc
-                });
-
-        let type_session_a = name_resolved.typecheck().unwrap().phase.types;
-
-        let module_a = Module {
-            name: "A".into(),
-            types: type_session_a,
-            exports,
-        };
+        let module_a = driver_a
+            .parse()
+            .unwrap()
+            .resolve_names()
+            .unwrap()
+            .typecheck()
+            .unwrap()
+            .lower()
+            .unwrap()
+            .module("A");
 
         let mut module_environment = ModuleEnvironment::default();
         module_environment.import(ModuleId::External(0), module_a);

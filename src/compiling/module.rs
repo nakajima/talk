@@ -3,7 +3,7 @@ use std::fmt::Display;
 use indexmap::IndexMap;
 use rustc_hash::FxHashMap;
 
-use crate::{name_resolution::symbol::Symbol, types::type_session::Types};
+use crate::{ir::program::Program, name_resolution::symbol::Symbol, types::type_session::Types};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
 pub enum ModuleId {
@@ -43,4 +43,5 @@ pub struct Module {
     pub name: String,
     pub types: Types,
     pub exports: IndexMap<String, Symbol>,
+    pub program: Program,
 }

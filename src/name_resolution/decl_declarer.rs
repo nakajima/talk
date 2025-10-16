@@ -7,7 +7,7 @@ use crate::{
     name::Name,
     name_resolution::{
         name_resolver::{NameResolver, NameResolverError, Scope},
-        symbol::{Symbol, TypeId},
+        symbol::{StructId, Symbol},
     },
     node::Node,
     node_id::{FileID, NodeID},
@@ -32,11 +32,27 @@ use crate::{
 // Dummy values for symbol type discrimination - actual values created by declare()
 #[macro_export]
 macro_rules! some {
-    (Type) => {
-        $crate::name_resolution::symbol::Symbol::Type($crate::name_resolution::symbol::TypeId::new(
+    (Struct) => {
+        $crate::name_resolution::symbol::Symbol::Struct(
+            $crate::name_resolution::symbol::StructId::new(
+                $crate::compiling::module::ModuleId::Current,
+                0,
+            ),
+        )
+    };
+    (Enum) => {
+        $crate::name_resolution::symbol::Symbol::Enum($crate::name_resolution::symbol::EnumId::new(
             $crate::compiling::module::ModuleId::Current,
             0,
         ))
+    };
+    (TypeAlias) => {
+        $crate::name_resolution::symbol::Symbol::TypeAlias(
+            $crate::name_resolution::symbol::TypeAliasId::new(
+                $crate::compiling::module::ModuleId::Current,
+                0,
+            ),
+        )
     };
     (Global) => {
         $crate::name_resolution::symbol::Symbol::Global(
@@ -202,10 +218,11 @@ impl<'a> DeclDeclarer<'a> {
         generics: &mut [GenericDecl],
         kind: TypeDefKind,
     ) {
-        *name = if kind == TypeDefKind::Protocol {
-            self.resolver.declare(name, some!(Protocol), id)
-        } else {
-            self.resolver.declare(name, some!(Type), id)
+        *name = match kind {
+            TypeDefKind::Protocol => self.resolver.declare(name, some!(Protocol), id),
+            TypeDefKind::Struct => self.resolver.declare(name, some!(Struct), id),
+            TypeDefKind::Enum => self.resolver.declare(name, some!(Enum), id),
+            TypeDefKind::Extension => self.resolver.lookup(name).unwrap_or(name.clone()),
         };
 
         self.type_members.insert(id, TypeMembers::default());
@@ -411,7 +428,7 @@ impl<'a> DeclDeclarer<'a> {
                     panic!("can't define a typealias with generics");
                 }
 
-                *lhs_name = self.resolver.declare(lhs_name, some!(Type), decl.id);
+                *lhs_name = self.resolver.declare(lhs_name, some!(TypeAlias), decl.id);
             }
         );
 
@@ -433,9 +450,9 @@ impl<'a> DeclDeclarer<'a> {
                 .insert("Self".into(), name.symbol().unwrap());
 
             for generic in generics {
-                generic.name = self
-                    .resolver
-                    .declare(&generic.name, some!(Type), generic.id);
+                generic.name =
+                    self.resolver
+                        .declare(&generic.name, some!(TypeParameter), generic.id);
             }
         });
 
@@ -522,7 +539,7 @@ impl<'a> DeclDeclarer<'a> {
         on!(
             &mut decl.kind,
             DeclKind::Struct {
-                name: Name::Resolved(Symbol::Type(type_id), _),
+                name: Name::Resolved(Symbol::Struct(type_id), _),
                 body,
                 ..
             },
@@ -553,7 +570,7 @@ impl<'a> DeclDeclarer<'a> {
         });
     }
 
-    fn synthesize_init(&mut self, body: &mut Block, type_members: &TypeMembers, type_id: TypeId) {
+    fn synthesize_init(&mut self, body: &mut Block, type_members: &TypeMembers, type_id: StructId) {
         let init_id = NodeID(FileID::SYNTHESIZED, self.node_ids.next_id());
         tracing::debug!("synthesizing init for type {type_id:?} as: {init_id:?}");
         let init_name = self

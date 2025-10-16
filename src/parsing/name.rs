@@ -2,14 +2,14 @@ use std::fmt::Display;
 
 use crate::name_resolution::{
     name_resolver::NameResolverError,
-    symbol::{Symbol, TypeId},
+    symbol::{StructId, Symbol},
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Name {
     Raw(String),
     Resolved(Symbol, String),
-    SelfType(TypeId),
+    SelfType(StructId),
 }
 
 impl Display for Name {

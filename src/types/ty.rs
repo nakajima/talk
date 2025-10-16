@@ -1,7 +1,7 @@
 use crate::{
     compiling::module::ModuleId,
     name::Name,
-    name_resolution::symbol::{Symbol, TypeId},
+    name_resolution::symbol::{Symbol, StructId},
     types::{infer_ty::TypeParamId, row::Row, type_session::TypeDefKind},
 };
 
@@ -101,7 +101,7 @@ impl Ty {
     pub const Void: Ty = Ty::Primitive(Symbol::Void);
     pub fn String() -> Ty {
         Ty::Nominal {
-            symbol: Symbol::Type(TypeId {
+            symbol: Symbol::Struct(StructId {
                 module_id: ModuleId::Core,
                 local_id: 2,
             }),
@@ -110,7 +110,7 @@ impl Ty {
     }
     pub fn Array(_t: Ty) -> Ty {
         Ty::Nominal {
-            symbol: Symbol::Type(TypeId {
+            symbol: Symbol::Struct(StructId {
                 module_id: ModuleId::Core,
                 local_id: 3,
             }),

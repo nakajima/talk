@@ -1,7 +1,7 @@
 use crate::{
     compiling::module::ModuleId,
     label::Label,
-    name_resolution::symbol::{ProtocolId, Symbol, TypeId},
+    name_resolution::symbol::{ProtocolId, Symbol, StructId},
     node_id::NodeID,
     span::Span,
     types::type_session::ASTTyRepr,
@@ -36,7 +36,7 @@ pub struct MethodRequirement {
 #[derive(Debug, PartialEq, Clone)]
 pub struct Initializer {
     pub symbol: Symbol,
-    pub initializes_type_id: TypeId,
+    pub initializes_type_id: StructId,
     pub params: Vec<ASTTyRepr>,
 }
 
