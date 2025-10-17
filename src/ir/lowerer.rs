@@ -1048,6 +1048,7 @@ impl<'a> Lowerer<'a> {
             ExprKind::LiteralTrue | ExprKind::LiteralFalse => Symbol::Bool,
             _ => {
                 let Ty::Nominal { symbol, .. } = self.specialized_ty(expr)?.0 else {
+                    println!("didn't get symbol for expr: {expr:?}");
                     return Ok(None);
                 };
 
@@ -1060,6 +1061,11 @@ impl<'a> Lowerer<'a> {
         {
             return Ok(Some(*method));
         }
+
+        println!(
+            "didn't get methods for {symbol:?} in {:?}",
+            self.types.catalog.instance_methods
+        );
 
         Ok(None)
     }
@@ -1282,7 +1288,7 @@ pub mod tests {
     }
 
     pub fn lower(input: &str) -> Program {
-        let driver = Driver::new_bare(vec![Source::from(input)], Default::default());
+        let driver = Driver::new(vec![Source::from(input)], Default::default());
         let mut typed = driver
             .parse()
             .unwrap()
@@ -1670,10 +1676,9 @@ pub mod tests {
     }
 
     #[test]
-    #[ignore = "need to be able to import the core first"]
     fn lowers_add() {
         let program = lower("1 + 2");
-        assert_eq_diff_display!(
+        assert_eq_diff!(
             *program
                 .functions
                 .get(&Symbol::Synthesized(SynthesizedId::from(1)))
@@ -1681,7 +1686,7 @@ pub mod tests {
             Function {
                 name: Name::Resolved(SynthesizedId::from(1).into(), "main".into()),
                 params: vec![].into(),
-                register_count: 1,
+                register_count: 3,
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
                 blocks: vec![BasicBlock::<IrTy, Label> {
                     id: BasicBlockId(0),
@@ -1700,13 +1705,13 @@ pub mod tests {
                             dest: Register(0),
                             ty: IrTy::Int,
                             callee: Value::Func(Name::Resolved(
-                                Symbol::Global(GlobalId {
+                                Symbol::InstanceMethod(InstanceMethodId {
                                     module_id: ModuleId::Core,
-                                    local_id: 1
+                                    local_id: 5
                                 }),
                                 "add".into()
                             )),
-                            args: vec![Register(1).into(), Register(2).into()].into(),
+                            args: vec![Register(2).into(), Register(1).into()].into(),
                             meta: meta()
                         },
                     ],

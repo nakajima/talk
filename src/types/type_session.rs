@@ -680,6 +680,31 @@ impl TypeSession {
 
         for module in self.modules.modules.values() {
             if let Some(sym) = module.types.catalog.lookup_member(receiver, label) {
+                match sym {
+                    Symbol::InstanceMethod(..) => {
+                        self.type_catalog
+                            .instance_methods
+                            .entry(*receiver)
+                            .or_default()
+                            .insert(label.clone(), sym);
+                    }
+                    Symbol::Property(..) => {
+                        self.type_catalog
+                            .properties
+                            .entry(*receiver)
+                            .or_default()
+                            .insert(label.clone(), sym);
+                    }
+                    Symbol::StaticMethod(..) => {
+                        self.type_catalog
+                            .static_methods
+                            .entry(*receiver)
+                            .or_default()
+                            .insert(label.clone(), sym);
+                    }
+                    _ => (),
+                }
+
                 return Some(sym);
             }
         }
