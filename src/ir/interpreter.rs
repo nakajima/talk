@@ -381,4 +381,16 @@ pub mod tests {
             Value::Int(123)
         );
     }
+
+    #[test]
+    pub fn generic_struct_field() {
+        assert_eq!(
+            interpret("struct Fizz<T> { let buzz: T } ; Fizz(buzz: 123).buzz"),
+            Value::Int(123)
+        );
+        assert_eq!(
+            interpret("struct Fizz<T> { let buzz: T } ; Fizz(buzz: 1.23).buzz"),
+            Value::Float(1.23)
+        );
+    }
 }
