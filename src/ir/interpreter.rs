@@ -160,8 +160,6 @@ impl Interpreter {
                     unreachable!("but where did the frame come from");
                 };
 
-                println!("FUNC NAME: {:?}", func.name);
-
                 self.program
                     .functions
                     .insert(func.name.symbol().unwrap(), func);
@@ -347,5 +345,32 @@ pub mod tests {
     pub fn add() {
         assert_eq!(interpret("1 + 2"), Value::Int(3));
         assert_eq!(interpret("1.0 + 2.0"), Value::Float(3.0));
+    }
+
+    #[test]
+    pub fn sub() {
+        assert_eq!(interpret("1 - 2"), Value::Int(-1));
+        assert_eq!(interpret("1.0 - 2.0"), Value::Float(-1.0));
+    }
+
+    #[test]
+    pub fn mul() {
+        assert_eq!(interpret("2 * 3"), Value::Int(6));
+        assert_eq!(interpret("2.0 * 3.0"), Value::Float(6.0));
+    }
+
+    #[test]
+    pub fn div() {
+        assert_eq!(interpret("4 / 2"), Value::Int(2));
+        assert_eq!(interpret("1.0 / 2.0"), Value::Float(0.5));
+    }
+
+    #[test]
+    pub fn record_literal() {
+        assert_eq!(interpret("{ fizz: 123, buzz: 1.23 }.fizz"), Value::Int(123));
+        assert_eq!(
+            interpret("{ fizz: 123, buzz: 1.23 }.buzz"),
+            Value::Float(1.23)
+        );
     }
 }

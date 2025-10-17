@@ -6,6 +6,7 @@ use crate::ir::parse_instruction;
 use crate::label::Label;
 use crate::name_resolution::symbol::{InstanceMethodId, Symbols};
 use crate::node_kinds::parameter::Parameter;
+use crate::node_kinds::record_field::RecordField;
 use crate::types::infer_row::RowParamId;
 use crate::types::infer_ty::TypeParamId;
 use crate::types::row::Row;
@@ -602,10 +603,43 @@ impl<'a> Lowerer<'a> {
             ExprKind::Constructor(name) => self.lower_constructor(name, expr, bind, instantiations),
             ExprKind::If(..) => todo!(),
             ExprKind::Match(..) => todo!(),
-            ExprKind::RecordLiteral { .. } => todo!(),
+            ExprKind::RecordLiteral { fields, .. } => {
+                self.lower_record_literal(expr, fields, bind, instantiations)
+            }
             ExprKind::RowVariable(..) => todo!(),
             _ => unreachable!("cannot lower expr: {expr:?}"),
         }
+    }
+
+    fn lower_record_literal(
+        &mut self,
+        expr: &Expr,
+        fields: &[RecordField],
+        bind: Bind,
+        instantiations: &Substitutions,
+    ) -> Result<(Value, Ty), IRError> {
+        let mut field_vals = vec![];
+        let mut field_row = Row::Empty(TypeDefKind::Struct);
+        for field in fields.iter() {
+            let (val, ty) = self.lower_expr(&field.value, Bind::Fresh, instantiations)?;
+            field_vals.push(val);
+            field_row = Row::Extend {
+                row: field_row.into(),
+                label: field.label.name_str().into(),
+                ty,
+            };
+        }
+
+        let ty = Ty::Record(field_row.into());
+        let dest = self.ret(bind);
+        self.push_instr(Instruction::Record {
+            dest,
+            ty: ty.clone(),
+            record: field_vals.into(),
+            meta: vec![InstructionMeta::Source(expr.id)].into(),
+        });
+
+        Ok((dest.into(), ty))
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
@@ -733,18 +767,25 @@ impl<'a> Lowerer<'a> {
                 tracing::debug!("lowering method: {label} {method:?}");
 
                 self.check_import(&method);
-
                 self.push_instr(Instruction::Ref {
                     dest,
                     ty: ty.clone(),
                     val: Value::Func(Name::Resolved(method, label.to_string())),
                 });
             } else {
+                let label = if let Ty::Record(row) | Ty::Nominal { row, .. } = &receiver_ty
+                    && let Some(idx) = row.close().get_index_of(label)
+                {
+                    Label::Positional(idx)
+                } else {
+                    label.clone()
+                };
+
                 self.push_instr(Instruction::GetField {
                     dest,
                     ty: ty.clone(),
                     record: receiver_val.as_register()?,
-                    field: label.clone(),
+                    field: label,
                     meta: vec![InstructionMeta::Source(id)].into(),
                 });
             };
@@ -1012,6 +1053,7 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    /// Check to see if this symbol comes from an external module, if so we need to import the code into our program.
     fn check_import(&mut self, symbol: &Symbol) {
         if let Symbol::InstanceMethod(InstanceMethodId {
             module_id: module_id @ (ModuleId::Core | ModuleId::Prelude | ModuleId::External(..)),
@@ -1543,7 +1585,7 @@ pub mod tests {
                             dest: 3.into(),
                             ty: IrTy::Int,
                             record: Register(0),
-                            field: Label::Named("bar".into()),
+                            field: Label::Positional(0),
                             meta: meta(),
                         }
                     ],
@@ -1603,7 +1645,7 @@ pub mod tests {
                             dest: 3.into(),
                             ty: IrTy::Int,
                             record: Register(0),
-                            field: Label::Named("bar".into()),
+                            field: Label::Positional(0),
                             meta: meta(),
                         }
                     ],
