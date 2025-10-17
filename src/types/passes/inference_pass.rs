@@ -136,6 +136,10 @@ impl<'a> InferencePass<'a> {
                 Node::Stmt(_)
                     | Node::Decl(Decl {
                         kind: DeclKind::Struct { .. }
+                            | DeclKind::Enum { .. }
+                            | DeclKind::Extend { .. }
+                            | DeclKind::Protocol { .. }
+                            | DeclKind::Method { .. }
                             | DeclKind::Let {
                                 lhs: Pattern {
                                     // These don't get handled by the binding groups (i'm not sure if they should?)
@@ -147,6 +151,7 @@ impl<'a> InferencePass<'a> {
                         ..
                     })
             ) {
+                tracing::trace!("skipping decl: {root:?}");
                 continue;
             }
 
@@ -266,6 +271,17 @@ impl<'a> InferencePass<'a> {
                 continue;
             };
 
+            // Skip nodes from other ASTs - they'll be inferred when processing their own AST
+            if rhs_expr_id.0 != self.ast.file_id {
+                tracing::trace!("Skipping {:?} - belongs to a different file", rhs_expr_id);
+                continue;
+            }
+
+            tracing::debug!(
+                "Looking for rhs_expr_id: {:?} for binder {:?}",
+                rhs_expr_id,
+                binder
+            );
             let rhs_expr = self
                 .ast
                 .find(rhs_expr_id)
@@ -524,14 +540,13 @@ impl<'a> InferencePass<'a> {
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn infer_decl(&mut self, decl: &Decl, level: Level, wants: &mut Wants) -> InferTy {
-        guard_found_ty!(self, decl.id);
-
         let ty = match &decl.kind {
             DeclKind::Let {
                 lhs,
                 value,
                 type_annotation: _,
             } => {
+                guard_found_ty!(self, decl.id);
                 let ty = self.session.new_ty_meta_var(level);
                 let mut local_wants = Wants::default();
                 self.check_pattern(lhs, &ty, level, &mut local_wants);
@@ -561,12 +576,14 @@ impl<'a> InferencePass<'a> {
                 ty
             }
             DeclKind::Method { func, .. } => {
+                tracing::info!("inferring method: {:?}", func.name);
                 let func_ty = self.infer_func(func, level, wants);
                 let entry = self.session.generalize(level, func_ty.clone(), &[]);
                 self.session.insert_term(func.name.symbol().unwrap(), entry);
                 func_ty
             }
             DeclKind::Init { name, params, body } => {
+                guard_found_ty!(self, decl.id);
                 // Look up the Init symbol's pre-computed type from type resolve pass
                 let init_symbol = name.symbol().unwrap();
 
@@ -612,8 +629,23 @@ impl<'a> InferencePass<'a> {
 
                 self.infer_block(body, level, wants)
             }
+            DeclKind::Protocol {
+                body,
+                ..
+            } => {
+                // Protocols aren't nominals, they're protocols - just infer the body
+                self.infer_block(body, level, wants)
+            }
+            DeclKind::Extend {
+                body,
+                ..
+            } => {
+                // Extensions can be on any type (nominals or builtins) - just infer the body
+                self.infer_block(body, level, wants)
+            }
             DeclKind::Property { .. } => InferTy::Void,
             DeclKind::TypeAlias(lhs, rhs) => {
+                guard_found_ty!(self, decl.id);
                 // If RHS is a simple nominal name, alias its EnvEntry directly.
                 if let (
                     TypeAnnotationKind::Nominal {
@@ -1048,6 +1080,7 @@ impl<'a> InferencePass<'a> {
             args = format!("{args:?}")
         )
         .entered();
+
         let callee_ty = if !type_args.is_empty()
             && let Some(scheme) = self.lookup_named_scheme(callee)
         {

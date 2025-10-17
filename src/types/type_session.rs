@@ -412,7 +412,7 @@ impl TypeSession {
         let raw = TypeHeaderPass::drive(ast);
         let _headers = TypeResolvePass::drive(ast, &mut session, raw);
         let mut scc = SCCResolved::default();
-        DependenciesPass::drive(&mut session, ast, &mut scc);
+        DependenciesPass::drive(&mut session, ast, &mut scc, ModuleId::Current);
         InferencePass::perform(&mut session, &scc, ast);
         session
     }

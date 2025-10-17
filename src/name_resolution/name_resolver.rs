@@ -471,6 +471,20 @@ impl NameResolver {
             }
         );
 
+        on!(&mut decl.kind, DeclKind::Extend { name, .. }, {
+            let Some(type_name) = self.lookup(name) else {
+                self.diagnostic(decl.span, NameResolverError::UndefinedName(name.name_str()));
+                return;
+            };
+
+            *name = type_name;
+
+            self.current_scope_mut()
+                .unwrap()
+                .types
+                .insert("Self".into(), name.symbol().unwrap());
+        });
+
         on!(&mut decl.kind, DeclKind::Init { params, .. }, {
             self.enter_scope(decl.id);
 

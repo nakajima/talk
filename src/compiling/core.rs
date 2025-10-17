@@ -1,11 +1,8 @@
 use std::path::PathBuf;
 
-use crate::{
-    compiling::{
-        driver::{Driver, DriverConfig, Source},
-        module::{Module, ModuleId},
-    },
-    ir::program::Program,
+use crate::compiling::{
+    driver::{Driver, DriverConfig, Source},
+    module::{Module, ModuleId},
 };
 
 pub fn compile() -> Module {
@@ -25,19 +22,30 @@ pub fn compile() -> Module {
         ],
         config,
     );
-    let name_resolved = driver.parse().unwrap().resolve_names().unwrap();
-    let exports = name_resolved.exports();
-    let typed = name_resolved.typecheck().unwrap();
-    let types = typed.phase.types;
 
     // We can't lower everything we need to yet, so we just make a module
     // ourselves instead of getting it from the driver
-    Module {
-        name: "Core".into(),
-        types,
-        exports,
-        program: Program {
-            functions: Default::default(),
-        },
-    }
+    driver
+        .parse()
+        .unwrap()
+        .resolve_names()
+        .unwrap()
+        .typecheck()
+        .unwrap()
+        .lower()
+        .unwrap()
+        .module("Core")
+
+    // let name_resolved = driver.parse().unwrap().resolve_names().unwrap();
+    // let exports = name_resolved.exports();
+    // let typed = name_resolved.typecheck().unwrap();
+    // let types = typed.phase.types;
+    // Module {
+    //     name: "Core".into(),
+    //     types,
+    //     exports,
+    //     program: Program {
+    //         functions: Default::default(),
+    //     },
+    // }
 }

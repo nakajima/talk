@@ -99,13 +99,20 @@ impl BoundRHS {
 pub struct DependenciesPass<'a> {
     scc: &'a mut SCCResolved,
     binder_stack: Vec<(NodeID, Binder)>,
+    module_id: ModuleId,
 }
 
 impl<'a> DependenciesPass<'a> {
-    pub fn drive(_session: &mut TypeSession, ast: &mut AST<NameResolved>, scc: &mut SCCResolved) {
+    pub fn drive(
+        _session: &mut TypeSession,
+        ast: &mut AST<NameResolved>,
+        scc: &mut SCCResolved,
+        module_id: ModuleId,
+    ) {
         let mut pass = DependenciesPass {
             scc,
             binder_stack: Default::default(),
+            module_id,
         };
 
         for root in ast.roots.iter() {
@@ -131,19 +138,19 @@ impl<'a> DependenciesPass<'a> {
             ),
             DeclKind::Method {
                 func:
-                    box func @ Func {
+                    box Func {
                         name: Name::Resolved(sym, _),
                         ..
                     },
                 ..
-            } => (sym, None, BoundRHS::Func(func.id)),
+            } => (sym, None, BoundRHS::Func(decl.id)),
             _ => {
                 return;
             }
         };
 
         // Skip symbols from external modules - they're already typed
-        if sym.module_id().is_some() {
+        if sym.module_id().is_some_and(|mid| mid != self.module_id) {
             return;
         }
 
@@ -238,6 +245,7 @@ pub mod tests {
 
     use crate::{
         ast::AST,
+        compiling::module::ModuleId,
         name_resolution::{name_resolver::NameResolved, symbol::GlobalId},
         types::{
             passes::{
@@ -253,7 +261,7 @@ pub mod tests {
     ) -> (AST<NameResolved>, SCCResolved, TypeSession) {
         let (mut ast, mut session) = type_header_resolve_pass(code);
         let mut scc = SCCResolved::default();
-        DependenciesPass::drive(&mut session, &mut ast, &mut scc);
+        DependenciesPass::drive(&mut session, &mut ast, &mut scc, ModuleId::default());
 
         (ast, scc, session)
     }

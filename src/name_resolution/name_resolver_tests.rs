@@ -5,7 +5,7 @@ pub mod tests {
     use rustc_hash::FxHashSet;
 
     use crate::{
-        annotation, any_block, any_decl, any_expr, any_expr_stmt, any_stmt, assert_eq_diff,
+        annotation, any, any_block, any_decl, any_expr, any_expr_stmt, any_stmt, assert_eq_diff,
         ast::AST,
         compiling::module::{ModuleEnvironment, ModuleId},
         diagnostic::{AnyDiagnostic, Diagnostic},
@@ -22,6 +22,7 @@ pub mod tests {
         node::Node,
         node_id::{FileID, NodeID},
         node_kinds::{
+            call_arg::CallArg,
             decl::DeclKind,
             expr::{Expr, ExprKind},
             func::Func,
@@ -456,6 +457,32 @@ pub mod tests {
                     })),
                     attributes: vec![],
                 })),)
+            })
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn resolves___IR() {
+        let resolved = resolve(
+            "
+        __IR(\"$0 = add int 1 2\")
+        ",
+        );
+        assert_eq!(
+            *resolved.roots[0].as_stmt(),
+            any_expr_stmt!(ExprKind::Call {
+                callee: any_expr!(ExprKind::Variable(Name::Resolved(
+                    Symbol::IR,
+                    "__IR".into()
+                )))
+                .into(),
+                type_args: vec![],
+                args: vec![any!(CallArg, {
+                    label: Label::Positional(0),
+                    label_span: Span::ANY,
+                    value: any_expr!(ExprKind::LiteralString("$0 = add int 1 2".into()))
+                })]
             })
         );
     }
@@ -915,6 +942,54 @@ pub mod tests {
                 conformances: vec![],
                 generics: vec![],
                 body: any_block!(vec![])
+            }),
+        )
+    }
+
+    #[test]
+    fn resolves_struct_extension_out_of_order() {
+        let resolved = resolve(
+            "
+        extend Person {
+            func fizz() {}
+        }
+        struct Person {}
+        ",
+        );
+        assert_eq_diff!(
+            *resolved.roots[0].as_decl(),
+            any_decl!(DeclKind::Extend {
+                name: Name::Resolved(Symbol::Struct(StructId::from(1)), "Person".into()),
+                name_span: Span::ANY,
+                conformances: vec![],
+                generics: vec![],
+                body: any_block!(vec![Node::Decl(any_decl!(DeclKind::Method {
+                    func: Box::new(Func {
+                        id: NodeID::ANY,
+                        name: Name::Resolved(
+                            Symbol::InstanceMethod(InstanceMethodId::from(1)),
+                            "fizz".into()
+                        ),
+                        name_span: Span::ANY,
+                        generics: vec![],
+                        params: vec![Parameter {
+                            id: NodeID::ANY,
+                            name: Name::Resolved(
+                                Symbol::ParamLocal(ParamLocalId(1)),
+                                "self".into()
+                            ),
+                            name_span: Span::ANY,
+                            type_annotation: Some(annotation!(TypeAnnotationKind::SelfType(
+                                Name::Resolved(Symbol::Struct(StructId::from(1)), "Self".into())
+                            ))),
+                            span: Span::ANY,
+                        }],
+                        body: any_block!(vec![]),
+                        ret: None,
+                        attributes: vec![]
+                    }),
+                    is_static: false
+                }))])
             }),
         )
     }

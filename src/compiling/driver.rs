@@ -226,7 +226,7 @@ impl Driver<NameResolved> {
         for ast in self.phase.asts.values_mut() {
             // TODO: do a drive_all for deps pass
             tracing::info!("resolving type deps in {:?}", ast.path);
-            DependenciesPass::drive(&mut type_session, ast, &mut scc);
+            DependenciesPass::drive(&mut type_session, ast, &mut scc, self.config.module_id);
         }
 
         for ast in self.phase.asts.values_mut() {

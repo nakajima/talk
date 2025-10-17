@@ -26,6 +26,7 @@ pub enum Value {
     Ref(Reference),
     Uninit,
 }
+
 impl Value {
     fn add(self, other: Value) -> Value {
         match (&self, &other) {
@@ -297,6 +298,7 @@ impl Interpreter {
             super::value::Value::Float(v) => Value::Float(v),
             super::value::Value::Func(v) => Value::Func(v.symbol().unwrap()),
             super::value::Value::Void => Value::Void,
+            super::value::Value::Bool(v) => Value::Bool(v),
             super::value::Value::Uninit => panic!("uninit"),
         }
     }

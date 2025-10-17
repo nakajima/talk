@@ -296,7 +296,11 @@ impl<'a> Lowerer<'a> {
             }
             DeclKind::Associated { .. } => todo!(),
             DeclKind::Func(..) => todo!(),
-            DeclKind::Extend { .. } => todo!(),
+            DeclKind::Extend { body, .. } => {
+                for node in &body.body {
+                    self.lower_node(node, instantiations)?;
+                }
+            }
             DeclKind::Enum { body, .. } => {
                 for node in &body.body {
                     self.lower_node(node, instantiations)?;
@@ -545,8 +549,8 @@ impl<'a> Lowerer<'a> {
                 });
                 Ok((ret.into(), Ty::Float))
             }
-            ExprKind::LiteralTrue => todo!(),
-            ExprKind::LiteralFalse => todo!(),
+            ExprKind::LiteralTrue => Ok((Value::Bool(true), Ty::Bool)),
+            ExprKind::LiteralFalse => Ok((Value::Bool(false), Ty::Bool)),
             ExprKind::LiteralString(_) => todo!(),
             ExprKind::Unary(..) => todo!(),
             ExprKind::Binary(..) => todo!(),
@@ -917,7 +921,7 @@ impl<'a> Lowerer<'a> {
         for node in func.body.body.iter() {
             (ret, ret_ty) = self.lower_node(node, instantiations)?;
         }
-        println!("wat: {ret_ty:?}");
+
         self.push_terminator(Terminator::Ret {
             val: ret,
             ty: ret_ty.clone(),

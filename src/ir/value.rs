@@ -11,6 +11,7 @@ pub enum Value {
     Int(i64),
     Float(f64),
     Func(Name),
+    Bool(bool),
     Void,
     Uninit,
 }
@@ -60,6 +61,7 @@ impl std::fmt::Display for Value {
             Value::Int(i) => write!(f, "{i}"),
             Value::Float(i) => write!(f, "{i}"),
             Value::Func(name) => write!(f, "@{}", name.name_str()),
+            Value::Bool(b) => write!(f, "{}", if *b { "true" } else { "false" }),
             Value::Void => write!(f, "void"),
             Value::Uninit => write!(f, "uninit"),
         }

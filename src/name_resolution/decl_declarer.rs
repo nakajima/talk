@@ -6,7 +6,7 @@ use crate::{
     id_generator::IDGenerator,
     name::Name,
     name_resolution::{
-        name_resolver::{NameResolver, NameResolverError, Scope},
+        name_resolver::{NameResolver, Scope},
         symbol::{StructId, Symbol},
     },
     node::Node,
@@ -432,22 +432,8 @@ impl<'a> DeclDeclarer<'a> {
             }
         );
 
-        on!(&mut decl.kind, DeclKind::Extend { name, generics, .. }, {
-            let Some(type_name) = self.resolver.lookup(name) else {
-                self.resolver
-                    .diagnostic(decl.span, NameResolverError::UndefinedName(name.name_str()));
-                return;
-            };
-
-            *name = type_name;
-
+        on!(&mut decl.kind, DeclKind::Extend { generics, .. }, {
             self.start_scope(decl.id);
-
-            self.resolver
-                .current_scope_mut()
-                .unwrap()
-                .types
-                .insert("Self".into(), name.symbol().unwrap());
 
             for generic in generics {
                 generic.name =
@@ -593,7 +579,7 @@ impl<'a> DeclDeclarer<'a> {
             type_annotation: Some(TypeAnnotation {
                 id: NodeID(FileID::SYNTHESIZED, self.node_ids.next_id()),
                 span: Span::SYNTHESIZED,
-                kind: TypeAnnotationKind::SelfType(Name::SelfType(type_id)),
+                kind: TypeAnnotationKind::SelfType(Name::SelfType(type_id.into())),
             }),
         }];
 
