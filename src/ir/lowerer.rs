@@ -259,7 +259,7 @@ impl<'a> Lowerer<'a> {
         &mut self,
         node: &Node,
         instantiations: &Substitutions,
-    ) -> Result<Value, IRError> {
+    ) -> Result<(Value, Ty), IRError> {
         match node {
             Node::Decl(decl) => self.lower_decl(decl, instantiations),
             Node::Stmt(stmt) => self.lower_stmt(stmt, instantiations),
@@ -272,7 +272,7 @@ impl<'a> Lowerer<'a> {
         &mut self,
         decl: &Decl,
         instantiations: &Substitutions,
-    ) -> Result<Value, IRError> {
+    ) -> Result<(Value, Ty), IRError> {
         match &decl.kind {
             DeclKind::Let {
                 lhs,
@@ -309,10 +309,10 @@ impl<'a> Lowerer<'a> {
             _ => (), // Nothing to do
         }
 
-        Ok(Value::Void)
+        Ok((Value::Void, Ty::Void))
     }
 
-    fn lower_method(&mut self, func: &Func) -> Result<Value, IRError> {
+    fn lower_method(&mut self, func: &Func) -> Result<(Value, Ty), IRError> {
         self.lower_func(func, Bind::Discard, &Default::default())
     }
 
@@ -324,7 +324,7 @@ impl<'a> Lowerer<'a> {
         params: &[Parameter],
         body: &Block,
         instantiations: &Substitutions,
-    ) -> Result<Value, IRError> {
+    ) -> Result<(Value, Ty), IRError> {
         let func_ty = match self.types.get_symbol(&name.symbol().unwrap()).unwrap() {
             TypeEntry::Mono(ty) => ty.clone(),
             TypeEntry::Poly(scheme) => scheme.ty.clone(),
@@ -334,7 +334,7 @@ impl<'a> Lowerer<'a> {
             unreachable!();
         };
 
-        let (param_tys, ret_ty) = uncurry_function(func_ty.clone());
+        let (param_tys, mut ret_ty) = uncurry_function(func_ty.clone());
 
         // Build param_ty from all params (for now, just use the first one for compatibility)
         let param_ty = if !param_tys.is_empty() {
@@ -361,7 +361,7 @@ impl<'a> Lowerer<'a> {
 
         let mut ret = Value::Void;
         for node in body.body.iter() {
-            ret = self.lower_node(node, instantiations)?;
+            (ret, ret_ty) = self.lower_node(node, instantiations)?;
         }
         self.push_terminator(Terminator::Ret {
             val: ret.clone(),
@@ -384,7 +384,7 @@ impl<'a> Lowerer<'a> {
             },
         );
 
-        Ok(ret)
+        Ok((ret, ret_ty))
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self, stmt), fields(stmt.id = %stmt.id))]
@@ -392,7 +392,7 @@ impl<'a> Lowerer<'a> {
         &mut self,
         stmt: &Stmt,
         instantiations: &Substitutions,
-    ) -> Result<Value, IRError> {
+    ) -> Result<(Value, Ty), IRError> {
         match &stmt.kind {
             StmtKind::Expr(expr) => self.lower_expr(expr, Bind::Fresh, instantiations),
             StmtKind::If(_expr, _block, _block1) => todo!(),
@@ -409,13 +409,13 @@ impl<'a> Lowerer<'a> {
         lhs: &Expr,
         rhs: &Expr,
         instantiations: &Substitutions,
-    ) -> Result<Value, IRError> {
+    ) -> Result<(Value, Ty), IRError> {
         let lvalue = self.lower_lvalue(lhs)?;
-        let value = self.lower_expr(rhs, Bind::Fresh, instantiations)?;
+        let (value, ty) = self.lower_expr(rhs, Bind::Fresh, instantiations)?;
 
         self.emit_lvalue_store(lvalue, value)?;
 
-        Ok(Value::Void)
+        Ok((Value::Void, ty))
     }
 
     fn emit_load_lvalue(&mut self, lvalue: &LValue<Label>) -> Result<Register, IRError> {
@@ -523,7 +523,7 @@ impl<'a> Lowerer<'a> {
         expr: &Expr,
         bind: Bind,
         instantiations: &Substitutions,
-    ) -> Result<Value, IRError> {
+    ) -> Result<(Value, Ty), IRError> {
         match &expr.kind {
             ExprKind::Func(func) => self.lower_func(func, bind, instantiations),
             ExprKind::LiteralArray(_exprs) => todo!(),
@@ -534,7 +534,7 @@ impl<'a> Lowerer<'a> {
                     val: str::parse(val).unwrap(),
                     meta: vec![InstructionMeta::Source(expr.id)].into(),
                 });
-                Ok(ret.into())
+                Ok((ret.into(), Ty::Int))
             }
             ExprKind::LiteralFloat(val) => {
                 let ret = self.ret(bind);
@@ -543,7 +543,7 @@ impl<'a> Lowerer<'a> {
                     val: str::parse(val).unwrap(),
                     meta: vec![InstructionMeta::Source(expr.id)].into(),
                 });
-                Ok(ret.into())
+                Ok((ret.into(), Ty::Float))
             }
             ExprKind::LiteralTrue => todo!(),
             ExprKind::LiteralFalse => todo!(),
@@ -607,7 +607,7 @@ impl<'a> Lowerer<'a> {
         expr: &Expr,
         bind: Bind,
         old_instantiations: &Substitutions,
-    ) -> Result<Value, IRError> {
+    ) -> Result<(Value, Ty), IRError> {
         let constructor_sym = *self
             .types
             .catalog
@@ -625,11 +625,11 @@ impl<'a> Lowerer<'a> {
         let dest = self.ret(bind);
         self.push_instr(Instruction::Ref {
             dest,
-            ty,
+            ty: ty.clone(),
             val: Value::Func(Name::Resolved(constructor_sym, format!("{}_init", name))),
         });
 
-        Ok(dest.into())
+        Ok((dest.into(), ty))
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
@@ -641,12 +641,13 @@ impl<'a> Lowerer<'a> {
         values: &[CallArg],
         bind: Bind,
         old_instantiations: &Substitutions,
-    ) -> Result<Value, IRError> {
+    ) -> Result<(Value, Ty), IRError> {
+        let enum_symbol = name.symbol().unwrap();
         let constructor_sym = *self
             .types
             .catalog
             .variants
-            .get(&name.symbol().unwrap())
+            .get(&enum_symbol)
             .unwrap()
             .get(variant_name)
             .unwrap_or_else(|| panic!("didn't get {:?}", name));
@@ -655,51 +656,48 @@ impl<'a> Lowerer<'a> {
             .types
             .catalog
             .variants
-            .get(&name.symbol().unwrap())
+            .get(&enum_symbol)
             .unwrap()
             .get_index_of(variant_name)
             .unwrap();
 
+        let enum_entry = self.types.get_symbol(&enum_symbol).unwrap().clone();
+        let (_, _ty_instantiations) = self.specialize(&enum_entry, id)?;
         let init_entry = self.types.get_symbol(&constructor_sym).cloned().unwrap();
-        let (mut ty, mut instantiations) = self.specialize(&init_entry, id)?;
+        let (_, mut instantiations) = self.specialize(&init_entry, id)?;
         instantiations.extend(old_instantiations.clone());
 
-        let mut row = Row::Empty(TypeDefKind::Enum);
-        row = Row::Extend {
-            row: row.into(),
-            label: Label::Positional(0),
-            ty: Ty::Int,
-        };
-
-        // If it's a func then we've got associated values
-        if matches!(ty, Ty::Func(..)) {
-            for (i, ty) in row.close()[1..].values().enumerate() {
-                row = Row::Extend {
-                    row: row.into(),
-                    label: Label::Positional(i + 1),
-                    ty: ty.clone(),
-                };
-            }
+        let mut args: Vec<Value> = Default::default();
+        let mut args_tys: Vec<Ty> = vec![Ty::Int];
+        for value in values.iter() {
+            let (val, ty) = self.lower_expr(&value.value, Bind::Fresh, &instantiations)?;
+            args.push(val);
+            args_tys.push(ty);
         }
-
-        ty = Ty::Record(row.into());
-        let mut args: Vec<Value> = values
-            .iter()
-            .map(|v| self.lower_expr(&v.value, Bind::Fresh, &instantiations))
-            .collect::<Result<Vec<_>, _>>()?;
 
         // Set the tag as the first entry
         args.insert(0, Value::Int(tag as i64));
 
+        let row =
+            args_tys
+                .iter()
+                .enumerate()
+                .fold(Row::Empty(TypeDefKind::Enum), |acc, (i, ty)| Row::Extend {
+                    row: acc.into(),
+                    label: Label::Positional(i),
+                    ty: ty.clone(),
+                });
+
+        let ty = Ty::Record(row.into());
         let dest = self.ret(bind);
         self.push_instr(Instruction::Record {
             dest,
-            ty,
+            ty: ty.clone(),
             record: args.into(),
             meta: vec![InstructionMeta::Source(id)].into(),
         });
 
-        Ok(dest.into())
+        Ok((dest.into(), ty))
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self, receiver))]
@@ -710,11 +708,11 @@ impl<'a> Lowerer<'a> {
         label: &Label,
         bind: Bind,
         instantiations: &Substitutions,
-    ) -> Result<Value, IRError> {
+    ) -> Result<(Value, Ty), IRError> {
         if let Some(box receiver) = &receiver {
             let reg = self.next_register();
             let member_bind = Bind::Assigned(reg);
-            let receiver_val = self.lower_expr(receiver, member_bind, instantiations)?;
+            let (receiver_val, _) = self.lower_expr(receiver, member_bind, instantiations)?;
             let ty = self.ty_from_id(&id)?;
             let dest = self.ret(bind);
 
@@ -730,20 +728,20 @@ impl<'a> Lowerer<'a> {
             {
                 self.push_instr(Instruction::Ref {
                     dest,
-                    ty,
+                    ty: ty.clone(),
                     val: Value::Func(Name::Resolved(*method, label.to_string())),
                 });
             } else {
                 self.push_instr(Instruction::GetField {
                     dest,
-                    ty,
+                    ty: ty.clone(),
                     record: receiver_val.as_register()?,
                     field: label.clone(),
                     meta: vec![InstructionMeta::Source(id)].into(),
                 });
             };
 
-            Ok(dest.into())
+            Ok((dest.into(), ty))
         } else {
             todo!("gotta handle unqualified lookups")
         }
@@ -755,9 +753,9 @@ impl<'a> Lowerer<'a> {
         name: &Name,
         expr: &Expr,
         instantiations: &Substitutions,
-    ) -> Result<Value, IRError> {
+    ) -> Result<(Value, Ty), IRError> {
         let (ty, instantiations) = self.specialized_ty(expr)?;
-        let monomorphized_ty = substitute(ty, &instantiations);
+        let monomorphized_ty = substitute(ty.clone(), &instantiations);
 
         let ret = if matches!(monomorphized_ty, Ty::Func(..)) {
             // It's a func reference so we pass the name
@@ -767,7 +765,7 @@ impl<'a> Lowerer<'a> {
             self.bindings.get(&name.symbol().unwrap()).unwrap().into()
         };
 
-        Ok(ret)
+        Ok((ret, ty))
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
@@ -780,7 +778,7 @@ impl<'a> Lowerer<'a> {
         mut args: Vec<Value>,
         dest: Register,
         instantiations: &Substitutions,
-    ) -> Result<Value, IRError> {
+    ) -> Result<(Value, Ty), IRError> {
         let record_dest = self.next_register();
 
         // Look up the initializer and specialize it using the already-computed instantiations
@@ -832,7 +830,7 @@ impl<'a> Lowerer<'a> {
             meta: vec![InstructionMeta::Source(id)].into(),
         });
 
-        Ok(dest.into())
+        Ok((dest.into(), ret))
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
@@ -843,28 +841,30 @@ impl<'a> Lowerer<'a> {
         args: &[CallArg],
         bind: Bind,
         parent_instantiations: &Substitutions,
-    ) -> Result<Value, IRError> {
+    ) -> Result<(Value, Ty), IRError> {
         let dest = self.ret(bind);
 
         // Handle embedded IR call
         if let ExprKind::Variable(name) = &callee.kind
             && name.symbol().unwrap() == Symbol::IR
         {
-            return self.lower_embedded_ir_call(args, dest);
+            return self.lower_embedded_ir_call(id, args, dest);
         }
 
         let (_callee_ty, mut instantiations) = self.specialized_ty(callee).unwrap();
-        instantiations.ty.extend(parent_instantiations.ty.clone());
-        instantiations.row.extend(parent_instantiations.row.clone());
+        instantiations.extend(parent_instantiations.clone());
 
         let ty = self.ty_from_id(&id)?;
-        let mut args = args
-            .iter()
-            .map(|arg| self.lower_expr(&arg.value, Bind::Fresh, &instantiations))
-            .collect::<Result<Vec<Value>, _>>()?;
+        let mut arg_vals = vec![];
+        let mut arg_tys = vec![];
+        for arg in args {
+            let (arg, arg_ty) = self.lower_expr(&arg.value, Bind::Fresh, &instantiations)?;
+            arg_vals.push(arg);
+            arg_tys.push(arg_ty)
+        }
 
         if let ExprKind::Constructor(name) = &callee.kind {
-            return self.lower_constructor_call(id, name, callee, args, dest, &instantiations);
+            return self.lower_constructor_call(id, name, callee, arg_vals, dest, &instantiations);
         }
 
         let callee_ir = if let ExprKind::Member(Some(box receiver), member, ..) = &callee.kind
@@ -872,22 +872,22 @@ impl<'a> Lowerer<'a> {
         {
             // Handle method calls. It'd be nice if we could re-use lower_member here but i'm not sure
             // how we'd get the receiver value, which we need to pass as the first arg..
-            let receiver_ir = self.lower_expr(receiver, Bind::Fresh, &instantiations)?;
-            args.insert(0, receiver_ir);
+            let (receiver_ir, _) = self.lower_expr(receiver, Bind::Fresh, &instantiations)?;
+            arg_vals.insert(0, receiver_ir);
             Value::Func(Name::Resolved(method_sym, member.to_string()))
         } else {
-            self.lower_expr(callee, Bind::Fresh, &instantiations)?
+            self.lower_expr(callee, Bind::Fresh, &instantiations)?.0
         };
 
         self.push_instr(Instruction::Call {
             dest,
-            ty,
+            ty: ty.clone(),
             callee: callee_ir,
-            args: args.into(),
+            args: arg_vals.into(),
             meta: vec![InstructionMeta::Source(id)].into(),
         });
 
-        Ok(dest.into())
+        Ok((dest.into(), ty))
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self, func), fields(func.name = %func.name))]
@@ -896,10 +896,10 @@ impl<'a> Lowerer<'a> {
         func: &Func,
         bind: Bind,
         instantiations: &Substitutions,
-    ) -> Result<Value, IRError> {
+    ) -> Result<(Value, Ty), IRError> {
         let ty = self.ty_from_symbol(&func.name.symbol().unwrap())?;
 
-        let Ty::Func(param_tys, box ret_ty) = ty else {
+        let Ty::Func(param_tys, box mut ret_ty) = ty else {
             panic!("didn't get func ty");
         };
 
@@ -915,8 +915,9 @@ impl<'a> Lowerer<'a> {
 
         let mut ret = Value::Void;
         for node in func.body.body.iter() {
-            ret = self.lower_node(node, instantiations)?;
+            (ret, ret_ty) = self.lower_node(node, instantiations)?;
         }
+        println!("wat: {ret_ty:?}");
         self.push_terminator(Terminator::Ret {
             val: ret,
             ty: ret_ty.clone(),
@@ -943,18 +944,19 @@ impl<'a> Lowerer<'a> {
             let dest = self.ret(bind);
             self.push_instr(Instruction::Ref {
                 dest,
-                ty: Ty::Func(param_tys, ret_ty.into()),
+                ty: Ty::Func(param_tys.clone(), ret_ty.clone().into()),
                 val: func.clone(),
             });
         }
-        Ok(func)
+        Ok((func, Ty::Func(param_tys, ret_ty.into())))
     }
 
     fn lower_embedded_ir_call(
         &mut self,
+        id: NodeID,
         args: &[CallArg],
         dest: Register,
-    ) -> Result<Value, IRError> {
+    ) -> Result<(Value, Ty), IRError> {
         let ExprKind::LiteralString(string) = &args[0].value.kind else {
             unreachable!()
         };
@@ -967,7 +969,9 @@ impl<'a> Lowerer<'a> {
 
         self.push_instr(parse_instruction::<IrTy, Label>(&string).into());
 
-        Ok(dest.into())
+        let ty = self.ty_from_id(&id).unwrap();
+
+        Ok((dest.into(), ty))
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
@@ -1606,6 +1610,55 @@ pub mod tests {
                     terminator: Terminator::Ret {
                         val: Value::Reg(0),
                         ty: IrTy::Record(vec![IrTy::Int]),
+                    }
+                }],
+            }
+        )
+    }
+
+    #[test]
+    fn lowers_enum_constructor_with_vals() {
+        let program = lower(
+            "
+            enum Fizz { case foo(Int, Float), bar(Float, Int) }
+            Fizz.bar(1.23, 456)",
+        );
+        assert_eq_diff!(
+            *program
+                .functions
+                .get(&Symbol::Synthesized(SynthesizedId::from(1)))
+                .unwrap(),
+            Function {
+                name: Name::Resolved(SynthesizedId::from(1).into(), "main".into()),
+                params: vec![].into(),
+                register_count: 3,
+                ty: IrTy::Func(
+                    vec![],
+                    IrTy::Record(vec![IrTy::Int, IrTy::Float, IrTy::Int]).into()
+                ),
+                blocks: vec![BasicBlock::<IrTy, Label> {
+                    id: BasicBlockId(0),
+                    instructions: vec![
+                        Instruction::ConstantFloat {
+                            dest: 0.into(),
+                            val: 1.23,
+                            meta: meta()
+                        },
+                        Instruction::ConstantInt {
+                            dest: 1.into(),
+                            val: 456,
+                            meta: meta()
+                        },
+                        Instruction::Record {
+                            dest: 2.into(),
+                            ty: IrTy::Record(vec![IrTy::Int, IrTy::Float, IrTy::Int]),
+                            record: vec![Value::Int(1), Value::Reg(0), Value::Reg(1)].into(),
+                            meta: meta()
+                        }
+                    ],
+                    terminator: Terminator::Ret {
+                        val: Value::Reg(2),
+                        ty: IrTy::Record(vec![IrTy::Int, IrTy::Float, IrTy::Int]),
                     }
                 }],
             }

@@ -1,7 +1,7 @@
 use crate::{
     compiling::module::ModuleId,
     name::Name,
-    name_resolution::symbol::{Symbol, StructId},
+    name_resolution::symbol::{StructId, Symbol},
     types::{infer_ty::TypeParamId, row::Row, type_session::TypeDefKind},
 };
 

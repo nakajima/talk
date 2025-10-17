@@ -13,6 +13,7 @@ use crate::{
         terminator::Terminator,
     },
     label::Label,
+    name::Name,
     name_resolution::{name_resolver::NameResolved, symbol::Symbol},
     types::{ty::Ty, type_session::Types},
 };
@@ -135,7 +136,27 @@ impl<'a> Monomorphizer<'a> {
                 }
             }
             Ty::Constructor {
-                params, box ret, ..
+                name: Name::Resolved(Symbol::Variant(..), ..),
+                params,
+                ..
+            } => {
+                let mut values = match &params[0] {
+                    &Ty::Void => vec![],
+                    Ty::Tuple(items) => items
+                        .iter()
+                        .map(|t| self.monomorphize_ty(t.clone(), substitutions))
+                        .collect(),
+                    other => vec![self.monomorphize_ty(other.clone(), substitutions)],
+                };
+                values.insert(0, IrTy::Int);
+
+                IrTy::Record(values)
+            }
+            Ty::Constructor {
+                name: Name::Resolved(Symbol::Struct(..), _),
+                params,
+                box ret,
+                ..
             } => IrTy::Func(
                 params
                     .into_iter()
@@ -153,7 +174,12 @@ impl<'a> Monomorphizer<'a> {
                     self.monomorphize_ty(final_ret, substitutions).into(),
                 )
             }
-            Ty::Tuple(..) => todo!(),
+            Ty::Tuple(items) => IrTy::Record(
+                items
+                    .into_iter()
+                    .map(|i| self.monomorphize_ty(i, substitutions))
+                    .collect(),
+            ),
             Ty::Record(row) => {
                 let closed = row.close();
                 IrTy::Record(
@@ -177,6 +203,7 @@ impl<'a> Monomorphizer<'a> {
                     )
                 }
             }
+            other => unreachable!("{other:?}"),
         }
     }
 
