@@ -427,7 +427,11 @@ impl<'a> Lowerer<'a> {
         Ok((Value::Void, ty))
     }
 
-    fn emit_load_lvalue(&mut self, lvalue: &LValue<Label>) -> Result<Register, IRError> {
+    fn emit_load_lvalue(
+        &mut self,
+        receiver_ty: &Ty,
+        lvalue: &LValue<Label>,
+    ) -> Result<Register, IRError> {
         match lvalue {
             LValue::Variable(sym) => {
                 // Variable is already in a register
@@ -435,13 +439,13 @@ impl<'a> Lowerer<'a> {
             }
             LValue::Field { base, field, ty } => {
                 // Recursively load base, then extract field
-                let base_val = self.emit_load_lvalue(base)?;
+                let base_val = self.emit_load_lvalue(receiver_ty, base)?;
                 let dest = self.next_register();
 
                 self.push_instr(Instruction::GetField {
                     dest,
                     record: base_val,
-                    field: field.clone(),
+                    field: self.field_index(receiver_ty, field),
                     ty: ty.clone(),
                     meta: vec![].into(),
                 });
@@ -462,21 +466,21 @@ impl<'a> Lowerer<'a> {
             LValue::Field {
                 box base,
                 field,
-                ty,
+                ty: receiver_ty,
             } => {
                 // This is the tricky part - need to rebuild the chain
 
                 // 1. Load the base (to get what we're inserting into)
-                let base_val = self.emit_load_lvalue(&base)?;
+                let base_val = self.emit_load_lvalue(&receiver_ty, &base)?;
 
                 // 2. Insert the new value at this level
                 let dest = self.next_register();
                 self.push_instr(Instruction::SetField {
                     dest,
                     record: base_val,
-                    field: field.clone(),
+                    field: self.field_index(&receiver_ty, &field),
                     val: value,
-                    ty,
+                    ty: receiver_ty,
                     meta: vec![].into(),
                 });
 
@@ -491,13 +495,13 @@ impl<'a> Lowerer<'a> {
     fn lower_lvalue(&mut self, expr: &Expr) -> Result<LValue<Label>, IRError> {
         match &expr.kind {
             ExprKind::Variable(name) => Ok(LValue::Variable(name.symbol().unwrap())),
-            ExprKind::Member(Some(box base), label, _span) => {
-                let base_lvalue = self.lower_lvalue(base)?;
-                let (base_ty, ..) = self.specialized_ty(base).expect("didn't get base ty");
+            ExprKind::Member(Some(box receiver), label, _span) => {
+                let receiver_lvalue = self.lower_lvalue(receiver)?;
+                let (receiver_ty, ..) = self.specialized_ty(receiver).expect("didn't get base ty");
 
                 Ok(LValue::Field {
-                    base: base_lvalue.into(),
-                    ty: base_ty.clone(),
+                    base: receiver_lvalue.into(),
+                    ty: receiver_ty.clone(),
                     field: label.clone(),
                 })
             }
@@ -773,14 +777,7 @@ impl<'a> Lowerer<'a> {
                     val: Value::Func(Name::Resolved(method, label.to_string())),
                 });
             } else {
-                let label = if let Ty::Record(row) | Ty::Nominal { row, .. } = &receiver_ty
-                    && let Some(idx) = row.close().get_index_of(label)
-                {
-                    Label::Positional(idx)
-                } else {
-                    label.clone()
-                };
-
+                let label = self.field_index(&receiver_ty, label);
                 self.push_instr(Instruction::GetField {
                     dest,
                     ty: ty.clone(),
@@ -1200,6 +1197,16 @@ impl<'a> Lowerer<'a> {
 
                 Ok((ty, substitutions))
             }
+        }
+    }
+
+    fn field_index(&self, receiver_ty: &Ty, label: &Label) -> Label {
+        if let Ty::Record(row) | Ty::Nominal { row, .. } = receiver_ty
+            && let Some(idx) = row.close().get_index_of(label)
+        {
+            Label::Positional(idx)
+        } else {
+            label.clone()
         }
     }
 

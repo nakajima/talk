@@ -309,7 +309,7 @@ impl Interpreter {
             super::value::Value::Func(v) => Value::Func(v.symbol().unwrap()),
             super::value::Value::Void => Value::Void,
             super::value::Value::Bool(v) => Value::Bool(v),
-            super::value::Value::Uninit => panic!("uninit"),
+            super::value::Value::Uninit => Value::Uninit,
         }
     }
 }
@@ -371,6 +371,14 @@ pub mod tests {
         assert_eq!(
             interpret("{ fizz: 123, buzz: 1.23 }.buzz"),
             Value::Float(1.23)
+        );
+    }
+
+    #[test]
+    pub fn struct_field() {
+        assert_eq!(
+            interpret("struct Person { let fizz: Int } ; Person(fizz: 123).fizz"),
+            Value::Int(123)
         );
     }
 }
