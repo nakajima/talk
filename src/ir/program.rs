@@ -1,7 +1,7 @@
 use indexmap::IndexMap;
 
 use crate::{
-    ir::{function::Function, ir_ty::IrTy},
+    ir::{function::Function, ir_ty::IrTy, lowerer::PolyFunction},
     label::Label,
     name_resolution::symbol::Symbol,
 };
@@ -9,6 +9,7 @@ use crate::{
 #[derive(Debug, Default, PartialEq)]
 pub struct Program {
     pub functions: IndexMap<Symbol, Function<IrTy, Label>>,
+    pub polyfunctions: IndexMap<Symbol, PolyFunction>,
 }
 
 impl Program {

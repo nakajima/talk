@@ -126,10 +126,19 @@ impl Interpreter {
     }
 
     pub fn call(&mut self, function: Symbol, args: Vec<Value>, dest: Register) {
+        let caller_name = self.current_func.as_ref().map(|f| f.name.symbol().unwrap());
+        if let Some(callee_func) = self.current_func.take() {
+            self.program
+                .functions
+                .insert(callee_func.name.symbol().unwrap(), callee_func);
+        }
+
         let func = self.program.functions.shift_remove(&function).unwrap();
-        let mut frame = Frame::new(dest, Some(func.name.symbol().unwrap()));
+        let mut frame = Frame::new(dest, caller_name);
         frame.registers.resize(func.register_count, Value::Uninit);
-        frame.registers.extend(args);
+        for (i, arg) in args.into_iter().enumerate() {
+            frame.registers[i] = arg;
+        }
         self.frames.push(frame);
         self.current_func = Some(func);
     }
@@ -138,6 +147,7 @@ impl Interpreter {
         let next_instruction = self.next_instr();
 
         tracing::trace!("{next_instruction}");
+        tracing::trace!("{:?}", self.frames.last().unwrap());
 
         match next_instruction {
             IR::Term(Terminator::Ret { val, .. }) => {
@@ -149,6 +159,8 @@ impl Interpreter {
                 let Some(func) = self.current_func.take() else {
                     unreachable!("but where did the frame come from");
                 };
+
+                println!("FUNC NAME: {:?}", func.name);
 
                 self.program
                     .functions
@@ -265,7 +277,7 @@ impl Interpreter {
         }
 
         let frame = self.frames.last_mut().unwrap();
-        frame.registers.insert(register.0 as usize, val);
+        frame.registers[register.0 as usize] = val;
     }
 
     fn read_register(&self, register: &Register) -> Value {
@@ -332,7 +344,6 @@ pub mod tests {
     }
 
     #[test]
-    #[ignore = "need to be able to import the core first"]
     pub fn add() {
         assert_eq!(interpret("1 + 2"), Value::Int(3));
         assert_eq!(interpret("1.0 + 2.0"), Value::Float(3.0));

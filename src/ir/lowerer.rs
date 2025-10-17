@@ -1,10 +1,10 @@
-use crate::compiling::module::ModuleId;
+use crate::compiling::module::{ModuleEnvironment, ModuleId};
 use crate::formatter;
 use crate::ir::ir_ty::IrTy;
 use crate::ir::monomorphizer::uncurry_function;
 use crate::ir::parse_instruction;
 use crate::label::Label;
-use crate::name_resolution::symbol::Symbols;
+use crate::name_resolution::symbol::{InstanceMethodId, Symbols};
 use crate::node_kinds::parameter::Parameter;
 use crate::types::infer_row::RowParamId;
 use crate::types::infer_ty::TypeParamId;
@@ -113,8 +113,8 @@ impl Substitutions {
     }
 }
 
-#[derive(Clone, Debug)]
-pub(super) struct PolyFunction {
+#[derive(Clone, Debug, PartialEq)]
+pub struct PolyFunction {
     pub name: Name,
     pub params: Vec<Value>,
     pub blocks: Vec<BasicBlock<Ty, Label>>,
@@ -137,6 +137,7 @@ pub struct Lowerer<'a> {
 
     symbols: &'a mut Symbols,
     bindings: FxHashMap<Symbol, Register>,
+    modules: &'a ModuleEnvironment,
     pub(super) specializations: IndexMap<Symbol, Vec<Specialization>>,
 }
 
@@ -145,6 +146,7 @@ impl<'a> Lowerer<'a> {
         asts: &'a mut IndexMap<Source, AST<NameResolved>>,
         types: &'a mut Types,
         symbols: &'a mut Symbols,
+        modules: &'a ModuleEnvironment,
     ) -> Self {
         Self {
             asts,
@@ -154,6 +156,7 @@ impl<'a> Lowerer<'a> {
             bindings: Default::default(),
             symbols,
             specializations: Default::default(),
+            modules,
         }
     }
 
@@ -252,6 +255,7 @@ impl<'a> Lowerer<'a> {
 
         Ok(Program {
             functions: monomorphizer.monomorphize(),
+            polyfunctions: monomorphizer.functions,
         })
     }
 
@@ -723,17 +727,17 @@ impl<'a> Lowerer<'a> {
             let (receiver_ty, _) = self.specialized_ty(receiver)?;
 
             if let Ty::Nominal { symbol, .. } = &receiver_ty
-                && let Some(method) = self
-                    .types
-                    .catalog
-                    .instance_methods
-                    .get(symbol)
-                    .and_then(|m| m.get(label))
+                && let Some(methods) = self.types.catalog.instance_methods.get(symbol)
+                && let Some(method) = methods.get(label).cloned()
             {
+                tracing::debug!("lowering method: {label} {method:?}");
+
+                self.check_import(&method);
+
                 self.push_instr(Instruction::Ref {
                     dest,
                     ty: ty.clone(),
-                    val: Value::Func(Name::Resolved(*method, label.to_string())),
+                    val: Value::Func(Name::Resolved(method, label.to_string())),
                 });
             } else {
                 self.push_instr(Instruction::GetField {
@@ -876,6 +880,7 @@ impl<'a> Lowerer<'a> {
         {
             // Handle method calls. It'd be nice if we could re-use lower_member here but i'm not sure
             // how we'd get the receiver value, which we need to pass as the first arg..
+            self.check_import(&method_sym);
             let (receiver_ir, _) = self.lower_expr(receiver, Bind::Fresh, &instantiations)?;
             arg_vals.insert(0, receiver_ir);
             Value::Func(Name::Resolved(method_sym, member.to_string()))
@@ -1004,6 +1009,20 @@ impl<'a> Lowerer<'a> {
             Bind::Assigned(value) => value,
             Bind::Fresh => self.next_register(),
             Bind::Discard => Register::DROP,
+        }
+    }
+
+    fn check_import(&mut self, symbol: &Symbol) {
+        if let Symbol::InstanceMethod(InstanceMethodId {
+            module_id: module_id @ (ModuleId::Core | ModuleId::Prelude | ModuleId::External(..)),
+            ..
+        }) = symbol
+        {
+            let module = self.modules.modules.get(module_id).unwrap();
+            tracing::debug!("importing {symbol:?} from {module_id}");
+            // TODO: This won't work with external methods yet, only core works.
+            let method_func = module.program.polyfunctions.get(symbol).unwrap();
+            self.functions.insert(*symbol, method_func.clone());
         }
     }
 
@@ -1260,7 +1279,7 @@ pub fn curry_ty<'a, I: IntoIterator<Item = &'a Ty>>(params: I, ret: Ty) -> Ty {
 #[cfg(test)]
 pub mod tests {
     use crate::{
-        assert_eq_diff, assert_eq_diff_display,
+        assert_eq_diff,
         compiling::{
             driver::{Driver, Source},
             module::ModuleId,
@@ -1301,6 +1320,7 @@ pub mod tests {
             &mut typed.phase.asts,
             &mut typed.phase.types,
             &mut typed.phase.symbols,
+            &typed.config.modules,
         );
         lowerer.lower().unwrap()
     }
@@ -1722,6 +1742,15 @@ pub mod tests {
                 }],
             }
         );
+        assert!(
+            program
+                .functions
+                .get(&Symbol::InstanceMethod(InstanceMethodId {
+                    module_id: ModuleId::Core,
+                    local_id: 5
+                }))
+                .is_some()
+        )
     }
 
     #[test]

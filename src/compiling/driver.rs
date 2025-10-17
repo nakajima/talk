@@ -128,7 +128,7 @@ impl Source {
 
 pub struct Driver<Phase: DriverPhase = Initial> {
     files: Vec<Source>,
-    config: DriverConfig,
+    pub config: DriverConfig,
     pub phase: Phase,
 }
 
@@ -255,6 +255,7 @@ impl Driver<Typed> {
             &mut self.phase.asts,
             &mut self.phase.types,
             &mut self.phase.symbols,
+            &self.config.modules,
         );
         let program = lowerer.lower().map_err(CompileError::Lowering)?;
         Ok(Driver {

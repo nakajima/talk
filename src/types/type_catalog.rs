@@ -204,7 +204,6 @@ impl TypeCatalog<InferTy> {
 
 impl<T: SomeType> TypeCatalog<T> {
     pub fn lookup_member(&self, receiver: &Symbol, label: &Label) -> Option<Symbol> {
-        println!("lookup_member {receiver:?}.{label}");
         if let Some(methods) = self.properties.get(receiver)
             && let Some(sym) = methods.get(label)
         {

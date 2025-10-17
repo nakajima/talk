@@ -22,7 +22,7 @@ use crate::{
 pub struct Monomorphizer<'a> {
     asts: &'a mut IndexMap<Source, AST<NameResolved>>,
     types: &'a mut Types,
-    functions: IndexMap<Symbol, PolyFunction>,
+    pub(super) functions: IndexMap<Symbol, PolyFunction>,
     specializations: IndexMap<Symbol, Vec<Specialization>>,
 }
 
