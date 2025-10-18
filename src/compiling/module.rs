@@ -8,7 +8,7 @@ use crate::{ir::program::Program, name_resolution::symbol::Symbol, types::type_s
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
 pub enum ModuleId {
     Core,
-    Prelude,
+    Builtin,
     #[default]
     Current,
     External(u32),
@@ -18,7 +18,7 @@ impl Display for ModuleId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Core => write!(f, "C"),
-            Self::Prelude => write!(f, "P"),
+            Self::Builtin => write!(f, "B"),
             Self::Current => write!(f, "_"),
             Self::External(id) => write!(f, "{id}"),
         }

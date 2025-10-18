@@ -12,7 +12,6 @@ use crate::{
         lowerer::{Lowerer, PolyFunction, Specialization, Substitutions},
         terminator::Terminator,
     },
-    label::Label,
     name::Name,
     name_resolution::{name_resolver::NameResolved, symbol::Symbol},
     types::{ty::Ty, type_session::Types},
@@ -37,8 +36,8 @@ impl<'a> Monomorphizer<'a> {
     }
 
     #[instrument(skip(self))]
-    pub fn monomorphize(&mut self) -> IndexMap<Symbol, Function<IrTy, Label>> {
-        let mut result = IndexMap::<Symbol, Function<IrTy, Label>>::default();
+    pub fn monomorphize(&mut self) -> IndexMap<Symbol, Function<IrTy>> {
+        let mut result = IndexMap::<Symbol, Function<IrTy>>::default();
         let functions = self.functions.clone();
         for func in functions.into_values() {
             self.monomorphize_func(func, &mut result);
@@ -50,7 +49,7 @@ impl<'a> Monomorphizer<'a> {
     fn monomorphize_func(
         &mut self,
         func: PolyFunction,
-        result: &mut IndexMap<Symbol, Function<IrTy, Label>>,
+        result: &mut IndexMap<Symbol, Function<IrTy>>,
     ) {
         for specialization in self
             .specializations
@@ -79,9 +78,9 @@ impl<'a> Monomorphizer<'a> {
     #[instrument(skip(self, block), fields(block = %block))]
     fn monomorphize_block(
         &mut self,
-        block: BasicBlock<Ty, Label>,
+        block: BasicBlock<Ty>,
         substitutions: &Substitutions,
-    ) -> BasicBlock<IrTy, Label> {
+    ) -> BasicBlock<IrTy> {
         BasicBlock {
             id: block.id,
             instructions: block
@@ -112,9 +111,9 @@ impl<'a> Monomorphizer<'a> {
     #[instrument(skip(self, instruction), fields(instruction = %instruction), ret)]
     fn monomorphize_instruction(
         &mut self,
-        instruction: Instruction<Ty, Label>,
+        instruction: Instruction<Ty>,
         substitutions: &Substitutions,
-    ) -> Instruction<IrTy, Label> {
+    ) -> Instruction<IrTy> {
         instruction.map_type(|ty| self.monomorphize_ty(ty, substitutions))
     }
 
@@ -213,7 +212,7 @@ impl<'a> Monomorphizer<'a> {
         &mut self,
         func: &PolyFunction,
         specialization: &Specialization,
-        result: &mut IndexMap<Symbol, Function<IrTy, Label>>,
+        result: &mut IndexMap<Symbol, Function<IrTy>>,
     ) {
         let specialized_func = Function {
             name: specialization.name.clone(),

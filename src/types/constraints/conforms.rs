@@ -4,6 +4,7 @@ use rustc_hash::FxHashMap;
 use tracing::instrument;
 
 use crate::{
+    compiling::module::ModuleId,
     name_resolution::symbol::{ProtocolId, Symbol},
     node_id::NodeID,
     span::Span,
@@ -56,7 +57,12 @@ impl Conforms {
 
             let impl_symbol = session
                 .lookup_member(&self.symbol, label)
-                .expect("didn't get member impl symbol");
+                .unwrap_or_else(|| {
+                    panic!(
+                        "didn't get member impl symbol: {label:?} for {:?}",
+                        self.symbol
+                    )
+                });
 
             let Some(protocol_entry) = session.lookup(req_symbol) else {
                 // We don't have our protocol typed yet
@@ -104,7 +110,7 @@ impl Conforms {
         next_wants: &mut Wants,
     ) -> Result<bool, TypeError> {
         // This is gross. We should just make it easier to generate type vars off something that isn't a whole-ass session.
-        let mut session = TypeSession::new(Rc::new(Default::default()));
+        let mut session = TypeSession::new(ModuleId::Current, Rc::new(Default::default()));
 
         // Instantiate both at the same level
         let level = Level(999); // High level so nothing escapes

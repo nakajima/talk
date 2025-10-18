@@ -629,17 +629,11 @@ impl<'a> InferencePass<'a> {
 
                 self.infer_block(body, level, wants)
             }
-            DeclKind::Protocol {
-                body,
-                ..
-            } => {
+            DeclKind::Protocol { body, .. } => {
                 // Protocols aren't nominals, they're protocols - just infer the body
                 self.infer_block(body, level, wants)
             }
-            DeclKind::Extend {
-                body,
-                ..
-            } => {
+            DeclKind::Extend { body, .. } => {
                 // Extensions can be on any type (nominals or builtins) - just infer the body
                 self.infer_block(body, level, wants)
             }

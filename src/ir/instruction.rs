@@ -2,6 +2,7 @@ use std::str::FromStr;
 
 use crate::{
     ir::{ir_error::IRError, ir_ty::IrTy, list::List, register::Register, value::Value},
+    label::Label,
     node_id::{FileID, NodeID},
     types::ty::Ty,
 };
@@ -48,8 +49,48 @@ pub enum CmpOperator {
     NotEquals,
 }
 
+impl std::fmt::Display for CmpOperator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CmpOperator::Greater => write!(f, ">"),
+            CmpOperator::GreaterEquals => write!(f, ">="),
+            CmpOperator::Less => write!(f, "<"),
+            CmpOperator::LessEquals => write!(f, "<="),
+            CmpOperator::Equals => write!(f, "=="),
+            CmpOperator::NotEquals => write!(f, "!="),
+        }
+    }
+}
+
+impl FromStr for CmpOperator {
+    type Err = IRError;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.starts_with(">=") {
+            return Ok(CmpOperator::GreaterEquals);
+        }
+        if s.starts_with(">") {
+            return Ok(CmpOperator::Greater);
+        }
+        if s.starts_with("<=") {
+            return Ok(CmpOperator::LessEquals);
+        }
+        if s.starts_with(">") {
+            return Ok(CmpOperator::Less);
+        }
+        if s.starts_with("==") {
+            return Ok(CmpOperator::Equals);
+        }
+        if s.starts_with("!=") {
+            return Ok(CmpOperator::NotEquals);
+        }
+        Err(IRError::CouldNotParse(format!(
+            "No match cmp operator: {s:?}"
+        )))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
-pub enum Instruction<T, F> {
+pub enum Instruction<T> {
     #[doc = "$dest = const $ty $val $meta"]
     Constant {
         dest: Register,
@@ -57,11 +98,12 @@ pub enum Instruction<T, F> {
         val: Value,
         meta: List<InstructionMeta>,
     },
-    #[doc = "$dest = cmp $op $lhs $rhs $meta"]
+    #[doc = "$dest = cmp $ty $lhs $op $rhs $meta"]
     Cmp {
         dest: Register,
         lhs: Value,
         rhs: Value,
+        ty: T,
         op: CmpOperator,
         meta: List<InstructionMeta>,
     },
@@ -119,7 +161,7 @@ pub enum Instruction<T, F> {
         dest: Register,
         ty: T,
         record: Register,
-        field: F,
+        field: Label,
         meta: List<InstructionMeta>,
     },
     #[doc = "$dest = setfield $ty $record $field $val $meta"]
@@ -128,13 +170,13 @@ pub enum Instruction<T, F> {
         val: Value,
         ty: T,
         record: Register,
-        field: F,
+        field: Label,
         meta: List<InstructionMeta>,
     },
 }
 
-impl<T, F> Instruction<T, F> {
-    pub fn map_type<U>(self, mut map: impl FnMut(T) -> U) -> Instruction<U, F> {
+impl<T> Instruction<T> {
+    pub fn map_type<U>(self, mut map: impl FnMut(T) -> U) -> Instruction<U> {
         match self {
             Instruction::Constant {
                 dest,
@@ -262,20 +304,22 @@ impl<T, F> Instruction<T, F> {
                 rhs,
                 op,
                 meta,
+                ty,
             } => Instruction::Cmp {
                 dest,
                 lhs,
                 rhs,
                 op,
                 meta,
+                ty: map(ty),
             },
         }
     }
 }
 
 #[allow(clippy::from_over_into)]
-impl<F> Into<Instruction<Ty, F>> for Instruction<IrTy, F> {
-    fn into(self) -> Instruction<Ty, F> {
+impl Into<Instruction<Ty>> for Instruction<IrTy> {
+    fn into(self) -> Instruction<Ty> {
         self.map_type(Into::into)
     }
 }
@@ -313,18 +357,14 @@ where
 
 #[cfg(test)]
 pub mod tests {
-    use crate::{
-        ir::{
-            instruction::Instruction, ir_ty::IrTy, parse_instruction, register::Register,
-            value::Value,
-        },
-        label::Label,
+    use crate::ir::{
+        instruction::Instruction, ir_ty::IrTy, parse_instruction, register::Register, value::Value,
     };
 
     #[test]
     fn parses_constant_int() {
         assert_eq!(
-            parse_instruction::<IrTy, Label>("%1 = int 123"),
+            parse_instruction::<IrTy>("%1 = int 123"),
             Instruction::Constant {
                 dest: Register(1),
                 val: Value::Int(123),
@@ -337,7 +377,7 @@ pub mod tests {
     #[test]
     fn parses_constant_float() {
         assert_eq!(
-            parse_instruction::<IrTy, Label>("%1 = float 1.23"),
+            parse_instruction::<IrTy>("%1 = float 1.23"),
             Instruction::Constant {
                 dest: Register(1),
                 val: Value::Float(1.23),
@@ -350,7 +390,7 @@ pub mod tests {
     #[test]
     fn parses_add() {
         assert_eq!(
-            parse_instruction::<IrTy, Label>("%1 = add int %2 %3"),
+            parse_instruction::<IrTy>("%1 = add int %2 %3"),
             Instruction::Add {
                 dest: 1.into(),
                 ty: IrTy::Int,
@@ -364,7 +404,7 @@ pub mod tests {
     #[test]
     fn parses_sub() {
         assert_eq!(
-            parse_instruction::<IrTy, Label>("%1 = sub int %2 %3"),
+            parse_instruction::<IrTy>("%1 = sub int %2 %3"),
             Instruction::Sub {
                 dest: 1.into(),
                 ty: IrTy::Int,
@@ -378,7 +418,7 @@ pub mod tests {
     #[test]
     fn parses_mul() {
         assert_eq!(
-            parse_instruction::<IrTy, Label>("%1 = mul int %2 %3"),
+            parse_instruction::<IrTy>("%1 = mul int %2 %3"),
             Instruction::Mul {
                 dest: 1.into(),
                 ty: IrTy::Int,
@@ -392,7 +432,7 @@ pub mod tests {
     #[test]
     fn parses_div() {
         assert_eq!(
-            parse_instruction::<IrTy, Label>("%1 = div int %2 %3"),
+            parse_instruction::<IrTy>("%1 = div int %2 %3"),
             Instruction::Div {
                 dest: 1.into(),
                 ty: IrTy::Int,

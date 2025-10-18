@@ -80,7 +80,7 @@ impl Frame {
 }
 
 enum IR {
-    Instr(Instruction<IrTy, Label>),
+    Instr(Instruction<IrTy>),
     Term(Terminator<IrTy>),
 }
 
@@ -96,7 +96,7 @@ impl Display for IR {
 pub struct Interpreter {
     program: Program,
     frames: Vec<Frame>,
-    current_func: Option<Function<IrTy, Label>>,
+    current_func: Option<Function<IrTy>>,
     main_result: Option<Value>,
 }
 

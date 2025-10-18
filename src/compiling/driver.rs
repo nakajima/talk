@@ -212,21 +212,15 @@ impl Driver<NameResolved> {
     }
 
     pub fn typecheck(mut self) -> Result<Driver<Typed>, CompileError> {
-        let mut type_session = TypeSession::new(self.config.modules.clone());
+        let mut type_session = TypeSession::new(self.config.module_id, self.config.modules.clone());
 
         let raw = TypeHeaderPass::drive_all(&self.phase.asts);
-
-        for ast in self.phase.asts.values_mut() {
-            // TODO: do a drive_all for resolve pass
-            tracing::info!("resolving types in {:?}", ast.path);
-            TypeResolvePass::drive(ast, &mut type_session, raw.clone());
-        }
+        TypeResolvePass::drive(&mut type_session, raw.clone());
 
         let mut scc = SCCResolved::default();
         for ast in self.phase.asts.values_mut() {
-            // TODO: do a drive_all for deps pass
             tracing::info!("resolving type deps in {:?}", ast.path);
-            DependenciesPass::drive(&mut type_session, ast, &mut scc, self.config.module_id);
+            DependenciesPass::drive(ast, &mut scc, self.config.module_id);
         }
 
         for ast in self.phase.asts.values_mut() {

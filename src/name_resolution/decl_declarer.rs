@@ -113,7 +113,7 @@ macro_rules! some {
     (Builtin) => {
         $crate::name_resolution::symbol::Symbol::Builtin(
             $crate::name_resolution::symbol::BuiltinId::new(
-                $crate::compiling::module::ModuleId::Prelude,
+                $crate::compiling::module::ModuleId::Builtin,
                 0,
             ),
         )

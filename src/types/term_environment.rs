@@ -179,10 +179,20 @@ impl TermEnv {
     }
 
     pub fn insert(&mut self, sym: Symbol, entry: EnvEntry) {
-        if let Some(existing) = self.symbols.get(&sym)
-            && *existing != entry
-        {
-            tracing::warn!("overriding {sym:?} with {entry:?}. existing: {existing:?}");
+        if let Some(existing) = self.symbols.get(&sym) {
+            // Don't override a Scheme with a Mono - this happens when protocol
+            // default methods get their bodies inferred in a specific context
+            if matches!(existing, EnvEntry::Scheme(_)) && matches!(entry, EnvEntry::Mono(_)) {
+                tracing::debug!(
+                    "skipping override of {sym:?}: would replace Scheme with Mono. \
+                   existing: {existing:?}, attempted: {entry:?}"
+                );
+                return;
+            }
+
+            if *existing != entry {
+                tracing::warn!("overriding {sym:?} with {entry:?}. existing: {existing:?}");
+            }
         }
 
         tracing::debug!("promote {sym:?} = {entry:?}");

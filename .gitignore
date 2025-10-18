@@ -8,3 +8,4 @@ talk-ex/index.wit
 .docs-cache
 /documents
 server.log
+*.log

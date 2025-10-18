@@ -22,7 +22,6 @@ use crate::{
         pattern::{Pattern, PatternKind},
     },
     span::Span,
-    types::type_session::TypeSession,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -103,12 +102,7 @@ pub struct DependenciesPass<'a> {
 }
 
 impl<'a> DependenciesPass<'a> {
-    pub fn drive(
-        _session: &mut TypeSession,
-        ast: &mut AST<NameResolved>,
-        scc: &mut SCCResolved,
-        module_id: ModuleId,
-    ) {
+    pub fn drive(ast: &mut AST<NameResolved>, scc: &mut SCCResolved, module_id: ModuleId) {
         let mut pass = DependenciesPass {
             scc,
             binder_stack: Default::default(),
@@ -150,7 +144,7 @@ impl<'a> DependenciesPass<'a> {
         };
 
         // Skip symbols from external modules - they're already typed
-        if sym.module_id().is_some_and(|mid| mid != self.module_id) {
+        if sym.module_id().is_some_and(|id| id != self.module_id) {
             return;
         }
 
@@ -261,7 +255,7 @@ pub mod tests {
     ) -> (AST<NameResolved>, SCCResolved, TypeSession) {
         let (mut ast, mut session) = type_header_resolve_pass(code);
         let mut scc = SCCResolved::default();
-        DependenciesPass::drive(&mut session, &mut ast, &mut scc, ModuleId::default());
+        DependenciesPass::drive(&mut ast, &mut scc, ModuleId::default());
 
         (ast, scc, session)
     }

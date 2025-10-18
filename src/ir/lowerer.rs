@@ -63,7 +63,7 @@ enum LValue<F> {
 #[derive(Debug)]
 pub(super) struct CurrentFunction {
     current_block_idx: usize,
-    blocks: Vec<BasicBlock<Ty, Label>>,
+    blocks: Vec<BasicBlock<Ty>>,
     pub registers: RegisterAllocator,
 }
 
@@ -71,7 +71,7 @@ impl Default for CurrentFunction {
     fn default() -> Self {
         CurrentFunction {
             current_block_idx: 0,
-            blocks: vec![BasicBlock::<Ty, Label> {
+            blocks: vec![BasicBlock::<Ty> {
                 id: BasicBlockId(0),
                 instructions: Default::default(),
                 terminator: Terminator::Unreachable,
@@ -118,7 +118,7 @@ impl Substitutions {
 pub struct PolyFunction {
     pub name: Name,
     pub params: Vec<Value>,
-    pub blocks: Vec<BasicBlock<Ty, Label>>,
+    pub blocks: Vec<BasicBlock<Ty>>,
     pub ty: Ty,
     pub register_count: usize,
 }
@@ -404,7 +404,9 @@ impl<'a> Lowerer<'a> {
     ) -> Result<(Value, Ty), IRError> {
         match &stmt.kind {
             StmtKind::Expr(expr) => self.lower_expr(expr, Bind::Fresh, instantiations),
-            StmtKind::If(_expr, _block, _block1) => todo!(),
+            StmtKind::If(expr, _block, _block1) => {
+                self.lower_expr(expr, Bind::Fresh, instantiations)
+            }
             StmtKind::Return(_expr) => todo!(),
             StmtKind::Break => todo!(),
             StmtKind::Assignment(lhs, rhs) => self.lower_assignment(lhs, rhs, instantiations),
@@ -949,7 +951,7 @@ impl<'a> Lowerer<'a> {
         let ty = self.ty_from_symbol(&func.name.symbol().unwrap())?;
 
         let Ty::Func(param_tys, box mut ret_ty) = ty else {
-            panic!("didn't get func ty");
+            panic!("didn't get func ty for {:?}: {ty:?}", func.name);
         };
 
         let _s = tracing::trace_span!("pushing new current function");
@@ -1016,7 +1018,7 @@ impl<'a> Lowerer<'a> {
             string = string.replace("$?", &format!("%{}", dest.0));
         }
 
-        self.push_instr(parse_instruction::<IrTy, Label>(&string).into());
+        self.push_instr(parse_instruction::<IrTy>(&string).into());
 
         let ty = self.ty_from_id(&id).unwrap();
 
@@ -1024,7 +1026,7 @@ impl<'a> Lowerer<'a> {
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
-    fn push_instr(&mut self, instruction: Instruction<Ty, Label>) {
+    fn push_instr(&mut self, instruction: Instruction<Ty>) {
         let current_function = self.current_function_stack.last_mut().unwrap();
         current_function.blocks[current_function.current_block_idx]
             .instructions
@@ -1055,7 +1057,7 @@ impl<'a> Lowerer<'a> {
     /// Check to see if this symbol comes from an external module, if so we need to import the code into our program.
     fn check_import(&mut self, symbol: &Symbol) {
         if let Symbol::InstanceMethod(InstanceMethodId {
-            module_id: module_id @ (ModuleId::Core | ModuleId::Prelude | ModuleId::External(..)),
+            module_id: module_id @ (ModuleId::Core | ModuleId::Builtin | ModuleId::External(..)),
             ..
         }) = symbol
         {

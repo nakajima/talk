@@ -146,7 +146,7 @@ pub mod tests {
                 type_annotation: Some(annotation!(TypeAnnotationKind::Nominal {
                     name: Name::Resolved(
                         Symbol::Builtin(BuiltinId::new(
-                            crate::compiling::module::ModuleId::Prelude,
+                            crate::compiling::module::ModuleId::Builtin,
                             1
                         )),
                         "Int".into()

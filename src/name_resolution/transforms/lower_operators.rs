@@ -31,7 +31,26 @@ impl LowerOperators {
 
     fn enter_expr(&mut self, expr: &mut Expr) {
         let kind = match expr.kind.clone() {
-            ExprKind::Unary(_op, _rhs) => todo!(),
+            ExprKind::Unary(op, rhs) => {
+                let label = match op {
+                    TokenKind::Bang => Label::Named("not".into()),
+                    TokenKind::Minus => Label::Named("negated".into()),
+                    _ => return,
+                };
+
+                let span = rhs.span;
+                let member = Expr {
+                    id: NodeID(expr.id.0, self.node_ids.next_id()),
+                    span,
+                    kind: ExprKind::Member(Some(rhs), label, span),
+                };
+
+                ExprKind::Call {
+                    callee: member.into(),
+                    type_args: vec![],
+                    args: vec![],
+                }
+            }
             ExprKind::Binary(lhs, op, box rhs) => {
                 let label = match op {
                     TokenKind::Plus => Label::Named("add".into()),
@@ -39,6 +58,7 @@ impl LowerOperators {
                     TokenKind::Star => Label::Named("times".into()),
                     TokenKind::Slash => Label::Named("divide".into()),
                     TokenKind::EqualsEquals => Label::Named("equals".into()),
+                    TokenKind::BangEquals => Label::Named("notEquals".into()),
                     _ => return,
                 };
 

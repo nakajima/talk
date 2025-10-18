@@ -20,16 +20,15 @@ impl FromStr for BasicBlockId {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct BasicBlock<T, F> {
+pub struct BasicBlock<T> {
     pub id: BasicBlockId,
-    pub instructions: Vec<Instruction<T, F>>,
+    pub instructions: Vec<Instruction<T>>,
     pub terminator: Terminator<T>,
 }
 
-impl<T, F> std::fmt::Display for BasicBlock<T, F>
+impl<T> std::fmt::Display for BasicBlock<T>
 where
     T: std::fmt::Display,
-    F: std::fmt::Display,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut parts = vec![];

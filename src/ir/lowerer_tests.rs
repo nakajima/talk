@@ -167,7 +167,7 @@ pub mod tests {
                 params: vec![].into(),
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
                 register_count: 3,
-                blocks: vec![BasicBlock::<IrTy, Label> {
+                blocks: vec![BasicBlock::<IrTy> {
                     id: BasicBlockId(0),
                     instructions: vec![
                         Instruction::Ref {
@@ -359,7 +359,7 @@ pub mod tests {
                 params: vec![].into(),
                 register_count: 1,
                 ty: IrTy::Func(vec![], IrTy::Record(vec![IrTy::Int]).into()),
-                blocks: vec![BasicBlock::<IrTy, Label> {
+                blocks: vec![BasicBlock::<IrTy> {
                     id: BasicBlockId(0),
                     instructions: vec![Instruction::Record {
                         dest: 0.into(),
@@ -396,7 +396,7 @@ pub mod tests {
                     vec![],
                     IrTy::Record(vec![IrTy::Int, IrTy::Float, IrTy::Int]).into()
                 ),
-                blocks: vec![BasicBlock::<IrTy, Label> {
+                blocks: vec![BasicBlock::<IrTy> {
                     id: BasicBlockId(0),
                     instructions: vec![
                         Instruction::Constant {
@@ -440,7 +440,7 @@ pub mod tests {
                 params: vec![].into(),
                 register_count: 3,
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
-                blocks: vec![BasicBlock::<IrTy, Label> {
+                blocks: vec![BasicBlock::<IrTy> {
                     id: BasicBlockId(0),
                     instructions: vec![
                         Instruction::Constant {
@@ -513,7 +513,7 @@ pub mod tests {
                 params: vec![].into(),
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
                 register_count: 4,
-                blocks: vec![BasicBlock::<IrTy, Label> {
+                blocks: vec![BasicBlock::<IrTy> {
                     id: BasicBlockId(0),
                     instructions: vec![
                         Instruction::Constant {
@@ -661,7 +661,7 @@ pub mod tests {
                 params: vec![].into(),
                 ty: IrTy::Func(vec![], IrTy::Float.into()),
                 register_count: 5,
-                blocks: vec![BasicBlock::<IrTy, Label> {
+                blocks: vec![BasicBlock::<IrTy> {
                     id: BasicBlockId(0),
                     instructions: vec![
                         Instruction::Ref {
@@ -723,7 +723,7 @@ pub mod tests {
                 params: vec![Value::Reg(0)].into(),
                 ty: IrTy::Func(vec![IrTy::Int], IrTy::Int.into()),
                 register_count: 1,
-                blocks: vec![BasicBlock::<IrTy, Label> {
+                blocks: vec![BasicBlock::<IrTy> {
                     id: BasicBlockId(0),
                     instructions: vec![],
                     terminator: Terminator::Ret {
@@ -747,7 +747,7 @@ pub mod tests {
                 params: vec![Value::Reg(0)].into(),
                 ty: IrTy::Func(vec![IrTy::Float], IrTy::Float.into()),
                 register_count: 1,
-                blocks: vec![BasicBlock::<IrTy, Label> {
+                blocks: vec![BasicBlock::<IrTy> {
                     id: BasicBlockId(0),
                     instructions: vec![],
                     terminator: Terminator::Ret {
@@ -774,7 +774,7 @@ pub mod tests {
                 .functions
                 .get(&Symbol::Synthesized(SynthesizedId::from(1)))
                 .unwrap(),
-            Function::<IrTy, Label> {
+            Function::<IrTy> {
                 name: Name::Resolved(SynthesizedId::from(1).into(), "main".into()),
                 params: vec![].into(),
                 ty: IrTy::Func(vec![], IrTy::Int.into()),

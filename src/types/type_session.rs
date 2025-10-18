@@ -11,7 +11,7 @@ use crate::{
     name::Name,
     name_resolution::{
         name_resolver::NameResolved,
-        symbol::{ProtocolId, StructId, Symbol},
+        symbol::{AssociatedTypeId, BuiltinId, EnumId, ProtocolId, StructId, Symbol},
     },
     node_id::NodeID,
     node_kinds::{generic_decl::GenericDecl, type_annotation::TypeAnnotation},
@@ -109,6 +109,7 @@ pub struct ProtocolBound {
 
 #[derive(Debug)]
 pub struct TypeSession {
+    pub current_module_id: ModuleId,
     pub types_by_node: FxHashMap<NodeID, InferTy>,
     pub(super) vars: Vars,
     term_env: TermEnv,
@@ -169,7 +170,7 @@ impl Types {
 }
 
 impl TypeSession {
-    pub fn new(modules: Rc<ModuleEnvironment>) -> Self {
+    pub fn new(current_module_id: ModuleId, modules: Rc<ModuleEnvironment>) -> Self {
         let mut term_env = TermEnv {
             symbols: FxHashMap::default(),
         };
@@ -179,6 +180,7 @@ impl TypeSession {
         }
 
         TypeSession {
+            current_module_id,
             vars: Default::default(),
             skolem_map: Default::default(),
             meta_levels: Default::default(),
@@ -408,11 +410,11 @@ impl TypeSession {
 
     pub fn drive(ast: &mut AST<NameResolved>) -> TypeSession {
         let modules = ModuleEnvironment::default();
-        let mut session = TypeSession::new(Rc::new(modules));
+        let mut session = TypeSession::new(ModuleId::Core, Rc::new(modules));
         let raw = TypeHeaderPass::drive(ast);
-        let _headers = TypeResolvePass::drive(ast, &mut session, raw);
+        let _headers = TypeResolvePass::drive(&mut session, raw);
         let mut scc = SCCResolved::default();
-        DependenciesPass::drive(&mut session, ast, &mut scc, ModuleId::Current);
+        DependenciesPass::drive(ast, &mut scc, ModuleId::Current);
         InferencePass::perform(&mut session, &scc, ast);
         session
     }
@@ -617,7 +619,7 @@ impl TypeSession {
                 .get_symbol(sym)
                 .or_else(|| module.types.get_symbol(&sym.current()))
                 .cloned()
-                .expect("did not get external symbol");
+                .unwrap_or_else(|| panic!("did not get external symbol: {sym:?}"));
             let entry: EnvEntry = match entry.clone() {
                 TypeEntry::Mono(t) => EnvEntry::Mono(t.into()),
                 TypeEntry::Poly(..) => entry.into(),
@@ -740,7 +742,7 @@ impl TypeSession {
         }
 
         if let ProtocolId {
-            module_id: module_id @ (ModuleId::External(..) | ModuleId::Core | ModuleId::Prelude),
+            module_id: module_id @ (ModuleId::External(..) | ModuleId::Core | ModuleId::Builtin),
             local_id,
         } = protocol_id
             && let Some(module) = self.modules.modules.get(&module_id)
@@ -759,7 +761,15 @@ impl TypeSession {
                     local_id,
                 })
                 .cloned()
-                .expect("did not get external symbol");
+                .unwrap_or_else(|| {
+                    panic!(
+                        "did not get external symbol: {:?}",
+                        ProtocolId {
+                            module_id: module_key,
+                            local_id,
+                        }
+                    )
+                });
 
             let protocol = protocol.import(module_id);
             self.type_catalog
@@ -780,7 +790,7 @@ impl TypeSession {
         }
 
         if let Symbol::Struct(StructId {
-            module_id: module_id @ (ModuleId::External(..) | ModuleId::Core | ModuleId::Prelude),
+            module_id: module_id @ (ModuleId::External(..) | ModuleId::Core | ModuleId::Builtin),
             local_id,
         }) = *symbol
             && let Some(module) = self.modules.modules.get(&module_id)
@@ -820,7 +830,7 @@ impl TypeSession {
         }
 
         if let Symbol::Struct(StructId {
-            module_id: module_id @ (ModuleId::External(..) | ModuleId::Core | ModuleId::Prelude),
+            module_id: module_id @ (ModuleId::External(..) | ModuleId::Core | ModuleId::Builtin),
             local_id,
         }) = *symbol
             && let Some(module) = self.modules.modules.get(&module_id)

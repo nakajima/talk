@@ -3,14 +3,10 @@ use rustc_hash::FxHashMap;
 use tracing::{instrument, trace_span};
 
 use crate::{
-    ast::AST,
     indexset,
     label::Label,
     name::Name,
-    name_resolution::{
-        name_resolver::NameResolved,
-        symbol::{AssociatedTypeId, ProtocolId, Symbol},
-    },
+    name_resolution::symbol::{AssociatedTypeId, ProtocolId, Symbol},
     node_kinds::{
         generic_decl::GenericDecl,
         type_annotation::{TypeAnnotation, TypeAnnotationKind},
@@ -44,21 +40,15 @@ pub struct TypeResolvePass<'a> {
     raw: Raw,
     conformance_keys: Vec<(ConformanceKey, Span)>,
     self_symbols: Vec<Symbol>,
-    _ast: &'a mut AST<NameResolved>,
 }
 
 impl<'a> TypeResolvePass<'a> {
-    pub fn drive(
-        ast: &mut AST<NameResolved>,
-        session: &mut TypeSession,
-        raw: Raw,
-    ) -> HeadersResolved {
+    pub fn drive(session: &mut TypeSession, raw: Raw) -> HeadersResolved {
         let mut resolver = TypeResolvePass {
             session,
             raw,
             conformance_keys: Default::default(),
             self_symbols: Default::default(),
-            _ast: ast,
         };
 
         resolver.solve()
@@ -67,6 +57,16 @@ impl<'a> TypeResolvePass<'a> {
     // Go through all headers and gather up properties/methods/variants/etc. Don't perform
     // any generalization until the very end.
     fn solve(&mut self) -> HeadersResolved {
+        // Import conformances from imported modules first
+        for module in self.session.modules.modules.values() {
+            for (key, conformance) in &module.types.catalog.conformances {
+                // Only process if this is a primitive or type we haven't seen
+                // This ensures primitive conformances from Core are available
+                if !self.session.type_catalog.conformances.contains_key(key) {
+                    self.conformance_keys.push((*key, conformance.span));
+                }
+            }
+        }
         for (decl_id, type_def) in self.raw.type_constructors.clone().iter() {
             // First insert type parameters for generics
             let generics = self.raw.generics.get(decl_id).cloned().unwrap_or_default();
@@ -179,13 +179,19 @@ impl<'a> TypeResolvePass<'a> {
             }
         }
 
+        for (symbol, conformances) in self.raw.conformances.iter() {
+            for conformance in conformances {
+                self.conformance_keys.push((
+                    ConformanceKey {
+                        protocol_id: conformance.protocol_id,
+                        conforming_id: *symbol,
+                    },
+                    conformance.span,
+                ));
+            }
+        }
         // Resolve associated types for conforming types
         for (conformance_key, span) in self.conformance_keys.iter() {
-            let ty = self
-                .session
-                .lookup_nominal(&conformance_key.conforming_id)
-                .unwrap();
-
             let protocol = self
                 .session
                 .lookup_protocol(conformance_key.protocol_id)
@@ -203,7 +209,11 @@ impl<'a> TypeResolvePass<'a> {
                     };
 
                     // Look up the witness type in the conforming type's child_types
-                    let witness_symbol = self.raw.child_types.get(&ty.symbol)?.get(type_name)?;
+                    let witness_symbol = self
+                        .raw
+                        .child_types
+                        .get(&conformance_key.conforming_id)?
+                        .get(type_name)?;
 
                     Some((*id, *witness_symbol))
                 })
@@ -1024,11 +1034,11 @@ pub mod tests {
     pub fn type_header_resolve_pass_err(
         code: &'static str,
     ) -> Result<(AST<NameResolved>, TypeSession), TypeError> {
-        let mut resolved = resolve(code);
+        let resolved = resolve(code);
         let modules = ModuleEnvironment::default();
-        let mut session = TypeSession::new(Rc::new(modules));
+        let mut session = TypeSession::new(ModuleId::Current, Rc::new(modules));
         let raw = TypeHeaderPass::drive(&resolved);
-        _ = TypeResolvePass::drive(&mut resolved, &mut session, raw);
+        _ = TypeResolvePass::drive(&mut session, raw);
         Ok((resolved, session))
     }
 

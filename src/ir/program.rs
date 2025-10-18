@@ -2,18 +2,17 @@ use indexmap::IndexMap;
 
 use crate::{
     ir::{function::Function, ir_ty::IrTy, lowerer::PolyFunction},
-    label::Label,
     name_resolution::symbol::Symbol,
 };
 
 #[derive(Debug, Default, PartialEq)]
 pub struct Program {
-    pub functions: IndexMap<Symbol, Function<IrTy, Label>>,
+    pub functions: IndexMap<Symbol, Function<IrTy>>,
     pub polyfunctions: IndexMap<Symbol, PolyFunction>,
 }
 
 impl Program {
-    pub fn entrypoint(&self) -> Option<&Function<IrTy, Label>> {
+    pub fn entrypoint(&self) -> Option<&Function<IrTy>> {
         for (sym, func) in self.functions.iter() {
             if func.name.name_str() == "main"
                 && matches!(sym, Symbol::Global(..) | Symbol::Synthesized(..))

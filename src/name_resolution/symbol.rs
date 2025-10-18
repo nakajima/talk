@@ -31,7 +31,7 @@ macro_rules! impl_module_symbol_id {
             }
 
             pub fn import(self, module_id: ModuleId) -> Self {
-                if matches!(module_id, ModuleId::Core | ModuleId::Prelude) {
+                if matches!(module_id, ModuleId::Core | ModuleId::Builtin) {
                     return self;
                 }
 
@@ -158,23 +158,23 @@ impl std::fmt::Debug for Symbol {
 #[allow(non_upper_case_globals)]
 impl Symbol {
     pub const Int: Symbol = Symbol::Builtin(BuiltinId {
-        module_id: ModuleId::Prelude,
+        module_id: ModuleId::Builtin,
         local_id: 1,
     });
     pub const Float: Symbol = Symbol::Builtin(BuiltinId {
-        module_id: ModuleId::Prelude,
+        module_id: ModuleId::Builtin,
         local_id: 2,
     });
     pub const Bool: Symbol = Symbol::Builtin(BuiltinId {
-        module_id: ModuleId::Prelude,
+        module_id: ModuleId::Builtin,
         local_id: 3,
     });
     pub const Void: Symbol = Symbol::Builtin(BuiltinId {
-        module_id: ModuleId::Prelude,
+        module_id: ModuleId::Builtin,
         local_id: 4,
     });
     pub const IR: Symbol = Symbol::Builtin(BuiltinId {
-        module_id: ModuleId::Prelude,
+        module_id: ModuleId::Builtin,
         local_id: 5,
     });
 
@@ -194,7 +194,7 @@ impl Symbol {
         };
 
         match module_id {
-            ModuleId::Current | ModuleId::Prelude => None,
+            ModuleId::Current | ModuleId::Builtin => None,
             _ => Some(*module_id),
         }
     }

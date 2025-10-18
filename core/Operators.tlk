@@ -25,6 +25,32 @@ protocol Divide {
   func divide(rhs: RHS) -> Ret
 }
 
+protocol Equatable {
+  associated RHS
+
+  func equals(rhs: RHS) -> Bool
+
+  func notEquals(rhs: RHS) -> Bool {
+    if self.equals(rhs: rhs) {
+			false
+		} else {
+			true
+		}
+  }
+}
+
+protocol Negatable {
+  associated Ret
+
+  func negated() -> Ret
+}
+
+protocol Not {
+  associated Ret
+
+  func not() -> Ret
+}
+
 extend Int: Add {
   func add(rhs: Int) -> Int {
     __IR("$? = add int %0 %1")
@@ -36,6 +62,7 @@ extend Float: Add {
     __IR("$? = add float %0 %1")
   }
 }
+
 
 extend Int: Subtract {
   func minus(rhs: Int) -> Int {
@@ -70,5 +97,51 @@ extend Int: Divide {
 extend Float: Divide {
   func divide(rhs: Float) -> Float {
     __IR("$? = div float %0 %1")
+  }
+}
+
+// Equatable Conformances (x == y)
+
+extend Int: Equatable {
+  func equals(rhs: Int) -> Bool {
+    __IR("$? = cmp int %0 == %1")
+  }
+}
+
+extend Float: Equatable {
+  func equals(rhs: Int) -> Bool {
+    __IR("$? = cmp float %0 == %1")
+  }
+}
+
+extend Bool: Equatable {
+  func equals(rhs: Bool) -> Bool {
+    __IR("$? = cmp bool %0 == %1")
+  }
+}
+
+// Negatable Conformances (-x)
+
+extend Int: Negatable {
+  func negated() -> Int {
+    __IR("$? = sub int 0 %0")
+  }
+}
+
+extend Float: Negatable {
+  func negated() -> Bool {
+    __IR("$? = sub float 0 %0")
+  }
+}
+
+// Not Conformances (!x)
+
+extend Bool: Not {
+  func not() -> Bool {
+    if self {
+      false
+    } else {
+      true
+    }
   }
 }

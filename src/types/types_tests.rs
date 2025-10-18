@@ -112,6 +112,27 @@ pub mod tests {
     }
 
     #[test]
+    fn types_equals_int() {
+        let (ast, types) = typecheck("1 == 2; 1 != 2");
+        assert_eq!(ty(0, &ast, &types), Ty::Bool);
+        assert_eq!(ty(1, &ast, &types), Ty::Bool);
+    }
+
+    #[test]
+    fn types_equals_float() {
+        let (ast, types) = typecheck("1.0 == 2.0; 1.0 != 2.0");
+        assert_eq!(ty(0, &ast, &types), Ty::Bool);
+        assert_eq!(ty(1, &ast, &types), Ty::Bool);
+    }
+
+    #[test]
+    fn types_equals_string() {
+        let (ast, types) = typecheck("\"hello\" == \"world\" ; \"hello\" != \"world\"");
+        assert_eq!(ty(0, &ast, &types), Ty::Bool);
+        assert_eq!(ty(1, &ast, &types), Ty::Bool);
+    }
+
+    #[test]
     fn types_array_literal() {
         let (ast, types) = typecheck("[1,2,3]; [1.2, 3.4, 5.6]");
         assert_eq!(ty(0, &ast, &types), Ty::Array(Ty::Int));
@@ -1785,6 +1806,30 @@ pub mod tests {
             "didn't get diagnostic: {:?}",
             ast.diagnostics
         );
+    }
+
+    #[test]
+    fn checks_protocol_method() {
+        let (ast, types) = typecheck(
+            "
+            protocol Countable {
+                func getCount() -> Int
+                func getOtherCount() {
+                    self.getCount()
+                }
+            }
+
+            struct Person {}
+
+            extend Person: Countable {
+                func getCount() { 123 }
+            }
+
+            Person().getOtherCount()
+        ",
+        );
+
+        assert_eq!(ty(3, &ast, &types), Ty::Int)
     }
 
     #[test]

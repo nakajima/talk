@@ -120,8 +120,18 @@ impl<'a> TypeHeaderPass<'a> {
                 raw.variants.entry(symbol).or_default().extend(vars);
             }
 
-            raw.generics.extend(file_raw.generics);
-            raw.conformances.extend(file_raw.conformances);
+            // Merge nested maps for generics
+            for (symbol, generics) in file_raw.generics {
+                raw.generics.entry(symbol).or_default().extend(generics);
+            }
+
+            // Merge nested maps for conformances
+            for (symbol, conformances) in file_raw.conformances {
+                raw.conformances
+                    .entry(symbol)
+                    .or_default()
+                    .extend(conformances);
+            }
 
             // Merge nested maps for child_types
             for (symbol, children) in file_raw.child_types {
@@ -796,7 +806,7 @@ pub mod tests {
                 symbol: Symbol::Property(PropertyId::from(1)),
                 is_static: false,
                 ty_repr: ASTTyRepr::Annotated(annotation!(TypeAnnotationKind::Nominal {
-                    name: Name::Resolved(Symbol::Builtin(BuiltinId::new(crate::compiling::module::ModuleId::Prelude, 1)), "Int".into()),
+                    name: Name::Resolved(Symbol::Builtin(BuiltinId::new(crate::compiling::module::ModuleId::Builtin, 1)), "Int".into()),
                     name_span: Span::ANY,
                     generics: vec![]
                 })),

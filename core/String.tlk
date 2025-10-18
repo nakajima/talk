@@ -5,3 +5,9 @@ extend String: Add<String, String> {
     self
   }
 }
+
+extend String: Equatable<String> {
+  func equals(rhs: String) -> Bool {
+    false
+  }
+}
