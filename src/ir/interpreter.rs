@@ -248,6 +248,7 @@ impl Interpreter {
 
                 self.write_register(&dest, Value::Ref(val));
             }
+            IR::Instr(Instruction::Cmp { .. }) => todo!(),
         }
     }
 

@@ -39,12 +39,30 @@ impl FromStr for InstructionMeta {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub enum CmpOperator {
+    Greater,
+    GreaterEquals,
+    Less,
+    LessEquals,
+    Equals,
+    NotEquals,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum Instruction<T, F> {
     #[doc = "$dest = const $ty $val $meta"]
     Constant {
         dest: Register,
         ty: T,
         val: Value,
+        meta: List<InstructionMeta>,
+    },
+    #[doc = "$dest = cmp $op $lhs $rhs $meta"]
+    Cmp {
+        dest: Register,
+        lhs: Value,
+        rhs: Value,
+        op: CmpOperator,
         meta: List<InstructionMeta>,
     },
     #[doc = "$dest = add $ty $a $b $meta"]
@@ -236,6 +254,19 @@ impl<T, F> Instruction<T, F> {
                 ty: map(ty),
                 callee,
                 args,
+                meta,
+            },
+            Instruction::Cmp {
+                dest,
+                lhs,
+                rhs,
+                op,
+                meta,
+            } => Instruction::Cmp {
+                dest,
+                lhs,
+                rhs,
+                op,
                 meta,
             },
         }
