@@ -6,7 +6,7 @@ use crate::{
     indexset,
     label::Label,
     name::Name,
-    name_resolution::symbol::{AssociatedTypeId, ProtocolId, Symbol},
+    name_resolution::symbol::{ProtocolId, Symbol},
     node_kinds::{
         generic_decl::GenericDecl,
         type_annotation::{TypeAnnotation, TypeAnnotationKind},
@@ -179,45 +179,45 @@ impl<'a> TypeResolvePass<'a> {
             }
         }
 
-        for (symbol, conformances) in self.raw.conformances.iter() {
-            for conformance in conformances {
-                self.conformance_keys.push((
-                    ConformanceKey {
-                        protocol_id: conformance.protocol_id,
-                        conforming_id: *symbol,
-                    },
-                    conformance.span,
-                ));
-            }
-        }
         // Resolve associated types for conforming types
         for (conformance_key, span) in self.conformance_keys.iter() {
             let protocol = self
                 .session
                 .lookup_protocol(conformance_key.protocol_id)
                 .unwrap();
-
-            // Get the protocol's associated types from the protocol definition
-            let protocol_associated_types = protocol.associated_types.clone();
-
-            // Map each protocol associated type to the conforming type's witness
-            let associated_types: FxHashMap<AssociatedTypeId, Symbol> = protocol_associated_types
+            let associated_types = protocol
+                .associated_types
                 .iter()
-                .filter_map(|(name, _associated)| {
-                    let Name::Resolved(Symbol::AssociatedType(id), type_name) = name else {
-                        return None;
+                .map(|(_, associated)| {
+                    let Symbol::AssociatedType(id) = &associated.symbol else {
+                        unreachable!()
                     };
 
-                    // Look up the witness type in the conforming type's child_types
-                    let witness_symbol = self
-                        .raw
-                        .child_types
-                        .get(&conformance_key.conforming_id)?
-                        .get(type_name)?;
-
-                    Some((*id, *witness_symbol))
+                    (*id, ConformanceRequirement::Unfulfilled(associated.symbol))
                 })
                 .collect();
+
+            // // Get the protocol's associated types from the protocol definition
+            // let protocol_associated_types = protocol.associated_types.clone();
+
+            // // Map each protocol associated type to the conforming type's witness
+            // let associated_types: FxHashMap<AssociatedTypeId, Symbol> = protocol_associated_types
+            //     .iter()
+            //     .filter_map(|(name, _associated)| {
+            //         let Name::Resolved(Symbol::AssociatedType(id), type_name) = name else {
+            //             return None;
+            //         };
+
+            //         // Look up the witness type in the conforming type's child_types
+            //         let witness_symbol = self
+            //             .raw
+            //             .child_types
+            //             .get(&conformance_key.conforming_id)?
+            //             .get(type_name)?;
+
+            //         Some((*id, *witness_symbol))
+            //     })
+            //     .collect();
 
             self.session.type_catalog.conformances.insert(
                 *conformance_key,
@@ -1256,7 +1256,7 @@ pub mod tests {
                     "setA".into() => ConformanceRequirement::Unfulfilled(Symbol::InstanceMethod(InstanceMethodId::from(2)))
                 ),
                 span: Span::ANY,
-                associated_types: fxhashmap!(AssociatedTypeId::from(1) => Symbol::TypeAlias(TypeAliasId::from(2)))
+                associated_types: fxhashmap!(AssociatedTypeId::from(1) => ConformanceRequirement::Fulfilled { symbol: Symbol::TypeAlias(TypeAliasId::from(2)) })
             }
         )
     }

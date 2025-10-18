@@ -364,7 +364,7 @@ pub mod tests {
     #[test]
     fn parses_constant_int() {
         assert_eq!(
-            parse_instruction::<IrTy>("%1 = int 123"),
+            parse_instruction::<IrTy>("%1 = const int 123"),
             Instruction::Constant {
                 dest: Register(1),
                 val: Value::Int(123),
@@ -377,7 +377,7 @@ pub mod tests {
     #[test]
     fn parses_constant_float() {
         assert_eq!(
-            parse_instruction::<IrTy>("%1 = float 1.23"),
+            parse_instruction::<IrTy>("%1 = const float 1.23"),
             Instruction::Constant {
                 dest: Register(1),
                 val: Value::Float(1.23),

@@ -276,19 +276,11 @@ impl<'a> TypeHeaderPass<'a> {
                     .push(TypeExtension { node_id: decl.id });
             }
             DeclKind::Extend {
-                name: name @ Name::Resolved(sym @ Symbol::Builtin(builtin_id), type_name),
+                name: name @ Name::Resolved(sym @ Symbol::Builtin(builtin_id), ..),
                 body: Block { body, .. },
                 conformances,
                 ..
             } => {
-                if let Some(parent_id) = self.type_stack.last() {
-                    self.raw
-                        .child_types
-                        .entry(*parent_id)
-                        .or_default()
-                        .insert(type_name.to_string(), *sym);
-                }
-
                 self.type_stack.push(*sym);
                 self.collect_fields(name, decl.id, body);
 

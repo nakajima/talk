@@ -11,7 +11,7 @@ use crate::{
     name::Name,
     name_resolution::{
         name_resolver::NameResolved,
-        symbol::{AssociatedTypeId, BuiltinId, EnumId, ProtocolId, StructId, Symbol},
+        symbol::{ProtocolId, StructId, Symbol},
     },
     node_id::NodeID,
     node_kinds::{generic_decl::GenericDecl, type_annotation::TypeAnnotation},
@@ -651,7 +651,7 @@ impl TypeSession {
         }
 
         if let Symbol::Struct(StructId {
-            module_id: module_id @ (ModuleId::External(..) | ModuleId::Core | ModuleId::Prelude),
+            module_id: module_id @ (ModuleId::External(..) | ModuleId::Core),
             local_id,
         }) = *symbol
             && let Some(module) = self.modules.modules.get(&module_id)
@@ -790,7 +790,7 @@ impl TypeSession {
         }
 
         if let Symbol::Struct(StructId {
-            module_id: module_id @ (ModuleId::External(..) | ModuleId::Core | ModuleId::Builtin),
+            module_id: module_id @ (ModuleId::External(..) | ModuleId::Core),
             local_id,
         }) = *symbol
             && let Some(module) = self.modules.modules.get(&module_id)
@@ -830,7 +830,7 @@ impl TypeSession {
         }
 
         if let Symbol::Struct(StructId {
-            module_id: module_id @ (ModuleId::External(..) | ModuleId::Core | ModuleId::Builtin),
+            module_id: module_id @ (ModuleId::External(..) | ModuleId::Core),
             local_id,
         }) = *symbol
             && let Some(module) = self.modules.modules.get(&module_id)

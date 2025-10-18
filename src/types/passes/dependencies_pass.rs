@@ -48,7 +48,7 @@ pub struct Conformance {
     pub conforming_id: Symbol,
     pub protocol_id: ProtocolId,
     pub requirements: FxHashMap<Label, ConformanceRequirement>,
-    pub associated_types: FxHashMap<AssociatedTypeId, Symbol>,
+    pub associated_types: FxHashMap<AssociatedTypeId, ConformanceRequirement>,
     pub span: Span,
 }
 
@@ -253,7 +253,7 @@ pub mod tests {
     pub fn resolve_dependencies(
         code: &'static str,
     ) -> (AST<NameResolved>, SCCResolved, TypeSession) {
-        let (mut ast, mut session) = type_header_resolve_pass(code);
+        let (mut ast, session) = type_header_resolve_pass(code);
         let mut scc = SCCResolved::default();
         DependenciesPass::drive(&mut ast, &mut scc, ModuleId::default());
 
