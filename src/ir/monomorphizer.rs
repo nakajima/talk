@@ -104,6 +104,7 @@ impl<'a> Monomorphizer<'a> {
                 val,
                 ty: self.monomorphize_ty(ty, substitutions),
             },
+            Terminator::Branch { cond, conseq, alt } => Terminator::Branch { cond, conseq, alt },
             Terminator::Unreachable => Terminator::Unreachable,
         }
     }

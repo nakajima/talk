@@ -13,3 +13,6 @@ pub mod program;
 pub mod register;
 pub mod terminator;
 pub mod value;
+
+#[cfg(test)]
+pub mod lowerer_tests;

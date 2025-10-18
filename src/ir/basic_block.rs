@@ -1,7 +1,23 @@
-use crate::ir::{instruction::Instruction, terminator::Terminator};
+use std::{fmt::Display, str::FromStr};
+
+use crate::ir::{instruction::Instruction, ir_error::IRError, terminator::Terminator};
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct BasicBlockId(pub u32);
+
+impl Display for BasicBlockId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "#{}", self.0)
+    }
+}
+
+impl FromStr for BasicBlockId {
+    type Err = IRError;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let i = str::parse::<u32>(&s[1..]).map_err(|e| IRError::CouldNotParse(format!("{e:?}")))?;
+        Ok(BasicBlockId(i))
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct BasicBlock<T, F> {

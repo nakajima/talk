@@ -40,16 +40,11 @@ impl FromStr for InstructionMeta {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Instruction<T, F> {
-    #[doc = "$dest = int $val $meta"]
-    ConstantInt {
+    #[doc = "$dest = const $ty $val $meta"]
+    Constant {
         dest: Register,
-        val: i64,
-        meta: List<InstructionMeta>,
-    },
-    #[doc = "$dest = float $val $meta"]
-    ConstantFloat {
-        dest: Register,
-        val: f64,
+        ty: T,
+        val: Value,
         meta: List<InstructionMeta>,
     },
     #[doc = "$dest = add $ty $a $b $meta"]
@@ -123,9 +118,17 @@ pub enum Instruction<T, F> {
 impl<T, F> Instruction<T, F> {
     pub fn map_type<U>(self, mut map: impl FnMut(T) -> U) -> Instruction<U, F> {
         match self {
-            Instruction::ConstantInt { dest, val, meta } => {
-                Instruction::ConstantInt { dest, val, meta }
-            }
+            Instruction::Constant {
+                dest,
+                val,
+                meta,
+                ty,
+            } => Instruction::Constant {
+                dest,
+                val,
+                meta,
+                ty: map(ty),
+            },
             Instruction::Record {
                 dest,
                 ty,
@@ -165,9 +168,6 @@ impl<T, F> Instruction<T, F> {
                 field,
                 meta,
             },
-            Instruction::ConstantFloat { dest, val, meta } => {
-                Instruction::ConstantFloat { dest, val, meta }
-            }
             Instruction::Ref { dest, ty, val } => Instruction::Ref {
                 dest,
                 ty: map(ty),
@@ -294,9 +294,10 @@ pub mod tests {
     fn parses_constant_int() {
         assert_eq!(
             parse_instruction::<IrTy, Label>("%1 = int 123"),
-            Instruction::ConstantInt {
+            Instruction::Constant {
                 dest: Register(1),
-                val: 123,
+                val: Value::Int(123),
+                ty: IrTy::Int,
                 meta: vec![].into(),
             }
         )
@@ -306,9 +307,10 @@ pub mod tests {
     fn parses_constant_float() {
         assert_eq!(
             parse_instruction::<IrTy, Label>("%1 = float 1.23"),
-            Instruction::ConstantFloat {
+            Instruction::Constant {
                 dest: Register(1),
-                val: 1.23,
+                val: Value::Float(1.23),
+                ty: IrTy::Float,
                 meta: vec![].into(),
             }
         )

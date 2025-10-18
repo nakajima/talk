@@ -54,6 +54,18 @@ impl FromStr for Value {
     }
 }
 
+impl From<i64> for Value {
+    fn from(value: i64) -> Self {
+        Value::Int(value)
+    }
+}
+
+impl From<f64> for Value {
+    fn from(value: f64) -> Self {
+        Value::Float(value)
+    }
+}
+
 impl std::fmt::Display for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

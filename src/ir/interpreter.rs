@@ -170,11 +170,10 @@ impl Interpreter {
                 }
             }
             IR::Term(Terminator::Unreachable) => panic!("Reached unreachable"),
-            IR::Instr(Instruction::ConstantInt { dest, val, .. }) => {
-                self.write_register(&dest, Value::Int(val));
-            }
-            IR::Instr(Instruction::ConstantFloat { dest, val, .. }) => {
-                self.write_register(&dest, Value::Float(val));
+            IR::Term(Terminator::Branch { .. }) => todo!(),
+            IR::Instr(Instruction::Constant { dest, val, .. }) => {
+                let val = self.val(val);
+                self.write_register(&dest, val);
             }
             IR::Instr(Instruction::Add { dest, a, b, .. }) => {
                 let result = self.val(a).add(self.val(b));
@@ -316,7 +315,7 @@ impl Interpreter {
 
 #[cfg(test)]
 pub mod tests {
-    use crate::ir::lowerer::tests::lower;
+    use crate::ir::lowerer_tests::tests::lower;
 
     use super::*;
 
