@@ -1,17 +1,14 @@
-use std::rc::Rc;
-
 use rustc_hash::FxHashMap;
 use tracing::instrument;
 
 use crate::{
-    compiling::module::ModuleId,
-    name_resolution::symbol::{ProtocolId, Symbol},
+    name_resolution::symbol::{InstanceMethodId, ProtocolId, Symbol},
     node_id::NodeID,
     span::Span,
     types::{
         constraints::constraint::Constraint,
-        infer_ty::{InferTy, Level},
-        passes::{dependencies_pass::ConformanceRequirement, inference_pass::Meta},
+        infer_ty::Level,
+        passes::dependencies_pass::ConformanceRequirement,
         term_environment::EnvEntry,
         type_catalog::ConformanceKey,
         type_error::TypeError,
@@ -33,7 +30,7 @@ impl Conforms {
         &self,
         session: &mut TypeSession,
         next_wants: &mut Wants,
-        _substitutions: &mut UnificationSubstitutions,
+        substitutions: &mut UnificationSubstitutions,
     ) -> Result<bool, TypeError> {
         let mut conformances = TakeToSlot::new(&mut session.type_catalog.conformances);
         let conformance = conformances
@@ -46,12 +43,12 @@ impl Conforms {
         let unfulfilled = conformance
             .requirements
             .iter_mut()
-            .filter(|(_, s)| matches!(s, ConformanceRequirement::Unfulfilled(_)))
+            .filter(|(_, s)| matches!(s, ConformanceRequirement::UnfulfilledInstanceMethod(..)))
             .collect::<FxHashMap<_, _>>();
 
         let mut still_unfulfilled = vec![];
         for (label, requirement) in unfulfilled {
-            let ConformanceRequirement::Unfulfilled(req_symbol) = requirement else {
+            let ConformanceRequirement::UnfulfilledInstanceMethod(id) = requirement else {
                 unreachable!()
             };
 
@@ -64,7 +61,7 @@ impl Conforms {
                     )
                 });
 
-            let Some(protocol_entry) = session.lookup(req_symbol) else {
+            let Some(protocol_entry) = session.lookup(&(*id).into()) else {
                 // We don't have our protocol typed yet
                 tracing::trace!("didn't get {label} requirement entry");
                 next_wants.push(Constraint::Conforms(self.clone()));
@@ -80,14 +77,15 @@ impl Conforms {
             tracing::trace!("checking {label} conformance: {protocol_entry:?} <> {entry:?}");
 
             if self.check_method_satisfaction(
+                session,
                 &protocol_entry,
                 &entry,
-                session.meta_levels.clone(),
+                substitutions,
                 next_wants,
             )? {
-                *requirement = ConformanceRequirement::Fulfilled {
-                    symbol: impl_symbol,
-                }
+                *requirement = ConformanceRequirement::FulfilledInstanceMethod(
+                    InstanceMethodId::try_from(impl_symbol),
+                )
             } else {
                 still_unfulfilled.push(label)
             }
@@ -101,73 +99,53 @@ impl Conforms {
         }
     }
 
-    #[instrument(level = tracing::Level::TRACE, skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self, session))]
     fn check_method_satisfaction(
         &self,
+        session: &mut TypeSession,
         requirement: &EnvEntry,
         implementation: &EnvEntry,
-        meta_levels: FxHashMap<Meta, Level>,
+        substitutions: &mut UnificationSubstitutions,
         next_wants: &mut Wants,
     ) -> Result<bool, TypeError> {
-        // This is gross. We should just make it easier to generate type vars off something that isn't a whole-ass session.
-        let mut session = TypeSession::new(ModuleId::Current, Rc::new(Default::default()));
-
-        // Instantiate both at the same level
-        let level = Level(999); // High level so nothing escapes
-
-        // Use a temporary Wants that we discard - we're just checking unification, not solving constraints
-        let mut temp_wants = Wants::default();
-
+        let level = Level(1);
         let req_ty = match requirement {
             EnvEntry::Mono(ty) => ty.clone(),
             EnvEntry::Scheme(s) => {
-                s.inference_instantiate(
-                    NodeID::SYNTHESIZED,
-                    &mut session,
-                    level,
-                    &mut temp_wants,
-                    self.span,
-                )
-                .0
+                s.instantiate(NodeID::SYNTHESIZED, session, level, next_wants, self.span)
+                    .0
             }
         };
 
         let impl_ty = match implementation {
             EnvEntry::Mono(ty) => ty.clone(),
             EnvEntry::Scheme(s) => {
-                s.inference_instantiate(
-                    NodeID::SYNTHESIZED,
-                    &mut session,
-                    level,
-                    &mut temp_wants,
-                    self.span,
-                )
-                .0
+                s.instantiate(NodeID::SYNTHESIZED, session, level, next_wants, self.span)
+                    .0
             }
         };
 
-        let req_ty = match req_ty {
-            InferTy::Func(box param, box ret) => {
-                // If the parameter is already the correct nominal, keep it;
-                // otherwise replace it with the concrete conforming nominal and a fresh row meta.
-                let adjusted_param = match param {
-                    InferTy::Nominal { symbol, .. } if symbol == self.symbol => param,
-                    _ => {
-                        let row = session.new_row_meta_var(level);
-                        InferTy::Nominal {
-                            symbol: self.symbol,
-                            row: Box::new(row),
-                        }
-                    }
-                };
-                InferTy::Func(Box::new(adjusted_param), Box::new(ret))
-            }
-            other => other,
-        };
+        //let req_ty = match req_ty {
+        //    InferTy::Func(box param, box ret) => {
+        //        // If the parameter is already the correct nominal, keep it;
+        //        // otherwise replace it with the concrete conforming nominal and a fresh row meta.
+        //        let adjusted_param = match param {
+        //            InferTy::Nominal { symbol, .. } if symbol == self.symbol => param,
+        //            _ => {
+        //                let row = session.new_row_meta_var(level);
+        //                InferTy::Nominal {
+        //                    symbol: self.symbol,
+        //                    row: Box::new(row),
+        //                }
+        //            }
+        //        };
+        //        InferTy::Func(Box::new(adjusted_param), Box::new(ret))
+        //    }
+        //    other => other,
+        //};
 
         // Try to unify in a sandbox
-        let mut temp_subs = UnificationSubstitutions::new(session.meta_levels.clone());
-        match unify(&req_ty, &impl_ty, &mut temp_subs, &mut session) {
+        match unify(&req_ty, &impl_ty, substitutions, session) {
             Ok(_) => Ok(true),
             Err(_) => Ok(false), // Don't propagate error, just say "doesn't conform"
         }

@@ -36,40 +36,36 @@ async fn main() {
             talk::lsp::server::start().await;
         }
         Commands::Debug { filename } => {
-            use std::rc::Rc;
+            use std::path::PathBuf;
             init();
 
             use talk::{
-                compiling::module::{ModuleEnvironment, ModuleId},
+                compiling::driver::{Driver, Source},
                 formatter::{DebugHTMLFormatter, Formatter},
-                lexer::Lexer,
-                name_resolution::name_resolver::NameResolver,
-                node_id::FileID,
-                parser::Parser,
-                types::{type_session::TypeSession, types_decorator::TypesDecorator},
             };
 
-            let code = std::fs::read_to_string(filename).unwrap();
-            let lexer = Lexer::new(&code);
-            let parser = Parser::new(filename, FileID(0), lexer);
-            let parsed = parser.parse().unwrap();
-            let modules = ModuleEnvironment::default();
-            let mut resolver = NameResolver::new(Rc::new(modules), ModuleId::Current);
-            let mut resolved = resolver.resolve(vec![parsed]).into_iter().next().unwrap();
-
-            let session = TypeSession::drive(&mut resolved);
+            let driver = Driver::new(
+                vec![Source::from(PathBuf::from(filename))],
+                Default::default(),
+            );
+            let resolved = driver.parse().unwrap().resolve_names().unwrap();
+            let meta = resolved.phase.asts[0].meta.clone();
+            let typed = resolved.typecheck().unwrap();
 
             let formatter = Formatter::new_with_decorators(
-                &resolved.meta,
+                &meta,
                 vec![
                     Box::new(DebugHTMLFormatter {}),
-                    Box::new(TypesDecorator {
-                        types_by_node: session.types_by_node,
-                    }),
+                    //Box::new(TypesDecorator {
+                    //    types_by_node: typed.phase.types.types_by_node,
+                    //}),
                 ],
             );
 
-            println!("{}", formatter.format(&resolved.roots, 80));
+            println!(
+                "{}",
+                formatter.format(&typed.phase.asts[0].roots.clone(), 80)
+            );
         }
     }
 }

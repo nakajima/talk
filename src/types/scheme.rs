@@ -1,5 +1,4 @@
 use indexmap::IndexSet;
-use rustc_hash::FxHashMap;
 use tracing::instrument;
 
 use crate::{
@@ -9,13 +8,9 @@ use crate::{
         constraints::constraint::ConstraintCause,
         infer_row::{InferRow, RowParamId},
         infer_ty::{InferTy, Level, TypeParamId},
-        passes::{dependencies_pass::ConformanceRequirement, inference_pass::Meta},
         predicate::Predicate,
-        term_environment::EnvEntry,
         ty::{SomeType, Ty},
-        type_operations::{
-            InstantiationSubstitutions, UnificationSubstitutions, instantiate_ty, substitute,
-        },
+        type_operations::{InstantiationSubstitutions, instantiate_ty},
         type_session::TypeSession,
         wants::Wants,
     },
@@ -64,113 +59,15 @@ impl Scheme<Ty> {
 }
 
 impl Scheme<InferTy> {
-    #[instrument(skip(self, session, level, wants, span))]
-    pub fn inference_instantiate(
-        &self,
-        id: NodeID,
-        session: &mut TypeSession,
-        level: Level,
-        wants: &mut Wants,
-        span: Span,
-    ) -> (InferTy, InstantiationSubstitutions) {
-        // Map each quantified meta id to a fresh meta at this use-site level
-        let mut substitutions = InstantiationSubstitutions::default();
-
-        for forall in &self.foralls {
-            match forall {
-                ForAll::Ty(param) => {
-                    let InferTy::UnificationVar { id: meta, .. } = session.new_ty_meta_var(level)
-                    else {
-                        unreachable!()
-                    };
-                    session.reverse_instantiations.ty.insert(meta, *param);
-                    tracing::trace!("instantiating {param:?} with {meta:?}");
-                    substitutions.ty.insert(*param, meta);
-                    session
-                        .type_catalog
-                        .instantiations
-                        .ty
-                        .insert((id, *param), InferTy::UnificationVar { id: meta, level });
-
-                    if let Some(bounds) = session.type_param_bounds.get(param).cloned() {
-                        for bound in bounds {
-                            let protocol = session
-                                .lookup_protocol(bound.protocol_id)
-                                .expect("didn't get protocol bound");
-
-                            let mut substitutions = FxHashMap::default();
-                            substitutions.insert(
-                                InferTy::Param(*param),
-                                InferTy::UnificationVar { id: meta, level },
-                            );
-
-                            for (label, requirement) in &protocol.requirements {
-                                tracing::trace!("adding {label} requirement to {meta:?}");
-
-                                let ConformanceRequirement::Unfulfilled(sym) = requirement else {
-                                    unreachable!(
-                                        "protocol.requirements must always be unfulfilled"
-                                    );
-                                };
-
-                                let entry =
-                                    session.lookup(sym).expect("didn't get requirement entry");
-
-                                let ty = match entry {
-                                    EnvEntry::Mono(ty) => ty.clone(),
-                                    EnvEntry::Scheme(scheme) => scheme.ty.clone(),
-                                };
-
-                                wants.member(
-                                    id,
-                                    InferTy::UnificationVar { id: meta, level },
-                                    label.clone(),
-                                    substitute(ty, &substitutions),
-                                    ConstraintCause::Internal,
-                                    span,
-                                );
-                            }
-                        }
-                    }
-                }
-                ForAll::Row(param) => {
-                    let InferRow::Var(meta) = session.new_row_meta_var(level) else {
-                        unreachable!()
-                    };
-                    tracing::trace!("instantiating {param:?} with {meta:?}");
-                    substitutions.row.insert(*param, meta);
-                    session.reverse_instantiations.row.insert(meta, *param);
-                    session
-                        .type_catalog
-                        .instantiations
-                        .row
-                        .insert((id, *param), InferRow::Var(meta));
-                }
-            };
-        }
-
-        for predicate in &self.predicates {
-            let constraint = predicate.instantiate(id, &substitutions, span, level);
-            tracing::trace!("predicate instantiated: {predicate:?} -> {constraint:?}");
-            wants.push(constraint);
-        }
-
-        (
-            instantiate_ty(self.ty.clone(), &substitutions, level),
-            substitutions,
-        )
-    }
-
     // Used while solving
-    #[instrument(skip(self, session, level, wants, span, unification_substitutions))]
-    pub fn solver_instantiate(
+    #[instrument(skip(self, session, level, wants, span,))]
+    pub fn instantiate(
         &self,
         id: NodeID,
         session: &mut TypeSession,
         level: Level,
         wants: &mut Wants,
         span: Span,
-        unification_substitutions: &mut UnificationSubstitutions,
     ) -> (InferTy, InstantiationSubstitutions) {
         // Map each quantified meta id to a fresh meta at this use-site level
         let mut substitutions = InstantiationSubstitutions::default();
@@ -185,9 +82,6 @@ impl Scheme<InferTy> {
 
                     tracing::trace!("instantiating {param:?} with {meta:?}");
                     session.reverse_instantiations.ty.insert(meta, *param);
-                    unification_substitutions
-                        .meta_levels
-                        .insert(Meta::Ty(meta), level);
                     substitutions.ty.insert(*param, meta);
                     session
                         .type_catalog
@@ -200,9 +94,6 @@ impl Scheme<InferTy> {
                         unreachable!()
                     };
                     tracing::trace!("instantiating {param:?} with {meta:?}");
-                    unification_substitutions
-                        .meta_levels
-                        .insert(Meta::Row(meta), level);
                     substitutions.row.insert(*param, meta);
                     session.reverse_instantiations.row.insert(meta, *param);
                     session

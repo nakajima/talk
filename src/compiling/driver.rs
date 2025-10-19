@@ -215,7 +215,7 @@ impl Driver<NameResolved> {
         let mut type_session = TypeSession::new(self.config.module_id, self.config.modules.clone());
 
         let raw = TypeHeaderPass::drive_all(&self.phase.asts);
-        TypeResolvePass::drive(&mut type_session, raw.clone());
+        TypeResolvePass::drive(&mut type_session, &mut self.phase.symbols, raw.clone());
 
         let mut scc = SCCResolved::default();
         for ast in self.phase.asts.values_mut() {

@@ -304,6 +304,9 @@ impl NameResolver {
             Symbol::InstanceMethod(..) => {
                 Symbol::InstanceMethod(self.symbols.next_instance_method(module_id))
             }
+            Symbol::MethodRequirement(..) => {
+                Symbol::MethodRequirement(self.symbols.next_method_requirement(module_id))
+            }
             Symbol::StaticMethod(..) => {
                 Symbol::StaticMethod(self.symbols.next_static_method(module_id))
             }

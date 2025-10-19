@@ -1026,8 +1026,6 @@ pub mod tests {
         )
         .1;
 
-        println!("raw: {raw:#?}");
-
         assert_eq!(
             *raw.variants.get(&Symbol::Enum(EnumId::from(1))).unwrap(),
             crate::indexmap!(

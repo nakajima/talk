@@ -15,8 +15,8 @@ pub mod tests {
             name_resolver::{NameResolved, NameResolver, NameResolverError},
             symbol::{
                 AssociatedTypeId, BuiltinId, DeclaredLocalId, EnumId, GlobalId, InstanceMethodId,
-                ParamLocalId, PropertyId, ProtocolId, StaticMethodId, StructId, Symbol,
-                SynthesizedId, TypeAliasId, TypeParameterId, VariantId,
+                MethodRequirementId, ParamLocalId, PropertyId, ProtocolId, StaticMethodId,
+                StructId, Symbol, SynthesizedId, TypeAliasId, TypeParameterId, VariantId,
             },
         },
         node::Node,
@@ -1049,7 +1049,7 @@ pub mod tests {
                         id: NodeID::ANY,
                         span: Span::ANY,
                         name: Name::Resolved(
-                            Symbol::InstanceMethod(InstanceMethodId::from(1)),
+                            Symbol::MethodRequirement(MethodRequirementId::from(1)),
                             "buzz".into()
                         ),
                         params: vec![Parameter {
@@ -1106,7 +1106,7 @@ pub mod tests {
                         id: NodeID::ANY,
                         span: Span::ANY,
                         name: Name::Resolved(
-                            Symbol::InstanceMethod(InstanceMethodId::from(1)),
+                            Symbol::MethodRequirement(MethodRequirementId::from(1)),
                             "buzz".into()
                         ),
                         params: vec![Parameter {

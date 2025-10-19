@@ -23,6 +23,14 @@ macro_rules! impl_module_symbol_id {
         }
 
         impl $ty {
+            pub fn try_from(symbol: Symbol) -> Self {
+                let Symbol::$case(id) = symbol else {
+                    panic!("Unable to get {} from {symbol:?}", stringify!($ty));
+                };
+
+                id
+            }
+
             pub fn new(module_id: ModuleId, local_id: u32) -> Self {
                 Self {
                     module_id,
@@ -126,6 +134,7 @@ pub enum Symbol {
     Variant(VariantId),
     Protocol(ProtocolId),
     AssociatedType(AssociatedTypeId),
+    MethodRequirement(MethodRequirementId),
 }
 
 impl std::fmt::Debug for Symbol {
@@ -151,6 +160,7 @@ impl std::fmt::Debug for Symbol {
             Symbol::Variant(id) => write!(f, "@Variant({id})"),
             Symbol::Protocol(id) => write!(f, "@Protocol({id})"),
             Symbol::AssociatedType(id) => write!(f, "@AssociatedType({id})"),
+            Symbol::MethodRequirement(id) => write!(f, "@MethodRequirement({id})"),
         }
     }
 }
@@ -263,6 +273,7 @@ impl_module_symbol_id!(Protocol, ProtocolId);
 impl_module_symbol_id!(Variant, VariantId);
 impl_module_symbol_id!(Property, PropertyId);
 impl_module_symbol_id!(InstanceMethod, InstanceMethodId);
+impl_module_symbol_id!(MethodRequirement, MethodRequirementId);
 impl_module_symbol_id!(StaticMethod, StaticMethodId);
 impl_module_symbol_id!(AssociatedType, AssociatedTypeId);
 impl_module_symbol_id!(Builtin, BuiltinId);
@@ -295,6 +306,7 @@ impl Display for Symbol {
             Symbol::Variant(variant_id) => write!(f, "{}", variant_id),
             Symbol::Protocol(protocol_id) => write!(f, "{}", protocol_id),
             Symbol::AssociatedType(associated_type_id) => write!(f, "{}", associated_type_id),
+            Symbol::MethodRequirement(id) => write!(f, "{}", id),
         }
     }
 }
@@ -308,6 +320,7 @@ pub struct Symbols {
     locals: IDGenerator,
     properties: IDGenerator,
     instance_methods: IDGenerator,
+    method_requirements: IDGenerator,
     static_methods: IDGenerator,
     variants: IDGenerator,
     synthesized: IDGenerator,
@@ -349,6 +362,10 @@ impl Symbols {
 
     pub fn next_instance_method(&mut self, module_id: ModuleId) -> InstanceMethodId {
         InstanceMethodId::new(module_id, self.instance_methods.next_id())
+    }
+
+    pub fn next_method_requirement(&mut self, module_id: ModuleId) -> MethodRequirementId {
+        MethodRequirementId::new(module_id, self.method_requirements.next_id())
     }
 
     pub fn next_static_method(&mut self, module_id: ModuleId) -> StaticMethodId {

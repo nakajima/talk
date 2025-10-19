@@ -94,6 +94,14 @@ macro_rules! some {
             ),
         )
     };
+    (MethodRequirement) => {
+        $crate::name_resolution::symbol::Symbol::MethodRequirement(
+            $crate::name_resolution::symbol::MethodRequirementId::new(
+                $crate::compiling::module::ModuleId::Current,
+                0,
+            ),
+        )
+    };
     (StaticMethod) => {
         $crate::name_resolution::symbol::Symbol::StaticMethod(
             $crate::name_resolution::symbol::StaticMethodId::new(
@@ -227,13 +235,12 @@ impl<'a> DeclDeclarer<'a> {
 
         self.type_members.insert(id, TypeMembers::default());
 
+        self.start_scope(id);
         self.resolver
             .current_scope_mut()
             .unwrap()
             .types
             .insert("Self".into(), name.symbol().unwrap());
-
-        self.start_scope(id);
 
         for generic in generics {
             generic.name = self
@@ -370,7 +377,9 @@ impl<'a> DeclDeclarer<'a> {
                 ..
             },
             {
-                *name = self.resolver.declare(name, some!(InstanceMethod), func.id);
+                *name = self
+                    .resolver
+                    .declare(name, some!(MethodRequirement), func.id);
 
                 self.start_scope(func.id);
 

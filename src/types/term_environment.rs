@@ -108,25 +108,6 @@ impl EnvEntry {
         }
     }
 
-    pub fn solver_instantiate(
-        &self,
-        id: NodeID,
-        session: &mut TypeSession,
-        level: Level,
-        substitutions: &mut UnificationSubstitutions,
-        wants: &mut Wants,
-        span: Span,
-    ) -> InferTy {
-        match self {
-            EnvEntry::Mono(ty) => ty.clone(),
-            EnvEntry::Scheme(scheme) => {
-                scheme
-                    .solver_instantiate(id, session, level, wants, span, substitutions)
-                    .0
-            }
-        }
-    }
-
     pub(super) fn _as_ty(&self) -> InferTy {
         match self {
             EnvEntry::Mono(ty) => ty.clone(),
@@ -134,7 +115,7 @@ impl EnvEntry {
         }
     }
 
-    pub fn inference_instantiate(
+    pub fn instantiate(
         &self,
         id: NodeID,
         session: &mut TypeSession,
@@ -145,11 +126,7 @@ impl EnvEntry {
         tracing::debug!("inference instantiate: {self:?}");
         match self {
             EnvEntry::Mono(ty) => ty.clone(),
-            EnvEntry::Scheme(scheme) => {
-                scheme
-                    .inference_instantiate(id, session, level, wants, span)
-                    .0
-            }
+            EnvEntry::Scheme(scheme) => scheme.instantiate(id, session, level, wants, span).0,
         }
     }
 }

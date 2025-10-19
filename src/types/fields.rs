@@ -1,7 +1,7 @@
 use crate::{
     compiling::module::ModuleId,
     label::Label,
-    name_resolution::symbol::{ProtocolId, Symbol, StructId},
+    name_resolution::symbol::{ProtocolId, StructId, Symbol},
     node_id::NodeID,
     span::Span,
     types::type_session::ASTTyRepr,

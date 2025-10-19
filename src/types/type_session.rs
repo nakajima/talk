@@ -1,18 +1,14 @@
-use std::rc::Rc;
+use std::{cell::RefCell, rc::Rc};
 
 use indexmap::{IndexMap, IndexSet};
 use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::instrument;
 
 use crate::{
-    ast::AST,
     compiling::module::{ModuleEnvironment, ModuleId},
     label::Label,
     name::Name,
-    name_resolution::{
-        name_resolver::NameResolved,
-        symbol::{ProtocolId, StructId, Symbol},
-    },
+    name_resolution::symbol::{ProtocolId, StructId, Symbol},
     node_id::NodeID,
     node_kinds::{generic_decl::GenericDecl, type_annotation::TypeAnnotation},
     span::Span,
@@ -24,10 +20,8 @@ use crate::{
         infer_ty::{InferTy, Level, MetaVarId, SkolemId, TypeParamId},
         kind::Kind,
         passes::{
-            dependencies_pass::{Conformance, DependenciesPass, SCCResolved},
-            inference_pass::{InferencePass, Meta, collect_meta},
-            type_headers_pass::TypeHeaderPass,
-            type_resolve_pass::TypeResolvePass,
+            dependencies_pass::Conformance,
+            inference_pass::{Meta, collect_meta},
         },
         row::Row,
         scheme::{ForAll, Scheme},
@@ -111,12 +105,12 @@ pub struct ProtocolBound {
 pub struct TypeSession {
     pub current_module_id: ModuleId,
     pub types_by_node: FxHashMap<NodeID, InferTy>,
-    pub(super) vars: Vars,
+    vars: Vars,
     term_env: TermEnv,
-    pub(super) meta_levels: FxHashMap<Meta, Level>,
+    pub(super) meta_levels: Rc<RefCell<FxHashMap<Meta, Level>>>,
     pub(super) skolem_map: FxHashMap<InferTy, InferTy>,
     pub skolem_bounds: FxHashMap<SkolemId, Vec<StructId>>,
-    pub(super) type_param_bounds: FxHashMap<TypeParamId, Vec<ProtocolBound>>,
+    // pub(super) type_param_bounds: FxHashMap<TypeParamId, Vec<ProtocolBound>>,
     pub typealiases: FxHashMap<Symbol, Scheme<InferTy>>,
     pub(super) type_catalog: TypeCatalog<InferTy>,
     pub(super) modules: Rc<ModuleEnvironment>,
@@ -144,7 +138,7 @@ impl TypeEntry {
 
 #[derive(Clone, Debug, Default)]
 pub struct Types {
-    types_by_node: FxHashMap<NodeID, TypeEntry>,
+    pub types_by_node: FxHashMap<NodeID, TypeEntry>,
     types_by_symbol: FxHashMap<Symbol, TypeEntry>,
     pub catalog: TypeCatalog<Ty>,
 }
@@ -185,7 +179,7 @@ impl TypeSession {
             skolem_map: Default::default(),
             meta_levels: Default::default(),
             term_env,
-            type_param_bounds: Default::default(),
+            // type_param_bounds: Default::default(),
             skolem_bounds: Default::default(),
             reverse_instantiations: Default::default(),
             types_by_node: Default::default(),
@@ -302,6 +296,7 @@ impl TypeSession {
         }
     }
 
+    #[instrument(skip(self))]
     fn shallow_generalize(&mut self, ty: InferTy) -> InferTy {
         match ty {
             InferTy::UnificationVar { id: meta, .. } => {
@@ -408,17 +403,6 @@ impl TypeSession {
         &self.term_env
     }
 
-    pub fn drive(ast: &mut AST<NameResolved>) -> TypeSession {
-        let modules = ModuleEnvironment::default();
-        let mut session = TypeSession::new(ModuleId::Core, Rc::new(modules));
-        let raw = TypeHeaderPass::drive(ast);
-        let _headers = TypeResolvePass::drive(&mut session, raw);
-        let mut scc = SCCResolved::default();
-        DependenciesPass::drive(ast, &mut scc, ModuleId::Current);
-        InferencePass::perform(&mut session, &scc, ast);
-        session
-    }
-
     #[instrument(level = tracing::Level::TRACE, skip(self))]
     pub fn generalize(&mut self, inner: Level, ty: InferTy, unsolved: &[Constraint]) -> EnvEntry {
         // collect metas in ty
@@ -461,8 +445,8 @@ impl TypeSession {
                     row: box InferRow::Var(id),
                     ..
                 } => {
-                    let level = self
-                        .meta_levels
+                    let levels = self.meta_levels.borrow();
+                    let level = levels
                         .get(&Meta::Row(*id))
                         .expect("didn't get level for row meta");
                     if *level <= inner {
@@ -488,11 +472,9 @@ impl TypeSession {
                 let r = apply_row(h.row.clone(), &mut substitutions);
                 if let InferRow::Var(row_meta) = r {
                     // quantify if its level is above the binder's level
-                    let lvl = *self
-                        .meta_levels
-                        .get(&Meta::Row(row_meta))
-                        .unwrap_or(&Level(0));
-                    if lvl >= inner {
+                    let levels = self.meta_levels.borrow();
+                    let lvl = levels.get(&Meta::Row(row_meta)).unwrap_or(&Level(0));
+                    if *lvl >= inner {
                         let param_id = self.vars.row_params.next_id();
                         foralls.insert(ForAll::Row(param_id));
                         substitutions
@@ -565,8 +547,8 @@ impl TypeSession {
                     substitutions.ty.insert(*id, InferTy::Param(param_id));
                 }
                 InferTy::Record(box InferRow::Var(id)) => {
-                    let level = self
-                        .meta_levels
+                    let levels = self.meta_levels.borrow();
+                    let level = levels
                         .get(&Meta::Row(*id))
                         .expect("didn't get level for row meta");
                     if *level <= inner {
@@ -732,8 +714,11 @@ impl TypeSession {
         self.type_catalog.conformances.clone()
     }
 
-    pub(super) fn lookup_conformance(&self, key: &ConformanceKey) -> Option<&Conformance> {
-        self.type_catalog.conformances.get(key)
+    pub(super) fn lookup_conformance_mut(
+        &mut self,
+        key: &ConformanceKey,
+    ) -> Option<&mut Conformance> {
+        self.type_catalog.conformances.get_mut(key)
     }
 
     pub(super) fn lookup_protocol(&mut self, protocol_id: ProtocolId) -> Option<Protocol> {
@@ -866,7 +851,6 @@ impl TypeSession {
 
     pub(crate) fn new_type_param(&mut self, meta: Option<MetaVarId>) -> InferTy {
         let id = self.vars.type_params.next_id();
-
         if let Some(meta) = meta {
             self.reverse_instantiations.ty.insert(meta, id);
         }
@@ -894,14 +878,14 @@ impl TypeSession {
 
     pub(crate) fn new_ty_meta_var(&mut self, level: Level) -> InferTy {
         let id = self.vars.ty_metas.next_id();
-        self.meta_levels.insert(Meta::Ty(id), level);
+        self.meta_levels.borrow_mut().insert(Meta::Ty(id), level);
         tracing::trace!("Fresh {id:?}");
         InferTy::UnificationVar { id, level }
     }
 
     pub(crate) fn new_row_meta_var(&mut self, level: Level) -> InferRow {
         let id = self.vars.row_metas.next_id();
-        self.meta_levels.insert(Meta::Row(id), level);
+        self.meta_levels.borrow_mut().insert(Meta::Row(id), level);
         tracing::trace!("Fresh {id:?}");
         InferRow::Var(id)
     }

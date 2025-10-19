@@ -6,7 +6,7 @@ use crate::{
     indexset,
     label::Label,
     name::Name,
-    name_resolution::symbol::{ProtocolId, Symbol},
+    name_resolution::symbol::{MethodRequirementId, ProtocolId, Symbol, Symbols},
     node_kinds::{
         generic_decl::GenericDecl,
         type_annotation::{TypeAnnotation, TypeAnnotationKind},
@@ -37,15 +37,18 @@ pub struct HeadersResolved {}
 #[derive(Debug)]
 pub struct TypeResolvePass<'a> {
     session: &'a mut TypeSession,
+    #[allow(dead_code)]
+    symbols: &'a mut Symbols,
     raw: Raw,
     conformance_keys: Vec<(ConformanceKey, Span)>,
     self_symbols: Vec<Symbol>,
 }
 
 impl<'a> TypeResolvePass<'a> {
-    pub fn drive(session: &mut TypeSession, raw: Raw) -> HeadersResolved {
+    pub fn drive(session: &mut TypeSession, symbols: &mut Symbols, raw: Raw) -> HeadersResolved {
         let mut resolver = TypeResolvePass {
             session,
+            symbols,
             raw,
             conformance_keys: Default::default(),
             self_symbols: Default::default(),
@@ -188,36 +191,27 @@ impl<'a> TypeResolvePass<'a> {
             let associated_types = protocol
                 .associated_types
                 .iter()
-                .map(|(_, associated)| {
+                .map(|(.., associated)| {
                     let Symbol::AssociatedType(id) = &associated.symbol else {
                         unreachable!()
                     };
 
-                    (*id, ConformanceRequirement::Unfulfilled(associated.symbol))
+                    let param = self.session.new_ty_meta_var(Level(1));
+
+                    (*id, param)
                 })
                 .collect();
 
-            // // Get the protocol's associated types from the protocol definition
-            // let protocol_associated_types = protocol.associated_types.clone();
-
-            // // Map each protocol associated type to the conforming type's witness
-            // let associated_types: FxHashMap<AssociatedTypeId, Symbol> = protocol_associated_types
-            //     .iter()
-            //     .filter_map(|(name, _associated)| {
-            //         let Name::Resolved(Symbol::AssociatedType(id), type_name) = name else {
-            //             return None;
-            //         };
-
-            //         // Look up the witness type in the conforming type's child_types
-            //         let witness_symbol = self
-            //             .raw
-            //             .child_types
-            //             .get(&conformance_key.conforming_id)?
-            //             .get(type_name)?;
-
-            //         Some((*id, *witness_symbol))
-            //     })
-            //     .collect();
+            // Also add default methods to the conforming type unless already defined
+            for (label, method) in &protocol.methods {
+                self.session
+                    .type_catalog
+                    .instance_methods
+                    .entry(conformance_key.conforming_id)
+                    .or_default()
+                    .entry(label.clone())
+                    .or_insert(*method);
+            }
 
             self.session.type_catalog.conformances.insert(
                 *conformance_key,
@@ -277,7 +271,7 @@ impl<'a> TypeResolvePass<'a> {
 
         let sym = type_def.name.symbol().unwrap();
         let static_methods = self.resolve_static_methods(&sym);
-        let instance_methods = self.resolve_instance_methods(&sym);
+        let instance_methods = Default::default(); //self.resolve_instance_methods(&sym);
         let method_requirements = self.resolve_method_requirements(&sym);
         let associated_types = self
             .raw
@@ -289,7 +283,9 @@ impl<'a> TypeResolvePass<'a> {
         for method_requirement in method_requirements {
             requirements.insert(
                 method_requirement.0,
-                ConformanceRequirement::Unfulfilled(method_requirement.1),
+                ConformanceRequirement::UnfulfilledInstanceMethod(MethodRequirementId::try_from(
+                    method_requirement.1,
+                )),
             );
         }
 
@@ -956,7 +952,11 @@ impl<'a> TypeResolvePass<'a> {
 
                 panic!("didn't get self type for protocol");
             }
-            ASTTyRepr::Hole(id, ..) => (InferTy::Hole(*id), vec![], Default::default()),
+            ASTTyRepr::Hole(..) => (
+                self.session.new_ty_meta_var(Level(1)),
+                vec![],
+                Default::default(),
+            ),
             ASTTyRepr::Generic(decl) => self.infer_generic_decl(decl),
         }
     }
@@ -994,19 +994,16 @@ impl<'a> TypeResolvePass<'a> {
 
 #[cfg(test)]
 pub mod tests {
-
-    use std::rc::Rc;
-
-    use indexmap::indexmap;
-
     use crate::{
         assert_eq_diff,
         ast::AST,
-        compiling::module::{ModuleEnvironment, ModuleId},
+        compiling::{
+            driver::{Driver, Source},
+            module::{ModuleEnvironment, ModuleId},
+        },
         fxhashmap,
         name_resolution::{
             name_resolver::NameResolved,
-            name_resolver_tests::tests::resolve,
             symbol::{
                 AssociatedTypeId, InstanceMethodId, PropertyId, ProtocolId, StaticMethodId,
                 StructId, SynthesizedId, TypeAliasId,
@@ -1018,6 +1015,8 @@ pub mod tests {
             type_catalog::ConformanceKey,
         },
     };
+    use indexmap::indexmap;
+    use std::rc::Rc;
 
     use super::*;
 
@@ -1034,12 +1033,13 @@ pub mod tests {
     pub fn type_header_resolve_pass_err(
         code: &'static str,
     ) -> Result<(AST<NameResolved>, TypeSession), TypeError> {
-        let resolved = resolve(code);
+        let driver = Driver::new(vec![Source::from(code)], Default::default());
+        let mut resolved = driver.parse().unwrap().resolve_names().unwrap();
         let modules = ModuleEnvironment::default();
         let mut session = TypeSession::new(ModuleId::Current, Rc::new(modules));
-        let raw = TypeHeaderPass::drive(&resolved);
-        _ = TypeResolvePass::drive(&mut session, raw);
-        Ok((resolved, session))
+        let raw = TypeHeaderPass::drive(&resolved.phase.asts[0]);
+        _ = TypeResolvePass::drive(&mut session, &mut resolved.phase.symbols, raw);
+        Ok((resolved.phase.asts[0].clone(), session))
     }
 
     #[test]
@@ -1194,7 +1194,7 @@ pub mod tests {
             Conformance {
                 conforming_id: StructId::from(1).into(),
                 protocol_id: ProtocolId::from(1),
-                requirements: fxhashmap!("count".into() => ConformanceRequirement::Unfulfilled(Symbol::InstanceMethod(InstanceMethodId::from(1)))),
+                requirements: fxhashmap!("count".into() => ConformanceRequirement::UnfulfilledInstanceMethod(MethodRequirementId::from(1))),
                 span: Span::ANY,
                 associated_types: Default::default()
             }
@@ -1252,11 +1252,13 @@ pub mod tests {
                 conforming_id: StructId::from(1).into(),
                 protocol_id: ProtocolId::from(1),
                 requirements: fxhashmap!(
-                    "getA".into() => ConformanceRequirement::Unfulfilled(Symbol::InstanceMethod(InstanceMethodId::from(1))),
-                    "setA".into() => ConformanceRequirement::Unfulfilled(Symbol::InstanceMethod(InstanceMethodId::from(2)))
+                    "getA".into() => ConformanceRequirement::UnfulfilledInstanceMethod(MethodRequirementId::from(1)),
+                    "setA".into() => ConformanceRequirement::UnfulfilledInstanceMethod(MethodRequirementId::from(2))
                 ),
                 span: Span::ANY,
-                associated_types: fxhashmap!(AssociatedTypeId::from(1) => ConformanceRequirement::Fulfilled { symbol: Symbol::TypeAlias(TypeAliasId::from(2)) })
+                associated_types: fxhashmap!(
+                    AssociatedTypeId::from(1) => InferTy::UnificationVar { id: 1.into(), level: Level(1) }
+                )
             }
         )
     }

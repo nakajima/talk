@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
 use rustc_hash::FxHashMap;
 use tracing::instrument;
@@ -15,13 +15,13 @@ use crate::{
     },
 };
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct UnificationSubstitutions {
     pub row: FxHashMap<RowMetaId, InferRow>,
     pub ty: FxHashMap<MetaVarId, InferTy>,
     ty_dsu: DSU<MetaVarId>,
     row_dsu: DSU<RowMetaId>,
-    pub meta_levels: FxHashMap<Meta, Level>,
+    pub meta_levels: Rc<RefCell<FxHashMap<Meta, Level>>>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -41,7 +41,7 @@ impl std::fmt::Debug for UnificationSubstitutions {
 }
 
 impl UnificationSubstitutions {
-    pub fn new(meta_levels: FxHashMap<Meta, Level>) -> Self {
+    pub fn new(meta_levels: Rc<RefCell<FxHashMap<Meta, Level>>>) -> Self {
         Self {
             row: Default::default(),
             ty: Default::default(),
@@ -511,6 +511,7 @@ pub(super) fn apply(ty: InferTy, substitutions: &mut UnificationSubstitutions) -
                     id: rep,
                     level: *substitutions
                         .meta_levels
+                        .borrow()
                         .get(&Meta::Ty(id))
                         .unwrap_or_else(|| {
                             panic!(

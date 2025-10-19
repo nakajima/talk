@@ -52,14 +52,9 @@ impl Construction {
 
         let (init_ty, inst_subs) = match init_entry {
             EnvEntry::Mono(ty) => (ty, Default::default()),
-            EnvEntry::Scheme(s) => s.solver_instantiate(
-                self.callee_id,
-                session,
-                level,
-                next_wants,
-                self.span,
-                substitutions,
-            ),
+            EnvEntry::Scheme(s) => {
+                s.instantiate(self.callee_id, session, level, next_wants, self.span)
+            }
         };
 
         let mut row = InferRow::Empty(TypeDefKind::Struct);

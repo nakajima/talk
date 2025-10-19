@@ -60,13 +60,7 @@ impl Call {
                     let entry = session
                         .lookup(&initializer)
                         .expect("constructor scheme missing");
-                    entry.inference_instantiate(
-                        self.callee_id,
-                        session,
-                        Level(1),
-                        next_wants,
-                        self.span,
-                    )
+                    entry.instantiate(self.callee_id, session, Level(1), next_wants, self.span)
                 } else {
                     match session
                         .lookup(&name.symbol().unwrap())

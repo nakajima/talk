@@ -28,6 +28,11 @@ pub struct Wants {
 }
 
 impl Wants {
+    pub fn extend(&mut self, other: Wants) {
+        self.simple.extend(other.simple);
+        self.defer.extend(other.defer);
+    }
+
     pub fn pop(&mut self) -> Option<Constraint> {
         self.simple.pop_front().or_else(|| self.defer.pop_front())
     }

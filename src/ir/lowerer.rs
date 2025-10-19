@@ -1110,7 +1110,6 @@ impl<'a> Lowerer<'a> {
             ExprKind::LiteralTrue | ExprKind::LiteralFalse => Symbol::Bool,
             _ => {
                 let Ty::Nominal { symbol, .. } = self.specialized_ty(expr)?.0 else {
-                    println!("didn't get symbol for expr: {expr:?}");
                     return Ok(None);
                 };
 

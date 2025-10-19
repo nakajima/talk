@@ -127,9 +127,10 @@ impl<'a> InferencePass<'a> {
             pass.apply_to_self(&mut subs);
         }
 
+        let mut wants = Wants::default();
+
         // Handle the rest of the AST
         let roots = std::mem::take(&mut pass.ast.roots);
-        let mut last_unsolved = vec![];
         for root in roots.iter() {
             if !matches!(
                 root,
@@ -155,15 +156,10 @@ impl<'a> InferencePass<'a> {
                 continue;
             }
 
-            let mut wants = Wants::default();
             let ty = pass.infer_node(root, Level(1), &mut wants);
             pass.session.types_by_node.insert(root.node_id(), ty);
-            let (mut subs, unsolved) = pass.solve(Level(1), wants);
-            last_unsolved.extend(unsolved);
-            pass.apply_to_self(&mut subs);
         }
 
-        let mut wants = Wants::default();
         for conformance in pass.session.clone_conformances().values() {
             wants.conforms(
                 conformance.conforming_id,
@@ -171,13 +167,13 @@ impl<'a> InferencePass<'a> {
                 conformance.span,
             );
         }
-        let (mut subs, unsolved) = pass.solve(Level(1), wants);
-        last_unsolved.extend(unsolved);
-        pass.apply_to_self(&mut subs);
 
         _ = std::mem::replace(&mut pass.ast.roots, roots);
 
-        for unsolved in last_unsolved {
+        let (mut subs, unsolved) = pass.solve(Level(1), wants);
+        pass.apply_to_self(&mut subs);
+
+        for unsolved in unsolved {
             if let Constraint::Conforms(conforms) = unsolved {
                 pass.ast
                     .diagnostics
@@ -349,7 +345,7 @@ impl<'a> InferencePass<'a> {
                 .session
                 .lookup(sym)
                 .expect("did not get type param")
-                .inference_instantiate(annotation.id, self.session, level, wants, annotation.span),
+                .instantiate(annotation.id, self.session, level, wants, annotation.span),
             TypeAnnotationKind::Nominal {
                 name: Name::Resolved(symbol, ..),
                 ..
@@ -362,7 +358,7 @@ impl<'a> InferencePass<'a> {
                 .lookup(sym)
                 .unwrap()
                 .clone()
-                .inference_instantiate(annotation.id, self.session, level, wants, annotation.span),
+                .instantiate(annotation.id, self.session, level, wants, annotation.span),
             TypeAnnotationKind::Record { fields } => {
                 let mut row = InferRow::Empty(TypeDefKind::Struct);
                 for field in fields.iter().rev() {
@@ -497,7 +493,7 @@ impl<'a> InferencePass<'a> {
                 types_by_node: self.session.types_by_node.clone(),
             };
 
-            tracing::trace!("{snapshot:?}");
+            // tracing::trace!("{snapshot:?}");
             self.snapshots.push(snapshot);
         }
 
@@ -538,7 +534,7 @@ impl<'a> InferencePass<'a> {
         }
     }
 
-    #[instrument(level = tracing::Level::TRACE, skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self, decl, wants), fields(decl.id = %decl.id))]
     fn infer_decl(&mut self, decl: &Decl, level: Level, wants: &mut Wants) -> InferTy {
         let ty = match &decl.kind {
             DeclKind::Let {
@@ -589,8 +585,7 @@ impl<'a> InferencePass<'a> {
 
                 if let Some(entry) = self.session.lookup(&init_symbol) {
                     // Instantiate the scheme to get the function type
-                    let func_ty =
-                        entry.inference_instantiate(decl.id, self.session, level, wants, decl.span);
+                    let func_ty = entry.instantiate(decl.id, self.session, level, wants, decl.span);
 
                     // Extract parameter types from the curried function
                     let mut param_tys = Vec::new();
@@ -847,7 +842,7 @@ impl<'a> InferencePass<'a> {
         }
     }
 
-    #[instrument(level = tracing::Level::TRACE, skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self, block), fields(block.id = %block.id))]
     fn infer_block(&mut self, block: &Block, level: Level, wants: &mut Wants) -> InferTy {
         guard_found_ty!(self, block.id);
 
@@ -895,7 +890,7 @@ impl<'a> InferencePass<'a> {
                 match self.session.lookup(sym) {
                     Some(EnvEntry::Scheme(scheme)) => {
                         scheme
-                            .inference_instantiate(expr.id, self.session, level, wants, expr.span)
+                            .instantiate(expr.id, self.session, level, wants, expr.span)
                             .0
                     } // or pass through
                     Some(EnvEntry::Mono(t)) => t.clone(),

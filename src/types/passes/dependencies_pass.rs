@@ -10,8 +10,8 @@ use crate::{
     name_resolution::{
         name_resolver::NameResolved,
         symbol::{
-            AssociatedTypeId, DeclaredLocalId, GlobalId, InstanceMethodId, ProtocolId,
-            StaticMethodId, Symbol,
+            AssociatedTypeId, DeclaredLocalId, GlobalId, InstanceMethodId, MethodRequirementId,
+            ProtocolId, StaticMethodId, Symbol,
         },
     },
     node_id::NodeID,
@@ -22,33 +22,34 @@ use crate::{
         pattern::{Pattern, PatternKind},
     },
     span::Span,
+    types::infer_ty::InferTy,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ConformanceRequirement {
-    Unfulfilled(Symbol),
-    Fulfilled { symbol: Symbol },
+    UnfulfilledInstanceMethod(MethodRequirementId),
+    FulfilledInstanceMethod(InstanceMethodId),
 }
 
 impl ConformanceRequirement {
     pub fn import(self, module_id: ModuleId) -> ConformanceRequirement {
         match self {
-            ConformanceRequirement::Unfulfilled(symbol) => {
-                ConformanceRequirement::Unfulfilled(symbol.import(module_id))
+            ConformanceRequirement::UnfulfilledInstanceMethod(id) => {
+                ConformanceRequirement::UnfulfilledInstanceMethod(id.import(module_id))
             }
-            ConformanceRequirement::Fulfilled { symbol } => ConformanceRequirement::Fulfilled {
-                symbol: symbol.import(module_id),
-            },
+            ConformanceRequirement::FulfilledInstanceMethod(id) => {
+                ConformanceRequirement::FulfilledInstanceMethod(id.import(module_id))
+            }
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Conformance {
     pub conforming_id: Symbol,
     pub protocol_id: ProtocolId,
     pub requirements: FxHashMap<Label, ConformanceRequirement>,
-    pub associated_types: FxHashMap<AssociatedTypeId, ConformanceRequirement>,
+    pub associated_types: FxHashMap<AssociatedTypeId, InferTy>,
     pub span: Span,
 }
 

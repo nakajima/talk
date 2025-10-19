@@ -38,8 +38,24 @@ pub mod tests {
         (ast, types)
     }
 
-    fn typecheck_err(code: &'static str) -> (AST<NameResolved>, Types) {
+    fn typecheck_core(code: &'static str) -> (AST<NameResolved>, Types) {
         let driver = Driver::new(vec![Source::from(code)], DriverConfig::default());
+        let typed = driver
+            .parse()
+            .unwrap()
+            .resolve_names()
+            .unwrap()
+            .typecheck()
+            .unwrap();
+
+        let types = typed.phase.types;
+        let ast = typed.phase.asts.into_iter().next().unwrap().1;
+
+        (ast, types)
+    }
+
+    fn typecheck_err(code: &'static str) -> (AST<NameResolved>, Types) {
+        let driver = Driver::new_bare(vec![Source::from(code)], DriverConfig::default());
         let typed = driver
             .parse()
             .unwrap()
@@ -113,28 +129,28 @@ pub mod tests {
 
     #[test]
     fn types_equals_int() {
-        let (ast, types) = typecheck("1 == 2; 1 != 2");
+        let (ast, types) = typecheck_core("1 == 2; 1 != 2");
         assert_eq!(ty(0, &ast, &types), Ty::Bool);
         assert_eq!(ty(1, &ast, &types), Ty::Bool);
     }
 
     #[test]
     fn types_equals_float() {
-        let (ast, types) = typecheck("1.0 == 2.0; 1.0 != 2.0");
+        let (ast, types) = typecheck_core("1.0 == 2.0; 1.0 != 2.0");
         assert_eq!(ty(0, &ast, &types), Ty::Bool);
         assert_eq!(ty(1, &ast, &types), Ty::Bool);
     }
 
     #[test]
     fn types_equals_string() {
-        let (ast, types) = typecheck("\"hello\" == \"world\" ; \"hello\" != \"world\"");
+        let (ast, types) = typecheck_core("\"hello\" == \"world\" ; \"hello\" != \"world\"");
         assert_eq!(ty(0, &ast, &types), Ty::Bool);
         assert_eq!(ty(1, &ast, &types), Ty::Bool);
     }
 
     #[test]
     fn types_array_literal() {
-        let (ast, types) = typecheck("[1,2,3]; [1.2, 3.4, 5.6]");
+        let (ast, types) = typecheck_core("[1,2,3]; [1.2, 3.4, 5.6]");
         assert_eq!(ty(0, &ast, &types), Ty::Array(Ty::Int));
         assert_eq!(ty(1, &ast, &types), Ty::Array(Ty::Float));
     }
@@ -148,13 +164,13 @@ pub mod tests {
 
     #[test]
     fn types_array_properties() {
-        let (ast, types) = typecheck("[1,2,3].count");
+        let (ast, types) = typecheck_core("[1,2,3].count");
         assert_eq!(ty(0, &ast, &types), Ty::Int);
     }
 
     #[test]
     fn types_basic_binary() {
-        let (ast, types) = typecheck("func a(x) { x + 1 } ; a(123)");
+        let (ast, types) = typecheck_core("func a(x) { x + 1 } ; a(123)");
         assert_eq!(ty(1, &ast, &types), Ty::Int);
     }
 
@@ -1857,6 +1873,41 @@ pub mod tests {
     }
 
     #[test]
+    fn tests_infers_associated_types() {
+        let (ast, types) = typecheck(
+            "
+        protocol Aged {
+            associated T
+
+            func getAge() -> T
+        }
+
+        struct Inty: Aged {
+            func getAge() {
+                123
+            }
+        }
+
+        struct Floaty: Aged {
+            func getAge() {
+                1.23
+            }
+        }
+
+        func get<A: Aged>(aged: A) {
+            aged.getAge()
+        }
+
+        get(Inty())
+        get(Floaty())
+        ",
+        );
+
+        assert_eq!(ty(4, &ast, &types), Ty::Int);
+        assert_eq!(ty(5, &ast, &types), Ty::Float);
+    }
+
+    #[test]
     fn types_protocol_associated_types() {
         let (ast, types) = typecheck(
             "
@@ -1931,7 +1982,7 @@ pub mod tests {
 
     #[test]
     fn includes_core_optional() {
-        let (ast, session) = typecheck(
+        let (ast, session) = typecheck_core(
             "
         enum Opt<T> {
             case some(T), none
@@ -1968,7 +2019,7 @@ pub mod tests {
 
     #[test]
     fn types_plus() {
-        let (ast, types) = typecheck(
+        let (ast, types) = typecheck_core(
             "
         1 + 2
         1.0 + 2.0
@@ -1981,7 +2032,7 @@ pub mod tests {
 
     #[test]
     fn types_minus() {
-        let (ast, types) = typecheck(
+        let (ast, types) = typecheck_core(
             "
         1 - 2
         1.0 - 2.0
@@ -1994,7 +2045,7 @@ pub mod tests {
 
     #[test]
     fn types_multiplication() {
-        let (ast, types) = typecheck(
+        let (ast, types) = typecheck_core(
             "
         1 * 2
         1.0 * 2.0
@@ -2007,7 +2058,7 @@ pub mod tests {
 
     #[test]
     fn types_division() {
-        let (ast, types) = typecheck(
+        let (ast, types) = typecheck_core(
             "
         1 / 2
         1.0 / 2.0
@@ -2020,7 +2071,7 @@ pub mod tests {
 
     #[test]
     fn types_comparisons() {
-        let (ast, types) = typecheck(
+        let (ast, types) = typecheck_core(
             "
         1 == 2
         1.0 == 2.0
@@ -2033,7 +2084,7 @@ pub mod tests {
 
     #[test]
     fn types_custom_add() {
-        let (ast, types) = typecheck(
+        let (ast, types) = typecheck_core(
             "
         struct A {}
         struct B {}

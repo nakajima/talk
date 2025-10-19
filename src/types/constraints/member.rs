@@ -70,15 +70,15 @@ impl Member {
                     let protocol_id = conformance_key.protocol_id;
                     if let Some(protocol) = session.lookup_protocol(protocol_id)
                         && let Some(requirement) = protocol.requirements.get(&self.label)
-                        && let ConformanceRequirement::Unfulfilled(req_sym) = requirement
-                        && let Some(entry) = session.lookup(req_sym)
+                        && let ConformanceRequirement::UnfulfilledInstanceMethod(id) = requirement
+                        && let Some(entry) = session.lookup(&id.into())
                     {
                         // Check if this protocol method has predicates - if so, prefer it
                         if let crate::types::term_environment::EnvEntry::Scheme(ref scheme) = entry
                             && !scheme.predicates.is_empty()
                         {
-                            tracing::debug!("Found protocol method with predicates: {req_sym:?}");
-                            protocol_method = Some((*req_sym, entry));
+                            tracing::debug!("Found protocol method with predicates: {id:?}");
+                            protocol_method = Some((id.into(), entry));
                             break;
                         }
                     }
@@ -101,14 +101,18 @@ impl Member {
             tracing::debug!("Member::solve looking up {sym:?}, got entry: {entry:?}");
             match sym {
                 Symbol::InstanceMethod(_) => {
-                    let scheme_ty = entry.solver_instantiate(
-                        self.node_id,
-                        session,
-                        level,
-                        substitutions,
-                        next_wants,
-                        self.span,
-                    );
+                    let scheme_ty =
+                        entry.instantiate(self.node_id, session, level, next_wants, self.span);
+                    if let InferTy::Func(first, box _rest) = scheme_ty.clone() {
+                        unify(&receiver, &first, substitutions, session)?;
+                        unify(&ty, &scheme_ty, substitutions, session)
+                    } else {
+                        unreachable!("instance method must be a function")
+                    }
+                }
+                Symbol::MethodRequirement(_) => {
+                    let scheme_ty =
+                        entry.instantiate(self.node_id, session, level, next_wants, self.span);
                     if let InferTy::Func(first, box _rest) = scheme_ty.clone() {
                         unify(&receiver, &first, substitutions, session)?;
                         unify(&ty, &scheme_ty, substitutions, session)
@@ -117,27 +121,15 @@ impl Member {
                     }
                 }
                 Symbol::StaticMethod(_) => {
-                    let scheme_ty = entry.solver_instantiate(
-                        self.node_id,
-                        session,
-                        level,
-                        substitutions,
-                        next_wants,
-                        self.span,
-                    );
+                    let scheme_ty =
+                        entry.instantiate(self.node_id, session, level, next_wants, self.span);
 
                     unify(&ty, &scheme_ty, substitutions, session)
                 }
                 Symbol::Property(..) => {
                     // Instantiate the declared property type (generic-aware).
-                    let scheme_ty = entry.solver_instantiate(
-                        self.node_id,
-                        session,
-                        level,
-                        substitutions,
-                        next_wants,
-                        self.span,
-                    );
+                    let scheme_ty =
+                        entry.instantiate(self.node_id, session, level, next_wants, self.span);
 
                     use crate::types::ty::SomeType;
 
@@ -215,14 +207,9 @@ impl Member {
                 Symbol::Variant(_) => {
                     let (payload_ty, inst_subs) = match entry {
                         EnvEntry::Mono(t) => (t, InstantiationSubstitutions::default()),
-                        EnvEntry::Scheme(s) => s.solver_instantiate(
-                            self.node_id,
-                            session,
-                            level,
-                            next_wants,
-                            self.span,
-                            substitutions,
-                        ),
+                        EnvEntry::Scheme(s) => {
+                            s.instantiate(self.node_id, session, level, next_wants, self.span)
+                        }
                     };
 
                     if let InferTy::Func(param, rest) = payload_ty {
