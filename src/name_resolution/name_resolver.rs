@@ -485,7 +485,7 @@ impl NameResolver {
             self.current_scope_mut()
                 .unwrap()
                 .types
-                .insert("Self".into(), name.symbol().unwrap());
+                .insert("Self".into(), name.symbol());
         });
 
         on!(&mut decl.kind, DeclKind::Init { params, .. }, {

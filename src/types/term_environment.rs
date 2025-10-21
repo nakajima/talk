@@ -171,7 +171,9 @@ impl TermEnv {
                 tracing::warn!("overriding {sym:?} with {entry:?}. existing: {existing:?}");
             }
         }
+    }
 
+    pub fn promote(&mut self, sym: Symbol, entry: EnvEntry) {
         tracing::debug!("promote {sym:?} = {entry:?}");
         self.symbols.insert(sym, entry);
     }

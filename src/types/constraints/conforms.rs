@@ -1,16 +1,12 @@
-use rustc_hash::FxHashMap;
 use tracing::instrument;
 
 use crate::{
-    name_resolution::symbol::{InstanceMethodId, ProtocolId, Symbol},
+    name_resolution::symbol::ProtocolId,
     node_id::NodeID,
     span::Span,
     types::{
-        constraints::constraint::Constraint,
-        infer_ty::Level,
-        passes::dependencies_pass::ConformanceRequirement,
+        infer_ty::{InferTy, Level},
         term_environment::EnvEntry,
-        type_catalog::ConformanceKey,
         type_error::TypeError,
         type_operations::{UnificationSubstitutions, unify},
         type_session::TypeSession,
@@ -20,7 +16,7 @@ use crate::{
 
 #[derive(Debug, Clone)]
 pub struct Conforms {
-    pub symbol: Symbol,
+    pub ty: InferTy,
     pub protocol_id: ProtocolId,
     pub span: Span,
 }
@@ -32,71 +28,66 @@ impl Conforms {
         next_wants: &mut Wants,
         substitutions: &mut UnificationSubstitutions,
     ) -> Result<bool, TypeError> {
-        let mut conformances = TakeToSlot::new(&mut session.type_catalog.conformances);
-        let conformance = conformances
-            .get_mut(&ConformanceKey {
-                protocol_id: self.protocol_id,
-                conforming_id: self.symbol,
-            })
-            .expect("didn't get conformance");
+        // let mut conformances = TakeToSlot::new(&mut session.type_catalog.conformances);
 
-        let unfulfilled = conformance
-            .requirements
-            .iter_mut()
-            .filter(|(_, s)| matches!(s, ConformanceRequirement::UnfulfilledInstanceMethod(..)))
-            .collect::<FxHashMap<_, _>>();
+        // let unfulfilled = conformance
+        //     .requirements
+        //     .iter_mut()
+        //     .filter(|(_, s)| matches!(s, ConformanceRequirement::UnfulfilledInstanceMethod(..)))
+        //     .collect::<FxHashMap<_, _>>();
 
-        let mut still_unfulfilled = vec![];
-        for (label, requirement) in unfulfilled {
-            let ConformanceRequirement::UnfulfilledInstanceMethod(id) = requirement else {
-                unreachable!()
-            };
+        // let mut still_unfulfilled = vec![];
+        // for (label, requirement) in unfulfilled {
+        //     let ConformanceRequirement::UnfulfilledInstanceMethod(id) = requirement else {
+        //         unreachable!()
+        //     };
 
-            let impl_symbol = session
-                .lookup_member(&self.symbol, label)
-                .unwrap_or_else(|| {
-                    panic!(
-                        "didn't get member impl symbol: {label:?} for {:?}",
-                        self.symbol
-                    )
-                });
+        //     let impl_symbol = session
+        //         .lookup_member(&self.symbol, label)
+        //         .unwrap_or_else(|| {
+        //             panic!(
+        //                 "didn't get member impl symbol: {label:?} for {:?}",
+        //                 self.symbol
+        //             )
+        //         });
 
-            let Some(protocol_entry) = session.lookup(&(*id).into()) else {
-                // We don't have our protocol typed yet
-                tracing::trace!("didn't get {label} requirement entry");
-                next_wants.push(Constraint::Conforms(self.clone()));
-                return Ok(false);
-            };
+        //     let Some(protocol_entry) = session.lookup(&(*id).into()) else {
+        //         // We don't have our protocol typed yet
+        //         tracing::trace!("didn't get {label} requirement entry");
+        //         next_wants.push(Constraint::Conforms(self.clone()));
+        //         return Ok(false);
+        //     };
 
-            let Some(entry) = session.lookup(&impl_symbol) else {
-                tracing::trace!("didn't get {label} impl entry");
-                still_unfulfilled.push(label);
-                continue;
-            };
+        //     let Some(entry) = session.lookup(&impl_symbol) else {
+        //         tracing::trace!("didn't get {label} impl entry");
+        //         still_unfulfilled.push(label);
+        //         continue;
+        //     };
 
-            tracing::trace!("checking {label} conformance: {protocol_entry:?} <> {entry:?}");
+        //     tracing::trace!("checking {label} conformance: {protocol_entry:?} <> {entry:?}");
 
-            if self.check_method_satisfaction(
-                session,
-                &protocol_entry,
-                &entry,
-                substitutions,
-                next_wants,
-            )? {
-                *requirement = ConformanceRequirement::FulfilledInstanceMethod(
-                    InstanceMethodId::try_from(impl_symbol),
-                )
-            } else {
-                still_unfulfilled.push(label)
-            }
-        }
+        //     if self.check_method_satisfaction(
+        //         session,
+        //         &protocol_entry,
+        //         &entry,
+        //         substitutions,
+        //         next_wants,
+        //     )? {
+        //         *requirement = ConformanceRequirement::FulfilledInstanceMethod(
+        //             InstanceMethodId::try_from(impl_symbol),
+        //         )
+        //     } else {
+        //         still_unfulfilled.push(label)
+        //     }
+        // }
 
-        if still_unfulfilled.is_empty() {
-            Ok(true)
-        } else {
-            next_wants.push(Constraint::Conforms(self.clone()));
-            Ok(false)
-        }
+        // if still_unfulfilled.is_empty() {
+        //     Ok(true)
+        // } else {
+        //     next_wants.push(Constraint::Conforms(self.clone()));
+        //     Ok(false)
+        // }
+        Ok(false)
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self, session))]

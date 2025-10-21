@@ -53,7 +53,7 @@ impl<'a> Monomorphizer<'a> {
     ) {
         for specialization in self
             .specializations
-            .get(&func.name.symbol().unwrap())
+            .get(&func.name.symbol())
             .cloned()
             .unwrap_or_default()
         {
@@ -72,7 +72,7 @@ impl<'a> Monomorphizer<'a> {
             register_count: func.register_count,
         };
 
-        result.insert(func.name.symbol().unwrap(), func);
+        result.insert(func.name.symbol(), func);
     }
 
     #[instrument(skip(self, block), fields(block = %block))]
@@ -227,7 +227,7 @@ impl<'a> Monomorphizer<'a> {
                 .collect(),
         };
 
-        result.insert(specialization.name.symbol().unwrap(), specialized_func);
+        result.insert(specialization.name.symbol(), specialized_func);
     }
 }
 

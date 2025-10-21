@@ -82,10 +82,10 @@ impl Wants {
         }))
     }
 
-    pub fn conforms(&mut self, symbol: Symbol, protocol_id: ProtocolId, span: Span) {
-        tracing::debug!("constraining conforms {symbol:?} < {protocol_id:?}");
+    pub fn conforms(&mut self, ty: InferTy, protocol_id: ProtocolId, span: Span) {
+        tracing::debug!("constraining conforms {ty:?} < {protocol_id:?}");
         self.defer.push_back(Constraint::Conforms(Conforms {
-            symbol,
+            ty,
             protocol_id,
             span,
         }));

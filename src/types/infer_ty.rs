@@ -4,7 +4,7 @@ use std::hash::Hash;
 use crate::{
     compiling::module::ModuleId,
     name::Name,
-    name_resolution::symbol::{Symbol, StructId},
+    name_resolution::symbol::{StructId, Symbol},
     node_id::NodeID,
     types::{
         infer_row::InferRow,
@@ -286,7 +286,7 @@ impl InferTy {
             InferTy::Rigid(..) => self,
             InferTy::UnificationVar { .. } => self,
             InferTy::Constructor { name, params, ret } => InferTy::Constructor {
-                name: Name::Resolved(name.symbol().unwrap().import(module_id), name.name_str()),
+                name: Name::Resolved(name.symbol().import(module_id), name.name_str()),
                 params,
                 ret,
             },

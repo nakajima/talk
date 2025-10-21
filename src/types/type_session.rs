@@ -63,7 +63,7 @@ pub enum TypeDefKind {
 
 #[derive(Debug, PartialEq, Default, Clone)]
 pub struct Raw {
-    pub type_constructors: FxHashMap<Symbol, TypeDef>,
+    pub nominals: FxHashMap<Symbol, TypeDef>,
     pub protocols: FxHashMap<ProtocolId, TypeDef>,
     pub extensions: FxHashMap<Symbol, Vec<TypeExtension>>,
     pub annotations: FxHashMap<NodeID, ASTTyRepr>,
@@ -617,6 +617,10 @@ impl TypeSession {
         }
 
         None
+    }
+
+    pub(super) fn promote(&mut self, sym: Symbol, entry: EnvEntry) {
+        self.term_env.promote(sym, entry);
     }
 
     pub(super) fn insert_term(&mut self, sym: Symbol, entry: EnvEntry) {

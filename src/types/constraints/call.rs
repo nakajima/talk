@@ -54,7 +54,7 @@ impl Call {
                 // TODO: Figure out if we're dealing with a struct vs an enum here and be more explicit.
                 // This is ok for now since enums can't have initializers and structs always have them.
                 let init_ty = if let Some(initializer) = session
-                    .lookup_initializers(&name.symbol().unwrap())
+                    .lookup_initializers(&name.symbol())
                     .and_then(|i| i.values().next().copied())
                 {
                     let entry = session
@@ -63,7 +63,7 @@ impl Call {
                     entry.instantiate(self.callee_id, session, Level(1), next_wants, self.span)
                 } else {
                     match session
-                        .lookup(&name.symbol().unwrap())
+                        .lookup(&name.symbol())
                         .expect("enum type missing from env")
                     {
                         EnvEntry::Mono(ty) => ty,

@@ -161,11 +161,8 @@ impl<'a> InferencePass<'a> {
         }
 
         for conformance in pass.session.clone_conformances().values() {
-            wants.conforms(
-                conformance.conforming_id,
-                conformance.protocol_id,
-                conformance.span,
-            );
+            let ty = pass.session.lookup(&conformance.conforming_id).unwrap();
+            wants.conforms(ty._as_ty(), conformance.protocol_id, conformance.span);
         }
 
         _ = std::mem::replace(&mut pass.ast.roots, roots);
@@ -174,16 +171,17 @@ impl<'a> InferencePass<'a> {
         pass.apply_to_self(&mut subs);
 
         for unsolved in unsolved {
-            if let Constraint::Conforms(conforms) = unsolved {
-                pass.ast
-                    .diagnostics
-                    .push(crate::diagnostic::AnyDiagnostic::Typing(Diagnostic {
-                        span: conforms.span,
-                        kind: TypeError::TypesDoesNotConform {
-                            protocol_id: conforms.protocol_id,
-                            symbol: conforms.symbol,
-                        },
-                    }))
+            if let Constraint::Conforms(_conforms) = unsolved {
+                // pass.ast
+                //     .diagnostics
+                //     .push(crate::diagnostic::AnyDiagnostic::Typing(Diagnostic {
+                //         span: conforms.span,
+                //         kind: TypeError::TypesDoesNotConform {
+                //             protocol_id: conforms.protocol_id,
+                //             symbol: conforms.symbol,
+                //         },
+                //     }))
+                panic!("wip");
             }
         }
 
@@ -513,11 +511,13 @@ impl<'a> InferencePass<'a> {
                 Some(EnvEntry::Mono(ty)) => {
                     let applied = apply(ty, subs);
                     let scheme = self.session.generalize(group.level, applied, &predicates);
-                    self.session.insert_term(sym, scheme);
+                    self.session.promote(sym, scheme);
                 }
                 Some(entry) => {
-                    let applied = entry.apply(subs);
-                    self.session.insert_term(sym, applied);
+                    let (ty, _, _) = entry.into();
+                    let applied = apply(ty, subs);
+                    let scheme = self.session.generalize(group.level, applied, &predicates);
+                    self.session.insert_term(sym, scheme);
                 }
                 None => panic!("didn't find {sym:?} in term env"),
             }
@@ -559,29 +559,47 @@ impl<'a> InferencePass<'a> {
 
                 let (mut subs, unsolved) = self.solve(level, local_wants);
                 let applied_ty = apply(ty.clone(), &mut subs);
+                self.apply_to_self(&mut subs);
 
                 if let PatternKind::Bind(Name::Resolved(sym, _)) = lhs.kind {
                     let scheme = self
                         .session
                         .generalize(level, applied_ty.clone(), &unsolved);
-                    self.session.insert_term(sym, scheme);
+                    self.session.promote(sym, scheme);
                 } else {
                     self.promote_pattern_bindings(lhs, level, &unsolved, &mut subs);
                 }
 
-                ty
+                applied_ty
             }
+            // DeclKind::Method { func, .. } => {
+            //     tracing::info!("inferring method: {:?}", func.name);
+            //     let func_ty = self.infer_func(func, level, wants);
+            //     let entry = self.session.generalize(level, func_ty.clone(), &[]);
+            //     self.session.promote(func.name.symbol(), entry);
+            //     func_ty
+            // }
             DeclKind::Method { func, .. } => {
+                let method_sym = func.name.symbol();
+
+                if let Some(EnvEntry::Scheme(scheme)) = self.session.lookup(&method_sym) {
+                    tracing::debug!(
+                        "skipping re-inference of {:?}: already has scheme",
+                        func.name
+                    );
+                    return scheme.ty; // ← Return scheme's type, not Void
+                }
+
                 tracing::info!("inferring method: {:?}", func.name);
                 let func_ty = self.infer_func(func, level, wants);
                 let entry = self.session.generalize(level, func_ty.clone(), &[]);
-                self.session.insert_term(func.name.symbol().unwrap(), entry);
+                self.session.insert_term(method_sym, entry);
                 func_ty
             }
             DeclKind::Init { name, params, body } => {
                 guard_found_ty!(self, decl.id);
                 // Look up the Init symbol's pre-computed type from type resolve pass
-                let init_symbol = name.symbol().unwrap();
+                let init_symbol = name.symbol();
 
                 if let Some(entry) = self.session.lookup(&init_symbol) {
                     // Instantiate the scheme to get the function type
@@ -598,7 +616,7 @@ impl<'a> InferencePass<'a> {
                     // Bind parameters to their types
                     for (param, param_ty) in params.iter().zip(param_tys) {
                         self.session
-                            .insert_mono(param.name.symbol().unwrap(), param_ty.clone());
+                            .insert_mono(param.name.symbol(), param_ty.clone());
                         self.session.types_by_node.insert(param.id, param_ty);
                     }
                 }
@@ -750,10 +768,7 @@ impl<'a> InferencePass<'a> {
                             let field_ty = self.session.new_ty_meta_var(level);
 
                             // bind the pattern name
-                            self.session.insert_mono(
-                                name.symbol().expect("did not resolve name"),
-                                field_ty.clone(),
-                            );
+                            self.session.insert_mono(name.symbol(), field_ty.clone());
 
                             // ONE RowHas per field, all referring to the same row
                             wants._has_field(
@@ -1146,8 +1161,7 @@ impl<'a> InferencePass<'a> {
             let param = self.session.new_type_param(None);
             self.session.skolem_map.insert(skolem.clone(), param);
 
-            self.session
-                .insert_mono(generic.name.symbol().expect("did not get symbol"), skolem);
+            self.session.insert_mono(generic.name.symbol(), skolem);
         }
 
         let mut param_tys: Vec<InferTy> = Vec::with_capacity(func.params.len());

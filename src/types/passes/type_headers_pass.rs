@@ -67,11 +67,14 @@ impl<'a> TypeHeaderPass<'a> {
 
         for ast in asts.values() {
             let file_raw = TypeHeaderPass::drive(ast);
-            raw.type_constructors.extend(file_raw.type_constructors);
+            raw.nominals.extend(file_raw.nominals);
             raw.protocols.extend(file_raw.protocols);
             raw.annotations.extend(file_raw.annotations);
             raw.typealiases.extend(file_raw.typealiases);
-            raw.extensions.extend(file_raw.extensions);
+
+            for (symbol, extensions) in file_raw.extensions {
+                raw.extensions.entry(symbol).or_default().extend(extensions);
+            }
 
             // Merge nested maps for instance_methods
             for (symbol, methods) in file_raw.instance_methods {
@@ -235,7 +238,7 @@ impl<'a> TypeHeaderPass<'a> {
                 );
 
                 self.collect_fields(name, decl.id, body);
-                self.raw.type_constructors.insert(
+                self.raw.nominals.insert(
                     *sym,
                     TypeDef {
                         name: name.clone(),
@@ -368,7 +371,7 @@ impl<'a> TypeHeaderPass<'a> {
                         .collect::<FxHashMap<Name, ASTTyRepr>>(),
                 );
 
-                self.raw.type_constructors.insert(
+                self.raw.nominals.insert(
                     *sym,
                     TypeDef {
                         name: name.clone(),
@@ -519,7 +522,7 @@ impl<'a> TypeHeaderPass<'a> {
                         variant_name.name_str().into(),
                         Variant {
                             tag: variant_name.name_str().into(),
-                            symbol: variant_name.symbol().expect("did not resolve variant name"),
+                            symbol: variant_name.symbol(),
                             fields: values
                                 .iter()
                                 .map(|type_annotation| {
@@ -538,7 +541,7 @@ impl<'a> TypeHeaderPass<'a> {
                         generic.name.clone(),
                         Associated {
                             protocol_id: *type_id,
-                            symbol: generic.name.symbol().unwrap(),
+                            symbol: generic.name.symbol(),
                         },
                     );
                 }
@@ -556,7 +559,7 @@ impl<'a> TypeHeaderPass<'a> {
                             Method {
                                 id,
                                 span: *span,
-                                symbol: name.symbol().unwrap(),
+                                symbol: name.symbol(),
                                 is_static: *is_static,
                                 params: params
                                     .iter()
@@ -583,7 +586,7 @@ impl<'a> TypeHeaderPass<'a> {
                             Method {
                                 id,
                                 span: *span,
-                                symbol: name.symbol().unwrap(),
+                                symbol: name.symbol(),
                                 is_static: *is_static,
                                 params: params
                                     .iter()
@@ -646,7 +649,7 @@ impl<'a> TypeHeaderPass<'a> {
                     initializers.insert(
                         name.name_str().into(),
                         Initializer {
-                            symbol: name.symbol().unwrap(),
+                            symbol: name.symbol(),
                             initializes_type_id: *type_id,
                             params: params
                                 .iter()
@@ -668,54 +671,47 @@ impl<'a> TypeHeaderPass<'a> {
             };
         }
 
-        let methods = self
-            .raw
+        self.raw
             .instance_methods
-            .entry(type_name.symbol().unwrap())
-            .or_default();
-        methods.extend(instance_methods);
+            .entry(type_name.symbol())
+            .or_default()
+            .extend(instance_methods);
 
-        let methods = self
-            .raw
+        self.raw
             .static_methods
-            .entry(type_name.symbol().unwrap())
-            .or_default();
-        methods.extend(static_methods);
+            .entry(type_name.symbol())
+            .or_default()
+            .extend(static_methods);
 
-        let inits = self
-            .raw
+        self.raw
             .initializers
-            .entry(type_name.symbol().unwrap())
-            .or_default();
-        inits.extend(initializers);
+            .entry(type_name.symbol())
+            .or_default()
+            .extend(initializers);
 
-        let props = self
-            .raw
+        self.raw
             .properties
-            .entry(type_name.symbol().unwrap())
-            .or_default();
-        props.extend(properties);
+            .entry(type_name.symbol())
+            .or_default()
+            .extend(properties);
 
-        let vars = self
-            .raw
+        self.raw
             .variants
-            .entry(type_name.symbol().unwrap())
-            .or_default();
-        vars.extend(variants);
+            .entry(type_name.symbol())
+            .or_default()
+            .extend(variants);
 
-        let reqs = self
-            .raw
+        self.raw
             .method_requirements
-            .entry(type_name.symbol().unwrap())
-            .or_default();
-        reqs.extend(method_requirements);
+            .entry(type_name.symbol())
+            .or_default()
+            .extend(method_requirements);
 
-        let associates = self
-            .raw
+        self.raw
             .associated_types
-            .entry(type_name.symbol().unwrap())
-            .or_default();
-        associates.extend(associated_types);
+            .entry(type_name.symbol())
+            .or_default()
+            .extend(associated_types);
     }
 }
 
@@ -732,7 +728,7 @@ pub mod tests {
             name_resolver::NameResolved,
             name_resolver_tests::tests::resolve,
             symbol::{
-                AssociatedTypeId, BuiltinId, EnumId, GlobalId, InstanceMethodId, PropertyId,
+                AssociatedTypeId, BuiltinId, EnumId, GlobalId, MethodRequirementId, PropertyId,
                 ProtocolId, StructId, Symbol, SynthesizedId, TypeParameterId, VariantId,
             },
         },
@@ -806,9 +802,7 @@ pub mod tests {
         );
 
         assert_eq_diff!(
-            *raw.type_constructors
-                .get(&StructId::from(1).into())
-                .unwrap(),
+            *raw.nominals.get(&StructId::from(1).into()).unwrap(),
             TypeDef {
                 name: Name::Resolved(Symbol::Struct(StructId::from(1)), "Person".into()),
                 kind: Kind::Type,
@@ -838,9 +832,7 @@ pub mod tests {
         );
 
         assert_eq_diff!(
-            *raw.type_constructors
-                .get(&StructId::from(1).into())
-                .unwrap(),
+            *raw.nominals.get(&StructId::from(1).into()).unwrap(),
             TypeDef {
                 name: Name::Resolved(Symbol::Struct(StructId::from(1)), "Person".into()),
                 kind: Kind::Type,
@@ -909,9 +901,7 @@ pub mod tests {
         );
 
         assert_eq_diff!(
-            *raw.type_constructors
-                .get(&StructId::from(1).into())
-                .unwrap(),
+            *raw.nominals.get(&StructId::from(1).into()).unwrap(),
             TypeDef {
                 name: Name::Resolved(Symbol::Struct(StructId::from(1)), "Wrapper".into()),
                 kind: Kind::Arrow {
@@ -996,9 +986,7 @@ pub mod tests {
         );
 
         assert_eq_diff!(
-            *raw.type_constructors
-                .get(&StructId::from(1).into())
-                .unwrap(),
+            *raw.nominals.get(&StructId::from(1).into()).unwrap(),
             TypeDef {
                 name: Name::Resolved(Symbol::Struct(StructId::from(1)), "Wrapper".into()),
                 kind: Kind::Arrow {
@@ -1045,7 +1033,7 @@ pub mod tests {
         );
 
         assert_eq_diff!(
-            *raw.type_constructors.get(&EnumId::from(1).into()).unwrap(),
+            *raw.nominals.get(&EnumId::from(1).into()).unwrap(),
             TypeDef {
                 name: Name::Resolved(Symbol::Enum(EnumId::from(1)), "Fizz".into()),
                 kind: Kind::Type,
@@ -1074,7 +1062,7 @@ pub mod tests {
                 .unwrap(),
             crate::indexmap!(Label::Named("foo".into()) => MethodRequirement {
                 id: NodeID::ANY,
-                symbol: Symbol::InstanceMethod(InstanceMethodId::from(1)),
+                symbol: Symbol::MethodRequirement(MethodRequirementId::from(1)),
                 generics: vec![
                     ASTTyRepr::Generic(any!(GenericDecl, {
                         name: Name::Resolved(Symbol::TypeParameter(TypeParameterId::from(1u32)), "G".into()),
@@ -1162,9 +1150,7 @@ pub mod tests {
         );
 
         assert_eq_diff!(
-            *raw.type_constructors
-                .get(&StructId::from(1).into())
-                .unwrap(),
+            *raw.nominals.get(&StructId::from(1).into()).unwrap(),
             TypeDef {
                 name: Name::Resolved(Symbol::Struct(StructId::from(1)), "Buzz".into()),
                 kind: Kind::Type,

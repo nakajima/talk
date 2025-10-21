@@ -72,7 +72,6 @@ impl Extension {
 #[derive(Debug, PartialEq, Clone)]
 pub struct Protocol {
     pub node_id: NodeID,
-    pub methods: FxHashMap<Label, Symbol>,
     pub static_methods: FxHashMap<Label, Symbol>,
     pub associated_types: IndexMap<Name, Associated>,
     pub requirements: FxHashMap<Label, ConformanceRequirement>,
@@ -82,7 +81,6 @@ impl Protocol {
     pub fn import(self, module_id: ModuleId) -> Protocol {
         Protocol {
             node_id: self.node_id,
-            methods: import_label_symbol_map(module_id, self.methods),
             static_methods: import_label_symbol_map(module_id, self.static_methods),
             associated_types: self
                 .associated_types

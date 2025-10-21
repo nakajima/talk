@@ -7,13 +7,14 @@ use crate::{
         constraints::{
             associated_equals::AssociatedEquals,
             call::Call,
+            conforms::Conforms,
             constraint::{Constraint, ConstraintCause},
             has_field::HasField,
             member::Member,
             type_member::TypeMember,
         },
         infer_row::{InferRow, RowParamId},
-        infer_ty::{InferTy, Level},
+        infer_ty::{InferTy, Level, TypeParamId},
         ty::{SomeType, Ty},
         type_operations::{
             InstantiationSubstitutions, UnificationSubstitutions, apply, apply_mult,
@@ -30,6 +31,11 @@ pub enum Predicate<T: SomeType> {
         row: RowParamId,
         label: Label,
         ty: T,
+    },
+    Conforms {
+        param: TypeParamId,
+        protocol_id: ProtocolId,
+        span: Span,
     },
     Member {
         receiver: T,
@@ -59,6 +65,15 @@ pub enum Predicate<T: SomeType> {
 impl From<Predicate<InferTy>> for Predicate<Ty> {
     fn from(value: Predicate<InferTy>) -> Self {
         match value {
+            Predicate::<InferTy>::Conforms {
+                param,
+                protocol_id,
+                span,
+            } => Self::Conforms {
+                param,
+                protocol_id,
+                span,
+            },
             Predicate::<InferTy>::HasField { row, label, ty } => Self::HasField {
                 row,
                 label,
@@ -113,6 +128,15 @@ impl From<Predicate<InferTy>> for Predicate<Ty> {
 impl From<Predicate<Ty>> for Predicate<InferTy> {
     fn from(value: Predicate<Ty>) -> Self {
         match value {
+            Predicate::<Ty>::Conforms {
+                param,
+                protocol_id,
+                span,
+            } => Self::Conforms {
+                param,
+                protocol_id,
+                span,
+            },
             Predicate::<Ty>::HasField { row, label, ty } => Self::HasField {
                 row,
                 label,
@@ -167,6 +191,15 @@ impl From<Predicate<Ty>> for Predicate<InferTy> {
 impl Predicate<InferTy> {
     pub fn apply(&self, substitutions: &mut UnificationSubstitutions) -> Self {
         match self {
+            Self::Conforms {
+                param,
+                protocol_id,
+                span,
+            } => Self::Conforms {
+                param: *param,
+                protocol_id: *protocol_id,
+                span: *span,
+            },
             Self::HasField { row, label, ty } => Self::HasField {
                 row: *row,
                 label: label.clone(),
@@ -228,6 +261,15 @@ impl Predicate<InferTy> {
         level: Level,
     ) -> Constraint {
         match self.clone() {
+            Self::Conforms {
+                param,
+                protocol_id,
+                span,
+            } => Constraint::Conforms(Conforms {
+                ty: InferTy::Param(param),
+                protocol_id,
+                span,
+            }),
             Self::HasField { row, label, ty } => Constraint::HasField(HasField {
                 row: instantiate_row(InferRow::Param(row), substitutions, level),
                 label,
@@ -301,6 +343,11 @@ impl Predicate<InferTy> {
 impl<T: SomeType> std::fmt::Debug for Predicate<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Predicate::Conforms {
+                param, protocol_id, ..
+            } => {
+                write!(f, "*conforms({param:?}, {protocol_id:?})")
+            }
             Predicate::HasField { row, label, ty } => {
                 write!(f, "*hasfield({label}: {ty:?}, {row:?})")
             }

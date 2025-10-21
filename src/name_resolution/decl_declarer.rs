@@ -240,7 +240,7 @@ impl<'a> DeclDeclarer<'a> {
             .current_scope_mut()
             .unwrap()
             .types
-            .insert("Self".into(), name.symbol().unwrap());
+            .insert("Self".into(), name.symbol());
 
         for generic in generics {
             generic.name = self

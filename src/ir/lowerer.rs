@@ -334,7 +334,7 @@ impl<'a> Lowerer<'a> {
         body: &Block,
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
-        let func_ty = match self.types.get_symbol(&name.symbol().unwrap()).unwrap() {
+        let func_ty = match self.types.get_symbol(&name.symbol()).unwrap() {
             TypeEntry::Mono(ty) => ty.clone(),
             TypeEntry::Poly(scheme) => scheme.ty.clone(),
         };
@@ -353,7 +353,7 @@ impl<'a> Lowerer<'a> {
             let formatter = formatter::Formatter::new(&meta);
             unreachable!(
                 "init has no params - param_tys: {param_tys:?} name: {name:?}, sym: {:?}, ty: {:?}, {:?}",
-                self.types.get_symbol(&name.symbol().unwrap()).unwrap(),
+                self.types.get_symbol(&name.symbol()).unwrap(),
                 func_ty,
                 formatter.format(&[Node::Decl(decl.clone())], 80)
             );
@@ -365,7 +365,7 @@ impl<'a> Lowerer<'a> {
         for param in params.iter() {
             let register = self.next_register();
             param_values.push(Value::Reg(register.0));
-            self.bindings.insert(param.name.symbol().unwrap(), register);
+            self.bindings.insert(param.name.symbol(), register);
         }
 
         let mut ret = Value::Void;
@@ -383,7 +383,7 @@ impl<'a> Lowerer<'a> {
             .expect("did not get current function");
 
         self.functions.insert(
-            name.symbol().unwrap(),
+            name.symbol(),
             PolyFunction {
                 name: name.clone(),
                 params: param_values,
@@ -496,7 +496,7 @@ impl<'a> Lowerer<'a> {
 
     fn lower_lvalue(&mut self, expr: &Expr) -> Result<LValue<Label>, IRError> {
         match &expr.kind {
-            ExprKind::Variable(name) => Ok(LValue::Variable(name.symbol().unwrap())),
+            ExprKind::Variable(name) => Ok(LValue::Variable(name.symbol())),
             ExprKind::Member(Some(box receiver), label, _span) => {
                 let receiver_lvalue = self.lower_lvalue(receiver)?;
                 let (receiver_ty, ..) = self.specialized_ty(receiver).expect("didn't get base ty");
@@ -516,7 +516,7 @@ impl<'a> Lowerer<'a> {
         match &pattern.kind {
             PatternKind::Bind(name) => {
                 let value = self.next_register();
-                let symbol = name.symbol().unwrap();
+                let symbol = name.symbol();
                 self.bindings.insert(symbol, value);
                 Ok(Bind::Assigned(value))
             }
@@ -662,7 +662,7 @@ impl<'a> Lowerer<'a> {
             .types
             .catalog
             .initializers
-            .get(&name.symbol().unwrap())
+            .get(&name.symbol())
             .unwrap()
             .get(&Label::Named("init".into()))
             .unwrap();
@@ -692,7 +692,7 @@ impl<'a> Lowerer<'a> {
         bind: Bind,
         old_instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
-        let enum_symbol = name.symbol().unwrap();
+        let enum_symbol = name.symbol();
         let constructor_sym = *self
             .types
             .catalog
@@ -812,7 +812,7 @@ impl<'a> Lowerer<'a> {
             let monomorphized_name = self.monomorphize_name(name.clone(), &instantiations);
             Value::Func(monomorphized_name)
         } else {
-            self.bindings.get(&name.symbol().unwrap()).unwrap().into()
+            self.bindings.get(&name.symbol()).unwrap().into()
         };
 
         Ok((ret, ty))
@@ -836,7 +836,7 @@ impl<'a> Lowerer<'a> {
             .types
             .catalog
             .initializers
-            .get(&name.symbol().unwrap())
+            .get(&name.symbol())
             .unwrap()
             .get(&Label::Named("init".into()))
             .unwrap();
@@ -844,12 +844,7 @@ impl<'a> Lowerer<'a> {
         let init_entry = self.types.get_symbol(&init_sym).cloned().unwrap();
         let (init_ty, concrete_tys) = self.specialize(&init_entry, callee.id)?;
 
-        let properties = self
-            .types
-            .catalog
-            .properties
-            .get(&name.symbol().unwrap())
-            .unwrap();
+        let properties = self.types.catalog.properties.get(&name.symbol()).unwrap();
 
         // Extract return type from the initializer function
         let mut params = init_ty.clone().uncurry_params();
@@ -896,7 +891,7 @@ impl<'a> Lowerer<'a> {
 
         // Handle embedded IR call
         if let ExprKind::Variable(name) = &callee.kind
-            && name.symbol().unwrap() == Symbol::IR
+            && name.symbol() == Symbol::IR
         {
             return self.lower_embedded_ir_call(id, args, dest);
         }
@@ -948,7 +943,7 @@ impl<'a> Lowerer<'a> {
         bind: Bind,
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
-        let ty = self.ty_from_symbol(&func.name.symbol().unwrap())?;
+        let ty = self.ty_from_symbol(&func.name.symbol())?;
 
         let Ty::Func(param_tys, box mut ret_ty) = ty else {
             panic!("didn't get func ty for {:?}: {ty:?}", func.name);
@@ -961,7 +956,7 @@ impl<'a> Lowerer<'a> {
         for param in func.params.iter() {
             let register = self.next_register();
             params.push(Value::Reg(register.0));
-            self.bindings.insert(param.name.symbol().unwrap(), register);
+            self.bindings.insert(param.name.symbol(), register);
         }
 
         let mut ret = Value::Void;
@@ -980,7 +975,7 @@ impl<'a> Lowerer<'a> {
             .expect("did not get current function");
         drop(_s);
         self.functions.insert(
-            func.name.symbol().unwrap(),
+            func.name.symbol(),
             PolyFunction {
                 name: func.name.clone(),
                 params,
@@ -1089,7 +1084,7 @@ impl<'a> Lowerer<'a> {
         let new_name = Name::Resolved(new_symbol.into(), new_name_str);
 
         self.specializations
-            .entry(name.symbol().unwrap())
+            .entry(name.symbol())
             .or_default()
             .push(Specialization {
                 name: new_name.clone(),
@@ -1142,7 +1137,7 @@ impl<'a> Lowerer<'a> {
             }
         };
 
-        let symbol = name.symbol().unwrap();
+        let symbol = name.symbol();
 
         let entry = self
             .types

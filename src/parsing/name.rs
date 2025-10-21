@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use crate::name_resolution::{name_resolver::NameResolverError, symbol::Symbol};
+use crate::name_resolution::symbol::Symbol;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Name {
@@ -28,12 +28,12 @@ impl Name {
         }
     }
 
-    pub fn symbol(&self) -> Result<Symbol, NameResolverError> {
+    pub fn symbol(&self) -> Symbol {
         if let Name::Resolved(sym, _) = self {
-            return Ok(*sym);
+            return *sym;
         }
 
-        Err(NameResolverError::Unresolved(self.clone()))
+        panic!("Name not resolved: {self:?}");
     }
 }
 

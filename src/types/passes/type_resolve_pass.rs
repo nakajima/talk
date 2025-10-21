@@ -70,7 +70,7 @@ impl<'a> TypeResolvePass<'a> {
                 }
             }
         }
-        for (decl_id, type_def) in self.raw.type_constructors.clone().iter() {
+        for (decl_id, type_def) in self.raw.nominals.clone().iter() {
             // First insert type parameters for generics
             let generics = self.raw.generics.get(decl_id).cloned().unwrap_or_default();
 
@@ -79,8 +79,7 @@ impl<'a> TypeResolvePass<'a> {
                     unreachable!()
                 };
 
-                self.session
-                    .insert_mono(name.symbol().unwrap(), InferTy::Param(id));
+                self.session.insert_mono(name.symbol(), InferTy::Param(id));
             }
 
             // Build row based on properties/variants
@@ -155,7 +154,7 @@ impl<'a> TypeResolvePass<'a> {
         }
 
         for (_id, (name, rhs)) in std::mem::take(&mut self.raw.typealiases) {
-            let symbol = name.symbol().unwrap();
+            let symbol = name.symbol();
             let entry = self.infer_type_annotation(&rhs);
             self.session.insert_term(symbol, entry.into());
         }
@@ -164,7 +163,7 @@ impl<'a> TypeResolvePass<'a> {
             self.infer_ast_ty_repr(ty_repr);
         }
 
-        for (decl_id, type_def) in self.raw.type_constructors.clone().iter() {
+        for (decl_id, type_def) in self.raw.nominals.clone().iter() {
             if let Ok(resolved) = self.resolve_type_def(type_def) {
                 self.session
                     .type_catalog
@@ -203,14 +202,26 @@ impl<'a> TypeResolvePass<'a> {
                 .collect();
 
             // Also add default methods to the conforming type unless already defined
-            for (label, method) in &protocol.methods {
+            for (label, method) in self
+                .session
+                .type_catalog
+                .instance_methods
+                .get(&conformance_key.protocol_id.into())
+                .cloned()
+                .unwrap_or_default()
+            {
+                let entry = self.session.lookup(&method).unwrap();
+                let new_sym = self
+                    .symbols
+                    .next_instance_method(self.session.current_module_id);
+                self.session.insert_term(new_sym.into(), entry);
                 self.session
                     .type_catalog
                     .instance_methods
                     .entry(conformance_key.conforming_id)
                     .or_default()
                     .entry(label.clone())
-                    .or_insert(*method);
+                    .or_insert(new_sym.into());
             }
 
             self.session.type_catalog.conformances.insert(
@@ -253,7 +264,7 @@ impl<'a> TypeResolvePass<'a> {
 
     fn resolve_protocol(&mut self, type_def: &TypeDef) -> Result<Protocol, TypeError> {
         let self_ty = self.session.new_type_param(None);
-        self.self_symbols.push(type_def.name.symbol().unwrap());
+        self.self_symbols.push(type_def.name.symbol());
 
         // The Self type parameter should be quantified in a scheme
         let entry = if let InferTy::Param(param_id) = self_ty.clone() {
@@ -266,12 +277,19 @@ impl<'a> TypeResolvePass<'a> {
             EnvEntry::Mono(self_ty)
         };
 
-        self.session
-            .insert_term(type_def.name.symbol().unwrap(), entry);
+        self.session.insert_term(type_def.name.symbol(), entry);
 
-        let sym = type_def.name.symbol().unwrap();
+        let sym = type_def.name.symbol();
+
+        let mut catalog = std::mem::take(&mut self.session.type_catalog);
+        catalog
+            .instance_methods
+            .entry(sym)
+            .or_default()
+            .extend(self.resolve_instance_methods(&sym));
+        _ = std::mem::replace(&mut self.session.type_catalog, catalog);
+
         let static_methods = self.resolve_static_methods(&sym);
-        let instance_methods = Default::default(); //self.resolve_instance_methods(&sym);
         let method_requirements = self.resolve_method_requirements(&sym);
         let associated_types = self
             .raw
@@ -293,7 +311,6 @@ impl<'a> TypeResolvePass<'a> {
 
         Ok(Protocol {
             node_id: type_def.node_id,
-            methods: instance_methods,
             static_methods,
             requirements,
             associated_types,
@@ -304,7 +321,7 @@ impl<'a> TypeResolvePass<'a> {
     fn resolve_type_def(&mut self, type_def: &TypeDef) -> Result<Nominal, TypeError> {
         let _s = trace_span!("resolve", type_def = format!("{type_def:?}")).entered();
 
-        let sym = type_def.name.symbol().unwrap();
+        let sym = type_def.name.symbol();
         let (ty, _, _) = self.session.lookup(&sym).unwrap().into();
 
         self.self_symbols.push(sym);
@@ -362,7 +379,7 @@ impl<'a> TypeResolvePass<'a> {
 
         _ = std::mem::replace(&mut self.session.type_catalog, catalog);
 
-        let symbol = type_def.name.symbol().unwrap();
+        let symbol = type_def.name.symbol();
 
         for c in self
             .raw
@@ -665,7 +682,7 @@ impl<'a> TypeResolvePass<'a> {
                 name.clone(),
                 Associated {
                     protocol_id,
-                    symbol: name.symbol().unwrap(),
+                    symbol: name.symbol(),
                 },
             );
         }
@@ -744,7 +761,7 @@ impl<'a> TypeResolvePass<'a> {
                     .unwrap_or_else(|| {
                         panic!(
                             "did not get type for id: {symbol:?} in {:?}",
-                            self.raw.type_constructors
+                            self.raw.nominals
                         )
                     })
                     .values()
@@ -967,7 +984,7 @@ impl<'a> TypeResolvePass<'a> {
     ) -> (InferTy, Vec<Predicate<InferTy>>, IndexSet<ForAll>) {
         let ty = self
             .session
-            .lookup(&decl.name.symbol().unwrap())
+            .lookup(&decl.name.symbol())
             .map(|t| t._as_ty())
             .unwrap_or_else(|| self.session.new_type_param(None));
 
@@ -987,7 +1004,7 @@ impl<'a> TypeResolvePass<'a> {
 
         let entry = (ty, predicates, foralls);
         self.session
-            .insert_term(decl.name.symbol().unwrap(), entry.clone().into());
+            .insert_term(decl.name.symbol(), entry.clone().into());
         entry
     }
 }
