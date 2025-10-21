@@ -25,7 +25,7 @@ use crate::{
 
 // Predicates are kinda like Constraint templates. They ride around with schemes and get instantiated
 // into constraints when the scheme itself is instantiated.
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub enum Predicate<T: SomeType> {
     HasField {
         row: RowParamId,

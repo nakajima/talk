@@ -1,6 +1,6 @@
 use crate::node_id::FileID;
 
-#[derive(Clone, Copy, Eq)]
+#[derive(Clone, Copy, Eq, Hash)]
 pub struct Span {
     pub file_id: FileID,
     pub start: u32,

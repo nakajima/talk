@@ -24,9 +24,9 @@ pub struct Conforms {
 impl Conforms {
     pub fn solve(
         &self,
-        session: &mut TypeSession,
-        next_wants: &mut Wants,
-        substitutions: &mut UnificationSubstitutions,
+        _session: &mut TypeSession,
+        _next_wants: &mut Wants,
+        _substitutions: &mut UnificationSubstitutions,
     ) -> Result<bool, TypeError> {
         // let mut conformances = TakeToSlot::new(&mut session.type_catalog.conformances);
 
@@ -91,7 +91,7 @@ impl Conforms {
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self, session))]
-    fn check_method_satisfaction(
+    fn _check_method_satisfaction(
         &self,
         session: &mut TypeSession,
         requirement: &EnvEntry,

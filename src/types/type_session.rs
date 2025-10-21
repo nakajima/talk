@@ -863,6 +863,16 @@ impl TypeSession {
         InferTy::Param(id)
     }
 
+    pub(crate) fn new_type_param_id(&mut self, meta: Option<MetaVarId>) -> TypeParamId {
+        let id = self.vars.type_params.next_id();
+        if let Some(meta) = meta {
+            self.reverse_instantiations.ty.insert(meta, id);
+        }
+
+        tracing::trace!("Fresh type param {id:?}");
+        id
+    }
+
     pub(crate) fn new_row_type_param(&mut self, meta: Option<RowMetaId>) -> InferRow {
         let id = self.vars.row_params.next_id();
 
@@ -892,6 +902,13 @@ impl TypeSession {
         self.meta_levels.borrow_mut().insert(Meta::Row(id), level);
         tracing::trace!("Fresh {id:?}");
         InferRow::Var(id)
+    }
+
+    pub(crate) fn new_row_meta_var_id(&mut self, level: Level) -> RowMetaId {
+        let id = self.vars.row_metas.next_id();
+        self.meta_levels.borrow_mut().insert(Meta::Row(id), level);
+        tracing::trace!("Fresh {id:?}");
+        id
     }
 }
 
