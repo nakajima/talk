@@ -9,6 +9,7 @@ use crate::{
         infer_row::{InferRow, RowParamId},
         infer_ty::{InferTy, Level, TypeParamId},
         predicate::Predicate,
+        term_environment::EnvEntry,
         ty::{SomeType, Ty},
         type_operations::{InstantiationSubstitutions, instantiate_ty},
         type_session::TypeSession,
@@ -27,6 +28,17 @@ pub struct Scheme<T: SomeType> {
     pub(crate) foralls: IndexSet<ForAll>,
     pub(super) predicates: Vec<Predicate<T>>,
     pub(crate) ty: T,
+}
+
+impl SomeType for EnvEntry {
+    type RowType = InferRow;
+
+    fn contains_var(&self) -> bool {
+        match self {
+            Self::Mono(ty) => ty.contains_var(),
+            Self::Scheme(scheme) => scheme.ty.contains_var(),
+        }
+    }
 }
 
 impl Scheme<InferTy> {

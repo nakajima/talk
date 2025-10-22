@@ -1,7 +1,7 @@
 use derive_visitor::{Drive, DriveMut};
 
 use crate::{
-    impl_into_node, label::Label, name::Name, node_id::NodeID,
+    impl_into_node, label::Label, name::Name, name_resolution::symbol::Symbol, node_id::NodeID,
     node_kinds::record_field::RecordFieldTypeAnnotation, parsing::span::Span,
 };
 
@@ -31,6 +31,16 @@ pub enum TypeAnnotationKind {
     Record {
         fields: Vec<RecordFieldTypeAnnotation>,
     },
+}
+
+impl TypeAnnotation {
+    pub fn symbol(&self) -> Symbol {
+        match &self.kind {
+            TypeAnnotationKind::Nominal { name, .. } => name.symbol(),
+            TypeAnnotationKind::SelfType(name) => name.symbol(),
+            _ => unreachable!(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
