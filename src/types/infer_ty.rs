@@ -4,7 +4,7 @@ use std::hash::Hash;
 use crate::{
     compiling::module::ModuleId,
     name::Name,
-    name_resolution::symbol::{StructId, Symbol},
+    name_resolution::symbol::{AssociatedTypeId, StructId, Symbol},
     node_id::NodeID,
     types::{
         infer_row::InferRow,
@@ -73,6 +73,11 @@ pub enum InferTy {
     UnificationVar {
         id: MetaVarId,
         level: Level,
+    },
+
+    Projection {
+        base: Box<InferTy>,
+        associated: AssociatedTypeId,
     },
 
     Constructor {
@@ -156,6 +161,7 @@ impl SomeType for InferTy {
             InferTy::Rigid(..) => false,
             InferTy::UnificationVar { .. } => true,
             InferTy::Primitive(..) => false,
+            InferTy::Projection { base, .. } => base.contains_var(),
             InferTy::Constructor { params, .. } => params.iter().any(|p| p.contains_var()),
             InferTy::Func(ty, ty1) => ty.contains_var() || ty1.contains_var(),
             InferTy::Tuple(items) => items.iter().any(|i| i.contains_var()),
@@ -219,6 +225,9 @@ impl InferTy {
             InferTy::Rigid(..) => (),
             InferTy::UnificationVar { .. } => (),
             InferTy::Primitive(..) => (),
+            InferTy::Projection { base, .. } => {
+                result.extend(base.collect_foralls());
+            }
             InferTy::Constructor { params, .. } => {
                 for item in params {
                     result.extend(item.collect_foralls());
@@ -250,6 +259,10 @@ impl InferTy {
             InferTy::Constructor { params, ret, .. } => {
                 _ = params.iter().map(&mut *f);
                 _ = f(ret);
+                f(self)
+            }
+            InferTy::Projection { base, .. } => {
+                _ = f(base);
                 f(self)
             }
             InferTy::Func(ty, ty1) => {
@@ -285,6 +298,10 @@ impl InferTy {
             InferTy::Param(..) => self,
             InferTy::Rigid(..) => self,
             InferTy::UnificationVar { .. } => self,
+            InferTy::Projection { base, associated } => InferTy::Projection {
+                base: base.import(module_id).into(),
+                associated,
+            },
             InferTy::Constructor { name, params, ret } => InferTy::Constructor {
                 name: Name::Resolved(name.symbol().import(module_id), name.name_str()),
                 params,
@@ -316,6 +333,7 @@ impl std::fmt::Debug for InferTy {
             InferTy::Constructor { params, .. } => {
                 write!(f, "Constructor({params:?})")
             }
+            InferTy::Projection { base, associated } => write!(f, "{base:?}.{associated:?}"),
             InferTy::Func(param, ret) => write!(f, "func({param:?}) -> {ret:?}"),
             InferTy::Tuple(items) => {
                 write!(f, "({})", items.iter().map(|i| format!("{i:?}")).join(", "))

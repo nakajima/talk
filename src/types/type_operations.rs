@@ -86,6 +86,7 @@ fn occurs_in(id: MetaVarId, ty: &InferTy) -> bool {
         InferTy::Tuple(items) => items.iter().any(|t| occurs_in(id, t)),
         InferTy::Record(row) => occurs_in_row(id, row),
         InferTy::Nominal { row, .. } => occurs_in_row(id, row),
+        InferTy::Projection { base, .. } => occurs_in(id, base),
         InferTy::Hole(..) => false,
         InferTy::Param(..) => false,
         InferTy::Rigid(..) => false,
@@ -449,6 +450,13 @@ pub(super) fn substitute(ty: InferTy, substitutions: &FxHashMap<InferTy, InferTy
         InferTy::Rigid(..) => ty,
         InferTy::UnificationVar { .. } => ty,
         InferTy::Primitive(..) => ty,
+        InferTy::Projection {
+            box base,
+            associated,
+        } => InferTy::Projection {
+            base: substitute(base, substitutions).into(),
+            associated,
+        },
         InferTy::Constructor { name, params, ret } => InferTy::Constructor {
             name,
             params: params
@@ -500,6 +508,13 @@ pub(super) fn apply(ty: InferTy, substitutions: &mut UnificationSubstitutions) -
         InferTy::Param(..) => ty,
         InferTy::Hole(..) => ty,
         InferTy::Rigid(..) => ty,
+        InferTy::Projection {
+            box base,
+            associated,
+        } => InferTy::Projection {
+            base: apply(base, substitutions).into(),
+            associated,
+        },
         InferTy::UnificationVar { id, .. } => {
             let rep = substitutions.canon_meta(id);
             if let Some(bound) = substitutions.ty.get(&rep).cloned()
@@ -594,6 +609,13 @@ pub(super) fn instantiate_ty(
         InferTy::Rigid(..) => ty,
         InferTy::UnificationVar { .. } => ty,
         InferTy::Primitive(..) => ty,
+        InferTy::Projection {
+            box base,
+            associated,
+        } => InferTy::Projection {
+            base: instantiate_ty(base, substitutions, level).into(),
+            associated,
+        },
         InferTy::Constructor { name, params, ret } => InferTy::Constructor {
             name,
             params: params
