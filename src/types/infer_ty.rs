@@ -48,7 +48,7 @@ impl From<u32> for SkolemId {
     }
 }
 
-#[derive(PartialEq, PartialOrd, Clone, Copy, Debug, Eq, Hash)]
+#[derive(Default, PartialEq, PartialOrd, Clone, Copy, Debug, Eq, Hash)]
 pub struct Level(pub u32);
 impl Level {
     pub fn next(&self) -> Level {

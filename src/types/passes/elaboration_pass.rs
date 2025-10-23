@@ -1,4 +1,5 @@
 use indexmap::{IndexMap, IndexSet};
+use petgraph::graph::UnGraph;
 use rustc_hash::FxHashMap;
 use tracing::instrument;
 
@@ -179,11 +180,20 @@ impl Protocol<RegisteredBodies> {
     }
 }
 
+// Walk the AST finding global funcs, lets, nominals and protocols. Extract
+// what we can from their type annotations to make inference easier.
+// TODO: Maybe we can just stash more info in ElaboratedTypes and not have
+// to traverse the AST as many times? But also since we're not entering bodies
+// maybe this is fine? I dunno we'll figure it out.
 pub struct ElaborationPass<'a> {
     session: &'a mut TypeSession,
     canonical_row_vars: FxHashMap<Symbol, RowMetaId>,
     canonical_type_params: FxHashMap<Symbol, TypeParamId>,
     type_param_conformances: IndexMap<TypeParamId, IndexSet<(ProtocolId, Span)>>,
+
+    // We need to track references between binders in the same scope so
+    // we can handle things like mutual recursion.
+    scc_graph: UnGraph<Symbol, NodeID>,
 }
 
 impl<'a> ElaborationPass<'a> {
@@ -196,6 +206,7 @@ impl<'a> ElaborationPass<'a> {
             canonical_row_vars: Default::default(),
             canonical_type_params: Default::default(),
             type_param_conformances: Default::default(),
+            scc_graph: Default::default(),
         };
 
         let registered_names = pass.register_type_names(
@@ -204,10 +215,10 @@ impl<'a> ElaborationPass<'a> {
             &mut Default::default(),
         );
 
-        let registered_members =
+        let infer_tys =
             pass.elaborate_to_infer_tys(registered_names, asts.iter().flat_map(|a| &a.roots));
 
-        pass.elaborate_to_schemes(registered_members, asts.iter().flat_map(|a| &a.roots))
+        pass.elaborate_to_schemes(infer_tys, asts.iter().flat_map(|a| &a.roots))
     }
 
     #[instrument(skip(self, types, nodes, child_types))]
@@ -232,6 +243,8 @@ impl<'a> ElaborationPass<'a> {
                             ..
                         }),
                 } => {
+                    self.scc_graph.add_node(func.name.symbol());
+
                     for generic in func.generics.iter() {
                         self.register_generic(generic);
                     }
@@ -250,6 +263,7 @@ impl<'a> ElaborationPass<'a> {
                         },
                     ..
                 } => {
+                    self.scc_graph.add_node(name.symbol());
                     types.globals.insert(name.symbol(), ());
                 }
                 DeclKind::Associated { generic } => {
@@ -299,7 +313,7 @@ impl<'a> ElaborationPass<'a> {
 
                     // Create a canonical row var since we don't know the properties/variants for this
                     // nominal yet
-                    let id = self.session.new_row_meta_var_id(Level(1));
+                    let id = self.session.new_row_meta_var_id(Level::default());
                     self.canonical_row_vars.insert(name.symbol(), id);
 
                     // Add this type to parent's children
@@ -397,7 +411,7 @@ impl<'a> ElaborationPass<'a> {
                     ..
                 } => {
                     let ty = match (&type_annotation, &value) {
-                        (None, None) => self.session.new_ty_meta_var(Level(1)),
+                        (None, None) => self.session.new_ty_meta_var(Level::default()),
                         (Some(anno), None) => self.infer_type_annotation(&types, &anno.kind),
                         (None, Some(val)) => self.infer_literal(val),
                         (Some(anno), Some(_val)) => self.infer_type_annotation(&types, &anno.kind),
@@ -715,7 +729,7 @@ impl<'a> ElaborationPass<'a> {
                                 .type_annotation
                                 .as_ref()
                                 .map(|anno| self.infer_type_annotation(types, &anno.kind.clone()))
-                                .unwrap_or_else(|| self.session.new_ty_meta_var(Level(1)))
+                                .unwrap_or_else(|| self.session.new_ty_meta_var(Level::default()))
                         }),
                         ret,
                     );
@@ -758,7 +772,9 @@ impl<'a> ElaborationPass<'a> {
                                         .map(|anno| {
                                             self.infer_type_annotation(types, &anno.kind.clone())
                                         })
-                                        .unwrap_or_else(|| self.session.new_ty_meta_var(Level(1)))
+                                        .unwrap_or_else(|| {
+                                            self.session.new_ty_meta_var(Level::default())
+                                        })
                                 }),
                                 self_ty,
                             ),
@@ -799,7 +815,7 @@ impl<'a> ElaborationPass<'a> {
                         todo!();
                     } else {
                         let ty = match (&type_annotation, &default_value) {
-                            (None, None) => self.session.new_ty_meta_var(Level(1)),
+                            (None, None) => self.session.new_ty_meta_var(Level::default()),
                             (Some(anno), None) => self.infer_type_annotation(types, &anno.kind),
                             (None, Some(_val)) => todo!(),
                             (Some(anno), Some(_val)) => {
@@ -876,7 +892,7 @@ impl<'a> ElaborationPass<'a> {
                     .type_annotation
                     .as_ref()
                     .map(|anno| self.infer_type_annotation(types, &anno.kind.clone()))
-                    .unwrap_or_else(|| self.session.new_ty_meta_var(Level(1)))
+                    .unwrap_or_else(|| self.session.new_ty_meta_var(Level::default()))
             })
             .collect::<Vec<_>>();
 
@@ -890,7 +906,7 @@ impl<'a> ElaborationPass<'a> {
             func.ret
                 .as_ref()
                 .map(|t| self.infer_type_annotation(types, &t.kind))
-                .unwrap_or_else(|| self.session.new_ty_meta_var(Level(1))),
+                .unwrap_or_else(|| self.session.new_ty_meta_var(Level::default())),
         );
 
         (ty, foralls, predicates)
@@ -1058,7 +1074,7 @@ pub mod tests {
                 InferTy::Void.into(),
                 InferTy::Var {
                     id: 1.into(),
-                    level: Level(1)
+                    level: Level::default()
                 }
                 .into()
             ))
@@ -1459,12 +1475,12 @@ pub mod tests {
                     methods: indexmap::indexmap! {
                       Label::Named("getProp".into()) =>
                           EnvEntry::Mono(
-                              curry(vec![struct_ty.clone()], InferTy::Var { id: 1.into(), level: Level(1) })
+                              curry(vec![struct_ty.clone()], InferTy::Var { id: 1.into(), level: Level::default() })
                           ),
                       Label::Named("getGeneric".into()) =>
                           EnvEntry::Scheme(
                             Scheme {
-                                ty: curry(vec![struct_ty.clone(), InferTy::Param(2.into())], InferTy::Var { id: 2.into(), level: Level(1) }),
+                                ty: curry(vec![struct_ty.clone(), InferTy::Param(2.into())], InferTy::Var { id: 2.into(), level: Level::default() }),
                                 foralls: indexset! { ForAll::Ty(2.into()) },
                                 predicates: vec![Predicate::Conforms { param: 2.into(), protocol_id: 1.into(), span: Span::ANY }]
                             }
