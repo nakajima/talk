@@ -1304,7 +1304,7 @@ pub fn collect_meta(ty: &InferTy, out: &mut FxHashSet<InferTy>) {
         InferTy::Param(_) => {
             out.insert(ty.clone());
         }
-        InferTy::UnificationVar { .. } => {
+        InferTy::Var { .. } => {
             out.insert(ty.clone());
         }
         InferTy::Projection { base, .. } => {

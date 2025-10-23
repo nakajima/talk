@@ -71,7 +71,7 @@ pub enum InferTy {
 
     Param(TypeParamId),
     Rigid(SkolemId),
-    UnificationVar {
+    Var {
         id: MetaVarId,
         level: Level,
     },
@@ -160,7 +160,7 @@ impl SomeType for InferTy {
             InferTy::Hole(..) => false,
             InferTy::Param(..) => false,
             InferTy::Rigid(..) => false,
-            InferTy::UnificationVar { .. } => true,
+            InferTy::Var { .. } => true,
             InferTy::Primitive(..) => false,
             InferTy::Projection { base, .. } => base.contains_var(),
             InferTy::Constructor { params, .. } => params.iter().any(|p| p.contains_var()),
@@ -224,7 +224,7 @@ impl InferTy {
             InferTy::Hole(..) => (),
             InferTy::Param(id) => result.push(ForAll::Ty(*id)),
             InferTy::Rigid(..) => (),
-            InferTy::UnificationVar { .. } => (),
+            InferTy::Var { .. } => (),
             InferTy::Primitive(..) => (),
             InferTy::Projection { base, .. } => {
                 result.extend(base.collect_foralls());
@@ -256,7 +256,7 @@ impl InferTy {
             InferTy::Primitive(..) => f(self),
             InferTy::Param(..) => f(self),
             InferTy::Rigid(..) => f(self),
-            InferTy::UnificationVar { .. } => f(self),
+            InferTy::Var { .. } => f(self),
             InferTy::Constructor { params, ret, .. } => {
                 _ = params.iter().map(&mut *f);
                 _ = f(ret);
@@ -298,7 +298,7 @@ impl InferTy {
             InferTy::Primitive(..) => self,
             InferTy::Param(..) => self,
             InferTy::Rigid(..) => self,
-            InferTy::UnificationVar { .. } => self,
+            InferTy::Var { .. } => self,
             InferTy::Projection { base, associated } => InferTy::Projection {
                 base: base.import(module_id).into(),
                 associated,
@@ -329,7 +329,7 @@ impl std::fmt::Debug for InferTy {
             InferTy::Hole(..) => write!(f, "Hole"),
             InferTy::Param(id) => write!(f, "typeparam(α{})", id.0),
             InferTy::Rigid(id) => write!(f, "rigid(α{})", id.0),
-            InferTy::UnificationVar { id, level } => write!(f, "meta(α{}, {})", id.0, level.0),
+            InferTy::Var { id, level } => write!(f, "meta(α{}, {})", id.0, level.0),
             InferTy::Primitive(primitive) => write!(f, "{primitive:?}"),
             InferTy::Constructor { params, .. } => {
                 write!(f, "Constructor({params:?})")

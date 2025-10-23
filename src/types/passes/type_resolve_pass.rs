@@ -1274,7 +1274,7 @@ pub mod tests {
                 ),
                 span: Span::ANY,
                 associated_types: fxhashmap!(
-                    AssociatedTypeId::from(1) => InferTy::UnificationVar { id: 1.into(), level: Level(1) }
+                    AssociatedTypeId::from(1) => InferTy::Var { id: 1.into(), level: Level(1) }
                 )
             }
         )

@@ -87,8 +87,7 @@ impl Scheme<InferTy> {
         for forall in &self.foralls {
             match forall {
                 ForAll::Ty(param) => {
-                    let InferTy::UnificationVar { id: meta, .. } = session.new_ty_meta_var(level)
-                    else {
+                    let InferTy::Var { id: meta, .. } = session.new_ty_meta_var(level) else {
                         unreachable!()
                     };
 
@@ -99,7 +98,7 @@ impl Scheme<InferTy> {
                         .type_catalog
                         .instantiations
                         .ty
-                        .insert((id, *param), InferTy::UnificationVar { id: meta, level });
+                        .insert((id, *param), InferTy::Var { id: meta, level });
                 }
                 ForAll::Row(param) => {
                     let InferRow::Var(meta) = session.new_row_meta_var(level) else {
@@ -153,8 +152,7 @@ impl Scheme<InferTy> {
                 unreachable!()
             };
 
-            let ty @ InferTy::UnificationVar { id: meta_var, .. } = session.new_ty_meta_var(level)
-            else {
+            let ty @ InferTy::Var { id: meta_var, .. } = session.new_ty_meta_var(level) else {
                 unreachable!();
             };
 
@@ -170,7 +168,7 @@ impl Scheme<InferTy> {
             substitutions.ty.insert(*param, meta_var);
             session.type_catalog.instantiations.ty.insert(
                 (*id, *param),
-                InferTy::UnificationVar {
+                InferTy::Var {
                     id: meta_var,
                     level: Level(1),
                 },

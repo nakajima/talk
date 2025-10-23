@@ -31,7 +31,7 @@ impl Call {
         next_wants: &mut Wants,
         substitutions: &mut UnificationSubstitutions,
     ) -> Result<bool, TypeError> {
-        if matches!(&self.callee, InferTy::UnificationVar { .. }) {
+        if matches!(&self.callee, InferTy::Var { .. }) {
             tracing::trace!(
                 "unable to determine callee type: {:?}, substitutions: {substitutions:?}",
                 self.callee

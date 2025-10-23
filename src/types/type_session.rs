@@ -299,7 +299,7 @@ impl TypeSession {
     #[instrument(skip(self))]
     fn shallow_generalize(&mut self, ty: InferTy) -> InferTy {
         match ty {
-            InferTy::UnificationVar { id: meta, .. } => {
+            InferTy::Var { id: meta, .. } => {
                 let id = self
                     .reverse_instantiations
                     .ty
@@ -428,7 +428,7 @@ impl TypeSession {
                     }
                 }
 
-                InferTy::UnificationVar { level, id } => {
+                InferTy::Var { level, id } => {
                     if *level <= inner {
                         tracing::warn!("discarding {m:?} due to level ({level:?} < {inner:?})");
                         continue;
@@ -534,7 +534,7 @@ impl TypeSession {
                     }
                 }
 
-                InferTy::UnificationVar { level, id } => {
+                InferTy::Var { level, id } => {
                     if *level <= inner {
                         tracing::warn!("discarding {m:?} due to level ({level:?} < {inner:?})");
                         continue;
@@ -894,7 +894,7 @@ impl TypeSession {
         let id = self.vars.ty_metas.next_id();
         self.meta_levels.borrow_mut().insert(Meta::Ty(id), level);
         tracing::trace!("Fresh {id:?}");
-        InferTy::UnificationVar { id, level }
+        InferTy::Var { id, level }
     }
 
     pub(crate) fn new_row_meta_var(&mut self, level: Level) -> InferRow {

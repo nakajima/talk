@@ -14,6 +14,8 @@ use crate::{
     node_id::NodeID,
     node_kinds::{
         decl::{Decl, DeclKind},
+        expr::{Expr, ExprKind},
+        func::Func,
         generic_decl::GenericDecl,
         type_annotation::{TypeAnnotation, TypeAnnotationKind},
     },
@@ -103,6 +105,7 @@ impl ElaborationPhase for RegisteredBodies {
 pub struct ElaboratedTypes<Phase: ElaborationPhase = RegisteredNames> {
     pub nominals: FxHashMap<Symbol, Nominal<Phase::T>>,
     pub protocols: FxHashMap<Symbol, Protocol<Phase>>,
+    pub globals: FxHashMap<Symbol, Phase::T>,
 }
 
 impl<T: ElaborationPhase> Default for ElaboratedTypes<T> {
@@ -110,6 +113,7 @@ impl<T: ElaborationPhase> Default for ElaboratedTypes<T> {
         ElaboratedTypes {
             nominals: Default::default(),
             protocols: Default::default(),
+            globals: Default::default(),
         }
     }
 }
@@ -200,9 +204,9 @@ impl<'a> ElaborationPass<'a> {
         );
 
         let registered_members =
-            pass.elaborate_members(registered_names, asts.iter().flat_map(|a| &a.roots));
+            pass.elaborate_to_infer_tys(registered_names, asts.iter().flat_map(|a| &a.roots));
 
-        pass.elaborate_bodies(registered_members, asts.iter().flat_map(|a| &a.roots))
+        pass.elaborate_to_schemes(registered_members, asts.iter().flat_map(|a| &a.roots))
     }
 
     #[instrument(skip(self, types, nodes, child_types))]
@@ -218,6 +222,25 @@ impl<'a> ElaborationPass<'a> {
             };
 
             match kind {
+                DeclKind::Let {
+                    lhs: _,
+                    type_annotation,
+                    value:
+                        Some(Expr {
+                            kind: ExprKind::Func(func),
+                            ..
+                        }),
+                } => {
+                    for generic in func.generics.iter() {
+                        self.register_generic(generic);
+                    }
+
+                    if let Some(anno) = &type_annotation {
+                        self.infer_type_annotation(&types, &anno.kind);
+                    }
+
+                    types.globals.insert(func.name.symbol(), ());
+                }
                 DeclKind::Associated { generic } => {
                     child_types.insert(generic.name.name_str().into(), generic.name.symbol());
                     self.register_generic(generic);
@@ -320,7 +343,7 @@ impl<'a> ElaborationPass<'a> {
 
     // Now that we've got Nominals and Protocols known, we can start gathering their members
     #[instrument(skip(self, types, nodes))]
-    fn elaborate_members(
+    fn elaborate_to_infer_tys(
         &mut self,
         types: ElaboratedTypes<RegisteredNames>,
         nodes: impl Iterator<Item = &'a Node>,
@@ -332,6 +355,26 @@ impl<'a> ElaborationPass<'a> {
             };
 
             match &kind {
+                DeclKind::Let {
+                    lhs: _,
+                    type_annotation,
+                    value:
+                        Some(Expr {
+                            kind: ExprKind::Func(func),
+                            ..
+                        }),
+                } => {
+                    for generic in func.generics.iter() {
+                        self.register_generic(generic);
+                    }
+
+                    if let Some(anno) = &type_annotation {
+                        self.infer_type_annotation(&types, &anno.kind);
+                    }
+
+                    let func_type = self.infer_func(&types, func);
+                    new_types.globals.insert(func.name.symbol(), func_type);
+                }
                 DeclKind::Struct {
                     name,
                     body,
@@ -401,7 +444,7 @@ impl<'a> ElaborationPass<'a> {
     }
 
     #[instrument(skip(self, types, nodes))]
-    fn elaborate_bodies(
+    fn elaborate_to_schemes(
         &mut self,
         types: ElaboratedTypes<RegisteredMembers>,
         nodes: impl Iterator<Item = &'a Node>,
@@ -413,6 +456,29 @@ impl<'a> ElaborationPass<'a> {
             };
 
             match &kind {
+                DeclKind::Let {
+                    lhs: _,
+                    type_annotation: _,
+                    value:
+                        Some(Expr {
+                            kind: ExprKind::Func(func),
+                            ..
+                        }),
+                } => {
+                    let (ty, foralls, predicates) =
+                        types.globals.get(&func.name.symbol()).cloned().unwrap();
+                    let entry = if foralls.is_empty() && predicates.is_empty() {
+                        EnvEntry::Mono(ty)
+                    } else {
+                        EnvEntry::Scheme(Scheme {
+                            ty,
+                            foralls,
+                            predicates: predicates.into_iter().collect(),
+                        })
+                    };
+
+                    new_types.globals.insert(func.name.symbol(), entry);
+                }
                 DeclKind::Struct { name, generics, .. } | DeclKind::Enum { name, generics, .. } => {
                     let nominal = types.nominals.get(&name.symbol()).cloned().unwrap();
                     let mut foralls = IndexSet::default();
@@ -676,47 +742,7 @@ impl<'a> ElaborationPass<'a> {
                     );
                 }
                 DeclKind::Method { func, is_static } => {
-                    let mut foralls = IndexSet::default();
-                    let mut predicates = IndexSet::default();
-                    for generic in func.generics.iter() {
-                        let id = self.register_generic(generic);
-                        foralls.insert(ForAll::Ty(id));
-                        for conformance in generic.conformances.iter() {
-                            let protocol_id = ProtocolId::from(conformance.symbol());
-                            predicates.insert(Predicate::Conforms {
-                                param: id,
-                                protocol_id,
-                                span: conformance.span,
-                            });
-                        }
-                    }
-
-                    let mut params = func
-                        .params
-                        .iter()
-                        .map(|param| {
-                            param
-                                .type_annotation
-                                .as_ref()
-                                .map(|anno| self.infer_type_annotation(types, &anno.kind.clone()))
-                                .unwrap_or_else(|| self.session.new_ty_meta_var(Level(1)))
-                        })
-                        .collect::<Vec<_>>();
-
-                    // If it's a static method, it won't have a self param so we need to prepend a Void so that curry works properly
-                    if *is_static {
-                        params.insert(0, InferTy::Void);
-                    }
-
-                    let ty = curry_stub(
-                        params,
-                        func.ret
-                            .as_ref()
-                            .map(|t| self.infer_type_annotation(types, &t.kind))
-                            .unwrap_or_else(|| self.session.new_ty_meta_var(Level(1))),
-                    );
-
-                    let result = (ty, foralls, predicates);
+                    let result = self.infer_func(types, func);
 
                     if *is_static {
                         members
@@ -794,6 +820,54 @@ impl<'a> ElaborationPass<'a> {
                 )),
             },
         }
+    }
+
+    fn infer_func<T: ElaborationPhase>(
+        &mut self,
+        types: &ElaboratedTypes<T>,
+        func: &Func,
+    ) -> (InferTy, IndexSet<ForAll>, IndexSet<Predicate<InferTy>>) {
+        let mut foralls = IndexSet::default();
+        let mut predicates = IndexSet::default();
+        for generic in func.generics.iter() {
+            let id = self.register_generic(generic);
+            foralls.insert(ForAll::Ty(id));
+            for conformance in generic.conformances.iter() {
+                let protocol_id = ProtocolId::from(conformance.symbol());
+                predicates.insert(Predicate::Conforms {
+                    param: id,
+                    protocol_id,
+                    span: conformance.span,
+                });
+            }
+        }
+
+        let mut params = func
+            .params
+            .iter()
+            .map(|param| {
+                param
+                    .type_annotation
+                    .as_ref()
+                    .map(|anno| self.infer_type_annotation(types, &anno.kind.clone()))
+                    .unwrap_or_else(|| self.session.new_ty_meta_var(Level(1)))
+            })
+            .collect::<Vec<_>>();
+
+        // If it's a static method, it won't have a self param so we need to prepend a Void so that curry works properly
+        if params.is_empty() {
+            params.insert(0, InferTy::Void);
+        }
+
+        let ty = curry_stub(
+            params,
+            func.ret
+                .as_ref()
+                .map(|t| self.infer_type_annotation(types, &t.kind))
+                .unwrap_or_else(|| self.session.new_ty_meta_var(Level(1))),
+        );
+
+        (ty, foralls, predicates)
     }
 
     #[instrument(skip(self, types))]
@@ -903,7 +977,7 @@ pub mod tests {
             driver::{Driver, Source},
             module::ModuleId,
         },
-        name_resolution::symbol::{AssociatedTypeId, EnumId, ProtocolId, StructId},
+        name_resolution::symbol::{AssociatedTypeId, EnumId, GlobalId, ProtocolId, StructId},
         node_id::FileID,
         span::Span,
         types::{
@@ -918,6 +992,42 @@ pub mod tests {
         let mut session = TypeSession::new(ModuleId::Current, Default::default());
         let asts: Vec<_> = resolved.phase.asts.into_values().collect();
         ElaborationPass::drive(asts.as_slice(), &mut session)
+    }
+
+    #[test]
+    fn registers_func_items() {
+        assert_eq_diff!(
+            *elaborate("func fizz() {}",)
+                .globals
+                .get(&GlobalId::from(1).into())
+                .unwrap(),
+            EnvEntry::Mono(InferTy::Func(
+                InferTy::Void.into(),
+                InferTy::Var {
+                    id: 1.into(),
+                    level: Level(1)
+                }
+                .into()
+            ))
+        );
+    }
+
+    #[test]
+    fn registers_generic_func_items() {
+        assert_eq_diff!(
+            *elaborate("func fizz<T>(t: T) -> T { t }",)
+                .globals
+                .get(&GlobalId::from(1).into())
+                .unwrap(),
+            EnvEntry::Scheme(Scheme {
+                ty: InferTy::Func(
+                    InferTy::Param(1.into()).into(),
+                    InferTy::Param(1.into()).into()
+                ),
+                foralls: indexset! {ForAll::Ty(1.into())},
+                predicates: Default::default()
+            })
+        );
     }
 
     #[test]
@@ -1296,12 +1406,12 @@ pub mod tests {
                     methods: indexmap::indexmap! {
                       Label::Named("getProp".into()) =>
                           EnvEntry::Mono(
-                              curry(vec![struct_ty.clone()], InferTy::UnificationVar { id: 1.into(), level: Level(1) })
+                              curry(vec![struct_ty.clone()], InferTy::Var { id: 1.into(), level: Level(1) })
                           ),
                       Label::Named("getGeneric".into()) =>
                           EnvEntry::Scheme(
                             Scheme {
-                                ty: curry(vec![struct_ty.clone(), InferTy::Param(2.into())], InferTy::UnificationVar { id: 2.into(), level: Level(1) }),
+                                ty: curry(vec![struct_ty.clone(), InferTy::Param(2.into())], InferTy::Var { id: 2.into(), level: Level(1) }),
                                 foralls: indexset! { ForAll::Ty(2.into()) },
                                 predicates: vec![Predicate::Conforms { param: 2.into(), protocol_id: 1.into(), span: Span::ANY }]
                             }

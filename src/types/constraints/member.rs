@@ -47,7 +47,7 @@ impl Member {
 
         if matches!(
             receiver,
-            InferTy::UnificationVar { .. } | InferTy::Rigid(_) | InferTy::Param(_)
+            InferTy::Var { .. } | InferTy::Rigid(_) | InferTy::Param(_)
         ) {
             // If we don't know what the receiver is yet, we can't do much
             tracing::debug!("deferring member constraint");

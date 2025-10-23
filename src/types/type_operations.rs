@@ -81,7 +81,7 @@ fn occurs_in_row(id: MetaVarId, row: &InferRow) -> bool {
 // Helper: occurs check
 fn occurs_in(id: MetaVarId, ty: &InferTy) -> bool {
     match ty {
-        InferTy::UnificationVar { id: mid, .. } => *mid == id,
+        InferTy::Var { id: mid, .. } => *mid == id,
         InferTy::Func(a, b) => occurs_in(id, a) || occurs_in(id, b),
         InferTy::Tuple(items) => items.iter().any(|t| occurs_in(id, t)),
         InferTy::Record(row) => occurs_in_row(id, row),
@@ -365,11 +365,11 @@ pub(super) fn unify(
             Ok(param || ret)
         }
         (
-            InferTy::UnificationVar {
+            InferTy::Var {
                 id: lhs_id,
                 level: _,
             },
-            InferTy::UnificationVar {
+            InferTy::Var {
                 id: rhs_id,
                 level: _,
             },
@@ -388,7 +388,7 @@ pub(super) fn unify(
                 Ok(false)
             }
         }
-        (ty, InferTy::UnificationVar { id, .. }) | (InferTy::UnificationVar { id, .. }, ty) => {
+        (ty, InferTy::Var { id, .. }) | (InferTy::Var { id, .. }, ty) => {
             if occurs_in(*id, ty) {
                 return Err(TypeError::OccursCheck(ty.clone())); // or your preferred variant
             }
@@ -448,7 +448,7 @@ pub(super) fn substitute(ty: InferTy, substitutions: &FxHashMap<InferTy, InferTy
         InferTy::Param(..) => ty,
         InferTy::Hole(..) => ty,
         InferTy::Rigid(..) => ty,
-        InferTy::UnificationVar { .. } => ty,
+        InferTy::Var { .. } => ty,
         InferTy::Primitive(..) => ty,
         InferTy::Projection {
             box base,
@@ -515,14 +515,14 @@ pub(super) fn apply(ty: InferTy, substitutions: &mut UnificationSubstitutions) -
             base: apply(base, substitutions).into(),
             associated,
         },
-        InferTy::UnificationVar { id, .. } => {
+        InferTy::Var { id, .. } => {
             let rep = substitutions.canon_meta(id);
             if let Some(bound) = substitutions.ty.get(&rep).cloned()
-                && !matches!(bound, InferTy::UnificationVar { id, .. } if rep == id)
+                && !matches!(bound, InferTy::Var { id, .. } if rep == id)
             {
                 apply(bound, substitutions) // keep collapsing
             } else {
-                InferTy::UnificationVar {
+                InferTy::Var {
                     id: rep,
                     level: *substitutions
                         .meta_levels
@@ -600,14 +600,14 @@ pub(super) fn instantiate_ty(
     match ty {
         InferTy::Param(param) => {
             if let Some(meta) = substitutions.ty.get(&param) {
-                InferTy::UnificationVar { id: *meta, level }
+                InferTy::Var { id: *meta, level }
             } else {
                 ty
             }
         }
         InferTy::Hole(..) => ty,
         InferTy::Rigid(..) => ty,
-        InferTy::UnificationVar { .. } => ty,
+        InferTy::Var { .. } => ty,
         InferTy::Primitive(..) => ty,
         InferTy::Projection {
             box base,
