@@ -17,6 +17,7 @@ use crate::{
         expr::{Expr, ExprKind},
         func::Func,
         generic_decl::GenericDecl,
+        pattern::{Pattern, PatternKind},
         type_annotation::{TypeAnnotation, TypeAnnotationKind},
     },
     span::Span,
@@ -241,6 +242,16 @@ impl<'a> ElaborationPass<'a> {
 
                     types.globals.insert(func.name.symbol(), ());
                 }
+                DeclKind::Let {
+                    lhs:
+                        Pattern {
+                            kind: PatternKind::Bind(name),
+                            ..
+                        },
+                    ..
+                } => {
+                    types.globals.insert(name.symbol(), ());
+                }
                 DeclKind::Associated { generic } => {
                     child_types.insert(generic.name.name_str().into(), generic.name.symbol());
                     self.register_generic(generic);
@@ -375,6 +386,28 @@ impl<'a> ElaborationPass<'a> {
                     let func_type = self.infer_func(&types, func);
                     new_types.globals.insert(func.name.symbol(), func_type);
                 }
+                DeclKind::Let {
+                    lhs:
+                        Pattern {
+                            kind: PatternKind::Bind(name),
+                            ..
+                        },
+                    type_annotation,
+                    value,
+                    ..
+                } => {
+                    let ty = match (&type_annotation, &value) {
+                        (None, None) => self.session.new_ty_meta_var(Level(1)),
+                        (Some(anno), None) => self.infer_type_annotation(&types, &anno.kind),
+                        (None, Some(val)) => self.infer_literal(val),
+                        (Some(anno), Some(_val)) => self.infer_type_annotation(&types, &anno.kind),
+                    };
+
+                    new_types
+                        .globals
+                        .insert(name.symbol(), (ty, Default::default(), Default::default()));
+                }
+
                 DeclKind::Struct {
                     name,
                     body,
@@ -450,35 +483,28 @@ impl<'a> ElaborationPass<'a> {
         nodes: impl Iterator<Item = &'a Node>,
     ) -> ElaboratedTypes<RegisteredBodies> {
         let mut new_types = ElaboratedTypes::<RegisteredBodies>::default();
+
+        for (sym, global) in types.globals {
+            let (ty, foralls, predicates) = global;
+            let entry = if foralls.is_empty() && predicates.is_empty() {
+                EnvEntry::Mono(ty)
+            } else {
+                EnvEntry::Scheme(Scheme {
+                    ty,
+                    foralls,
+                    predicates: predicates.into_iter().collect(),
+                })
+            };
+
+            new_types.globals.insert(sym, entry);
+        }
+
         for node in nodes {
             let Node::Decl(Decl { kind, .. }) = &node else {
                 continue;
             };
 
             match &kind {
-                DeclKind::Let {
-                    lhs: _,
-                    type_annotation: _,
-                    value:
-                        Some(Expr {
-                            kind: ExprKind::Func(func),
-                            ..
-                        }),
-                } => {
-                    let (ty, foralls, predicates) =
-                        types.globals.get(&func.name.symbol()).cloned().unwrap();
-                    let entry = if foralls.is_empty() && predicates.is_empty() {
-                        EnvEntry::Mono(ty)
-                    } else {
-                        EnvEntry::Scheme(Scheme {
-                            ty,
-                            foralls,
-                            predicates: predicates.into_iter().collect(),
-                        })
-                    };
-
-                    new_types.globals.insert(func.name.symbol(), entry);
-                }
                 DeclKind::Struct { name, generics, .. } | DeclKind::Enum { name, generics, .. } => {
                     let nominal = types.nominals.get(&name.symbol()).cloned().unwrap();
                     let mut foralls = IndexSet::default();
@@ -870,6 +896,15 @@ impl<'a> ElaborationPass<'a> {
         (ty, foralls, predicates)
     }
 
+    fn infer_literal(&self, literal: &Expr) -> InferTy {
+        match &literal.kind {
+            ExprKind::LiteralInt(..) => InferTy::Int,
+            ExprKind::LiteralFloat(..) => InferTy::Float,
+            ExprKind::LiteralTrue | ExprKind::LiteralFalse => InferTy::Bool,
+            _ => panic!("unhandled literal ty: {literal:?}"),
+        }
+    }
+
     #[instrument(skip(self, types))]
     fn infer_type_annotation<T: ElaborationPhase>(
         &self,
@@ -992,6 +1027,24 @@ pub mod tests {
         let mut session = TypeSession::new(ModuleId::Current, Default::default());
         let asts: Vec<_> = resolved.phase.asts.into_values().collect();
         ElaborationPass::drive(asts.as_slice(), &mut session)
+    }
+
+    #[test]
+    fn registers_globals() {
+        assert_eq_diff!(
+            *elaborate("let fizz = 123; fizz")
+                .globals
+                .get(&GlobalId::from(1).into())
+                .unwrap(),
+            EnvEntry::Mono(InferTy::Int)
+        );
+        assert_eq_diff!(
+            *elaborate("let fizz = true; fizz")
+                .globals
+                .get(&GlobalId::from(1).into())
+                .unwrap(),
+            EnvEntry::Mono(InferTy::Bool)
+        );
     }
 
     #[test]
