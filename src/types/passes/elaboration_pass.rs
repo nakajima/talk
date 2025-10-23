@@ -345,7 +345,7 @@ impl<'a> ElaborationPass<'a> {
                     ..
                 } => {
                     let nominal = types.nominals.get(&name.symbol()).cloned().unwrap();
-                    let members = self.collect_members(name.symbol(), &types, &body.body);
+                    let members = self.collect_members(name.symbol(), &body.body);
                     let symbol = name.symbol();
                     let mut foralls = IndexSet::default();
                     let mut predicates = IndexSet::default();
@@ -377,9 +377,9 @@ impl<'a> ElaborationPass<'a> {
                 }
                 DeclKind::Protocol { name, body, .. } => {
                     let protocol = types.protocols.get(&name.symbol()).cloned().unwrap();
-                    let members = self.collect_members(name.symbol(), &types, &body.body);
+                    let members = self.collect_members(name.symbol(), &body.body);
                     let (associated_types, method_requirements) =
-                        self.collect_protocol_members(&types, &body.body);
+                        self.collect_protocol_members(&body.body);
                     new_types.protocols.insert(
                         name.symbol(),
                         Protocol {
@@ -554,10 +554,9 @@ impl<'a> ElaborationPass<'a> {
         }
     }
 
-    #[instrument(skip(self, types, nodes))]
-    fn collect_protocol_members<T: ElaborationPhase>(
+    #[instrument(skip(self, nodes))]
+    fn collect_protocol_members(
         &mut self,
-        types: &ElaboratedTypes<T>,
         nodes: &[Node],
     ) -> (
         IndexMap<Label, (AssociatedTypeId, TypeParamId, IndexSet<Predicate<InferTy>>)>,
@@ -612,7 +611,7 @@ impl<'a> ElaborationPass<'a> {
                     }
 
                     let ret = if let Some(box ret) = req.ret.clone() {
-                        self.infer_type_annotation(&types, &ret.kind.clone())
+                        self.infer_type_annotation(&ret.kind.clone())
                     } else {
                         InferTy::Void
                     };
@@ -621,7 +620,7 @@ impl<'a> ElaborationPass<'a> {
                             param
                                 .type_annotation
                                 .as_ref()
-                                .map(|anno| self.infer_type_annotation(types, &anno.kind.clone()))
+                                .map(|anno| self.infer_type_annotation(&anno.kind.clone()))
                                 .unwrap_or_else(|| self.session.new_ty_meta_var(Level(1)))
                         }),
                         ret,
@@ -637,11 +636,10 @@ impl<'a> ElaborationPass<'a> {
         (associated_types, method_requirements)
     }
 
-    #[instrument(skip(self, types, nodes))]
-    fn collect_members<T: ElaborationPhase>(
+    #[instrument(skip(self, nodes))]
+    fn collect_members(
         &mut self,
         self_symbol: Symbol,
-        types: &ElaboratedTypes<T>,
         nodes: &[Node],
     ) -> Members<(InferTy, IndexSet<ForAll>, IndexSet<Predicate<InferTy>>)> {
         let mut members = Members::default();
@@ -662,9 +660,7 @@ impl<'a> ElaborationPass<'a> {
                                     param
                                         .type_annotation
                                         .as_ref()
-                                        .map(|anno| {
-                                            self.infer_type_annotation(&types, &anno.kind.clone())
-                                        })
+                                        .map(|anno| self.infer_type_annotation(&anno.kind.clone()))
                                         .unwrap_or_else(|| self.session.new_ty_meta_var(Level(1)))
                                 }),
                                 self_ty,
@@ -697,7 +693,7 @@ impl<'a> ElaborationPass<'a> {
                             param
                                 .type_annotation
                                 .as_ref()
-                                .map(|anno| self.infer_type_annotation(&types, &anno.kind.clone()))
+                                .map(|anno| self.infer_type_annotation(&anno.kind.clone()))
                                 .unwrap_or_else(|| self.session.new_ty_meta_var(Level(1)))
                         })
                         .collect::<Vec<_>>();
@@ -711,7 +707,7 @@ impl<'a> ElaborationPass<'a> {
                         params,
                         func.ret
                             .as_ref()
-                            .map(|t| self.infer_type_annotation(&types, &t.kind))
+                            .map(|t| self.infer_type_annotation(&t.kind))
                             .unwrap_or_else(|| self.session.new_ty_meta_var(Level(1))),
                     );
 
@@ -747,11 +743,9 @@ impl<'a> ElaborationPass<'a> {
                     } else {
                         let ty = match (&type_annotation, &default_value) {
                             (None, None) => self.session.new_ty_meta_var(Level(1)),
-                            (Some(anno), None) => self.infer_type_annotation(&types, &anno.kind),
+                            (Some(anno), None) => self.infer_type_annotation(&anno.kind),
                             (None, Some(_val)) => todo!(),
-                            (Some(anno), Some(_val)) => {
-                                self.infer_type_annotation(&types, &anno.kind)
-                            }
+                            (Some(anno), Some(_val)) => self.infer_type_annotation(&anno.kind),
                         };
 
                         members.properties.insert(
@@ -795,12 +789,8 @@ impl<'a> ElaborationPass<'a> {
         }
     }
 
-    #[instrument(skip(self, types))]
-    fn infer_type_annotation<T: ElaborationPhase>(
-        &self,
-        types: &ElaboratedTypes<T>,
-        kind: &TypeAnnotationKind,
-    ) -> InferTy {
+    #[instrument(skip(self,))]
+    fn infer_type_annotation(&self, kind: &TypeAnnotationKind) -> InferTy {
         match kind {
             TypeAnnotationKind::SelfType(name) => {
                 let symbol = name.symbol();
@@ -817,74 +807,10 @@ impl<'a> ElaborationPass<'a> {
             }
             TypeAnnotationKind::Nominal { name, .. } => self.symbol_to_infer_ty(name.symbol()),
             TypeAnnotationKind::NominalPath { base, member, .. } => {
-                let base_sym = base.symbol();
-                let base = self.infer_type_annotation(types, &base.kind);
-                match base_sym {
-                    Symbol::AssociatedType(associated) => InferTy::Projection {
-                        base: Box::new(base),
-                        associated,
-                    },
-                    Symbol::Protocol(..) => {
-                        let child_sym = types
-                            .protocols
-                            .get(&base_sym)
-                            .unwrap()
-                            .child_types
-                            .get(member)
-                            .unwrap();
-                        self.symbol_to_infer_ty(*child_sym)
-                    }
-                    Symbol::Enum(..) | Symbol::Struct(..) => {
-                        let child_sym = types
-                            .nominals
-                            .get(&base_sym)
-                            .unwrap_or_else(|| panic!("did not get nominal {base_sym:?} {base:?}"))
-                            .child_types
-                            .get(member)
-                            .unwrap();
-                        self.symbol_to_infer_ty(*child_sym)
-                    }
-                    Symbol::TypeParameter(..) => {
-                        let InferTy::Param(id) = base else {
-                            unreachable!();
-                        };
-
-                        let Some(conformances) = self.type_param_conformances.get(&id) else {
-                            panic!(
-                                "no conformances for type param id: {id:?}, can't find projection"
-                            );
-                        };
-
-                        println!("conformances: {conformances:?}");
-
-                        let mut eligible_associated_ids =
-                            conformances.iter().filter_map(|(protocol_id, _)| {
-                                let protocol = types.protocols.get(&protocol_id.into()).unwrap();
-                                if let Some(Symbol::AssociatedType(associated_id)) =
-                                    protocol.child_types.get(member)
-                                {
-                                    Some(associated_id)
-                                } else {
-                                    None
-                                }
-                            });
-
-                        let Some(associated_id) = eligible_associated_ids.next() else {
-                            panic!("no conformance found for projection");
-                        };
-
-                        if eligible_associated_ids.next().is_some() {
-                            panic!("ambiguous associated types found");
-                        }
-
-                        InferTy::Projection {
-                            base: Box::new(base),
-                            associated: *associated_id,
-                        }
-                    }
-                    _ => {
-                        unimplemented!("base: {base:?}, member: {member:?}");
-                    }
+                let base = self.infer_type_annotation(&base.kind);
+                InferTy::Projection {
+                    base: Box::new(base),
+                    associated: member.clone(),
                 }
             }
             _ => todo!(),
@@ -1239,22 +1165,35 @@ pub mod tests {
                 },
                 method_requirements: indexmap::indexmap! {
                   Label::Named("fizz".into()) =>
-                      EnvEntry::Mono(InferTy::Func(
+                      EnvEntry::Scheme(Scheme {
+                          ty:InferTy::Func(
                               Box::new(InferTy::Param(3.into())), // Self
                               Box::new(
                                 InferTy::Projection {
                                     base: Box::new(InferTy::Param(6.into())),
-                                    associated: AssociatedTypeId::from(1),
+                                    associated: "F".into(),
                                 }
                               )
-                          )
-                      )
+                          ),
+                          foralls: [ForAll::Ty(6.into())].into(),
+                          predicates: [
+                              Predicate::Conforms {
+                                  param: 6.into(),
+                                  protocol_id: 1.into(),
+                                  span: Span::ANY
+                              }
+                          ].into()
+                      })
                 },
                 associated_types: indexmap::indexmap! {
                     "C".into() => (2.into(), 4.into(), indexset!{}),
                     "D".into() => (3.into(), 5.into(), indexset!{
-                             Predicate::Conforms { param: 5.into(), protocol_id: ProtocolId::from(1), span: Span::ANY }
-                        }),
+                        Predicate::Conforms {
+                            param: 5.into(),
+                            protocol_id: ProtocolId::from(1),
+                            span: Span::ANY
+                        }
+                    }),
                 },
                 members: Members {
                     initializers: Default::default(),

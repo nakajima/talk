@@ -3,8 +3,9 @@ use std::hash::Hash;
 
 use crate::{
     compiling::module::ModuleId,
+    label::Label,
     name::Name,
-    name_resolution::symbol::{AssociatedTypeId, StructId, Symbol},
+    name_resolution::symbol::{StructId, Symbol},
     node_id::NodeID,
     types::{
         infer_row::InferRow,
@@ -77,7 +78,7 @@ pub enum InferTy {
 
     Projection {
         base: Box<InferTy>,
-        associated: AssociatedTypeId,
+        associated: Label,
     },
 
     Constructor {
