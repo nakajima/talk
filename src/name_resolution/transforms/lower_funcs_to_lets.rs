@@ -70,7 +70,7 @@ impl LowerFuncsToLets {
                     kind: crate::node_kinds::pattern::PatternKind::Bind(name.clone()),
                 },
                 type_annotation: None,
-                value: Some(func_expr),
+                rhs: Some(func_expr),
             };
         }
     }
@@ -112,7 +112,7 @@ pub mod tests {
                     kind: PatternKind::Bind(Name::Raw("fizz".into()))
                 },
                 type_annotation: None,
-                value: Some(any_expr!(ExprKind::Func(Func {
+                rhs: Some(any_expr!(ExprKind::Func(Func {
                     id: NodeID(FileID(0), 2),
                     name: Name::Raw("fizz".into()),
                     name_span: Span::ANY,

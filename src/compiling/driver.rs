@@ -15,12 +15,7 @@ use crate::{
     parser::Parser,
     parser_error::ParserError,
     types::{
-        passes::{
-            dependencies_pass::{DependenciesPass, SCCResolved},
-            inference_pass::InferencePass,
-            type_headers_pass::TypeHeaderPass,
-            type_resolve_pass::TypeResolvePass,
-        },
+        passes::{elaboration_pass::ElaborationPass, inference_pass::InferencePass},
         type_error::TypeError,
         type_session::{TypeSession, Types},
     },
@@ -211,31 +206,21 @@ impl Driver<NameResolved> {
             })
     }
 
-    pub fn typecheck(mut self) -> Result<Driver<Typed>, CompileError> {
-        let mut type_session = TypeSession::new(self.config.module_id, self.config.modules.clone());
-
-        let raw = TypeHeaderPass::drive_all(&self.phase.asts);
-        TypeResolvePass::drive(&mut type_session, &mut self.phase.symbols, raw.clone());
-
-        let mut scc = SCCResolved::default();
-        for ast in self.phase.asts.values_mut() {
-            tracing::info!("resolving type deps in {:?}", ast.path);
-            DependenciesPass::drive(ast, &mut scc, self.config.module_id);
-        }
-
-        for ast in self.phase.asts.values_mut() {
-            tracing::info!("inferencing {:?}", ast.path);
-            InferencePass::perform(&mut type_session, &scc, ast);
-        }
-
+    pub fn typecheck(self) -> Result<Driver<Typed>, CompileError> {
+        let mut session = TypeSession::new(self.config.module_id, self.config.modules.clone());
         let exports = self.exports();
+
+        let (paths, mut asts): (Vec<_>, Vec<_>) = self.phase.asts.into_iter().unzip();
+        let elaborated_types = ElaborationPass::drive(&asts, &mut session);
+        InferencePass::drive(&mut asts, &mut session, elaborated_types);
+        let asts: IndexMap<Source, AST<_>> = paths.into_iter().zip(asts).collect();
 
         Ok(Driver {
             files: self.files,
             config: self.config,
             phase: Typed {
-                asts: self.phase.asts,
-                types: type_session.finalize().map_err(CompileError::Typing)?,
+                asts,
+                types: session.finalize().map_err(CompileError::Typing)?,
                 exports,
                 symbols: self.phase.symbols,
             },

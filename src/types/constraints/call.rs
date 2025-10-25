@@ -4,7 +4,7 @@ use crate::{
     types::{
         constraints::constraint::{Constraint, ConstraintCause},
         infer_ty::{InferTy, Level},
-        passes::inference_pass::curry,
+        passes::old_inference_pass::curry,
         term_environment::EnvEntry,
         type_error::TypeError,
         type_operations::{UnificationSubstitutions, unify},

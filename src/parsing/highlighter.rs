@@ -215,7 +215,7 @@ impl<'a> Higlighter<'a> {
                 DeclKind::Let {
                     lhs,
                     type_annotation,
-                    value,
+                    rhs: value,
                 } => {
                     result.extend(self.tokens_from_expr(lhs, ast));
 

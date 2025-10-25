@@ -154,7 +154,7 @@ pub mod tests {
                     name_span: Span::ANY,
                     generics: vec![]
                 })),
-                value: None
+                rhs: None
             })
         );
     }
@@ -195,7 +195,7 @@ pub mod tests {
                     span: Span::ANY
                 },
                 type_annotation: None,
-                value: Some(any_expr!(ExprKind::Func(Func {
+                rhs: Some(any_expr!(ExprKind::Func(Func {
                     id: NodeID::ANY,
                     name: Name::Resolved(Symbol::Global(GlobalId::from(1)), "foo".into()),
                     name_span: Span::ANY,
@@ -233,7 +233,7 @@ pub mod tests {
                     ))
                 },
                 type_annotation: None,
-                value: Some(any_expr!(ExprKind::Func(Func {
+                rhs: Some(any_expr!(ExprKind::Func(Func {
                     id: NodeID::ANY,
                     name: Name::Resolved(Symbol::Global(GlobalId::from(1)), "odd".into()),
                     name_span: Span::ANY,
@@ -262,7 +262,7 @@ pub mod tests {
                     ))
                 },
                 type_annotation: None,
-                value: Some(any_expr!(ExprKind::Func(Func {
+                rhs: Some(any_expr!(ExprKind::Func(Func {
                     id: NodeID::ANY,
                     name: Name::Resolved(Symbol::Global(GlobalId::from(2)), "even".into()),
                     name_span: Span::ANY,
@@ -296,7 +296,7 @@ pub mod tests {
                     span: Span::ANY
                 },
                 type_annotation: None,
-                value: Some(any_expr!(ExprKind::Func(Func {
+                rhs: Some(any_expr!(ExprKind::Func(Func {
                     id: NodeID::ANY,
                     name: Name::Resolved(Symbol::Global(GlobalId::from(1)), "foo".into()),
                     name_span: Span::ANY,
@@ -313,7 +313,7 @@ pub mod tests {
                                 span: Span::ANY
                             },
                             type_annotation: None,
-                            value: Some(any_expr!(ExprKind::Func(Func {
+                            rhs: Some(any_expr!(ExprKind::Func(Func {
                                 id: NodeID::ANY,
                                 name: Name::Resolved(
                                     Symbol::DeclaredLocal(DeclaredLocalId(1)),
@@ -363,7 +363,7 @@ pub mod tests {
                     "count".into()
                 ))),
                 type_annotation: None,
-                value: Some(any_expr!(ExprKind::LiteralInt("0".into())))
+                rhs: Some(any_expr!(ExprKind::LiteralInt("0".into())))
             })
         );
 
@@ -375,7 +375,7 @@ pub mod tests {
                     "counter".into()
                 ))),
                 type_annotation: None,
-                value: Some(any_expr!(ExprKind::Func(Func {
+                rhs: Some(any_expr!(ExprKind::Func(Func {
                     id: NodeID::ANY,
                     name: Name::Resolved(Symbol::Global(GlobalId::from(2)), "counter".into()),
                     name_span: Span::ANY,
@@ -423,7 +423,7 @@ pub mod tests {
                     span: Span::ANY
                 },
                 type_annotation: None,
-                value: Some(any_expr!(ExprKind::Func(Func {
+                rhs: Some(any_expr!(ExprKind::Func(Func {
                     id: NodeID::ANY,
                     name: Name::Resolved(Symbol::Global(GlobalId::from(1)), "fizz".into()),
                     name_span: Span::ANY,

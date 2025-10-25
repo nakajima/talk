@@ -228,7 +228,7 @@ impl<'a> Lowerer<'a> {
                         )),
                     },
                     type_annotation: None,
-                    value: Some(Expr {
+                    rhs: Some(Expr {
                         id: NodeID(FileID::SYNTHESIZED, 0),
                         span: Span::SYNTHESIZED,
                         kind: ExprKind::Func(func),
@@ -281,7 +281,7 @@ impl<'a> Lowerer<'a> {
         match &decl.kind {
             DeclKind::Let {
                 lhs,
-                value: Some(value),
+                rhs: Some(value),
                 ..
             } => {
                 let bind = self.lower_pattern(lhs)?;
@@ -1294,7 +1294,7 @@ fn is_main_func(node: &Node) -> bool {
     if let Node::Decl(Decl {
         kind:
             DeclKind::Let {
-                value:
+                rhs:
                     Some(Expr {
                         kind:
                             ExprKind::Func(Func {

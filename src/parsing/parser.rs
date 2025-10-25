@@ -375,7 +375,7 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
-        let value = if self.did_match(TokenKind::Equals)? {
+        let rhs = if self.did_match(TokenKind::Equals)? {
             Some(self.expr()?.as_expr())
         } else {
             None
@@ -389,7 +389,7 @@ impl<'a> Parser<'a> {
             kind: DeclKind::Let {
                 lhs,
                 type_annotation,
-                value,
+                rhs,
             },
         })
     }

@@ -864,7 +864,7 @@ pub mod tests {
                         kind: PatternKind::Bind("fizz".into())
                     },
                     type_annotation: None,
-                    value: None
+                    rhs: None
                 }
             }
         );
@@ -889,7 +889,7 @@ pub mod tests {
                         name_span: Span::ANY,
                         generics: vec![]
                     })),
-                    value: None
+                    rhs: None
                 }
             }
         );
@@ -918,7 +918,7 @@ pub mod tests {
                             generics: vec![]
                         })]
                     })),
-                    value: None
+                    rhs: None
                 }
             }
         );
@@ -962,7 +962,7 @@ pub mod tests {
                             },
                         ])
                     }),
-                    value: None
+                    rhs: None
                 }
             }
         );
@@ -1061,7 +1061,7 @@ pub mod tests {
                     kind: PatternKind::Bind("a".into())
                 },
                 type_annotation: None,
-                value: Some(any_expr!(ExprKind::If(
+                rhs: Some(any_expr!(ExprKind::If(
                     any_expr!(ExprKind::LiteralTrue).into(),
                     any_block!(vec![any_expr_stmt!(ExprKind::LiteralInt("123".into()))]),
                     any_block!(vec![any_expr_stmt!(ExprKind::LiteralInt("456".into()))]),
@@ -1653,7 +1653,7 @@ pub mod tests {
                     kind: PatternKind::Bind("foo".into())
                 },
                 type_annotation: None,
-                value: Some(any_expr!(ExprKind::LiteralInt("123".into())))
+                rhs: Some(any_expr!(ExprKind::LiteralInt("123".into())))
             })
         );
     }
@@ -2371,7 +2371,7 @@ pub mod tests {
                         ]
                     }
                 })),
-                value: None
+                rhs: None
             })
         )
     }

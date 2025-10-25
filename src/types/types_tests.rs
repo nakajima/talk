@@ -466,7 +466,7 @@ pub mod tests {
         let (ast, types) = typecheck(
             "
             func foo() {
-                func id(x) { x } 
+                func id(x) { x }
                 (id(123), id(1.23))
             };
 
@@ -678,7 +678,7 @@ pub mod tests {
     fn requires_if_stmt_cond_to_be_bool() {
         let (ast, _types) = typecheck_err(
             "
-        if 123 { 123 } 
+        if 123 { 123 }
         ",
         );
 
@@ -862,9 +862,9 @@ pub mod tests {
         // Polymorphic recursion should NOT be inferred.
         let (ast, _types) = typecheck_err(
             r#"
-        func g(x) { 
+        func g(x) {
             // Force a shape change on the recursive call to try to “polymorphically” recurse.
-            g( (x, x) ) 
+            g( (x, x) )
         }
         g(1)
     "#,

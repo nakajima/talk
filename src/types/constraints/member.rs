@@ -8,7 +8,7 @@ use crate::{
         constraints::constraint::{Constraint, ConstraintCause},
         infer_row::{InferRow, RowTail, normalize_row},
         infer_ty::{InferTy, Level},
-        passes::{dependencies_pass::ConformanceRequirement, inference_pass::curry},
+        passes::{dependencies_pass::ConformanceRequirement, old_inference_pass::curry},
         term_environment::EnvEntry,
         type_error::TypeError,
         type_operations::{

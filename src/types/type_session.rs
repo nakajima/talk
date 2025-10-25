@@ -21,7 +21,7 @@ use crate::{
         kind::Kind,
         passes::{
             dependencies_pass::Conformance,
-            inference_pass::{Meta, collect_meta},
+            old_inference_pass::{Meta, collect_meta},
         },
         row::Row,
         scheme::{ForAll, Scheme},
@@ -623,6 +623,7 @@ impl TypeSession {
         self.term_env.promote(sym, entry);
     }
 
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     pub(super) fn insert_term(&mut self, sym: Symbol, entry: EnvEntry) {
         self.term_env.insert(sym, entry);
     }

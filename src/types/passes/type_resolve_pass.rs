@@ -19,7 +19,7 @@ use crate::{
         infer_ty::{InferTy, Level},
         passes::{
             dependencies_pass::{Conformance, ConformanceRequirement},
-            inference_pass::curry,
+            old_inference_pass::curry,
         },
         predicate::Predicate,
         scheme::{ForAll, Scheme},

@@ -9,7 +9,7 @@ use crate::{
         dsu::DSU,
         infer_row::{InferRow, RowMetaId, RowParamId, RowTail, normalize_row},
         infer_ty::{InferTy, Level, MetaVarId, TypeParamId},
-        passes::inference_pass::{Meta, curry},
+        passes::old_inference_pass::{Meta, curry},
         type_error::TypeError,
         type_session::{TypeDefKind, TypeSession},
     },
@@ -22,6 +22,13 @@ pub struct UnificationSubstitutions {
     ty_dsu: DSU<MetaVarId>,
     row_dsu: DSU<RowMetaId>,
     pub meta_levels: Rc<RefCell<FxHashMap<Meta, Level>>>,
+}
+
+impl UnificationSubstitutions {
+    pub fn extend(&mut self, substitutions: UnificationSubstitutions) {
+        self.row.extend(substitutions.row);
+        self.ty.extend(substitutions.ty);
+    }
 }
 
 #[derive(Clone, Debug, Default)]

@@ -298,7 +298,7 @@ impl<'a> Formatter<'a> {
             DeclKind::Let {
                 lhs,
                 type_annotation,
-                value,
+                rhs: value,
             } => self.format_let_decl(lhs, type_annotation.as_ref(), value.as_ref()),
             DeclKind::Protocol {
                 name,

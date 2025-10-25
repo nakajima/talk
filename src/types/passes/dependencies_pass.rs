@@ -124,7 +124,7 @@ impl<'a> DependenciesPass<'a> {
                         ..
                     },
                 type_annotation,
-                value: Some(rhs),
+                rhs: Some(rhs),
                 ..
             } => (
                 sym,

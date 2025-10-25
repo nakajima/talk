@@ -28,7 +28,7 @@ pub enum DeclKind {
     Let {
         lhs: Pattern,
         type_annotation: Option<TypeAnnotation>,
-        value: Option<Expr>,
+        rhs: Option<Expr>,
     },
 
     Protocol {

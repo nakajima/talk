@@ -1,5 +1,8 @@
 use indexmap::{IndexMap, IndexSet};
-use petgraph::graph::UnGraph;
+use petgraph::{
+    algo::kosaraju_scc,
+    graph::{DiGraph, NodeIndex},
+};
 use rustc_hash::FxHashMap;
 use tracing::instrument;
 
@@ -19,6 +22,7 @@ use crate::{
         func::Func,
         generic_decl::GenericDecl,
         pattern::{Pattern, PatternKind},
+        stmt::{Stmt, StmtKind},
         type_annotation::{TypeAnnotation, TypeAnnotationKind},
     },
     span::Span,
@@ -93,21 +97,77 @@ impl ElaborationPhase for RegisteredNames {
 }
 
 #[derive(PartialEq, Clone, Debug)]
-pub struct RegisteredMembers {}
-impl ElaborationPhase for RegisteredMembers {
+pub struct ElaboratedToInferTys {}
+impl ElaborationPhase for ElaboratedToInferTys {
     type T = (InferTy, IndexSet<ForAll>, IndexSet<Predicate<InferTy>>);
 }
 
 #[derive(PartialEq, Clone, Debug)]
-pub struct RegisteredBodies {}
-impl ElaborationPhase for RegisteredBodies {
+pub struct ElaboratedToSchemes {}
+impl ElaborationPhase for ElaboratedToSchemes {
     type T = EnvEntry;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Binder {
+    Symbol(Symbol),
+    Member(Symbol, Label),
+}
+
+#[derive(Default, Debug, Clone)]
+pub struct SCCGraph {
+    idx_map: FxHashMap<Binder, NodeIndex>,
+    graph: DiGraph<Binder, NodeID>,
+    rhs_ids: FxHashMap<Binder, NodeID>,
+}
+
+impl SCCGraph {
+    pub fn rhs_id_for(&self, binder: &Binder) -> &NodeID {
+        self.rhs_ids.get(binder).unwrap()
+    }
+
+    pub fn add_node(&mut self, node: Binder, rhs_id: NodeID) -> NodeIndex {
+        if let Some(idx) = self.idx_map.get(&node) {
+            return *idx;
+        }
+
+        let idx = self.graph.add_node(node.clone());
+        self.idx_map.insert(node.clone(), idx);
+        self.rhs_ids.insert(node, rhs_id);
+        idx
+    }
+
+    #[instrument(skip(self))]
+    pub fn add_edge(&mut self, from: (Binder, NodeID), to: (Binder, NodeID), node_id: NodeID) {
+        if from.0 == to.0 {
+            return;
+        }
+        let from = self.add_node(from.0, from.1);
+        let to = self.add_node(to.0, to.1);
+        self.graph.update_edge(from, to, node_id);
+    }
 }
 
 pub struct ElaboratedTypes<Phase: ElaborationPhase = RegisteredNames> {
     pub nominals: FxHashMap<Symbol, Nominal<Phase::T>>,
     pub protocols: FxHashMap<Symbol, Protocol<Phase>>,
     pub globals: FxHashMap<Symbol, Phase::T>,
+    // We need to track references between binders in the same scope so
+    // we can handle things like mutual recursion.
+    pub scc_graph: SCCGraph,
+}
+
+impl ElaboratedTypes<ElaboratedToSchemes> {
+    pub fn groups(&self) -> Vec<Vec<Binder>> {
+        kosaraju_scc(&self.scc_graph.graph)
+            .iter()
+            .map(|ids| {
+                ids.iter()
+                    .map(|id| self.scc_graph.graph[*id].clone())
+                    .collect()
+            })
+            .collect()
+    }
 }
 
 impl<T: ElaborationPhase> Default for ElaboratedTypes<T> {
@@ -116,6 +176,7 @@ impl<T: ElaborationPhase> Default for ElaboratedTypes<T> {
             nominals: Default::default(),
             protocols: Default::default(),
             globals: Default::default(),
+            scc_graph: Default::default(),
         }
     }
 }
@@ -129,7 +190,7 @@ pub enum NominalKind {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Nominal<T> {
     name: Name,
-    ty: T,
+    pub ty: T,
     node_id: NodeID,
     kind: NominalKind,
     conformances: Vec<ConformanceStub>,
@@ -150,7 +211,7 @@ pub struct Protocol<Phase: ElaborationPhase> {
     members: Members<Phase::T>,
 }
 
-impl Protocol<RegisteredMembers> {
+impl Protocol<ElaboratedToInferTys> {
     pub fn collect_foralls(&self) -> IndexSet<ForAll> {
         let mut foralls = IndexSet::default();
 
@@ -165,7 +226,7 @@ impl Protocol<RegisteredMembers> {
     }
 }
 
-impl Protocol<RegisteredBodies> {
+impl Protocol<ElaboratedToSchemes> {
     pub fn collect_foralls(&self) -> IndexSet<ForAll> {
         let mut foralls = IndexSet::default();
 
@@ -190,23 +251,18 @@ pub struct ElaborationPass<'a> {
     canonical_row_vars: FxHashMap<Symbol, RowMetaId>,
     canonical_type_params: FxHashMap<Symbol, TypeParamId>,
     type_param_conformances: IndexMap<TypeParamId, IndexSet<(ProtocolId, Span)>>,
-
-    // We need to track references between binders in the same scope so
-    // we can handle things like mutual recursion.
-    scc_graph: UnGraph<Symbol, NodeID>,
 }
 
 impl<'a> ElaborationPass<'a> {
     pub fn drive(
         asts: &'a [AST<NameResolved>],
         session: &'a mut TypeSession,
-    ) -> ElaboratedTypes<RegisteredBodies> {
+    ) -> ElaboratedTypes<ElaboratedToSchemes> {
         let mut pass = Self {
             session,
             canonical_row_vars: Default::default(),
             canonical_type_params: Default::default(),
             type_param_conformances: Default::default(),
-            scc_graph: Default::default(),
         };
 
         let registered_names = pass.register_type_names(
@@ -229,7 +285,10 @@ impl<'a> ElaborationPass<'a> {
         child_types: &mut IndexMap<Label, Symbol>,
     ) -> ElaboratedTypes<RegisteredNames> {
         for node in nodes {
-            let Node::Decl(Decl { kind, .. }) = &node else {
+            let Node::Decl(Decl {
+                id: decl_id, kind, ..
+            }) = &node
+            else {
                 continue;
             };
 
@@ -237,23 +296,30 @@ impl<'a> ElaborationPass<'a> {
                 DeclKind::Let {
                     lhs: _,
                     type_annotation,
-                    value:
+                    rhs:
                         Some(Expr {
                             kind: ExprKind::Func(func),
                             ..
                         }),
                 } => {
-                    self.scc_graph.add_node(func.name.symbol());
+                    types
+                        .scc_graph
+                        .add_node(Binder::Symbol(func.name.symbol()), *decl_id);
 
                     for generic in func.generics.iter() {
                         self.register_generic(generic);
                     }
 
                     if let Some(anno) = &type_annotation {
-                        self.infer_type_annotation(&types, &anno.kind);
+                        self.elaborate_type_annotation(&types, &anno.kind);
                     }
 
                     types.globals.insert(func.name.symbol(), ());
+                    self.collect_references(
+                        &mut types,
+                        (Binder::Symbol(func.name.symbol()), func.id),
+                        func.body.body.iter(),
+                    );
                 }
                 DeclKind::Let {
                     lhs:
@@ -261,9 +327,12 @@ impl<'a> ElaborationPass<'a> {
                             kind: PatternKind::Bind(name),
                             ..
                         },
+                    rhs: Some(rhs),
                     ..
                 } => {
-                    self.scc_graph.add_node(name.symbol());
+                    types
+                        .scc_graph
+                        .add_node(Binder::Symbol(name.symbol()), rhs.id);
                     types.globals.insert(name.symbol(), ());
                 }
                 DeclKind::Associated { generic } => {
@@ -370,10 +439,13 @@ impl<'a> ElaborationPass<'a> {
     #[instrument(skip(self, types, nodes))]
     fn elaborate_to_infer_tys(
         &mut self,
-        types: ElaboratedTypes<RegisteredNames>,
+        mut types: ElaboratedTypes<RegisteredNames>,
         nodes: impl Iterator<Item = &'a Node>,
-    ) -> ElaboratedTypes<RegisteredMembers> {
-        let mut new_types = ElaboratedTypes::<RegisteredMembers>::default();
+    ) -> ElaboratedTypes<ElaboratedToInferTys> {
+        let mut new_types = ElaboratedTypes::<ElaboratedToInferTys> {
+            scc_graph: std::mem::take(&mut types.scc_graph),
+            ..Default::default()
+        };
         for node in nodes {
             let Node::Decl(Decl { kind, .. }) = &node else {
                 continue;
@@ -383,7 +455,7 @@ impl<'a> ElaborationPass<'a> {
                 DeclKind::Let {
                     lhs: _,
                     type_annotation,
-                    value:
+                    rhs:
                         Some(Expr {
                             kind: ExprKind::Func(func),
                             ..
@@ -394,10 +466,10 @@ impl<'a> ElaborationPass<'a> {
                     }
 
                     if let Some(anno) = &type_annotation {
-                        self.infer_type_annotation(&types, &anno.kind);
+                        self.elaborate_type_annotation(&types, &anno.kind);
                     }
 
-                    let func_type = self.infer_func(&types, func);
+                    let func_type = self.elaborate_func(&types, func);
                     new_types.globals.insert(func.name.symbol(), func_type);
                 }
                 DeclKind::Let {
@@ -407,14 +479,16 @@ impl<'a> ElaborationPass<'a> {
                             ..
                         },
                     type_annotation,
-                    value,
+                    rhs,
                     ..
                 } => {
-                    let ty = match (&type_annotation, &value) {
+                    let ty = match (&type_annotation, &rhs) {
                         (None, None) => self.session.new_ty_meta_var(Level::default()),
-                        (Some(anno), None) => self.infer_type_annotation(&types, &anno.kind),
-                        (None, Some(val)) => self.infer_literal(val),
-                        (Some(anno), Some(_val)) => self.infer_type_annotation(&types, &anno.kind),
+                        (Some(anno), None) => self.elaborate_type_annotation(&types, &anno.kind),
+                        (None, Some(val)) => self.elaborate_literal(val),
+                        (Some(anno), Some(_val)) => {
+                            self.elaborate_type_annotation(&types, &anno.kind)
+                        }
                     };
 
                     new_types
@@ -435,7 +509,7 @@ impl<'a> ElaborationPass<'a> {
                     ..
                 } => {
                     let nominal = types.nominals.get(&name.symbol()).cloned().unwrap();
-                    let members = self.collect_members(name.symbol(), &types, &body.body);
+                    let members = self.collect_members(name.symbol(), &mut new_types, &body.body);
                     let symbol = name.symbol();
                     let mut foralls = IndexSet::default();
                     let mut predicates = IndexSet::default();
@@ -467,7 +541,7 @@ impl<'a> ElaborationPass<'a> {
                 }
                 DeclKind::Protocol { name, body, .. } => {
                     let protocol = types.protocols.get(&name.symbol()).cloned().unwrap();
-                    let members = self.collect_members(name.symbol(), &types, &body.body);
+                    let members = self.collect_members(name.symbol(), &mut new_types, &body.body);
                     let (associated_types, method_requirements) =
                         self.collect_protocol_members(&types, &body.body);
                     new_types.protocols.insert(
@@ -493,10 +567,13 @@ impl<'a> ElaborationPass<'a> {
     #[instrument(skip(self, types, nodes))]
     fn elaborate_to_schemes(
         &mut self,
-        types: ElaboratedTypes<RegisteredMembers>,
+        mut types: ElaboratedTypes<ElaboratedToInferTys>,
         nodes: impl Iterator<Item = &'a Node>,
-    ) -> ElaboratedTypes<RegisteredBodies> {
-        let mut new_types = ElaboratedTypes::<RegisteredBodies>::default();
+    ) -> ElaboratedTypes<ElaboratedToSchemes> {
+        let mut new_types = ElaboratedTypes::<ElaboratedToSchemes> {
+            scc_graph: std::mem::take(&mut types.scc_graph),
+            ..Default::default()
+        };
 
         for (sym, global) in types.globals {
             let (ty, foralls, predicates) = global;
@@ -719,7 +796,7 @@ impl<'a> ElaborationPass<'a> {
                     }
 
                     let ret = if let Some(box ret) = req.ret.clone() {
-                        self.infer_type_annotation(types, &ret.kind.clone())
+                        self.elaborate_type_annotation(types, &ret.kind.clone())
                     } else {
                         InferTy::Void
                     };
@@ -728,7 +805,9 @@ impl<'a> ElaborationPass<'a> {
                             param
                                 .type_annotation
                                 .as_ref()
-                                .map(|anno| self.infer_type_annotation(types, &anno.kind.clone()))
+                                .map(|anno| {
+                                    self.elaborate_type_annotation(types, &anno.kind.clone())
+                                })
                                 .unwrap_or_else(|| self.session.new_ty_meta_var(Level::default()))
                         }),
                         ret,
@@ -748,7 +827,7 @@ impl<'a> ElaborationPass<'a> {
     fn collect_members<T: ElaborationPhase>(
         &mut self,
         self_symbol: Symbol,
-        types: &ElaboratedTypes<T>,
+        types: &mut ElaboratedTypes<T>,
         nodes: &[Node],
     ) -> Members<(InferTy, IndexSet<ForAll>, IndexSet<Predicate<InferTy>>)> {
         let mut members = Members::default();
@@ -770,7 +849,10 @@ impl<'a> ElaborationPass<'a> {
                                         .type_annotation
                                         .as_ref()
                                         .map(|anno| {
-                                            self.infer_type_annotation(types, &anno.kind.clone())
+                                            self.elaborate_type_annotation(
+                                                types,
+                                                &anno.kind.clone(),
+                                            )
                                         })
                                         .unwrap_or_else(|| {
                                             self.session.new_ty_meta_var(Level::default())
@@ -784,7 +866,7 @@ impl<'a> ElaborationPass<'a> {
                     );
                 }
                 DeclKind::Method { func, is_static } => {
-                    let result = self.infer_func(types, func);
+                    let result = self.elaborate_func(types, func);
 
                     if *is_static {
                         members
@@ -793,6 +875,12 @@ impl<'a> ElaborationPass<'a> {
                     } else {
                         members.methods.insert(func.name.name_str().into(), result);
                     }
+
+                    self.collect_references(
+                        types,
+                        (Binder::Symbol(func.name.symbol()), func.id),
+                        func.body.body.iter(),
+                    );
                 }
                 DeclKind::FuncSignature(req) => {
                     for generic in req.generics.iter() {
@@ -816,10 +904,10 @@ impl<'a> ElaborationPass<'a> {
                     } else {
                         let ty = match (&type_annotation, &default_value) {
                             (None, None) => self.session.new_ty_meta_var(Level::default()),
-                            (Some(anno), None) => self.infer_type_annotation(types, &anno.kind),
+                            (Some(anno), None) => self.elaborate_type_annotation(types, &anno.kind),
                             (None, Some(_val)) => todo!(),
                             (Some(anno), Some(_val)) => {
-                                self.infer_type_annotation(types, &anno.kind)
+                                self.elaborate_type_annotation(types, &anno.kind)
                             }
                         };
 
@@ -864,7 +952,7 @@ impl<'a> ElaborationPass<'a> {
         }
     }
 
-    fn infer_func<T: ElaborationPhase>(
+    fn elaborate_func<T: ElaborationPhase>(
         &mut self,
         types: &ElaboratedTypes<T>,
         func: &Func,
@@ -891,7 +979,7 @@ impl<'a> ElaborationPass<'a> {
                 param
                     .type_annotation
                     .as_ref()
-                    .map(|anno| self.infer_type_annotation(types, &anno.kind.clone()))
+                    .map(|anno| self.elaborate_type_annotation(types, &anno.kind.clone()))
                     .unwrap_or_else(|| self.session.new_ty_meta_var(Level::default()))
             })
             .collect::<Vec<_>>();
@@ -905,14 +993,14 @@ impl<'a> ElaborationPass<'a> {
             params,
             func.ret
                 .as_ref()
-                .map(|t| self.infer_type_annotation(types, &t.kind))
+                .map(|t| self.elaborate_type_annotation(types, &t.kind))
                 .unwrap_or_else(|| self.session.new_ty_meta_var(Level::default())),
         );
 
         (ty, foralls, predicates)
     }
 
-    fn infer_literal(&self, literal: &Expr) -> InferTy {
+    fn elaborate_literal(&self, literal: &Expr) -> InferTy {
         match &literal.kind {
             ExprKind::LiteralInt(..) => InferTy::Int,
             ExprKind::LiteralFloat(..) => InferTy::Float,
@@ -922,7 +1010,7 @@ impl<'a> ElaborationPass<'a> {
     }
 
     #[instrument(skip(self, types))]
-    fn infer_type_annotation<T: ElaborationPhase>(
+    fn elaborate_type_annotation<T: ElaborationPhase>(
         &self,
         types: &ElaboratedTypes<T>,
         kind: &TypeAnnotationKind,
@@ -944,7 +1032,7 @@ impl<'a> ElaborationPass<'a> {
             TypeAnnotationKind::Nominal { name, .. } => self.symbol_to_infer_ty(name.symbol()),
             TypeAnnotationKind::NominalPath { base, member, .. } => {
                 let base_sym = base.symbol();
-                let base = self.infer_type_annotation(types, &base.kind);
+                let base = self.elaborate_type_annotation(types, &base.kind);
                 match base_sym {
                     Symbol::AssociatedType(..) => InferTy::Projection {
                         base: Box::new(base),
@@ -1007,6 +1095,107 @@ impl<'a> ElaborationPass<'a> {
             })
             .collect()
     }
+
+    #[instrument(skip(self, types, nodes))]
+    fn collect_references<T: ElaborationPhase>(
+        &mut self,
+        types: &mut ElaboratedTypes<T>,
+        from: (Binder, NodeID),
+        nodes: impl Iterator<Item = impl Into<Node>>,
+    ) {
+        for node in nodes {
+            let node: Node = node.into();
+            let (Node::Stmt(Stmt {
+                kind: StmtKind::Expr(expr),
+                ..
+            })
+            | Node::Expr(expr)) = node
+            else {
+                continue;
+            };
+
+            match &expr.kind {
+                ExprKind::LiteralArray(exprs) => {
+                    self.collect_references(types, from.clone(), exprs.iter())
+                }
+                ExprKind::Unary(.., box expr) => {
+                    self.collect_references(types, from.clone(), [expr.clone()].iter())
+                }
+                ExprKind::Binary(box expr, .., box expr1) => self.collect_references(
+                    types,
+                    from.clone(),
+                    [expr.clone(), expr1.clone()].iter(),
+                ),
+                ExprKind::Tuple(exprs) => {
+                    self.collect_references(types, from.clone(), exprs.iter())
+                }
+                ExprKind::Call { callee, args, .. } => {
+                    self.collect_references(types, from.clone(), args.iter());
+
+                    if let ExprKind::Variable(Name::Resolved(sym, _)) = &callee.kind {
+                        types.scc_graph.add_edge(
+                            from.clone(),
+                            (Binder::Symbol(*sym), callee.id),
+                            expr.id,
+                        );
+                        continue;
+                    }
+
+                    if let ExprKind::Member(
+                        Some(box Expr {
+                            kind:
+                                ExprKind::Variable(Name::SelfType(sym))
+                                | ExprKind::Constructor(Name::Resolved(sym, ..)),
+                            ..
+                        }),
+                        label,
+                        ..,
+                    ) = &callee.kind
+                    {
+                        types.scc_graph.add_edge(
+                            from.clone(),
+                            (Binder::Member(*sym, label.clone()), callee.id),
+                            expr.id,
+                        );
+                        continue;
+                    }
+
+                    if let ExprKind::Member(
+                        Some(box Expr {
+                            kind: ExprKind::Variable(Name::Resolved(Symbol::ParamLocal(..), named)),
+                            ..
+                        }),
+                        label,
+                        ..,
+                    ) = &callee.kind
+                        && named == "self"
+                        && let Binder::Symbol(parent) = from.0
+                    {
+                        types.scc_graph.add_edge(
+                            from.clone(),
+                            (Binder::Member(parent, label.clone()), callee.id),
+                            expr.id,
+                        );
+                        continue;
+                    }
+                }
+                ExprKind::Func(..) => { /* we don't do this recursively */ }
+                ExprKind::If(box expr, conseq, alt) => {
+                    self.collect_references(types, from.clone(), [expr.clone()].iter());
+                    self.collect_references(types, from.clone(), conseq.body.iter());
+                    self.collect_references(types, from.clone(), alt.body.iter());
+                }
+                ExprKind::Match(box expr, match_arms) => {
+                    self.collect_references(types, from.clone(), [expr.clone()].iter());
+                    for arm in match_arms {
+                        self.collect_references(types, from.clone(), arm.body.body.iter());
+                    }
+                }
+                ExprKind::RecordLiteral { .. } => todo!(),
+                _ => (),
+            }
+        }
+    }
 }
 
 fn curry_stub<I: IntoIterator<Item = InferTy>>(params: I, ret: InferTy) -> InferTy {
@@ -1033,11 +1222,20 @@ pub mod tests {
         span::Span,
         types::{
             infer_row::{InferRow, RowMetaId},
-            passes::inference_pass::curry,
+            passes::old_inference_pass::curry,
         },
     };
 
-    fn elaborate(code: &'static str) -> ElaboratedTypes<RegisteredBodies> {
+    impl SCCGraph {
+        fn neighbors_for(&self, node: &Binder) -> Vec<Binder> {
+            self.graph
+                .neighbors(self.idx_map[node])
+                .map(|idx| self.graph[idx].clone())
+                .collect()
+        }
+    }
+
+    fn elaborate(code: &'static str) -> ElaboratedTypes<ElaboratedToSchemes> {
         let driver = Driver::new_bare(vec![Source::from(code)], Default::default());
         let resolved = driver.parse().unwrap().resolve_names().unwrap();
         let mut session = TypeSession::new(ModuleId::Current, Default::default());
@@ -1339,7 +1537,7 @@ pub mod tests {
                 .protocols
                 .get(&ProtocolId::from(1).into())
                 .unwrap(),
-            Protocol::<RegisteredBodies> {
+            Protocol::<ElaboratedToSchemes> {
                 name: Name::Resolved(ProtocolId::from(1).into(), "A".into()),
                 node_id: NodeID::ANY,
                 conformances: vec![],
@@ -1374,7 +1572,7 @@ pub mod tests {
             .protocols
             .get(&ProtocolId::from(2).into())
             .unwrap(),
-            Protocol::<RegisteredBodies> {
+            Protocol::<ElaboratedToSchemes> {
                 self_id: 3.into(),
                 name: Name::Resolved(ProtocolId::from(2).into(), "B".into()),
                 node_id: NodeID::ANY,
@@ -1495,6 +1693,122 @@ pub mod tests {
                 },
                 ty: EnvEntry::Mono(struct_ty.clone()),
             }
+        );
+    }
+
+    #[test]
+    fn registers_edges_for_global_func_calls() {
+        let types = elaborate(
+            "
+            func a() { 123 }
+            func b() { a() ; a() } // Twice to make sure we don't have dups
+          ",
+        );
+
+        // b references a...
+        assert_eq!(
+            vec![Binder::Symbol(Symbol::Global(1.into()))],
+            types
+                .scc_graph
+                .neighbors_for(&Binder::Symbol(Symbol::Global(2.into())))
+        );
+
+        // but a does not reference b
+        assert!(
+            types
+                .scc_graph
+                .neighbors_for(&Binder::Symbol(Symbol::Global(1.into())))
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn registers_mutual_recursion_edges_for_global_func_calls() {
+        let types = elaborate(
+            "
+            func a() { b() }
+            func b() { a() }
+          ",
+        );
+
+        assert_eq!(
+            vec![Binder::Symbol(Symbol::Global(2.into()))],
+            types
+                .scc_graph
+                .neighbors_for(&Binder::Symbol(Symbol::Global(1.into())))
+        );
+
+        assert_eq!(
+            vec![Binder::Symbol(Symbol::Global(1.into()))],
+            types
+                .scc_graph
+                .neighbors_for(&Binder::Symbol(Symbol::Global(2.into())))
+        );
+    }
+
+    #[test]
+    #[ignore = "we dont have builtin funcs yet"]
+    fn graph_ignores_builtins() {
+        // Calls to builtins (no DeclId) must not create edges.
+        let types = elaborate(
+            "
+            func f(){ print(1) }
+          ",
+        );
+
+        assert_eq!(types.scc_graph.graph.edge_count(), 0);
+    }
+
+    #[test]
+    #[ignore = "for this to work we either need to make the `self` param's symbol track its parent type or track type context in the elaboration pass"]
+    fn instance_methods_are_graphed() {
+        let types = elaborate(
+            r#"
+        struct Person {
+            func first()  { self.second() }
+            func second() { self.first() }
+        }
+        "#,
+        );
+
+        assert_eq!(
+            vec![Binder::Symbol(Symbol::InstanceMethod(1.into()))],
+            types
+                .scc_graph
+                .neighbors_for(&Binder::Member(Symbol::Struct(1.into()), "second".into()))
+        );
+
+        assert_eq!(
+            vec![Binder::Symbol(Symbol::InstanceMethod(2.into()))],
+            types
+                .scc_graph
+                .neighbors_for(&Binder::Member(Symbol::Struct(1.into()), "first".into()))
+        );
+    }
+
+    #[test]
+    fn static_methods_are_graphed() {
+        let types = elaborate(
+            r#"
+        struct Person {
+            static func first()  { Person.second() }
+            static func second() { Person.first() }
+        }
+        "#,
+        );
+
+        assert_eq!(
+            vec![Binder::Member(Symbol::Struct(1.into()), "first".into())],
+            types
+                .scc_graph
+                .neighbors_for(&Binder::Symbol(Symbol::StaticMethod(2.into())))
+        );
+
+        assert_eq!(
+            vec![Binder::Member(Symbol::Struct(1.into()), "second".into())],
+            types
+                .scc_graph
+                .neighbors_for(&Binder::Symbol(Symbol::StaticMethod(1.into())))
         );
     }
 }

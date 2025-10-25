@@ -6,7 +6,7 @@ use crate::{
         constraints::constraint::ConstraintCause,
         infer_row::InferRow,
         infer_ty::{InferTy, Level},
-        passes::inference_pass::curry,
+        passes::old_inference_pass::curry,
         term_environment::EnvEntry,
         type_error::TypeError,
         type_operations::{UnificationSubstitutions, instantiate_ty, unify},
