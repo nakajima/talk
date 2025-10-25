@@ -5,8 +5,10 @@ use crate::{
     diagnostic::{AnyDiagnostic, Diagnostic},
     name_resolution::name_resolver::NameResolved,
     node::Node,
+    node_id::NodeID,
     node_kinds::{
         block::Block,
+        call_arg::CallArg,
         decl::{Decl, DeclKind},
         expr::{Expr, ExprKind},
         func::Func,
@@ -85,11 +87,14 @@ impl<'a> InferencePass<'a> {
 
         while let Some(want) = wants.pop() {
             let constraint = want.apply(&mut substitutions);
+            let mut next_wants = Wants::default();
             let solution = match constraint {
                 Constraint::Equals(ref equals) => {
                     unify(&equals.lhs, &equals.rhs, &mut substitutions, self.session)
                 }
-                Constraint::Call(call) => todo!(),
+                Constraint::Call(ref call) => {
+                    call.solve(self.session, &mut next_wants, &mut substitutions)
+                }
                 Constraint::HasField(has_field) => todo!(),
                 Constraint::Member(member) => todo!(),
                 Constraint::Construction(construction) => todo!(),
@@ -306,7 +311,17 @@ impl<'a> InferencePass<'a> {
         level: Level,
         wants: &mut Wants,
     ) -> InferTy {
-        todo!()
+        match kind {
+            TypeAnnotationKind::Nominal {
+                name,
+                name_span,
+                generics,
+            } => {
+                let nominal = self.elaborated_types.nominals.get(&name.symbol()).unwrap();
+                return nominal.ty._as_ty();
+            }
+            _ => todo!(),
+        }
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self, wants))]
@@ -348,7 +363,7 @@ impl<'a> InferencePass<'a> {
                 callee,
                 type_args,
                 args,
-            } => todo!(),
+            } => self.infer_call(expr.id, callee, type_args, args, level, wants),
             ExprKind::Member(expr, label, span) => todo!(),
             ExprKind::Func(func) => self.infer_func(func, level, wants),
             ExprKind::Variable(name) => self.session.lookup(&name.symbol()).unwrap().instantiate(
@@ -366,6 +381,34 @@ impl<'a> InferencePass<'a> {
         }
     }
 
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
+    fn infer_call(
+        &mut self,
+        id: NodeID,
+        callee: &Expr,
+        type_args: &[TypeAnnotation],
+        args: &[CallArg],
+        level: Level,
+        wants: &mut Wants,
+    ) -> InferTy {
+        let returns = self.session.new_ty_meta_var(level);
+        let callee_ty = self.infer_expr(callee, level, wants);
+        let arg_tys = args
+            .iter()
+            .map(|a| self.infer_expr(&a.value, level, wants))
+            .collect();
+        wants.call(
+            callee.id,
+            callee_ty,
+            arg_tys,
+            returns.clone(),
+            None,
+            ConstraintCause::Call(id),
+            callee.span,
+        );
+        returns
+    }
+
     #[instrument(level = tracing::Level::TRACE, skip(self, wants))]
     fn infer_block(&mut self, expr: &Block, level: Level, wants: &mut Wants) -> InferTy {
         InferTy::Void
@@ -373,9 +416,23 @@ impl<'a> InferencePass<'a> {
 
     // Checks
     fn check_func(&mut self, func: &Func, expected: InferTy, level: Level, wants: &mut Wants) {
-        let InferTy::Func(param, box ret) = expected else {
-            panic!("can't check func against non-func expected ty: {expected:?}");
-        };
+        let (params, ret) = uncurry_function(expected);
+        for (param, expected_param_ty) in func.params.iter().zip(params) {
+            let ty = if let Some(anno) = &param.type_annotation {
+                let ty = self.infer_type_annotation(&anno.kind, level, wants);
+                wants.equals(
+                    ty,
+                    expected_param_ty.clone(),
+                    ConstraintCause::Annotation(anno.id),
+                    anno.span,
+                );
+                expected_param_ty
+            } else {
+                expected_param_ty
+            };
+
+            self.session.insert_mono(param.name.symbol(), ty);
+        }
 
         self.check_body(&func.body, ret.clone(), level, wants);
     }
@@ -394,6 +451,19 @@ impl<'a> InferencePass<'a> {
             ConstraintCause::Internal,
             block.span,
         );
+    }
+}
+
+fn uncurry_function(ty: InferTy) -> (Vec<InferTy>, InferTy) {
+    match ty {
+        InferTy::Func(box param, box ret) => {
+            let (mut params, final_ret) = uncurry_function(ret);
+            if param != InferTy::Void {
+                params.insert(0, param);
+            }
+            (params, final_ret)
+        }
+        other => (vec![], other),
     }
 }
 
