@@ -1,28 +1,44 @@
+use itertools::Itertools;
 use tracing::instrument;
 
 use crate::{
     ast::AST,
     diagnostic::{AnyDiagnostic, Diagnostic},
-    name_resolution::name_resolver::NameResolved,
+    label::Label,
+    name::Name,
+    name_resolution::{name_resolver::NameResolved, symbol::Symbol},
     node::Node,
-    node_id::NodeID,
+    node_id::{FileID, NodeID},
     node_kinds::{
         block::Block,
         call_arg::CallArg,
         decl::{Decl, DeclKind},
         expr::{Expr, ExprKind},
         func::Func,
+        match_arm::MatchArm,
         parameter::Parameter,
-        pattern::{Pattern, PatternKind},
+        pattern::{Pattern, PatternKind, RecordFieldPatternKind},
+        record_field::RecordField,
         stmt::{Stmt, StmtKind},
         type_annotation::{TypeAnnotation, TypeAnnotationKind},
     },
+    span::Span,
     types::{
+        builtins::resolve_builtin_type,
         constraints::constraint::{Constraint, ConstraintCause},
+        infer_row::InferRow,
         infer_ty::{InferTy, Level},
-        passes::elaboration_pass::{Binder, ElaboratedToSchemes, ElaboratedTypes},
-        type_operations::{UnificationSubstitutions, unify},
-        type_session::TypeSession,
+        passes::{
+            elaboration_pass::{
+                Binder, ElaboratedToSchemes, ElaboratedTypes, ElaborationTy, SCCGraph,
+            },
+            old_inference_pass::curry,
+        },
+        predicate::Predicate,
+        scheme::Scheme,
+        term_environment::EnvEntry,
+        type_operations::{UnificationSubstitutions, apply, unify},
+        type_session::{TypeDefKind, TypeSession},
         wants::Wants,
     },
 };
@@ -52,11 +68,8 @@ impl<'a> InferencePass<'a> {
         };
 
         let level = Level::default();
-
-        for group in pass.elaborated_types.groups() {
-            pass.infer_group(group, level.next());
-        }
-
+        let graph = pass.elaborated_types.scc_graph.clone();
+        pass.infer_scc_graph(level.next(), &graph);
         pass.final_pass(level);
         pass.apply_substitutions();
     }
@@ -67,7 +80,7 @@ impl<'a> InferencePass<'a> {
             let roots = self.asts[i].roots.clone(); // TODO: It'd be nice to avoid this clone.
             self.infer_nodes(&roots, level.next(), &mut wants);
         }
-        self.solve(wants);
+        self.solve(wants, level);
     }
 
     fn apply_substitutions(&mut self) {
@@ -75,7 +88,11 @@ impl<'a> InferencePass<'a> {
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
-    fn solve(&mut self, mut wants: Wants) {
+    fn solve(
+        &mut self,
+        mut wants: Wants,
+        level: Level,
+    ) -> (Vec<Constraint>, UnificationSubstitutions) {
         let mut substitutions = UnificationSubstitutions::new(self.session.meta_levels.clone());
         let mut unsolved = vec![];
 
@@ -85,59 +102,125 @@ impl<'a> InferencePass<'a> {
             .defer
             .extend(std::mem::take(&mut self.unsolved_constraints));
 
-        while let Some(want) = wants.pop() {
-            let constraint = want.apply(&mut substitutions);
+        // TODO: Move to a more sophisticated system than just a limit on solve attempts.
+        let mut remaining_attempts = 3;
+        while remaining_attempts >= 0 {
             let mut next_wants = Wants::default();
-            let solution = match constraint {
-                Constraint::Equals(ref equals) => {
-                    unify(&equals.lhs, &equals.rhs, &mut substitutions, self.session)
-                }
-                Constraint::Call(ref call) => {
-                    call.solve(self.session, &mut next_wants, &mut substitutions)
-                }
-                Constraint::HasField(has_field) => todo!(),
-                Constraint::Member(member) => todo!(),
-                Constraint::Construction(construction) => todo!(),
-                Constraint::Conforms(conforms) => todo!(),
-                Constraint::AssociatedEquals(associated_equals) => todo!(),
-                Constraint::TypeMember(type_member) => todo!(),
-            };
+            while let Some(want) = wants.pop() {
+                let constraint = want.apply(&mut substitutions);
+                let solution = match constraint {
+                    Constraint::Equals(ref equals) => {
+                        unify(&equals.lhs, &equals.rhs, &mut substitutions, self.session)
+                    }
+                    Constraint::Call(ref call) => {
+                        call.solve(self.session, &mut next_wants, &mut substitutions)
+                    }
+                    Constraint::HasField(ref has_field) => {
+                        has_field.solve(self.session, level, &mut next_wants, &mut substitutions)
+                    }
+                    Constraint::Member(ref member) => {
+                        member.solve(self.session, level, &mut next_wants, &mut substitutions)
+                    }
+                    Constraint::Construction(construction) => todo!(),
+                    Constraint::Conforms(conforms) => todo!(),
+                    Constraint::AssociatedEquals(associated_equals) => todo!(),
+                    Constraint::TypeMember(type_member) => todo!(),
+                };
 
-            match solution {
-                Ok(true) => (), // We're good
-                Ok(false) => {
-                    unsolved.push(constraint);
+                match solution {
+                    Ok(true) => (), // We're good
+                    Ok(false) => {
+                        unsolved.push(constraint);
+                    }
+                    Err(e) => {
+                        tracing::error!("Error solving constraint: {e:?}");
+                        self.asts[constraint.span().file_id.0 as usize]
+                            .diagnostics
+                            .push(AnyDiagnostic::Typing(Diagnostic {
+                                span: constraint.span(),
+                                kind: e,
+                            }));
+                    }
                 }
-                Err(e) => {
-                    tracing::error!("Error solving constraint: {e:?}");
-                    self.asts[constraint.span().file_id.0 as usize]
-                        .diagnostics
-                        .push(AnyDiagnostic::Typing(Diagnostic {
-                            span: constraint.span(),
-                            kind: e,
-                        }));
-                }
+
+                // Add any new constraints generated during solving
             }
+            wants.extend(next_wants);
+            remaining_attempts -= 1;
         }
 
         // Stash our unsolved constraints for later
         self.unsolved_constraints.extend(unsolved.clone());
-        self.substitutions.extend(substitutions);
+        self.substitutions.extend(&substitutions);
+
+        (unsolved, substitutions)
+    }
+
+    fn infer_scc_graph(&mut self, level: Level, graph: &SCCGraph) {
+        let groups = graph.groups();
+        for group in groups {
+            self.infer_group(&group, level, graph);
+        }
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
-    fn infer_group(&mut self, group: Vec<Binder>, level: Level) {
+    fn infer_group(&mut self, group: &[Binder], level: Level, graph: &SCCGraph) {
         let mut wants = Wants::default();
 
+        let mut placeholders = vec![];
         for binder in group {
-            let rhs_id = self.elaborated_types.scc_graph.rhs_id_for(&binder);
+            let symbol = binder.symbol();
+            if self.session.lookup(&symbol).is_none() {
+                let ty = self.session.new_ty_meta_var(level.next());
+                placeholders.push(ty.clone());
+                self.session.insert_mono(symbol, ty);
+            }
+        }
+
+        for (binder, placeholder) in group.iter().zip(placeholders) {
+            let rhs_id = graph.rhs_id_for(binder);
             let ast = &self.asts[rhs_id.0.0 as usize];
             let rhs = ast.find(*rhs_id).unwrap();
 
-            self.infer_node(&rhs, level, &mut wants);
+            let ty = self.infer_node(&rhs, level.next(), &mut wants);
+            wants.equals(
+                placeholder,
+                ty.clone(),
+                ConstraintCause::Internal,
+                rhs.span(),
+            );
+
+            if self.session.lookup(&binder.symbol()).is_none() {
+                self.session.insert_mono(binder.symbol(), ty);
+            }
         }
 
-        self.solve(wants);
+        let (predicates, mut substitutions) = self.solve(wants, level);
+
+        for binder in group {
+            let Binder::Symbol(sym) = binder else {
+                println!("Cannot generalize binder: {binder:?}, wip");
+                continue;
+            };
+
+            match self.session.lookup(sym) {
+                Some(EnvEntry::Mono(ty)) => {
+                    let applied = apply(ty, &mut substitutions);
+                    let scheme = self.session.generalize(level, applied, &predicates);
+                    self.session.promote(*sym, scheme);
+                }
+                Some(entry) => {
+                    let (ty, _, _) = entry.into();
+                    let applied = apply(ty, &mut substitutions);
+                    let scheme = self.session.generalize(level, applied, &predicates);
+                    self.session.insert_term(*sym, scheme);
+                }
+                None => panic!(
+                    "didn't find {sym:?} in term env: {:?}",
+                    self.session.get_term_env()
+                ),
+            }
+        }
     }
 
     fn infer_nodes(&mut self, nodes: &[Node], level: Level, wants: &mut Wants) -> Vec<InferTy> {
@@ -151,17 +234,19 @@ impl<'a> InferencePass<'a> {
     fn infer_node(&mut self, node: impl Into<Node>, level: Level, wants: &mut Wants) -> InferTy {
         let node: Node = node.into();
 
+        tracing::trace!("infer_node {node:?}");
+
         if let Some(known) = self.session.types_by_node.get(&node.node_id()) {
             return known.clone();
         }
 
         let ty = match node {
             Node::Attribute(..) => todo!(),
-            Node::Decl(ref decl) => self.infer_decl(&decl, level, wants),
-            Node::Func(ref func) => self.infer_func(&func, level, wants),
-            Node::Parameter(ref parameter) => self.infer_parameter(&parameter, level, wants),
-            Node::Stmt(ref stmt) => self.infer_stmt(&stmt, level, wants),
-            Node::Expr(ref expr) => self.infer_expr(&expr, level, wants),
+            Node::Decl(ref decl) => self.infer_decl(decl, level, wants),
+            Node::Func(ref func) => self.infer_func(func, level, wants),
+            Node::Parameter(ref parameter) => self.infer_parameter(parameter, level, wants),
+            Node::Stmt(ref stmt) => self.infer_stmt(stmt, level, wants),
+            Node::Expr(ref expr) => self.infer_expr(expr, level, wants),
             Node::CallArg(..) => todo!(),
             Node::Pattern(..) => todo!(),
             Node::MatchArm(..) => todo!(),
@@ -179,31 +264,6 @@ impl<'a> InferencePass<'a> {
 
         ty
     }
-
-    #[instrument(level = tracing::Level::TRACE, skip(self, wants))]
-    fn check_expr(&mut self, expr: &Expr, expected: InferTy, level: Level, wants: &mut Wants) {
-        if let Some(known) = self.session.types_by_node.get(&expr.id) {
-            wants.equals(
-                known.clone(),
-                expected,
-                ConstraintCause::Internal,
-                expr.span,
-            );
-
-            return;
-        }
-
-        // We can assume that our type will be what is expected for the types_by_node
-        self.session.types_by_node.insert(expr.id, expected.clone());
-
-        match &expr.kind {
-            ExprKind::Func(func) => {
-                self.check_func(func, expected, level, wants);
-            }
-            _ => todo!(),
-        }
-    }
-
     #[instrument(level = tracing::Level::TRACE, skip(self, wants, decl), fields(decl.kind = ?decl.kind))]
     fn infer_decl(&mut self, decl: &Decl, level: Level, wants: &mut Wants) -> InferTy {
         match &decl.kind {
@@ -218,7 +278,7 @@ impl<'a> InferencePass<'a> {
                 generics,
                 conformances,
                 body,
-            } => todo!(),
+            } => InferTy::Void, // Should be handled by groups?
             DeclKind::Protocol {
                 name,
                 name_span,
@@ -272,33 +332,48 @@ impl<'a> InferencePass<'a> {
             todo!();
         };
 
-        if let Some(entry) = self
-            .elaborated_types
-            .nominals
-            .get(&name.symbol())
-            .map(|n| n.ty.clone())
-            .or_else(|| self.elaborated_types.globals.get(&name.symbol()).cloned())
-        {
+        if let Some(entry) = self.elaborated_types.nominals.get(&name.symbol()) {
+            let entry = self.materialize_entry(entry.ty.clone(), level);
+            let skolemized = self.session.skolemize(&entry);
             if let Some(rhs) = rhs {
-                self.check_expr(rhs, entry._as_ty(), level, wants);
+                self.check_expr(rhs, skolemized.clone(), level, wants);
             }
 
-            self.session.insert_term(name.symbol(), entry);
-
-            return InferTy::Void;
+            self.session.insert_term(name.symbol(), entry.clone());
+            return skolemized;
         };
 
-        match (&type_annotation, &rhs) {
-            (None, None) => (),
-            (None, Some(rhs)) => {
+        if let Some(entry) = self.elaborated_types.globals.get(&name.symbol()) {
+            let entry = self.materialize_entry(entry.clone(), level);
+            let skolemized = self.session.skolemize(&entry);
+            if let Some(rhs) = rhs {
+                self.check_expr(rhs, skolemized.clone(), level, wants);
+            }
+
+            self.session.insert_term(name.symbol(), entry.clone());
+            return skolemized;
+        };
+
+        let ty = match (&type_annotation, &rhs) {
+            (None, None) => self.session.new_ty_meta_var(level),
+            (None, Some(rhs)) => self.infer_node(rhs, level.next(), wants),
+            (Some(anno), None) => self.infer_type_annotation(&anno.kind, level.next(), wants),
+            (Some(anno), Some(rhs)) => {
                 let rhs_ty = self.infer_node(rhs, level.next(), wants);
-                self.session.insert_mono(name.symbol(), rhs_ty);
+                let anno_ty = self.infer_type_annotation(&anno.kind, level.next(), wants);
+                wants.equals(
+                    rhs_ty,
+                    anno_ty.clone(),
+                    ConstraintCause::Annotation(anno.id),
+                    anno.span,
+                );
+
+                anno_ty
             }
-            (Some(anno), None) => {
-                let rhs_ty = self.infer_type_annotation(&anno.kind, level.next(), wants);
-                self.session.insert_mono(name.symbol(), rhs_ty);
-            }
-            (Some(_), Some(_)) => todo!(),
+        };
+
+        if self.session.lookup(&name.symbol()).is_none() {
+            self.session.insert_mono(name.symbol(), ty);
         }
 
         InferTy::Void
@@ -317,8 +392,13 @@ impl<'a> InferencePass<'a> {
                 name_span,
                 generics,
             } => {
-                let nominal = self.elaborated_types.nominals.get(&name.symbol()).unwrap();
-                return nominal.ty._as_ty();
+                if let Some(nominal) = self.elaborated_types.nominals.get(&name.symbol()) {
+                    self.materialize_entry(nominal.ty.clone(), level)._as_ty()
+                } else if matches!(name.symbol(), Symbol::Builtin(..)) {
+                    resolve_builtin_type(&name.symbol()).0
+                } else {
+                    panic!("don't know how to resolve {name:?}")
+                }
             }
             _ => todo!(),
         }
@@ -326,7 +406,20 @@ impl<'a> InferencePass<'a> {
 
     #[instrument(level = tracing::Level::TRACE, skip(self, wants))]
     fn infer_func(&mut self, func: &Func, level: Level, wants: &mut Wants) -> InferTy {
-        InferTy::Void
+        let mut param_tys = vec![];
+        for param in func.params.iter() {
+            let meta = self.session.new_ty_meta_var(level);
+            self.session.insert_mono(param.name.symbol(), meta.clone());
+            param_tys.push(meta);
+        }
+
+        if param_tys.is_empty() {
+            param_tys.push(InferTy::Void);
+        }
+
+        let ret = self.infer_block(&func.body, level, wants);
+
+        curry(param_tys, ret)
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self, wants))]
@@ -338,11 +431,50 @@ impl<'a> InferencePass<'a> {
     fn infer_stmt(&mut self, stmt: &Stmt, level: Level, wants: &mut Wants) -> InferTy {
         match &stmt.kind {
             StmtKind::Expr(expr) => self.infer_expr(expr, level, wants),
-            StmtKind::If(expr, block, block1) => todo!(),
+            StmtKind::If(cond, conseq, alt) => {
+                let cond_ty = self.infer_node(cond, level, wants);
+                wants.equals(
+                    cond_ty,
+                    InferTy::Bool,
+                    ConstraintCause::Condition(cond.id),
+                    cond.span,
+                );
+
+                let ret = self.infer_node(conseq, level, wants);
+                if let Some(alt) = alt {
+                    self.infer_node(alt, level, wants);
+                }
+
+                ret // TODO: This is sort of a hack around the fact that if exprs are parsed as statements at times.
+            }
             StmtKind::Return(expr) => todo!(),
             StmtKind::Break => todo!(),
-            StmtKind::Assignment(expr, expr1) => todo!(),
-            StmtKind::Loop(expr, block) => todo!(),
+            StmtKind::Assignment(lhs, rhs) => {
+                let lhs_ty = self.infer_expr(lhs, level, wants);
+                let rhs_ty = self.infer_expr(rhs, level, wants);
+                wants.equals(
+                    lhs_ty,
+                    rhs_ty,
+                    ConstraintCause::Assignment(stmt.id),
+                    stmt.span,
+                );
+                InferTy::Void
+            }
+            StmtKind::Loop(cond, block) => {
+                if let Some(cond) = cond {
+                    let cond_ty = self.infer_expr(cond, level, wants);
+                    wants.equals(
+                        cond_ty,
+                        InferTy::Bool,
+                        ConstraintCause::Condition(cond.id),
+                        cond.span,
+                    );
+                }
+
+                self.infer_block(block, level, wants);
+
+                InferTy::Void
+            }
         }
     }
 
@@ -357,28 +489,175 @@ impl<'a> InferencePass<'a> {
             ExprKind::LiteralString(_) => InferTy::String(),
             ExprKind::Unary(token_kind, expr) => todo!(),
             ExprKind::Binary(expr, token_kind, expr1) => todo!(),
-            ExprKind::Tuple(exprs) => todo!(),
+            ExprKind::Tuple(exprs) => InferTy::Tuple(
+                exprs
+                    .iter()
+                    .map(|e| self.infer_expr(e, level, wants))
+                    .collect(),
+            ),
             ExprKind::Block(block) => todo!(),
             ExprKind::Call {
                 callee,
                 type_args,
                 args,
             } => self.infer_call(expr.id, callee, type_args, args, level, wants),
-            ExprKind::Member(expr, label, span) => todo!(),
+            ExprKind::Member(receiver, label, span) => {
+                self.infer_member(expr.id, receiver, label, level, wants)
+            }
             ExprKind::Func(func) => self.infer_func(func, level, wants),
-            ExprKind::Variable(name) => self.session.lookup(&name.symbol()).unwrap().instantiate(
-                expr.id,
-                self.session,
-                level,
-                wants,
-                expr.span,
-            ),
-            ExprKind::Constructor(name) => todo!(),
-            ExprKind::If(expr, block, block1) => todo!(),
-            ExprKind::Match(expr, match_arms) => todo!(),
-            ExprKind::RecordLiteral { fields, spread } => todo!(),
+            ExprKind::Variable(name) => self
+                .session
+                .lookup(&name.symbol())
+                .unwrap_or_else(|| panic!("did not find entry for {name:?}"))
+                .instantiate(expr.id, self.session, level, wants, expr.span),
+            ExprKind::Constructor(name) => self.infer_constructor(expr, name, level, wants),
+            ExprKind::If(cond, conseq, alt) => self.infer_if_expr(cond, conseq, alt, level, wants),
+            ExprKind::Match(scrutinee, arms) => self.infer_match(scrutinee, arms, level, wants),
+            ExprKind::RecordLiteral { fields, spread } => {
+                self.infer_record_literal(fields, spread, level, wants)
+            }
             ExprKind::RowVariable(name) => todo!(),
         }
+    }
+
+    fn infer_constructor(
+        &mut self,
+        expr: &Expr,
+        name: &Name,
+        level: Level,
+        wants: &mut Wants,
+    ) -> InferTy {
+        let (_, entry) = self
+            .elaborated_types
+            .nominals
+            .get(&name.symbol())
+            .unwrap()
+            .members
+            .initializers
+            .iter()
+            .next()
+            .unwrap()
+            .clone();
+
+        self.materialize_entry(entry.clone(), level).instantiate(
+            expr.id,
+            self.session,
+            level,
+            wants,
+            expr.span,
+        )
+    }
+
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
+    fn infer_member(
+        &mut self,
+        id: NodeID,
+        receiver: &Option<Box<Expr>>,
+        label: &Label,
+        level: Level,
+        wants: &mut Wants,
+    ) -> InferTy {
+        let receiver_ty = if let Some(receiver) = &receiver {
+            self.infer_expr(receiver, level, wants)
+        } else {
+            self.session.new_ty_meta_var(level)
+        };
+
+        let member_ty = self.session.new_ty_meta_var(level);
+
+        wants.member(
+            id,
+            receiver_ty,
+            label.clone(),
+            member_ty.clone(),
+            ConstraintCause::Member(id),
+            receiver.as_ref().map(|r| r.span).unwrap_or(Span {
+                file_id: FileID(0),
+                start: 0,
+                end: 0,
+            }),
+        );
+
+        member_ty
+    }
+
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
+    fn infer_match(
+        &mut self,
+        scrutinee: &Expr,
+        arms: &[MatchArm],
+        level: Level,
+        wants: &mut Wants,
+    ) -> InferTy {
+        let mut last_arm_ty: Option<InferTy> = None;
+        let scrutinee_ty = self.infer_expr(scrutinee, level, wants);
+
+        for arm in arms {
+            self.check_pattern(&arm.pattern, &scrutinee_ty, level, wants);
+            let arm_ty = self.infer_block(&arm.body, level, wants);
+
+            if let Some(last_arm_ty) = &last_arm_ty {
+                wants.equals(
+                    arm_ty.clone(),
+                    last_arm_ty.clone(),
+                    ConstraintCause::MatchArm(arm.id),
+                    arm.span,
+                );
+            }
+
+            last_arm_ty = Some(arm_ty);
+        }
+
+        last_arm_ty.unwrap_or(InferTy::Void)
+    }
+
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
+    fn infer_record_literal(
+        &mut self,
+        fields: &[RecordField],
+        spread: &Option<Box<Expr>>,
+        level: Level,
+        wants: &mut Wants,
+    ) -> InferTy {
+        let mut row = InferRow::Empty(TypeDefKind::Struct);
+        for field in fields.iter().rev() {
+            row = InferRow::Extend {
+                row: Box::new(row),
+                label: field.label.name_str().into(),
+                ty: self.infer_expr(&field.value, level, wants),
+            };
+        }
+
+        InferTy::Record(Box::new(row))
+    }
+
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
+    fn infer_if_expr(
+        &mut self,
+        cond: &Expr,
+        conseq: &Block,
+        alt: &Block,
+        level: Level,
+        wants: &mut Wants,
+    ) -> InferTy {
+        let cond_ty = self.infer_expr(cond, level, wants);
+        wants.equals(
+            cond_ty,
+            InferTy::Bool,
+            ConstraintCause::Condition(cond.id),
+            cond.span,
+        );
+
+        let conseq_ty = self.infer_block(conseq, level, wants);
+        let alt_ty = self.infer_block(alt, level, wants);
+        wants.equals(
+            conseq_ty.clone(),
+            alt_ty,
+            ConstraintCause::Condition(alt.id),
+            alt.span,
+        );
+
+        conseq_ty
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
@@ -393,10 +672,16 @@ impl<'a> InferencePass<'a> {
     ) -> InferTy {
         let returns = self.session.new_ty_meta_var(level);
         let callee_ty = self.infer_expr(callee, level, wants);
-        let arg_tys = args
+        let mut arg_tys = args
             .iter()
             .map(|a| self.infer_expr(&a.value, level, wants))
-            .collect();
+            .collect_vec();
+
+        // If we're calling a constructor, it needs to take `self` as its first arg.
+        if matches!(&callee.kind, ExprKind::Constructor(..)) {
+            arg_tys.insert(0, returns.clone());
+        }
+
         wants.call(
             callee.id,
             callee_ty,
@@ -411,7 +696,16 @@ impl<'a> InferencePass<'a> {
 
     #[instrument(level = tracing::Level::TRACE, skip(self, wants))]
     fn infer_block(&mut self, expr: &Block, level: Level, wants: &mut Wants) -> InferTy {
-        InferTy::Void
+        let graph = self
+            .elaborated_types
+            .collect_scc_graph(self.session, &expr.body);
+        self.infer_scc_graph(level, &graph);
+
+        let mut ret = InferTy::Void;
+        for node in &expr.body {
+            ret = self.infer_node(node, level, wants);
+        }
+        ret
     }
 
     // Checks
@@ -437,6 +731,30 @@ impl<'a> InferencePass<'a> {
         self.check_body(&func.body, ret.clone(), level, wants);
     }
 
+    #[instrument(level = tracing::Level::TRACE, skip(self, wants))]
+    fn check_expr(&mut self, expr: &Expr, expected: InferTy, level: Level, wants: &mut Wants) {
+        if let Some(known) = self.session.types_by_node.get(&expr.id) {
+            wants.equals(
+                known.clone(),
+                expected,
+                ConstraintCause::Internal,
+                expr.span,
+            );
+
+            return;
+        }
+
+        // We can assume that our type will be what is expected for the types_by_node
+        self.session.types_by_node.insert(expr.id, expected.clone());
+
+        match &expr.kind {
+            ExprKind::Func(func) => {
+                self.check_func(func, expected, level, wants);
+            }
+            _ => todo!(),
+        }
+    }
+
     #[instrument(level = tracing::Level::TRACE, skip(self, wants, block), fields(block.id = ?block.id))]
     fn check_body(&mut self, block: &Block, expected: InferTy, level: Level, wants: &mut Wants) {
         let mut actual_ret = InferTy::Void;
@@ -451,6 +769,291 @@ impl<'a> InferencePass<'a> {
             ConstraintCause::Internal,
             block.span,
         );
+    }
+
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
+    fn check_pattern(
+        &mut self,
+        pattern: &Pattern,
+        expected: &InferTy,
+        level: Level,
+        wants: &mut Wants,
+    ) {
+        let Pattern { kind, .. } = &pattern;
+
+        match kind {
+            PatternKind::Bind(Name::Raw(name)) => {
+                panic!("Unresolved name in pattern: {name:?}");
+            }
+            PatternKind::Bind(Name::Resolved(sym, _)) => {
+                self.session.insert_mono(*sym, expected.clone());
+            }
+            PatternKind::Bind(Name::SelfType(..)) => (),
+            PatternKind::LiteralInt(_) => {
+                wants.equals(
+                    expected.clone(),
+                    InferTy::Int,
+                    ConstraintCause::Pattern(pattern.id),
+                    pattern.span,
+                );
+            }
+            PatternKind::LiteralFloat(_) => {
+                wants.equals(
+                    expected.clone(),
+                    InferTy::Float,
+                    ConstraintCause::Pattern(pattern.id),
+                    pattern.span,
+                );
+            }
+            PatternKind::LiteralFalse | PatternKind::LiteralTrue => {
+                wants.equals(
+                    expected.clone(),
+                    InferTy::Bool,
+                    ConstraintCause::Pattern(pattern.id),
+                    pattern.span,
+                );
+            }
+            PatternKind::Tuple(patterns) => {
+                let metas: Vec<InferTy> = (0..patterns.len())
+                    .map(|_| self.session.new_ty_meta_var(level))
+                    .collect();
+
+                wants.equals(
+                    expected.clone(),
+                    InferTy::Tuple(metas.clone()),
+                    ConstraintCause::Pattern(pattern.id),
+                    pattern.span,
+                );
+
+                for (pi, bi) in patterns.iter().zip(metas) {
+                    self.check_pattern(pi, &bi, level, wants);
+                }
+            }
+            PatternKind::Record { fields } => {
+                let expected_row =
+                    self.ensure_row_record(pattern.id, pattern.span, expected, level, wants);
+                for field in fields {
+                    match &field.kind {
+                        RecordFieldPatternKind::Bind(name) => {
+                            // fresh meta for the field type
+                            let field_ty = self.session.new_ty_meta_var(level);
+
+                            // bind the pattern name
+                            self.session.insert_mono(name.symbol(), field_ty.clone());
+
+                            // ONE RowHas per field, all referring to the same row
+                            wants._has_field(
+                                expected_row.clone(),
+                                name.name_str().into(),
+                                field_ty,
+                                ConstraintCause::Pattern(field.id),
+                                pattern.span,
+                            );
+                        }
+                        RecordFieldPatternKind::Equals { name, value, .. } => {
+                            // optional: pattern field = subpattern; same RowHas then recurse on value
+                            let field_ty = self.session.new_ty_meta_var(level);
+                            wants._has_field(
+                                expected_row.clone(),
+                                name.name_str().into(),
+                                field_ty.clone(),
+                                ConstraintCause::Pattern(field.id),
+                                pattern.span,
+                            );
+                            self.check_pattern(value, &field_ty, level, wants);
+                        }
+                        RecordFieldPatternKind::Rest => {}
+                    }
+                }
+            }
+            PatternKind::Variant {
+                enum_name: _,
+                variant_name,
+                fields,
+                ..
+            } => {
+                let field_metas: Vec<InferTy> = fields
+                    .iter()
+                    .map(|_| self.session.new_ty_meta_var(level))
+                    .collect();
+                let payload = if fields.is_empty() {
+                    expected.clone()
+                } else if fields.len() == 1 {
+                    InferTy::Func(field_metas[0].clone().into(), expected.clone().into())
+                } else {
+                    curry(field_metas.clone(), expected.clone())
+                };
+
+                wants.member(
+                    pattern.id,
+                    expected.clone(),
+                    variant_name.into(),
+                    payload,
+                    ConstraintCause::Pattern(pattern.id),
+                    pattern.span,
+                );
+
+                // Recursively check each field pattern
+                for (field_pattern, field_ty) in fields.iter().zip(field_metas) {
+                    self.check_pattern(field_pattern, &field_ty, level, wants);
+                }
+            }
+            PatternKind::Wildcard => (),
+            PatternKind::Struct { .. } => todo!(),
+        }
+    }
+
+    fn ensure_row_record(
+        &mut self,
+        id: NodeID,
+        span: Span,
+        expected: &InferTy,
+        level: Level,
+        wants: &mut Wants,
+    ) -> InferRow {
+        match expected {
+            InferTy::Record(box row) => row.clone(),
+            _ => {
+                let row = self.session.new_row_meta_var(level);
+                wants.equals(
+                    expected.clone(),
+                    InferTy::Record(Box::new(row.clone())),
+                    ConstraintCause::Member(id),
+                    span,
+                );
+                row
+            }
+        }
+    }
+
+    fn materialize_entry(
+        &mut self,
+        entry: EnvEntry<ElaborationTy>,
+        level: Level,
+    ) -> EnvEntry<InferTy> {
+        match entry {
+            EnvEntry::Mono(ty) => EnvEntry::Mono(self.materialize(ty, level)),
+            EnvEntry::Scheme(scheme) => EnvEntry::Scheme(Scheme {
+                ty: self.materialize(scheme.ty, level),
+                foralls: scheme.foralls,
+                predicates: scheme
+                    .predicates
+                    .into_iter()
+                    .map(|p| self.materialize_predicate(p, level))
+                    .collect(),
+            }),
+        }
+    }
+
+    fn materialize_predicate(
+        &mut self,
+        predicate: Predicate<ElaborationTy>,
+        level: Level,
+    ) -> Predicate<InferTy> {
+        match predicate {
+            Predicate::HasField { row, label, ty } => Predicate::HasField {
+                row,
+                label,
+                ty: self.materialize(ty, level),
+            },
+            Predicate::Conforms {
+                param,
+                protocol_id,
+                span,
+            } => Predicate::Conforms {
+                param,
+                protocol_id,
+                span,
+            },
+            Predicate::Member {
+                receiver,
+                label,
+                ty,
+            } => Predicate::Member {
+                receiver: self.materialize(receiver, level),
+                label,
+                ty: self.materialize(ty, level),
+            },
+            Predicate::Call {
+                callee,
+                args,
+                returns,
+                receiver,
+            } => Predicate::Call {
+                callee: self.materialize(callee, level),
+                args: args
+                    .into_iter()
+                    .map(|i| self.materialize(i, level))
+                    .collect(),
+                returns: self.materialize(returns, level),
+                receiver: receiver.map(|r| self.materialize(r, level)),
+            },
+            Predicate::TypeMember {
+                base,
+                member,
+                returns,
+                generics,
+            } => Predicate::TypeMember {
+                base: self.materialize(base, level),
+                member,
+                returns: self.materialize(returns, level),
+                generics: generics
+                    .into_iter()
+                    .map(|g| self.materialize(g, level))
+                    .collect(),
+            },
+            Predicate::AssociatedEquals {
+                subject,
+                protocol_id,
+                associated_type_id,
+                output,
+            } => Predicate::AssociatedEquals {
+                subject: self.materialize(subject, level),
+                protocol_id,
+                associated_type_id,
+                output: self.materialize(output, level),
+            },
+        }
+    }
+
+    fn materialize(&mut self, ty: ElaborationTy, level: Level) -> InferTy {
+        match ty {
+            ElaborationTy::Hole(node_id) => self.session.new_ty_meta_var(level),
+            ElaborationTy::Projection {
+                box base,
+                associated,
+            } => InferTy::Projection {
+                base: self.materialize(base, level).into(),
+                associated,
+            },
+            ElaborationTy::Constructor {
+                name,
+                params,
+                box ret,
+            } => InferTy::Constructor {
+                name,
+                params: params
+                    .into_iter()
+                    .map(|i| self.materialize(i, level))
+                    .collect(),
+                ret: self.materialize(ret, level).into(),
+            },
+            ElaborationTy::Func(box param, box ret) => InferTy::Func(
+                self.materialize(param, level).into(),
+                self.materialize(ret, level).into(),
+            ),
+            ElaborationTy::Tuple(items) => InferTy::Tuple(
+                items
+                    .into_iter()
+                    .map(|i| self.materialize(i, level))
+                    .collect(),
+            ),
+            ElaborationTy::Record(row) => InferTy::Record(row),
+            ElaborationTy::Nominal { symbol, row } => InferTy::Nominal { symbol, row },
+            ElaborationTy::Primitive(symbol) => InferTy::Primitive(symbol),
+            ElaborationTy::Param(type_param_id) => self.session.new_ty_meta_var(level),
+            ElaborationTy::Rigid(skolem_id) => InferTy::Rigid(skolem_id),
+        }
     }
 }
 

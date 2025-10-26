@@ -403,8 +403,25 @@ impl TypeSession {
         &self.term_env
     }
 
+    pub fn skolemize(&mut self, entry: &EnvEntry<InferTy>) -> InferTy {
+        let mut skolems = FxHashMap::default();
+        for forall in entry.foralls() {
+            let ForAll::Ty(id) = forall else {
+                continue;
+            };
+            skolems.insert(InferTy::Param(id), self.new_skolem(id));
+        }
+
+        substitute(entry._as_ty().clone(), &skolems)
+    }
+
     #[instrument(level = tracing::Level::TRACE, skip(self))]
-    pub fn generalize(&mut self, inner: Level, ty: InferTy, unsolved: &[Constraint]) -> EnvEntry {
+    pub fn generalize(
+        &mut self,
+        inner: Level,
+        ty: InferTy,
+        unsolved: &[Constraint],
+    ) -> EnvEntry<InferTy> {
         // collect metas in ty
         let mut metas = FxHashSet::default();
         collect_meta(&ty, &mut metas);
@@ -512,7 +529,7 @@ impl TypeSession {
         ty: InferTy,
         unsolved: &[Constraint],
         substitutions: &mut UnificationSubstitutions,
-    ) -> EnvEntry {
+    ) -> EnvEntry<InferTy> {
         let ty = apply(ty, substitutions);
 
         // collect metas in ty
@@ -586,7 +603,7 @@ impl TypeSession {
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
-    pub(super) fn lookup(&mut self, sym: &Symbol) -> Option<EnvEntry> {
+    pub(super) fn lookup(&mut self, sym: &Symbol) -> Option<EnvEntry<InferTy>> {
         if let Some(entry) = self.term_env.lookup(sym).cloned() {
             return Some(entry);
         }
@@ -602,7 +619,7 @@ impl TypeSession {
                 .or_else(|| module.types.get_symbol(&sym.current()))
                 .cloned()
                 .unwrap_or_else(|| panic!("did not get external symbol: {sym:?}"));
-            let entry: EnvEntry = match entry.clone() {
+            let entry: EnvEntry<InferTy> = match entry.clone() {
                 TypeEntry::Mono(t) => EnvEntry::Mono(t.into()),
                 TypeEntry::Poly(..) => entry.into(),
             };
@@ -619,12 +636,12 @@ impl TypeSession {
         None
     }
 
-    pub(super) fn promote(&mut self, sym: Symbol, entry: EnvEntry) {
+    pub(super) fn promote(&mut self, sym: Symbol, entry: EnvEntry<InferTy>) {
         self.term_env.promote(sym, entry);
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
-    pub(super) fn insert_term(&mut self, sym: Symbol, entry: EnvEntry) {
+    pub(super) fn insert_term(&mut self, sym: Symbol, entry: EnvEntry<InferTy>) {
         self.term_env.insert(sym, entry);
     }
 
@@ -885,8 +902,10 @@ impl TypeSession {
         InferRow::Param(id)
     }
 
-    pub(crate) fn new_skolem(&mut self) -> InferTy {
+    pub(crate) fn new_skolem(&mut self, param: TypeParamId) -> InferTy {
         let id = self.vars.skolems.next_id();
+        self.skolem_map
+            .insert(InferTy::Rigid(id), InferTy::Param(param));
         tracing::trace!("Fresh skolem {id:?}");
         InferTy::Rigid(id)
     }

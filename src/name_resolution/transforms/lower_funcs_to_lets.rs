@@ -1,6 +1,7 @@
 use crate::ast::Parsed;
 use crate::id_generator::IDGenerator;
 use crate::node_id::{FileID, NodeID};
+use crate::node_kinds::pattern::{Pattern, PatternKind};
 use crate::{ast::AST, node_kinds::decl::Decl};
 use derive_visitor::DriveMut;
 use derive_visitor::VisitorMut;
@@ -34,6 +35,27 @@ impl LowerFuncsToLets {
             expr::{Expr, ExprKind},
             func::Func,
         };
+
+        if let DeclKind::Let {
+            lhs:
+                Pattern {
+                    kind: PatternKind::Bind(name),
+                    ..
+                },
+            rhs:
+                Some(Expr {
+                    kind: ExprKind::Func(func),
+                    ..
+                }),
+            ..
+        } = &mut decl.kind
+        {
+            // If we get `let foo = func bar() {}`, just rename the func to foo
+            // because who has time for this nonsense anyway.
+            // TODO: Maybe handle this during name resolution instead?
+            func.name = name.clone();
+            return;
+        }
 
         if let DeclKind::Func(Func {
             id,

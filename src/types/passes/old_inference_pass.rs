@@ -530,7 +530,7 @@ impl<'a> OldInferencePass<'a> {
             Node::Stmt(stmt) => self.infer_stmt(stmt, level, wants),
             Node::Decl(decl) => self.infer_decl(decl, level, wants),
             Node::Block(block) => self.infer_block(block, level, wants),
-            _ => InferTy::Hole(node.node_id()),
+            _ => unimplemented!(),
         }
     }
 
@@ -918,8 +918,6 @@ impl<'a> OldInferencePass<'a> {
                 }
             }
             ExprKind::LiteralString(_) => InferTy::String(),
-            ExprKind::Unary(..) => InferTy::Hole(expr.id),
-            ExprKind::Binary(..) => InferTy::Hole(expr.id),
             ExprKind::Tuple(items) => InferTy::Tuple(
                 items
                     .iter()
@@ -965,8 +963,7 @@ impl<'a> OldInferencePass<'a> {
                 params: vec![],
                 ret: InferTy::Void.into(),
             },
-            ExprKind::RowVariable(..) => InferTy::Hole(expr.id),
-            _ => InferTy::Hole(expr.id),
+            _ => unimplemented!(),
         };
 
         // // record the type for this expression node
@@ -1157,10 +1154,8 @@ impl<'a> OldInferencePass<'a> {
         guard_found_ty!(self, func.id);
 
         for generic in func.generics.iter() {
-            let skolem = self.session.new_skolem();
-            let param = self.session.new_type_param(None);
-            self.session.skolem_map.insert(skolem.clone(), param);
-
+            let param_id = self.session.new_type_param_id(None);
+            let skolem = self.session.new_skolem(param_id);
             self.session.insert_mono(generic.name.symbol(), skolem);
         }
 
@@ -1222,8 +1217,6 @@ impl<'a> OldInferencePass<'a> {
             StmtKind::If(cond, conseq, alt) => {
                 self.infer_if_stmt(stmt.id, cond, conseq, alt, level, wants)
             }
-            StmtKind::Return(..) => InferTy::Hole(stmt.id),
-            StmtKind::Break => InferTy::Void,
             StmtKind::Assignment(lhs, rhs) => {
                 let lhs_ty = self.infer_expr(lhs, level, wants);
                 let rhs_ty = self.infer_expr(rhs, level, wants);
@@ -1250,6 +1243,7 @@ impl<'a> OldInferencePass<'a> {
 
                 InferTy::Void
             }
+            _ => unimplemented!(),
         };
 
         self.session.types_by_node.insert(stmt.id, ty.clone());
@@ -1338,7 +1332,7 @@ pub fn collect_meta(ty: &InferTy, out: &mut FxHashSet<InferTy>) {
                 collect_meta(param, out);
             }
         }
-        InferTy::Primitive(_) | InferTy::Rigid(_) | InferTy::Hole(_) => {}
+        InferTy::Primitive(_) | InferTy::Rigid(_) => {}
     }
 }
 

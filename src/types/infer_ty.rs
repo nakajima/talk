@@ -6,7 +6,6 @@ use crate::{
     label::Label,
     name::Name,
     name_resolution::symbol::{StructId, Symbol},
-    node_id::NodeID,
     types::{
         infer_row::InferRow,
         scheme::ForAll,
@@ -66,7 +65,6 @@ pub enum Primitive {
 
 #[derive(PartialEq, Eq, Clone, Hash)]
 pub enum InferTy {
-    Hole(NodeID),
     Primitive(Symbol),
 
     Param(TypeParamId),
@@ -157,7 +155,6 @@ impl SomeType for InferTy {
     type RowType = InferRow;
     fn contains_var(&self) -> bool {
         match self {
-            InferTy::Hole(..) => false,
             InferTy::Param(..) => false,
             InferTy::Rigid(..) => false,
             InferTy::Var { .. } => true,
@@ -221,7 +218,6 @@ impl InferTy {
     pub fn collect_foralls(&self) -> Vec<ForAll> {
         let mut result = vec![];
         match self {
-            InferTy::Hole(..) => (),
             InferTy::Param(id) => result.push(ForAll::Ty(*id)),
             InferTy::Rigid(..) => (),
             InferTy::Var { .. } => (),
@@ -252,7 +248,6 @@ impl InferTy {
 
     pub fn fold<T, F: FnMut(&InferTy) -> T>(&self, f: &mut F) -> T {
         match self {
-            InferTy::Hole(..) => f(self),
             InferTy::Primitive(..) => f(self),
             InferTy::Param(..) => f(self),
             InferTy::Rigid(..) => f(self),
@@ -294,7 +289,6 @@ impl InferTy {
 
     pub fn import(self, module_id: ModuleId) -> InferTy {
         match self {
-            InferTy::Hole(..) => self,
             InferTy::Primitive(..) => self,
             InferTy::Param(..) => self,
             InferTy::Rigid(..) => self,
@@ -326,7 +320,6 @@ impl InferTy {
 impl std::fmt::Debug for InferTy {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            InferTy::Hole(..) => write!(f, "Hole"),
             InferTy::Param(id) => write!(f, "typeparam(α{})", id.0),
             InferTy::Rigid(id) => write!(f, "rigid(α{})", id.0),
             InferTy::Var { id, level } => write!(f, "meta(α{}, {})", id.0, level.0),

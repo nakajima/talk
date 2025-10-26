@@ -1,5 +1,3 @@
-use rustc_hash::FxHashMap;
-
 use crate::{
     node_id::NodeID,
     span::Span,
@@ -18,6 +16,7 @@ use crate::{
         },
     },
 };
+use rustc_hash::FxHashMap;
 
 #[derive(Debug, Clone, Copy)]
 pub enum ConstraintCause {

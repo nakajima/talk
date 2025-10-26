@@ -25,9 +25,9 @@ pub struct UnificationSubstitutions {
 }
 
 impl UnificationSubstitutions {
-    pub fn extend(&mut self, substitutions: UnificationSubstitutions) {
-        self.row.extend(substitutions.row);
-        self.ty.extend(substitutions.ty);
+    pub fn extend(&mut self, substitutions: &UnificationSubstitutions) {
+        self.row.extend(substitutions.row.clone());
+        self.ty.extend(substitutions.ty.clone());
     }
 }
 
@@ -94,7 +94,6 @@ fn occurs_in(id: MetaVarId, ty: &InferTy) -> bool {
         InferTy::Record(row) => occurs_in_row(id, row),
         InferTy::Nominal { row, .. } => occurs_in_row(id, row),
         InferTy::Projection { base, .. } => occurs_in(id, base),
-        InferTy::Hole(..) => false,
         InferTy::Param(..) => false,
         InferTy::Rigid(..) => false,
         InferTy::Primitive(..) => false,
@@ -453,7 +452,6 @@ pub(super) fn substitute(ty: InferTy, substitutions: &FxHashMap<InferTy, InferTy
     }
     match ty {
         InferTy::Param(..) => ty,
-        InferTy::Hole(..) => ty,
         InferTy::Rigid(..) => ty,
         InferTy::Var { .. } => ty,
         InferTy::Primitive(..) => ty,
@@ -513,7 +511,6 @@ pub(super) fn apply_row(row: InferRow, substitutions: &mut UnificationSubstituti
 pub(super) fn apply(ty: InferTy, substitutions: &mut UnificationSubstitutions) -> InferTy {
     match ty {
         InferTy::Param(..) => ty,
-        InferTy::Hole(..) => ty,
         InferTy::Rigid(..) => ty,
         InferTy::Projection {
             box base,
@@ -612,7 +609,6 @@ pub(super) fn instantiate_ty(
                 ty
             }
         }
-        InferTy::Hole(..) => ty,
         InferTy::Rigid(..) => ty,
         InferTy::Var { .. } => ty,
         InferTy::Primitive(..) => ty,

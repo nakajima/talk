@@ -29,8 +29,8 @@ pub fn resolve_builtin_type(id: &Symbol) -> (InferTy, Vec<Predicate<InferTy>>, I
     (ty, vec![], Default::default())
 }
 
-pub fn builtin_scope() -> FxHashMap<Symbol, EnvEntry> {
-    let mut res: FxHashMap<Symbol, EnvEntry> = Default::default();
+pub fn builtin_scope() -> FxHashMap<Symbol, EnvEntry<InferTy>> {
+    let mut res: FxHashMap<Symbol, EnvEntry<InferTy>> = Default::default();
 
     res.insert(Symbol::Int, EnvEntry::Mono(InferTy::Int));
     res.insert(Symbol::Float, EnvEntry::Mono(InferTy::Float));

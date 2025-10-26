@@ -94,8 +94,8 @@ impl Conforms {
     fn _check_method_satisfaction(
         &self,
         session: &mut TypeSession,
-        requirement: &EnvEntry,
-        implementation: &EnvEntry,
+        requirement: &EnvEntry<InferTy>,
+        implementation: &EnvEntry<InferTy>,
         substitutions: &mut UnificationSubstitutions,
         next_wants: &mut Wants,
     ) -> Result<bool, TypeError> {

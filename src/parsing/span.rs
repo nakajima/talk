@@ -1,6 +1,7 @@
 use crate::node_id::FileID;
 
 #[derive(Clone, Copy, Eq, Hash)]
+#[allow(clippy::derived_hash_with_manual_eq)]
 pub struct Span {
     pub file_id: FileID,
     pub start: u32,

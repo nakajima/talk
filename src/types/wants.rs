@@ -142,6 +142,10 @@ impl Wants {
     }
 
     pub fn equals(&mut self, lhs: InferTy, rhs: InferTy, cause: ConstraintCause, span: Span) {
+        if lhs == rhs {
+            return;
+        }
+
         tracing::debug!("constraining equals {lhs:?} = {rhs:?}");
         self.simple.push_back(Constraint::Equals(Equals {
             lhs,

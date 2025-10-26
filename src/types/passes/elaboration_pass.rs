@@ -1,4 +1,5 @@
 use indexmap::{IndexMap, IndexSet};
+use itertools::Itertools;
 use petgraph::{
     algo::kosaraju_scc,
     graph::{DiGraph, NodeIndex},
@@ -8,11 +9,12 @@ use tracing::instrument;
 
 use crate::{
     ast::AST,
+    compiling::module::ModuleId,
     label::Label,
     name::Name,
     name_resolution::{
         name_resolver::NameResolved,
-        symbol::{AssociatedTypeId, ProtocolId, Symbol},
+        symbol::{AssociatedTypeId, ProtocolId, StructId, Symbol},
     },
     node::Node,
     node_id::NodeID,
@@ -28,17 +30,83 @@ use crate::{
     span::Span,
     types::{
         infer_row::{InferRow, RowMetaId},
-        infer_ty::{InferTy, Level, TypeParamId},
+        infer_ty::{Level, SkolemId, TypeParamId},
         predicate::Predicate,
         scheme::{ForAll, Scheme},
         term_environment::EnvEntry,
+        ty::SomeType,
         type_catalog::ConformanceStub,
-        type_session::TypeSession,
+        type_session::{TypeDefKind, TypeSession},
     },
 };
 
+#[derive(PartialEq, Debug, Eq, Clone, Hash)]
+pub enum ElaborationTy {
+    Hole(NodeID),
+    Primitive(Symbol),
+
+    Param(TypeParamId),
+    Rigid(SkolemId),
+
+    Projection {
+        base: Box<ElaborationTy>,
+        associated: Label,
+    },
+
+    Constructor {
+        name: Name,
+        params: Vec<ElaborationTy>,
+        ret: Box<ElaborationTy>,
+    },
+
+    Func(Box<ElaborationTy>, Box<ElaborationTy>),
+    Tuple(Vec<ElaborationTy>),
+    Record(Box<InferRow>),
+
+    // Nominal types (we look up their information from the TypeCatalog)
+    Nominal {
+        symbol: Symbol,
+        row: Box<InferRow>,
+    },
+}
+
+impl SomeType for ElaborationTy {
+    type RowType = InferRow;
+
+    fn contains_var(&self) -> bool {
+        false
+    }
+}
+
+#[allow(non_snake_case)]
+#[allow(non_upper_case_globals)]
+impl ElaborationTy {
+    pub const Int: ElaborationTy = ElaborationTy::Primitive(Symbol::Int);
+    pub const Float: ElaborationTy = ElaborationTy::Primitive(Symbol::Float);
+    pub const Bool: ElaborationTy = ElaborationTy::Primitive(Symbol::Bool);
+    pub const Void: ElaborationTy = ElaborationTy::Primitive(Symbol::Void);
+    pub fn String() -> ElaborationTy {
+        ElaborationTy::Nominal {
+            symbol: Symbol::Struct(StructId {
+                module_id: ModuleId::Core,
+                local_id: 2,
+            }),
+            row: Box::new(InferRow::Empty(TypeDefKind::Struct)),
+        }
+    }
+    pub fn Array(_t: ElaborationTy) -> ElaborationTy {
+        ElaborationTy::Nominal {
+            symbol: Symbol::Struct(StructId {
+                module_id: ModuleId::Core,
+                local_id: 3,
+            }),
+            row: Box::new(InferRow::Empty(TypeDefKind::Struct)),
+        }
+    }
+}
+
 #[derive(Clone, PartialEq, Debug)]
-struct Members<T> {
+pub struct Members<T> {
     pub initializers: IndexMap<Label, T>,
     pub variants: IndexMap<Label, T>,
     pub properties: IndexMap<Label, T>,
@@ -97,21 +165,34 @@ impl ElaborationPhase for RegisteredNames {
 }
 
 #[derive(PartialEq, Clone, Debug)]
-pub struct ElaboratedToInferTys {}
-impl ElaborationPhase for ElaboratedToInferTys {
-    type T = (InferTy, IndexSet<ForAll>, IndexSet<Predicate<InferTy>>);
+pub struct ElaboratedToElaborationTys {}
+impl ElaborationPhase for ElaboratedToElaborationTys {
+    type T = (
+        ElaborationTy,
+        IndexSet<ForAll>,
+        IndexSet<Predicate<ElaborationTy>>,
+    );
 }
 
 #[derive(PartialEq, Clone, Debug)]
 pub struct ElaboratedToSchemes {}
 impl ElaborationPhase for ElaboratedToSchemes {
-    type T = EnvEntry;
+    type T = EnvEntry<ElaborationTy>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Binder {
     Symbol(Symbol),
     Member(Symbol, Label),
+}
+
+impl Binder {
+    pub fn symbol(&self) -> Symbol {
+        match self {
+            Binder::Symbol(symbol) => *symbol,
+            Binder::Member(..) => todo!(),
+        }
+    }
 }
 
 #[derive(Default, Debug, Clone)]
@@ -124,6 +205,13 @@ pub struct SCCGraph {
 impl SCCGraph {
     pub fn rhs_id_for(&self, binder: &Binder) -> &NodeID {
         self.rhs_ids.get(binder).unwrap()
+    }
+
+    pub fn groups(&self) -> Vec<Vec<Binder>> {
+        kosaraju_scc(&self.graph)
+            .iter()
+            .map(|ids| ids.iter().map(|id| self.graph[*id].clone()).collect())
+            .collect()
     }
 
     pub fn add_node(&mut self, node: Binder, rhs_id: NodeID) -> NodeIndex {
@@ -152,21 +240,31 @@ pub struct ElaboratedTypes<Phase: ElaborationPhase = RegisteredNames> {
     pub nominals: FxHashMap<Symbol, Nominal<Phase::T>>,
     pub protocols: FxHashMap<Symbol, Protocol<Phase>>,
     pub globals: FxHashMap<Symbol, Phase::T>,
+    canonical_row_vars: FxHashMap<Symbol, RowMetaId>,
+    canonical_type_params: FxHashMap<Symbol, TypeParamId>,
+    type_param_conformances: IndexMap<TypeParamId, IndexSet<(ProtocolId, Span)>>,
     // We need to track references between binders in the same scope so
     // we can handle things like mutual recursion.
     pub scc_graph: SCCGraph,
 }
 
 impl ElaboratedTypes<ElaboratedToSchemes> {
-    pub fn groups(&self) -> Vec<Vec<Binder>> {
-        kosaraju_scc(&self.scc_graph.graph)
-            .iter()
-            .map(|ids| {
-                ids.iter()
-                    .map(|id| self.scc_graph.graph[*id].clone())
-                    .collect()
-            })
-            .collect()
+    pub fn collect_scc_graph(&self, session: &mut TypeSession, nodes: &[Node]) -> SCCGraph {
+        let mut pass = ElaborationPass {
+            session,
+            canonical_row_vars: self.canonical_row_vars.clone(),
+            canonical_type_params: self.canonical_type_params.clone(),
+            type_param_conformances: self.type_param_conformances.clone(),
+        };
+
+        let types = ElaboratedTypes::<RegisteredNames>::default();
+        let types_registered =
+            pass.register_type_names(types, nodes.iter(), &mut Default::default());
+
+        let elaborated_infer_tys = pass.elaborate_to_infer_tys(types_registered, nodes.iter());
+        let elaborated_schemes = pass.elaborate_to_schemes(elaborated_infer_tys, nodes.iter());
+
+        elaborated_schemes.scc_graph
     }
 }
 
@@ -177,6 +275,9 @@ impl<T: ElaborationPhase> Default for ElaboratedTypes<T> {
             protocols: Default::default(),
             globals: Default::default(),
             scc_graph: Default::default(),
+            canonical_row_vars: Default::default(),
+            canonical_type_params: Default::default(),
+            type_param_conformances: Default::default(),
         }
     }
 }
@@ -195,7 +296,7 @@ pub struct Nominal<T> {
     kind: NominalKind,
     conformances: Vec<ConformanceStub>,
     child_types: IndexMap<Label, Symbol>,
-    members: Members<T>,
+    pub members: Members<T>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -203,15 +304,21 @@ pub struct Protocol<Phase: ElaborationPhase> {
     name: Name,
     node_id: NodeID,
     self_id: TypeParamId,
-    associated_types:
-        IndexMap<Label, (AssociatedTypeId, TypeParamId, IndexSet<Predicate<InferTy>>)>,
+    associated_types: IndexMap<
+        Label,
+        (
+            AssociatedTypeId,
+            TypeParamId,
+            IndexSet<Predicate<ElaborationTy>>,
+        ),
+    >,
     method_requirements: IndexMap<Label, Phase::T>,
     conformances: Vec<ConformanceStub>,
     child_types: IndexMap<Label, Symbol>,
     members: Members<Phase::T>,
 }
 
-impl Protocol<ElaboratedToInferTys> {
+impl Protocol<ElaboratedToElaborationTys> {
     pub fn collect_foralls(&self) -> IndexSet<ForAll> {
         let mut foralls = IndexSet::default();
 
@@ -285,10 +392,7 @@ impl<'a> ElaborationPass<'a> {
         child_types: &mut IndexMap<Label, Symbol>,
     ) -> ElaboratedTypes<RegisteredNames> {
         for node in nodes {
-            let Node::Decl(Decl {
-                id: decl_id, kind, ..
-            }) = &node
-            else {
+            let Node::Decl(Decl { kind, .. }) = &node else {
                 continue;
             };
 
@@ -298,20 +402,21 @@ impl<'a> ElaborationPass<'a> {
                     type_annotation,
                     rhs:
                         Some(Expr {
+                            id: expr_id,
                             kind: ExprKind::Func(func),
                             ..
                         }),
                 } => {
                     types
                         .scc_graph
-                        .add_node(Binder::Symbol(func.name.symbol()), *decl_id);
+                        .add_node(Binder::Symbol(func.name.symbol()), *expr_id);
 
                     for generic in func.generics.iter() {
                         self.register_generic(generic);
                     }
 
                     if let Some(anno) = &type_annotation {
-                        self.elaborate_type_annotation(&types, &anno.kind);
+                        self.elaborate_type_annotation(anno.id, &types, &anno.kind);
                     }
 
                     types.globals.insert(func.name.symbol(), ());
@@ -330,10 +435,18 @@ impl<'a> ElaborationPass<'a> {
                     rhs: Some(rhs),
                     ..
                 } => {
+                    // Add the binding to the graph
                     types
                         .scc_graph
                         .add_node(Binder::Symbol(name.symbol()), rhs.id);
                     types.globals.insert(name.symbol(), ());
+
+                    // Collect references from RHS (only adds edges for globals)
+                    self.collect_references(
+                        &mut types,
+                        (Binder::Symbol(name.symbol()), rhs.id),
+                        std::iter::once(rhs.clone()),
+                    );
                 }
                 DeclKind::Associated { generic } => {
                     child_types.insert(generic.name.name_str().into(), generic.name.symbol());
@@ -441,8 +554,8 @@ impl<'a> ElaborationPass<'a> {
         &mut self,
         mut types: ElaboratedTypes<RegisteredNames>,
         nodes: impl Iterator<Item = &'a Node>,
-    ) -> ElaboratedTypes<ElaboratedToInferTys> {
-        let mut new_types = ElaboratedTypes::<ElaboratedToInferTys> {
+    ) -> ElaboratedTypes<ElaboratedToElaborationTys> {
+        let mut new_types = ElaboratedTypes::<ElaboratedToElaborationTys> {
             scc_graph: std::mem::take(&mut types.scc_graph),
             ..Default::default()
         };
@@ -466,7 +579,7 @@ impl<'a> ElaborationPass<'a> {
                     }
 
                     if let Some(anno) = &type_annotation {
-                        self.elaborate_type_annotation(&types, &anno.kind);
+                        self.elaborate_type_annotation(anno.id, &types, &anno.kind);
                     }
 
                     let func_type = self.elaborate_func(&types, func);
@@ -483,12 +596,27 @@ impl<'a> ElaborationPass<'a> {
                     ..
                 } => {
                     let ty = match (&type_annotation, &rhs) {
-                        (None, None) => self.session.new_ty_meta_var(Level::default()),
-                        (Some(anno), None) => self.elaborate_type_annotation(&types, &anno.kind),
-                        (None, Some(val)) => self.elaborate_literal(val),
-                        (Some(anno), Some(_val)) => {
-                            self.elaborate_type_annotation(&types, &anno.kind)
+                        (None, None) => ElaborationTy::Hole(node.node_id()),
+                        (Some(anno), None) => {
+                            self.elaborate_type_annotation(anno.id, &types, &anno.kind)
                         }
+                        (
+                            None,
+                            Some(
+                                val @ Expr {
+                                    kind:
+                                        ExprKind::LiteralInt(..)
+                                        | ExprKind::LiteralFloat(..)
+                                        | ExprKind::LiteralTrue
+                                        | ExprKind::LiteralFalse,
+                                    ..
+                                },
+                            ),
+                        ) => self.elaborate_literal(val),
+                        (Some(anno), Some(_val)) => {
+                            self.elaborate_type_annotation(anno.id, &types, &anno.kind)
+                        }
+                        _ => continue,
                     };
 
                     new_types
@@ -567,7 +695,7 @@ impl<'a> ElaborationPass<'a> {
     #[instrument(skip(self, types, nodes))]
     fn elaborate_to_schemes(
         &mut self,
-        mut types: ElaboratedTypes<ElaboratedToInferTys>,
+        mut types: ElaboratedTypes<ElaboratedToElaborationTys>,
         nodes: impl Iterator<Item = &'a Node>,
     ) -> ElaboratedTypes<ElaboratedToSchemes> {
         let mut new_types = ElaboratedTypes::<ElaboratedToSchemes> {
@@ -603,7 +731,7 @@ impl<'a> ElaborationPass<'a> {
                     let mut generic_ids = vec![];
                     for generic in generics.iter() {
                         let (id, protocol_ids) = self.lookup_generic(generic.clone());
-                        generic_ids.push(EnvEntry::Mono(InferTy::Param(id)));
+                        generic_ids.push(EnvEntry::Mono(ElaborationTy::Param(id)));
                         foralls.insert(ForAll::Ty(id));
                         for (protocol_id, span) in protocol_ids {
                             predicates.push(Predicate::Conforms {
@@ -717,9 +845,13 @@ impl<'a> ElaborationPass<'a> {
     #[instrument(skip(self))]
     fn upgrade_members_to_entries(
         &mut self,
-        ty: (InferTy, IndexSet<ForAll>, IndexSet<Predicate<InferTy>>),
+        ty: (
+            ElaborationTy,
+            IndexSet<ForAll>,
+            IndexSet<Predicate<ElaborationTy>>,
+        ),
         type_foralls: &IndexSet<ForAll>,
-    ) -> EnvEntry {
+    ) -> EnvEntry<ElaborationTy> {
         let (ty, foralls, predicates) = ty;
         let foralls: IndexSet<_> = foralls
             .into_iter()
@@ -744,15 +876,39 @@ impl<'a> ElaborationPass<'a> {
         types: &ElaboratedTypes<T>,
         nodes: &[Node],
     ) -> (
-        IndexMap<Label, (AssociatedTypeId, TypeParamId, IndexSet<Predicate<InferTy>>)>,
-        IndexMap<Label, (InferTy, IndexSet<ForAll>, IndexSet<Predicate<InferTy>>)>,
+        IndexMap<
+            Label,
+            (
+                AssociatedTypeId,
+                TypeParamId,
+                IndexSet<Predicate<ElaborationTy>>,
+            ),
+        >,
+        IndexMap<
+            Label,
+            (
+                ElaborationTy,
+                IndexSet<ForAll>,
+                IndexSet<Predicate<ElaborationTy>>,
+            ),
+        >,
     ) {
         let mut associated_types = IndexMap::<
             Label,
-            (AssociatedTypeId, TypeParamId, IndexSet<Predicate<InferTy>>),
+            (
+                AssociatedTypeId,
+                TypeParamId,
+                IndexSet<Predicate<ElaborationTy>>,
+            ),
         >::default();
-        let mut method_requirements =
-            IndexMap::<Label, (InferTy, IndexSet<ForAll>, IndexSet<Predicate<InferTy>>)>::default();
+        let mut method_requirements = IndexMap::<
+            Label,
+            (
+                ElaborationTy,
+                IndexSet<ForAll>,
+                IndexSet<Predicate<ElaborationTy>>,
+            ),
+        >::default();
 
         for node in nodes {
             let Node::Decl(Decl { kind, .. }) = &node else {
@@ -768,7 +924,7 @@ impl<'a> ElaborationPass<'a> {
                     let (id, protocol_ids) = self.lookup_generic(generic.clone());
                     let predicates = protocol_ids
                         .into_iter()
-                        .map(|(protocol_id, span)| Predicate::<InferTy>::Conforms {
+                        .map(|(protocol_id, span)| Predicate::<ElaborationTy>::Conforms {
                             param: id,
                             protocol_id,
                             span,
@@ -796,9 +952,9 @@ impl<'a> ElaborationPass<'a> {
                     }
 
                     let ret = if let Some(box ret) = req.ret.clone() {
-                        self.elaborate_type_annotation(types, &ret.kind.clone())
+                        self.elaborate_type_annotation(ret.id, types, &ret.kind.clone())
                     } else {
-                        InferTy::Void
+                        ElaborationTy::Void
                     };
                     let ty = curry_stub(
                         req.params.iter().map(|param| {
@@ -806,9 +962,13 @@ impl<'a> ElaborationPass<'a> {
                                 .type_annotation
                                 .as_ref()
                                 .map(|anno| {
-                                    self.elaborate_type_annotation(types, &anno.kind.clone())
+                                    self.elaborate_type_annotation(
+                                        anno.id,
+                                        types,
+                                        &anno.kind.clone(),
+                                    )
                                 })
-                                .unwrap_or_else(|| self.session.new_ty_meta_var(Level::default()))
+                                .unwrap_or_else(|| ElaborationTy::Hole(param.id))
                         }),
                         ret,
                     );
@@ -829,7 +989,11 @@ impl<'a> ElaborationPass<'a> {
         self_symbol: Symbol,
         types: &mut ElaboratedTypes<T>,
         nodes: &[Node],
-    ) -> Members<(InferTy, IndexSet<ForAll>, IndexSet<Predicate<InferTy>>)> {
+    ) -> Members<(
+        ElaborationTy,
+        IndexSet<ForAll>,
+        IndexSet<Predicate<ElaborationTy>>,
+    )> {
         let mut members = Members::default();
 
         for node in nodes {
@@ -838,28 +1002,37 @@ impl<'a> ElaborationPass<'a> {
             };
 
             match kind {
-                DeclKind::Init { params, .. } => {
+                DeclKind::Init { name, params, body } => {
                     let self_ty = self.symbol_to_infer_ty(self_symbol);
+                    self.collect_references(
+                        types,
+                        (Binder::Symbol(name.symbol()), node.node_id()),
+                        body.body.iter(),
+                    );
+
+                    let params = params
+                        .iter()
+                        .map(|param| {
+                            param
+                                .type_annotation
+                                .as_ref()
+                                .map(|anno| {
+                                    self.elaborate_type_annotation(
+                                        anno.id,
+                                        types,
+                                        &anno.kind.clone(),
+                                    )
+                                })
+                                .unwrap_or_else(|| ElaborationTy::Hole(param.id))
+                        })
+                        .collect_vec();
+
+                    println!("INIT: {params:?}, SELF: {self_ty:?}");
+
                     members.initializers.insert(
                         Label::Named("init".into()),
                         (
-                            curry_stub(
-                                params.iter().map(|param| {
-                                    param
-                                        .type_annotation
-                                        .as_ref()
-                                        .map(|anno| {
-                                            self.elaborate_type_annotation(
-                                                types,
-                                                &anno.kind.clone(),
-                                            )
-                                        })
-                                        .unwrap_or_else(|| {
-                                            self.session.new_ty_meta_var(Level::default())
-                                        })
-                                }),
-                                self_ty,
-                            ),
+                            curry_stub(params, self_ty),
                             Default::default(),
                             Default::default(),
                         ),
@@ -903,11 +1076,13 @@ impl<'a> ElaborationPass<'a> {
                         todo!();
                     } else {
                         let ty = match (&type_annotation, &default_value) {
-                            (None, None) => self.session.new_ty_meta_var(Level::default()),
-                            (Some(anno), None) => self.elaborate_type_annotation(types, &anno.kind),
+                            (None, None) => ElaborationTy::Hole(node.node_id()),
+                            (Some(anno), None) => {
+                                self.elaborate_type_annotation(anno.id, types, &anno.kind)
+                            }
                             (None, Some(_val)) => todo!(),
                             (Some(anno), Some(_val)) => {
-                                self.elaborate_type_annotation(types, &anno.kind)
+                                self.elaborate_type_annotation(anno.id, types, &anno.kind)
                             }
                         };
 
@@ -925,12 +1100,12 @@ impl<'a> ElaborationPass<'a> {
     }
 
     #[instrument(skip(self))]
-    fn symbol_to_infer_ty(&self, symbol: Symbol) -> InferTy {
+    fn symbol_to_infer_ty(&self, symbol: Symbol) -> ElaborationTy {
         match symbol {
-            Symbol::Int => InferTy::Int,
-            Symbol::Float => InferTy::Float,
-            Symbol::Bool => InferTy::Bool,
-            Symbol::Void => InferTy::Void,
+            Symbol::Int => ElaborationTy::Int,
+            Symbol::Float => ElaborationTy::Float,
+            Symbol::Bool => ElaborationTy::Bool,
+            Symbol::Void => ElaborationTy::Void,
             Symbol::TypeParameter(..) | Symbol::AssociatedType(..) => {
                 let id = self.canonical_type_params.get(&symbol).unwrap_or_else(|| {
                     panic!(
@@ -939,9 +1114,9 @@ impl<'a> ElaborationPass<'a> {
                     )
                 });
 
-                InferTy::Param(*id)
+                ElaborationTy::Param(*id)
             }
-            _ => InferTy::Nominal {
+            _ => ElaborationTy::Nominal {
                 symbol,
                 row: Box::new(InferRow::Var(
                     *self.canonical_row_vars.get(&symbol).unwrap_or_else(|| {
@@ -956,7 +1131,11 @@ impl<'a> ElaborationPass<'a> {
         &mut self,
         types: &ElaboratedTypes<T>,
         func: &Func,
-    ) -> (InferTy, IndexSet<ForAll>, IndexSet<Predicate<InferTy>>) {
+    ) -> (
+        ElaborationTy,
+        IndexSet<ForAll>,
+        IndexSet<Predicate<ElaborationTy>>,
+    ) {
         let mut foralls = IndexSet::default();
         let mut predicates = IndexSet::default();
         for generic in func.generics.iter() {
@@ -979,32 +1158,32 @@ impl<'a> ElaborationPass<'a> {
                 param
                     .type_annotation
                     .as_ref()
-                    .map(|anno| self.elaborate_type_annotation(types, &anno.kind.clone()))
-                    .unwrap_or_else(|| self.session.new_ty_meta_var(Level::default()))
+                    .map(|anno| self.elaborate_type_annotation(anno.id, types, &anno.kind.clone()))
+                    .unwrap_or_else(|| ElaborationTy::Hole(param.id))
             })
             .collect::<Vec<_>>();
 
         // If it's a static method, it won't have a self param so we need to prepend a Void so that curry works properly
         if params.is_empty() {
-            params.insert(0, InferTy::Void);
+            params.insert(0, ElaborationTy::Void);
         }
 
         let ty = curry_stub(
             params,
             func.ret
                 .as_ref()
-                .map(|t| self.elaborate_type_annotation(types, &t.kind))
-                .unwrap_or_else(|| self.session.new_ty_meta_var(Level::default())),
+                .map(|t| self.elaborate_type_annotation(t.id, types, &t.kind))
+                .unwrap_or_else(|| ElaborationTy::Hole(func.id)),
         );
 
         (ty, foralls, predicates)
     }
 
-    fn elaborate_literal(&self, literal: &Expr) -> InferTy {
+    fn elaborate_literal(&self, literal: &Expr) -> ElaborationTy {
         match &literal.kind {
-            ExprKind::LiteralInt(..) => InferTy::Int,
-            ExprKind::LiteralFloat(..) => InferTy::Float,
-            ExprKind::LiteralTrue | ExprKind::LiteralFalse => InferTy::Bool,
+            ExprKind::LiteralInt(..) => ElaborationTy::Int,
+            ExprKind::LiteralFloat(..) => ElaborationTy::Float,
+            ExprKind::LiteralTrue | ExprKind::LiteralFalse => ElaborationTy::Bool,
             _ => panic!("unhandled literal ty: {literal:?}"),
         }
     }
@@ -1012,14 +1191,15 @@ impl<'a> ElaborationPass<'a> {
     #[instrument(skip(self, types))]
     fn elaborate_type_annotation<T: ElaborationPhase>(
         &self,
+        id: NodeID,
         types: &ElaboratedTypes<T>,
         kind: &TypeAnnotationKind,
-    ) -> InferTy {
+    ) -> ElaborationTy {
         match kind {
             TypeAnnotationKind::SelfType(name) => {
                 let symbol = name.symbol();
                 if matches!(symbol, Symbol::Protocol(..) | Symbol::AssociatedType(..)) {
-                    InferTy::Param(
+                    ElaborationTy::Param(
                         *self
                             .canonical_type_params
                             .get(&symbol)
@@ -1032,9 +1212,9 @@ impl<'a> ElaborationPass<'a> {
             TypeAnnotationKind::Nominal { name, .. } => self.symbol_to_infer_ty(name.symbol()),
             TypeAnnotationKind::NominalPath { base, member, .. } => {
                 let base_sym = base.symbol();
-                let base = self.elaborate_type_annotation(types, &base.kind);
+                let base = self.elaborate_type_annotation(id, types, &base.kind);
                 match base_sym {
-                    Symbol::AssociatedType(..) => InferTy::Projection {
+                    Symbol::AssociatedType(..) => ElaborationTy::Projection {
                         base: Box::new(base),
                         associated: member.clone(),
                     },
@@ -1058,7 +1238,7 @@ impl<'a> ElaborationPass<'a> {
                             .unwrap();
                         self.symbol_to_infer_ty(*child_sym)
                     }
-                    Symbol::TypeParameter(..) => InferTy::Projection {
+                    Symbol::TypeParameter(..) => ElaborationTy::Projection {
                         base: Box::new(base),
                         associated: member.clone(),
                     },
@@ -1097,6 +1277,7 @@ impl<'a> ElaborationPass<'a> {
     }
 
     #[instrument(skip(self, types, nodes))]
+    #[allow(clippy::only_used_in_recursion)]
     fn collect_references<T: ElaborationPhase>(
         &mut self,
         types: &mut ElaboratedTypes<T>,
@@ -1130,14 +1311,33 @@ impl<'a> ElaborationPass<'a> {
                     self.collect_references(types, from.clone(), exprs.iter())
                 }
                 ExprKind::Call { callee, args, .. } => {
+                    if let ExprKind::Variable(Name::Resolved(sym, _)) = &callee.kind {
+                        // Only track references to global-scope symbols
+                        if matches!(
+                            sym,
+                            Symbol::Global(_) | Symbol::StaticMethod(_) | Symbol::InstanceMethod(_)
+                        ) {
+                            types.scc_graph.add_edge(
+                                from.clone(),
+                                (Binder::Symbol(*sym), expr.id),
+                                expr.id,
+                            );
+                        }
+                        continue;
+                    }
+
                     self.collect_references(types, from.clone(), args.iter());
 
                     if let ExprKind::Variable(Name::Resolved(sym, _)) = &callee.kind {
-                        types.scc_graph.add_edge(
-                            from.clone(),
-                            (Binder::Symbol(*sym), callee.id),
-                            expr.id,
-                        );
+                        if matches!(sym, Symbol::Global(_)) {
+                            // Only globals!
+                            types.scc_graph.add_edge(
+                                from.clone(),
+                                (Binder::Symbol(*sym), expr.id),
+                                expr.id,
+                            );
+                        }
+
                         continue;
                     }
 
@@ -1154,7 +1354,7 @@ impl<'a> ElaborationPass<'a> {
                     {
                         types.scc_graph.add_edge(
                             from.clone(),
-                            (Binder::Member(*sym, label.clone()), callee.id),
+                            (Binder::Member(*sym, label.clone()), expr.id),
                             expr.id,
                         );
                         continue;
@@ -1173,7 +1373,7 @@ impl<'a> ElaborationPass<'a> {
                     {
                         types.scc_graph.add_edge(
                             from.clone(),
-                            (Binder::Member(parent, label.clone()), callee.id),
+                            (Binder::Member(parent, label.clone()), expr.id),
                             expr.id,
                         );
                         continue;
@@ -1191,19 +1391,27 @@ impl<'a> ElaborationPass<'a> {
                         self.collect_references(types, from.clone(), arm.body.body.iter());
                     }
                 }
-                ExprKind::RecordLiteral { .. } => todo!(),
+                ExprKind::RecordLiteral { fields, .. } => {
+                    let fields = fields.iter().map(|f| f.value.clone()).collect_vec();
+                    self.collect_references(types, from.clone(), fields.iter());
+                }
                 _ => (),
             }
         }
     }
 }
 
-fn curry_stub<I: IntoIterator<Item = InferTy>>(params: I, ret: InferTy) -> InferTy {
+fn curry_stub<I: IntoIterator<Item = ElaborationTy>>(
+    params: I,
+    ret: ElaborationTy,
+) -> ElaborationTy {
     params
         .into_iter()
         .collect::<Vec<_>>()
         .into_iter()
-        .rfold(ret, |acc, p| InferTy::Func(Box::new(p), Box::new(acc)))
+        .rfold(ret, |acc, p| {
+            ElaborationTy::Func(Box::new(p), Box::new(acc))
+        })
 }
 
 #[cfg(test)]
@@ -1220,11 +1428,21 @@ pub mod tests {
         name_resolution::symbol::{AssociatedTypeId, EnumId, GlobalId, ProtocolId, StructId},
         node_id::FileID,
         span::Span,
-        types::{
-            infer_row::{InferRow, RowMetaId},
-            passes::old_inference_pass::curry,
-        },
+        types::infer_row::{InferRow, RowMetaId},
     };
+
+    pub fn curry<I: IntoIterator<Item = ElaborationTy>>(
+        params: I,
+        ret: ElaborationTy,
+    ) -> ElaborationTy {
+        params
+            .into_iter()
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rfold(ret, |acc, p| {
+                ElaborationTy::Func(Box::new(p), Box::new(acc))
+            })
+    }
 
     impl SCCGraph {
         fn neighbors_for(&self, node: &Binder) -> Vec<Binder> {
@@ -1250,14 +1468,14 @@ pub mod tests {
                 .globals
                 .get(&GlobalId::from(1).into())
                 .unwrap(),
-            EnvEntry::Mono(InferTy::Int)
+            EnvEntry::Mono(ElaborationTy::Int)
         );
         assert_eq_diff!(
             *elaborate("let fizz = true; fizz")
                 .globals
                 .get(&GlobalId::from(1).into())
                 .unwrap(),
-            EnvEntry::Mono(InferTy::Bool)
+            EnvEntry::Mono(ElaborationTy::Bool)
         );
     }
 
@@ -1268,13 +1486,9 @@ pub mod tests {
                 .globals
                 .get(&GlobalId::from(1).into())
                 .unwrap(),
-            EnvEntry::Mono(InferTy::Func(
-                InferTy::Void.into(),
-                InferTy::Var {
-                    id: 1.into(),
-                    level: Level::default()
-                }
-                .into()
+            EnvEntry::Mono(ElaborationTy::Func(
+                ElaborationTy::Void.into(),
+                ElaborationTy::Hole(NodeID::ANY).into()
             ))
         );
     }
@@ -1287,9 +1501,9 @@ pub mod tests {
                 .get(&GlobalId::from(1).into())
                 .unwrap(),
             EnvEntry::Scheme(Scheme {
-                ty: InferTy::Func(
-                    InferTy::Param(1.into()).into(),
-                    InferTy::Param(1.into()).into()
+                ty: ElaborationTy::Func(
+                    ElaborationTy::Param(1.into()).into(),
+                    ElaborationTy::Param(1.into()).into()
                 ),
                 foralls: indexset! {ForAll::Ty(1.into())},
                 predicates: Default::default()
@@ -1299,7 +1513,7 @@ pub mod tests {
 
     #[test]
     fn registers_struct() {
-        let struct_ty = InferTy::Nominal {
+        let struct_ty = ElaborationTy::Nominal {
             symbol: StructId::from(1).into(),
             row: InferRow::Var(RowMetaId(1)).into(),
         };
@@ -1309,7 +1523,7 @@ pub mod tests {
                 .nominals
                 .get(&StructId::from(1).into())
                 .unwrap(),
-            Nominal::<EnvEntry> {
+            Nominal::<EnvEntry<ElaborationTy>> {
                 name: Name::Resolved(StructId::from(1).into(), "A".into()),
                 node_id: NodeID::ANY,
                 kind: NominalKind::Struct,
@@ -1332,7 +1546,7 @@ pub mod tests {
 
     #[test]
     fn registers_generics() {
-        let struct_ty = InferTy::Nominal {
+        let struct_ty = ElaborationTy::Nominal {
             symbol: StructId::from(1).into(),
             row: InferRow::Var(RowMetaId(1)).into(),
         };
@@ -1347,12 +1561,12 @@ pub mod tests {
                 kind: NominalKind::Struct,
                 members: Members {
                     initializers: indexmap::indexmap! {
-                      Label::Named("init".into()) => EnvEntry::Mono(curry(vec![struct_ty.clone(), InferTy::Param(1.into())], struct_ty.clone()))
+                      Label::Named("init".into()) => EnvEntry::Mono(curry(vec![struct_ty.clone(), ElaborationTy::Param(1.into())], struct_ty.clone()))
                     },
                     variants: Default::default(),
                     properties: indexmap::indexmap! {
                       Label::Named("b".into()) =>
-                          EnvEntry::Mono(InferTy::Param(1.into()))
+                          EnvEntry::Mono(ElaborationTy::Param(1.into()))
                     },
                     methods: Default::default(),
                     static_methods: Default::default(),
@@ -1362,7 +1576,7 @@ pub mod tests {
                 ty: EnvEntry::Scheme(Scheme {
                     foralls: [ForAll::Ty(1.into())].into(),
                     predicates: vec![],
-                    ty: InferTy::Nominal {
+                    ty: ElaborationTy::Nominal {
                         symbol: StructId::from(1).into(),
                         row: Box::new(InferRow::Var(1.into())),
                     }
@@ -1373,7 +1587,7 @@ pub mod tests {
 
     #[test]
     fn registers_generic_conformances() {
-        let struct_ty = InferTy::Nominal {
+        let struct_ty = ElaborationTy::Nominal {
             symbol: StructId::from(1).into(),
             row: InferRow::Var(RowMetaId(1)).into(),
         };
@@ -1389,12 +1603,12 @@ pub mod tests {
                 members: Members {
                     initializers: indexmap::indexmap! {
                     Label::Named("init".into()) =>
-                        EnvEntry::Mono(curry(vec![struct_ty.clone(), InferTy::Param(2.into())], struct_ty.clone()))
+                        EnvEntry::Mono(curry(vec![struct_ty.clone(), ElaborationTy::Param(2.into())], struct_ty.clone()))
                     },
                     variants: Default::default(),
                     properties: indexmap::indexmap! {
                     Label::Named("b".into()) =>
-                        EnvEntry::Mono(InferTy::Param(2.into()))
+                        EnvEntry::Mono(ElaborationTy::Param(2.into()))
                     },
                     methods: Default::default(),
                     static_methods: Default::default(),
@@ -1408,7 +1622,7 @@ pub mod tests {
                         protocol_id: ProtocolId::from(1),
                         span: Span::ANY
                     }],
-                    ty: InferTy::Nominal {
+                    ty: ElaborationTy::Nominal {
                         symbol: StructId::from(1).into(),
                         row: Box::new(InferRow::Var(1.into())),
                     }
@@ -1419,7 +1633,7 @@ pub mod tests {
 
     #[test]
     fn registers_struct_conformances() {
-        let struct_ty = InferTy::Nominal {
+        let struct_ty = ElaborationTy::Nominal {
             symbol: StructId::from(1).into(),
             row: InferRow::Var(RowMetaId(1)).into(),
         };
@@ -1462,7 +1676,7 @@ pub mod tests {
 
     #[test]
     fn child_types() {
-        let struct_ty = InferTy::Nominal {
+        let struct_ty = ElaborationTy::Nominal {
             symbol: StructId::from(1).into(),
             row: InferRow::Var(RowMetaId(1)).into(),
         };
@@ -1477,7 +1691,7 @@ pub mod tests {
             .nominals
             .get(&StructId::from(1).into())
             .unwrap(),
-            Nominal::<EnvEntry> {
+            Nominal::<EnvEntry<_>> {
                 name: Name::Resolved(StructId::from(1).into(), "A".into()),
                 node_id: NodeID::ANY,
                 kind: NominalKind::Struct,
@@ -1509,7 +1723,7 @@ pub mod tests {
                 .nominals
                 .get(&EnumId::from(1).into())
                 .unwrap(),
-            Nominal::<EnvEntry> {
+            Nominal::<EnvEntry<_>> {
                 name: Name::Resolved(EnumId::from(1).into(), "A".into()),
                 node_id: NodeID(FileID(0), 2),
                 kind: NominalKind::Enum,
@@ -1522,7 +1736,7 @@ pub mod tests {
                 },
                 conformances: vec![],
                 child_types: Default::default(),
-                ty: EnvEntry::Mono(InferTy::Nominal {
+                ty: EnvEntry::Mono(ElaborationTy::Nominal {
                     symbol: EnumId::from(1).into(),
                     row: Box::new(InferRow::Var(RowMetaId(1))),
                 }),
@@ -1543,9 +1757,9 @@ pub mod tests {
                 conformances: vec![],
                 child_types: Default::default(),
                 method_requirements: indexmap!("fizz".into() => EnvEntry::Mono(
-                  InferTy::Func(
-                    InferTy::Param(1.into()).into(),
-                    InferTy::Int.into(),
+                  ElaborationTy::Func(
+                    ElaborationTy::Param(1.into()).into(),
+                    ElaborationTy::Int.into(),
                   )
                 )),
                 members: Default::default(),
@@ -1584,11 +1798,11 @@ pub mod tests {
                 method_requirements: indexmap::indexmap! {
                   Label::Named("fizz".into()) =>
                       EnvEntry::Scheme(Scheme {
-                          ty:InferTy::Func(
-                              Box::new(InferTy::Param(3.into())), // Self
+                          ty:ElaborationTy::Func(
+                              Box::new(ElaborationTy::Param(3.into())), // Self
                               Box::new(
-                                InferTy::Projection {
-                                    base: Box::new(InferTy::Param(6.into())),
+                                ElaborationTy::Projection {
+                                    base: Box::new(ElaborationTy::Param(6.into())),
                                     associated: Label::Named("F".into()),
                                 }
                               )
@@ -1626,7 +1840,7 @@ pub mod tests {
 
     #[test]
     fn registers_struct_members() {
-        let struct_ty = InferTy::Nominal {
+        let struct_ty = ElaborationTy::Nominal {
             symbol: StructId::from(1).into(),
             row: InferRow::Var(RowMetaId(1)).into(),
         };
@@ -1650,7 +1864,7 @@ pub mod tests {
             .nominals
             .get(&StructId::from(1).into())
             .unwrap(),
-            Nominal::<EnvEntry> {
+            Nominal::<EnvEntry<_>> {
                 name: Name::Resolved(StructId::from(1).into(), "A".into()),
                 node_id: NodeID::ANY,
                 kind: NominalKind::Struct,
@@ -1660,25 +1874,25 @@ pub mod tests {
                     initializers: indexmap::indexmap! {
                       Label::Named("init".into()) =>
                         EnvEntry::Mono(
-                            curry(vec![struct_ty.clone(), InferTy::Int], struct_ty.clone())
+                            curry(vec![struct_ty.clone(), ElaborationTy::Int], struct_ty.clone())
                         )
                     },
                     variants: Default::default(),
                     properties: indexmap::indexmap! {
                       Label::Named("prop".into()) =>
                         EnvEntry::Mono(
-                            InferTy::Int
+                            ElaborationTy::Int
                         )
                     },
                     methods: indexmap::indexmap! {
                       Label::Named("getProp".into()) =>
                           EnvEntry::Mono(
-                              curry(vec![struct_ty.clone()], InferTy::Var { id: 1.into(), level: Level::default() })
+                              curry(vec![struct_ty.clone()], ElaborationTy::Hole(NodeID::ANY))
                           ),
                       Label::Named("getGeneric".into()) =>
                           EnvEntry::Scheme(
                             Scheme {
-                                ty: curry(vec![struct_ty.clone(), InferTy::Param(2.into())], InferTy::Var { id: 2.into(), level: Level::default() }),
+                                ty: curry(vec![struct_ty.clone(), ElaborationTy::Param(2.into())], ElaborationTy::Hole(NodeID::ANY)),
                                 foralls: indexset! { ForAll::Ty(2.into()) },
                                 predicates: vec![Predicate::Conforms { param: 2.into(), protocol_id: 1.into(), span: Span::ANY }]
                             }
@@ -1687,7 +1901,7 @@ pub mod tests {
                     static_methods: indexmap::indexmap! {
                       Label::Named("getPropStatic".into()) =>
                         EnvEntry::Mono(
-                          InferTy::Func(InferTy::Void.into(), InferTy::Int.into())
+                          ElaborationTy::Func(ElaborationTy::Void.into(), ElaborationTy::Int.into())
                         )
                     },
                 },

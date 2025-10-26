@@ -30,7 +30,7 @@ pub struct Scheme<T: SomeType> {
     pub(crate) ty: T,
 }
 
-impl SomeType for EnvEntry {
+impl<T: SomeType> SomeType for EnvEntry<T> {
     type RowType = InferRow;
 
     fn contains_var(&self) -> bool {

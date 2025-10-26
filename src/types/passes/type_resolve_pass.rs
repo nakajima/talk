@@ -780,7 +780,7 @@ impl<'a> TypeResolvePass<'a> {
                     row,
                 };
 
-                let entry: EnvEntry = (ty, predicates, foralls).into();
+                let entry: EnvEntry<InferTy> = (ty, predicates, foralls).into();
                 self.session.insert_term(*symbol, entry.clone());
                 entry.into()
             }
