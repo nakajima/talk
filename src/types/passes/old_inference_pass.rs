@@ -624,32 +624,32 @@ impl<'a> OldInferencePass<'a> {
                 _ = self.infer_block(body, level, wants);
                 InferTy::Void
             }
-            DeclKind::Struct {
-                body,
-                name: Name::Resolved(symbol, name),
-                ..
-            } => {
-                let Some(_) = self.session.lookup_nominal(symbol) else {
-                    self.ast
-                        .diagnostics
-                        .push(crate::diagnostic::AnyDiagnostic::Typing(Diagnostic {
-                            span: decl.span,
-                            kind: TypeError::TypeNotFound(name.to_string()),
-                        }));
+            // DeclKind::Struct {
+            //     body,
+            //     name: Name::Resolved(symbol, name),
+            //     ..
+            // } => {
+            //     let Some(_) = self.session.lookup_nominal(symbol) else {
+            //         self.ast
+            //             .diagnostics
+            //             .push(crate::diagnostic::AnyDiagnostic::Typing(Diagnostic {
+            //                 span: decl.span,
+            //                 kind: TypeError::TypeNotFound(name.to_string()),
+            //             }));
 
-                    return InferTy::Void;
-                };
+            //         return InferTy::Void;
+            //     };
 
-                self.infer_block(body, level, wants)
-            }
-            DeclKind::Protocol { body, .. } => {
-                // Protocols aren't nominals, they're protocols - just infer the body
-                self.infer_block(body, level, wants)
-            }
-            DeclKind::Extend { body, .. } => {
-                // Extensions can be on any type (nominals or builtins) - just infer the body
-                self.infer_block(body, level, wants)
-            }
+            //     self.infer_block(body, level, wants)
+            // }
+            // DeclKind::Protocol { body, .. } => {
+            //     // Protocols aren't nominals, they're protocols - just infer the body
+            //     self.infer_block(body, level, wants)
+            // }
+            // DeclKind::Extend { body, .. } => {
+            //     // Extensions can be on any type (nominals or builtins) - just infer the body
+            //     self.infer_block(body, level, wants)
+            // }
             DeclKind::Property { .. } => InferTy::Void,
             DeclKind::TypeAlias(lhs, rhs) => {
                 guard_found_ty!(self, decl.id);

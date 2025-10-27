@@ -8,6 +8,7 @@ use crate::{
     node_kinds::{
         attribute::Attribute,
         block::Block,
+        body::Body,
         call_arg::CallArg,
         decl::{Decl, DeclKind},
         expr::{Expr, ExprKind},
@@ -237,6 +238,7 @@ impl<'a> Formatter<'a> {
             Node::Pattern(pattern) => self.format_pattern(pattern),
             Node::MatchArm(arm) => self.format_match_arm(arm),
             Node::Block(block) => self.format_block(block),
+            Node::Body(body) => self.format_body(body),
             Node::TypeAnnotation(ty) => self.format_type_annotation(ty),
             Node::RecordField(field) => self.format_record_field(field),
             Node::IncompleteExpr(_) => Doc::Empty,
@@ -525,6 +527,44 @@ impl<'a> Formatter<'a> {
         )
     }
 
+    fn format_body(&self, body: &Body) -> Doc {
+        if body.decls.is_empty() {
+            return concat(text("{"), text("}"));
+        }
+
+        let mut final_doc = empty();
+        let mut last_meta: Option<&NodeMeta> = None;
+
+        for (i, decl) in body.decls.iter().enumerate() {
+            let meta = self.get_meta_for_node(&decl.into());
+
+            // Add separators *before* each statement, except the first one.
+            if i > 0 {
+                // Always add at least one newline.
+                final_doc = concat(final_doc, hardline());
+
+                // If preserving a blank line, add a second newline.
+                if let (Some(last), Some(current)) = (last_meta, meta)
+                    && current.start.line - last.end.line > 1
+                {
+                    final_doc = concat(final_doc, hardline());
+                }
+            }
+
+            // Add the formatted statement itself.
+            final_doc = concat(final_doc, self.format_decl(&decl));
+            last_meta = meta;
+        }
+
+        concat(
+            text("{"),
+            concat(
+                nest(1, concat(hardline(), final_doc)),
+                concat(hardline(), text("}")),
+            ),
+        )
+    }
+
     fn format_call(&self, callee: &Expr, type_args: &[TypeAnnotation], args: &[CallArg]) -> Doc {
         let mut result = self.format_expr(callee);
 
@@ -706,7 +746,7 @@ impl<'a> Formatter<'a> {
         name: &Name,
         generics: &[GenericDecl],
         conformances: &[TypeAnnotation],
-        body: &Block,
+        body: &Body,
     ) -> Doc {
         let mut result = concat_space(text("struct"), self.format_name(name));
 
@@ -736,7 +776,7 @@ impl<'a> Formatter<'a> {
             );
         }
 
-        concat_space(result, self.format_block(body))
+        concat_space(result, self.format_body(body))
     }
 
     fn format_extend(
@@ -744,7 +784,7 @@ impl<'a> Formatter<'a> {
         name: &Name,
         generics: &[GenericDecl],
         conformances: &[TypeAnnotation],
-        body: &Block,
+        body: &Body,
     ) -> Doc {
         let mut result = concat_space(text("extend"), self.format_name(name));
 
@@ -774,7 +814,7 @@ impl<'a> Formatter<'a> {
             );
         }
 
-        concat_space(result, self.format_block(body))
+        concat_space(result, self.format_body(body))
     }
 
     fn format_protocol(
@@ -782,7 +822,7 @@ impl<'a> Formatter<'a> {
         name: &Name,
         generics: &[GenericDecl],
         conformances: &[TypeAnnotation],
-        body: &Block,
+        body: &Body,
     ) -> Doc {
         let mut result = concat_space(text("protocol"), self.format_name(name));
 
@@ -812,7 +852,7 @@ impl<'a> Formatter<'a> {
             );
         }
 
-        concat_space(result, self.format_block(body))
+        concat_space(result, self.format_body(body))
     }
 
     fn format_property(
@@ -1053,7 +1093,7 @@ impl<'a> Formatter<'a> {
         name: &Name,
         generics: &[GenericDecl],
         conformances: &[TypeAnnotation],
-        body: &Block,
+        body: &Body,
     ) -> Doc {
         let mut result = concat_space(text("enum"), self.format_name(name));
 
@@ -1086,14 +1126,14 @@ impl<'a> Formatter<'a> {
         concat_space(result, self.format_enum_body(body))
     }
 
-    fn format_enum_body(&self, body: &Block) -> Doc {
-        if body.body.is_empty() {
+    fn format_enum_body(&self, body: &Body) -> Doc {
+        if body.decls.is_empty() {
             return concat(text("{"), text("}"));
         }
 
         let mut docs = Vec::new();
-        for item in &body.body {
-            docs.push(self.format_node(item));
+        for item in &body.decls {
+            docs.push(self.format_decl(item));
         }
 
         concat(

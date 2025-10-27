@@ -423,6 +423,7 @@ impl<'a> Higlighter<'a> {
                 ExprKind::RecordLiteral { .. } => (),
                 ExprKind::RowVariable(..) => (),
             },
+            Node::Body(..) => (),
             Node::Pattern(..) => (),
             Node::MatchArm(..) => (),
             Node::Block(..) => (),

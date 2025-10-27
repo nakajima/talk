@@ -13,6 +13,7 @@ use crate::{
     node_id::{FileID, NodeID},
     node_kinds::{
         block::Block,
+        body::Body,
         decl::{Decl, DeclKind},
         expr::{Expr, ExprKind},
         func::Func,
@@ -565,7 +566,7 @@ impl<'a> DeclDeclarer<'a> {
         });
     }
 
-    fn synthesize_init(&mut self, body: &mut Block, type_members: &TypeMembers, type_id: StructId) {
+    fn synthesize_init(&mut self, body: &mut Body, type_members: &TypeMembers, type_id: StructId) {
         let init_id = NodeID(FileID::SYNTHESIZED, self.node_ids.next_id());
         tracing::debug!("synthesizing init for type {type_id:?} as: {init_id:?}");
         let init_name = self
@@ -652,18 +653,6 @@ impl<'a> DeclDeclarer<'a> {
             assignments.push(assignment);
         }
 
-        let self_ret = Node::Stmt(Stmt {
-            id: NodeID(FileID::SYNTHESIZED, self.node_ids.next_id()),
-            kind: StmtKind::Expr(Expr {
-                id: NodeID(FileID::SYNTHESIZED, self.node_ids.next_id()),
-                span: Span::SYNTHESIZED,
-                kind: ExprKind::Variable(self_param_name.clone()),
-            }),
-            span: Span::SYNTHESIZED,
-        });
-
-        assignments.push(self_ret);
-
         let init = Decl {
             id: init_id,
             span: Span::SYNTHESIZED,
@@ -681,6 +670,6 @@ impl<'a> DeclDeclarer<'a> {
 
         self.end_scope();
 
-        body.body.insert(0, init.into());
+        body.decls.insert(0, init.into());
     }
 }

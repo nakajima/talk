@@ -1,5 +1,7 @@
 use std::collections::VecDeque;
 
+use indexmap::IndexSet;
+
 use crate::{
     label::Label,
     name_resolution::symbol::{AssociatedTypeId, ProtocolId, Symbol},
@@ -18,6 +20,7 @@ use crate::{
         },
         infer_row::InferRow,
         infer_ty::InferTy,
+        predicate::Predicate,
     },
 };
 
@@ -25,9 +28,14 @@ use crate::{
 pub struct Wants {
     pub simple: VecDeque<Constraint>,
     pub defer: VecDeque<Constraint>,
+    pub givens: IndexSet<Predicate<InferTy>>,
 }
 
 impl Wants {
+    pub fn given(&mut self, predicate: Predicate<InferTy>) {
+        self.givens.insert(predicate);
+    }
+
     pub fn extend(&mut self, other: Wants) {
         self.simple.extend(other.simple);
         self.defer.extend(other.defer);

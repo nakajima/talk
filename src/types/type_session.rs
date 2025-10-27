@@ -109,6 +109,7 @@ pub struct TypeSession {
     term_env: TermEnv,
     pub(super) meta_levels: Rc<RefCell<FxHashMap<Meta, Level>>>,
     pub(super) skolem_map: FxHashMap<InferTy, InferTy>,
+    pub(super) skolems_by_param: FxHashMap<TypeParamId, SkolemId>,
     pub skolem_bounds: FxHashMap<SkolemId, Vec<StructId>>,
     // pub(super) type_param_bounds: FxHashMap<TypeParamId, Vec<ProtocolBound>>,
     pub typealiases: FxHashMap<Symbol, Scheme<InferTy>>,
@@ -177,6 +178,7 @@ impl TypeSession {
             current_module_id,
             vars: Default::default(),
             skolem_map: Default::default(),
+            skolems_by_param: Default::default(),
             meta_levels: Default::default(),
             term_env,
             // type_param_bounds: Default::default(),
@@ -903,7 +905,12 @@ impl TypeSession {
     }
 
     pub(crate) fn new_skolem(&mut self, param: TypeParamId) -> InferTy {
+        if let Some(existing) = self.skolems_by_param.get(&param) {
+            return InferTy::Rigid(*existing);
+        }
+
         let id = self.vars.skolems.next_id();
+        self.skolems_by_param.insert(param, id);
         self.skolem_map
             .insert(InferTy::Rigid(id), InferTy::Param(param));
         tracing::trace!("Fresh skolem {id:?}");

@@ -11,10 +11,12 @@ use crate::{
     node_id::{FileID, NodeID},
     node_kinds::{
         block::Block,
+        body::Body,
         call_arg::CallArg,
         decl::{Decl, DeclKind},
         expr::{Expr, ExprKind},
         func::Func,
+        generic_decl::GenericDecl,
         match_arm::MatchArm,
         parameter::Parameter,
         pattern::{Pattern, PatternKind, RecordFieldPatternKind},
@@ -30,7 +32,8 @@ use crate::{
         infer_ty::{InferTy, Level},
         passes::{
             elaboration_pass::{
-                Binder, ElaboratedToSchemes, ElaboratedTypes, ElaborationTy, SCCGraph,
+                Binder, ElaboratedToSchemes, ElaboratedTypes, ElaborationRow, ElaborationTy,
+                Nominal, NominalKind, SCCGraph,
             },
             old_inference_pass::curry,
         },
@@ -134,7 +137,12 @@ impl<'a> InferencePass<'a> {
                     }
                     Err(e) => {
                         tracing::error!("Error solving constraint: {e:?}");
-                        self.asts[constraint.span().file_id.0 as usize]
+                        let file_id = if self.asts.len() >= constraint.span().file_id.0 as usize {
+                            constraint.span().file_id.0 as usize
+                        } else {
+                            self.asts.len() - 1
+                        };
+                        self.asts[file_id]
                             .diagnostics
                             .push(AnyDiagnostic::Typing(Diagnostic {
                                 span: constraint.span(),
@@ -247,6 +255,7 @@ impl<'a> InferencePass<'a> {
             Node::Parameter(ref parameter) => self.infer_parameter(parameter, level, wants),
             Node::Stmt(ref stmt) => self.infer_stmt(stmt, level, wants),
             Node::Expr(ref expr) => self.infer_expr(expr, level, wants),
+            Node::Body(ref body) => self.infer_body(body, level, wants),
             Node::CallArg(..) => todo!(),
             Node::Pattern(..) => todo!(),
             Node::MatchArm(..) => todo!(),
@@ -264,6 +273,21 @@ impl<'a> InferencePass<'a> {
 
         ty
     }
+
+    #[instrument(level = tracing::Level::TRACE, skip(self, wants))]
+    fn infer_body(&mut self, expr: &Body, level: Level, wants: &mut Wants) -> InferTy {
+        let graph = self
+            .elaborated_types
+            .collect_scc_graph(self.session, &expr.decls);
+        self.infer_scc_graph(level, &graph);
+
+        let mut ret = InferTy::Void;
+        for node in &expr.decls {
+            ret = self.infer_node(node, level, wants);
+        }
+        ret
+    }
+
     #[instrument(level = tracing::Level::TRACE, skip(self, wants, decl), fields(decl.kind = ?decl.kind))]
     fn infer_decl(&mut self, decl: &Decl, level: Level, wants: &mut Wants) -> InferTy {
         match &decl.kind {
@@ -278,7 +302,7 @@ impl<'a> InferencePass<'a> {
                 generics,
                 conformances,
                 body,
-            } => InferTy::Void, // Should be handled by groups?
+            } => self.infer_nominal(name, generics, conformances, body, level, wants),
             DeclKind::Protocol {
                 name,
                 name_span,
@@ -317,6 +341,130 @@ impl<'a> InferencePass<'a> {
             DeclKind::TypeAlias(type_annotation, type_annotation1) => todo!(),
             DeclKind::Import(_) => InferTy::Void,
         }
+    }
+
+    #[instrument(level = tracing::Level::TRACE, skip(self, wants))]
+    fn infer_nominal(
+        &mut self,
+        name: &Name,
+        generics: &[GenericDecl],
+        conformances: &[TypeAnnotation],
+        body: &Body,
+        level: Level,
+        wants: &mut Wants,
+    ) -> InferTy {
+        let Nominal {
+            ty,
+            kind,
+            conformances,
+            child_types,
+            members,
+            ..
+        } = self
+            .elaborated_types
+            .nominals
+            .get(&name.symbol())
+            .cloned()
+            .unwrap();
+        let entry = self.materialize_entry(ty.clone(), level);
+        let InferTy::Nominal { box row, .. } = self.session.skolemize(&entry) else {
+            unreachable!()
+        };
+        for decl in &body.decls {
+            match &decl.kind {
+                DeclKind::Struct {
+                    name,
+                    generics,
+                    conformances,
+                    body,
+                    ..
+                } => {
+                    self.infer_nominal(name, generics, conformances, body, level, wants);
+                }
+                DeclKind::Protocol {
+                    name,
+                    name_span,
+                    generics,
+                    body,
+                    conformances,
+                } => todo!(),
+                DeclKind::Init {
+                    name: _,
+                    params,
+                    body,
+                } => {
+                    let expected_entry = self.materialize_entry(
+                        self.elaborated_types
+                            .nominals
+                            .get(&name.symbol())
+                            .unwrap()
+                            .members
+                            .initializers
+                            .get(&Label::Named("init".into()))
+                            .unwrap()
+                            .clone(),
+                        level,
+                    );
+                    let expected = self.session.skolemize(&expected_entry);
+                    let (expected_params, expected_ret) = uncurry_function(expected);
+                    self.check_func(
+                        &params,
+                        &None,
+                        &body,
+                        expected_params,
+                        InferTy::Void,
+                        level,
+                        wants,
+                    );
+                }
+                DeclKind::Property {
+                    name,
+                    default_value,
+                    ..
+                } => {
+                    // let row =
+                    let ty = members
+                        .properties
+                        .get(&Label::Named(name.name_str()))
+                        .cloned()
+                        .unwrap();
+                    let mono_ty = self.materialize_entry(ty, level)._as_ty();
+                    if let Some(val) = default_value {
+                        let default_value_ty = self.infer_node(val, level, wants);
+                        wants.equals(
+                            mono_ty,
+                            default_value_ty,
+                            ConstraintCause::Literal(val.id),
+                            val.span,
+                        );
+                    }
+                }
+                DeclKind::Method { func, is_static } => todo!(),
+                DeclKind::Associated { generic } => todo!(),
+                DeclKind::Func(func) => todo!(),
+                DeclKind::Extend {
+                    name,
+                    name_span,
+                    conformances,
+                    generics,
+                    body,
+                } => todo!(),
+                DeclKind::Enum {
+                    name,
+                    name_span,
+                    conformances,
+                    generics,
+                    body,
+                } => todo!(),
+                DeclKind::EnumVariant(name, span, type_annotations) => todo!(),
+                DeclKind::FuncSignature(func_signature) => todo!(),
+                DeclKind::MethodRequirement(func_signature) => todo!(),
+                DeclKind::TypeAlias(type_annotation, type_annotation1) => todo!(),
+                _ => (),
+            }
+        }
+
+        InferTy::Void
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self, wants))]
@@ -387,20 +535,30 @@ impl<'a> InferencePass<'a> {
         wants: &mut Wants,
     ) -> InferTy {
         match kind {
-            TypeAnnotationKind::Nominal {
-                name,
-                name_span,
-                generics,
-            } => {
-                if let Some(nominal) = self.elaborated_types.nominals.get(&name.symbol()) {
-                    self.materialize_entry(nominal.ty.clone(), level)._as_ty()
-                } else if matches!(name.symbol(), Symbol::Builtin(..)) {
-                    resolve_builtin_type(&name.symbol()).0
-                } else {
-                    panic!("don't know how to resolve {name:?}")
+            TypeAnnotationKind::SelfType(name) | TypeAnnotationKind::Nominal { name, .. } => {
+                match name.symbol() {
+                    Symbol::Struct(..) | Symbol::Enum(..) => {
+                        let Some(nominal) = self.elaborated_types.nominals.get(&name.symbol())
+                        else {
+                            panic!("did not find nominal named {name:?}");
+                        };
+
+                        self.materialize_entry(nominal.ty.clone(), level)._as_ty()
+                    }
+                    Symbol::TypeParameter(..) => {
+                        println!("{:?}", self.elaborated_types.canonical_type_params);
+                        let id = self
+                            .elaborated_types
+                            .canonical_type_params
+                            .get(&name.symbol())
+                            .unwrap();
+                        InferTy::Param(*id)
+                    }
+                    Symbol::Builtin(..) => resolve_builtin_type(&name.symbol()).0,
+                    _ => panic!("not sure how to handle {name:?} type annotation"),
                 }
             }
-            _ => todo!(),
+            _ => todo!("{kind:?}"),
         }
     }
 
@@ -696,9 +854,20 @@ impl<'a> InferencePass<'a> {
 
     #[instrument(level = tracing::Level::TRACE, skip(self, wants))]
     fn infer_block(&mut self, expr: &Block, level: Level, wants: &mut Wants) -> InferTy {
-        let graph = self
-            .elaborated_types
-            .collect_scc_graph(self.session, &expr.body);
+        let graph = self.elaborated_types.collect_scc_graph(
+            self.session,
+            &expr
+                .body
+                .iter()
+                .filter_map(|n| {
+                    if let Node::Decl(decl) = n {
+                        Some(decl.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect_vec(),
+        );
         self.infer_scc_graph(level, &graph);
 
         let mut ret = InferTy::Void;
@@ -709,26 +878,22 @@ impl<'a> InferencePass<'a> {
     }
 
     // Checks
-    fn check_func(&mut self, func: &Func, expected: InferTy, level: Level, wants: &mut Wants) {
-        let (params, ret) = uncurry_function(expected);
-        for (param, expected_param_ty) in func.params.iter().zip(params) {
-            let ty = if let Some(anno) = &param.type_annotation {
-                let ty = self.infer_type_annotation(&anno.kind, level, wants);
-                wants.equals(
-                    ty,
-                    expected_param_ty.clone(),
-                    ConstraintCause::Annotation(anno.id),
-                    anno.span,
-                );
-                expected_param_ty
-            } else {
-                expected_param_ty
-            };
-
-            self.session.insert_mono(param.name.symbol(), ty);
+    fn check_func(
+        &mut self,
+        params: &[Parameter],
+        ret: &Option<TypeAnnotation>,
+        body: &Block,
+        expected_params: Vec<InferTy>,
+        expected_ret: InferTy,
+        level: Level,
+        wants: &mut Wants,
+    ) {
+        for (param, expected_param_ty) in params.iter().zip(expected_params) {
+            self.session
+                .insert_mono(param.name.symbol(), expected_param_ty);
         }
 
-        self.check_body(&func.body, ret.clone(), level, wants);
+        self.check_body(&body, expected_ret.clone(), level, wants);
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self, wants))]
@@ -749,7 +914,16 @@ impl<'a> InferencePass<'a> {
 
         match &expr.kind {
             ExprKind::Func(func) => {
-                self.check_func(func, expected, level, wants);
+                let (params, ret) = uncurry_function(expected);
+                self.check_func(
+                    &func.params,
+                    &func.ret,
+                    &func.body,
+                    params,
+                    ret,
+                    level,
+                    wants,
+                );
             }
             _ => todo!(),
         }
@@ -945,6 +1119,44 @@ impl<'a> InferencePass<'a> {
         }
     }
 
+    fn build_infer_row(&mut self, symbol: &Symbol, level: Level) -> InferRow {
+        let nominal = self.elaborated_types.nominals.get(symbol).cloned().unwrap();
+
+        // We can use inner_ty here because any generics are owned by the nominal,
+        // so predicates/foralls will still be accounted for.
+        match nominal.kind {
+            NominalKind::Struct => nominal.members.properties.iter().fold(
+                InferRow::Empty(TypeDefKind::Struct),
+                |acc, (label, entry)| InferRow::Extend {
+                    row: acc.into(),
+                    label: label.clone(),
+                    ty: self.materialize(entry.inner_ty(), level),
+                },
+            ),
+            NominalKind::Enum => nominal.members.variants.iter().fold(
+                InferRow::Empty(TypeDefKind::Struct),
+                |acc, (label, entry)| InferRow::Extend {
+                    row: acc.into(),
+                    label: label.clone(),
+                    ty: self.materialize(entry.inner_ty(), level),
+                },
+            ),
+        }
+    }
+
+    fn materialize_row(&mut self, row: ElaborationRow, level: Level) -> InferRow {
+        match row {
+            ElaborationRow::Empty(kind) => InferRow::Empty(kind),
+            ElaborationRow::Extend { box row, label, ty } => InferRow::Extend {
+                row: self.materialize_row(row, level).into(),
+                label,
+                ty: self.materialize(ty, level),
+            },
+            ElaborationRow::Param(row_param_id) => InferRow::Param(row_param_id),
+            ElaborationRow::Pending => panic!("did not replace pending elaboration row"),
+        }
+    }
+
     fn materialize_predicate(
         &mut self,
         predicate: Predicate<ElaborationTy>,
@@ -1016,6 +1228,7 @@ impl<'a> InferencePass<'a> {
         }
     }
 
+    #[instrument(skip(self))]
     fn materialize(&mut self, ty: ElaborationTy, level: Level) -> InferTy {
         match ty {
             ElaborationTy::Hole(node_id) => self.session.new_ty_meta_var(level),
@@ -1048,10 +1261,15 @@ impl<'a> InferencePass<'a> {
                     .map(|i| self.materialize(i, level))
                     .collect(),
             ),
-            ElaborationTy::Record(row) => InferTy::Record(row),
-            ElaborationTy::Nominal { symbol, row } => InferTy::Nominal { symbol, row },
+            ElaborationTy::Record(box row) => {
+                InferTy::Record(self.materialize_row(row, level).into())
+            }
+            ElaborationTy::Nominal { symbol } => InferTy::Nominal {
+                symbol,
+                row: self.build_infer_row(&symbol, level).into(),
+            },
             ElaborationTy::Primitive(symbol) => InferTy::Primitive(symbol),
-            ElaborationTy::Param(type_param_id) => self.session.new_ty_meta_var(level),
+            ElaborationTy::Param(type_param_id) => InferTy::Param(type_param_id),
             ElaborationTy::Rigid(skolem_id) => InferTy::Rigid(skolem_id),
         }
     }

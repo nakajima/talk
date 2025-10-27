@@ -96,7 +96,7 @@ impl PrependSelfToMethods {
 #[cfg(test)]
 pub mod tests {
     use crate::{
-        annotation, any_block, any_decl, assert_eq_diff,
+        annotation, any_block, any_body, any_decl, assert_eq_diff,
         name_resolution::transforms::prepend_self_to_methods::PrependSelfToMethods,
         node_id::NodeID,
         node_kinds::{
@@ -126,7 +126,7 @@ pub mod tests {
                 name_span: Span::ANY,
                 generics: vec![],
                 conformances: vec![],
-                body: any_block!(vec![
+                body: any_body!(vec![
                     any_decl!(DeclKind::Method {
                         func: Box::new(Func {
                             id: NodeID::ANY,
@@ -182,7 +182,7 @@ pub mod tests {
                 name_span: Span::ANY,
                 generics: vec![],
                 conformances: vec![],
-                body: any_block!(vec![
+                body: any_body!(vec![
                     any_decl!(DeclKind::Init {
                         name: "init".into(),
                         params: vec![Parameter {

@@ -1,10 +1,10 @@
 use crate::{
     node_id::{FileID, NodeID},
     node_kinds::{
-        attribute::Attribute, block::Block, call_arg::CallArg, decl::Decl, expr::Expr, func::Func,
-        func_signature::FuncSignature, generic_decl::GenericDecl, incomplete_expr::IncompleteExpr,
-        match_arm::MatchArm, parameter::Parameter, pattern::Pattern, record_field::RecordField,
-        stmt::Stmt, type_annotation::TypeAnnotation,
+        attribute::Attribute, block::Block, body::Body, call_arg::CallArg, decl::Decl, expr::Expr,
+        func::Func, func_signature::FuncSignature, generic_decl::GenericDecl,
+        incomplete_expr::IncompleteExpr, match_arm::MatchArm, parameter::Parameter,
+        pattern::Pattern, record_field::RecordField, stmt::Stmt, type_annotation::TypeAnnotation,
     },
     span::Span,
 };
@@ -25,6 +25,7 @@ pub enum Node {
     Pattern(Pattern),
     MatchArm(MatchArm),
     Block(Block),
+    Body(Body),
     TypeAnnotation(TypeAnnotation),
     RecordField(RecordField),
     IncompleteExpr(IncompleteExpr),
@@ -45,6 +46,7 @@ impl Node {
             Node::Pattern(pattern) => pattern.span,
             Node::MatchArm(match_arm) => match_arm.span,
             Node::Block(block) => block.span,
+            Node::Body(body) => body.span,
             Node::TypeAnnotation(type_annotation) => type_annotation.span,
             Node::RecordField(record_field) => record_field.span,
             Node::IncompleteExpr(..) => Span {
@@ -69,6 +71,7 @@ impl Node {
             Node::Pattern(pattern) => pattern.id,
             Node::MatchArm(match_arm) => match_arm.id,
             Node::Block(block) => block.id,
+            Node::Body(body) => body.id,
             Node::TypeAnnotation(type_annotation) => type_annotation.id,
             Node::RecordField(record_field) => record_field.id,
             Node::IncompleteExpr(..) => NodeID(FileID(0), 0),

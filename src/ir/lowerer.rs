@@ -288,8 +288,8 @@ impl<'a> Lowerer<'a> {
                 self.lower_expr(value, bind, instantiations)?;
             }
             DeclKind::Struct { body, .. } => {
-                for node in &body.body {
-                    self.lower_node(node, instantiations)?;
+                for decl in &body.decls {
+                    self.lower_decl(decl, instantiations)?;
                 }
             }
             DeclKind::Init { name, params, body } => {
@@ -302,13 +302,13 @@ impl<'a> Lowerer<'a> {
             DeclKind::Associated { .. } => todo!(),
             DeclKind::Func(..) => todo!(),
             DeclKind::Extend { body, .. } => {
-                for node in &body.body {
-                    self.lower_node(node, instantiations)?;
+                for decl in &body.decls {
+                    self.lower_decl(decl, instantiations)?;
                 }
             }
             DeclKind::Enum { body, .. } => {
-                for node in &body.body {
-                    self.lower_node(node, instantiations)?;
+                for decl in &body.decls {
+                    self.lower_decl(decl, instantiations)?;
                 }
             }
             DeclKind::EnumVariant(..) => (),

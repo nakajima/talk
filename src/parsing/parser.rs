@@ -5,6 +5,7 @@ use crate::name::Name;
 use crate::node::Node;
 use crate::node_id::{FileID, NodeID};
 use crate::node_kinds::block::Block;
+use crate::node_kinds::body::Body;
 use crate::node_kinds::call_arg::CallArg;
 use crate::node_kinds::decl::{Decl, DeclKind};
 use crate::node_kinds::expr::{Expr, ExprKind};
@@ -225,7 +226,7 @@ impl<'a> Parser<'a> {
         let params = self.parameters()?;
         self.consume(TokenKind::RightParen)?;
 
-        let body = self.body_block(BlockContext::Func)?;
+        let body = self.block(BlockContext::Func, true)?;
         let (id, span) = self.save_meta(tok)?;
 
         Ok(Decl {
@@ -456,7 +457,7 @@ impl<'a> Parser<'a> {
             }));
         }
 
-        let body = self.body_block(BlockContext::Func)?;
+        let body = self.block(BlockContext::Func, true)?;
         let (id, _span) = self.save_meta(tok)?;
 
         Ok(FuncOrFuncSignature::Func(Func {
@@ -512,9 +513,9 @@ impl<'a> Parser<'a> {
         let tok = self.push_source_location();
         self.consume(TokenKind::If)?;
         let cond = self.expr()?;
-        let body = self.body_block(BlockContext::If)?;
+        let body = self.block(BlockContext::If, true)?;
         self.consume(TokenKind::Else)?;
-        let alt = self.body_block(BlockContext::If)?;
+        let alt = self.block(BlockContext::If, true)?;
 
         let (id, span) = self.save_meta(tok)?;
         Ok(Expr {
@@ -548,10 +549,10 @@ impl<'a> Parser<'a> {
         let tok = self.push_source_location();
         self.consume(TokenKind::If)?;
         let cond = self.expr()?;
-        let body = self.body_block(BlockContext::If)?;
+        let body = self.block(BlockContext::If, true)?;
 
         if self.did_match(TokenKind::Else)? {
-            let alt = self.body_block(BlockContext::If)?;
+            let alt = self.block(BlockContext::If, true)?;
             let (id, span) = self.save_meta(tok)?;
             Ok(Stmt {
                 id,
@@ -579,7 +580,7 @@ impl<'a> Parser<'a> {
             None
         };
 
-        let body = self.body_block(BlockContext::Loop)?;
+        let body = self.block(BlockContext::Loop, true)?;
         let (id, span) = self.save_meta(tok)?;
         Ok(Stmt {
             id,
@@ -647,7 +648,7 @@ impl<'a> Parser<'a> {
             let pattern = self.parse_pattern()?;
             self.consume(TokenKind::Arrow)?;
 
-            let body = self.body_block(BlockContext::MatchArmBody)?;
+            let body = self.block(BlockContext::MatchArmBody, true)?;
             let (id, span) = self.save_meta(arm_tok)?;
             arms.push(MatchArm {
                 id,
@@ -1387,8 +1388,8 @@ impl<'a> Parser<'a> {
         Ok(annotations)
     }
 
-    fn body_block(&mut self, context: BlockContext) -> Result<Block, ParserError> {
-        self.block(context, true)
+    fn body_block(&mut self, context: BlockContext) -> Result<Body, ParserError> {
+        self.body(context, true)
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
@@ -1448,6 +1449,54 @@ impl<'a> Parser<'a> {
             span,
             args: vec![],
             body,
+        })
+    }
+
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
+    fn body(
+        &mut self,
+        context: BlockContext,
+        consumes_left_brace: bool,
+    ) -> Result<Body, ParserError> {
+        self.skip_newlines();
+        let tok = self.push_source_location();
+
+        if consumes_left_brace {
+            self.consume(TokenKind::LeftBrace)?;
+        }
+
+        self.skip_semicolons_and_newlines();
+        let mut body = vec![];
+        while !self.did_match(TokenKind::RightBrace)? {
+            if context == BlockContext::Enum {
+                // Special handling for multiple cases on one line
+                if self.peek_is(TokenKind::Case) {
+                    body.push(self.variant_decl(true)?);
+
+                    while self.did_match(TokenKind::Comma)? {
+                        body.push(self.variant_decl(false)?.into());
+                    }
+
+                    continue;
+                }
+            }
+
+            if context == BlockContext::Protocol && self.peek_is(TokenKind::Associated) {
+                body.push(self.associated_type()?);
+                continue;
+            }
+
+            body.push(self.decl(context, false)?.into());
+
+            self.skip_semicolons_and_newlines();
+        }
+
+        let (id, span) = self.save_meta(tok)?;
+
+        Ok(Body {
+            id,
+            span,
+            decls: body,
         })
     }
 

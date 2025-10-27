@@ -1,3 +1,4 @@
+use crate::node_kinds::block::Block;
 use crate::{
     ast::AST,
     compiling::driver::Source,
@@ -7,7 +8,6 @@ use crate::{
     node::Node,
     node_id::NodeID,
     node_kinds::{
-        block::Block,
         decl::{Decl, DeclKind},
         expr::{Expr, ExprKind},
         func::Func,
@@ -210,7 +210,7 @@ impl<'a> TypeHeaderPass<'a> {
             DeclKind::Struct {
                 name: name @ Name::Resolved(sym @ Symbol::Struct(..), type_name),
                 generics,
-                body: Block { body, .. },
+                body,
                 conformances,
                 ..
             } => {
@@ -237,7 +237,7 @@ impl<'a> TypeHeaderPass<'a> {
                         .collect::<IndexMap<Name, ASTTyRepr>>(),
                 );
 
-                self.collect_fields(name, decl.id, body);
+                // self.collect_fields(name, decl.id, body);
                 self.raw.nominals.insert(
                     *sym,
                     TypeDef {
@@ -251,7 +251,7 @@ impl<'a> TypeHeaderPass<'a> {
             DeclKind::Extend {
                 name:
                     name @ Name::Resolved(sym @ (Symbol::Struct(..) | Symbol::Enum(..)), type_name),
-                body: Block { body, .. },
+                body,
                 conformances,
                 ..
             } => {
@@ -264,7 +264,7 @@ impl<'a> TypeHeaderPass<'a> {
                 }
 
                 self.type_stack.push(*sym);
-                self.collect_fields(name, decl.id, body);
+                // self.collect_fields(name, decl.id, body);
 
                 self.raw
                     .conformances
@@ -280,12 +280,12 @@ impl<'a> TypeHeaderPass<'a> {
             }
             DeclKind::Extend {
                 name: name @ Name::Resolved(sym @ Symbol::Builtin(builtin_id), ..),
-                body: Block { body, .. },
+                body,
                 conformances,
                 ..
             } => {
                 self.type_stack.push(*sym);
-                self.collect_fields(name, decl.id, body);
+                // self.collect_fields(name, decl.id, body);
 
                 self.raw
                     .conformances
@@ -303,7 +303,7 @@ impl<'a> TypeHeaderPass<'a> {
                 name: name @ Name::Resolved(sym @ Symbol::Protocol(protocol_id), type_name),
                 generics,
                 conformances,
-                body: Block { body, .. },
+                body,
                 ..
             } => {
                 if let Some(parent_id) = self.type_stack.last() {
@@ -315,7 +315,7 @@ impl<'a> TypeHeaderPass<'a> {
                 }
 
                 self.type_stack.push(*sym);
-                self.collect_fields(name, decl.id, body);
+                // self.collect_fields(name, decl.id, body);
 
                 self.raw
                     .conformances
@@ -342,7 +342,7 @@ impl<'a> TypeHeaderPass<'a> {
             }
             DeclKind::Enum {
                 name: name @ Name::Resolved(sym @ Symbol::Enum(..), type_name),
-                body: Block { body, .. },
+                body,
                 generics,
                 conformances,
                 ..
@@ -356,7 +356,7 @@ impl<'a> TypeHeaderPass<'a> {
                 }
 
                 self.type_stack.push(*sym);
-                self.collect_fields(name, decl.id, body);
+                // self.collect_fields(name, decl.id, body);
 
                 self.raw
                     .conformances

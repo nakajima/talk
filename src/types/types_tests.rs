@@ -1365,13 +1365,17 @@ pub mod tests {
             "
         struct Person {
             let age: Int
+
+            // init(age: Int) {
+            //     self.age = age
+            // }
         }
 
         Person(age: 1.23)
         ",
         );
 
-        assert_eq!(1, ast.diagnostics.len(), "{:?}", ast.diagnostics);
+        assert_eq!(ast.diagnostics.len(), 1, "{:?}", ast.diagnostics);
     }
 
     #[test]

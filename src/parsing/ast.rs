@@ -91,6 +91,7 @@ impl ASTNodeFinder {
         match node {
             Node::Attribute(attribute) => self.check(attribute),
             Node::Decl(decl) => self.check(decl),
+            Node::Body(body) => self.check(body),
             Node::Func(func) => self.check(func),
             Node::GenericDecl(generic_decl) => self.check(generic_decl),
             Node::Parameter(parameter) => self.check(parameter),

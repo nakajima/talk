@@ -5,7 +5,7 @@ use crate::{
     name::Name,
     node_id::NodeID,
     node_kinds::{
-        block::Block, expr::Expr, func::Func, func_signature::FuncSignature,
+        block::Block, body::Body, expr::Expr, func::Func, func_signature::FuncSignature,
         generic_decl::GenericDecl, parameter::Parameter, pattern::Pattern,
         type_annotation::TypeAnnotation,
     },
@@ -22,7 +22,7 @@ pub enum DeclKind {
         name_span: Span,
         generics: Vec<GenericDecl>, /* generics */
         conformances: Vec<TypeAnnotation>,
-        body: Block, /* body */
+        body: Body, /* body */
     },
 
     Let {
@@ -37,7 +37,7 @@ pub enum DeclKind {
         #[drive(skip)]
         name_span: Span,
         generics: Vec<GenericDecl>,
-        body: Block,
+        body: Body,
         conformances: Vec<TypeAnnotation>,
     },
 
@@ -79,7 +79,7 @@ pub enum DeclKind {
         name_span: Span,
         conformances: Vec<TypeAnnotation>,
         generics: Vec<GenericDecl>, // Generics TypeParams <T>
-        body: Block,
+        body: Body,
     },
 
     // Enum declaration
@@ -90,7 +90,7 @@ pub enum DeclKind {
         name_span: Span,
         conformances: Vec<TypeAnnotation>,
         generics: Vec<GenericDecl>, // Generics TypeParams <T>
-        body: Block,
+        body: Body,
     },
 
     // Individual enum variant in declaration

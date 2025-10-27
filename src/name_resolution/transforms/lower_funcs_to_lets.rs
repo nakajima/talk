@@ -101,7 +101,7 @@ impl LowerFuncsToLets {
 #[cfg(test)]
 pub mod tests {
     use crate::{
-        any_block, any_decl, any_expr, assert_eq_diff,
+        any_block, any_body, any_decl, any_expr, assert_eq_diff,
         name::Name,
         name_resolution::transforms::lower_funcs_to_lets::LowerFuncsToLets,
         node_id::{FileID, NodeID},
@@ -165,7 +165,7 @@ pub mod tests {
                 name_span: Span::ANY,
                 generics: vec![],
                 conformances: vec![],
-                body: any_block!(vec![
+                body: any_body!(vec![
                     any_decl!(DeclKind::Method {
                         func: Box::new(Func {
                             id: NodeID::ANY,

@@ -61,10 +61,10 @@ debug = false
 [lints.clippy]
 approx_constant = "allow"
 
-[[bench]]
-name = "interpreter"
-harness = false
+# [[bench]]
+# name = "interpreter"
+# harness = false
 
-[[bench]]
-name = "compiler"
-harness = false
+# [[bench]]
+# name = "compiler"
+# harness = false

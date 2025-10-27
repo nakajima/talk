@@ -85,6 +85,17 @@ macro_rules! any {
 }
 
 #[macro_export]
+macro_rules! any_body {
+    ($expr:expr) => {{
+        $crate::node_kinds::body::Body {
+            id: NodeID::ANY,
+            span: $crate::parsing::span::Span::ANY,
+            decls: $expr,
+        }
+    }};
+}
+
+#[macro_export]
 macro_rules! any_block {
     ($expr:expr) => {{
         $crate::node_kinds::block::Block {

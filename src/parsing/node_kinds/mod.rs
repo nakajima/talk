@@ -1,5 +1,6 @@
 pub mod attribute;
 pub mod block;
+pub mod body;
 pub mod call_arg;
 pub mod decl;
 pub mod expr;

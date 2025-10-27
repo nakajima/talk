@@ -5,7 +5,8 @@ pub mod tests {
     use rustc_hash::FxHashSet;
 
     use crate::{
-        annotation, any, any_block, any_decl, any_expr, any_expr_stmt, any_stmt, assert_eq_diff,
+        annotation, any, any_block, any_body, any_decl, any_expr, any_expr_stmt, any_stmt,
+        assert_eq_diff,
         ast::AST,
         compiling::module::{ModuleEnvironment, ModuleId},
         diagnostic::{AnyDiagnostic, Diagnostic},
@@ -19,7 +20,6 @@ pub mod tests {
                 StructId, Symbol, SynthesizedId, TypeAliasId, TypeParameterId, VariantId,
             },
         },
-        node::Node,
         node_id::{FileID, NodeID},
         node_kinds::{
             call_arg::CallArg,
@@ -528,24 +528,21 @@ pub mod tests {
                 name_span: Span::ANY,
                 generics: vec![],
                 conformances: vec![],
-                body: any_block!(vec![
-                    any_decl!(DeclKind::Init {
-                        name: Name::Resolved(SynthesizedId::from(1).into(), "init".into()),
-                        params: vec![param!(
-                            ParamLocalId(2),
-                            "self",
-                            annotation!(TypeAnnotationKind::SelfType(Name::Resolved(
-                                StructId::from(1).into(),
-                                "Self".into()
-                            )))
-                        )],
-                        body: any_block!(vec![any_expr_stmt!(ExprKind::Variable(Name::Resolved(
-                            ParamLocalId(2).into(),
-                            "self".into()
-                        )))])
-                    })
-                    .into()
-                ])
+                body: any_body!(vec![any_decl!(DeclKind::Init {
+                    name: Name::Resolved(SynthesizedId::from(1).into(), "init".into()),
+                    params: vec![param!(
+                        ParamLocalId(2),
+                        "self",
+                        annotation!(TypeAnnotationKind::SelfType(Name::Resolved(
+                            StructId::from(1).into(),
+                            "Self".into()
+                        )))
+                    )],
+                    body: any_block!(vec![any_expr_stmt!(ExprKind::Variable(Name::Resolved(
+                        ParamLocalId(2).into(),
+                        "self".into()
+                    )))])
+                })])
             })
         )
     }
@@ -566,7 +563,7 @@ pub mod tests {
                 name_span: Span::ANY,
                 generics: vec![],
                 conformances: vec![],
-                body: any_block!(vec![
+                body: any_body!(vec![
                     any_decl!(DeclKind::Init {
                         name: Name::Resolved(SynthesizedId::from(1).into(), "init".into()),
                         params: vec![
@@ -603,9 +600,8 @@ pub mod tests {
                                 "self".into()
                             )))
                         ])
-                    })
-                    .into(),
-                    Node::Decl(any_decl!(DeclKind::Property {
+                    }),
+                    any_decl!(DeclKind::Property {
                         name: Name::Resolved(Symbol::Property(PropertyId::from(1)), "me".into()),
                         name_span: Span::ANY,
                         is_static: false,
@@ -615,7 +611,7 @@ pub mod tests {
                             generics: vec![]
                         })),
                         default_value: None
-                    }))
+                    })
                 ])
             })
         )
@@ -637,7 +633,7 @@ pub mod tests {
                 name_span: Span::ANY,
                 generics: vec![],
                 conformances: vec![],
-                body: any_block!(vec![Node::Decl(any_decl!(DeclKind::Init {
+                body: any_body!(vec![any_decl!(DeclKind::Init {
                     name: Name::Resolved(Symbol::Global(GlobalId::from(1)), "init".into()),
                     params: vec![param!(
                         Symbol::ParamLocal(ParamLocalId(1)),
@@ -648,7 +644,7 @@ pub mod tests {
                         )))
                     )],
                     body: any_block!(vec![])
-                }))])
+                })])
             })
         )
     }
@@ -676,7 +672,7 @@ pub mod tests {
                     span: Span::ANY
                 }],
                 conformances: vec![],
-                body: any_block!(vec![
+                body: any_body!(vec![
                     any_decl!(DeclKind::Init {
                         name: Name::Resolved(SynthesizedId::from(1).into(), "init".into()),
                         params: vec![
@@ -713,9 +709,8 @@ pub mod tests {
                                 "self".into()
                             )))
                         ])
-                    })
-                    .into(),
-                    Node::Decl(any_decl!(DeclKind::Property {
+                    }),
+                    any_decl!(DeclKind::Property {
                         name: Name::Resolved(Symbol::Property(PropertyId::from(1)), "me".into()),
                         name_span: Span::ANY,
                         is_static: false,
@@ -728,7 +723,7 @@ pub mod tests {
                             generics: vec![]
                         })),
                         default_value: None
-                    }))
+                    })
                 ])
             })
         )
@@ -748,7 +743,7 @@ pub mod tests {
                 name_span: Span::ANY,
                 generics: vec![],
                 conformances: vec![],
-                body: any_block!(vec![
+                body: any_body!(vec![
                     any_decl!(DeclKind::Init {
                         name: Name::Resolved(SynthesizedId::from(1).into(), "init".into()),
                         params: vec![param!(
@@ -763,8 +758,7 @@ pub mod tests {
                             ParamLocalId(2).into(),
                             "self".into()
                         )))])
-                    })
-                    .into(),
+                    }),
                     any_decl!(DeclKind::Method {
                         func: Box::new(Func {
                             id: NodeID::ANY,
@@ -780,8 +774,7 @@ pub mod tests {
                             attributes: vec![]
                         }),
                         is_static: true
-                    })
-                    .into(),
+                    }),
                 ])
             })
         )
@@ -807,7 +800,7 @@ pub mod tests {
                 name_span: Span::ANY,
                 generics: vec![],
                 conformances: vec![],
-                body: any_block!(vec![
+                body: any_body!(vec![
                     any_decl!(DeclKind::Init {
                         name: Name::Resolved(SynthesizedId::from(1).into(), "init".into()),
                         params: vec![param!(
@@ -822,8 +815,7 @@ pub mod tests {
                             ParamLocalId(4).into(),
                             "self".into()
                         )))])
-                    })
-                    .into(),
+                    }),
                     any_decl!(DeclKind::Method {
                         func: Box::new(Func {
                             id: NodeID::ANY,
@@ -898,7 +890,6 @@ pub mod tests {
                         }),
                         is_static: false
                     })
-                    .into()
                 ])
             })
         )
@@ -941,7 +932,7 @@ pub mod tests {
                 name_span: Span::ANY,
                 conformances: vec![],
                 generics: vec![],
-                body: any_block!(vec![])
+                body: any_body!(vec![])
             }),
         )
     }
@@ -963,7 +954,7 @@ pub mod tests {
                 name_span: Span::ANY,
                 conformances: vec![],
                 generics: vec![],
-                body: any_block!(vec![Node::Decl(any_decl!(DeclKind::Method {
+                body: any_body!(vec![any_decl!(DeclKind::Method {
                     func: Box::new(Func {
                         id: NodeID::ANY,
                         name: Name::Resolved(
@@ -989,7 +980,7 @@ pub mod tests {
                         attributes: vec![]
                     }),
                     is_static: false
-                }))])
+                })])
             }),
         )
     }
@@ -1011,17 +1002,17 @@ pub mod tests {
                 name_span: Span::ANY,
                 conformances: vec![],
                 generics: vec![],
-                body: any_block!(vec![
-                    Node::Decl(any_decl!(DeclKind::EnumVariant(
+                body: any_body!(vec![
+                    any_decl!(DeclKind::EnumVariant(
                         Name::Resolved(Symbol::Variant(VariantId::from(1)), "foo".into()),
                         Span::ANY,
                         vec![]
-                    ))),
-                    Node::Decl(any_decl!(DeclKind::EnumVariant(
+                    )),
+                    any_decl!(DeclKind::EnumVariant(
                         Name::Resolved(Symbol::Variant(VariantId::from(2)), "bar".into()),
                         Span::ANY,
                         vec![]
-                    ))),
+                    )),
                 ])
             })
         )
@@ -1044,7 +1035,7 @@ pub mod tests {
                 name_span: Span::ANY,
                 conformances: vec![],
                 generics: vec![],
-                body: any_block!(vec![Node::Decl(any_decl!(DeclKind::MethodRequirement(
+                body: any_body!(vec![any_decl!(DeclKind::MethodRequirement(
                     FuncSignature {
                         id: NodeID::ANY,
                         span: Span::ANY,
@@ -1064,7 +1055,7 @@ pub mod tests {
                         generics: vec![],
                         ret: Some(Box::new(annotation!(TypeAnnotationKind::Tuple(vec![]))))
                     }
-                )))])
+                ))])
             })
         )
     }
@@ -1088,8 +1079,8 @@ pub mod tests {
                 name_span: Span::ANY,
                 conformances: vec![],
                 generics: vec![],
-                body: any_block!(vec![
-                    Node::Decl(any_decl!(DeclKind::Associated {
+                body: any_body!(vec![
+                    any_decl!(DeclKind::Associated {
                         generic: GenericDecl {
                             id: NodeID::ANY,
                             name: Name::Resolved(
@@ -1101,8 +1092,8 @@ pub mod tests {
                             conformances: vec![],
                             span: Span::ANY
                         }
-                    })),
-                    Node::Decl(any_decl!(DeclKind::MethodRequirement(FuncSignature {
+                    }),
+                    any_decl!(DeclKind::MethodRequirement(FuncSignature {
                         id: NodeID::ANY,
                         span: Span::ANY,
                         name: Name::Resolved(
@@ -1127,7 +1118,7 @@ pub mod tests {
                             name_span: Span::ANY,
                             generics: vec![]
                         })))
-                    }))),
+                    })),
                 ])
             })
         )

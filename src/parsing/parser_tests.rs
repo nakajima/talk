@@ -3,7 +3,7 @@ pub mod tests {
     use std::assert_matches::assert_matches;
 
     use crate::{
-        any, any_block, any_expr, assert_eq_diff,
+        any, any_block, any_body, any_expr, assert_eq_diff,
         ast::{AST, Parsed},
         label::Label,
         lexer::Lexer,
@@ -203,7 +203,7 @@ pub mod tests {
                 name_span: Span::ANY,
                 generics: vec![],
                 conformances: vec![],
-                body: any_block!(vec![])
+                body: any_body!(vec![])
             })
         );
     }
@@ -1160,7 +1160,7 @@ pub mod tests {
                 name_span: Span::ANY,
                 generics: vec![],
                 conformances: vec![],
-                body: any_block!(vec![])
+                body: any_body!(vec![])
             })
         );
     }
@@ -1240,7 +1240,7 @@ pub mod tests {
                     },
                 ],
                 conformances: vec![],
-                body: any_block!(vec![
+                body: any_body!(vec![
                     any_decl!(DeclKind::EnumVariant(
                         Name::Raw("foo".into()),
                         Span::ANY,
@@ -1292,7 +1292,7 @@ pub mod tests {
                 name_span: Span::ANY,
                 generics: vec![],
                 conformances: vec![],
-                body: any_block!(
+                body: any_body!(
                     (vec![
                         any_decl!(DeclKind::EnumVariant(
                             Name::Raw("foo".into()),
@@ -1332,7 +1332,7 @@ pub mod tests {
                 name_span: Span::ANY,
                 generics: vec![],
                 conformances: vec![],
-                body: any_block!(vec![
+                body: any_body!(vec![
                     any_decl!(DeclKind::EnumVariant(
                         Name::Raw("foo".into()),
                         Span::ANY,
@@ -1594,7 +1594,7 @@ pub mod tests {
                 name_span: Span::ANY,
                 generics: vec![],
                 conformances: vec![],
-                body: any_block!(vec![
+                body: any_body!(vec![
                     any_decl!(DeclKind::EnumVariant(
                         Name::Raw("val".into()),
                         Span::ANY,
@@ -1790,7 +1790,7 @@ pub mod tests {
                         }]
                     }
                 }],
-                body: any_block!(vec![
+                body: any_body!(vec![
                     any_decl!(DeclKind::Method {
                         func: Box::new(Func {
                             id: NodeID::ANY,
@@ -1825,7 +1825,7 @@ pub mod tests {
                 name_span: Span::ANY,
                 generics: vec![],
                 conformances: vec![],
-                body: any_block!(vec![])
+                body: any_body!(vec![])
             })
         );
     }
@@ -1849,7 +1849,7 @@ pub mod tests {
                 name_span: Span::ANY,
                 generics: vec![],
                 conformances: vec![],
-                body: any_block!(vec![
+                body: any_body!(vec![
                     any_decl!(DeclKind::Property {
                         name: "age".into(),
                         name_span: Span::ANY,
@@ -1906,7 +1906,7 @@ pub mod tests {
                 name_span: Span::ANY,
                 generics: vec![],
                 conformances: vec![],
-                body: any_block!(vec![
+                body: any_body!(vec![
                     any_decl!(DeclKind::Property {
                         name: "age".into(),
                         name_span: Span::ANY,
@@ -1963,7 +1963,7 @@ pub mod tests {
                 name_span: Span::ANY,
                 generics: vec![],
                 conformances: vec![],
-                body: any_block!(vec![
+                body: any_body!(vec![
                     any_decl!(DeclKind::Method {
                         is_static: true,
                         func: Func {
@@ -2005,7 +2005,7 @@ pub mod tests {
                 name_span: Span::ANY,
                 generics: vec![],
                 conformances: vec![],
-                body: any_block!(vec![
+                body: any_body!(vec![
                     any_decl!(DeclKind::Method {
                         is_static: false,
                         func: Func {
@@ -2047,7 +2047,7 @@ pub mod tests {
                 name_span: Span::ANY,
                 generics: vec![],
                 conformances: vec![],
-                body: any_block!(vec![
+                body: any_body!(vec![
                     any_decl!(DeclKind::Init {
                         name: Name::Raw("init".into()),
                         params: vec![Parameter {
@@ -2094,7 +2094,7 @@ pub mod tests {
                 name_span: Span::ANY,
                 generics: vec![],
                 conformances: vec![],
-                body: any_block!(vec![])
+                body: any_body!(vec![])
             })
         );
     }
@@ -2116,7 +2116,7 @@ pub mod tests {
                 name_span: Span::ANY,
                 generics: vec![],
                 conformances: vec![],
-                body: any_block!(vec![
+                body: any_body!(vec![
                     any_decl!(DeclKind::MethodRequirement(FuncSignature {
                         id: NodeID::ANY,
                         span: Span::ANY,
@@ -2223,7 +2223,7 @@ pub mod tests {
                 name_span: Span::ANY,
                 generics: vec![],
                 conformances: vec![],
-                body: any_block!(vec![
+                body: any_body!(vec![
                     any_decl!(DeclKind::Associated {
                         generic: GenericDecl {
                             id: NodeID::ANY,
