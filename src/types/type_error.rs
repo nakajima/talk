@@ -5,7 +5,7 @@ use crate::{
     types::infer_ty::InferTy,
 };
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum TypeError {
     TypeConstructorNotFound(Symbol),
     ExpectedRow(InferTy),

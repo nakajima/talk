@@ -1,20 +1,15 @@
 use crate::{
     label::Label,
-    name::Name,
     name_resolution::symbol::Symbol,
     node_id::NodeID,
     span::Span,
     types::{
         constraints::constraint::{Constraint, ConstraintCause},
-        infer_row::{InferRow, RowTail, normalize_row},
         infer_ty::{InferTy, Level},
-        passes::{dependencies_pass::ConformanceRequirement, old_inference_pass::curry},
-        term_environment::EnvEntry,
+        passes::{inference_pass::uncurry_function, old_inference_pass::curry},
         type_error::TypeError,
-        type_operations::{
-            InstantiationSubstitutions, UnificationSubstitutions, instantiate_ty, unify,
-        },
-        type_session::{TypeDefKind, TypeSession},
+        type_operations::UnificationSubstitutions,
+        type_session::TypeSession,
         wants::Wants,
     },
 };
@@ -55,18 +50,49 @@ impl Member {
             return Ok(false);
         }
 
-        match &receiver {
-            InferTy::Nominal { box row, .. } => {
-                next_wants._has_field(
-                    row.clone(),
-                    self.label.clone(),
-                    self.ty.clone(),
-                    self.cause,
-                    self.span,
-                );
-                Ok(true)
-            }
-            _ => todo!(),
+        if let InferTy::Record(box row) = &receiver {
+            next_wants._has_field(row.clone(), self.label.clone(), ty, self.cause, self.span);
+            return Ok(true);
         }
+
+        if let InferTy::Nominal { symbol, box row } = &receiver {
+            let Some(member_sym) = session.lookup_member(symbol, &self.label) else {
+                return Err(TypeError::MemberNotFound(receiver, self.label.to_string()));
+            };
+
+            match member_sym {
+                Symbol::InstanceMethod(..) => {
+                    let method = session.lookup(&member_sym).unwrap().instantiate(
+                        self.node_id,
+                        session,
+                        Level::default(),
+                        next_wants,
+                        self.span,
+                    );
+
+                    let (method_receiver, method_fn) = consume_self(&method);
+                    next_wants.equals(method_receiver, receiver, self.cause, self.span);
+                    next_wants.equals(method_fn, self.ty.clone(), self.cause, self.span);
+                    return Ok(true);
+                }
+                _ => (),
+            }
+
+            // If all else fails, see if it's a property
+            next_wants._has_field(row.clone(), self.label.clone(), ty, self.cause, self.span);
+            return Ok(true);
+        }
+
+        Ok(false)
     }
+}
+
+fn consume_self(method: &InferTy) -> (InferTy, InferTy) {
+    let (mut params, ret) = uncurry_function(method.clone());
+    let method_receiver = params.remove(0);
+    if params.is_empty() {
+        // We need to make sure there's at least one param or else curry doesn't return a func.
+        params.insert(0, InferTy::Void);
+    }
+    (method_receiver, curry(params, ret))
 }

@@ -1296,6 +1296,8 @@ pub mod tests {
             row: Box::new(make_row!(Struct, "age" => Ty::Int, "height" => Ty::Float)),
         };
 
+        println!("{types:?}");
+
         let (params, _ret) = uncurry_function(
             types
                 .get_symbol(&Symbol::from(SynthesizedId::from(1)))

@@ -106,7 +106,7 @@ impl<'a> InferencePass<'a> {
             .extend(std::mem::take(&mut self.unsolved_constraints));
 
         // TODO: Move to a more sophisticated system than just a limit on solve attempts.
-        let mut remaining_attempts = 3;
+        let mut remaining_attempts = 6;
         while remaining_attempts >= 0 {
             let mut next_wants = Wants::default();
             while let Some(want) = wants.pop() {
@@ -142,12 +142,13 @@ impl<'a> InferencePass<'a> {
                         } else {
                             self.asts.len() - 1
                         };
-                        self.asts[file_id]
-                            .diagnostics
-                            .push(AnyDiagnostic::Typing(Diagnostic {
-                                span: constraint.span(),
-                                kind: e,
-                            }));
+                        let diagnostic = AnyDiagnostic::Typing(Diagnostic {
+                            span: constraint.span(),
+                            kind: e,
+                        });
+                        if !self.asts[file_id].diagnostics.contains(&diagnostic) {
+                            self.asts[file_id].diagnostics.push(diagnostic);
+                        }
                     }
                 }
 
@@ -160,6 +161,7 @@ impl<'a> InferencePass<'a> {
         // Stash our unsolved constraints for later
         self.unsolved_constraints.extend(unsolved.clone());
         self.substitutions.extend(&substitutions);
+        self.session.apply(&mut substitutions);
 
         (unsolved, substitutions)
     }
@@ -389,7 +391,7 @@ impl<'a> InferencePass<'a> {
                     conformances,
                 } => todo!(),
                 DeclKind::Init {
-                    name: _,
+                    name: init_name,
                     params,
                     body,
                 } => {
@@ -405,6 +407,10 @@ impl<'a> InferencePass<'a> {
                             .clone(),
                         level,
                     );
+
+                    self.session
+                        .insert_term(init_name.symbol(), expected_entry.clone());
+
                     let expected = self.session.skolemize(&expected_entry);
                     let (expected_params, expected_ret) = uncurry_function(expected);
                     self.check_func(
@@ -422,7 +428,6 @@ impl<'a> InferencePass<'a> {
                     default_value,
                     ..
                 } => {
-                    // let row =
                     let ty = members
                         .properties
                         .get(&Label::Named(name.name_str()))
@@ -439,7 +444,26 @@ impl<'a> InferencePass<'a> {
                         );
                     }
                 }
-                DeclKind::Method { func, is_static } => todo!(),
+                DeclKind::Method { func, is_static } => {
+                    let ty = members
+                        .methods
+                        .get(&Label::Named(func.name.name_str()))
+                        .cloned()
+                        .unwrap();
+                    let expected_entry = self.materialize_entry(ty, level);
+                    self.session
+                        .insert_term(func.name.symbol(), expected_entry.clone());
+                    let (expected_params, expected_ret) = uncurry_function(expected_entry._as_ty());
+                    self.check_func(
+                        &func.params,
+                        &func.ret,
+                        &func.body,
+                        expected_params,
+                        expected_ret,
+                        level,
+                        wants,
+                    );
+                }
                 DeclKind::Associated { generic } => todo!(),
                 DeclKind::Func(func) => todo!(),
                 DeclKind::Extend {
@@ -1275,7 +1299,7 @@ impl<'a> InferencePass<'a> {
     }
 }
 
-fn uncurry_function(ty: InferTy) -> (Vec<InferTy>, InferTy) {
+pub fn uncurry_function(ty: InferTy) -> (Vec<InferTy>, InferTy) {
     match ty {
         InferTy::Func(box param, box ret) => {
             let (mut params, final_ret) = uncurry_function(ret);
