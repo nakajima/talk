@@ -1285,57 +1285,6 @@ impl<'a> OldInferencePass<'a> {
     }
 }
 
-pub fn curry<I: IntoIterator<Item = InferTy>>(params: I, ret: InferTy) -> InferTy {
-    params
-        .into_iter()
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rfold(ret, |acc, p| InferTy::Func(Box::new(p), Box::new(acc)))
-}
-
-pub fn collect_meta(ty: &InferTy, out: &mut FxHashSet<InferTy>) {
-    match ty {
-        InferTy::Param(_) => {
-            out.insert(ty.clone());
-        }
-        InferTy::Var { .. } => {
-            out.insert(ty.clone());
-        }
-        InferTy::Projection { base, .. } => {
-            collect_meta(base, out);
-        }
-        InferTy::Func(dom, codom) => {
-            collect_meta(dom, out);
-            collect_meta(codom, out);
-        }
-        InferTy::Tuple(items) => {
-            for item in items {
-                collect_meta(item, out);
-            }
-        }
-        InferTy::Record(box row) => match row {
-            InferRow::Empty(..) => (),
-            InferRow::Var(..) => {
-                out.insert(ty.clone());
-            }
-            InferRow::Param(..) => (),
-            InferRow::Extend { row, ty, .. } => {
-                collect_meta(ty, out);
-                collect_meta(&InferTy::Record(row.clone()), out);
-            }
-        },
-        InferTy::Nominal { row, .. } => {
-            collect_meta(&InferTy::Record(row.clone()), out);
-        }
-        InferTy::Constructor { params, .. } => {
-            for param in params {
-                collect_meta(param, out);
-            }
-        }
-        InferTy::Primitive(_) | InferTy::Rigid(_) => {}
-    }
-}
-
 #[derive(Clone, Debug)]
 pub struct Typed {
     _types_by_node: FxHashMap<NodeID, InferTy>,

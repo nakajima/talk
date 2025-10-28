@@ -7,12 +7,18 @@ use crate::{
     name::Name,
     name_resolution::symbol::{StructId, Symbol},
     types::{
-        infer_row::InferRow,
+        infer_row::{InferRow, RowMetaId},
         scheme::ForAll,
         ty::{SomeType, Ty},
         type_session::TypeDefKind,
     },
 };
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Meta {
+    Ty(MetaVarId),
+    Row(RowMetaId),
+}
 
 #[derive(PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord)]
 pub struct MetaVarId(u32);

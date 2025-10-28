@@ -336,7 +336,7 @@ pub mod tests {
         // Get the struct's type parameter
         let TypeEntry::Poly(Scheme { foralls, .. }) = types
             .get_symbol(&Symbol::Struct(StructId::from(1)))
-            .unwrap()
+            .unwrap_or_else(|| panic!("did not find struct {:#?}", types.types_by_symbol))
         else {
             panic!("didn't get struct scheme");
         };

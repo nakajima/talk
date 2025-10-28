@@ -5,10 +5,11 @@ use crate::{
     span::Span,
     types::{
         constraints::constraint::{Constraint, ConstraintCause},
+        infer_row::InferRow,
         infer_ty::{InferTy, Level},
-        passes::{inference_pass::uncurry_function, old_inference_pass::curry},
+        passes::inference_pass::uncurry_function,
         type_error::TypeError,
-        type_operations::UnificationSubstitutions,
+        type_operations::{UnificationSubstitutions, curry},
         type_session::TypeSession,
         wants::Wants,
     },
@@ -75,6 +76,18 @@ impl Member {
                     next_wants.equals(method_fn, self.ty.clone(), self.cause, self.span);
                     return Ok(true);
                 }
+                Symbol::Variant(..) => {
+                    println!("instantiating variant. ty: {receiver:?}");
+                    let variant = self.lookup_variant(row).unwrap();
+                    let constructor_ty = match variant {
+                        InferTy::Void => receiver,
+                        InferTy::Tuple(values) => curry(values, receiver),
+                        other => curry(vec![other], receiver),
+                    };
+
+                    next_wants.equals(constructor_ty, ty, self.cause, self.span);
+                    return Ok(true);
+                }
                 _ => (),
             }
 
@@ -84,6 +97,18 @@ impl Member {
         }
 
         Ok(false)
+    }
+
+    fn lookup_variant(&self, row: &InferRow) -> Option<InferTy> {
+        if let InferRow::Extend { row, label, ty } = row {
+            if *label == self.label {
+                return Some(ty.clone());
+            }
+
+            return self.lookup_variant(row);
+        }
+
+        None
     }
 }
 

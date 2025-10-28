@@ -5,18 +5,47 @@ use crate::{
     compiling::module::ModuleId,
     label::Label,
     name::Name,
-    name_resolution::symbol::{ProtocolId, Symbol},
+    name_resolution::symbol::{
+        AssociatedTypeId, InstanceMethodId, MethodRequirementId, ProtocolId, Symbol,
+    },
     node_id::NodeID,
     span::Span,
     types::{
         fields::Associated,
         infer_row::RowParamId,
         infer_ty::{InferTy, TypeParamId},
-        passes::dependencies_pass::{Conformance, ConformanceRequirement},
         ty::{SomeType, Ty},
         type_session::{TypeEntry, TypeSession},
     },
 };
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ConformanceRequirement {
+    UnfulfilledInstanceMethod(MethodRequirementId),
+    FulfilledInstanceMethod(InstanceMethodId),
+}
+
+impl ConformanceRequirement {
+    pub fn import(self, module_id: ModuleId) -> ConformanceRequirement {
+        match self {
+            ConformanceRequirement::UnfulfilledInstanceMethod(id) => {
+                ConformanceRequirement::UnfulfilledInstanceMethod(id.import(module_id))
+            }
+            ConformanceRequirement::FulfilledInstanceMethod(id) => {
+                ConformanceRequirement::FulfilledInstanceMethod(id.import(module_id))
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Conformance {
+    pub conforming_id: Symbol,
+    pub protocol_id: ProtocolId,
+    pub requirements: FxHashMap<Label, ConformanceRequirement>,
+    pub associated_types: FxHashMap<AssociatedTypeId, InferTy>,
+    pub span: Span,
+}
 
 fn import_label_symbol_map<
     I: IntoIterator<Item = (Label, Symbol)> + FromIterator<(Label, Symbol)>,

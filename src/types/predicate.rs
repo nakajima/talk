@@ -317,6 +317,7 @@ impl Predicate<InferTy> {
                     .iter()
                     .map(|f| instantiate_ty(f.clone(), substitutions, level))
                     .collect(),
+                type_args: vec![],
                 returns: instantiate_ty(returns, substitutions, level),
                 receiver: receiver.map(|r| instantiate_ty(r.clone(), substitutions, level)),
                 span,

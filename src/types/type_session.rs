@@ -17,17 +17,15 @@ use crate::{
         constraints::constraint::Constraint,
         fields::{Associated, Initializer, Method, MethodRequirement, Property, Variant},
         infer_row::{InferRow, RowMetaId, RowParamId},
-        infer_ty::{InferTy, Level, MetaVarId, SkolemId, TypeParamId},
+        infer_ty::{InferTy, Level, Meta, MetaVarId, SkolemId, TypeParamId},
         kind::Kind,
-        passes::{
-            dependencies_pass::Conformance,
-            old_inference_pass::{Meta, collect_meta},
-        },
         row::Row,
         scheme::{ForAll, Scheme},
         term_environment::{EnvEntry, TermEnv},
         ty::{SomeType, Ty},
-        type_catalog::{ConformanceKey, ConformanceStub, Nominal, Protocol, TypeCatalog},
+        type_catalog::{
+            Conformance, ConformanceKey, ConformanceStub, Nominal, Protocol, TypeCatalog,
+        },
         type_error::TypeError,
         type_operations::{UnificationSubstitutions, apply, apply_row, substitute},
         vars::Vars,
@@ -140,7 +138,7 @@ impl TypeEntry {
 #[derive(Clone, Debug, Default)]
 pub struct Types {
     pub types_by_node: FxHashMap<NodeID, TypeEntry>,
-    types_by_symbol: FxHashMap<Symbol, TypeEntry>,
+    pub types_by_symbol: FxHashMap<Symbol, TypeEntry>,
     pub catalog: TypeCatalog<Ty>,
 }
 
@@ -984,5 +982,48 @@ fn collect_metas_in_constraint(constraint: &Constraint, out: &mut FxHashSet<Infe
                 collect_meta(ty, out);
             }
         }
+    }
+}
+
+pub fn collect_meta(ty: &InferTy, out: &mut FxHashSet<InferTy>) {
+    match ty {
+        InferTy::Param(_) => {
+            out.insert(ty.clone());
+        }
+        InferTy::Var { .. } => {
+            out.insert(ty.clone());
+        }
+        InferTy::Projection { base, .. } => {
+            collect_meta(base, out);
+        }
+        InferTy::Func(dom, codom) => {
+            collect_meta(dom, out);
+            collect_meta(codom, out);
+        }
+        InferTy::Tuple(items) => {
+            for item in items {
+                collect_meta(item, out);
+            }
+        }
+        InferTy::Record(box row) => match row {
+            InferRow::Empty(..) => (),
+            InferRow::Var(..) => {
+                out.insert(ty.clone());
+            }
+            InferRow::Param(..) => (),
+            InferRow::Extend { row, ty, .. } => {
+                collect_meta(ty, out);
+                collect_meta(&InferTy::Record(row.clone()), out);
+            }
+        },
+        InferTy::Nominal { row, .. } => {
+            collect_meta(&InferTy::Record(row.clone()), out);
+        }
+        InferTy::Constructor { params, .. } => {
+            for param in params {
+                collect_meta(param, out);
+            }
+        }
+        InferTy::Primitive(_) | InferTy::Rigid(_) => {}
     }
 }

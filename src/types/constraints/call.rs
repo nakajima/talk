@@ -4,10 +4,9 @@ use crate::{
     types::{
         constraints::constraint::{Constraint, ConstraintCause},
         infer_ty::{InferTy, Level},
-        passes::old_inference_pass::curry,
         term_environment::EnvEntry,
         type_error::TypeError,
-        type_operations::{UnificationSubstitutions, unify},
+        type_operations::{UnificationSubstitutions, curry, unify},
         type_session::TypeSession,
         wants::Wants,
     },
@@ -18,6 +17,7 @@ pub struct Call {
     pub callee_id: NodeID,
     pub callee: InferTy,
     pub args: Vec<InferTy>,
+    pub type_args: Vec<InferTy>,
     pub returns: InferTy,
     pub receiver: Option<InferTy>, // If it's a method
     pub span: Span,

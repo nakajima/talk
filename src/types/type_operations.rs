@@ -5,13 +5,16 @@ use tracing::instrument;
 
 use crate::{
     label::Label,
+    node_id::NodeID,
+    span::Span,
     types::{
         dsu::DSU,
         infer_row::{InferRow, RowMetaId, RowParamId, RowTail, normalize_row},
-        infer_ty::{InferTy, Level, MetaVarId, TypeParamId},
-        passes::old_inference_pass::{Meta, curry},
+        infer_ty::{InferTy, Level, Meta, MetaVarId, TypeParamId},
+        term_environment::EnvEntry,
         type_error::TypeError,
         type_session::{TypeDefKind, TypeSession},
+        wants::Wants,
     },
 };
 
@@ -35,6 +38,44 @@ impl UnificationSubstitutions {
 pub struct InstantiationSubstitutions {
     pub row: FxHashMap<RowParamId, RowMetaId>,
     pub ty: FxHashMap<TypeParamId, MetaVarId>,
+}
+
+impl InstantiationSubstitutions {
+    pub fn group<'a>(
+        session: &'a mut TypeSession,
+        level: Level,
+        wants: &'a mut Wants,
+    ) -> InstantiationGroup<'a> {
+        InstantiationGroup {
+            session,
+            level,
+            wants,
+            substitutions: InstantiationSubstitutions::default(),
+        }
+    }
+}
+
+pub struct InstantiationGroup<'a> {
+    session: &'a mut TypeSession,
+    level: Level,
+    wants: &'a mut Wants,
+    substitutions: InstantiationSubstitutions,
+}
+
+impl<'a> InstantiationGroup<'a> {
+    pub fn instantiate(&mut self, id: NodeID, span: Span, entry: EnvEntry<InferTy>) -> InferTy {
+        match entry {
+            EnvEntry::Mono(ty) => ty,
+            EnvEntry::Scheme(scheme) => scheme.instantiate_with_substitutions(
+                id,
+                span,
+                self.session,
+                self.level,
+                self.wants,
+                &mut self.substitutions,
+            ),
+        }
+    }
 }
 
 impl std::fmt::Debug for UnificationSubstitutions {
@@ -419,6 +460,14 @@ pub(super) fn unify(
             Err(TypeError::InvalidUnification(lhs.into(), rhs.into()))
         }
     }
+}
+
+pub fn curry<I: IntoIterator<Item = InferTy>>(params: I, ret: InferTy) -> InferTy {
+    params
+        .into_iter()
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rfold(ret, |acc, p| InferTy::Func(Box::new(p), Box::new(acc)))
 }
 
 pub(super) fn substitute_row(

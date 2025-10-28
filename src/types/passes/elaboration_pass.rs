@@ -53,6 +53,24 @@ pub enum ElaborationRow {
     Pending,
 }
 
+impl ElaborationRow {
+    pub fn collect_foralls(&self) -> Vec<ForAll> {
+        let mut result = vec![];
+        match self {
+            Self::Empty(..) => (),
+            Self::Param(id) => {
+                result.push(ForAll::Row(*id));
+            }
+            Self::Extend { row, ty, .. } => {
+                result.extend(ty.collect_foralls());
+                result.extend(row.collect_foralls());
+            }
+            _ => (),
+        }
+        result
+    }
+}
+
 #[derive(PartialEq, Debug, Eq, Clone, Hash)]
 pub enum ElaborationTy {
     Hole(NodeID),
@@ -112,6 +130,37 @@ impl ElaborationTy {
                 local_id: 3,
             }),
         }
+    }
+
+    pub fn collect_foralls(&self) -> Vec<ForAll> {
+        let mut result = vec![];
+        match self {
+            ElaborationTy::Param(id) => result.push(ForAll::Ty(*id)),
+            ElaborationTy::Rigid(..) => (),
+            ElaborationTy::Primitive(..) => (),
+            ElaborationTy::Projection { base, .. } => {
+                result.extend(base.collect_foralls());
+            }
+            ElaborationTy::Constructor { params, .. } => {
+                for item in params {
+                    result.extend(item.collect_foralls());
+                }
+            }
+            ElaborationTy::Func(ty, ty1) => {
+                result.extend(ty.collect_foralls());
+                result.extend(ty1.collect_foralls());
+            }
+            ElaborationTy::Tuple(items) => {
+                for item in items {
+                    result.extend(item.collect_foralls());
+                }
+            }
+            ElaborationTy::Record(box row) => {
+                result.extend(row.collect_foralls());
+            }
+            _ => (),
+        }
+        result
     }
 }
 
@@ -323,9 +372,10 @@ pub enum NominalKind {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Nominal<T> {
-    name: Name,
+    pub name: Name,
     pub ty: T,
-    node_id: NodeID,
+    pub node_id: NodeID,
+    pub span: Span,
     pub kind: NominalKind,
     pub conformances: Vec<ConformanceStub>,
     pub child_types: IndexMap<Label, Symbol>,
@@ -406,7 +456,7 @@ impl<'a> ElaborationPass<'a> {
         };
 
         let root_decls = asts
-            .into_iter()
+            .iter()
             .flat_map(|a| {
                 a.roots
                     .clone()
@@ -539,6 +589,7 @@ impl<'a> ElaborationPass<'a> {
                         members: Default::default(),
                         name: name.clone(),
                         node_id: node.id,
+                        span: node.span,
                         kind,
                         conformances: Self::collect_conformance_stubs(name.symbol(), conformances),
                         child_types: Default::default(),
@@ -715,6 +766,7 @@ impl<'a> ElaborationPass<'a> {
                             members,
                             name: nominal.name,
                             node_id: nominal.node_id,
+                            span: nominal.span,
                             kind: nominal.kind,
                             conformances: nominal.conformances,
                             child_types: nominal.child_types,
@@ -820,6 +872,7 @@ impl<'a> ElaborationPass<'a> {
                             members,
                             name: nominal.name,
                             node_id: nominal.node_id,
+                            span: nominal.span,
                             kind: nominal.kind,
                             conformances: nominal.conformances,
                             child_types: nominal.child_types,
@@ -919,6 +972,7 @@ impl<'a> ElaborationPass<'a> {
         type_foralls: &IndexSet<ForAll>,
     ) -> EnvEntry<ElaborationTy> {
         let (ty, mut foralls, predicates) = ty;
+        foralls.extend(ty.collect_foralls());
 
         if kind != MemberKind::Property && kind != MemberKind::Variant {
             foralls.extend(type_foralls);
@@ -1179,6 +1233,30 @@ impl<'a> ElaborationPass<'a> {
                             (ty, Default::default(), Default::default()),
                         );
                     }
+                }
+                DeclKind::EnumVariant(name, _, annos) => {
+                    self.session
+                        .type_catalog
+                        .properties
+                        .entry(self_symbol)
+                        .or_default()
+                        .insert(name.name_str().into(), name.symbol());
+
+                    let ty = match annos.len() {
+                        0 => ElaborationTy::Void,
+                        1 => self.elaborate_type_annotation(annos[0].id, types, &annos[0].kind),
+                        _ => ElaborationTy::Tuple(
+                            annos
+                                .iter()
+                                .map(|a| self.elaborate_type_annotation(a.id, types, &a.kind))
+                                .collect(),
+                        ),
+                    };
+
+                    members.variants.insert(
+                        name.name_str().into(),
+                        (ty, Default::default(), Default::default()),
+                    );
                 }
                 _ => (),
             }
@@ -1605,6 +1683,7 @@ pub mod tests {
             Nominal::<EnvEntry<ElaborationTy>> {
                 name: Name::Resolved(StructId::from(1).into(), "A".into()),
                 node_id: NodeID::ANY,
+                span: Span::ANY,
                 kind: NominalKind::Struct,
                 members: Members {
                     initializers: indexmap::indexmap! {
@@ -1636,6 +1715,7 @@ pub mod tests {
             Nominal {
                 name: Name::Resolved(StructId::from(1).into(), "A".into()),
                 node_id: NodeID::ANY,
+                span: Span::ANY,
                 kind: NominalKind::Struct,
                 members: Members {
                     initializers: indexmap::indexmap! {
@@ -1681,6 +1761,7 @@ pub mod tests {
             Nominal {
                 name: Name::Resolved(StructId::from(1).into(), "A".into()),
                 node_id: NodeID::ANY,
+                span: Span::ANY,
                 kind: NominalKind::Struct,
                 members: Members {
                     initializers: indexmap::indexmap! {
@@ -1731,6 +1812,7 @@ pub mod tests {
             Nominal {
                 name: Name::Resolved(StructId::from(1).into(), "C".into()),
                 node_id: NodeID::ANY,
+                span: Span::ANY,
                 kind: NominalKind::Struct,
                 members: Members {
                     initializers: indexmap::indexmap! {
@@ -1779,6 +1861,7 @@ pub mod tests {
             Nominal::<EnvEntry<_>> {
                 name: Name::Resolved(StructId::from(1).into(), "A".into()),
                 node_id: NodeID::ANY,
+                span: Span::ANY,
                 kind: NominalKind::Struct,
                 members: Members {
                     initializers: indexmap::indexmap! {
@@ -1811,6 +1894,7 @@ pub mod tests {
             Nominal::<EnvEntry<_>> {
                 name: Name::Resolved(EnumId::from(1).into(), "A".into()),
                 node_id: NodeID(FileID(0), 2),
+                span: Span::ANY,
                 kind: NominalKind::Enum,
                 members: Members {
                     initializers: Default::default(),
@@ -1954,6 +2038,7 @@ pub mod tests {
             Nominal::<EnvEntry<_>> {
                 name: Name::Resolved(StructId::from(1).into(), "A".into()),
                 node_id: NodeID::ANY,
+                span: Span::ANY,
                 kind: NominalKind::Struct,
                 conformances: vec![],
                 child_types: Default::default(),
