@@ -165,22 +165,19 @@ pub mod tests {
                 name_span: Span::ANY,
                 generics: vec![],
                 conformances: vec![],
-                body: any_body!(vec![
-                    any_decl!(DeclKind::Method {
-                        func: Box::new(Func {
-                            id: NodeID::ANY,
-                            name: "fizz".into(),
-                            name_span: Span::ANY,
-                            generics: vec![],
-                            params: vec![],
-                            body: any_block!(vec![]),
-                            ret: None,
-                            attributes: vec![]
-                        }),
-                        is_static: false
-                    })
-                    .into()
-                ])
+                body: any_body!(vec![any_decl!(DeclKind::Method {
+                    func: Box::new(Func {
+                        id: NodeID::ANY,
+                        name: "fizz".into(),
+                        name_span: Span::ANY,
+                        generics: vec![],
+                        params: vec![],
+                        body: any_block!(vec![]),
+                        ret: None,
+                        attributes: vec![]
+                    }),
+                    is_static: false
+                })])
             })
         )
     }

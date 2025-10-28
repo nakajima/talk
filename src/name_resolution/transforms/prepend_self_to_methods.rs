@@ -126,39 +126,36 @@ pub mod tests {
                 name_span: Span::ANY,
                 generics: vec![],
                 conformances: vec![],
-                body: any_body!(vec![
-                    any_decl!(DeclKind::Method {
-                        func: Box::new(Func {
-                            id: NodeID::ANY,
-                            name: "fizz".into(),
-                            name_span: Span::ANY,
-                            generics: vec![],
-                            params: vec![
-                                Parameter {
-                                    id: NodeID::ANY,
-                                    span: Span::ANY,
-                                    name: "self".into(),
-                                    name_span: Span::ANY,
-                                    type_annotation: Some(annotation!(
-                                        TypeAnnotationKind::SelfType("Self".into())
-                                    ))
-                                },
-                                Parameter {
-                                    id: NodeID::ANY,
-                                    span: Span::ANY,
-                                    name: "x".into(),
-                                    name_span: Span::ANY,
-                                    type_annotation: None
-                                }
-                            ],
-                            body: any_block!(vec![]),
-                            ret: None,
-                            attributes: vec![]
-                        }),
-                        is_static: false
-                    })
-                    .into()
-                ])
+                body: any_body!(vec![any_decl!(DeclKind::Method {
+                    func: Box::new(Func {
+                        id: NodeID::ANY,
+                        name: "fizz".into(),
+                        name_span: Span::ANY,
+                        generics: vec![],
+                        params: vec![
+                            Parameter {
+                                id: NodeID::ANY,
+                                span: Span::ANY,
+                                name: "self".into(),
+                                name_span: Span::ANY,
+                                type_annotation: Some(annotation!(TypeAnnotationKind::SelfType(
+                                    "Self".into()
+                                )))
+                            },
+                            Parameter {
+                                id: NodeID::ANY,
+                                span: Span::ANY,
+                                name: "x".into(),
+                                name_span: Span::ANY,
+                                type_annotation: None
+                            }
+                        ],
+                        body: any_block!(vec![]),
+                        ret: None,
+                        attributes: vec![]
+                    }),
+                    is_static: false
+                })])
             })
         )
     }
@@ -182,22 +179,19 @@ pub mod tests {
                 name_span: Span::ANY,
                 generics: vec![],
                 conformances: vec![],
-                body: any_body!(vec![
-                    any_decl!(DeclKind::Init {
-                        name: "init".into(),
-                        params: vec![Parameter {
-                            id: NodeID::ANY,
-                            span: Span::ANY,
-                            name: "self".into(),
-                            name_span: Span::ANY,
-                            type_annotation: Some(annotation!(TypeAnnotationKind::SelfType(
-                                "Self".into()
-                            )))
-                        },],
-                        body: any_block!(vec![]),
-                    })
-                    .into()
-                ])
+                body: any_body!(vec![any_decl!(DeclKind::Init {
+                    name: "init".into(),
+                    params: vec![Parameter {
+                        id: NodeID::ANY,
+                        span: Span::ANY,
+                        name: "self".into(),
+                        name_span: Span::ANY,
+                        type_annotation: Some(annotation!(TypeAnnotationKind::SelfType(
+                            "Self".into()
+                        )))
+                    },],
+                    body: any_block!(vec![]),
+                })])
             })
         )
     }

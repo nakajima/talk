@@ -552,7 +552,7 @@ impl<'a> Formatter<'a> {
             }
 
             // Add the formatted statement itself.
-            final_doc = concat(final_doc, self.format_decl(&decl));
+            final_doc = concat(final_doc, self.format_decl(decl));
             last_meta = meta;
         }
 

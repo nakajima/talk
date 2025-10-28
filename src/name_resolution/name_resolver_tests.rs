@@ -853,8 +853,7 @@ pub mod tests {
                             attributes: vec![]
                         }),
                         is_static: false
-                    })
-                    .into(),
+                    }),
                     any_decl!(DeclKind::Method {
                         func: Box::new(Func {
                             id: NodeID::ANY,

@@ -670,6 +670,6 @@ impl<'a> DeclDeclarer<'a> {
 
         self.end_scope();
 
-        body.decls.insert(0, init.into());
+        body.decls.insert(0, init);
     }
 }

@@ -384,10 +384,10 @@ pub struct Nominal<T> {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Protocol<Phase: ElaborationPhase> {
-    name: Name,
-    node_id: NodeID,
-    self_id: TypeParamId,
-    associated_types: IndexMap<
+    pub name: Name,
+    pub node_id: NodeID,
+    pub self_id: TypeParamId,
+    pub associated_types: IndexMap<
         Label,
         (
             AssociatedTypeId,
@@ -395,10 +395,10 @@ pub struct Protocol<Phase: ElaborationPhase> {
             IndexSet<Predicate<ElaborationTy>>,
         ),
     >,
-    method_requirements: IndexMap<Label, Phase::T>,
-    conformances: Vec<ConformanceStub>,
-    child_types: IndexMap<Label, Symbol>,
-    members: Members<Phase::T>,
+    pub method_requirements: IndexMap<Label, Phase::T>,
+    pub conformances: Vec<ConformanceStub>,
+    pub child_types: IndexMap<Label, Symbol>,
+    pub members: Members<Phase::T>,
 }
 
 impl Protocol<ElaboratedToElaborationTys> {

@@ -29,9 +29,9 @@ impl Member {
     pub fn solve(
         &self,
         session: &mut TypeSession,
-        level: Level,
+        _level: Level,
         next_wants: &mut Wants,
-        substitutions: &mut UnificationSubstitutions,
+        _substitutions: &mut UnificationSubstitutions,
     ) -> Result<bool, TypeError> {
         let receiver = self.receiver.clone();
         let ty = self.ty.clone();

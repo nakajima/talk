@@ -32,7 +32,7 @@ use crate::{
         infer_ty::{InferTy, Level},
         passes::elaboration_pass::{
             Binder, ElaboratedToSchemes, ElaboratedTypes, ElaborationRow, ElaborationTy, Nominal,
-            NominalKind, SCCGraph,
+            NominalKind, Protocol, SCCGraph,
         },
         predicate::Predicate,
         scheme::Scheme,
@@ -122,7 +122,9 @@ impl<'a> InferencePass<'a> {
                         member.solve(self.session, level, &mut next_wants, &mut substitutions)
                     }
                     Constraint::Construction(construction) => todo!(),
-                    Constraint::Conforms(conforms) => todo!(),
+                    Constraint::Conforms(ref conforms) => {
+                        conforms.solve(self.session, &mut next_wants, &mut substitutions)
+                    }
                     Constraint::AssociatedEquals(associated_equals) => todo!(),
                     Constraint::TypeMember(type_member) => todo!(),
                 };
@@ -315,7 +317,7 @@ impl<'a> InferencePass<'a> {
                 generics,
                 body,
                 conformances,
-            } => todo!(),
+            } => self.infer_protocol(name, generics, conformances, body, level, wants),
             DeclKind::Init { name, params, body } => todo!(),
             DeclKind::Property {
                 name,
@@ -333,13 +335,42 @@ impl<'a> InferencePass<'a> {
                 conformances,
                 generics,
                 body,
-            } => todo!(),
+            } => InferTy::Void,
             DeclKind::EnumVariant(name, span, type_annotations) => todo!(),
             DeclKind::FuncSignature(func_signature) => todo!(),
             DeclKind::MethodRequirement(func_signature) => todo!(),
             DeclKind::TypeAlias(type_annotation, type_annotation1) => todo!(),
             DeclKind::Import(_) => InferTy::Void,
         }
+    }
+
+    #[instrument(level = tracing::Level::TRACE, skip(self, wants))]
+    fn infer_protocol(
+        &mut self,
+        name: &Name,
+        generics: &[GenericDecl],
+        conformances: &[TypeAnnotation],
+        body: &Body,
+        level: Level,
+        wants: &mut Wants,
+    ) -> InferTy {
+        let Protocol {
+            name,
+            node_id,
+            self_id,
+            associated_types,
+            method_requirements,
+            conformances,
+            child_types,
+            members,
+        } = self
+            .elaborated_types
+            .protocols
+            .get(&name.symbol())
+            .cloned()
+            .unwrap();
+
+        InferTy::Void
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self, wants))]

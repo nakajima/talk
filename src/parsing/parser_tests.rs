@@ -1264,14 +1264,12 @@ pub mod tests {
                                 }
                             }
                         ]
-                    ))
-                    .into(),
+                    )),
                     any_decl!(DeclKind::EnumVariant(
                         Name::Raw("bar".into()),
                         Span::ANY,
                         vec![]
                     ))
-                    .into()
                 ])
             })
         );
@@ -1298,20 +1296,17 @@ pub mod tests {
                             Name::Raw("foo".into()),
                             Span::ANY,
                             vec![]
-                        ))
-                        .into(),
+                        )),
                         any_decl!(DeclKind::EnumVariant(
                             Name::Raw("bar".into()),
                             Span::ANY,
                             vec![]
-                        ))
-                        .into(),
+                        )),
                         any_decl!(DeclKind::EnumVariant(
                             Name::Raw("fizz".into()),
                             Span::ANY,
                             vec![]
-                        ))
-                        .into(),
+                        )),
                     ])
                 )
             })
@@ -1356,8 +1351,7 @@ pub mod tests {
                                 },
                             },
                         ]
-                    ))
-                    .into(),
+                    )),
                     any_decl!(DeclKind::EnumVariant(
                         Name::Raw("bar".into()),
                         Span::ANY,
@@ -1381,8 +1375,7 @@ pub mod tests {
                                 },
                             },
                         ]
-                    ))
-                    .into(),
+                    )),
                 ])
             })
         );
@@ -1607,14 +1600,12 @@ pub mod tests {
                                 generics: vec! {}
                             }
                         }]
-                    ))
-                    .into(),
+                    )),
                     any_decl!(DeclKind::EnumVariant(
                         Name::Raw("nope".into()),
                         Span::ANY,
                         vec![]
-                    ))
-                    .into(),
+                    )),
                     any_decl!(DeclKind::Method {
                         is_static: false,
                         func: Box::new(Func {
@@ -1630,7 +1621,6 @@ pub mod tests {
                             attributes: vec![],
                         })
                     })
-                    .into()
                 ])
             })
         )
@@ -1790,22 +1780,19 @@ pub mod tests {
                         }]
                     }
                 }],
-                body: any_body!(vec![
-                    any_decl!(DeclKind::Method {
-                        func: Box::new(Func {
-                            id: NodeID::ANY,
-                            name: "foo".into(),
-                            name_span: Span::ANY,
-                            generics: vec![],
-                            params: vec![],
-                            body: any_block!(vec![]),
-                            ret: None,
-                            attributes: vec![],
-                        }),
-                        is_static: false
-                    })
-                    .into()
-                ])
+                body: any_body!(vec![any_decl!(DeclKind::Method {
+                    func: Box::new(Func {
+                        id: NodeID::ANY,
+                        name: "foo".into(),
+                        name_span: Span::ANY,
+                        generics: vec![],
+                        params: vec![],
+                        body: any_block!(vec![]),
+                        ret: None,
+                        attributes: vec![],
+                    }),
+                    is_static: false
+                })])
             })
         );
     }
@@ -1860,8 +1847,7 @@ pub mod tests {
                             name_span: Span::ANY,
                             generics: vec![],
                         }))
-                    })
-                    .into(),
+                    }),
                     any_decl!(DeclKind::Property {
                         name: "count".into(),
                         name_span: Span::ANY,
@@ -1872,16 +1858,14 @@ pub mod tests {
                             name_span: Span::ANY,
                             generics: vec![],
                         }))
-                    })
-                    .into(),
+                    }),
                     any_decl!(DeclKind::Property {
                         name: "height".into(),
                         name_span: Span::ANY,
                         is_static: false,
                         default_value: Some(any_expr!(ExprKind::LiteralInt("456".into()))),
                         type_annotation: None
-                    })
-                    .into(),
+                    }),
                 ])
             })
         );
