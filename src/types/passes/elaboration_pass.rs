@@ -193,6 +193,14 @@ pub struct Members<T> {
 }
 
 impl<T> Members<T> {
+    fn extend(&mut self, other: Members<T>) {
+        self.initializers.extend(other.initializers);
+        self.variants.extend(other.variants);
+        self.properties.extend(other.properties);
+        self.methods.extend(other.methods);
+        self.static_methods.extend(other.static_methods);
+    }
+
     fn map<U>(self, mut map: impl FnMut(MemberKind, T) -> U) -> Members<U> {
         Members {
             initializers: self
@@ -250,6 +258,7 @@ impl ElaborationPhase for RegisteredNames {
 pub struct ElaboratedToElaborationTys {}
 impl ElaborationPhase for ElaboratedToElaborationTys {
     type T = (
+        Symbol,
         ElaborationTy,
         IndexSet<ForAll>,
         IndexSet<Predicate<ElaborationTy>>,
@@ -259,7 +268,7 @@ impl ElaborationPhase for ElaboratedToElaborationTys {
 #[derive(PartialEq, Clone, Debug)]
 pub struct ElaboratedToSchemes {}
 impl ElaborationPhase for ElaboratedToSchemes {
-    type T = EnvEntry<ElaborationTy>;
+    type T = (Symbol, EnvEntry<ElaborationTy>);
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -318,37 +327,20 @@ impl SCCGraph {
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct ElaboratedTypes<Phase: ElaborationPhase = RegisteredNames> {
     pub nominals: FxHashMap<Symbol, Nominal<Phase::T>>,
     pub protocols: FxHashMap<Symbol, Protocol<Phase>>,
     pub globals: FxHashMap<Symbol, Phase::T>,
-    canonical_row_vars: FxHashMap<Symbol, RowMetaId>,
+    pub canonical_row_vars: FxHashMap<Symbol, RowMetaId>,
     pub canonical_type_params: FxHashMap<Symbol, TypeParamId>,
-    type_param_conformances: IndexMap<TypeParamId, IndexSet<(ProtocolId, Span)>>,
+    pub type_param_conformances: IndexMap<TypeParamId, IndexSet<(ProtocolId, Span)>>,
     // We need to track references between binders in the same scope so
     // we can handle things like mutual recursion.
     pub scc_graph: SCCGraph,
 }
 
-impl ElaboratedTypes<ElaboratedToSchemes> {
-    pub fn collect_scc_graph(&self, session: &mut TypeSession, nodes: &[Decl]) -> SCCGraph {
-        let mut pass = ElaborationPass {
-            session,
-            canonical_row_vars: self.canonical_row_vars.clone(),
-            canonical_type_params: self.canonical_type_params.clone(),
-            type_param_conformances: self.type_param_conformances.clone(),
-        };
-
-        let types = ElaboratedTypes::<RegisteredNames>::default();
-        let types_registered =
-            pass.register_type_names(types, nodes.iter(), &mut Default::default());
-
-        let elaborated_infer_tys = pass.elaborate_to_infer_tys(types_registered, nodes.iter());
-        let elaborated_schemes = pass.elaborate_to_schemes(elaborated_infer_tys, nodes.iter());
-
-        elaborated_schemes.scc_graph
-    }
-}
+impl ElaboratedTypes<ElaboratedToSchemes> {}
 
 impl<T: ElaborationPhase> Default for ElaboratedTypes<T> {
     fn default() -> Self {
@@ -383,6 +375,7 @@ pub struct Nominal<T> {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+#[allow(clippy::type_complexity)]
 pub struct Protocol<Phase: ElaborationPhase> {
     pub name: Name,
     pub node_id: NodeID,
@@ -390,6 +383,7 @@ pub struct Protocol<Phase: ElaborationPhase> {
     pub associated_types: IndexMap<
         Label,
         (
+            Symbol,
             AssociatedTypeId,
             TypeParamId,
             IndexSet<Predicate<ElaborationTy>>,
@@ -409,7 +403,7 @@ impl Protocol<ElaboratedToElaborationTys> {
         foralls.extend(
             self.associated_types
                 .values()
-                .map(|(_, id, _)| ForAll::Ty(*id)),
+                .map(|(_, _, id, _)| ForAll::Ty(*id)),
         );
 
         foralls
@@ -424,7 +418,7 @@ impl Protocol<ElaboratedToSchemes> {
         foralls.extend(
             self.associated_types
                 .values()
-                .map(|(_, id, _)| ForAll::Ty(*id)),
+                .map(|(_, _, id, _)| ForAll::Ty(*id)),
         );
 
         foralls
@@ -437,10 +431,10 @@ impl Protocol<ElaboratedToSchemes> {
 // to traverse the AST as many times? But also since we're not entering bodies
 // maybe this is fine? I dunno we'll figure it out.
 pub struct ElaborationPass<'a> {
-    session: &'a mut TypeSession,
-    canonical_row_vars: FxHashMap<Symbol, RowMetaId>,
-    canonical_type_params: FxHashMap<Symbol, TypeParamId>,
-    type_param_conformances: IndexMap<TypeParamId, IndexSet<(ProtocolId, Span)>>,
+    pub session: &'a mut TypeSession,
+    pub canonical_row_vars: FxHashMap<Symbol, RowMetaId>,
+    pub canonical_type_params: FxHashMap<Symbol, TypeParamId>,
+    pub type_param_conformances: IndexMap<TypeParamId, IndexSet<(ProtocolId, Span)>>,
 }
 
 impl<'a> ElaborationPass<'a> {
@@ -488,7 +482,7 @@ impl<'a> ElaborationPass<'a> {
     }
 
     #[instrument(skip(self, types, nodes, child_types))]
-    fn register_type_names(
+    pub fn register_type_names(
         &mut self,
         mut types: ElaboratedTypes<RegisteredNames>,
         nodes: impl Iterator<Item = &'a Decl>,
@@ -565,6 +559,13 @@ impl<'a> ElaborationPass<'a> {
                     body,
                     ..
                 }
+                | DeclKind::Extend {
+                    name,
+                    conformances,
+                    generics,
+                    body,
+                    ..
+                }
                 | DeclKind::Enum {
                     name,
                     generics,
@@ -572,9 +573,9 @@ impl<'a> ElaborationPass<'a> {
                     body,
                     ..
                 } => {
-                    let kind = match kind {
-                        DeclKind::Struct { .. } => NominalKind::Struct,
-                        DeclKind::Enum { .. } => NominalKind::Enum,
+                    let kind = match name.symbol() {
+                        Symbol::Struct(..) => NominalKind::Struct,
+                        Symbol::Enum(..) => NominalKind::Enum,
                         _ => unreachable!(),
                     };
 
@@ -584,21 +585,30 @@ impl<'a> ElaborationPass<'a> {
                     }
 
                     // Create the initial nominal that we'll pass through to future phases.
-                    let mut nominal = Nominal {
-                        ty: (),
-                        members: Default::default(),
-                        name: name.clone(),
-                        node_id: node.id,
-                        span: node.span,
-                        kind,
-                        conformances: Self::collect_conformance_stubs(name.symbol(), conformances),
-                        child_types: Default::default(),
-                    };
+                    let mut nominal =
+                        types
+                            .nominals
+                            .get(&name.symbol())
+                            .cloned()
+                            .unwrap_or_else(|| {
+                                let id = self.session.new_row_meta_var_id(Level::default());
+                                self.canonical_row_vars.insert(name.symbol(), id);
+                                Nominal {
+                                    ty: (),
+                                    members: Default::default(),
+                                    name: name.clone(),
+                                    node_id: node.id,
+                                    span: node.span,
+                                    kind,
+                                    conformances: Default::default(),
+                                    child_types: Default::default(),
+                                }
+                            });
 
-                    // Create a canonical row var since we don't know the properties/variants for this
-                    // nominal yet
-                    let id = self.session.new_row_meta_var_id(Level::default());
-                    self.canonical_row_vars.insert(name.symbol(), id);
+                    let conformance_stubs =
+                        Self::collect_conformance_stubs(name.symbol(), conformances);
+
+                    nominal.conformances.extend(conformance_stubs);
 
                     // Add this type to parent's children
                     child_types.insert(name.name_str().into(), name.symbol());
@@ -655,7 +665,7 @@ impl<'a> ElaborationPass<'a> {
 
     // Now that we've got Nominals and Protocols known, we can start gathering their members
     #[instrument(skip(self, types, nodes))]
-    fn elaborate_to_infer_tys(
+    pub fn elaborate_to_infer_tys(
         &mut self,
         mut types: ElaboratedTypes<RegisteredNames>,
         nodes: impl Iterator<Item = &'a Decl>,
@@ -725,9 +735,10 @@ impl<'a> ElaborationPass<'a> {
                         _ => continue,
                     };
 
-                    new_types
-                        .globals
-                        .insert(name.symbol(), (ty, Default::default(), Default::default()));
+                    new_types.globals.insert(
+                        name.symbol(),
+                        (name.symbol(), ty, Default::default(), Default::default()),
+                    );
                 }
 
                 DeclKind::Struct {
@@ -737,6 +748,12 @@ impl<'a> ElaborationPass<'a> {
                     ..
                 }
                 | DeclKind::Enum {
+                    name,
+                    body,
+                    generics,
+                    ..
+                }
+                | DeclKind::Extend {
                     name,
                     body,
                     generics,
@@ -760,19 +777,18 @@ impl<'a> ElaborationPass<'a> {
                         }
                     }
 
-                    new_types.nominals.insert(
-                        symbol,
-                        Nominal {
-                            members,
-                            name: nominal.name,
-                            node_id: nominal.node_id,
-                            span: nominal.span,
-                            kind: nominal.kind,
-                            conformances: nominal.conformances,
-                            child_types: nominal.child_types,
-                            ty: (self.symbol_to_infer_ty(symbol), foralls, predicates),
-                        },
-                    );
+                    let nominal = new_types.nominals.entry(symbol).or_insert_with(|| Nominal {
+                        members: Default::default(),
+                        name: nominal.name,
+                        node_id: nominal.node_id,
+                        span: nominal.span,
+                        kind: nominal.kind,
+                        conformances: nominal.conformances,
+                        child_types: nominal.child_types,
+                        ty: (symbol, self.symbol_to_infer_ty(symbol), foralls, predicates),
+                    });
+
+                    nominal.members.extend(members);
                 }
                 DeclKind::Protocol { name, body, .. } => {
                     let protocol = types.protocols.get(&name.symbol()).cloned().unwrap();
@@ -800,7 +816,7 @@ impl<'a> ElaborationPass<'a> {
     }
 
     #[instrument(skip(self, types, nodes))]
-    fn elaborate_to_schemes(
+    pub fn elaborate_to_schemes(
         &mut self,
         mut types: ElaboratedTypes<ElaboratedToElaborationTys>,
         nodes: impl Iterator<Item = &'a Decl>,
@@ -814,7 +830,7 @@ impl<'a> ElaborationPass<'a> {
         };
 
         for (sym, global) in types.globals {
-            let (ty, foralls, predicates) = global;
+            let (_, ty, foralls, predicates) = global;
             let entry = if foralls.is_empty() && predicates.is_empty() {
                 EnvEntry::Mono(ty)
             } else {
@@ -825,14 +841,16 @@ impl<'a> ElaborationPass<'a> {
                 })
             };
 
-            new_types.globals.insert(sym, entry);
+            new_types.globals.insert(sym, (sym, entry));
         }
 
         for node in nodes {
             let Decl { kind, .. } = &node;
 
             match &kind {
-                DeclKind::Struct { name, generics, .. } | DeclKind::Enum { name, generics, .. } => {
+                DeclKind::Struct { name, generics, .. }
+                | DeclKind::Enum { name, generics, .. }
+                | DeclKind::Extend { name, generics, .. } => {
                     let nominal = types.nominals.get(&name.symbol()).cloned().unwrap();
                     let mut foralls = IndexSet::default();
                     let mut predicates = vec![];
@@ -865,19 +883,22 @@ impl<'a> ElaborationPass<'a> {
                         .members
                         .map(|kind, m| self.upgrade_members_to_entries(kind, m, &foralls));
 
-                    new_types.nominals.insert(
-                        name.symbol(),
-                        Nominal {
-                            ty,
-                            members,
-                            name: nominal.name,
-                            node_id: nominal.node_id,
-                            span: nominal.span,
-                            kind: nominal.kind,
-                            conformances: nominal.conformances,
-                            child_types: nominal.child_types,
-                        },
-                    );
+                    let nominal =
+                        new_types
+                            .nominals
+                            .entry(name.symbol())
+                            .or_insert_with(|| Nominal {
+                                ty: (name.symbol(), ty),
+                                members: Default::default(),
+                                name: nominal.name,
+                                node_id: nominal.node_id,
+                                span: nominal.span,
+                                kind: nominal.kind,
+                                conformances: nominal.conformances,
+                                child_types: nominal.child_types,
+                            });
+
+                    nominal.members.extend(members);
                 }
                 DeclKind::Protocol { name, .. } => {
                     let protocol = types.protocols.get(&name.symbol()).cloned().unwrap();
@@ -965,20 +986,21 @@ impl<'a> ElaborationPass<'a> {
         &mut self,
         kind: MemberKind,
         ty: (
+            Symbol,
             ElaborationTy,
             IndexSet<ForAll>,
             IndexSet<Predicate<ElaborationTy>>,
         ),
         type_foralls: &IndexSet<ForAll>,
-    ) -> EnvEntry<ElaborationTy> {
-        let (ty, mut foralls, predicates) = ty;
+    ) -> (Symbol, EnvEntry<ElaborationTy>) {
+        let (sym, ty, mut foralls, predicates) = ty;
         foralls.extend(ty.collect_foralls());
 
         if kind != MemberKind::Property && kind != MemberKind::Variant {
             foralls.extend(type_foralls);
         }
 
-        if foralls.is_empty() && predicates.is_empty() {
+        let entry = if foralls.is_empty() && predicates.is_empty() {
             EnvEntry::Mono(ty)
         } else {
             EnvEntry::Scheme(Scheme {
@@ -986,7 +1008,9 @@ impl<'a> ElaborationPass<'a> {
                 foralls,
                 predicates: predicates.into_iter().collect(),
             })
-        }
+        };
+
+        (sym, entry)
     }
 
     #[instrument(skip(self, types, nodes))]
@@ -999,6 +1023,7 @@ impl<'a> ElaborationPass<'a> {
         IndexMap<
             Label,
             (
+                Symbol,
                 AssociatedTypeId,
                 TypeParamId,
                 IndexSet<Predicate<ElaborationTy>>,
@@ -1007,6 +1032,7 @@ impl<'a> ElaborationPass<'a> {
         IndexMap<
             Label,
             (
+                Symbol,
                 ElaborationTy,
                 IndexSet<ForAll>,
                 IndexSet<Predicate<ElaborationTy>>,
@@ -1016,6 +1042,7 @@ impl<'a> ElaborationPass<'a> {
         let mut associated_types = IndexMap::<
             Label,
             (
+                Symbol,
                 AssociatedTypeId,
                 TypeParamId,
                 IndexSet<Predicate<ElaborationTy>>,
@@ -1024,6 +1051,7 @@ impl<'a> ElaborationPass<'a> {
         let mut method_requirements = IndexMap::<
             Label,
             (
+                Symbol,
                 ElaborationTy,
                 IndexSet<ForAll>,
                 IndexSet<Predicate<ElaborationTy>>,
@@ -1050,7 +1078,7 @@ impl<'a> ElaborationPass<'a> {
                         .collect();
                     associated_types.insert(
                         generic.name.name_str().into(),
-                        (associated_type_id, id, predicates),
+                        (generic.name.symbol(), associated_type_id, id, predicates),
                     );
                 }
                 DeclKind::MethodRequirement(req) | DeclKind::FuncSignature(req) => {
@@ -1091,8 +1119,10 @@ impl<'a> ElaborationPass<'a> {
                         ret,
                     );
 
-                    method_requirements
-                        .insert(req.name.name_str().into(), (ty, foralls, predicates));
+                    method_requirements.insert(
+                        req.name.name_str().into(),
+                        (req.name.symbol(), ty, foralls, predicates),
+                    );
                 }
                 _ => continue,
             }
@@ -1102,12 +1132,14 @@ impl<'a> ElaborationPass<'a> {
     }
 
     #[instrument(skip(self, types, nodes))]
+    #[allow(clippy::type_complexity)]
     fn collect_members<T: ElaborationPhase>(
         &mut self,
         self_symbol: Symbol,
         types: &mut ElaboratedTypes<T>,
         nodes: &[Decl],
     ) -> Members<(
+        Symbol,
         ElaborationTy,
         IndexSet<ForAll>,
         IndexSet<Predicate<ElaborationTy>>,
@@ -1153,6 +1185,7 @@ impl<'a> ElaborationPass<'a> {
                     members.initializers.insert(
                         Label::Named("init".into()),
                         (
+                            name.symbol(),
                             curry_stub(params, self_ty),
                             Default::default(),
                             Default::default(),
@@ -1230,7 +1263,7 @@ impl<'a> ElaborationPass<'a> {
 
                         members.properties.insert(
                             name.name_str().into(),
-                            (ty, Default::default(), Default::default()),
+                            (name.symbol(), ty, Default::default(), Default::default()),
                         );
                     }
                 }
@@ -1255,7 +1288,7 @@ impl<'a> ElaborationPass<'a> {
 
                     members.variants.insert(
                         name.name_str().into(),
-                        (ty, Default::default(), Default::default()),
+                        (name.symbol(), ty, Default::default(), Default::default()),
                     );
                 }
                 _ => (),
@@ -1291,6 +1324,7 @@ impl<'a> ElaborationPass<'a> {
         types: &ElaboratedTypes<T>,
         func: &Func,
     ) -> (
+        Symbol,
         ElaborationTy,
         IndexSet<ForAll>,
         IndexSet<Predicate<ElaborationTy>>,
@@ -1335,7 +1369,7 @@ impl<'a> ElaborationPass<'a> {
                 .unwrap_or_else(|| ElaborationTy::Hole(func.id)),
         );
 
-        (ty, foralls, predicates)
+        (func.name.symbol(), ty, foralls, predicates)
     }
 
     fn elaborate_literal(&self, literal: &Expr) -> ElaborationTy {
@@ -1626,14 +1660,17 @@ pub mod tests {
                 .globals
                 .get(&GlobalId::from(1).into())
                 .unwrap(),
-            EnvEntry::Mono(ElaborationTy::Int)
+            (Symbol::Global(1.into()), EnvEntry::Mono(ElaborationTy::Int))
         );
         assert_eq_diff!(
             *elaborate("let fizz = true; fizz")
                 .globals
                 .get(&GlobalId::from(1).into())
                 .unwrap(),
-            EnvEntry::Mono(ElaborationTy::Bool)
+            (
+                Symbol::Global(1.into()),
+                EnvEntry::Mono(ElaborationTy::Bool)
+            )
         );
     }
 
@@ -1644,10 +1681,13 @@ pub mod tests {
                 .globals
                 .get(&GlobalId::from(1).into())
                 .unwrap(),
-            EnvEntry::Mono(ElaborationTy::Func(
-                ElaborationTy::Void.into(),
-                ElaborationTy::Hole(NodeID::ANY).into()
-            ))
+            (
+                Symbol::Global(1.into()),
+                EnvEntry::Mono(ElaborationTy::Func(
+                    ElaborationTy::Void.into(),
+                    ElaborationTy::Hole(NodeID::ANY).into()
+                ))
+            )
         );
     }
 
@@ -1658,14 +1698,17 @@ pub mod tests {
                 .globals
                 .get(&GlobalId::from(1).into())
                 .unwrap(),
-            EnvEntry::Scheme(Scheme {
-                ty: ElaborationTy::Func(
-                    ElaborationTy::Param(1.into()).into(),
-                    ElaborationTy::Param(1.into()).into()
-                ),
-                foralls: indexset! {ForAll::Ty(1.into())},
-                predicates: Default::default()
-            })
+            (
+                Symbol::Global(1.into()),
+                EnvEntry::Scheme(Scheme {
+                    ty: ElaborationTy::Func(
+                        ElaborationTy::Param(1.into()).into(),
+                        ElaborationTy::Param(1.into()).into()
+                    ),
+                    foralls: indexset! {ForAll::Ty(1.into())},
+                    predicates: Default::default()
+                })
+            )
         );
     }
 
@@ -1680,7 +1723,7 @@ pub mod tests {
                 .nominals
                 .get(&StructId::from(1).into())
                 .unwrap(),
-            Nominal::<EnvEntry<ElaborationTy>> {
+            Nominal::<(Symbol, EnvEntry<ElaborationTy>)> {
                 name: Name::Resolved(StructId::from(1).into(), "A".into()),
                 node_id: NodeID::ANY,
                 span: Span::ANY,
@@ -1688,7 +1731,7 @@ pub mod tests {
                 members: Members {
                     initializers: indexmap::indexmap! {
                     Label::Named("init".into()) =>
-                        EnvEntry::Mono(curry(vec![struct_ty.clone()], struct_ty.clone()))
+                        (Symbol::Synthesized(1.into()), EnvEntry::Mono(curry(vec![struct_ty.clone()], struct_ty.clone())))
                     },
                     variants: Default::default(),
                     properties: Default::default(),
@@ -1697,7 +1740,7 @@ pub mod tests {
                 },
                 conformances: vec![],
                 child_types: Default::default(),
-                ty: EnvEntry::Mono(struct_ty.clone()),
+                ty: (Symbol::Struct(1.into()), EnvEntry::Mono(struct_ty.clone())),
             }
         );
     }
@@ -1719,31 +1762,34 @@ pub mod tests {
                 kind: NominalKind::Struct,
                 members: Members {
                     initializers: indexmap::indexmap! {
-                      Label::Named("init".into()) => EnvEntry::Scheme(
+                      Label::Named("init".into()) => (Symbol::Synthesized(1.into()), EnvEntry::Scheme(
                         Scheme {
                           foralls: indexset! { ForAll::Ty(1.into()) },
                           predicates: Default::default(),
                           ty: curry(vec![struct_ty.clone(), ElaborationTy::Param(1.into())], struct_ty.clone())
                         }
-                      )
+                      ))
                     },
                     variants: Default::default(),
                     properties: indexmap::indexmap! {
                       Label::Named("b".into()) =>
-                          EnvEntry::Mono(ElaborationTy::Param(1.into()))
+                          (Symbol::Property(1.into()), EnvEntry::Scheme(Scheme { foralls: indexset! { ForAll::Ty(1.into()) }, predicates: vec![], ty: ElaborationTy::Param(1.into()) }))
                     },
                     methods: Default::default(),
                     static_methods: Default::default(),
                 },
                 conformances: vec![],
                 child_types: Default::default(),
-                ty: EnvEntry::Scheme(Scheme {
-                    foralls: [ForAll::Ty(1.into())].into(),
-                    predicates: vec![],
-                    ty: ElaborationTy::Nominal {
-                        symbol: StructId::from(1).into(),
-                    }
-                }),
+                ty: (
+                    Symbol::Struct(1.into()),
+                    EnvEntry::Scheme(Scheme {
+                        foralls: [ForAll::Ty(1.into())].into(),
+                        predicates: vec![],
+                        ty: ElaborationTy::Nominal {
+                            symbol: StructId::from(1).into(),
+                        }
+                    })
+                ),
             }
         );
     }
@@ -1766,35 +1812,38 @@ pub mod tests {
                 members: Members {
                     initializers: indexmap::indexmap! {
                     Label::Named("init".into()) =>
-                      EnvEntry::Scheme(
+                      (Symbol::Synthesized(1.into()), EnvEntry::Scheme(
                         Scheme {
                           foralls: indexset! { ForAll::Ty(2.into()) },
                           predicates: Default::default(),
                           ty: curry(vec![struct_ty.clone(), ElaborationTy::Param(2.into())], struct_ty.clone())
                         }
-                      )
+                      ))
                     },
                     variants: Default::default(),
                     properties: indexmap::indexmap! {
                     Label::Named("b".into()) =>
-                        EnvEntry::Mono(ElaborationTy::Param(2.into()))
+                        (Symbol::Property(1.into()), EnvEntry::Scheme(Scheme { foralls: indexset! { ForAll::Ty(2.into()) }, predicates: vec![], ty: ElaborationTy::Param(2.into()) }))
                     },
                     methods: Default::default(),
                     static_methods: Default::default(),
                 },
                 conformances: vec![],
                 child_types: Default::default(),
-                ty: EnvEntry::Scheme(Scheme {
-                    foralls: [ForAll::Ty(2.into())].into(),
-                    predicates: vec![Predicate::Conforms {
-                        param: 2.into(),
-                        protocol_id: ProtocolId::from(1),
-                        span: Span::ANY
-                    }],
-                    ty: ElaborationTy::Nominal {
-                        symbol: StructId::from(1).into(),
-                    }
-                }),
+                ty: (
+                    Symbol::Struct(1.into()),
+                    EnvEntry::Scheme(Scheme {
+                        foralls: [ForAll::Ty(2.into())].into(),
+                        predicates: vec![Predicate::Conforms {
+                            param: 2.into(),
+                            protocol_id: ProtocolId::from(1),
+                            span: Span::ANY
+                        }],
+                        ty: ElaborationTy::Nominal {
+                            symbol: StructId::from(1).into(),
+                        }
+                    })
+                ),
             }
         );
     }
@@ -1817,7 +1866,7 @@ pub mod tests {
                 members: Members {
                     initializers: indexmap::indexmap! {
                     Label::Named("init".into()) =>
-                        EnvEntry::Mono(curry(vec![struct_ty.clone()], struct_ty.clone()))
+                        (Symbol::Synthesized(1.into()), EnvEntry::Mono(curry(vec![struct_ty.clone()], struct_ty.clone())))
                     },
                     variants: Default::default(),
                     properties: Default::default(),
@@ -1837,7 +1886,52 @@ pub mod tests {
                     }
                 ],
                 child_types: Default::default(),
-                ty: EnvEntry::Mono(struct_ty.clone()),
+                ty: (Symbol::Struct(1.into()), EnvEntry::Mono(struct_ty.clone())),
+            }
+        );
+    }
+
+    #[test]
+    fn registers_struct_extend_conformances() {
+        let struct_ty = ElaborationTy::Nominal {
+            symbol: StructId::from(1).into(),
+        };
+        assert_eq_diff!(
+            *elaborate(
+                "protocol A {} ; protocol B {} ; struct C {}; extend C: A {} ; extend C: B {}",
+            )
+            .nominals
+            .get(&StructId::from(1).into())
+            .unwrap(),
+            Nominal {
+                name: Name::Resolved(StructId::from(1).into(), "C".into()),
+                node_id: NodeID::ANY,
+                span: Span::ANY,
+                kind: NominalKind::Struct,
+                members: Members {
+                    initializers: indexmap::indexmap! {
+                    Label::Named("init".into()) =>
+                       (Symbol::Synthesized(1.into()),  EnvEntry::Mono(curry(vec![struct_ty.clone()], struct_ty.clone())))
+                    },
+                    variants: Default::default(),
+                    properties: Default::default(),
+                    methods: Default::default(),
+                    static_methods: Default::default(),
+                },
+                conformances: vec![
+                    ConformanceStub {
+                        protocol_id: ProtocolId::from(1),
+                        conforming_id: StructId::from(1).into(),
+                        span: Span::ANY,
+                    },
+                    ConformanceStub {
+                        protocol_id: ProtocolId::from(2),
+                        conforming_id: StructId::from(1).into(),
+                        span: Span::ANY,
+                    }
+                ],
+                child_types: Default::default(),
+                ty: (Symbol::Struct(1.into()), EnvEntry::Mono(struct_ty.clone())),
             }
         );
     }
@@ -1858,7 +1952,7 @@ pub mod tests {
             .nominals
             .get(&StructId::from(1).into())
             .unwrap(),
-            Nominal::<EnvEntry<_>> {
+            Nominal {
                 name: Name::Resolved(StructId::from(1).into(), "A".into()),
                 node_id: NodeID::ANY,
                 span: Span::ANY,
@@ -1866,7 +1960,7 @@ pub mod tests {
                 members: Members {
                     initializers: indexmap::indexmap! {
                     Label::Named("init".into()) =>
-                        EnvEntry::Mono(curry(vec![struct_ty.clone()], struct_ty.clone()))
+                       (Symbol::Synthesized(2.into()),  EnvEntry::Mono(curry(vec![struct_ty.clone()], struct_ty.clone())))
                     },
                     variants: Default::default(),
                     properties: Default::default(),
@@ -1879,7 +1973,7 @@ pub mod tests {
                     "C".into() => EnumId::from(3).into(),
                     "D".into() => ProtocolId::from(1).into(),
                 ],
-                ty: EnvEntry::Mono(struct_ty.clone()),
+                ty: (Symbol::Struct(1.into()), EnvEntry::Mono(struct_ty.clone())),
             }
         );
     }
@@ -1891,7 +1985,7 @@ pub mod tests {
                 .nominals
                 .get(&EnumId::from(1).into())
                 .unwrap(),
-            Nominal::<EnvEntry<_>> {
+            Nominal {
                 name: Name::Resolved(EnumId::from(1).into(), "A".into()),
                 node_id: NodeID(FileID(0), 2),
                 span: Span::ANY,
@@ -1905,9 +1999,12 @@ pub mod tests {
                 },
                 conformances: vec![],
                 child_types: Default::default(),
-                ty: EnvEntry::Mono(ElaborationTy::Nominal {
-                    symbol: EnumId::from(1).into(),
-                }),
+                ty: (
+                    Symbol::Enum(1.into()),
+                    EnvEntry::Mono(ElaborationTy::Nominal {
+                        symbol: EnumId::from(1).into(),
+                    })
+                ),
             }
         );
     }
@@ -1924,7 +2021,7 @@ pub mod tests {
                 node_id: NodeID::ANY,
                 conformances: vec![],
                 child_types: Default::default(),
-                method_requirements: indexmap!("fizz".into() => EnvEntry::Scheme(
+                method_requirements: indexmap!("fizz".into() => (Symbol::MethodRequirement(1.into()), EnvEntry::Scheme(
                   Scheme {
                     foralls: indexset! { ForAll::Ty(1.into()) },
                     predicates: Default::default(),
@@ -1933,7 +2030,7 @@ pub mod tests {
                       ElaborationTy::Int.into(),
                     )
                   }
-                )),
+                ))),
                 members: Default::default(),
                 self_id: 1.into(),
                 associated_types: Default::default(),
@@ -1969,7 +2066,7 @@ pub mod tests {
                 },
                 method_requirements: indexmap::indexmap! {
                   Label::Named("fizz".into()) =>
-                      EnvEntry::Scheme(Scheme {
+                      (Symbol::MethodRequirement(1.into()), EnvEntry::Scheme(Scheme {
                           ty:ElaborationTy::Func(
                               Box::new(ElaborationTy::Param(3.into())), // Self
                               Box::new(
@@ -1987,11 +2084,11 @@ pub mod tests {
                                   span: Span::ANY
                               }
                           ].into()
-                      })
+                      }))
                 },
                 associated_types: indexmap::indexmap! {
-                    "C".into() => (2.into(), 4.into(), indexset!{}),
-                    "D".into() => (3.into(), 5.into(), indexset!{
+                    "C".into() => (Symbol::AssociatedType(2.into()), 2.into(), 4.into(), indexset!{}),
+                    "D".into() => (Symbol::AssociatedType(3.into()), 3.into(), 5.into(), indexset!{
                         Predicate::Conforms {
                             param: 5.into(),
                             protocol_id: ProtocolId::from(1),
@@ -2035,7 +2132,7 @@ pub mod tests {
             .nominals
             .get(&StructId::from(1).into())
             .unwrap(),
-            Nominal::<EnvEntry<_>> {
+            Nominal {
                 name: Name::Resolved(StructId::from(1).into(), "A".into()),
                 node_id: NodeID::ANY,
                 span: Span::ANY,
@@ -2045,39 +2142,39 @@ pub mod tests {
                 members: Members {
                     initializers: indexmap::indexmap! {
                       Label::Named("init".into()) =>
-                        EnvEntry::Mono(
+                        (Symbol::Synthesized(1.into()), EnvEntry::Mono(
                             curry(vec![struct_ty.clone(), ElaborationTy::Int], struct_ty.clone())
-                        )
+                        ))
                     },
                     variants: Default::default(),
                     properties: indexmap::indexmap! {
                       Label::Named("prop".into()) =>
-                        EnvEntry::Mono(
+                        (Symbol::Property(1.into()), EnvEntry::Mono(
                             ElaborationTy::Int
-                        )
+                        ))
                     },
                     methods: indexmap::indexmap! {
                       Label::Named("getProp".into()) =>
-                          EnvEntry::Mono(
+                          (Symbol::InstanceMethod(1.into()), EnvEntry::Mono(
                               curry(vec![struct_ty.clone()], ElaborationTy::Hole(NodeID::ANY))
-                          ),
+                          )),
                       Label::Named("getGeneric".into()) =>
-                          EnvEntry::Scheme(
+                          (Symbol::InstanceMethod(2.into()), EnvEntry::Scheme(
                             Scheme {
                                 ty: curry(vec![struct_ty.clone(), ElaborationTy::Param(2.into())], ElaborationTy::Hole(NodeID::ANY)),
                                 foralls: indexset! { ForAll::Ty(2.into()) },
                                 predicates: vec![Predicate::Conforms { param: 2.into(), protocol_id: 1.into(), span: Span::ANY }]
                             }
-                          )
+                          ))
                     },
                     static_methods: indexmap::indexmap! {
                       Label::Named("getPropStatic".into()) =>
-                        EnvEntry::Mono(
+                        (Symbol::StaticMethod(1.into()), EnvEntry::Mono(
                           ElaborationTy::Func(ElaborationTy::Void.into(), ElaborationTy::Int.into())
-                        )
+                        ))
                     },
                 },
-                ty: EnvEntry::Mono(struct_ty.clone()),
+                ty: (Symbol::Struct(1.into()), EnvEntry::Mono(struct_ty.clone())),
             }
         );
     }

@@ -1901,8 +1901,7 @@ pub mod tests {
                             name_span: Span::ANY,
                             generics: vec![],
                         }))
-                    })
-                    .into(),
+                    }),
                     any_decl!(DeclKind::Property {
                         name: "count".into(),
                         name_span: Span::ANY,
@@ -1913,16 +1912,14 @@ pub mod tests {
                             name_span: Span::ANY,
                             generics: vec![],
                         }))
-                    })
-                    .into(),
+                    }),
                     any_decl!(DeclKind::Property {
                         name: "height".into(),
                         name_span: Span::ANY,
                         is_static: true,
                         default_value: Some(any_expr!(ExprKind::LiteralInt("456".into()))),
                         type_annotation: None
-                    })
-                    .into(),
+                    }),
                 ])
             })
         );
@@ -1947,25 +1944,20 @@ pub mod tests {
                 name_span: Span::ANY,
                 generics: vec![],
                 conformances: vec![],
-                body: any_body!(vec![
-                    any_decl!(DeclKind::Method {
-                        is_static: true,
-                        func: Func {
-                            id: NodeID::ANY,
-                            name: "getAge".into(),
-                            name_span: Span::ANY,
-                            generics: vec![],
-                            params: vec![],
-                            body: any_block!(vec![any_expr_stmt!(ExprKind::LiteralInt(
-                                "123".into()
-                            ))]),
-                            ret: None,
-                            attributes: vec![]
-                        }
-                        .into()
-                    })
+                body: any_body!(vec![any_decl!(DeclKind::Method {
+                    is_static: true,
+                    func: Func {
+                        id: NodeID::ANY,
+                        name: "getAge".into(),
+                        name_span: Span::ANY,
+                        generics: vec![],
+                        params: vec![],
+                        body: any_block!(vec![any_expr_stmt!(ExprKind::LiteralInt("123".into()))]),
+                        ret: None,
+                        attributes: vec![]
+                    }
                     .into()
-                ])
+                })])
             })
         );
     }
@@ -1989,25 +1981,20 @@ pub mod tests {
                 name_span: Span::ANY,
                 generics: vec![],
                 conformances: vec![],
-                body: any_body!(vec![
-                    any_decl!(DeclKind::Method {
-                        is_static: false,
-                        func: Func {
-                            id: NodeID::ANY,
-                            name: "getAge".into(),
-                            name_span: Span::ANY,
-                            generics: vec![],
-                            params: vec![],
-                            body: any_block!(vec![any_expr_stmt!(ExprKind::LiteralInt(
-                                "123".into()
-                            ))]),
-                            ret: None,
-                            attributes: vec![]
-                        }
-                        .into()
-                    })
+                body: any_body!(vec![any_decl!(DeclKind::Method {
+                    is_static: false,
+                    func: Func {
+                        id: NodeID::ANY,
+                        name: "getAge".into(),
+                        name_span: Span::ANY,
+                        generics: vec![],
+                        params: vec![],
+                        body: any_block!(vec![any_expr_stmt!(ExprKind::LiteralInt("123".into()))]),
+                        ret: None,
+                        attributes: vec![]
+                    }
                     .into()
-                ])
+                })])
             })
         );
     }
@@ -2031,34 +2018,31 @@ pub mod tests {
                 name_span: Span::ANY,
                 generics: vec![],
                 conformances: vec![],
-                body: any_body!(vec![
-                    any_decl!(DeclKind::Init {
-                        name: Name::Raw("init".into()),
-                        params: vec![Parameter {
-                            id: NodeID::ANY,
-                            span: Span::ANY,
-                            name: Name::Raw("age".into()),
+                body: any_body!(vec![any_decl!(DeclKind::Init {
+                    name: Name::Raw("init".into()),
+                    params: vec![Parameter {
+                        id: NodeID::ANY,
+                        span: Span::ANY,
+                        name: Name::Raw("age".into()),
+                        name_span: Span::ANY,
+                        type_annotation: Some(annotation!(TypeAnnotationKind::Nominal {
+                            name: "Int".into(),
                             name_span: Span::ANY,
-                            type_annotation: Some(annotation!(TypeAnnotationKind::Nominal {
-                                name: "Int".into(),
-                                name_span: Span::ANY,
-                                generics: vec![]
-                            }))
-                        }],
-                        body: any_block!(vec![
-                            any_stmt!(StmtKind::Assignment(
-                                any_expr!(ExprKind::Member(
-                                    Some(any_expr!(ExprKind::Variable("self".into())).into()),
-                                    "age".into(),
-                                    Span::ANY,
-                                )),
-                                any_expr!(ExprKind::Variable("age".into()))
-                            ))
-                            .into()
-                        ]),
-                    })
-                    .into()
-                ])
+                            generics: vec![]
+                        }))
+                    }],
+                    body: any_block!(vec![
+                        any_stmt!(StmtKind::Assignment(
+                            any_expr!(ExprKind::Member(
+                                Some(any_expr!(ExprKind::Variable("self".into())).into()),
+                                "age".into(),
+                                Span::ANY,
+                            )),
+                            any_expr!(ExprKind::Variable("age".into()))
+                        ))
+                        .into()
+                    ]),
+                })])
             })
         );
     }
@@ -2100,8 +2084,8 @@ pub mod tests {
                 name_span: Span::ANY,
                 generics: vec![],
                 conformances: vec![],
-                body: any_body!(vec![
-                    any_decl!(DeclKind::MethodRequirement(FuncSignature {
+                body: any_body!(vec![any_decl!(DeclKind::MethodRequirement(
+                    FuncSignature {
                         id: NodeID::ANY,
                         span: Span::ANY,
                         name: "me".into(),
@@ -2115,9 +2099,8 @@ pub mod tests {
                             })
                             .into()
                         )
-                    }))
-                    .into()
-                ])
+                    }
+                ))])
             })
         );
     }
@@ -2207,19 +2190,16 @@ pub mod tests {
                 name_span: Span::ANY,
                 generics: vec![],
                 conformances: vec![],
-                body: any_body!(vec![
-                    any_decl!(DeclKind::Associated {
-                        generic: GenericDecl {
-                            id: NodeID::ANY,
-                            name: "T".into(),
-                            name_span: Span::ANY,
-                            generics: vec![],
-                            conformances: vec![],
-                            span: Span::ANY
-                        }
-                    })
-                    .into()
-                ])
+                body: any_body!(vec![any_decl!(DeclKind::Associated {
+                    generic: GenericDecl {
+                        id: NodeID::ANY,
+                        name: "T".into(),
+                        name_span: Span::ANY,
+                        generics: vec![],
+                        conformances: vec![],
+                        span: Span::ANY
+                    }
+                })])
             })
         );
     }

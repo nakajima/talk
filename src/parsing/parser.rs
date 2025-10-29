@@ -1474,7 +1474,7 @@ impl<'a> Parser<'a> {
                     body.push(self.variant_decl(true)?);
 
                     while self.did_match(TokenKind::Comma)? {
-                        body.push(self.variant_decl(false)?.into());
+                        body.push(self.variant_decl(false)?);
                     }
 
                     continue;

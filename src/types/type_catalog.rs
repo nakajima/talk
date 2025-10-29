@@ -11,7 +11,6 @@ use crate::{
     node_id::NodeID,
     span::Span,
     types::{
-        fields::Associated,
         infer_row::RowParamId,
         infer_ty::{InferTy, TypeParamId},
         ty::{SomeType, Ty},
@@ -102,7 +101,7 @@ impl Extension {
 pub struct Protocol {
     pub node_id: NodeID,
     pub static_methods: FxHashMap<Label, Symbol>,
-    pub associated_types: IndexMap<Name, Associated>,
+    pub associated_types: IndexMap<Name, Symbol>,
     pub requirements: FxHashMap<Label, ConformanceRequirement>,
 }
 
@@ -174,6 +173,7 @@ pub struct TypeCatalog<T: SomeType> {
     pub instance_methods: FxHashMap<Symbol, FxHashMap<Label, Symbol>>,
     pub static_methods: FxHashMap<Symbol, FxHashMap<Label, Symbol>>,
     pub variants: FxHashMap<Symbol, IndexMap<Label, Symbol>>,
+    pub method_requirements: FxHashMap<Symbol, IndexMap<Label, Symbol>>,
 
     pub instantiations: TrackedInstantiations<T>,
 }
@@ -192,6 +192,7 @@ impl<T: SomeType> Default for TypeCatalog<T> {
             instance_methods: Default::default(),
             static_methods: Default::default(),
             variants: Default::default(),
+            method_requirements: Default::default(),
 
             instantiations: Default::default(),
         }
@@ -224,6 +225,7 @@ impl TypeCatalog<InferTy> {
             instance_methods: self.instance_methods,
             static_methods: self.static_methods,
             variants: self.variants,
+            method_requirements: self.method_requirements,
             instantiations,
         }
     }
@@ -231,26 +233,32 @@ impl TypeCatalog<InferTy> {
 
 impl<T: SomeType> TypeCatalog<T> {
     pub fn lookup_member(&self, receiver: &Symbol, label: &Label) -> Option<Symbol> {
-        if let Some(methods) = self.properties.get(receiver)
-            && let Some(sym) = methods.get(label)
+        if let Some(entries) = self.properties.get(receiver)
+            && let Some(sym) = entries.get(label)
         {
             return Some(*sym);
         }
 
-        if let Some(methods) = self.instance_methods.get(receiver)
-            && let Some(sym) = methods.get(label)
+        if let Some(entries) = self.instance_methods.get(receiver)
+            && let Some(sym) = entries.get(label)
         {
             return Some(*sym);
         }
 
-        if let Some(methods) = self.static_methods.get(receiver)
-            && let Some(sym) = methods.get(label)
+        if let Some(entries) = self.static_methods.get(receiver)
+            && let Some(sym) = entries.get(label)
         {
             return Some(*sym);
         }
 
-        if let Some(methods) = self.variants.get(receiver)
-            && let Some(sym) = methods.get(label)
+        if let Some(entries) = self.variants.get(receiver)
+            && let Some(sym) = entries.get(label)
+        {
+            return Some(*sym);
+        }
+
+        if let Some(entries) = self.method_requirements.get(receiver)
+            && let Some(sym) = entries.get(label)
         {
             return Some(*sym);
         }

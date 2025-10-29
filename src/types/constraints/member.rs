@@ -1,3 +1,5 @@
+use tracing::instrument;
+
 use crate::{
     label::Label,
     name_resolution::symbol::Symbol,
@@ -6,10 +8,10 @@ use crate::{
     types::{
         constraints::constraint::{Constraint, ConstraintCause},
         infer_row::InferRow,
-        infer_ty::{InferTy, Level},
+        infer_ty::{InferTy, Level, TypeParamId},
         passes::inference_pass::uncurry_function,
         type_error::TypeError,
-        type_operations::{UnificationSubstitutions, curry},
+        type_operations::{UnificationSubstitutions, curry, unify},
         type_session::TypeSession,
         wants::Wants,
     },
@@ -29,9 +31,9 @@ impl Member {
     pub fn solve(
         &self,
         session: &mut TypeSession,
-        _level: Level,
+        level: Level,
         next_wants: &mut Wants,
-        _substitutions: &mut UnificationSubstitutions,
+        substitutions: &mut UnificationSubstitutions,
     ) -> Result<bool, TypeError> {
         let receiver = self.receiver.clone();
         let ty = self.ty.clone();
@@ -41,62 +43,141 @@ impl Member {
             self.label
         );
 
-        if matches!(
-            receiver,
-            InferTy::Var { .. } | InferTy::Rigid(_) | InferTy::Param(_)
-        ) {
-            // If we don't know what the receiver is yet, we can't do much
-            tracing::debug!("deferring member constraint");
-            next_wants.push(Constraint::Member(self.clone()));
-            return Ok(false);
-        }
-
-        if let InferTy::Record(box row) = &receiver {
-            next_wants._has_field(row.clone(), self.label.clone(), ty, self.cause, self.span);
-            return Ok(true);
-        }
-
-        if let InferTy::Nominal { symbol, box row } = &receiver {
-            let Some(member_sym) = session.lookup_member(symbol, &self.label) else {
-                return Err(TypeError::MemberNotFound(receiver, self.label.to_string()));
-            };
-
-            match member_sym {
-                Symbol::InstanceMethod(..) => {
-                    let method = session.lookup(&member_sym).unwrap().instantiate(
-                        self.node_id,
-                        session,
-                        Level::default(),
-                        next_wants,
-                        self.span,
-                    );
-
-                    let (method_receiver, method_fn) = consume_self(&method);
-                    next_wants.equals(method_receiver, receiver, self.cause, self.span);
-                    next_wants.equals(method_fn, self.ty.clone(), self.cause, self.span);
-                    return Ok(true);
-                }
-                Symbol::Variant(..) => {
-                    println!("instantiating variant. ty: {receiver:?}");
-                    let variant = self.lookup_variant(row).unwrap();
-                    let constructor_ty = match variant {
-                        InferTy::Void => receiver,
-                        InferTy::Tuple(values) => curry(values, receiver),
-                        other => curry(vec![other], receiver),
-                    };
-
-                    next_wants.equals(constructor_ty, ty, self.cause, self.span);
-                    return Ok(true);
-                }
-                _ => (),
+        match &receiver {
+            InferTy::Var { .. } => {
+                tracing::debug!("deferring member constraint");
+                next_wants.push(Constraint::Member(self.clone()));
+                return Ok(false);
             }
+            InferTy::Rigid(id) => {
+                let Some(InferTy::Param(type_param_id)) =
+                    session.skolem_map.get(&InferTy::Rigid(*id))
+                else {
+                    unreachable!();
+                };
 
-            // If all else fails, see if it's a property
-            next_wants._has_field(row.clone(), self.label.clone(), ty, self.cause, self.span);
-            return Ok(true);
+                return self.lookup_type_param_member(
+                    &ty,
+                    *type_param_id,
+                    session,
+                    level,
+                    next_wants,
+                    substitutions,
+                );
+            }
+            InferTy::Param(id) => {
+                return self.lookup_type_param_member(
+                    &ty,
+                    *id,
+                    session,
+                    level,
+                    next_wants,
+                    substitutions,
+                );
+            }
+            InferTy::Record(box row) => {
+                next_wants._has_field(row.clone(), self.label.clone(), ty, self.cause, self.span);
+                return Ok(true);
+            }
+            InferTy::Nominal { symbol, box row } => {
+                return self.lookup_nominal_member(
+                    symbol,
+                    row,
+                    session,
+                    ty.clone(),
+                    receiver.clone(),
+                    next_wants,
+                );
+            }
+            _ => {}
         }
 
         Ok(false)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[instrument(skip(self, session, substitutions, wants))]
+    fn lookup_type_param_member(
+        &self,
+        ty: &InferTy,
+        type_param_id: TypeParamId,
+        session: &mut TypeSession,
+        level: Level,
+        wants: &mut Wants,
+        substitutions: &mut UnificationSubstitutions,
+    ) -> Result<bool, TypeError> {
+        let conformances = session
+            .type_param_conformances
+            .get(&type_param_id)
+            .cloned()
+            .unwrap_or_default();
+        println!("hi conformances {conformances:?}");
+        for conformance in conformances {
+            println!(
+                "cat: {:?}",
+                session
+                    .type_catalog
+                    .method_requirements
+                    .get(&conformance.0.into())
+            );
+            if let Some(req) = session.lookup_member(&conformance.0.into(), &self.label) {
+                println!("found a member lol: {req:?}");
+                let entry = session.lookup(&req).unwrap();
+                let req_ty = entry.instantiate(self.node_id, session, level, wants, self.span);
+                return unify(ty, &req_ty, substitutions, session);
+            }
+        }
+
+        panic!("didn't find a conformance to find a member in");
+    }
+
+    #[instrument(skip(self, session, next_wants))]
+    fn lookup_nominal_member(
+        &self,
+        symbol: &Symbol,
+        row: &InferRow,
+        session: &mut TypeSession,
+        ty: InferTy,
+        receiver: InferTy,
+        next_wants: &mut Wants,
+    ) -> Result<bool, TypeError> {
+        let Some(member_sym) = session.lookup_member(symbol, &self.label) else {
+            return Err(TypeError::MemberNotFound(receiver, self.label.to_string()));
+        };
+
+        match member_sym {
+            Symbol::InstanceMethod(..) => {
+                let method = session.lookup(&member_sym).unwrap().instantiate(
+                    self.node_id,
+                    session,
+                    Level::default(),
+                    next_wants,
+                    self.span,
+                );
+
+                let (method_receiver, method_fn) = consume_self(&method);
+                next_wants.equals(method_receiver, receiver, self.cause, self.span);
+                next_wants.equals(method_fn, self.ty.clone(), self.cause, self.span);
+                return Ok(true);
+            }
+            Symbol::Variant(..) => {
+                println!("instantiating variant. ty: {receiver:?}");
+                let variant = self.lookup_variant(row).unwrap();
+                let constructor_ty = match variant {
+                    InferTy::Void => receiver,
+                    InferTy::Tuple(values) => curry(values, receiver),
+                    other => curry(vec![other], receiver),
+                };
+
+                next_wants.equals(constructor_ty, ty, self.cause, self.span);
+                return Ok(true);
+            }
+            _ => (),
+        }
+
+        // If all else fails, see if it's a property
+        next_wants._has_field(row.clone(), self.label.clone(), ty, self.cause, self.span);
+        Ok(true)
     }
 
     fn lookup_variant(&self, row: &InferRow) -> Option<InferTy> {

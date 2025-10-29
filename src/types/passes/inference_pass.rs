@@ -1,4 +1,6 @@
+use indexmap::{IndexMap, IndexSet};
 use itertools::Itertools;
+use rustc_hash::FxHashMap;
 use tracing::instrument;
 
 use crate::{
@@ -6,7 +8,10 @@ use crate::{
     diagnostic::{AnyDiagnostic, Diagnostic},
     label::Label,
     name::Name,
-    name_resolution::{name_resolver::NameResolved, symbol::Symbol},
+    name_resolution::{
+        name_resolver::NameResolved,
+        symbol::{ProtocolId, Symbol},
+    },
     node::Node,
     node_id::{FileID, NodeID},
     node_kinds::{
@@ -28,11 +33,11 @@ use crate::{
     types::{
         builtins::resolve_builtin_type,
         constraints::constraint::{Constraint, ConstraintCause},
-        infer_row::InferRow,
-        infer_ty::{InferTy, Level},
+        infer_row::{InferRow, RowMetaId},
+        infer_ty::{InferTy, Level, TypeParamId},
         passes::elaboration_pass::{
-            Binder, ElaboratedToSchemes, ElaboratedTypes, ElaborationRow, ElaborationTy, Nominal,
-            NominalKind, Protocol, SCCGraph,
+            Binder, ElaboratedToSchemes, ElaboratedTypes, ElaborationPass, ElaborationRow,
+            ElaborationTy, Members, NominalKind, RegisteredNames, SCCGraph,
         },
         predicate::Predicate,
         scheme::Scheme,
@@ -46,9 +51,11 @@ use crate::{
 pub struct InferencePass<'a> {
     session: &'a mut TypeSession,
     asts: &'a mut [AST<NameResolved>],
-    elaborated_types: ElaboratedTypes<ElaboratedToSchemes>,
     unsolved_constraints: Vec<Constraint>,
     substitutions: UnificationSubstitutions,
+    canonical_type_params: FxHashMap<Symbol, TypeParamId>,
+    canonical_row_vars: FxHashMap<Symbol, RowMetaId>,
+    type_param_conformances: IndexMap<TypeParamId, IndexSet<(ProtocolId, Span)>>,
 }
 
 #[allow(unused_variables)]
@@ -62,16 +69,139 @@ impl<'a> InferencePass<'a> {
         let mut pass = InferencePass {
             asts,
             session,
-            elaborated_types,
             unsolved_constraints: Default::default(),
             substitutions,
+            canonical_type_params: elaborated_types.canonical_type_params.clone(),
+            canonical_row_vars: elaborated_types.canonical_row_vars.clone(),
+            type_param_conformances: elaborated_types.type_param_conformances.clone(),
         };
 
+        let graph = elaborated_types.scc_graph.clone();
+
+        // Import elaborated types into the session, materializing as needed
+        pass.import_elaborated_types(elaborated_types);
+
         let level = Level::default();
-        let graph = pass.elaborated_types.scc_graph.clone();
         pass.infer_scc_graph(level.next(), &graph);
         pass.final_pass(level);
         pass.apply_substitutions();
+    }
+
+    fn import_elaborated_types(&mut self, elaborated_types: ElaboratedTypes<ElaboratedToSchemes>) {
+        self.session.type_param_conformances = elaborated_types.type_param_conformances.clone();
+
+        let mut wants = Wants::default();
+        let level = Level::default();
+
+        for (sym, param) in elaborated_types.canonical_type_params.iter() {
+            self.session.insert_mono(*sym, InferTy::Param(*param));
+        }
+
+        for (symbol, nominal) in elaborated_types.nominals.iter() {
+            self.import_elaborated_members(
+                &elaborated_types,
+                nominal.name.symbol(),
+                &nominal.members,
+                level,
+                &mut wants,
+            );
+
+            let entry =
+                self.materialize_entry(&elaborated_types, nominal.ty.1.clone(), level, &mut wants);
+            self.session.insert_term(*symbol, entry);
+        }
+
+        for (symbol, protocol) in elaborated_types.protocols.iter() {
+            self.import_elaborated_members(
+                &elaborated_types,
+                protocol.name.symbol(),
+                &protocol.members,
+                level,
+                &mut wants,
+            );
+            for (label, (sym, method_requirement)) in protocol.method_requirements.iter() {
+                let entry = self.materialize_entry(
+                    &elaborated_types,
+                    method_requirement.clone(),
+                    level,
+                    &mut wants,
+                );
+                println!("importing method req: {entry:?}");
+                self.session.insert_term(*sym, entry);
+                self.session
+                    .type_catalog
+                    .method_requirements
+                    .entry(protocol.name.symbol())
+                    .or_default()
+                    .insert(label.clone(), *sym);
+            }
+        }
+    }
+
+    fn import_elaborated_members(
+        &mut self,
+        types: &ElaboratedTypes<ElaboratedToSchemes>,
+        type_symbol: Symbol,
+        members: &Members<(Symbol, EnvEntry<ElaborationTy>)>,
+        level: Level,
+        wants: &mut Wants,
+    ) {
+        let level = level.next();
+
+        for (label, (sym, method)) in members.initializers.iter() {
+            let entry = self.materialize_entry(types, method.clone(), level, wants);
+            self.session.insert_term(*sym, entry);
+            self.session
+                .type_catalog
+                .initializers
+                .entry(type_symbol)
+                .or_default()
+                .insert(label.clone(), *sym);
+        }
+
+        for (label, (sym, entry)) in members.methods.iter() {
+            let entry = self.materialize_entry(types, entry.clone(), level, wants);
+            self.session.insert_term(*sym, entry);
+            self.session
+                .type_catalog
+                .instance_methods
+                .entry(type_symbol)
+                .or_default()
+                .insert(label.clone(), *sym);
+        }
+
+        for (label, (sym, entry)) in members.static_methods.iter() {
+            let entry = self.materialize_entry(types, entry.clone(), level, wants);
+            self.session.insert_term(*sym, entry);
+            self.session
+                .type_catalog
+                .static_methods
+                .entry(type_symbol)
+                .or_default()
+                .insert(label.clone(), *sym);
+        }
+
+        for (label, (sym, entry)) in members.properties.iter() {
+            let entry = self.materialize_entry(types, entry.clone(), level, wants);
+            self.session.insert_term(*sym, entry);
+            self.session
+                .type_catalog
+                .properties
+                .entry(type_symbol)
+                .or_default()
+                .insert(label.clone(), *sym);
+        }
+
+        for (label, (sym, entry)) in members.variants.iter() {
+            let entry = self.materialize_entry(types, entry.clone(), level, wants);
+            self.session.insert_term(*sym, entry);
+            self.session
+                .type_catalog
+                .variants
+                .entry(type_symbol)
+                .or_default()
+                .insert(label.clone(), *sym);
+        }
     }
 
     fn final_pass(&mut self, level: Level) {
@@ -103,7 +233,7 @@ impl<'a> InferencePass<'a> {
             .extend(std::mem::take(&mut self.unsolved_constraints));
 
         // TODO: Move to a more sophisticated system than just a limit on solve attempts.
-        let mut remaining_attempts = 6;
+        let mut remaining_attempts = 5;
         while remaining_attempts >= 0 {
             let mut next_wants = Wants::default();
             while let Some(want) = wants.pop() {
@@ -218,16 +348,11 @@ impl<'a> InferencePass<'a> {
                     let scheme = self.session.generalize(level, applied, &predicates);
                     self.session.promote(*sym, scheme);
                 }
-                Some(entry) => {
-                    let (ty, _, _) = entry.into();
-                    let applied = apply(ty, &mut substitutions);
-                    let scheme = self.session.generalize(level, applied, &predicates);
-                    self.session.insert_term(*sym, scheme);
+                Some(entry @ EnvEntry::Scheme(_)) => {
+                    let applied_entry = entry.apply(&mut substitutions);
+                    self.session.promote(*sym, applied_entry);
                 }
-                None => panic!(
-                    "didn't find {sym:?} in term env: {:?}",
-                    self.session.get_term_env()
-                ),
+                None => panic!("didn't find {sym:?} in term env"),
             }
         }
     }
@@ -277,9 +402,7 @@ impl<'a> InferencePass<'a> {
 
     #[instrument(level = tracing::Level::TRACE, skip(self, wants))]
     fn infer_body(&mut self, expr: &Body, level: Level, wants: &mut Wants) -> InferTy {
-        let graph = self
-            .elaborated_types
-            .collect_scc_graph(self.session, &expr.decls);
+        let graph = self.collect_scc_graph(&expr.decls);
         self.infer_scc_graph(level, &graph);
 
         let mut ret = InferTy::Void;
@@ -354,21 +477,7 @@ impl<'a> InferencePass<'a> {
         level: Level,
         wants: &mut Wants,
     ) -> InferTy {
-        let Protocol {
-            name,
-            node_id,
-            self_id,
-            associated_types,
-            method_requirements,
-            conformances,
-            child_types,
-            members,
-        } = self
-            .elaborated_types
-            .protocols
-            .get(&name.symbol())
-            .cloned()
-            .unwrap();
+        // TODO: check methods
 
         InferTy::Void
     }
@@ -383,26 +492,8 @@ impl<'a> InferencePass<'a> {
         level: Level,
         wants: &mut Wants,
     ) -> InferTy {
-        let Nominal {
-            ty,
-            kind,
-            conformances,
-            child_types,
-            members,
-            ..
-        } = self
-            .elaborated_types
-            .nominals
-            .get(&name.symbol())
-            .cloned()
-            .unwrap();
-        let entry = self.materialize_entry(ty.clone(), level, wants);
+        let entry = self.session.lookup(&name.symbol()).unwrap();
 
-        self.session.insert_term(name.symbol(), entry.clone());
-
-        let InferTy::Nominal { box row, .. } = self.session.skolemize(&entry) else {
-            unreachable!()
-        };
         for decl in &body.decls {
             match &decl.kind {
                 DeclKind::Struct {
@@ -426,23 +517,7 @@ impl<'a> InferencePass<'a> {
                     params,
                     body,
                 } => {
-                    let expected_entry = self.materialize_entry(
-                        self.elaborated_types
-                            .nominals
-                            .get(&name.symbol())
-                            .unwrap()
-                            .members
-                            .initializers
-                            .get(&Label::Named("init".into()))
-                            .unwrap()
-                            .clone(),
-                        level,
-                        wants,
-                    );
-
-                    self.session
-                        .insert_term(init_name.symbol(), expected_entry.clone());
-
+                    let expected_entry = self.session.lookup(&init_name.symbol()).unwrap();
                     let expected = self.session.skolemize(&expected_entry);
                     let (expected_params, expected_ret) = uncurry_function(expected);
                     self.check_func(
@@ -457,20 +532,7 @@ impl<'a> InferencePass<'a> {
                 }
                 DeclKind::EnumVariant(variant_name, span, type_annotations) => {
                     // Should something be happening here? Unclear.
-                    let expected_entry = self.materialize_entry(
-                        self.elaborated_types
-                            .nominals
-                            .get(&name.symbol())
-                            .unwrap()
-                            .members
-                            .variants
-                            .get(&Label::Named(variant_name.name_str()))
-                            .unwrap()
-                            .clone(),
-                        level,
-                        wants,
-                    );
-
+                    let expected_entry = self.session.lookup(&variant_name.symbol()).unwrap();
                     self.session
                         .insert_term(variant_name.symbol(), expected_entry.clone());
                 }
@@ -479,12 +541,7 @@ impl<'a> InferencePass<'a> {
                     default_value,
                     ..
                 } => {
-                    let ty = members
-                        .properties
-                        .get(&Label::Named(name.name_str()))
-                        .cloned()
-                        .unwrap();
-                    let mono_ty = self.materialize_entry(ty, level, wants)._as_ty();
+                    let mono_ty = self.session.lookup(&name.symbol()).unwrap()._as_ty();
                     if let Some(val) = default_value {
                         let default_value_ty = self.infer_node(val, level, wants);
                         wants.equals(
@@ -496,14 +553,7 @@ impl<'a> InferencePass<'a> {
                     }
                 }
                 DeclKind::Method { func, is_static } => {
-                    let ty = members
-                        .methods
-                        .get(&Label::Named(func.name.name_str()))
-                        .cloned()
-                        .unwrap();
-                    let expected_entry = self.materialize_entry(ty, level, wants);
-                    self.session
-                        .insert_term(func.name.symbol(), expected_entry.clone());
+                    let expected_entry = self.session.lookup(&func.name.symbol()).unwrap();
                     let (expected_params, expected_ret) = uncurry_function(expected_entry._as_ty());
                     self.check_func(
                         &func.params,
@@ -554,19 +604,14 @@ impl<'a> InferencePass<'a> {
             todo!();
         };
 
-        if let Some(entry) = self.elaborated_types.nominals.get(&name.symbol()) {
-            let entry = self.materialize_entry(entry.ty.clone(), level, wants);
-            let skolemized = self.session.skolemize(&entry);
-            if let Some(rhs) = rhs {
-                self.check_expr(rhs, skolemized.clone(), level, wants);
-            }
-
+        if let Some(entry) = self.session.lookup(&name.symbol()) {
+            // This name was already inferred (e.g., by the SCC pass). Do not re-check RHS
+            // against a skolemized type; just expose the known entry for downstream uses.
             self.session.insert_term(name.symbol(), entry.clone());
-            return skolemized;
-        };
+            return entry._as_ty();
+        }
 
-        if let Some(entry) = self.elaborated_types.globals.get(&name.symbol()) {
-            let entry = self.materialize_entry(entry.clone(), level, wants);
+        if let Some(entry) = self.session.lookup(&name.symbol()) {
             let skolemized = self.session.skolemize(&entry);
             if let Some(rhs) = rhs {
                 self.check_expr(rhs, skolemized.clone(), level, wants);
@@ -612,21 +657,15 @@ impl<'a> InferencePass<'a> {
             TypeAnnotationKind::SelfType(name) | TypeAnnotationKind::Nominal { name, .. } => {
                 match name.symbol() {
                     Symbol::Struct(..) | Symbol::Enum(..) => {
-                        let Some(nominal) = self.elaborated_types.nominals.get(&name.symbol())
-                        else {
+                        let Some(nominal) = self.session.lookup(&name.symbol()) else {
                             panic!("did not find nominal named {name:?}");
                         };
 
-                        self.materialize_entry(nominal.ty.clone(), level, wants)
-                            ._as_ty()
+                        nominal._as_ty()
                     }
                     Symbol::TypeParameter(..) => {
-                        println!("{:?}", self.elaborated_types.canonical_type_params);
-                        let id = self
-                            .elaborated_types
-                            .canonical_type_params
-                            .get(&name.symbol())
-                            .unwrap();
+                        println!("{:?}", self.canonical_type_params);
+                        let id = self.canonical_type_params.get(&name.symbol()).unwrap();
                         InferTy::Param(*id)
                     }
                     Symbol::Builtin(..) => resolve_builtin_type(&name.symbol()).0,
@@ -641,8 +680,19 @@ impl<'a> InferencePass<'a> {
     fn infer_func(&mut self, func: &Func, level: Level, wants: &mut Wants) -> InferTy {
         let mut param_tys = vec![];
         for param in func.params.iter() {
-            let meta = self.session.new_ty_meta_var(level);
-            self.session.insert_mono(param.name.symbol(), meta.clone());
+            let meta = if let Some(existing) = self.session.lookup(&param.name.symbol()) {
+                existing._as_ty()
+            } else if let Some(anno) = &param.type_annotation {
+                let param_id = self.canonical_type_params.get(&anno.symbol()).unwrap();
+                self.session
+                    .insert_mono(param.name.symbol(), InferTy::Param(*param_id));
+                InferTy::Param(*param_id)
+            } else {
+                let meta = self.session.new_ty_meta_var(level);
+                self.session.insert_mono(param.name.symbol(), meta.clone());
+                meta
+            };
+
             param_tys.push(meta);
         }
 
@@ -760,23 +810,29 @@ impl<'a> InferencePass<'a> {
         level: Level,
         wants: &mut Wants,
     ) -> InferTy {
-        let nominal = &self.elaborated_types.nominals.get(&name.symbol()).unwrap();
-        let entry = match name.symbol() {
+        match name.symbol() {
             Symbol::Struct(..) => {
-                nominal
-                    .members
+                let init_sym = self
+                    .session
+                    .type_catalog
                     .initializers
-                    .iter()
-                    .next()
-                    .unwrap_or_else(|| panic!("{name:?}"))
-                    .1
+                    .get(&name.symbol())
+                    .unwrap()
+                    .get(&Label::Named("init".into()))
+                    .cloned()
+                    .unwrap();
+                let entry = self.session.lookup(&init_sym).unwrap();
+                entry.instantiate(expr.id, self.session, level, wants, expr.span)
             }
-            Symbol::Enum(..) => &nominal.ty,
+            Symbol::Enum(..) => self.session.lookup(&name.symbol()).unwrap().instantiate(
+                expr.id,
+                self.session,
+                level,
+                wants,
+                expr.span,
+            ),
             _ => panic!("cannot have a constructor for {name:?}"),
-        };
-
-        self.materialize_entry(entry.clone(), level, wants)
-            .instantiate(expr.id, self.session, level, wants, expr.span)
+        }
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
@@ -951,8 +1007,7 @@ impl<'a> InferencePass<'a> {
 
     #[instrument(level = tracing::Level::TRACE, skip(self, wants))]
     fn infer_block(&mut self, expr: &Block, level: Level, wants: &mut Wants) -> InferTy {
-        let graph = self.elaborated_types.collect_scc_graph(
-            self.session,
+        let graph = self.collect_scc_graph(
             &expr
                 .body
                 .iter()
@@ -1198,30 +1253,107 @@ impl<'a> InferencePass<'a> {
         }
     }
 
-    #[instrument(skip(self))]
+    pub fn collect_scc_graph(&mut self, nodes: &[Decl]) -> SCCGraph {
+        let mut pass = ElaborationPass {
+            session: self.session,
+            canonical_row_vars: self.canonical_row_vars.clone(),
+            canonical_type_params: self.canonical_type_params.clone(),
+            type_param_conformances: self.type_param_conformances.clone(),
+        };
+
+        let types = ElaboratedTypes::<RegisteredNames>::default();
+        let types_registered =
+            pass.register_type_names(types, nodes.iter(), &mut Default::default());
+
+        let elaborated_infer_tys = pass.elaborate_to_infer_tys(types_registered, nodes.iter());
+        let elaborated_schemes = pass.elaborate_to_schemes(elaborated_infer_tys, nodes.iter());
+
+        elaborated_schemes.scc_graph
+    }
+
+    #[instrument(skip(self, types))]
+    pub fn materialize(
+        &mut self,
+        types: &ElaboratedTypes<ElaboratedToSchemes>,
+        ty: ElaborationTy,
+        level: Level,
+        wants: &mut Wants,
+    ) -> InferTy {
+        match ty {
+            ElaborationTy::Hole(node_id) => self.session.new_ty_meta_var(level),
+            ElaborationTy::Projection {
+                box base,
+                associated,
+            } => InferTy::Projection {
+                base: self.materialize(types, base, level, wants).into(),
+                associated,
+            },
+            ElaborationTy::Constructor {
+                name,
+                params,
+                box ret,
+            } => InferTy::Constructor {
+                name,
+                params: params
+                    .into_iter()
+                    .map(|i| self.materialize(types, i, level, wants))
+                    .collect(),
+                ret: self.materialize(types, ret, level, wants).into(),
+            },
+            ElaborationTy::Func(box param, box ret) => InferTy::Func(
+                self.materialize(types, param, level, wants).into(),
+                self.materialize(types, ret, level, wants).into(),
+            ),
+            ElaborationTy::Tuple(items) => InferTy::Tuple(
+                items
+                    .into_iter()
+                    .map(|i| self.materialize(types, i, level, wants))
+                    .collect(),
+            ),
+            ElaborationTy::Record(box row) => {
+                InferTy::Record(self.materialize_row(types, row, level, wants).into())
+            }
+            ElaborationTy::Nominal { symbol } => InferTy::Nominal {
+                symbol,
+                row: self.build_infer_row(types, &symbol, level, wants).into(),
+            },
+            ElaborationTy::Primitive(symbol) => InferTy::Primitive(symbol),
+            ElaborationTy::Param(type_param_id) => InferTy::Param(type_param_id),
+            ElaborationTy::Rigid(skolem_id) => InferTy::Rigid(skolem_id),
+        }
+    }
+
+    #[instrument(skip(self, types))]
     fn materialize_entry(
         &mut self,
+        types: &ElaboratedTypes<ElaboratedToSchemes>,
         entry: EnvEntry<ElaborationTy>,
         level: Level,
         wants: &mut Wants,
     ) -> EnvEntry<InferTy> {
         match entry {
-            EnvEntry::Mono(ty) => EnvEntry::Mono(self.materialize(ty, level, wants)),
+            EnvEntry::Mono(ty) => EnvEntry::Mono(self.materialize(types, ty, level, wants)),
             EnvEntry::Scheme(scheme) => EnvEntry::Scheme(Scheme {
-                ty: self.materialize(scheme.ty, level, wants),
+                ty: self.materialize(types, scheme.ty, level, wants),
                 foralls: scheme.foralls,
                 predicates: scheme
                     .predicates
                     .into_iter()
-                    .map(|p| self.materialize_predicate(p, level, wants))
+                    .map(|p| self.materialize_predicate(types, p, level, wants))
                     .collect(),
             }),
         }
     }
 
-    #[instrument(skip(self))]
-    fn build_infer_row(&mut self, symbol: &Symbol, level: Level, wants: &mut Wants) -> InferRow {
-        let nominal = self.elaborated_types.nominals.get(symbol).cloned().unwrap();
+    #[instrument(skip(self, types))]
+    fn build_infer_row(
+        &mut self,
+        types: &ElaboratedTypes<ElaboratedToSchemes>,
+        symbol: &Symbol,
+        level: Level,
+        wants: &mut Wants,
+    ) -> InferRow {
+        let nominal = types.nominals.get(symbol).cloned().unwrap();
 
         // We can use inner_ty here because any generics are owned by the nominal,
         // so predicates/foralls will still be accounted for.
@@ -1231,13 +1363,13 @@ impl<'a> InferencePass<'a> {
                 |acc, (label, entry)| InferRow::Extend {
                     row: acc.into(),
                     label: label.clone(),
-                    ty: self.materialize(entry.inner_ty(), level, wants),
+                    ty: self.materialize(types, entry.1.inner_ty(), level, wants),
                 },
             ),
             NominalKind::Enum => nominal.members.variants.iter().fold(
                 InferRow::Empty(TypeDefKind::Enum),
                 |acc, (label, entry)| {
-                    let entry = self.materialize_entry(entry.clone(), level, wants);
+                    let entry = self.materialize_entry(types, entry.1.clone(), level, wants);
                     println!("VARIANT ENTRY: {entry:?}");
                     let row_ty = entry.instantiate(
                         nominal.node_id,
@@ -1257,9 +1389,10 @@ impl<'a> InferencePass<'a> {
         }
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip(self, types))]
     fn materialize_row(
         &mut self,
+        types: &ElaboratedTypes<ElaboratedToSchemes>,
         row: ElaborationRow,
         level: Level,
         wants: &mut Wants,
@@ -1267,18 +1400,19 @@ impl<'a> InferencePass<'a> {
         match row {
             ElaborationRow::Empty(kind) => InferRow::Empty(kind),
             ElaborationRow::Extend { box row, label, ty } => InferRow::Extend {
-                row: self.materialize_row(row, level, wants).into(),
+                row: self.materialize_row(types, row, level, wants).into(),
                 label,
-                ty: self.materialize(ty, level, wants),
+                ty: self.materialize(types, ty, level, wants),
             },
             ElaborationRow::Param(row_param_id) => InferRow::Param(row_param_id),
             ElaborationRow::Pending => panic!("did not replace pending elaboration row"),
         }
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip(self, types))]
     fn materialize_predicate(
         &mut self,
+        types: &ElaboratedTypes<ElaboratedToSchemes>,
         predicate: Predicate<ElaborationTy>,
         level: Level,
         wants: &mut Wants,
@@ -1287,7 +1421,7 @@ impl<'a> InferencePass<'a> {
             Predicate::HasField { row, label, ty } => Predicate::HasField {
                 row,
                 label,
-                ty: self.materialize(ty, level, wants),
+                ty: self.materialize(types, ty, level, wants),
             },
             Predicate::Conforms {
                 param,
@@ -1303,9 +1437,9 @@ impl<'a> InferencePass<'a> {
                 label,
                 ty,
             } => Predicate::Member {
-                receiver: self.materialize(receiver, level, wants),
+                receiver: self.materialize(types, receiver, level, wants),
                 label,
-                ty: self.materialize(ty, level, wants),
+                ty: self.materialize(types, ty, level, wants),
             },
             Predicate::Call {
                 callee,
@@ -1313,13 +1447,13 @@ impl<'a> InferencePass<'a> {
                 returns,
                 receiver,
             } => Predicate::Call {
-                callee: self.materialize(callee, level, wants),
+                callee: self.materialize(types, callee, level, wants),
                 args: args
                     .into_iter()
-                    .map(|i| self.materialize(i, level, wants))
+                    .map(|i| self.materialize(types, i, level, wants))
                     .collect(),
-                returns: self.materialize(returns, level, wants),
-                receiver: receiver.map(|r| self.materialize(r, level, wants)),
+                returns: self.materialize(types, returns, level, wants),
+                receiver: receiver.map(|r| self.materialize(types, r, level, wants)),
             },
             Predicate::TypeMember {
                 base,
@@ -1327,12 +1461,12 @@ impl<'a> InferencePass<'a> {
                 returns,
                 generics,
             } => Predicate::TypeMember {
-                base: self.materialize(base, level, wants),
+                base: self.materialize(types, base, level, wants),
                 member,
-                returns: self.materialize(returns, level, wants),
+                returns: self.materialize(types, returns, level, wants),
                 generics: generics
                     .into_iter()
-                    .map(|g| self.materialize(g, level, wants))
+                    .map(|g| self.materialize(types, g, level, wants))
                     .collect(),
             },
             Predicate::AssociatedEquals {
@@ -1341,57 +1475,11 @@ impl<'a> InferencePass<'a> {
                 associated_type_id,
                 output,
             } => Predicate::AssociatedEquals {
-                subject: self.materialize(subject, level, wants),
+                subject: self.materialize(types, subject, level, wants),
                 protocol_id,
                 associated_type_id,
-                output: self.materialize(output, level, wants),
+                output: self.materialize(types, output, level, wants),
             },
-        }
-    }
-
-    #[instrument(skip(self))]
-    fn materialize(&mut self, ty: ElaborationTy, level: Level, wants: &mut Wants) -> InferTy {
-        match ty {
-            ElaborationTy::Hole(node_id) => self.session.new_ty_meta_var(level),
-            ElaborationTy::Projection {
-                box base,
-                associated,
-            } => InferTy::Projection {
-                base: self.materialize(base, level, wants).into(),
-                associated,
-            },
-            ElaborationTy::Constructor {
-                name,
-                params,
-                box ret,
-            } => InferTy::Constructor {
-                name,
-                params: params
-                    .into_iter()
-                    .map(|i| self.materialize(i, level, wants))
-                    .collect(),
-                ret: self.materialize(ret, level, wants).into(),
-            },
-            ElaborationTy::Func(box param, box ret) => InferTy::Func(
-                self.materialize(param, level, wants).into(),
-                self.materialize(ret, level, wants).into(),
-            ),
-            ElaborationTy::Tuple(items) => InferTy::Tuple(
-                items
-                    .into_iter()
-                    .map(|i| self.materialize(i, level, wants))
-                    .collect(),
-            ),
-            ElaborationTy::Record(box row) => {
-                InferTy::Record(self.materialize_row(row, level, wants).into())
-            }
-            ElaborationTy::Nominal { symbol } => InferTy::Nominal {
-                symbol,
-                row: self.build_infer_row(&symbol, level, wants).into(),
-            },
-            ElaborationTy::Primitive(symbol) => InferTy::Primitive(symbol),
-            ElaborationTy::Param(type_param_id) => InferTy::Param(type_param_id),
-            ElaborationTy::Rigid(skolem_id) => InferTy::Rigid(skolem_id),
         }
     }
 

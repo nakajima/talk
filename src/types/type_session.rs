@@ -7,49 +7,24 @@ use tracing::instrument;
 use crate::{
     compiling::module::{ModuleEnvironment, ModuleId},
     label::Label,
-    name::Name,
     name_resolution::symbol::{ProtocolId, StructId, Symbol},
     node_id::NodeID,
-    node_kinds::{generic_decl::GenericDecl, type_annotation::TypeAnnotation},
     span::Span,
     types::{
         builtins::builtin_scope,
         constraints::constraint::Constraint,
-        fields::{Associated, Initializer, Method, MethodRequirement, Property, Variant},
         infer_row::{InferRow, RowMetaId, RowParamId},
         infer_ty::{InferTy, Level, Meta, MetaVarId, SkolemId, TypeParamId},
-        kind::Kind,
         row::Row,
         scheme::{ForAll, Scheme},
         term_environment::{EnvEntry, TermEnv},
         ty::{SomeType, Ty},
-        type_catalog::{
-            Conformance, ConformanceKey, ConformanceStub, Nominal, Protocol, TypeCatalog,
-        },
+        type_catalog::{Conformance, ConformanceKey, Nominal, Protocol, TypeCatalog},
         type_error::TypeError,
         type_operations::{UnificationSubstitutions, apply, apply_row, substitute},
         vars::Vars,
     },
 };
-
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub enum ASTTyRepr {
-    Annotated(TypeAnnotation), // already resolved names
-    Generic(GenericDecl),
-    Hole(NodeID, Span),           // no annotation; to be inferred later
-    SelfType(Name, NodeID, Span), // For synthesized `self` param
-}
-
-impl ASTTyRepr {
-    pub fn span(&self) -> Span {
-        match self {
-            Self::Annotated(ta) => ta.span,
-            Self::Generic(gd) => gd.span,
-            Self::Hole(_, span) => *span,
-            Self::SelfType(_, _, span) => *span,
-        }
-    }
-}
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum TypeDefKind {
@@ -59,46 +34,6 @@ pub enum TypeDefKind {
     Extension,
 }
 
-#[derive(Debug, PartialEq, Default, Clone)]
-pub struct Raw {
-    pub nominals: FxHashMap<Symbol, TypeDef>,
-    pub protocols: FxHashMap<ProtocolId, TypeDef>,
-    pub extensions: FxHashMap<Symbol, Vec<TypeExtension>>,
-    pub annotations: FxHashMap<NodeID, ASTTyRepr>,
-    pub typealiases: FxHashMap<NodeID, (Name, TypeAnnotation)>,
-    pub instance_methods: FxHashMap<Symbol, FxHashMap<Label, Method>>,
-    pub static_methods: FxHashMap<Symbol, FxHashMap<Label, Method>>,
-    pub initializers: FxHashMap<Symbol, FxHashMap<Label, Initializer>>,
-    pub properties: FxHashMap<Symbol, IndexMap<Label, Property>>,
-    pub variants: FxHashMap<Symbol, IndexMap<Label, Variant>>,
-    pub associated_types: FxHashMap<Symbol, IndexMap<Name, Associated>>,
-    pub method_requirements: FxHashMap<Symbol, IndexMap<Label, MethodRequirement>>,
-
-    pub generics: FxHashMap<Symbol, IndexMap<Name, ASTTyRepr>>,
-    pub conformances: FxHashMap<Symbol, Vec<ConformanceStub>>,
-    pub child_types: FxHashMap<Symbol, FxHashMap<String, Symbol>>,
-}
-
-#[derive(Debug, PartialEq, Clone)]
-pub struct TypeExtension {
-    pub node_id: NodeID,
-}
-
-#[derive(Debug, PartialEq, Clone)]
-pub struct TypeDef {
-    pub name: Name,
-    pub node_id: NodeID,
-    pub kind: Kind,
-    pub def: TypeDefKind,
-}
-
-// new helper
-#[derive(Debug, Clone)]
-pub struct ProtocolBound {
-    pub protocol_id: ProtocolId,
-    pub args: Vec<InferTy>, // concrete types the protocol is instantiated with, e.g. [Ty::Float]
-}
-
 #[derive(Debug)]
 pub struct TypeSession {
     pub current_module_id: ModuleId,
@@ -106,8 +41,12 @@ pub struct TypeSession {
     vars: Vars,
     term_env: TermEnv,
     pub(super) meta_levels: Rc<RefCell<FxHashMap<Meta, Level>>>,
+
     pub(super) skolem_map: FxHashMap<InferTy, InferTy>,
-    pub(super) skolems_by_param: FxHashMap<TypeParamId, SkolemId>,
+    pub(super) skolem_conformances: FxHashMap<SkolemId, IndexSet<(ProtocolId, Span)>>,
+
+    pub(super) type_param_conformances: IndexMap<TypeParamId, IndexSet<(ProtocolId, Span)>>,
+
     pub skolem_bounds: FxHashMap<SkolemId, Vec<StructId>>,
     // pub(super) type_param_bounds: FxHashMap<TypeParamId, Vec<ProtocolBound>>,
     pub typealiases: FxHashMap<Symbol, Scheme<InferTy>>,
@@ -176,10 +115,10 @@ impl TypeSession {
             current_module_id,
             vars: Default::default(),
             skolem_map: Default::default(),
-            skolems_by_param: Default::default(),
+            skolem_conformances: Default::default(),
             meta_levels: Default::default(),
             term_env,
-            // type_param_bounds: Default::default(),
+            type_param_conformances: Default::default(),
             skolem_bounds: Default::default(),
             reverse_instantiations: Default::default(),
             types_by_node: Default::default(),
@@ -409,7 +348,9 @@ impl TypeSession {
             let ForAll::Ty(id) = forall else {
                 continue;
             };
-            skolems.insert(InferTy::Param(id), self.new_skolem(id));
+
+            let new_id = self.new_skolem(id);
+            skolems.insert(InferTy::Param(id), new_id);
         }
 
         substitute(entry._as_ty().clone(), &skolems)
@@ -451,10 +392,18 @@ impl TypeSession {
                         continue;
                     }
 
-                    let param_id = self.vars.type_params.next_id();
-                    self.reverse_instantiations.ty.insert(*id, param_id);
-                    tracing::trace!("generalizing {m:?} to {param_id:?}");
-                    foralls.insert(ForAll::Ty(param_id));
+                    let param_id = self
+                        .reverse_instantiations
+                        .ty
+                        .get(id)
+                        .copied()
+                        .unwrap_or_else(|| {
+                            let param_id = self.vars.type_params.next_id();
+                            self.reverse_instantiations.ty.insert(*id, param_id);
+                            tracing::trace!("generalizing {m:?} to {param_id:?}");
+                            foralls.insert(ForAll::Ty(param_id));
+                            param_id
+                        });
                     substitutions.ty.insert(*id, InferTy::Param(param_id));
                 }
                 InferTy::Record(box InferRow::Var(id))
@@ -471,11 +420,20 @@ impl TypeSession {
                         continue;
                     }
 
-                    let param_id = self.vars.row_params.next_id();
-                    tracing::trace!("generalizing {m:?} to {param_id:?}");
-                    foralls.insert(ForAll::Row(param_id));
+                    let param_id = self
+                        .reverse_instantiations
+                        .row
+                        .get(id)
+                        .copied()
+                        .unwrap_or_else(|| {
+                            let param_id = self.vars.row_params.next_id();
+                            self.reverse_instantiations.row.insert(*id, param_id);
+                            tracing::trace!("generalizing {m:?} to {param_id:?}");
+                            foralls.insert(ForAll::Row(param_id));
+                            param_id
+                        });
+
                     substitutions.row.insert(*id, InferRow::Param(param_id));
-                    self.reverse_instantiations.row.insert(*id, param_id);
                 }
                 _ => {
                     tracing::warn!("got {m:?} for var while generalizing")
@@ -557,10 +515,18 @@ impl TypeSession {
                         continue;
                     }
 
-                    let param_id = self.vars.type_params.next_id();
-                    self.reverse_instantiations.ty.insert(*id, param_id);
-                    tracing::trace!("generalizing {m:?} to {param_id:?}");
-                    foralls.insert(ForAll::Ty(param_id));
+                    let param_id = self
+                        .reverse_instantiations
+                        .ty
+                        .get(id)
+                        .copied()
+                        .unwrap_or_else(|| {
+                            let param_id = self.vars.type_params.next_id();
+                            self.reverse_instantiations.ty.insert(*id, param_id);
+                            tracing::trace!("generalizing {m:?} to {param_id:?}");
+                            foralls.insert(ForAll::Ty(param_id));
+                            param_id
+                        });
                     substitutions.ty.insert(*id, InferTy::Param(param_id));
                 }
                 InferTy::Record(box InferRow::Var(id)) => {
@@ -573,10 +539,18 @@ impl TypeSession {
                         continue;
                     }
 
-                    let param_id = self.vars.row_params.next_id();
-                    tracing::trace!("generalizing {m:?} to {param_id:?}");
-                    self.reverse_instantiations.row.insert(*id, param_id);
-                    foralls.insert(ForAll::Row(param_id));
+                    let param_id = self
+                        .reverse_instantiations
+                        .row
+                        .get(id)
+                        .copied()
+                        .unwrap_or_else(|| {
+                            let param_id = self.vars.row_params.next_id();
+                            self.reverse_instantiations.row.insert(*id, param_id);
+                            tracing::trace!("generalizing {m:?} to {param_id:?}");
+                            foralls.insert(ForAll::Row(param_id));
+                            param_id
+                        });
                     substitutions.row.insert(*id, InferRow::Param(param_id));
                 }
                 _ => {
@@ -649,7 +623,7 @@ impl TypeSession {
         self.term_env.insert(sym, EnvEntry::Mono(ty));
     }
 
-    pub(super) fn lookup_nominal(&mut self, symbol: &Symbol) -> Option<Nominal> {
+    pub(super) fn _lookup_nominal(&mut self, symbol: &Symbol) -> Option<Nominal> {
         if let Some(entry) = self.type_catalog.nominals.get(symbol).cloned() {
             return Some(entry);
         }
@@ -708,6 +682,13 @@ impl TypeSession {
                             .or_default()
                             .insert(label.clone(), sym);
                     }
+                    Symbol::MethodRequirement(..) => {
+                        self.type_catalog
+                            .method_requirements
+                            .entry(*receiver)
+                            .or_default()
+                            .insert(label.clone(), sym);
+                    }
                     _ => (),
                 }
 
@@ -718,7 +699,7 @@ impl TypeSession {
         None
     }
 
-    pub(super) fn lookup_variants(&self, receiver: &Symbol) -> Option<IndexMap<Label, Symbol>> {
+    pub(super) fn _lookup_variants(&self, receiver: &Symbol) -> Option<IndexMap<Label, Symbol>> {
         if let Some(variants) = self.type_catalog.variants.get(receiver).cloned() {
             return Some(variants);
         }
@@ -732,7 +713,7 @@ impl TypeSession {
         None
     }
 
-    pub(super) fn clone_conformances(&self) -> FxHashMap<ConformanceKey, Conformance> {
+    pub(super) fn _clone_conformances(&self) -> FxHashMap<ConformanceKey, Conformance> {
         self.type_catalog.conformances.clone()
     }
 
@@ -743,7 +724,7 @@ impl TypeSession {
         self.type_catalog.conformances.get_mut(key)
     }
 
-    pub(super) fn lookup_protocol(&mut self, protocol_id: ProtocolId) -> Option<Protocol> {
+    pub(super) fn _lookup_protocol(&mut self, protocol_id: ProtocolId) -> Option<Protocol> {
         if let Some(entry) = self.type_catalog.protocols.get(&protocol_id).cloned() {
             return Some(entry);
         }
@@ -903,16 +884,24 @@ impl TypeSession {
     }
 
     pub(crate) fn new_skolem(&mut self, param: TypeParamId) -> InferTy {
-        if let Some(existing) = self.skolems_by_param.get(&param) {
-            return InferTy::Rigid(*existing);
-        }
+        let id = self.new_skolem_id(param);
+        InferTy::Rigid(id)
+    }
 
+    pub(crate) fn new_skolem_id(&mut self, param: TypeParamId) -> SkolemId {
         let id = self.vars.skolems.next_id();
-        self.skolems_by_param.insert(param, id);
+
+        self.skolem_conformances.insert(
+            id,
+            self.type_param_conformances
+                .get(&param)
+                .cloned()
+                .unwrap_or_default(),
+        );
         self.skolem_map
             .insert(InferTy::Rigid(id), InferTy::Param(param));
         tracing::trace!("Fresh skolem {id:?}");
-        InferTy::Rigid(id)
+        id
     }
 
     pub(crate) fn new_ty_meta_var(&mut self, level: Level) -> InferTy {

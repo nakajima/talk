@@ -129,67 +129,6 @@ impl Scheme<InferTy> {
         )
     }
 
-    #[instrument(skip(self, session, level, wants, span,))]
-    pub fn instantiate_with_substitutions(
-        &self,
-        id: NodeID,
-        span: Span,
-        session: &mut TypeSession,
-        level: Level,
-        wants: &mut Wants,
-        substitutions: &mut InstantiationSubstitutions,
-    ) -> InferTy {
-        for forall in &self.foralls {
-            match forall {
-                ForAll::Ty(param) => {
-                    if substitutions.ty.contains_key(param) {
-                        // We've already got this one
-                        continue;
-                    }
-
-                    let InferTy::Var { id: meta, .. } = session.new_ty_meta_var(level) else {
-                        unreachable!()
-                    };
-
-                    tracing::trace!("instantiating {param:?} with {meta:?}");
-                    session.reverse_instantiations.ty.insert(meta, *param);
-                    substitutions.ty.insert(*param, meta);
-                    session
-                        .type_catalog
-                        .instantiations
-                        .ty
-                        .insert((id, *param), InferTy::Var { id: meta, level });
-                }
-                ForAll::Row(param) => {
-                    if substitutions.row.contains_key(param) {
-                        // We've already got this one
-                        continue;
-                    }
-
-                    let InferRow::Var(meta) = session.new_row_meta_var(level) else {
-                        unreachable!()
-                    };
-                    tracing::trace!("instantiating {param:?} with {meta:?}");
-                    substitutions.row.insert(*param, meta);
-                    session.reverse_instantiations.row.insert(meta, *param);
-                    session
-                        .type_catalog
-                        .instantiations
-                        .row
-                        .insert((id, *param), InferRow::Var(meta));
-                }
-            };
-        }
-
-        for predicate in &self.predicates {
-            let constraint = predicate.instantiate(id, substitutions, span, level);
-            tracing::trace!("predicate instantiated: {predicate:?} -> {constraint:?}");
-            wants.push(constraint);
-        }
-
-        instantiate_ty(self.ty.clone(), substitutions, level)
-    }
-
     #[instrument(skip(self, session, level, wants, span))]
     pub fn instantiate_with_args(
         &self,

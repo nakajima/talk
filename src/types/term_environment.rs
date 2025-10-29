@@ -82,6 +82,13 @@ impl<T: SomeType> EnvEntry<T> {
             EnvEntry::Scheme(scheme) => scheme.foralls.clone(),
         }
     }
+
+    pub fn predicates(&self) -> Vec<Predicate<T>> {
+        match self {
+            EnvEntry::Mono(..) => Default::default(),
+            EnvEntry::Scheme(scheme) => scheme.predicates.clone(),
+        }
+    }
 }
 
 impl EnvEntry<InferTy> {

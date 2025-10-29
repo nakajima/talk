@@ -1,7 +1,6 @@
 pub mod builtins;
 pub mod constraints;
 pub mod dsu;
-pub mod fields;
 pub mod infer_row;
 pub mod infer_ty;
 pub mod kind;
