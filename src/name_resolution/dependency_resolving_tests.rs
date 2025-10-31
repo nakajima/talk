@@ -77,7 +77,7 @@ pub mod tests {
             types
                 .phase
                 .scc_graph
-                .neighbors_for(&Symbol::Global(1.into()))
+                .neighbors_for(&Symbol::Global(2.into()))
                 .is_empty()
         );
     }
