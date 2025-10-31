@@ -660,7 +660,7 @@ impl<'a> Lowerer<'a> {
     ) -> Result<(Value, Ty), IRError> {
         let constructor_sym = *self
             .types
-            .catalog
+            .catalogold
             .initializers
             .get(&name.symbol())
             .unwrap()
@@ -695,7 +695,7 @@ impl<'a> Lowerer<'a> {
         let enum_symbol = name.symbol();
         let constructor_sym = *self
             .types
-            .catalog
+            .catalogold
             .variants
             .get(&enum_symbol)
             .unwrap()
@@ -704,7 +704,7 @@ impl<'a> Lowerer<'a> {
 
         let tag = self
             .types
-            .catalog
+            .catalogold
             .variants
             .get(&enum_symbol)
             .unwrap()
@@ -769,7 +769,7 @@ impl<'a> Lowerer<'a> {
             let (receiver_ty, _) = self.specialized_ty(receiver)?;
 
             if let Ty::Nominal { symbol, .. } = &receiver_ty
-                && let Some(methods) = self.types.catalog.instance_methods.get(symbol)
+                && let Some(methods) = self.types.catalogold.instance_methods.get(symbol)
                 && let Some(method) = methods.get(label).cloned()
             {
                 tracing::debug!("lowering method: {label} {method:?}");
@@ -834,7 +834,7 @@ impl<'a> Lowerer<'a> {
         // Look up the initializer and specialize it using the already-computed instantiations
         let init_sym = *self
             .types
-            .catalog
+            .catalogold
             .initializers
             .get(&name.symbol())
             .unwrap()
@@ -844,7 +844,12 @@ impl<'a> Lowerer<'a> {
         let init_entry = self.types.get_symbol(&init_sym).cloned().unwrap();
         let (init_ty, concrete_tys) = self.specialize(&init_entry, callee.id)?;
 
-        let properties = self.types.catalog.properties.get(&name.symbol()).unwrap();
+        let properties = self
+            .types
+            .catalogold
+            .properties
+            .get(&name.symbol())
+            .unwrap();
 
         // Extract return type from the initializer function
         let mut params = init_ty.clone().uncurry_params();
@@ -1112,7 +1117,7 @@ impl<'a> Lowerer<'a> {
             }
         };
 
-        if let Some(methods) = self.types.catalog.instance_methods.get(&symbol)
+        if let Some(methods) = self.types.catalogold.instance_methods.get(&symbol)
             && let Some(method) = methods.get(label)
         {
             return Ok(Some(*method));
@@ -1120,7 +1125,7 @@ impl<'a> Lowerer<'a> {
 
         println!(
             "didn't get methods for {symbol:?} in {:?}",
-            self.types.catalog.instance_methods
+            self.types.catalogold.instance_methods
         );
 
         Ok(None)
@@ -1168,7 +1173,7 @@ impl<'a> Lowerer<'a> {
                         ForAll::Ty(param) => {
                             let ty = self
                                 .types
-                                .catalog
+                                .catalogold
                                 .instantiations
                                 .ty
                                 .get(&(id, *param))
@@ -1180,7 +1185,7 @@ impl<'a> Lowerer<'a> {
                         ForAll::Row(param) => {
                             let row = self
                                 .types
-                                .catalog
+                                .catalogold
                                 .instantiations
                                 .row
                                 .get(&(id, *param))

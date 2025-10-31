@@ -80,14 +80,7 @@ impl Member {
                 return Ok(true);
             }
             InferTy::Nominal { symbol, box row } => {
-                return self.lookup_nominal_member(
-                    symbol,
-                    row,
-                    session,
-                    ty.clone(),
-                    receiver.clone(),
-                    next_wants,
-                );
+                return self.lookup_nominal_member(symbol, row, session, next_wants);
             }
             _ => {}
         }
@@ -107,6 +100,7 @@ impl Member {
         substitutions: &mut UnificationSubstitutions,
     ) -> Result<bool, TypeError> {
         let conformances = session
+            .elaborated_types
             .type_param_conformances
             .get(&type_param_id)
             .cloned()
@@ -137,17 +131,28 @@ impl Member {
         symbol: &Symbol,
         row: &InferRow,
         session: &mut TypeSession,
-        ty: InferTy,
-        receiver: InferTy,
         next_wants: &mut Wants,
     ) -> Result<bool, TypeError> {
         let Some(member_sym) = session.lookup_member(symbol, &self.label) else {
-            return Err(TypeError::MemberNotFound(receiver, self.label.to_string()));
+            return Err(TypeError::MemberNotFound(
+                self.receiver.clone(),
+                self.label.to_string(),
+            ));
         };
 
         match member_sym {
             Symbol::InstanceMethod(..) => {
-                let method = session.lookup(&member_sym).unwrap().instantiate(
+                let entry = session
+                    .elaborated_types
+                    .nominals
+                    .get(symbol)
+                    .unwrap()
+                    .members
+                    .methods
+                    .get(&self.label)
+                    .unwrap();
+                let entry = session.materialize_entry(entry.clone(), Level::default(), next_wants);
+                let method = entry.instantiate(
                     self.node_id,
                     session,
                     Level::default(),
@@ -155,28 +160,44 @@ impl Member {
                     self.span,
                 );
 
+                println!("method: {method:?}");
                 let (method_receiver, method_fn) = consume_self(&method);
-                next_wants.equals(method_receiver, receiver, self.cause, self.span);
+                println!("receiver: {:?}", self.receiver);
+                println!("ty: {:?}", self.ty);
+                println!("method_receiver: {method_receiver:?}");
+                println!("method_fn: {method_fn:?}");
+                next_wants.equals(
+                    method_receiver,
+                    self.receiver.clone(),
+                    self.cause,
+                    self.span,
+                );
                 next_wants.equals(method_fn, self.ty.clone(), self.cause, self.span);
                 return Ok(true);
             }
             Symbol::Variant(..) => {
-                println!("instantiating variant. ty: {receiver:?}");
+                println!("instantiating variant. ty: {:?}", self.ty);
                 let variant = self.lookup_variant(row).unwrap();
                 let constructor_ty = match variant {
-                    InferTy::Void => receiver,
-                    InferTy::Tuple(values) => curry(values, receiver),
-                    other => curry(vec![other], receiver),
+                    InferTy::Void => self.receiver.clone(),
+                    InferTy::Tuple(values) => curry(values, self.receiver.clone()),
+                    other => curry(vec![other], self.receiver.clone()),
                 };
 
-                next_wants.equals(constructor_ty, ty, self.cause, self.span);
+                next_wants.equals(constructor_ty, self.ty.clone(), self.cause, self.span);
                 return Ok(true);
             }
             _ => (),
         }
 
         // If all else fails, see if it's a property
-        next_wants._has_field(row.clone(), self.label.clone(), ty, self.cause, self.span);
+        next_wants._has_field(
+            row.clone(),
+            self.label.clone(),
+            self.ty.clone(),
+            self.cause,
+            self.span,
+        );
         Ok(true)
     }
 

@@ -14,7 +14,7 @@ use crate::{
     name::Name,
     name_resolution::{
         name_resolver::NameResolved,
-        symbol::{AssociatedTypeId, ProtocolId, StructId, Symbol},
+        symbol::{ProtocolId, StructId, Symbol},
     },
     node::Node,
     node_id::NodeID,
@@ -31,7 +31,10 @@ use crate::{
     types::{
         infer_row::{RowMetaId, RowParamId},
         infer_ty::{Level, SkolemId, TypeParamId},
+        members::{MemberKind, Members},
+        nominal::{Nominal, NominalKind},
         predicate::Predicate,
+        protocol::{AssociatedType, Protocol},
         scheme::{ForAll, Scheme},
         term_environment::EnvEntry,
         ty::SomeType,
@@ -165,81 +168,10 @@ impl ElaborationTy {
 }
 
 impl EnvEntry<ElaborationTy> {
-    pub(super) fn inner_ty(&self) -> ElaborationTy {
+    pub fn inner_ty(&self) -> ElaborationTy {
         match self {
             Self::Mono(ty) => ty.clone(),
             Self::Scheme(scheme) => scheme.ty.clone(),
-        }
-    }
-}
-
-#[derive(Clone, PartialEq, Debug)]
-pub enum MemberKind {
-    Initializer,
-    Variant,
-    Property,
-    InstanceMethod,
-    StaticMethod,
-    MethodRequirement,
-}
-
-#[derive(Clone, PartialEq, Debug)]
-pub struct Members<T> {
-    pub initializers: IndexMap<Label, T>,
-    pub variants: IndexMap<Label, T>,
-    pub properties: IndexMap<Label, T>,
-    pub methods: IndexMap<Label, T>,
-    pub static_methods: IndexMap<Label, T>,
-}
-
-impl<T> Members<T> {
-    fn extend(&mut self, other: Members<T>) {
-        self.initializers.extend(other.initializers);
-        self.variants.extend(other.variants);
-        self.properties.extend(other.properties);
-        self.methods.extend(other.methods);
-        self.static_methods.extend(other.static_methods);
-    }
-
-    fn map<U>(self, mut map: impl FnMut(MemberKind, T) -> U) -> Members<U> {
-        Members {
-            initializers: self
-                .initializers
-                .into_iter()
-                .map(|(l, v)| (l, map(MemberKind::Initializer, v)))
-                .collect(),
-            variants: self
-                .variants
-                .into_iter()
-                .map(|(l, v)| (l, map(MemberKind::Variant, v)))
-                .collect(),
-            properties: self
-                .properties
-                .into_iter()
-                .map(|(l, v)| (l, map(MemberKind::Property, v)))
-                .collect(),
-            methods: self
-                .methods
-                .into_iter()
-                .map(|(l, v)| (l, map(MemberKind::InstanceMethod, v)))
-                .collect(),
-            static_methods: self
-                .static_methods
-                .into_iter()
-                .map(|(l, v)| (l, map(MemberKind::StaticMethod, v)))
-                .collect(),
-        }
-    }
-}
-
-impl<T> Default for Members<T> {
-    fn default() -> Self {
-        Members {
-            initializers: Default::default(),
-            variants: Default::default(),
-            properties: Default::default(),
-            methods: Default::default(),
-            static_methods: Default::default(),
         }
     }
 }
@@ -289,7 +221,7 @@ impl Binder {
 #[derive(Default, Debug, Clone)]
 pub struct SCCGraph {
     idx_map: FxHashMap<Binder, NodeIndex>,
-    graph: DiGraph<Binder, NodeID>,
+    pub graph: DiGraph<Binder, NodeID>,
     rhs_ids: FxHashMap<Binder, NodeID>,
 }
 
@@ -330,7 +262,7 @@ impl SCCGraph {
 #[derive(Clone, Debug)]
 pub struct ElaboratedTypes<Phase: ElaborationPhase = RegisteredNames> {
     pub nominals: FxHashMap<Symbol, Nominal<Phase::T>>,
-    pub protocols: FxHashMap<Symbol, Protocol<Phase>>,
+    pub protocols: FxHashMap<Symbol, Protocol<Phase::T>>,
     pub globals: FxHashMap<Symbol, Phase::T>,
     pub canonical_row_vars: FxHashMap<Symbol, RowMetaId>,
     pub canonical_type_params: FxHashMap<Symbol, TypeParamId>,
@@ -356,75 +288,6 @@ impl<T: ElaborationPhase> Default for ElaboratedTypes<T> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum NominalKind {
-    Struct,
-    Enum,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct Nominal<T> {
-    pub name: Name,
-    pub ty: T,
-    pub node_id: NodeID,
-    pub span: Span,
-    pub kind: NominalKind,
-    pub conformances: Vec<ConformanceStub>,
-    pub child_types: IndexMap<Label, Symbol>,
-    pub members: Members<T>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-#[allow(clippy::type_complexity)]
-pub struct Protocol<Phase: ElaborationPhase> {
-    pub name: Name,
-    pub node_id: NodeID,
-    pub self_id: TypeParamId,
-    pub associated_types: IndexMap<
-        Label,
-        (
-            Symbol,
-            AssociatedTypeId,
-            TypeParamId,
-            IndexSet<Predicate<ElaborationTy>>,
-        ),
-    >,
-    pub method_requirements: IndexMap<Label, Phase::T>,
-    pub conformances: Vec<ConformanceStub>,
-    pub child_types: IndexMap<Label, Symbol>,
-    pub members: Members<Phase::T>,
-}
-
-impl Protocol<ElaboratedToElaborationTys> {
-    pub fn collect_foralls(&self) -> IndexSet<ForAll> {
-        let mut foralls = IndexSet::default();
-
-        foralls.insert(ForAll::Ty(self.self_id));
-        foralls.extend(
-            self.associated_types
-                .values()
-                .map(|(_, _, id, _)| ForAll::Ty(*id)),
-        );
-
-        foralls
-    }
-}
-
-impl Protocol<ElaboratedToSchemes> {
-    pub fn collect_foralls(&self) -> IndexSet<ForAll> {
-        let mut foralls = IndexSet::default();
-
-        foralls.insert(ForAll::Ty(self.self_id));
-        foralls.extend(
-            self.associated_types
-                .values()
-                .map(|(_, _, id, _)| ForAll::Ty(*id)),
-        );
-
-        foralls
-    }
-}
-
 // Walk the AST finding global funcs, lets, nominals and protocols. Extract
 // what we can from their type annotations to make inference easier.
 // TODO: Maybe we can just stash more info in ElaboratedTypes and not have
@@ -438,10 +301,7 @@ pub struct ElaborationPass<'a> {
 }
 
 impl<'a> ElaborationPass<'a> {
-    pub fn drive(
-        asts: &'a [AST<NameResolved>],
-        session: &'a mut TypeSession,
-    ) -> ElaboratedTypes<ElaboratedToSchemes> {
+    pub fn drive(asts: &'a [AST<NameResolved>], session: &'a mut TypeSession) {
         let mut pass = Self {
             session,
             canonical_row_vars: Default::default(),
@@ -478,7 +338,7 @@ impl<'a> ElaborationPass<'a> {
         scheme_tys.canonical_row_vars = std::mem::take(&mut pass.canonical_row_vars);
         scheme_tys.canonical_type_params = std::mem::take(&mut pass.canonical_type_params);
         scheme_tys.type_param_conformances = std::mem::take(&mut pass.type_param_conformances);
-        scheme_tys
+        pass.session.elaborated_types = scheme_tys;
     }
 
     #[instrument(skip(self, types, nodes, child_types))]
@@ -1020,15 +880,7 @@ impl<'a> ElaborationPass<'a> {
         types: &ElaboratedTypes<T>,
         nodes: &[Decl],
     ) -> (
-        IndexMap<
-            Label,
-            (
-                Symbol,
-                AssociatedTypeId,
-                TypeParamId,
-                IndexSet<Predicate<ElaborationTy>>,
-            ),
-        >,
+        IndexMap<Label, AssociatedType>,
         IndexMap<
             Label,
             (
@@ -1039,15 +891,7 @@ impl<'a> ElaborationPass<'a> {
             ),
         >,
     ) {
-        let mut associated_types = IndexMap::<
-            Label,
-            (
-                Symbol,
-                AssociatedTypeId,
-                TypeParamId,
-                IndexSet<Predicate<ElaborationTy>>,
-            ),
-        >::default();
+        let mut associated_types = IndexMap::<Label, AssociatedType>::default();
         let mut method_requirements = IndexMap::<
             Label,
             (
@@ -1063,22 +907,14 @@ impl<'a> ElaborationPass<'a> {
 
             match kind {
                 DeclKind::Associated { generic } => {
-                    let Symbol::AssociatedType(associated_type_id) = generic.name.symbol() else {
-                        unreachable!()
-                    };
-
                     let (id, protocol_ids) = self.lookup_generic(generic.clone());
-                    let predicates = protocol_ids
-                        .into_iter()
-                        .map(|(protocol_id, span)| Predicate::<ElaborationTy>::Conforms {
-                            param: id,
-                            protocol_id,
-                            span,
-                        })
-                        .collect();
                     associated_types.insert(
                         generic.name.name_str().into(),
-                        (generic.name.symbol(), associated_type_id, id, predicates),
+                        AssociatedType {
+                            symbol: generic.name.symbol(),
+                            type_param_id: id,
+                            conformances: protocol_ids,
+                        },
                     );
                 }
                 DeclKind::MethodRequirement(req) | DeclKind::FuncSignature(req) => {
@@ -1637,7 +1473,7 @@ pub mod tests {
     }
 
     impl SCCGraph {
-        fn neighbors_for(&self, node: &Binder) -> Vec<Binder> {
+        pub fn neighbors_for(&self, node: &Binder) -> Vec<Binder> {
             self.graph
                 .neighbors(self.idx_map[node])
                 .map(|idx| self.graph[idx].clone())
@@ -1650,7 +1486,8 @@ pub mod tests {
         let resolved = driver.parse().unwrap().resolve_names().unwrap();
         let mut session = TypeSession::new(ModuleId::Current, Default::default());
         let asts: Vec<_> = resolved.phase.asts.into_values().collect();
-        ElaborationPass::drive(asts.as_slice(), &mut session)
+        ElaborationPass::drive(asts.as_slice(), &mut session);
+        session.elaborated_types
     }
 
     #[test]
@@ -2016,7 +1853,7 @@ pub mod tests {
                 .protocols
                 .get(&ProtocolId::from(1).into())
                 .unwrap(),
-            Protocol::<ElaboratedToSchemes> {
+            Protocol {
                 name: Name::Resolved(ProtocolId::from(1).into(), "A".into()),
                 node_id: NodeID::ANY,
                 conformances: vec![],
@@ -2055,7 +1892,7 @@ pub mod tests {
             .protocols
             .get(&ProtocolId::from(2).into())
             .unwrap(),
-            Protocol::<ElaboratedToSchemes> {
+            Protocol {
                 self_id: 3.into(),
                 name: Name::Resolved(ProtocolId::from(2).into(), "B".into()),
                 node_id: NodeID::ANY,
@@ -2087,15 +1924,21 @@ pub mod tests {
                       }))
                 },
                 associated_types: indexmap::indexmap! {
-                    "C".into() => (Symbol::AssociatedType(2.into()), 2.into(), 4.into(), indexset!{}),
-                    "D".into() => (Symbol::AssociatedType(3.into()), 3.into(), 5.into(), indexset!{
-                        Predicate::Conforms {
-                            param: 5.into(),
-                            protocol_id: ProtocolId::from(1),
-                            span: Span::ANY
-                        }
-                    }),
-                },
+                "C".into() => AssociatedType {
+                                    symbol: Symbol::AssociatedType(2.into()),
+                                    type_param_id: 4.into(),
+                                    conformances: vec![
+                                    ]
+                                },
+
+                                "D".into() => AssociatedType {
+                                    symbol: Symbol::AssociatedType(3.into()),
+                                    type_param_id: 5.into(),
+                                    conformances: vec![
+                                        (ProtocolId::from(1), Span::ANY)
+                                    ]
+                                }
+                            },
                 members: Members {
                     initializers: Default::default(),
                     variants: Default::default(),

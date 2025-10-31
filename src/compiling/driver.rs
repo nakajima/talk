@@ -211,8 +211,8 @@ impl Driver<NameResolved> {
         let exports = self.exports();
 
         let (paths, mut asts): (Vec<_>, Vec<_>) = self.phase.asts.into_iter().unzip();
-        let elaborated_types = ElaborationPass::drive(&asts, &mut session);
-        InferencePass::drive(&mut asts, &mut session, elaborated_types);
+        ElaborationPass::drive(&asts, &mut session);
+        InferencePass::drive(&mut asts, &mut session);
         let asts: IndexMap<Source, AST<_>> = paths.into_iter().zip(asts).collect();
 
         Ok(Driver {

@@ -13,6 +13,7 @@ use crate::{
     types::{
         infer_row::RowParamId,
         infer_ty::{InferTy, TypeParamId},
+        nominal::Nominal,
         ty::{SomeType, Ty},
         type_session::{TypeEntry, TypeSession},
     },
@@ -98,16 +99,16 @@ impl Extension {
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub struct Protocol {
+pub struct ProtocolOld {
     pub node_id: NodeID,
     pub static_methods: FxHashMap<Label, Symbol>,
     pub associated_types: IndexMap<Name, Symbol>,
     pub requirements: FxHashMap<Label, ConformanceRequirement>,
 }
 
-impl Protocol {
-    pub fn import(self, module_id: ModuleId) -> Protocol {
-        Protocol {
+impl ProtocolOld {
+    pub fn import(self, module_id: ModuleId) -> ProtocolOld {
+        ProtocolOld {
             node_id: self.node_id,
             static_methods: import_label_symbol_map(module_id, self.static_methods),
             associated_types: self
@@ -125,14 +126,14 @@ impl Protocol {
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub struct Nominal {
+pub struct NominalOld {
     pub symbol: Symbol,
     pub node_id: NodeID,
 }
 
-impl Nominal {
-    pub fn import(self, module_id: ModuleId) -> Nominal {
-        Nominal {
+impl NominalOld {
+    pub fn import(self, module_id: ModuleId) -> NominalOld {
+        NominalOld {
             symbol: self.symbol.import(module_id),
             node_id: self.node_id,
         }
@@ -162,8 +163,13 @@ impl<T: SomeType> Default for TrackedInstantiations<T> {
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct TypeCatalog<T: SomeType> {
-    pub nominals: FxHashMap<Symbol, Nominal>,
-    pub protocols: FxHashMap<ProtocolId, Protocol>,
+    pub nominals: FxHashMap<Symbol, Nominal<T>>,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub struct TypeCatalogOld<T: SomeType> {
+    pub nominals: FxHashMap<Symbol, NominalOld>,
+    pub protocols: FxHashMap<ProtocolId, ProtocolOld>,
     pub conformances: FxHashMap<ConformanceKey, Conformance>,
     pub extensions: FxHashMap<Symbol, FxHashMap<Label, Symbol>>,
     pub child_types: FxHashMap<Symbol, FxHashMap<String, Symbol>>,
@@ -178,7 +184,7 @@ pub struct TypeCatalog<T: SomeType> {
     pub instantiations: TrackedInstantiations<T>,
 }
 
-impl<T: SomeType> Default for TypeCatalog<T> {
+impl<T: SomeType> Default for TypeCatalogOld<T> {
     fn default() -> Self {
         Self {
             nominals: Default::default(),
@@ -199,8 +205,8 @@ impl<T: SomeType> Default for TypeCatalog<T> {
     }
 }
 
-impl TypeCatalog<InferTy> {
-    pub fn finalize(self, session: &mut TypeSession) -> TypeCatalog<Ty> {
+impl TypeCatalogOld<InferTy> {
+    pub fn finalize(self, session: &mut TypeSession) -> TypeCatalogOld<Ty> {
         let mut instantiations = TrackedInstantiations::default();
         for (key, infer_ty) in self.instantiations.ty {
             let ty = match session.finalize_ty(infer_ty) {
@@ -214,7 +220,7 @@ impl TypeCatalog<InferTy> {
                 .row
                 .insert(key, session.finalize_row(infer_row));
         }
-        TypeCatalog {
+        TypeCatalogOld {
             nominals: self.nominals,
             protocols: self.protocols,
             conformances: self.conformances,
@@ -231,7 +237,7 @@ impl TypeCatalog<InferTy> {
     }
 }
 
-impl<T: SomeType> TypeCatalog<T> {
+impl<T: SomeType> TypeCatalogOld<T> {
     pub fn lookup_member(&self, receiver: &Symbol, label: &Label) -> Option<Symbol> {
         if let Some(entries) = self.properties.get(receiver)
             && let Some(sym) = entries.get(label)

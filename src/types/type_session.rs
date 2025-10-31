@@ -15,14 +15,20 @@ use crate::{
         constraints::constraint::Constraint,
         infer_row::{InferRow, RowMetaId, RowParamId},
         infer_ty::{InferTy, Level, Meta, MetaVarId, SkolemId, TypeParamId},
+        nominal::NominalKind,
+        passes::elaboration_pass::{
+            ElaboratedToSchemes, ElaboratedTypes, ElaborationRow, ElaborationTy,
+        },
+        predicate::Predicate,
         row::Row,
         scheme::{ForAll, Scheme},
         term_environment::{EnvEntry, TermEnv},
         ty::{SomeType, Ty},
-        type_catalog::{Conformance, ConformanceKey, Nominal, Protocol, TypeCatalog},
+        type_catalog::{Conformance, ConformanceKey, NominalOld, ProtocolOld, TypeCatalogOld},
         type_error::TypeError,
         type_operations::{UnificationSubstitutions, apply, apply_row, substitute},
         vars::Vars,
+        wants::Wants,
     },
 };
 
@@ -45,15 +51,14 @@ pub struct TypeSession {
     pub(super) skolem_map: FxHashMap<InferTy, InferTy>,
     pub(super) skolem_conformances: FxHashMap<SkolemId, IndexSet<(ProtocolId, Span)>>,
 
-    pub(super) type_param_conformances: IndexMap<TypeParamId, IndexSet<(ProtocolId, Span)>>,
-
     pub skolem_bounds: FxHashMap<SkolemId, Vec<StructId>>,
-    // pub(super) type_param_bounds: FxHashMap<TypeParamId, Vec<ProtocolBound>>,
     pub typealiases: FxHashMap<Symbol, Scheme<InferTy>>,
-    pub(super) type_catalog: TypeCatalog<InferTy>,
+    pub(super) type_catalog: TypeCatalogOld<InferTy>,
     pub(super) modules: Rc<ModuleEnvironment>,
     pub aliases: FxHashMap<Symbol, Scheme<InferTy>>,
     pub(super) reverse_instantiations: ReverseInstantiations,
+
+    pub elaborated_types: ElaboratedTypes<ElaboratedToSchemes>,
 }
 
 pub struct Typed {}
@@ -78,7 +83,7 @@ impl TypeEntry {
 pub struct Types {
     pub types_by_node: FxHashMap<NodeID, TypeEntry>,
     pub types_by_symbol: FxHashMap<Symbol, TypeEntry>,
-    pub catalog: TypeCatalog<Ty>,
+    pub catalogold: TypeCatalogOld<Ty>,
 }
 
 #[derive(Debug, Default)]
@@ -118,7 +123,6 @@ impl TypeSession {
             skolem_conformances: Default::default(),
             meta_levels: Default::default(),
             term_env,
-            type_param_conformances: Default::default(),
             skolem_bounds: Default::default(),
             reverse_instantiations: Default::default(),
             types_by_node: Default::default(),
@@ -126,6 +130,7 @@ impl TypeSession {
             type_catalog: Default::default(),
             modules,
             aliases: Default::default(),
+            elaborated_types: Default::default(),
         }
     }
 
@@ -197,7 +202,7 @@ impl TypeSession {
         let catalog = std::mem::take(&mut self.type_catalog);
         let catalog = catalog.finalize(&mut self);
         let types = Types {
-            catalog,
+            catalogold: catalog,
             types_by_node: entries,
             types_by_symbol,
         };
@@ -623,7 +628,7 @@ impl TypeSession {
         self.term_env.insert(sym, EnvEntry::Mono(ty));
     }
 
-    pub(super) fn _lookup_nominal(&mut self, symbol: &Symbol) -> Option<Nominal> {
+    pub(super) fn _lookup_nominal(&mut self, symbol: &Symbol) -> Option<NominalOld> {
         if let Some(entry) = self.type_catalog.nominals.get(symbol).cloned() {
             return Some(entry);
         }
@@ -636,7 +641,7 @@ impl TypeSession {
         {
             let nominal = module
                 .types
-                .catalog
+                .catalogold
                 .nominals
                 .get(&Symbol::Struct(StructId {
                     module_id: ModuleId::Current,
@@ -659,7 +664,7 @@ impl TypeSession {
         }
 
         for module in self.modules.modules.values() {
-            if let Some(sym) = module.types.catalog.lookup_member(receiver, label) {
+            if let Some(sym) = module.types.catalogold.lookup_member(receiver, label) {
                 match sym {
                     Symbol::InstanceMethod(..) => {
                         self.type_catalog
@@ -705,7 +710,7 @@ impl TypeSession {
         }
 
         for module in self.modules.modules.values() {
-            if let Some(variants) = module.types.catalog.variants.get(receiver).cloned() {
+            if let Some(variants) = module.types.catalogold.variants.get(receiver).cloned() {
                 return Some(variants);
             }
         }
@@ -724,7 +729,7 @@ impl TypeSession {
         self.type_catalog.conformances.get_mut(key)
     }
 
-    pub(super) fn _lookup_protocol(&mut self, protocol_id: ProtocolId) -> Option<Protocol> {
+    pub(super) fn _lookup_protocol(&mut self, protocol_id: ProtocolId) -> Option<ProtocolOld> {
         if let Some(entry) = self.type_catalog.protocols.get(&protocol_id).cloned() {
             return Some(entry);
         }
@@ -742,7 +747,7 @@ impl TypeSession {
             };
             let protocol = module
                 .types
-                .catalog
+                .catalogold
                 .protocols
                 .get(&ProtocolId {
                     module_id: module_key,
@@ -790,7 +795,7 @@ impl TypeSession {
             };
             let initializers = module
                 .types
-                .catalog
+                .catalogold
                 .initializers
                 .get(&Symbol::Struct(StructId {
                     module_id: module_key,
@@ -830,7 +835,7 @@ impl TypeSession {
             };
             let properties = module
                 .types
-                .catalog
+                .catalogold
                 .properties
                 .get(&Symbol::Struct(StructId {
                     module_id: module_key,
@@ -850,6 +855,204 @@ impl TypeSession {
         }
 
         None
+    }
+
+    #[instrument(skip(self, wants))]
+    pub fn materialize(&mut self, ty: ElaborationTy, level: Level, wants: &mut Wants) -> InferTy {
+        match ty {
+            ElaborationTy::Hole(..) => self.new_ty_meta_var(level),
+            ElaborationTy::Projection {
+                box base,
+                associated,
+            } => InferTy::Projection {
+                base: self.materialize(base, level, wants).into(),
+                associated,
+            },
+            ElaborationTy::Constructor {
+                name,
+                params,
+                box ret,
+            } => InferTy::Constructor {
+                name,
+                params: params
+                    .into_iter()
+                    .map(|i| self.materialize(i, level, wants))
+                    .collect(),
+                ret: self.materialize(ret, level, wants).into(),
+            },
+            ElaborationTy::Func(box param, box ret) => InferTy::Func(
+                self.materialize(param, level, wants).into(),
+                self.materialize(ret, level, wants).into(),
+            ),
+            ElaborationTy::Tuple(items) => InferTy::Tuple(
+                items
+                    .into_iter()
+                    .map(|i| self.materialize(i, level, wants))
+                    .collect(),
+            ),
+            ElaborationTy::Record(box row) => {
+                InferTy::Record(self.materialize_row(row, level, wants).into())
+            }
+            ElaborationTy::Nominal { symbol } => InferTy::Nominal {
+                symbol,
+                row: self.build_infer_row(&symbol, level, wants).into(),
+            },
+            ElaborationTy::Primitive(symbol) => InferTy::Primitive(symbol),
+            ElaborationTy::Param(type_param_id) => InferTy::Param(type_param_id),
+            ElaborationTy::Rigid(skolem_id) => InferTy::Rigid(skolem_id),
+        }
+    }
+
+    #[instrument(skip(self, wants))]
+    pub fn materialize_entry(
+        &mut self,
+        entry: (Symbol, EnvEntry<ElaborationTy>),
+        level: Level,
+        wants: &mut Wants,
+    ) -> EnvEntry<InferTy> {
+        let (symbol, entry) = entry;
+
+        if let Some(existing) = self.lookup(&symbol) {
+            return existing;
+        }
+
+        match entry {
+            EnvEntry::Mono(ty) => EnvEntry::Mono(self.materialize(ty, level, wants)),
+            EnvEntry::Scheme(scheme) => EnvEntry::Scheme(Scheme {
+                ty: self.materialize(scheme.ty, level, wants),
+                foralls: scheme.foralls,
+                predicates: scheme
+                    .predicates
+                    .into_iter()
+                    .map(|p| self.materialize_predicate(p, level, wants))
+                    .collect(),
+            }),
+        }
+    }
+
+    #[instrument(skip(self, wants))]
+    fn build_infer_row(&mut self, symbol: &Symbol, level: Level, wants: &mut Wants) -> InferRow {
+        let nominal = self.elaborated_types.nominals.get(symbol).cloned().unwrap();
+
+        // We can use inner_ty here because any generics are owned by the nominal,
+        // so predicates/foralls will still be accounted for.
+        match nominal.kind {
+            NominalKind::Struct => nominal.members.properties.iter().fold(
+                InferRow::Empty(TypeDefKind::Struct),
+                |acc, (label, entry)| InferRow::Extend {
+                    row: acc.into(),
+                    label: label.clone(),
+                    ty: self.materialize(entry.1.inner_ty(), level, wants),
+                },
+            ),
+            NominalKind::Enum => nominal.members.variants.iter().fold(
+                InferRow::Empty(TypeDefKind::Enum),
+                |acc, (label, entry)| {
+                    let entry = self.materialize_entry(entry.clone(), level, wants);
+                    println!("VARIANT ENTRY: {entry:?}");
+                    let row_ty =
+                        entry.instantiate(nominal.node_id, self, level, wants, nominal.span);
+
+                    InferRow::Extend {
+                        row: acc.into(),
+                        label: label.clone(),
+                        ty: row_ty,
+                    }
+                },
+            ),
+        }
+    }
+
+    #[instrument(skip(self, wants))]
+    fn materialize_row(
+        &mut self,
+        row: ElaborationRow,
+        level: Level,
+        wants: &mut Wants,
+    ) -> InferRow {
+        match row {
+            ElaborationRow::Empty(kind) => InferRow::Empty(kind),
+            ElaborationRow::Extend { box row, label, ty } => InferRow::Extend {
+                row: self.materialize_row(row, level, wants).into(),
+                label,
+                ty: self.materialize(ty, level, wants),
+            },
+            ElaborationRow::Param(row_param_id) => InferRow::Param(row_param_id),
+            ElaborationRow::Pending => panic!("did not replace pending elaboration row"),
+        }
+    }
+
+    #[instrument(skip(self, wants))]
+    fn materialize_predicate(
+        &mut self,
+        predicate: Predicate<ElaborationTy>,
+        level: Level,
+        wants: &mut Wants,
+    ) -> Predicate<InferTy> {
+        match predicate {
+            Predicate::HasField { row, label, ty } => Predicate::HasField {
+                row,
+                label,
+                ty: self.materialize(ty, level, wants),
+            },
+            Predicate::Conforms {
+                param,
+                protocol_id,
+                span,
+            } => Predicate::Conforms {
+                param,
+                protocol_id,
+                span,
+            },
+            Predicate::Member {
+                receiver,
+                label,
+                ty,
+            } => Predicate::Member {
+                receiver: self.materialize(receiver, level, wants),
+                label,
+                ty: self.materialize(ty, level, wants),
+            },
+            Predicate::Call {
+                callee,
+                args,
+                returns,
+                receiver,
+            } => Predicate::Call {
+                callee: self.materialize(callee, level, wants),
+                args: args
+                    .into_iter()
+                    .map(|i| self.materialize(i, level, wants))
+                    .collect(),
+                returns: self.materialize(returns, level, wants),
+                receiver: receiver.map(|r| self.materialize(r, level, wants)),
+            },
+            Predicate::TypeMember {
+                base,
+                member,
+                returns,
+                generics,
+            } => Predicate::TypeMember {
+                base: self.materialize(base, level, wants),
+                member,
+                returns: self.materialize(returns, level, wants),
+                generics: generics
+                    .into_iter()
+                    .map(|g| self.materialize(g, level, wants))
+                    .collect(),
+            },
+            Predicate::AssociatedEquals {
+                subject,
+                protocol_id,
+                associated_type_id,
+                output,
+            } => Predicate::AssociatedEquals {
+                subject: self.materialize(subject, level, wants),
+                protocol_id,
+                associated_type_id,
+                output: self.materialize(output, level, wants),
+            },
+        }
     }
 
     pub(crate) fn new_type_param(&mut self, meta: Option<MetaVarId>) -> InferTy {
@@ -893,7 +1096,8 @@ impl TypeSession {
 
         self.skolem_conformances.insert(
             id,
-            self.type_param_conformances
+            self.elaborated_types
+                .type_param_conformances
                 .get(&param)
                 .cloned()
                 .unwrap_or_default(),

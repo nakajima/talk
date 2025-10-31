@@ -5,6 +5,8 @@ pub mod symbol;
 pub mod transforms;
 
 #[cfg(test)]
+pub mod dependency_resolving_tests;
+#[cfg(test)]
 pub mod name_resolver_tests;
 
 #[macro_export]

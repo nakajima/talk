@@ -231,7 +231,7 @@ impl<'a> DeclDeclarer<'a> {
             TypeDefKind::Protocol => self.resolver.declare(name, some!(Protocol), id),
             TypeDefKind::Struct => self.resolver.declare(name, some!(Struct), id),
             TypeDefKind::Enum => self.resolver.declare(name, some!(Enum), id),
-            TypeDefKind::Extension => self.resolver.lookup(name).unwrap_or(name.clone()),
+            TypeDefKind::Extension => self.resolver.lookup(name, Some(id)).unwrap_or(name.clone()),
         };
 
         self.type_members.insert(id, TypeMembers::default());
@@ -343,7 +343,7 @@ impl<'a> DeclDeclarer<'a> {
             {
                 *name = self
                     .resolver
-                    .lookup(name)
+                    .lookup(name, Some(*id))
                     .unwrap_or_else(|| self.resolver.declare(name, some!(Global), func_id));
 
                 self.start_scope(*id);

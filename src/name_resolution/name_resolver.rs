@@ -31,6 +31,7 @@ use crate::{
     },
     on, some,
     span::Span,
+    types::passes::elaboration_pass::{Binder, SCCGraph},
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -76,6 +77,7 @@ pub struct NameResolved {
     pub is_captured: FxHashSet<Symbol>,
     pub scopes: FxHashMap<NodeID, Scope>,
     pub symbols_to_node: FxHashMap<Symbol, NodeID>,
+    pub scc_graph: SCCGraph,
 }
 
 pub type ScopeId = Index;
@@ -103,6 +105,7 @@ pub struct NameResolver {
     // Scope stuff
     pub(super) scopes: FxHashMap<NodeID, Scope>,
     pub(super) current_scope_id: Option<NodeID>,
+    pub(super) current_symbol_scope: Vec<Option<(Symbol, NodeID)>>,
 }
 
 impl ASTPhase for NameResolved {}
@@ -116,6 +119,7 @@ impl NameResolver {
             current_module_id,
             scopes: Default::default(),
             current_scope_id: None,
+            current_symbol_scope: Default::default(),
             modules,
         };
 
@@ -252,11 +256,29 @@ impl NameResolver {
         None
     }
 
-    pub(super) fn lookup(&mut self, name: &Name) -> Option<Name> {
+    pub(super) fn lookup(&mut self, name: &Name, node_id: Option<NodeID>) -> Option<Name> {
         let symbol =
             self.lookup_in_scope(name, self.current_scope_id.expect("no scope to declare in"))?;
 
+        if let Some(node_id) = node_id {
+            self.track_dependency(symbol, node_id);
+        }
+
         Some(Name::Resolved(symbol, name.name_str()))
+    }
+
+    fn track_dependency(&mut self, to: Symbol, id: NodeID) {
+        if !matches!(to, Symbol::Global(..) | Symbol::StaticMethod(..)) {
+            return;
+        }
+
+        if let Some((from_sym, from_id)) = self.current_symbol_scope.iter().rev().find_map(|f| *f) {
+            self.phase.scc_graph.add_edge(
+                (Binder::Symbol(from_sym), from_id),
+                (Binder::Symbol(to), id),
+                id,
+            );
+        }
     }
 
     pub(super) fn diagnostic(&mut self, span: Span, err: NameResolverError) {
@@ -264,11 +286,25 @@ impl NameResolver {
             .push(Diagnostic::<NameResolverError> { kind: err, span });
     }
 
-    fn enter_scope(&mut self, node_id: NodeID) {
+    fn enter_scope(&mut self, node_id: NodeID, symbol: Option<(Symbol, NodeID)>) {
         self.current_scope_id = Some(node_id);
+        self.current_symbol_scope.push(symbol);
+
+        // We track instance methods by type so we don't need to insert individual notes for them
+        // automatically, however, we do insert nodes for them if they reference other things like globals
+        if let Some(symbol) = symbol
+            && !matches!(
+                symbol.0,
+                Symbol::InstanceMethod(..) | Symbol::Synthesized(..)
+            )
+        {
+            self.phase
+                .scc_graph
+                .add_node(Binder::Symbol(symbol.0), symbol.1);
+        }
     }
 
-    fn exit_scope(&mut self) {
+    fn exit_scope(&mut self, node_id: NodeID) {
         let current_scope_id = self.current_scope_id.expect("no scope to exit");
         let current_scope = self
             .scopes
@@ -276,6 +312,12 @@ impl NameResolver {
             .expect("did not find current scope");
 
         self.current_scope_id = current_scope.parent_id;
+
+        if let Some(Some(scope)) = self.current_symbol_scope.last()
+            && scope.1 == node_id
+        {
+            self.current_symbol_scope.pop();
+        }
     }
 
     pub(super) fn declare(&mut self, name: &Name, kind: Symbol, node_id: NodeID) -> Name {
@@ -334,7 +376,7 @@ impl NameResolver {
         if let PatternKind::Variant { enum_name, .. } = &mut pattern.kind
             && let Some(enum_name) = enum_name
         {
-            let Some(resolved) = self.lookup(enum_name) else {
+            let Some(resolved) = self.lookup(enum_name, None) else {
                 self.diagnostic(
                     pattern.span,
                     NameResolverError::UndefinedName(enum_name.name_str()),
@@ -351,7 +393,7 @@ impl NameResolver {
     ///////////////////////////////////////////////////////////////////////////
     fn enter_type_annotation(&mut self, ty: &mut TypeAnnotation) {
         if let TypeAnnotationKind::Nominal { name, .. } = &mut ty.kind {
-            if let Some(resolved_name) = self.lookup(name) {
+            if let Some(resolved_name) = self.lookup(name, None) {
                 *name = resolved_name
             } else {
                 self.diagnostic(ty.span, NameResolverError::UndefinedName(name.name_str()));
@@ -359,7 +401,7 @@ impl NameResolver {
         }
 
         if let TypeAnnotationKind::SelfType(name) = &mut ty.kind {
-            if let Some(resolved_name) = self.lookup(name) {
+            if let Some(resolved_name) = self.lookup(name, None) {
                 *name = resolved_name
             } else {
                 self.diagnostic(ty.span, NameResolverError::UndefinedName(name.name_str()));
@@ -376,7 +418,7 @@ impl NameResolver {
             ..
         }) = &mut stmt.kind
         {
-            self.enter_scope(block.id);
+            self.enter_scope(block.id, None);
         }
     }
 
@@ -386,7 +428,7 @@ impl NameResolver {
             ..
         }) = &mut stmt.kind
         {
-            self.exit_scope();
+            self.exit_scope(stmt.id);
         }
     }
 
@@ -395,16 +437,16 @@ impl NameResolver {
     ///////////////////////////////////////////////////////////////////////////
 
     fn enter_match_arm(&mut self, arm: &mut MatchArm) {
-        self.enter_scope(arm.id);
+        self.enter_scope(arm.id, None);
     }
 
-    fn exit_match_arm(&mut self, _arm: &mut MatchArm) {
-        self.exit_scope();
+    fn exit_match_arm(&mut self, arm: &mut MatchArm) {
+        self.exit_scope(arm.id);
     }
 
     fn enter_expr(&mut self, expr: &mut Expr) {
         on!(&mut expr.kind, ExprKind::Variable(name), {
-            let Some(resolved_name) = self.lookup(name) else {
+            let Some(resolved_name) = self.lookup(name, Some(expr.id)) else {
                 self.diagnostic(expr.span, NameResolverError::UndefinedName(name.name_str()));
                 return;
             };
@@ -436,7 +478,7 @@ impl NameResolver {
             panic!("did not resolve name")
         };
 
-        self.enter_scope(func.id);
+        self.enter_scope(func.id, None);
     }
 
     fn exit_func(&mut self, func: &mut Func) {
@@ -448,15 +490,15 @@ impl NameResolver {
             panic!("Did not resolve func")
         };
 
-        self.exit_scope();
+        self.exit_scope(func.id);
     }
 
     fn enter_func_signature(&mut self, func: &mut FuncSignature) {
-        self.enter_scope(func.id);
+        self.enter_scope(func.id, None);
     }
 
-    fn exit_func_signature(&mut self, _func: &mut FuncSignature) {
-        self.exit_scope();
+    fn exit_func_signature(&mut self, func: &mut FuncSignature) {
+        self.exit_scope(func.id);
     }
 
     ///////////////////////////////////////////////////////////////////////////
@@ -464,18 +506,18 @@ impl NameResolver {
     ///////////////////////////////////////////////////////////////////////////
     fn enter_decl(&mut self, decl: &mut Decl) {
         on!(
-            decl.kind,
-            DeclKind::Enum { .. }
-                | DeclKind::Struct { .. }
-                | DeclKind::Protocol { .. }
-                | DeclKind::Extend { .. },
+            &decl.kind,
+            DeclKind::Enum { name, .. }
+                | DeclKind::Struct { name, .. }
+                | DeclKind::Protocol { name, .. }
+                | DeclKind::Extend { name, .. },
             {
-                self.enter_scope(decl.id);
+                self.enter_scope(decl.id, Some((name.symbol(), decl.id)));
             }
         );
 
         on!(&mut decl.kind, DeclKind::Extend { name, .. }, {
-            let Some(type_name) = self.lookup(name) else {
+            let Some(type_name) = self.lookup(name, None) else {
                 self.diagnostic(decl.span, NameResolverError::UndefinedName(name.name_str()));
                 return;
             };
@@ -488,13 +530,31 @@ impl NameResolver {
                 .insert("Self".into(), name.symbol());
         });
 
-        on!(&mut decl.kind, DeclKind::Init { params, .. }, {
-            self.enter_scope(decl.id);
+        on!(&mut decl.kind, DeclKind::Init { name, params, .. }, {
+            self.enter_scope(decl.id, Some((name.symbol(), decl.id)));
 
             for param in params {
                 param.name = self.declare(&param.name, some!(ParamLocal), param.id);
             }
-        })
+        });
+
+        on!(&mut decl.kind, DeclKind::Method { .. }, {
+            self.enter_scope(decl.id, None);
+        });
+
+        on!(
+            &decl.kind,
+            DeclKind::Let {
+                rhs: Some(Expr {
+                    kind: ExprKind::Func(func),
+                    ..
+                }),
+                ..
+            },
+            {
+                self.enter_scope(func.id, Some((func.name.symbol(), func.id)));
+            }
+        );
     }
 
     fn exit_decl(&mut self, decl: &mut Decl) {
@@ -503,14 +563,19 @@ impl NameResolver {
             DeclKind::Enum { .. }
                 | DeclKind::Struct { .. }
                 | DeclKind::Protocol { .. }
-                | DeclKind::Extend { .. },
+                | DeclKind::Extend { .. }
+                | DeclKind::Method { .. }
+                | DeclKind::Init { .. }
+                | DeclKind::Let {
+                    rhs: Some(Expr {
+                        kind: ExprKind::Func(..),
+                        ..
+                    }),
+                    ..
+                },
             {
-                self.exit_scope();
+                self.exit_scope(decl.id);
             }
         );
-
-        on!(&mut decl.kind, DeclKind::Init { .. }, {
-            self.exit_scope();
-        })
     }
 }
