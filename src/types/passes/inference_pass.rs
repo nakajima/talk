@@ -30,9 +30,7 @@ use crate::{
         constraints::constraint::{Constraint, ConstraintCause},
         infer_row::InferRow,
         infer_ty::{InferTy, Level},
-        passes::elaboration_pass::{
-            Binder, ElaboratedTypes, ElaborationPass, RegisteredNames, SCCGraph,
-        },
+        passes::elaboration_pass::{ElaboratedTypes, ElaborationPass, RegisteredNames, SCCGraph},
         scheme::Scheme,
         term_environment::EnvEntry,
         type_operations::{UnificationSubstitutions, apply, curry, unify},
@@ -166,16 +164,15 @@ impl<'a> InferencePass<'a> {
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self, group, graph))]
-    fn infer_group(&mut self, group: &[Binder], level: Level, graph: &SCCGraph) {
+    fn infer_group(&mut self, group: &[Symbol], level: Level, graph: &SCCGraph) {
         let mut wants = Wants::default();
 
         let mut placeholders = vec![];
-        for binder in group {
-            let symbol = binder.symbol();
+        for symbol in group {
             if self.session.lookup(&symbol).is_none() {
                 let ty = self.session.new_ty_meta_var(level.next());
                 placeholders.push(ty.clone());
-                self.session.insert_mono(symbol, ty);
+                self.session.insert_mono(*symbol, ty);
             }
         }
 
@@ -192,19 +189,14 @@ impl<'a> InferencePass<'a> {
                 rhs.span(),
             );
 
-            if self.session.lookup(&binder.symbol()).is_none() {
-                self.session.insert_mono(binder.symbol(), ty);
+            if self.session.lookup(&binder).is_none() {
+                self.session.insert_mono(*binder, ty);
             }
         }
 
         let (predicates, mut substitutions) = self.solve(wants, level);
 
-        for binder in group {
-            let Binder::Symbol(sym) = binder else {
-                println!("Cannot generalize binder: {binder:?}, wip");
-                continue;
-            };
-
+        for sym in group {
             match self.session.lookup(sym) {
                 Some(EnvEntry::Mono(ty)) => {
                     let applied = apply(ty, &mut substitutions);

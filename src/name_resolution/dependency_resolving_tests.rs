@@ -1,9 +1,6 @@
 #[cfg(test)]
 pub mod tests {
-    use crate::{
-        name_resolution::{name_resolver_tests::tests::resolve, symbol::Symbol},
-        types::passes::elaboration_pass::Binder,
-    };
+    use crate::name_resolution::{name_resolver_tests::tests::resolve, symbol::Symbol};
 
     #[test]
     fn registers_edges_for_global_func_calls() {
@@ -16,11 +13,11 @@ pub mod tests {
 
         // b references a...
         assert_eq!(
-            vec![Binder::Symbol(Symbol::Global(1.into()))],
+            vec![Symbol::Global(1.into())],
             types
                 .phase
                 .scc_graph
-                .neighbors_for(&Binder::Symbol(Symbol::Global(2.into())))
+                .neighbors_for(&Symbol::Global(2.into()))
         );
 
         // but a does not reference b
@@ -28,7 +25,7 @@ pub mod tests {
             types
                 .phase
                 .scc_graph
-                .neighbors_for(&Binder::Symbol(Symbol::Global(1.into())))
+                .neighbors_for(&Symbol::Global(1.into()))
                 .is_empty()
         );
     }
@@ -43,19 +40,19 @@ pub mod tests {
         );
 
         assert_eq!(
-            vec![Binder::Symbol(Symbol::Global(2.into()))],
+            vec![Symbol::Global(2.into())],
             types
                 .phase
                 .scc_graph
-                .neighbors_for(&Binder::Symbol(Symbol::Global(1.into())))
+                .neighbors_for(&Symbol::Global(1.into()))
         );
 
         assert_eq!(
-            vec![Binder::Symbol(Symbol::Global(1.into()))],
+            vec![Symbol::Global(1.into())],
             types
                 .phase
                 .scc_graph
-                .neighbors_for(&Binder::Symbol(Symbol::Global(2.into())))
+                .neighbors_for(&Symbol::Global(2.into()))
         );
     }
 
@@ -71,7 +68,7 @@ pub mod tests {
             types
                 .phase
                 .scc_graph
-                .neighbors_for(&Binder::Symbol(Symbol::Global(1.into())))
+                .neighbors_for(&Symbol::Global(1.into()))
                 .is_empty()
         );
     }
@@ -91,7 +88,7 @@ pub mod tests {
 
         assert_eq!(
             types.phase.scc_graph.groups(),
-            vec![vec![Binder::Symbol(Symbol::Struct(1.into()))]],
+            vec![vec![Symbol::Struct(1.into())]],
         );
     }
 
@@ -107,11 +104,11 @@ pub mod tests {
         );
 
         assert_eq!(
-            vec![Binder::Symbol(Symbol::Global(1.into()))],
+            vec![Symbol::Global(1.into())],
             types
                 .phase
                 .scc_graph
-                .neighbors_for(&Binder::Symbol(Symbol::Struct(1.into())))
+                .neighbors_for(&Symbol::Struct(1.into()))
         );
     }
 
@@ -128,7 +125,7 @@ pub mod tests {
 
         assert_eq!(
             types.phase.scc_graph.groups(),
-            vec![vec![Binder::Symbol(Symbol::Struct(1.into()))],],
+            vec![vec![Symbol::Struct(1.into())],],
         );
     }
 
@@ -144,11 +141,11 @@ pub mod tests {
         );
 
         assert_eq!(
-            vec![Binder::Symbol(Symbol::Global(1.into()))],
+            vec![Symbol::Global(1.into())],
             types
                 .phase
                 .scc_graph
-                .neighbors_for(&Binder::Symbol(Symbol::Struct(1.into())))
+                .neighbors_for(&Symbol::Struct(1.into()))
         );
     }
 }

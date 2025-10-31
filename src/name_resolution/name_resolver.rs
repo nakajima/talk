@@ -31,7 +31,7 @@ use crate::{
     },
     on, some,
     span::Span,
-    types::passes::elaboration_pass::{Binder, SCCGraph},
+    types::passes::elaboration_pass::SCCGraph,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -273,11 +273,9 @@ impl NameResolver {
         }
 
         if let Some((from_sym, from_id)) = self.current_symbol_scope.iter().rev().find_map(|f| *f) {
-            self.phase.scc_graph.add_edge(
-                (Binder::Symbol(from_sym), from_id),
-                (Binder::Symbol(to), id),
-                id,
-            );
+            self.phase
+                .scc_graph
+                .add_edge((from_sym, from_id), (to, id), id);
         }
     }
 
@@ -298,9 +296,7 @@ impl NameResolver {
                 Symbol::InstanceMethod(..) | Symbol::Synthesized(..)
             )
         {
-            self.phase
-                .scc_graph
-                .add_node(Binder::Symbol(symbol.0), symbol.1);
+            self.phase.scc_graph.add_node(symbol.0, symbol.1);
         }
     }
 

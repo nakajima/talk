@@ -203,41 +203,26 @@ impl ElaborationPhase for ElaboratedToSchemes {
     type T = (Symbol, EnvEntry<ElaborationTy>);
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Binder {
-    Symbol(Symbol),
-    Member(Symbol, Label),
-}
-
-impl Binder {
-    pub fn symbol(&self) -> Symbol {
-        match self {
-            Binder::Symbol(symbol) => *symbol,
-            Binder::Member(..) => todo!(),
-        }
-    }
-}
-
 #[derive(Default, Debug, Clone)]
 pub struct SCCGraph {
-    idx_map: FxHashMap<Binder, NodeIndex>,
-    pub graph: DiGraph<Binder, NodeID>,
-    rhs_ids: FxHashMap<Binder, NodeID>,
+    idx_map: FxHashMap<Symbol, NodeIndex>,
+    pub graph: DiGraph<Symbol, NodeID>,
+    rhs_ids: FxHashMap<Symbol, NodeID>,
 }
 
 impl SCCGraph {
-    pub fn rhs_id_for(&self, binder: &Binder) -> &NodeID {
+    pub fn rhs_id_for(&self, binder: &Symbol) -> &NodeID {
         self.rhs_ids.get(binder).unwrap()
     }
 
-    pub fn groups(&self) -> Vec<Vec<Binder>> {
+    pub fn groups(&self) -> Vec<Vec<Symbol>> {
         kosaraju_scc(&self.graph)
             .iter()
             .map(|ids| ids.iter().map(|id| self.graph[*id].clone()).collect())
             .collect()
     }
 
-    pub fn add_node(&mut self, node: Binder, rhs_id: NodeID) -> NodeIndex {
+    pub fn add_node(&mut self, node: Symbol, rhs_id: NodeID) -> NodeIndex {
         if let Some(idx) = self.idx_map.get(&node) {
             return *idx;
         }
@@ -249,7 +234,7 @@ impl SCCGraph {
     }
 
     #[instrument(skip(self))]
-    pub fn add_edge(&mut self, from: (Binder, NodeID), to: (Binder, NodeID), node_id: NodeID) {
+    pub fn add_edge(&mut self, from: (Symbol, NodeID), to: (Symbol, NodeID), node_id: NodeID) {
         if from.0 == to.0 {
             return;
         }
@@ -362,9 +347,7 @@ impl<'a> ElaborationPass<'a> {
                             ..
                         }),
                 } => {
-                    types
-                        .scc_graph
-                        .add_node(Binder::Symbol(func.name.symbol()), *expr_id);
+                    types.scc_graph.add_node(func.name.symbol(), *expr_id);
 
                     for generic in func.generics.iter() {
                         self.register_generic(generic);
@@ -377,7 +360,7 @@ impl<'a> ElaborationPass<'a> {
                     types.globals.insert(func.name.symbol(), ());
                     self.collect_references(
                         &mut types,
-                        (Binder::Symbol(func.name.symbol()), func.id),
+                        (func.name.symbol(), func.id),
                         func.body.body.iter(),
                     );
                 }
@@ -391,15 +374,13 @@ impl<'a> ElaborationPass<'a> {
                     ..
                 } => {
                     // Add the binding to the graph
-                    types
-                        .scc_graph
-                        .add_node(Binder::Symbol(name.symbol()), rhs.id);
+                    types.scc_graph.add_node(name.symbol(), rhs.id);
                     types.globals.insert(name.symbol(), ());
 
                     // Collect references from RHS (only adds edges for globals)
                     self.collect_references(
                         &mut types,
-                        (Binder::Symbol(name.symbol()), rhs.id),
+                        (name.symbol(), rhs.id),
                         std::iter::once(rhs.clone()),
                     );
                 }
@@ -988,11 +969,7 @@ impl<'a> ElaborationPass<'a> {
             match kind {
                 DeclKind::Init { name, params, body } => {
                     let self_ty = self.symbol_to_infer_ty(self_symbol);
-                    self.collect_references(
-                        types,
-                        (Binder::Symbol(name.symbol()), node.id),
-                        body.body.iter(),
-                    );
+                    self.collect_references(types, (name.symbol(), node.id), body.body.iter());
 
                     let params = params
                         .iter()
@@ -1055,7 +1032,7 @@ impl<'a> ElaborationPass<'a> {
 
                     self.collect_references(
                         types,
-                        (Binder::Symbol(func.name.symbol()), func.id),
+                        (func.name.symbol(), func.id),
                         func.body.body.iter(),
                     );
                 }
@@ -1310,7 +1287,7 @@ impl<'a> ElaborationPass<'a> {
     fn collect_references<T: ElaborationPhase>(
         &mut self,
         types: &mut ElaboratedTypes<T>,
-        from: (Binder, NodeID),
+        from: (Symbol, NodeID),
         nodes: impl Iterator<Item = impl Into<Node>>,
     ) {
         for node in nodes {
@@ -1346,11 +1323,9 @@ impl<'a> ElaborationPass<'a> {
                             sym,
                             Symbol::Global(_) | Symbol::StaticMethod(_) | Symbol::InstanceMethod(_)
                         ) {
-                            types.scc_graph.add_edge(
-                                from.clone(),
-                                (Binder::Symbol(*sym), expr.id),
-                                expr.id,
-                            );
+                            types
+                                .scc_graph
+                                .add_edge(from.clone(), (*sym, expr.id), expr.id);
                         }
                         continue;
                     }
@@ -1360,11 +1335,9 @@ impl<'a> ElaborationPass<'a> {
                     if let ExprKind::Variable(Name::Resolved(sym, _)) = &callee.kind {
                         if matches!(sym, Symbol::Global(_)) {
                             // Only globals!
-                            types.scc_graph.add_edge(
-                                from.clone(),
-                                (Binder::Symbol(*sym), expr.id),
-                                expr.id,
-                            );
+                            types
+                                .scc_graph
+                                .add_edge(from.clone(), (*sym, expr.id), expr.id);
                         }
 
                         continue;
@@ -1377,15 +1350,12 @@ impl<'a> ElaborationPass<'a> {
                                 | ExprKind::Constructor(Name::Resolved(sym, ..)),
                             ..
                         }),
-                        label,
                         ..,
                     ) = &callee.kind
                     {
-                        types.scc_graph.add_edge(
-                            from.clone(),
-                            (Binder::Member(*sym, label.clone()), expr.id),
-                            expr.id,
-                        );
+                        types
+                            .scc_graph
+                            .add_edge(from.clone(), (*sym, expr.id), expr.id);
                         continue;
                     }
 
@@ -1394,17 +1364,14 @@ impl<'a> ElaborationPass<'a> {
                             kind: ExprKind::Variable(Name::Resolved(Symbol::ParamLocal(..), named)),
                             ..
                         }),
-                        label,
                         ..,
                     ) = &callee.kind
                         && named == "self"
-                        && let Binder::Symbol(parent) = from.0
                     {
-                        types.scc_graph.add_edge(
-                            from.clone(),
-                            (Binder::Member(parent, label.clone()), expr.id),
-                            expr.id,
-                        );
+                        let parent = from.0;
+                        types
+                            .scc_graph
+                            .add_edge(from.clone(), (parent, expr.id), expr.id);
                         continue;
                     }
                 }
@@ -1473,7 +1440,7 @@ pub mod tests {
     }
 
     impl SCCGraph {
-        pub fn neighbors_for(&self, node: &Binder) -> Vec<Binder> {
+        pub fn neighbors_for(&self, node: &Symbol) -> Vec<Symbol> {
             self.graph
                 .neighbors(self.idx_map[node])
                 .map(|idx| self.graph[idx].clone())
@@ -2033,17 +2000,15 @@ pub mod tests {
 
         // b references a...
         assert_eq!(
-            vec![Binder::Symbol(Symbol::Global(1.into()))],
-            types
-                .scc_graph
-                .neighbors_for(&Binder::Symbol(Symbol::Global(2.into())))
+            vec![Symbol::Global(1.into())],
+            types.scc_graph.neighbors_for(&Symbol::Global(2.into()))
         );
 
         // but a does not reference b
         assert!(
             types
                 .scc_graph
-                .neighbors_for(&Binder::Symbol(Symbol::Global(1.into())))
+                .neighbors_for(&Symbol::Global(1.into()))
                 .is_empty()
         );
     }
@@ -2058,17 +2023,13 @@ pub mod tests {
         );
 
         assert_eq!(
-            vec![Binder::Symbol(Symbol::Global(2.into()))],
-            types
-                .scc_graph
-                .neighbors_for(&Binder::Symbol(Symbol::Global(1.into())))
+            vec![Symbol::Global(2.into())],
+            types.scc_graph.neighbors_for(&Symbol::Global(1.into()))
         );
 
         assert_eq!(
-            vec![Binder::Symbol(Symbol::Global(1.into()))],
-            types
-                .scc_graph
-                .neighbors_for(&Binder::Symbol(Symbol::Global(2.into())))
+            vec![Symbol::Global(1.into())],
+            types.scc_graph.neighbors_for(&Symbol::Global(2.into()))
         );
     }
 
@@ -2098,17 +2059,13 @@ pub mod tests {
         );
 
         assert_eq!(
-            vec![Binder::Symbol(Symbol::InstanceMethod(1.into()))],
-            types
-                .scc_graph
-                .neighbors_for(&Binder::Member(Symbol::Struct(1.into()), "second".into()))
+            vec![Symbol::InstanceMethod(1.into())],
+            types.scc_graph.neighbors_for(&Symbol::Struct(1.into()))
         );
 
         assert_eq!(
-            vec![Binder::Symbol(Symbol::InstanceMethod(2.into()))],
-            types
-                .scc_graph
-                .neighbors_for(&Binder::Member(Symbol::Struct(1.into()), "first".into()))
+            vec![Symbol::InstanceMethod(2.into())],
+            types.scc_graph.neighbors_for(&Symbol::Struct(1.into()))
         );
     }
 
@@ -2124,17 +2081,17 @@ pub mod tests {
         );
 
         assert_eq!(
-            vec![Binder::Member(Symbol::Struct(1.into()), "first".into())],
+            vec![Symbol::Struct(1.into())],
             types
                 .scc_graph
-                .neighbors_for(&Binder::Symbol(Symbol::StaticMethod(2.into())))
+                .neighbors_for(&Symbol::StaticMethod(2.into()))
         );
 
         assert_eq!(
-            vec![Binder::Member(Symbol::Struct(1.into()), "second".into())],
+            vec![Symbol::Struct(1.into())],
             types
                 .scc_graph
-                .neighbors_for(&Binder::Symbol(Symbol::StaticMethod(1.into())))
+                .neighbors_for(&Symbol::StaticMethod(1.into()))
         );
     }
 }
