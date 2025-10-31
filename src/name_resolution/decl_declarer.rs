@@ -529,6 +529,14 @@ impl<'a> DeclDeclarer<'a> {
 
             self.start_scope(decl.id);
         });
+
+        on!(&mut decl.kind, DeclKind::Let { .. }, {
+            // Make sure a scope exists for this let so we can handle dependencies.
+            // NOTE: might make more sense to stop defining in the pattern case and
+            // setup scopes properly here and in match arms
+            self.start_scope(decl.id);
+            self.end_scope();
+        });
     }
 
     fn exit_decl(&mut self, decl: &mut Decl) {

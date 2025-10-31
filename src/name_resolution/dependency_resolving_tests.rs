@@ -57,6 +57,32 @@ pub mod tests {
     }
 
     #[test]
+    fn registers_edges_for_lets() {
+        let types = resolve(
+            "
+            let a = b()
+            func b() { 123 }
+          ",
+        );
+
+        assert_eq!(
+            vec![Symbol::Global(2.into())],
+            types
+                .phase
+                .scc_graph
+                .neighbors_for(&Symbol::Global(1.into()))
+        );
+
+        assert!(
+            types
+                .phase
+                .scc_graph
+                .neighbors_for(&Symbol::Global(1.into()))
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn graph_ignores_builtins() {
         let types = resolve(
             "

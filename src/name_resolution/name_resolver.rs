@@ -541,14 +541,14 @@ impl NameResolver {
         on!(
             &decl.kind,
             DeclKind::Let {
-                rhs: Some(Expr {
-                    kind: ExprKind::Func(func),
+                lhs: Pattern {
+                    kind: PatternKind::Bind(name),
                     ..
-                }),
+                },
                 ..
             },
             {
-                self.enter_scope(func.id, Some((func.name.symbol(), func.id)));
+                self.enter_scope(decl.id, Some((name.symbol(), decl.id)));
             }
         );
     }
