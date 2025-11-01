@@ -1,7 +1,10 @@
 #[cfg(test)]
 pub mod tests {
     use crate::{
-        name_resolution::{name_resolver_tests::tests::resolve, symbol::Symbol},
+        name_resolution::{
+            name_resolver_tests::tests::resolve,
+            symbol::{DeclaredLocalId, Symbol},
+        },
         types::infer_ty::Level,
     };
 
@@ -172,5 +175,12 @@ pub mod tests {
 
         // Both locals belong to the same SCC (mutual recursion) and generalize at one level deeper.
         assert_eq!(group_b.level, Level(2));
+        assert_eq!(
+            group_b.binders,
+            vec![
+                Symbol::DeclaredLocal(DeclaredLocalId(1)),
+                Symbol::DeclaredLocal(DeclaredLocalId(2))
+            ]
+        );
     }
 }
