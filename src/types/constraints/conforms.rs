@@ -14,7 +14,7 @@ use crate::{
     },
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Conforms {
     pub ty: InferTy,
     pub protocol_id: ProtocolId,

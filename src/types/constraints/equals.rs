@@ -3,7 +3,7 @@ use crate::{
     types::{constraints::constraint::ConstraintCause, infer_ty::InferTy},
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Equals {
     pub lhs: InferTy,
     pub rhs: InferTy,

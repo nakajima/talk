@@ -19,6 +19,7 @@ use crate::{
             prepend_self_to_methods::PrependSelfToMethods,
         },
     },
+    node::Node,
     node_id::{FileID, NodeID},
     node_kinds::{
         decl::{Decl, DeclKind},
@@ -79,6 +80,7 @@ pub struct NameResolved {
     pub scopes: FxHashMap<NodeID, Scope>,
     pub symbols_to_node: FxHashMap<Symbol, NodeID>,
     pub scc_graph: SCCGraph,
+    pub unbound_nodes: Vec<NodeID>,
 }
 
 pub type ScopeId = Index;
@@ -155,7 +157,18 @@ impl NameResolver {
             for ast in &mut asts {
                 let mut declarer = DeclDeclarer::new(self, &mut ast.node_ids);
                 for root in &mut ast.roots {
-                    root.drive_mut(&mut declarer);
+                    if let Node::Stmt(Stmt {
+                        id,
+                        kind: StmtKind::Expr(..),
+                        ..
+                    }) = root
+                    {
+                        // If it's just a top level expr, it's not bound to anything so we stash it away so we can still
+                        // type check it.
+                        declarer.resolver.phase.unbound_nodes.push(*id);
+                    } else {
+                        root.drive_mut(&mut declarer);
+                    }
                 }
                 // declarer dropped here before the next AST
             }

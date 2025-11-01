@@ -151,6 +151,13 @@ impl Wants {
         }))
     }
 
+    pub fn all(&self) -> Vec<Constraint> {
+        let mut result = vec![];
+        result.extend(self.simple.clone());
+        result.extend(self.defer.clone());
+        result
+    }
+
     pub fn equals(&mut self, lhs: InferTy, rhs: InferTy, cause: ConstraintCause, span: Span) {
         if lhs == rhs {
             return;

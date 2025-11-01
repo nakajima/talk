@@ -17,7 +17,7 @@ use crate::{
     },
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Member {
     pub node_id: NodeID,
     pub receiver: InferTy,

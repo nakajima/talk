@@ -12,7 +12,7 @@ use crate::{
     },
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct HasField {
     pub row: InferRow,
     pub label: Label,

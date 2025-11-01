@@ -11,7 +11,7 @@ use crate::{
     },
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TypeMember {
     pub base: InferTy,
     pub name: Label,

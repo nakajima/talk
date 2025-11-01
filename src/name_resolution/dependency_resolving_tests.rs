@@ -171,9 +171,8 @@ pub mod tests {
         assert_eq!(group_a.binders, vec![Symbol::Global(1.into())]);
         assert_eq!(group_a.level, Level(1));
 
-        let group_b = &types.phase.scc_graph.groups()[0];
-
         // Both locals belong to the same SCC (mutual recursion) and generalize at one level deeper.
+        let group_b = &types.phase.scc_graph.groups()[0];
         assert_eq!(group_b.level, Level(2));
         assert_eq!(
             group_b.binders,
@@ -182,5 +181,16 @@ pub mod tests {
                 Symbol::DeclaredLocal(DeclaredLocalId(2))
             ]
         );
+    }
+
+    #[test]
+    fn collects_residual_exprs_that_arent_bound() {
+        let types = resolve(
+            r#"
+            1 + 2
+        "#,
+        );
+
+        assert_eq!(types.phase.unbound_nodes, vec![types.roots[0].node_id()]);
     }
 }

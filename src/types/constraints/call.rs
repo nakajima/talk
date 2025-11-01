@@ -12,7 +12,7 @@ use crate::{
     },
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Call {
     pub callee_id: NodeID,
     pub callee: InferTy,

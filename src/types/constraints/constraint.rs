@@ -18,7 +18,7 @@ use crate::{
 };
 use rustc_hash::FxHashMap;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ConstraintCause {
     Annotation(NodeID),
     Member(NodeID),
@@ -34,7 +34,7 @@ pub enum ConstraintCause {
     Internal,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Constraint {
     Call(Call),
     Equals(Equals),
