@@ -59,6 +59,10 @@ impl Level {
     pub fn next(&self) -> Level {
         Level(self.0 + 1)
     }
+
+    pub fn prev(&self) -> Level {
+        Level(self.0 - 1)
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]

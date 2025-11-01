@@ -159,7 +159,7 @@ impl<'a> InferencePass<'a> {
     fn infer_scc_graph(&mut self, level: Level, graph: &SCCGraph) {
         let groups = graph.groups();
         for group in groups {
-            self.infer_group(&group, level, graph);
+            self.infer_group(&group.binders, group.level, graph);
         }
     }
 
@@ -169,7 +169,7 @@ impl<'a> InferencePass<'a> {
 
         let mut placeholders = vec![];
         for symbol in group {
-            if self.session.lookup(&symbol).is_none() {
+            if self.session.lookup(symbol).is_none() {
                 let ty = self.session.new_ty_meta_var(level.next());
                 placeholders.push(ty.clone());
                 self.session.insert_mono(*symbol, ty);

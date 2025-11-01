@@ -3,6 +3,7 @@ use std::{error::Error, fmt::Display, rc::Rc};
 use derive_visitor::{DriveMut, VisitorMut};
 use generational_arena::Index;
 use rustc_hash::{FxHashMap, FxHashSet};
+use tracing::instrument;
 
 use crate::{
     ast::{AST, ASTPhase, Parsed},
@@ -31,7 +32,7 @@ use crate::{
     },
     on, some,
     span::Span,
-    types::passes::elaboration_pass::SCCGraph,
+    types::{infer_ty::Level, passes::elaboration_pass::SCCGraph},
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -106,6 +107,7 @@ pub struct NameResolver {
     pub(super) scopes: FxHashMap<NodeID, Scope>,
     pub(super) current_scope_id: Option<NodeID>,
     pub(super) current_symbol_scope: Vec<Option<(Symbol, NodeID)>>,
+    current_level: Level,
 }
 
 impl ASTPhase for NameResolved {}
@@ -120,6 +122,7 @@ impl NameResolver {
             scopes: Default::default(),
             current_scope_id: None,
             current_symbol_scope: Default::default(),
+            current_level: Level::default(),
             modules,
         };
 
@@ -268,7 +271,10 @@ impl NameResolver {
     }
 
     fn track_dependency(&mut self, to: Symbol, id: NodeID) {
-        if !matches!(to, Symbol::Global(..) | Symbol::StaticMethod(..)) {
+        if !matches!(
+            to,
+            Symbol::Global(..) | Symbol::StaticMethod(..) | Symbol::DeclaredLocal(..)
+        ) {
             return;
         }
 
@@ -284,6 +290,7 @@ impl NameResolver {
             .push(Diagnostic::<NameResolverError> { kind: err, span });
     }
 
+    #[instrument(skip(self))]
     fn enter_scope(&mut self, node_id: NodeID, symbol: Option<(Symbol, NodeID)>) {
         self.current_scope_id = Some(node_id);
         self.current_symbol_scope.push(symbol);
@@ -296,10 +303,13 @@ impl NameResolver {
                 Symbol::InstanceMethod(..) | Symbol::Synthesized(..)
             )
         {
-            self.phase.scc_graph.add_node(symbol.0, symbol.1);
+            self.phase
+                .scc_graph
+                .add_node(symbol.0, symbol.1, self.current_level);
         }
     }
 
+    #[instrument(skip(self))]
     fn exit_scope(&mut self, node_id: NodeID) {
         let current_scope_id = self.current_scope_id.expect("no scope to exit");
         let current_scope = self
@@ -505,8 +515,7 @@ impl NameResolver {
             &decl.kind,
             DeclKind::Enum { name, .. }
                 | DeclKind::Struct { name, .. }
-                | DeclKind::Protocol { name, .. }
-                | DeclKind::Extend { name, .. },
+                | DeclKind::Protocol { name, .. },
             {
                 self.enter_scope(decl.id, Some((name.symbol(), decl.id)));
             }
@@ -524,6 +533,8 @@ impl NameResolver {
                 .unwrap()
                 .types
                 .insert("Self".into(), name.symbol());
+
+            self.enter_scope(decl.id, Some((name.symbol(), decl.id)));
         });
 
         on!(&mut decl.kind, DeclKind::Init { name, params, .. }, {
@@ -548,6 +559,7 @@ impl NameResolver {
                 ..
             },
             {
+                self.current_level = self.current_level.next();
                 self.enter_scope(decl.id, Some((name.symbol(), decl.id)));
             }
         );
@@ -563,15 +575,19 @@ impl NameResolver {
                 | DeclKind::Method { .. }
                 | DeclKind::Init { .. }
                 | DeclKind::Let {
-                    rhs: Some(Expr {
-                        kind: ExprKind::Func(..),
+                    lhs: Pattern {
+                        kind: PatternKind::Bind(..),
                         ..
-                    }),
+                    },
                     ..
                 },
             {
                 self.exit_scope(decl.id);
             }
         );
+
+        on!(decl.kind, DeclKind::Let { .. }, {
+            self.current_level = self.current_level.prev();
+        })
     }
 }

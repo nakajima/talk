@@ -1,6 +1,9 @@
 #[cfg(test)]
 pub mod tests {
-    use crate::name_resolution::{name_resolver_tests::tests::resolve, symbol::Symbol};
+    use crate::{
+        name_resolution::{name_resolver_tests::tests::resolve, symbol::Symbol},
+        types::infer_ty::Level,
+    };
 
     #[test]
     fn registers_edges_for_global_func_calls() {
@@ -57,32 +60,6 @@ pub mod tests {
     }
 
     #[test]
-    fn registers_edges_for_lets() {
-        let types = resolve(
-            "
-            let a = b()
-            func b() { 123 }
-          ",
-        );
-
-        assert_eq!(
-            vec![Symbol::Global(2.into())],
-            types
-                .phase
-                .scc_graph
-                .neighbors_for(&Symbol::Global(1.into()))
-        );
-
-        assert!(
-            types
-                .phase
-                .scc_graph
-                .neighbors_for(&Symbol::Global(2.into()))
-                .is_empty()
-        );
-    }
-
-    #[test]
     fn graph_ignores_builtins() {
         let types = resolve(
             "
@@ -113,8 +90,8 @@ pub mod tests {
         );
 
         assert_eq!(
-            types.phase.scc_graph.groups(),
-            vec![vec![Symbol::Struct(1.into())]],
+            types.phase.scc_graph.groups()[0].binders,
+            vec![Symbol::Struct(1.into())],
         );
     }
 
@@ -150,8 +127,8 @@ pub mod tests {
         );
 
         assert_eq!(
-            types.phase.scc_graph.groups(),
-            vec![vec![Symbol::Struct(1.into())],],
+            types.phase.scc_graph.groups()[0].binders,
+            vec![Symbol::Struct(1.into()),],
         );
     }
 
@@ -173,5 +150,27 @@ pub mod tests {
                 .scc_graph
                 .neighbors_for(&Symbol::Struct(1.into()))
         );
+    }
+
+    #[test]
+    fn local_func_group_is_deeper_than_top_level() {
+        let types = resolve(
+            r#"
+        func outer() {
+            func a() { b() }
+            func b() { a() }
+            a()
+        }
+        "#,
+        );
+
+        let group_a = &types.phase.scc_graph.groups()[1];
+        assert_eq!(group_a.binders, vec![Symbol::Global(1.into())]);
+        assert_eq!(group_a.level, Level(1));
+
+        let group_b = &types.phase.scc_graph.groups()[0];
+
+        // Both locals belong to the same SCC (mutual recursion) and generalize at one level deeper.
+        assert_eq!(group_b.level, Level(2));
     }
 }

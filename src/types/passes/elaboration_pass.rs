@@ -203,11 +203,18 @@ impl ElaborationPhase for ElaboratedToSchemes {
     type T = (Symbol, EnvEntry<ElaborationTy>);
 }
 
+#[derive(Default, Debug, Clone, PartialEq)]
+pub struct BindingGroup {
+    pub level: Level,
+    pub binders: Vec<Symbol>,
+}
+
 #[derive(Default, Debug, Clone)]
 pub struct SCCGraph {
     idx_map: FxHashMap<Symbol, NodeIndex>,
     pub graph: DiGraph<Symbol, NodeID>,
     rhs_ids: FxHashMap<Symbol, NodeID>,
+    level_map: FxHashMap<NodeIndex, Level>,
 }
 
 impl SCCGraph {
@@ -215,21 +222,36 @@ impl SCCGraph {
         self.rhs_ids.get(binder).unwrap()
     }
 
-    pub fn groups(&self) -> Vec<Vec<Symbol>> {
+    pub fn groups(&self) -> Vec<BindingGroup> {
         kosaraju_scc(&self.graph)
             .iter()
-            .map(|ids| ids.iter().map(|id| self.graph[*id].clone()).collect())
+            .map(|ids| {
+                let mut level = Level::default();
+                BindingGroup {
+                    binders: ids
+                        .iter()
+                        .map(|id| {
+                            if self.level_map[id] > level {
+                                level = self.level_map[id];
+                            }
+                            self.graph[*id]
+                        })
+                        .collect(),
+                    level,
+                }
+            })
             .collect()
     }
 
-    pub fn add_node(&mut self, node: Symbol, rhs_id: NodeID) -> NodeIndex {
+    pub fn add_node(&mut self, node: Symbol, rhs_id: NodeID, level: Level) -> NodeIndex {
         if let Some(idx) = self.idx_map.get(&node) {
             return *idx;
         }
 
-        let idx = self.graph.add_node(node.clone());
-        self.idx_map.insert(node.clone(), idx);
+        let idx = self.graph.add_node(node);
+        self.idx_map.insert(node, idx);
         self.rhs_ids.insert(node, rhs_id);
+        self.level_map.insert(idx, level);
         idx
     }
 
@@ -238,8 +260,8 @@ impl SCCGraph {
         if from.0 == to.0 {
             return;
         }
-        let from = self.add_node(from.0, from.1);
-        let to = self.add_node(to.0, to.1);
+        let from = self.add_node(from.0, from.1, Level::default());
+        let to = self.add_node(to.0, to.1, Level::default());
         self.graph.update_edge(from, to, node_id);
     }
 }
@@ -347,7 +369,9 @@ impl<'a> ElaborationPass<'a> {
                             ..
                         }),
                 } => {
-                    types.scc_graph.add_node(func.name.symbol(), *expr_id);
+                    types
+                        .scc_graph
+                        .add_node(func.name.symbol(), *expr_id, Level::default());
 
                     for generic in func.generics.iter() {
                         self.register_generic(generic);
@@ -374,7 +398,9 @@ impl<'a> ElaborationPass<'a> {
                     ..
                 } => {
                     // Add the binding to the graph
-                    types.scc_graph.add_node(name.symbol(), rhs.id);
+                    types
+                        .scc_graph
+                        .add_node(name.symbol(), rhs.id, Level::default());
                     types.globals.insert(name.symbol(), ());
 
                     // Collect references from RHS (only adds edges for globals)

@@ -162,7 +162,6 @@ macro_rules! some {
 #[visitor(
     Stmt(enter, exit),
     FuncSignature,
-    Pattern(enter),
     MatchArm(enter, exit),
     Func,
     Decl(enter, exit)
@@ -220,6 +219,42 @@ impl<'a> DeclDeclarer<'a> {
         self.resolver.current_scope_id = current.parent_id;
     }
 
+    ///////////////////////////////////////////////////////////////////////////
+    // Local decls
+    ///////////////////////////////////////////////////////////////////////////
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
+    fn declare_pattern(&mut self, pattern: &mut Pattern) {
+        let Pattern { kind, .. } = pattern;
+
+        match kind {
+            PatternKind::Bind(name @ Name::Raw(_)) => {
+                *name = if self.at_module_scope() {
+                    self.resolver.declare(name, some!(Global), pattern.id)
+                } else {
+                    self.resolver
+                        .declare(name, some!(DeclaredLocal), pattern.id)
+                }
+            }
+            PatternKind::Record { fields } => {
+                for field in fields {
+                    let RecordFieldPatternKind::Bind(name) = &mut field.kind else {
+                        continue;
+                    };
+
+                    *name = if self.at_module_scope() {
+                        self.resolver.declare(name, some!(Global), pattern.id)
+                    } else {
+                        self.resolver
+                            .declare(name, some!(DeclaredLocal), pattern.id)
+                    }
+                }
+            }
+            PatternKind::Tuple(_) => (),
+            PatternKind::Wildcard => (),
+            _ => (),
+        }
+    }
+
     fn enter_nominal(
         &mut self,
         id: NodeID,
@@ -275,47 +310,12 @@ impl<'a> DeclDeclarer<'a> {
     }
 
     ///////////////////////////////////////////////////////////////////////////
-    // Local decls
-    ///////////////////////////////////////////////////////////////////////////
-    #[instrument(level = tracing::Level::TRACE, skip(self))]
-    fn enter_pattern(&mut self, pattern: &mut Pattern) {
-        let Pattern { kind, .. } = pattern;
-
-        match kind {
-            PatternKind::Bind(name @ Name::Raw(_)) => {
-                *name = if self.at_module_scope() {
-                    self.resolver.declare(name, some!(Global), pattern.id)
-                } else {
-                    self.resolver
-                        .declare(name, some!(DeclaredLocal), pattern.id)
-                }
-            }
-            PatternKind::Record { fields } => {
-                for field in fields {
-                    let RecordFieldPatternKind::Bind(name) = &mut field.kind else {
-                        continue;
-                    };
-
-                    *name = if self.at_module_scope() {
-                        self.resolver.declare(name, some!(Global), pattern.id)
-                    } else {
-                        self.resolver
-                            .declare(name, some!(DeclaredLocal), pattern.id)
-                    }
-                }
-            }
-            PatternKind::Tuple(_) => (),
-            PatternKind::Wildcard => (),
-            _ => (),
-        }
-    }
-
-    ///////////////////////////////////////////////////////////////////////////
     // Block scoping
     ///////////////////////////////////////////////////////////////////////////
     #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn enter_match_arm(&mut self, arm: &mut MatchArm) {
         self.start_scope(arm.id);
+        self.declare_pattern(&mut arm.pattern);
     }
 
     fn exit_match_arm(&mut self, _arm: &mut MatchArm) {
@@ -530,12 +530,9 @@ impl<'a> DeclDeclarer<'a> {
             self.start_scope(decl.id);
         });
 
-        on!(&mut decl.kind, DeclKind::Let { .. }, {
-            // Make sure a scope exists for this let so we can handle dependencies.
-            // NOTE: might make more sense to stop defining in the pattern case and
-            // setup scopes properly here and in match arms
+        on!(&mut decl.kind, DeclKind::Let { lhs, .. }, {
+            self.declare_pattern(lhs);
             self.start_scope(decl.id);
-            self.end_scope();
         });
     }
 
@@ -563,15 +560,15 @@ impl<'a> DeclDeclarer<'a> {
 
         on!(
             &mut decl.kind,
-            DeclKind::Protocol { .. } | DeclKind::Enum { .. } | DeclKind::Extend { .. },
+            DeclKind::Protocol { .. }
+                | DeclKind::Enum { .. }
+                | DeclKind::Extend { .. }
+                | DeclKind::Let { .. }
+                | DeclKind::Init { .. },
             {
                 self.end_scope();
             }
         );
-
-        on!(&mut decl.kind, DeclKind::Init { .. }, {
-            self.end_scope();
-        });
     }
 
     fn synthesize_init(&mut self, body: &mut Body, type_members: &TypeMembers, type_id: StructId) {
@@ -660,6 +657,16 @@ impl<'a> DeclDeclarer<'a> {
 
             assignments.push(assignment);
         }
+
+        assignments.push(Node::Stmt(Stmt {
+            id: NodeID(FileID::SYNTHESIZED, self.node_ids.next_id()),
+            span: Span::SYNTHESIZED,
+            kind: StmtKind::Expr(Expr {
+                id: NodeID(FileID::SYNTHESIZED, self.node_ids.next_id()),
+                span: Span::SYNTHESIZED,
+                kind: ExprKind::Variable(self_param_name),
+            }),
+        }));
 
         let init = Decl {
             id: init_id,
