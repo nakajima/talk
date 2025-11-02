@@ -1216,19 +1216,6 @@ impl<'a> InferencePass<'a> {
     }
 }
 
-pub fn uncurry_function(ty: InferTy) -> (Vec<InferTy>, InferTy) {
-    match ty {
-        InferTy::Func(box param, box ret) => {
-            let (mut params, final_ret) = uncurry_function(ret);
-            if param != InferTy::Void {
-                params.insert(0, param);
-            }
-            (params, final_ret)
-        }
-        other => (vec![], other),
-    }
-}
-
 #[cfg(test)]
 pub mod tests {
     use crate::{

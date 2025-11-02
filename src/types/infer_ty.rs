@@ -1,3 +1,4 @@
+use indexmap::IndexSet;
 use itertools::Itertools;
 use std::hash::Hash;
 
@@ -8,7 +9,8 @@ use crate::{
     name_resolution::symbol::{StructId, Symbol},
     types::{
         infer_row::{InferRow, RowMetaId},
-        scheme::ForAll,
+        scheme::{ForAll, Scheme},
+        term_environment::EnvEntry,
         ty::{SomeType, Ty},
         type_session::TypeDefKind,
     },
@@ -222,6 +224,19 @@ impl InferTy {
                 local_id: 3,
             }),
             row: Box::new(InferRow::Empty(TypeDefKind::Struct)),
+        }
+    }
+
+    pub fn to_entry(&self) -> EnvEntry<InferTy> {
+        let foralls: IndexSet<ForAll> = self.collect_foralls().into_iter().collect();
+        if foralls.is_empty() {
+            EnvEntry::Mono(self.clone())
+        } else {
+            EnvEntry::Scheme(Scheme {
+                ty: self.clone(),
+                foralls,
+                predicates: vec![],
+            })
         }
     }
 

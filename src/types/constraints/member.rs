@@ -9,7 +9,7 @@ use crate::{
         constraints::constraint::{Constraint, ConstraintCause},
         infer_row::InferRow,
         infer_ty::{InferTy, Level, TypeParamId},
-        passes::inference_pass::uncurry_function,
+        passes::uncurry_function,
         type_error::TypeError,
         type_operations::{UnificationSubstitutions, curry, unify},
         type_session::TypeSession,
@@ -99,28 +99,28 @@ impl Member {
         wants: &mut Wants,
         substitutions: &mut UnificationSubstitutions,
     ) -> Result<bool, TypeError> {
-        let conformances = session
-            .elaborated_types
-            .type_param_conformances
-            .get(&type_param_id)
-            .cloned()
-            .unwrap_or_default();
-        println!("hi conformances {conformances:?}");
-        for conformance in conformances {
-            println!(
-                "cat: {:?}",
-                session
-                    .type_catalog
-                    .method_requirements
-                    .get(&conformance.0.into())
-            );
-            if let Some(req) = session.lookup_member(&conformance.0.into(), &self.label) {
-                println!("found a member lol: {req:?}");
-                let entry = session.lookup(&req).unwrap();
-                let req_ty = entry.instantiate(self.node_id, session, level, wants, self.span);
-                return unify(ty, &req_ty, substitutions, session);
-            }
-        }
+        // let conformances = session
+        //     .elaborated_types
+        //     .type_param_conformances
+        //     .get(&type_param_id)
+        //     .cloned()
+        //     .unwrap_or_default();
+        // println!("hi conformances {conformances:?}");
+        // for conformance in conformances {
+        //     println!(
+        //         "cat: {:?}",
+        //         session
+        //             .type_catalog
+        //             .method_requirements
+        //             .get(&conformance.0.into())
+        //     );
+        //     if let Some(req) = session.lookup_member(&conformance.0.into(), &self.label) {
+        //         println!("found a member lol: {req:?}");
+        //         let entry = session.lookup(&req).unwrap();
+        //         let req_ty = entry.instantiate(self.node_id, session, level, wants, self.span);
+        //         return unify(ty, &req_ty, substitutions, session);
+        //     }
+        // }
 
         panic!("didn't find a conformance to find a member in");
     }
@@ -140,55 +140,55 @@ impl Member {
             ));
         };
 
-        match member_sym {
-            Symbol::InstanceMethod(..) => {
-                let entry = session
-                    .elaborated_types
-                    .nominals
-                    .get(symbol)
-                    .unwrap()
-                    .members
-                    .methods
-                    .get(&self.label)
-                    .unwrap();
-                let entry = session.materialize_entry(entry.clone(), Level::default(), next_wants);
-                let method = entry.instantiate(
-                    self.node_id,
-                    session,
-                    Level::default(),
-                    next_wants,
-                    self.span,
-                );
+        // match member_sym {
+        //     Symbol::InstanceMethod(..) => {
+        //         let entry = session
+        //             .elaborated_types
+        //             .nominals
+        //             .get(symbol)
+        //             .unwrap()
+        //             .members
+        //             .methods
+        //             .get(&self.label)
+        //             .unwrap();
+        //         let entry = session.materialize_entry(entry.clone(), Level::default(), next_wants);
+        //         let method = entry.instantiate(
+        //             self.node_id,
+        //             session,
+        //             Level::default(),
+        //             next_wants,
+        //             self.span,
+        //         );
 
-                println!("method: {method:?}");
-                let (method_receiver, method_fn) = consume_self(&method);
-                println!("receiver: {:?}", self.receiver);
-                println!("ty: {:?}", self.ty);
-                println!("method_receiver: {method_receiver:?}");
-                println!("method_fn: {method_fn:?}");
-                next_wants.equals(
-                    method_receiver,
-                    self.receiver.clone(),
-                    self.cause,
-                    self.span,
-                );
-                next_wants.equals(method_fn, self.ty.clone(), self.cause, self.span);
-                return Ok(true);
-            }
-            Symbol::Variant(..) => {
-                println!("instantiating variant. ty: {:?}", self.ty);
-                let variant = self.lookup_variant(row).unwrap();
-                let constructor_ty = match variant {
-                    InferTy::Void => self.receiver.clone(),
-                    InferTy::Tuple(values) => curry(values, self.receiver.clone()),
-                    other => curry(vec![other], self.receiver.clone()),
-                };
+        //         println!("method: {method:?}");
+        //         let (method_receiver, method_fn) = consume_self(&method);
+        //         println!("receiver: {:?}", self.receiver);
+        //         println!("ty: {:?}", self.ty);
+        //         println!("method_receiver: {method_receiver:?}");
+        //         println!("method_fn: {method_fn:?}");
+        //         next_wants.equals(
+        //             method_receiver,
+        //             self.receiver.clone(),
+        //             self.cause,
+        //             self.span,
+        //         );
+        //         next_wants.equals(method_fn, self.ty.clone(), self.cause, self.span);
+        //         return Ok(true);
+        //     }
+        //     Symbol::Variant(..) => {
+        //         println!("instantiating variant. ty: {:?}", self.ty);
+        //         let variant = self.lookup_variant(row).unwrap();
+        //         let constructor_ty = match variant {
+        //             InferTy::Void => self.receiver.clone(),
+        //             InferTy::Tuple(values) => curry(values, self.receiver.clone()),
+        //             other => curry(vec![other], self.receiver.clone()),
+        //         };
 
-                next_wants.equals(constructor_ty, self.ty.clone(), self.cause, self.span);
-                return Ok(true);
-            }
-            _ => (),
-        }
+        //         next_wants.equals(constructor_ty, self.ty.clone(), self.cause, self.span);
+        //         return Ok(true);
+        //     }
+        //     _ => (),
+        // }
 
         // If all else fails, see if it's a property
         next_wants._has_field(

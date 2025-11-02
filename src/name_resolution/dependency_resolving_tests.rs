@@ -3,10 +3,20 @@ pub mod tests {
     use crate::{
         name_resolution::{
             name_resolver_tests::tests::resolve,
+            scc_graph::SCCGraph,
             symbol::{DeclaredLocalId, Symbol},
         },
         types::infer_ty::Level,
     };
+
+    impl SCCGraph {
+        pub fn neighbors_for(&self, node: &Symbol) -> Vec<Symbol> {
+            self.graph
+                .neighbors(self.idx_map[node])
+                .map(|idx| self.graph[idx])
+                .collect()
+        }
+    }
 
     #[test]
     fn registers_edges_for_global_func_calls() {
@@ -76,6 +86,20 @@ pub mod tests {
                 .scc_graph
                 .neighbors_for(&Symbol::Global(1.into()))
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn contains_node_for_lets() {
+        let types = resolve(
+            r#"
+            let foo = 123
+        "#,
+        );
+
+        assert_eq!(
+            types.phase.scc_graph.groups()[0].binders,
+            vec![Symbol::Global(1.into())],
         );
     }
 

@@ -13,6 +13,7 @@ use crate::{
     name_resolution::{
         builtins,
         decl_declarer::DeclDeclarer,
+        scc_graph::SCCGraph,
         symbol::{Symbol, Symbols},
         transforms::{
             lower_funcs_to_lets::LowerFuncsToLets, lower_operators::LowerOperators,
@@ -33,7 +34,7 @@ use crate::{
     },
     on, some,
     span::Span,
-    types::{infer_ty::Level, passes::elaboration_pass::SCCGraph},
+    types::infer_ty::Level,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
