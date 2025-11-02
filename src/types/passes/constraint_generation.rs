@@ -7,6 +7,7 @@ use crate::{
     node::Node,
     node_kinds::{
         block::Block,
+        call_arg::CallArg,
         decl::{Decl, DeclKind},
         expr::{Expr, ExprKind},
         func::Func,
@@ -16,7 +17,7 @@ use crate::{
     },
     types::{
         builtins::resolve_builtin_type,
-        constraints::constraint::ConstraintCause,
+        constraints::{call, constraint::ConstraintCause},
         infer_ty::{InferTy, Level},
         type_operations::curry,
         type_session::TypeSession,
@@ -179,7 +180,7 @@ impl<'a> ConstraintGenerationPass<'a> {
                 callee,
                 type_args,
                 args,
-            } => todo!(),
+            } => self.visit_call(callee, type_args, args, level),
             ExprKind::Member(expr, label, span) => todo!(),
             ExprKind::Func(func) => self.visit_func(func, level),
             ExprKind::Variable(name) => self.visit_variable(expr, name, level),
@@ -204,6 +205,36 @@ impl<'a> ConstraintGenerationPass<'a> {
             &mut self.wants,
             expr.span,
         )
+    }
+
+    fn visit_call(
+        &mut self,
+        callee: &Expr,
+        type_args: &[TypeAnnotation],
+        args: &[CallArg],
+        level: Level,
+    ) -> InferTy {
+        let arg_tys = args
+            .iter()
+            .map(|a| self.visit_expr(&a.value, level))
+            .collect_vec();
+        let type_args = type_args
+            .iter()
+            .map(|a| self.visit_type_annotation(&a, level))
+            .collect_vec();
+        let callee_ty = self.visit_expr(callee, level);
+        let ret = self.session.new_ty_meta_var(level);
+        self.wants.call(
+            callee.id,
+            callee_ty,
+            arg_tys,
+            type_args,
+            ret.clone(),
+            None,
+            ConstraintCause::Call(callee.id),
+            callee.span,
+        );
+        ret
     }
 
     fn visit_func(&mut self, func: &Func, level: Level) -> InferTy {
