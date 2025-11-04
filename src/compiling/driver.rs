@@ -15,7 +15,7 @@ use crate::{
     parser::Parser,
     parser_error::ParserError,
     types::{
-        passes::constraint_generation::ConstraintGenerationPass,
+        passes::inference_pass::InferencePass,
         type_error::TypeError,
         type_session::{TypeSession, Types},
     },
@@ -211,7 +211,7 @@ impl Driver<NameResolved> {
         let exports = self.exports();
 
         let (paths, mut asts): (Vec<_>, Vec<_>) = self.phase.asts.into_iter().unzip();
-        ConstraintGenerationPass::drive(&mut asts, &mut session);
+        InferencePass::drive(&mut asts, &mut session);
 
         let asts: IndexMap<Source, AST<_>> = paths.into_iter().zip(asts).collect();
 

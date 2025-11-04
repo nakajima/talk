@@ -111,6 +111,8 @@ pub struct NameResolver {
     pub(super) current_scope_id: Option<NodeID>,
     pub(super) current_symbol_scope: Vec<Option<(Symbol, NodeID)>>,
     current_level: Level,
+    pub param_owners: FxHashMap<Symbol, (Symbol /*binder*/, NodeID /*binder decl*/)>,
+    pub local_owners: FxHashMap<Symbol, (Symbol /*binder*/, NodeID /*binder decl*/)>,
 }
 
 impl ASTPhase for NameResolved {}
@@ -127,6 +129,8 @@ impl NameResolver {
             current_symbol_scope: Default::default(),
             current_level: Level::default(),
             modules,
+            param_owners: Default::default(),
+            local_owners: Default::default(),
         };
 
         resolver.init_root_scope();
@@ -279,7 +283,8 @@ impl NameResolver {
         Some(Name::Resolved(symbol, name.name_str()))
     }
 
-    fn track_dependency(&mut self, to: Symbol, id: NodeID) {
+    #[instrument(skip(self))]
+    fn track_dependency(&mut self, mut to: Symbol, id: NodeID) {
         if !matches!(
             to,
             Symbol::Global(..)
@@ -288,6 +293,26 @@ impl NameResolver {
                 | Symbol::ParamLocal(..)
         ) {
             return;
+        }
+
+        let target: Option<(Symbol, NodeID)> = match to {
+            Symbol::ParamLocal(..) => self.param_owners.get(&to).copied(),
+            Symbol::PatternBindLocal(..) | Symbol::DeclaredLocal(..) => {
+                self.local_owners.get(&to).copied()
+            }
+            Symbol::Global(..) | Symbol::StaticMethod(..) | Symbol::Synthesized(..) => {
+                Some((to, id))
+            } // already binder-like in your setup
+            _ => None, // enums/structs/etc. don't form value-dependency edges here
+        };
+
+        if let (Some((from_sym, from_id)), Some((to_sym, to_id))) = (
+            self.current_symbol_scope.iter().rev().find_map(|x| *x),
+            target,
+        ) {
+            self.phase
+                .scc_graph
+                .add_edge((from_sym, from_id), (to_sym, to_id), id);
         }
 
         if let Some((from_sym, from_id)) = self.current_symbol_scope.iter().rev().find_map(|f| *f) {
@@ -563,11 +588,17 @@ impl NameResolver {
             self.enter_scope(decl.id, Some((name.symbol(), decl.id)));
         });
 
-        on!(&mut decl.kind, DeclKind::Init { name, params, .. }, {
+        on!(&mut decl.kind, DeclKind::Init { params, .. }, {
             self.enter_scope(decl.id, None);
 
             for param in params {
                 param.name = self.declare(&param.name, some!(ParamLocal), param.id);
+                if let Some((owner_sym, owner_decl_id)) =
+                    self.current_symbol_scope.iter().rev().find_map(|x| *x)
+                {
+                    self.param_owners
+                        .insert(param.name.symbol(), (owner_sym, owner_decl_id));
+                }
             }
         });
 
@@ -587,6 +618,13 @@ impl NameResolver {
             {
                 self.current_level = self.current_level.next();
                 self.enter_scope(decl.id, Some((name.symbol(), decl.id)));
+                // for let-bound locals that can be captured:
+                let sym = name.symbol();
+                if let Some((owner_sym, owner_decl_id)) =
+                    self.current_symbol_scope.iter().rev().find_map(|x| *x)
+                {
+                    self.local_owners.insert(sym, (owner_sym, owner_decl_id));
+                }
             }
         );
     }
