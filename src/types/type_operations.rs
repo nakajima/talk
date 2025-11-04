@@ -383,6 +383,9 @@ pub(super) fn unify(
             let rb = substitutions.canon_meta(*rhs_id);
             if ra != rb {
                 let keep = substitutions.link_meta(ra, rb);
+
+                tracing::info!("unifying vars {ra:?} and {rb:?}, keeping: {keep:?}");
+
                 // if the losing rep had a binding, keep it by moving once:
                 let lose = if keep == ra { rb } else { ra };
                 if let Some(v) = substitutions.ty.remove(&lose) {
@@ -538,14 +541,14 @@ pub(super) fn apply(ty: InferTy, substitutions: &mut UnificationSubstitutions) -
                     level: *substitutions
                         .meta_levels
                         .borrow()
-                        .get(&Meta::Ty(id))
+                        .get(&Meta::Ty(rep))
                         .unwrap_or_else(|| {
                             panic!(
                                 "did not get level for {id:?} {:?}",
                                 substitutions.meta_levels
                             )
                         }),
-                } // normalize id to the representative
+                }
             }
         }
         InferTy::Constructor { name, params, ret } => InferTy::Constructor {

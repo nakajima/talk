@@ -163,9 +163,9 @@ impl Wants {
             return;
         }
 
-        if !lhs.collect_foralls().is_empty() || !rhs.collect_foralls().is_empty() {
-            panic!("cannot constrain forall: {lhs:?}, {rhs:?}");
-        }
+        // if !lhs.collect_foralls().is_empty() || !rhs.collect_foralls().is_empty() {
+        //     panic!("cannot constrain forall: {lhs:?}, {rhs:?}");
+        // }
 
         tracing::debug!("constraining equals {lhs:?} = {rhs:?}");
         self.simple.push_back(Constraint::Equals(Equals {

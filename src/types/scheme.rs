@@ -71,7 +71,7 @@ impl Scheme<Ty> {
 }
 
 impl Scheme<InferTy> {
-    #[instrument(skip(self, session, level, wants, span,))]
+    #[instrument(skip(self, session, level, wants, span,), ret)]
     pub fn instantiate(
         &self,
         id: NodeID,

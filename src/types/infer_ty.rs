@@ -63,7 +63,7 @@ impl Level {
     }
 
     pub fn prev(&self) -> Level {
-        Level(self.0 - 1)
+        Level(self.0.saturating_sub(1))
     }
 }
 

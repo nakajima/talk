@@ -231,7 +231,6 @@ impl TypeSession {
         }
     }
 
-    #[instrument(skip(self))]
     fn shallow_generalize(&mut self, ty: InferTy) -> InferTy {
         match ty {
             InferTy::Var { id: meta, .. } => {
@@ -319,6 +318,10 @@ impl TypeSession {
             }
 
             *ty = apply(ty.clone(), substitutions);
+        }
+
+        for entry in self.term_env.symbols.values_mut() {
+            *entry = entry.apply(substitutions);
         }
 
         for ty in self.type_catalog.instantiations.ty.values_mut() {

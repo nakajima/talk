@@ -130,6 +130,7 @@ pub enum Symbol {
     Property(PropertyId),
     Synthesized(SynthesizedId),
     InstanceMethod(InstanceMethodId),
+    Initializer(InitializerId),
     StaticMethod(StaticMethodId),
     Variant(VariantId),
     Protocol(ProtocolId),
@@ -156,6 +157,7 @@ impl std::fmt::Debug for Symbol {
             Symbol::Property(id) => write!(f, "@Property({id})"),
             Symbol::Synthesized(id) => write!(f, "@Synthesized({id})"),
             Symbol::InstanceMethod(id) => write!(f, "@InstanceMethod({id})"),
+            Symbol::Initializer(id) => write!(f, "@Initializer({id})"),
             Symbol::StaticMethod(id) => write!(f, "@StaticMethod({id})"),
             Symbol::Variant(id) => write!(f, "@Variant({id})"),
             Symbol::Protocol(id) => write!(f, "@Protocol({id})"),
@@ -196,6 +198,7 @@ impl Symbol {
             | Symbol::Property(PropertyId { module_id, .. })
             | Symbol::Synthesized(SynthesizedId { module_id, .. })
             | Symbol::InstanceMethod(InstanceMethodId { module_id, .. })
+            | Symbol::Initializer(InitializerId { module_id, .. })
             | Symbol::StaticMethod(StaticMethodId { module_id, .. })
             | Symbol::Variant(VariantId { module_id, .. })
             | Symbol::Protocol(ProtocolId { module_id, .. })
@@ -223,6 +226,9 @@ impl Symbol {
             Symbol::InstanceMethod(instance_method_id) => {
                 Symbol::InstanceMethod(instance_method_id.import(module_id))
             }
+            Symbol::Initializer(instance_method_id) => {
+                Symbol::Initializer(instance_method_id.import(module_id))
+            }
             Symbol::StaticMethod(static_method_id) => {
                 Symbol::StaticMethod(static_method_id.import(module_id))
             }
@@ -249,6 +255,9 @@ impl Symbol {
             Symbol::InstanceMethod(instance_method_id) => {
                 Symbol::InstanceMethod(instance_method_id.import(ModuleId::Current))
             }
+            Symbol::Initializer(instance_method_id) => {
+                Symbol::Initializer(instance_method_id.import(ModuleId::Current))
+            }
             Symbol::StaticMethod(static_method_id) => {
                 Symbol::StaticMethod(static_method_id.import(ModuleId::Current))
             }
@@ -273,6 +282,7 @@ impl_module_symbol_id!(Protocol, ProtocolId);
 impl_module_symbol_id!(Variant, VariantId);
 impl_module_symbol_id!(Property, PropertyId);
 impl_module_symbol_id!(InstanceMethod, InstanceMethodId);
+impl_module_symbol_id!(Initializer, InitializerId);
 impl_module_symbol_id!(MethodRequirement, MethodRequirementId);
 impl_module_symbol_id!(StaticMethod, StaticMethodId);
 impl_module_symbol_id!(AssociatedType, AssociatedTypeId);
@@ -297,11 +307,12 @@ impl Display for Symbol {
             Symbol::PatternBindLocal(pattern_bind_local_id) => {
                 write!(f, "{}", pattern_bind_local_id)
             }
-            Symbol::ParamLocal(param_local_id) => write!(f, "{}", param_local_id),
-            Symbol::Builtin(builtin_id) => write!(f, "{}", builtin_id),
-            Symbol::Property(property_id) => write!(f, "{}", property_id),
-            Symbol::Synthesized(synthesized_id) => write!(f, "{}", synthesized_id),
-            Symbol::InstanceMethod(instance_method_id) => write!(f, "{}", instance_method_id),
+            Symbol::ParamLocal(id) => write!(f, "{}", id),
+            Symbol::Builtin(id) => write!(f, "{}", id),
+            Symbol::Property(id) => write!(f, "{}", id),
+            Symbol::Synthesized(id) => write!(f, "{}", id),
+            Symbol::InstanceMethod(id) => write!(f, "{}", id),
+            Symbol::Initializer(id) => write!(f, "{}", id),
             Symbol::StaticMethod(static_method_id) => write!(f, "{}", static_method_id),
             Symbol::Variant(variant_id) => write!(f, "{}", variant_id),
             Symbol::Protocol(protocol_id) => write!(f, "{}", protocol_id),
@@ -320,6 +331,7 @@ pub struct Symbols {
     locals: IDGenerator,
     properties: IDGenerator,
     instance_methods: IDGenerator,
+    initializers: IDGenerator,
     method_requirements: IDGenerator,
     static_methods: IDGenerator,
     variants: IDGenerator,
@@ -362,6 +374,10 @@ impl Symbols {
 
     pub fn next_instance_method(&mut self, module_id: ModuleId) -> InstanceMethodId {
         InstanceMethodId::new(module_id, self.instance_methods.next_id())
+    }
+
+    pub fn next_initializer(&mut self, module_id: ModuleId) -> InitializerId {
+        InitializerId::new(module_id, self.initializers.next_id())
     }
 
     pub fn next_method_requirement(&mut self, module_id: ModuleId) -> MethodRequirementId {

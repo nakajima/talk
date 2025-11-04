@@ -158,18 +158,13 @@ impl NameResolver {
             for ast in &mut asts {
                 let mut declarer = DeclDeclarer::new(self, &mut ast.node_ids);
                 for root in &mut ast.roots {
-                    if let Node::Stmt(Stmt {
-                        id,
-                        kind: StmtKind::Expr(..),
-                        ..
-                    }) = root
-                    {
+                    if let Node::Stmt(Stmt { id, .. }) = root {
                         // If it's just a top level expr, it's not bound to anything so we stash it away so we can still
                         // type check it.
                         declarer.resolver.phase.unbound_nodes.push(*id);
-                    } else {
-                        root.drive_mut(&mut declarer);
                     }
+
+                    root.drive_mut(&mut declarer);
                 }
                 // declarer dropped here before the next AST
             }
@@ -239,7 +234,7 @@ impl NameResolver {
         let scope = self
             .scopes
             .get_mut(&scope_id)
-            .unwrap_or_else(|| panic!("scope not found: {scope_id:?}"));
+            .unwrap_or_else(|| panic!("scope not found: {scope_id:?}, {:?}", name));
 
         if let Some(symbol) = scope.types.get(&name.name_str()) {
             return Some(*symbol);
@@ -287,7 +282,10 @@ impl NameResolver {
     fn track_dependency(&mut self, to: Symbol, id: NodeID) {
         if !matches!(
             to,
-            Symbol::Global(..) | Symbol::StaticMethod(..) | Symbol::DeclaredLocal(..)
+            Symbol::Global(..)
+                | Symbol::StaticMethod(..)
+                | Symbol::DeclaredLocal(..)
+                | Symbol::ParamLocal(..)
         ) {
             return;
         }
@@ -314,7 +312,7 @@ impl NameResolver {
         if let Some(symbol) = symbol
             && !matches!(
                 symbol.0,
-                Symbol::InstanceMethod(..) | Symbol::Synthesized(..)
+                Symbol::InstanceMethod(..) | Symbol::Synthesized(..) | Symbol::Initializer(..)
             )
         {
             self.phase
@@ -326,17 +324,28 @@ impl NameResolver {
     #[instrument(skip(self))]
     fn exit_scope(&mut self, node_id: NodeID) {
         let current_scope_id = self.current_scope_id.expect("no scope to exit");
-        let current_scope = self
-            .scopes
-            .get(&current_scope_id)
-            .expect("did not find current scope");
+        let current_scope = self.scopes.get(&current_scope_id).unwrap_or_else(|| {
+            panic!(
+                "did nto get current scope ({:?}). {:?}",
+                current_scope_id, self.scopes
+            )
+        });
 
         self.current_scope_id = current_scope.parent_id;
 
-        if let Some(Some(scope)) = self.current_symbol_scope.last()
-            && scope.1 == node_id
-        {
-            self.current_symbol_scope.pop();
+        // Pop from symbol scope stack if this scope matches
+        match self.current_symbol_scope.last() {
+            Some(None) => {
+                // Always pop None entries when exiting any scope
+                self.current_symbol_scope.pop();
+            }
+            Some(Some(scope)) if scope.1 == node_id => {
+                // Pop symbol entries that match this scope
+                self.current_symbol_scope.pop();
+            }
+            _ => {
+                // Don't pop if it doesn't match
+            }
         }
     }
 
@@ -365,6 +374,9 @@ impl NameResolver {
             }
             Symbol::InstanceMethod(..) => {
                 Symbol::InstanceMethod(self.symbols.next_instance_method(module_id))
+            }
+            Symbol::Initializer(..) => {
+                Symbol::Initializer(self.symbols.next_initializer(module_id))
             }
             Symbol::MethodRequirement(..) => {
                 Symbol::MethodRequirement(self.symbols.next_method_requirement(module_id))
@@ -552,7 +564,7 @@ impl NameResolver {
         });
 
         on!(&mut decl.kind, DeclKind::Init { name, params, .. }, {
-            self.enter_scope(decl.id, Some((name.symbol(), decl.id)));
+            self.enter_scope(decl.id, None);
 
             for param in params {
                 param.name = self.declare(&param.name, some!(ParamLocal), param.id);

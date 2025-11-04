@@ -210,8 +210,8 @@ impl Driver<NameResolved> {
         let mut session = TypeSession::new(self.config.module_id, self.config.modules.clone());
         let exports = self.exports();
 
-        let (paths, asts): (Vec<_>, Vec<_>) = self.phase.asts.into_iter().unzip();
-        ConstraintGenerationPass::drive(&asts, &mut session);
+        let (paths, mut asts): (Vec<_>, Vec<_>) = self.phase.asts.into_iter().unzip();
+        ConstraintGenerationPass::drive(&mut asts, &mut session);
 
         let asts: IndexMap<Source, AST<_>> = paths.into_iter().zip(asts).collect();
 

@@ -95,6 +95,14 @@ macro_rules! some {
             ),
         )
     };
+    (Initializer) => {
+        $crate::name_resolution::symbol::Symbol::Initializer(
+            $crate::name_resolution::symbol::InitializerId::new(
+                $crate::compiling::module::ModuleId::Current,
+                0,
+            ),
+        )
+    };
     (MethodRequirement) => {
         $crate::name_resolution::symbol::Symbol::MethodRequirement(
             $crate::name_resolution::symbol::MethodRequirementId::new(
@@ -521,11 +529,7 @@ impl<'a> DeclDeclarer<'a> {
                 .initializers
                 .push(decl_kind);
 
-            *name = self.resolver.declare(name, some!(Global), decl.id);
-
-            let Name::Resolved(Symbol::Global(..), _) = &name else {
-                unreachable!()
-            };
+            *name = self.resolver.declare(name, some!(Initializer), decl.id);
 
             self.start_scope(decl.id);
         });
