@@ -49,6 +49,15 @@ impl SCCGraph {
 
     pub fn add_node(&mut self, node: Symbol, rhs_id: NodeID, level: Level) -> NodeIndex {
         if let Some(idx) = self.idx_map.get(&node) {
+            // Update stored level to the max of existing and new, so later
+            // passes (with more accurate nesting) can raise the level.
+            if let Some(existing) = self.level_map.get_mut(idx) {
+                if level > *existing {
+                    *existing = level;
+                }
+            }
+            // Update rhs_id if we didn't have one previously for this symbol.
+            self.rhs_ids.entry(node).or_insert(rhs_id);
             return *idx;
         }
 

@@ -124,7 +124,8 @@ impl<'a> InferencePass<'a> {
             Node::Decl(decl) => self.visit_decl(decl, level),
             Node::Stmt(stmt) => self.visit_stmt(stmt, level),
             Node::Expr(expr) => self.visit_expr(expr, level),
-            _ => todo!(),
+            Node::Parameter(param) => self.visit_param(param, level),
+            _ => todo!("{node:?}"),
         }
     }
 
@@ -662,23 +663,25 @@ impl<'a> InferencePass<'a> {
     fn visit_params(&mut self, params: &[Parameter], level: Level) -> Vec<InferTy> {
         params
             .iter()
-            .map(|param| {
-                if let Some(existing) = self.session.lookup(&param.name.symbol()) {
-                    return existing._as_ty();
-                }
-
-                let ty = if let Some(type_annotation) = &param.type_annotation {
-                    self.visit_type_annotation(type_annotation, level)
-                } else {
-                    self.session.new_ty_meta_var(level)
-                };
-
-                self.session
-                    .insert_term(param.name.symbol(), ty.clone().to_entry());
-
-                ty
-            })
+            .map(|param| self.visit_param(param, level))
             .collect_vec()
+    }
+
+    fn visit_param(&mut self, param: &Parameter, level: Level) -> InferTy {
+        if let Some(existing) = self.session.lookup(&param.name.symbol()) {
+            return existing._as_ty();
+        }
+
+        let ty = if let Some(type_annotation) = &param.type_annotation {
+            self.visit_type_annotation(type_annotation, level)
+        } else {
+            self.session.new_ty_meta_var(level)
+        };
+
+        self.session
+            .insert_term(param.name.symbol(), ty.clone().to_entry());
+
+        ty
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self, block))]
