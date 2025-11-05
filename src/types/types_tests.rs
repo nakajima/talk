@@ -1379,7 +1379,7 @@ pub mod tests {
     }
 
     #[test]
-    fn types_struct_init() {
+    fn types_generic_struct_init() {
         let (ast, types) = typecheck(
             "
         struct Person<T> {
@@ -1469,25 +1469,12 @@ pub mod tests {
           "#,
         );
 
-        let Decl {
-            kind: DeclKind::Let {
-                type_annotation, ..
-            },
-            ..
-        } = &ast.roots[1].as_decl()
-        else {
-            unreachable!()
-        };
-
-        let ty = types.get(&type_annotation.as_ref().unwrap().id).unwrap();
-
-        // x should have type Box<Int>, not just Box
         assert_eq!(
-            *ty,
-            TypeEntry::Mono(Ty::Nominal {
+            ty(3, &ast, &types),
+            Ty::Nominal {
                 symbol: StructId::from(1).into(),
                 row: make_row!(Struct, "value" => Ty::Int).into()
-            })
+            }
         );
     }
 

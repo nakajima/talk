@@ -22,6 +22,7 @@ pub struct Call {
     pub receiver: Option<InferTy>, // If it's a method
     pub span: Span,
     pub cause: ConstraintCause,
+    pub level: Level,
 }
 
 impl Call {
@@ -51,16 +52,30 @@ impl Call {
 
         match &self.callee {
             InferTy::Constructor { name, .. } => {
+                let Some(returns_type_entry) = session.lookup(&name.symbol()) else {
+                    tracing::trace!("no type found for {name:?}, deferring");
+                    next_wants.push(Constraint::Call(self.clone()));
+                    return Ok(false);
+                };
+                let returns_type = returns_type_entry
+                    .instantiate(self.callee_id, session, self.level, next_wants, self.span)
+                    .0;
+
                 // TODO: Figure out if we're dealing with a struct vs an enum here and be more explicit.
                 // This is ok for now since enums can't have initializers and structs always have them.
                 let init_ty = if let Some(initializer) = session
                     .lookup_initializers(&name.symbol())
                     .and_then(|i| i.values().next().copied())
                 {
+                    args.insert(0, returns_type.clone());
+
                     let entry = session
                         .lookup(&initializer)
                         .expect("constructor scheme missing");
-                    entry.instantiate(self.callee_id, session, Level(1), next_wants, self.span)
+
+                    entry
+                        .instantiate(self.callee_id, session, self.level, next_wants, self.span)
+                        .0
                 } else {
                     match session
                         .lookup(&name.symbol())
@@ -71,12 +86,14 @@ impl Call {
                     }
                 };
 
-                unify(
-                    &init_ty,
-                    &curry(args, self.returns.clone()),
-                    substitutions,
-                    session,
-                )
+                next_wants.equals(
+                    self.returns.clone(),
+                    returns_type.clone(),
+                    ConstraintCause::Internal,
+                    self.span,
+                );
+
+                unify(&init_ty, &curry(args, returns_type), substitutions, session)
             }
             InferTy::Func(..) => {
                 if args.is_empty() {

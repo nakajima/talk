@@ -60,23 +60,40 @@ pub struct Scope {
     pub values: FxHashMap<String, Symbol>,
     pub types: FxHashMap<String, Symbol>,
     pub depth: u32,
+    pub binder: Option<Symbol>,
+    pub level: Level,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Capture {
+    pub symbol: Symbol,
+    pub parent_binder: Option<Symbol>,
+    pub level: Level,
 }
 
 impl Scope {
-    pub fn new(node_id: NodeID, parent_id: Option<NodeID>, depth: u32) -> Self {
+    pub fn new(
+        binder: Option<Symbol>,
+        level: Level,
+        node_id: NodeID,
+        parent_id: Option<NodeID>,
+        depth: u32,
+    ) -> Self {
         Scope {
             node_id,
             parent_id,
             depth,
+            level,
             values: Default::default(),
             types: Default::default(),
+            binder,
         }
     }
 }
 
 #[derive(Clone, Debug, Default)]
 pub struct NameResolved {
-    pub captures: FxHashMap<NodeID, FxHashSet<Symbol>>,
+    pub captures: FxHashMap<Symbol, FxHashSet<Capture>>,
     pub is_captured: FxHashSet<Symbol>,
     pub scopes: FxHashMap<NodeID, Scope>,
     pub symbols_to_node: FxHashMap<Symbol, NodeID>,
@@ -110,7 +127,7 @@ pub struct NameResolver {
     pub(super) scopes: FxHashMap<NodeID, Scope>,
     pub(super) current_scope_id: Option<NodeID>,
     pub(super) current_symbol_scope: Vec<Option<(Symbol, NodeID)>>,
-    current_level: Level,
+    pub(super) current_level: Level,
 }
 
 impl ASTPhase for NameResolved {}
@@ -134,7 +151,7 @@ impl NameResolver {
     }
 
     fn init_root_scope(&mut self) {
-        let root_scope = Scope::new(NodeID(FileID(0), 0), None, 1);
+        let root_scope = Scope::new(None, self.current_level, NodeID(FileID(0), 0), None, 1);
         self.scopes.insert(NodeID(FileID(0), 0), root_scope);
         self.current_scope_id = Some(NodeID(FileID(0), 0));
     }
@@ -159,16 +176,15 @@ impl NameResolver {
                 let mut declarer = DeclDeclarer::new(self, &mut ast.node_ids);
                 for root in &mut ast.roots {
                     if let Node::Stmt(Stmt { id, .. }) = root {
-                        // If it's just a top level expr, it's not bound to anything so we stash it away so we can still
-                        // type check it.
+                        // If it's just a top level expr, it's not bound to anything so we stash
+                        // it away so we can still type check it.
                         declarer.resolver.phase.unbound_nodes.push(*id);
                     }
 
                     root.drive_mut(&mut declarer);
                 }
-                // declarer dropped here before the next AST
             }
-        } // declarer definitely dropped before second pass
+        }
 
         // Second pass: resolve all names
         self.current_scope_id = Some(NodeID(FileID(0), 0));
@@ -246,14 +262,37 @@ impl NameResolver {
 
         if let Some(parent) = scope.parent_id
             && let Some(captured) = self.lookup_in_scope(name, parent)
+            && parent != scope_id
         {
+            let parent_scope = self.scopes.get(&parent).unwrap();
             let scope = self.scopes.get(&scope_id).expect("did not find scope");
+
+            if scope.binder == Some(captured) {
+                return Some(captured);
+            }
+
+            let Some(current_scope_binder) = scope.binder else {
+                return Some(captured);
+            };
+
+            if !matches!(
+                captured,
+                Symbol::Global(..) | Symbol::DeclaredLocal(..) | Symbol::ParamLocal(..)
+            ) {
+                return Some(captured);
+            }
+
+            let capture = Capture {
+                symbol: captured,
+                parent_binder: parent_scope.binder,
+                level: scope.level,
+            };
 
             self.phase
                 .captures
-                .entry(scope.node_id)
+                .entry(current_scope_binder)
                 .or_default()
-                .insert(captured);
+                .insert(capture);
             self.phase.is_captured.insert(captured);
 
             return Some(captured);
@@ -279,7 +318,6 @@ impl NameResolver {
         Some(Name::Resolved(symbol, name.name_str()))
     }
 
-    #[instrument(skip(self))]
     fn track_dependency(&mut self, to: Symbol, id: NodeID) {
         if !matches!(
             to,
@@ -289,6 +327,7 @@ impl NameResolver {
         }
 
         if let Some((from_sym, from_id)) = self.current_symbol_scope.iter().rev().find_map(|f| *f) {
+            tracing::trace!("track_dependency from {from_sym:?} to {to:?}");
             self.phase
                 .scc_graph
                 .add_edge((from_sym, from_id), (to, id), id);
@@ -390,16 +429,6 @@ impl NameResolver {
         };
 
         self.phase.symbols_to_node.insert(symbol, node_id);
-
-        // Ensure parameter locals participate in SCC with a deeper level than their owner.
-        // This lets their meta vars be generalized at the let-binding level (let-polymorphism).
-        if matches!(symbol, Symbol::ParamLocal(..)) {
-            // Record the param node at one level deeper than the current binder level.
-            // If a node already exists, this is a no-op.
-            self.phase
-                .scc_graph
-                .add_node(symbol, node_id, self.current_level.next());
-        }
 
         tracing::debug!(
             "declare type {} -> {symbol:?} {:?}",
@@ -518,7 +547,7 @@ impl NameResolver {
             panic!("did not resolve name")
         };
 
-        self.enter_scope(func.id, None);
+        // self.enter_scope(func.id, None);
     }
 
     fn exit_func(&mut self, func: &mut Func) {
@@ -530,7 +559,7 @@ impl NameResolver {
             panic!("Did not resolve func")
         };
 
-        self.exit_scope(func.id);
+        // self.exit_scope(func.id);
     }
 
     fn enter_func_signature(&mut self, func: &mut FuncSignature) {

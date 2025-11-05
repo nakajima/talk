@@ -1,3 +1,4 @@
+use indexmap::IndexSet;
 use itertools::Itertools;
 use rustc_hash::FxHashMap;
 use tracing::instrument;
@@ -8,6 +9,7 @@ use crate::{
     name::Name,
     name_resolution::{name_resolver::NameResolved, scc_graph::BindingGroup, symbol::Symbol},
     node::Node,
+    node_id::NodeID,
     node_kinds::{
         block::Block,
         body::Body,
@@ -27,8 +29,12 @@ use crate::{
         constraint_solver::ConstraintSolver,
         constraints::constraint::ConstraintCause,
         infer_row::{InferRow, RowMetaId},
-        infer_ty::{InferTy, Level},
-        type_operations::{apply, curry, substitute},
+        infer_ty::{InferTy, Level, Meta, MetaVarId},
+        scheme::Scheme,
+        term_environment::EnvEntry,
+        type_operations::{
+            InstantiationSubstitutions, UnificationSubstitutions, apply, curry, substitute,
+        },
         type_session::{TypeDefKind, TypeSession},
         wants::Wants,
     },
@@ -39,11 +45,15 @@ pub struct InferencePass<'a> {
     session: &'a mut TypeSession,
     wants: Wants,
     canonical_rows: FxHashMap<Symbol, RowMetaId>,
+    pending_type_instances: FxHashMap<Symbol, Vec<(MetaVarId, Vec<(InferTy, NodeID)>)>>,
+    instantiations: FxHashMap<NodeID, InstantiationSubstitutions>,
+    substitutions: UnificationSubstitutions,
 }
 
 impl<'a> InferencePass<'a> {
     pub fn drive(asts: &'a mut [AST<NameResolved>], session: &'a mut TypeSession) -> Wants {
         let mut result = Wants::default();
+        let mut substitutions = UnificationSubstitutions::new(session.meta_levels.clone());
 
         for ast in asts.iter_mut() {
             let pass = InferencePass {
@@ -51,17 +61,23 @@ impl<'a> InferencePass<'a> {
                 wants: Default::default(),
                 session,
                 canonical_rows: Default::default(),
+                instantiations: Default::default(),
+                substitutions: UnificationSubstitutions::new(Default::default()),
+                pending_type_instances: Default::default(),
             };
 
-            result.extend(pass.generate());
+            let (wants, subs) = pass.generate();
+            result.extend(wants);
+            substitutions.extend(&subs);
         }
+
+        session.apply(&mut substitutions);
 
         result
     }
 
-    fn generate(mut self) -> Wants {
-        println!("GROUPS: {:?}", self.ast.phase.scc_graph.groups());
-
+    fn generate(mut self) -> (Wants, UnificationSubstitutions) {
+        println!("groups: {:?}", self.ast.phase.scc_graph.groups());
         for group in self.ast.phase.scc_graph.groups() {
             self.generate_for_group(group);
         }
@@ -74,8 +90,12 @@ impl<'a> InferencePass<'a> {
         let wants = std::mem::take(&mut self.wants);
         let solver = ConstraintSolver::new(wants, Level::default(), self.session, self.ast);
         let (mut substitutions, _unsolved) = solver.solve();
+        self.substitutions.extend(&substitutions);
+
+        // Apply substitutions to types_by_node for top-level expressions
         self.session.apply(&mut substitutions);
-        self.wants
+
+        (self.wants, self.substitutions)
     }
 
     fn generate_for_group(&mut self, group: BindingGroup) {
@@ -93,6 +113,20 @@ impl<'a> InferencePass<'a> {
 
         // Visit each binder
         for (i, binder) in group.binders.iter().enumerate() {
+            if let Some(captures) = self.ast.phase.captures.get(binder) {
+                for capture in captures {
+                    if self.session.lookup(&capture.symbol).is_none() {
+                        let placeholder = self.session.new_ty_meta_var(capture.level);
+                        tracing::trace!(
+                            "capture placeholder {:?} = {placeholder:?}",
+                            capture.symbol
+                        );
+                        self.session
+                            .insert_term(capture.symbol, placeholder.to_entry());
+                    }
+                }
+            }
+
             let rhs_id = self.ast.phase.scc_graph.rhs_id_for(binder);
             let rhs = self.ast.find(*rhs_id).unwrap();
             let ty = self.visit_node(&rhs, group.level);
@@ -116,7 +150,7 @@ impl<'a> InferencePass<'a> {
             self.session.promote(*binder, entry);
         }
 
-        self.session.apply(&mut substitutions);
+        // self.session.apply(&mut substitutions);
     }
 
     fn visit_node(&mut self, node: &Node, level: Level) -> InferTy {
@@ -268,11 +302,13 @@ impl<'a> InferencePass<'a> {
         for generic in generics.iter() {
             let param_id = self.session.new_type_param_id(None);
             let skolem = self.session.new_skolem(param_id);
-            self.session.insert_mono(generic.name.symbol(), skolem);
+            self.session
+                .insert_mono(generic.name.symbol(), InferTy::Param(param_id));
         }
 
         let struct_symbol = name.symbol();
-        let struct_row = InferRow::Var(self.canonical_row_for(&struct_symbol, level));
+        let struct_row_placeholder_id = self.canonical_row_for(&struct_symbol, level);
+        let struct_row = InferRow::Var(struct_row_placeholder_id);
 
         let struct_ty = InferTy::Nominal {
             symbol: name.symbol(),
@@ -317,9 +353,11 @@ impl<'a> InferencePass<'a> {
                     InferRow::Extend {
                         row: acc.into(),
                         label: name.into(),
-                        ty: ty.clone(),
+                        ty: substitute(ty.clone(), &self.session.skolem_map),
                     }
                 });
+
+        println!("STRUCT ROW: {row:?}");
 
         // NOTE: This is sort of a hack since we don't have a direct way to say
         // that rows should be equal.
@@ -329,11 +367,34 @@ impl<'a> InferencePass<'a> {
             ConstraintCause::Internal,
             body.span,
         );
+        // Replace all instances of the placeholder row
+        let mut substitutions = UnificationSubstitutions::new(self.session.meta_levels.clone());
+        substitutions
+            .row
+            .insert(struct_row_placeholder_id, row.clone());
 
-        InferTy::Nominal {
+        self.session.apply(&mut substitutions);
+        self.wants.apply(&mut substitutions);
+
+        let ty = InferTy::Nominal {
             symbol: struct_symbol,
             row: row.into(),
-        }
+        };
+
+        let foralls: IndexSet<_> = ty.collect_foralls().into_iter().collect();
+        let entry = if foralls.is_empty() {
+            EnvEntry::Mono(ty.clone())
+        } else {
+            EnvEntry::Scheme(Scheme {
+                foralls,
+                predicates: vec![],
+                ty: ty.clone(),
+            })
+        };
+
+        self.session.insert_term(struct_symbol, entry);
+
+        ty
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self, ))]
@@ -350,8 +411,15 @@ impl<'a> InferencePass<'a> {
             todo!()
         }
 
+        self.session
+            .type_catalog
+            .properties
+            .entry(struct_symbol)
+            .or_default()
+            .insert(name.name_str().into(), name.symbol());
+
         let ty = if let Some(anno) = type_annotation {
-            self.visit_type_annotation(&anno, level)
+            self.visit_type_annotation(anno, level)
         } else {
             self.session.new_type_param(None)
         };
@@ -402,8 +470,19 @@ impl<'a> InferencePass<'a> {
             .or_default()
             .insert(Label::Named("init".into()), name.symbol());
 
-        // TODO: This might be wrong
-        self.session.insert_mono(name.symbol(), ty);
+        let ty = substitute(ty, &self.session.skolem_map);
+        let foralls: IndexSet<_> = ty.collect_foralls().into_iter().collect();
+        let entry = if foralls.is_empty() {
+            EnvEntry::Mono(ty)
+        } else {
+            EnvEntry::Scheme(Scheme {
+                ty,
+                foralls,
+                predicates: Default::default(),
+            })
+        };
+        println!("INIT ENTRY: {entry:?}");
+        self.session.insert_term(name.symbol(), entry);
 
         InferTy::Void
     }
@@ -588,13 +667,17 @@ impl<'a> InferencePass<'a> {
 
     #[instrument(level = tracing::Level::TRACE, skip(self, expr))]
     fn visit_variable(&mut self, expr: &Expr, name: &Name, level: Level) -> InferTy {
-        self.session.lookup(&name.symbol()).unwrap().instantiate(
+        let (ty, substitutions) = self.session.lookup(&name.symbol()).unwrap().instantiate(
             expr.id,
             self.session,
             level,
             &mut self.wants,
             expr.span,
-        )
+        );
+
+        self.instantiations.insert(expr.id, substitutions);
+
+        ty
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
@@ -611,14 +694,35 @@ impl<'a> InferencePass<'a> {
             .collect_vec();
         let type_args = type_args
             .iter()
-            .map(|a| self.visit_type_annotation(&a, level))
+            .map(|a| self.visit_type_annotation(a, level))
             .collect_vec();
         let callee_ty = self.visit_expr(callee, level);
         let ret = self.session.new_ty_meta_var(level);
-
-        if matches!(callee_ty, InferTy::Constructor { .. }) {
-            arg_tys.insert(0, ret.clone());
+        let instantiations = self
+            .instantiations
+            .get(&callee.id)
+            .cloned()
+            .unwrap_or_default();
+        for (type_arg, instantiated) in type_args.iter().zip(instantiations.ty.values()) {
+            self.wants.equals(
+                type_arg.clone(),
+                InferTy::Var {
+                    id: *instantiated,
+                    level: *self
+                        .session
+                        .meta_levels
+                        .borrow()
+                        .get(&Meta::Ty(*instantiated))
+                        .unwrap(),
+                },
+                ConstraintCause::Internal,
+                callee.span,
+            );
         }
+
+        // if matches!(callee_ty, InferTy::Constructor { .. }) {
+        //     arg_tys.insert(0, ret.clone());
+        // }
 
         self.wants.call(
             callee.id,
@@ -627,6 +731,7 @@ impl<'a> InferencePass<'a> {
             type_args,
             ret.clone(),
             None,
+            level,
             ConstraintCause::Call(callee.id),
             callee.span,
         );
@@ -734,15 +839,25 @@ impl<'a> InferencePass<'a> {
                     return resolve_builtin_type(&name.symbol()).0;
                 }
 
+                let generic_args = generics
+                    .iter()
+                    .map(|g| (self.visit_type_annotation(g, level), g.id))
+                    .collect_vec();
+
                 // Do we know about this already? Cool.
                 if let Some(entry) = self.session.lookup(&name.symbol()) {
-                    return entry.instantiate(
+                    let (ty, subsitutions) = entry.instantiate_with_args(
                         type_annotation.id,
+                        &generic_args,
                         self.session,
                         level,
                         &mut self.wants,
                         type_annotation.span,
                     );
+
+                    self.instantiations.insert(type_annotation.id, subsitutions);
+
+                    return ty;
                 } else {
                     tracing::info!("nope, did not find anything in the env for {name:?}");
                 }
@@ -751,25 +866,27 @@ impl<'a> InferencePass<'a> {
                     return self.session.lookup(&name.symbol()).unwrap()._as_ty();
                 }
 
-                if !generics.is_empty() {
-                    todo!()
-                }
+                // We don't know about this type yet, wait until we visit it
+                let var_id = self.session.new_ty_meta_var_id(level);
+                self.pending_type_instances
+                    .entry(name.symbol())
+                    .or_default()
+                    .push((var_id, generic_args));
 
-                let row = InferRow::Var(self.canonical_row_for(&name.symbol(), level));
-
-                InferTy::Nominal {
-                    symbol: name.symbol(),
-                    row: Box::new(row),
-                }
+                InferTy::Var { id: var_id, level }
             }
             TypeAnnotationKind::SelfType(name) => {
-                self.session.lookup(&name.symbol()).unwrap().instantiate(
+                let (ty, subsitutions) = self.session.lookup(&name.symbol()).unwrap().instantiate(
                     type_annotation.id,
                     self.session,
                     level,
                     &mut self.wants,
                     type_annotation.span,
-                )
+                );
+
+                self.instantiations.insert(type_annotation.id, subsitutions);
+
+                ty
             }
             _ => todo!(),
         }

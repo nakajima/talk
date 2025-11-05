@@ -201,9 +201,16 @@ impl<'a> DeclDeclarer<'a> {
         matches!(self.resolver.current_scope_id, Some(NodeID(_, 0)))
     }
 
-    pub fn start_scope(&mut self, id: NodeID) {
+    #[instrument(skip(self), fields(level = ?self.resolver.current_level))]
+    pub fn start_scope(&mut self, symbol: Option<Symbol>, id: NodeID, bump_level: bool) {
         let parent_id = self.resolver.current_scope_id;
         let scope = Scope::new(
+            symbol,
+            if bump_level {
+                self.resolver.current_level.next()
+            } else {
+                self.resolver.current_level
+            },
             id,
             parent_id,
             self.resolver
@@ -279,7 +286,7 @@ impl<'a> DeclDeclarer<'a> {
 
         self.type_members.insert(id, TypeMembers::default());
 
-        self.start_scope(id);
+        self.start_scope(Some(name.symbol()), id, false);
         self.resolver
             .current_scope_mut()
             .unwrap()
@@ -303,7 +310,7 @@ impl<'a> DeclDeclarer<'a> {
             ..
         }) = &mut stmt.kind
         {
-            self.start_scope(block.id);
+            self.start_scope(None, block.id, false);
         }
     }
 
@@ -322,7 +329,7 @@ impl<'a> DeclDeclarer<'a> {
     ///////////////////////////////////////////////////////////////////////////
     #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn enter_match_arm(&mut self, arm: &mut MatchArm) {
-        self.start_scope(arm.id);
+        self.start_scope(None, arm.id, false);
         self.declare_pattern(&mut arm.pattern);
     }
 
@@ -354,7 +361,12 @@ impl<'a> DeclDeclarer<'a> {
                     .lookup(name, Some(*id))
                     .unwrap_or_else(|| self.resolver.declare(name, some!(Global), func_id));
 
-                self.start_scope(*id);
+                if matches!(
+                    name.symbol(),
+                    Symbol::InstanceMethod(..) | Symbol::StaticMethod(..) | Symbol::Initializer(..)
+                ) {
+                    self.start_scope(Some(func.name.symbol()), *id, false);
+                }
 
                 for generic in generics {
                     generic.name =
@@ -371,8 +383,13 @@ impl<'a> DeclDeclarer<'a> {
         )
     }
 
-    fn exit_func(&mut self, _func: &mut Func) {
-        self.end_scope();
+    fn exit_func(&mut self, func: &mut Func) {
+        if matches!(
+            func.name.symbol(),
+            Symbol::InstanceMethod(..) | Symbol::StaticMethod(..) | Symbol::Initializer(..)
+        ) {
+            self.end_scope();
+        }
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
@@ -390,7 +407,7 @@ impl<'a> DeclDeclarer<'a> {
                     .resolver
                     .declare(name, some!(MethodRequirement), func.id);
 
-                self.start_scope(func.id);
+                self.start_scope(Some(name.symbol()), func.id, false);
 
                 for generic in generics {
                     generic.name =
@@ -451,7 +468,7 @@ impl<'a> DeclDeclarer<'a> {
         );
 
         on!(&mut decl.kind, DeclKind::Extend { generics, .. }, {
-            self.start_scope(decl.id);
+            self.start_scope(None, decl.id, false);
 
             for generic in generics {
                 generic.name =
@@ -531,12 +548,16 @@ impl<'a> DeclDeclarer<'a> {
 
             *name = self.resolver.declare(name, some!(Initializer), decl.id);
 
-            self.start_scope(decl.id);
+            self.start_scope(None, decl.id, false);
         });
 
         on!(&mut decl.kind, DeclKind::Let { lhs, .. }, {
             self.declare_pattern(lhs);
-            self.start_scope(decl.id);
+            let binder_symbol = match &lhs.kind {
+                PatternKind::Bind(name) => Some(name.symbol()),
+                _ => None,
+            };
+            self.start_scope(binder_symbol, decl.id, true);
         });
     }
 
@@ -582,7 +603,7 @@ impl<'a> DeclDeclarer<'a> {
             .resolver
             .declare(&"init".into(), some!(Synthesized), init_id);
 
-        self.start_scope(init_id);
+        self.start_scope(None, init_id, false);
 
         // Need to synthesize an init
         let self_param_name = self.resolver.declare(

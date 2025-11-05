@@ -386,7 +386,7 @@ impl TypeSession {
                 }
 
                 InferTy::Var { level, id } => {
-                    if *level <= inner {
+                    if *level < inner {
                         tracing::warn!("discarding {m:?} due to level ({level:?} < {inner:?})");
                         continue;
                     }
@@ -414,7 +414,7 @@ impl TypeSession {
                     let level = levels
                         .get(&Meta::Row(*id))
                         .expect("didn't get level for row meta");
-                    if *level <= inner {
+                    if *level < inner {
                         tracing::trace!("discarding {m:?} due to level ({level:?} < {inner:?})");
                         continue;
                     }
@@ -509,7 +509,7 @@ impl TypeSession {
                 }
 
                 InferTy::Var { level, id } => {
-                    if *level <= inner {
+                    if *level < inner {
                         tracing::warn!("discarding {m:?} due to level ({level:?} < {inner:?})");
                         continue;
                     }
@@ -533,7 +533,7 @@ impl TypeSession {
                     let level = levels
                         .get(&Meta::Row(*id))
                         .expect("didn't get level for row meta");
-                    if *level <= inner {
+                    if *level < inner {
                         tracing::trace!("discarding {m:?} due to level ({level:?} < {inner:?})");
                         continue;
                     }
@@ -900,6 +900,13 @@ impl TypeSession {
         self.meta_levels.borrow_mut().insert(Meta::Ty(id), level);
         tracing::trace!("Fresh {id:?}");
         InferTy::Var { id, level }
+    }
+
+    pub(crate) fn new_ty_meta_var_id(&mut self, level: Level) -> MetaVarId {
+        let id = self.vars.ty_metas.next_id();
+        self.meta_levels.borrow_mut().insert(Meta::Ty(id), level);
+        tracing::trace!("Fresh {id:?}");
+        id
     }
 
     pub(crate) fn new_row_meta_var(&mut self, level: Level) -> InferRow {

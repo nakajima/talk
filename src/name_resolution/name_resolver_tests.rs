@@ -13,11 +13,12 @@ pub mod tests {
         label::Label,
         name::Name,
         name_resolution::{
-            name_resolver::{NameResolved, NameResolver, NameResolverError},
+            name_resolver::{Capture, NameResolved, NameResolver, NameResolverError},
             symbol::{
-                AssociatedTypeId, BuiltinId, DeclaredLocalId, EnumId, GlobalId, InstanceMethodId,
-                MethodRequirementId, ParamLocalId, PropertyId, ProtocolId, StaticMethodId,
-                StructId, Symbol, SynthesizedId, TypeAliasId, TypeParameterId, VariantId,
+                AssociatedTypeId, BuiltinId, DeclaredLocalId, EnumId, GlobalId, InitializerId,
+                InstanceMethodId, MethodRequirementId, ParamLocalId, PropertyId, ProtocolId,
+                StaticMethodId, StructId, Symbol, SynthesizedId, TypeAliasId, TypeParameterId,
+                VariantId,
             },
         },
         node_id::{FileID, NodeID},
@@ -36,6 +37,7 @@ pub mod tests {
         },
         parsing::parser_tests::tests::parse,
         span::Span,
+        types::infer_ty::Level,
     };
 
     #[macro_export]
@@ -393,13 +395,72 @@ pub mod tests {
         );
 
         let mut expected = FxHashSet::default();
-        expected.insert(Symbol::Global(GlobalId::from(1)));
+        expected.insert(Capture {
+            symbol: Symbol::Global(GlobalId::from(1)),
+            parent_binder: None,
+            level: Level(1),
+        });
 
         assert_eq!(
-            resolved.phase.captures.get(&NodeID(FileID(0), 9)),
+            resolved.phase.captures.get(&GlobalId::from(2).into()),
             Some(&expected),
             "{:?}",
             resolved.phase.captures
+        );
+    }
+
+    #[test]
+    fn types_arent_captured() {
+        let resolved = resolve(
+            "
+        struct Foo {}
+        func bar() { Foo() }
+        ",
+        );
+
+        assert!(
+            !resolved
+                .phase
+                .captures
+                .contains_key(&GlobalId::from(1).into()),
+            "captures: {:?}",
+            resolved
+                .phase
+                .captures
+                .get(&GlobalId::from(1).into())
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn resolves_nested_captures() {
+        let resolved = resolve(
+            "
+        func outer(x) {
+            let y = 123
+            func inner() {
+                (x, y)
+            }
+        }
+        ",
+        );
+
+        let mut expected = FxHashSet::default();
+        expected.insert(Capture {
+            symbol: Symbol::DeclaredLocal(DeclaredLocalId(1)),
+            parent_binder: Some(Symbol::Global(GlobalId::from(1))),
+            level: Level(1),
+        });
+
+        expected.insert(Capture {
+            symbol: Symbol::ParamLocal(ParamLocalId(1)),
+            parent_binder: Some(Symbol::Global(GlobalId::from(1))),
+            level: Level(1),
+        });
+
+        assert_eq_diff!(
+            resolved.phase.captures.get(&DeclaredLocalId(2).into()),
+            Some(&expected),
         );
     }
 
@@ -634,7 +695,10 @@ pub mod tests {
                 generics: vec![],
                 conformances: vec![],
                 body: any_body!(vec![any_decl!(DeclKind::Init {
-                    name: Name::Resolved(Symbol::Global(GlobalId::from(1)), "init".into()),
+                    name: Name::Resolved(
+                        Symbol::Initializer(InitializerId::from(1)),
+                        "init".into()
+                    ),
                     params: vec![param!(
                         Symbol::ParamLocal(ParamLocalId(1)),
                         "self",

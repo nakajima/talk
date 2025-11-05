@@ -1,5 +1,6 @@
 use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
+use indexmap::IndexMap;
 use rustc_hash::FxHashMap;
 use tracing::instrument;
 
@@ -32,8 +33,8 @@ impl UnificationSubstitutions {
 
 #[derive(Clone, Debug, Default)]
 pub struct InstantiationSubstitutions {
-    pub row: FxHashMap<RowParamId, RowMetaId>,
-    pub ty: FxHashMap<TypeParamId, MetaVarId>,
+    pub row: IndexMap<RowParamId, RowMetaId>,
+    pub ty: IndexMap<TypeParamId, MetaVarId>,
 }
 
 impl std::fmt::Debug for UnificationSubstitutions {

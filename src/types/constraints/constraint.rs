@@ -196,6 +196,10 @@ impl Constraint {
                     .as_ref()
                     .map(|r| apply(r.clone(), substitutions)),
             },
+            Self::Equals(equals) => Predicate::Equals {
+                lhs: apply(equals.lhs.clone(), substitutions),
+                rhs: apply(equals.rhs.clone(), substitutions),
+            },
             _ => unimplemented!("No predicate for constraint: {self:?}"),
         }
     }

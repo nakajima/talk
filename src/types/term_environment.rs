@@ -12,7 +12,7 @@ use crate::{
         predicate::Predicate,
         scheme::{ForAll, Scheme},
         ty::SomeType,
-        type_operations::{UnificationSubstitutions, apply},
+        type_operations::{InstantiationSubstitutions, UnificationSubstitutions, apply},
         type_session::{TypeEntry, TypeSession},
         wants::Wants,
     },
@@ -125,6 +125,24 @@ impl EnvEntry<InferTy> {
         }
     }
 
+    pub fn instantiate_with_args(
+        &self,
+        id: NodeID,
+        args: &[(InferTy, NodeID)],
+        session: &mut TypeSession,
+        level: Level,
+        wants: &mut Wants,
+        span: Span,
+    ) -> (InferTy, InstantiationSubstitutions) {
+        tracing::debug!("inference instantiate: {self:?}");
+        match self {
+            EnvEntry::Mono(ty) => (ty.clone(), Default::default()),
+            EnvEntry::Scheme(scheme) => {
+                scheme.instantiate_with_args(id, args, session, level, wants, span)
+            }
+        }
+    }
+
     pub fn instantiate(
         &self,
         id: NodeID,
@@ -132,11 +150,11 @@ impl EnvEntry<InferTy> {
         level: Level,
         wants: &mut Wants,
         span: Span,
-    ) -> InferTy {
+    ) -> (InferTy, InstantiationSubstitutions) {
         tracing::debug!("inference instantiate: {self:?}");
         match self {
-            EnvEntry::Mono(ty) => ty.clone(),
-            EnvEntry::Scheme(scheme) => scheme.instantiate(id, session, level, wants, span).0,
+            EnvEntry::Mono(ty) => (ty.clone(), Default::default()),
+            EnvEntry::Scheme(scheme) => scheme.instantiate(id, session, level, wants, span),
         }
     }
 }

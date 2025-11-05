@@ -138,7 +138,7 @@ impl Scheme<InferTy> {
         level: Level,
         wants: &mut Wants,
         span: Span,
-    ) -> InferTy {
+    ) -> (InferTy, InstantiationSubstitutions) {
         // Map each quantified meta id to a fresh meta at this use-site level
         let mut substitutions = InstantiationSubstitutions::default();
         let (ty_foralls, row_foralls): (Vec<ForAll>, Vec<ForAll>) = self
@@ -200,6 +200,9 @@ impl Scheme<InferTy> {
             wants.push(constraint);
         }
 
-        instantiate_ty(self.ty.clone(), &substitutions, level)
+        (
+            instantiate_ty(self.ty.clone(), &substitutions, level),
+            substitutions,
+        )
     }
 }

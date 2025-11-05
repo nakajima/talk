@@ -19,8 +19,9 @@ use crate::{
             member::Member,
         },
         infer_row::InferRow,
-        infer_ty::InferTy,
+        infer_ty::{InferTy, Level},
         predicate::Predicate,
+        type_operations::{UnificationSubstitutions, apply},
     },
 };
 
@@ -34,6 +35,17 @@ pub struct Wants {
 impl Wants {
     pub fn given(&mut self, predicate: Predicate<InferTy>) {
         self.givens.insert(predicate);
+    }
+
+    pub fn apply(&mut self, substitutions: &mut UnificationSubstitutions) {
+        self.simple = std::mem::take(&mut self.simple)
+            .into_iter()
+            .map(|c| c.apply(substitutions))
+            .collect();
+        self.defer = std::mem::take(&mut self.defer)
+            .into_iter()
+            .map(|c| c.apply(substitutions))
+            .collect();
     }
 
     pub fn extend(&mut self, other: Wants) {
@@ -135,6 +147,7 @@ impl Wants {
         type_args: Vec<InferTy>,
         returns: InferTy,
         receiver: Option<InferTy>,
+        level: Level,
         cause: ConstraintCause,
         span: Span,
     ) {
@@ -146,6 +159,7 @@ impl Wants {
             type_args,
             returns,
             receiver,
+            level,
             cause,
             span,
         }))

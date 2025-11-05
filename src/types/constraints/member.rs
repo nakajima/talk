@@ -11,7 +11,7 @@ use crate::{
         infer_ty::{InferTy, Level, TypeParamId},
         passes::uncurry_function,
         type_error::TypeError,
-        type_operations::{UnificationSubstitutions, curry, unify},
+        type_operations::{UnificationSubstitutions, curry},
         type_session::TypeSession,
         wants::Wants,
     },

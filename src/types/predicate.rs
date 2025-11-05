@@ -9,6 +9,7 @@ use crate::{
             call::Call,
             conforms::Conforms,
             constraint::{Constraint, ConstraintCause},
+            equals::Equals,
             has_field::HasField,
             member::Member,
             type_member::TypeMember,
@@ -42,6 +43,10 @@ pub enum Predicate<T: SomeType> {
         label: Label,
         ty: T,
     },
+    Equals {
+        lhs: T,
+        rhs: T,
+    },
     Call {
         callee: T,
         args: Vec<T>,
@@ -73,6 +78,10 @@ impl From<Predicate<InferTy>> for Predicate<Ty> {
                 param,
                 protocol_id,
                 span,
+            },
+            Predicate::<InferTy>::Equals { lhs, rhs } => Self::Equals {
+                lhs: lhs.into(),
+                rhs: rhs.into(),
             },
             Predicate::<InferTy>::HasField { row, label, ty } => Self::HasField {
                 row,
@@ -136,6 +145,10 @@ impl From<Predicate<Ty>> for Predicate<InferTy> {
                 param,
                 protocol_id,
                 span,
+            },
+            Predicate::<Ty>::Equals { lhs, rhs } => Self::Equals {
+                lhs: lhs.into(),
+                rhs: rhs.into(),
             },
             Predicate::<Ty>::HasField { row, label, ty } => Self::HasField {
                 row,
@@ -250,6 +263,10 @@ impl Predicate<InferTy> {
                 associated_type_id: *associated_type_id,
                 output: apply(output.clone(), substitutions),
             },
+            Self::Equals { lhs, rhs } => Self::Equals {
+                lhs: apply(lhs.clone(), substitutions),
+                rhs: apply(rhs.clone(), substitutions),
+            },
         }
     }
 
@@ -268,6 +285,12 @@ impl Predicate<InferTy> {
             } => Constraint::Conforms(Conforms {
                 ty: InferTy::Param(param),
                 protocol_id,
+                span,
+            }),
+            Self::Equals { lhs, rhs } => Constraint::Equals(Equals {
+                lhs: instantiate_ty(lhs, substitutions, level),
+                rhs: instantiate_ty(rhs, substitutions, level),
+                cause: ConstraintCause::Internal,
                 span,
             }),
             Self::HasField { row, label, ty } => Constraint::HasField(HasField {
@@ -322,6 +345,7 @@ impl Predicate<InferTy> {
                 receiver: receiver.map(|r| instantiate_ty(r.clone(), substitutions, level)),
                 span,
                 cause: ConstraintCause::Internal,
+                level,
             }),
             Self::AssociatedEquals {
                 subject,
@@ -351,6 +375,9 @@ impl<T: SomeType> std::fmt::Debug for Predicate<T> {
             }
             Predicate::HasField { row, label, ty } => {
                 write!(f, "*hasfield({label}: {ty:?}, {row:?})")
+            }
+            Predicate::Equals { lhs, rhs } => {
+                write!(f, "*eq({lhs:?} = {rhs:?})")
             }
             Predicate::Member {
                 receiver,
