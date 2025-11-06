@@ -1,10 +1,13 @@
+use indexmap::IndexSet;
+
 use crate::{
     ast::AST,
     diagnostic::{AnyDiagnostic, Diagnostic},
     name_resolution::name_resolver::NameResolved,
     types::{
         constraints::constraint::Constraint,
-        infer_ty::Level,
+        infer_ty::{InferTy, Level},
+        predicate::Predicate,
         type_operations::{UnificationSubstitutions, unify},
         type_session::TypeSession,
         wants::Wants,
@@ -13,22 +16,25 @@ use crate::{
 
 pub struct ConstraintSolver<'a> {
     wants: Wants,
+    givens: &'a IndexSet<Predicate<InferTy>>,
     substitutions: UnificationSubstitutions,
     session: &'a mut TypeSession,
     ast: &'a mut AST<NameResolved>,
     level: Level,
-    unsolved: Vec<Constraint>,
+    unsolved: IndexSet<Constraint>,
 }
 
 impl<'a> ConstraintSolver<'a> {
     pub fn new(
         wants: Wants,
+        givens: &'a IndexSet<Predicate<InferTy>>,
         level: Level,
         session: &'a mut TypeSession,
         ast: &'a mut AST<NameResolved>,
     ) -> Self {
         Self {
             wants,
+            givens,
             substitutions: UnificationSubstitutions::new(session.meta_levels.clone()),
             session,
             level,
@@ -37,7 +43,7 @@ impl<'a> ConstraintSolver<'a> {
         }
     }
 
-    pub fn solve(mut self) -> (UnificationSubstitutions, Vec<Constraint>) {
+    pub fn solve(mut self) -> (UnificationSubstitutions, IndexSet<Constraint>) {
         let mut remaining_attempts = 5;
         while remaining_attempts >= 0 {
             let mut next_wants = Wants::default();
@@ -63,6 +69,7 @@ impl<'a> ConstraintSolver<'a> {
                     Constraint::Member(ref member) => member.solve(
                         self.session,
                         self.level,
+                        self.givens,
                         &mut next_wants,
                         &mut self.substitutions,
                     ),
@@ -92,7 +99,7 @@ impl<'a> ConstraintSolver<'a> {
                 match solution {
                     Ok(true) => (), // We're good
                     Ok(false) => {
-                        self.unsolved.push(constraint);
+                        self.unsolved.insert(constraint);
                     }
                     Err(e) => {
                         tracing::error!("Error solving constraint: {e:?}");

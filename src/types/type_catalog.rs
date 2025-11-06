@@ -14,8 +14,9 @@ use crate::{
         infer_row::RowParamId,
         infer_ty::{InferTy, TypeParamId},
         nominal::Nominal,
+        passes::inference_pass::Protocol,
         ty::{SomeType, Ty},
-        type_session::{TypeEntry, TypeSession},
+        type_session::{MemberSource, TypeEntry, TypeSession},
     },
 };
 
@@ -162,11 +163,6 @@ impl<T: SomeType> Default for TrackedInstantiations<T> {
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub struct TypeCatalog<T: SomeType> {
-    pub nominals: FxHashMap<Symbol, Nominal<T>>,
-}
-
-#[derive(Debug, PartialEq, Clone)]
 pub struct TypeCatalogOld<T: SomeType> {
     pub nominals: FxHashMap<Symbol, NominalOld>,
     pub protocols: FxHashMap<ProtocolId, ProtocolOld>,
@@ -238,19 +234,7 @@ impl TypeCatalogOld<InferTy> {
 }
 
 impl<T: SomeType> TypeCatalogOld<T> {
-    pub fn lookup_member(&self, receiver: &Symbol, label: &Label) -> Option<Symbol> {
-        if let Some(entries) = self.properties.get(receiver)
-            && let Some(sym) = entries.get(label)
-        {
-            return Some(*sym);
-        }
-
-        if let Some(entries) = self.instance_methods.get(receiver)
-            && let Some(sym) = entries.get(label)
-        {
-            return Some(*sym);
-        }
-
+    pub fn lookup_static_member(&self, receiver: &Symbol, label: &Label) -> Option<Symbol> {
         if let Some(entries) = self.static_methods.get(receiver)
             && let Some(sym) = entries.get(label)
         {
@@ -263,10 +247,53 @@ impl<T: SomeType> TypeCatalogOld<T> {
             return Some(*sym);
         }
 
+        None
+    }
+
+    pub fn lookup_member(
+        &self,
+        receiver: &Symbol,
+        label: &Label,
+    ) -> Option<(Symbol, MemberSource)> {
+        if let Some(entries) = self.properties.get(receiver)
+            && let Some(sym) = entries.get(label)
+        {
+            return Some((*sym, MemberSource::SelfMember));
+        }
+
+        if let Some(entries) = self.instance_methods.get(receiver)
+            && let Some(sym) = entries.get(label)
+        {
+            return Some((*sym, MemberSource::SelfMember));
+        }
+
+        if let Some(entries) = self.variants.get(receiver)
+            && let Some(sym) = entries.get(label)
+        {
+            return Some((*sym, MemberSource::SelfMember));
+        }
+
         if let Some(entries) = self.method_requirements.get(receiver)
             && let Some(sym) = entries.get(label)
         {
-            return Some(*sym);
+            return Some((*sym, MemberSource::SelfMember));
+        }
+
+        println!("CONFORMANCES: {:?}", self.conformances);
+
+        for ConformanceKey {
+            protocol_id,
+            conforming_id,
+        } in self.conformances.keys()
+        {
+            println!("CHECKING CONFORMANCE: {conforming_id:?}");
+            if conforming_id != receiver {
+                continue;
+            }
+
+            if let Some((member, _)) = self.lookup_member(&protocol_id.into(), label) {
+                return Some((member, MemberSource::Protocol(*protocol_id)));
+            }
         }
 
         None

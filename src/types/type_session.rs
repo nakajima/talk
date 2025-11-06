@@ -41,7 +41,6 @@ pub struct TypeSession {
     vars: Vars,
     term_env: TermEnv,
     pub(super) meta_levels: Rc<RefCell<FxHashMap<Meta, Level>>>,
-
     pub(super) skolem_map: FxHashMap<InferTy, InferTy>,
     pub(super) skolem_conformances: FxHashMap<SkolemId, IndexSet<(ProtocolId, Span)>>,
 
@@ -54,6 +53,12 @@ pub struct TypeSession {
 }
 
 pub struct Typed {}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum MemberSource {
+    SelfMember,
+    Protocol(ProtocolId),
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypeEntry {
@@ -125,6 +130,22 @@ impl TypeSession {
         }
     }
 
+    pub fn insert(&mut self, symbol: Symbol, ty: InferTy) {
+        let foralls: IndexSet<_> = ty.collect_foralls().into_iter().collect();
+        if foralls.is_empty() {
+            self.term_env.insert(symbol, EnvEntry::Mono(ty));
+        } else {
+            self.term_env.insert(
+                symbol,
+                EnvEntry::Scheme(Scheme {
+                    foralls,
+                    predicates: Default::default(),
+                    ty,
+                }),
+            );
+        }
+    }
+
     pub fn finalize(mut self) -> Result<Types, TypeError> {
         let types_by_node = std::mem::take(&mut self.types_by_node);
         let entries = types_by_node
@@ -145,11 +166,11 @@ impl TypeSession {
                     EnvEntry::Scheme(scheme) => {
                         if scheme.ty.contains_var() {
                             // Merge with existing scheme's foralls/predicates
-                            let EnvEntry::Scheme(generalized) =
-                                self.generalize(Level(0), scheme.ty, &[])
+                            let generalized = self.generalize(Level(0), scheme.ty, &Default::default());
+                            let EnvEntry::Scheme(generalized) = generalized
                             else {
                                 unreachable!(
-                                    "generalize returned Mono when scheme.ty.contains_var()"
+                                    "generalize returned Mono when scheme.ty.contains_var() {generalized:?}"
                                 );
                             };
 
@@ -287,7 +308,8 @@ impl TypeSession {
         let ty = self.shallow_generalize(ty);
 
         if ty.contains_var() {
-            self.generalize(Level(0), ty.clone(), &[]).into()
+            self.generalize(Level(0), ty.clone(), &Default::default())
+                .into()
         } else {
             TypeEntry::Mono(ty.clone().into())
         }
@@ -360,7 +382,7 @@ impl TypeSession {
         &mut self,
         inner: Level,
         ty: InferTy,
-        unsolved: &[Constraint],
+        unsolved: &IndexSet<Constraint>,
     ) -> EnvEntry<InferTy> {
         // collect metas in ty
         let mut metas = FxHashSet::default();
@@ -372,21 +394,18 @@ impl TypeSession {
         }
 
         // keep only metas born at or above inner
-        let mut foralls = IndexSet::default();
+        let mut foralls: IndexSet<_> = ty.collect_foralls().into_iter().collect();
+        println!("FORALLS {foralls:?}, ty: {ty:?} metas: {metas:?}");
         let mut substitutions = UnificationSubstitutions::new(self.meta_levels.clone());
         for m in &metas {
             match m {
                 InferTy::Param(p) => {
-                    if !foralls
-                        .iter()
-                        .any(|fa| matches!(fa, ForAll::Ty(q) if *q == *p))
-                    {
-                        foralls.insert(ForAll::Ty(*p));
-                    }
+                    foralls.insert(ForAll::Ty(*p));
                 }
 
                 InferTy::Var { level, id } => {
                     if *level < inner {
+                        println!("discarding {m:?} due to level ({level:?} < {inner:?})");
                         tracing::warn!("discarding {m:?} due to level ({level:?} < {inner:?})");
                         continue;
                     }
@@ -403,6 +422,7 @@ impl TypeSession {
                             foralls.insert(ForAll::Ty(param_id));
                             param_id
                         });
+                    foralls.insert(ForAll::Ty(param_id));
                     substitutions.ty.insert(*id, InferTy::Param(param_id));
                 }
                 InferTy::Record(box InferRow::Var(id))
@@ -432,6 +452,7 @@ impl TypeSession {
                             param_id
                         });
 
+                    foralls.insert(ForAll::Row(param_id));
                     substitutions.row.insert(*id, InferRow::Param(param_id));
                 }
                 _ => {
@@ -463,11 +484,7 @@ impl TypeSession {
         let ty = substitute(ty, &self.skolem_map);
         let ty = apply(ty, &mut substitutions);
 
-        if foralls.is_empty() {
-            return EnvEntry::Mono(ty);
-        }
-
-        let predicates = unsolved
+        let predicates: Vec<_> = unsolved
             .iter()
             .map(|c| {
                 let c = c.substitute(&self.skolem_map);
@@ -475,6 +492,10 @@ impl TypeSession {
                 c.into_predicate(&mut substitutions)
             })
             .collect();
+
+        if foralls.is_empty() && predicates.is_empty() {
+            return EnvEntry::Mono(ty);
+        }
 
         EnvEntry::Scheme(Scheme::<InferTy>::new(foralls, predicates, ty))
     }
@@ -652,13 +673,17 @@ impl TypeSession {
         None
     }
 
-    pub(super) fn lookup_member(&mut self, receiver: &Symbol, label: &Label) -> Option<Symbol> {
+    pub(super) fn lookup_member(
+        &mut self,
+        receiver: &Symbol,
+        label: &Label,
+    ) -> Option<(Symbol, MemberSource)> {
         if let Some(sym) = self.type_catalog.lookup_member(receiver, label) {
             return Some(sym);
         }
 
         for module in self.modules.modules.values() {
-            if let Some(sym) = module.types.catalogold.lookup_member(receiver, label) {
+            if let Some((sym, source)) = module.types.catalogold.lookup_member(receiver, label) {
                 match sym {
                     Symbol::InstanceMethod(..) => {
                         self.type_catalog
@@ -684,6 +709,55 @@ impl TypeSession {
                     Symbol::MethodRequirement(..) => {
                         self.type_catalog
                             .method_requirements
+                            .entry(*receiver)
+                            .or_default()
+                            .insert(label.clone(), sym);
+                    }
+                    Symbol::Variant(..) => {
+                        self.type_catalog
+                            .variants
+                            .entry(*receiver)
+                            .or_default()
+                            .insert(label.clone(), sym);
+                    }
+                    _ => (),
+                }
+
+                return Some((sym, source));
+            }
+        }
+
+        None
+    }
+
+    pub(super) fn lookup_static_member(
+        &mut self,
+        receiver: &Symbol,
+        label: &Label,
+    ) -> Option<Symbol> {
+        println!("lookup_static_member: {receiver:?}.{label:?}");
+        if let Some(sym) = self.type_catalog.lookup_static_member(receiver, label) {
+            println!("FOUND: {sym:?}");
+            return Some(sym);
+        }
+
+        for module in self.modules.modules.values() {
+            if let Some(sym) = module
+                .types
+                .catalogold
+                .lookup_static_member(receiver, label)
+            {
+                match sym {
+                    Symbol::StaticMethod(..) => {
+                        self.type_catalog
+                            .static_methods
+                            .entry(*receiver)
+                            .or_default()
+                            .insert(label.clone(), sym);
+                    }
+                    Symbol::Variant(..) => {
+                        self.type_catalog
+                            .variants
                             .entry(*receiver)
                             .or_default()
                             .insert(label.clone(), sym);

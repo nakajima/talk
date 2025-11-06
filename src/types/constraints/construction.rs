@@ -14,7 +14,7 @@ use crate::{
     },
 };
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Construction {
     pub callee_id: NodeID,
     pub callee: InferTy,

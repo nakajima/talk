@@ -14,7 +14,6 @@ pub mod tests {
             symbol::{EnumId, GlobalId, ProtocolId, StructId, Symbol, SynthesizedId},
         },
         node_kinds::{
-            decl::{Decl, DeclKind},
             expr::{Expr, ExprKind},
             stmt::{Stmt, StmtKind},
         },
@@ -1694,7 +1693,7 @@ pub mod tests {
                 case foo(T)
             }
 
-            match Fizz.foo(Fizz.foo(Int)) {
+            match Fizz.foo(Fizz.foo(123)) {
                 Fizz.foo(Fizz.foo(x)) -> x,
             }
             ",

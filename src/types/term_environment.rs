@@ -157,6 +157,29 @@ impl EnvEntry<InferTy> {
             EnvEntry::Scheme(scheme) => scheme.instantiate(id, session, level, wants, span),
         }
     }
+
+    pub fn instantiate_with_substitutions(
+        &self,
+        id: NodeID,
+        session: &mut TypeSession,
+        level: Level,
+        wants: &mut Wants,
+        span: Span,
+        substitutions: InstantiationSubstitutions,
+    ) -> (InferTy, InstantiationSubstitutions) {
+        tracing::debug!("inference instantiate: {self:?}");
+        match self {
+            EnvEntry::Mono(ty) => (ty.clone(), Default::default()),
+            EnvEntry::Scheme(scheme) => scheme.instantiate_with_substitutions(
+                id,
+                session,
+                level,
+                wants,
+                span,
+                substitutions,
+            ),
+        }
+    }
 }
 
 #[derive(Debug, Default, PartialEq, Clone)]

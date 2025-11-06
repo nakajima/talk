@@ -250,6 +250,18 @@ impl<'a> DeclDeclarer<'a> {
                         .declare(name, some!(DeclaredLocal), pattern.id)
                 }
             }
+            PatternKind::Bind(..) => {}
+            PatternKind::Variant {
+                enum_name, fields, ..
+            } => {
+                if let Some(enum_name) = enum_name {
+                    *enum_name = self.resolver.declare(enum_name, some!(Variant), pattern.id);
+                }
+
+                for field in fields.iter_mut() {
+                    self.declare_pattern(field);
+                }
+            }
             PatternKind::Record { fields } => {
                 for field in fields {
                     let RecordFieldPatternKind::Bind(name) = &mut field.kind else {
@@ -264,9 +276,13 @@ impl<'a> DeclDeclarer<'a> {
                     }
                 }
             }
-            PatternKind::Tuple(_) => (),
+            PatternKind::Struct { .. } => todo!(),
+            PatternKind::Tuple(_) => todo!(),
             PatternKind::Wildcard => (),
-            _ => (),
+            PatternKind::LiteralFalse
+            | PatternKind::LiteralTrue
+            | PatternKind::LiteralInt(..)
+            | PatternKind::LiteralFloat(..) => (),
         }
     }
 

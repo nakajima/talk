@@ -18,7 +18,7 @@ use crate::{
 };
 use rustc_hash::FxHashMap;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ConstraintCause {
     Annotation(NodeID),
     Member(NodeID),
@@ -34,7 +34,7 @@ pub enum ConstraintCause {
     Internal,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Constraint {
     Call(Call),
     Equals(Equals),
@@ -200,6 +200,16 @@ impl Constraint {
                 lhs: apply(equals.lhs.clone(), substitutions),
                 rhs: apply(equals.rhs.clone(), substitutions),
             },
+            Self::Conforms(conforms) => {
+                let InferTy::Param(param) = conforms.ty else {
+                    panic!("didn't get param for conforms predicate: {:?}", conforms.ty);
+                };
+                Predicate::Conforms {
+                    param,
+                    protocol_id: conforms.protocol_id,
+                    span: conforms.span,
+                }
+            }
             _ => unimplemented!("No predicate for constraint: {self:?}"),
         }
     }

@@ -17,7 +17,7 @@ use crate::{
     },
 };
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AssociatedEquals {
     pub node_id: NodeID,
     pub subject: InferTy,

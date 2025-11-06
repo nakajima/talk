@@ -1,7 +1,5 @@
 use std::collections::VecDeque;
 
-use indexmap::IndexSet;
-
 use crate::{
     label::Label,
     name_resolution::symbol::{AssociatedTypeId, ProtocolId, Symbol},
@@ -20,8 +18,7 @@ use crate::{
         },
         infer_row::InferRow,
         infer_ty::{InferTy, Level},
-        predicate::Predicate,
-        type_operations::{UnificationSubstitutions, apply},
+        type_operations::UnificationSubstitutions,
     },
 };
 
@@ -29,14 +26,9 @@ use crate::{
 pub struct Wants {
     pub simple: VecDeque<Constraint>,
     pub defer: VecDeque<Constraint>,
-    pub givens: IndexSet<Predicate<InferTy>>,
 }
 
 impl Wants {
-    pub fn given(&mut self, predicate: Predicate<InferTy>) {
-        self.givens.insert(predicate);
-    }
-
     pub fn apply(&mut self, substitutions: &mut UnificationSubstitutions) {
         self.simple = std::mem::take(&mut self.simple)
             .into_iter()

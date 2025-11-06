@@ -80,12 +80,27 @@ impl Scheme<InferTy> {
         wants: &mut Wants,
         span: Span,
     ) -> (InferTy, InstantiationSubstitutions) {
-        // Map each quantified meta id to a fresh meta at this use-site level
-        let mut substitutions = InstantiationSubstitutions::default();
+        let substitutions = InstantiationSubstitutions::default();
+        self.instantiate_with_substitutions(id, session, level, wants, span, substitutions)
+    }
 
+    #[instrument(skip(self, session, level, wants, span,), ret)]
+    pub fn instantiate_with_substitutions(
+        &self,
+        id: NodeID,
+        session: &mut TypeSession,
+        level: Level,
+        wants: &mut Wants,
+        span: Span,
+        mut substitutions: InstantiationSubstitutions,
+    ) -> (InferTy, InstantiationSubstitutions) {
         for forall in &self.foralls {
             match forall {
                 ForAll::Ty(param) => {
+                    if substitutions.ty.contains_key(param) {
+                        continue;
+                    }
+
                     let InferTy::Var { id: meta, .. } = session.new_ty_meta_var(level) else {
                         unreachable!()
                     };
@@ -100,6 +115,10 @@ impl Scheme<InferTy> {
                         .insert((id, *param), InferTy::Var { id: meta, level });
                 }
                 ForAll::Row(param) => {
+                    if substitutions.row.contains_key(param) {
+                        continue;
+                    }
+
                     let InferRow::Var(meta) = session.new_row_meta_var(level) else {
                         unreachable!()
                     };

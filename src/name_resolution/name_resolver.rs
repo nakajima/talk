@@ -442,18 +442,23 @@ impl NameResolver {
     }
 
     fn enter_pattern(&mut self, pattern: &mut Pattern) {
-        if let PatternKind::Variant { enum_name, .. } = &mut pattern.kind
-            && let Some(enum_name) = enum_name
-        {
-            let Some(resolved) = self.lookup(enum_name, None) else {
-                self.diagnostic(
-                    pattern.span,
-                    NameResolverError::UndefinedName(enum_name.name_str()),
-                );
-                return;
-            };
+        match &mut pattern.kind {
+            PatternKind::Bind(name) => *name = self.lookup(name, None).unwrap(),
+            PatternKind::Variant {
+                enum_name: Some(enum_name),
+                ..
+            } => {
+                let Some(resolved) = self.lookup(enum_name, None) else {
+                    self.diagnostic(
+                        pattern.span,
+                        NameResolverError::UndefinedName(enum_name.name_str()),
+                    );
+                    return;
+                };
 
-            *enum_name = resolved;
+                *enum_name = resolved;
+            }
+            _ => unimplemented!(),
         }
     }
 
@@ -596,6 +601,8 @@ impl NameResolver {
                 .unwrap()
                 .types
                 .insert("Self".into(), name.symbol());
+
+            self.phase.unbound_nodes.push(decl.id);
 
             self.enter_scope(decl.id, Some((name.symbol(), decl.id)));
         });
