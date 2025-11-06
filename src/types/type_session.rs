@@ -261,6 +261,7 @@ impl TypeSession {
                     .get(&meta)
                     .cloned()
                     .unwrap_or_else(|| {
+                        panic!("unsolved or ungeneralized meta: {ty:?}");
                         let InferTy::Param(id) = self.new_type_param(Some(meta)) else {
                             unreachable!()
                         };
@@ -333,6 +334,7 @@ impl TypeSession {
         }
     }
 
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     pub fn apply(&mut self, substitutions: &mut UnificationSubstitutions) {
         for ty in self.types_by_node.values_mut() {
             if matches!(ty, InferTy::Primitive(_)) {

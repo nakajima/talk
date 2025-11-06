@@ -1041,7 +1041,7 @@ pub mod tests {
     }
 
     #[test]
-    fn types_nested_record_pattern() {
+    fn type_nested_record_pattern() {
         let (ast, types) = typecheck(
             r#"
         let rec = { a: 123, b: { c: true } }

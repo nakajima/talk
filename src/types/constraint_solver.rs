@@ -45,11 +45,13 @@ impl<'a> ConstraintSolver<'a> {
 
     pub fn solve(mut self) -> (UnificationSubstitutions, IndexSet<Constraint>) {
         let mut remaining_attempts = 5;
+        let mut made_progress = false;
         while remaining_attempts >= 0 {
             let mut next_wants = Wants::default();
             while let Some(want) = self.wants.pop() {
                 tracing::trace!("solving {want:?}");
                 let constraint = want.apply(&mut self.substitutions);
+                println!("solving {constraint:?}");
                 let solution = match constraint {
                     Constraint::Equals(ref equals) => unify(
                         &equals.lhs,
@@ -97,7 +99,9 @@ impl<'a> ConstraintSolver<'a> {
                 };
 
                 match solution {
-                    Ok(true) => (), // We're good
+                    Ok(true) => {
+                        made_progress |= true;
+                    } // We're good
                     Ok(false) => {
                         self.unsolved.insert(constraint);
                     }
@@ -114,9 +118,21 @@ impl<'a> ConstraintSolver<'a> {
                 }
             }
 
+            if !made_progress {
+                remaining_attempts -= 1;
+            }
+
+            if next_wants.is_empty() {
+                tracing::trace!("no more wants found, breaking");
+                break;
+            }
+
+            if remaining_attempts == 0 {
+                tracing::error!("did not make forward progress!");
+            }
+
             // Add any new constraints generated during solving
             self.wants.extend(next_wants);
-            remaining_attempts -= 1;
         }
 
         (self.substitutions, self.unsolved)
