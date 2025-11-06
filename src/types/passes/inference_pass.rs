@@ -20,7 +20,7 @@ use crate::{
         call_arg::CallArg,
         decl::{Decl, DeclKind},
         expr::{Expr, ExprKind},
-        func::{self, Func},
+        func::Func,
         func_signature::FuncSignature,
         generic_decl::GenericDecl,
         match_arm::MatchArm,
@@ -113,7 +113,6 @@ impl<'a> InferencePass<'a> {
                 kind:
                     DeclKind::Protocol {
                         name: name @ Name::Resolved(Symbol::Protocol(protocol_id), ..),
-                        generics,
                         body,
                         ..
                     },
@@ -123,7 +122,7 @@ impl<'a> InferencePass<'a> {
                 continue;
             };
 
-            let mut protocol = Protocol::new(name.clone());
+            let protocol = Protocol::new(name.clone());
             let protocol_self_id = self.session.new_type_param_id(None);
             self.givens.insert(Predicate::Conforms {
                 param: protocol_self_id,
@@ -374,7 +373,7 @@ impl<'a> InferencePass<'a> {
         protocol_self_id: TypeParamId,
         protocol_id: ProtocolId,
         func_signature: &FuncSignature,
-        level: Level,
+        _level: Level,
     ) -> InferTy {
         for generic in func_signature.generics.iter() {
             let param_id = self.session.new_type_param_id(None);
@@ -701,115 +700,6 @@ impl<'a> InferencePass<'a> {
             self.wants
                 .conforms(ty.clone(), protocol_id, conformance.span);
         }
-
-        ty
-    }
-
-    #[instrument(level = tracing::Level::TRACE, skip(self, generics, _conformances, body))]
-    fn visit_enum(
-        &mut self,
-        name: &Name,
-        generics: &[GenericDecl],
-        _conformances: &[TypeAnnotation],
-        body: &Body,
-        level: Level,
-    ) -> InferTy {
-        for generic in generics.iter() {
-            let param_id = self.session.new_type_param_id(None);
-            self.session
-                .insert_mono(generic.name.symbol(), InferTy::Param(param_id));
-        }
-
-        let enum_symbol = name.symbol();
-        let enum_row_placeholder_id = self.canonical_row_for(&enum_symbol, level);
-        let enum_row = InferRow::Var(enum_row_placeholder_id);
-        let enum_ty = InferTy::Nominal {
-            symbol: name.symbol(),
-            row: enum_row.clone().into(),
-        };
-
-        let mut variants = vec![];
-
-        for decl in body.decls.iter() {
-            match &decl.kind {
-                DeclKind::Init { name, params, body } => {
-                    self.visit_init(enum_ty.clone(), name, params, body, level.next());
-                }
-                DeclKind::Method { func, is_static } => {
-                    self.visit_method(enum_symbol, func, *is_static, level.next());
-                }
-                DeclKind::EnumVariant(name, _, values) => {
-                    self.session
-                        .type_catalog
-                        .variants
-                        .entry(enum_symbol)
-                        .or_default()
-                        .insert(name.name_str().into(), name.symbol());
-
-                    let tys = values
-                        .iter()
-                        .map(|v| self.visit_type_annotation(v, level))
-                        .collect_vec();
-
-                    let ty = match tys.len() {
-                        0 => InferTy::Void,
-                        1 => tys[0].clone(),
-                        _ => InferTy::Tuple(tys.to_vec()),
-                    };
-
-                    self.session.insert(name.symbol(), ty.clone());
-                    variants.push((name.name_str(), ty));
-                }
-                _ => todo!("{:?}", decl.kind),
-            }
-        }
-
-        let row = variants
-            .iter()
-            .fold(InferRow::Empty(TypeDefKind::Enum), |acc, (name, ty)| {
-                InferRow::Extend {
-                    row: acc.into(),
-                    label: name.into(),
-                    ty: substitute(ty.clone(), &self.session.skolem_map),
-                }
-            });
-
-        println!("ENUM ROW: {row:?}");
-
-        // NOTE: This is sort of a hack since we don't have a direct way to say
-        // that rows should be equal.
-        self.wants.equals(
-            InferTy::Record(row.clone().into()),
-            InferTy::Record(enum_row.into()),
-            ConstraintCause::Internal,
-            body.span,
-        );
-        // Replace all instances of the placeholder row
-        let mut substitutions = UnificationSubstitutions::new(self.session.meta_levels.clone());
-        substitutions
-            .row
-            .insert(enum_row_placeholder_id, row.clone());
-
-        self.session.apply(&mut substitutions);
-        self.wants.apply(&mut substitutions);
-
-        let ty = InferTy::Nominal {
-            symbol: enum_symbol,
-            row: row.into(),
-        };
-
-        let foralls: IndexSet<_> = ty.collect_foralls().into_iter().collect();
-        let entry = if foralls.is_empty() {
-            EnvEntry::Mono(ty.clone())
-        } else {
-            EnvEntry::Scheme(Scheme {
-                foralls,
-                predicates: vec![],
-                ty: ty.clone(),
-            })
-        };
-
-        self.session.insert_term(enum_symbol, entry);
 
         ty
     }

@@ -458,7 +458,16 @@ impl NameResolver {
 
                 *enum_name = resolved;
             }
-            _ => unimplemented!(),
+            PatternKind::Tuple(patterns) => {
+                for pattern in patterns.iter_mut() {
+                    self.enter_pattern(pattern);
+                }
+            }
+            PatternKind::LiteralInt(..)
+            | PatternKind::LiteralFloat(..)
+            | PatternKind::LiteralTrue
+            | PatternKind::LiteralFalse => (),
+            _ => unimplemented!("{pattern:?}"),
         }
     }
 
