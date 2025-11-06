@@ -258,14 +258,13 @@ impl TypeSession {
                     .get(&meta)
                     .cloned()
                     .unwrap_or_else(|| {
-                        panic!("unsolved or ungeneralized meta: {ty:?}");
-                        // let InferTy::Param(id) = self.new_type_param(Some(meta)) else {
-                        //     unreachable!()
-                        // };
+                        let InferTy::Param(id) = self.new_type_param(Some(meta)) else {
+                            unreachable!()
+                        };
 
-                        // self.reverse_instantiations.ty.insert(meta, id);
+                        self.reverse_instantiations.ty.insert(meta, id);
 
-                        // id
+                        id
                     });
 
                 InferTy::Param(id)

@@ -97,14 +97,81 @@ impl<'a> InferencePass<'a> {
             pass.discover_protocols(&roots, Level::default());
             _ = std::mem::replace(&mut pass.ast.roots, roots);
 
-            let (wants, subs) = pass.generate();
-            result.extend(wants);
-            substitutions.extend(&subs);
+            pass.generate();
+            pass.check_conformances();
+
+            substitutions.extend(&pass.substitutions);
         }
 
         session.apply(&mut substitutions);
 
         result
+    }
+
+    fn check_conformances(&mut self) {
+        let mut wants = Wants::default();
+        println!(
+            "CHECKING CONFORMANCES: {:?}",
+            self.session.type_catalog.conformances
+        );
+        for (key, conformance) in self.session.type_catalog.conformances.clone().iter() {
+            let conforming_ty = self.session.lookup(&key.conforming_id).unwrap();
+            let requirements = self
+                .session
+                .type_catalog
+                .method_requirements
+                .get(&key.protocol_id.into())
+                .unwrap();
+
+            for (label, sym) in requirements.clone() {
+                let requirement_entry = self.session.lookup(&sym).unwrap();
+                let witness_entry_sym = self
+                    .session
+                    .type_catalog
+                    .instance_methods
+                    .get(&key.conforming_id)
+                    .unwrap()
+                    .get(&label)
+                    .copied()
+                    .unwrap();
+                let witness_entry = self.session.lookup(&witness_entry_sym).unwrap();
+                let requirement_ty = requirement_entry
+                    .instantiate(
+                        NodeID::SYNTHESIZED,
+                        self.session,
+                        Level::default(),
+                        &mut wants,
+                        conformance.span,
+                    )
+                    .0;
+                let witness_ty = witness_entry
+                    .instantiate(
+                        NodeID::SYNTHESIZED,
+                        self.session,
+                        Level::default(),
+                        &mut wants,
+                        conformance.span,
+                    )
+                    .0;
+
+                wants.equals(
+                    requirement_ty,
+                    witness_ty,
+                    ConstraintCause::Internal,
+                    conformance.span,
+                );
+            }
+        }
+
+        let solver = ConstraintSolver::new(
+            wants,
+            &self.givens,
+            Level::default(),
+            self.session,
+            self.ast,
+        );
+
+        solver.solve();
     }
 
     fn discover_protocols(&mut self, roots: &[Node], level: Level) {
@@ -162,7 +229,7 @@ impl<'a> InferencePass<'a> {
         }
     }
 
-    fn generate(mut self) -> (Wants, UnificationSubstitutions) {
+    fn generate(&mut self) {
         for group in self.ast.phase.scc_graph.groups() {
             self.generate_for_group(group);
         }
@@ -185,8 +252,6 @@ impl<'a> InferencePass<'a> {
 
         // Apply substitutions to types_by_node for top-level expressions
         self.session.apply(&mut substitutions);
-
-        (self.wants, self.substitutions)
     }
 
     fn generate_for_group(&mut self, group: BindingGroup) {
