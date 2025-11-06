@@ -28,7 +28,7 @@ use crate::{
         func::Func,
         func_signature::FuncSignature,
         match_arm::MatchArm,
-        pattern::{Pattern, PatternKind},
+        pattern::{Pattern, PatternKind, RecordFieldPatternKind},
         stmt::{Stmt, StmtKind},
         type_annotation::{TypeAnnotation, TypeAnnotationKind},
     },
@@ -461,6 +461,20 @@ impl NameResolver {
             PatternKind::Tuple(patterns) => {
                 for pattern in patterns.iter_mut() {
                     self.enter_pattern(pattern);
+                }
+            }
+            PatternKind::Record { fields } => {
+                for field in fields {
+                    match &mut field.kind {
+                        RecordFieldPatternKind::Bind(name) => {
+                            *name = self.lookup(name, None).unwrap();
+                        }
+                        RecordFieldPatternKind::Equals { name, value, .. } => {
+                            *name = self.lookup(name, None).unwrap();
+                            self.enter_pattern(value);
+                        }
+                        RecordFieldPatternKind::Rest => (),
+                    }
                 }
             }
             PatternKind::LiteralInt(..)

@@ -264,15 +264,19 @@ impl<'a> DeclDeclarer<'a> {
             }
             PatternKind::Record { fields } => {
                 for field in fields {
-                    let RecordFieldPatternKind::Bind(name) = &mut field.kind else {
-                        continue;
-                    };
-
-                    *name = if self.at_module_scope() {
-                        self.resolver.declare(name, some!(Global), pattern.id)
-                    } else {
-                        self.resolver
-                            .declare(name, some!(DeclaredLocal), pattern.id)
+                    match &mut field.kind {
+                        RecordFieldPatternKind::Bind(name) => {
+                            *name =
+                                self.resolver
+                                    .declare(name, some!(PatternBindLocal), pattern.id);
+                        }
+                        RecordFieldPatternKind::Equals { name, value, .. } => {
+                            *name =
+                                self.resolver
+                                    .declare(name, some!(PatternBindLocal), pattern.id);
+                            self.declare_pattern(value);
+                        }
+                        RecordFieldPatternKind::Rest => (),
                     }
                 }
             }
