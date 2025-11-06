@@ -77,7 +77,6 @@ impl Call {
                         .instantiate(self.callee_id, session, self.level, next_wants, self.span)
                         .0
                 } else {
-                    println!("CALL: {:?}", self);
                     match session
                         .lookup(&name.symbol())
                         .expect("enum type missing from env")

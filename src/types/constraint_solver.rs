@@ -51,7 +51,6 @@ impl<'a> ConstraintSolver<'a> {
             while let Some(want) = self.wants.pop()
                 && remaining_attempts >= 0
             {
-                println!("remaining: {remaining_attempts:?}");
                 tracing::trace!("solving {want:?}");
                 let constraint = want.apply(&mut self.substitutions);
                 let solution = match constraint {
@@ -102,7 +101,6 @@ impl<'a> ConstraintSolver<'a> {
 
                 match solution {
                     Ok(true) => {
-                        println!("made progress on {constraint:?}");
                         made_progress |= true;
                     } // We're good
                     Ok(false) => {

@@ -9,7 +9,6 @@ use crate::{
     label::Label,
     name_resolution::symbol::{ProtocolId, StructId, Symbol},
     node_id::NodeID,
-    span::Span,
     types::{
         builtins::builtin_scope,
         constraints::constraint::Constraint,
@@ -42,7 +41,6 @@ pub struct TypeSession {
     term_env: TermEnv,
     pub(super) meta_levels: Rc<RefCell<FxHashMap<Meta, Level>>>,
     pub(super) skolem_map: FxHashMap<InferTy, InferTy>,
-    pub(super) skolem_conformances: FxHashMap<SkolemId, IndexSet<(ProtocolId, Span)>>,
 
     pub skolem_bounds: FxHashMap<SkolemId, Vec<StructId>>,
     pub typealiases: FxHashMap<Symbol, Scheme<InferTy>>,
@@ -117,7 +115,6 @@ impl TypeSession {
             current_module_id,
             vars: Default::default(),
             skolem_map: Default::default(),
-            skolem_conformances: Default::default(),
             meta_levels: Default::default(),
             term_env,
             skolem_bounds: Default::default(),
@@ -262,13 +259,13 @@ impl TypeSession {
                     .cloned()
                     .unwrap_or_else(|| {
                         panic!("unsolved or ungeneralized meta: {ty:?}");
-                        let InferTy::Param(id) = self.new_type_param(Some(meta)) else {
-                            unreachable!()
-                        };
+                        // let InferTy::Param(id) = self.new_type_param(Some(meta)) else {
+                        //     unreachable!()
+                        // };
 
-                        self.reverse_instantiations.ty.insert(meta, id);
+                        // self.reverse_instantiations.ty.insert(meta, id);
 
-                        id
+                        // id
                     });
 
                 InferTy::Param(id)
@@ -397,7 +394,6 @@ impl TypeSession {
 
         // keep only metas born at or above inner
         let mut foralls: IndexSet<_> = ty.collect_foralls().into_iter().collect();
-        println!("FORALLS {foralls:?}, ty: {ty:?} metas: {metas:?}");
         let mut substitutions = UnificationSubstitutions::new(self.meta_levels.clone());
         for m in &metas {
             match m {
@@ -407,7 +403,6 @@ impl TypeSession {
 
                 InferTy::Var { level, id } => {
                     if *level < inner {
-                        println!("discarding {m:?} due to level ({level:?} < {inner:?})");
                         tracing::warn!("discarding {m:?} due to level ({level:?} < {inner:?})");
                         continue;
                     }
@@ -737,9 +732,7 @@ impl TypeSession {
         receiver: &Symbol,
         label: &Label,
     ) -> Option<Symbol> {
-        println!("lookup_static_member: {receiver:?}.{label:?}");
         if let Some(sym) = self.type_catalog.lookup_static_member(receiver, label) {
-            println!("FOUND: {sym:?}");
             return Some(sym);
         }
 

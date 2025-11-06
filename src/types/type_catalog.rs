@@ -13,8 +13,6 @@ use crate::{
     types::{
         infer_row::RowParamId,
         infer_ty::{InferTy, TypeParamId},
-        nominal::Nominal,
-        passes::inference_pass::Protocol,
         ty::{SomeType, Ty},
         type_session::{MemberSource, TypeEntry, TypeSession},
     },
@@ -279,14 +277,11 @@ impl<T: SomeType> TypeCatalogOld<T> {
             return Some((*sym, MemberSource::SelfMember));
         }
 
-        println!("CONFORMANCES: {:?}", self.conformances);
-
         for ConformanceKey {
             protocol_id,
             conforming_id,
         } in self.conformances.keys()
         {
-            println!("CHECKING CONFORMANCE: {conforming_id:?}");
             if conforming_id != receiver {
                 continue;
             }

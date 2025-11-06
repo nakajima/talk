@@ -49,7 +49,6 @@ impl Member {
         match &receiver {
             InferTy::Var { id, .. } => {
                 if let Some(param) = session.reverse_instantiations.ty.get(id) {
-                    println!("well we have a param: {param:?}");
                     return self.lookup_type_param_member(
                         &ty,
                         *param,
@@ -134,7 +133,6 @@ impl Member {
         wants: &mut Wants,
         substitutions: &mut UnificationSubstitutions,
     ) -> Result<bool, TypeError> {
-        println!("GIVENS: {givens:?}");
         let mut candidates = vec![];
         for given in givens {
             if let Predicate::Conforms {
@@ -147,8 +145,7 @@ impl Member {
         }
 
         for candidate in candidates {
-            if let Some((req, source)) = session.lookup_member(&candidate.into(), &self.label) {
-                println!("found a member lol: {req:?}, source: {source:?}");
+            if let Some((req, _source)) = session.lookup_member(&candidate.into(), &self.label) {
                 let entry = session.lookup(&req).unwrap();
                 let req_ty = entry
                     .instantiate(self.node_id, session, level, wants, self.span)
@@ -218,8 +215,6 @@ impl Member {
             };
         }
 
-        println!("LOOKUP STATIC MEMBER: {symbol:?} . {member_sym:?}");
-
         next_wants.equals(member_ty, self.ty.clone(), self.cause, self.span);
         Ok(true)
     }
@@ -241,8 +236,6 @@ impl Member {
             ));
         };
 
-        println!("MEMBER SYM: {row:?} {member_sym:?} {source:?}");
-
         match member_sym {
             Symbol::InstanceMethod(..) => {
                 let entry = session.lookup(&member_sym).unwrap();
@@ -251,12 +244,9 @@ impl Member {
                     .0;
                 let (method_receiver, method_fn) = consume_self(&method);
 
-                println!("receiver: {:?}", self.receiver);
-                println!("ty: {:?}", self.ty);
-                println!("method_receiver: {method_receiver:?}");
-                println!("method_fn: {method_fn:?}");
-
-                if let MemberSource::Protocol(protocol_id) = source {}
+                if let MemberSource::Protocol(protocol_id) = source {
+                    tracing::trace!("member found in protocol: {protocol_id:?}");
+                }
 
                 next_wants.equals(
                     method_receiver,
@@ -269,7 +259,6 @@ impl Member {
                 return Ok(true);
             }
             Symbol::Variant(..) => {
-                println!("instantiating variant. ty: {:?}", self.ty);
                 let variant = self.lookup_variant(row).unwrap();
                 let constructor_ty = match variant {
                     InferTy::Void => self.receiver.clone(),

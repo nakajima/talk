@@ -612,7 +612,6 @@ impl<'a> InferencePass<'a> {
         }
 
         let ret = self.infer_block(&func.body, level, wants);
-        println!("inferred func: {:?}", curry(param_tys.clone(), ret.clone()));
 
         curry(param_tys, ret)
     }
@@ -970,8 +969,6 @@ impl<'a> InferencePass<'a> {
             );
         }
 
-        println!("expected ret: {expected_ret:?}");
-
         self.check_body(body, expected_ret.clone(), level, wants);
     }
 
@@ -1015,9 +1012,6 @@ impl<'a> InferencePass<'a> {
         for node in block.body.iter() {
             actual_ret = self.infer_node(node, level, wants);
         }
-
-        println!("check_body {block:?}");
-        println!("actual_ret: {actual_ret:?} {expected:?}");
 
         wants.equals(
             expected,

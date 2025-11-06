@@ -159,13 +159,10 @@ impl<'a> InferencePass<'a> {
                     _ => (),
                 }
             }
-
-            println!("HI PROTOCOL: {name:?}");
         }
     }
 
     fn generate(mut self) -> (Wants, UnificationSubstitutions) {
-        println!("groups: {:?}", self.ast.phase.scc_graph.groups());
         for group in self.ast.phase.scc_graph.groups() {
             self.generate_for_group(group);
         }
@@ -448,7 +445,6 @@ impl<'a> InferencePass<'a> {
         body: &Body,
         level: Level,
     ) -> InferTy {
-        println!("VISIT NOMINAL: {name:?} {conformances:?}");
         for generic in generics.iter() {
             let param_id = self.session.new_type_param_id(None);
             self.session
@@ -563,8 +559,6 @@ impl<'a> InferencePass<'a> {
                 continue;
             };
 
-            println!("REGISTERING CONFORMANCE: {conformance:?}");
-
             self.session.type_catalog.conformances.insert(
                 ConformanceKey {
                     protocol_id,
@@ -606,7 +600,6 @@ impl<'a> InferencePass<'a> {
         body: &Body,
         level: Level,
     ) -> InferTy {
-        println!("VISIT NOMINAL: {name:?} {conformances:?}");
         for generic in generics.iter() {
             let param_id = self.session.new_type_param_id(None);
             self.session
@@ -681,8 +674,6 @@ impl<'a> InferencePass<'a> {
                 tracing::warn!("didnt get protocol id for conformance: {conformance:?}");
                 continue;
             };
-
-            println!("REGISTERING CONFORMANCE: {conformance:?}");
 
             self.session.type_catalog.conformances.insert(
                 ConformanceKey {
@@ -837,7 +828,6 @@ impl<'a> InferencePass<'a> {
                 predicates: Default::default(),
             })
         };
-        println!("INIT ENTRY: {entry:?}");
         self.session.insert_term(name.symbol(), entry);
 
         InferTy::Void
@@ -1229,8 +1219,6 @@ impl<'a> InferencePass<'a> {
                 ret.span,
             );
         }
-
-        println!("expected ret: {expected_ret:?}");
 
         self.check_block(body, expected_ret.clone(), level);
     }
