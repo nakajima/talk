@@ -1380,7 +1380,15 @@ impl<'a> InferencePass<'a> {
 
                 InferTy::Record(Box::new(row))
             }
-            _ => todo!(),
+            TypeAnnotationKind::NominalPath {
+                base,
+                member,
+                member_span,
+                member_generics,
+            } => {
+                todo!()
+            }
+            _ => todo!("{type_annotation:?}"),
         }
     }
 

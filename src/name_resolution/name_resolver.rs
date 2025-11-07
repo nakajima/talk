@@ -99,6 +99,7 @@ pub struct NameResolved {
     pub symbols_to_node: FxHashMap<Symbol, NodeID>,
     pub scc_graph: SCCGraph,
     pub unbound_nodes: Vec<NodeID>,
+    pub child_types: FxHashMap<Symbol, Vec<Symbol>>,
 }
 
 pub type ScopeId = Index;
@@ -128,6 +129,9 @@ pub struct NameResolver {
     pub(super) current_scope_id: Option<NodeID>,
     pub(super) current_symbol_scope: Vec<Option<(Symbol, NodeID)>>,
     pub(super) current_level: Level,
+
+    // For figuring out child types
+    pub(super) nominal_stack: Vec<Symbol>,
 }
 
 impl ASTPhase for NameResolved {}
@@ -143,6 +147,7 @@ impl NameResolver {
             current_scope_id: None,
             current_symbol_scope: Default::default(),
             current_level: Level::default(),
+            nominal_stack: Default::default(),
             modules,
         };
 

@@ -304,6 +304,16 @@ impl<'a> DeclDeclarer<'a> {
             TypeDefKind::Extension => self.resolver.lookup(name, Some(id)).unwrap_or(name.clone()),
         };
 
+        if let Some(parent) = self.resolver.nominal_stack.last() {
+            self.resolver
+                .phase
+                .child_types
+                .entry(*parent)
+                .or_default()
+                .push(name.symbol());
+        }
+
+        self.resolver.nominal_stack.push(name.symbol());
         self.type_members.insert(id, TypeMembers::default());
 
         self.start_scope(Some(name.symbol()), id, false);
@@ -484,6 +494,15 @@ impl<'a> DeclDeclarer<'a> {
                 }
 
                 *lhs_name = self.resolver.declare(lhs_name, some!(TypeAlias), decl.id);
+
+                if let Some(parent) = self.resolver.nominal_stack.last() {
+                    self.resolver
+                        .phase
+                        .child_types
+                        .entry(*parent)
+                        .or_default()
+                        .push(lhs_name.symbol());
+                }
             }
         );
 
@@ -612,6 +631,17 @@ impl<'a> DeclDeclarer<'a> {
                 | DeclKind::Init { .. },
             {
                 self.end_scope();
+            }
+        );
+
+        on!(
+            &mut decl.kind,
+            DeclKind::Protocol { .. }
+                | DeclKind::Enum { .. }
+                | DeclKind::Extend { .. }
+                | DeclKind::Struct { .. },
+            {
+                self.resolver.nominal_stack.pop();
             }
         );
     }

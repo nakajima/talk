@@ -1049,6 +1049,81 @@ pub mod tests {
     }
 
     #[test]
+    fn resolves_struct_child_types() {
+        let resolved = resolve(
+            "
+        struct A {
+            struct B {}
+            typealias C = Int
+            enum D {}
+        }
+        ",
+        );
+        assert_eq!(
+            *resolved
+                .phase
+                .child_types
+                .get(&Symbol::Struct(StructId::from(1)))
+                .unwrap(),
+            vec![
+                Symbol::Struct(StructId::from(2)),
+                Symbol::TypeAlias(TypeAliasId::from(3)),
+                Symbol::Enum(EnumId::from(4))
+            ]
+        )
+    }
+
+    #[test]
+    fn resolves_enum_child_types() {
+        let resolved = resolve(
+            "
+        enum A {
+            struct B {}
+            typealias C = Int
+            enum D {}
+        }
+        ",
+        );
+        assert_eq!(
+            *resolved
+                .phase
+                .child_types
+                .get(&Symbol::Enum(EnumId::from(1)))
+                .unwrap(),
+            vec![
+                Symbol::Struct(StructId::from(2)),
+                Symbol::TypeAlias(TypeAliasId::from(3)),
+                Symbol::Enum(EnumId::from(4))
+            ]
+        )
+    }
+
+    #[test]
+    fn resolves_protocol_child_types() {
+        let resolved = resolve(
+            "
+        protocol A {
+            struct B {}
+            typealias C = Int
+            enum D {}
+        }
+        ",
+        );
+        assert_eq!(
+            *resolved
+                .phase
+                .child_types
+                .get(&Symbol::Protocol(ProtocolId::from(1)))
+                .unwrap(),
+            vec![
+                Symbol::Struct(StructId::from(1)),
+                Symbol::TypeAlias(TypeAliasId::from(2)),
+                Symbol::Enum(EnumId::from(3))
+            ]
+        )
+    }
+
+    #[test]
     fn resolves_enum() {
         let resolved = resolve(
             "
