@@ -349,7 +349,7 @@ impl Member {
     }
 }
 
-fn consume_self(method: &InferTy) -> (InferTy, InferTy) {
+pub fn consume_self(method: &InferTy) -> (InferTy, InferTy) {
     let (mut params, ret) = uncurry_function(method.clone());
     let method_receiver = params.remove(0);
     if params.is_empty() {

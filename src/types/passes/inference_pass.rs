@@ -34,7 +34,7 @@ use crate::{
     types::{
         builtins::resolve_builtin_type,
         constraint_solver::ConstraintSolver,
-        constraints::constraint::ConstraintCause,
+        constraints::{constraint::ConstraintCause, member::consume_self},
         infer_row::{InferRow, RowMetaId},
         infer_ty::{InferTy, Level, Meta, MetaVarId, TypeParamId},
         predicate::Predicate,
@@ -108,6 +108,7 @@ impl<'a> InferencePass<'a> {
         result
     }
 
+    #[instrument(skip(self))]
     fn check_conformances(&mut self) {
         let mut wants = Wants::default();
         println!(
@@ -115,7 +116,6 @@ impl<'a> InferencePass<'a> {
             self.session.type_catalog.conformances
         );
         for (key, conformance) in self.session.type_catalog.conformances.clone().iter() {
-            let conforming_ty = self.session.lookup(&key.conforming_id).unwrap();
             let requirements = self
                 .session
                 .type_catalog
@@ -124,6 +124,7 @@ impl<'a> InferencePass<'a> {
                 .unwrap();
 
             for (label, sym) in requirements.clone() {
+                tracing::trace!("checking req {label:?} {sym:?}");
                 let requirement_entry = self.session.lookup(&sym).unwrap();
                 let witness_entry_sym = self
                     .session
@@ -144,7 +145,7 @@ impl<'a> InferencePass<'a> {
                         conformance.span,
                     )
                     .0;
-                let witness_ty = witness_entry
+                let witness_ty_with_self = witness_entry
                     .instantiate(
                         NodeID::SYNTHESIZED,
                         self.session,
@@ -153,6 +154,8 @@ impl<'a> InferencePass<'a> {
                         conformance.span,
                     )
                     .0;
+
+                let witness_ty = consume_self(&witness_ty_with_self).1;
 
                 wants.equals(
                     requirement_ty,

@@ -1,5 +1,7 @@
 use std::collections::VecDeque;
 
+use tracing::instrument;
+
 use crate::{
     label::Label,
     name_resolution::symbol::{AssociatedTypeId, ProtocolId, Symbol},
@@ -18,6 +20,7 @@ use crate::{
         },
         infer_row::InferRow,
         infer_ty::{InferTy, Level},
+        ty::SomeType,
         type_operations::UnificationSubstitutions,
     },
 };
@@ -57,8 +60,8 @@ impl Wants {
         self.simple.into_iter().chain(self.defer).collect()
     }
 
+    #[instrument(skip(self))]
     pub fn push(&mut self, constraint: Constraint) {
-        tracing::debug!("constraining {constraint:?}");
         match &constraint {
             Constraint::Call(..) => self.defer.push_back(constraint),
             Constraint::Equals(..) => self.simple.push_back(constraint),
@@ -72,6 +75,7 @@ impl Wants {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[instrument(skip(self))]
     pub fn construction(
         &mut self,
         callee_id: NodeID,
@@ -82,7 +86,6 @@ impl Wants {
         cause: ConstraintCause,
         span: Span,
     ) {
-        tracing::debug!("constraining constructor {callee:?}({args:?}) = {type_symbol:?}");
         self.defer.push_back(Constraint::Construction(Construction {
             callee_id,
             callee,
@@ -94,8 +97,8 @@ impl Wants {
         }))
     }
 
+    #[instrument(skip(self))]
     pub fn conforms(&mut self, ty: InferTy, protocol_id: ProtocolId, span: Span) {
-        tracing::debug!("constraining conforms {ty:?} < {protocol_id:?}");
         self.defer.push_back(Constraint::Conforms(Conforms {
             ty,
             protocol_id,
@@ -104,6 +107,7 @@ impl Wants {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[instrument(skip(self))]
     pub fn associated_equals(
         &mut self,
         node_id: NodeID,
@@ -114,10 +118,6 @@ impl Wants {
         cause: ConstraintCause,
         span: Span,
     ) {
-        tracing::debug!(
-            "constraining associated_equals {subject:?} = ({protocol_id:?}.{associated_type_id:?}) = {output:?}"
-        );
-
         self.defer
             .push_back(Constraint::AssociatedEquals(AssociatedEquals {
                 node_id,
@@ -131,6 +131,7 @@ impl Wants {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[instrument(skip(self))]
     pub fn call(
         &mut self,
         callee_id: NodeID,
@@ -143,7 +144,6 @@ impl Wants {
         cause: ConstraintCause,
         span: Span,
     ) {
-        tracing::debug!("constraining call {callee:?}({args:?}) = {returns:?}");
         self.defer.push_back(Constraint::Call(Call {
             callee_id,
             callee,
@@ -164,6 +164,7 @@ impl Wants {
         result
     }
 
+    #[instrument(skip(self))]
     pub fn equals(&mut self, lhs: InferTy, rhs: InferTy, cause: ConstraintCause, span: Span) {
         if lhs == rhs {
             return;
@@ -173,7 +174,6 @@ impl Wants {
         //     panic!("cannot constrain forall: {lhs:?}, {rhs:?}");
         // }
 
-        tracing::debug!("constraining equals {lhs:?} = {rhs:?}");
         self.simple.push_back(Constraint::Equals(Equals {
             lhs,
             rhs,
@@ -182,6 +182,7 @@ impl Wants {
         }));
     }
 
+    #[instrument(skip(self))]
     pub fn member(
         &mut self,
         node_id: NodeID,
@@ -191,7 +192,6 @@ impl Wants {
         cause: ConstraintCause,
         span: Span,
     ) {
-        tracing::debug!("constraining member {receiver:?}.{label:?} <> {ty:?}");
         self.defer.push_back(Constraint::Member(Member {
             node_id,
             receiver,
@@ -202,6 +202,7 @@ impl Wants {
         }))
     }
 
+    #[instrument(skip(self))]
     pub fn _has_field(
         &mut self,
         row: InferRow,
@@ -210,7 +211,6 @@ impl Wants {
         cause: ConstraintCause,
         span: Span,
     ) {
-        tracing::debug!("constraining has_field {row:?}.{label:?} <> {ty:?}");
         self.simple.push_back(Constraint::HasField(HasField {
             row,
             label,
