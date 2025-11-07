@@ -349,7 +349,10 @@ impl NameResolver {
         if let Some(symbol) = symbol
             && !matches!(
                 symbol.0,
-                Symbol::InstanceMethod(..) | Symbol::Synthesized(..) | Symbol::Initializer(..)
+                Symbol::InstanceMethod(..)
+                    | Symbol::Synthesized(..)
+                    | Symbol::Initializer(..)
+                    | Symbol::Builtin(..)
             )
         {
             self.phase

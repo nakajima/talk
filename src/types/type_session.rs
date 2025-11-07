@@ -627,15 +627,30 @@ impl TypeSession {
     }
 
     pub(super) fn promote(&mut self, sym: Symbol, entry: EnvEntry<InferTy>) {
+        #[cfg(debug_assertions)]
+        if matches!(sym, Symbol::Builtin(..)) {
+            panic!("can't override builtin");
+        }
+
         self.term_env.promote(sym, entry);
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
     pub(super) fn insert_term(&mut self, sym: Symbol, entry: EnvEntry<InferTy>) {
+        #[cfg(debug_assertions)]
+        if matches!(sym, Symbol::Builtin(..)) {
+            panic!("can't override builtin");
+        }
+
         self.term_env.insert(sym, entry);
     }
 
     pub(super) fn insert_mono(&mut self, sym: Symbol, ty: InferTy) {
+        #[cfg(debug_assertions)]
+        if matches!(sym, Symbol::Builtin(..)) {
+            panic!("can't override builtin");
+        }
+
         self.term_env.insert(sym, EnvEntry::Mono(ty));
     }
 

@@ -107,10 +107,20 @@ impl Member {
                 next_wants._has_field(row.clone(), self.label.clone(), ty, self.cause, self.span);
                 return Ok(true);
             }
+            InferTy::Primitive(symbol) => {
+                return self.lookup_nominal_member(
+                    symbol,
+                    None,
+                    session,
+                    next_wants,
+                    level,
+                    substitutions,
+                );
+            }
             InferTy::Nominal { symbol, box row } => {
                 return self.lookup_nominal_member(
                     symbol,
-                    row,
+                    Some(row),
                     session,
                     next_wants,
                     level,
@@ -225,7 +235,7 @@ impl Member {
     fn lookup_nominal_member(
         &self,
         symbol: &Symbol,
-        row: &InferRow,
+        row: Option<&InferRow>,
         session: &mut TypeSession,
         next_wants: &mut Wants,
         level: Level,
@@ -261,6 +271,10 @@ impl Member {
                 return Ok(true);
             }
             Symbol::Variant(..) => {
+                let Some(row) = row else {
+                    return Err(TypeError::ExpectedRow(self.receiver.clone()));
+                };
+
                 let variant = self.lookup_variant(row).unwrap();
                 let constructor_ty = match variant {
                     InferTy::Void => self.receiver.clone(),
@@ -328,6 +342,9 @@ impl Member {
         // }
 
         // If all else fails, see if it's a property
+        let Some(row) = row else {
+            return Err(TypeError::ExpectedRow(self.receiver.clone()));
+        };
         next_wants._has_field(
             row.clone(),
             self.label.clone(),

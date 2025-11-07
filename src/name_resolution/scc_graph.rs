@@ -48,6 +48,11 @@ impl SCCGraph {
     }
 
     pub fn add_node(&mut self, node: Symbol, rhs_id: NodeID, level: Level) -> NodeIndex {
+        #[cfg(debug_assertions)]
+        if matches!(node, Symbol::Builtin(..)) {
+            panic!("should not have builtin in graph");
+        }
+
         if let Some(idx) = self.idx_map.get(&node) {
             // Update stored level to the max of existing and new, so later
             // passes (with more accurate nesting) can raise the level.

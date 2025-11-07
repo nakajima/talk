@@ -257,6 +257,7 @@ impl<'a> InferencePass<'a> {
         self.session.apply(&mut substitutions);
     }
 
+    #[instrument(skip(self))]
     fn generate_for_group(&mut self, group: BindingGroup) {
         // Create placeholders
         let placeholders = group
@@ -755,8 +756,7 @@ impl<'a> InferencePass<'a> {
 
         for conformance in conformances {
             let Symbol::Protocol(protocol_id) = conformance.symbol() else {
-                tracing::warn!("didnt get protocol id for conformance: {conformance:?}");
-                continue;
+                unreachable!("didnt get protocol id for conformance: {conformance:?}");
             };
 
             self.session.type_catalog.conformances.insert(
@@ -1352,6 +1352,10 @@ impl<'a> InferencePass<'a> {
                 InferTy::Var { id: var_id, level }
             }
             TypeAnnotationKind::SelfType(name) => {
+                if matches!(name.symbol(), Symbol::Builtin(..)) {
+                    return resolve_builtin_type(&name.symbol()).0;
+                }
+
                 let (ty, subsitutions) = self.session.lookup(&name.symbol()).unwrap().instantiate(
                     type_annotation.id,
                     self.session,
