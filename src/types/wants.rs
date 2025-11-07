@@ -20,7 +20,6 @@ use crate::{
         },
         infer_row::InferRow,
         infer_ty::{InferTy, Level},
-        ty::SomeType,
         type_operations::UnificationSubstitutions,
     },
 };
