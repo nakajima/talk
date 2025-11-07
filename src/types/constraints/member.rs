@@ -48,8 +48,8 @@ impl Member {
 
         match &receiver {
             InferTy::Var { id, .. } => {
-                if let Some(param) = session.reverse_instantiations.ty.get(id) {
-                    return self.lookup_type_param_member(
+                if let Some(param) = session.reverse_instantiations.ty.get(id)
+                    && self.lookup_type_param_member(
                         &ty,
                         *param,
                         session,
@@ -57,7 +57,9 @@ impl Member {
                         givens,
                         next_wants,
                         substitutions,
-                    );
+                    ) == Ok(true)
+                {
+                    return Ok(true);
                 }
 
                 tracing::debug!("deferring member constraint: {self:?}");
@@ -172,7 +174,7 @@ impl Member {
 
         // }
 
-        panic!("didn't find a conformance to find a member in for {self:?}");
+        Ok(false)
     }
 
     #[instrument(skip(self, session, next_wants))]

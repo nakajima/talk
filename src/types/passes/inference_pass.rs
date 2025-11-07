@@ -78,7 +78,7 @@ pub struct InferencePass<'a> {
 
 impl<'a> InferencePass<'a> {
     pub fn drive(asts: &'a mut [AST<NameResolved>], session: &'a mut TypeSession) -> Wants {
-        let mut result = Wants::default();
+        let result = Wants::default();
         let mut substitutions = UnificationSubstitutions::new(session.meta_levels.clone());
 
         for ast in asts.iter_mut() {
@@ -384,7 +384,23 @@ impl<'a> InferencePass<'a> {
                 );
                 InferTy::Void
             }
-            _ => todo!(),
+            StmtKind::Return(_expr) => todo!(),
+            StmtKind::Break => todo!(),
+            StmtKind::Loop(cond, block) => {
+                if let Some(cond) = cond {
+                    let cond_ty = self.visit_expr(cond, level);
+                    self.wants.equals(
+                        cond_ty,
+                        InferTy::Bool,
+                        ConstraintCause::Condition(cond.id),
+                        cond.span,
+                    );
+                }
+
+                self.infer_block(block, level);
+
+                InferTy::Void
+            }
         };
 
         self.session.types_by_node.insert(stmt.id, ty.clone());
