@@ -6,7 +6,7 @@ use crate::{
     compiling::module::ModuleId,
     label::Label,
     name::Name,
-    name_resolution::symbol::{StructId, Symbol},
+    name_resolution::symbol::{ProtocolId, StructId, Symbol},
     types::{
         infer_row::{InferRow, RowMetaId},
         scheme::{ForAll, Scheme},
@@ -88,6 +88,7 @@ pub enum InferTy {
 
     Projection {
         base: Box<InferTy>,
+        protocol_id: ProtocolId,
         associated: Label,
     },
 
@@ -131,6 +132,7 @@ impl From<InferTy> for Ty {
                 symbol,
                 row: Box::new(row.into()),
             },
+            InferTy::Projection { .. } => Ty::Param(420420.into()), // FIXME
             ty => panic!("Ty cannot contain variables: {ty:?}"),
         }
     }
@@ -318,9 +320,14 @@ impl InferTy {
             InferTy::Param(..) => self,
             InferTy::Rigid(..) => self,
             InferTy::Var { .. } => self,
-            InferTy::Projection { base, associated } => InferTy::Projection {
+            InferTy::Projection {
+                base,
+                associated,
+                protocol_id,
+            } => InferTy::Projection {
                 base: base.import(module_id).into(),
                 associated,
+                protocol_id,
             },
             InferTy::Constructor { name, params, ret } => InferTy::Constructor {
                 name: Name::Resolved(name.symbol().import(module_id), name.name_str()),
@@ -352,7 +359,11 @@ impl std::fmt::Debug for InferTy {
             InferTy::Constructor { params, .. } => {
                 write!(f, "Constructor({params:?})")
             }
-            InferTy::Projection { base, associated } => write!(f, "{base:?}.{associated:?}"),
+            InferTy::Projection {
+                base,
+                associated,
+                protocol_id,
+            } => write!(f, "{base:?}.{associated:?}[{protocol_id:?}"),
             InferTy::Func(param, ret) => write!(f, "func({param:?}) -> {ret:?}"),
             InferTy::Tuple(items) => {
                 write!(f, "({})", items.iter().map(|i| format!("{i:?}")).join(", "))

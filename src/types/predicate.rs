@@ -1,17 +1,17 @@
 use crate::{
     label::Label,
-    name_resolution::symbol::{AssociatedTypeId, ProtocolId},
+    name_resolution::symbol::ProtocolId,
     node_id::NodeID,
     span::Span,
     types::{
         constraints::{
-            associated_equals::AssociatedEquals,
             call::Call,
             conforms::Conforms,
             constraint::{Constraint, ConstraintCause},
             equals::Equals,
             has_field::HasField,
             member::Member,
+            projection::Projection,
             type_member::TypeMember,
         },
         infer_row::{InferRow, RowParamId},
@@ -32,6 +32,11 @@ pub enum Predicate<T: SomeType> {
         row: RowParamId,
         label: Label,
         ty: T,
+    },
+    Projection {
+        base: InferTy,
+        label: Label,
+        returns: InferTy,
     },
     Conforms {
         param: TypeParamId,
@@ -59,17 +64,20 @@ pub enum Predicate<T: SomeType> {
         returns: T,
         generics: Vec<T>,
     },
-    AssociatedEquals {
-        subject: T,              // the type the associated type is relative to
-        protocol_id: ProtocolId, // protocol that declares the associated type
-        associated_type_id: AssociatedTypeId,
-        output: T, // a type variable (or any Ty) that must equal the witness
-    },
 }
 
 impl From<Predicate<InferTy>> for Predicate<Ty> {
     fn from(value: Predicate<InferTy>) -> Self {
         match value {
+            Predicate::Projection {
+                base,
+                label,
+                returns,
+            } => Self::Projection {
+                base,
+                label,
+                returns,
+            },
             Predicate::<InferTy>::Conforms {
                 param,
                 protocol_id,
@@ -119,17 +127,6 @@ impl From<Predicate<InferTy>> for Predicate<Ty> {
                 returns: returns.into(),
                 receiver: receiver.map(|r| r.into()),
             },
-            Predicate::<InferTy>::AssociatedEquals {
-                subject,
-                protocol_id,
-                associated_type_id,
-                output,
-            } => Self::AssociatedEquals {
-                subject: subject.into(),
-                protocol_id,
-                associated_type_id,
-                output: output.into(),
-            },
         }
     }
 }
@@ -137,6 +134,15 @@ impl From<Predicate<InferTy>> for Predicate<Ty> {
 impl From<Predicate<Ty>> for Predicate<InferTy> {
     fn from(value: Predicate<Ty>) -> Self {
         match value {
+            Predicate::<Ty>::Projection {
+                base,
+                label,
+                returns,
+            } => Self::Projection {
+                base,
+                label,
+                returns,
+            },
             Predicate::<Ty>::Conforms {
                 param,
                 protocol_id,
@@ -186,17 +192,6 @@ impl From<Predicate<Ty>> for Predicate<InferTy> {
                 returns: returns.into(),
                 receiver: receiver.map(|r| r.into()),
             },
-            Predicate::<Ty>::AssociatedEquals {
-                subject,
-                protocol_id,
-                associated_type_id,
-                output,
-            } => Self::AssociatedEquals {
-                subject: subject.into(),
-                protocol_id,
-                associated_type_id,
-                output: output.into(),
-            },
         }
     }
 }
@@ -204,6 +199,15 @@ impl From<Predicate<Ty>> for Predicate<InferTy> {
 impl Predicate<InferTy> {
     pub fn apply(&self, substitutions: &mut UnificationSubstitutions) -> Self {
         match self {
+            Self::Projection {
+                base,
+                label,
+                returns,
+            } => Self::Projection {
+                base: apply(base.clone(), substitutions),
+                returns: apply(returns.clone(), substitutions),
+                label: label.clone(),
+            },
             Self::Conforms {
                 param,
                 protocol_id,
@@ -252,17 +256,6 @@ impl Predicate<InferTy> {
                 returns: apply(returns.clone(), substitutions),
                 receiver: receiver.as_ref().map(|r| apply(r.clone(), substitutions)),
             },
-            Self::AssociatedEquals {
-                subject,
-                protocol_id,
-                associated_type_id,
-                output,
-            } => Self::AssociatedEquals {
-                subject: apply(subject.clone(), substitutions),
-                protocol_id: *protocol_id,
-                associated_type_id: *associated_type_id,
-                output: apply(output.clone(), substitutions),
-            },
             Self::Equals { lhs, rhs } => Self::Equals {
                 lhs: apply(lhs.clone(), substitutions),
                 rhs: apply(rhs.clone(), substitutions),
@@ -278,12 +271,24 @@ impl Predicate<InferTy> {
         level: Level,
     ) -> Constraint {
         match self.clone() {
+            Self::Projection {
+                base,
+                label,
+                returns,
+            } => Constraint::Projection(Projection {
+                node_id: id,
+                base: instantiate_ty(base, substitutions, level),
+                label,
+                result: instantiate_ty(returns, substitutions, level),
+                cause: ConstraintCause::Internal,
+                span,
+            }),
             Self::Conforms {
                 param,
                 protocol_id,
                 span,
             } => Constraint::Conforms(Conforms {
-                ty: InferTy::Param(param),
+                ty: instantiate_ty(InferTy::Param(param), substitutions, level),
                 protocol_id,
                 span,
             }),
@@ -319,6 +324,7 @@ impl Predicate<InferTy> {
                 generics,
             } => Constraint::TypeMember(TypeMember {
                 base: instantiate_ty(base, substitutions, level),
+                node_id: id,
                 name: member,
                 generics: generics
                     .iter()
@@ -347,20 +353,6 @@ impl Predicate<InferTy> {
                 cause: ConstraintCause::Internal,
                 level,
             }),
-            Self::AssociatedEquals {
-                subject,
-                protocol_id,
-                associated_type_id,
-                output,
-            } => Constraint::AssociatedEquals(AssociatedEquals {
-                node_id: id,
-                subject: instantiate_ty(subject, substitutions, level),
-                protocol_id,
-                associated_type_id,
-                output: instantiate_ty(output, substitutions, level),
-                span,
-                cause: ConstraintCause::Internal,
-            }),
         }
     }
 }
@@ -368,6 +360,13 @@ impl Predicate<InferTy> {
 impl<T: SomeType> std::fmt::Debug for Predicate<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Predicate::Projection {
+                base,
+                label,
+                returns,
+            } => {
+                write!(f, "*projection({base:?}.{label:?})->{returns:?}")
+            }
             Predicate::Conforms {
                 param, protocol_id, ..
             } => {
@@ -411,15 +410,6 @@ impl<T: SomeType> std::fmt::Debug for Predicate<T> {
                     "*typemember({base:?}.{member}<{generics:?}> = {returns:?})"
                 )
             }
-            Predicate::AssociatedEquals {
-                subject,
-                protocol_id,
-                associated_type_id,
-                output,
-            } => write!(
-                f,
-                "*associatedequals({subject:?}, {protocol_id:?}, {associated_type_id:?} = {output:?})"
-            ),
         }
     }
 }

@@ -5,12 +5,8 @@ use crate::{
     node_id::NodeID,
     span::Span,
     types::{
-        infer_ty::{InferTy, Level},
-        term_environment::EnvEntry,
-        type_error::TypeError,
-        type_operations::{UnificationSubstitutions, unify},
-        type_session::TypeSession,
-        wants::Wants,
+        infer_ty::InferTy, solve_context::SolveContext, term_environment::EnvEntry,
+        type_error::TypeError, type_operations::unify, type_session::TypeSession, wants::Wants,
     },
 };
 
@@ -22,12 +18,7 @@ pub struct Conforms {
 }
 
 impl Conforms {
-    pub fn solve(
-        &self,
-        _session: &mut TypeSession,
-        _next_wants: &mut Wants,
-        _substitutions: &mut UnificationSubstitutions,
-    ) -> Result<bool, TypeError> {
+    pub fn solve(&self, _context: &mut SolveContext) -> Result<bool, TypeError> {
         // let mut conformances = TakeToSlot::new(&mut session.type_catalog.conformances);
 
         // let unfulfilled = conformance
@@ -87,33 +78,26 @@ impl Conforms {
         //     next_wants.push(Constraint::Conforms(self.clone()));
         //     Ok(false)
         // }
-        Ok(false)
+        Ok(true)
     }
 
-    #[instrument(level = tracing::Level::TRACE, skip(self, session))]
+    #[instrument(level = tracing::Level::TRACE, skip(self, context))]
     fn _check_method_satisfaction(
         &self,
+        context: &mut SolveContext,
         session: &mut TypeSession,
         requirement: &EnvEntry<InferTy>,
         implementation: &EnvEntry<InferTy>,
-        substitutions: &mut UnificationSubstitutions,
         next_wants: &mut Wants,
     ) -> Result<bool, TypeError> {
-        let level = Level(1);
         let req_ty = match requirement {
             EnvEntry::Mono(ty) => ty.clone(),
-            EnvEntry::Scheme(s) => {
-                s.instantiate(NodeID::SYNTHESIZED, session, level, next_wants, self.span)
-                    .0
-            }
+            EnvEntry::Scheme(s) => s.instantiate(NodeID::SYNTHESIZED, context, session, self.span),
         };
 
         let impl_ty = match implementation {
             EnvEntry::Mono(ty) => ty.clone(),
-            EnvEntry::Scheme(s) => {
-                s.instantiate(NodeID::SYNTHESIZED, session, level, next_wants, self.span)
-                    .0
-            }
+            EnvEntry::Scheme(s) => s.instantiate(NodeID::SYNTHESIZED, context, session, self.span),
         };
 
         //let req_ty = match req_ty {
@@ -136,7 +120,7 @@ impl Conforms {
         //};
 
         // Try to unify in a sandbox
-        match unify(&req_ty, &impl_ty, substitutions, session) {
+        match unify(&req_ty, &impl_ty, context, session) {
             Ok(_) => Ok(true),
             Err(_) => Ok(false), // Don't propagate error, just say "doesn't conform"
         }

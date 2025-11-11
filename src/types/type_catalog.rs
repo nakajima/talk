@@ -5,9 +5,7 @@ use crate::{
     compiling::module::ModuleId,
     label::Label,
     name::Name,
-    name_resolution::symbol::{
-        AssociatedTypeId, InstanceMethodId, MethodRequirementId, ProtocolId, Symbol,
-    },
+    name_resolution::symbol::{InstanceMethodId, MethodRequirementId, ProtocolId, Symbol},
     node_id::NodeID,
     span::Span,
     types::{
@@ -39,10 +37,11 @@ impl ConformanceRequirement {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Conformance {
+    pub node_id: NodeID,
     pub conforming_id: Symbol,
     pub protocol_id: ProtocolId,
     pub requirements: FxHashMap<Label, ConformanceRequirement>,
-    pub associated_types: FxHashMap<AssociatedTypeId, InferTy>,
+    pub associated_types: FxHashMap<Label, InferTy>,
     pub span: Span,
 }
 
@@ -162,9 +161,8 @@ impl<T: SomeType> Default for TrackedInstantiations<T> {
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct TypeCatalogOld<T: SomeType> {
-    pub nominals: FxHashMap<Symbol, NominalOld>,
-    pub protocols: FxHashMap<ProtocolId, ProtocolOld>,
     pub conformances: FxHashMap<ConformanceKey, Conformance>,
+    pub associated_types: FxHashMap<Symbol, FxHashMap<Label, Symbol>>,
     pub extensions: FxHashMap<Symbol, FxHashMap<Label, Symbol>>,
     pub child_types: FxHashMap<Symbol, FxHashMap<String, Symbol>>,
 
@@ -181,11 +179,10 @@ pub struct TypeCatalogOld<T: SomeType> {
 impl<T: SomeType> Default for TypeCatalogOld<T> {
     fn default() -> Self {
         Self {
-            nominals: Default::default(),
-            protocols: Default::default(),
             conformances: Default::default(),
             extensions: Default::default(),
             child_types: Default::default(),
+            associated_types: Default::default(),
 
             initializers: Default::default(),
             properties: Default::default(),
@@ -215,8 +212,7 @@ impl TypeCatalogOld<InferTy> {
                 .insert(key, session.finalize_row(infer_row));
         }
         TypeCatalogOld {
-            nominals: self.nominals,
-            protocols: self.protocols,
+            associated_types: self.associated_types,
             conformances: self.conformances,
             extensions: self.extensions,
             child_types: self.child_types,

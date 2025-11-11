@@ -3,9 +3,8 @@ use crate::{
     span::Span,
     types::{
         constraints::{
-            associated_equals::AssociatedEquals, call::Call, conforms::Conforms,
-            construction::Construction, equals::Equals, has_field::HasField, member::Member,
-            type_member::TypeMember,
+            call::Call, conforms::Conforms, equals::Equals, has_field::HasField, member::Member,
+            projection::Projection, type_member::TypeMember,
         },
         infer_row::InferRow,
         infer_ty::InferTy,
@@ -17,6 +16,7 @@ use crate::{
     },
 };
 use rustc_hash::FxHashMap;
+use tracing::instrument;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ConstraintCause {
@@ -40,10 +40,9 @@ pub enum Constraint {
     Equals(Equals),
     HasField(HasField),
     Member(Member),
-    Construction(Construction),
     Conforms(Conforms),
-    AssociatedEquals(AssociatedEquals),
     TypeMember(TypeMember),
+    Projection(Projection),
 }
 
 impl Constraint {
@@ -53,10 +52,9 @@ impl Constraint {
             Constraint::Equals(c) => c.span,
             Constraint::HasField(c) => c.span,
             Constraint::Member(c) => c.span,
-            Constraint::Construction(c) => c.span,
             Constraint::Conforms(c) => c.span,
-            Constraint::AssociatedEquals(c) => c.span,
             Constraint::TypeMember(c) => c.span,
+            Constraint::Projection(c) => c.span,
         }
     }
 
@@ -72,6 +70,10 @@ impl Constraint {
                     .collect();
                 call.returns = apply(call.returns.clone(), substitutions);
             }
+            Constraint::Projection(c) => {
+                c.base = apply(c.base.clone(), substitutions);
+                c.result = apply(c.result.clone(), substitutions);
+            }
             Constraint::Conforms(..) => (),
             Constraint::Equals(e) => {
                 e.lhs = apply(e.lhs.clone(), substitutions);
@@ -84,15 +86,6 @@ impl Constraint {
             Constraint::Member(member) => {
                 member.ty = apply(member.ty.clone(), substitutions);
                 member.receiver = apply(member.receiver.clone(), substitutions)
-            }
-            Constraint::Construction(construction) => {
-                construction.callee = apply(construction.callee.clone(), substitutions);
-                construction.args = apply_mult(construction.args.clone(), substitutions);
-                construction.returns = apply(construction.returns.clone(), substitutions);
-            }
-            Constraint::AssociatedEquals(associated_equals) => {
-                associated_equals.subject = apply(associated_equals.subject.clone(), substitutions);
-                associated_equals.output = apply(associated_equals.output.clone(), substitutions);
             }
             Constraint::TypeMember(c) => {
                 c.base = apply(c.base.clone(), substitutions);
@@ -117,6 +110,10 @@ impl Constraint {
                     .collect();
                 call.returns = substitute(call.returns.clone(), substitutions);
             }
+            Constraint::Projection(c) => {
+                c.base = substitute(c.base.clone(), substitutions);
+                c.result = substitute(c.result.clone(), substitutions);
+            }
             Constraint::Conforms(..) => (),
             Constraint::Equals(e) => {
                 e.lhs = substitute(e.lhs.clone(), substitutions);
@@ -130,21 +127,6 @@ impl Constraint {
                 member.ty = substitute(member.ty.clone(), substitutions);
                 member.receiver = substitute(member.receiver.clone(), substitutions)
             }
-            Constraint::Construction(construction) => {
-                construction.callee = substitute(construction.callee.clone(), substitutions);
-                construction.args = construction
-                    .args
-                    .iter()
-                    .map(|a| substitute(a.clone(), substitutions))
-                    .collect();
-                construction.returns = substitute(construction.returns.clone(), substitutions);
-            }
-            Constraint::AssociatedEquals(associated_equals) => {
-                associated_equals.subject =
-                    substitute(associated_equals.subject.clone(), substitutions);
-                associated_equals.output =
-                    substitute(associated_equals.output.clone(), substitutions);
-            }
             Constraint::TypeMember(c) => {
                 c.base = substitute(c.base.clone(), substitutions);
                 c.result = substitute(c.result.clone(), substitutions);
@@ -155,6 +137,7 @@ impl Constraint {
         copy
     }
 
+    #[instrument(skip(substitutions), ret)]
     pub fn into_predicate(
         &self,
         substitutions: &mut UnificationSubstitutions,
@@ -204,12 +187,18 @@ impl Constraint {
                 let InferTy::Param(param) = conforms.ty else {
                     panic!("didn't get param for conforms predicate: {:?}", conforms.ty);
                 };
+
                 Predicate::Conforms {
                     param,
                     protocol_id: conforms.protocol_id,
                     span: conforms.span,
                 }
             }
+            Self::Projection(projection) => Predicate::Projection {
+                base: apply(projection.base.clone(), substitutions),
+                label: projection.label.clone(),
+                returns: apply(projection.result.clone(), substitutions),
+            },
             _ => unimplemented!("No predicate for constraint: {self:?}"),
         }
     }

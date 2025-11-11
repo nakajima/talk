@@ -14,11 +14,12 @@ use crate::{
         constraints::constraint::Constraint,
         infer_row::{InferRow, RowMetaId, RowParamId},
         infer_ty::{InferTy, Level, Meta, MetaVarId, SkolemId, TypeParamId},
+        predicate::Predicate,
         row::Row,
         scheme::{ForAll, Scheme},
         term_environment::{EnvEntry, TermEnv},
         ty::{SomeType, Ty},
-        type_catalog::{Conformance, ConformanceKey, NominalOld, ProtocolOld, TypeCatalogOld},
+        type_catalog::{Conformance, ConformanceKey, TypeCatalogOld},
         type_error::TypeError,
         type_operations::{UnificationSubstitutions, apply, apply_row, substitute},
         vars::Vars,
@@ -42,7 +43,8 @@ pub struct TypeSession {
     pub(super) meta_levels: Rc<RefCell<FxHashMap<Meta, Level>>>,
     pub(super) skolem_map: FxHashMap<InferTy, InferTy>,
 
-    pub skolem_bounds: FxHashMap<SkolemId, Vec<StructId>>,
+    pub(super) type_param_bounds: FxHashMap<TypeParamId, IndexSet<Predicate<InferTy>>>,
+
     pub typealiases: FxHashMap<Symbol, Scheme<InferTy>>,
     pub(super) type_catalog: TypeCatalogOld<InferTy>,
     pub(super) modules: Rc<ModuleEnvironment>,
@@ -116,8 +118,8 @@ impl TypeSession {
             vars: Default::default(),
             skolem_map: Default::default(),
             meta_levels: Default::default(),
+            type_param_bounds: Default::default(),
             term_env,
-            skolem_bounds: Default::default(),
             reverse_instantiations: Default::default(),
             types_by_node: Default::default(),
             typealiases: Default::default(),
@@ -127,6 +129,7 @@ impl TypeSession {
         }
     }
 
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     pub fn insert(&mut self, symbol: Symbol, ty: InferTy) {
         let foralls: IndexSet<_> = ty.collect_foralls().into_iter().collect();
         if foralls.is_empty() {
@@ -189,7 +192,7 @@ impl TypeSession {
                                         .collect::<Vec<_>>(),
                                 ]
                                 .concat(),
-                                ty: generalized.ty.into(),
+                                ty: self.finalize_infer_ty(generalized.ty).into(),
                             })
                         } else {
                             TypeEntry::Poly(Scheme {
@@ -199,7 +202,7 @@ impl TypeSession {
                                     .into_iter()
                                     .map(|p| p.into())
                                     .collect(),
-                                ty: scheme.ty.into(),
+                                ty: self.finalize_infer_ty(scheme.ty).into(),
                             })
                         }
                     }
@@ -258,13 +261,14 @@ impl TypeSession {
                     .get(&meta)
                     .cloned()
                     .unwrap_or_else(|| {
-                        let InferTy::Param(id) = self.new_type_param(Some(meta)) else {
-                            unreachable!()
-                        };
+                        panic!("did not solve {meta:?}");
+                        // let InferTy::Param(id) = self.new_type_param(Some(meta)) else {
+                        //     unreachable!()
+                        // };
 
-                        self.reverse_instantiations.ty.insert(meta, id);
+                        // self.reverse_instantiations.ty.insert(meta, id);
 
-                        id
+                        // id
                     });
 
                 InferTy::Param(id)
@@ -300,9 +304,13 @@ impl TypeSession {
         }
     }
 
-    pub(super) fn finalize_ty(&mut self, ty: InferTy) -> TypeEntry {
+    pub(super) fn finalize_infer_ty(&mut self, ty: InferTy) -> InferTy {
         let ty = substitute(ty.clone(), &self.skolem_map);
-        let ty = self.shallow_generalize(ty);
+        self.shallow_generalize(ty)
+    }
+
+    pub(super) fn finalize_ty(&mut self, ty: InferTy) -> TypeEntry {
+        let ty = self.finalize_infer_ty(ty);
 
         if ty.contains_var() {
             self.generalize(Level(0), ty.clone(), &Default::default())
@@ -330,7 +338,7 @@ impl TypeSession {
         }
     }
 
-    #[instrument(level = tracing::Level::TRACE, skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self, substitutions))]
     pub fn apply(&mut self, substitutions: &mut UnificationSubstitutions) {
         for ty in self.types_by_node.values_mut() {
             if matches!(ty, InferTy::Primitive(_)) {
@@ -391,12 +399,13 @@ impl TypeSession {
             collect_metas_in_constraint(constraint, &mut metas);
         }
 
-        // keep only metas born at or above inner
         let mut foralls: IndexSet<_> = ty.collect_foralls().into_iter().collect();
+        let mut predicates: IndexSet<Predicate<InferTy>> = Default::default();
         let mut substitutions = UnificationSubstitutions::new(self.meta_levels.clone());
         for m in &metas {
             match m {
                 InferTy::Param(p) => {
+                    predicates.extend(self.type_param_bounds.get(p).cloned().unwrap_or_default());
                     foralls.insert(ForAll::Ty(*p));
                 }
 
@@ -480,116 +489,21 @@ impl TypeSession {
         let ty = substitute(ty, &self.skolem_map);
         let ty = apply(ty, &mut substitutions);
 
-        let predicates: Vec<_> = unsolved
-            .iter()
-            .map(|c| {
-                let c = c.substitute(&self.skolem_map);
+        predicates.extend(unsolved.iter().map(|c| {
+            let c = c.substitute(&self.skolem_map);
 
-                c.into_predicate(&mut substitutions)
-            })
-            .collect();
+            c.into_predicate(&mut substitutions)
+        }));
 
         if foralls.is_empty() && predicates.is_empty() {
             return EnvEntry::Mono(ty);
         }
 
-        EnvEntry::Scheme(Scheme::<InferTy>::new(foralls, predicates, ty))
-    }
-
-    #[instrument(level = tracing::Level::TRACE, skip(self))]
-    pub fn generalize_with_substitutions(
-        &mut self,
-        inner: Level,
-        ty: InferTy,
-        unsolved: &[Constraint],
-        substitutions: &mut UnificationSubstitutions,
-    ) -> EnvEntry<InferTy> {
-        let ty = apply(ty, substitutions);
-
-        // collect metas in ty
-        let mut metas = FxHashSet::default();
-        collect_meta(&ty, &mut metas);
-
-        // keep only metas born at or above inner
-        let mut foralls = IndexSet::default();
-        for m in &metas {
-            match m {
-                InferTy::Param(p) => {
-                    // No substitution needed (the ty already contains Ty::Param(p)),
-                    // but we must record it in `foralls`, so instantiate() knows what to replace.
-                    if !foralls
-                        .iter()
-                        .any(|fa| matches!(fa, ForAll::Ty(q) if *q == *p))
-                    {
-                        foralls.insert(ForAll::Ty(*p));
-                    }
-                }
-
-                InferTy::Var { level, id } => {
-                    if *level < inner {
-                        tracing::warn!("discarding {m:?} due to level ({level:?} < {inner:?})");
-                        continue;
-                    }
-
-                    let param_id = self
-                        .reverse_instantiations
-                        .ty
-                        .get(id)
-                        .copied()
-                        .unwrap_or_else(|| {
-                            let param_id = self.vars.type_params.next_id();
-                            self.reverse_instantiations.ty.insert(*id, param_id);
-                            tracing::trace!("generalizing {m:?} to {param_id:?}");
-                            foralls.insert(ForAll::Ty(param_id));
-                            param_id
-                        });
-                    substitutions.ty.insert(*id, InferTy::Param(param_id));
-                }
-                InferTy::Record(box InferRow::Var(id)) => {
-                    let levels = self.meta_levels.borrow();
-                    let level = levels
-                        .get(&Meta::Row(*id))
-                        .expect("didn't get level for row meta");
-                    if *level < inner {
-                        tracing::trace!("discarding {m:?} due to level ({level:?} < {inner:?})");
-                        continue;
-                    }
-
-                    let param_id = self
-                        .reverse_instantiations
-                        .row
-                        .get(id)
-                        .copied()
-                        .unwrap_or_else(|| {
-                            let param_id = self.vars.row_params.next_id();
-                            self.reverse_instantiations.row.insert(*id, param_id);
-                            tracing::trace!("generalizing {m:?} to {param_id:?}");
-                            foralls.insert(ForAll::Row(param_id));
-                            param_id
-                        });
-                    substitutions.row.insert(*id, InferRow::Param(param_id));
-                }
-                _ => {
-                    tracing::warn!("got {m:?} for var while generalizing")
-                }
-            }
-        }
-
-        // 3) de-skolemize+apply again
-        let ty = substitute(ty, &self.skolem_map);
-        let ty = apply(ty, substitutions);
-
-        // 4) build predicates from unsolved using *current substitutions*
-        if foralls.is_empty() {
-            return EnvEntry::Mono(ty);
-        }
-        let predicates = unsolved
-            .iter()
-            .map(|c| c.substitute(&self.skolem_map))
-            .map(|c| c.into_predicate(substitutions))
-            .collect();
-
-        EnvEntry::Scheme(Scheme::<InferTy>::new(foralls, predicates, ty))
+        EnvEntry::Scheme(Scheme::<InferTy>::new(
+            foralls,
+            predicates.into_iter().collect(),
+            ty,
+        ))
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
@@ -626,6 +540,7 @@ impl TypeSession {
         None
     }
 
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     pub(super) fn promote(&mut self, sym: Symbol, entry: EnvEntry<InferTy>) {
         #[cfg(debug_assertions)]
         if matches!(sym, Symbol::Builtin(..)) {
@@ -652,36 +567,6 @@ impl TypeSession {
         }
 
         self.term_env.insert(sym, EnvEntry::Mono(ty));
-    }
-
-    pub(super) fn _lookup_nominal(&mut self, symbol: &Symbol) -> Option<NominalOld> {
-        if let Some(entry) = self.type_catalog.nominals.get(symbol).cloned() {
-            return Some(entry);
-        }
-
-        if let Symbol::Struct(StructId {
-            module_id: module_id @ (ModuleId::External(..) | ModuleId::Core),
-            local_id,
-        }) = *symbol
-            && let Some(module) = self.modules.modules.get(&module_id)
-        {
-            let nominal = module
-                .types
-                .catalogold
-                .nominals
-                .get(&Symbol::Struct(StructId {
-                    module_id: ModuleId::Current,
-                    local_id,
-                }))
-                .cloned()
-                .expect("did not get external symbol");
-
-            let nominal = nominal.import(module_id);
-            self.type_catalog.nominals.insert(*symbol, nominal.clone());
-            return Some(nominal);
-        }
-
-        None
     }
 
     pub(super) fn lookup_member(
@@ -799,56 +684,11 @@ impl TypeSession {
         self.type_catalog.conformances.clone()
     }
 
-    pub(super) fn lookup_conformance_mut(
+    pub(super) fn _lookup_conformance_mut(
         &mut self,
         key: &ConformanceKey,
     ) -> Option<&mut Conformance> {
         self.type_catalog.conformances.get_mut(key)
-    }
-
-    pub(super) fn _lookup_protocol(&mut self, protocol_id: ProtocolId) -> Option<ProtocolOld> {
-        if let Some(entry) = self.type_catalog.protocols.get(&protocol_id).cloned() {
-            return Some(entry);
-        }
-
-        if let ProtocolId {
-            module_id: module_id @ (ModuleId::External(..) | ModuleId::Core | ModuleId::Builtin),
-            local_id,
-        } = protocol_id
-            && let Some(module) = self.modules.modules.get(&module_id)
-        {
-            let module_key = if matches!(module_id, ModuleId::External(..)) {
-                ModuleId::Current
-            } else {
-                module_id
-            };
-            let protocol = module
-                .types
-                .catalogold
-                .protocols
-                .get(&ProtocolId {
-                    module_id: module_key,
-                    local_id,
-                })
-                .cloned()
-                .unwrap_or_else(|| {
-                    panic!(
-                        "did not get external symbol: {:?}",
-                        ProtocolId {
-                            module_id: module_key,
-                            local_id,
-                        }
-                    )
-                });
-
-            let protocol = protocol.import(module_id);
-            self.type_catalog
-                .protocols
-                .insert(protocol_id, protocol.clone());
-            return Some(protocol);
-        }
-
-        None
     }
 
     pub(super) fn lookup_initializers(
@@ -894,7 +734,10 @@ impl TypeSession {
         None
     }
 
-    pub(super) fn lookup_properties(&mut self, symbol: &Symbol) -> Option<IndexMap<Label, Symbol>> {
+    pub(super) fn _lookup_properties(
+        &mut self,
+        symbol: &Symbol,
+    ) -> Option<IndexMap<Label, Symbol>> {
         if let Some(properties) = self.type_catalog.properties.get(symbol).cloned() {
             return Some(properties);
         }
@@ -1009,6 +852,10 @@ impl TypeSession {
 
 fn collect_metas_in_constraint(constraint: &Constraint, out: &mut FxHashSet<InferTy>) {
     match constraint {
+        Constraint::Projection(c) => {
+            collect_meta(&c.base, out);
+            collect_meta(&c.result, out);
+        }
         Constraint::Equals(equals) => {
             collect_meta(&equals.lhs, out);
             collect_meta(&equals.rhs, out);
@@ -1027,23 +874,12 @@ fn collect_metas_in_constraint(constraint: &Constraint, out: &mut FxHashSet<Infe
             }
             collect_meta(&call.returns, out);
         }
-        Constraint::Construction(construction) => {
-            collect_meta(&construction.callee, out);
-            for argument in &construction.args {
-                collect_meta(argument, out);
-            }
-            collect_meta(&construction.returns, out);
-        }
         Constraint::HasField(has_field) => {
             // The row meta is handled in your existing HasField block later.
             collect_meta(&has_field.ty, out);
         }
         Constraint::Conforms(_) => {
             // No direct metas to generalize here.
-        }
-        Constraint::AssociatedEquals(associated_equals) => {
-            collect_meta(&associated_equals.output, out);
-            collect_meta(&associated_equals.subject, out);
         }
         Constraint::TypeMember(c) => {
             collect_meta(&c.base, out);

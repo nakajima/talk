@@ -11,6 +11,7 @@ use crate::{
         infer_ty::{InferTy, Level},
         predicate::Predicate,
         scheme::{ForAll, Scheme},
+        solve_context::Solve,
         ty::SomeType,
         type_operations::{InstantiationSubstitutions, UnificationSubstitutions, apply},
         type_session::{TypeEntry, TypeSession},
@@ -143,41 +144,17 @@ impl EnvEntry<InferTy> {
         }
     }
 
-    pub fn instantiate(
+    pub(super) fn instantiate(
         &self,
         id: NodeID,
+        context: &mut impl Solve,
         session: &mut TypeSession,
-        level: Level,
-        wants: &mut Wants,
         span: Span,
-    ) -> (InferTy, InstantiationSubstitutions) {
+    ) -> InferTy {
         tracing::debug!("inference instantiate: {self:?}");
         match self {
-            EnvEntry::Mono(ty) => (ty.clone(), Default::default()),
-            EnvEntry::Scheme(scheme) => scheme.instantiate(id, session, level, wants, span),
-        }
-    }
-
-    pub fn instantiate_with_substitutions(
-        &self,
-        id: NodeID,
-        session: &mut TypeSession,
-        level: Level,
-        wants: &mut Wants,
-        span: Span,
-        substitutions: InstantiationSubstitutions,
-    ) -> (InferTy, InstantiationSubstitutions) {
-        tracing::debug!("inference instantiate: {self:?}");
-        match self {
-            EnvEntry::Mono(ty) => (ty.clone(), Default::default()),
-            EnvEntry::Scheme(scheme) => scheme.instantiate_with_substitutions(
-                id,
-                session,
-                level,
-                wants,
-                span,
-                substitutions,
-            ),
+            EnvEntry::Mono(ty) => ty.clone(),
+            EnvEntry::Scheme(scheme) => scheme.instantiate(id, context, session, span),
         }
     }
 }

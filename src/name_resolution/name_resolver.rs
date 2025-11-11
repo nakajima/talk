@@ -9,6 +9,7 @@ use crate::{
     ast::{AST, ASTPhase, Parsed},
     compiling::module::{ModuleEnvironment, ModuleId},
     diagnostic::Diagnostic,
+    label::Label,
     name::Name,
     name_resolution::{
         builtins,
@@ -99,7 +100,7 @@ pub struct NameResolved {
     pub symbols_to_node: FxHashMap<Symbol, NodeID>,
     pub scc_graph: SCCGraph,
     pub unbound_nodes: Vec<NodeID>,
-    pub child_types: FxHashMap<Symbol, Vec<Symbol>>,
+    pub child_types: FxHashMap<Symbol, FxHashMap<Label, Symbol>>,
 }
 
 pub type ScopeId = Index;
@@ -358,6 +359,7 @@ impl NameResolver {
                     | Symbol::Synthesized(..)
                     | Symbol::Initializer(..)
                     | Symbol::Builtin(..)
+                    | Symbol::Protocol(..)
             )
         {
             self.phase

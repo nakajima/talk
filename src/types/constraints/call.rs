@@ -4,11 +4,11 @@ use crate::{
     types::{
         constraints::constraint::{Constraint, ConstraintCause},
         infer_ty::{InferTy, Level},
+        solve_context::SolveContext,
         term_environment::EnvEntry,
         type_error::TypeError,
-        type_operations::{UnificationSubstitutions, curry, unify},
+        type_operations::{curry, unify},
         type_session::TypeSession,
-        wants::Wants,
     },
 };
 
@@ -28,38 +28,30 @@ pub struct Call {
 impl Call {
     pub fn solve(
         &self,
+        context: &mut SolveContext,
         session: &mut TypeSession,
-        next_wants: &mut Wants,
-        substitutions: &mut UnificationSubstitutions,
     ) -> Result<bool, TypeError> {
         if matches!(&self.callee, InferTy::Var { .. }) {
             tracing::trace!(
-                "unable to determine callee type: {:?}, substitutions: {substitutions:?}",
+                "unable to determine callee type: {:?}, substitutions: {context:?}",
                 self.callee
             );
             // We don't know the callee yet, defer
-            next_wants.push(Constraint::Call(self.clone()));
+            context.wants.push(Constraint::Call(self.clone()));
             return Ok(false);
         }
 
         let mut args = self.args.to_vec();
 
-        if let Some(receiver) = &self.receiver
-            && !matches!(receiver, InferTy::Constructor { .. })
-        {
-            args.insert(0, receiver.clone());
-        }
-
         match &self.callee {
             InferTy::Constructor { name, .. } => {
                 let Some(returns_type_entry) = session.lookup(&name.symbol()) else {
                     tracing::trace!("no type found for {name:?}, deferring");
-                    next_wants.push(Constraint::Call(self.clone()));
+                    context.wants.push(Constraint::Call(self.clone()));
                     return Ok(false);
                 };
-                let returns_type = returns_type_entry
-                    .instantiate(self.callee_id, session, self.level, next_wants, self.span)
-                    .0;
+                let returns_type =
+                    returns_type_entry.instantiate(self.callee_id, context, session, self.span);
 
                 // TODO: Figure out if we're dealing with a struct vs an enum here and be more explicit.
                 // This is ok for now since enums can't have initializers and structs always have them.
@@ -73,9 +65,7 @@ impl Call {
                         .lookup(&initializer)
                         .expect("constructor scheme missing");
 
-                    entry
-                        .instantiate(self.callee_id, session, self.level, next_wants, self.span)
-                        .0
+                    entry.instantiate(self.callee_id, context, session, self.span)
                 } else {
                     match session
                         .lookup(&name.symbol())
@@ -86,28 +76,28 @@ impl Call {
                     }
                 };
 
-                next_wants.equals(
+                context.wants.equals(
                     self.returns.clone(),
                     returns_type.clone(),
                     ConstraintCause::Internal,
                     self.span,
                 );
 
-                unify(&init_ty, &curry(args, returns_type), substitutions, session)
+                unify(&init_ty, &curry(args, returns_type), context, session)
             }
             InferTy::Func(..) => {
                 if args.is_empty() {
                     unify(
                         &self.callee,
                         &InferTy::Func(InferTy::Void.into(), self.returns.clone().into()),
-                        substitutions,
+                        context,
                         session,
                     )
                 } else {
                     unify(
                         &self.callee,
                         &curry(args, self.returns.clone()),
-                        substitutions,
+                        context,
                         session,
                     )
                 }

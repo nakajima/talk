@@ -2,13 +2,8 @@ use crate::{
     label::Label,
     span::Span,
     types::{
-        constraints::constraint::ConstraintCause,
-        infer_row::InferRow,
-        infer_ty::{InferTy, Level},
-        type_error::TypeError,
-        type_operations::UnificationSubstitutions,
-        type_session::TypeSession,
-        wants::Wants,
+        constraints::constraint::ConstraintCause, infer_row::InferRow, infer_ty::InferTy,
+        solve_context::SolveContext, type_error::TypeError,
     },
 };
 
@@ -22,13 +17,7 @@ pub struct HasField {
 }
 
 impl HasField {
-    pub fn solve(
-        &self,
-        _session: &mut TypeSession,
-        _level: Level,
-        next_wants: &mut Wants,
-        _substitutions: &mut UnificationSubstitutions,
-    ) -> Result<bool, TypeError> {
+    pub fn solve(&self, context: &mut SolveContext) -> Result<bool, TypeError> {
         match &self.row {
             InferRow::Empty(..) => Err(TypeError::MemberNotFound(
                 self.ty.clone(),
@@ -40,7 +29,7 @@ impl HasField {
             )),
             InferRow::Var(..) => {
                 // Keep the constraint for the next iteration with the applied row
-                next_wants._has_field(
+                context.wants._has_field(
                     self.row.clone(),
                     self.label.clone(),
                     self.ty.clone(),
@@ -51,7 +40,7 @@ impl HasField {
             }
             InferRow::Extend { row, label, ty } => {
                 if self.label == *label {
-                    next_wants.equals(
+                    context.wants.equals(
                         self.ty.clone(),
                         ty.clone(),
                         ConstraintCause::Internal,
@@ -60,7 +49,7 @@ impl HasField {
                     tracing::trace!("found match for {label:?}");
                     Ok(true)
                 } else {
-                    next_wants._has_field(
+                    context.wants._has_field(
                         *row.clone(),
                         self.label.clone(),
                         self.ty.clone(),

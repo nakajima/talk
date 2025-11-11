@@ -310,7 +310,7 @@ impl<'a> DeclDeclarer<'a> {
                 .child_types
                 .entry(*parent)
                 .or_default()
-                .push(name.symbol());
+                .insert(name.name_str().into(), name.symbol());
         }
 
         self.resolver.nominal_stack.push(name.symbol());
@@ -501,7 +501,7 @@ impl<'a> DeclDeclarer<'a> {
                         .child_types
                         .entry(*parent)
                         .or_default()
-                        .push(lhs_name.symbol());
+                        .insert(lhs_name.name_str().into(), lhs_name.symbol());
                 }
             }
         );
@@ -543,6 +543,17 @@ impl<'a> DeclDeclarer<'a> {
             generic.name = self
                 .resolver
                 .declare(&generic.name, some!(AssociatedType), decl.id);
+            let parent = self
+                .resolver
+                .nominal_stack
+                .last()
+                .expect("did not get parent protocol for associated type");
+            self.resolver
+                .phase
+                .child_types
+                .entry(*parent)
+                .or_default()
+                .insert(generic.name.name_str().into(), generic.name.symbol());
         });
 
         on!(

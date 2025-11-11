@@ -1,4 +1,5 @@
 use indexmap::IndexSet;
+use itertools::Itertools;
 use tracing::instrument;
 
 use crate::{
@@ -9,6 +10,7 @@ use crate::{
         infer_row::{InferRow, RowParamId},
         infer_ty::{InferTy, Level, TypeParamId},
         predicate::Predicate,
+        solve_context::Solve,
         term_environment::EnvEntry,
         ty::{SomeType, Ty},
         type_operations::{InstantiationSubstitutions, instantiate_ty},
@@ -71,33 +73,19 @@ impl Scheme<Ty> {
 }
 
 impl Scheme<InferTy> {
-    #[instrument(skip(self, session, level, wants, span,), ret)]
-    pub fn instantiate(
+    #[instrument(skip(self, session, context), ret)]
+    pub(super) fn instantiate(
         &self,
         id: NodeID,
+        context: &mut impl Solve,
         session: &mut TypeSession,
-        level: Level,
-        wants: &mut Wants,
         span: Span,
-    ) -> (InferTy, InstantiationSubstitutions) {
-        let substitutions = InstantiationSubstitutions::default();
-        self.instantiate_with_substitutions(id, session, level, wants, span, substitutions)
-    }
-
-    #[instrument(skip(self, session, level, wants, span,), ret)]
-    pub fn instantiate_with_substitutions(
-        &self,
-        id: NodeID,
-        session: &mut TypeSession,
-        level: Level,
-        wants: &mut Wants,
-        span: Span,
-        mut substitutions: InstantiationSubstitutions,
-    ) -> (InferTy, InstantiationSubstitutions) {
+    ) -> InferTy {
+        let level = context.level();
         for forall in &self.foralls {
             match forall {
                 ForAll::Ty(param) => {
-                    if substitutions.ty.contains_key(param) {
+                    if context.instantiations_mut().ty.contains_key(param) {
                         continue;
                     }
 
@@ -107,7 +95,7 @@ impl Scheme<InferTy> {
 
                     tracing::trace!("instantiating {param:?} with {meta:?}");
                     session.reverse_instantiations.ty.insert(meta, *param);
-                    substitutions.ty.insert(*param, meta);
+                    context.instantiations_mut().ty.insert(*param, meta);
                     session
                         .type_catalog
                         .instantiations
@@ -115,7 +103,7 @@ impl Scheme<InferTy> {
                         .insert((id, *param), InferTy::Var { id: meta, level });
                 }
                 ForAll::Row(param) => {
-                    if substitutions.row.contains_key(param) {
+                    if context.instantiations_mut().row.contains_key(param) {
                         continue;
                     }
 
@@ -123,7 +111,7 @@ impl Scheme<InferTy> {
                         unreachable!()
                     };
                     tracing::trace!("instantiating {param:?} with {meta:?}");
-                    substitutions.row.insert(*param, meta);
+                    context.instantiations_mut().row.insert(*param, meta);
                     session.reverse_instantiations.row.insert(meta, *param);
                     session
                         .type_catalog
@@ -135,17 +123,17 @@ impl Scheme<InferTy> {
         }
 
         for predicate in &self.predicates {
-            let constraint = predicate.instantiate(id, &substitutions, span, level);
+            let constraint = predicate.instantiate(id, context.instantiations_mut(), span, level);
             tracing::trace!("predicate instantiated: {predicate:?} -> {constraint:?}");
-            wants.push(constraint);
+            context.wants_mut().push(constraint);
         }
 
-        tracing::trace!("solver_instantiate ret subs: {substitutions:?}");
+        tracing::trace!(
+            "solver_instantiate ret subs: {:?}",
+            context.instantiations_mut()
+        );
 
-        (
-            instantiate_ty(self.ty.clone(), &substitutions, level),
-            substitutions,
-        )
+        instantiate_ty(self.ty.clone(), context.instantiations_mut(), level)
     }
 
     #[instrument(skip(self, session, level, wants, span))]
@@ -165,7 +153,10 @@ impl Scheme<InferTy> {
             .iter()
             .partition(|fa| matches!(fa, ForAll::Ty(_)));
 
-        for (param, (arg_ty, id)) in ty_foralls.iter().zip(args) {
+        // We used to zip these with ty_foralls but that failed when the counts were different.
+        let mut args = args.iter().rev().collect_vec();
+
+        for param in ty_foralls.iter() {
             let ForAll::Ty(param) = param else {
                 unreachable!()
             };
@@ -176,16 +167,18 @@ impl Scheme<InferTy> {
 
             session.reverse_instantiations.ty.insert(meta_var, *param);
 
-            wants.equals(
-                ty.clone(),
-                arg_ty.clone(),
-                ConstraintCause::CallTypeArg(*id),
-                span,
-            );
+            if let Some((arg_ty, id)) = args.pop() {
+                wants.equals(
+                    ty.clone(),
+                    arg_ty.clone(),
+                    ConstraintCause::CallTypeArg(*id),
+                    span,
+                );
+            }
 
             substitutions.ty.insert(*param, meta_var);
             session.type_catalog.instantiations.ty.insert(
-                (*id, *param),
+                (id, *param),
                 InferTy::Var {
                     id: meta_var,
                     level: Level(1),

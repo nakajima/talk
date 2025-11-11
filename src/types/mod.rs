@@ -9,6 +9,7 @@ pub mod passes;
 pub mod predicate;
 pub mod row;
 pub mod scheme;
+pub mod solve_context;
 pub mod term_environment;
 pub mod ty;
 pub mod type_catalog;

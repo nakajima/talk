@@ -1,4 +1,5 @@
-use indexmap::IndexSet;
+use std::assert_matches::assert_matches;
+
 use tracing::instrument;
 
 use crate::{
@@ -7,15 +8,18 @@ use crate::{
     node_id::NodeID,
     span::Span,
     types::{
-        constraints::constraint::{Constraint, ConstraintCause},
+        constraints::{
+            constraint::{Constraint, ConstraintCause},
+            projection::Projection,
+        },
         infer_row::InferRow,
-        infer_ty::{InferTy, Level, TypeParamId},
+        infer_ty::{InferTy, TypeParamId},
         passes::uncurry_function,
         predicate::Predicate,
+        solve_context::{Solve, SolveContext},
         type_error::TypeError,
-        type_operations::{UnificationSubstitutions, curry, unify},
+        type_operations::{apply, curry, unify},
         type_session::{MemberSource, TypeSession},
-        wants::Wants,
     },
 };
 
@@ -32,11 +36,8 @@ pub struct Member {
 impl Member {
     pub fn solve(
         &self,
+        context: &mut SolveContext,
         session: &mut TypeSession,
-        level: Level,
-        givens: &IndexSet<Predicate<InferTy>>,
-        next_wants: &mut Wants,
-        substitutions: &mut UnificationSubstitutions,
     ) -> Result<bool, TypeError> {
         let receiver = self.receiver.clone();
         let ty = self.ty.clone();
@@ -49,21 +50,13 @@ impl Member {
         match &receiver {
             InferTy::Var { id, .. } => {
                 if let Some(param) = session.reverse_instantiations.ty.get(id)
-                    && self.lookup_type_param_member(
-                        &ty,
-                        *param,
-                        session,
-                        level,
-                        givens,
-                        next_wants,
-                        substitutions,
-                    ) == Ok(true)
+                    && self.lookup_type_param_member(context, session, &ty, *param) == Ok(true)
                 {
                     return Ok(true);
                 }
 
                 tracing::debug!("deferring member constraint: {self:?}");
-                next_wants.push(Constraint::Member(self.clone()));
+                context.wants.push(Constraint::Member(self.clone()));
                 return Ok(false);
             }
             InferTy::Rigid(id) => {
@@ -73,59 +66,29 @@ impl Member {
                     unreachable!();
                 };
 
-                return self.lookup_type_param_member(
-                    &ty,
-                    *type_param_id,
-                    session,
-                    level,
-                    givens,
-                    next_wants,
-                    substitutions,
-                );
+                return self.lookup_type_param_member(context, session, &ty, *type_param_id);
             }
             InferTy::Param(id) => {
-                return self.lookup_type_param_member(
-                    &ty,
-                    *id,
-                    session,
-                    level,
-                    givens,
-                    next_wants,
-                    substitutions,
-                );
+                return self.lookup_type_param_member(context, session, &ty, *id);
             }
             InferTy::Constructor { name, .. } => {
-                return self.lookup_static_member(
-                    &name.symbol(),
-                    session,
-                    next_wants,
-                    level,
-                    substitutions,
-                );
+                return self.lookup_static_member(context, session, &name.symbol());
             }
             InferTy::Record(box row) => {
-                next_wants._has_field(row.clone(), self.label.clone(), ty, self.cause, self.span);
+                context.wants._has_field(
+                    row.clone(),
+                    self.label.clone(),
+                    ty,
+                    self.cause,
+                    self.span,
+                );
                 return Ok(true);
             }
             InferTy::Primitive(symbol) => {
-                return self.lookup_nominal_member(
-                    symbol,
-                    None,
-                    session,
-                    next_wants,
-                    level,
-                    substitutions,
-                );
+                return self.lookup_nominal_member(context, session, symbol, None);
             }
             InferTy::Nominal { symbol, box row } => {
-                return self.lookup_nominal_member(
-                    symbol,
-                    Some(row),
-                    session,
-                    next_wants,
-                    level,
-                    substitutions,
-                );
+                return self.lookup_nominal_member(context, session, symbol, Some(row));
             }
             _ => {}
         }
@@ -134,19 +97,16 @@ impl Member {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[instrument(skip(self, session, substitutions, wants))]
+    #[instrument(skip(self, context, session))]
     fn lookup_type_param_member(
         &self,
+        context: &mut SolveContext,
+        session: &mut TypeSession,
         ty: &InferTy,
         type_param_id: TypeParamId,
-        session: &mut TypeSession,
-        level: Level,
-        givens: &IndexSet<Predicate<InferTy>>,
-        wants: &mut Wants,
-        substitutions: &mut UnificationSubstitutions,
     ) -> Result<bool, TypeError> {
         let mut candidates = vec![];
-        for given in givens {
+        for given in &context.givens {
             if let Predicate::Conforms {
                 param, protocol_id, ..
             } = given
@@ -156,45 +116,63 @@ impl Member {
             };
         }
 
+        // // after instantiating the requirement scheme:
+        // let req_ty = requirement_entry.instantiate(node_id, context, self.session, span);
+
+        // // peel off self: func(Self) -> Ret  ==>  (Self, func(Void) -> Ret)
+        // let (req_self_ty, consumed_fun) = consume_self(&req_ty);
+        // let ret_ty = consumed_fun.ret_ty().clone(); // however you fetch the return
+
+        // // 1) Self must match the receiver
+        // context.wants_mut().equals(
+        //     req_self_ty.clone(),
+        //     receiver.clone(),
+        //     ConstraintCause::Internal,
+        //     span,
+        // );
+
+        // // 2) The *associated type result* is the method's *return*:
+        // context.wants_mut().projection(
+        //     node_id,
+        //     receiver.clone(),
+        //     label.clone(),  // "T"
+        //     ret_ty.clone(), // <-- use the return, not the member var
+        //     ConstraintCause::Member(node_id),
+        //     span,
+        // );
+
+        // // 3) The *member expression* denotes the consumed function value:
+        // context
+        //     .wants_mut()
+        //     .equals(member_ty_var, consumed_fun, ConstraintCause::Internal, span);
+
         for candidate in candidates {
             if let Some((req, _source)) = session.lookup_member(&candidate.into(), &self.label) {
+                println!("---------------");
                 let entry = session.lookup(&req).unwrap();
-                let req_ty = entry
-                    .instantiate(self.node_id, session, level, wants, self.span)
-                    .0;
-                return unify(ty, &req_ty, substitutions, session);
+                println!("entry: {entry:?}");
+                let req_ty = entry.instantiate(self.node_id, context, session, self.span);
+                let (req_self, req_func) = consume_self(&req_ty);
+                context.wants_mut().equals(
+                    req_self,
+                    self.receiver.clone(),
+                    ConstraintCause::Internal,
+                    self.span,
+                );
+
+                return unify(ty, &req_func, context, session);
             }
         }
-
-        // let conformances = session
-        //     .elaborated_types
-        //     .type_param_conformances
-        //     .get(&type_param_id)
-        //     .cloned()
-        //     .unwrap_or_default();
-        // println!("hi conformances {conformances:?}");
-        // for conformance in conformances {
-        //     println!(
-        //         "cat: {:?}",
-        //         session
-        //             .type_catalog
-        //             .method_requirements
-        //             .get(&conformance.0.into())
-        //     );
-
-        // }
 
         Ok(false)
     }
 
-    #[instrument(skip(self, session, next_wants))]
+    #[instrument(skip(self, context, session))]
     fn lookup_static_member(
         &self,
-        symbol: &Symbol,
+        context: &mut SolveContext,
         session: &mut TypeSession,
-        next_wants: &mut Wants,
-        level: Level,
-        substitutions: &mut UnificationSubstitutions,
+        symbol: &Symbol,
     ) -> Result<bool, TypeError> {
         let Some(member_sym) = session.lookup_static_member(symbol, &self.label) else {
             return Err(TypeError::MemberNotFound(
@@ -204,22 +182,15 @@ impl Member {
         };
 
         let entry = session.lookup(&member_sym).unwrap();
-        let (mut member_ty, instantiation_substitutions) =
-            entry.instantiate(self.node_id, session, level, next_wants, self.span);
+        let mut member_ty = entry.instantiate(self.node_id, context, session, self.span);
 
         if let Symbol::Variant(..) = member_sym {
-            let enum_ty = session
-                .lookup(symbol)
-                .unwrap()
-                .instantiate_with_substitutions(
-                    self.node_id,
-                    session,
-                    level,
-                    next_wants,
-                    self.span,
-                    instantiation_substitutions,
-                )
-                .0;
+            let enum_ty = session.lookup(symbol).unwrap().instantiate(
+                self.node_id,
+                context,
+                session,
+                self.span,
+            );
             member_ty = match member_ty {
                 InferTy::Void => enum_ty,
                 InferTy::Tuple(values) => curry(values, enum_ty),
@@ -227,19 +198,19 @@ impl Member {
             };
         }
 
-        next_wants.equals(member_ty, self.ty.clone(), self.cause, self.span);
+        context
+            .wants
+            .equals(member_ty, self.ty.clone(), self.cause, self.span);
         Ok(true)
     }
 
-    #[instrument(skip(self, session, next_wants))]
+    #[instrument(skip(self, context, session))]
     fn lookup_nominal_member(
         &self,
+        context: &mut SolveContext,
+        session: &mut TypeSession,
         symbol: &Symbol,
         row: Option<&InferRow>,
-        session: &mut TypeSession,
-        next_wants: &mut Wants,
-        level: Level,
-        substitutions: &mut UnificationSubstitutions,
     ) -> Result<bool, TypeError> {
         let Some((member_sym, source)) = session.lookup_member(symbol, &self.label) else {
             return Err(TypeError::MemberNotFound(
@@ -251,23 +222,24 @@ impl Member {
         match member_sym {
             Symbol::InstanceMethod(..) => {
                 let entry = session.lookup(&member_sym).unwrap();
-                let method = entry
-                    .instantiate(self.node_id, session, level, next_wants, self.span)
-                    .0;
+                let method = entry.instantiate(self.node_id, context, session, self.span);
+                let method = apply(method, &mut context.substitutions);
                 let (method_receiver, method_fn) = consume_self(&method);
 
                 if let MemberSource::Protocol(protocol_id) = source {
                     tracing::trace!("member found in protocol: {protocol_id:?}");
                 }
 
-                next_wants.equals(
+                context.wants.equals(
                     method_receiver,
                     self.receiver.clone(),
                     self.cause,
                     self.span,
                 );
 
-                next_wants.equals(method_fn, self.ty.clone(), self.cause, self.span);
+                context
+                    .wants
+                    .equals(method_fn, self.ty.clone(), self.cause, self.span);
                 return Ok(true);
             }
             Symbol::Variant(..) => {
@@ -282,7 +254,9 @@ impl Member {
                     other => curry(vec![other], self.receiver.clone()),
                 };
 
-                next_wants.equals(constructor_ty, self.ty.clone(), self.cause, self.span);
+                context
+                    .wants
+                    .equals(constructor_ty, self.ty.clone(), self.cause, self.span);
                 return Ok(true);
             }
             Symbol::StaticMethod(..) => {
@@ -345,7 +319,7 @@ impl Member {
         let Some(row) = row else {
             return Err(TypeError::ExpectedRow(self.receiver.clone()));
         };
-        next_wants._has_field(
+        context.wants._has_field(
             row.clone(),
             self.label.clone(),
             self.ty.clone(),
@@ -368,7 +342,9 @@ impl Member {
     }
 }
 
+#[instrument(level = tracing::Level::TRACE, ret)]
 pub fn consume_self(method: &InferTy) -> (InferTy, InferTy) {
+    assert_matches!(method, InferTy::Func(..), "didn't get func to consume self");
     let (mut params, ret) = uncurry_function(method.clone());
     let method_receiver = params.remove(0);
     if params.is_empty() {

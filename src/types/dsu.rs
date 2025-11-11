@@ -35,6 +35,17 @@ impl<Id: Copy + Eq + std::hash::Hash + Ord> Default for DSU<Id> {
 }
 
 impl<Id: Copy + Eq + std::hash::Hash + Ord> DSU<Id> {
+    /// Merge the equivalence classes from `other` into `self`.
+    /// After this, any `x ~ y` that held in `other` will also hold in `self`.
+    pub fn extend(&mut self, other: &DSU<Id>) {
+        // Union each element with its recorded parent in `other`.
+        // This recreates `other`'s forest in `self` (transitively merging classes),
+        // and also inserts singleton roots (where x == parent[x]).
+        for (&x, &p) in other.parent.iter() {
+            self.union(x, p);
+        }
+    }
+
     pub fn find(&mut self, x: Id) -> Id {
         let p = *self.parent.entry(x).or_insert(x);
         if p == x {

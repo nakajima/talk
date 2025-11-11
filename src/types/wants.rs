@@ -4,19 +4,19 @@ use tracing::instrument;
 
 use crate::{
     label::Label,
-    name_resolution::symbol::{AssociatedTypeId, ProtocolId, Symbol},
+    name_resolution::symbol::ProtocolId,
     node_id::NodeID,
     span::Span,
     types::{
         constraints::{
-            associated_equals::AssociatedEquals,
             call::Call,
             conforms::Conforms,
             constraint::{Constraint, ConstraintCause},
-            construction::Construction,
             equals::Equals,
             has_field::HasField,
             member::Member,
+            projection::Projection,
+            type_member::TypeMember,
         },
         infer_row::InferRow,
         infer_ty::{InferTy, Level},
@@ -66,34 +66,10 @@ impl Wants {
             Constraint::Equals(..) => self.simple.push_back(constraint),
             Constraint::HasField(..) => self.simple.push_back(constraint),
             Constraint::Member(..) => self.defer.push_back(constraint),
-            Constraint::Construction(..) => self.defer.push_back(constraint),
             Constraint::Conforms(..) => self.defer.push_back(constraint),
-            Constraint::AssociatedEquals(..) => self.defer.push_back(constraint),
             Constraint::TypeMember(..) => self.defer.push_back(constraint),
+            Constraint::Projection(..) => self.defer.push_back(constraint),
         }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    #[instrument(skip(self))]
-    pub fn construction(
-        &mut self,
-        callee_id: NodeID,
-        callee: InferTy,
-        args: Vec<InferTy>,
-        returns: InferTy,
-        type_symbol: Symbol,
-        cause: ConstraintCause,
-        span: Span,
-    ) {
-        self.defer.push_back(Constraint::Construction(Construction {
-            callee_id,
-            callee,
-            args,
-            returns,
-            type_symbol,
-            cause,
-            span,
-        }))
     }
 
     #[instrument(skip(self))]
@@ -105,28 +81,25 @@ impl Wants {
         }));
     }
 
-    #[allow(clippy::too_many_arguments)]
     #[instrument(skip(self))]
-    pub fn associated_equals(
+    pub fn type_member(
         &mut self,
-        node_id: NodeID,
-        subject: InferTy,
-        protocol_id: ProtocolId,
-        associated_type_id: AssociatedTypeId,
-        output: InferTy,
-        cause: ConstraintCause,
+        base: InferTy,
+        name: Label,
+        generics: Vec<InferTy>,
+        result: InferTy,
+        id: NodeID,
         span: Span,
     ) {
-        self.defer
-            .push_back(Constraint::AssociatedEquals(AssociatedEquals {
-                node_id,
-                subject,
-                protocol_id,
-                associated_type_id,
-                output,
-                cause,
-                span,
-            }));
+        self.defer.push_back(Constraint::TypeMember(TypeMember {
+            node_id: id,
+            base,
+            name,
+            generics,
+            result,
+            cause: ConstraintCause::TypeMember(id),
+            span,
+        }));
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -217,5 +190,25 @@ impl Wants {
             cause,
             span,
         }))
+    }
+
+    #[instrument(skip(self))]
+    pub fn projection(
+        &mut self,
+        node_id: NodeID,
+        base: InferTy,
+        label: Label,
+        result: InferTy,
+        cause: ConstraintCause,
+        span: Span,
+    ) {
+        self.push(Constraint::Projection(Projection {
+            node_id,
+            base,
+            label,
+            result,
+            cause,
+            span,
+        }));
     }
 }

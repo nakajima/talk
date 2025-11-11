@@ -10,6 +10,7 @@ pub mod tests {
         ast::AST,
         compiling::module::{ModuleEnvironment, ModuleId},
         diagnostic::{AnyDiagnostic, Diagnostic},
+        fxhashmap,
         label::Label,
         name::Name,
         name_resolution::{
@@ -1065,11 +1066,11 @@ pub mod tests {
                 .child_types
                 .get(&Symbol::Struct(StructId::from(1)))
                 .unwrap(),
-            vec![
-                Symbol::Struct(StructId::from(2)),
-                Symbol::TypeAlias(TypeAliasId::from(3)),
-                Symbol::Enum(EnumId::from(4))
-            ]
+            fxhashmap! {
+                "B".into() => Symbol::Struct(StructId::from(2)),
+                "C".into() => Symbol::TypeAlias(TypeAliasId::from(3)),
+                "D".into() => Symbol::Enum(EnumId::from(4))
+            }
         )
     }
 
@@ -1090,11 +1091,11 @@ pub mod tests {
                 .child_types
                 .get(&Symbol::Enum(EnumId::from(1)))
                 .unwrap(),
-            vec![
-                Symbol::Struct(StructId::from(2)),
-                Symbol::TypeAlias(TypeAliasId::from(3)),
-                Symbol::Enum(EnumId::from(4))
-            ]
+            fxhashmap! {
+                "B".into() => Symbol::Struct(StructId::from(2)),
+                "C".into() => Symbol::TypeAlias(TypeAliasId::from(3)),
+                "D".into() => Symbol::Enum(EnumId::from(4))
+            }
         )
     }
 
@@ -1106,6 +1107,7 @@ pub mod tests {
             struct B {}
             typealias C = Int
             enum D {}
+            associated E
         }
         ",
         );
@@ -1115,11 +1117,12 @@ pub mod tests {
                 .child_types
                 .get(&Symbol::Protocol(ProtocolId::from(1)))
                 .unwrap(),
-            vec![
-                Symbol::Struct(StructId::from(1)),
-                Symbol::TypeAlias(TypeAliasId::from(2)),
-                Symbol::Enum(EnumId::from(3))
-            ]
+            fxhashmap! {
+                "B".into() => Symbol::Struct(StructId::from(1)),
+                "C".into() => Symbol::TypeAlias(TypeAliasId::from(2)),
+                "D".into() => Symbol::Enum(EnumId::from(3)),
+                "E".into() => Symbol::AssociatedType(AssociatedTypeId::from(1))
+            }
         )
     }
 
