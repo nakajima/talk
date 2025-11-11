@@ -85,7 +85,7 @@ impl Scheme<InferTy> {
         for forall in &self.foralls {
             match forall {
                 ForAll::Ty(param) => {
-                    if context.instantiations_mut().ty.contains_key(param) {
+                    if context.instantiations_mut().get_ty(&id, param).is_some() {
                         continue;
                     }
 
@@ -95,7 +95,7 @@ impl Scheme<InferTy> {
 
                     tracing::trace!("instantiating {param:?} with {meta:?}");
                     session.reverse_instantiations.ty.insert(meta, *param);
-                    context.instantiations_mut().ty.insert(*param, meta);
+                    context.instantiations_mut().insert_ty(id, *param, meta);
                     session
                         .type_catalog
                         .instantiations
@@ -103,7 +103,7 @@ impl Scheme<InferTy> {
                         .insert((id, *param), InferTy::Var { id: meta, level });
                 }
                 ForAll::Row(param) => {
-                    if context.instantiations_mut().row.contains_key(param) {
+                    if context.instantiations_mut().get_row(&id, param).is_some() {
                         continue;
                     }
 
@@ -111,7 +111,7 @@ impl Scheme<InferTy> {
                         unreachable!()
                     };
                     tracing::trace!("instantiating {param:?} with {meta:?}");
-                    context.instantiations_mut().row.insert(*param, meta);
+                    context.instantiations_mut().insert_row(id, *param, meta);
                     session.reverse_instantiations.row.insert(meta, *param);
                     session
                         .type_catalog
@@ -133,7 +133,7 @@ impl Scheme<InferTy> {
             context.instantiations_mut()
         );
 
-        instantiate_ty(self.ty.clone(), context.instantiations_mut(), level)
+        instantiate_ty(id, self.ty.clone(), context.instantiations_mut(), level)
     }
 
     #[instrument(skip(self, session, level, wants, span))]
@@ -176,7 +176,7 @@ impl Scheme<InferTy> {
                 );
             }
 
-            substitutions.ty.insert(*param, meta_var);
+            substitutions.insert_ty(id, *param, meta_var);
             session.type_catalog.instantiations.ty.insert(
                 (id, *param),
                 InferTy::Var {
@@ -194,7 +194,7 @@ impl Scheme<InferTy> {
             let InferRow::Var(row_meta) = session.new_row_meta_var(level) else {
                 unreachable!()
             };
-            substitutions.row.insert(row_param, row_meta);
+            substitutions.insert_row(id, row_param, row_meta);
             session
                 .reverse_instantiations
                 .row
@@ -213,7 +213,7 @@ impl Scheme<InferTy> {
         }
 
         (
-            instantiate_ty(self.ty.clone(), &substitutions, level),
+            instantiate_ty(id, self.ty.clone(), &substitutions, level),
             substitutions,
         )
     }

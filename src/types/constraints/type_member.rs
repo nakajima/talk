@@ -81,7 +81,6 @@ impl TypeMember {
             {
                 let child_entry = session.lookup(child_sym).unwrap();
                 let child_ty = child_entry.instantiate(self.node_id, context, session, self.span);
-                println!("child_ty: {child_ty:?}");
                 return unify(&child_ty, &self.result, context, session);
             }
         }

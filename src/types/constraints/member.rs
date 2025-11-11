@@ -148,9 +148,7 @@ impl Member {
 
         for candidate in candidates {
             if let Some((req, _source)) = session.lookup_member(&candidate.into(), &self.label) {
-                println!("---------------");
                 let entry = session.lookup(&req).unwrap();
-                println!("entry: {entry:?}");
                 let req_ty = entry.instantiate(self.node_id, context, session, self.span);
                 let (req_self, req_func) = consume_self(&req_ty);
                 context.wants_mut().equals(

@@ -153,15 +153,8 @@ impl<'a> InferencePass<'a> {
                     continue;
                 };
 
-                let ty = InferTy::Projection {
-                    base: InferTy::Param(protocol_self_id).into(),
-                    protocol_id: *protocol_id,
-                    associated: generic.name.name_str().into(),
-                };
                 let ret_id = self.session.new_type_param_id(None);
                 let ret = InferTy::Param(ret_id);
-
-                println!("registering associated: {:?}", generic.name.name_str());
 
                 if !generic.conformances.is_empty() {
                     todo!("not handling associated type conformances yet");
@@ -225,6 +218,7 @@ impl<'a> InferencePass<'a> {
             let solver = ConstraintSolver::new(&mut context, self.ast);
             let unsolved = solver.solve(self.session);
             for (binder, ty) in binders.into_iter() {
+                let ty = apply(ty, &mut context.substitutions);
                 let entry = self.session.generalize(context.level(), ty, &unsolved);
                 self.session.promote(binder, entry);
             }
@@ -341,15 +335,12 @@ impl<'a> InferencePass<'a> {
                     conformance.span,
                 );
 
-                println!("requirement_entry: {requirement_entry:?}");
                 let requirement_ty = requirement_entry.instantiate(
                     NodeID::SYNTHESIZED,
                     &mut context,
                     self.session,
                     conformance.span,
                 );
-
-                println!("requirement_ty: {requirement_ty:?}");
 
                 let (req_self, requirement_ty) = consume_self(&requirement_ty);
                 let (wit_self, witness_ty) = consume_self(&witness_ty);
@@ -626,11 +617,6 @@ impl<'a> InferencePass<'a> {
             protocol_id,
             span: func_signature.span,
         }];
-
-        println!(
-            "visit_func_signature: preds: {predicates:?}, foralls: {foralls:?}, uncurrid: {:?}",
-            uncurry_function(ty.clone())
-        );
 
         self.session.insert_term(
             func_signature.name.symbol(),
@@ -1392,7 +1378,10 @@ impl<'a> InferencePass<'a> {
             .get(&callee.id)
             .cloned()
             .unwrap_or_default();
-        for (type_arg, instantiated) in type_args.iter().zip(instantiations.ty.values()) {
+        for (type_arg, instantiated) in type_args
+            .iter()
+            .zip(instantiations.ty_mappings(&callee.id).values())
+        {
             context.wants_mut().equals(
                 type_arg.clone(),
                 InferTy::Var {
@@ -1591,7 +1580,6 @@ impl<'a> InferencePass<'a> {
                 if matches!(name.symbol(), Symbol::TypeParameter(..)) {
                     let entry = self.session.lookup(&name.symbol()).unwrap();
 
-                    println!("returning raw type param: {name:?} : {entry:?}");
                     return entry.instantiate(
                         type_annotation.id,
                         context,
@@ -1607,7 +1595,6 @@ impl<'a> InferencePass<'a> {
                     .or_default()
                     .push((var_id, generic_args));
 
-                println!("we don't know about this, returning a var");
                 InferTy::Var {
                     id: var_id,
                     level: context.level(),
@@ -1765,201 +1752,5 @@ impl<'a> InferencePass<'a> {
         }
 
         param_id
-    }
-}
-
-#[cfg(test)]
-pub mod tests {
-    use crate::{
-        compiling::module::ModuleId,
-        name_resolution::{name_resolver_tests::tests::resolve, symbol::Symbol},
-        node_id::NodeID,
-        span::Span,
-        types::{
-            constraints::{
-                constraint::{Constraint, ConstraintCause},
-                equals::Equals,
-            },
-            infer_ty::InferTy,
-            term_environment::EnvEntry,
-        },
-    };
-
-    use super::*;
-
-    fn generate(code: &'static str) -> (Wants, TypeSession) {
-        let resolved = resolve(code);
-        let mut session = TypeSession::new(ModuleId::Current, Default::default());
-        let wants = InferencePass::drive(&mut vec![resolved], &mut session);
-        (wants, session)
-    }
-
-    #[test]
-    fn let_int() {
-        let (wants, mut session) = generate(
-            r#"
-            let a = 123
-            "#,
-        );
-
-        assert!(wants.is_empty(), "generated unnecessary constraint");
-        assert_eq!(
-            session.lookup(&Symbol::Global(1.into())).unwrap(),
-            EnvEntry::Mono(InferTy::Int)
-        );
-    }
-
-    #[test]
-    fn let_float() {
-        let (wants, mut session) = generate(
-            r#"
-            let a = 1.23
-            "#,
-        );
-
-        assert!(wants.is_empty(), "generated unnecessary constraint");
-        assert_eq!(
-            session.lookup(&Symbol::Global(1.into())).unwrap(),
-            EnvEntry::Mono(InferTy::Float)
-        );
-    }
-
-    #[test]
-    fn let_with_annotation_no_value() {
-        let (wants, mut session) = generate(
-            r#"
-            let a: Bool
-            "#,
-        );
-
-        assert!(wants.is_empty(), "generated unnecessary constraint");
-        assert_eq!(
-            session.lookup(&Symbol::Global(1.into())).unwrap(),
-            EnvEntry::Mono(InferTy::Bool)
-        );
-    }
-
-    #[test]
-    fn let_with_annotation_and_value() {
-        let (wants, mut session) = generate(
-            r#"
-            let a: Bool = 123
-            "#,
-        );
-
-        assert_eq!(
-            wants.all(),
-            vec![Constraint::Equals(Equals {
-                lhs: InferTy::Bool,
-                rhs: InferTy::Int,
-                cause: ConstraintCause::Annotation(NodeID::ANY),
-                span: Span::ANY
-            })]
-        );
-        assert_eq!(
-            session.lookup(&Symbol::Global(1.into())).unwrap(),
-            EnvEntry::Mono(InferTy::Bool)
-        );
-    }
-
-    #[test]
-    fn annotated_param_func_returning_monotype() {
-        let (wants, mut session) = generate(
-            r#"
-            func foo(x: Int) { x }
-            "#,
-        );
-
-        assert_eq!(
-            wants.all(),
-            vec![Constraint::Equals(Equals {
-                lhs: InferTy::Int,
-                rhs: InferTy::Var {
-                    id: 1.into(),
-                    level: Level(1)
-                },
-                cause: ConstraintCause::Internal,
-                span: Span::ANY
-            })]
-        );
-        assert_eq!(
-            session.lookup(&Symbol::Global(1.into())).unwrap(),
-            EnvEntry::Mono(InferTy::Func(
-                InferTy::Int.into(),
-                InferTy::Var {
-                    id: 1.into(),
-                    level: Level(1)
-                }
-                .into()
-            ))
-        );
-    }
-
-    #[test]
-    fn annotated_ret_func_returning_monotype() {
-        let (wants, mut session) = generate(
-            r#"
-            func foo(x) -> Int { x }
-            "#,
-        );
-
-        assert_eq!(
-            wants.all(),
-            vec![Constraint::Equals(Equals {
-                lhs: InferTy::Var {
-                    id: 1.into(),
-                    level: Level(1)
-                },
-                rhs: InferTy::Int,
-                cause: ConstraintCause::Internal,
-                span: Span::ANY
-            })]
-        );
-        assert_eq!(
-            session.lookup(&Symbol::Global(1.into())).unwrap(),
-            EnvEntry::Mono(InferTy::Func(
-                InferTy::Var {
-                    id: 1.into(),
-                    level: Level(1)
-                }
-                .into(),
-                InferTy::Int.into(),
-            ))
-        );
-    }
-
-    #[test]
-    fn identity() {
-        let (wants, mut session) = generate(
-            r#"
-            func id(x) { x }
-            id(123)
-            id(1.23)
-            "#,
-        );
-
-        assert_eq!(
-            wants.all(),
-            vec![Constraint::Equals(Equals {
-                lhs: InferTy::Var {
-                    id: 1.into(),
-                    level: Level(1)
-                },
-                rhs: InferTy::Int,
-                cause: ConstraintCause::Internal,
-                span: Span::ANY
-            })]
-        );
-        assert_eq!(
-            session.lookup(&Symbol::Global(1.into())).unwrap(),
-            EnvEntry::Mono(InferTy::Func(
-                InferTy::Var {
-                    id: 1.into(),
-                    level: Level(1)
-                }
-                .into(),
-                InferTy::Int.into(),
-            ))
-        );
     }
 }

@@ -6,6 +6,7 @@ use tracing::instrument;
 
 use crate::{
     label::Label,
+    node_id::NodeID,
     types::{
         dsu::DSU,
         infer_row::{InferRow, RowMetaId, RowParamId, RowTail, normalize_row},
@@ -36,8 +37,54 @@ impl UnificationSubstitutions {
 
 #[derive(Clone, Debug, Default)]
 pub struct InstantiationSubstitutions {
-    pub row: IndexMap<RowParamId, RowMetaId>,
-    pub ty: IndexMap<TypeParamId, MetaVarId>,
+    pub row: FxHashMap<NodeID, IndexMap<RowParamId, RowMetaId>>,
+    pub ty: FxHashMap<NodeID, IndexMap<TypeParamId, MetaVarId>>,
+}
+
+impl InstantiationSubstitutions {
+    pub(super) fn ty_mappings(&self, id: &NodeID) -> IndexMap<TypeParamId, MetaVarId> {
+        self.ty.get(id).cloned().unwrap_or_default()
+    }
+
+    pub(super) fn get_ty(
+        &mut self,
+        node_id: &NodeID,
+        type_param_id: &TypeParamId,
+    ) -> Option<&MetaVarId> {
+        self.ty.entry(*node_id).or_default().get(type_param_id)
+    }
+
+    pub(super) fn get_row(
+        &mut self,
+        node_id: &NodeID,
+        type_param_id: &RowParamId,
+    ) -> Option<&RowMetaId> {
+        self.row.entry(*node_id).or_default().get(type_param_id)
+    }
+
+    pub(super) fn insert_ty(
+        &mut self,
+        node_id: NodeID,
+        type_param_id: TypeParamId,
+        meta: MetaVarId,
+    ) {
+        self.ty
+            .entry(node_id)
+            .or_default()
+            .insert(type_param_id, meta);
+    }
+
+    pub(super) fn insert_row(
+        &mut self,
+        node_id: NodeID,
+        row_param_id: RowParamId,
+        meta: RowMetaId,
+    ) {
+        self.row
+            .entry(node_id)
+            .or_default()
+            .insert(row_param_id, meta);
+    }
 }
 
 impl std::fmt::Debug for UnificationSubstitutions {
@@ -592,6 +639,7 @@ pub fn apply_mult(tys: Vec<InferTy>, substitutions: &mut UnificationSubstitution
 }
 
 pub(super) fn instantiate_row(
+    node_id: NodeID,
     row: InferRow,
     substitutions: &InstantiationSubstitutions,
     level: Level,
@@ -600,21 +648,22 @@ pub(super) fn instantiate_row(
         InferRow::Empty(..) => row,
         InferRow::Var(..) => row,
         InferRow::Param(id) => {
-            if let Some(row_meta) = substitutions.row.get(&id) {
+            if let Some(row_meta) = substitutions.row.get(&node_id).unwrap().get(&id) {
                 InferRow::Var(*row_meta)
             } else {
                 row
             }
         }
         InferRow::Extend { row, label, ty } => InferRow::Extend {
-            row: Box::new(instantiate_row(*row, substitutions, level)),
+            row: Box::new(instantiate_row(node_id, *row, substitutions, level)),
             label,
-            ty: instantiate_ty(ty, substitutions, level),
+            ty: instantiate_ty(node_id, ty, substitutions, level),
         },
     }
 }
 
 pub(super) fn instantiate_ty(
+    node_id: NodeID,
     ty: InferTy,
     substitutions: &InstantiationSubstitutions,
     level: Level,
@@ -625,7 +674,7 @@ pub(super) fn instantiate_ty(
 
     match ty {
         InferTy::Param(param) => {
-            if let Some(meta) = substitutions.ty.get(&param) {
+            if let Some(meta) = substitutions.ty.get(&node_id).unwrap().get(&param) {
                 InferTy::Var { id: *meta, level }
             } else {
                 ty
@@ -639,7 +688,7 @@ pub(super) fn instantiate_ty(
             associated,
             protocol_id,
         } => InferTy::Projection {
-            base: instantiate_ty(base, substitutions, level).into(),
+            base: instantiate_ty(node_id, base, substitutions, level).into(),
             associated,
             protocol_id,
         },
@@ -647,26 +696,29 @@ pub(super) fn instantiate_ty(
             name,
             params: params
                 .into_iter()
-                .map(|p| instantiate_ty(p, substitutions, level))
+                .map(|p| instantiate_ty(node_id, p, substitutions, level))
                 .collect(),
-            ret: Box::new(instantiate_ty(*ret, substitutions, level)),
+            ret: Box::new(instantiate_ty(node_id, *ret, substitutions, level)),
         },
         InferTy::Func(params, ret) => InferTy::Func(
-            Box::new(instantiate_ty(*params, substitutions, level)),
-            Box::new(instantiate_ty(*ret, substitutions, level)),
+            Box::new(instantiate_ty(node_id, *params, substitutions, level)),
+            Box::new(instantiate_ty(node_id, *ret, substitutions, level)),
         ),
         InferTy::Tuple(items) => InferTy::Tuple(
             items
                 .into_iter()
-                .map(|t| instantiate_ty(t, substitutions, level))
+                .map(|t| instantiate_ty(node_id, t, substitutions, level))
                 .collect(),
         ),
-        InferTy::Record(row) => {
-            InferTy::Record(Box::new(instantiate_row(*row, substitutions, level)))
-        }
+        InferTy::Record(row) => InferTy::Record(Box::new(instantiate_row(
+            node_id,
+            *row,
+            substitutions,
+            level,
+        ))),
         InferTy::Nominal { symbol, box row } => InferTy::Nominal {
             symbol,
-            row: Box::new(instantiate_row(row, substitutions, level)),
+            row: Box::new(instantiate_row(node_id, row, substitutions, level)),
         },
     }
 }

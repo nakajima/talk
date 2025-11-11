@@ -277,9 +277,9 @@ impl Predicate<InferTy> {
                 returns,
             } => Constraint::Projection(Projection {
                 node_id: id,
-                base: instantiate_ty(base, substitutions, level),
+                base: instantiate_ty(id, base, substitutions, level),
                 label,
-                result: instantiate_ty(returns, substitutions, level),
+                result: instantiate_ty(id, returns, substitutions, level),
                 cause: ConstraintCause::Internal,
                 span,
             }),
@@ -288,20 +288,20 @@ impl Predicate<InferTy> {
                 protocol_id,
                 span,
             } => Constraint::Conforms(Conforms {
-                ty: instantiate_ty(InferTy::Param(param), substitutions, level),
+                ty: instantiate_ty(id, InferTy::Param(param), substitutions, level),
                 protocol_id,
                 span,
             }),
             Self::Equals { lhs, rhs } => Constraint::Equals(Equals {
-                lhs: instantiate_ty(lhs, substitutions, level),
-                rhs: instantiate_ty(rhs, substitutions, level),
+                lhs: instantiate_ty(id, lhs, substitutions, level),
+                rhs: instantiate_ty(id, rhs, substitutions, level),
                 cause: ConstraintCause::Internal,
                 span,
             }),
             Self::HasField { row, label, ty } => Constraint::HasField(HasField {
-                row: instantiate_row(InferRow::Param(row), substitutions, level),
+                row: instantiate_row(id, InferRow::Param(row), substitutions, level),
                 label,
-                ty: instantiate_ty(ty, substitutions, level),
+                ty: instantiate_ty(id, ty, substitutions, level),
                 cause: ConstraintCause::Internal,
                 span,
             }),
@@ -311,9 +311,9 @@ impl Predicate<InferTy> {
                 ty,
             } => Constraint::Member(Member {
                 node_id: id,
-                receiver: instantiate_ty(receiver, substitutions, level),
+                receiver: instantiate_ty(id, receiver, substitutions, level),
                 label,
-                ty: instantiate_ty(ty, substitutions, level),
+                ty: instantiate_ty(id, ty, substitutions, level),
                 cause: ConstraintCause::Internal,
                 span,
             }),
@@ -323,14 +323,14 @@ impl Predicate<InferTy> {
                 returns,
                 generics,
             } => Constraint::TypeMember(TypeMember {
-                base: instantiate_ty(base, substitutions, level),
+                base: instantiate_ty(id, base, substitutions, level),
                 node_id: id,
                 name: member,
                 generics: generics
                     .iter()
-                    .map(|g| instantiate_ty(g.clone(), substitutions, level))
+                    .map(|g| instantiate_ty(id, g.clone(), substitutions, level))
                     .collect(),
-                result: instantiate_ty(returns, substitutions, level),
+                result: instantiate_ty(id, returns, substitutions, level),
                 cause: ConstraintCause::Internal,
                 span,
             }),
@@ -341,14 +341,14 @@ impl Predicate<InferTy> {
                 receiver,
             } => Constraint::Call(Call {
                 callee_id: id,
-                callee: instantiate_ty(callee, substitutions, level),
+                callee: instantiate_ty(id, callee, substitutions, level),
                 args: args
                     .iter()
-                    .map(|f| instantiate_ty(f.clone(), substitutions, level))
+                    .map(|f| instantiate_ty(id, f.clone(), substitutions, level))
                     .collect(),
                 type_args: vec![],
-                returns: instantiate_ty(returns, substitutions, level),
-                receiver: receiver.map(|r| instantiate_ty(r.clone(), substitutions, level)),
+                returns: instantiate_ty(id, returns, substitutions, level),
+                receiver: receiver.map(|r| instantiate_ty(id, r.clone(), substitutions, level)),
                 span,
                 cause: ConstraintCause::Internal,
                 level,
