@@ -256,7 +256,7 @@ fn unify_rows(
             if fields.is_empty() {
                 return Ok(false);
             }
-            let mut acc = InferRow::Empty(TypeDefKind::Struct);
+            let mut acc = session.new_row_meta_var(context.level());
             for (label, ty) in fields.into_iter().rev() {
                 acc = InferRow::Extend {
                     row: Box::new(acc),

@@ -508,6 +508,18 @@ impl TypeSession {
                 return None;
             }
 
+                // Check that all metas are at or above the current generalization level
+                // Predicates should only reference quantified variables (foralls), not
+                // ungeneralized metas from outer scopes
+                for meta in &metas {
+                    if let InferTy::Var { level, .. } = meta && *level < inner {
+                            tracing::debug!(
+                                "skipping constraint {c:?} with outer-scope meta {meta:?} (level {level:?} < {inner:?})"
+                            );
+                            return None;
+                    }
+                }
+
             Some(
                 c.substitute(&self.skolem_map)
                     .into_predicate(&mut substitutions),
