@@ -34,7 +34,10 @@ use crate::{
     types::{
         builtins::resolve_builtin_type,
         constraint_solver::ConstraintSolver,
-        constraints::{constraint::ConstraintCause, member::consume_self},
+        constraints::{
+            constraint::{Constraint, ConstraintCause},
+            member::consume_self,
+        },
         infer_row::{InferRow, RowMetaId},
         infer_ty::{InferTy, Level, Meta, MetaVarId, TypeParamId},
         predicate::Predicate,
@@ -46,7 +49,7 @@ use crate::{
             InstantiationSubstitutions, UnificationSubstitutions, apply, curry, instantiate_ty,
             substitute,
         },
-        type_session::{TypeDefKind, TypeSession},
+        type_session::{TypeDefKind, TypeSession, collect_metas_in_constraint},
         wants::Wants,
     },
 };
@@ -66,14 +69,30 @@ impl Protocol {
     }
 }
 
+#[derive(Debug)]
+pub enum GeneralizationBlock {
+    PendingType {
+        node_id: NodeID,
+        span: Span,
+        level: Level,
+        type_symbol: Symbol,
+        args: Vec<(InferTy, NodeID)>,
+    },
+    PatternBindLocal,
+}
+
+pub type PendingTypeInstances =
+    FxHashMap<MetaVarId, (NodeID, Span, Level, Symbol, Vec<(InferTy, NodeID)>)>;
+
 pub struct InferencePass<'a> {
     ast: &'a mut AST<NameResolved>,
     session: &'a mut TypeSession,
     canonical_rows: FxHashMap<Symbol, RowMetaId>,
+    unsolved: IndexSet<Constraint>,
     #[allow(clippy::type_complexity)]
-    pending_type_instances: FxHashMap<Symbol, Vec<(MetaVarId, Vec<(InferTy, NodeID)>)>>,
     instantiations: FxHashMap<NodeID, InstantiationSubstitutions>,
     substitutions: UnificationSubstitutions,
+    generalization_blocks: FxHashMap<MetaVarId, GeneralizationBlock>,
 }
 
 impl<'a> InferencePass<'a> {
@@ -87,8 +106,9 @@ impl<'a> InferencePass<'a> {
                 session,
                 canonical_rows: Default::default(),
                 instantiations: Default::default(),
+                unsolved: Default::default(),
                 substitutions,
-                pending_type_instances: Default::default(),
+                generalization_blocks: Default::default(),
             };
 
             let roots = std::mem::take(&mut pass.ast.roots);
@@ -166,6 +186,7 @@ impl<'a> InferencePass<'a> {
                     predicates: vec![Predicate::Projection {
                         base: InferTy::Param(protocol_self_id),
                         label: generic.name.name_str().into(),
+                        protocol_id: Some(*protocol_id),
                         returns: ret,
                     }],
                 };
@@ -215,16 +236,8 @@ impl<'a> InferencePass<'a> {
                 }
             }
 
-            let solver = ConstraintSolver::new(&mut context, self.ast);
-            let unsolved = solver.solve(self.session);
-            for (binder, ty) in binders.into_iter() {
-                let ty = apply(ty, &mut context.substitutions);
-                let entry = self.session.generalize(context.level(), ty, &unsolved);
-                self.session.promote(binder, entry);
-            }
-
-            self.substitutions.extend(&context.substitutions);
-            self.session.apply(&mut context.substitutions);
+            let (binders, placeholders) = binders.into_iter().unzip();
+            self.solve(&mut context, binders, placeholders)
         }
     }
 
@@ -286,8 +299,6 @@ impl<'a> InferencePass<'a> {
                 let concrete = if let Some(conforming) = conforming_children.get(child_sym.0)
                     && let Some(concrete) = self.session.lookup(conforming)
                 {
-                    println!("instantiating concrete: {:?}", context.instantiations);
-                    println!("conformance node id: {:?}", conformance.node_id);
                     concrete.instantiate(
                         conformance.node_id,
                         &mut context,
@@ -298,8 +309,6 @@ impl<'a> InferencePass<'a> {
                     let ty = conformance.associated_types.get(child_sym.0).unwrap();
                     ty.clone()
                 };
-
-                println!("{child_sym:?} concrete is {concrete:?}");
 
                 associated_substitutions.insert(
                     InferTy::Projection {
@@ -313,6 +322,7 @@ impl<'a> InferencePass<'a> {
                     conformance.node_id,
                     conforming_self.clone(),
                     child_sym.0.clone(),
+                    Some(key.protocol_id),
                     concrete,
                     ConstraintCause::Internal,
                     conformance.span,
@@ -374,7 +384,8 @@ impl<'a> InferencePass<'a> {
                 );
             }
 
-            let solver = ConstraintSolver::new(&mut context, self.ast);
+            let solver =
+                ConstraintSolver::new(&mut context, self.ast, std::mem::take(&mut self.unsolved));
 
             solver.solve(self.session);
             self.substitutions.extend(&context.substitutions);
@@ -386,20 +397,14 @@ impl<'a> InferencePass<'a> {
                 unreachable!()
             };
 
-            for (k, ty) in conf_mut.associated_types.iter_mut() {
+            for ty in conf_mut.associated_types.values_mut() {
                 *ty = apply(ty.clone(), &mut context.substitutions);
-                println!(
-                    "applying associated type {k}., node id: {:?} before: {ty:?}, {:?}",
-                    conformance.node_id, context.instantiations
-                );
                 *ty = instantiate_ty(
                     conformance.node_id,
                     ty.clone(),
                     &context.instantiations,
                     context.level(),
                 );
-
-                println!("  after: {ty:?}");
             }
         }
     }
@@ -419,7 +424,8 @@ impl<'a> InferencePass<'a> {
             self.visit_node(&node, &mut context);
         }
 
-        let solver = ConstraintSolver::new(&mut context, self.ast);
+        let solver =
+            ConstraintSolver::new(&mut context, self.ast, std::mem::take(&mut self.unsolved));
         let _unsolved = solver.solve(self.session);
         self.substitutions.extend(&context.substitutions);
 
@@ -475,13 +481,48 @@ impl<'a> InferencePass<'a> {
         }
 
         // Solve this group
-        let solver = ConstraintSolver::new(&mut context, self.ast);
+        self.solve(&mut context, group.binders, placeholders)
+    }
+
+    fn solve(
+        &mut self,
+        context: &mut SolveContext,
+        binders: Vec<Symbol>,
+        placeholders: Vec<InferTy>,
+    ) {
+        context.substitutions_mut().extend(&self.substitutions);
+        let solver = ConstraintSolver::new(context, self.ast, std::mem::take(&mut self.unsolved));
         let unsolved = solver.solve(self.session);
 
-        // Generalize
-        for (i, binder) in group.binders.iter().enumerate() {
+        // Ok, hear me out. I know this is messy. We don't want to generalize metas that have pending type instances
+        // and we want to hang on to constraints that contain them instead of converting them to predicates during
+        // generalization. So we need to grab those and set them aside.
+        let (generalizable, needs_defer) = unsolved.into_iter().partition(|c| {
+            let mut out = Default::default();
+            collect_metas_in_constraint(c, &mut out);
+            for ty in out {
+                let InferTy::Var { id, .. } = ty else {
+                    continue;
+                };
+
+                if self.generalization_blocks.contains_key(&id) {
+                    return false;
+                }
+            }
+
+            true
+        });
+
+        self.unsolved.extend(needs_defer);
+
+        for (i, binder) in binders.iter().enumerate() {
             let ty = apply(placeholders[i].clone(), &mut context.substitutions);
-            let entry = self.session.generalize(group.level, ty, &unsolved);
+            let entry = self.session.generalize(
+                context.level(),
+                ty,
+                &generalizable,
+                &self.generalization_blocks,
+            );
             self.session.promote(*binder, entry);
         }
 
@@ -512,7 +553,7 @@ impl<'a> InferencePass<'a> {
                 conformances,
                 body,
                 ..
-            } => self.visit_nominal(name, generics, conformances, body, context),
+            } => self.visit_nominal(decl, name, generics, conformances, body, context),
             DeclKind::Protocol { .. } => InferTy::Void,
             DeclKind::Init { .. } => {
                 unreachable!("inits are handled by visit_struct")
@@ -534,7 +575,7 @@ impl<'a> InferencePass<'a> {
                 conformances,
                 body,
                 ..
-            } => self.visit_nominal(name, generics, conformances, body, context),
+            } => self.visit_nominal(decl, name, generics, conformances, body, context),
             DeclKind::EnumVariant(..) => todo!(),
             DeclKind::FuncSignature(..) => todo!(),
             DeclKind::MethodRequirement(..) => todo!(),
@@ -685,10 +726,14 @@ impl<'a> InferencePass<'a> {
         label: &Label,
         context: &mut impl Solve,
     ) -> InferTy {
-        let Some(receiver) = receiver else { todo!() };
+        let receiver_ty = if let Some(receiver) = receiver {
+            self.visit_expr(receiver, context)
+        } else {
+            self.session.new_ty_meta_var(context.level().next())
+        };
 
-        let receiver_ty = self.visit_expr(receiver, context);
-        let ret = self.session.new_ty_meta_var(context.level());
+        let ret = self.session.new_ty_meta_var(context.level().next());
+
         context.wants_mut().member(
             expr.id,
             receiver_ty,
@@ -704,6 +749,7 @@ impl<'a> InferencePass<'a> {
     #[instrument(level = tracing::Level::TRACE, skip(self, generics, conformances, body, context))]
     fn visit_nominal(
         &mut self,
+        decl: &Decl,
         name: &Name,
         generics: &[GenericDecl],
         conformances: &[TypeAnnotation],
@@ -711,9 +757,7 @@ impl<'a> InferencePass<'a> {
         context: &mut impl Solve,
     ) -> InferTy {
         for generic in generics.iter() {
-            let param_id = self.session.new_type_param_id(None);
-            self.session
-                .insert_mono(generic.name.symbol(), InferTy::Param(param_id));
+            self.register_generic(generic, context);
         }
 
         let nominal_symbol = name.symbol();
@@ -836,14 +880,6 @@ impl<'a> InferencePass<'a> {
             .row
             .insert(row_placeholder_id, real_row.clone());
 
-        self.session.apply(&mut substitutions);
-        context.wants_mut().apply(&mut substitutions);
-
-        let ty = InferTy::Nominal {
-            symbol: nominal_symbol,
-            row: real_row.into(),
-        };
-
         for conformance in conformances {
             let Symbol::Protocol(protocol_id) = conformance.symbol() else {
                 tracing::warn!("didnt get protocol id for conformance: {conformance:?}");
@@ -863,10 +899,8 @@ impl<'a> InferencePass<'a> {
                     let associated_ty = if let Some(child_types) = &child_types
                         && let Some(child_sym) = child_types.get(label)
                     {
-                        println!("got a child sym: {child_sym:?}");
                         self.session.lookup(child_sym).unwrap()._as_ty()
                     } else {
-                        println!("did not get a chid for {name:?}.{label:?} {child_types:?}");
                         self.session.new_ty_meta_var(context.level())
                     };
 
@@ -903,6 +937,83 @@ impl<'a> InferencePass<'a> {
                 ty: ty.clone(),
             })
         };
+
+        let generalization_blocks = std::mem::take(&mut self.generalization_blocks);
+        for (var_id, block) in generalization_blocks {
+            let GeneralizationBlock::PendingType {
+                node_id,
+                span,
+                level,
+                type_symbol,
+                args,
+            } = &block
+            else {
+                self.generalization_blocks.insert(var_id, block);
+                continue;
+            };
+
+            if *type_symbol != name.symbol() {
+                self.generalization_blocks.insert(var_id, block);
+                continue;
+            }
+
+            let (instance, instantiations) = entry.instantiate_with_args(
+                *node_id,
+                args,
+                self.session,
+                *level,
+                context.wants_mut(),
+                *span,
+            );
+
+            context.instantiations_mut().ty.extend(instantiations.ty);
+            context.instantiations_mut().row.extend(instantiations.row);
+
+            substitutions.ty.insert(var_id, instance);
+        }
+
+        self.substitutions.extend(&substitutions);
+        self.session.apply(&mut substitutions);
+        context.wants_mut().apply(&mut substitutions);
+
+        let ty = InferTy::Nominal {
+            symbol: nominal_symbol,
+            row: real_row.into(),
+        };
+
+        // for (var_id, args) in self
+        //     .pending_type_instances
+        //     .get(&nominal_symbol)
+        //     .cloned()
+        //     .unwrap_or_default()
+        // {
+        //     let (instance, instantiations) = entry.instantiate_with_args(
+        //         decl.id,
+        //         &args,
+        //         self.session,
+        //         context.level(),
+        //         context.wants_mut(),
+        //         decl.span,
+        //     );
+
+        //     context.instantiations_mut().ty.extend(instantiations.ty);
+        //     context.instantiations_mut().row.extend(instantiations.row);
+
+        //     let var = InferTy::Var {
+        //         id: var_id,
+        //         level: self
+        //             .session
+        //             .meta_levels
+        //             .borrow()
+        //             .get(&Meta::Ty(var_id))
+        //             .copied()
+        //             .unwrap(),
+        //     };
+
+        //     context
+        //         .wants_mut()
+        //         .equals(var, instance, ConstraintCause::Internal, decl.span);
+        // }
 
         self.session.insert_term(nominal_symbol, entry);
 
@@ -1204,7 +1315,7 @@ impl<'a> InferencePass<'a> {
             PatternKind::Bind(Name::Resolved(sym, _)) => {
                 self.session.insert_mono(*sym, expected.clone());
             }
-            PatternKind::Bind(Name::SelfType(..)) => (),
+            PatternKind::Bind(Name::SelfType(..)) => todo!("not sure how this would work"),
             PatternKind::LiteralInt(_) => {
                 context.wants_mut().equals(
                     expected.clone(),
@@ -1290,7 +1401,16 @@ impl<'a> InferencePass<'a> {
             } => {
                 let field_metas: Vec<InferTy> = fields
                     .iter()
-                    .map(|_| self.session.new_ty_meta_var(context.level()))
+                    .map(|_| {
+                        let var_id = self.session.new_ty_meta_var_id(context.level());
+                        self.generalization_blocks
+                            .insert(var_id, GeneralizationBlock::PatternBindLocal);
+
+                        InferTy::Var {
+                            id: var_id,
+                            level: context.level(),
+                        }
+                    })
                     .collect();
                 let payload = if fields.is_empty() {
                     expected.clone()
@@ -1422,6 +1542,7 @@ impl<'a> InferencePass<'a> {
                         .unwrap_or_else(|| self.visit_expr(rcv, context)),
                 )
             }
+            ExprKind::Member(None, ..) => Some(self.session.new_ty_meta_var(context.level())),
             _ => None,
         };
 
@@ -1482,22 +1603,18 @@ impl<'a> InferencePass<'a> {
     #[instrument(level = tracing::Level::TRACE, skip(self, context))]
     fn visit_func(&mut self, func: &Func, context: &mut impl Solve) -> InferTy {
         for generic in func.generics.iter() {
-            let param_id = self.register_generic(generic, context);
-            self.session
-                .insert_mono(generic.name.symbol(), InferTy::Param(param_id));
+            self.register_generic(generic, context);
         }
 
         let mut params = self.visit_params(&func.params, context);
 
         let ret = if let Some(ret) = &func.ret {
-            println!("ret is type annotation");
-            self.visit_type_annotation(ret, context)
+            let ret = self.visit_type_annotation(ret, context);
+            self.check_block(&func.body, ret.clone(), context);
+            ret
         } else {
-            println!("ret is new meta: {func:?}");
-            self.session.new_ty_meta_var(context.level())
+            self.infer_block(&func.body, context)
         };
-
-        self.check_block(&func.body, ret.clone(), context);
 
         if params.is_empty() {
             // Otherwise curry gets confused. TODO: just fix curry?
@@ -1583,7 +1700,10 @@ impl<'a> InferencePass<'a> {
         match &type_annotation.kind {
             TypeAnnotationKind::Nominal { name, generics, .. } => {
                 if let (
-                    SolveContextKind::Protocol { protocol_self, .. },
+                    SolveContextKind::Protocol {
+                        protocol_self,
+                        protocol_id,
+                    },
                     Symbol::AssociatedType(..),
                 ) = (context.kind(), name.symbol())
                 {
@@ -1603,6 +1723,7 @@ impl<'a> InferencePass<'a> {
                         type_annotation.id,
                         base,
                         name.name_str().into(), // "T"
+                        Some(protocol_id),
                         result.clone(),
                         ConstraintCause::Annotation(type_annotation.id),
                         type_annotation.span,
@@ -1638,26 +1759,21 @@ impl<'a> InferencePass<'a> {
 
                     return ty;
                 } else {
-                    tracing::info!("nope, did not find anything in the env for {name:?}");
+                    tracing::warn!("nope, did not find anything in the env for {name:?}");
                 }
 
-                if matches!(name.symbol(), Symbol::TypeParameter(..)) {
-                    let entry = self.session.lookup(&name.symbol()).unwrap();
-
-                    return entry.instantiate(
-                        type_annotation.id,
-                        context,
-                        self.session,
-                        type_annotation.span,
-                    );
-                }
-
-                // We don't know about this type yet, wait until we visit it
                 let var_id = self.session.new_ty_meta_var_id(context.level());
-                self.pending_type_instances
-                    .entry(name.symbol())
-                    .or_default()
-                    .push((var_id, generic_args));
+
+                self.generalization_blocks.insert(
+                    var_id,
+                    GeneralizationBlock::PendingType {
+                        node_id: type_annotation.id,
+                        span: type_annotation.span,
+                        level: context.level(),
+                        type_symbol: name.symbol(),
+                        args: generic_args,
+                    },
+                );
 
                 InferTy::Var {
                     id: var_id,
@@ -1712,14 +1828,11 @@ impl<'a> InferencePass<'a> {
                 let ret = self.session.new_ty_meta_var(context.level());
 
                 if matches!(base.symbol(), Symbol::TypeParameter(..)) {
-                    println!(
-                        "base symbol: {:?}, base_ty: {base_ty:?}, ret: {ret:?}",
-                        base.symbol()
-                    );
                     context.wants_mut().projection(
                         type_annotation.id,
                         base_ty,
                         member.clone(),
+                        None,
                         ret.clone(),
                         ConstraintCause::Annotation(type_annotation.id),
                         type_annotation.span,
@@ -1831,6 +1944,9 @@ impl<'a> InferencePass<'a> {
                 .or_default()
                 .insert(predicate);
         }
+
+        self.session
+            .insert_mono(generic.name.symbol(), InferTy::Param(param_id));
 
         param_id
     }

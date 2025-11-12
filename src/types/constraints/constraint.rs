@@ -3,8 +3,9 @@ use crate::{
     span::Span,
     types::{
         constraints::{
-            call::Call, conforms::Conforms, equals::Equals, has_field::HasField, member::Member,
-            projection::Projection, type_member::TypeMember,
+            call::Call, conforms::Conforms, equals::Equals, has_field::HasField,
+            instance_of::InstanceOf, member::Member, projection::Projection,
+            type_member::TypeMember,
         },
         infer_row::InferRow,
         infer_ty::InferTy,
@@ -43,9 +44,23 @@ pub enum Constraint {
     Conforms(Conforms),
     TypeMember(TypeMember),
     Projection(Projection),
+    InstanceOf(InstanceOf),
 }
 
 impl Constraint {
+    pub fn is_generalizable(&self) -> bool {
+        match self {
+            Constraint::Call(..) => false,
+            Constraint::Equals(..) => true,
+            Constraint::HasField(..) => true,
+            Constraint::Member(..) => true,
+            Constraint::Conforms(..) => false,
+            Constraint::TypeMember(..) => true,
+            Constraint::Projection(..) => true,
+            Constraint::InstanceOf(..) => false,
+        }
+    }
+
     pub fn span(&self) -> Span {
         match self {
             Constraint::Call(c) => c.span,
@@ -55,6 +70,7 @@ impl Constraint {
             Constraint::Conforms(c) => c.span,
             Constraint::TypeMember(c) => c.span,
             Constraint::Projection(c) => c.span,
+            Constraint::InstanceOf(c) => c.span,
         }
     }
 
@@ -69,6 +85,9 @@ impl Constraint {
                     .map(|f| apply(f.clone(), substitutions))
                     .collect();
                 call.returns = apply(call.returns.clone(), substitutions);
+            }
+            Constraint::InstanceOf(c) => {
+                c.var = apply(c.var.clone(), substitutions);
             }
             Constraint::Projection(c) => {
                 c.base = apply(c.base.clone(), substitutions);
@@ -100,6 +119,7 @@ impl Constraint {
         let mut copy = self.clone();
 
         match &mut copy {
+            Constraint::InstanceOf(c) => c.var = substitute(c.var.clone(), substitutions),
             Constraint::Call(call) => {
                 call.receiver = call.receiver.clone().map(|r| substitute(r, substitutions));
                 call.callee = substitute(call.callee.clone(), substitutions);
@@ -195,6 +215,7 @@ impl Constraint {
                 }
             }
             Self::Projection(projection) => Predicate::Projection {
+                protocol_id: projection.protocol_id,
                 base: apply(projection.base.clone(), substitutions),
                 label: projection.label.clone(),
                 returns: apply(projection.result.clone(), substitutions),

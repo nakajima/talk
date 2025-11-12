@@ -14,6 +14,7 @@ use crate::{
         constraints::constraint::Constraint,
         infer_row::{InferRow, RowMetaId, RowParamId},
         infer_ty::{InferTy, Level, Meta, MetaVarId, SkolemId, TypeParamId},
+        passes::inference_pass::{GeneralizationBlock, PendingTypeInstances},
         predicate::Predicate,
         row::Row,
         scheme::{ForAll, Scheme},
@@ -166,7 +167,7 @@ impl TypeSession {
                     EnvEntry::Scheme(scheme) => {
                         if scheme.ty.contains_var() {
                             // Merge with existing scheme's foralls/predicates
-                            let generalized = self.generalize(Level(0), scheme.ty, &Default::default());
+                            let generalized = self.generalize(Level(0), scheme.ty, &Default::default(), &Default::default());
                             let EnvEntry::Scheme(generalized) = generalized
                             else {
                                 unreachable!(
@@ -313,8 +314,13 @@ impl TypeSession {
         let ty = self.finalize_infer_ty(ty);
 
         if ty.contains_var() {
-            self.generalize(Level(0), ty.clone(), &Default::default())
-                .into()
+            self.generalize(
+                Level(0),
+                ty.clone(),
+                &Default::default(),
+                &Default::default(),
+            )
+            .into()
         } else {
             TypeEntry::Mono(ty.clone().into())
         }
@@ -389,6 +395,7 @@ impl TypeSession {
         inner: Level,
         ty: InferTy,
         unsolved: &IndexSet<Constraint>,
+        generalization_blocks: &FxHashMap<MetaVarId, GeneralizationBlock>,
     ) -> EnvEntry<InferTy> {
         // collect metas in ty
         let mut metas = FxHashSet::default();
@@ -412,6 +419,11 @@ impl TypeSession {
                 InferTy::Var { level, id } => {
                     if *level < inner {
                         tracing::warn!("discarding {m:?} due to level ({level:?} < {inner:?})");
+                        continue;
+                    }
+
+                    if let Some(block) = generalization_blocks.get(id) {
+                        tracing::warn!("discarding {m:?} due to block: {block:?}");
                         continue;
                     }
 
@@ -489,10 +501,17 @@ impl TypeSession {
         let ty = substitute(ty, &self.skolem_map);
         let ty = apply(ty, &mut substitutions);
 
-        predicates.extend(unsolved.iter().map(|c| {
-            let c = c.substitute(&self.skolem_map);
+        predicates.extend(unsolved.iter().filter_map(|c| {
+            let mut metas = Default::default();
+            collect_metas_in_constraint(c, &mut metas);
+            if metas.is_empty() {
+                return None;
+            }
 
-            c.into_predicate(&mut substitutions)
+            Some(
+                c.substitute(&self.skolem_map)
+                    .into_predicate(&mut substitutions),
+            )
         }));
 
         if foralls.is_empty() && predicates.is_empty() {
@@ -850,8 +869,11 @@ impl TypeSession {
     }
 }
 
-fn collect_metas_in_constraint(constraint: &Constraint, out: &mut FxHashSet<InferTy>) {
+pub(super) fn collect_metas_in_constraint(constraint: &Constraint, out: &mut FxHashSet<InferTy>) {
     match constraint {
+        Constraint::InstanceOf(c) => {
+            collect_meta(&c.var, out);
+        }
         Constraint::Projection(c) => {
             collect_meta(&c.base, out);
             collect_meta(&c.result, out);
@@ -893,9 +915,7 @@ fn collect_metas_in_constraint(constraint: &Constraint, out: &mut FxHashSet<Infe
 
 pub fn collect_meta(ty: &InferTy, out: &mut FxHashSet<InferTy>) {
     match ty {
-        InferTy::Param(_) => {
-            out.insert(ty.clone());
-        }
+        InferTy::Param(_) => {}
         InferTy::Var { .. } => {
             out.insert(ty.clone());
         }

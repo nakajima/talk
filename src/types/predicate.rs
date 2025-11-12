@@ -37,6 +37,7 @@ pub enum Predicate<T: SomeType> {
         base: InferTy,
         label: Label,
         returns: InferTy,
+        protocol_id: Option<ProtocolId>,
     },
     Conforms {
         param: TypeParamId,
@@ -70,6 +71,7 @@ impl From<Predicate<InferTy>> for Predicate<Ty> {
     fn from(value: Predicate<InferTy>) -> Self {
         match value {
             Predicate::Projection {
+                protocol_id,
                 base,
                 label,
                 returns,
@@ -77,6 +79,7 @@ impl From<Predicate<InferTy>> for Predicate<Ty> {
                 base,
                 label,
                 returns,
+                protocol_id,
             },
             Predicate::<InferTy>::Conforms {
                 param,
@@ -135,10 +138,12 @@ impl From<Predicate<Ty>> for Predicate<InferTy> {
     fn from(value: Predicate<Ty>) -> Self {
         match value {
             Predicate::<Ty>::Projection {
+                protocol_id,
                 base,
                 label,
                 returns,
             } => Self::Projection {
+                protocol_id,
                 base,
                 label,
                 returns,
@@ -200,10 +205,12 @@ impl Predicate<InferTy> {
     pub fn apply(&self, substitutions: &mut UnificationSubstitutions) -> Self {
         match self {
             Self::Projection {
+                protocol_id,
                 base,
                 label,
                 returns,
             } => Self::Projection {
+                protocol_id: *protocol_id,
                 base: apply(base.clone(), substitutions),
                 returns: apply(returns.clone(), substitutions),
                 label: label.clone(),
@@ -275,8 +282,10 @@ impl Predicate<InferTy> {
                 base,
                 label,
                 returns,
+                protocol_id,
             } => Constraint::Projection(Projection {
                 node_id: id,
+                protocol_id,
                 base: instantiate_ty(id, base, substitutions, level),
                 label,
                 result: instantiate_ty(id, returns, substitutions, level),
@@ -364,8 +373,12 @@ impl<T: SomeType> std::fmt::Debug for Predicate<T> {
                 base,
                 label,
                 returns,
+                protocol_id,
             } => {
-                write!(f, "*projection({base:?}.{label:?})->{returns:?}")
+                write!(
+                    f,
+                    "*projection({base:?}.{label:?}, {protocol_id:?})->{returns:?}"
+                )
             }
             Predicate::Conforms {
                 param, protocol_id, ..

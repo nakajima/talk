@@ -238,7 +238,7 @@ impl<'a> DeclDeclarer<'a> {
     // Local decls
     ///////////////////////////////////////////////////////////////////////////
     #[instrument(level = tracing::Level::TRACE, skip(self))]
-    fn declare_pattern(&mut self, pattern: &mut Pattern) {
+    fn declare_pattern(&mut self, pattern: &mut Pattern, bind_type: Symbol) {
         let Pattern { kind, .. } = pattern;
 
         match kind {
@@ -246,8 +246,7 @@ impl<'a> DeclDeclarer<'a> {
                 *name = if self.at_module_scope() {
                     self.resolver.declare(name, some!(Global), pattern.id)
                 } else {
-                    self.resolver
-                        .declare(name, some!(DeclaredLocal), pattern.id)
+                    self.resolver.declare(name, bind_type, pattern.id)
                 }
             }
             PatternKind::Bind(..) => {}
@@ -259,7 +258,7 @@ impl<'a> DeclDeclarer<'a> {
                 }
 
                 for field in fields.iter_mut() {
-                    self.declare_pattern(field);
+                    self.declare_pattern(field, some!(PatternBindLocal));
                 }
             }
             PatternKind::Record { fields } => {
@@ -274,7 +273,7 @@ impl<'a> DeclDeclarer<'a> {
                             *name =
                                 self.resolver
                                     .declare(name, some!(PatternBindLocal), pattern.id);
-                            self.declare_pattern(value);
+                            self.declare_pattern(value, some!(PatternBindLocal));
                         }
                         RecordFieldPatternKind::Rest => (),
                     }
@@ -360,7 +359,7 @@ impl<'a> DeclDeclarer<'a> {
     #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn enter_match_arm(&mut self, arm: &mut MatchArm) {
         self.start_scope(None, arm.id, false);
-        self.declare_pattern(&mut arm.pattern);
+        self.declare_pattern(&mut arm.pattern, some!(PatternBindLocal));
     }
 
     fn exit_match_arm(&mut self, _arm: &mut MatchArm) {
@@ -584,7 +583,7 @@ impl<'a> DeclDeclarer<'a> {
         });
 
         on!(&mut decl.kind, DeclKind::Let { lhs, .. }, {
-            self.declare_pattern(lhs);
+            self.declare_pattern(lhs, some!(DeclaredLocal));
             let binder_symbol = match &lhs.kind {
                 PatternKind::Bind(name) => Some(name.symbol()),
                 _ => None,

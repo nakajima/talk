@@ -11,7 +11,7 @@ use crate::{
         dsu::DSU,
         infer_row::{InferRow, RowMetaId, RowParamId, RowTail, normalize_row},
         infer_ty::{InferTy, Level, Meta, MetaVarId, TypeParamId},
-        solve_context::{Solve, SolveContext},
+        solve_context::Solve,
         type_error::TypeError,
         type_session::{TypeDefKind, TypeSession},
     },
@@ -210,11 +210,11 @@ fn unify_rows(
     kind: TypeDefKind,
     lhs: &InferRow,
     rhs: &InferRow,
-    context: &mut SolveContext,
+    context: &mut impl Solve,
     session: &mut TypeSession,
 ) -> Result<bool, TypeError> {
-    let (mut lhs_fields, lhs_tail) = normalize_row(lhs.clone(), &mut context.substitutions);
-    let (mut rhs_fields, rhs_tail) = normalize_row(rhs.clone(), &mut context.substitutions);
+    let (mut lhs_fields, lhs_tail) = normalize_row(lhs.clone(), context.substitutions_mut());
+    let (mut rhs_fields, rhs_tail) = normalize_row(rhs.clone(), context.substitutions_mut());
 
     // Check to see if one side is closed and the other is a var. If so,
     // just unify the var as the other side
@@ -232,11 +232,11 @@ fn unify_rows(
             };
         }
 
-        let var = context.substitutions.canon_row(*var);
-        if row_occurs_structural(var, &acc, &mut context.substitutions) {
+        let var = context.substitutions_mut().canon_row(*var);
+        if row_occurs_structural(var, &acc, context.substitutions_mut()) {
             return Err(TypeError::OccursCheck(InferTy::Record(Box::new(acc))));
         }
-        context.substitutions.row.insert(var, acc);
+        context.substitutions_mut().row.insert(var, acc);
 
         return Ok(true);
     }
@@ -264,12 +264,12 @@ fn unify_rows(
                     ty,
                 };
             }
-            if row_occurs(tail_id, &acc, &mut context.substitutions) {
+            if row_occurs(tail_id, &acc, context.substitutions_mut()) {
                 return Err(TypeError::OccursCheck(InferTy::Record(Box::new(acc))));
             }
 
-            let can = context.substitutions.canon_row(tail_id);
-            context.substitutions.row.insert(can, acc);
+            let can = context.substitutions_mut().canon_row(tail_id);
+            context.substitutions_mut().row.insert(can, acc);
             Ok(true)
         };
 
@@ -318,11 +318,12 @@ fn unify_rows(
     // unify tails when both are metas/params (cheap)
     match (lhs_tail, rhs_tail) {
         (RowTail::Var(a), RowTail::Var(b))
-            if context.substitutions.canon_row(a) != context.substitutions.canon_row(b) =>
+            if context.substitutions_mut().canon_row(a)
+                != context.substitutions_mut().canon_row(b) =>
         {
-            let can_a = context.substitutions.canon_row(a);
-            let can_b = context.substitutions.canon_row(b);
-            context.substitutions.link_row(can_a, can_b);
+            let can_a = context.substitutions_mut().canon_row(a);
+            let can_b = context.substitutions_mut().canon_row(b);
+            context.substitutions_mut().link_row(can_a, can_b);
             changed = true;
         }
         (RowTail::Param(a), RowTail::Param(b)) if a == b => {}
@@ -343,13 +344,13 @@ fn unify_rows(
 pub(super) fn unify(
     lhs: &InferTy,
     rhs: &InferTy,
-    context: &mut SolveContext,
+    context: &mut impl Solve,
     session: &mut TypeSession,
 ) -> Result<bool, TypeError> {
     let lhs = context.normalize(lhs.clone(), session);
     let rhs = context.normalize(rhs.clone(), session);
-    let lhs = apply(lhs, &mut context.substitutions);
-    let rhs = apply(rhs, &mut context.substitutions);
+    let lhs = apply(lhs, context.substitutions_mut());
+    let rhs = apply(rhs, context.substitutions_mut());
 
     match (&lhs, &rhs) {
         (InferTy::Primitive(lhs), InferTy::Primitive(rhs)) => {
@@ -434,17 +435,17 @@ pub(super) fn unify(
                 level: _,
             },
         ) => {
-            let ra = context.substitutions.canon_meta(*lhs_id);
-            let rb = context.substitutions.canon_meta(*rhs_id);
+            let ra = context.substitutions_mut().canon_meta(*lhs_id);
+            let rb = context.substitutions_mut().canon_meta(*rhs_id);
             if ra != rb {
-                let keep = context.substitutions.link_meta(ra, rb);
+                let keep = context.substitutions_mut().link_meta(ra, rb);
 
                 tracing::info!("unifying vars {ra:?} and {rb:?}, keeping: {keep:?}");
 
                 // if the losing rep had a binding, keep it by moving once:
                 let lose = if keep == ra { rb } else { ra };
-                if let Some(v) = context.substitutions.ty.remove(&lose) {
-                    context.substitutions.ty.entry(keep).or_insert(v);
+                if let Some(v) = context.substitutions_mut().ty.remove(&lose) {
+                    context.substitutions_mut().ty.entry(keep).or_insert(v);
                 }
                 Ok(true)
             } else {
@@ -456,7 +457,7 @@ pub(super) fn unify(
                 return Err(TypeError::OccursCheck(ty.clone())); // or your preferred variant
             }
 
-            context.substitutions.ty.insert(*id, ty.clone());
+            context.substitutions_mut().ty.insert(*id, ty.clone());
 
             Ok(true)
         }
@@ -469,9 +470,9 @@ pub(super) fn unify(
         }
         _ => {
             tracing::error!(
-                "attempted to unify {:?} <> {:?}, {context:?}",
-                apply(lhs.clone(), &mut context.substitutions),
-                apply(rhs.clone(), &mut context.substitutions)
+                "attempted to unify {:?} <> {:?}",
+                apply(lhs.clone(), context.substitutions_mut()),
+                apply(rhs.clone(), context.substitutions_mut())
             );
             Err(TypeError::InvalidUnification(lhs.into(), rhs.into()))
         }

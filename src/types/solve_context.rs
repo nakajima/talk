@@ -4,9 +4,10 @@ use indexmap::IndexSet;
 use rustc_hash::FxHashMap;
 
 use crate::{
-    name_resolution::symbol::ProtocolId,
+    name_resolution::symbol::{ProtocolId, Symbol},
+    node_id::NodeID,
     types::{
-        infer_ty::{InferTy, Level, TypeParamId},
+        infer_ty::{InferTy, Level, MetaVarId, TypeParamId},
         predicate::Predicate,
         type_catalog::ConformanceKey,
         type_operations::{InstantiationSubstitutions, UnificationSubstitutions, apply},
@@ -24,6 +25,7 @@ pub struct SolveContext {
     pub(super) wants: Wants,
     pub(super) givens: IndexSet<Predicate<InferTy>>,
     pub(super) level: Level,
+    pub(super) pending_type_instances: FxHashMap<MetaVarId, Vec<(Symbol, Vec<(InferTy, NodeID)>)>>,
 }
 
 pub(super) struct ChildSolveContext<'a> {
@@ -55,6 +57,7 @@ where
     fn parent(&mut self) -> &mut SolveContext;
     fn wants_mut(&'_ mut self) -> &mut Wants;
     fn givens_mut(&'_ mut self) -> &mut IndexSet<Predicate<InferTy>>;
+    fn substitutions_mut(&'_ mut self) -> &mut UnificationSubstitutions;
     fn instantiations_mut(&'_ mut self) -> &mut InstantiationSubstitutions;
 }
 
@@ -105,6 +108,10 @@ impl<'a> Solve for ChildSolveContext<'a> {
     fn instantiations_mut(&'_ mut self) -> &mut InstantiationSubstitutions {
         &mut self.instantiations
     }
+
+    fn substitutions_mut(&'_ mut self) -> &mut UnificationSubstitutions {
+        &mut self.parent().substitutions
+    }
 }
 
 impl Solve for SolveContext {
@@ -153,6 +160,10 @@ impl Solve for SolveContext {
     fn instantiations_mut(&'_ mut self) -> &mut InstantiationSubstitutions {
         &mut self.instantiations
     }
+
+    fn substitutions_mut(&'_ mut self) -> &mut UnificationSubstitutions {
+        &mut self.substitutions
+    }
 }
 
 impl SolveContext {
@@ -168,6 +179,7 @@ impl SolveContext {
             givens: Default::default(),
             wants: Default::default(),
             instantiations: Default::default(),
+            pending_type_instances: Default::default(),
             level,
         }
     }

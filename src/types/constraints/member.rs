@@ -52,8 +52,7 @@ impl Member {
                     return Ok(true);
                 }
 
-                tracing::debug!("deferring member constraint: {self:?}");
-                context.wants.push(Constraint::Member(self.clone()));
+                context.wants.defer(Constraint::Member(self.clone()));
                 return Ok(false);
             }
             InferTy::Rigid(id) => {

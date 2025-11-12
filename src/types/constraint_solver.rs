@@ -10,6 +10,7 @@ use crate::{
     },
 };
 
+#[derive(Debug)]
 pub struct ConstraintSolver<'a> {
     context: &'a mut SolveContext,
     ast: &'a mut AST<NameResolved>,
@@ -17,10 +18,14 @@ pub struct ConstraintSolver<'a> {
 }
 
 impl<'a> ConstraintSolver<'a> {
-    pub fn new(context: &'a mut SolveContext, ast: &'a mut AST<NameResolved>) -> Self {
+    pub fn new(
+        context: &'a mut SolveContext,
+        ast: &'a mut AST<NameResolved>,
+        unsolved: IndexSet<Constraint>,
+    ) -> Self {
         Self {
             context,
-            unsolved: Default::default(),
+            unsolved,
             ast,
         }
     }
@@ -45,6 +50,7 @@ impl<'a> ConstraintSolver<'a> {
                     Constraint::Equals(ref equals) => {
                         unify(&equals.lhs, &equals.rhs, self.context, session)
                     }
+                    Constraint::InstanceOf(ref c) => c.solve(self.context, session),
                     Constraint::Call(ref call) => call.solve(self.context, session),
                     Constraint::HasField(ref has_field) => has_field.solve(self.context),
                     Constraint::Member(ref member) => member.solve(self.context, session),

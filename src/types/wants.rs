@@ -60,8 +60,23 @@ impl Wants {
     }
 
     #[instrument(skip(self))]
+    pub fn defer(&mut self, constraint: Constraint) {
+        match &constraint {
+            Constraint::InstanceOf(..) => self.simple.push_back(constraint),
+            Constraint::Call(..) => self.defer.push_back(constraint),
+            Constraint::Equals(..) => self.simple.push_back(constraint),
+            Constraint::HasField(..) => self.simple.push_back(constraint),
+            Constraint::Member(..) => self.defer.push_back(constraint),
+            Constraint::Conforms(..) => self.defer.push_back(constraint),
+            Constraint::TypeMember(..) => self.defer.push_back(constraint),
+            Constraint::Projection(..) => self.defer.push_back(constraint),
+        }
+    }
+
+    #[instrument(skip(self))]
     pub fn push(&mut self, constraint: Constraint) {
         match &constraint {
+            Constraint::InstanceOf(..) => self.simple.push_back(constraint),
             Constraint::Call(..) => self.defer.push_back(constraint),
             Constraint::Equals(..) => self.simple.push_back(constraint),
             Constraint::HasField(..) => self.simple.push_back(constraint),
@@ -193,11 +208,13 @@ impl Wants {
     }
 
     #[instrument(skip(self))]
+    #[allow(clippy::too_many_arguments)]
     pub fn projection(
         &mut self,
         node_id: NodeID,
         base: InferTy,
         label: Label,
+        protocol_id: Option<ProtocolId>,
         result: InferTy,
         cause: ConstraintCause,
         span: Span,
@@ -205,6 +222,7 @@ impl Wants {
         self.push(Constraint::Projection(Projection {
             node_id,
             base,
+            protocol_id,
             label,
             result,
             cause,

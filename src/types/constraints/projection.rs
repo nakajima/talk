@@ -1,13 +1,14 @@
 use crate::{
     ast::AST,
     label::Label,
-    name_resolution::name_resolver::NameResolved,
+    name_resolution::{name_resolver::NameResolved, symbol::ProtocolId},
     node_id::NodeID,
     span::Span,
     types::{
         constraints::constraint::ConstraintCause,
         infer_ty::InferTy,
         solve_context::{Solve, SolveContext},
+        type_catalog::ConformanceKey,
         type_error::TypeError,
         type_operations::apply,
         type_session::TypeSession,
@@ -16,6 +17,7 @@ use crate::{
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Projection {
+    pub protocol_id: Option<ProtocolId>,
     pub node_id: NodeID,
     pub base: InferTy,
     pub label: Label,
@@ -34,26 +36,26 @@ impl Projection {
         let base = apply(self.base.clone(), &mut context.substitutions);
         let result = apply(self.result.clone(), &mut context.substitutions);
 
-        println!(
-            "Solve projection: {base:?}.{:?}, result: {result:?}",
-            self.label
-        );
         // Try to reduce when base is a concrete nominal
         if let InferTy::Nominal {
             symbol: base_sym, ..
         } = base
         {
+            let conformance = if let Some(protocol_id) = self.protocol_id {
+                session.type_catalog.conformances.get(&ConformanceKey {
+                    protocol_id, // add this field to Projection (see below)
+                    conforming_id: base_sym,
+                })
+            } else {
+                session
+                    .type_catalog
+                    .conformances
+                    .values()
+                    .find(|c| c.conforming_id == base_sym)
+            };
+
             // Find a conformance for the nominal base that mentions this associated label
-            if let Some(conf) = session
-                .type_catalog
-                .conformances
-                .values()
-                .find(|c| c.conforming_id == base_sym)
-            {
-                println!(
-                    "looking up alias: base_sym: {base:?}, child types: {:?}",
-                    ast.phase.child_types.get(&base_sym)
-                );
+            if let Some(conf) = conformance {
                 // Prefer the alias symbol (if the nominal actually provided `typealias T = ...`)
                 if let Some(alias_sym) = ast
                     .phase

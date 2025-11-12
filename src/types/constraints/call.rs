@@ -7,7 +7,7 @@ use crate::{
         solve_context::SolveContext,
         term_environment::EnvEntry,
         type_error::TypeError,
-        type_operations::{curry, unify},
+        type_operations::{apply, curry, unify},
         type_session::TypeSession,
     },
 };
@@ -31,9 +31,12 @@ impl Call {
         context: &mut SolveContext,
         session: &mut TypeSession,
     ) -> Result<bool, TypeError> {
-        if matches!(&self.callee, InferTy::Var { .. }) {
+        let callee = apply(self.callee.clone(), &mut context.substitutions);
+        let returns = apply(self.returns.clone(), &mut context.substitutions);
+
+        if matches!(&callee, InferTy::Var { .. }) {
             tracing::trace!(
-                "unable to determine callee type: {:?}, substitutions: {context:?}",
+                "unable to determine callee type: {:?}, substitutions: {returns:?}",
                 self.callee
             );
             // We don't know the callee yet, defer
@@ -46,8 +49,7 @@ impl Call {
         match &self.callee {
             InferTy::Constructor { name, .. } => {
                 let Some(returns_type_entry) = session.lookup(&name.symbol()) else {
-                    tracing::trace!("no type found for {name:?}, deferring");
-                    context.wants.push(Constraint::Call(self.clone()));
+                    context.wants.defer(Constraint::Call(self.clone()));
                     return Ok(false);
                 };
                 let returns_type =

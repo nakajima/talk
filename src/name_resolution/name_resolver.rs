@@ -456,6 +456,7 @@ impl NameResolver {
             PatternKind::Bind(name) => *name = self.lookup(name, None).unwrap(),
             PatternKind::Variant {
                 enum_name: Some(enum_name),
+                fields,
                 ..
             } => {
                 let Some(resolved) = self.lookup(enum_name, None) else {
@@ -467,6 +468,19 @@ impl NameResolver {
                 };
 
                 *enum_name = resolved;
+
+                for field in fields {
+                    self.enter_pattern(field);
+                }
+            }
+            PatternKind::Variant {
+                enum_name: None,
+                fields,
+                ..
+            } => {
+                for field in fields {
+                    self.enter_pattern(field);
+                }
             }
             PatternKind::Tuple(patterns) => {
                 for pattern in patterns.iter_mut() {
