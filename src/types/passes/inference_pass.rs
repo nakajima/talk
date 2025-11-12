@@ -37,14 +37,14 @@ use crate::{
         constraints::{constraint::ConstraintCause, member::consume_self},
         infer_row::{InferRow, RowMetaId},
         infer_ty::{InferTy, Level, Meta, MetaVarId, TypeParamId},
-        passes::uncurry_function,
         predicate::Predicate,
         scheme::{ForAll, Scheme},
         solve_context::{Solve, SolveContext, SolveContextKind},
         term_environment::EnvEntry,
         type_catalog::{Conformance, ConformanceKey},
         type_operations::{
-            InstantiationSubstitutions, UnificationSubstitutions, apply, curry, substitute,
+            InstantiationSubstitutions, UnificationSubstitutions, apply, curry, instantiate_ty,
+            substitute,
         },
         type_session::{TypeDefKind, TypeSession},
         wants::Wants,
@@ -260,7 +260,7 @@ impl<'a> InferencePass<'a> {
 
             context.wants_mut().equals(
                 protocol_self_meta.clone(),
-                conforming_self,
+                conforming_self.clone(),
                 ConstraintCause::Internal,
                 conformance.span,
             );
@@ -286,6 +286,8 @@ impl<'a> InferencePass<'a> {
                 let concrete = if let Some(conforming) = conforming_children.get(child_sym.0)
                     && let Some(concrete) = self.session.lookup(conforming)
                 {
+                    println!("instantiating concrete: {:?}", context.instantiations);
+                    println!("conformance node id: {:?}", conformance.node_id);
                     concrete.instantiate(
                         conformance.node_id,
                         &mut context,
@@ -297,13 +299,23 @@ impl<'a> InferencePass<'a> {
                     ty.clone()
                 };
 
+                println!("{child_sym:?} concrete is {concrete:?}");
+
                 associated_substitutions.insert(
                     InferTy::Projection {
                         base: protocol_self_meta.clone().into(),
                         associated: child_sym.0.clone(),
                         protocol_id: key.protocol_id,
                     },
+                    concrete.clone(),
+                );
+                context.wants_mut().projection(
+                    conformance.node_id,
+                    conforming_self.clone(),
+                    child_sym.0.clone(),
                     concrete,
+                    ConstraintCause::Internal,
+                    conformance.span,
                 );
             }
 
@@ -366,6 +378,29 @@ impl<'a> InferencePass<'a> {
 
             solver.solve(self.session);
             self.substitutions.extend(&context.substitutions);
+            self.session.apply(&mut context.substitutions);
+
+            // Rewrite the conformance's associated_types using the solution,
+            // so later Projection(Self.T) sees the *solved* witness type.
+            let Some(conf_mut) = self.session.type_catalog.conformances.get_mut(key) else {
+                unreachable!()
+            };
+
+            for (k, ty) in conf_mut.associated_types.iter_mut() {
+                *ty = apply(ty.clone(), &mut context.substitutions);
+                println!(
+                    "applying associated type {k}., node id: {:?} before: {ty:?}, {:?}",
+                    conformance.node_id, context.instantiations
+                );
+                *ty = instantiate_ty(
+                    conformance.node_id,
+                    ty.clone(),
+                    &context.instantiations,
+                    context.level(),
+                );
+
+                println!("  after: {ty:?}");
+            }
         }
     }
 
@@ -740,15 +775,31 @@ impl<'a> InferencePass<'a> {
                         ),
                     ));
                 }
-                DeclKind::TypeAlias(lhs, rhs) => {
-                    let lhs_ty = self.visit_type_annotation(lhs, context);
+                DeclKind::TypeAlias(lhs, .., rhs) => {
                     let rhs_ty = self.visit_type_annotation(rhs, context);
-                    context.wants_mut().equals(
-                        lhs_ty,
-                        rhs_ty,
-                        ConstraintCause::Annotation(decl.id),
-                        decl.span,
-                    );
+
+                    // Quantify over the enclosing nominal's generics so the alias can be
+                    // instantiated at use sites (e.g., Person<A>.T = A ⇒ T specializes to α).
+                    let mut foralls: IndexSet<ForAll> = IndexSet::new();
+                    for g in generics {
+                        if let Some(entry) = self.session.lookup(&g.name.symbol())
+                            && let InferTy::Param(pid) = entry._as_ty()
+                        {
+                            foralls.insert(ForAll::Ty(pid));
+                        }
+                    }
+
+                    let entry = if foralls.is_empty() {
+                        EnvEntry::Mono(rhs_ty)
+                    } else {
+                        EnvEntry::Scheme(Scheme {
+                            ty: rhs_ty,
+                            foralls,
+                            predicates: Default::default(),
+                        })
+                    };
+
+                    self.session.insert_term(lhs.symbol(), entry);
                 }
                 _ => todo!("{:?}", decl.kind),
             }
@@ -808,7 +859,18 @@ impl<'a> InferencePass<'a> {
                 .unwrap_or_default()
                 .iter()
                 .fold(FxHashMap::default(), |mut acc, (label, _)| {
-                    acc.insert(label.clone(), self.session.new_ty_meta_var(context.level()));
+                    let child_types = self.ast.phase.child_types.get(&nominal_symbol).cloned();
+                    let associated_ty = if let Some(child_types) = &child_types
+                        && let Some(child_sym) = child_types.get(label)
+                    {
+                        println!("got a child sym: {child_sym:?}");
+                        self.session.lookup(child_sym).unwrap()._as_ty()
+                    } else {
+                        println!("did not get a chid for {name:?}.{label:?} {child_types:?}");
+                        self.session.new_ty_meta_var(context.level())
+                    };
+
+                    acc.insert(label.clone(), associated_ty);
                     acc
                 });
 
@@ -983,7 +1045,7 @@ impl<'a> InferencePass<'a> {
         InferTy::Record(Box::new(row))
     }
 
-    #[instrument(level = tracing::Level::TRACE, skip(self, context))]
+    #[instrument(level = tracing::Level::TRACE, skip(self, context, func))]
     fn visit_method(
         &mut self,
         owner_symbol: Symbol,
@@ -1428,8 +1490,10 @@ impl<'a> InferencePass<'a> {
         let mut params = self.visit_params(&func.params, context);
 
         let ret = if let Some(ret) = &func.ret {
+            println!("ret is type annotation");
             self.visit_type_annotation(ret, context)
         } else {
+            println!("ret is new meta: {func:?}");
             self.session.new_ty_meta_var(context.level())
         };
 
@@ -1646,14 +1710,31 @@ impl<'a> InferencePass<'a> {
                     .map(|t| self.visit_type_annotation(t, context))
                     .collect_vec();
                 let ret = self.session.new_ty_meta_var(context.level());
-                context.wants_mut().type_member(
-                    base_ty,
-                    member.clone(),
-                    generics,
-                    ret.clone(),
-                    type_annotation.id,
-                    type_annotation.span,
-                );
+
+                if matches!(base.symbol(), Symbol::TypeParameter(..)) {
+                    println!(
+                        "base symbol: {:?}, base_ty: {base_ty:?}, ret: {ret:?}",
+                        base.symbol()
+                    );
+                    context.wants_mut().projection(
+                        type_annotation.id,
+                        base_ty,
+                        member.clone(),
+                        ret.clone(),
+                        ConstraintCause::Annotation(type_annotation.id),
+                        type_annotation.span,
+                    );
+                } else {
+                    context.wants_mut().type_member(
+                        base_ty,
+                        member.clone(),
+                        generics,
+                        ret.clone(),
+                        type_annotation.id,
+                        type_annotation.span,
+                    );
+                }
+
                 ret
             }
             _ => todo!("{type_annotation:?}"),

@@ -342,7 +342,7 @@ impl<'a> Formatter<'a> {
             DeclKind::EnumVariant(name, .., types) => self.format_enum_variant(name, types),
             DeclKind::FuncSignature(sig) => self.format_func_signature(sig),
             DeclKind::MethodRequirement(sig) => self.format_func_signature(sig),
-            DeclKind::TypeAlias(lhs, rhs) => self.format_type_alias(lhs, rhs),
+            DeclKind::TypeAlias(lhs, .., rhs) => self.format_type_alias(lhs, rhs),
         };
 
         self.decorators
@@ -350,14 +350,11 @@ impl<'a> Formatter<'a> {
             .fold(doc, |acc, decorator| decorator.wrap_decl(decl, acc))
     }
 
-    fn format_type_alias(&self, lhs: &TypeAnnotation, rhs: &TypeAnnotation) -> Doc {
+    fn format_type_alias(&self, lhs: &Name, rhs: &TypeAnnotation) -> Doc {
         concat_space(
             text("type"),
             join(
-                vec![
-                    self.format_type_annotation(lhs),
-                    self.format_type_annotation(rhs),
-                ],
+                vec![self.format_name(lhs), self.format_type_annotation(rhs)],
                 text("="),
             ),
         )

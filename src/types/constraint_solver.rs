@@ -53,7 +53,7 @@ impl<'a> ConstraintSolver<'a> {
                         type_member.solve(self.context, session, self.ast)
                     }
                     Constraint::Projection(ref projection) => {
-                        projection.solve(self.context, session)
+                        projection.solve(self.ast, self.context, session)
                     }
                 };
 

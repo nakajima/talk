@@ -555,14 +555,8 @@ pub mod tests {
         assert_eq!(
             *resolved.roots[0].as_decl(),
             any_decl!(DeclKind::TypeAlias(
-                annotation!(TypeAnnotationKind::Nominal {
-                    name: Name::Resolved(
-                        Symbol::TypeAlias(TypeAliasId::from(1)),
-                        "Intyfresh".into()
-                    ),
-                    name_span: Span::ANY,
-                    generics: vec![]
-                }),
+                Name::Resolved(Symbol::TypeAlias(TypeAliasId::from(1)), "Intyfresh".into()),
+                Span::ANY,
                 annotation!(TypeAnnotationKind::Nominal {
                     name: Name::Resolved(Symbol::Int, "Int".into()),
                     name_span: Span::ANY,

@@ -206,7 +206,7 @@ impl<'a> Parser<'a> {
     fn typealias(&mut self) -> Result<Decl, ParserError> {
         let tok = self.push_source_location();
         self.consume(TokenKind::Typealias)?;
-        let lhs = self.type_annotation()?;
+        let (lhs, lhs_span) = self.identifier()?;
         self.consume(TokenKind::Equals)?;
         let rhs = self.type_annotation()?;
         let (id, span) = self.save_meta(tok)?;
@@ -214,7 +214,7 @@ impl<'a> Parser<'a> {
         Ok(Decl {
             id,
             span,
-            kind: DeclKind::TypeAlias(lhs, rhs),
+            kind: DeclKind::TypeAlias(lhs.into(), lhs_span, rhs),
         })
     }
 

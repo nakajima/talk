@@ -8,10 +8,7 @@ use crate::{
     node_id::NodeID,
     span::Span,
     types::{
-        constraints::{
-            constraint::{Constraint, ConstraintCause},
-            projection::Projection,
-        },
+        constraints::constraint::{Constraint, ConstraintCause},
         infer_row::InferRow,
         infer_ty::{InferTy, TypeParamId},
         passes::uncurry_function,
@@ -115,36 +112,6 @@ impl Member {
                 candidates.push(protocol_id);
             };
         }
-
-        // // after instantiating the requirement scheme:
-        // let req_ty = requirement_entry.instantiate(node_id, context, self.session, span);
-
-        // // peel off self: func(Self) -> Ret  ==>  (Self, func(Void) -> Ret)
-        // let (req_self_ty, consumed_fun) = consume_self(&req_ty);
-        // let ret_ty = consumed_fun.ret_ty().clone(); // however you fetch the return
-
-        // // 1) Self must match the receiver
-        // context.wants_mut().equals(
-        //     req_self_ty.clone(),
-        //     receiver.clone(),
-        //     ConstraintCause::Internal,
-        //     span,
-        // );
-
-        // // 2) The *associated type result* is the method's *return*:
-        // context.wants_mut().projection(
-        //     node_id,
-        //     receiver.clone(),
-        //     label.clone(),  // "T"
-        //     ret_ty.clone(), // <-- use the return, not the member var
-        //     ConstraintCause::Member(node_id),
-        //     span,
-        // );
-
-        // // 3) The *member expression* denotes the consumed function value:
-        // context
-        //     .wants_mut()
-        //     .equals(member_ty_var, consumed_fun, ConstraintCause::Internal, span);
 
         for candidate in candidates {
             if let Some((req, _source)) = session.lookup_member(&candidate.into(), &self.label) {

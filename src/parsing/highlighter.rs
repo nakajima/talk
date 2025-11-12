@@ -298,8 +298,8 @@ impl<'a> Higlighter<'a> {
                 DeclKind::MethodRequirement(func_signature) => {
                     result.extend(self.tokens_from_expr(func_signature, ast));
                 }
-                DeclKind::TypeAlias(lhs, rhs) => {
-                    result.extend(self.tokens_from_expr(lhs, ast));
+                DeclKind::TypeAlias(.., lhs_span, rhs) => {
+                    result.push(self.make_span(Kind::TYPE, *lhs_span));
                     result.extend(self.tokens_from_expr(rhs, ast));
                 }
             },

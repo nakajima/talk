@@ -1,5 +1,7 @@
 use crate::{
+    ast::AST,
     label::Label,
+    name_resolution::name_resolver::NameResolved,
     node_id::NodeID,
     span::Span,
     types::{
@@ -25,39 +27,87 @@ pub struct Projection {
 impl Projection {
     pub fn solve(
         &self,
+        ast: &AST<NameResolved>,
         context: &mut SolveContext,
         session: &mut TypeSession,
     ) -> Result<bool, TypeError> {
         let base = apply(self.base.clone(), &mut context.substitutions);
         let result = apply(self.result.clone(), &mut context.substitutions);
 
+        println!(
+            "Solve projection: {base:?}.{:?}, result: {result:?}",
+            self.label
+        );
         // Try to reduce when base is a concrete nominal
         if let InferTy::Nominal {
             symbol: base_sym, ..
         } = base
         {
-            // Find conformance for this base that defines label p.label
-            if let Some(conformance) = session
+            // Find a conformance for the nominal base that mentions this associated label
+            if let Some(conf) = session
                 .type_catalog
                 .conformances
                 .values()
-                .find(|conf| {
-                    conf.conforming_id == base_sym
-                        && conf.associated_types.contains_key(&self.label)
-                })
-                .cloned()
+                .find(|c| c.conforming_id == base_sym)
             {
-                // Get the concrete associated type into this context
-                let concrete = conformance.associated_types.get(&self.label).unwrap();
-
-                // result must equal the concrete witness type
-                context.wants_mut().equals(
-                    result,
-                    concrete.clone(),
-                    ConstraintCause::Internal,
-                    self.span,
+                println!(
+                    "looking up alias: base_sym: {base:?}, child types: {:?}",
+                    ast.phase.child_types.get(&base_sym)
                 );
-                return Ok(true);
+                // Prefer the alias symbol (if the nominal actually provided `typealias T = ...`)
+                if let Some(alias_sym) = ast
+                    .phase
+                    .child_types
+                    .get(&base_sym)
+                    .and_then(|t| t.get(&self.label))
+                    .cloned()
+                {
+                    // Instantiate the nominal TYPE scheme at this projection node id.
+                    // This yields Type(@Struct(base_sym), row metas_for_A, ...)
+                    let nominal_entry = session.lookup(&base_sym).expect("nominal env entry");
+                    let nominal_inst =
+                        nominal_entry.instantiate(self.node_id, context, session, self.span);
+
+                    // Force the base we're projecting from to be "this" instantiation,
+                    // so the metas_for_A unify with the actual arguments (Float/Int).
+                    context.wants_mut().equals(
+                        base.clone(),
+                        nominal_inst,
+                        ConstraintCause::Internal,
+                        self.span,
+                    );
+
+                    // Instantiate the alias SCHEME at the SAME node id.
+                    // This reuses the exact same TypeParamId -> meta mapping as the nominal above.
+                    let alias_entry = session.lookup(&alias_sym).expect("alias env entry");
+                    let alias_inst =
+                        alias_entry.instantiate(self.node_id, context, session, self.span);
+
+                    // Self.T must equal the instantiated alias.
+                    context.wants_mut().equals(
+                        result.clone(),
+                        alias_inst,
+                        ConstraintCause::Internal,
+                        self.span,
+                    );
+
+                    return Ok(true);
+                }
+
+                // Fallback: no alias symbol recorded; if a concrete (non-param) witness
+                // was recorded for this conformance, equate to it. Otherwise leave unsolved.
+                if let Some(witness) = conf.associated_types.get(&self.label) {
+                    let witness = apply(witness.clone(), &mut context.substitutions);
+                    if !matches!(witness, InferTy::Param(_)) {
+                        context.wants_mut().equals(
+                            result,
+                            witness,
+                            ConstraintCause::Internal,
+                            self.span,
+                        );
+                        return Ok(true);
+                    }
+                }
             }
         }
 

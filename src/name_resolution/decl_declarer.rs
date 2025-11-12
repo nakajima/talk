@@ -475,36 +475,18 @@ impl<'a> DeclDeclarer<'a> {
             self.enter_nominal(decl.id, name, generics, TypeDefKind::Protocol);
         });
 
-        on!(
-            &mut decl.kind,
-            DeclKind::TypeAlias(
-                TypeAnnotation {
-                    kind: TypeAnnotationKind::Nominal {
-                        name: lhs_name,
-                        generics: lhs_generics,
-                        ..
-                    },
-                    ..
-                },
-                ..
-            ),
-            {
-                if !lhs_generics.is_empty() {
-                    panic!("can't define a typealias with generics");
-                }
+        on!(&mut decl.kind, DeclKind::TypeAlias(lhs_name, ..), {
+            *lhs_name = self.resolver.declare(lhs_name, some!(TypeAlias), decl.id);
 
-                *lhs_name = self.resolver.declare(lhs_name, some!(TypeAlias), decl.id);
-
-                if let Some(parent) = self.resolver.nominal_stack.last() {
-                    self.resolver
-                        .phase
-                        .child_types
-                        .entry(*parent)
-                        .or_default()
-                        .insert(lhs_name.name_str().into(), lhs_name.symbol());
-                }
+            if let Some(parent) = self.resolver.nominal_stack.last() {
+                self.resolver
+                    .phase
+                    .child_types
+                    .entry(*parent)
+                    .or_default()
+                    .insert(lhs_name.name_str().into(), lhs_name.symbol());
             }
-        );
+        });
 
         on!(&mut decl.kind, DeclKind::Extend { generics, .. }, {
             self.start_scope(None, decl.id, false);

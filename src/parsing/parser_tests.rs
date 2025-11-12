@@ -2116,11 +2116,8 @@ pub mod tests {
         assert_eq!(
             *parsed.roots[0].as_decl(),
             any_decl!(DeclKind::TypeAlias(
-                annotation!(TypeAnnotationKind::Nominal {
-                    name: "Foo".into(),
-                    name_span: Span::ANY,
-                    generics: vec![]
-                }),
+                "Foo".into(),
+                Span::ANY,
                 annotation!(TypeAnnotationKind::Nominal {
                     name: "Bar".into(),
                     name_span: Span::ANY,
@@ -2145,11 +2142,8 @@ pub mod tests {
         assert_eq!(
             *parsed.roots[0].as_decl(),
             any_decl!(DeclKind::TypeAlias(
-                annotation!(TypeAnnotationKind::Nominal {
-                    name: "Foo".into(),
-                    name_span: Span::ANY,
-                    generics: vec![]
-                }),
+                "Foo".into(),
+                Span::ANY,
                 annotation!(TypeAnnotationKind::NominalPath {
                     base: annotation!(TypeAnnotationKind::Nominal {
                         name: "Fizz".into(),
