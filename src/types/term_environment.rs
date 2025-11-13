@@ -95,7 +95,19 @@ impl<T: SomeType> EnvEntry<T> {
 impl EnvEntry<InferTy> {
     pub fn apply(&self, substitutions: &mut UnificationSubstitutions) -> Self {
         match self.clone() {
-            EnvEntry::Mono(ty) => EnvEntry::Mono(apply(ty, substitutions)),
+            EnvEntry::Mono(ty) => {
+                let ty = apply(ty, substitutions);
+                let foralls = ty.collect_foralls();
+                if foralls.is_empty() {
+                    EnvEntry::Mono(ty)
+                } else {
+                    EnvEntry::Scheme(Scheme {
+                        ty,
+                        foralls,
+                        predicates: Default::default(),
+                    })
+                }
+            }
             EnvEntry::Scheme(scheme) => EnvEntry::Scheme(Scheme {
                 foralls: scheme.foralls,
                 predicates: scheme

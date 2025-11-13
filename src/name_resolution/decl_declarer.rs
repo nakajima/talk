@@ -202,10 +202,10 @@ impl<'a> DeclDeclarer<'a> {
     }
 
     #[instrument(skip(self), fields(level = ?self.resolver.current_level))]
-    pub fn start_scope(&mut self, symbol: Option<Symbol>, id: NodeID, bump_level: bool) {
+    pub fn start_scope(&mut self, binder: Option<Symbol>, id: NodeID, bump_level: bool) {
         let parent_id = self.resolver.current_scope_id;
         let scope = Scope::new(
-            symbol,
+            binder,
             if bump_level {
                 self.resolver.current_level.next()
             } else {
@@ -280,7 +280,11 @@ impl<'a> DeclDeclarer<'a> {
                 }
             }
             PatternKind::Struct { .. } => todo!(),
-            PatternKind::Tuple(_) => todo!(),
+            PatternKind::Tuple(values) => {
+                for value in values {
+                    self.declare_pattern(value, bind_type);
+                }
+            }
             PatternKind::Wildcard => (),
             PatternKind::LiteralFalse
             | PatternKind::LiteralTrue
@@ -584,11 +588,9 @@ impl<'a> DeclDeclarer<'a> {
 
         on!(&mut decl.kind, DeclKind::Let { lhs, .. }, {
             self.declare_pattern(lhs, some!(DeclaredLocal));
-            let binder_symbol = match &lhs.kind {
-                PatternKind::Bind(name) => Some(name.symbol()),
-                _ => None,
-            };
-            self.start_scope(binder_symbol, decl.id, true);
+            for (id, binder) in lhs.collect_binders() {
+                self.start_scope(Some(binder), id, true);
+            }
         });
     }
 
@@ -619,12 +621,17 @@ impl<'a> DeclDeclarer<'a> {
             DeclKind::Protocol { .. }
                 | DeclKind::Enum { .. }
                 | DeclKind::Extend { .. }
-                | DeclKind::Let { .. }
                 | DeclKind::Init { .. },
             {
                 self.end_scope();
             }
         );
+
+        on!(&mut decl.kind, DeclKind::Let { lhs, .. }, {
+            for _ in lhs.collect_binders() {
+                self.end_scope();
+            }
+        });
 
         on!(
             &mut decl.kind,

@@ -242,10 +242,12 @@ impl InferTy {
         }
     }
 
-    pub fn collect_foralls(&self) -> Vec<ForAll> {
-        let mut result = vec![];
+    pub fn collect_foralls(&self) -> IndexSet<ForAll> {
+        let mut result: IndexSet<ForAll> = Default::default();
         match self {
-            InferTy::Param(id) => result.push(ForAll::Ty(*id)),
+            InferTy::Param(id) => {
+                result.insert(ForAll::Ty(*id));
+            }
             InferTy::Rigid(..) => (),
             InferTy::Var { .. } => (),
             InferTy::Primitive(..) => (),

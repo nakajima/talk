@@ -211,7 +211,10 @@ impl<'a> InferencePass<'a> {
                             func_signature,
                             &mut context,
                         );
-                        binders.insert(func_signature.name.symbol(), ty);
+
+                        binders.insert(func_signature.name.symbol(), ty.clone());
+
+                        self.session.insert(func_signature.name.symbol(), ty);
                         self.session
                             .type_catalog
                             .method_requirements
@@ -331,14 +334,17 @@ impl<'a> InferencePass<'a> {
 
             let requirements = self
                 .session
-                .type_catalog
-                .method_requirements
-                .get(&key.protocol_id.into())
-                .unwrap();
+                .lookup_method_requirements(&key.protocol_id)
+                .unwrap_or_else(|| {
+                    panic!("did not find method requirements for {:?}", key.protocol_id)
+                });
 
             for (label, sym) in requirements.clone() {
                 tracing::trace!("checking req {label:?} {sym:?}");
-                let requirement_entry = self.session.lookup(&sym).unwrap();
+                let requirement_entry = self
+                    .session
+                    .lookup(&sym)
+                    .unwrap_or_else(|| panic!("did not find requirement entry: {sym:?}"));
                 let witness_entry_sym = self
                     .session
                     .type_catalog
@@ -410,6 +416,7 @@ impl<'a> InferencePass<'a> {
     }
 
     fn generate(&mut self) {
+        println!("groups: {:?}", self.ast.phase.scc_graph.groups());
         for group in self.ast.phase.scc_graph.groups() {
             self.generate_for_group(group);
         }
@@ -1093,6 +1100,33 @@ impl<'a> InferencePass<'a> {
                         ),
                     ));
                 }
+                DeclKind::TypeAlias(lhs, .., rhs) => {
+                    let rhs_ty = self.visit_type_annotation(rhs, context);
+
+                    // Quantify over the enclosing nominal's generics so the alias can be
+                    // instantiated at use sites (e.g., Person<A>.T = A ⇒ T specializes to α).
+                    let mut foralls: IndexSet<ForAll> = IndexSet::new();
+                    for g in generics {
+                        if let Some(entry) = self.session.lookup(&g.name.symbol())
+                            && let InferTy::Param(pid) = entry._as_ty()
+                        {
+                            foralls.insert(ForAll::Ty(pid));
+                        }
+                    }
+
+                    let entry = if foralls.is_empty() {
+                        EnvEntry::Mono(rhs_ty)
+                    } else {
+                        EnvEntry::Scheme(Scheme {
+                            ty: rhs_ty,
+                            foralls,
+                            predicates: Default::default(),
+                        })
+                    };
+
+                    self.session.insert_term(lhs.symbol(), entry);
+                }
+
                 _ => todo!("{:?}", decl.kind),
             }
         }
@@ -1884,6 +1918,32 @@ impl<'a> InferencePass<'a> {
                 self.session.insert_term(name.symbol(), ty.to_entry());
             }
             PatternKind::Record { .. } => todo!(),
+            PatternKind::Tuple(items) => {
+                let vars = items
+                    .iter()
+                    .map(|_| self.session.new_ty_meta_var_id(context.level().next()))
+                    .collect_vec();
+                let expected = InferTy::Tuple(
+                    vars.iter()
+                        .map(|id| InferTy::Var {
+                            id: *id,
+                            level: context.level().next(),
+                        })
+                        .collect_vec(),
+                );
+                self.check_pattern(lhs, &expected, &mut context.next());
+                for (sym, var) in lhs.collect_binders().iter().zip(vars) {
+                    self.generalization_blocks
+                        .insert(var, GeneralizationBlock::PatternBindLocal);
+                    self.session.insert_mono(
+                        sym.1,
+                        InferTy::Var {
+                            id: var,
+                            level: context.level().next(),
+                        },
+                    );
+                }
+            }
             _ => todo!(),
         };
 

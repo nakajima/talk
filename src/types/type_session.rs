@@ -716,6 +716,34 @@ impl TypeSession {
         self.type_catalog.conformances.clone()
     }
 
+    pub(super) fn lookup_method_requirements(
+        &self,
+        protocol_id: &ProtocolId,
+    ) -> Option<IndexMap<Label, Symbol>> {
+        if let Some(reqs) = self
+            .type_catalog
+            .method_requirements
+            .get(&protocol_id.into())
+            .cloned()
+        {
+            return Some(reqs);
+        }
+
+        for module in self.modules.modules.values() {
+            if let Some(reqs) = module
+                .types
+                .catalogold
+                .method_requirements
+                .get(&protocol_id.into())
+                .cloned()
+            {
+                return Some(reqs);
+            }
+        }
+
+        None
+    }
+
     pub(super) fn _lookup_conformance_mut(
         &mut self,
         key: &ConformanceKey,

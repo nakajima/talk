@@ -666,20 +666,12 @@ impl NameResolver {
             self.enter_scope(decl.id, None);
         });
 
-        on!(
-            &decl.kind,
-            DeclKind::Let {
-                lhs: Pattern {
-                    kind: PatternKind::Bind(name),
-                    ..
-                },
-                ..
-            },
-            {
-                self.current_level = self.current_level.next();
-                self.enter_scope(decl.id, Some((name.symbol(), decl.id)));
+        on!(&decl.kind, DeclKind::Let { lhs, .. }, {
+            self.current_level = self.current_level.next();
+            for (id, binder) in lhs.collect_binders() {
+                self.enter_scope(id, Some((binder, decl.id)));
             }
-        );
+        });
     }
 
     fn exit_decl(&mut self, decl: &mut Decl) {
@@ -690,18 +682,17 @@ impl NameResolver {
                 | DeclKind::Protocol { .. }
                 | DeclKind::Extend { .. }
                 | DeclKind::Method { .. }
-                | DeclKind::Init { .. }
-                | DeclKind::Let {
-                    lhs: Pattern {
-                        kind: PatternKind::Bind(..),
-                        ..
-                    },
-                    ..
-                },
+                | DeclKind::Init { .. },
             {
                 self.exit_scope(decl.id);
             }
         );
+
+        on!(&decl.kind, DeclKind::Let { lhs, .. }, {
+            for (id, _binder) in lhs.collect_binders() {
+                self.exit_scope(id);
+            }
+        });
 
         on!(decl.kind, DeclKind::Let { .. }, {
             self.current_level = self.current_level.prev();

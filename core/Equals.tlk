@@ -1,8 +1,10 @@
 protocol Equals {
   associated RHS
-  associated Ret
 
   func equals(rhs: RHS) -> Bool
+	func notEquals(rhs: RHS) -> Bool {
+		true
+	}
 }
 
 extend Int: Equals {

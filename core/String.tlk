@@ -1,12 +1,12 @@
 struct String {}
 
-extend String: Add<String, String> {
+extend String: Add {
   func add(rhs: String) -> String {
     self
   }
 }
 
-extend String: Equatable<String> {
+extend String: Equals {
   func equals(rhs: String) -> Bool {
     false
   }

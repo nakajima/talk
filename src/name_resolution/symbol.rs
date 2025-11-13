@@ -198,13 +198,17 @@ impl Symbol {
             | Symbol::Property(PropertyId { module_id, .. })
             | Symbol::Synthesized(SynthesizedId { module_id, .. })
             | Symbol::InstanceMethod(InstanceMethodId { module_id, .. })
+            | Symbol::MethodRequirement(MethodRequirementId { module_id, .. })
             | Symbol::Initializer(InitializerId { module_id, .. })
             | Symbol::StaticMethod(StaticMethodId { module_id, .. })
             | Symbol::Variant(VariantId { module_id, .. })
             | Symbol::Protocol(ProtocolId { module_id, .. })
             | Symbol::AssociatedType(AssociatedTypeId { module_id, .. })
             | Symbol::Enum(EnumId { module_id, .. }) => module_id,
-            _ => return None,
+            _ => {
+                tracing::warn!("looking up module id for non-module symbol: {self:?}");
+                return None;
+            }
         };
 
         match module_id {

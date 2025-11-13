@@ -122,7 +122,7 @@ pub mod tests {
 
     #[test]
     fn types_string_concat() {
-        let (ast, types) = typecheck("\"hello\" + \"world\"");
+        let (ast, types) = typecheck_core("\"hello\" + \"world\"");
         assert_eq!(ty(0, &ast, &types), Ty::String());
     }
 
@@ -2080,8 +2080,6 @@ pub mod tests {
         struct B {}
         struct C {}
         extend A: Add {
-            typealias RHS = B
-            typealias Ret = C
             func add(rhs: B) -> C {
                 C()
             }

@@ -1,6 +1,9 @@
 use derive_visitor::{Drive, DriveMut};
 
-use crate::{impl_into_node, name::Name, node::Node, node_id::NodeID, parsing::span::Span};
+use crate::{
+    impl_into_node, name::Name, name_resolution::symbol::Symbol, node::Node, node_id::NodeID,
+    parsing::span::Span,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq, Drive, DriveMut)]
 pub enum RecordFieldPatternKind {
@@ -73,6 +76,45 @@ pub struct Pattern {
     pub kind: PatternKind,
     #[drive(skip)]
     pub span: Span,
+}
+
+impl Pattern {
+    pub fn collect_binders(&self) -> Vec<(NodeID, Symbol)> {
+        let mut result = vec![];
+        match &self.kind {
+            PatternKind::LiteralInt(_) => (),
+            PatternKind::LiteralFloat(_) => (),
+            PatternKind::LiteralTrue => (),
+            PatternKind::LiteralFalse => (),
+            PatternKind::Bind(name) => result.push((self.id, name.symbol())),
+            PatternKind::Tuple(patterns) => {
+                for pattern in patterns {
+                    result.extend(pattern.collect_binders());
+                }
+            }
+            PatternKind::Wildcard => (),
+            PatternKind::Variant { fields, .. } => {
+                for pattern in fields {
+                    result.extend(pattern.collect_binders());
+                }
+            }
+            PatternKind::Record { fields } => {
+                for field in fields {
+                    match &field.kind {
+                        RecordFieldPatternKind::Bind(name) => {
+                            result.push((field.id, name.symbol()))
+                        }
+                        RecordFieldPatternKind::Equals { value, .. } => {
+                            result.extend(value.collect_binders())
+                        }
+                        RecordFieldPatternKind::Rest => (),
+                    }
+                }
+            }
+            PatternKind::Struct { .. } => todo!(),
+        }
+        result
+    }
 }
 
 impl_into_node!(Pattern);
