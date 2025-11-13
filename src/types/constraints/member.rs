@@ -136,9 +136,9 @@ impl Member {
         &self,
         context: &mut SolveContext,
         session: &mut TypeSession,
-        symbol: &Symbol,
+        nominal_symbol: &Symbol,
     ) -> Result<bool, TypeError> {
-        let Some(member_sym) = session.lookup_static_member(symbol, &self.label) else {
+        let Some(member_sym) = session.lookup_static_member(nominal_symbol, &self.label) else {
             return Err(TypeError::MemberNotFound(
                 self.receiver.clone(),
                 self.label.to_string(),
@@ -149,7 +149,7 @@ impl Member {
         let mut member_ty = entry.instantiate(self.node_id, context, session, self.span);
 
         if let Symbol::Variant(..) = member_sym {
-            let enum_ty = session.lookup(symbol).unwrap().instantiate(
+            let enum_ty = session.lookup(nominal_symbol).unwrap().instantiate(
                 self.node_id,
                 context,
                 session,

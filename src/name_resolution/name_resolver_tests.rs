@@ -8,7 +8,10 @@ pub mod tests {
         annotation, any, any_block, any_body, any_decl, any_expr, any_expr_stmt, any_stmt,
         assert_eq_diff,
         ast::AST,
-        compiling::module::{ModuleEnvironment, ModuleId},
+        compiling::{
+            core,
+            module::{ModuleEnvironment, ModuleId},
+        },
         diagnostic::{AnyDiagnostic, Diagnostic},
         fxhashmap,
         label::Label,
@@ -547,6 +550,35 @@ pub mod tests {
                 })]
             })
         );
+    }
+
+    #[test]
+    #[ignore = "requires core"]
+    #[allow(non_snake_case)]
+    fn resolves_Optional() {
+        let resolved = resolve(
+            "
+            Optional.none
+        ",
+        );
+        assert_eq!(
+            *resolved.roots[0].as_stmt(),
+            any_expr_stmt!(ExprKind::Member(
+                Some(
+                    any_expr!(ExprKind::Constructor(Name::Resolved(
+                        EnumId {
+                            local_id: 1,
+                            module_id: ModuleId::Core
+                        }
+                        .into(),
+                        "Optional".into(),
+                    )))
+                    .into()
+                ),
+                "none".into(),
+                Span::ANY,
+            ))
+        )
     }
 
     #[test]

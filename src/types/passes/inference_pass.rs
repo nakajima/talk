@@ -631,7 +631,7 @@ impl<'a> InferencePass<'a> {
             ExprKind::LiteralInt(_) => InferTy::Int,
             ExprKind::LiteralFloat(_) => InferTy::Float,
             ExprKind::LiteralTrue | ExprKind::LiteralFalse => InferTy::Bool,
-            ExprKind::LiteralString(_) => todo!(),
+            ExprKind::LiteralString(_) => InferTy::String(),
             ExprKind::Unary(..) => todo!(),
             ExprKind::Binary(..) => todo!(),
             ExprKind::Tuple(exprs) => InferTy::Tuple(

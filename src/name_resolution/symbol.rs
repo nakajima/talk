@@ -202,7 +202,8 @@ impl Symbol {
             | Symbol::StaticMethod(StaticMethodId { module_id, .. })
             | Symbol::Variant(VariantId { module_id, .. })
             | Symbol::Protocol(ProtocolId { module_id, .. })
-            | Symbol::AssociatedType(AssociatedTypeId { module_id, .. }) => module_id,
+            | Symbol::AssociatedType(AssociatedTypeId { module_id, .. })
+            | Symbol::Enum(EnumId { module_id, .. }) => module_id,
             _ => return None,
         };
 
