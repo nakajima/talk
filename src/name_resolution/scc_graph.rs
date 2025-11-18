@@ -47,7 +47,7 @@ impl SCCGraph {
             .collect()
     }
 
-    pub fn add_node(&mut self, node: Symbol, rhs_id: NodeID, level: Level) -> NodeIndex {
+    pub fn add_definition(&mut self, node: Symbol, rhs_id: NodeID, level: Level) -> NodeIndex {
         #[cfg(debug_assertions)]
         if matches!(node, Symbol::Builtin(..)) {
             panic!("should not have builtin in graph");
@@ -61,7 +61,8 @@ impl SCCGraph {
             {
                 *existing = level;
             }
-            // Update rhs_id if we didn't have one previously for this symbol.
+            // Only set rhs_id if not already set (by a previous definition).
+            // This ensures the first definition wins, which is typically the actual declaration.
             self.rhs_ids.entry(node).or_insert(rhs_id);
             return *idx;
         }
@@ -73,13 +74,32 @@ impl SCCGraph {
         idx
     }
 
+    fn ensure_node(&mut self, node: Symbol, rhs_id: NodeID) -> NodeIndex {
+        #[cfg(debug_assertions)]
+        if matches!(node, Symbol::Builtin(..)) {
+            panic!("should not have builtin in graph");
+        }
+
+        if let Some(idx) = self.idx_map.get(&node) {
+            // Don't update anything for references if node already exists
+            return *idx;
+        }
+
+        // First time seeing this symbol, and it's from a reference (forward reference).
+        // Add the node but don't set rhs_id - let the definition set it later.
+        let idx = self.graph.add_node(node);
+        self.idx_map.insert(node, idx);
+        self.level_map.insert(idx, Level::default());
+        idx
+    }
+
     #[instrument(skip(self))]
     pub fn add_edge(&mut self, from: (Symbol, NodeID), to: (Symbol, NodeID), node_id: NodeID) {
         if from.0 == to.0 {
             return;
         }
-        let from = self.add_node(from.0, from.1, Level::default());
-        let to = self.add_node(to.0, to.1, Level::default());
+        let from = self.ensure_node(from.0, from.1);
+        let to = self.ensure_node(to.0, to.1);
         self.graph.update_edge(from, to, node_id);
     }
 }

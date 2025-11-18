@@ -416,8 +416,12 @@ impl<'a> InferencePass<'a> {
     }
 
     fn generate(&mut self) {
-        println!("groups: {:?}", self.ast.phase.scc_graph.groups());
-        for group in self.ast.phase.scc_graph.groups() {
+        let mut groups = self.ast.phase.scc_graph.groups();
+        // Sort by level in descending order so inner bindings are generalized first
+        // Use stable sort to preserve topological order for groups at the same level
+        groups.sort_by_key(|group| std::cmp::Reverse(group.level.0));
+        println!("groups: {:?}", groups);
+        for group in groups {
             self.generate_for_group(group);
         }
 
@@ -426,6 +430,8 @@ impl<'a> InferencePass<'a> {
             Level::default(),
             SolveContextKind::Normal,
         );
+
+        tracing::debug!("visiting stragglers");
         for id in self.ast.phase.unbound_nodes.clone() {
             let node = self.ast.find(id).unwrap();
             self.visit_node(&node, &mut context);
@@ -478,6 +484,11 @@ impl<'a> InferencePass<'a> {
 
             let rhs_id = self.ast.phase.scc_graph.rhs_id_for(binder);
             let rhs = self.ast.find(*rhs_id).unwrap();
+            match &rhs {
+                Node::Decl(d) => eprintln!("DEBUG: binder={:?}, rhs_id={:?}, rhs=Decl", binder, rhs_id),
+                Node::Expr(e) => eprintln!("DEBUG: binder={:?}, rhs_id={:?}, rhs=Expr({:?})", binder, rhs_id, std::mem::discriminant(&e.kind)),
+                _ => eprintln!("DEBUG: binder={:?}, rhs_id={:?}, rhs=Other", binder, rhs_id),
+            }
             let ty = self.visit_node(&rhs, &mut context);
             context.wants_mut().equals(
                 ty,
@@ -1644,10 +1655,10 @@ impl<'a> InferencePass<'a> {
 
         let ret = if let Some(ret) = &func.ret {
             let ret = self.visit_type_annotation(ret, context);
-            self.check_block(&func.body, ret.clone(), context);
+            self.check_block(&func.body, ret.clone(), &mut context.next());
             ret
         } else {
-            self.infer_block(&func.body, context)
+            self.infer_block(&func.body, &mut context.next())
         };
 
         if params.is_empty() {

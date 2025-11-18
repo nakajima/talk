@@ -334,6 +334,7 @@ impl NameResolver {
 
         if let Some((from_sym, from_id)) = self.current_symbol_scope.iter().rev().find_map(|f| *f) {
             tracing::trace!("track_dependency from {from_sym:?} to {to:?}");
+            eprintln!("DEBUG track_dependency: from {:?} (node {:?}) to {:?} (node {:?})", from_sym, from_id, to, id);
             self.phase
                 .scc_graph
                 .add_edge((from_sym, from_id), (to, id), id);
@@ -362,9 +363,10 @@ impl NameResolver {
                     | Symbol::Protocol(..)
             )
         {
+            eprintln!("DEBUG enter_scope: adding node {:?} with node_id {:?}", symbol.0, symbol.1);
             self.phase
                 .scc_graph
-                .add_node(symbol.0, symbol.1, self.current_level);
+                .add_definition(symbol.0, symbol.1, self.current_level);
         }
     }
 

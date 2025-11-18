@@ -611,7 +611,7 @@ impl TypeSession {
         }
 
         for module in self.modules.modules.values() {
-            if let Some((sym, source)) = module.types.catalogold.lookup_member(receiver, label) {
+            if let Some((sym, source)) = module.types.catalogold.lookup_member(&receiver.current(), label) {
                 match sym {
                     Symbol::InstanceMethod(..) => {
                         self.type_catalog
@@ -671,7 +671,7 @@ impl TypeSession {
             if let Some(sym) = module
                 .types
                 .catalogold
-                .lookup_static_member(receiver, label)
+                .lookup_static_member(&receiver.current(), label)
             {
                 match sym {
                     Symbol::StaticMethod(..) => {
@@ -704,7 +704,7 @@ impl TypeSession {
         }
 
         for module in self.modules.modules.values() {
-            if let Some(variants) = module.types.catalogold.variants.get(receiver).cloned() {
+            if let Some(variants) = module.types.catalogold.variants.get(&receiver.current()).cloned() {
                 return Some(variants);
             }
         }

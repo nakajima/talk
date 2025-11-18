@@ -8,10 +8,7 @@ pub mod tests {
         annotation, any, any_block, any_body, any_decl, any_expr, any_expr_stmt, any_stmt,
         assert_eq_diff,
         ast::AST,
-        compiling::{
-            core,
-            module::{ModuleEnvironment, ModuleId},
-        },
+        compiling::module::{ModuleEnvironment, ModuleId},
         diagnostic::{AnyDiagnostic, Diagnostic},
         fxhashmap,
         label::Label,
@@ -20,9 +17,9 @@ pub mod tests {
             name_resolver::{Capture, NameResolved, NameResolver, NameResolverError},
             symbol::{
                 AssociatedTypeId, BuiltinId, DeclaredLocalId, EnumId, GlobalId, InitializerId,
-                InstanceMethodId, MethodRequirementId, ParamLocalId, PropertyId, ProtocolId,
-                StaticMethodId, StructId, Symbol, SynthesizedId, TypeAliasId, TypeParameterId,
-                VariantId,
+                InstanceMethodId, MethodRequirementId, ParamLocalId, PatternBindLocalId,
+                PropertyId, ProtocolId, StaticMethodId, StructId, Symbol, SynthesizedId,
+                TypeAliasId, TypeParameterId, VariantId,
             },
         },
         node_id::{FileID, NodeID},
@@ -1313,12 +1310,12 @@ pub mod tests {
                         id: NodeID::ANY,
                         span: Span::ANY,
                         kind: PatternKind::Bind(Name::Resolved(
-                            Symbol::DeclaredLocal(DeclaredLocalId(1)),
+                            Symbol::PatternBindLocal(PatternBindLocalId(1)),
                             "b".into()
                         ))
                     },
                     body: any_block!(vec![any_expr_stmt!(ExprKind::Variable(Name::Resolved(
-                        Symbol::DeclaredLocal(DeclaredLocalId(1)),
+                        Symbol::PatternBindLocal(PatternBindLocalId(1)),
                         "b".into()
                     )))])
                 }]

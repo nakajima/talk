@@ -43,6 +43,10 @@ macro_rules! impl_module_symbol_id {
                     return self;
                 }
 
+                if matches!(self.module_id, ModuleId::Core | ModuleId::Builtin) {
+                    return self;
+                }
+
                 Self {
                     module_id,
                     local_id: self.local_id,
@@ -249,6 +253,7 @@ impl Symbol {
     pub fn current(self) -> Symbol {
         match self {
             Symbol::Struct(type_id) => Symbol::Struct(type_id.import(ModuleId::Current)),
+            Symbol::Enum(type_id) => Symbol::Enum(type_id.import(ModuleId::Current)),
             Symbol::Global(global_id) => Symbol::Global(global_id.import(ModuleId::Current)),
             Symbol::Builtin(builtin_id) => Symbol::Builtin(builtin_id.import(ModuleId::Current)),
             Symbol::Property(property_id) => {

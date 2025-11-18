@@ -1486,9 +1486,9 @@ pub mod tests {
         }
 
         let person = Person(age: 123)
-        getAge(person)
+        callNonExisting(person)
 
-        func getAge(aged) {
+        func callNonExisting(aged) {
             aged.getAge()
         }
         ",
