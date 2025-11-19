@@ -170,7 +170,7 @@ pub fn normalize_row(
 impl std::fmt::Debug for InferRow {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            InferRow::Empty(..) => write!(f, "{{}}"),
+            InferRow::Empty(kind) => write!(f, "{{{kind:?}}}"),
             InferRow::Extend { .. } => {
                 write!(f, "{:?}", self.close())
             }

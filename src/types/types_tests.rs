@@ -1293,7 +1293,7 @@ pub mod tests {
 
         let nominal = Ty::Nominal {
             symbol: StructId::from(1).into(),
-            row: Box::new(make_row!(Struct, "age" => Ty::Int, "height" => Ty::Float)),
+            row: Box::new(make_row!(Struct, "height" => Ty::Float, "age" => Ty::Int)),
         };
 
         let (params, _ret) = uncurry_function(

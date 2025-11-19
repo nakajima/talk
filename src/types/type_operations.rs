@@ -6,6 +6,7 @@ use tracing::instrument;
 
 use crate::{
     label::Label,
+    name_resolution::symbol::Symbol,
     node_id::NodeID,
     types::{
         dsu::DSU,
@@ -403,18 +404,23 @@ pub(super) fn unify(
                 return Err(TypeError::InvalidUnification(lhs.into(), rhs.into()));
             }
 
-            // Pick the correct row kind (Enum vs Struct) from the rows themselves.
-            fn row_kind(r: &InferRow) -> Option<TypeDefKind> {
-                match r {
-                    InferRow::Empty(k) => Some(*k),
-                    InferRow::Extend { row, .. } => row_kind(row),
-                    InferRow::Var(_) | InferRow::Param(_) => None,
-                }
-            }
+            // // Pick the correct row kind (Enum vs Struct) from the rows themselves.
+            // fn row_kind(r: &InferRow) -> Option<TypeDefKind> {
+            //     match r {
+            //         InferRow::Empty(k) => Some(*k),
+            //         InferRow::Extend { row, .. } => row_kind(row),
+            //         InferRow::Var(_) | InferRow::Param(_) => None,
+            //     }
+            // }
 
-            let kind = row_kind(lhs_row)
-                .or_else(|| row_kind(rhs_row))
-                .unwrap_or(TypeDefKind::Struct);
+            // let kind = row_kind(lhs_row)
+            //     .or_else(|| row_kind(rhs_row))
+            //     .unwrap_or(TypeDefKind::Struct);
+            let kind = match lhs_id {
+                Symbol::Struct(..) => TypeDefKind::Struct,
+                Symbol::Enum(..) => TypeDefKind::Enum,
+                _ => panic!("No type def kind found: {lhs_id:?}"),
+            };
 
             let changed = unify_rows(kind, lhs_row, rhs_row, context, session)?;
             Ok(changed)

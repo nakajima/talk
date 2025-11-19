@@ -492,9 +492,11 @@ impl<'a> InferencePass<'a> {
 
     fn generate(&mut self, idx: usize) {
         let mut groups = self.asts[idx].phase.scc_graph.groups();
+
         // Sort by level in descending order so inner bindings are generalized first
         // Use stable sort to preserve topological order for groups at the same level
         groups.sort_by_key(|group| std::cmp::Reverse(group.level.0));
+
         for group in groups {
             self.generate_for_group(idx, group);
         }
@@ -565,12 +567,24 @@ impl<'a> InferencePass<'a> {
             let rhs = self.asts.iter().find_map(|ast| ast.find(*rhs_id)).unwrap();
 
             let ty = self.visit_node(&rhs, &mut context);
-            context.wants_mut().equals(
-                ty,
-                placeholders[i].clone(),
-                ConstraintCause::Internal,
-                rhs.span(),
-            );
+
+            if let Some(existing) = self.session.lookup(binder) {
+                if existing == EnvEntry::Mono(placeholders[i].clone()) {
+                    context.wants_mut().equals(
+                        ty,
+                        placeholders[i].clone(),
+                        ConstraintCause::Internal,
+                        rhs.span(),
+                    );
+                } else {
+                    context.wants_mut().equals(
+                        placeholders[i].clone(),
+                        existing._as_ty(),
+                        ConstraintCause::Internal,
+                        rhs.span(),
+                    );
+                }
+            }
         }
 
         // Solve this group
@@ -1000,14 +1014,21 @@ impl<'a> InferencePass<'a> {
         // NOTE: This is sort of a hack since we don't have a direct way to say
         // that rows should be equal.
         context.wants_mut().equals(
-            InferTy::Record(row_placeholder.into()),
-            InferTy::Record(real_row.clone().into()),
+            InferTy::Nominal {
+                symbol: nominal_symbol,
+                row: row_placeholder.into(),
+            },
+            InferTy::Nominal {
+                symbol: nominal_symbol,
+                row: real_row.clone().into(),
+            },
             ConstraintCause::Internal,
             body.span,
         );
 
         // Replace all instances of the placeholder row
         let mut substitutions = UnificationSubstitutions::new(self.session.meta_levels.clone());
+
         substitutions
             .row
             .insert(row_placeholder_id, real_row.clone());
@@ -1429,48 +1450,121 @@ impl<'a> InferencePass<'a> {
         last_arm_ty.unwrap_or(InferTy::Void)
     }
 
-    fn promote_pattern_bindings(&mut self, pattern: &Pattern) {
-        use crate::node_kinds::pattern::{PatternKind, RecordFieldPatternKind};
+    #[instrument(level = tracing::Level::TRACE, skip(self, context))]
+    fn promote_pattern_bindings(
+        &mut self,
+        pattern: &Pattern,
+        expected: &InferTy,
+        context: &mut impl Solve,
+    ) -> InferTy {
         match &pattern.kind {
             PatternKind::Bind(Name::Resolved(sym, _)) => {
-                if let Some(entry) = self.session.lookup(sym) {
-                    let ty = match entry {
-                        EnvEntry::Mono(t) => t,
-                        EnvEntry::Scheme(s) => s.ty, // unlikely here, but safe
-                    };
-                    // Generalize with the current substitutions so metas turn into concrete types/params.
-                    self.session.insert(*sym, ty);
-                }
+                // let level = context.level();
+                // let var = self.session.new_ty_meta_var_id(level);
+                // self.generalization_blocks
+                //     .insert(var, GeneralizationBlock::PatternBindLocal);
+
+                // self.session.insert(*sym, InferTy::Var { id: var, level });
+
+                if let Some(EnvEntry::Mono(existing)) = self.session.lookup(sym) {
+                    tracing::trace!("found existing.");
+                    context.wants_mut().equals(
+                        expected.clone(),
+                        existing.clone(),
+                        ConstraintCause::Internal,
+                        pattern.span,
+                    );
+                };
+
+                // context.wants_mut().equals(
+                //     InferTy::Var { id: var, level },
+                //     expected.clone(),
+                //     ConstraintCause::Internal,
+                //     pattern.span,
+                // );
+
+                self.session.insert(*sym, expected.clone());
+                expected.clone()
             }
             PatternKind::Tuple(items) => {
-                for p in items {
-                    self.promote_pattern_bindings(p);
-                }
+                let ty = InferTy::Tuple(
+                    items
+                        .iter()
+                        .map(|i| {
+                            let var = self.session.new_ty_meta_var_id(context.level());
+                            self.generalization_blocks
+                                .insert(var, GeneralizationBlock::PatternBindLocal);
+                            self.promote_pattern_bindings(
+                                i,
+                                &InferTy::Var {
+                                    id: var,
+                                    level: context.level(),
+                                },
+                                context,
+                            )
+                        })
+                        .collect_vec(),
+                );
+
+                context.wants_mut().equals(
+                    ty.clone(),
+                    expected.clone(),
+                    ConstraintCause::Internal,
+                    pattern.span,
+                );
+
+                ty
             }
             PatternKind::Record { fields } => {
-                for f in fields {
-                    match &f.kind {
+                let mut row = InferRow::Empty(TypeDefKind::Struct);
+                for field in fields {
+                    match &field.kind {
                         RecordFieldPatternKind::Bind(name) => {
-                            if let Name::Resolved(sym, _) = name
-                                && let Some(entry) = self.session.lookup(sym)
-                            {
-                                let ty = match entry {
-                                    EnvEntry::Mono(t) => t,
-                                    EnvEntry::Scheme(s) => s.ty,
-                                };
+                            let ty = if let Some(existing) = self.session.lookup(&name.symbol()) {
+                                existing._as_ty()
+                            } else {
+                                let var = self.session.new_ty_meta_var_id(context.level());
+                                self.generalization_blocks
+                                    .insert(var, GeneralizationBlock::PatternBindLocal);
+                                InferTy::Var {
+                                    id: var,
+                                    level: context.level(),
+                                }
+                            };
 
-                                self.session.insert(*sym, ty);
-                            }
+                            self.session.insert(name.symbol(), expected.clone());
+                            row = InferRow::Extend {
+                                row: row.into(),
+                                label: name.name_str().into(),
+                                ty,
+                            };
                         }
-                        RecordFieldPatternKind::Equals { value, .. } => {
-                            self.promote_pattern_bindings(value);
+                        RecordFieldPatternKind::Equals { name, value, .. } => {
+                            let ty = if let Some(existing) = self.session.lookup(&name.symbol()) {
+                                existing._as_ty()
+                            } else {
+                                let var = self.session.new_ty_meta_var_id(context.level());
+                                self.generalization_blocks
+                                    .insert(var, GeneralizationBlock::PatternBindLocal);
+                                InferTy::Var {
+                                    id: var,
+                                    level: context.level(),
+                                }
+                            };
+                            let ty = self.promote_pattern_bindings(value, &ty, context);
+                            row = InferRow::Extend {
+                                row: row.into(),
+                                label: name.name_str().into(),
+                                ty,
+                            };
                         }
                         RecordFieldPatternKind::Rest => {}
                     }
                 }
+                InferTy::Record(row.into())
             }
             // cover any other pattern forms you support
-            _ => {}
+            _ => InferTy::Void,
         }
     }
 
@@ -2046,12 +2140,18 @@ impl<'a> InferencePass<'a> {
                 );
                 annotated_ty
             }
-            (None, None) => self.session.new_ty_meta_var(context.level()),
+            (None, None) => {
+                let id = self.session.new_ty_meta_var_id(context.level().next());
+                self.generalization_blocks
+                    .insert(id, GeneralizationBlock::PatternBindLocal);
+                InferTy::Var {
+                    id,
+                    level: context.level().next(),
+                }
+            }
         };
 
-        self.promote_pattern_bindings(lhs);
-
-        ty
+        self.promote_pattern_bindings(lhs, &ty, &mut context.next())
     }
 
     fn canonical_row_for(&mut self, symbol: &Symbol, level: Level) -> RowMetaId {

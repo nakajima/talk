@@ -391,7 +391,7 @@ impl std::fmt::Debug for InferTy {
             }
             InferTy::Record(box row) => {
                 let row_debug = match row {
-                    InferRow::Empty(..) => "".to_string(),
+                    InferRow::Empty(kind) => format!("emptyrow({kind:?})"),
                     InferRow::Param(id) => format!("rowparam(π{})", id.0),
                     InferRow::Extend { .. } => {
                         let closed = row.close();

@@ -128,7 +128,7 @@ pub struct NameResolver {
     // Scope stuff
     pub(super) scopes: FxHashMap<NodeID, Scope>,
     pub(super) current_scope_id: Option<NodeID>,
-    pub(super) current_symbol_scope: Vec<Option<(Symbol, NodeID)>>,
+    pub(super) current_symbol_scope: Vec<Option<Vec<(Symbol, NodeID)>>>,
     pub(super) current_level: Level,
 
     // For figuring out child types
@@ -324,7 +324,7 @@ impl NameResolver {
         Some(Name::Resolved(symbol, name.name_str()))
     }
 
-    fn track_dependency(&mut self, to: Symbol, id: NodeID) {
+    pub(super) fn track_dependency(&mut self, to: Symbol, id: NodeID) {
         if !matches!(
             to,
             Symbol::Global(..) | Symbol::StaticMethod(..) | Symbol::DeclaredLocal(..)
@@ -332,12 +332,39 @@ impl NameResolver {
             return;
         }
 
-        if let Some((from_sym, from_id)) = self.current_symbol_scope.iter().rev().find_map(|f| *f) {
-            tracing::trace!("track_dependency from {from_sym:?} to {to:?}");
-            self.phase
-                .scc_graph
-                .add_edge((from_sym, from_id), (to, id), id);
+        if let Some(symbols) = self
+            .current_symbol_scope
+            .iter()
+            .rev()
+            .find_map(|f| f.clone())
+        {
+            for (from_sym, from_id) in symbols {
+                tracing::debug!("track_dependency from {from_sym:?} to {to:?}");
+                self.phase
+                    .scc_graph
+                    .add_edge((from_sym, from_id), (to, id), id);
+            }
         }
+    }
+
+    pub(super) fn track_dependency_from_to(
+        &mut self,
+        from_sym: Symbol,
+        from_id: NodeID,
+        to_sym: Symbol,
+        to_id: NodeID,
+    ) {
+        if !matches!(
+            to_sym,
+            Symbol::Global(..) | Symbol::StaticMethod(..) | Symbol::DeclaredLocal(..)
+        ) {
+            return;
+        }
+
+        tracing::debug!("track_dependency from {from_sym:?} to {to_sym:?}");
+        self.phase
+            .scc_graph
+            .add_edge((from_sym, from_id), (to_sym, to_id), to_id);
     }
 
     pub(super) fn diagnostic(&mut self, span: Span, err: NameResolverError) {
@@ -346,25 +373,27 @@ impl NameResolver {
     }
 
     #[instrument(skip(self))]
-    fn enter_scope(&mut self, node_id: NodeID, symbol: Option<(Symbol, NodeID)>) {
+    fn enter_scope(&mut self, node_id: NodeID, symbols: Option<Vec<(Symbol, NodeID)>>) {
         self.current_scope_id = Some(node_id);
-        self.current_symbol_scope.push(symbol);
+        self.current_symbol_scope.push(symbols.clone());
 
         // We track instance methods by type so we don't need to insert individual notes for them
         // automatically, however, we do insert nodes for them if they reference other things like globals
-        if let Some(symbol) = symbol
-            && !matches!(
+        let Some(symbols) = symbols else { return };
+
+        for symbol in symbols {
+            if !matches!(
                 symbol.0,
                 Symbol::InstanceMethod(..)
                     | Symbol::Synthesized(..)
                     | Symbol::Initializer(..)
                     | Symbol::Builtin(..)
                     | Symbol::Protocol(..)
-            )
-        {
-            self.phase
-                .scc_graph
-                .add_definition(symbol.0, symbol.1, self.current_level);
+            ) {
+                self.phase
+                    .scc_graph
+                    .add_definition(symbol.0, symbol.1, self.current_level);
+            }
         }
     }
 
@@ -379,21 +408,21 @@ impl NameResolver {
         });
 
         self.current_scope_id = current_scope.parent_id;
-
+        self.current_symbol_scope.pop();
         // Pop from symbol scope stack if this scope matches
-        match self.current_symbol_scope.last() {
-            Some(None) => {
-                // Always pop None entries when exiting any scope
-                self.current_symbol_scope.pop();
-            }
-            Some(Some(scope)) if scope.1 == node_id => {
-                // Pop symbol entries that match this scope
-                self.current_symbol_scope.pop();
-            }
-            _ => {
-                // Don't pop if it doesn't match
-            }
-        }
+        // match self.current_symbol_scope.last() {
+        //     Some(None) => {
+        //         // Always pop None entries when exiting any scope
+        //         self.current_symbol_scope.pop();
+        //     }
+        //     Some(Some(scope)) if scope.1 == node_id => {
+        //         // Pop symbol entries that match this scope
+        //         self.current_symbol_scope.pop();
+        //     }
+        //     _ => {
+        //         // Don't pop if it doesn't match
+        //     }
+        // }
     }
 
     pub(super) fn declare(&mut self, name: &Name, kind: Symbol, node_id: NodeID) -> Name {
@@ -632,7 +661,7 @@ impl NameResolver {
                 | DeclKind::Struct { name, .. }
                 | DeclKind::Protocol { name, .. },
             {
-                self.enter_scope(decl.id, Some((name.symbol(), decl.id)));
+                self.enter_scope(decl.id, Some(vec![(name.symbol(), decl.id)]));
             }
         );
 
@@ -651,7 +680,7 @@ impl NameResolver {
 
             self.phase.unbound_nodes.push(decl.id);
 
-            self.enter_scope(decl.id, Some((name.symbol(), decl.id)));
+            self.enter_scope(decl.id, Some(vec![(name.symbol(), decl.id)]));
         });
 
         on!(&mut decl.kind, DeclKind::Init { params, .. }, {
@@ -668,8 +697,15 @@ impl NameResolver {
 
         on!(&decl.kind, DeclKind::Let { lhs, .. }, {
             self.current_level = self.current_level.next();
+            let mut last = None;
             for (id, binder) in lhs.collect_binders() {
-                self.enter_scope(id, Some((binder, decl.id)));
+                if let Some((last_id, last_binder)) = last {
+                    self.track_dependency_from_to(last_binder, last_id, binder, id);
+                    self.track_dependency_from_to(binder, id, last_binder, last_id);
+                }
+
+                last = Some((id, binder));
+                self.enter_scope(id, Some(vec![(binder, decl.id)]));
             }
         });
     }
