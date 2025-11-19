@@ -717,7 +717,7 @@ impl TypeSession {
     }
 
     pub(super) fn lookup_method_requirements(
-        &self,
+        &mut self,
         protocol_id: &ProtocolId,
     ) -> Option<IndexMap<Label, Symbol>> {
         if let Some(reqs) = self
@@ -729,16 +729,36 @@ impl TypeSession {
             return Some(reqs);
         }
 
-        for module in self.modules.modules.values() {
-            if let Some(reqs) = module
+        if let ProtocolId {
+            module_id: module_id @ (ModuleId::External(..) | ModuleId::Core),
+            local_id,
+        } = *protocol_id
+            && let Some(module) = self.modules.modules.get(&module_id)
+        {
+            let module_key = if matches!(module_id, ModuleId::External(..)) {
+                ModuleId::Current
+            } else {
+                module_id
+            };
+            let requirements = module
                 .types
                 .catalogold
                 .method_requirements
-                .get(&protocol_id.into())
-                .cloned()
-            {
-                return Some(reqs);
-            }
+                .get(&Symbol::Protocol(ProtocolId {
+                    module_id: module_key,
+                    local_id,
+                }))
+                .cloned()?;
+
+            let imported: IndexMap<Label, Symbol> = requirements
+                .into_iter()
+                .map(|(label, sym)| (label, sym.import(module_id)))
+                .collect();
+
+            self.type_catalog
+                .method_requirements
+                .insert((*protocol_id).into(), imported.clone());
+            return Some(imported);
         }
 
         None

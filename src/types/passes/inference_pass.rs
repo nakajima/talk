@@ -85,7 +85,7 @@ pub type PendingTypeInstances =
     FxHashMap<MetaVarId, (NodeID, Span, Level, Symbol, Vec<(InferTy, NodeID)>)>;
 
 pub struct InferencePass<'a> {
-    ast: &'a mut AST<NameResolved>,
+    asts: &'a mut [AST<NameResolved>],
     session: &'a mut TypeSession,
     canonical_rows: FxHashMap<Symbol, RowMetaId>,
     unsolved: IndexSet<Constraint>,
@@ -98,32 +98,43 @@ pub struct InferencePass<'a> {
 impl<'a> InferencePass<'a> {
     pub fn drive(asts: &'a mut [AST<NameResolved>], session: &'a mut TypeSession) -> Wants {
         let result = Wants::default();
+        let substitutions = UnificationSubstitutions::new(session.meta_levels.clone());
+        let mut pass = InferencePass {
+            asts,
+            session,
+            canonical_rows: Default::default(),
+            instantiations: Default::default(),
+            unsolved: Default::default(),
+            substitutions,
+            generalization_blocks: Default::default(),
+        };
 
-        for ast in asts.iter_mut() {
-            let substitutions = UnificationSubstitutions::new(session.meta_levels.clone());
-            let mut pass = InferencePass {
-                ast,
-                session,
-                canonical_rows: Default::default(),
-                instantiations: Default::default(),
-                unsolved: Default::default(),
-                substitutions,
-                generalization_blocks: Default::default(),
-            };
-
-            let roots = std::mem::take(&mut pass.ast.roots);
-            pass.discover_protocols(&roots, Level::default());
-            _ = std::mem::replace(&mut pass.ast.roots, roots);
-
-            pass.generate();
-            pass.check_conformances();
-            pass.session.apply(&mut pass.substitutions);
-        }
+        pass.drive_all();
 
         result
     }
 
-    fn discover_protocols(&mut self, roots: &[Node], level: Level) {
+    fn drive_all(&mut self) {
+        for i in 0..self.asts.len() {
+            self.discover_protocols(i, Level::default());
+            self.session.apply(&mut self.substitutions);
+        }
+
+        for i in 0..self.asts.len() {
+            self.generate(i);
+            self.session.apply(&mut self.substitutions);
+        }
+
+        for i in 0..self.asts.len() {
+            self.check_conformances(i);
+            self.session.apply(&mut self.substitutions);
+        }
+
+        self.rectify_blocks();
+    }
+
+    fn discover_protocols(&mut self, idx: usize, level: Level) {
+        let roots = std::mem::take(&mut self.asts[idx].roots);
         for root in roots.iter() {
             let Node::Decl(Decl {
                 kind:
@@ -242,10 +253,11 @@ impl<'a> InferencePass<'a> {
             let (binders, placeholders) = binders.into_iter().unzip();
             self.solve(&mut context, binders, placeholders)
         }
+        _ = std::mem::replace(&mut self.asts[idx].roots, roots);
     }
 
     #[instrument(skip(self))]
-    fn check_conformances(&mut self) {
+    fn check_conformances(&mut self, idx: usize) {
         for (key, conformance) in self.session.type_catalog.conformances.clone().iter() {
             let mut context = SolveContext::new(
                 self.substitutions.clone(),
@@ -282,8 +294,7 @@ impl<'a> InferencePass<'a> {
             );
 
             let mut associated_substitutions = FxHashMap::<InferTy, InferTy>::default();
-            for child_sym in self
-                .ast
+            for child_sym in self.asts[idx]
                 .phase
                 .child_types
                 .get(&key.protocol_id.into())
@@ -292,8 +303,7 @@ impl<'a> InferencePass<'a> {
                 .iter()
                 .filter(|sym| matches!(sym.1, Symbol::AssociatedType(..)))
             {
-                let conforming_children = self
-                    .ast
+                let conforming_children = self.asts[idx]
                     .phase
                     .child_types
                     .get(&key.conforming_id)
@@ -391,7 +401,7 @@ impl<'a> InferencePass<'a> {
             }
 
             let solver =
-                ConstraintSolver::new(&mut context, self.ast, std::mem::take(&mut self.unsolved));
+                ConstraintSolver::new(&mut context, self.asts, std::mem::take(&mut self.unsolved));
 
             solver.solve(self.session);
             self.substitutions.extend(&context.substitutions);
@@ -415,14 +425,76 @@ impl<'a> InferencePass<'a> {
         }
     }
 
-    fn generate(&mut self) {
-        let mut groups = self.ast.phase.scc_graph.groups();
+    #[instrument(skip(self))]
+    fn rectify_blocks(&mut self) {
+        tracing::debug!(
+            "Before rectify_blocks, unsolved: {} constraints",
+            self.unsolved.len()
+        );
+        let mut context = SolveContext::new(
+            self.substitutions.clone(),
+            Level::default(),
+            SolveContextKind::Normal,
+        );
+        let generalization_blocks = std::mem::take(&mut self.generalization_blocks);
+        for (var_id, block) in generalization_blocks {
+            tracing::debug!("rectifying generalization blocks: {var_id:?} {block:?}");
+            let GeneralizationBlock::PendingType {
+                node_id,
+                span,
+                level,
+                type_symbol,
+                args,
+            } = &block
+            else {
+                self.generalization_blocks.insert(var_id, block);
+                continue;
+            };
+
+            let Some(entry) = self.session.lookup(type_symbol) else {
+                self.generalization_blocks.insert(var_id, block);
+                continue;
+            };
+
+            let (instance, instantiations) = entry.instantiate_with_args(
+                *node_id,
+                args,
+                self.session,
+                *level,
+                context.wants_mut(),
+                *span,
+            );
+
+            context.instantiations_mut().ty.extend(instantiations.ty);
+            context.instantiations_mut().row.extend(instantiations.row);
+
+            self.substitutions.ty.insert(var_id, instance);
+        }
+
+        self.session.apply(&mut self.substitutions);
+        context.wants_mut().apply(&mut self.substitutions);
+
+        // Also apply substitutions to unsolved constraints so they can be retried
+        // with resolved types after rectification
+        let mut updated_unsolved = IndexSet::new();
+        for constraint in std::mem::take(&mut self.unsolved) {
+            updated_unsolved.insert(constraint.apply(&mut self.substitutions));
+        }
+        tracing::debug!(
+            "After applying constraints in rectify_blocks, unsolved: {} constraints",
+            updated_unsolved.len()
+        );
+        self.unsolved = updated_unsolved;
+        self.solve(&mut context, vec![], vec![]);
+    }
+
+    fn generate(&mut self, idx: usize) {
+        let mut groups = self.asts[idx].phase.scc_graph.groups();
         // Sort by level in descending order so inner bindings are generalized first
         // Use stable sort to preserve topological order for groups at the same level
         groups.sort_by_key(|group| std::cmp::Reverse(group.level.0));
-        println!("groups: {:?}", groups);
         for group in groups {
-            self.generate_for_group(group);
+            self.generate_for_group(idx, group);
         }
 
         let mut context = SolveContext::new(
@@ -432,14 +504,15 @@ impl<'a> InferencePass<'a> {
         );
 
         tracing::debug!("visiting stragglers");
-        for id in self.ast.phase.unbound_nodes.clone() {
-            let node = self.ast.find(id).unwrap();
+        for id in self.asts[idx].phase.unbound_nodes.clone() {
+            let node = self.asts.iter().find_map(|ast| ast.find(id)).unwrap();
             self.visit_node(&node, &mut context);
         }
 
         let solver =
-            ConstraintSolver::new(&mut context, self.ast, std::mem::take(&mut self.unsolved));
-        let _unsolved = solver.solve(self.session);
+            ConstraintSolver::new(&mut context, self.asts, std::mem::take(&mut self.unsolved));
+        let unsolved = solver.solve(self.session);
+        self.unsolved.extend(unsolved);
         self.substitutions.extend(&context.substitutions);
 
         // Apply substitutions to types_by_node for top-level expressions
@@ -447,7 +520,7 @@ impl<'a> InferencePass<'a> {
     }
 
     #[instrument(skip(self))]
-    fn generate_for_group(&mut self, group: BindingGroup) {
+    fn generate_for_group(&mut self, idx: usize, group: BindingGroup) {
         let mut context = SolveContext::new(
             self.substitutions.clone(),
             group.level,
@@ -468,7 +541,7 @@ impl<'a> InferencePass<'a> {
 
         // Visit each binder
         for (i, binder) in group.binders.iter().enumerate() {
-            if let Some(captures) = self.ast.phase.captures.get(binder) {
+            if let Some(captures) = self.asts[idx].phase.captures.get(binder) {
                 for capture in captures {
                     if self.session.lookup(&capture.symbol).is_none() {
                         let placeholder = self.session.new_ty_meta_var(capture.level);
@@ -482,13 +555,9 @@ impl<'a> InferencePass<'a> {
                 }
             }
 
-            let rhs_id = self.ast.phase.scc_graph.rhs_id_for(binder);
-            let rhs = self.ast.find(*rhs_id).unwrap();
-            match &rhs {
-                Node::Decl(d) => eprintln!("DEBUG: binder={:?}, rhs_id={:?}, rhs=Decl", binder, rhs_id),
-                Node::Expr(e) => eprintln!("DEBUG: binder={:?}, rhs_id={:?}, rhs=Expr({:?})", binder, rhs_id, std::mem::discriminant(&e.kind)),
-                _ => eprintln!("DEBUG: binder={:?}, rhs_id={:?}, rhs=Other", binder, rhs_id),
-            }
+            let rhs_id = self.asts[idx].phase.scc_graph.rhs_id_for(binder);
+            let rhs = self.asts.iter().find_map(|ast| ast.find(*rhs_id)).unwrap();
+
             let ty = self.visit_node(&rhs, &mut context);
             context.wants_mut().equals(
                 ty,
@@ -509,28 +578,45 @@ impl<'a> InferencePass<'a> {
         placeholders: Vec<InferTy>,
     ) {
         context.substitutions_mut().extend(&self.substitutions);
-        let solver = ConstraintSolver::new(context, self.ast, std::mem::take(&mut self.unsolved));
+        tracing::debug!(
+            "After extend, context substitutions: {:?}",
+            context.substitutions_mut()
+        );
+        let solver =
+            ConstraintSolver::new(context, &mut self.asts, std::mem::take(&mut self.unsolved));
         let unsolved = solver.solve(self.session);
 
         // Ok, hear me out. I know this is messy. We don't want to generalize metas that have pending type instances
         // and we want to hang on to constraints that contain them instead of converting them to predicates during
         // generalization. So we need to grab those and set them aside.
-        let (generalizable, needs_defer) = unsolved.into_iter().partition(|c| {
-            let mut out = Default::default();
-            collect_metas_in_constraint(c, &mut out);
-            for ty in out {
-                let InferTy::Var { id, .. } = ty else {
-                    continue;
-                };
+        let (generalizable, needs_defer): (IndexSet<_>, IndexSet<_>) =
+            unsolved.into_iter().partition(|c| {
+                let mut out = Default::default();
+                collect_metas_in_constraint(c, &mut out);
+                for ty in out {
+                    let InferTy::Var { id, .. } = ty else {
+                        continue;
+                    };
 
-                if self.generalization_blocks.contains_key(&id) {
-                    return false;
+                    if self.generalization_blocks.contains_key(&id) {
+                        tracing::trace!(
+                            "Deferring constraint {:?} because meta({:?}) has generalization block",
+                            c,
+                            id
+                        );
+                        return false;
+                    }
                 }
-            }
 
-            true
-        });
+                tracing::trace!("Considering constraint {:?} as generalizable", c);
+                true
+            });
 
+        tracing::debug!(
+            "After partition: {} generalizable, {} needs_defer",
+            generalizable.len(),
+            needs_defer.len()
+        );
         self.unsolved.extend(needs_defer);
 
         for (i, binder) in binders.iter().enumerate() {
@@ -913,7 +999,11 @@ impl<'a> InferencePass<'a> {
                 .unwrap_or_default()
                 .iter()
                 .fold(FxHashMap::default(), |mut acc, (label, _)| {
-                    let child_types = self.ast.phase.child_types.get(&nominal_symbol).cloned();
+                    let child_types = self
+                        .asts
+                        .iter()
+                        .find_map(|ast| ast.phase.child_types.get(&nominal_symbol))
+                        .cloned();
                     let associated_ty = if let Some(child_types) = &child_types
                         && let Some(child_sym) = child_types.get(label)
                     {
@@ -955,44 +1045,6 @@ impl<'a> InferencePass<'a> {
                 ty: ty.clone(),
             })
         };
-
-        let generalization_blocks = std::mem::take(&mut self.generalization_blocks);
-        for (var_id, block) in generalization_blocks {
-            let GeneralizationBlock::PendingType {
-                node_id,
-                span,
-                level,
-                type_symbol,
-                args,
-            } = &block
-            else {
-                self.generalization_blocks.insert(var_id, block);
-                continue;
-            };
-
-            if *type_symbol != name.symbol() {
-                self.generalization_blocks.insert(var_id, block);
-                continue;
-            }
-
-            let (instance, instantiations) = entry.instantiate_with_args(
-                *node_id,
-                args,
-                self.session,
-                *level,
-                context.wants_mut(),
-                *span,
-            );
-
-            context.instantiations_mut().ty.extend(instantiations.ty);
-            context.instantiations_mut().row.extend(instantiations.row);
-
-            substitutions.ty.insert(var_id, instance);
-        }
-
-        self.substitutions.extend(&substitutions);
-        self.session.apply(&mut substitutions);
-        context.wants_mut().apply(&mut substitutions);
 
         let ty = InferTy::Nominal {
             symbol: nominal_symbol,

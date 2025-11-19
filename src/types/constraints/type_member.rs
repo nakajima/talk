@@ -31,12 +31,12 @@ impl TypeMember {
         &self,
         context: &mut SolveContext,
         session: &mut TypeSession,
-        ast: &AST<NameResolved>,
+        asts: &[AST<NameResolved>],
     ) -> Result<bool, TypeError> {
         match &self.base {
             InferTy::Var { .. } => todo!(),
             InferTy::Param(type_param_id) => {
-                self.lookup_for_type_param(context, session, ast, *type_param_id)
+                self.lookup_for_type_param(context, session, asts, *type_param_id)
             }
             InferTy::Rigid(skolem_id) => {
                 let Some(InferTy::Param(type_param_id)) =
@@ -45,7 +45,7 @@ impl TypeMember {
                     unreachable!();
                 };
 
-                self.lookup_for_type_param(context, session, ast, *type_param_id)
+                self.lookup_for_type_param(context, session, asts, *type_param_id)
             }
             InferTy::Constructor { .. } => todo!(),
             InferTy::Nominal { .. } => todo!(),
@@ -61,7 +61,7 @@ impl TypeMember {
         &self,
         context: &mut SolveContext,
         session: &mut TypeSession,
-        ast: &AST<NameResolved>,
+        asts: &[AST<NameResolved>],
         type_param_id: TypeParamId,
     ) -> Result<bool, TypeError> {
         let mut candidates = vec![];
@@ -76,7 +76,9 @@ impl TypeMember {
         }
 
         for candidate in candidates {
-            if let Some(child_types) = ast.phase.child_types.get(&candidate.into())
+            if let Some(child_types) = asts
+                .iter()
+                .find_map(|ast| ast.phase.child_types.get(&candidate.into()))
                 && let Some(child_sym) = child_types.get(&self.name)
             {
                 let child_entry = session.lookup(child_sym).unwrap();

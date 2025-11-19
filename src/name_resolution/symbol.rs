@@ -246,6 +246,9 @@ impl Symbol {
             Symbol::AssociatedType(associated_type_id) => {
                 Symbol::AssociatedType(associated_type_id.import(module_id))
             }
+            Symbol::MethodRequirement(method_requirement_id) => {
+                Symbol::MethodRequirement(method_requirement_id.import(module_id))
+            }
             _ => unreachable!("{self:?} not exportable"),
         }
     }
@@ -277,6 +280,9 @@ impl Symbol {
             }
             Symbol::AssociatedType(associated_type_id) => {
                 Symbol::AssociatedType(associated_type_id.import(ModuleId::Current))
+            }
+            Symbol::MethodRequirement(method_requirement_id) => {
+                Symbol::MethodRequirement(method_requirement_id.import(ModuleId::Current))
             }
             _ => unreachable!("{self:?} not exportable"),
         }

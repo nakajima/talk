@@ -13,20 +13,20 @@ use crate::{
 #[derive(Debug)]
 pub struct ConstraintSolver<'a> {
     context: &'a mut SolveContext,
-    ast: &'a mut AST<NameResolved>,
+    asts: &'a mut [AST<NameResolved>],
     unsolved: IndexSet<Constraint>,
 }
 
 impl<'a> ConstraintSolver<'a> {
     pub fn new(
         context: &'a mut SolveContext,
-        ast: &'a mut AST<NameResolved>,
+        asts: &'a mut [AST<NameResolved>],
         unsolved: IndexSet<Constraint>,
     ) -> Self {
         Self {
             context,
             unsolved,
-            ast,
+            asts,
         }
     }
 
@@ -56,10 +56,10 @@ impl<'a> ConstraintSolver<'a> {
                     Constraint::Member(ref member) => member.solve(self.context, session),
                     Constraint::Conforms(ref conforms) => conforms.solve(self.context),
                     Constraint::TypeMember(ref type_member) => {
-                        type_member.solve(self.context, session, self.ast)
+                        type_member.solve(self.context, session, self.asts)
                     }
                     Constraint::Projection(ref projection) => {
-                        projection.solve(self.ast, self.context, session)
+                        projection.solve(self.context, session, self.asts)
                     }
                 };
 
@@ -76,8 +76,9 @@ impl<'a> ConstraintSolver<'a> {
                             span: constraint.span(),
                             kind: e,
                         });
-                        if !self.ast.diagnostics.contains(&diagnostic) {
-                            self.ast.diagnostics.push(diagnostic);
+                        if !self.asts[0].diagnostics.contains(&diagnostic) {
+                            tracing::error!("Just adding it to the first constraint. Fixme.");
+                            self.asts[0].diagnostics.push(diagnostic);
                         }
                     }
                 }

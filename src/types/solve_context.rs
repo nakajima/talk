@@ -49,7 +49,6 @@ pub(super) trait Solve
 where
     Self: Sized,
 {
-    fn with_kind(&'_ mut self, kind: SolveContextKind) -> ChildSolveContext<'_>;
     fn kind(&self) -> SolveContextKind;
     fn next(&'_ mut self) -> ChildSolveContext<'_>;
     fn level(&self) -> Level;
@@ -73,15 +72,6 @@ impl<'a> Solve for ChildSolveContext<'a> {
 
     fn kind(&self) -> SolveContextKind {
         self.kind
-    }
-
-    fn with_kind(&'_ mut self, kind: SolveContextKind) -> ChildSolveContext<'_> {
-        ChildSolveContext {
-            kind,
-            level: self.level(),
-            parent: self.parent,
-            instantiations: self.instantiations.clone(),
-        }
     }
 
     fn wants_mut(&'_ mut self) -> &mut Wants {
@@ -126,15 +116,6 @@ impl Solve for SolveContext {
 
     fn kind(&self) -> SolveContextKind {
         self.kind
-    }
-
-    fn with_kind(&'_ mut self, kind: SolveContextKind) -> ChildSolveContext<'_> {
-        ChildSolveContext {
-            kind,
-            level: self.level(),
-            instantiations: self.instantiations.clone(),
-            parent: self,
-        }
     }
 
     fn level(&self) -> Level {

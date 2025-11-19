@@ -29,9 +29,9 @@ pub struct Projection {
 impl Projection {
     pub fn solve(
         &self,
-        ast: &AST<NameResolved>,
         context: &mut SolveContext,
         session: &mut TypeSession,
+        asts: &[AST<NameResolved>],
     ) -> Result<bool, TypeError> {
         let base = apply(self.base.clone(), &mut context.substitutions);
         let result = apply(self.result.clone(), &mut context.substitutions);
@@ -57,10 +57,9 @@ impl Projection {
             // Find a conformance for the nominal base that mentions this associated label
             if let Some(conf) = conformance {
                 // Prefer the alias symbol (if the nominal actually provided `typealias T = ...`)
-                if let Some(alias_sym) = ast
-                    .phase
-                    .child_types
-                    .get(&base_sym)
+                if let Some(alias_sym) = asts
+                    .iter()
+                    .find_map(|ast| ast.phase.child_types.get(&base_sym))
                     .and_then(|t| t.get(&self.label))
                     .cloned()
                 {

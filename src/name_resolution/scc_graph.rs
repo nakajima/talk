@@ -74,7 +74,7 @@ impl SCCGraph {
         idx
     }
 
-    fn ensure_node(&mut self, node: Symbol, rhs_id: NodeID) -> NodeIndex {
+    fn ensure_node(&mut self, node: Symbol) -> NodeIndex {
         #[cfg(debug_assertions)]
         if matches!(node, Symbol::Builtin(..)) {
             panic!("should not have builtin in graph");
@@ -98,8 +98,8 @@ impl SCCGraph {
         if from.0 == to.0 {
             return;
         }
-        let from = self.ensure_node(from.0, from.1);
-        let to = self.ensure_node(to.0, to.1);
+        let from = self.ensure_node(from.0);
+        let to = self.ensure_node(to.0);
         self.graph.update_edge(from, to, node_id);
     }
 }
