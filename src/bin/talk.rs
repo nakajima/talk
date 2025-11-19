@@ -16,6 +16,7 @@ async fn main() {
         // IR { filename: PathBuf },
         Parse { filename: String },
         Debug { filename: String },
+        Run { filenames: Vec<String> },
         // Run { filename: PathBuf },
         Lsp(LspArgs),
     }
@@ -34,6 +35,33 @@ async fn main() {
         Commands::Parse { .. } => {}
         Commands::Lsp(_) => {
             talk::lsp::server::start().await;
+        }
+        Commands::Run { filenames } => {
+            use std::path::PathBuf;
+
+            use talk::{
+                compiling::driver::{Driver, Source},
+                ir::interpreter::Interpreter,
+            };
+
+            let sources: Vec<_> = filenames
+                .iter()
+                .map(|filename| Source::from(PathBuf::from(filename)))
+                .collect();
+            let driver = Driver::new(sources, Default::default());
+            let module = driver
+                .parse()
+                .unwrap()
+                .resolve_names()
+                .unwrap()
+                .typecheck()
+                .unwrap()
+                .lower()
+                .unwrap()
+                .module("talkin");
+            let interpreter = Interpreter::new(module.program);
+            let result = interpreter.run();
+            println!("{result:?}");
         }
         Commands::Debug { filename } => {
             use std::path::PathBuf;

@@ -1335,7 +1335,7 @@ impl<'a> InferencePass<'a> {
         } else {
             self.session
                 .type_catalog
-                .instance_methods
+                .properties
                 .entry(struct_symbol)
                 .or_default()
                 .insert(name.name_str().into(), name.symbol());

@@ -160,7 +160,7 @@ impl<T: SomeType> Default for TrackedInstantiations<T> {
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub struct TypeCatalogOld<T: SomeType> {
+pub struct TypeCatalog<T: SomeType> {
     pub conformances: FxHashMap<ConformanceKey, Conformance>,
     pub associated_types: FxHashMap<Symbol, FxHashMap<Label, Symbol>>,
     pub extensions: FxHashMap<Symbol, FxHashMap<Label, Symbol>>,
@@ -176,7 +176,7 @@ pub struct TypeCatalogOld<T: SomeType> {
     pub instantiations: TrackedInstantiations<T>,
 }
 
-impl<T: SomeType> Default for TypeCatalogOld<T> {
+impl<T: SomeType> Default for TypeCatalog<T> {
     fn default() -> Self {
         Self {
             conformances: Default::default(),
@@ -196,8 +196,8 @@ impl<T: SomeType> Default for TypeCatalogOld<T> {
     }
 }
 
-impl TypeCatalogOld<InferTy> {
-    pub fn finalize(self, session: &mut TypeSession) -> TypeCatalogOld<Ty> {
+impl TypeCatalog<InferTy> {
+    pub fn finalize(self, session: &mut TypeSession) -> TypeCatalog<Ty> {
         let mut instantiations = TrackedInstantiations::default();
         for (key, infer_ty) in self.instantiations.ty {
             let ty = match session.finalize_ty(infer_ty) {
@@ -211,7 +211,7 @@ impl TypeCatalogOld<InferTy> {
                 .row
                 .insert(key, session.finalize_row(infer_row));
         }
-        TypeCatalogOld {
+        TypeCatalog {
             associated_types: self.associated_types,
             conformances: self.conformances,
             extensions: self.extensions,
@@ -227,7 +227,7 @@ impl TypeCatalogOld<InferTy> {
     }
 }
 
-impl<T: SomeType> TypeCatalogOld<T> {
+impl<T: SomeType> TypeCatalog<T> {
     pub fn lookup_static_member(&self, receiver: &Symbol, label: &Label) -> Option<Symbol> {
         if let Some(entries) = self.static_methods.get(receiver)
             && let Some(sym) = entries.get(label)

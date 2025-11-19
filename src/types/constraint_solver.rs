@@ -97,7 +97,6 @@ impl<'a> ConstraintSolver<'a> {
                 tracing::warn!("did not make forward progress, moving on.");
             }
         }
-
         self.unsolved
     }
 }

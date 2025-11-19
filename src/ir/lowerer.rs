@@ -660,7 +660,7 @@ impl<'a> Lowerer<'a> {
     ) -> Result<(Value, Ty), IRError> {
         let constructor_sym = *self
             .types
-            .catalogold
+            .catalog
             .initializers
             .get(&name.symbol())
             .unwrap()
@@ -695,7 +695,7 @@ impl<'a> Lowerer<'a> {
         let enum_symbol = name.symbol();
         let constructor_sym = *self
             .types
-            .catalogold
+            .catalog
             .variants
             .get(&enum_symbol)
             .unwrap()
@@ -704,7 +704,7 @@ impl<'a> Lowerer<'a> {
 
         let tag = self
             .types
-            .catalogold
+            .catalog
             .variants
             .get(&enum_symbol)
             .unwrap()
@@ -768,11 +768,14 @@ impl<'a> Lowerer<'a> {
 
             let (receiver_ty, _) = self.specialized_ty(receiver)?;
 
+            println!("lower_member: receiver_ty={receiver_ty:?}, label={label:?}");
+
             if let Ty::Nominal { symbol, .. } = &receiver_ty
-                && let Some(methods) = self.types.catalogold.instance_methods.get(symbol)
+                && let Some(methods) = self.types.catalog.instance_methods.get(symbol)
                 && let Some(method) = methods.get(label).cloned()
             {
                 tracing::debug!("lowering method: {label} {method:?}");
+                println!("Found method: {method:?}");
 
                 self.check_import(&method);
                 self.push_instr(Instruction::Ref {
@@ -781,6 +784,7 @@ impl<'a> Lowerer<'a> {
                     val: Value::Func(Name::Resolved(method, label.to_string())),
                 });
             } else {
+                println!("lower_member: Not a method, generating GetField");
                 let label = self.field_index(&receiver_ty, label);
                 self.push_instr(Instruction::GetField {
                     dest,
@@ -834,7 +838,7 @@ impl<'a> Lowerer<'a> {
         // Look up the initializer and specialize it using the already-computed instantiations
         let init_sym = *self
             .types
-            .catalogold
+            .catalog
             .initializers
             .get(&name.symbol())
             .unwrap()
@@ -844,12 +848,7 @@ impl<'a> Lowerer<'a> {
         let init_entry = self.types.get_symbol(&init_sym).cloned().unwrap();
         let (init_ty, concrete_tys) = self.specialize(&init_entry, callee.id)?;
 
-        let properties = self
-            .types
-            .catalogold
-            .properties
-            .get(&name.symbol())
-            .unwrap();
+        let properties = self.types.catalog.properties.get(&name.symbol()).unwrap();
 
         // Extract return type from the initializer function
         let mut params = init_ty.clone().uncurry_params();
@@ -1117,7 +1116,7 @@ impl<'a> Lowerer<'a> {
             }
         };
 
-        if let Some(methods) = self.types.catalogold.instance_methods.get(&symbol)
+        if let Some(methods) = self.types.catalog.instance_methods.get(&symbol)
             && let Some(method) = methods.get(label)
         {
             return Ok(Some(*method));
@@ -1125,7 +1124,7 @@ impl<'a> Lowerer<'a> {
 
         println!(
             "didn't get methods for {symbol:?} in {:?}",
-            self.types.catalogold.instance_methods
+            self.types.catalog.instance_methods
         );
 
         Ok(None)
@@ -1159,6 +1158,7 @@ impl<'a> Lowerer<'a> {
         Ok((ty, substitutions))
     }
 
+    #[instrument(skip(self))]
     fn specialize(
         &mut self,
         entry: &TypeEntry,
@@ -1168,30 +1168,34 @@ impl<'a> Lowerer<'a> {
             TypeEntry::Mono(ty) => Ok((ty.clone(), Default::default())),
             TypeEntry::Poly(scheme) => {
                 let mut substitutions = Substitutions::default();
+                println!("tci: {:?}", self.types.catalog.instantiations);
                 for forall in scheme.foralls.iter() {
+                    println!("id: {id:?}, forall: {forall:?}");
                     match forall {
                         ForAll::Ty(param) => {
                             let ty = self
                                 .types
-                                .catalogold
+                                .catalog
                                 .instantiations
                                 .ty
                                 .get(&(id, *param))
-                                .unwrap();
+                                .map(|ty| ty.clone())
+                                .unwrap_or_else(|| Ty::Param(*param));
 
-                            substitutions.ty.insert(*param, ty.clone());
+                            substitutions.ty.insert(*param, ty);
                         }
 
                         ForAll::Row(param) => {
                             let row = self
                                 .types
-                                .catalogold
+                                .catalog
                                 .instantiations
                                 .row
                                 .get(&(id, *param))
-                                .unwrap();
+                                .map(|row| row.clone())
+                                .unwrap_or_else(|| Row::Param(*param));
 
-                            substitutions.row.insert(*param, row.clone());
+                            substitutions.row.insert(*param, row);
                         }
                     };
                 }

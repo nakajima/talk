@@ -147,7 +147,7 @@ impl EnvEntry<InferTy> {
         wants: &mut Wants,
         span: Span,
     ) -> (InferTy, InstantiationSubstitutions) {
-        tracing::debug!("inference instantiate: {self:?}");
+        tracing::debug!("inference instantiate (id: {id:?}): {self:?}");
         match self {
             EnvEntry::Mono(ty) => (ty.clone(), Default::default()),
             EnvEntry::Scheme(scheme) => {
@@ -163,7 +163,7 @@ impl EnvEntry<InferTy> {
         session: &mut TypeSession,
         span: Span,
     ) -> InferTy {
-        tracing::debug!("inference instantiate: {self:?}");
+        tracing::debug!("inference instantiate (id: {id:?}): {self:?}");
         match self {
             EnvEntry::Mono(ty) => ty.clone(),
             EnvEntry::Scheme(scheme) => scheme.instantiate(id, context, session, span),

@@ -85,7 +85,15 @@ impl Scheme<InferTy> {
         for forall in &self.foralls {
             match forall {
                 ForAll::Ty(param) => {
-                    if context.instantiations_mut().get_ty(&id, param).is_some() {
+                    if let Some(meta) = context.instantiations_mut().get_ty(&id, param) {
+                        session.type_catalog.instantiations.ty.insert(
+                            (id, *param),
+                            InferTy::Var {
+                                id: *meta,
+                                level: Level(1),
+                            },
+                        );
+
                         continue;
                     }
 
@@ -96,6 +104,7 @@ impl Scheme<InferTy> {
                     tracing::trace!("instantiating {param:?} with {meta:?}");
                     session.reverse_instantiations.ty.insert(meta, *param);
                     context.instantiations_mut().insert_ty(id, *param, meta);
+
                     session
                         .type_catalog
                         .instantiations

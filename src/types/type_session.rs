@@ -20,7 +20,7 @@ use crate::{
         scheme::{ForAll, Scheme},
         term_environment::{EnvEntry, TermEnv},
         ty::{SomeType, Ty},
-        type_catalog::{Conformance, ConformanceKey, TypeCatalogOld},
+        type_catalog::{Conformance, ConformanceKey, TypeCatalog},
         type_error::TypeError,
         type_operations::{UnificationSubstitutions, apply, apply_row, substitute},
         vars::Vars,
@@ -47,7 +47,7 @@ pub struct TypeSession {
     pub(super) type_param_bounds: FxHashMap<TypeParamId, IndexSet<Predicate<InferTy>>>,
 
     pub typealiases: FxHashMap<Symbol, Scheme<InferTy>>,
-    pub(super) type_catalog: TypeCatalogOld<InferTy>,
+    pub(super) type_catalog: TypeCatalog<InferTy>,
     pub(super) modules: Rc<ModuleEnvironment>,
     pub aliases: FxHashMap<Symbol, Scheme<InferTy>>,
     pub(super) reverse_instantiations: ReverseInstantiations,
@@ -81,7 +81,7 @@ impl TypeEntry {
 pub struct Types {
     pub types_by_node: FxHashMap<NodeID, TypeEntry>,
     pub types_by_symbol: FxHashMap<Symbol, TypeEntry>,
-    pub catalogold: TypeCatalogOld<Ty>,
+    pub catalog: TypeCatalog<Ty>,
 }
 
 #[derive(Debug, Default)]
@@ -215,7 +215,7 @@ impl TypeSession {
         let catalog = std::mem::take(&mut self.type_catalog);
         let catalog = catalog.finalize(&mut self);
         let types = Types {
-            catalogold: catalog,
+            catalog,
             types_by_node: entries,
             types_by_symbol,
         };
@@ -613,7 +613,7 @@ impl TypeSession {
         for module in self.modules.modules.values() {
             if let Some((sym, source)) = module
                 .types
-                .catalogold
+                .catalog
                 .lookup_member(&receiver.current(), label)
             {
                 match sym {
@@ -676,7 +676,7 @@ impl TypeSession {
         for module in self.modules.modules.values() {
             if let Some(sym) = module
                 .types
-                .catalogold
+                .catalog
                 .lookup_static_member(&receiver.current(), label)
             {
                 match sym {
@@ -712,7 +712,7 @@ impl TypeSession {
         for module in self.modules.modules.values() {
             if let Some(variants) = module
                 .types
-                .catalogold
+                .catalog
                 .variants
                 .get(&receiver.current())
                 .cloned()
@@ -754,7 +754,7 @@ impl TypeSession {
             };
             let requirements = module
                 .types
-                .catalogold
+                .catalog
                 .method_requirements
                 .get(&Symbol::Protocol(ProtocolId {
                     module_id: module_key,
@@ -804,7 +804,7 @@ impl TypeSession {
             };
             let initializers = module
                 .types
-                .catalogold
+                .catalog
                 .initializers
                 .get(&Symbol::Struct(StructId {
                     module_id: module_key,
@@ -847,7 +847,7 @@ impl TypeSession {
             };
             let properties = module
                 .types
-                .catalogold
+                .catalog
                 .properties
                 .get(&Symbol::Struct(StructId {
                     module_id: module_key,

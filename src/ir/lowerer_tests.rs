@@ -323,7 +323,7 @@ pub mod tests {
                             dest: 0.into(),
                             ty: IrTy::Record(vec![IrTy::Int]),
                             callee: Value::Func(Name::Resolved(
-                                Symbol::from(SynthesizedId::from(4)),
+                                Symbol::from(SynthesizedId::from(7)),
                                 "@@Foo:Struct(_:1)_init:Synthesized(_:1)[Int]".into()
                             )),
                             args: vec![Register(2).into(), Register(1).into()].into(),
@@ -769,7 +769,8 @@ pub mod tests {
         123
         ",
         );
-        assert_eq_diff!(
+
+        assert_eq!(
             *program
                 .functions
                 .get(&Symbol::Synthesized(SynthesizedId::from(1)))

@@ -260,7 +260,7 @@ pub mod tests {
 
         assert_eq!(
             *types
-                .catalogold
+                .catalog
                 .instantiations
                 .ty
                 .get(&(root_1.id, *type_param))
@@ -269,7 +269,7 @@ pub mod tests {
         );
         assert_eq!(
             *types
-                .catalogold
+                .catalog
                 .instantiations
                 .ty
                 .get(&(root_2.id, *type_param))
@@ -352,7 +352,7 @@ pub mod tests {
         // Check instantiations are stored
         assert_eq!(
             *types
-                .catalogold
+                .catalog
                 .instantiations
                 .ty
                 .get(&(*constructor_1_id, *type_param))
@@ -361,7 +361,7 @@ pub mod tests {
         );
         assert_eq!(
             *types
-                .catalogold
+                .catalog
                 .instantiations
                 .ty
                 .get(&(*constructor_2_id, *type_param))
@@ -443,7 +443,7 @@ pub mod tests {
         // Check instantiations are stored
         assert_eq!(
             *types
-                .catalogold
+                .catalog
                 .instantiations
                 .ty
                 .get(&(*member_1_id, *type_param))
@@ -452,7 +452,7 @@ pub mod tests {
         );
         assert_eq!(
             *types
-                .catalogold
+                .catalog
                 .instantiations
                 .ty
                 .get(&(*member_2_id, *type_param))
@@ -1783,7 +1783,7 @@ pub mod tests {
             ",
         );
 
-        assert!(types.catalogold.conformances.contains_key(&ConformanceKey {
+        assert!(types.catalog.conformances.contains_key(&ConformanceKey {
             protocol_id: ProtocolId::from(1),
             conforming_id: StructId::from(1).into(),
         }));
