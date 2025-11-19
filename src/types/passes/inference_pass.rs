@@ -535,8 +535,6 @@ impl<'a> InferencePass<'a> {
             .iter()
             .map(|sym| {
                 let placeholder_id = self.session.new_ty_meta_var_id(group.level);
-                self.generalization_blocks
-                    .insert(placeholder_id, GeneralizationBlock::Placeholder);
                 let placeholder = InferTy::Var {
                     id: placeholder_id,
                     level: context.level(),
