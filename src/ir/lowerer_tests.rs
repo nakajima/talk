@@ -461,7 +461,7 @@ pub mod tests {
                             callee: Value::Func(Name::Resolved(
                                 Symbol::InstanceMethod(InstanceMethodId {
                                     module_id: ModuleId::Core,
-                                    local_id: 5
+                                    local_id: 1
                                 }),
                                 "add".into()
                             )),
@@ -481,7 +481,7 @@ pub mod tests {
                 .functions
                 .get(&Symbol::InstanceMethod(InstanceMethodId {
                     module_id: ModuleId::Core,
-                    local_id: 5
+                    local_id: 1
                 }))
                 .is_some()
         )
@@ -769,7 +769,7 @@ pub mod tests {
         123
         ",
         );
-        assert_eq!(
+        assert_eq_diff!(
             *program
                 .functions
                 .get(&Symbol::Synthesized(SynthesizedId::from(1)))
