@@ -79,6 +79,8 @@ pub enum GeneralizationBlock {
         args: Vec<(InferTy, NodeID)>,
     },
     PatternBindLocal,
+    EmptyArray,
+    Placeholder,
 }
 
 pub type PendingTypeInstances =
@@ -532,7 +534,13 @@ impl<'a> InferencePass<'a> {
             .binders
             .iter()
             .map(|sym| {
-                let placeholder = self.session.new_ty_meta_var(group.level);
+                let placeholder_id = self.session.new_ty_meta_var_id(group.level);
+                self.generalization_blocks
+                    .insert(placeholder_id, GeneralizationBlock::Placeholder);
+                let placeholder = InferTy::Var {
+                    id: placeholder_id,
+                    level: context.level(),
+                };
                 tracing::trace!("placeholder {sym:?} = {placeholder:?}");
                 self.session.insert_term(*sym, placeholder.to_entry());
                 placeholder
@@ -582,8 +590,7 @@ impl<'a> InferencePass<'a> {
             "After extend, context substitutions: {:?}",
             context.substitutions_mut()
         );
-        let solver =
-            ConstraintSolver::new(context, &mut self.asts, std::mem::take(&mut self.unsolved));
+        let solver = ConstraintSolver::new(context, self.asts, std::mem::take(&mut self.unsolved));
         let unsolved = solver.solve(self.session);
 
         // Ok, hear me out. I know this is messy. We don't want to generalize metas that have pending type instances
@@ -731,7 +738,7 @@ impl<'a> InferencePass<'a> {
 
     fn visit_expr(&mut self, expr: &Expr, context: &mut impl Solve) -> InferTy {
         let ty = match &expr.kind {
-            ExprKind::LiteralArray(..) => todo!(),
+            ExprKind::LiteralArray(items) => self.visit_array(items, context),
             ExprKind::LiteralInt(_) => InferTy::Int,
             ExprKind::LiteralFloat(_) => InferTy::Float,
             ExprKind::LiteralTrue | ExprKind::LiteralFalse => InferTy::Bool,
@@ -768,6 +775,29 @@ impl<'a> InferencePass<'a> {
         self.session.types_by_node.insert(expr.id, ty.clone());
 
         ty
+    }
+
+    fn visit_array(&mut self, items: &[Expr], context: &mut impl Solve) -> InferTy {
+        let Some(first_item) = items.first() else {
+            let id = self.session.new_ty_meta_var_id(context.level());
+            self.generalization_blocks
+                .insert(id, GeneralizationBlock::EmptyArray);
+            return InferTy::Array(InferTy::Var {
+                id,
+                level: context.level(),
+            });
+        };
+
+        let item_ty = self.visit_expr(first_item, context);
+
+        for expr in items[1..].iter() {
+            let ty = self.visit_expr(expr, context);
+            context
+                .wants_mut()
+                .equals(item_ty.clone(), ty, ConstraintCause::Internal, expr.span);
+        }
+
+        InferTy::Array(item_ty)
     }
 
     fn visit_func_signature(
@@ -1401,6 +1431,51 @@ impl<'a> InferencePass<'a> {
         last_arm_ty.unwrap_or(InferTy::Void)
     }
 
+    fn promote_pattern_bindings(&mut self, pattern: &Pattern) {
+        use crate::node_kinds::pattern::{PatternKind, RecordFieldPatternKind};
+        match &pattern.kind {
+            PatternKind::Bind(Name::Resolved(sym, _)) => {
+                if let Some(entry) = self.session.lookup(sym) {
+                    let ty = match entry {
+                        EnvEntry::Mono(t) => t,
+                        EnvEntry::Scheme(s) => s.ty, // unlikely here, but safe
+                    };
+                    // Generalize with the current substitutions so metas turn into concrete types/params.
+                    self.session.insert(*sym, ty);
+                }
+            }
+            PatternKind::Tuple(items) => {
+                for p in items {
+                    self.promote_pattern_bindings(p);
+                }
+            }
+            PatternKind::Record { fields } => {
+                for f in fields {
+                    match &f.kind {
+                        RecordFieldPatternKind::Bind(name) => {
+                            if let Name::Resolved(sym, _) = name
+                                && let Some(entry) = self.session.lookup(sym)
+                            {
+                                let ty = match entry {
+                                    EnvEntry::Mono(t) => t,
+                                    EnvEntry::Scheme(s) => s.ty,
+                                };
+
+                                self.session.insert(*sym, ty);
+                            }
+                        }
+                        RecordFieldPatternKind::Equals { value, .. } => {
+                            self.promote_pattern_bindings(value);
+                        }
+                        RecordFieldPatternKind::Rest => {}
+                    }
+                }
+            }
+            // cover any other pattern forms you support
+            _ => {}
+        }
+    }
+
     #[instrument(level = tracing::Level::TRACE, skip(self, context))]
     fn check_pattern(&mut self, pattern: &Pattern, expected: &InferTy, context: &mut impl Solve) {
         let Pattern { kind, .. } = &pattern;
@@ -1976,39 +2051,7 @@ impl<'a> InferencePass<'a> {
             (None, None) => self.session.new_ty_meta_var(context.level()),
         };
 
-        match &lhs.kind {
-            PatternKind::Bind(name) => {
-                self.session.insert_term(name.symbol(), ty.to_entry());
-            }
-            PatternKind::Record { .. } => todo!(),
-            PatternKind::Tuple(items) => {
-                let vars = items
-                    .iter()
-                    .map(|_| self.session.new_ty_meta_var_id(context.level().next()))
-                    .collect_vec();
-                let expected = InferTy::Tuple(
-                    vars.iter()
-                        .map(|id| InferTy::Var {
-                            id: *id,
-                            level: context.level().next(),
-                        })
-                        .collect_vec(),
-                );
-                self.check_pattern(lhs, &expected, &mut context.next());
-                for (sym, var) in lhs.collect_binders().iter().zip(vars) {
-                    self.generalization_blocks
-                        .insert(var, GeneralizationBlock::PatternBindLocal);
-                    self.session.insert_mono(
-                        sym.1,
-                        InferTy::Var {
-                            id: var,
-                            level: context.level().next(),
-                        },
-                    );
-                }
-            }
-            _ => todo!(),
-        };
+        self.promote_pattern_bindings(lhs);
 
         ty
     }

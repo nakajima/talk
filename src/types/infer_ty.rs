@@ -220,12 +220,28 @@ impl InferTy {
         }
     }
     pub fn Array(_t: InferTy) -> InferTy {
+        let row = InferRow::Extend {
+            row: InferRow::Extend {
+                row: InferRow::Extend {
+                    row: InferRow::Empty(TypeDefKind::Struct).into(),
+                    label: "count".into(),
+                    ty: InferTy::Int,
+                }
+                .into(),
+                label: "capacity".into(),
+                ty: InferTy::Int,
+            }
+            .into(),
+            label: "storage".into(),
+            ty: InferTy::Int,
+        };
+
         InferTy::Nominal {
             symbol: Symbol::Struct(StructId {
                 module_id: ModuleId::Core,
                 local_id: 3,
             }),
-            row: Box::new(InferRow::Empty(TypeDefKind::Struct)),
+            row: row.into(),
         }
     }
 

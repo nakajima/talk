@@ -4,10 +4,9 @@ use indexmap::IndexSet;
 use rustc_hash::FxHashMap;
 
 use crate::{
-    name_resolution::symbol::{ProtocolId, Symbol},
-    node_id::NodeID,
+    name_resolution::symbol::ProtocolId,
     types::{
-        infer_ty::{InferTy, Level, MetaVarId, TypeParamId},
+        infer_ty::{InferTy, Level, TypeParamId},
         predicate::Predicate,
         type_catalog::ConformanceKey,
         type_operations::{InstantiationSubstitutions, UnificationSubstitutions, apply},
@@ -25,7 +24,6 @@ pub struct SolveContext {
     pub(super) wants: Wants,
     pub(super) givens: IndexSet<Predicate<InferTy>>,
     pub(super) level: Level,
-    pub(super) pending_type_instances: FxHashMap<MetaVarId, Vec<(Symbol, Vec<(InferTy, NodeID)>)>>,
 }
 
 pub(super) struct ChildSolveContext<'a> {
@@ -160,7 +158,6 @@ impl SolveContext {
             givens: Default::default(),
             wants: Default::default(),
             instantiations: Default::default(),
-            pending_type_instances: Default::default(),
             level,
         }
     }

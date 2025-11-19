@@ -2,7 +2,11 @@ use crate::{
     compiling::module::ModuleId,
     name::Name,
     name_resolution::symbol::{StructId, Symbol},
-    types::{infer_ty::TypeParamId, row::Row, type_session::TypeDefKind},
+    types::{
+        infer_ty::{InferTy, TypeParamId},
+        row::Row,
+        type_session::TypeDefKind,
+    },
 };
 
 pub trait SomeType: std::fmt::Debug + PartialEq + Clone {
@@ -108,14 +112,8 @@ impl Ty {
             row: Box::new(Row::Empty(TypeDefKind::Struct)),
         }
     }
-    pub fn Array(_t: Ty) -> Ty {
-        Ty::Nominal {
-            symbol: Symbol::Struct(StructId {
-                module_id: ModuleId::Core,
-                local_id: 3,
-            }),
-            row: Box::new(Row::Empty(TypeDefKind::Struct)),
-        }
+    pub fn Array(t: InferTy) -> Ty {
+        InferTy::Array(t).into()
     }
 
     pub(crate) fn uncurry_params(self) -> Vec<Ty> {

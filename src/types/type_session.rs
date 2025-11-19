@@ -1,7 +1,6 @@
 use std::{cell::RefCell, rc::Rc};
 
 use indexmap::{IndexMap, IndexSet};
-use itertools::Itertools;
 use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::instrument;
 
@@ -15,7 +14,7 @@ use crate::{
         constraints::constraint::Constraint,
         infer_row::{InferRow, RowMetaId, RowParamId},
         infer_ty::{InferTy, Level, Meta, MetaVarId, SkolemId, TypeParamId},
-        passes::inference_pass::{GeneralizationBlock, PendingTypeInstances},
+        passes::inference_pass::GeneralizationBlock,
         predicate::Predicate,
         row::Row,
         scheme::{ForAll, Scheme},
@@ -601,6 +600,7 @@ impl TypeSession {
         self.term_env.insert(sym, EnvEntry::Mono(ty));
     }
 
+    #[instrument(skip(self))]
     pub(super) fn lookup_member(
         &mut self,
         receiver: &Symbol,
@@ -611,7 +611,11 @@ impl TypeSession {
         }
 
         for module in self.modules.modules.values() {
-            if let Some((sym, source)) = module.types.catalogold.lookup_member(&receiver.current(), label) {
+            if let Some((sym, source)) = module
+                .types
+                .catalogold
+                .lookup_member(&receiver.current(), label)
+            {
                 match sym {
                     Symbol::InstanceMethod(..) => {
                         self.type_catalog
@@ -648,7 +652,9 @@ impl TypeSession {
                             .or_default()
                             .insert(label.clone(), sym);
                     }
-                    _ => (),
+                    _ => {
+                        tracing::warn!("found unhandled nominal member: {sym:?}");
+                    }
                 }
 
                 return Some((sym, source));
@@ -704,7 +710,13 @@ impl TypeSession {
         }
 
         for module in self.modules.modules.values() {
-            if let Some(variants) = module.types.catalogold.variants.get(&receiver.current()).cloned() {
+            if let Some(variants) = module
+                .types
+                .catalogold
+                .variants
+                .get(&receiver.current())
+                .cloned()
+            {
                 return Some(variants);
             }
         }
