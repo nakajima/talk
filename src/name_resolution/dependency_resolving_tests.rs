@@ -120,6 +120,22 @@ pub mod tests {
     }
 
     #[test]
+    fn only_creates_one_group_for_record_assignment() {
+        let types = resolve(
+            r#"
+            let { x, y } =  { x: 123, y: 456 }
+        "#,
+        );
+
+        assert_eq!(
+            types.phase.scc_graph.groups().len(),
+            1,
+            "{:#?}",
+            types.phase.scc_graph.groups()
+        );
+    }
+
+    #[test]
     fn contains_node_for_structs() {
         // We handle all instance methods for a struct in one go so we don't need to add individual nodes
         // for instance methods

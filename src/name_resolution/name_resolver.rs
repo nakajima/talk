@@ -356,7 +356,10 @@ impl NameResolver {
     ) {
         if !matches!(
             to_sym,
-            Symbol::Global(..) | Symbol::StaticMethod(..) | Symbol::DeclaredLocal(..)
+            Symbol::Global(..)
+                | Symbol::StaticMethod(..)
+                | Symbol::DeclaredLocal(..)
+                | Symbol::PatternBindLocal(..)
         ) {
             return;
         }
@@ -698,8 +701,13 @@ impl NameResolver {
         on!(&decl.kind, DeclKind::Let { lhs, .. }, {
             self.current_level = self.current_level.next();
             let mut last = None;
+
+            println!("enter_decl resolve: {:?}", lhs.collect_binders());
+
             for (id, binder) in lhs.collect_binders() {
-                if let Some((last_id, last_binder)) = last {
+                if let Some((last_id, last_binder)) = last
+                    && id != last_id
+                {
                     self.track_dependency_from_to(last_binder, last_id, binder, id);
                     self.track_dependency_from_to(binder, id, last_binder, last_id);
                 }

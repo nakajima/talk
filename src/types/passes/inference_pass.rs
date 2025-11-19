@@ -1100,40 +1100,6 @@ impl<'a> InferencePass<'a> {
             row: real_row.into(),
         };
 
-        // for (var_id, args) in self
-        //     .pending_type_instances
-        //     .get(&nominal_symbol)
-        //     .cloned()
-        //     .unwrap_or_default()
-        // {
-        //     let (instance, instantiations) = entry.instantiate_with_args(
-        //         decl.id,
-        //         &args,
-        //         self.session,
-        //         context.level(),
-        //         context.wants_mut(),
-        //         decl.span,
-        //     );
-
-        //     context.instantiations_mut().ty.extend(instantiations.ty);
-        //     context.instantiations_mut().row.extend(instantiations.row);
-
-        //     let var = InferTy::Var {
-        //         id: var_id,
-        //         level: self
-        //             .session
-        //             .meta_levels
-        //             .borrow()
-        //             .get(&Meta::Ty(var_id))
-        //             .copied()
-        //             .unwrap(),
-        //     };
-
-        //     context
-        //         .wants_mut()
-        //         .equals(var, instance, ConstraintCause::Internal, decl.span);
-        // }
-
         self.session.insert_term(nominal_symbol, entry);
 
         ty
@@ -1459,15 +1425,7 @@ impl<'a> InferencePass<'a> {
     ) -> InferTy {
         match &pattern.kind {
             PatternKind::Bind(Name::Resolved(sym, _)) => {
-                // let level = context.level();
-                // let var = self.session.new_ty_meta_var_id(level);
-                // self.generalization_blocks
-                //     .insert(var, GeneralizationBlock::PatternBindLocal);
-
-                // self.session.insert(*sym, InferTy::Var { id: var, level });
-
                 if let Some(EnvEntry::Mono(existing)) = self.session.lookup(sym) {
-                    tracing::trace!("found existing.");
                     context.wants_mut().equals(
                         expected.clone(),
                         existing.clone(),
@@ -1475,13 +1433,6 @@ impl<'a> InferencePass<'a> {
                         pattern.span,
                     );
                 };
-
-                // context.wants_mut().equals(
-                //     InferTy::Var { id: var, level },
-                //     expected.clone(),
-                //     ConstraintCause::Internal,
-                //     pattern.span,
-                // );
 
                 self.session.insert(*sym, expected.clone());
                 expected.clone()
@@ -1520,19 +1471,15 @@ impl<'a> InferencePass<'a> {
                 for field in fields {
                     match &field.kind {
                         RecordFieldPatternKind::Bind(name) => {
-                            let ty = if let Some(existing) = self.session.lookup(&name.symbol()) {
-                                existing._as_ty()
-                            } else {
-                                let var = self.session.new_ty_meta_var_id(context.level());
-                                self.generalization_blocks
-                                    .insert(var, GeneralizationBlock::PatternBindLocal);
-                                InferTy::Var {
-                                    id: var,
-                                    level: context.level(),
-                                }
+                            let var = self.session.new_ty_meta_var_id(context.level());
+                            self.generalization_blocks
+                                .insert(var, GeneralizationBlock::PatternBindLocal);
+                            let ty = InferTy::Var {
+                                id: var,
+                                level: context.level(),
                             };
 
-                            self.session.insert(name.symbol(), expected.clone());
+                            self.session.insert(name.symbol(), ty.clone());
                             row = InferRow::Extend {
                                 row: row.into(),
                                 label: name.name_str().into(),
@@ -1561,7 +1508,16 @@ impl<'a> InferencePass<'a> {
                         RecordFieldPatternKind::Rest => {}
                     }
                 }
-                InferTy::Record(row.into())
+
+                let ty = InferTy::Record(row.into());
+                context.wants_mut().equals(
+                    ty.clone(),
+                    expected.clone(),
+                    ConstraintCause::Internal,
+                    pattern.span,
+                );
+
+                ty
             }
             // cover any other pattern forms you support
             _ => InferTy::Void,

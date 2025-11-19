@@ -104,7 +104,8 @@ impl Pattern {
                         RecordFieldPatternKind::Bind(name) => {
                             result.push((field.id, name.symbol()))
                         }
-                        RecordFieldPatternKind::Equals { value, .. } => {
+                        RecordFieldPatternKind::Equals { name, value, .. } => {
+                            result.push((field.id, name.symbol()));
                             result.extend(value.collect_binders())
                         }
                         RecordFieldPatternKind::Rest => (),
