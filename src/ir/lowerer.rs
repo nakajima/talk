@@ -1199,8 +1199,8 @@ impl<'a> Lowerer<'a> {
                                 .instantiations
                                 .row
                                 .get(&(id, *param))
-                                .map(|row| row.clone())
-                                .unwrap_or_else(|| Row::Param(*param));
+                                .cloned()
+                                .unwrap_or(Row::Param(*param));
 
                             substitutions.row.insert(*param, row);
                         }

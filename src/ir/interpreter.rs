@@ -207,7 +207,7 @@ impl Interpreter {
                 ..
             }) => {
                 let Label::Positional(idx) = field else {
-                    panic!("did not get positional index for record field");
+                    panic!("did not get positional index for record field: {field:?}");
                 };
 
                 let Value::Record(fields) = self.read_register(&record) else {
