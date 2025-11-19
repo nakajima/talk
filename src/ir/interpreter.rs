@@ -391,4 +391,17 @@ pub mod tests {
             Value::Float(1.23)
         );
     }
+
+    #[test]
+    pub fn add_method() {
+        assert_eq!(
+            interpret(
+                "func add(x) { x + 1 }
+
+            add(2)
+            "
+            ),
+            Value::Int(3)
+        );
+    }
 }

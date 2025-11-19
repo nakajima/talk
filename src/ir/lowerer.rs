@@ -770,6 +770,11 @@ impl<'a> Lowerer<'a> {
 
             println!("lower_member: receiver_ty={receiver_ty:?}, label={label:?}");
 
+            println!(
+                "lower_member: receiver_ty={receiver_ty:?}, label={label:?}\n{:#?}",
+                self.types.catalog.instance_methods
+            );
+
             if let Ty::Nominal { symbol, .. } = &receiver_ty
                 && let Some(methods) = self.types.catalog.instance_methods.get(symbol)
                 && let Some(method) = methods.get(label).cloned()
@@ -1137,6 +1142,10 @@ impl<'a> Lowerer<'a> {
             ExprKind::Constructor(name) => name,
             _ => {
                 tracing::trace!("expr has no substitutions: {expr:?}");
+                println!(
+                    "expr has no substitutions: {expr:?}, {:?}",
+                    self.ty_from_id(&expr.id)
+                );
                 return Ok((self.ty_from_id(&expr.id)?, Default::default()));
             }
         };
@@ -1168,9 +1177,7 @@ impl<'a> Lowerer<'a> {
             TypeEntry::Mono(ty) => Ok((ty.clone(), Default::default())),
             TypeEntry::Poly(scheme) => {
                 let mut substitutions = Substitutions::default();
-                println!("tci: {:?}", self.types.catalog.instantiations);
                 for forall in scheme.foralls.iter() {
-                    println!("id: {id:?}, forall: {forall:?}");
                     match forall {
                         ForAll::Ty(param) => {
                             let ty = self
@@ -1179,8 +1186,8 @@ impl<'a> Lowerer<'a> {
                                 .instantiations
                                 .ty
                                 .get(&(id, *param))
-                                .map(|ty| ty.clone())
-                                .unwrap_or_else(|| Ty::Param(*param));
+                                .cloned()
+                                .unwrap_or(Ty::Param(*param));
 
                             substitutions.ty.insert(*param, ty);
                         }
@@ -1213,6 +1220,7 @@ impl<'a> Lowerer<'a> {
         {
             Label::Positional(idx)
         } else {
+            panic!("can't get positional index for some reason? {receiver_ty:?}.{label:?}");
             label.clone()
         }
     }
