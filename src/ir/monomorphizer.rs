@@ -5,7 +5,7 @@ use crate::{
     ast::AST,
     compiling::driver::Source,
     ir::{
-        basic_block::BasicBlock,
+        basic_block::{BasicBlock, Phi},
         function::Function,
         instruction::Instruction,
         ir_ty::IrTy,
@@ -83,6 +83,15 @@ impl<'a> Monomorphizer<'a> {
     ) -> BasicBlock<IrTy> {
         BasicBlock {
             id: block.id,
+            phis: block
+                .phis
+                .into_iter()
+                .map(|phi| Phi {
+                    dest: phi.dest,
+                    ty: self.monomorphize_ty(phi.ty, substitutions),
+                    sources: phi.sources,
+                })
+                .collect(),
             instructions: block
                 .instructions
                 .into_iter()

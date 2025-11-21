@@ -1,10 +1,13 @@
 use crate::compiling::module::{ModuleEnvironment, ModuleId};
 use crate::formatter;
+use crate::ir::basic_block::{Phi, PhiSource};
+use crate::ir::instruction::CmpOperator;
 use crate::ir::ir_ty::IrTy;
 use crate::ir::monomorphizer::uncurry_function;
 use crate::ir::parse_instruction;
 use crate::label::Label;
 use crate::name_resolution::symbol::{InstanceMethodId, Symbols};
+use crate::node_kinds::match_arm::MatchArm;
 use crate::node_kinds::parameter::Parameter;
 use crate::node_kinds::record_field::RecordField;
 use crate::types::infer_row::RowParamId;
@@ -49,7 +52,6 @@ use crate::{
     },
 };
 use indexmap::IndexMap;
-use itertools::Itertools;
 use rustc_hash::FxHashMap;
 use tracing::instrument;
 
@@ -74,6 +76,7 @@ impl Default for CurrentFunction {
         CurrentFunction {
             current_block_idx: vec![0],
             blocks: vec![BasicBlock::<Ty> {
+                phis: Default::default(),
                 id: BasicBlockId(0),
                 instructions: Default::default(),
                 terminator: Terminator::Unreachable,
@@ -532,12 +535,7 @@ impl<'a> Lowerer<'a> {
                 field,
                 ty: receiver_ty,
             } => {
-                // This is the tricky part - need to rebuild the chain
-
-                // 1. Load the base (to get what we're inserting into)
                 let base_val = self.emit_load_lvalue(&receiver_ty, &base)?;
-
-                // 2. Insert the new value at this level
                 let dest = self.next_register();
                 self.push_instr(Instruction::SetField {
                     dest,
@@ -548,7 +546,6 @@ impl<'a> Lowerer<'a> {
                     meta: vec![].into(),
                 });
 
-                // 3. Recursively store the updated value back into base!
                 self.emit_lvalue_store(base, dest.into())?;
 
                 Ok(())
@@ -672,13 +669,191 @@ impl<'a> Lowerer<'a> {
             ExprKind::Variable(name) => self.lower_variable(name, expr, instantiations),
             ExprKind::Constructor(name) => self.lower_constructor(name, expr, bind, instantiations),
             ExprKind::If(..) => todo!(),
-            ExprKind::Match(..) => todo!(),
+            ExprKind::Match(box scrutinee, arms) => {
+                self.lower_match(scrutinee, arms, bind, instantiations)
+            }
             ExprKind::RecordLiteral { fields, .. } => {
                 self.lower_record_literal(expr, fields, bind, instantiations)
             }
             ExprKind::RowVariable(..) => todo!(),
             ExprKind::As(lhs, ..) => self.lower_expr(lhs, bind, instantiations),
             _ => unreachable!("cannot lower expr: {expr:?}"),
+        }
+    }
+
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
+    fn lower_match(
+        &mut self,
+        scrutinee: &Expr,
+        arms: &[MatchArm],
+        bind: Bind,
+        instantiations: &Substitutions,
+    ) -> Result<(Value, Ty), IRError> {
+        // Type of the whole match expression (all arm bodies are this type).
+        // If you have a dedicated match expr node id, you can use that instead.
+        let result_type = {
+            let first_arm_expr_id = arms[0].body.id;
+            self.ty_from_id(&first_arm_expr_id)?
+        };
+
+        // This is the "result variable" of the match expression.
+        // If in statement position, this may just be DROP and never used.
+        let result_register = self.ret(bind);
+
+        // 1. Lower scrutinee.
+        let (scrutinee_value, _scrutinee_type) =
+            self.lower_expr(scrutinee, Bind::Fresh, instantiations)?;
+        let scrutinee_register = scrutinee_value.as_register()?;
+
+        // 2. One block per arm + a join block.
+        let join_block_id = self.new_basic_block();
+
+        let mut arm_block_ids = Vec::with_capacity(arms.len());
+        let mut arm_result_registers = Vec::with_capacity(arms.len());
+
+        for arm in arms {
+            let arm_block_id = self.new_basic_block();
+            arm_block_ids.push(arm_block_id);
+
+            self.in_basic_block(arm_block_id, |lowerer| {
+                let (arm_value, _arm_type) =
+                    lowerer.lower_block(&arm.body, Bind::Fresh, instantiations)?;
+                let arm_register = arm_value.as_register()?;
+                arm_result_registers.push(arm_register);
+
+                lowerer.push_terminator(Terminator::Jump { to: join_block_id });
+                Ok(())
+            })?;
+        }
+
+        // 3. Build the dispatch chain from the block that computed the scrutinee.
+        self.build_match_dispatch(scrutinee, scrutinee_register.into(), arms, &arm_block_ids)?;
+
+        // 4. Join block φ (if match produces a value).
+        self.set_current_block(join_block_id);
+
+        self.push_phi(Phi {
+            dest: result_register,
+            ty: result_type.clone(),
+            sources: arm_block_ids
+                .into_iter()
+                .zip(arm_result_registers.into_iter())
+                .map(|a| a.into())
+                .collect::<Vec<PhiSource>>()
+                .into(),
+        });
+
+        Ok((Value::Reg(result_register.0), result_type))
+    }
+
+    fn build_match_dispatch(
+        &mut self,
+        scrutinee_expr: &Expr,
+        scrutinee_value: Value,
+        arms: &[MatchArm],
+        arm_block_ids: &[BasicBlockId],
+    ) -> Result<(), IRError> {
+        assert_eq!(
+            arms.len(),
+            arm_block_ids.len(),
+            "arms and arm blocks must match"
+        );
+
+        // Type of scrutinee; used for the Cmp instruction.
+        let scrutinee_type = self.ty_from_id(&scrutinee_expr.id)?;
+
+        // Start dispatch from the block where the scrutinee was just computed.
+        let current_function = self.current_function_stack.last().unwrap();
+        let current_block_index = *current_function.current_block_idx.last().unwrap();
+        let mut current_test_block_id = current_function.blocks[current_block_index].id;
+
+        for arm_index in 0..arms.len() {
+            let arm = &arms[arm_index];
+            let arm_block_id = arm_block_ids[arm_index];
+
+            // If the pattern is Bind or Wildcard, this is a catch-all from here on.
+            match &arm.pattern.kind {
+                PatternKind::Bind(..) | PatternKind::Wildcard => {
+                    self.set_current_block(current_test_block_id);
+                    self.push_terminator(Terminator::Jump { to: arm_block_id });
+                    return Ok(());
+                }
+                _ => {}
+            }
+
+            // Last arm: treat it as default (type checker should have enforced
+            // exhaustiveness or complained earlier).
+            if arm_index == arms.len() - 1 {
+                self.set_current_block(current_test_block_id);
+                self.push_terminator(Terminator::Jump { to: arm_block_id });
+                break;
+            }
+
+            // For non-last arms, we emit: Cmp then Branch.
+            self.set_current_block(current_test_block_id);
+
+            let (pattern_value, _pattern_type) = self.lower_pattern_literal_value(&arm.pattern)?;
+
+            let condition_register = self.next_register();
+            self.push_instr(Instruction::Cmp {
+                dest: condition_register,
+                lhs: scrutinee_value.clone(),
+                rhs: pattern_value,
+                ty: scrutinee_type.clone(),
+                op: CmpOperator::Equals,
+                meta: vec![InstructionMeta::Source(arm.pattern.id)].into(),
+            });
+
+            let next_test_block_id = self.new_basic_block();
+
+            self.push_terminator(Terminator::Branch {
+                cond: Value::Reg(condition_register.0),
+                conseq: arm_block_id,
+                alt: next_test_block_id,
+            });
+
+            // Next iteration will emit into the fallthrough test block.
+            current_test_block_id = next_test_block_id;
+        }
+
+        Ok(())
+    }
+
+    fn lower_pattern_literal_value(&mut self, pattern: &Pattern) -> Result<(Value, Ty), IRError> {
+        match &pattern.kind {
+            PatternKind::LiteralInt(text) => {
+                let parsed = text.parse::<i64>().map_err(|error| {
+                    IRError::InvalidAssignmentTarget(format!(
+                        "invalid integer literal in match pattern: {text} ({error})"
+                    ))
+                })?;
+                Ok((Value::Int(parsed), Ty::Int))
+            }
+
+            PatternKind::LiteralFloat(text) => {
+                let parsed = text.parse::<f64>().map_err(|error| {
+                    IRError::InvalidAssignmentTarget(format!(
+                        "invalid float literal in match pattern: {text} ({error})"
+                    ))
+                })?;
+                Ok((Value::Float(parsed), Ty::Float))
+            }
+
+            PatternKind::LiteralTrue => Ok((Value::Bool(true), Ty::Bool)),
+            PatternKind::LiteralFalse => Ok((Value::Bool(false), Ty::Bool)),
+
+            PatternKind::Bind(..) | PatternKind::Wildcard => {
+                // These are handled earlier in build_match_dispatch as defaults.
+                unreachable!("Bind and Wildcard should not reach lower_pattern_literal_value")
+            }
+
+            // Everything else will need a more sophisticated scheme:
+            // - Variant: compare enum tag, then destructure fields in the arm
+            // - Tuple / Record / Struct: recursive structural matching
+            // For now, make it explicit that these are not lowered here.
+            other => Err(IRError::InvalidAssignmentTarget(format!(
+                "pattern kind not yet supported in match dispatch lowering: {other:?}"
+            ))),
         }
     }
 
@@ -1007,33 +1182,6 @@ impl<'a> Lowerer<'a> {
             );
         }
 
-        // let callee_ir = if let ExprKind::Member(Some(box receiver), member, ..) = &callee.kind
-        //     && let Some(method_sym) = self.lookup_instance_method(receiver, member)?
-        // {
-        //     // Handle method calls. It'd be nice if we could re-use lower_member here but i'm not sure
-        //     // how we'd get the receiver value, which we need to pass as the first arg..
-        //     self.check_import(&method_sym);
-        //     let (receiver_ir, _) = self.lower_expr(receiver, Bind::Fresh, &instantiations)?;
-        //     arg_vals.insert(0, receiver_ir);
-        //     Value::Func(Name::Resolved(method_sym, member.to_string()))
-        // } else if let ExprKind::Member(Some(box receiver), label, ..) = &callee.kind
-        //     && let ExprKind::As(lhs, anno) = &receiver.kind
-        //     && let Symbol::Protocol(protocol_id) = anno.symbol()
-        //     && let Some(witness) = self.witness_for(&id, protocol_id, label).copied()
-        // {
-        //     tracing::debug!("lowering req {label} {witness:?}");
-        //     println!("ok wise guuy {:?}", self.types.catalog.instantiations.ty);
-
-        //     self.check_import(&witness);
-        //     let (receiver_ir, _) = self.lower_expr(lhs, Bind::Fresh, &instantiations)?;
-        //     arg_vals.insert(0, receiver_ir);
-        //     Value::Func(Name::Resolved(witness, label.to_string()))
-        //     // self.push_instr(Instruction::Ref {
-        //     //     dest,
-        //     //     ty: ty.clone(),
-        //     //     val: Value::Func(Name::Resolved(witness, label.to_string())),
-        //     // })
-        // } else {
         let callee_ir = self.lower_expr(callee, Bind::Fresh, &instantiations)?.0;
 
         self.push_instr(Instruction::Call {
@@ -1087,17 +1235,6 @@ impl<'a> Lowerer<'a> {
             });
             return Ok((dest.into(), ty));
         }
-
-        println!("Callee {:?} ---------------------", callee_expr.id);
-        println!("Witnesses: {:?}", self.types.catalog.member_witnesses);
-        println!(
-            "Module witnesses: {:?}",
-            self.modules
-                .modules
-                .values()
-                .map(|m| &m.types.catalog.member_witnesses)
-                .collect_vec()
-        );
 
         Err(IRError::TypeNotFound(format!(
             "No witness found for {:?} in {:?}.",
@@ -1199,11 +1336,19 @@ impl<'a> Lowerer<'a> {
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
+    fn push_phi(&mut self, phi: Phi<Ty>) {
+        let current_function = self.current_function_stack.last_mut().unwrap();
+        let current_block_idx = current_function.current_block_idx.last().unwrap();
+        current_function.blocks[*current_block_idx].phis.push(phi);
+    }
+
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn new_basic_block(&mut self) -> BasicBlockId {
         let current_function = self.current_function_stack.last_mut().unwrap();
         let id = BasicBlockId(current_function.blocks.len() as u32);
         let new_block = BasicBlock {
             id,
+            phis: Default::default(),
             instructions: Default::default(),
             terminator: Terminator::Unreachable,
         };

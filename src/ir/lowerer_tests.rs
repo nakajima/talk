@@ -7,9 +7,9 @@ pub mod tests {
             module::ModuleId,
         },
         ir::{
-            basic_block::{BasicBlock, BasicBlockId},
+            basic_block::{BasicBlock, BasicBlockId, Phi, PhiSource},
             function::Function,
-            instruction::{Instruction, InstructionMeta},
+            instruction::{CmpOperator, Instruction, InstructionMeta},
             ir_ty::IrTy,
             list::List,
             lowerer::Lowerer,
@@ -59,6 +59,7 @@ pub mod tests {
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
                 blocks: vec![BasicBlock {
                     id: BasicBlockId(0),
+                    phis: Default::default(),
                     instructions: vec![
                         Instruction::Constant { ty: IrTy::Int, dest: 0.into(), val: 123.into(), meta: vec![InstructionMeta::Source(NodeID::ANY)].into(), }
                     ],
@@ -83,6 +84,7 @@ pub mod tests {
                 ty: IrTy::Func(vec![], IrTy::Float.into()),
                 blocks: vec![BasicBlock {
                 id: BasicBlockId(0),
+                phis: Default::default(),
                 instructions: vec![
                     Instruction::Constant {
                       ty: IrTy::Float,
@@ -112,6 +114,7 @@ pub mod tests {
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
                     blocks: vec![BasicBlock {
                     id: BasicBlockId(0),
+                    phis: Default::default(),
                     instructions: vec![
                         Instruction::Constant { ty: IrTy::Int, dest: 0.into(), val: 123.into(), meta: vec![InstructionMeta::Source(NodeID::ANY)].into(), }
                     ],
@@ -136,6 +139,7 @@ pub mod tests {
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
                     blocks: vec![BasicBlock {
                     id: BasicBlockId(0),
+                    phis: Default::default(),
                     instructions: vec![
                         Instruction::Constant { ty: IrTy::Int, dest: 0.into(), val: 123.into(), meta: vec![InstructionMeta::Source(NodeID::ANY)].into(), }
                     ],
@@ -169,6 +173,7 @@ pub mod tests {
                 register_count: 3,
                 blocks: vec![BasicBlock::<IrTy> {
                     id: BasicBlockId(0),
+                    phis: Default::default(),
                     instructions: vec![
                         Instruction::Ref {
                             dest: 0.into(),
@@ -214,6 +219,7 @@ pub mod tests {
                 ty: IrTy::Func(vec![IrTy::Int], IrTy::Int.into()),
                 blocks: vec![BasicBlock {
                     id: BasicBlockId(0),
+                    phis: Default::default(),
                     instructions: vec![],
                     terminator: Terminator::Ret {
                         val: Value::Reg(0),
@@ -245,6 +251,7 @@ pub mod tests {
                 register_count: 4,
                 blocks: vec![BasicBlock {
                     id: BasicBlockId(0),
+                    phis: Default::default(),
                     instructions: vec![
                         Instruction::Constant {
                             ty: IrTy::Int,
@@ -306,6 +313,7 @@ pub mod tests {
                 register_count: 4,
                 blocks: vec![BasicBlock {
                     id: BasicBlockId(0),
+                    phis: Default::default(),
                     instructions: vec![
                         Instruction::Constant {
                             ty: IrTy::Int,
@@ -361,6 +369,7 @@ pub mod tests {
                 ty: IrTy::Func(vec![], IrTy::Record(vec![IrTy::Int]).into()),
                 blocks: vec![BasicBlock::<IrTy> {
                     id: BasicBlockId(0),
+                    phis: Default::default(),
                     instructions: vec![Instruction::Record {
                         dest: 0.into(),
                         ty: IrTy::Record(vec![IrTy::Int]),
@@ -398,6 +407,7 @@ pub mod tests {
                 ),
                 blocks: vec![BasicBlock::<IrTy> {
                     id: BasicBlockId(0),
+                    phis: Default::default(),
                     instructions: vec![
                         Instruction::Constant {
                             ty: IrTy::Float,
@@ -442,6 +452,7 @@ pub mod tests {
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
                 blocks: vec![BasicBlock::<IrTy> {
                     id: BasicBlockId(0),
+                    phis: Default::default(),
                     instructions: vec![
                         Instruction::Constant {
                             ty: IrTy::Int,
@@ -515,6 +526,7 @@ pub mod tests {
                 register_count: 4,
                 blocks: vec![BasicBlock::<IrTy> {
                     id: BasicBlockId(0),
+                    phis: Default::default(),
                     instructions: vec![
                         Instruction::Constant {
                             ty: IrTy::Int,
@@ -574,6 +586,7 @@ pub mod tests {
                 register_count: 1,
                 blocks: vec![BasicBlock {
                     id: BasicBlockId(0),
+                    phis: Default::default(),
                     instructions: vec![Instruction::Add {
                         dest: 0.into(),
                         ty: IrTy::Int,
@@ -611,6 +624,7 @@ pub mod tests {
                 register_count: 3,
                 blocks: vec![BasicBlock {
                     id: BasicBlockId(0),
+                    phis: Default::default(),
                     instructions: vec![
                         Instruction::Constant {
                             ty: IrTy::Int,
@@ -663,6 +677,7 @@ pub mod tests {
                 register_count: 5,
                 blocks: vec![BasicBlock::<IrTy> {
                     id: BasicBlockId(0),
+                    phis: Default::default(),
                     instructions: vec![
                         Instruction::Ref {
                             dest: 0.into(),
@@ -725,6 +740,7 @@ pub mod tests {
                 register_count: 1,
                 blocks: vec![BasicBlock::<IrTy> {
                     id: BasicBlockId(0),
+                    phis: Default::default(),
                     instructions: vec![],
                     terminator: Terminator::Ret {
                         val: Value::Reg(0),
@@ -749,6 +765,7 @@ pub mod tests {
                 register_count: 1,
                 blocks: vec![BasicBlock::<IrTy> {
                     id: BasicBlockId(0),
+                    phis: Default::default(),
                     instructions: vec![],
                     terminator: Terminator::Ret {
                         val: Value::Reg(0),
@@ -783,6 +800,7 @@ pub mod tests {
                 blocks: vec![
                     BasicBlock {
                         id: BasicBlockId(0),
+                        phis: Default::default(),
                         instructions: vec![],
                         terminator: Terminator::Branch {
                             cond: Value::Bool(false),
@@ -792,6 +810,7 @@ pub mod tests {
                     },
                     BasicBlock {
                         id: BasicBlockId(1),
+                        phis: Default::default(),
                         instructions: vec![Instruction::Constant {
                             dest: 0.into(),
                             ty: IrTy::Int,
@@ -804,6 +823,7 @@ pub mod tests {
                     },
                     BasicBlock {
                         id: BasicBlockId(2),
+                        phis: Default::default(),
                         instructions: vec![Instruction::Constant {
                             dest: 1.into(),
                             ty: IrTy::Int,
@@ -816,6 +836,151 @@ pub mod tests {
                         }
                     }
                 ],
+            }
+        );
+    }
+
+    #[test]
+    fn lowers_match() {
+        let program = lower(
+            "
+        match 789 {
+            123 -> 1,
+            456 -> 2,
+            789 -> 3,
+        }
+        ",
+        );
+
+        assert_eq_diff!(
+            *program
+                .functions
+                .get(&Symbol::Synthesized(SynthesizedId::from(1)))
+                .unwrap(),
+            Function::<IrTy> {
+                name: Name::Resolved(SynthesizedId::from(1).into(), "main".into()),
+                params: vec![].into(),
+                ty: IrTy::Func(vec![], IrTy::Int.into()),
+                // allocator got up to Register(9), so next is 10
+                register_count: 10,
+                blocks: vec![
+                    BasicBlock {
+                        id: BasicBlockId(0),
+                        phis: vec![],
+                        instructions: vec![
+                            Instruction::Constant {
+                                dest: Register(1),
+                                ty: IrTy::Int,
+                                val: Value::Int(789),
+                                meta: meta(), // NodeID::ANY-based helper
+                            },
+                            Instruction::Cmp {
+                                dest: Register(8),
+                                lhs: Value::Reg(1),
+                                rhs: Value::Int(123),
+                                ty: IrTy::Int,
+                                op: CmpOperator::Equals,
+                                meta: meta(),
+                            },
+                        ],
+                        terminator: Terminator::Branch {
+                            cond: Value::Reg(8),
+                            conseq: BasicBlockId(2),
+                            alt: BasicBlockId(5),
+                        },
+                    },
+                    BasicBlock {
+                        id: BasicBlockId(1),
+                        phis: vec![Phi {
+                            dest: Register(0),
+                            ty: IrTy::Int,
+                            sources: vec![
+                                PhiSource {
+                                    from_id: BasicBlockId(2),
+                                    register: Register(2),
+                                },
+                                PhiSource {
+                                    from_id: BasicBlockId(3),
+                                    register: Register(4),
+                                },
+                                PhiSource {
+                                    from_id: BasicBlockId(4),
+                                    register: Register(6),
+                                },
+                            ]
+                            .into(),
+                        }],
+                        instructions: vec![],
+                        terminator: Terminator::Ret {
+                            val: Value::Reg(0),
+                            ty: IrTy::Int,
+                        },
+                    },
+                    BasicBlock {
+                        id: BasicBlockId(2),
+                        phis: vec![],
+                        instructions: vec![Instruction::Constant {
+                            dest: Register(3),
+                            ty: IrTy::Int,
+                            val: Value::Int(1),
+                            meta: meta(),
+                        },],
+                        terminator: Terminator::Jump {
+                            to: BasicBlockId(1),
+                        },
+                    },
+                    BasicBlock {
+                        id: BasicBlockId(3),
+                        phis: vec![],
+                        instructions: vec![Instruction::Constant {
+                            dest: Register(5),
+                            ty: IrTy::Int,
+                            val: Value::Int(2),
+                            meta: meta(),
+                        },],
+                        terminator: Terminator::Jump {
+                            to: BasicBlockId(1),
+                        },
+                    },
+                    BasicBlock {
+                        id: BasicBlockId(4),
+                        phis: vec![],
+                        instructions: vec![Instruction::Constant {
+                            dest: Register(7),
+                            ty: IrTy::Int,
+                            val: Value::Int(3),
+                            meta: meta(),
+                        },],
+                        terminator: Terminator::Jump {
+                            to: BasicBlockId(1),
+                        },
+                    },
+                    BasicBlock {
+                        id: BasicBlockId(5),
+                        phis: vec![],
+                        instructions: vec![Instruction::Cmp {
+                            dest: Register(9),
+                            lhs: Value::Reg(1),
+                            rhs: Value::Int(456),
+                            ty: IrTy::Int,
+                            op: CmpOperator::Equals,
+                            meta: meta(),
+                        },],
+                        terminator: Terminator::Branch {
+                            cond: Value::Reg(9),
+                            conseq: BasicBlockId(3),
+                            alt: BasicBlockId(6),
+                        },
+                    },
+                    BasicBlock {
+                        id: BasicBlockId(6),
+                        phis: vec![],
+                        instructions: vec![],
+                        terminator: Terminator::Jump {
+                            to: BasicBlockId(4),
+                        },
+                    },
+                ]
             }
         );
     }

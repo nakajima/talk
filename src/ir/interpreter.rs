@@ -414,4 +414,20 @@ pub mod tests {
             Value::Int(3)
         );
     }
+
+    #[test]
+    pub fn matching() {
+        assert_eq!(
+            interpret(
+                "
+                match 789 {
+                    123 -> 1,
+                    456 -> 2,
+                    789 -> 3
+                }
+                "
+            ),
+            Value::Int(3)
+        );
+    }
 }
