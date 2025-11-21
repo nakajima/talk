@@ -39,6 +39,14 @@ impl FromStr for Register {
 
 impl std::fmt::Display for Register {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.0 == Self::DROP.0 {
+            return write!(f, "%DROP");
+        }
+
+        if self.0 == Self::MAIN.0 {
+            return write!(f, "%MAIN");
+        }
+
         write!(f, "%{}", self.0)
     }
 }

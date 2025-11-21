@@ -796,7 +796,7 @@ pub mod tests {
                 name: Name::Resolved(SynthesizedId::from(1).into(), "main".into()),
                 params: vec![].into(),
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
-                register_count: 2,
+                register_count: 1,
                 blocks: vec![
                     BasicBlock {
                         id: BasicBlockId(0),
@@ -812,7 +812,7 @@ pub mod tests {
                         id: BasicBlockId(1),
                         phis: Default::default(),
                         instructions: vec![Instruction::Constant {
-                            dest: 0.into(),
+                            dest: Register::DROP,
                             ty: IrTy::Int,
                             val: Value::Int(456),
                             meta: meta()
@@ -825,13 +825,13 @@ pub mod tests {
                         id: BasicBlockId(2),
                         phis: Default::default(),
                         instructions: vec![Instruction::Constant {
-                            dest: 1.into(),
+                            dest: 0.into(),
                             ty: IrTy::Int,
                             val: Value::Int(123),
                             meta: meta()
                         }],
                         terminator: Terminator::Ret {
-                            val: Value::Reg(1),
+                            val: Value::Reg(0),
                             ty: IrTy::Int
                         }
                     }
@@ -862,7 +862,7 @@ pub mod tests {
                 params: vec![].into(),
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
                 // allocator got up to Register(9), so next is 10
-                register_count: 10,
+                register_count: 7,
                 blocks: vec![
                     BasicBlock {
                         id: BasicBlockId(0),
@@ -875,7 +875,7 @@ pub mod tests {
                                 meta: meta(), // NodeID::ANY-based helper
                             },
                             Instruction::Cmp {
-                                dest: Register(8),
+                                dest: Register(5),
                                 lhs: Value::Reg(1),
                                 rhs: Value::Int(123),
                                 ty: IrTy::Int,
@@ -884,7 +884,7 @@ pub mod tests {
                             },
                         ],
                         terminator: Terminator::Branch {
-                            cond: Value::Reg(8),
+                            cond: Value::Reg(5),
                             conseq: BasicBlockId(2),
                             alt: BasicBlockId(5),
                         },
@@ -901,11 +901,11 @@ pub mod tests {
                                 },
                                 PhiSource {
                                     from_id: BasicBlockId(3),
-                                    register: Register(4),
+                                    register: Register(3),
                                 },
                                 PhiSource {
                                     from_id: BasicBlockId(4),
-                                    register: Register(6),
+                                    register: Register(4),
                                 },
                             ]
                             .into(),
@@ -920,7 +920,7 @@ pub mod tests {
                         id: BasicBlockId(2),
                         phis: vec![],
                         instructions: vec![Instruction::Constant {
-                            dest: Register(3),
+                            dest: Register(2),
                             ty: IrTy::Int,
                             val: Value::Int(1),
                             meta: meta(),
@@ -933,7 +933,7 @@ pub mod tests {
                         id: BasicBlockId(3),
                         phis: vec![],
                         instructions: vec![Instruction::Constant {
-                            dest: Register(5),
+                            dest: Register(3),
                             ty: IrTy::Int,
                             val: Value::Int(2),
                             meta: meta(),
@@ -946,7 +946,7 @@ pub mod tests {
                         id: BasicBlockId(4),
                         phis: vec![],
                         instructions: vec![Instruction::Constant {
-                            dest: Register(7),
+                            dest: Register(4),
                             ty: IrTy::Int,
                             val: Value::Int(3),
                             meta: meta(),
@@ -959,7 +959,7 @@ pub mod tests {
                         id: BasicBlockId(5),
                         phis: vec![],
                         instructions: vec![Instruction::Cmp {
-                            dest: Register(9),
+                            dest: Register(6),
                             lhs: Value::Reg(1),
                             rhs: Value::Int(456),
                             ty: IrTy::Int,
@@ -967,7 +967,7 @@ pub mod tests {
                             meta: meta(),
                         },],
                         terminator: Terminator::Branch {
-                            cond: Value::Reg(9),
+                            cond: Value::Reg(6),
                             conseq: BasicBlockId(3),
                             alt: BasicBlockId(6),
                         },

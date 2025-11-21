@@ -2,8 +2,13 @@ use std::fmt::Display;
 
 use crate::{
     ir::{
-        function::Function, instruction::Instruction, ir_ty::IrTy, program::Program,
-        register::Register, terminator::Terminator,
+        basic_block::{BasicBlock, BasicBlockId, Phi},
+        function::Function,
+        instruction::{CmpOperator, Instruction},
+        ir_ty::IrTy,
+        program::Program,
+        register::Register,
+        terminator::Terminator,
     },
     label::Label,
     name_resolution::symbol::Symbol,
@@ -27,34 +32,91 @@ pub enum Value {
     Uninit,
 }
 
+#[allow(clippy::should_implement_trait)]
 impl Value {
-    fn add(self, other: Value) -> Value {
+    pub fn add(self, other: Value) -> Value {
         match (&self, &other) {
             (Self::Int(lhs), Self::Int(rhs)) => Self::Int(lhs + rhs),
             (Self::Float(lhs), Self::Float(rhs)) => Self::Float(lhs + rhs),
             _ => panic!("can't add {self:?} and {other:?}"),
         }
     }
-    fn sub(self, other: Value) -> Value {
+    pub fn sub(self, other: Value) -> Value {
         match (&self, &other) {
             (Self::Int(lhs), Self::Int(rhs)) => Self::Int(lhs - rhs),
             (Self::Float(lhs), Self::Float(rhs)) => Self::Float(lhs - rhs),
             _ => panic!("can't sub {self:?} and {other:?}"),
         }
     }
-    fn mul(self, other: Value) -> Value {
+    pub fn mul(self, other: Value) -> Value {
         match (&self, &other) {
             (Self::Int(lhs), Self::Int(rhs)) => Self::Int(lhs * rhs),
             (Self::Float(lhs), Self::Float(rhs)) => Self::Float(lhs * rhs),
             _ => panic!("can't mul {self:?} and {other:?}"),
         }
     }
-    fn div(self, other: Value) -> Value {
+    pub fn div(self, other: Value) -> Value {
         match (&self, &other) {
             (Self::Int(lhs), Self::Int(rhs)) => Self::Int(lhs / rhs),
             (Self::Float(lhs), Self::Float(rhs)) => Self::Float(lhs / rhs),
             _ => panic!("can't div {self:?} and {other:?}"),
         }
+    }
+    pub fn gt(self, other: Value) -> Value {
+        match (&self, &other) {
+            (Self::Int(lhs), Self::Int(rhs)) => Self::Bool(lhs > rhs),
+            (Self::Float(lhs), Self::Float(rhs)) => Self::Bool(lhs > rhs),
+            _ => panic!("can't compare {self:?} > {other:?}"),
+        }
+    }
+    pub fn gte(self, other: Value) -> Value {
+        match (&self, &other) {
+            (Self::Int(lhs), Self::Int(rhs)) => Self::Bool(lhs >= rhs),
+            (Self::Float(lhs), Self::Float(rhs)) => Self::Bool(lhs >= rhs),
+            _ => panic!("can't compare {self:?} > {other:?}"),
+        }
+    }
+    pub fn lt(self, other: Value) -> Value {
+        match (&self, &other) {
+            (Self::Int(lhs), Self::Int(rhs)) => Self::Bool(lhs < rhs),
+            (Self::Float(lhs), Self::Float(rhs)) => Self::Bool(lhs < rhs),
+            _ => panic!("can't compare {self:?} > {other:?}"),
+        }
+    }
+    pub fn lte(self, other: Value) -> Value {
+        match (&self, &other) {
+            (Self::Int(lhs), Self::Int(rhs)) => Self::Bool(lhs <= rhs),
+            (Self::Float(lhs), Self::Float(rhs)) => Self::Bool(lhs <= rhs),
+            _ => panic!("can't compare {self:?} > {other:?}"),
+        }
+    }
+    pub fn eq(self, other: Value) -> Value {
+        match (&self, &other) {
+            (Self::Int(lhs), Self::Int(rhs)) => Self::Bool(lhs == rhs),
+            (Self::Float(lhs), Self::Float(rhs)) => Self::Bool(lhs == rhs),
+            _ => panic!("can't compare {self:?} > {other:?}"),
+        }
+    }
+    pub fn ne(self, other: Value) -> Value {
+        match (&self, &other) {
+            (Self::Int(lhs), Self::Int(rhs)) => Self::Bool(lhs != rhs),
+            (Self::Float(lhs), Self::Float(rhs)) => Self::Bool(lhs != rhs),
+            _ => panic!("can't compare {self:?} > {other:?}"),
+        }
+    }
+}
+
+impl BasicBlock<IrTy> {
+    fn next_ir(&self, idx: usize) -> IR {
+        if idx >= self.phis.len() + self.instructions.len() {
+            return IR::Term(self.terminator.clone());
+        }
+
+        if idx >= self.phis.len() {
+            return IR::Instr(self.instructions[idx - self.phis.len()].clone());
+        }
+
+        IR::Phi(self.phis[idx].clone())
     }
 }
 
@@ -65,6 +127,7 @@ pub struct Frame {
     registers: Vec<Value>,
     pc: usize,
     current_block: usize,
+    prev_block: Option<usize>,
 }
 
 impl Frame {
@@ -75,11 +138,13 @@ impl Frame {
             registers: Default::default(),
             pc: 0,
             current_block: 0,
+            prev_block: None,
         }
     }
 }
 
 enum IR {
+    Phi(Phi<IrTy>),
     Instr(Instruction<IrTy>),
     Term(Terminator<IrTy>),
 }
@@ -87,6 +152,7 @@ enum IR {
 impl Display for IR {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            IR::Phi(phi) => write!(f, "{phi}"),
             IR::Instr(instr) => write!(f, "{instr}"),
             IR::Term(term) => write!(f, "{term}"),
         }
@@ -156,6 +222,17 @@ impl Interpreter {
         tracing::trace!("{:?}", self.frames.last().unwrap());
 
         match next_instruction {
+            IR::Phi(phi) => {
+                let prev = self.frames.last().unwrap().prev_block.unwrap();
+                let source = phi
+                    .sources
+                    .items
+                    .iter()
+                    .find(|s| s.from_id == BasicBlockId(prev as u32))
+                    .unwrap();
+                let val = self.read_register(&source.register);
+                self.write_register(&phi.dest, val);
+            }
             IR::Term(Terminator::Ret { val, .. }) => {
                 let val = self.val(val);
                 let frame = self.frames.pop().unwrap();
@@ -174,8 +251,17 @@ impl Interpreter {
                 }
             }
             IR::Term(Terminator::Unreachable) => panic!("Reached unreachable"),
-            IR::Term(Terminator::Branch { .. }) => todo!(),
-            IR::Term(Terminator::Jump { .. }) => todo!(),
+            IR::Term(Terminator::Branch { cond, conseq, alt }) => {
+                let cond_val = self.val(cond);
+                let next_block = if cond_val == Value::Bool(true) {
+                    conseq
+                } else {
+                    alt
+                };
+
+                self.jump(next_block);
+            }
+            IR::Term(Terminator::Jump { to }) => self.jump(to),
             IR::Instr(Instruction::Constant { dest, val, .. }) => {
                 let val = self.val(val);
                 self.write_register(&dest, val);
@@ -253,7 +339,20 @@ impl Interpreter {
 
                 self.write_register(&dest, Value::Ref(val));
             }
-            IR::Instr(Instruction::Cmp { .. }) => todo!(),
+            IR::Instr(Instruction::Cmp {
+                dest, lhs, rhs, op, ..
+            }) => {
+                let val = match op {
+                    CmpOperator::Greater => self.val(lhs).gt(self.val(rhs)),
+                    CmpOperator::GreaterEquals => self.val(lhs).gte(self.val(rhs)),
+                    CmpOperator::Less => self.val(lhs).lt(self.val(rhs)),
+                    CmpOperator::LessEquals => self.val(lhs).lte(self.val(rhs)),
+                    CmpOperator::Equals => self.val(lhs).eq(self.val(rhs)),
+                    CmpOperator::NotEquals => self.val(lhs).ne(self.val(rhs)),
+                };
+
+                self.write_register(&dest, val);
+            }
         }
     }
 
@@ -262,15 +361,18 @@ impl Interpreter {
         let frame = self.frames.last_mut().unwrap();
         let func = self.current_func.as_ref().unwrap();
         let block = &func.blocks[frame.current_block];
-        let result = if frame.pc >= block.instructions.len() {
-            IR::Term(block.terminator.clone())
-        } else {
-            IR::Instr(block.instructions[frame.pc].clone())
-        };
+        let ir = block.next_ir(frame.pc);
 
         frame.pc += 1;
 
-        result
+        ir
+    }
+
+    fn jump(&mut self, basic_block_id: BasicBlockId) {
+        let frame = self.frames.last_mut().unwrap();
+        frame.prev_block = Some(frame.current_block);
+        frame.current_block = basic_block_id.0 as usize;
+        frame.pc = 0;
     }
 
     fn write_register(&mut self, register: &Register, val: Value) {

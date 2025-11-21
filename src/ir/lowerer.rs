@@ -270,9 +270,19 @@ impl<'a> Lowerer<'a> {
         node: &Node,
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
+        self.lower_node_with_bind(node, instantiations, Bind::Fresh)
+    }
+
+    #[instrument(level = tracing::Level::TRACE, skip(self, node), fields(node.id = %node.node_id()))]
+    fn lower_node_with_bind(
+        &mut self,
+        node: &Node,
+        instantiations: &Substitutions,
+        bind: Bind,
+    ) -> Result<(Value, Ty), IRError> {
         match node {
             Node::Decl(decl) => self.lower_decl(decl, instantiations),
-            Node::Stmt(stmt) => self.lower_stmt(stmt, instantiations),
+            Node::Stmt(stmt) => self.lower_stmt(stmt, instantiations, bind),
             _ => unreachable!("node not handled: {node:?}"),
         }
     }
@@ -406,9 +416,10 @@ impl<'a> Lowerer<'a> {
         &mut self,
         stmt: &Stmt,
         instantiations: &Substitutions,
+        bind: Bind,
     ) -> Result<(Value, Ty), IRError> {
         match &stmt.kind {
-            StmtKind::Expr(expr) => self.lower_expr(expr, Bind::Fresh, instantiations),
+            StmtKind::Expr(expr) => self.lower_expr(expr, bind, instantiations),
             StmtKind::If(cond, conseq, alt) => {
                 self.lower_if_stmt(cond, conseq, alt, instantiations)
             }
@@ -468,15 +479,20 @@ impl<'a> Lowerer<'a> {
         bind: Bind,
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
-        let ret = self.ret(bind);
-
-        for node in &block.body {
-            self.lower_node(node, instantiations)?;
+        for (i, node) in block.body.iter().enumerate() {
+            // We want to skip the last one in the loop so we can handle it outside the loop and use our Bind
+            if i < block.body.len() - 1 {
+                self.lower_node(node, instantiations)?;
+            }
         }
 
-        let ty = self.ty_from_id(&block.id)?;
+        let (val, ty) = if let Some(node) = block.body.last() {
+            self.lower_node_with_bind(node, instantiations, bind)?
+        } else {
+            (Value::Void, Ty::Void)
+        };
 
-        Ok((ret.into(), ty))
+        Ok((val, ty))
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self, lhs, rhs), fields(lhs.id = %lhs.id, rhs.id = %rhs.id))]
@@ -689,23 +705,17 @@ impl<'a> Lowerer<'a> {
         bind: Bind,
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
-        // Type of the whole match expression (all arm bodies are this type).
-        // If you have a dedicated match expr node id, you can use that instead.
         let result_type = {
             let first_arm_expr_id = arms[0].body.id;
             self.ty_from_id(&first_arm_expr_id)?
         };
 
-        // This is the "result variable" of the match expression.
-        // If in statement position, this may just be DROP and never used.
         let result_register = self.ret(bind);
 
-        // 1. Lower scrutinee.
         let (scrutinee_value, _scrutinee_type) =
             self.lower_expr(scrutinee, Bind::Fresh, instantiations)?;
         let scrutinee_register = scrutinee_value.as_register()?;
 
-        // 2. One block per arm + a join block.
         let join_block_id = self.new_basic_block();
 
         let mut arm_block_ids = Vec::with_capacity(arms.len());
