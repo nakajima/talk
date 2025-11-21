@@ -288,11 +288,12 @@ pub async fn start() {
             .service(router)
     });
     // Open (or create) a file for logs
+    #[allow(clippy::expect_used)]
     let file = File::options()
         .create(true)
         .append(true)
         .open("server.log")
-        .unwrap_or_else(|_| panic!("Could not create LSP server log"));
+        .expect("Could not create LSP server log");
 
     tracing_subscriber::fmt()
         .with_max_level(Level::TRACE)

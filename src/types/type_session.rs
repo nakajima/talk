@@ -69,11 +69,10 @@ pub enum TypeEntry {
 
 impl TypeEntry {
     pub fn as_mono_ty(&self) -> &Ty {
-        if let Self::Mono(ty) = self {
-            return ty;
+        match self {
+            Self::Mono(ty) => ty,
+            Self::Poly(scheme) => &scheme.ty,
         }
-
-        panic!("Cannot get mono ty: {self:?}");
     }
 }
 
@@ -609,8 +608,7 @@ impl TypeSession {
                 .types
                 .get_symbol(sym)
                 .or_else(|| module.types.get_symbol(&sym.current()))
-                .cloned()
-                .unwrap_or_else(|| panic!("did not get external symbol: {sym:?}"));
+                .cloned()?;
             let entry: EnvEntry<InferTy> = match entry.clone() {
                 TypeEntry::Mono(t) => EnvEntry::Mono(t.into()),
                 TypeEntry::Poly(..) => entry.into(),
@@ -630,9 +628,9 @@ impl TypeSession {
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
     pub(super) fn promote(&mut self, sym: Symbol, entry: EnvEntry<InferTy>) {
-        #[cfg(debug_assertions)]
         if matches!(sym, Symbol::Builtin(..)) {
-            panic!("can't override builtin");
+            tracing::error!("can't override builtin");
+            return;
         }
 
         self.term_env.promote(sym, entry);
@@ -640,18 +638,18 @@ impl TypeSession {
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
     pub(super) fn insert_term(&mut self, sym: Symbol, entry: EnvEntry<InferTy>) {
-        #[cfg(debug_assertions)]
         if matches!(sym, Symbol::Builtin(..)) {
-            panic!("can't override builtin");
+            tracing::error!("can't override builtin");
+            return;
         }
 
         self.term_env.insert(sym, entry);
     }
 
     pub(super) fn insert_mono(&mut self, sym: Symbol, ty: InferTy) {
-        #[cfg(debug_assertions)]
         if matches!(sym, Symbol::Builtin(..)) {
-            panic!("can't override builtin");
+            tracing::error!("can't override builtin");
+            return;
         }
 
         self.term_env.insert(sym, EnvEntry::Mono(ty));

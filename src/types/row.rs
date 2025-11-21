@@ -21,6 +21,7 @@ impl Row {
 }
 
 fn close(row: &Row, mut closed_row: ClosedRow<Ty>) -> ClosedRow<Ty> {
+    #[allow(clippy::panic)]
     match row {
         Row::Empty(..) => closed_row,
         Row::Param(_) => panic!("Cannot close param: {row:?}"),

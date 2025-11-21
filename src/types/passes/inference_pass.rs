@@ -5,6 +5,7 @@ use tracing::instrument;
 
 use crate::{
     ast::AST,
+    diagnostic::{AnyDiagnostic, Diagnostic},
     label::Label,
     name::Name,
     name_resolution::{
@@ -190,6 +191,7 @@ impl<'a> InferencePass<'a> {
                 let ret_id = self.session.new_type_param_id(None);
                 let ret = InferTy::Param(ret_id);
 
+                #[warn(clippy::todo)]
                 if !generic.conformances.is_empty() {
                     todo!("not handling associated type conformances yet");
                 }
@@ -361,10 +363,18 @@ impl<'a> InferencePass<'a> {
 
             for (label, sym) in requirements.clone() {
                 tracing::trace!("checking req {label:?} {sym:?}");
-                let requirement_entry = self
-                    .session
-                    .lookup(&sym)
-                    .unwrap_or_else(|| panic!("did not find requirement entry: {sym:?}"));
+                let Some(requirement_entry) = self.session.lookup(&sym) else {
+                    self.asts[idx]
+                        .diagnostics
+                        .push(AnyDiagnostic::Typing(Diagnostic {
+                            kind: TypeError::MissingConformanceRequirement(format!(
+                                "{label:?} {sym:?}"
+                            )),
+                            span: conformance.span,
+                        }));
+
+                    continue;
+                };
                 let Some(instance_methods) = self
                     .session
                     .type_catalog
@@ -729,7 +739,9 @@ impl<'a> InferencePass<'a> {
             Node::Stmt(stmt) => self.visit_stmt(stmt, context),
             Node::Expr(expr) => self.visit_expr(expr, context),
             Node::Parameter(param) => self.visit_param(param, context),
-            _ => todo!("{node:?}"),
+            _ => InferTy::Error(
+                TypeError::TypeNotFound(format!("No type checking for {node:?}")).into(),
+            ),
         };
 
         self.session
@@ -759,10 +771,7 @@ impl<'a> InferencePass<'a> {
             DeclKind::Init { .. } => {
                 unreachable!("inits are handled by visit_struct")
             }
-            DeclKind::Property { .. } => todo!(),
-            DeclKind::Method { .. } => todo!(),
-            DeclKind::Associated { .. } => todo!(),
-            DeclKind::Func(..) => todo!(),
+
             DeclKind::Extend {
                 name,
                 conformances,
@@ -777,12 +786,14 @@ impl<'a> InferencePass<'a> {
                 body,
                 ..
             } => self.visit_nominal(decl, name, generics, conformances, body, context),
-            DeclKind::EnumVariant(..) => todo!(),
-            DeclKind::FuncSignature(..) => todo!(),
-            DeclKind::MethodRequirement(..) => todo!(),
-            DeclKind::TypeAlias(..) => {
-                todo!()
-            }
+            DeclKind::Func(..)
+            | DeclKind::TypeAlias(..)
+            | DeclKind::Associated { .. }
+            | DeclKind::Method { .. }
+            | DeclKind::Property { .. }
+            | DeclKind::MethodRequirement(..)
+            | DeclKind::FuncSignature(..)
+            | DeclKind::EnumVariant(..) => unreachable!("handled elsewhere"),
             _ => InferTy::Void,
         }
     }
@@ -803,7 +814,9 @@ impl<'a> InferencePass<'a> {
                 );
                 InferTy::Void
             }
+            #[warn(clippy::todo)]
             StmtKind::Return(_expr) => todo!(),
+            #[warn(clippy::todo)]
             StmtKind::Break => todo!(),
             StmtKind::Loop(cond, block) => {
                 if let Some(cond) = cond {
@@ -835,8 +848,6 @@ impl<'a> InferencePass<'a> {
             ExprKind::LiteralFloat(_) => InferTy::Float,
             ExprKind::LiteralTrue | ExprKind::LiteralFalse => InferTy::Bool,
             ExprKind::LiteralString(_) => InferTy::String(),
-            ExprKind::Unary(..) => todo!(),
-            ExprKind::Binary(..) => todo!(),
             ExprKind::Tuple(exprs) => match exprs.len() {
                 0 => InferTy::Void,
                 1 => self.visit_expr(&exprs[0], context),
@@ -847,8 +858,11 @@ impl<'a> InferencePass<'a> {
                         .collect_vec(),
                 ),
             },
-
+            #[warn(clippy::todo)]
             ExprKind::Block(..) => todo!(),
+            ExprKind::Unary(..) | ExprKind::Binary(..) => {
+                unreachable!("these are lowered to calls earlier")
+            }
             ExprKind::Call {
                 callee,
                 type_args,
@@ -865,6 +879,7 @@ impl<'a> InferencePass<'a> {
             ExprKind::RecordLiteral { fields, spread } => {
                 self.infer_record_literal(fields, spread, context)
             }
+            #[warn(clippy::todo)]
             ExprKind::RowVariable(..) => todo!(),
             ExprKind::As(box lhs, rhs) => self.visit_as(lhs, rhs, context),
             _ => unimplemented!(),
@@ -878,7 +893,9 @@ impl<'a> InferencePass<'a> {
     fn visit_as(&mut self, lhs: &Expr, rhs: &TypeAnnotation, context: &mut impl Solve) -> InferTy {
         let lhs_ty = self.visit_expr(lhs, context);
         let Symbol::Protocol(id) = rhs.symbol() else {
-            panic!("didn't get protocol id");
+            return InferTy::Error(
+                TypeError::MissingConformanceRequirement("not a protocol".into()).into(),
+            );
         };
 
         context.wants_mut().conforms(lhs_ty.clone(), id, lhs.span);
@@ -1087,7 +1104,7 @@ impl<'a> InferencePass<'a> {
 
                     self.session.insert_term(lhs.symbol(), entry);
                 }
-                _ => todo!("{:?}", decl.kind),
+                _ => tracing::warn!("Unhandled nominal decl: {:?}", decl.kind),
             }
         }
 
@@ -1302,7 +1319,7 @@ impl<'a> InferencePass<'a> {
                     self.session.insert_term(lhs.symbol(), entry);
                 }
 
-                _ => todo!("{:?}", decl.kind),
+                _ => tracing::warn!("Unhandled extend decl: {:?}", decl.kind),
             }
         }
 
@@ -1405,10 +1422,6 @@ impl<'a> InferencePass<'a> {
         default_value: &Option<Expr>,
         context: &mut impl Solve,
     ) -> InferTy {
-        if default_value.is_some() {
-            todo!()
-        }
-
         self.session
             .type_catalog
             .properties
@@ -1421,6 +1434,16 @@ impl<'a> InferencePass<'a> {
         } else {
             self.session.new_type_param(None)
         };
+
+        if let Some(default_value) = default_value {
+            let default_ty = self.visit_expr(default_value, context);
+            context.wants_mut().equals(
+                default_ty,
+                ty.clone(),
+                ConstraintCause::Internal,
+                default_value.span,
+            );
+        }
 
         if is_static {
             self.session
@@ -1627,12 +1650,17 @@ impl<'a> InferencePass<'a> {
 
         match kind {
             PatternKind::Bind(Name::Raw(name)) => {
-                panic!("Unresolved name in pattern: {name:?}");
+                context.wants_mut().equals(
+                    expected.clone(),
+                    InferTy::Error(TypeError::NameNotResolved(name.clone().into()).into()),
+                    ConstraintCause::Internal,
+                    pattern.span,
+                );
             }
             PatternKind::Bind(Name::Resolved(sym, _)) => {
                 self.session.insert_mono(*sym, expected.clone());
             }
-            PatternKind::Bind(Name::SelfType(..)) => todo!("not sure how this would work"),
+            PatternKind::Bind(Name::SelfType(..)) => (),
             PatternKind::LiteralInt(_) => {
                 context.wants_mut().equals(
                     expected.clone(),
@@ -1752,6 +1780,7 @@ impl<'a> InferencePass<'a> {
                 }
             }
             PatternKind::Wildcard => (),
+            #[warn(clippy::todo)]
             PatternKind::Struct { .. } => todo!(),
         }
     }
@@ -2173,7 +2202,7 @@ impl<'a> InferencePass<'a> {
 
                 ret
             }
-            _ => todo!("{type_annotation:?}"),
+            _ => InferTy::Error(TypeError::TypeNotFound(format!("{type_annotation:?}")).into()),
         }
     }
 

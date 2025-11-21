@@ -32,6 +32,7 @@ pub enum Value {
     Uninit,
 }
 
+#[allow(clippy::panic)]
 #[allow(clippy::should_implement_trait)]
 impl Value {
     pub fn add(self, other: Value) -> Value {
@@ -168,6 +169,7 @@ pub struct Interpreter {
 
 #[allow(clippy::unwrap_used)]
 #[allow(clippy::expect_used)]
+#[allow(clippy::panic)]
 impl Interpreter {
     pub fn new(program: Program) -> Self {
         Self {

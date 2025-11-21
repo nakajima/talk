@@ -112,6 +112,7 @@ impl Pattern {
                     }
                 }
             }
+            #[warn(clippy::todo)]
             PatternKind::Struct { .. } => todo!(),
         }
         result

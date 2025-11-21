@@ -187,6 +187,7 @@ fn generate_from_str_impl(instr_enum: &syn::ItemEnum) -> proc_macro2::TokenStrea
 
         let re_ident = format_ident!("RE_{}", v_ident);
         let branch = quote! {
+            #[allow(clippy::unwrap_used)]
             static #re_ident: ::once_cell::sync::Lazy<::regex::Regex> =
                 ::once_cell::sync::Lazy::new(|| ::regex::Regex::new(#regex_lit).unwrap());
             if let Some(caps) = #re_ident.captures(line) {
@@ -245,6 +246,7 @@ fn generate_from_str_impl(instr_enum: &syn::ItemEnum) -> proc_macro2::TokenStrea
             non_upper_case_globals,
             clippy::all
         )]
+        #[allow(clippy::unwrap_used)]
         pub fn parse_instruction<T>(line: &str) -> crate::ir::#enum_ident<T>
         where
             T: FromStr,
@@ -347,33 +349,6 @@ fn generate_display_impl(instr_enum: &syn::ItemEnum) -> proc_macro2::TokenStream
         }
     }
 }
-
-// fn generate_from_str_impl(instr_enum: &syn::ItemEnum) -> proc_macro2::TokenStream {
-//     let mut instruction_fmts: Vec<String> = vec![];
-
-//     for variant in &instr_enum.variants {
-//         let doc = get_doc_attr(&variant.attrs).expect("did not get doc string for variant");
-//         let fields = variant
-//             .fields
-//             .iter()
-//             .map(|f| {
-//                 (
-//                     f.ident.clone().unwrap().to_string(),
-//                     f.ty.clone().to_token_stream().to_string(),
-//                 )
-//             })
-//             .collect::<Vec<_>>();
-
-//         println!("variant: {doc:?} fields: {fields:?}");
-//     }
-
-//     quote::quote! {
-//        use std::str::FromStr;
-//        use std::string::ToString;
-//        use once_cell::sync::Lazy;
-//        use regex::Regex;
-//     }
-// }
 
 fn get_doc_attr(attrs: &[syn::Attribute]) -> Option<String> {
     attrs.iter().find_map(|attr| {

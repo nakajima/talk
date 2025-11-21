@@ -52,6 +52,7 @@ pub enum InferRow {
 }
 
 impl From<InferRow> for Row {
+    #[allow(clippy::panic)]
     fn from(value: InferRow) -> Self {
         match value {
             InferRow::Empty(t) => Row::Empty(t),
@@ -125,6 +126,7 @@ impl InferRow {
     }
 }
 
+#[allow(clippy::panic)]
 fn close(row: &InferRow, mut closed_row: ClosedRow<InferTy>) -> ClosedRow<InferTy> {
     match row {
         InferRow::Empty(..) => closed_row,

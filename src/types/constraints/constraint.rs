@@ -161,6 +161,7 @@ impl Constraint {
             self.clone().apply(substitutions)
         );
         let pred = match self {
+            #[allow(clippy::panic)]
             Self::HasField(has_field) => {
                 let InferRow::Param(row_param) = apply_row(has_field.row.clone(), substitutions)
                 else {
@@ -200,7 +201,7 @@ impl Constraint {
             },
             Self::Conforms(conforms) => {
                 let InferTy::Param(param) = conforms.ty else {
-                    panic!("didn't get param for conforms predicate: {:?}", conforms.ty);
+                    unreachable!("didn't get param for conforms predicate: {:?}", conforms.ty);
                 };
 
                 Predicate::Conforms {

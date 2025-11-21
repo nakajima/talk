@@ -422,7 +422,7 @@ pub(super) fn unify(
             let kind = match lhs_id {
                 Symbol::Struct(..) => TypeDefKind::Struct,
                 Symbol::Enum(..) => TypeDefKind::Enum,
-                _ => panic!("No type def kind found: {lhs_id:?}"),
+                _ => unreachable!(),
             };
 
             let changed = unify_rows(kind, lhs_row, rhs_row, context, session)?;
@@ -609,16 +609,12 @@ pub(super) fn apply(ty: InferTy, substitutions: &mut UnificationSubstitutions) -
             } else {
                 InferTy::Var {
                     id: rep,
-                    level: *substitutions
+                    level: substitutions
                         .meta_levels
                         .borrow()
                         .get(&Meta::Ty(rep))
-                        .unwrap_or_else(|| {
-                            panic!(
-                                "did not get level for {id:?} {:?}",
-                                substitutions.meta_levels
-                            )
-                        }),
+                        .copied()
+                        .unwrap_or_default(),
                 }
             }
         }

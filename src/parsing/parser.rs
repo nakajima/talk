@@ -420,9 +420,10 @@ impl<'a> Parser<'a> {
         let (name, name_span) = self.identifier().unwrap_or_else(|_| {
             (
                 format!("#fn_{:?}", self.current),
+                #[allow(clippy::panic)]
                 self.current
                     .as_ref()
-                    .unwrap_or_else(|| panic!("no current token"))
+                    .unwrap_or_else(|| unreachable!("no current token"))
                     .span(self.file_id),
             )
         });
@@ -734,7 +735,7 @@ impl<'a> Parser<'a> {
                 self.parse_record_pattern()?
             }
 
-            _ => todo!("{:?}", current.kind),
+            _ => unimplemented!("{:?}", current.kind),
         };
 
         self.save_meta(tok, |id, span| Pattern { id, span, kind })
@@ -795,7 +796,7 @@ impl<'a> Parser<'a> {
                         self.save_meta(tok, |id, span| RecordFieldPattern { id, span, kind })?;
                     fields.push(field);
                 }
-                _ => todo!("{current:?} field pattern not implemented yet"),
+                _ => unimplemented!("{current:?} field pattern not implemented yet"),
             }
             self.consume(TokenKind::Comma).ok();
         }
@@ -833,7 +834,7 @@ impl<'a> Parser<'a> {
                     Label::Positional(str::parse(&val).map_err(|_| ParserError::BadLabel(val))?),
                     self.current
                         .as_ref()
-                        .unwrap_or_else(|| panic!("no current token"))
+                        .unwrap_or_else(|| unreachable!("no current token"))
                         .span(self.file_id),
                 )
             }

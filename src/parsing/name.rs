@@ -28,6 +28,7 @@ impl Name {
         }
     }
 
+    #[allow(clippy::panic)]
     pub fn symbol(&self) -> Symbol {
         if let Name::Resolved(sym, _) = self {
             return *sym;

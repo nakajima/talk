@@ -257,7 +257,7 @@ impl NameResolver {
         let scope = self
             .scopes
             .get_mut(&scope_id)
-            .unwrap_or_else(|| panic!("scope not found: {scope_id:?}, {:?}", name));
+            .unwrap_or_else(|| unreachable!("scope not found: {scope_id:?}, {:?}", name));
 
         if let Some(symbol) = scope.types.get(&name.name_str()) {
             return Some(*symbol);
@@ -405,7 +405,7 @@ impl NameResolver {
     fn exit_scope(&mut self, node_id: NodeID) {
         let current_scope_id = self.current_scope_id.expect("no scope to exit");
         let current_scope = self.scopes.get(&current_scope_id).unwrap_or_else(|| {
-            panic!(
+            unreachable!(
                 "did not get current scope ({:?}). {:?}",
                 current_scope_id, self.scopes
             )
@@ -433,7 +433,7 @@ impl NameResolver {
         let scope = self
             .scopes
             .get_mut(&self.current_scope_id.expect("no scope to declare in"))
-            .unwrap_or_else(|| panic!("scope not found: {:?}", self.current_scope_id));
+            .unwrap_or_else(|| unreachable!("scope not found: {:?}", self.current_scope_id));
 
         let module_id = self.current_module_id;
         let symbol = match kind {
@@ -634,27 +634,11 @@ impl NameResolver {
     // Func scoping
     ///////////////////////////////////////////////////////////////////////////
 
-    fn enter_func(&mut self, func: &mut Func) {
-        let Func {
-            name: Name::Resolved(_, _),
-            ..
-        } = func
-        else {
-            panic!("did not resolve name")
-        };
-
+    fn enter_func(&mut self, _func: &mut Func) {
         // self.enter_scope(func.id, None);
     }
 
-    fn exit_func(&mut self, func: &mut Func) {
-        let Func {
-            name: Name::Resolved(_sym, _),
-            ..
-        } = func
-        else {
-            panic!("Did not resolve func")
-        };
-
+    fn exit_func(&mut self, _func: &mut Func) {
         // self.exit_scope(func.id);
     }
 

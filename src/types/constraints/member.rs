@@ -258,7 +258,7 @@ impl Member {
                 return Ok(true);
             }
             Symbol::StaticMethod(..) => {
-                todo!()
+                return self.lookup_static_member(context, session, symbol);
             }
             _ => (),
         }

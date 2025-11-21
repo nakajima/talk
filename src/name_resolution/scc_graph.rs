@@ -50,7 +50,7 @@ impl SCCGraph {
     pub fn add_definition(&mut self, node: Symbol, rhs_id: NodeID, level: Level) -> NodeIndex {
         #[cfg(debug_assertions)]
         if matches!(node, Symbol::Builtin(..)) {
-            panic!("should not have builtin in graph");
+            unreachable!()
         }
 
         if let Some(idx) = self.idx_map.get(&node) {
@@ -77,7 +77,7 @@ impl SCCGraph {
     fn ensure_node(&mut self, node: Symbol) -> NodeIndex {
         #[cfg(debug_assertions)]
         if matches!(node, Symbol::Builtin(..)) {
-            panic!("should not have builtin in graph");
+            unreachable!("should not have builtin in graph");
         }
 
         if let Some(idx) = self.idx_map.get(&node) {

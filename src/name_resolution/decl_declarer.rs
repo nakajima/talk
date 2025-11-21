@@ -280,7 +280,10 @@ impl<'a> DeclDeclarer<'a> {
                     }
                 }
             }
-            PatternKind::Struct { .. } => todo!(),
+            #[warn(clippy::todo)]
+            PatternKind::Struct { .. } => {
+                todo!()
+            }
             PatternKind::Tuple(values) => {
                 for value in values {
                     self.declare_pattern(value, bind_type);

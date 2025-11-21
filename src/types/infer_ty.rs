@@ -113,6 +113,7 @@ pub enum InferTy {
 }
 
 impl From<InferTy> for Ty {
+    #[allow(clippy::panic)]
     fn from(value: InferTy) -> Self {
         match value {
             InferTy::Primitive(primitive) => Ty::Primitive(primitive),

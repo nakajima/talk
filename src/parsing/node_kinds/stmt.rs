@@ -31,6 +31,7 @@ pub struct Stmt {
 }
 
 impl Stmt {
+    #[allow(clippy::panic)]
     pub fn as_expr(self) -> Expr {
         if let StmtKind::Expr(expr) = self.kind {
             expr

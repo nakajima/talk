@@ -333,7 +333,9 @@ impl<'a> Higlighter<'a> {
                     result.push(self.make_span(Kind::TYPE, *name_span));
                     result.extend(self.tokens_from_exprs(generics, ast));
                 }
-                TypeAnnotationKind::SelfType(..) => todo!(),
+                TypeAnnotationKind::SelfType(..) => {
+                    result.push(self.make_span(Kind::TYPE, node.span()));
+                }
                 TypeAnnotationKind::Func {
                     params,
                     box returns,

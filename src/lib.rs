@@ -12,8 +12,8 @@
 #![allow(clippy::uninlined_format_args)]
 #![cfg_attr(not(test), deny(clippy::unwrap_used))]
 #![cfg_attr(not(test), deny(clippy::expect_used))]
-// #![cfg_attr(not(test), warn(clippy::panic))]
-// #![cfg_attr(not(test), warn(clippy::todo))]
+#![cfg_attr(not(test), deny(clippy::panic))]
+#![cfg_attr(not(test), deny(clippy::todo))]
 // #![cfg_attr(not(test), warn(clippy::unimplemented))]
 
 pub mod parsing;

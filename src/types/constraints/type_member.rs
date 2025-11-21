@@ -33,6 +33,7 @@ impl TypeMember {
         session: &mut TypeSession,
         asts: &[AST<NameResolved>],
     ) -> Result<bool, TypeError> {
+        #[warn(clippy::todo)]
         match &self.base {
             InferTy::Var { .. } => todo!(),
             InferTy::Param(type_param_id) => {

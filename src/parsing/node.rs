@@ -80,6 +80,7 @@ impl Node {
         }
     }
 
+    #[allow(clippy::panic)]
     pub fn as_expr(self) -> Expr {
         let Node::Expr(expr) = self else {
             panic!("Node.as_expr() failed for {self:?}")
@@ -88,6 +89,7 @@ impl Node {
         expr
     }
 
+    #[allow(clippy::panic)]
     pub fn as_stmt(&self) -> &Stmt {
         let Node::Stmt(stmt) = &self else {
             panic!("Node.as_stmt() failed for {self:?}")
@@ -96,6 +98,7 @@ impl Node {
         stmt
     }
 
+    #[allow(clippy::panic)]
     pub fn as_decl(&self) -> &Decl {
         let Node::Decl(decl) = &self else {
             panic!("Node.as_stmt() failed for {self:?}")

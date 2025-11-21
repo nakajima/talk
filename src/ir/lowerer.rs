@@ -147,6 +147,7 @@ pub struct Lowerer<'a> {
     pub(super) specializations: IndexMap<Symbol, Vec<Specialization>>,
 }
 
+#[allow(clippy::panic)]
 #[allow(clippy::expect_used)]
 impl<'a> Lowerer<'a> {
     pub fn new(
@@ -316,8 +317,8 @@ impl<'a> Lowerer<'a> {
             DeclKind::Method { func, .. } => {
                 self.lower_method(func)?;
             }
-            DeclKind::Associated { .. } => todo!(),
-            DeclKind::Func(..) => todo!(),
+            DeclKind::Associated { .. } => (),
+            DeclKind::Func(..) => (), // Handled by DeclKind::Let
             DeclKind::Extend { body, .. } => {
                 for decl in &body.decls {
                     self.lower_decl(decl, instantiations)?;
@@ -329,9 +330,9 @@ impl<'a> Lowerer<'a> {
                 }
             }
             DeclKind::EnumVariant(..) => (),
-            DeclKind::FuncSignature(..) => todo!(),
-            DeclKind::MethodRequirement(..) => todo!(),
-            DeclKind::TypeAlias(..) => todo!(),
+            DeclKind::FuncSignature(..) => (),
+            DeclKind::MethodRequirement(..) => (),
+            DeclKind::TypeAlias(..) => (),
             _ => (), // Nothing to do
         }
 
@@ -431,9 +432,12 @@ impl<'a> Lowerer<'a> {
             StmtKind::If(cond, conseq, alt) => {
                 self.lower_if_stmt(cond, conseq, alt, instantiations)
             }
+            #[warn(clippy::todo)]
             StmtKind::Return(_expr) => todo!(),
+            #[warn(clippy::todo)]
             StmtKind::Break => todo!(),
             StmtKind::Assignment(lhs, rhs) => self.lower_assignment(lhs, rhs, instantiations),
+            #[warn(clippy::todo)]
             StmtKind::Loop(_expr, _block) => todo!(),
         }
     }
@@ -604,14 +608,23 @@ impl<'a> Lowerer<'a> {
                 self.bindings.insert(symbol, value);
                 Ok(Bind::Assigned(value))
             }
+            #[warn(clippy::todo)]
             PatternKind::LiteralInt(_) => todo!(),
+            #[warn(clippy::todo)]
             PatternKind::LiteralFloat(_) => todo!(),
+            #[warn(clippy::todo)]
             PatternKind::LiteralTrue => todo!(),
+            #[warn(clippy::todo)]
             PatternKind::LiteralFalse => todo!(),
+            #[warn(clippy::todo)]
             PatternKind::Tuple(..) => todo!(),
-            PatternKind::Wildcard => todo!(),
+            #[warn(clippy::todo)]
+            PatternKind::Wildcard => Ok(Bind::Discard),
+            #[warn(clippy::todo)]
             PatternKind::Variant { .. } => todo!(),
+            #[warn(clippy::todo)]
             PatternKind::Record { .. } => todo!(),
+            #[warn(clippy::todo)]
             PatternKind::Struct { .. } => todo!(),
         }
     }
@@ -625,6 +638,7 @@ impl<'a> Lowerer<'a> {
     ) -> Result<(Value, Ty), IRError> {
         match &expr.kind {
             ExprKind::Func(func) => self.lower_func(func, bind, instantiations),
+            #[warn(clippy::todo)]
             ExprKind::LiteralArray(_exprs) => todo!(),
             ExprKind::LiteralInt(val) => {
                 let ret = self.ret(bind);
@@ -652,10 +666,13 @@ impl<'a> Lowerer<'a> {
             }
             ExprKind::LiteralTrue => Ok((Value::Bool(true), Ty::Bool)),
             ExprKind::LiteralFalse => Ok((Value::Bool(false), Ty::Bool)),
+            #[warn(clippy::todo)]
             ExprKind::LiteralString(_) => todo!(),
-            ExprKind::Unary(..) => todo!(),
-            ExprKind::Binary(..) => todo!(),
+            ExprKind::Unary(..) => Ok((Value::Void, Ty::Void)), // Converted to calls earlier
+            ExprKind::Binary(..) => Ok((Value::Void, Ty::Void)), // Converted to calls earlier
+            #[warn(clippy::todo)]
             ExprKind::Tuple(..) => todo!(),
+            #[warn(clippy::todo)]
             ExprKind::Block(..) => todo!(),
 
             ExprKind::Call {
@@ -697,6 +714,7 @@ impl<'a> Lowerer<'a> {
 
             ExprKind::Variable(name) => self.lower_variable(name, expr, instantiations),
             ExprKind::Constructor(name) => self.lower_constructor(name, expr, bind, instantiations),
+            #[warn(clippy::todo)]
             ExprKind::If(..) => todo!(),
             ExprKind::Match(box scrutinee, arms) => {
                 self.lower_match(scrutinee, arms, bind, instantiations)
@@ -704,6 +722,7 @@ impl<'a> Lowerer<'a> {
             ExprKind::RecordLiteral { fields, .. } => {
                 self.lower_record_literal(expr, fields, bind, instantiations)
             }
+            #[warn(clippy::todo)]
             ExprKind::RowVariable(..) => todo!(),
             ExprKind::As(lhs, ..) => self.lower_expr(lhs, bind, instantiations),
             _ => unreachable!("cannot lower expr: {expr:?}"),
@@ -1030,6 +1049,7 @@ impl<'a> Lowerer<'a> {
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self, receiver))]
+    #[warn(clippy::todo)]
     fn lower_member(
         &mut self,
         id: NodeID,
