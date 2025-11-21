@@ -1,0 +1,13 @@
+{
+  "name": "talk-wasm",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "wasm-pack build  --target web --out-dir pkg"
+  },
+  "files": [
+    "pkg",
+    "js"
+  ]
+}

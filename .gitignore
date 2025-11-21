@@ -1,5 +1,6 @@
 /target
 editors/vscode/node_modules
+wasm/pkg
 log.txt
 *.vsix
 talk-ex/index.wit

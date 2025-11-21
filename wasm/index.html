@@ -1,0 +1,13 @@
+<html>
+  <head>
+    <title>talktalk wasm</title>
+  </head>
+  <body>
+    Check the console pal.
+    <script type="module">
+      import { loadTalk } from "./js/index.js";
+      const talk = await loadTalk();
+      console.log(await talk.runProgram("1 + 2 + 3"));
+    </script>
+  </body>
+</html>
