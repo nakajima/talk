@@ -985,9 +985,6 @@ impl TypeSession {
 
 pub(super) fn collect_metas_in_constraint(constraint: &Constraint, out: &mut FxHashSet<InferTy>) {
     match constraint {
-        Constraint::InstanceOf(c) => {
-            collect_meta(&c.var, out);
-        }
         Constraint::Projection(c) => {
             collect_meta(&c.base, out);
             collect_meta(&c.result, out);

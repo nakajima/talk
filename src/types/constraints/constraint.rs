@@ -3,9 +3,8 @@ use crate::{
     span::Span,
     types::{
         constraints::{
-            call::Call, conforms::Conforms, equals::Equals, has_field::HasField,
-            instance_of::InstanceOf, member::Member, projection::Projection,
-            type_member::TypeMember,
+            call::Call, conforms::Conforms, equals::Equals, has_field::HasField, member::Member,
+            projection::Projection, type_member::TypeMember,
         },
         infer_row::InferRow,
         infer_ty::InferTy,
@@ -44,7 +43,6 @@ pub enum Constraint {
     Conforms(Conforms),
     TypeMember(TypeMember),
     Projection(Projection),
-    InstanceOf(InstanceOf),
 }
 
 impl Constraint {
@@ -57,7 +55,6 @@ impl Constraint {
             Constraint::Conforms(..) => false,
             Constraint::TypeMember(..) => true,
             Constraint::Projection(..) => true,
-            Constraint::InstanceOf(..) => false,
         }
     }
 
@@ -70,7 +67,6 @@ impl Constraint {
             Constraint::Conforms(c) => c.span,
             Constraint::TypeMember(c) => c.span,
             Constraint::Projection(c) => c.span,
-            Constraint::InstanceOf(c) => c.span,
         }
     }
 
@@ -85,9 +81,6 @@ impl Constraint {
                     .map(|f| apply(f.clone(), substitutions))
                     .collect();
                 call.returns = apply(call.returns.clone(), substitutions);
-            }
-            Constraint::InstanceOf(c) => {
-                c.var = apply(c.var.clone(), substitutions);
             }
             Constraint::Projection(c) => {
                 c.base = apply(c.base.clone(), substitutions);
@@ -121,7 +114,6 @@ impl Constraint {
         let mut copy = self.clone();
 
         match &mut copy {
-            Constraint::InstanceOf(c) => c.var = substitute(c.var.clone(), substitutions),
             Constraint::Call(call) => {
                 call.receiver = call.receiver.clone().map(|r| substitute(r, substitutions));
                 call.callee = substitute(call.callee.clone(), substitutions);

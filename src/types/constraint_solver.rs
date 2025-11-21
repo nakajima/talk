@@ -50,7 +50,6 @@ impl<'a> ConstraintSolver<'a> {
                     Constraint::Equals(ref equals) => {
                         unify(&equals.lhs, &equals.rhs, self.context, session)
                     }
-                    Constraint::InstanceOf(ref c) => c.solve(self.context, session),
                     Constraint::Call(ref call) => call.solve(self.context, session),
                     Constraint::HasField(ref has_field) => has_field.solve(self.context),
                     Constraint::Member(ref member) => member.solve(self.context, session),

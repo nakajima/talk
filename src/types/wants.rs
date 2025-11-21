@@ -62,7 +62,6 @@ impl Wants {
     #[instrument(skip(self))]
     pub fn defer(&mut self, constraint: Constraint) {
         match &constraint {
-            Constraint::InstanceOf(..) => self.simple.push_back(constraint),
             Constraint::Call(..) => self.defer.push_back(constraint),
             Constraint::Equals(..) => self.simple.push_back(constraint),
             Constraint::HasField(..) => self.simple.push_back(constraint),
@@ -76,7 +75,6 @@ impl Wants {
     #[instrument(skip(self))]
     pub fn push(&mut self, constraint: Constraint) {
         match &constraint {
-            Constraint::InstanceOf(..) => self.simple.push_back(constraint),
             Constraint::Call(..) => self.defer.push_back(constraint),
             Constraint::Equals(..) => self.simple.push_back(constraint),
             Constraint::HasField(..) => self.simple.push_back(constraint),

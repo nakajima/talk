@@ -243,56 +243,6 @@ impl Member {
             _ => (),
         }
 
-        // match member_sym {
-        //     Symbol::InstanceMethod(..) => {
-        //         let entry = session
-        //             .elaborated_types
-        //             .nominals
-        //             .get(symbol)
-        //             .unwrap()
-        //             .members
-        //             .methods
-        //             .get(&self.label)
-        //             .unwrap();
-        //         let entry = session.materialize_entry(entry.clone(), Level::default(), next_wants);
-        //         let method = entry.instantiate(
-        //             self.node_id,
-        //             session,
-        //             Level::default(),
-        //             next_wants,
-        //             self.span,
-        //         );
-
-        //         println!("method: {method:?}");
-        //         let (method_receiver, method_fn) = consume_self(&method);
-        //         println!("receiver: {:?}", self.receiver);
-        //         println!("ty: {:?}", self.ty);
-        //         println!("method_receiver: {method_receiver:?}");
-        //         println!("method_fn: {method_fn:?}");
-        //         next_wants.equals(
-        //             method_receiver,
-        //             self.receiver.clone(),
-        //             self.cause,
-        //             self.span,
-        //         );
-        //         next_wants.equals(method_fn, self.ty.clone(), self.cause, self.span);
-        //         return Ok(true);
-        //     }
-        //     Symbol::Variant(..) => {
-        //         println!("instantiating variant. ty: {:?}", self.ty);
-        //         let variant = self.lookup_variant(row).unwrap();
-        //         let constructor_ty = match variant {
-        //             InferTy::Void => self.receiver.clone(),
-        //             InferTy::Tuple(values) => curry(values, self.receiver.clone()),
-        //             other => curry(vec![other], self.receiver.clone()),
-        //         };
-
-        //         next_wants.equals(constructor_ty, self.ty.clone(), self.cause, self.span);
-        //         return Ok(true);
-        //     }
-        //     _ => (),
-        // }
-
         // If all else fails, see if it's a property
         let Some(row) = row else {
             return Err(TypeError::ExpectedRow(self.receiver.clone()));
