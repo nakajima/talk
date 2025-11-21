@@ -192,7 +192,7 @@ pub async fn start() {
                             typ: MessageType::INFO,
                             message: "Hello LSP".into(),
                         })
-                        .unwrap();
+                        .ok();
                     Ok(Some(Hover {
                         contents: HoverContents::Scalar(MarkedString::String(format!(
                             "I am a hover text {counter}!"
@@ -292,7 +292,7 @@ pub async fn start() {
         .create(true)
         .append(true)
         .open("server.log")
-        .unwrap();
+        .unwrap_or_else(|_| panic!("Could not create LSP server log"));
 
     tracing_subscriber::fmt()
         .with_max_level(Level::TRACE)
@@ -305,6 +305,7 @@ pub async fn start() {
 
     // Prefer truly asynchronous piped stdin/stdout without blocking tasks.
     #[cfg(unix)]
+    #[allow(clippy::unwrap_used)]
     let (stdin, stdout) = (
         async_lsp::stdio::PipeStdin::lock_tokio().unwrap(),
         async_lsp::stdio::PipeStdout::lock_tokio().unwrap(),
@@ -316,6 +317,7 @@ pub async fn start() {
         tokio_util::compat::TokioAsyncWriteCompatExt::compat_write(tokio::io::stdout()),
     );
 
+    #[allow(clippy::unwrap_used)]
     server.run_buffered(stdin, stdout).await.unwrap();
 }
 

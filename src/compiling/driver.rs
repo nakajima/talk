@@ -107,6 +107,7 @@ impl From<&str> for Source {
 
 impl Source {
     pub fn path(&self) -> &str {
+        #[allow(clippy::unwrap_used)]
         match &self.kind {
             SourceKind::File(path) => path.to_str().unwrap(),
             SourceKind::String(..) => ":memory:",
@@ -129,6 +130,7 @@ pub struct Driver<Phase: DriverPhase = Initial> {
 
 impl Driver {
     pub fn new(files: Vec<Source>, mut config: DriverConfig) -> Self {
+        #[allow(clippy::unwrap_used)]
         let mut modules = Rc::into_inner(config.modules).unwrap();
         modules.import(ModuleId::Core, super::core::compile());
         config.modules = Rc::new(modules);
@@ -193,6 +195,7 @@ impl Driver<NameResolved> {
             .asts
             .values()
             .fold(IndexMap::default(), |mut acc, ast| {
+                #[allow(clippy::unwrap_used)]
                 let root = ast.phase.scopes.get(&NodeID(FileID(0), 0)).unwrap();
                 for (string, sym) in root.types.iter() {
                     acc.insert(string.to_string(), *sym);

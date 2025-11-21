@@ -104,6 +104,7 @@ impl Types {
     }
 }
 
+#[allow(clippy::expect_used)]
 impl TypeSession {
     pub fn new(current_module_id: ModuleId, modules: Rc<ModuleEnvironment>) -> Self {
         let mut term_env = TermEnv {
@@ -386,7 +387,13 @@ impl TypeSession {
         match row {
             InferRow::Empty(..) => row.into(),
             InferRow::Param(..) => row.into(),
-            InferRow::Var(var) => Row::Param(*self.reverse_instantiations.row.get(&var).unwrap()),
+            InferRow::Var(var) => Row::Param(
+                *self
+                    .reverse_instantiations
+                    .row
+                    .get(&var)
+                    .expect("did not get reverse instantiation"),
+            ),
             InferRow::Extend { box row, label, ty } => Row::Extend {
                 row: self.finalize_row(row).into(),
                 label,
@@ -502,10 +509,8 @@ impl TypeSession {
                     ..
                 } => {
                     let levels = self.meta_levels.borrow();
-                    let level = levels
-                        .get(&Meta::Row(*id))
-                        .expect("didn't get level for row meta");
-                    if *level < inner {
+                    let level = levels.get(&Meta::Row(*id)).copied().unwrap_or_default();
+                    if level < inner {
                         tracing::trace!("discarding {m:?} due to level ({level:?} < {inner:?})");
                         continue;
                     }
@@ -1026,6 +1031,7 @@ pub(super) fn collect_metas_in_constraint(constraint: &Constraint, out: &mut FxH
 
 pub fn collect_meta(ty: &InferTy, out: &mut FxHashSet<InferTy>) {
     match ty {
+        InferTy::Error(..) => {}
         InferTy::Param(_) => {}
         InferTy::Var { .. } => {
             out.insert(ty.clone());

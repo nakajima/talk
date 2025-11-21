@@ -9,6 +9,7 @@ use crate::{
         infer_ty::{InferTy, Level, TypeParamId},
         predicate::Predicate,
         type_catalog::ConformanceKey,
+        type_error::TypeError,
         type_operations::{InstantiationSubstitutions, UnificationSubstitutions, apply},
         type_session::TypeSession,
         wants::Wants,
@@ -175,19 +176,28 @@ impl SolveContext {
                 protocol_id,
                 associated,
             } => {
-                let conformance = session
-                    .type_catalog
-                    .conformances
-                    .get(&ConformanceKey {
-                        protocol_id: *protocol_id,
-                        conforming_id: *symbol,
-                    })
-                    .unwrap();
-                conformance
-                    .associated_types
-                    .get(associated)
-                    .cloned()
-                    .unwrap()
+                let Some(conformance) = session.type_catalog.conformances.get(&ConformanceKey {
+                    protocol_id: *protocol_id,
+                    conforming_id: *symbol,
+                }) else {
+                    return InferTy::Error(
+                        TypeError::TypesDoesNotConform {
+                            symbol: *symbol,
+                            protocol_id: *protocol_id,
+                        }
+                        .into(),
+                    );
+                };
+                let Some(ty) = conformance.associated_types.get(associated).cloned() else {
+                    return InferTy::Error(
+                        TypeError::MissingConformanceRequirement(format!(
+                            "Associated type: {associated:?}"
+                        ))
+                        .into(),
+                    );
+                };
+
+                ty
             }
             InferTy::Projection {
                 base: box InferTy::Var { .. },

@@ -20,6 +20,7 @@ pub fn compile() -> Module {
         config,
     );
 
+    #[allow(clippy::unwrap_used)]
     driver
         .parse()
         .unwrap()

@@ -1,6 +1,7 @@
 use std::{error::Error, fmt::Display};
 
 use crate::{
+    name::Name,
     name_resolution::symbol::{ProtocolId, Symbol},
     types::infer_ty::InferTy,
 };
@@ -17,6 +18,7 @@ pub enum TypeError {
     OccursCheck(InferTy),
     CalleeNotCallable(InferTy),
     MemberNotFound(InferTy, String),
+    NameNotResolved(Name),
     MissingConformanceRequirement(String),
     TypeNotFound(String),
     TypesDoesNotConform {
@@ -59,6 +61,9 @@ impl Display for TypeError {
             }
             Self::TypesCannotConform { ty, .. } => {
                 write!(f, "Type cannot conform: {ty:?}")
+            }
+            Self::NameNotResolved(name) => {
+                write!(f, "Name not resolved: {name:?}")
             }
         }
     }

@@ -81,7 +81,10 @@ impl TypeMember {
                 .find_map(|ast| ast.phase.child_types.get(&candidate.into()))
                 && let Some(child_sym) = child_types.get(&self.name)
             {
-                let child_entry = session.lookup(child_sym).unwrap();
+                let Some(child_entry) = session.lookup(child_sym) else {
+                    return Err(TypeError::TypeNotFound(format!("{child_sym:?}")));
+                };
+
                 let child_ty = child_entry.instantiate(self.node_id, context, session, self.span);
                 return unify(&child_ty, &self.result, context, session);
             }

@@ -116,7 +116,12 @@ impl Member {
 
         for candidate in candidates {
             if let Some((req, _source)) = session.lookup_member(&candidate.into(), &self.label) {
-                let entry = session.lookup(&req).unwrap();
+                let Some(entry) = session.lookup(&req) else {
+                    return Err(TypeError::MemberNotFound(
+                        self.receiver.clone(),
+                        self.label.to_string(),
+                    ));
+                };
                 let req_ty = entry.instantiate(self.node_id, context, session, self.span);
                 let (req_self, req_func) = consume_self(&req_ty);
                 context.wants_mut().equals(
@@ -154,20 +159,24 @@ impl Member {
             ));
         };
 
-        let entry = session.lookup(&member_sym).unwrap();
-        let mut member_ty = entry.instantiate(self.node_id, context, session, self.span);
+        let mut member_ty = if let Some(entry) = session.lookup(&member_sym) {
+            entry.instantiate(self.node_id, context, session, self.span)
+        } else {
+            InferTy::Error(
+                TypeError::MemberNotFound(self.receiver.clone(), self.label.to_string()).into(),
+            )
+        };
 
         if let Symbol::Variant(..) = member_sym {
-            let enum_ty = session.lookup(nominal_symbol).unwrap().instantiate(
-                self.node_id,
-                context,
-                session,
-                self.span,
-            );
-            member_ty = match member_ty {
-                InferTy::Void => enum_ty,
-                InferTy::Tuple(values) => curry(values, enum_ty),
-                other => curry(vec![other], enum_ty),
+            member_ty = if let Some(enum_entry) = session.lookup(nominal_symbol) {
+                let enum_ty = enum_entry.instantiate(self.node_id, context, session, self.span);
+                match member_ty {
+                    InferTy::Void => enum_ty,
+                    InferTy::Tuple(values) => curry(values, enum_ty),
+                    other => curry(vec![other], enum_ty),
+                }
+            } else {
+                InferTy::Error(TypeError::TypeNotFound(format!("{nominal_symbol:?}")).into())
             };
         }
 
@@ -199,7 +208,12 @@ impl Member {
 
         match member_sym {
             Symbol::InstanceMethod(..) => {
-                let entry = session.lookup(&member_sym).unwrap();
+                let Some(entry) = session.lookup(&member_sym) else {
+                    return Err(TypeError::MemberNotFound(
+                        self.receiver.clone(),
+                        self.label.to_string(),
+                    ));
+                };
                 let method = entry.instantiate(self.node_id, context, session, self.span);
                 let method = apply(method, &mut context.substitutions);
                 let (method_receiver, method_fn) = consume_self(&method);
@@ -225,7 +239,13 @@ impl Member {
                     return Err(TypeError::ExpectedRow(self.receiver.clone()));
                 };
 
-                let variant = self.lookup_variant(row).unwrap();
+                let Some(variant) = self.lookup_variant(row) else {
+                    return Err(TypeError::MemberNotFound(
+                        self.receiver.clone(),
+                        self.label.to_string(),
+                    ));
+                };
+
                 let constructor_ty = match variant {
                     InferTy::Void => self.receiver.clone(),
                     InferTy::Tuple(values) => curry(values, self.receiver.clone()),

@@ -166,6 +166,8 @@ pub struct Interpreter {
     main_result: Option<Value>,
 }
 
+#[allow(clippy::unwrap_used)]
+#[allow(clippy::expect_used)]
 impl Interpreter {
     pub fn new(program: Program) -> Self {
         Self {
@@ -177,6 +179,7 @@ impl Interpreter {
     }
 
     pub fn run(mut self) -> Value {
+        #[allow(clippy::expect_used)]
         let entrypoint = self
             .program
             .entrypoint()

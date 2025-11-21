@@ -139,6 +139,7 @@ fn occurs_in_row(id: MetaVarId, row: &InferRow) -> bool {
 // Helper: occurs check
 fn occurs_in(id: MetaVarId, ty: &InferTy) -> bool {
     match ty {
+        InferTy::Error(..) => false,
         InferTy::Var { id: mid, .. } => *mid == id,
         InferTy::Func(a, b) => occurs_in(id, a) || occurs_in(id, b),
         InferTy::Tuple(items) => items.iter().any(|t| occurs_in(id, t)),
@@ -246,7 +247,9 @@ fn unify_rows(
     let mut changed = false;
     for k in lhs_fields.keys().cloned().collect::<Vec<_>>() {
         if let Some(rv) = rhs_fields.remove(&k) {
-            let lv = lhs_fields.remove(&k).unwrap();
+            let Some(lv) = lhs_fields.remove(&k) else {
+                continue;
+            };
             changed |= unify(&lv, &rv, context, session)?;
         }
     }
@@ -523,6 +526,7 @@ pub(super) fn substitute(ty: InferTy, substitutions: &FxHashMap<InferTy, InferTy
         return subst.clone();
     }
     match ty {
+        InferTy::Error(..) => ty,
         InferTy::Param(..) => ty,
         InferTy::Rigid(..) => ty,
         InferTy::Var { .. } => ty,
@@ -584,6 +588,7 @@ pub(super) fn apply_row(row: InferRow, substitutions: &mut UnificationSubstituti
 
 pub(super) fn apply(ty: InferTy, substitutions: &mut UnificationSubstitutions) -> InferTy {
     match ty {
+        InferTy::Error(..) => ty,
         InferTy::Param(..) => ty,
         InferTy::Rigid(..) => ty,
         InferTy::Projection {
@@ -655,7 +660,9 @@ pub(super) fn instantiate_row(
         InferRow::Empty(..) => row,
         InferRow::Var(..) => row,
         InferRow::Param(id) => {
-            if let Some(row_meta) = substitutions.row.get(&node_id).unwrap().get(&id) {
+            if let Some(row_metas) = substitutions.row.get(&node_id)
+                && let Some(row_meta) = row_metas.get(&id)
+            {
                 InferRow::Var(*row_meta)
             } else {
                 row
@@ -680,8 +687,11 @@ pub(super) fn instantiate_ty(
     }
 
     match ty {
+        InferTy::Error(..) => ty,
         InferTy::Param(param) => {
-            if let Some(meta) = substitutions.ty.get(&node_id).unwrap().get(&param) {
+            if let Some(metas) = substitutions.ty.get(&node_id)
+                && let Some(meta) = metas.get(&param)
+            {
                 InferTy::Var { id: *meta, level }
             } else {
                 ty

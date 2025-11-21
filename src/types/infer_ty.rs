@@ -12,6 +12,7 @@ use crate::{
         scheme::{ForAll, Scheme},
         term_environment::EnvEntry,
         ty::{SomeType, Ty},
+        type_error::TypeError,
         type_session::TypeDefKind,
     },
 };
@@ -107,6 +108,8 @@ pub enum InferTy {
         symbol: Symbol,
         row: Box<InferRow>,
     },
+
+    Error(Box<TypeError>),
 }
 
 impl From<InferTy> for Ty {
@@ -173,6 +176,7 @@ impl SomeType for InferTy {
             InferTy::Rigid(..) => false,
             InferTy::Var { .. } => true,
             InferTy::Primitive(..) => false,
+            InferTy::Error(..) => false,
             InferTy::Projection { base, .. } => base.contains_var(),
             InferTy::Constructor { params, .. } => params.iter().any(|p| p.contains_var()),
             InferTy::Func(ty, ty1) => ty.contains_var() || ty1.contains_var(),
@@ -264,6 +268,7 @@ impl InferTy {
             InferTy::Param(id) => {
                 result.insert(ForAll::Ty(*id));
             }
+            InferTy::Error(..) => (),
             InferTy::Rigid(..) => (),
             InferTy::Var { .. } => (),
             InferTy::Primitive(..) => (),
@@ -297,6 +302,7 @@ impl InferTy {
             InferTy::Param(..) => f(self),
             InferTy::Rigid(..) => f(self),
             InferTy::Var { .. } => f(self),
+            InferTy::Error(..) => f(self),
             InferTy::Constructor { params, ret, .. } => {
                 _ = params.iter().map(&mut *f);
                 _ = f(ret);
@@ -334,6 +340,7 @@ impl InferTy {
 
     pub fn import(self, module_id: ModuleId) -> InferTy {
         match self {
+            InferTy::Error(..) => self,
             InferTy::Primitive(..) => self,
             InferTy::Param(..) => self,
             InferTy::Rigid(..) => self,
@@ -370,6 +377,7 @@ impl InferTy {
 impl std::fmt::Debug for InferTy {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            InferTy::Error(err) => write!(f, "Err: {err}"),
             InferTy::Param(id) => write!(f, "typeparam(α{})", id.0),
             InferTy::Rigid(id) => write!(f, "rigid(α{})", id.0),
             InferTy::Var { id, level } => write!(f, "meta(α{}, {})", id.0, level.0),

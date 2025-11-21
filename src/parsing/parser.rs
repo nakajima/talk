@@ -71,6 +71,7 @@ pub struct Parser<'a> {
     file_id: FileID,
 }
 
+#[allow(clippy::expect_used)]
 impl<'a> Parser<'a> {
     pub fn new(path: impl Into<String>, file_id: FileID, lexer: Lexer<'a>) -> Self {
         Self {
@@ -419,7 +420,10 @@ impl<'a> Parser<'a> {
         let (name, name_span) = self.identifier().unwrap_or_else(|_| {
             (
                 format!("#fn_{:?}", self.current),
-                self.current.as_ref().unwrap().span(self.file_id),
+                self.current
+                    .as_ref()
+                    .unwrap_or_else(|| panic!("no current token"))
+                    .span(self.file_id),
             )
         });
 
@@ -827,7 +831,10 @@ impl<'a> Parser<'a> {
                 self.advance();
                 (
                     Label::Positional(str::parse(&val).map_err(|_| ParserError::BadLabel(val))?),
-                    self.current.as_ref().unwrap().span(self.file_id),
+                    self.current
+                        .as_ref()
+                        .unwrap_or_else(|| panic!("no current token"))
+                        .span(self.file_id),
                 )
             }
             Some(_) | None => {
@@ -887,7 +894,10 @@ impl<'a> Parser<'a> {
                 self.advance();
                 (
                     Label::Positional(str::parse(&val).map_err(|_| ParserError::BadLabel(val))?),
-                    self.current.as_ref().unwrap().span(self.file_id),
+                    self.current
+                        .as_ref()
+                        .expect("no current token")
+                        .span(self.file_id),
                 )
             }
             Some(_) | None => {

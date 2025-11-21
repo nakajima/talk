@@ -65,7 +65,10 @@ impl Projection {
                 {
                     // Instantiate the nominal TYPE scheme at this projection node id.
                     // This yields Type(@Struct(base_sym), row metas_for_A, ...)
-                    let nominal_entry = session.lookup(&base_sym).expect("nominal env entry");
+                    let Some(nominal_entry) = session.lookup(&base_sym) else {
+                        return Err(TypeError::TypeNotFound(format!("{:?}", self.base)));
+                    };
+
                     let nominal_inst =
                         nominal_entry.instantiate(self.node_id, context, session, self.span);
 
@@ -78,9 +81,10 @@ impl Projection {
                         self.span,
                     );
 
-                    // Instantiate the alias SCHEME at the SAME node id.
-                    // This reuses the exact same TypeParamId -> meta mapping as the nominal above.
-                    let alias_entry = session.lookup(&alias_sym).expect("alias env entry");
+                    let Some(alias_entry) = session.lookup(&alias_sym) else {
+                        return Err(TypeError::TypeNotFound(format!("{alias_sym:?}")));
+                    };
+
                     let alias_inst =
                         alias_entry.instantiate(self.node_id, context, session, self.span);
 

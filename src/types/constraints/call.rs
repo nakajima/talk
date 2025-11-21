@@ -63,18 +63,18 @@ impl Call {
                 {
                     args.insert(0, returns_type.clone());
 
-                    let entry = session
-                        .lookup(&initializer)
-                        .expect("constructor scheme missing");
-
-                    entry.instantiate(self.callee_id, context, session, self.span)
+                    if let Some(entry) = session.lookup(&initializer) {
+                        entry.instantiate(self.callee_id, context, session, self.span)
+                    } else {
+                        InferTy::Error(TypeError::TypeNotFound(format!("{initializer:?}")).into())
+                    }
                 } else {
-                    match session
-                        .lookup(&name.symbol())
-                        .expect("enum type missing from env")
-                    {
-                        EnvEntry::Mono(ty) => ty,
-                        EnvEntry::Scheme(s) => s.ty.clone(),
+                    match session.lookup(&name.symbol()) {
+                        Some(EnvEntry::Mono(ty)) => ty,
+                        Some(EnvEntry::Scheme(s)) => s.ty.clone(),
+                        _ => InferTy::Error(
+                            TypeError::TypeNotFound(format!("Missing {name:?}")).into(),
+                        ),
                     }
                 };
 

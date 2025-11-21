@@ -137,6 +137,7 @@ pub struct NameResolver {
 
 impl ASTPhase for NameResolved {}
 
+#[allow(clippy::expect_used)]
 impl NameResolver {
     pub fn new(modules: Rc<ModuleEnvironment>, current_module_id: ModuleId) -> Self {
         let mut resolver = Self {
@@ -270,7 +271,7 @@ impl NameResolver {
             && let Some(captured) = self.lookup_in_scope(name, parent)
             && parent != scope_id
         {
-            let parent_scope = self.scopes.get(&parent).unwrap();
+            let parent_scope = self.scopes.get(&parent).expect("did not find parent scope");
             let scope = self.scopes.get(&scope_id).expect("did not find scope");
 
             if scope.binder == Some(captured) {
@@ -405,7 +406,7 @@ impl NameResolver {
         let current_scope_id = self.current_scope_id.expect("no scope to exit");
         let current_scope = self.scopes.get(&current_scope_id).unwrap_or_else(|| {
             panic!(
-                "did nto get current scope ({:?}). {:?}",
+                "did not get current scope ({:?}). {:?}",
                 current_scope_id, self.scopes
             )
         });
@@ -485,7 +486,12 @@ impl NameResolver {
 
     fn enter_pattern(&mut self, pattern: &mut Pattern) {
         match &mut pattern.kind {
-            PatternKind::Bind(name) => *name = self.lookup(name, None).unwrap(),
+            PatternKind::Bind(name) => {
+                *name = self.lookup(name, None).unwrap_or_else(|| {
+                    tracing::error!("Lookup failed for {name:?}");
+                    name.clone()
+                })
+            }
             PatternKind::Variant {
                 enum_name: Some(enum_name),
                 fields,
@@ -523,10 +529,16 @@ impl NameResolver {
                 for field in fields {
                     match &mut field.kind {
                         RecordFieldPatternKind::Bind(name) => {
-                            *name = self.lookup(name, None).unwrap();
+                            *name = self.lookup(name, None).unwrap_or_else(|| {
+                                tracing::error!("Lookup failed for {name:?}");
+                                name.clone()
+                            });
                         }
                         RecordFieldPatternKind::Equals { name, value, .. } => {
-                            *name = self.lookup(name, None).unwrap();
+                            *name = self.lookup(name, None).unwrap_or_else(|| {
+                                tracing::error!("Lookup failed for {name:?}");
+                                name.clone()
+                            });
                             self.enter_pattern(value);
                         }
                         RecordFieldPatternKind::Rest => (),
@@ -677,7 +689,7 @@ impl NameResolver {
             *name = type_name;
 
             self.current_scope_mut()
-                .unwrap()
+                .expect("did not get current scope")
                 .types
                 .insert("Self".into(), name.symbol());
 

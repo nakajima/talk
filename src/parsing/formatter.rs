@@ -1453,6 +1453,7 @@ impl<'a> Formatter<'a> {
     }
 }
 
+#[allow(clippy::unwrap_used)]
 pub fn format_string(string: &str) -> String {
     let lexer = Lexer::new(string);
     let ast = Parser::new("", FileID(0), lexer).parse().unwrap();

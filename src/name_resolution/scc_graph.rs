@@ -22,8 +22,8 @@ pub struct SCCGraph {
 }
 
 impl SCCGraph {
-    pub fn rhs_id_for(&self, binder: &Symbol) -> &NodeID {
-        self.rhs_ids.get(binder).unwrap()
+    pub fn rhs_id_for(&self, binder: &Symbol) -> Option<&NodeID> {
+        self.rhs_ids.get(binder)
     }
 
     pub fn groups(&self) -> Vec<BindingGroup> {

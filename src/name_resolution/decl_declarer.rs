@@ -188,6 +188,7 @@ struct TypeMembers {
     properties: Vec<DeclKind>,
 }
 
+#[allow(clippy::expect_used)]
 impl<'a> DeclDeclarer<'a> {
     pub fn new(resolver: &'a mut NameResolver, node_ids: &'a mut IDGenerator) -> Self {
         Self {
@@ -322,7 +323,7 @@ impl<'a> DeclDeclarer<'a> {
         self.start_scope(Some(name.symbol()), id, false);
         self.resolver
             .current_scope_mut()
-            .unwrap()
+            .expect("didn't get current scope")
             .types
             .insert("Self".into(), name.symbol());
 
@@ -564,8 +565,8 @@ impl<'a> DeclDeclarer<'a> {
                 .current_scope_id
                 .expect("didn't get current scope id");
             self.type_members
-                .get_mut(&id)
-                .expect("didn't get type members")
+                .entry(id)
+                .or_default()
                 .properties
                 .push(decl_kind.clone());
         });
@@ -576,8 +577,8 @@ impl<'a> DeclDeclarer<'a> {
                 .current_scope_id
                 .expect("didn't get current scope id");
             self.type_members
-                .get_mut(&id)
-                .expect("didn't get type members")
+                .entry(id)
+                .or_default()
                 .initializers
                 .push(decl_kind);
 

@@ -45,6 +45,7 @@ use crate::{
         solve_context::{Solve, SolveContext, SolveContextKind},
         term_environment::EnvEntry,
         type_catalog::{Conformance, ConformanceKey, MemberWitness},
+        type_error::TypeError,
         type_operations::{
             InstantiationSubstitutions, UnificationSubstitutions, apply, curry, instantiate_ty,
             substitute,
@@ -266,10 +267,11 @@ impl<'a> InferencePass<'a> {
                 Level::default(),
                 SolveContextKind::Nominal,
             );
-            let protocol_self = self
-                .session
-                .lookup(&Symbol::Protocol(key.protocol_id))
-                .unwrap();
+            let Some(protocol_self) = self.session.lookup(&Symbol::Protocol(key.protocol_id))
+            else {
+                tracing::error!("did not get protocol_self for {key:?}");
+                continue;
+            };
 
             let protocol_self_meta @ InferTy::Var { .. } = protocol_self.instantiate(
                 conformance.node_id,
@@ -280,7 +282,11 @@ impl<'a> InferencePass<'a> {
                 unreachable!();
             };
 
-            let conforming_self_entry = self.session.lookup(&key.conforming_id).unwrap();
+            let Some(conforming_self_entry) = self.session.lookup(&key.conforming_id) else {
+                tracing::error!("Could not find conforming_self_entry for {key:?}");
+                continue;
+            };
+
             let conforming_self = conforming_self_entry.instantiate(
                 conformance.node_id,
                 &mut context,
@@ -321,8 +327,12 @@ impl<'a> InferencePass<'a> {
                         conformance.span,
                     )
                 } else {
-                    let ty = conformance.associated_types.get(child_sym.0).unwrap();
-                    ty.clone()
+                    let Some(ty) = conformance.associated_types.get(child_sym.0).cloned() else {
+                        tracing::error!("Did not get associated type {child_sym:?}");
+                        continue;
+                    };
+
+                    ty
                 };
 
                 associated_substitutions.insert(
@@ -355,15 +365,20 @@ impl<'a> InferencePass<'a> {
                     .session
                     .lookup(&sym)
                     .unwrap_or_else(|| panic!("did not find requirement entry: {sym:?}"));
-                let witness_entry_sym = self
+                let Some(instance_methods) = self
                     .session
                     .type_catalog
                     .instance_methods
                     .get(&key.conforming_id)
-                    .unwrap()
-                    .get(&label)
-                    .copied()
-                    .unwrap();
+                else {
+                    tracing::error!("Did not get instance methods for {key:?}");
+                    continue;
+                };
+
+                let Some(witness_entry_sym) = instance_methods.get(&label).copied() else {
+                    tracing::error!("Did not get witness entry sym for {key:?} {label:?}");
+                    continue;
+                };
 
                 tracing::trace!("Inserting witness {sym:?} {label:?} -> {witness_entry_sym:?}");
                 self.session
@@ -374,7 +389,10 @@ impl<'a> InferencePass<'a> {
                         conformance.witnesses.insert(label, witness_entry_sym);
                     });
 
-                let witness_entry = self.session.lookup(&witness_entry_sym).unwrap();
+                let Some(witness_entry) = self.session.lookup(&witness_entry_sym) else {
+                    tracing::error!("did not find witness entry for {witness_entry_sym:?}");
+                    continue;
+                };
                 let witness_ty = witness_entry.instantiate(
                     NodeID::SYNTHESIZED,
                     &mut context,
@@ -548,7 +566,11 @@ impl<'a> InferencePass<'a> {
 
         tracing::debug!("visiting stragglers");
         for id in self.asts[idx].phase.unbound_nodes.clone() {
-            let node = self.asts.iter().find_map(|ast| ast.find(id)).unwrap();
+            let Some(node) = self.asts.iter().find_map(|ast| ast.find(id)) else {
+                tracing::error!("Did not find ast node for id: {id:?}");
+                continue;
+            };
+
             self.visit_node(&node, &mut context);
         }
 
@@ -602,8 +624,15 @@ impl<'a> InferencePass<'a> {
                 }
             }
 
-            let rhs_id = self.asts[idx].phase.scc_graph.rhs_id_for(binder);
-            let rhs = self.asts.iter().find_map(|ast| ast.find(*rhs_id)).unwrap();
+            let Some(rhs_id) = self.asts[idx].phase.scc_graph.rhs_id_for(binder) else {
+                tracing::error!("did not find rhs_id for binder: {binder:?}");
+                return;
+            };
+
+            let Some(rhs) = self.asts.iter().find_map(|ast| ast.find(*rhs_id)) else {
+                tracing::error!("did not find rhs for id: {rhs_id:?}, binder: {binder:?}");
+                return;
+            };
 
             let ty = self.visit_node(&rhs, &mut context);
 
@@ -1122,8 +1151,9 @@ impl<'a> InferencePass<'a> {
                         .cloned();
                     let associated_ty = if let Some(child_types) = &child_types
                         && let Some(child_sym) = child_types.get(label)
+                        && let Some(entry) = self.session.lookup(child_sym)
                     {
-                        self.session.lookup(child_sym).unwrap()._as_ty()
+                        entry._as_ty()
                     } else {
                         self.session.new_ty_meta_var(context.level())
                     };
@@ -1799,12 +1829,11 @@ impl<'a> InferencePass<'a> {
 
     #[instrument(level = tracing::Level::TRACE, skip(self, expr, context))]
     fn visit_variable(&mut self, expr: &Expr, name: &Name, context: &mut impl Solve) -> InferTy {
-        let ty = self.session.lookup(&name.symbol()).unwrap().instantiate(
-            expr.id,
-            context,
-            self.session,
-            expr.span,
-        );
+        let Some(entry) = self.session.lookup(&name.symbol()) else {
+            return InferTy::Error(TypeError::NameNotResolved(name.clone()).into());
+        };
+
+        let ty = entry.instantiate(expr.id, context, self.session, expr.span);
 
         self.instantiations
             .insert(expr.id, context.instantiations_mut().clone());
@@ -1859,12 +1888,13 @@ impl<'a> InferencePass<'a> {
                 type_arg.clone(),
                 InferTy::Var {
                     id: *instantiated,
-                    level: *self
+                    level: self
                         .session
                         .meta_levels
                         .borrow()
                         .get(&Meta::Ty(*instantiated))
-                        .unwrap(),
+                        .copied()
+                        .unwrap_or_default(),
                 },
                 ConstraintCause::Internal,
                 callee.span,
@@ -2079,7 +2109,10 @@ impl<'a> InferencePass<'a> {
                     return InferTy::Param(protocol_self);
                 }
 
-                let entry = self.session.lookup(&name.symbol()).unwrap();
+                let Some(entry) = self.session.lookup(&name.symbol()) else {
+                    return InferTy::Error(TypeError::TypeNotFound(format!("{name:?}")).into());
+                };
+
                 let ty = entry.instantiate(
                     type_annotation.id,
                     context,

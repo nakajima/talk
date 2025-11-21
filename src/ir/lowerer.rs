@@ -147,6 +147,7 @@ pub struct Lowerer<'a> {
     pub(super) specializations: IndexMap<Symbol, Vec<Specialization>>,
 }
 
+#[allow(clippy::expect_used)]
 impl<'a> Lowerer<'a> {
     pub fn new(
         asts: &'a mut IndexMap<Source, AST<NameResolved>>,
@@ -219,6 +220,7 @@ impl<'a> Lowerer<'a> {
                 attributes: vec![],
             };
 
+            #[allow(clippy::unwrap_used)]
             let ast = asts.iter_mut().next().unwrap();
             ast.1.roots.push(Node::Decl(Decl {
                 id: NodeID(FileID::SYNTHESIZED, 0),
@@ -349,7 +351,11 @@ impl<'a> Lowerer<'a> {
         body: &Block,
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
-        let func_ty = match self.types.get_symbol(&name.symbol()).unwrap() {
+        let func_ty = match self
+            .types
+            .get_symbol(&name.symbol())
+            .unwrap_or_else(|| panic!("did not get func ty for {name:?}"))
+        {
             TypeEntry::Mono(ty) => ty.clone(),
             TypeEntry::Poly(scheme) => scheme.ty.clone(),
         };
@@ -368,6 +374,7 @@ impl<'a> Lowerer<'a> {
             let formatter = formatter::Formatter::new(&meta);
             unreachable!(
                 "init has no params - param_tys: {param_tys:?} name: {name:?}, sym: {:?}, ty: {:?}, {:?}",
+                #[allow(clippy::unwrap_used)]
                 self.types.get_symbol(&name.symbol()).unwrap(),
                 func_ty,
                 formatter.format(&[Node::Decl(decl.clone())], 80)
@@ -392,6 +399,7 @@ impl<'a> Lowerer<'a> {
             ty: ret_ty.clone(),
         });
 
+        #[allow(clippy::expect_used)]
         let current_function = self
             .current_function_stack
             .pop()
@@ -518,6 +526,7 @@ impl<'a> Lowerer<'a> {
         match lvalue {
             LValue::Variable(sym) => {
                 // Variable is already in a register
+                #[allow(clippy::unwrap_used)]
                 Ok(*self.bindings.get(sym).unwrap())
             }
             LValue::Field { base, field, ty } => {
@@ -621,7 +630,9 @@ impl<'a> Lowerer<'a> {
                 let ret = self.ret(bind);
                 self.push_instr(Instruction::Constant {
                     dest: ret,
-                    val: Value::Int(str::parse(val).unwrap()),
+                    val: Value::Int(str::parse(val).map_err(|_| {
+                        IRError::CouldNotParse(format!("Could not get int value from {val}"))
+                    })?),
                     ty: Ty::Int,
                     meta: vec![InstructionMeta::Source(expr.id)].into(),
                 });
@@ -631,7 +642,9 @@ impl<'a> Lowerer<'a> {
                 let ret = self.ret(bind);
                 self.push_instr(Instruction::Constant {
                     dest: ret,
-                    val: Value::Float(str::parse(val).unwrap()),
+                    val: Value::Float(str::parse(val).map_err(|_| {
+                        IRError::CouldNotParse(format!("Could not get float value from {val}"))
+                    })?),
                     ty: Ty::Float,
                     meta: vec![InstructionMeta::Source(expr.id)].into(),
                 });
@@ -773,8 +786,14 @@ impl<'a> Lowerer<'a> {
         let scrutinee_type = self.ty_from_id(&scrutinee_expr.id)?;
 
         // Start dispatch from the block where the scrutinee was just computed.
-        let current_function = self.current_function_stack.last().unwrap();
-        let current_block_index = *current_function.current_block_idx.last().unwrap();
+        let current_function = self
+            .current_function_stack
+            .last()
+            .expect("did not get current function");
+        let current_block_index = *current_function
+            .current_block_idx
+            .last()
+            .expect("did not get current block index");
         let mut current_test_block_id = current_function.blocks[current_block_index].id;
 
         for arm_index in 0..arms.len() {
@@ -911,11 +930,15 @@ impl<'a> Lowerer<'a> {
             .catalog
             .initializers
             .get(&name.symbol())
-            .unwrap()
+            .expect("did not get init")
             .get(&Label::Named("init".into()))
-            .unwrap();
+            .expect("did not get init");
 
-        let init_entry = self.types.get_symbol(&constructor_sym).cloned().unwrap();
+        let init_entry = self
+            .types
+            .get_symbol(&constructor_sym)
+            .cloned()
+            .expect("did not get init entry");
         let (ty, mut instantiations) = self.specialize(&init_entry, expr.id)?;
         instantiations.ty.extend(old_instantiations.ty.clone());
         instantiations.row.extend(old_instantiations.row.clone());
@@ -946,7 +969,7 @@ impl<'a> Lowerer<'a> {
             .catalog
             .variants
             .get(&enum_symbol)
-            .unwrap()
+            .unwrap_or_else(|| panic!("did not get variants for {enum_symbol:?}"))
             .get(variant_name)
             .unwrap_or_else(|| panic!("didn't get {:?}", name));
 
@@ -955,13 +978,21 @@ impl<'a> Lowerer<'a> {
             .catalog
             .variants
             .get(&enum_symbol)
-            .unwrap()
+            .unwrap_or_else(|| panic!("did not get variants for {enum_symbol:?}"))
             .get_index_of(variant_name)
-            .unwrap();
+            .unwrap_or_else(|| panic!("did not get tag for {enum_symbol:?} {variant_name:?}"));
 
-        let enum_entry = self.types.get_symbol(&enum_symbol).unwrap().clone();
+        let enum_entry = self
+            .types
+            .get_symbol(&enum_symbol)
+            .unwrap_or_else(|| panic!("did not get enum entry {enum_symbol:?}"))
+            .clone();
         let (_, _ty_instantiations) = self.specialize(&enum_entry, id)?;
-        let init_entry = self.types.get_symbol(&constructor_sym).cloned().unwrap();
+        let init_entry = self
+            .types
+            .get_symbol(&constructor_sym)
+            .cloned()
+            .expect("did not get enum constructor entry");
         let (_, mut instantiations) = self.specialize(&init_entry, id)?;
         instantiations.extend(old_instantiations.clone());
 
@@ -1070,7 +1101,10 @@ impl<'a> Lowerer<'a> {
             let monomorphized_name = self.monomorphize_name(name.clone(), &instantiations);
             Value::Func(monomorphized_name)
         } else {
-            self.bindings.get(&name.symbol()).unwrap().into()
+            self.bindings
+                .get(&name.symbol())
+                .expect("did not get binding for variable")
+                .into()
         };
 
         Ok((ret, ty))
@@ -1095,18 +1129,27 @@ impl<'a> Lowerer<'a> {
             .catalog
             .initializers
             .get(&name.symbol())
-            .unwrap()
+            .unwrap_or_else(|| panic!("did not get initializers for {name:?}"))
             .get(&Label::Named("init".into()))
-            .unwrap();
+            .expect("did not get init");
 
-        let init_entry = self.types.get_symbol(&init_sym).cloned().unwrap();
+        let init_entry = self
+            .types
+            .get_symbol(&init_sym)
+            .cloned()
+            .expect("did not get init entry");
         let (init_ty, concrete_tys) = self.specialize(&init_entry, callee.id)?;
 
-        let properties = self.types.catalog.properties.get(&name.symbol()).unwrap();
+        let properties = self
+            .types
+            .catalog
+            .properties
+            .get(&name.symbol())
+            .expect("did not get properties");
 
         // Extract return type from the initializer function
         let mut params = init_ty.clone().uncurry_params();
-        let ret = params.pop().unwrap();
+        let ret = params.pop().expect("did not get init ret");
 
         self.push_instr(Instruction::Record {
             dest: record_dest,
@@ -1154,7 +1197,9 @@ impl<'a> Lowerer<'a> {
             return self.lower_embedded_ir_call(call_expr.id, args, dest);
         }
 
-        let (_callee_ty, mut instantiations) = self.specialized_ty(callee).unwrap();
+        let (_callee_ty, mut instantiations) = self
+            .specialized_ty(callee)
+            .expect("did not get specialized ty for callee");
         instantiations.extend(parent_instantiations.clone());
 
         let ty = self.ty_from_id(&call_expr.id)?;
@@ -1327,15 +1372,21 @@ impl<'a> Lowerer<'a> {
 
         self.push_instr(parse_instruction::<IrTy>(&string).into());
 
-        let ty = self.ty_from_id(&id).unwrap();
+        let ty = self.ty_from_id(&id)?;
 
         Ok((dest.into(), ty))
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn push_instr(&mut self, instruction: Instruction<Ty>) {
-        let current_function = self.current_function_stack.last_mut().unwrap();
-        let current_block_idx = current_function.current_block_idx.last().unwrap();
+        let current_function = self
+            .current_function_stack
+            .last_mut()
+            .expect("didn't get current function");
+        let current_block_idx = current_function
+            .current_block_idx
+            .last()
+            .expect("didn't get current block idx");
         current_function.blocks[*current_block_idx]
             .instructions
             .push(instruction);
@@ -1343,14 +1394,23 @@ impl<'a> Lowerer<'a> {
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn push_phi(&mut self, phi: Phi<Ty>) {
-        let current_function = self.current_function_stack.last_mut().unwrap();
-        let current_block_idx = current_function.current_block_idx.last().unwrap();
+        let current_function = self
+            .current_function_stack
+            .last_mut()
+            .expect("didn't get current function");
+        let current_block_idx = current_function
+            .current_block_idx
+            .last()
+            .expect("didn't get current block idx");
         current_function.blocks[*current_block_idx].phis.push(phi);
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn new_basic_block(&mut self) -> BasicBlockId {
-        let current_function = self.current_function_stack.last_mut().unwrap();
+        let current_function = self
+            .current_function_stack
+            .last_mut()
+            .expect("didn't get current function");
         let id = BasicBlockId(current_function.blocks.len() as u32);
         let new_block = BasicBlock {
             id,
@@ -1366,7 +1426,7 @@ impl<'a> Lowerer<'a> {
     fn set_current_block(&mut self, id: BasicBlockId) {
         self.current_function_stack
             .last_mut()
-            .unwrap()
+            .expect("didn't get current func")
             .current_block_idx
             .push(id.0 as usize);
     }
@@ -1379,13 +1439,13 @@ impl<'a> Lowerer<'a> {
     ) -> Result<T, IRError> {
         self.current_function_stack
             .last_mut()
-            .unwrap()
+            .expect("didn't get current func")
             .current_block_idx
             .push(id.0 as usize);
         let ret = f(self);
         self.current_function_stack
             .last_mut()
-            .unwrap()
+            .expect("didn't get current func")
             .current_block_idx
             .pop();
         ret
@@ -1393,13 +1453,22 @@ impl<'a> Lowerer<'a> {
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn push_terminator(&mut self, terminator: Terminator<Ty>) {
-        let current_function = self.current_function_stack.last_mut().unwrap();
-        let current_block_idx = current_function.current_block_idx.last().unwrap();
+        let current_function = self
+            .current_function_stack
+            .last_mut()
+            .expect("didn't get current function");
+        let current_block_idx = current_function
+            .current_block_idx
+            .last()
+            .expect("didn't get current block idx");
         current_function.blocks[*current_block_idx].terminator = terminator;
     }
 
     fn next_register(&mut self) -> Register {
-        let current_function = self.current_function_stack.last_mut().unwrap();
+        let current_function = self
+            .current_function_stack
+            .last_mut()
+            .expect("didn't get current function");
         let register = current_function.registers.next();
         tracing::trace!("allocated register: {register}");
         register
@@ -1420,10 +1489,18 @@ impl<'a> Lowerer<'a> {
             ..
         }) = symbol
         {
-            let module = self.modules.modules.get(module_id).unwrap();
+            let module = self
+                .modules
+                .modules
+                .get(module_id)
+                .expect("didn't get module for import");
             tracing::debug!("importing {symbol:?} from {module_id}");
             // TODO: This won't work with external methods yet, only core works.
-            let method_func = module.program.polyfunctions.get(symbol).unwrap();
+            let method_func = module
+                .program
+                .polyfunctions
+                .get(symbol)
+                .expect("didn't get method for import");
             self.functions.insert(*symbol, method_func.clone());
         }
     }
@@ -1504,8 +1581,7 @@ impl<'a> Lowerer<'a> {
             .cloned()
             .ok_or(IRError::TypeNotFound(format!(
                 "no type found for {symbol:?}"
-            )))
-            .unwrap();
+            )))?;
 
         let (ty, substitutions) = self.specialize(&entry, expr.id)?;
         _ = self.monomorphize_name(name.clone(), &substitutions);
