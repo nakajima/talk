@@ -275,8 +275,8 @@ pub mod tests {
     fn typechecks_multiple_files() {
         let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let paths = vec![
-            Source::from(current_dir.join("test/fixtures/a.tlk")),
-            Source::from(current_dir.join("test/fixtures/b.tlk")),
+            Source::from(current_dir.join("dev/fixtures/a.tlk")),
+            Source::from(current_dir.join("dev/fixtures/b.tlk")),
         ];
 
         let driver = Driver::new(paths, Default::default());
@@ -291,7 +291,7 @@ pub mod tests {
         let ast = typed
             .phase
             .asts
-            .get(&Source::from(current_dir.join("test/fixtures/b.tlk")))
+            .get(&Source::from(current_dir.join("dev/fixtures/b.tlk")))
             .unwrap();
 
         assert_eq!(types_tests::tests::ty(1, ast, &typed.phase.types), Ty::Int);
@@ -301,8 +301,8 @@ pub mod tests {
     fn typechecks_multiple_files_out_of_order() {
         let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let paths = vec![
-            Source::from(current_dir.join("test/fixtures/b.tlk")),
-            Source::from(current_dir.join("test/fixtures/a.tlk")),
+            Source::from(current_dir.join("dev/fixtures/b.tlk")),
+            Source::from(current_dir.join("dev/fixtures/a.tlk")),
         ];
 
         let driver = Driver::new(paths, Default::default());
@@ -317,7 +317,7 @@ pub mod tests {
         let ast = typed
             .phase
             .asts
-            .get(&Source::from(current_dir.join("test/fixtures/b.tlk")))
+            .get(&Source::from(current_dir.join("dev/fixtures/b.tlk")))
             .unwrap();
 
         assert_eq!(types_tests::tests::ty(1, ast, &typed.phase.types), Ty::Int);
@@ -328,7 +328,7 @@ pub mod tests {
         let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
         let driver_a = Driver::new(
-            vec![Source::from(current_dir.join("test/fixtures/protocol.tlk"))],
+            vec![Source::from(current_dir.join("dev/fixtures/protocol.tlk"))],
             Default::default(),
         );
 
@@ -351,7 +351,7 @@ pub mod tests {
 
         let driver_b = Driver::new(
             vec![Source::from(
-                current_dir.join("test/fixtures/conformance.tlk"),
+                current_dir.join("dev/fixtures/conformance.tlk"),
             )],
             config,
         );
@@ -367,7 +367,7 @@ pub mod tests {
             .phase
             .asts
             .get(&Source::from(
-                current_dir.join("test/fixtures/conformance.tlk"),
+                current_dir.join("dev/fixtures/conformance.tlk"),
             ))
             .unwrap();
 
@@ -379,7 +379,7 @@ pub mod tests {
         let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
         let driver_a = Driver::new(
-            vec![Source::from(current_dir.join("test/fixtures/a.tlk"))],
+            vec![Source::from(current_dir.join("dev/fixtures/a.tlk"))],
             Default::default(),
         );
         let typed_a = driver_a
@@ -400,7 +400,7 @@ pub mod tests {
         };
 
         let driver_b = Driver::new(
-            vec![Source::from(current_dir.join("test/fixtures/b.tlk"))],
+            vec![Source::from(current_dir.join("dev/fixtures/b.tlk"))],
             config,
         );
 
@@ -414,7 +414,7 @@ pub mod tests {
         let ast = typed
             .phase
             .asts
-            .get(&Source::from(current_dir.join("test/fixtures/b.tlk")))
+            .get(&Source::from(current_dir.join("dev/fixtures/b.tlk")))
             .unwrap();
 
         assert_eq!(types_tests::tests::ty(1, ast, &typed.phase.types), Ty::Int);
