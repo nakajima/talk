@@ -1,52 +1,147 @@
-protocol Add<RHS, Ret> { func add(rhs: RHS) -> Ret }
-protocol Subtract<RHS, Ret> { func subtract(rhs: RHS) -> Ret }
-protocol Multiply<RHS, Ret> { func multiply(rhs: RHS) -> Ret }
-protocol Divide<RHS, Ret> { func divide(rhs: RHS) -> Ret }
+protocol Add {
+  associated RHS
+  associated Ret
+  func add(rhs: RHS) -> Ret
+}
 
-extend Int: Add<Int, Int> {
+protocol Subtract {
+  associated RHS
+  associated Ret
+
+  func minus(rhs: RHS) -> Ret
+}
+
+protocol Multiply {
+  associated RHS
+  associated Ret
+
+  func times(rhs: RHS) -> Ret
+}
+
+protocol Divide {
+  associated RHS
+  associated Ret
+
+  func divide(rhs: RHS) -> Ret
+}
+
+protocol Equatable {
+  associated RHS
+
+  func equals(rhs: RHS) -> Bool
+
+  // func notEquals(rhs: RHS) -> Bool {
+  //   if self.equals(rhs: rhs) {
+	// 		false
+	// 	} else {
+	// 		true
+	// 	}
+  // }
+}
+
+protocol Negatable {
+  associated Ret
+
+  func negated() -> Ret
+}
+
+protocol Not {
+  associated Ret
+
+  func not() -> Ret
+}
+
+extend Int: Add {
   func add(rhs: Int) -> Int {
-    __ir_instr<Int>("$? = add int %0, %1;")
+    __IR("$? = add int %0 %1")
   }
 }
 
-extend Float: Add<Float, Float> {
+extend Float: Add {
   func add(rhs: Float) -> Float {
-    __ir_instr("$? = add float %0, %1;")
+    __IR("$? = add float %0 %1")
   }
 }
 
-extend Int: Subtract<Int, Int> {
-  func subtract(rhs: Int) -> Int {
-    __ir_instr("$? = sub int %0, %1;")
+
+extend Int: Subtract {
+  func minus(rhs: Int) -> Int {
+    __IR("$? = sub int %0 %1")
   }
 }
 
-extend Float: Subtract<Float, Float> {
-  func subtract(rhs: Float) -> Float {
-    __ir_instr("$? = sub float %0, %1;")
+extend Float: Subtract {
+  func minus(rhs: Float) -> Float {
+    __IR("$? = sub float %0 %1")
   }
 }
 
-extend Int: Multiply<Int, Int> {
-  func multiply(rhs: Int) -> Int {
-    __ir_instr("$? = mul int %0, %1;")
+extend Int: Multiply {
+  func times(rhs: Int) -> Int {
+    __IR("$? = mul int %0 %1")
   }
 }
 
-extend Float: Multiply<Float, Float> {
-  func multiply(rhs: Float) -> Float {
-    __ir_instr("$? = mul float %0, %1;")
+extend Float: Multiply {
+  func times(rhs: Float) -> Float {
+    __IR("$? = mul float %0 %1")
   }
 }
 
-extend Int: Divide<Int, Int> {
+extend Int: Divide {
   func divide(rhs: Int) -> Int {
-    __ir_instr("$? = div int %0, %1;")
+    __IR("$? = div int %0 %1")
   }
 }
 
-extend Float: Divide<Float, Float> {
+extend Float: Divide {
   func divide(rhs: Float) -> Float {
-    __ir_instr("$? = div float %0, %1;")
+    __IR("$? = div float %0 %1")
   }
 }
+
+// Equatable Conformances (x == y)
+
+// extend Int: Equatable {
+//   func equals(rhs: Int) -> Bool {
+//     __IR("$? = cmp int %0 == %1")
+//   }
+// }
+
+// extend Float: Equatable {
+//   func equals(rhs: Int) -> Bool {
+//     __IR("$? = cmp float %0 == %1")
+//   }
+// }
+
+// extend Bool: Equatable {
+//   func equals(rhs: Bool) -> Bool {
+//     __IR("$? = cmp bool %0 == %1")
+//   }
+// }
+
+// Negatable Conformances (-x)
+
+extend Int: Negatable {
+  func negated() -> Int {
+    __IR("$? = sub int 0 %0")
+  }
+}
+
+extend Float: Negatable {
+  func negated() -> Bool {
+    __IR("$? = sub float 0 %0")
+  }
+}
+
+// Not Conformances (!x)
+
+// extend Bool: Not {
+//   func not() -> Bool {
+//     if self {
+//       false
+//     } else {
+//       true
+//     }
+//   }
+// }

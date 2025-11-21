@@ -1,10 +1,108 @@
 #[macro_export]
+macro_rules! fxhashmap {
+    ($($k:expr => $v:expr),* $(,)?) => {{
+        let mut m = rustc_hash::FxHashMap::default();
+        $( m.insert($k, $v); )*
+        m
+    }};
+}
+
+#[macro_export]
+macro_rules! make_infer_row {
+     // entrypoint with a kind and fields
+    ($kind:ident, $($label:expr => $ty:expr),* $(,)?) => {{
+        let mut row = $crate::types::infer_row::InferRow::Empty(
+            $crate::types::type_session::TypeDefKind::$kind,
+        );
+        $(
+            row = $crate::types::infer_row::InferRow::Extend {
+                row: Box::new(row),
+                label: ($label).into(),
+                ty: $ty,
+            };
+        )*
+        row
+    }};
+}
+
+#[macro_export]
+macro_rules! make_row {
+     // entrypoint with a kind and fields
+    ($kind:ident, $($label:expr => $ty:expr),* $(,)?) => {{
+        let mut row = $crate::types::row::Row::Empty(
+            $crate::types::type_session::TypeDefKind::$kind,
+        );
+        $(
+            row = $crate::types::row::Row::Extend {
+                row: Box::new(row),
+                label: ($label).into(),
+                ty: $ty,
+            };
+        )*
+        row
+    }};
+}
+
+#[macro_export]
+macro_rules! indexmap {
+    ($($k:expr => $v:expr),* $(,)?) => {{
+        let mut m = indexmap::IndexMap::new();
+        $( m.insert($k, $v); )*
+        m
+    }};
+}
+
+#[macro_export]
 macro_rules! any_expr {
     ($expr:expr) => {{
-        use $crate::expr_id::ExprID;
-        ParsedExpr {
-            id: ExprID::ANY,
-            expr: $expr,
+        $crate::parsing::node_kinds::expr::Expr {
+            id: NodeID::ANY,
+            span: $crate::parsing::span::Span::ANY,
+            kind: $expr,
+        }
+    }};
+}
+
+#[macro_export]
+macro_rules! any {
+    // Pass an arbitrary list of fields
+    ($ty:ident, { $($fields:tt)* }) => {{
+        $ty {
+            id: NodeID::ANY,
+            span: Span::ANY,
+            $($fields)*
+        }
+    }};
+
+    // Convenience: pass just a kind expression
+    ($ty:ident, $kind:expr) => {{
+        $ty {
+            id: NodeID::ANY,
+            span: Span::ANY,
+            kind: $kind,
+        }
+    }};
+}
+
+#[macro_export]
+macro_rules! any_body {
+    ($expr:expr) => {{
+        $crate::node_kinds::body::Body {
+            id: NodeID::ANY,
+            span: $crate::parsing::span::Span::ANY,
+            decls: $expr,
+        }
+    }};
+}
+
+#[macro_export]
+macro_rules! any_block {
+    ($expr:expr) => {{
+        $crate::node_kinds::block::Block {
+            id: NodeID::ANY,
+            span: $crate::parsing::span::Span::ANY,
+            args: vec![],
+            body: $expr,
         }
     }};
 }
@@ -12,11 +110,26 @@ macro_rules! any_expr {
 #[macro_export]
 macro_rules! any_typed {
     ($expr:expr, $ty: expr) => {{
-        use $crate::expr_id::ExprID;
+        use $crate::node_id::NodeID;
         TypedExpr {
-            id: ExprID::ANY,
+            id: NodeID::ANY,
             expr: $expr,
             ty: $ty,
+        }
+    }};
+}
+
+#[macro_export]
+macro_rules! assert_eq_diff_display {
+    ($lhs:expr, $rhs:expr $(,)?) => {{
+        if $lhs != $rhs {
+            use prettydiff::diff_lines;
+            panic!(
+                "Assertion failed, {} != {}\nDiff:\n{}",
+                $lhs,
+                $rhs,
+                diff_lines(format!("{}", $lhs).as_str(), format!("{}", $rhs).as_str())
+            );
         }
     }};
 }
@@ -219,7 +332,7 @@ pub mod trace {
     pub fn init() {
         use tracing_subscriber::{EnvFilter, prelude::*, registry};
 
-        if std::env::var("LOG_PRELUDE").is_ok() {
+        if std::env::var("LOG_PRELUDE") == Ok("1".into()) {
             let tree = tracing_tree::HierarchicalLayer::new(2)
                 .with_writer(TestWriter::new())
                 .with_filter(EnvFilter::from_default_env()); // ordinary RUST_LOG filtering
@@ -229,6 +342,7 @@ pub mod trace {
                 .init();
         } else {
             let tree = tracing_tree::HierarchicalLayer::new(2)
+                .with_ansi(std::env::var("NO_COLOR").is_err())
                 .with_writer(TestWriter::new())
                 .with_filter(SuppressPrelude) // kills everything inside a prelude span
                 .with_filter(EnvFilter::from_default_env()); // ordinary RUST_LOG filtering

@@ -1,8 +1,10 @@
+use anyhow::Result;
 use std::{mem::transmute, ops::Add};
 
-use crate::{parsed_expr::ParsedExpr, token::Token, token_kind::TokenKind};
-
-use super::parser::{Parser, ParserError};
+use crate::{
+    node::Node, node_kinds::expr::Expr, parser::Parser, parser_error::ParserError, token::Token,
+    token_kind::TokenKind,
+};
 
 #[derive(Copy, Clone, Debug, PartialEq, PartialOrd)]
 #[repr(u8)]
@@ -30,9 +32,8 @@ impl Precedence {
 #[derive(Debug)]
 #[allow(clippy::type_complexity)]
 pub struct ParseHandler<'a> {
-    pub(crate) prefix: Option<fn(&mut Parser<'a>, bool) -> Result<ParsedExpr, ParserError>>,
-    pub(crate) infix:
-        Option<fn(&mut Parser<'a>, bool, ParsedExpr) -> Result<ParsedExpr, ParserError>>,
+    pub(crate) prefix: Option<fn(&mut Parser<'a>, bool) -> Result<Node, ParserError>>,
+    pub(crate) infix: Option<fn(&mut Parser<'a>, bool, Expr) -> Result<Node, ParserError>>,
     pub(crate) precedence: Precedence,
 }
 
@@ -49,16 +50,14 @@ impl Precedence {
         let token = match token {
             Some(t) => t,
             None => {
-                return Err(ParserError::UnknownError(
-                    "did not get token for parser handler".into(),
-                ));
+                return Err(ParserError::UnexpectedEndOfInput(None));
             }
         };
 
         Ok(match &token.kind {
             TokenKind::LeftParen => ParseHandler {
                 prefix: Some(Parser::tuple),
-                infix: Some(Parser::call_infix),
+                infix: None,
                 precedence: Precedence::Assignment,
             },
 
@@ -69,7 +68,7 @@ impl Precedence {
             },
             TokenKind::Else => ParseHandler::NONE,
             TokenKind::Loop => ParseHandler {
-                prefix: Some(Parser::loop_expr),
+                prefix: None,
                 infix: None,
                 precedence: Precedence::None,
             },
@@ -81,43 +80,31 @@ impl Precedence {
             },
 
             TokenKind::At => ParseHandler {
-                prefix: Some(Parser::attribute),
-                infix: None,
-                precedence: Precedence::Primary,
-            },
-
-            TokenKind::Return => ParseHandler {
-                prefix: Some(Parser::return_expr),
-                infix: None,
-                precedence: Precedence::Primary,
-            },
-
-            TokenKind::Break => ParseHandler {
-                prefix: Some(Parser::break_expr),
+                prefix: None,
                 infix: None,
                 precedence: Precedence::Primary,
             },
 
             TokenKind::True => ParseHandler {
-                prefix: Some(Parser::boolean),
+                prefix: Some(Parser::literal),
                 infix: None,
                 precedence: Precedence::None,
             },
 
             TokenKind::False => ParseHandler {
-                prefix: Some(Parser::boolean),
+                prefix: Some(Parser::literal),
                 infix: None,
                 precedence: Precedence::None,
             },
 
             TokenKind::Enum => ParseHandler {
-                prefix: Some(Parser::enum_decl),
+                prefix: None,
                 infix: None,
                 precedence: Precedence::Call,
             },
 
             TokenKind::LeftBrace => ParseHandler {
-                prefix: Some(Parser::block),
+                prefix: Some(Parser::block_expr),
                 infix: None,
                 precedence: Precedence::Call,
             },
@@ -129,31 +116,31 @@ impl Precedence {
             },
 
             TokenKind::Struct => ParseHandler {
-                prefix: Some(Parser::struct_expr),
+                prefix: None,
                 infix: None,
                 precedence: Precedence::Call,
             },
 
             TokenKind::Extend => ParseHandler {
-                prefix: Some(Parser::extend_expr),
+                prefix: None,
                 infix: None,
                 precedence: Precedence::Call,
             },
 
             TokenKind::Import => ParseHandler {
-                prefix: Some(Parser::import_expr),
+                prefix: None,
                 infix: None,
                 precedence: Precedence::Primary,
             },
 
             TokenKind::Protocol => ParseHandler {
-                prefix: Some(Parser::protocol_expr),
+                prefix: None,
                 infix: None,
                 precedence: Precedence::Call,
             },
 
             TokenKind::LeftBracket => ParseHandler {
-                prefix: Some(Parser::array_literal),
+                prefix: Some(Parser::array),
                 infix: None,
                 precedence: Precedence::Call,
             },
@@ -249,13 +236,13 @@ impl Precedence {
             },
 
             TokenKind::Func => ParseHandler {
-                prefix: Some(Parser::literal),
+                prefix: Some(Parser::func_expr),
                 infix: None,
                 precedence: Precedence::Assignment,
             },
 
             TokenKind::Let => ParseHandler {
-                prefix: Some(Parser::let_expr),
+                prefix: None,
                 infix: None,
                 precedence: Precedence::Assignment,
             },

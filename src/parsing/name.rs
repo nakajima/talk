@@ -1,72 +1,39 @@
-use crate::{
-    SymbolID, compiling::compiled_module::ImportedSymbol, ty::Ty, type_checker::TypeError,
-};
+use std::fmt::Display;
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+use crate::name_resolution::symbol::Symbol;
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Name {
     Raw(String),
-    Resolved(SymbolID, String),
-    _Self(SymbolID),
-    SelfType,
-    Imported(SymbolID, ImportedSymbol),
+    Resolved(Symbol, String),
+    SelfType(Symbol),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct ResolvedName(pub SymbolID, pub String);
-
-impl ResolvedName {
-    pub fn mangled(&self, _ty: &Ty) -> String {
-        if self.1 == "main" {
-            "@main".into()
-        } else {
-            format!("@_{:?}_{}", self.0.0, self.1)
+impl Display for Name {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Raw(name) => write!(f, "@{}", name),
+            Self::Resolved(sym, name) => write!(f, "@{name}:{sym}"),
+            Self::SelfType(id) => write!(f, "Self({id})"),
         }
-    }
-
-    pub fn name_str(&self) -> String {
-        self.1.to_string()
-    }
-
-    pub fn symbol_id(&self) -> SymbolID {
-        self.0
     }
 }
 
 impl Name {
-    pub fn resolved(&self) -> Result<ResolvedName, TypeError> {
-        match self {
-            Name::Raw(_) => Err(TypeError::Unresolved(format!("{self:?} is unresolved"))),
-            Name::Resolved(symbol_id, name_str) => Ok(ResolvedName(*symbol_id, name_str.clone())),
-            Name::_Self(symbol_id) => Ok(ResolvedName(*symbol_id, "self".to_string())),
-            Name::Imported(symbol_id, _) => Ok(ResolvedName(*symbol_id, self.name_str())),
-            Name::SelfType => Err(TypeError::Unresolved(format!(
-                "Name::SelfType {self:?} is unresolved"
-            ))),
-        }
-    }
-
     pub fn name_str(&self) -> String {
         match self {
             Name::Raw(name_str) => name_str.into(),
             Name::Resolved(_symbol_id, name_str) => name_str.into(),
-            Name::_Self(_) => "self".into(),
-            Name::SelfType => "Self".to_string(),
-            Name::Imported(_, imported) => imported.name.to_string(),
+            Name::SelfType(..) => "Self".to_string(),
         }
     }
 
-    pub fn symbol_id(&self) -> Result<SymbolID, TypeError> {
-        match self {
-            Name::Raw(name_str) => Err(TypeError::Unresolved(format!(
-                "Cannot get symbol ID from unresolved {name_str:?}"
-            ))),
-            Name::Resolved(symbol_id, _) => Ok(*symbol_id),
-            Name::_Self(symbol_id) => Ok(*symbol_id),
-            Name::SelfType => Err(TypeError::Unknown(
-                "Cannot get symbol ID from unresolved Self".to_string(),
-            )),
-            Name::Imported(symbol_id, _) => Ok(*symbol_id),
+    pub fn symbol(&self) -> Symbol {
+        if let Name::Resolved(sym, _) = self {
+            return *sym;
         }
+
+        panic!("Name not resolved: {self:?}");
     }
 }
 
@@ -82,7 +49,7 @@ impl From<&str> for Name {
     }
 }
 
-impl From<Name> for SymbolID {
+impl From<Name> for Symbol {
     #[allow(clippy::panic)]
     fn from(value: Name) -> Self {
         let Name::Resolved(id, _) = value else {

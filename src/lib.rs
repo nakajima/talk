@@ -6,34 +6,24 @@
 #![feature(hash_set_entry)]
 #![feature(stmt_expr_attributes)]
 #![feature(error_generic_member_access)]
-#![cfg_attr(not(test), warn(clippy::unwrap_used))]
-#![cfg_attr(not(test), warn(clippy::expect_used))]
-#![cfg_attr(not(test), warn(clippy::panic))]
-#![cfg_attr(not(test), warn(clippy::todo))]
-#![cfg_attr(not(test), warn(clippy::unimplemented))]
+#![feature(try_blocks)]
+#![feature(try_trait_v2)]
+#![feature(never_type)]
+#![allow(clippy::uninlined_format_args)]
+// #![cfg_attr(not(test), warn(clippy::unwrap_used))]
+// #![cfg_attr(not(test), warn(clippy::expect_used))]
+// #![cfg_attr(not(test), warn(clippy::panic))]
+// #![cfg_attr(not(test), warn(clippy::todo))]
+// #![cfg_attr(not(test), warn(clippy::unimplemented))]
 
-pub mod prelude;
-
-pub mod builtins;
-pub use builtins::*;
-pub mod semantic_index;
-pub mod source_file;
-pub mod span_index;
-pub use source_file::*;
-pub mod symbol_table;
-pub use symbol_table::*;
-pub mod lexing;
-pub use lexing::*;
-pub mod type_checking;
-pub use type_checking::*;
 pub mod parsing;
 pub use parsing::*;
-pub mod analysis;
+pub mod common;
 pub mod compiling;
-pub mod diagnostic;
-pub mod interpret;
-pub mod lowering;
-pub mod transforms;
+pub use common::*;
+pub mod ir;
+pub mod name_resolution;
+pub mod types;
 
 #[cfg(feature = "cli")]
 pub mod lsp;

@@ -1,8 +1,14 @@
 use crate::{
-    SourceFile,
+    ast::{AST, Parsed},
     lexer::Lexer,
-    parsed_expr::{Expr, IncompleteExpr, ParsedExpr, Pattern},
-    parser::parse,
+    node::Node,
+    node_id::FileID,
+    node_kinds::{
+        decl::DeclKind, expr::ExprKind, record_field::RecordFieldTypeAnnotation, stmt::StmtKind,
+        type_annotation::TypeAnnotationKind,
+    },
+    parser::Parser,
+    span::Span,
     token::Token,
     token_kind::TokenKind,
 };
@@ -57,36 +63,38 @@ impl HighlightToken {
 #[derive(Debug, Clone)]
 pub struct Higlighter<'a> {
     source: &'a str,
-    source_file: SourceFile,
 }
 
 impl<'a> Higlighter<'a> {
     pub fn new(source: &'a str) -> Self {
-        let source_file = parse(source, "-".into());
-
-        Self {
-            source,
-            source_file,
-        }
+        Self { source }
     }
 
     pub fn highlight(&mut self) -> Vec<HighlightToken> {
         let mut result = vec![];
-        result.extend(self.collect_lexed_tokens());
 
-        for root in self.source_file.roots() {
-            result.extend(self.tokens_from_expr(root));
+        let lexer = Lexer::preserving_comments(self.source);
+
+        result.extend(self.collect_lexed_tokens(lexer.clone()));
+
+        let parser = Parser::new("-", FileID(0), lexer);
+        let Ok(ast) = parser.parse() else {
+            return result;
+        };
+
+        for root in ast.roots.iter() {
+            result.extend(self.tokens_from_expr(&root, &ast));
         }
 
         result
     }
 
-    fn collect_lexed_tokens(&mut self) -> Vec<HighlightToken> {
-        let mut lexer = Lexer::preserving_comments(self.source);
+    fn collect_lexed_tokens(&mut self, mut lexer: Lexer) -> Vec<HighlightToken> {
         let mut tokens: Vec<HighlightToken> = vec![];
 
         while let Ok(tok) = &lexer.next() {
             match tok.kind {
+                TokenKind::As => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::At => self.make(tok, Kind::DECORATOR, &mut tokens),
                 TokenKind::LineComment(_) => self.make(tok, Kind::COMMENT, &mut tokens),
                 TokenKind::Extend => self.make(tok, Kind::KEYWORD, &mut tokens),
@@ -154,6 +162,9 @@ impl<'a> Higlighter<'a> {
                 TokenKind::DotDot | TokenKind::DotDotDot => {
                     self.make(tok, Kind::OPERATOR, &mut tokens)
                 }
+                TokenKind::Associated => self.make(tok, Kind::TYPE, &mut tokens),
+                TokenKind::Typealias => self.make(tok, Kind::KEYWORD, &mut tokens),
+                TokenKind::Static => self.make(tok, Kind::KEYWORD, &mut tokens),
             }
         }
 
@@ -165,258 +176,288 @@ impl<'a> Higlighter<'a> {
         tokens
     }
 
-    fn tokens_from_expr(&self, expr: &ParsedExpr) -> Vec<HighlightToken> {
+    fn tokens_from_expr<T: Into<Node> + Clone>(
+        &self,
+        node: &T,
+        ast: &AST<Parsed>,
+    ) -> Vec<HighlightToken> {
         let mut result = vec![];
+        let node: Node = node.clone().into();
 
-        let meta = self.source_file.meta.borrow();
-        let Some(meta) = meta.get(&expr.id) else {
+        let Some(meta) = ast.meta.get(&node.node_id()) else {
             return vec![];
         };
 
         let start = meta.start.start;
         let end = meta.end.end;
 
-        match &expr.expr {
-            Expr::Incomplete(e) => match e {
-                IncompleteExpr::Member(rec) => {
-                    if let Some(receiver) = rec {
-                        result.extend(self.tokens_from_expr(receiver))
-                    }
+        match &node {
+            Node::Attribute(..) => {
+                result.push(HighlightToken {
+                    kind: Kind::DECORATOR,
+                    start,
+                    end,
+                });
+            }
+            Node::Decl(decl) => match &decl.kind {
+                DeclKind::Import(_) => (),
+                DeclKind::Struct {
+                    generics,
+                    conformances,
+                    body,
+                    name_span,
+                    ..
+                } => {
+                    result.push(self.make_span(Kind::TYPE, *name_span));
+                    result.extend(self.tokens_from_exprs(generics, ast));
+                    result.extend(self.tokens_from_exprs(conformances, ast));
+                    result.extend(self.tokens_from_expr(body, ast));
                 }
-                IncompleteExpr::Func { .. } => (),
-            },
-            Expr::Attribute(_) => {
-                result.push(HighlightToken::new(Kind::DECORATOR, start, end));
-            }
-            Expr::LiteralString(_) => (), // already handled by lexed
-            Expr::LiteralArray(items) => result.extend(self.tokens_from_exprs(items)),
-            Expr::LiteralInt(_) | Expr::LiteralFloat(_) => {
-                result.push(HighlightToken::new(Kind::NUMBER, start, end));
-            }
-            Expr::LiteralTrue | Expr::LiteralFalse => {
-                result.push(HighlightToken::new(Kind::KEYWORD, start, end))
-            }
-            Expr::Unary(_token_kind, rhs) => result.extend(self.tokens_from_expr(rhs)),
-            Expr::Binary(box lhs, _token_kind, box rhs) => {
-                result.extend(self.tokens_from_expr_refs(&[lhs, rhs]))
-            }
-            Expr::Tuple(items) => {
-                result.push(HighlightToken::new(Kind::KEYWORD, start, end));
-                result.extend(self.tokens_from_exprs(items));
-            }
-            Expr::Import(_) => (), // Handled by keyword
-            Expr::Break => result.push(HighlightToken::new(Kind::KEYWORD, start, end)),
-            Expr::Block(items) => result.extend(self.tokens_from_exprs(items)),
-            Expr::Call {
-                callee,
-                type_args,
-                args,
-            } => {
-                result.extend(self.tokens_from_expr(callee));
-                result.extend(self.tokens_from_exprs(type_args));
-                result.extend(self.tokens_from_exprs(args));
-            }
-            Expr::ParsedPattern(pattern) => match pattern {
-                Pattern::LiteralInt(_) => {
-                    result.push(HighlightToken::new(Kind::NUMBER, start, end))
-                }
-                Pattern::LiteralFloat(_) => {
-                    result.push(HighlightToken::new(Kind::NUMBER, start, end))
-                }
-                Pattern::LiteralTrue => result.push(HighlightToken::new(Kind::KEYWORD, start, end)),
-                Pattern::LiteralFalse => {
-                    result.push(HighlightToken::new(Kind::KEYWORD, start, end))
-                }
-                Pattern::Bind(_name) => {}
-                Pattern::Wildcard => {}
-                Pattern::Variant { fields, .. } => result.extend(self.tokens_from_exprs(fields)),
-                Pattern::Struct { fields, .. } => {
-                    for field_pattern in fields {
-                        result.extend(self.tokens_from_expr(field_pattern));
-                    }
-                }
-            },
-            Expr::Return(rhs) => {
-                if let Some(rhs) = rhs {
-                    result.extend(self.tokens_from_expr(rhs))
-                }
-            }
-            Expr::Struct {
-                generics,
-                conformances,
-                body,
-                ..
-            } => {
-                result.extend(self.tokens_from_exprs(generics));
-                result.extend(self.tokens_from_exprs(conformances));
-                result.extend(self.tokens_from_expr(body));
-            }
-            Expr::Extend {
-                generics,
-                conformances,
-                body,
-                ..
-            } => {
-                result.extend(self.tokens_from_exprs(generics));
-                result.extend(self.tokens_from_exprs(conformances));
-                result.extend(self.tokens_from_expr(body));
-            }
-            Expr::Property {
-                name: _name,
-                type_repr,
-                default_value,
-            } => {
-                if let Some(type_repr) = type_repr {
-                    result.extend(self.tokens_from_expr(type_repr));
-                }
-                if let Some(default_value) = default_value {
-                    result.extend(self.tokens_from_expr(default_value));
-                }
-            }
-            Expr::TypeRepr {
-                generics,
-                conformances,
-                ..
-            } => {
-                let meta = self.source_file.meta.borrow();
-                if let Some(meta) = meta.get(&expr.id) {
-                    result.extend(
-                        meta.identifiers
-                            .iter()
-                            .map(|i| HighlightToken::new(Kind::TYPE_PARAMETER, i.start, i.end)),
-                    )
-                }
-                result.extend(self.tokens_from_exprs(generics));
-                result.extend(self.tokens_from_exprs(conformances));
-            }
-            Expr::FuncTypeRepr(items, ret, _) => {
-                result.extend(self.tokens_from_exprs(items));
-                result.extend(self.tokens_from_expr(ret));
-            }
-            Expr::TupleTypeRepr(items, _) => {
-                result.extend(self.tokens_from_exprs(items));
-            }
-            Expr::Member(receiver, _) => {
-                if let Some(receiver) = receiver {
-                    result.extend(self.tokens_from_expr(receiver));
-                }
-            }
-            Expr::Func {
-                generics,
-                params,
-                body,
-                ret,
-                ..
-            } => {
-                result.extend(self.tokens_from_exprs(generics));
-                result.extend(self.tokens_from_exprs(params));
-                result.extend(self.tokens_from_expr(body));
-                if let Some(ret) = ret {
-                    result.extend(self.tokens_from_expr(ret));
-                }
-            }
-            Expr::Init(_, func_id) => result.extend(self.tokens_from_expr(func_id)),
-            Expr::Parameter(_name, ty) => {
-                if let Some(ty) = ty {
-                    result.extend(self.tokens_from_expr(ty));
-                }
-            }
-            Expr::Let(_name, rhs) => {
-                if let Some(rhs) = rhs {
-                    result.extend(self.tokens_from_expr(rhs));
-                }
-            }
-            Expr::Assignment(box lhs, box rhs) => {
-                result.extend(self.tokens_from_expr_refs(&[lhs, rhs]))
-            }
-            Expr::Variable(_name) => {}
-            Expr::If(cond, then, alt) => {
-                result.extend(self.tokens_from_expr(cond));
-                result.extend(self.tokens_from_expr(then));
-                if let Some(alt) = alt {
-                    result.extend(self.tokens_from_expr(alt));
-                }
-            }
-            Expr::Loop(cond, body) => {
-                if let Some(cond) = cond {
-                    result.extend(self.tokens_from_expr(cond));
-                }
-                result.extend(self.tokens_from_expr(body));
-            }
-            Expr::EnumDecl { generics, body, .. } => {
-                result.extend(self.tokens_from_exprs(generics));
-                result.extend(self.tokens_from_expr(body));
-            }
-            Expr::EnumVariant(_name, items) => result.extend(self.tokens_from_exprs(items)),
-            Expr::Match(_, items) => result.extend(self.tokens_from_exprs(items)),
-            Expr::MatchArm(box pattern, box body) => {
-                result.extend(self.tokens_from_expr_refs(&[pattern, body]))
-            }
-            Expr::PatternVariant(_name, _name1, items) => {
-                result.extend(self.tokens_from_exprs(items))
-            }
-            Expr::CallArg { value, .. } => {
-                let meta = self.source_file.meta.borrow();
-                if let Some(meta) = meta.get(&expr.id) {
-                    result.extend(
-                        meta.identifiers
-                            .iter()
-                            .map(|i| HighlightToken::new(Kind::PROPERTY, i.start, i.end)),
-                    )
-                }
+                DeclKind::Let {
+                    lhs,
+                    type_annotation,
+                    rhs: value,
+                } => {
+                    result.extend(self.tokens_from_expr(lhs, ast));
 
-                result.extend(self.tokens_from_expr(value));
-            }
-            Expr::ProtocolDecl {
-                associated_types,
-                body,
-                conformances,
-                ..
-            } => {
-                result.extend(self.tokens_from_exprs(associated_types));
-                result.extend(self.tokens_from_expr(body));
-                result.extend(self.tokens_from_exprs(conformances));
-            }
-            Expr::FuncSignature {
-                params,
-                generics,
-                ret,
-                ..
-            } => {
-                result.extend(self.tokens_from_exprs(params));
-                result.extend(self.tokens_from_exprs(generics));
-                result.extend(self.tokens_from_expr(ret));
-            }
-            Expr::RecordLiteral(fields) => result.extend(self.tokens_from_exprs(fields)),
-            Expr::RecordField { value, .. } => result.extend(self.tokens_from_expr(value)),
-            Expr::RecordTypeRepr {
-                fields, row_var, ..
-            } => {
-                result.extend(self.tokens_from_exprs(fields));
-                if let Some(row) = row_var {
-                    result.extend(self.tokens_from_expr(row));
+                    if let Some(node) = type_annotation {
+                        result.extend(self.tokens_from_expr(node, ast));
+                    }
+
+                    if let Some(node) = value {
+                        result.extend(self.tokens_from_expr(node, ast));
+                    }
+                }
+                DeclKind::Protocol {
+                    generics,
+                    body,
+                    conformances,
+                    name_span,
+                    ..
+                } => {
+                    result.push(self.make_span(Kind::INTERFACE, *name_span));
+                    result.extend(self.tokens_from_exprs(generics, ast));
+                    result.extend(self.tokens_from_exprs(conformances, ast));
+                    result.extend(self.tokens_from_expr(body, ast));
+                }
+                DeclKind::Init { params, body, .. } => {
+                    result.extend(self.tokens_from_exprs(params, ast));
+                    result.extend(self.tokens_from_expr(body, ast));
+                }
+                DeclKind::Property {
+                    type_annotation,
+                    default_value,
+                    ..
+                } => {
+                    if let Some(node) = type_annotation {
+                        result.extend(self.tokens_from_expr(node, ast));
+                    }
+
+                    if let Some(node) = default_value {
+                        result.extend(self.tokens_from_expr(node, ast));
+                    }
+                }
+                DeclKind::Method { box func, .. } => {
+                    result.extend(self.tokens_from_expr(func, ast));
+                }
+                DeclKind::Associated { generic } => {
+                    result.extend(self.tokens_from_expr(generic, ast));
+                }
+                DeclKind::Func(func) => {
+                    result.extend(self.tokens_from_expr(func, ast));
+                }
+                DeclKind::Extend {
+                    conformances,
+                    generics,
+                    body,
+                    name_span,
+                    ..
+                } => {
+                    result.push(self.make_span(Kind::TYPE, *name_span));
+                    result.extend(self.tokens_from_exprs(generics, ast));
+                    result.extend(self.tokens_from_exprs(conformances, ast));
+                    result.extend(self.tokens_from_expr(body, ast));
+                }
+                DeclKind::Enum {
+                    conformances,
+                    generics,
+                    body,
+                    name_span,
+                    ..
+                } => {
+                    result.push(self.make_span(Kind::TYPE, *name_span));
+                    result.extend(self.tokens_from_exprs(generics, ast));
+                    result.extend(self.tokens_from_exprs(conformances, ast));
+                    result.extend(self.tokens_from_expr(body, ast));
+                }
+                DeclKind::EnumVariant(.., type_annotations) => {
+                    result.extend(self.tokens_from_exprs(type_annotations, ast));
+                }
+                DeclKind::FuncSignature(func_signature) => {
+                    result.extend(self.tokens_from_expr(func_signature, ast));
+                }
+                DeclKind::MethodRequirement(func_signature) => {
+                    result.extend(self.tokens_from_expr(func_signature, ast));
+                }
+                DeclKind::TypeAlias(.., lhs_span, rhs) => {
+                    result.push(self.make_span(Kind::TYPE, *lhs_span));
+                    result.extend(self.tokens_from_expr(rhs, ast));
+                }
+            },
+            Node::Func(func) => {
+                result.push(self.make_span(Kind::FUNCTION, func.name_span));
+                result.extend(self.tokens_from_exprs(&func.params, ast));
+                result.extend(self.tokens_from_expr(&func.body, ast));
+                result.extend(self.tokens_from_exprs(&func.attributes, ast));
+                if let Some(ret) = &func.ret {
+                    result.extend(self.tokens_from_expr(ret, ast));
                 }
             }
-            Expr::RecordTypeField { ty, .. } => result.extend(self.tokens_from_expr(ty)),
-            Expr::RowVariable(_) => {}
-            Expr::Spread(expr) => result.extend(self.tokens_from_expr(expr)),
+            Node::GenericDecl(generic_decl) => {
+                result.push(self.make_span(Kind::TYPE_PARAMETER, generic_decl.name_span));
+                result.extend(self.tokens_from_exprs(&generic_decl.conformances, ast));
+                result.extend(self.tokens_from_exprs(&generic_decl.generics, ast));
+            }
+            Node::Parameter(parameter) => {
+                result.push(self.make_span(Kind::PARAMETER, parameter.name_span));
+                if let Some(ty) = &parameter.type_annotation {
+                    result.extend(self.tokens_from_expr(&ty, ast));
+                }
+            }
+            Node::TypeAnnotation(type_annotation) => match &type_annotation.kind {
+                TypeAnnotationKind::Nominal {
+                    name_span,
+                    generics,
+                    ..
+                } => {
+                    result.push(self.make_span(Kind::TYPE, *name_span));
+                    result.extend(self.tokens_from_exprs(generics, ast));
+                }
+                TypeAnnotationKind::SelfType(..) => todo!(),
+                TypeAnnotationKind::Func {
+                    params,
+                    box returns,
+                } => {
+                    result.extend(self.tokens_from_exprs(params, ast));
+                    result.extend(self.tokens_from_expr(&returns, ast));
+                }
+                TypeAnnotationKind::NominalPath {
+                    box base,
+                    member: _,
+                    member_span,
+                    member_generics,
+                } => {
+                    result.extend(self.tokens_from_expr(base, ast));
+                    result.push(self.make_span(Kind::TYPE, *member_span));
+                    result.extend(self.tokens_from_exprs(member_generics, ast));
+                }
+                TypeAnnotationKind::Tuple(type_annotations) => {
+                    result.extend(self.tokens_from_exprs(type_annotations, ast));
+                }
+                TypeAnnotationKind::Record { fields } => {
+                    for RecordFieldTypeAnnotation {
+                        label_span, value, ..
+                    } in fields
+                    {
+                        result.push(self.make_span(Kind::PARAMETER, *label_span));
+                        result.extend(self.tokens_from_expr(value, ast));
+                    }
+                }
+            },
+            Node::Stmt(stmt) => match &stmt.kind {
+                StmtKind::Expr(expr) => {
+                    result.extend(self.tokens_from_expr(expr, ast));
+                }
+                StmtKind::If(cond, conseq, alt) => {
+                    result.extend(self.tokens_from_expr(cond, ast));
+                    result.extend(self.tokens_from_expr(conseq, ast));
+                    if let Some(alt) = alt {
+                        result.extend(self.tokens_from_expr(alt, ast));
+                    }
+                }
+                StmtKind::Return(expr) => {
+                    if let Some(expr) = expr {
+                        result.extend(self.tokens_from_expr(expr, ast));
+                    }
+                }
+                StmtKind::Break => (),
+                StmtKind::Assignment(lhs, rhs) => {
+                    result.extend(self.tokens_from_expr(lhs, ast));
+                    result.extend(self.tokens_from_expr(rhs, ast));
+                }
+                StmtKind::Loop(cond, block) => {
+                    if let Some(cond) = cond {
+                        result.extend(self.tokens_from_expr(cond, ast));
+                    }
+
+                    result.extend(self.tokens_from_expr(block, ast));
+                }
+            },
+            Node::Expr(expr) => match &expr.kind {
+                ExprKind::Incomplete(..) => (),
+                ExprKind::LiteralArray(exprs) => {
+                    result.extend(self.tokens_from_exprs(exprs, ast));
+                }
+                ExprKind::As(box lhs, rhs) => {
+                    result.extend(self.tokens_from_expr(lhs, ast));
+                    result.extend(self.tokens_from_expr(rhs, ast));
+                }
+                // Literals are handled by tokens pass
+                ExprKind::LiteralInt(_) => (),
+                ExprKind::LiteralFloat(_) => (),
+                ExprKind::LiteralTrue => (),
+                ExprKind::LiteralFalse => (),
+                ExprKind::LiteralString(_) => (),
+                ExprKind::Unary(..) => (),
+                ExprKind::Binary(..) => (),
+                ExprKind::Tuple(..) => (),
+                ExprKind::Block(..) => (),
+                ExprKind::Call { .. } => (),
+                ExprKind::Member(.., span) => {
+                    result.push(self.make_span(Kind::METHOD, *span));
+                }
+                ExprKind::Func(..) => (),
+                ExprKind::Variable(..) => {
+                    result.push(self.make_span(Kind::VARIABLE, expr.span));
+                }
+                ExprKind::Constructor(..) => {
+                    result.push(self.make_span(Kind::TYPE, expr.span));
+                }
+                ExprKind::If(..) => (),
+                ExprKind::Match(..) => (),
+                ExprKind::RecordLiteral { .. } => (),
+                ExprKind::RowVariable(..) => (),
+            },
+            Node::Body(..) => (),
+            Node::Pattern(..) => (),
+            Node::MatchArm(..) => (),
+            Node::Block(..) => (),
+            Node::RecordField(..) => (),
+            Node::IncompleteExpr(..) => (),
+            Node::CallArg(..) => (),
+            Node::FuncSignature(..) => (),
         };
 
         result
     }
 
-    fn tokens_from_expr_refs(&self, exprs: &[&ParsedExpr]) -> Vec<HighlightToken> {
+    fn tokens_from_exprs<T: Into<Node> + Clone>(
+        &self,
+        exprs: &[T],
+        ast: &AST<Parsed>,
+    ) -> Vec<HighlightToken> {
         exprs
             .iter()
-            .flat_map(|e| self.tokens_from_expr(e))
+            .flat_map(|e| self.tokens_from_expr(e, ast))
             .collect()
     }
 
-    fn tokens_from_exprs(&self, exprs: &[ParsedExpr]) -> Vec<HighlightToken> {
-        exprs
-            .iter()
-            .flat_map(|e| self.tokens_from_expr(e))
-            .collect()
+    fn make_span(&self, kind: Kind, span: Span) -> HighlightToken {
+        HighlightToken {
+            kind,
+            start: span.start,
+            end: span.end,
+        }
     }
 
     fn make(&self, token: &Token, token_type: Kind, tokens: &mut Vec<HighlightToken>) {

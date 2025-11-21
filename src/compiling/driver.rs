@@ -1,482 +1,472 @@
-use std::{
-    collections::{HashMap, HashSet},
-    path::{Path, PathBuf},
-};
+use std::{io, path::PathBuf, rc::Rc};
+
+use indexmap::IndexMap;
 
 use crate::{
-    SourceFile, SymbolID, SymbolInfo, SymbolKind, SymbolTable,
-    compiling::{
-        compilation_session::{CompilationSession, SharedCompilationSession},
-        compilation_unit::{CompilationError, CompilationUnit, Lowered, Parsed, Typed},
-        compiled_module::{CompiledModule, ImportedSymbol, ImportedSymbolKind},
+    ast::{self, AST},
+    compiling::module::{Module, ModuleEnvironment, ModuleId},
+    ir::{ir_error::IRError, lowerer::Lowerer, program::Program},
+    lexer::Lexer,
+    name_resolution::{
+        name_resolver::{self, NameResolver},
+        symbol::{Symbol, Symbols},
     },
-    diagnostic::{Diagnostic, Position},
-    environment::Environment,
-    lowering::ir_module::IRModule,
-    name::ResolvedName,
-    semantic_index::QueryDatabase,
-    source_file,
-    ty::Ty,
-    typed_expr::TypedExpr,
+    node_id::{FileID, NodeID},
+    parser::Parser,
+    parser_error::ParserError,
+    types::{
+        passes::inference_pass::InferencePass,
+        type_error::TypeError,
+        type_session::{TypeSession, Types},
+    },
 };
 
+pub trait DriverPhase {}
+
+pub struct Initial {}
+impl DriverPhase for Initial {}
+
+impl DriverPhase for Parsed {}
+pub struct Parsed {
+    pub asts: IndexMap<Source, AST<ast::Parsed>>,
+}
+
+type Exports = IndexMap<String, Symbol>;
+
+impl DriverPhase for NameResolved {}
+pub struct NameResolved {
+    pub asts: IndexMap<Source, AST<name_resolver::NameResolved>>,
+    pub symbols: Symbols,
+}
+
+impl DriverPhase for Typed {}
+pub struct Typed {
+    pub asts: IndexMap<Source, AST<name_resolver::NameResolved>>,
+    pub types: Types,
+    pub exports: Exports,
+    pub symbols: Symbols,
+}
+
+impl DriverPhase for Lowered {}
+pub struct Lowered {
+    pub asts: IndexMap<Source, AST<name_resolver::NameResolved>>,
+    pub types: Types,
+    pub exports: Exports,
+    pub symbols: Symbols,
+    pub program: Program,
+}
+
 #[derive(Debug)]
+pub enum CompileError {
+    IO(io::Error),
+    Parsing(ParserError),
+    Typing(TypeError),
+    Lowering(IRError),
+}
+
+#[derive(Debug, Default)]
+pub enum CompilationMode {
+    Executable,
+    #[default]
+    Library,
+}
+
+#[derive(Debug, Default)]
 pub struct DriverConfig {
-    pub executable: bool,
-    pub include_prelude: bool,
-    pub include_comments: bool,
+    pub module_id: ModuleId,
+    pub modules: Rc<ModuleEnvironment>,
+    pub mode: CompilationMode,
 }
 
-pub type ModuleEnvironment = HashMap<String, CompiledModule>;
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+pub enum SourceKind {
+    File(PathBuf),
+    String(String),
+}
 
-impl DriverConfig {
-    pub fn new_environment(&self) -> Environment {
-        if self.include_prelude {
-            crate::prelude::compile_prelude().environment.clone()
-        } else {
-            Environment::new()
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+pub struct Source {
+    kind: SourceKind,
+}
+
+impl From<PathBuf> for Source {
+    fn from(value: PathBuf) -> Self {
+        Source {
+            kind: SourceKind::File(value),
         }
     }
 }
 
-impl Default for DriverConfig {
-    fn default() -> Self {
-        DriverConfig {
-            executable: true,
-            include_prelude: true,
-            include_comments: false,
+impl From<&str> for Source {
+    fn from(value: &str) -> Self {
+        Source {
+            kind: SourceKind::String(value.to_string()),
         }
     }
 }
 
-#[derive(Debug)]
-pub struct Driver {
-    pub units: Vec<CompilationUnit>,
-    pub symbol_table: SymbolTable,
+impl Source {
+    pub fn path(&self) -> &str {
+        match &self.kind {
+            SourceKind::File(path) => path.to_str().unwrap(),
+            SourceKind::String(..) => ":memory:",
+        }
+    }
+
+    pub fn read(&self) -> Result<String, CompileError> {
+        match &self.kind {
+            SourceKind::File(path) => std::fs::read_to_string(path).map_err(CompileError::IO),
+            SourceKind::String(string) => Ok(string.to_string()),
+        }
+    }
+}
+
+pub struct Driver<Phase: DriverPhase = Initial> {
+    files: Vec<Source>,
     pub config: DriverConfig,
-    pub session: SharedCompilationSession,
-    pub module_env: HashMap<String, CompiledModule>,
-}
-
-impl Default for Driver {
-    fn default() -> Self {
-        Self::new("default", Default::default())
-    }
+    pub phase: Phase,
 }
 
 impl Driver {
-    pub fn new(name: impl Into<String>, config: DriverConfig) -> Self {
-        let session = SharedCompilationSession::new(CompilationSession::new().into());
-        let environment = config.new_environment();
+    pub fn new(files: Vec<Source>, mut config: DriverConfig) -> Self {
+        let mut modules = Rc::into_inner(config.modules).unwrap();
+        modules.import(ModuleId::Core, super::core::compile());
+        config.modules = Rc::new(modules);
 
         Self {
-            units: vec![CompilationUnit::new(
-                name.into(),
-                session.clone(),
-                vec![],
-                environment,
-            )],
-            symbol_table: if config.include_prelude {
-                crate::prelude::compile_prelude().symbols.clone()
-            } else {
-                SymbolTable::base()
-            },
+            files,
+            phase: Initial {},
             config,
-            session,
-            module_env: Default::default(),
         }
     }
 
-    pub fn with_str(string: &str) -> Self {
-        let mut driver = Driver::default();
-        driver.update_file(&PathBuf::from("-"), string);
-        driver
-    }
-
-    pub fn with_files(files: Vec<PathBuf>) -> Self {
-        let mut driver = Driver::default();
-
-        #[allow(clippy::expect_used)]
-        #[allow(clippy::expect_fun_call)]
-        for file in files {
-            let contents =
-                std::fs::read_to_string(&file).expect(format!("File not found: {file:?}").as_str());
-            driver.update_file(&file, contents);
-        }
-
-        driver
-    }
-
-    pub fn update_file(&mut self, path: &PathBuf, contents: impl Into<String>) {
-        let contents: String = contents.into();
-        for unit in &mut self.units {
-            if unit.has_file(path) {
-                unit.src_cache.insert(path.clone(), contents.clone());
-                return;
-            }
-        }
-
-        // We don't have this file, so add it to the default unit
-        tracing::info!("adding {path:?} to default unit");
-        self.units[0].input.push(path.to_path_buf());
-        self.units[0]
-            .src_cache
-            .insert(path.clone(), contents.clone());
-    }
-
-    pub fn parse(&self) -> Vec<CompilationUnit<Parsed>> {
-        let mut result = vec![];
-        for unit in self.units.clone() {
-            result.push(unit.parse(self.config.include_comments));
-        }
-        result
-    }
-
-    pub fn lower(&mut self) -> Vec<CompilationUnit<Lowered>> {
-        let mut result = vec![];
-
-        for unit in self.units.clone() {
-            let parsed = unit.parse(self.config.include_comments);
-            let resolved = parsed.resolved(&mut self.symbol_table, &self.config, &self.module_env);
-            let typed = resolved.typed(&mut self.symbol_table, &self.config, &self.module_env);
-
-            let module = if self.config.include_prelude {
-                crate::prelude::compile_prelude().module.clone()
-            } else {
-                IRModule::new()
-            };
-
-            result.push(typed.lower(
-                &mut self.symbol_table,
-                &self.config,
-                module,
-                &self.module_env,
-            ));
-        }
-
-        result
-    }
-
-    pub fn check(&mut self) -> Vec<CompilationUnit<Typed>> {
-        let mut result = vec![];
-        let mut new_units = vec![];
-
-        // for unit in self.units.clone() {
-        //     let parsed = unit.clone().parse(self.config.include_comments);
-        //     let resolved = parsed.resolved(&mut self.symbol_table, &self.config, &self.module_env);
-        //     let typed = resolved.typed(&mut self.symbol_table, &self.config, &self.module_env);
-
-        //     // Update the unit's environment with the typed environment to preserve semantic index
-        //     let mut updated_unit = unit;
-        //     updated_unit.env = typed.env.clone();
-        //     new_units.push(updated_unit);
-
-        //     result.push(typed);
-        // }
-        for unit in std::mem::take(&mut self.units) {
-            let parsed = unit.clone().parse(self.config.include_comments);
-            let resolved = parsed.resolved(&mut self.symbol_table, &self.config, &self.module_env);
-            let typed = resolved.typed(&mut self.symbol_table, &self.config, &self.module_env);
-
-            // Update the unit's environment with the typed environment to preserve semantic index
-            let mut updated_unit = unit;
-            updated_unit.env = typed.env.clone();
-            new_units.push(updated_unit);
-
-            result.push(typed);
-        }
-
-        // Update the driver's units with the new environments
-        self.units = new_units;
-
-        result
-    }
-
-    /// Find symbol at position using the semantic index and symbol table (immutable version)
-    pub fn symbol_at_position(&self, position: Position, path: &PathBuf) -> Option<SymbolID> {
-        // First try the semantic index for member accesses and other expressions
-        for unit in &self.units {
-            if !unit.has_file(path) {
-                continue;
-            }
-
-            // Look for an expression at this position
-            if let Some(expr_id) = unit
-                .env
-                .semantic_index
-                .find_expr_at_position(&position, path)
-                && let Some(symbol) = unit.env.semantic_index.expr_symbol(expr_id)
-            {
-                return Some(symbol);
-            }
-        }
-
-        // Fall back to symbol table lookup
-        let mut result = None;
-        let mut min = u32::MAX;
-
-        for (span, sym) in &self.symbol_table.symbol_map {
-            if span.contains(&Position {
-                line: position.line,
-                col: position.col,
-            }) && span.path == *path
-                && span.length() < min
-            {
-                min = span.length();
-                result = Some(sym);
-            }
-        }
-
-        result.copied()
-    }
-
-    pub fn refresh_diagnostics_for(
-        &mut self,
-        path: &PathBuf,
-    ) -> Result<HashSet<Diagnostic>, CompilationError> {
-        if let Ok(session) = &mut self.session.lock() {
-            session.clear_diagnostics()
-        } else {
-            tracing::error!("Unable to clear diagnostics")
-        }
-
-        self.lower();
-
-        #[allow(clippy::unwrap_used)]
-        match self.session.lock() {
-            Ok(session) => Ok(session.diagnostics_for(path).into_iter().cloned().collect()),
-            Err(err) => {
-                tracing::error!("Could not lock session: {err:?}");
-                Err(CompilationError::UnknownError("Could not lock session"))
-            }
+    pub fn new_bare(files: Vec<Source>, config: DriverConfig) -> Self {
+        Self {
+            files,
+            phase: Initial {},
+            config,
         }
     }
 
-    pub fn has_file(&self, path: &PathBuf) -> bool {
-        for unit in &self.units {
-            if unit.has_file(path) {
-                return true;
-            }
+    pub fn parse(self) -> Result<Driver<Parsed>, CompileError> {
+        let mut asts: IndexMap<Source, AST<_>> = IndexMap::default();
+
+        for (i, file) in self.files.iter().enumerate() {
+            let input = file.read()?;
+            let lexer = Lexer::new(&input);
+            tracing::info!("parsing {file:?}");
+            let parser = Parser::new(file.path(), FileID(i as u32), lexer);
+            asts.insert(file.clone(), parser.parse().map_err(CompileError::Parsing)?);
         }
 
-        false
+        Ok(Driver {
+            files: self.files,
+            config: self.config,
+            phase: Parsed { asts },
+        })
     }
+}
 
-    pub fn contents(&self, path: &PathBuf) -> String {
-        for unit in &self.units {
-            if unit.has_file(path)
-                && let Some(contents) = unit.src_cache.get(path)
-            {
-                return contents.clone();
-            }
-        }
+impl Driver<Parsed> {
+    pub fn resolve_names(self) -> Result<Driver<NameResolved>, CompileError> {
+        let mut resolver = NameResolver::new(self.config.modules.clone(), self.config.module_id);
 
-        "".into()
+        let (paths, asts): (Vec<_>, Vec<_>) = self.phase.asts.into_iter().unzip();
+        let resolved = resolver.resolve(asts);
+
+        let asts = paths.into_iter().zip(resolved).collect();
+
+        Ok(Driver {
+            files: self.files,
+            config: self.config,
+            phase: NameResolved {
+                asts,
+                symbols: resolver.symbols,
+            },
+        })
     }
+}
 
-    pub fn typed_source_file(&mut self, path: &PathBuf) -> Option<SourceFile<source_file::Typed>> {
-        for unit in self.units.clone() {
-            let typed = unit
-                .parse(self.config.include_comments)
-                .resolved(&mut self.symbol_table, &self.config, &self.module_env)
-                .typed(&mut self.symbol_table, &self.config, &self.module_env);
-            for file in typed.stage.files {
-                if *path == file.path {
-                    return Some(file);
-                }
-            }
-        }
-
-        None
-    }
-
-    pub fn import_modules(&mut self, modules: Vec<CompiledModule>) {
-        for module in modules.into_iter() {
-            self.module_env
-                .insert(module.module_name.to_string(), module);
-        }
-    }
-
-    pub fn resolved_source_file(
-        &mut self,
-        path: &Path,
-    ) -> Option<SourceFile<source_file::NameResolved>> {
-        for unit in self.units.clone() {
-            let typed = unit.parse(self.config.include_comments).resolved(
-                &mut self.symbol_table,
-                &self.config,
-                &self.module_env,
-            );
-            if let Some(file) = typed.source_file(&PathBuf::from(path)) {
-                return Some(file.clone());
-            }
-        }
-
-        None
-    }
-
-    pub fn parsed_source_file(
-        &mut self,
-        path: &PathBuf,
-    ) -> Option<SourceFile<source_file::Parsed>> {
-        let parsed = self.parse();
-        for unit in parsed.into_iter() {
-            for file in unit.stage.files {
-                if *path == file.path {
-                    return Some(file);
-                }
-            }
-        }
-
-        None
-    }
-
-    #[allow(clippy::expect_used)]
-    #[allow(clippy::panic)]
-    pub fn compile_modules(&mut self) -> Result<Vec<CompiledModule>, CompilationError> {
-        let prelude_scope = crate::prelude::compile_prelude().global_scope.clone();
-        let mut modules = vec![];
-
-        for unit in self.units.iter() {
-            let resolved = unit
-                .clone()
-                .parse(false /* don't include comments */)
-                .resolved(&mut self.symbol_table, &self.config, &self.module_env);
-
-            let mut symbols = HashMap::<String, ImportedSymbol>::new();
-            for (name, symbol_id) in &resolved.stage.global_scope {
-                if prelude_scope.contains_key(name) {
-                    continue;
+impl Driver<NameResolved> {
+    pub fn exports(&self) -> Exports {
+        self.phase
+            .asts
+            .values()
+            .fold(IndexMap::default(), |mut acc, ast| {
+                let root = ast.phase.scopes.get(&NodeID(FileID(0), 0)).unwrap();
+                for (string, sym) in root.types.iter() {
+                    acc.insert(string.to_string(), *sym);
                 }
 
-                let kind = match self.symbol_table.get(symbol_id) {
-                    Some(SymbolInfo {
-                        kind: SymbolKind::FuncDef,
-                        ..
-                    }) => ImportedSymbolKind::Function { index: 0 },
-                    Some(_) => ImportedSymbolKind::Constant { index: 0 },
-                    _ => continue,
-                };
-                symbols.insert(
-                    name.clone(),
-                    ImportedSymbol {
-                        module: unit.name.clone(),
-                        name: name.clone(),
-                        symbol: *symbol_id,
-                        kind,
-                    },
-                );
-            }
-
-            let typed = resolved.typed(&mut self.symbol_table, &self.config, &self.module_env);
-
-            let mut typed_symbols = HashMap::<SymbolID, Ty>::new();
-            for (_, imported) in symbols.iter() {
-                let info = self
-                    .symbol_table
-                    .get(&imported.symbol)
-                    .expect("didn't get symbol for exported ty");
-                // TODO: This is gonna be slow.
-                for file in &typed.stage.files {
-                    let typed_expr =
-                        TypedExpr::find_in(file.roots(), info.expr_id).unwrap_or_else(|| {
-                            panic!("did not find type for compiled module export: {info:?}")
-                        });
-                    typed_symbols.insert(imported.symbol, typed_expr.ty.clone());
+                for (string, sym) in root.values.iter() {
+                    acc.insert(string.to_string(), *sym);
                 }
-            }
 
-            let types = typed.env.types.clone();
+                acc
+            })
+    }
 
-            let lowered = typed
-                .lower(
-                    &mut self.symbol_table,
-                    &self.config,
-                    IRModule::new(),
-                    &self.module_env,
-                )
-                .module();
+    pub fn typecheck(self) -> Result<Driver<Typed>, CompileError> {
+        let mut session = TypeSession::new(self.config.module_id, self.config.modules.clone());
+        let exports = self.exports();
 
-            // Go back and fill in indexes
-            // TODO: This too, will be slow
-            for (i, function) in lowered.functions.iter().enumerate() {
-                for symbol in symbols.values_mut() {
-                    if ResolvedName(symbol.symbol, symbol.name.clone())
-                        .mangled(typed_symbols.get(&symbol.symbol).expect("how tho"))
-                        == function.name
-                        && let ImportedSymbolKind::Function { index } = &mut symbol.kind
-                    {
-                        *index = i;
-                    }
-                }
-            }
+        let (paths, mut asts): (Vec<_>, Vec<_>) = self.phase.asts.into_iter().unzip();
+        InferencePass::drive(&mut asts, &mut session);
 
-            let module = CompiledModule {
-                module_name: unit.name.clone(),
-                symbols,
-                types,
-                typed_symbols,
-                ir_module: lowered,
-            };
+        let asts: IndexMap<Source, AST<_>> = paths.into_iter().zip(asts).collect();
 
-            modules.push(module);
+        Ok(Driver {
+            files: self.files,
+            config: self.config,
+            phase: Typed {
+                asts,
+                types: session.finalize().map_err(CompileError::Typing)?,
+                exports,
+                symbols: self.phase.symbols,
+            },
+        })
+    }
+}
+
+impl Driver<Typed> {
+    pub fn lower(mut self) -> Result<Driver<Lowered>, CompileError> {
+        let lowerer = Lowerer::new(
+            &mut self.phase.asts,
+            &mut self.phase.types,
+            &mut self.phase.symbols,
+            &self.config.modules,
+        );
+        let program = lowerer.lower().map_err(CompileError::Lowering)?;
+        Ok(Driver {
+            files: self.files,
+            config: self.config,
+            phase: Lowered {
+                asts: self.phase.asts,
+                types: self.phase.types,
+                exports: self.phase.exports,
+                symbols: self.phase.symbols,
+                program,
+            },
+        })
+    }
+}
+
+impl Driver<Lowered> {
+    pub fn module<T: Into<String>>(self, name: T) -> Module {
+        Module {
+            name: name.into(),
+            types: self.phase.types,
+            exports: self.phase.exports,
+            program: self.phase.program,
         }
-
-        Ok(modules)
     }
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
+    use super::*;
     use crate::{
-        SymbolID,
-        compiling::{
-            compiled_module::{ImportedSymbol, ImportedSymbolKind},
-            driver::Driver,
-        },
-        ty::Ty,
+        compiling::module::ModuleId,
+        types::{ty::Ty, types_tests},
     };
+    use std::path::PathBuf;
 
     #[test]
-    fn compiles_a_module() {
-        let mut driver = Driver::with_str(
-            "
-            func foo(x: Int) { x }
-            func bar(x: Float) { x }
+    fn typechecks_multiple_files() {
+        let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let paths = vec![
+            Source::from(current_dir.join("test/fixtures/a.tlk")),
+            Source::from(current_dir.join("test/fixtures/b.tlk")),
+        ];
+
+        let driver = Driver::new(paths, Default::default());
+        let typed = driver
+            .parse()
+            .unwrap()
+            .resolve_names()
+            .unwrap()
+            .typecheck()
+            .unwrap();
+
+        let ast = typed
+            .phase
+            .asts
+            .get(&Source::from(current_dir.join("test/fixtures/b.tlk")))
+            .unwrap();
+
+        assert_eq!(types_tests::tests::ty(1, ast, &typed.phase.types), Ty::Int);
+    }
+
+    #[test]
+    fn typechecks_multiple_files_out_of_order() {
+        let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let paths = vec![
+            Source::from(current_dir.join("test/fixtures/b.tlk")),
+            Source::from(current_dir.join("test/fixtures/a.tlk")),
+        ];
+
+        let driver = Driver::new(paths, Default::default());
+        let typed = driver
+            .parse()
+            .unwrap()
+            .resolve_names()
+            .unwrap()
+            .typecheck()
+            .unwrap();
+
+        let ast = typed
+            .phase
+            .asts
+            .get(&Source::from(current_dir.join("test/fixtures/b.tlk")))
+            .unwrap();
+
+        assert_eq!(types_tests::tests::ty(1, ast, &typed.phase.types), Ty::Int);
+    }
+
+    #[test]
+    fn conformances_across_modules() {
+        let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+
+        let driver_a = Driver::new(
+            vec![Source::from(current_dir.join("test/fixtures/protocol.tlk"))],
+            Default::default(),
+        );
+
+        let typed_a = driver_a
+            .parse()
+            .unwrap()
+            .resolve_names()
+            .unwrap()
+            .typecheck()
+            .unwrap();
+
+        let module_a = typed_a.lower().unwrap().module("A");
+        let mut module_environment = ModuleEnvironment::default();
+        module_environment.import(ModuleId::External(0), module_a);
+        let config = DriverConfig {
+            module_id: ModuleId::Current,
+            modules: Rc::new(module_environment),
+            mode: CompilationMode::Library,
+        };
+
+        let driver_b = Driver::new(
+            vec![Source::from(
+                current_dir.join("test/fixtures/conformance.tlk"),
+            )],
+            config,
+        );
+
+        let typed = driver_b
+            .parse()
+            .unwrap()
+            .resolve_names()
+            .unwrap()
+            .typecheck()
+            .unwrap();
+        let ast = typed
+            .phase
+            .asts
+            .get(&Source::from(
+                current_dir.join("test/fixtures/conformance.tlk"),
+            ))
+            .unwrap();
+
+        assert_eq!(types_tests::tests::ty(2, ast, &typed.phase.types), Ty::Int);
+    }
+
+    #[test]
+    fn compiles_module() {
+        let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+
+        let driver_a = Driver::new(
+            vec![Source::from(current_dir.join("test/fixtures/a.tlk"))],
+            Default::default(),
+        );
+        let typed_a = driver_a
+            .parse()
+            .unwrap()
+            .resolve_names()
+            .unwrap()
+            .typecheck()
+            .unwrap();
+
+        let module_a = typed_a.lower().unwrap().module("A");
+        let mut module_environment = ModuleEnvironment::default();
+        module_environment.import(ModuleId::External(0), module_a);
+        let config = DriverConfig {
+            module_id: ModuleId::Current,
+            modules: Rc::new(module_environment),
+            mode: CompilationMode::Library,
+        };
+
+        let driver_b = Driver::new(
+            vec![Source::from(current_dir.join("test/fixtures/b.tlk"))],
+            config,
+        );
+
+        let typed = driver_b
+            .parse()
+            .unwrap()
+            .resolve_names()
+            .unwrap()
+            .typecheck()
+            .unwrap();
+        let ast = typed
+            .phase
+            .asts
+            .get(&Source::from(current_dir.join("test/fixtures/b.tlk")))
+            .unwrap();
+
+        assert_eq!(types_tests::tests::ty(1, ast, &typed.phase.types), Ty::Int);
+    }
+
+    #[test]
+    fn compiles_from_string() {
+        let driver_a = Driver::new(
+            vec![Source::from(
+                "
+            struct Hello {
+                let x: Int
+            }
             ",
+            )],
+            Default::default(),
         );
 
-        let modules = driver.compile_modules().unwrap();
-        assert_eq!(modules.len(), 1);
-        let module = &modules[0];
-        assert_eq!("default", module.module_name);
-        assert_eq!(
-            module.symbols.get("foo").unwrap(),
-            &ImportedSymbol {
-                module: "default".into(),
-                name: "foo".into(),
-                symbol: SymbolID::resolved(1),
-                kind: ImportedSymbolKind::Function { index: 0 }
-            }
-        );
-        assert_eq!(
-            module.symbols.get("bar").unwrap(),
-            &ImportedSymbol {
-                module: "default".into(),
-                name: "bar".into(),
-                symbol: SymbolID::resolved(2),
-                kind: ImportedSymbolKind::Function { index: 1 }
-            }
-        );
+        let module_a = driver_a
+            .parse()
+            .unwrap()
+            .resolve_names()
+            .unwrap()
+            .typecheck()
+            .unwrap()
+            .lower()
+            .unwrap()
+            .module("A");
 
-        assert_eq!(
-            module.typed_symbols.get(&SymbolID::resolved(1)).unwrap(),
-            &Ty::Func(vec![Ty::Int], Ty::Int.into(), vec![])
-        );
+        let mut module_environment = ModuleEnvironment::default();
+        module_environment.import(ModuleId::External(0), module_a);
+        let config = DriverConfig {
+            module_id: ModuleId::Current,
+            modules: Rc::new(module_environment),
+            mode: CompilationMode::Library,
+        };
 
-        assert_eq!(
-            module.typed_symbols.get(&SymbolID::resolved(2)).unwrap(),
-            &Ty::Func(vec![Ty::Float], Ty::Float.into(), vec![])
-        );
+        let driver_b = Driver::new(vec![Source::from("Hello(x: 123).x")], config);
+
+        let typed = driver_b
+            .parse()
+            .unwrap()
+            .resolve_names()
+            .unwrap()
+            .typecheck()
+            .unwrap();
+        let ast = typed
+            .phase
+            .asts
+            .get(&Source::from("Hello(x: 123).x"))
+            .unwrap();
+
+        assert_eq!(types_tests::tests::ty(0, ast, &typed.phase.types), Ty::Int);
     }
 }

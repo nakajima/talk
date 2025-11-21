@@ -1,0 +1,20 @@
+protocol Equals {
+  associated RHS
+
+  func equals(rhs: RHS) -> Bool
+	func notEquals(rhs: RHS) -> Bool {
+		true
+	}
+}
+
+extend Int: Equals {
+  func equals(rhs: Int) -> Bool {
+    true
+  }
+}
+
+extend Float: Equals {
+  func equals(rhs: Float) -> Bool {
+    true
+  }
+}

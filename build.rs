@@ -1,44 +1,21 @@
-// build.rs
-use quote::{ToTokens, quote};
-use std::collections::HashMap;
-use std::env;
-use std::fs;
-use std::path::Path;
-use syn::{Fields, GenericArgument, PathArguments, Type};
+use std::{env, path::Path};
+
+const INSTRUCTIONS_SRC_PATH: &str = "src/ir/instruction.rs";
 
 fn main() {
     let out_dir = env::var_os("OUT_DIR").unwrap();
     let dest_path = Path::new(&out_dir).join("instr_impls.rs");
-
-    let instr_file_path = "src/lowering/instr.rs";
-    println!("cargo:rerun-if-changed={instr_file_path}");
+    println!("cargo:rerun-if-changed={INSTRUCTIONS_SRC_PATH}");
     println!("cargo:rerun-if-changed=build.rs");
 
-    let content = fs::read_to_string(instr_file_path).unwrap();
+    let content = std::fs::read_to_string(INSTRUCTIONS_SRC_PATH).unwrap();
     let file = syn::parse_file(&content).expect("Failed to parse src/lowering/instr.rs");
 
     let generated_code = generate_impls(&file).unwrap_or_else(|e| {
         panic!("Failed to generate impls for Instr: {e}");
     });
 
-    fs::write(&dest_path, generated_code.to_string()).unwrap();
-}
-
-fn get_option_inner_type(ty: &Type) -> Option<&Type> {
-    if let Type::Path(type_path) = ty
-        && type_path.qself.is_none()
-        && type_path.path.segments.len() == 1
-    {
-        let segment = &type_path.path.segments[0];
-        if segment.ident == "Option"
-            && let PathArguments::AngleBracketed(args) = &segment.arguments
-            && args.args.len() == 1
-            && let GenericArgument::Type(inner_ty) = &args.args[0]
-        {
-            return Some(inner_ty);
-        }
-    }
-    None
+    std::fs::write(&dest_path, generated_code.to_string()).unwrap();
 }
 
 fn generate_impls(
@@ -49,22 +26,354 @@ fn generate_impls(
         .iter()
         .find_map(|item| {
             if let syn::Item::Enum(e) = item
-                && e.ident == "Instr"
+                && e.ident == "Instruction"
             {
                 return Some(e);
             }
             None
         })
-        .ok_or("Could not find 'enum Instr' in src/lowering/instr.rs")?;
+        .ok_or_else(|| panic!("Could not find 'enum Instr' in {INSTRUCTIONS_SRC_PATH}"))?;
 
     let display_impl = generate_display_impl(instr_enum);
     let from_str_impl = generate_from_str_impl(instr_enum);
 
-    Ok(quote! {
-        #display_impl
+    Ok(quote::quote! {
+        // #display_impl
+        #[allow(
+            dead_code,
+            unused_imports,
+            unused_variables,
+            unused_mut,
+            non_snake_case,
+            non_camel_case_types,
+            non_upper_case_globals,
+            clippy::all
+        )]
         #from_str_impl
+        #display_impl
     })
 }
+fn generate_from_str_impl(instr_enum: &syn::ItemEnum) -> proc_macro2::TokenStream {
+    use quote::{format_ident, quote};
+    use syn::Fields;
+
+    let enum_ident = &instr_enum.ident;
+    let mut branches = Vec::new();
+
+    for v in &instr_enum.variants {
+        let v_ident = &v.ident;
+        let doc =
+            get_doc_attr(&v.attrs).unwrap_or_else(|| panic!("missing #[doc] on variant {v_ident}"));
+
+        // ensure named fields & build set for validation
+        let fields: Vec<_> = match &v.fields {
+            Fields::Named(named) => named
+                .named
+                .iter()
+                .map(|f| f.ident.clone().unwrap())
+                .collect(),
+            _ => panic!("variant {v_ident} must use named fields"),
+        };
+
+        // doc -> regex; $name => capture, last => (.*), others => (\S+)
+        let mut regex_src = String::from("^\\s*");
+        let mut holes: Vec<String> = Vec::new();
+        let mut chars = doc.chars().peekable();
+        let mut buf = String::new();
+        let mut last_ws = false;
+
+        let flush = |b: &mut String, out: &mut String| {
+            if !b.is_empty() {
+                out.push_str(&regex::escape(b));
+                b.clear();
+            }
+        };
+
+        while let Some(ch) = chars.next() {
+            if ch == '$' {
+                flush(&mut buf, &mut regex_src);
+                let mut name = String::new();
+                while let Some(&c) = chars.peek() {
+                    if c == '_' || c.is_ascii_alphanumeric() {
+                        name.push(c);
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+                if name.is_empty() {
+                    panic!("`$` without name in template for {v_ident}");
+                }
+                holes.push(name);
+                regex_src.push_str("{{CAP}}");
+                last_ws = false;
+            } else if ch.is_whitespace() {
+                if !last_ws {
+                    flush(&mut buf, &mut regex_src);
+                    regex_src.push_str("\\s+");
+                }
+                last_ws = true;
+            } else {
+                last_ws = false;
+                buf.push(ch);
+            }
+        }
+        flush(&mut buf, &mut regex_src);
+        regex_src.push_str("\\s*$");
+
+        if holes.is_empty() {
+            panic!("template for {v_ident} must contain at least one $field");
+        }
+
+        // validate holes exist as fields
+        for h in &holes {
+            if !fields.iter().any(|f| f == &format_ident!("{h}")) {
+                panic!("template for {v_ident} references unknown field `${h}`");
+            }
+        }
+
+        // patch captures
+        let total = holes.len();
+        let mut count = 0usize;
+        let mut patched = String::new();
+        let mut parts = regex_src.split("{{CAP}}").peekable();
+        while let Some(p) = parts.next() {
+            patched.push_str(p);
+            if parts.peek().is_some() {
+                count += 1;
+                if count == total {
+                    patched.push_str("(.*)");
+                } else {
+                    patched.push_str("(\\S+)");
+                }
+            }
+        }
+        let regex_lit = patched;
+
+        // Make the *last* capture (and its leading whitespace) optional,
+        // so lines without trailing metas still match.
+        let regex_lit = {
+            let required = "\\s+(.*)\\s*$";
+            let optional = "(?:\\s+(.*))?\\s*$";
+            if let Some(pos) = regex_lit.rfind(required) {
+                let mut s = regex_lit.clone();
+                s.replace_range(pos.., optional);
+                s
+            } else {
+                regex_lit
+            }
+        };
+
+        // c0..cN capture bindings with literal indices 1..=N
+        let cap_idents: Vec<_> = (0..holes.len()).map(|i| format_ident!("c{i}")).collect();
+        let mut grab_caps = Vec::new();
+        for (i, ident) in cap_idents.iter().enumerate() {
+            let idx = i + 1;
+            grab_caps.push(quote! {
+                let #ident = caps.get(#idx).map(|m| m.as_str()).unwrap_or("").trim();
+            });
+        }
+
+        // parse into locals named after holes, then use struct shorthand
+        let mut parse_locals = Vec::new();
+        let mut hole_idents = Vec::new();
+        for (i, h) in holes.iter().enumerate() {
+            let local = format_ident!("{h}");
+            let cap = &cap_idents[i];
+            hole_idents.push(local.clone());
+            parse_locals
+                .push(quote! { let #local = #cap.parse().map_err(|e| anyhow::anyhow!("{}", e))?; });
+        }
+
+        let re_ident = format_ident!("RE_{}", v_ident);
+        let branch = quote! {
+            static #re_ident: ::once_cell::sync::Lazy<::regex::Regex> =
+                ::once_cell::sync::Lazy::new(|| ::regex::Regex::new(#regex_lit).unwrap());
+            if let Some(caps) = #re_ident.captures(line) {
+                use std::str::FromStr as _;
+                #(#grab_caps)*
+                #(#parse_locals)*
+                let value = Self::#v_ident { #(#hole_idents),* };
+                return Ok(value);
+            }
+        };
+        branches.push(branch);
+    }
+
+    quote! {
+        use std::str::FromStr;
+        use crate::ir::instruction::*;
+
+        #[allow(
+            dead_code,
+            unused_imports,
+            unused_variables,
+            unused_mut,
+            non_snake_case,
+            non_camel_case_types,
+            non_upper_case_globals,
+            clippy::all
+        )]
+        impl<T> FromStr for crate::ir::#enum_ident<T>
+        where
+            T: FromStr,
+            <T as FromStr>::Err: std::fmt::Display,
+            crate::ir::register::Register: FromStr,
+            <crate::ir::register::Register as FromStr>::Err: std::fmt::Display,
+            crate::ir::value::Value: FromStr,
+            <crate::ir::value::Value as FromStr>::Err: std::fmt::Display,
+            crate::ir::instruction::InstructionMeta: FromStr,
+            <crate::ir::instruction::InstructionMeta as FromStr>::Err: std::fmt::Display,
+            crate::ir::list::List<crate::ir::instruction::InstructionMeta>: FromStr,
+            <crate::ir::list::List<crate::ir::instruction::InstructionMeta> as FromStr>::Err: std::fmt::Display,
+        {
+            type Err = anyhow::Error;
+
+            fn from_str(line: &str) -> Result<Self, Self::Err> {
+                #(#branches)*
+                Err(anyhow::anyhow!("unrecognized instruction: {}", line))
+            }
+        }
+
+        #[allow(
+            dead_code,
+            unused_imports,
+            unused_variables,
+            unused_mut,
+            non_snake_case,
+            non_camel_case_types,
+            non_upper_case_globals,
+            clippy::all
+        )]
+        pub fn parse_instruction<T>(line: &str) -> crate::ir::#enum_ident<T>
+        where
+            T: FromStr,
+            <T as FromStr>::Err: std::fmt::Display,
+            crate::ir::register::Register: FromStr,
+            <crate::ir::register::Register as FromStr>::Err: std::fmt::Display,
+            crate::ir::value::Value: FromStr,
+            <crate::ir::value::Value as FromStr>::Err: std::fmt::Display,
+            crate::ir::instruction::InstructionMeta: FromStr,
+            <crate::ir::instruction::InstructionMeta as FromStr>::Err: std::fmt::Display,
+            crate::ir::list::List<crate::ir::instruction::InstructionMeta>: FromStr,
+            <crate::ir::list::List<crate::ir::instruction::InstructionMeta> as FromStr>::Err: std::fmt::Display,
+        {
+            line.parse().unwrap()
+        }
+    }
+}
+
+fn generate_display_impl(instr_enum: &syn::ItemEnum) -> proc_macro2::TokenStream {
+    use quote::{format_ident, quote};
+    use syn::Fields;
+
+    let enum_ident = &instr_enum.ident;
+    let mut arms = Vec::new();
+
+    for v in &instr_enum.variants {
+        let v_ident = &v.ident;
+        let doc =
+            get_doc_attr(&v.attrs).unwrap_or_else(|| panic!("missing #[doc] on variant {v_ident}"));
+
+        // Named fields only (matches your enum)
+        let field_idents: Vec<_> = match &v.fields {
+            Fields::Named(named) => named
+                .named
+                .iter()
+                .map(|f| f.ident.clone().unwrap())
+                .collect(),
+            _ => panic!("variant {v_ident} must use named fields"),
+        };
+
+        // Tokenize doc by whitespace.
+        // Literal tokens are printed verbatim,
+        // $name tokens are formatted via Display on that field.
+        let tokens: Vec<String> = doc.split_whitespace().map(|s| s.to_string()).collect();
+
+        // Build code that pushes each piece into a Vec<String>
+        let mut pushes = Vec::new();
+        for t in &tokens {
+            if let Some(name) = t.strip_prefix('$') {
+                let id = format_ident!("{}", name);
+                // format field as string
+                pushes.push(quote! {
+                    parts.push(format!("{}", #id));
+                });
+            } else {
+                // literal piece
+                let lit = t.clone();
+                pushes.push(quote! {
+                    parts.push(#lit.to_string());
+                });
+            }
+        }
+
+        // Pattern: destructure all fields so we can use shorthand names
+        let pat_fields = quote! { { #( #field_idents ),* } };
+
+        // One match arm
+        arms.push(quote! {
+            Self::#v_ident #pat_fields => {
+                // Build string parts from template
+                let mut parts: Vec<String> = Vec::new();
+                #(#pushes)*
+
+                // Drop empty pieces (e.g., when last field formats to "")
+                // and join with single spaces to avoid trailing space.
+                let s = parts.into_iter()
+                    .filter(|p| !p.is_empty())
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                write!(f, "{}", s)
+            }
+        });
+    }
+
+    quote! {
+        impl<T> std::fmt::Display for crate::ir::#enum_ident<T>
+        where
+            T: std::fmt::Display,
+            crate::ir::register::Register: std::fmt::Display,
+            crate::ir::value::Value: std::fmt::Display,
+            crate::ir::instruction::InstructionMeta: std::fmt::Display,
+            // If you print a List<InstructionMeta>, make sure List<T>: Display in your crate.
+            crate::ir::list::List<crate::ir::instruction::InstructionMeta>: std::fmt::Display,
+        {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                match self {
+                    #(#arms),*
+                }
+            }
+        }
+    }
+}
+
+// fn generate_from_str_impl(instr_enum: &syn::ItemEnum) -> proc_macro2::TokenStream {
+//     let mut instruction_fmts: Vec<String> = vec![];
+
+//     for variant in &instr_enum.variants {
+//         let doc = get_doc_attr(&variant.attrs).expect("did not get doc string for variant");
+//         let fields = variant
+//             .fields
+//             .iter()
+//             .map(|f| {
+//                 (
+//                     f.ident.clone().unwrap().to_string(),
+//                     f.ty.clone().to_token_stream().to_string(),
+//                 )
+//             })
+//             .collect::<Vec<_>>();
+
+//         println!("variant: {doc:?} fields: {fields:?}");
+//     }
+
+//     quote::quote! {
+//        use std::str::FromStr;
+//        use std::string::ToString;
+//        use once_cell::sync::Lazy;
+//        use regex::Regex;
+//     }
+// }
 
 fn get_doc_attr(attrs: &[syn::Attribute]) -> Option<String> {
     attrs.iter().find_map(|attr| {
@@ -76,296 +385,4 @@ fn get_doc_attr(attrs: &[syn::Attribute]) -> Option<String> {
         }
         None
     })
-}
-
-fn generate_display_impl(instr_enum: &syn::ItemEnum) -> proc_macro2::TokenStream {
-    let match_arms = instr_enum.variants.iter().map(|variant| {
-        let variant_ident = &variant.ident;
-        let format_str = get_doc_attr(&variant.attrs)
-            .unwrap_or_else(|| panic!("Variant {variant_ident} is missing doc attribute"));
-
-        let (field_idents, fields_are_named) = match &variant.fields {
-            Fields::Named(f) => (
-                f.named
-                    .iter()
-                    .map(|field| field.ident.as_ref().unwrap().clone())
-                    .collect(),
-                true,
-            ),
-            Fields::Unnamed(f) => (
-                (0..f.unnamed.len())
-                    .map(|i| syn::Ident::new(&format!("v{i}"), proc_macro2::Span::call_site()))
-                    .collect(),
-                false,
-            ),
-            Fields::Unit => (vec![], true),
-        };
-        let field_types: Vec<_> = match &variant.fields {
-            Fields::Named(f) => f.named.iter().map(|field| &field.ty).collect(),
-            Fields::Unnamed(f) => f.unnamed.iter().map(|field| &field.ty).collect(),
-            Fields::Unit => vec![],
-        };
-        let field_pattern = if fields_are_named {
-            quote! { { #( #field_idents ),* } }
-        } else {
-            quote! { ( #( #field_idents ),* ) }
-        };
-
-        let mut write_ops = Vec::new();
-        let mut last_end = 0;
-        let placeholder_re = regex::Regex::new(r"\$\w+").unwrap();
-
-        for mat in placeholder_re.find_iter(&format_str) {
-            if mat.start() > last_end {
-                let literal = &format_str[last_end..mat.start()];
-                write_ops.push(quote! { write!(f, #literal)?; });
-            }
-
-            let placeholder_name = &mat.as_str()[1..];
-            let (field_idx, field_ident) = if let Ok(idx) = placeholder_name.parse::<usize>() {
-                (idx, &field_idents[idx])
-            } else {
-                field_idents
-                    .iter()
-                    .enumerate()
-                    .find(|(_, ident)| *ident == placeholder_name)
-                    .unwrap_or_else(|| {
-                        panic!(
-                            "Named placeholder '{placeholder_name}' not found in variant '{variant_ident}'"
-                        )
-                    })
-            };
-
-            let field_ty = field_types[field_idx];
-
-            if get_option_inner_type(field_ty).is_some() {
-                write_ops.push(quote! {
-                   if let Some(val) = &#field_ident {
-                       write!(f, "{}", val)?;
-                   }
-                });
-            } else {
-                write_ops.push(quote! { write!(f, "{}", #field_ident)?; });
-            }
-            last_end = mat.end();
-        }
-
-        if last_end < format_str.len() {
-            let literal = &format_str[last_end..];
-            write_ops.push(quote! { write!(f, #literal)?; });
-        }
-
-        quote! {
-            Self::#variant_ident #field_pattern => {
-                #( #write_ops )*
-                Ok(())
-            }
-        }
-    });
-
-    quote! {
-        use std::fmt;
-        use crate::lowering::instr::*;
-
-        #[allow(unknown_lints)]
-        #[allow(clippy::all)]
-        impl fmt::Display for Instr {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                match self {
-                    #( #match_arms ),*
-                }
-            }
-        }
-    }
-}
-
-fn regex_for_type(ty: &Type) -> &'static str {
-    let type_str = ty.to_token_stream().to_string();
-    match type_str.as_str() {
-        "Register" => r"(%\d+)",
-        "i64" | "u16" => r"(-?\d+)",
-        "f64" => r"(-?\d+\.\d+)",
-        "bool" => r"(true|false)",
-        "BasicBlockID" => r"(#\d+|entry)",
-        "RegisterList" => r"((?:(?:[^\s]*)\s+%\d+(?:\s*%\d+)*,?)?)",
-        "Callee" => r"([@%][^\(]+)",
-
-        // FIX: Use a specific regex for types that start with '@'
-        "RefKind" | "FuncName" => r"(@\S+)",
-
-        // FIX: Use a non-greedy "match anything" for IRType. This works because
-        // the following patterns (like RefKind or Register) are specific enough
-        // to stop this one from consuming the whole line.
-        "IRType" => r"(.*?)",
-
-        "String" => r"(\S+)",
-        "PhiPredecessors" => r"(\[.*?\])",
-        "RetVal" => r"(.+)",
-        _ => r"(\S+)", // Default fallback
-    }
-}
-
-// In build.rs
-fn generate_from_str_impl(instr_enum: &syn::ItemEnum) -> proc_macro2::TokenStream {
-    let mut static_regexes = Vec::new();
-    let mut parser_arms = Vec::new();
-
-    let placeholder_re = regex::Regex::new(r"\$([a-zA-Z0-9_]+)").unwrap();
-    for variant in &instr_enum.variants {
-        let variant_ident = &variant.ident;
-        let static_re_ident = syn::Ident::new(
-            &format!("RE_{}", variant_ident.to_string().to_uppercase()),
-            proc_macro2::Span::call_site(),
-        );
-
-        let format_str = get_doc_attr(&variant.attrs).expect("Missing doc format string");
-
-        let field_map: HashMap<String, &Type> = match &variant.fields {
-            Fields::Named(f) => f
-                .named
-                .iter()
-                .map(|field| (field.ident.as_ref().unwrap().to_string(), &field.ty))
-                .collect(),
-            Fields::Unnamed(f) => f
-                .unnamed
-                .iter()
-                .enumerate()
-                .map(|(i, field)| (i.to_string(), &field.ty))
-                .collect(),
-            Fields::Unit => HashMap::new(),
-        };
-
-        let mut regex_str = String::from(r"^\s*");
-        let mut last_end = 0;
-        let mut placeholder_to_idx: HashMap<String, usize> = HashMap::new();
-        let mut cap_idx: usize = 1;
-
-        for mat in placeholder_re.find_iter(&format_str) {
-            let literal_part = &format_str[last_end..mat.start()];
-            let placeholder_name = mat.as_str()[1..].to_string();
-
-            let field_type = field_map.get(&placeholder_name).unwrap_or_else(|| {
-                panic!(
-                    "Placeholder ${placeholder_name} has no corresponding field in variant {variant_ident}"
-                )
-            });
-
-            if let Some(inner_ty) = get_option_inner_type(field_type) {
-                let group = format!(
-                    "{}{}",
-                    regex::escape(literal_part),
-                    regex_for_type(inner_ty)
-                );
-                regex_str.push_str(&format!("(?:{group})?"));
-            } else {
-                regex_str.push_str(&regex::escape(literal_part));
-                regex_str.push_str(regex_for_type(field_type));
-            }
-
-            placeholder_to_idx.insert(placeholder_name.clone(), cap_idx);
-            cap_idx += 1;
-            last_end = mat.end();
-        }
-        regex_str.push_str(&regex::escape(&format_str[last_end..]));
-        regex_str.push_str(r"\s*;?\s*$");
-
-        static_regexes.push(quote! {
-            static #static_re_ident: Lazy<Regex> = Lazy::new(|| {
-                Regex::new(#regex_str).unwrap_or_else(|e| {
-                    panic!("Failed to compile regex for {}: {}\\nRegex: {}", stringify!(#variant_ident), e, #regex_str);
-                })
-            });
-        });
-
-        let (constructor, parsers) = match &variant.fields {
-            Fields::Named(fields) => {
-                let field_parsers = fields.named.iter().map(|field| {
-                    let field_ident = field.ident.as_ref().unwrap();
-                    let field_ty = &field.ty;
-                    let cap_idx = placeholder_to_idx.get(&field_ident.to_string()).unwrap();
-
-                    if let Some(inner_ty) = get_option_inner_type(field_ty) {
-                        quote! {
-                            let #field_ident: #field_ty = caps.get(#cap_idx)
-                                .and_then(|m| m.as_str().trim().parse::<#inner_ty>().ok());
-                        }
-                    } else {
-                        quote! {
-                            let #field_ident: #field_ty = caps.get(#cap_idx).unwrap().as_str().trim().parse()
-                                .map_err(|e: <#field_ty as FromStr>::Err| format!("Could not parse '{}' from capture '{}': {}", stringify!(#field_ident), caps.get(#cap_idx).unwrap().as_str(), e.to_string()))?;
-                        }
-                    }
-                });
-                let field_names = fields.named.iter().map(|f| f.ident.as_ref().unwrap());
-                (
-                    quote! { { #( #field_names ),* } },
-                    quote! { #( #field_parsers )* },
-                )
-            }
-            Fields::Unnamed(fields) => {
-                let var_parsers = fields.unnamed.iter().enumerate().map(|(i, field)| {
-                    let var_name = syn::Ident::new(&format!("v{i}"), proc_macro2::Span::call_site());
-                    let field_ty = &field.ty;
-                    let cap_idx = placeholder_to_idx.get(&i.to_string()).unwrap();
-
-                    if let Some(inner_ty) = get_option_inner_type(field_ty) {
-                        quote! {
-                            let #var_name: #field_ty = caps.get(#cap_idx)
-                                .and_then(|m| m.as_str().trim().parse::<#inner_ty>().ok());
-                        }
-                    } else {
-                        quote! {
-                            let #var_name: #field_ty = caps.get(#cap_idx).unwrap().as_str().trim().parse()
-                                .map_err(|e: <#field_ty as FromStr>::Err| format!("Could not parse argument {} from capture '{}': {}", #i, caps.get(#cap_idx).unwrap().as_str(), e.to_string()))?;
-                        }
-                    }
-                });
-                let var_names = (0..fields.unnamed.len())
-                    .map(|i| syn::Ident::new(&format!("v{i}"), proc_macro2::Span::call_site()));
-                (
-                    quote! { ( #( #var_names ),* ) },
-                    quote! { #( #var_parsers )* },
-                )
-            }
-            Fields::Unit => (quote! {}, quote! {}),
-        };
-
-        parser_arms.push(quote! {
-            #[allow(unused)]
-            #[allow(unknown_lints)]
-            #[allow(clippy::all)]
-            if let Some(caps) = #static_re_ident.captures(s) {
-                #parsers
-                return Ok(Self::#variant_ident #constructor);
-            }
-        });
-    }
-
-    quote! {
-        use std::str::FromStr;
-        use std::string::ToString;
-        use once_cell::sync::Lazy;
-        use regex::Regex;
-
-        #(#static_regexes)*
-
-        #[allow(unknown_lints)]
-        #[allow(clippy::all)]
-        impl FromStr for Instr {
-            type Err = String;
-
-            fn from_str(s: &str) -> Result<Self, Self::Err> {
-                use crate::lowering::ir_type::*;
-                use crate::lowering::lowerer::*;
-                use crate::lowering::register::*;
-                use crate::lowering::ir_value::IRValue;
-                use crate::lowering::phi_predecessors::*;
-
-
-                #(#parser_arms)*
-
-                Err(format!("Could not parse '{}' as an instruction.", s))
-            }
-        }
-    }
 }

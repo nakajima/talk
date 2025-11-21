@@ -1,8 +1,6 @@
 #[cfg(feature = "cli")]
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    use std::path::PathBuf;
-
     use clap::{Args, Parser, Subcommand};
 
     /// Simple program to greet a person
@@ -15,9 +13,11 @@ async fn main() {
 
     #[derive(Subcommand, Debug)]
     enum Commands {
-        IR { filename: PathBuf },
-        // Parse { filename: String },
-        Run { filename: PathBuf },
+        // IR { filename: PathBuf },
+        Parse { filename: String },
+        Debug { filename: String },
+        Run { filenames: Vec<String> },
+        // Run { filename: PathBuf },
         Lsp(LspArgs),
     }
 
@@ -27,49 +27,74 @@ async fn main() {
         stdio: bool,
     }
 
-    init();
-
     let cli = Cli::parse();
 
     // You can check for the existence of subcommands, and if found use their
     // matches just as you would the top level cmd
     match &cli.command {
-        // Dump the IR
-        #[allow(clippy::print_with_newline)]
-        Commands::IR { filename } => {
-            use talk::{compiling::driver::Driver, lowering::ir_printer::print};
-            let cwd = std::env::current_dir().expect("couldn’t get CWD");
-            let mut driver = Driver::with_files(vec![cwd.join(filename).clone()]);
-            let lowered = driver.lower();
-
-            for unit in lowered {
-                use talk::analysis::module_pass_manager::ModulePassManager;
-
-                let module = ModulePassManager::run(&unit.env, unit.module());
-                print!("{}\n", print(&module));
-            }
+        Commands::Parse { .. } => {}
+        Commands::Lsp(_) => {
+            talk::lsp::server::start().await;
         }
+        Commands::Run { filenames } => {
+            use std::path::PathBuf;
 
-        Commands::Run { filename } => {
-            use talk::compiling::driver::Driver;
-            let mut driver = Driver::with_files(vec![filename.clone()]);
-            let lowered = driver.lower();
+            use talk::{
+                compiling::driver::{Driver, Source},
+                ir::interpreter::Interpreter,
+            };
 
-            use talk::interpret::interpreter::IRInterpreter;
-            use talk::interpret::io::InterpreterStdIO;
-
-            // let contents = std::fs::read_to_string(filename).expect("Could not read file");
-            // let lowered = lower(&contents);
-            let io = InterpreterStdIO::default();
-            for lowered in lowered {
-                use talk::analysis::module_pass_manager::ModulePassManager;
-
-                let module = ModulePassManager::run(&lowered.env, lowered.module());
-                let interpreter = IRInterpreter::new(module, &io, &driver.symbol_table);
-                interpreter.run().unwrap();
-            }
+            let sources: Vec<_> = filenames
+                .iter()
+                .map(|filename| Source::from(PathBuf::from(filename)))
+                .collect();
+            let driver = Driver::new(sources, Default::default());
+            let module = driver
+                .parse()
+                .unwrap()
+                .resolve_names()
+                .unwrap()
+                .typecheck()
+                .unwrap()
+                .lower()
+                .unwrap()
+                .module("talkin");
+            let interpreter = Interpreter::new(module.program);
+            let result = interpreter.run();
+            println!("{result:?}");
         }
-        Commands::Lsp(_args) => talk::lsp::server::start().await,
+        Commands::Debug { filename } => {
+            use std::path::PathBuf;
+            init();
+
+            use talk::{
+                compiling::driver::{Driver, Source},
+                formatter::{DebugHTMLFormatter, Formatter},
+            };
+
+            let driver = Driver::new(
+                vec![Source::from(PathBuf::from(filename))],
+                Default::default(),
+            );
+            let resolved = driver.parse().unwrap().resolve_names().unwrap();
+            let meta = resolved.phase.asts[0].meta.clone();
+            let typed = resolved.typecheck().unwrap();
+
+            let formatter = Formatter::new_with_decorators(
+                &meta,
+                vec![
+                    Box::new(DebugHTMLFormatter {}),
+                    //Box::new(TypesDecorator {
+                    //    types_by_node: typed.phase.types.types_by_node,
+                    //}),
+                ],
+            );
+
+            println!(
+                "{}",
+                formatter.format(&typed.phase.asts[0].roots.clone(), 80)
+            );
+        }
     }
 }
 
