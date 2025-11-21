@@ -1,5 +1,0 @@
-/target
-editors/vscode/node_modules
-log.txt
-*.vsix
-dist/
