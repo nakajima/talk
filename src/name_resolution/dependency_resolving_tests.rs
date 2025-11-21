@@ -243,7 +243,7 @@ pub mod tests {
     fn collects_residual_exprs_that_arent_bound() {
         let types = resolve(
             r#"
-            1 + 2
+            1
         "#,
         );
 

@@ -332,7 +332,7 @@ pub mod trace {
     pub fn init() {
         use tracing_subscriber::{EnvFilter, prelude::*, registry};
 
-        if std::env::var("LOG_PRELUDE").is_ok() {
+        if std::env::var("LOG_PRELUDE") == Ok("1".into()) {
             let tree = tracing_tree::HierarchicalLayer::new(2)
                 .with_writer(TestWriter::new())
                 .with_filter(EnvFilter::from_default_env()); // ordinary RUST_LOG filtering

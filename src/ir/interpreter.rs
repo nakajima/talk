@@ -111,6 +111,8 @@ impl Interpreter {
     }
 
     pub fn run(mut self) -> Value {
+        println!("\nIR\n{}\n", self.program);
+
         let entrypoint = self
             .program
             .entrypoint()
@@ -133,7 +135,11 @@ impl Interpreter {
                 .insert(callee_func.name.symbol(), callee_func);
         }
 
-        let func = self.program.functions.shift_remove(&function).unwrap();
+        let func = self
+            .program
+            .functions
+            .shift_remove(&function)
+            .unwrap_or_else(|| panic!("did not find function: {:?}", function));
         let mut frame = Frame::new(dest, caller_name);
         frame.registers.resize(func.register_count, Value::Uninit);
         for (i, arg) in args.into_iter().enumerate() {
@@ -169,6 +175,7 @@ impl Interpreter {
             }
             IR::Term(Terminator::Unreachable) => panic!("Reached unreachable"),
             IR::Term(Terminator::Branch { .. }) => todo!(),
+            IR::Term(Terminator::Jump { .. }) => todo!(),
             IR::Instr(Instruction::Constant { dest, val, .. }) => {
                 let val = self.val(val);
                 self.write_register(&dest, val);
@@ -289,7 +296,10 @@ impl Interpreter {
         match val {
             super::value::Value::Reg(reg) => {
                 let Value::Func(symbol) = self.read_register(&Register(reg)) else {
-                    panic!("didn't get func symbol from {val:?}");
+                    panic!(
+                        "didn't get func symbol from {val:?}: {:?}",
+                        self.read_register(&Register(reg))
+                    );
                 };
 
                 symbol

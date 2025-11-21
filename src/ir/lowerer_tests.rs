@@ -323,7 +323,7 @@ pub mod tests {
                             dest: 0.into(),
                             ty: IrTy::Record(vec![IrTy::Int]),
                             callee: Value::Func(Name::Resolved(
-                                Symbol::from(SynthesizedId::from(7)),
+                                Symbol::from(SynthesizedId::from(4)),
                                 "@@Foo:Struct(_:1)_init:Synthesized(_:1)[Int]".into()
                             )),
                             args: vec![Register(2).into(), Register(1).into()].into(),
@@ -770,7 +770,7 @@ pub mod tests {
         ",
         );
 
-        assert_eq!(
+        assert_eq_diff!(
             *program
                 .functions
                 .get(&Symbol::Synthesized(SynthesizedId::from(1)))
@@ -779,47 +779,39 @@ pub mod tests {
                 name: Name::Resolved(SynthesizedId::from(1).into(), "main".into()),
                 params: vec![].into(),
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
-                register_count: 1,
+                register_count: 2,
                 blocks: vec![
                     BasicBlock {
                         id: BasicBlockId(0),
-                        instructions: vec![Instruction::Constant {
-                            dest: 0.into(),
-                            ty: IrTy::Bool,
-                            val: Value::Bool(false),
-                            meta: vec![].into(),
-                        }],
+                        instructions: vec![],
                         terminator: Terminator::Branch {
-                            cond: Value::Reg(0),
+                            cond: Value::Bool(false),
                             conseq: BasicBlockId(1),
                             alt: BasicBlockId(2),
                         }
                     },
                     BasicBlock {
-                        id: BasicBlockId(0),
-                        instructions: vec![Instruction::Add {
+                        id: BasicBlockId(1),
+                        instructions: vec![Instruction::Constant {
                             dest: 0.into(),
                             ty: IrTy::Int,
-                            a: Value::Int(1),
-                            b: Value::Int(2),
-                            meta: vec![].into(),
+                            val: Value::Int(456),
+                            meta: meta()
                         }],
-                        terminator: Terminator::Ret {
-                            val: Value::Reg(0),
-                            ty: IrTy::Int
+                        terminator: Terminator::Jump {
+                            to: BasicBlockId(2)
                         }
                     },
                     BasicBlock {
-                        id: BasicBlockId(0),
-                        instructions: vec![Instruction::Add {
-                            dest: 0.into(),
+                        id: BasicBlockId(2),
+                        instructions: vec![Instruction::Constant {
+                            dest: 1.into(),
                             ty: IrTy::Int,
-                            a: Value::Int(1),
-                            b: Value::Int(2),
-                            meta: vec![].into(),
+                            val: Value::Int(123),
+                            meta: meta()
                         }],
                         terminator: Terminator::Ret {
-                            val: Value::Reg(0),
+                            val: Value::Reg(1),
                             ty: IrTy::Int
                         }
                     }

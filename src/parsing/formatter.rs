@@ -254,6 +254,10 @@ impl<'a> Formatter<'a> {
     fn format_expr(&self, expr: &Expr) -> Doc {
         let doc = match &expr.kind {
             ExprKind::Incomplete(_) => Doc::Empty,
+            ExprKind::As(lhs, rhs) => join(
+                vec![self.format_expr(lhs), self.format_type_annotation(rhs)],
+                text(" as "),
+            ),
             ExprKind::LiteralArray(items) => self.format_array_literal(items),
             ExprKind::LiteralString(string) => self.format_string_literal(string),
             ExprKind::LiteralInt(val) => text(val),

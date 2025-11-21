@@ -601,6 +601,17 @@ pub mod tests {
     }
 
     #[test]
+    fn types_single_tuple_value() {
+        let (ast, types) = typecheck(
+            "
+        let z = (123)
+        z
+        ",
+        );
+        assert_eq!(ty(1, &ast, &types), Ty::Int);
+    }
+
+    #[test]
     fn types_tuple_value() {
         let (ast, types) = typecheck(
             "
@@ -2095,6 +2106,65 @@ pub mod tests {
                 symbol: StructId::from(3).into(),
                 row: Row::Empty(TypeDefKind::Struct).into()
             }
+        );
+    }
+
+    #[test]
+    fn types_as() {
+        let (ast, types) = typecheck(
+            "
+        protocol Fizz {
+            func fizz() -> Int
+            func buzz() -> Int {
+                self.fizz()
+            }
+        }
+
+        struct A: Fizz {
+            func fizz() { 123 }
+        }
+
+        (A() as Fizz).buzz()
+        ",
+        );
+
+        assert_eq!(ty(2, &ast, &types), Ty::Int);
+    }
+
+    #[test]
+    pub fn types_add_method_in_func() {
+        let (ast, types) = typecheck_core(
+            "func add(x) { x + 1 }
+
+            add(2)
+            ",
+        );
+        println!("{:#?}", types);
+        assert_eq!(ty(1, &ast, &types), Ty::Int);
+    }
+
+    #[test]
+    fn checks_as() {
+        let (ast, _types) = typecheck_err(
+            "
+        protocol Fizz {
+            func fizz() -> Int
+            func buzz() -> Int {
+                self.fizz()
+            }
+        }
+
+        struct A {}
+
+        A() as Fizz
+        ",
+        );
+
+        assert_eq!(
+            1,
+            ast.diagnostics.len(),
+            "didn't get diagnostic: {:?}",
+            ast.diagnostics
         );
     }
 }

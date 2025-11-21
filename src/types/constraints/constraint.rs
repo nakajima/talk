@@ -50,7 +50,7 @@ pub enum Constraint {
 impl Constraint {
     pub fn is_generalizable(&self) -> bool {
         match self {
-            Constraint::Call(..) => false,
+            Constraint::Call(..) => true,
             Constraint::Equals(..) => true,
             Constraint::HasField(..) => true,
             Constraint::Member(..) => true,
@@ -93,7 +93,9 @@ impl Constraint {
                 c.base = apply(c.base.clone(), substitutions);
                 c.result = apply(c.result.clone(), substitutions);
             }
-            Constraint::Conforms(..) => (),
+            Constraint::Conforms(c) => {
+                c.ty = apply(c.ty.clone(), substitutions);
+            }
             Constraint::Equals(e) => {
                 e.lhs = apply(e.lhs.clone(), substitutions);
                 e.rhs = apply(e.rhs.clone(), substitutions);
@@ -161,12 +163,12 @@ impl Constraint {
     pub fn into_predicate(
         &self,
         substitutions: &mut UnificationSubstitutions,
-    ) -> Predicate<InferTy> {
+    ) -> Option<Predicate<InferTy>> {
         tracing::debug!(
             "converting {:?} to predicate",
             self.clone().apply(substitutions)
         );
-        match self {
+        let pred = match self {
             Self::HasField(has_field) => {
                 let InferRow::Param(row_param) = apply_row(has_field.row.clone(), substitutions)
                 else {
@@ -185,6 +187,7 @@ impl Constraint {
                 receiver: apply(member.receiver.clone(), substitutions),
                 label: member.label.clone(),
                 ty: apply(member.ty.clone(), substitutions),
+                node_id: member.node_id,
             },
             Self::Call(call) => Predicate::Call {
                 callee: apply(call.callee.clone(), substitutions),
@@ -220,7 +223,9 @@ impl Constraint {
                 label: projection.label.clone(),
                 returns: apply(projection.result.clone(), substitutions),
             },
-            _ => unimplemented!("No predicate for constraint: {self:?}"),
-        }
+            _ => return None,
+        };
+
+        Some(pred)
     }
 }

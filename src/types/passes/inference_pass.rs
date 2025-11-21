@@ -44,7 +44,7 @@ use crate::{
         scheme::{ForAll, Scheme},
         solve_context::{Solve, SolveContext, SolveContextKind},
         term_environment::EnvEntry,
-        type_catalog::{Conformance, ConformanceKey},
+        type_catalog::{Conformance, ConformanceKey, MemberWitness},
         type_operations::{
             InstantiationSubstitutions, UnificationSubstitutions, apply, curry, instantiate_ty,
             substitute,
@@ -347,9 +347,7 @@ impl<'a> InferencePass<'a> {
             let requirements = self
                 .session
                 .lookup_method_requirements(&key.protocol_id)
-                .unwrap_or_else(|| {
-                    panic!("did not find method requirements for {:?}", key.protocol_id)
-                });
+                .unwrap_or_default();
 
             for (label, sym) in requirements.clone() {
                 tracing::trace!("checking req {label:?} {sym:?}");
@@ -366,6 +364,15 @@ impl<'a> InferencePass<'a> {
                     .get(&label)
                     .copied()
                     .unwrap();
+
+                tracing::trace!("Inserting witness {sym:?} {label:?} -> {witness_entry_sym:?}");
+                self.session
+                    .type_catalog
+                    .conformances
+                    .entry(*key)
+                    .and_modify(|conformance| {
+                        conformance.witnesses.insert(label, witness_entry_sym);
+                    });
 
                 let witness_entry = self.session.lookup(&witness_entry_sym).unwrap();
                 let witness_ty = witness_entry.instantiate(
@@ -488,6 +495,45 @@ impl<'a> InferencePass<'a> {
         );
         self.unsolved = updated_unsolved;
         self.solve(&mut context, vec![], vec![]);
+    }
+
+    #[instrument(skip(self))]
+    fn rectify_witnesses(&mut self) {
+        for (node_id, witness) in self.session.type_catalog.member_witnesses.iter_mut() {
+            if let MemberWitness::Meta { receiver, label } = witness {
+                let receiver_ty = apply(receiver.clone(), &mut self.substitutions);
+                let symbol = match receiver_ty {
+                    InferTy::Primitive(symbol) => symbol,
+                    InferTy::Nominal { symbol, .. } => symbol,
+                    _ => {
+                        tracing::warn!(
+                            "Unable to resolve witness: {witness:?} for {receiver_ty:?} (original: {:?})",
+                            receiver.clone()
+                        );
+                        continue;
+                    }
+                };
+
+                if let Some(methods) = self.session.type_catalog.instance_methods.get(&symbol)
+                    && let Some(method) = methods.get(label)
+                {
+                    tracing::trace!(
+                        "Resolved concrete witness {receiver_ty:?}.{label:?} = {method:?}"
+                    );
+                    *witness = MemberWitness::Concrete(*method);
+                    continue;
+                }
+
+                tracing::warn!("Unable to resolve witness: {witness:?} for {receiver_ty:?}");
+            };
+
+            if let MemberWitness::Requirement(req) = witness {
+                println!(
+                    "wtf: {node_id:?}, req: {req:?}, ty: {:?}",
+                    self.session.types_by_node.get(node_id)
+                );
+            }
+        }
     }
 
     fn generate(&mut self, idx: usize) {
@@ -651,18 +697,28 @@ impl<'a> InferencePass<'a> {
 
         self.substitutions.extend(&context.substitutions);
         self.session.apply(&mut self.substitutions);
+        self.rectify_witnesses();
     }
 
+    #[instrument(level = tracing::Level::TRACE, skip(self, node, context), fields(node.id = ?node.node_id()))]
     fn visit_node(&mut self, node: &Node, context: &mut impl Solve) -> InferTy {
-        match &node {
+        let ty = match &node {
             Node::Decl(decl) => self.visit_decl(decl, context),
             Node::Stmt(stmt) => self.visit_stmt(stmt, context),
             Node::Expr(expr) => self.visit_expr(expr, context),
             Node::Parameter(param) => self.visit_param(param, context),
             _ => todo!("{node:?}"),
-        }
+        };
+
+        self.session
+            .types_by_node
+            .entry(node.node_id())
+            .or_insert(ty.clone());
+
+        ty
     }
 
+    #[instrument(level = tracing::Level::TRACE, skip(self, decl, context), fields(decl.id = ?decl.id))]
     fn visit_decl(&mut self, decl: &Decl, context: &mut impl Solve) -> InferTy {
         match &decl.kind {
             DeclKind::Let {
@@ -709,6 +765,7 @@ impl<'a> InferencePass<'a> {
         }
     }
 
+    #[instrument(level = tracing::Level::TRACE, skip(self, stmt, context), fields(stmt.id = ?stmt.id))]
     fn visit_stmt(&mut self, stmt: &Stmt, context: &mut impl Solve) -> InferTy {
         let ty = match &stmt.kind {
             StmtKind::Expr(expr) => self.visit_expr(expr, context),
@@ -748,6 +805,7 @@ impl<'a> InferencePass<'a> {
         ty
     }
 
+    #[instrument(level = tracing::Level::TRACE, skip(self, expr, context), fields(expr.id = ?expr.id))]
     fn visit_expr(&mut self, expr: &Expr, context: &mut impl Solve) -> InferTy {
         let ty = match &expr.kind {
             ExprKind::LiteralArray(items) => self.visit_array(items, context),
@@ -757,12 +815,17 @@ impl<'a> InferencePass<'a> {
             ExprKind::LiteralString(_) => InferTy::String(),
             ExprKind::Unary(..) => todo!(),
             ExprKind::Binary(..) => todo!(),
-            ExprKind::Tuple(exprs) => InferTy::Tuple(
-                exprs
-                    .iter()
-                    .map(|e| self.visit_expr(e, context))
-                    .collect_vec(),
-            ),
+            ExprKind::Tuple(exprs) => match exprs.len() {
+                0 => InferTy::Void,
+                1 => self.visit_expr(&exprs[0], context),
+                _ => InferTy::Tuple(
+                    exprs
+                        .iter()
+                        .map(|e| self.visit_expr(e, context))
+                        .collect_vec(),
+                ),
+            },
+
             ExprKind::Block(..) => todo!(),
             ExprKind::Call {
                 callee,
@@ -781,12 +844,23 @@ impl<'a> InferencePass<'a> {
                 self.infer_record_literal(fields, spread, context)
             }
             ExprKind::RowVariable(..) => todo!(),
+            ExprKind::As(box lhs, rhs) => self.visit_as(lhs, rhs, context),
             _ => unimplemented!(),
         };
 
         self.session.types_by_node.insert(expr.id, ty.clone());
 
         ty
+    }
+
+    fn visit_as(&mut self, lhs: &Expr, rhs: &TypeAnnotation, context: &mut impl Solve) -> InferTy {
+        let lhs_ty = self.visit_expr(lhs, context);
+        let Symbol::Protocol(id) = rhs.symbol() else {
+            panic!("didn't get protocol id");
+        };
+
+        context.wants_mut().conforms(lhs_ty.clone(), id, lhs.span);
+        lhs_ty
     }
 
     fn visit_array(&mut self, items: &[Expr], context: &mut impl Solve) -> InferTy {
@@ -1074,7 +1148,7 @@ impl<'a> InferencePass<'a> {
                     node_id: conformance.id,
                     conforming_id: nominal_symbol,
                     protocol_id,
-                    requirements: Default::default(),
+                    witnesses: Default::default(),
                     associated_types,
                     span: conformance.span,
                 },
@@ -1236,7 +1310,7 @@ impl<'a> InferencePass<'a> {
                     node_id: conformance.id,
                     conforming_id: nominal_symbol,
                     protocol_id,
-                    requirements: Default::default(),
+                    witnesses: Default::default(),
                     associated_types,
                     span: conformance.span,
                 },
@@ -1724,6 +1798,9 @@ impl<'a> InferencePass<'a> {
         for node in block.body.iter() {
             ret = self.visit_node(node, context);
         }
+
+        self.session.types_by_node.insert(block.id, ret.clone());
+
         ret
     }
 

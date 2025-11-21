@@ -23,6 +23,10 @@ pub enum TypeError {
         symbol: Symbol,
         protocol_id: ProtocolId,
     },
+    TypesCannotConform {
+        ty: InferTy,
+        protocol_id: ProtocolId,
+    },
 }
 
 impl Error for TypeError {}
@@ -52,6 +56,9 @@ impl Display for TypeError {
             }
             Self::TypesDoesNotConform { .. } => {
                 write!(f, "Type does not conform wip")
+            }
+            Self::TypesCannotConform { ty, .. } => {
+                write!(f, "Type cannot conform: {ty:?}")
             }
         }
     }

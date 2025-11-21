@@ -246,7 +246,7 @@ pub mod tests {
                 node_id: NodeID::SYNTHESIZED,
                 conforming_id: Symbol::Struct(1.into()),
                 protocol_id: ProtocolId::from(1),
-                requirements: Default::default(),
+                witnesses: Default::default(),
                 associated_types: fxhashmap!(
                     Label::Named("foo".into()) => var.clone()
                 ),

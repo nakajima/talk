@@ -2707,6 +2707,22 @@ pub mod tests {
     }
 
     #[test]
+    fn parses_as() {
+        let parsed = parse("fizz as Buzz");
+        assert_eq!(
+            parsed.roots[0],
+            any_expr_stmt!(ExprKind::As(
+                Box::new(any_expr!(ExprKind::Variable("fizz".into()))),
+                annotation!(TypeAnnotationKind::Nominal {
+                    name: "Buzz".into(),
+                    name_span: Span::ANY,
+                    generics: vec![]
+                })
+            ))
+        );
+    }
+
+    #[test]
     fn parses_empty_braces_as_block() {
         let parsed = parse("{}");
         assert_eq!(

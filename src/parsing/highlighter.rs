@@ -94,6 +94,7 @@ impl<'a> Higlighter<'a> {
 
         while let Ok(tok) = &lexer.next() {
             match tok.kind {
+                TokenKind::As => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::At => self.make(tok, Kind::DECORATOR, &mut tokens),
                 TokenKind::LineComment(_) => self.make(tok, Kind::COMMENT, &mut tokens),
                 TokenKind::Extend => self.make(tok, Kind::KEYWORD, &mut tokens),
@@ -396,6 +397,10 @@ impl<'a> Higlighter<'a> {
                 ExprKind::Incomplete(..) => (),
                 ExprKind::LiteralArray(exprs) => {
                     result.extend(self.tokens_from_exprs(exprs, ast));
+                }
+                ExprKind::As(box lhs, rhs) => {
+                    result.extend(self.tokens_from_expr(lhs, ast));
+                    result.extend(self.tokens_from_expr(rhs, ast));
                 }
                 // Literals are handled by tokens pass
                 ExprKind::LiteralInt(_) => (),

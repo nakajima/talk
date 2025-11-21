@@ -14,6 +14,7 @@ use crate::{
         passes::uncurry_function,
         predicate::Predicate,
         solve_context::{Solve, SolveContext},
+        type_catalog::MemberWitness,
         type_error::TypeError,
         type_operations::{apply, curry, unify},
         type_session::{MemberSource, TypeSession},
@@ -40,8 +41,9 @@ impl Member {
         let ty = self.ty.clone();
 
         tracing::debug!(
-            "Member::solve receiver={receiver:?}, label={:?}",
-            self.label
+            "Member::solve receiver={receiver:?}, label={:?} id={:?}",
+            self.label,
+            self.node_id
         );
 
         match &receiver {
@@ -118,11 +120,18 @@ impl Member {
                 let req_ty = entry.instantiate(self.node_id, context, session, self.span);
                 let (req_self, req_func) = consume_self(&req_ty);
                 context.wants_mut().equals(
-                    req_self,
+                    req_self.clone(),
                     self.receiver.clone(),
                     ConstraintCause::Internal,
                     self.span,
                 );
+
+                // Store the method requirement symbol directly as a concrete witness
+                // since it represents the protocol method that will be called
+                session
+                    .type_catalog
+                    .member_witnesses
+                    .insert(self.node_id, MemberWitness::Requirement(req));
 
                 return unify(ty, &req_func, context, session);
             }
@@ -182,6 +191,11 @@ impl Member {
                 self.label.to_string(),
             ));
         };
+
+        session
+            .type_catalog
+            .member_witnesses
+            .insert(self.node_id, MemberWitness::Concrete(member_sym));
 
         match member_sym {
             Symbol::InstanceMethod(..) => {

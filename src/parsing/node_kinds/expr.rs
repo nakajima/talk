@@ -19,6 +19,8 @@ pub enum ExprKind {
     #[drive(skip)]
     Incomplete(IncompleteExpr),
 
+    As(Box<Expr>, TypeAnnotation),
+
     // Start of the real expressions
     LiteralArray(Vec<Expr>),
 
@@ -88,6 +90,7 @@ impl ExprKind {
             | ExprKind::Unary(..)
             | ExprKind::Binary(..)
             | ExprKind::Member(..)
+            | ExprKind::As(..)
             | ExprKind::RowVariable(..) => false,
 
             ExprKind::Func(..) => true,

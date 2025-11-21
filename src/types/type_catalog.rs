@@ -2,10 +2,8 @@ use indexmap::IndexMap;
 use rustc_hash::FxHashMap;
 
 use crate::{
-    compiling::module::ModuleId,
     label::Label,
-    name::Name,
-    name_resolution::symbol::{InstanceMethodId, MethodRequirementId, ProtocolId, Symbol},
+    name_resolution::symbol::{ProtocolId, Symbol},
     node_id::NodeID,
     span::Span,
     types::{
@@ -17,123 +15,45 @@ use crate::{
 };
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum ConformanceRequirement {
-    UnfulfilledInstanceMethod(MethodRequirementId),
-    FulfilledInstanceMethod(InstanceMethodId),
-}
-
-impl ConformanceRequirement {
-    pub fn import(self, module_id: ModuleId) -> ConformanceRequirement {
-        match self {
-            ConformanceRequirement::UnfulfilledInstanceMethod(id) => {
-                ConformanceRequirement::UnfulfilledInstanceMethod(id.import(module_id))
-            }
-            ConformanceRequirement::FulfilledInstanceMethod(id) => {
-                ConformanceRequirement::FulfilledInstanceMethod(id.import(module_id))
-            }
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct Conformance {
+pub struct Conformance<T> {
     pub node_id: NodeID,
     pub conforming_id: Symbol,
     pub protocol_id: ProtocolId,
-    pub requirements: FxHashMap<Label, ConformanceRequirement>,
-    pub associated_types: FxHashMap<Label, InferTy>,
+    pub witnesses: FxHashMap<Label, Symbol>,
+    pub associated_types: FxHashMap<Label, T>,
     pub span: Span,
 }
 
-fn import_label_symbol_map<
-    I: IntoIterator<Item = (Label, Symbol)> + FromIterator<(Label, Symbol)>,
->(
-    module_id: ModuleId,
-    map: I,
-) -> I {
-    map.into_iter()
-        .map(|(label, sym)| (label, sym.import(module_id)))
-        .collect()
-}
-
-#[derive(Debug, PartialEq, Clone, Copy)]
-pub struct ConformanceStub {
-    pub protocol_id: ProtocolId,
-    pub conforming_id: Symbol,
-    pub span: Span,
-}
-
-impl ConformanceStub {
-    pub fn import(self, module_id: ModuleId) -> ConformanceStub {
-        ConformanceStub {
-            protocol_id: self.protocol_id.import(module_id),
-            conforming_id: self.conforming_id.import(module_id),
+impl Conformance<InferTy> {
+    fn finalize(self, session: &mut TypeSession) -> Conformance<Ty> {
+        Conformance {
+            node_id: self.node_id,
+            conforming_id: self.conforming_id,
+            protocol_id: self.protocol_id,
+            witnesses: self.witnesses,
+            associated_types: self
+                .associated_types
+                .into_iter()
+                .map(|(k, v)| (k, session.finalize_ty(v).as_mono_ty().clone()))
+                .collect(),
             span: self.span,
         }
     }
 }
 
-#[derive(Debug, PartialEq, Clone)]
-pub struct Extension {
-    pub node_id: NodeID,
-    pub conformances: Vec<ConformanceStub>,
-}
-
-impl Extension {
-    pub fn import(self, module_id: ModuleId) -> Extension {
-        Extension {
-            node_id: self.node_id,
-            conformances: self
-                .conformances
-                .into_iter()
-                .map(|c| ConformanceStub {
-                    protocol_id: c.protocol_id.import(module_id),
-                    conforming_id: c.conforming_id.import(module_id),
-                    span: c.span,
-                })
-                .collect(),
-        }
-    }
-}
-
-#[derive(Debug, PartialEq, Clone)]
-pub struct ProtocolOld {
-    pub node_id: NodeID,
-    pub static_methods: FxHashMap<Label, Symbol>,
-    pub associated_types: IndexMap<Name, Symbol>,
-    pub requirements: FxHashMap<Label, ConformanceRequirement>,
-}
-
-impl ProtocolOld {
-    pub fn import(self, module_id: ModuleId) -> ProtocolOld {
-        ProtocolOld {
-            node_id: self.node_id,
-            static_methods: import_label_symbol_map(module_id, self.static_methods),
-            associated_types: self
+impl From<Conformance<Ty>> for Conformance<InferTy> {
+    fn from(value: Conformance<Ty>) -> Self {
+        Conformance {
+            node_id: value.node_id,
+            conforming_id: value.conforming_id,
+            protocol_id: value.protocol_id,
+            witnesses: value.witnesses,
+            associated_types: value
                 .associated_types
                 .into_iter()
-                .map(|(name, associated)| (name, associated.import(module_id)))
+                .map(|(k, v)| (k, v.into()))
                 .collect(),
-            requirements: self
-                .requirements
-                .into_iter()
-                .map(|(label, req)| (label, req.import(module_id)))
-                .collect(),
-        }
-    }
-}
-
-#[derive(Debug, PartialEq, Clone)]
-pub struct NominalOld {
-    pub symbol: Symbol,
-    pub node_id: NodeID,
-}
-
-impl NominalOld {
-    pub fn import(self, module_id: ModuleId) -> NominalOld {
-        NominalOld {
-            symbol: self.symbol.import(module_id),
-            node_id: self.node_id,
+            span: value.span,
         }
     }
 }
@@ -160,8 +80,15 @@ impl<T: SomeType> Default for TrackedInstantiations<T> {
 }
 
 #[derive(Debug, PartialEq, Clone)]
+pub enum MemberWitness<T> {
+    Concrete(Symbol),
+    Requirement(Symbol),
+    Meta { receiver: T, label: Label },
+}
+
+#[derive(Debug, PartialEq, Clone)]
 pub struct TypeCatalog<T: SomeType> {
-    pub conformances: FxHashMap<ConformanceKey, Conformance>,
+    pub conformances: FxHashMap<ConformanceKey, Conformance<T>>,
     pub associated_types: FxHashMap<Symbol, FxHashMap<Label, Symbol>>,
     pub extensions: FxHashMap<Symbol, FxHashMap<Label, Symbol>>,
     pub child_types: FxHashMap<Symbol, FxHashMap<String, Symbol>>,
@@ -174,6 +101,7 @@ pub struct TypeCatalog<T: SomeType> {
     pub method_requirements: FxHashMap<Symbol, IndexMap<Label, Symbol>>,
 
     pub instantiations: TrackedInstantiations<T>,
+    pub member_witnesses: FxHashMap<NodeID, MemberWitness<T>>,
 }
 
 impl<T: SomeType> Default for TypeCatalog<T> {
@@ -192,6 +120,7 @@ impl<T: SomeType> Default for TypeCatalog<T> {
             method_requirements: Default::default(),
 
             instantiations: Default::default(),
+            member_witnesses: Default::default(),
         }
     }
 }
@@ -213,7 +142,11 @@ impl TypeCatalog<InferTy> {
         }
         TypeCatalog {
             associated_types: self.associated_types,
-            conformances: self.conformances,
+            conformances: self
+                .conformances
+                .into_iter()
+                .map(|(k, v)| (k, v.finalize(session)))
+                .collect(),
             extensions: self.extensions,
             child_types: self.child_types,
             initializers: self.initializers,
@@ -222,6 +155,23 @@ impl TypeCatalog<InferTy> {
             static_methods: self.static_methods,
             variants: self.variants,
             method_requirements: self.method_requirements,
+            member_witnesses: self
+                .member_witnesses
+                .into_iter()
+                .map(|(k, v)| {
+                    (
+                        k,
+                        match v {
+                            MemberWitness::Concrete(sym) => MemberWitness::Concrete(sym),
+                            MemberWitness::Requirement(sym) => MemberWitness::Requirement(sym),
+                            MemberWitness::Meta { receiver, label } => MemberWitness::Meta {
+                                receiver: session.finalize_ty(receiver).as_mono_ty().clone(),
+                                label,
+                            },
+                        },
+                    )
+                })
+                .collect(),
             instantiations,
         }
     }

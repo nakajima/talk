@@ -34,6 +34,7 @@ use tracing::instrument;
 // it's not copyable so we always need to have one before calling add_expr
 pub struct LocToken;
 
+#[derive(Debug)]
 enum FuncOrFuncSignature {
     Func(Func),
     FuncSignature(FuncSignature),
@@ -209,9 +210,7 @@ impl<'a> Parser<'a> {
         let (lhs, lhs_span) = self.identifier()?;
         self.consume(TokenKind::Equals)?;
         let rhs = self.type_annotation()?;
-        let (id, span) = self.save_meta(tok)?;
-
-        Ok(Decl {
+        self.save_meta(tok, |id, span| Decl {
             id,
             span,
             kind: DeclKind::TypeAlias(lhs.into(), lhs_span, rhs),
@@ -227,9 +226,7 @@ impl<'a> Parser<'a> {
         self.consume(TokenKind::RightParen)?;
 
         let body = self.block(BlockContext::Func, true)?;
-        let (id, span) = self.save_meta(tok)?;
-
-        Ok(Decl {
+        self.save_meta(tok, |id, span| Decl {
             id,
             span,
             kind: DeclKind::Init {
@@ -277,8 +274,7 @@ impl<'a> Parser<'a> {
             None
         };
 
-        let (id, span) = self.save_meta(tok)?;
-        Ok(Decl {
+        self.save_meta(tok, |id, span| Decl {
             id,
             span,
             kind: DeclKind::Property {
@@ -303,8 +299,8 @@ impl<'a> Parser<'a> {
         } else {
             vec![]
         };
-        let (id, span) = self.save_meta(tok)?;
-        Ok(Decl {
+
+        self.save_meta(tok, |id, span| Decl {
             id,
             span,
             kind: DeclKind::EnumVariant(name.into(), name_span, values),
@@ -329,7 +325,6 @@ impl<'a> Parser<'a> {
         };
 
         let body = self.body_block(context)?;
-        let (id, span) = self.save_meta(tok)?;
 
         let kind = match context {
             BlockContext::Enum => DeclKind::Enum {
@@ -362,7 +357,8 @@ impl<'a> Parser<'a> {
             },
             _ => unreachable!("tried to call nominal_decl with wrong context: {context:?}"),
         };
-        Ok(Decl { id, span, kind })
+
+        self.save_meta(tok, |id, span| Decl { id, span, kind })
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
@@ -382,9 +378,7 @@ impl<'a> Parser<'a> {
             None
         };
 
-        let (id, span) = self.save_meta(tok)?;
-
-        Ok(Decl {
+        self.save_meta(tok, |id, span| Decl {
             id,
             span,
             kind: DeclKind::Let {
@@ -408,9 +402,7 @@ impl<'a> Parser<'a> {
             FuncOrFuncSignature::FuncSignature(func_sig) => DeclKind::FuncSignature(func_sig),
         };
 
-        let (id, span) = self.save_meta(tok)?;
-
-        Ok(Decl { id, span, kind })
+        self.save_meta(tok, |id, span| Decl { id, span, kind })
     }
 
     fn func(
@@ -446,30 +438,31 @@ impl<'a> Parser<'a> {
         if context == BlockContext::Protocol && !self.peek_is(TokenKind::LeftBrace) {
             let ret = ret.map(Box::new);
 
-            let (id, span) = self.save_meta(tok)?;
-            return Ok(FuncOrFuncSignature::FuncSignature(FuncSignature {
-                id,
-                span,
-                name: name.into(),
-                generics,
-                params,
-                ret,
-            }));
+            return self.save_meta(tok, |id, span| {
+                FuncOrFuncSignature::FuncSignature(FuncSignature {
+                    id,
+                    span,
+                    name: name.into(),
+                    generics,
+                    params,
+                    ret,
+                })
+            });
         }
 
         let body = self.block(BlockContext::Func, true)?;
-        let (id, _span) = self.save_meta(tok)?;
-
-        Ok(FuncOrFuncSignature::Func(Func {
-            id,
-            name: name.into(),
-            name_span,
-            generics,
-            params,
-            body,
-            ret,
-            attributes: vec![],
-        }))
+        self.save_meta(tok, |id, _span| {
+            FuncOrFuncSignature::Func(Func {
+                id,
+                name: name.into(),
+                name_span,
+                generics,
+                params,
+                body,
+                ret,
+                attributes: vec![],
+            })
+        })
     }
 
     // MARK: Statements
@@ -489,8 +482,7 @@ impl<'a> Parser<'a> {
             TokenKind::Break => {
                 let tok = self.push_source_location();
                 self.consume(TokenKind::Break)?;
-                let (id, span) = self.save_meta(tok)?;
-                Ok(Stmt {
+                self.save_meta(tok, |id, span| Stmt {
                     id,
                     span,
                     kind: StmtKind::Break,
@@ -517,13 +509,14 @@ impl<'a> Parser<'a> {
         self.consume(TokenKind::Else)?;
         let alt = self.block(BlockContext::If, true)?;
 
-        let (id, span) = self.save_meta(tok)?;
-        Ok(Expr {
-            id,
-            span,
-            kind: ExprKind::If(Box::new(cond.as_expr()), body, alt),
-        }
-        .into())
+        self.save_meta(tok, |id, span| {
+            Expr {
+                id,
+                span,
+                kind: ExprKind::If(Box::new(cond.as_expr()), body, alt),
+            }
+            .into()
+        })
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
@@ -535,13 +528,14 @@ impl<'a> Parser<'a> {
             ));
         };
 
-        let (id, span) = self.save_meta(tok)?;
-        Ok(Expr {
-            id,
-            span,
-            kind: ExprKind::Func(func),
-        }
-        .into())
+        self.save_meta(tok, |id, span| {
+            Expr {
+                id,
+                span,
+                kind: ExprKind::Func(func),
+            }
+            .into()
+        })
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
@@ -553,15 +547,13 @@ impl<'a> Parser<'a> {
 
         if self.did_match(TokenKind::Else)? {
             let alt = self.block(BlockContext::If, true)?;
-            let (id, span) = self.save_meta(tok)?;
-            Ok(Stmt {
+            self.save_meta(tok, |id, span| Stmt {
                 id,
                 span,
                 kind: StmtKind::If(cond.as_expr(), body, Some(alt)),
             })
         } else {
-            let (id, span) = self.save_meta(tok)?;
-            Ok(Stmt {
+            self.save_meta(tok, |id, span| Stmt {
                 id,
                 span,
                 kind: StmtKind::If(cond.as_expr(), body, None),
@@ -581,8 +573,7 @@ impl<'a> Parser<'a> {
         };
 
         let body = self.block(BlockContext::Loop, true)?;
-        let (id, span) = self.save_meta(tok)?;
-        Ok(Stmt {
+        self.save_meta(tok, |id, span| Stmt {
             id,
             span,
             kind: StmtKind::Loop(cond.map(|c| c.as_expr()), body),
@@ -595,8 +586,7 @@ impl<'a> Parser<'a> {
         self.consume(TokenKind::Return)?;
 
         if self.peek_is(TokenKind::Newline) || self.peek_is(TokenKind::RightBrace) {
-            let (id, span) = self.save_meta(tok)?;
-            return Ok(Stmt {
+            return self.save_meta(tok, |id, span| Stmt {
                 id,
                 span,
                 kind: StmtKind::Return(None),
@@ -604,9 +594,7 @@ impl<'a> Parser<'a> {
         }
 
         let rhs = Box::new(self.expr_with_precedence(Precedence::None)?);
-        let (id, span) = self.save_meta(tok)?;
-
-        Ok(Stmt {
+        self.save_meta(tok, |id, span| Stmt {
             id,
             span,
             kind: StmtKind::Return(Some(rhs.as_expr())),
@@ -624,13 +612,14 @@ impl<'a> Parser<'a> {
             items.push(self.expr()?.as_expr());
             self.consume(TokenKind::Comma).ok();
         }
-        let (id, span) = self.save_meta(tok)?;
-        Ok(Expr {
-            id,
-            span,
-            kind: ExprKind::LiteralArray(items),
-        }
-        .into())
+        self.save_meta(tok, |id, span| {
+            Expr {
+                id,
+                span,
+                kind: ExprKind::LiteralArray(items),
+            }
+            .into()
+        })
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
@@ -649,25 +638,24 @@ impl<'a> Parser<'a> {
             self.consume(TokenKind::Arrow)?;
 
             let body = self.block(BlockContext::MatchArmBody, true)?;
-            let (id, span) = self.save_meta(arm_tok)?;
-            arms.push(MatchArm {
+            arms.push(self.save_meta(arm_tok, |id, span| MatchArm {
                 id,
                 span,
                 pattern,
                 body,
-            });
+            })?);
 
             self.consume(TokenKind::Comma).ok();
             self.skip_newlines();
         }
 
-        let (id, span) = self.save_meta(tok)?;
-
-        Ok(Node::Expr(Expr {
-            id,
-            span,
-            kind: ExprKind::Match(Box::new(scrutinee.as_expr()), arms),
-        }))
+        self.save_meta(tok, |id, span| {
+            Node::Expr(Expr {
+                id,
+                span,
+                kind: ExprKind::Match(Box::new(scrutinee.as_expr()), arms),
+            })
+        })
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
@@ -745,8 +733,7 @@ impl<'a> Parser<'a> {
             _ => todo!("{:?}", current.kind),
         };
 
-        let (id, span) = self.save_meta(tok)?;
-        Ok(Pattern { id, span, kind })
+        self.save_meta(tok, |id, span| Pattern { id, span, kind })
     }
 
     fn parse_record_pattern(&mut self) -> Result<PatternKind, ParserError> {
@@ -775,12 +762,11 @@ impl<'a> Parser<'a> {
                         });
                     }
 
-                    let (id, span) = self.save_meta(tok)?;
-                    let field = RecordFieldPattern {
+                    let field = self.save_meta(tok, |id, span| RecordFieldPattern {
                         id,
                         span,
                         kind: RecordFieldPatternKind::Rest,
-                    };
+                    })?;
                     fields.push(field);
                     self.consume(TokenKind::RightBrace).ok();
 
@@ -801,8 +787,8 @@ impl<'a> Parser<'a> {
                         RecordFieldPatternKind::Bind(name)
                     };
 
-                    let (id, span) = self.save_meta(tok)?;
-                    let field = RecordFieldPattern { id, span, kind };
+                    let field =
+                        self.save_meta(tok, |id, span| RecordFieldPattern { id, span, kind })?;
                     fields.push(field);
                 }
                 _ => todo!("{current:?} field pattern not implemented yet"),
@@ -863,12 +849,14 @@ impl<'a> Parser<'a> {
             if can_assign {
                 let loc = self.push_source_location();
                 let rhs = self.expr_with_precedence(Precedence::Assignment)?;
-                let (id, span) = self.save_meta(loc)?;
-                return Ok(Node::Stmt(Stmt {
-                    id,
-                    span,
-                    kind: StmtKind::Assignment(expr, rhs.as_expr()),
-                }));
+                return self.save_meta(loc, |id, span| {
+                    Stmt {
+                        id,
+                        span,
+                        kind: StmtKind::Assignment(expr, rhs.as_expr()),
+                    }
+                    .into()
+                });
             } else {
                 return Err(ParserError::CannotAssign);
             }
@@ -921,12 +909,13 @@ impl<'a> Parser<'a> {
             if can_assign {
                 let loc = self.push_source_location();
                 let rhs = self.expr_with_precedence(Precedence::Assignment)?;
-                let (id, span) = self.save_meta(loc)?;
-                return Ok(Node::Stmt(Stmt {
-                    id,
-                    span,
-                    kind: StmtKind::Assignment(expr, rhs.as_expr()),
-                }));
+                return self.save_meta(loc, |id, span| {
+                    Node::Stmt(Stmt {
+                        id,
+                        span,
+                        kind: StmtKind::Assignment(expr, rhs.as_expr()),
+                    })
+                });
             } else {
                 return Err(ParserError::CannotAssign);
             }
@@ -988,9 +977,7 @@ impl<'a> Parser<'a> {
             ExprKind::Block(self.block(BlockContext::None, false)?)
         };
 
-        let (id, span) = self.save_meta(tok)?;
-
-        Ok(Node::Expr(Expr { id, span, kind }))
+        self.save_meta(tok, |id, span| Node::Expr(Expr { id, span, kind }))
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
@@ -1024,13 +1011,14 @@ impl<'a> Parser<'a> {
         } else if can_assign && self.did_match(TokenKind::Equals)? {
             let tok = self.push_lhs_location(variable.id);
             let rhs = self.expr()?;
-            let (id, span) = self.save_meta(tok)?;
-            Ok(Stmt {
-                id,
-                span,
-                kind: StmtKind::Assignment(variable, rhs.as_expr()),
-            }
-            .into())
+            self.save_meta(tok, |id, span| {
+                Stmt {
+                    id,
+                    span,
+                    kind: StmtKind::Assignment(variable, rhs.as_expr()),
+                }
+                .into()
+            })
         } else {
             Ok(variable.into())
         }
@@ -1120,13 +1108,31 @@ impl<'a> Parser<'a> {
 
         #[allow(clippy::expect_fun_call)]
         if let Some(lhs) = lhs {
-            Ok(lhs)
+            self.check_as(lhs)
         } else {
             self.advance();
             Err(ParserError::UnexpectedEndOfInput(Some(format!(
                 "expected lhs. {:?}",
                 self.ast
             ))))
+        }
+    }
+
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
+    fn check_as(&mut self, lhs: Node) -> Result<Node, ParserError> {
+        if self.did_match(TokenKind::As)? {
+            let tok = self.push_lhs_location(lhs.node_id());
+            let rhs = self.type_annotation()?;
+            self.save_meta(tok, |id, span| {
+                Expr {
+                    id,
+                    span,
+                    kind: ExprKind::As(lhs.as_expr().into(), rhs),
+                }
+                .into()
+            })
+        } else {
+            Ok(lhs)
         }
     }
 
@@ -1216,25 +1222,22 @@ impl<'a> Parser<'a> {
                 let tok = self.push_source_location();
                 self.consume(TokenKind::Colon)?;
                 let value = self.expr_with_precedence(Precedence::Assignment)?;
-                let (id, span) = self.save_meta(tok)?;
-                args.push(CallArg {
+                args.push(self.save_meta(tok, |id, span| CallArg {
                     id,
                     span,
                     label: label.into(),
                     label_span,
                     value: value.as_expr(),
-                })
+                })?);
             } else {
                 let value = self.expr_with_precedence(Precedence::Assignment)?;
-                let (id, span) = self.save_meta(tok)?;
-
-                args.push(CallArg {
+                args.push(self.save_meta(tok, |id, span| CallArg {
                     id,
                     span,
                     label: Label::Positional(i),
                     label_span: span,
                     value: value.as_expr(),
-                })
+                })?);
             }
 
             i += 1;
@@ -1257,8 +1260,7 @@ impl<'a> Parser<'a> {
             }
             if self.did_match(TokenKind::Arrow)? {
                 let ret = self.type_annotation()?;
-                let (id, span) = self.save_meta(tok)?;
-                return Ok(TypeAnnotation {
+                return self.save_meta(tok, |id, span| TypeAnnotation {
                     id,
                     span,
                     kind: TypeAnnotationKind::Func {
@@ -1267,8 +1269,7 @@ impl<'a> Parser<'a> {
                     },
                 });
             } else {
-                let (id, span) = self.save_meta(tok)?;
-                return Ok(TypeAnnotation {
+                return self.save_meta(tok, |id, span| TypeAnnotation {
                     id,
                     span,
                     kind: TypeAnnotationKind::Tuple(sig_args),
@@ -1286,19 +1287,17 @@ impl<'a> Parser<'a> {
                 let label = Name::Raw(label);
                 self.consume(TokenKind::Colon)?;
                 let value = self.type_annotation()?;
-                let (id, span) = self.save_meta(tok)?;
-                fields.push(RecordFieldTypeAnnotation {
+                fields.push(self.save_meta(tok, |id, span| RecordFieldTypeAnnotation {
                     id,
                     label,
                     label_span,
                     value,
                     span,
-                });
+                })?);
                 self.consume(TokenKind::Comma).ok();
             }
 
-            let (id, span) = self.save_meta(tok)?;
-            return Ok(TypeAnnotation {
+            return self.save_meta(tok, |id, span| TypeAnnotation {
                 id,
                 span,
                 kind: TypeAnnotationKind::Record { fields },
@@ -1316,9 +1315,7 @@ impl<'a> Parser<'a> {
             }
         }
 
-        let (id, span) = self.save_meta(tok)?;
-
-        let mut base = TypeAnnotation {
+        let mut base = self.save_meta(tok, |id, span| TypeAnnotation {
             id,
             span,
             kind: TypeAnnotationKind::Nominal {
@@ -1326,7 +1323,7 @@ impl<'a> Parser<'a> {
                 name_span,
                 generics,
             },
-        };
+        })?;
 
         if !self.did_match(TokenKind::Dot)? {
             return Ok(base);
@@ -1342,8 +1339,7 @@ impl<'a> Parser<'a> {
                 vec![]
             };
 
-            let (id, span) = self.save_meta(tok)?;
-            base = TypeAnnotation {
+            base = self.save_meta(tok, |id, span| TypeAnnotation {
                 id,
                 span,
                 kind: TypeAnnotationKind::NominalPath {
@@ -1352,7 +1348,7 @@ impl<'a> Parser<'a> {
                     member_span,
                     member_generics,
                 },
-            };
+            })?;
 
             if self.did_match(TokenKind::Dot)? {
                 continue;
@@ -1403,8 +1399,7 @@ impl<'a> Parser<'a> {
 
         if context == BlockContext::MatchArmBody && !self.peek_is(TokenKind::LeftBrace) {
             let stmt = self.stmt()?;
-            let (id, span) = self.save_meta(tok)?;
-            return Ok(Block {
+            return self.save_meta(tok, |id, span| Block {
                 id,
                 span,
                 args: vec![],
@@ -1442,9 +1437,7 @@ impl<'a> Parser<'a> {
             self.skip_semicolons_and_newlines();
         }
 
-        let (id, span) = self.save_meta(tok)?;
-
-        Ok(Block {
+        self.save_meta(tok, |id, span| Block {
             id,
             span,
             args: vec![],
@@ -1491,9 +1484,7 @@ impl<'a> Parser<'a> {
             self.skip_semicolons_and_newlines();
         }
 
-        let (id, span) = self.save_meta(tok)?;
-
-        Ok(Body {
+        self.save_meta(tok, |id, span| Body {
             id,
             span,
             decls: body,
@@ -1555,14 +1546,13 @@ impl<'a> Parser<'a> {
                 let (label, label_span) = self.identifier()?;
                 self.consume(TokenKind::Colon)?;
                 let value = self.expr_with_precedence(Precedence::Assignment)?;
-                let (id, span) = self.save_meta(field_tok)?;
-                fields.push(RecordField {
+                fields.push(self.save_meta(field_tok, |id, span| RecordField {
                     id,
                     span,
                     label: Name::Raw(label),
                     label_span,
                     value: value.into(),
-                });
+                })?);
             }
 
             // Handle comma
@@ -1581,8 +1571,7 @@ impl<'a> Parser<'a> {
         let tok = self.push_source_location();
         self.consume(TokenKind::Associated)?;
         let generic = self.generic()?;
-        let (id, span) = self.save_meta(tok)?;
-        Ok(Decl {
+        self.save_meta(tok, |id, span| Decl {
             id,
             span,
             kind: DeclKind::Associated { generic },
@@ -1601,8 +1590,7 @@ impl<'a> Parser<'a> {
             vec![]
         };
 
-        let (id, span) = self.save_meta(tok)?;
-        Ok(GenericDecl {
+        self.save_meta(tok, |id, span| GenericDecl {
             id,
             span,
             name: name.into(),
@@ -1635,14 +1623,13 @@ impl<'a> Parser<'a> {
                 None
             };
 
-            let (id, span) = self.save_meta(tok)?;
-            let param = Parameter {
+            let param = self.save_meta(tok, |id, span| Parameter {
                 id,
                 span,
                 name: name.into(),
                 name_span,
                 type_annotation,
-            };
+            })?;
             params.push(param);
 
             if self.did_match(TokenKind::Comma)? {
@@ -1712,7 +1699,6 @@ impl<'a> Parser<'a> {
     }
 
     pub(crate) fn advance(&mut self) -> Option<Token> {
-        tracing::trace!("advance {:?}", self.current);
         self.previous = self.current.take();
 
         if let Some(prev) = &self.previous
@@ -1727,16 +1713,18 @@ impl<'a> Parser<'a> {
     }
 
     fn add_expr(&mut self, expr_kind: ExprKind, loc: LocToken) -> Result<Expr, ParserError> {
-        let (id, span) = self.save_meta(loc)?;
-        tracing::trace!("add expr [{id}] {expr_kind:?}");
-        Ok(Expr {
+        self.save_meta(loc, |id, span| Expr {
             id,
             span,
             kind: expr_kind,
         })
     }
 
-    pub(super) fn save_meta(&mut self, _loc: LocToken) -> Result<(NodeID, Span), ParserError> {
+    pub(super) fn save_meta<T: std::fmt::Debug>(
+        &mut self,
+        _loc: LocToken,
+        f: impl FnOnce(NodeID, Span) -> T,
+    ) -> Result<T, ParserError> {
         let token = self
             .previous_before_newline
             .clone()
@@ -1756,14 +1744,18 @@ impl<'a> Parser<'a> {
         let next_id = self.next_id();
         self.ast.meta.insert(next_id, meta);
 
-        Ok((
+        let node = f(
             next_id,
             Span {
                 file_id: self.file_id,
                 start: start.token.start,
                 end: token.end,
             },
-        ))
+        );
+
+        tracing::trace!("Parsed {:?}", node);
+
+        Ok(node)
     }
 
     fn next_id(&mut self) -> NodeID {
@@ -1785,7 +1777,6 @@ impl<'a> Parser<'a> {
 
     #[must_use]
     fn push_source_location(&mut self) -> LocToken {
-        tracing::trace!("push_source_location: {:?}", self.current);
         #[allow(clippy::unwrap_used)]
         let start = SourceLocationStart {
             token: self.current.clone().unwrap(),

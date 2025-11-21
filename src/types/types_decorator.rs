@@ -48,6 +48,7 @@ impl FormatterDecorator for TypesDecorator {
 
 fn expr_class(kind: &ExprKind) -> &'static str {
     match kind {
+        ExprKind::As(..) => "as",
         ExprKind::Incomplete(..) => "incomplete",
         ExprKind::LiteralArray(..) => "array",
         ExprKind::LiteralInt(_) => "int",

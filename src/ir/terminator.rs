@@ -14,6 +14,9 @@ pub enum Terminator<T> {
         conseq: BasicBlockId,
         alt: BasicBlockId,
     },
+    Jump {
+        to: BasicBlockId,
+    },
 }
 
 impl<T: Display> Display for Terminator<T> {
@@ -21,6 +24,7 @@ impl<T: Display> Display for Terminator<T> {
         match self {
             Self::Ret { val, ty } => write!(f, "ret {} {}", ty, val),
             Self::Branch { cond, conseq, alt } => write!(f, "br {} {} {}", cond, conseq, alt),
+            Self::Jump { to } => write!(f, "jmp {to}"),
             Self::Unreachable => write!(f, "unreachable"),
         }
     }

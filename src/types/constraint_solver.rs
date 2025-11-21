@@ -54,7 +54,9 @@ impl<'a> ConstraintSolver<'a> {
                     Constraint::Call(ref call) => call.solve(self.context, session),
                     Constraint::HasField(ref has_field) => has_field.solve(self.context),
                     Constraint::Member(ref member) => member.solve(self.context, session),
-                    Constraint::Conforms(ref conforms) => conforms.solve(self.context),
+                    Constraint::Conforms(ref conforms) => {
+                        conforms.solve(self.context, session, remaining_attempts == 0)
+                    }
                     Constraint::TypeMember(ref type_member) => {
                         type_member.solve(self.context, session, self.asts)
                     }

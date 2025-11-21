@@ -20,7 +20,7 @@ use crate::{
         scheme::{ForAll, Scheme},
         term_environment::{EnvEntry, TermEnv},
         ty::{SomeType, Ty},
-        type_catalog::{Conformance, ConformanceKey, TypeCatalog},
+        type_catalog::{MemberWitness, TypeCatalog},
         type_error::TypeError,
         type_operations::{UnificationSubstitutions, apply, apply_row, substitute},
         vars::Vars,
@@ -114,6 +114,61 @@ impl TypeSession {
             term_env.insert(sym, entry);
         }
 
+        let mut catalog = TypeCatalog::<InferTy>::default();
+
+        // Import reqs
+        for module in &modules.modules {
+            for (sym, reqs) in module.1.types.catalog.method_requirements.iter() {
+                catalog
+                    .method_requirements
+                    .entry(*sym)
+                    .or_default()
+                    .extend(reqs.clone());
+            }
+
+            for (sym, reqs) in module.1.types.catalog.instance_methods.iter() {
+                catalog
+                    .instance_methods
+                    .entry(*sym)
+                    .or_default()
+                    .extend(reqs.clone());
+            }
+
+            catalog.conformances.extend(
+                module
+                    .1
+                    .types
+                    .catalog
+                    .conformances
+                    .clone()
+                    .into_iter()
+                    .map(|(k, v)| (k, v.into())),
+            );
+
+            catalog.member_witnesses.extend(
+                module
+                    .1
+                    .types
+                    .catalog
+                    .member_witnesses
+                    .clone()
+                    .into_iter()
+                    .map(|(k, v)| {
+                        (
+                            k,
+                            match v {
+                                MemberWitness::Concrete(sym) => MemberWitness::Concrete(sym),
+                                MemberWitness::Requirement(sym) => MemberWitness::Requirement(sym),
+                                MemberWitness::Meta { receiver, label } => MemberWitness::Meta {
+                                    receiver: receiver.into(),
+                                    label,
+                                },
+                            },
+                        )
+                    }),
+            );
+        }
+
         TypeSession {
             current_module_id,
             vars: Default::default(),
@@ -124,7 +179,7 @@ impl TypeSession {
             reverse_instantiations: Default::default(),
             types_by_node: Default::default(),
             typealiases: Default::default(),
-            type_catalog: Default::default(),
+            type_catalog: catalog,
             modules,
             aliases: Default::default(),
         }
@@ -214,6 +269,7 @@ impl TypeSession {
 
         let catalog = std::mem::take(&mut self.type_catalog);
         let catalog = catalog.finalize(&mut self);
+
         let types = Types {
             catalog,
             types_by_node: entries,
@@ -265,10 +321,8 @@ impl TypeSession {
                         let InferTy::Param(id) = self.new_type_param(Some(meta)) else {
                             unreachable!()
                         };
-                        tracing::error!("did not solve {meta:?}");
-
+                        tracing::warn!("did not solve {meta:?}");
                         self.reverse_instantiations.ty.insert(meta, id);
-
                         id
                     });
 
@@ -508,22 +562,20 @@ impl TypeSession {
                 return None;
             }
 
-                // Check that all metas are at or above the current generalization level
-                // Predicates should only reference quantified variables (foralls), not
-                // ungeneralized metas from outer scopes
-                for meta in &metas {
-                    if let InferTy::Var { level, .. } = meta && *level < inner {
-                            tracing::debug!(
-                                "skipping constraint {c:?} with outer-scope meta {meta:?} (level {level:?} < {inner:?})"
-                            );
-                            return None;
-                    }
+            // Check that all metas are at or above the current generalization level
+            // Predicates should only reference quantified variables (foralls), not
+            // ungeneralized metas from outer scopes
+            for meta in &metas {
+                if let InferTy::Var { level, .. } = meta && *level < inner {
+                        tracing::debug!(
+                            "skipping constraint {c:?} with outer-scope meta {meta:?} (level {level:?} < {inner:?})"
+                        );
+                        return None;
                 }
+            }
 
-            Some(
-                c.substitute(&self.skolem_map)
-                    .into_predicate(&mut substitutions),
-            )
+            c.substitute(&self.skolem_map)
+                .into_predicate(&mut substitutions)
         }));
 
         if foralls.is_empty() && predicates.is_empty() {
@@ -724,10 +776,6 @@ impl TypeSession {
         None
     }
 
-    pub(super) fn _clone_conformances(&self) -> FxHashMap<ConformanceKey, Conformance> {
-        self.type_catalog.conformances.clone()
-    }
-
     pub(super) fn lookup_method_requirements(
         &mut self,
         protocol_id: &ProtocolId,
@@ -774,13 +822,6 @@ impl TypeSession {
         }
 
         None
-    }
-
-    pub(super) fn _lookup_conformance_mut(
-        &mut self,
-        key: &ConformanceKey,
-    ) -> Option<&mut Conformance> {
-        self.type_catalog.conformances.get_mut(key)
     }
 
     pub(super) fn lookup_initializers(

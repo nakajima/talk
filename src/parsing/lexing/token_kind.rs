@@ -26,6 +26,7 @@ pub enum TokenKind {
     Typealias,
 
     // More
+    As,
     At,
     Extend,
     QuestionMark,
@@ -91,6 +92,7 @@ impl Display for TokenKind {
 impl TokenKind {
     pub fn as_str(&self) -> String {
         let text = match &self {
+            TokenKind::As => "as",
             TokenKind::Typealias => "typealias",
             TokenKind::LineComment(text) => &format!("// {text}"),
             TokenKind::If => "if",

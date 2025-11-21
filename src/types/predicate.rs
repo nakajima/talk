@@ -48,6 +48,7 @@ pub enum Predicate<T: SomeType> {
         receiver: T,
         label: Label,
         ty: T,
+        node_id: NodeID,
     },
     Equals {
         lhs: T,
@@ -103,10 +104,12 @@ impl From<Predicate<InferTy>> for Predicate<Ty> {
                 receiver,
                 label,
                 ty,
+                node_id,
             } => Self::Member {
                 receiver: receiver.into(),
                 label,
                 ty: ty.into(),
+                node_id,
             },
             Predicate::<InferTy>::TypeMember {
                 base: owner,
@@ -170,10 +173,12 @@ impl From<Predicate<Ty>> for Predicate<InferTy> {
                 receiver,
                 label,
                 ty,
+                node_id,
             } => Self::Member {
                 receiver: receiver.into(),
                 label,
                 ty: ty.into(),
+                node_id,
             },
             Predicate::<Ty>::TypeMember {
                 base: owner,
@@ -233,10 +238,12 @@ impl Predicate<InferTy> {
                 receiver,
                 label,
                 ty,
+                node_id,
             } => Self::Member {
                 receiver: apply(receiver.clone(), substitutions),
                 label: label.clone(),
                 ty: apply(ty.clone(), substitutions),
+                node_id: *node_id,
             },
             Self::TypeMember {
                 base: owner,
@@ -318,8 +325,9 @@ impl Predicate<InferTy> {
                 receiver,
                 label,
                 ty,
+                node_id,
             } => Constraint::Member(Member {
-                node_id: id,
+                node_id,
                 receiver: instantiate_ty(id, receiver, substitutions, level),
                 label,
                 ty: instantiate_ty(id, ty, substitutions, level),
@@ -392,11 +400,12 @@ impl<T: SomeType> std::fmt::Debug for Predicate<T> {
                 write!(f, "*eq({lhs:?} = {rhs:?})")
             }
             Predicate::Member {
+                node_id,
                 receiver,
                 label,
                 ty,
             } => {
-                write!(f, "*member({receiver:?}.{label} = {ty:?})")
+                write!(f, "*member({receiver:?}.{label} = {ty:?})[{node_id:?}]")
             }
             Predicate::Call {
                 callee,

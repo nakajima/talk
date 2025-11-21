@@ -45,7 +45,7 @@ impl<'a> Monomorphizer<'a> {
         result
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip(self, result))]
     fn monomorphize_func(
         &mut self,
         func: PolyFunction,
@@ -104,6 +104,7 @@ impl<'a> Monomorphizer<'a> {
                 ty: self.monomorphize_ty(ty, substitutions),
             },
             Terminator::Branch { cond, conseq, alt } => Terminator::Branch { cond, conseq, alt },
+            Terminator::Jump { to } => Terminator::Jump { to },
             Terminator::Unreachable => Terminator::Unreachable,
         }
     }
@@ -207,7 +208,7 @@ impl<'a> Monomorphizer<'a> {
         }
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip(self, result))]
     fn generate_specialized_function(
         &mut self,
         func: &PolyFunction,

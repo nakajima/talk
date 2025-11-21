@@ -10,6 +10,7 @@ use crate::node_kinds::record_field::RecordField;
 use crate::types::infer_row::RowParamId;
 use crate::types::infer_ty::TypeParamId;
 use crate::types::row::Row;
+use crate::types::type_catalog::MemberWitness;
 use crate::types::type_session::TypeDefKind;
 use crate::{
     ast::AST,
@@ -48,6 +49,7 @@ use crate::{
     },
 };
 use indexmap::IndexMap;
+use itertools::Itertools;
 use rustc_hash::FxHashMap;
 use tracing::instrument;
 
@@ -62,7 +64,7 @@ enum LValue<F> {
 
 #[derive(Debug)]
 pub(super) struct CurrentFunction {
-    current_block_idx: usize,
+    current_block_idx: Vec<usize>,
     blocks: Vec<BasicBlock<Ty>>,
     pub registers: RegisterAllocator,
 }
@@ -70,7 +72,7 @@ pub(super) struct CurrentFunction {
 impl Default for CurrentFunction {
     fn default() -> Self {
         CurrentFunction {
-            current_block_idx: 0,
+            current_block_idx: vec![0],
             blocks: vec![BasicBlock::<Ty> {
                 id: BasicBlockId(0),
                 instructions: Default::default(),
@@ -404,14 +406,74 @@ impl<'a> Lowerer<'a> {
     ) -> Result<(Value, Ty), IRError> {
         match &stmt.kind {
             StmtKind::Expr(expr) => self.lower_expr(expr, Bind::Fresh, instantiations),
-            StmtKind::If(expr, _block, _block1) => {
-                self.lower_expr(expr, Bind::Fresh, instantiations)
+            StmtKind::If(cond, conseq, alt) => {
+                self.lower_if_stmt(cond, conseq, alt, instantiations)
             }
             StmtKind::Return(_expr) => todo!(),
             StmtKind::Break => todo!(),
             StmtKind::Assignment(lhs, rhs) => self.lower_assignment(lhs, rhs, instantiations),
             StmtKind::Loop(_expr, _block) => todo!(),
         }
+    }
+
+    #[instrument(level = tracing::Level::TRACE, skip(self, cond, conseq, alt))]
+    fn lower_if_stmt(
+        &mut self,
+        cond: &Expr,
+        conseq: &Block,
+        alt: &Option<Block>,
+        instantiations: &Substitutions,
+    ) -> Result<(Value, Ty), IRError> {
+        let cond_ir = self.lower_expr(cond, Bind::Fresh, instantiations)?;
+
+        let conseq_block_id = self.new_basic_block();
+        let join_block_id = self.new_basic_block();
+
+        self.in_basic_block(conseq_block_id, |lowerer| {
+            lowerer.lower_block(conseq, Bind::Discard, instantiations)?;
+            lowerer.push_terminator(Terminator::Jump { to: join_block_id });
+            Ok(())
+        })?;
+
+        let else_id = if let Some(alt) = alt {
+            let alt_block_id = self.new_basic_block();
+            self.in_basic_block(alt_block_id, |lowerer| {
+                lowerer.lower_block(alt, Bind::Discard, instantiations)?;
+                lowerer.push_terminator(Terminator::Jump { to: join_block_id });
+                Ok(())
+            })?;
+            alt_block_id
+        } else {
+            join_block_id
+        };
+
+        self.push_terminator(Terminator::Branch {
+            cond: cond_ir.0,
+            conseq: conseq_block_id,
+            alt: else_id,
+        });
+
+        self.set_current_block(join_block_id);
+
+        Ok((Value::Void, Ty::Void))
+    }
+
+    #[instrument(level = tracing::Level::TRACE, skip(self, block), fields(block.id = %block.id))]
+    fn lower_block(
+        &mut self,
+        block: &Block,
+        bind: Bind,
+        instantiations: &Substitutions,
+    ) -> Result<(Value, Ty), IRError> {
+        let ret = self.ret(bind);
+
+        for node in &block.body {
+            self.lower_node(node, instantiations)?;
+        }
+
+        let ty = self.ty_from_id(&block.id)?;
+
+        Ok((ret.into(), ty))
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self, lhs, rhs), fields(lhs.id = %lhs.id, rhs.id = %rhs.id))]
@@ -593,7 +655,7 @@ impl<'a> Lowerer<'a> {
 
             ExprKind::Call {
                 box callee, args, ..
-            } => self.lower_call(expr.id, callee, args, bind, instantiations),
+            } => self.lower_call(expr, callee, args, bind, instantiations),
 
             ExprKind::Member(
                 Some(box Expr {
@@ -615,6 +677,7 @@ impl<'a> Lowerer<'a> {
                 self.lower_record_literal(expr, fields, bind, instantiations)
             }
             ExprKind::RowVariable(..) => todo!(),
+            ExprKind::As(lhs, ..) => self.lower_expr(lhs, bind, instantiations),
             _ => unreachable!("cannot lower expr: {expr:?}"),
         }
     }
@@ -768,25 +831,29 @@ impl<'a> Lowerer<'a> {
 
             let (receiver_ty, _) = self.specialized_ty(receiver)?;
 
-            println!("lower_member: receiver_ty={receiver_ty:?}, label={label:?}");
-
-            println!(
-                "lower_member: receiver_ty={receiver_ty:?}, label={label:?}\n{:#?}",
-                self.types.catalog.instance_methods
-            );
-
             if let Ty::Nominal { symbol, .. } = &receiver_ty
                 && let Some(methods) = self.types.catalog.instance_methods.get(symbol)
                 && let Some(method) = methods.get(label).cloned()
             {
                 tracing::debug!("lowering method: {label} {method:?}");
-                println!("Found method: {method:?}");
 
                 self.check_import(&method);
                 self.push_instr(Instruction::Ref {
                     dest,
                     ty: ty.clone(),
                     val: Value::Func(Name::Resolved(method, label.to_string())),
+                });
+            } else if let Some(witness) = self.witness_for(&id, label).copied()
+                && matches!(witness, Symbol::InstanceMethod(..))
+            {
+                tracing::debug!("lowering req {label} {witness:?}");
+                println!("ok wise guuy {:?}", self.types.catalog.instantiations.ty);
+
+                self.check_import(&witness);
+                self.push_instr(Instruction::Ref {
+                    dest,
+                    ty: ty.clone(),
+                    val: Value::Func(Name::Resolved(witness, label.to_string())),
                 });
             } else {
                 println!("lower_member: Not a method, generating GetField");
@@ -890,7 +957,7 @@ impl<'a> Lowerer<'a> {
     #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn lower_call(
         &mut self,
-        id: NodeID,
+        call_expr: &Expr,
         callee: &Expr,
         args: &[CallArg],
         bind: Bind,
@@ -902,13 +969,13 @@ impl<'a> Lowerer<'a> {
         if let ExprKind::Variable(name) = &callee.kind
             && name.symbol() == Symbol::IR
         {
-            return self.lower_embedded_ir_call(id, args, dest);
+            return self.lower_embedded_ir_call(call_expr.id, args, dest);
         }
 
         let (_callee_ty, mut instantiations) = self.specialized_ty(callee).unwrap();
         instantiations.extend(parent_instantiations.clone());
 
-        let ty = self.ty_from_id(&id)?;
+        let ty = self.ty_from_id(&call_expr.id)?;
         let mut arg_vals = vec![];
         let mut arg_tys = vec![];
         for arg in args {
@@ -918,31 +985,124 @@ impl<'a> Lowerer<'a> {
         }
 
         if let ExprKind::Constructor(name) = &callee.kind {
-            return self.lower_constructor_call(id, name, callee, arg_vals, dest, &instantiations);
+            return self.lower_constructor_call(
+                call_expr.id,
+                name,
+                callee,
+                arg_vals,
+                dest,
+                &instantiations,
+            );
         }
 
-        let callee_ir = if let ExprKind::Member(Some(box receiver), member, ..) = &callee.kind
-            && let Some(method_sym) = self.lookup_instance_method(receiver, member)?
-        {
-            // Handle method calls. It'd be nice if we could re-use lower_member here but i'm not sure
-            // how we'd get the receiver value, which we need to pass as the first arg..
-            self.check_import(&method_sym);
-            let (receiver_ir, _) = self.lower_expr(receiver, Bind::Fresh, &instantiations)?;
-            arg_vals.insert(0, receiver_ir);
-            Value::Func(Name::Resolved(method_sym, member.to_string()))
-        } else {
-            self.lower_expr(callee, Bind::Fresh, &instantiations)?.0
-        };
+        if let ExprKind::Member(Some(box receiver), member, ..) = &callee.kind {
+            return self.lower_method_call(
+                call_expr,
+                callee,
+                receiver,
+                member,
+                arg_vals,
+                dest,
+                &instantiations,
+            );
+        }
+
+        // let callee_ir = if let ExprKind::Member(Some(box receiver), member, ..) = &callee.kind
+        //     && let Some(method_sym) = self.lookup_instance_method(receiver, member)?
+        // {
+        //     // Handle method calls. It'd be nice if we could re-use lower_member here but i'm not sure
+        //     // how we'd get the receiver value, which we need to pass as the first arg..
+        //     self.check_import(&method_sym);
+        //     let (receiver_ir, _) = self.lower_expr(receiver, Bind::Fresh, &instantiations)?;
+        //     arg_vals.insert(0, receiver_ir);
+        //     Value::Func(Name::Resolved(method_sym, member.to_string()))
+        // } else if let ExprKind::Member(Some(box receiver), label, ..) = &callee.kind
+        //     && let ExprKind::As(lhs, anno) = &receiver.kind
+        //     && let Symbol::Protocol(protocol_id) = anno.symbol()
+        //     && let Some(witness) = self.witness_for(&id, protocol_id, label).copied()
+        // {
+        //     tracing::debug!("lowering req {label} {witness:?}");
+        //     println!("ok wise guuy {:?}", self.types.catalog.instantiations.ty);
+
+        //     self.check_import(&witness);
+        //     let (receiver_ir, _) = self.lower_expr(lhs, Bind::Fresh, &instantiations)?;
+        //     arg_vals.insert(0, receiver_ir);
+        //     Value::Func(Name::Resolved(witness, label.to_string()))
+        //     // self.push_instr(Instruction::Ref {
+        //     //     dest,
+        //     //     ty: ty.clone(),
+        //     //     val: Value::Func(Name::Resolved(witness, label.to_string())),
+        //     // })
+        // } else {
+        let callee_ir = self.lower_expr(callee, Bind::Fresh, &instantiations)?.0;
 
         self.push_instr(Instruction::Call {
             dest,
             ty: ty.clone(),
             callee: callee_ir,
             args: arg_vals.into(),
-            meta: vec![InstructionMeta::Source(id)].into(),
+            meta: vec![InstructionMeta::Source(call_expr.id)].into(),
         });
 
         Ok((dest.into(), ty))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
+    fn lower_method_call(
+        &mut self,
+        call_expr: &Expr,
+        callee_expr: &Expr,
+        receiver: &Expr,
+        label: &Label,
+        mut args: Vec<Value>,
+        dest: Register,
+        instantiations: &Substitutions,
+    ) -> Result<(Value, Ty), IRError> {
+        let ty = self.ty_from_id(&call_expr.id)?;
+        let (receiver_ir, _) = self.lower_expr(receiver, Bind::Fresh, instantiations)?;
+        args.insert(0, receiver_ir);
+
+        if let Some(method_sym) = self.lookup_instance_method(receiver, label)? {
+            self.check_import(&method_sym);
+            self.push_instr(Instruction::Call {
+                dest,
+                ty: ty.clone(),
+                callee: Value::Func(Name::Resolved(method_sym, label.to_string())),
+                args: args.into(),
+                meta: vec![InstructionMeta::Source(call_expr.id)].into(),
+            });
+            return Ok((dest.into(), ty));
+        };
+
+        if let Some(witness) = self.witness_for(&callee_expr.id, label).copied() {
+            println!("Got a witness! {witness:?}");
+            self.check_import(&witness);
+            self.push_instr(Instruction::Call {
+                dest,
+                ty: ty.clone(),
+                callee: Value::Func(Name::Resolved(witness, label.to_string())),
+                args: args.into(),
+                meta: vec![InstructionMeta::Source(call_expr.id)].into(),
+            });
+            return Ok((dest.into(), ty));
+        }
+
+        println!("Callee {:?} ---------------------", callee_expr.id);
+        println!("Witnesses: {:?}", self.types.catalog.member_witnesses);
+        println!(
+            "Module witnesses: {:?}",
+            self.modules
+                .modules
+                .values()
+                .map(|m| &m.types.catalog.member_witnesses)
+                .collect_vec()
+        );
+
+        Err(IRError::TypeNotFound(format!(
+            "No witness found for {:?} in {:?}.",
+            label, receiver
+        )))
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self, func), fields(func.name = %func.name))]
@@ -1032,15 +1192,59 @@ impl<'a> Lowerer<'a> {
     #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn push_instr(&mut self, instruction: Instruction<Ty>) {
         let current_function = self.current_function_stack.last_mut().unwrap();
-        current_function.blocks[current_function.current_block_idx]
+        let current_block_idx = current_function.current_block_idx.last().unwrap();
+        current_function.blocks[*current_block_idx]
             .instructions
             .push(instruction);
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
+    fn new_basic_block(&mut self) -> BasicBlockId {
+        let current_function = self.current_function_stack.last_mut().unwrap();
+        let id = BasicBlockId(current_function.blocks.len() as u32);
+        let new_block = BasicBlock {
+            id,
+            instructions: Default::default(),
+            terminator: Terminator::Unreachable,
+        };
+        current_function.blocks.push(new_block);
+        id
+    }
+
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
+    fn set_current_block(&mut self, id: BasicBlockId) {
+        self.current_function_stack
+            .last_mut()
+            .unwrap()
+            .current_block_idx
+            .push(id.0 as usize);
+    }
+
+    #[instrument(level = tracing::Level::TRACE, skip(self, f))]
+    fn in_basic_block<T>(
+        &mut self,
+        id: BasicBlockId,
+        f: impl FnOnce(&mut Lowerer<'a>) -> Result<T, IRError>,
+    ) -> Result<T, IRError> {
+        self.current_function_stack
+            .last_mut()
+            .unwrap()
+            .current_block_idx
+            .push(id.0 as usize);
+        let ret = f(self);
+        self.current_function_stack
+            .last_mut()
+            .unwrap()
+            .current_block_idx
+            .pop();
+        ret
+    }
+
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn push_terminator(&mut self, terminator: Terminator<Ty>) {
         let current_function = self.current_function_stack.last_mut().unwrap();
-        current_function.blocks[current_function.current_block_idx].terminator = terminator;
+        let current_block_idx = current_function.current_block_idx.last().unwrap();
+        current_function.blocks[*current_block_idx].terminator = terminator;
     }
 
     fn next_register(&mut self) -> Register {
@@ -1127,11 +1331,6 @@ impl<'a> Lowerer<'a> {
             return Ok(Some(*method));
         }
 
-        println!(
-            "didn't get methods for {symbol:?} in {:?}",
-            self.types.catalog.instance_methods
-        );
-
         Ok(None)
     }
 
@@ -1189,7 +1388,9 @@ impl<'a> Lowerer<'a> {
                                 .cloned()
                                 .unwrap_or(Ty::Param(*param));
 
-                            substitutions.ty.insert(*param, ty);
+                            if Ty::Param(*param) != ty {
+                                substitutions.ty.insert(*param, ty);
+                            }
                         }
 
                         ForAll::Row(param) => {
@@ -1214,13 +1415,31 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    #[instrument(skip(self), ret)]
+    fn witness_for(&self, node_id: &NodeID, label: &Label) -> Option<&Symbol> {
+        if let Some(MemberWitness::Concrete(witness) | MemberWitness::Requirement(witness)) =
+            self.types.catalog.member_witnesses.get(node_id)
+        {
+            return Some(witness);
+        }
+
+        for module in self.modules.modules.values() {
+            if let Some(MemberWitness::Concrete(witness) | MemberWitness::Requirement(witness)) =
+                module.types.catalog.member_witnesses.get(node_id)
+            {
+                return Some(witness);
+            }
+        }
+
+        None
+    }
+
     fn field_index(&self, receiver_ty: &Ty, label: &Label) -> Label {
         if let Ty::Record(row) | Ty::Nominal { row, .. } = receiver_ty
             && let Some(idx) = row.close().get_index_of(label)
         {
             Label::Positional(idx)
         } else {
-            panic!("can't get positional index for some reason? {receiver_ty:?}.{label:?}");
             label.clone()
         }
     }

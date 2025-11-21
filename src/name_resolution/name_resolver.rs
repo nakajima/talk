@@ -702,8 +702,6 @@ impl NameResolver {
             self.current_level = self.current_level.next();
             let mut last = None;
 
-            println!("enter_decl resolve: {:?}", lhs.collect_binders());
-
             for (id, binder) in lhs.collect_binders() {
                 if let Some((last_id, last_binder)) = last
                     && id != last_id
