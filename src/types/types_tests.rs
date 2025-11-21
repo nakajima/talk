@@ -2139,7 +2139,6 @@ pub mod tests {
             add(2)
             ",
         );
-        println!("{:#?}", types);
         assert_eq!(ty(1, &ast, &types), Ty::Int);
     }
 

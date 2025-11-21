@@ -526,13 +526,6 @@ impl<'a> InferencePass<'a> {
 
                 tracing::warn!("Unable to resolve witness: {witness:?} for {receiver_ty:?}");
             };
-
-            if let MemberWitness::Requirement(req) = witness {
-                println!(
-                    "wtf: {node_id:?}, req: {req:?}, ty: {:?}",
-                    self.session.types_by_node.get(node_id)
-                );
-            }
         }
     }
 

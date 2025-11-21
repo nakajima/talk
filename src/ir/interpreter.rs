@@ -177,8 +177,6 @@ impl Interpreter {
     }
 
     pub fn run(mut self) -> Value {
-        println!("\nIR\n{}\n", self.program);
-
         let entrypoint = self
             .program
             .entrypoint()

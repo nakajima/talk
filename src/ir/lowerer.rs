@@ -1032,8 +1032,6 @@ impl<'a> Lowerer<'a> {
                 && matches!(witness, Symbol::InstanceMethod(..))
             {
                 tracing::debug!("lowering req {label} {witness:?}");
-                println!("ok wise guuy {:?}", self.types.catalog.instantiations.ty);
-
                 self.check_import(&witness);
                 self.push_instr(Instruction::Ref {
                     dest,
@@ -1041,7 +1039,6 @@ impl<'a> Lowerer<'a> {
                     val: Value::Func(Name::Resolved(witness, label.to_string())),
                 });
             } else {
-                println!("lower_member: Not a method, generating GetField");
                 let label = self.field_index(&receiver_ty, label);
                 self.push_instr(Instruction::GetField {
                     dest,
@@ -1234,7 +1231,6 @@ impl<'a> Lowerer<'a> {
         };
 
         if let Some(witness) = self.witness_for(&callee_expr.id, label).copied() {
-            println!("Got a witness! {witness:?}");
             self.check_import(&witness);
             self.push_instr(Instruction::Call {
                 dest,
@@ -1496,10 +1492,6 @@ impl<'a> Lowerer<'a> {
             ExprKind::Constructor(name) => name,
             _ => {
                 tracing::trace!("expr has no substitutions: {expr:?}");
-                println!(
-                    "expr has no substitutions: {expr:?}, {:?}",
-                    self.ty_from_id(&expr.id)
-                );
                 return Ok((self.ty_from_id(&expr.id)?, Default::default()));
             }
         };
