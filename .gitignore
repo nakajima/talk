@@ -1,5 +1,5 @@
 /target
-editors/vscode/node_modules
+dev/editors/vscode/node_modules
 wasm/pkg
 log.txt
 *.vsix
