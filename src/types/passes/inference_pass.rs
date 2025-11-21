@@ -499,7 +499,7 @@ impl<'a> InferencePass<'a> {
 
     #[instrument(skip(self))]
     fn rectify_witnesses(&mut self) {
-        for (node_id, witness) in self.session.type_catalog.member_witnesses.iter_mut() {
+        for (_node_id, witness) in self.session.type_catalog.member_witnesses.iter_mut() {
             if let MemberWitness::Meta { receiver, label } = witness {
                 let receiver_ty = apply(receiver.clone(), &mut self.substitutions);
                 let symbol = match receiver_ty {
