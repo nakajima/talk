@@ -422,7 +422,7 @@ pub(super) fn unify(
             let kind = match lhs_id {
                 Symbol::Struct(..) => TypeDefKind::Struct,
                 Symbol::Enum(..) => TypeDefKind::Enum,
-                _ => unreachable!(),
+                _ => TypeDefKind::Struct,
             };
 
             let changed = unify_rows(kind, lhs_row, rhs_row, context, session)?;

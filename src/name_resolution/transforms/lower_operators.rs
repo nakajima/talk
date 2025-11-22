@@ -54,10 +54,19 @@ impl LowerOperators {
             }
             ExprKind::Binary(lhs, op, box rhs) => {
                 let (protocol_name, label) = match op {
+                    // Arithmetic
                     TokenKind::Plus => ("Add", Label::Named("add".into())),
                     TokenKind::Minus => ("Subtract", Label::Named("minus".into())),
                     TokenKind::Star => ("Multiply", Label::Named("times".into())),
                     TokenKind::Slash => ("Divide", Label::Named("divide".into())),
+
+                    // Comparisons
+                    TokenKind::Greater => ("Comparable", Label::Named("gt".into())),
+                    TokenKind::GreaterEquals => ("Comparable", Label::Named("gte".into())),
+                    TokenKind::Less => ("Comparable", Label::Named("lt".into())),
+                    TokenKind::LessEquals => ("Comparable", Label::Named("lte".into())),
+
+                    // Equatables
                     TokenKind::EqualsEquals => ("Equatable", Label::Named("equals".into())),
                     TokenKind::BangEquals => ("Equatable", Label::Named("notEquals".into())),
                     _ => return,

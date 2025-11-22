@@ -129,19 +129,37 @@ extend Int: Negatable {
 }
 
 extend Float: Negatable {
-  func negated() -> Bool {
+  func negated() -> Float {
     __IR("$? = sub float 0 %0")
   }
 }
 
-// Not Conformances (!x)
+extend Bool: Negatable {
+	func negated() -> Bool {
+		__IR("$? = cmp bool %0 == true")
+	}
+}
 
-// extend Bool: Not {
-//   func not() -> Bool {
-//     if self {
-//       false
-//     } else {
-//       true
-//     }
-//   }
-// }
+protocol Comparable: Equatable {
+  associated RHS
+
+  func gt(rhs: RHS) -> Bool
+
+  func gte(rhs: RHS) -> Bool {
+    self.gt(rhs) || self.equals(rhs)
+  }
+
+  func lt(rhs: RHS) -> Bool {
+    !self.gt(rhs) && !self.equals(rhs)
+  }
+	
+  func lte(rhs: RHS) -> Bool {
+		self.equals(rhs) || !self.gt(rhs)
+  }
+}
+
+extend Int: Comparable {
+  func gt(rhs: Int) -> Bool {
+    __IR("$? = cmp int %0 > %1")
+  }
+}

@@ -2077,11 +2077,23 @@ pub mod tests {
             "
         1 == 2
         1.0 == 2.0
+        1 > 2
+        1 >= 2
+        1 < 2
+        1 <= 2
+        1 < 2 && 2 < 3
+        1 < 2 || 2 < 3
         ",
         );
 
         assert_eq!(ty(0, &ast, &types), Ty::Bool);
         assert_eq!(ty(1, &ast, &types), Ty::Bool);
+        assert_eq!(ty(2, &ast, &types), Ty::Bool);
+        assert_eq!(ty(3, &ast, &types), Ty::Bool);
+        assert_eq!(ty(4, &ast, &types), Ty::Bool);
+        assert_eq!(ty(5, &ast, &types), Ty::Bool);
+        assert_eq!(ty(6, &ast, &types), Ty::Bool);
+        assert_eq!(ty(7, &ast, &types), Ty::Bool);
     }
 
     #[test]
@@ -2156,6 +2168,76 @@ pub mod tests {
         struct A {}
 
         A() as Fizz
+        ",
+        );
+
+        assert_eq!(
+            1,
+            ast.diagnostics.len(),
+            "didn't get diagnostic: {:?}",
+            ast.diagnostics
+        );
+    }
+
+    #[test]
+    fn checks_basic_conformance() {
+        let (ast, _types) = typecheck_err(
+            "
+        protocol A {
+            func fizz() -> Int
+        }
+
+        struct B: A {}
+        ",
+        );
+
+        assert_eq!(
+            1,
+            ast.diagnostics.len(),
+            "didn't get diagnostic: {:?}",
+            ast.diagnostics
+        );
+    }
+
+    #[test]
+    fn protocols_on_protocols() {
+        let (ast, types) = typecheck(
+            "
+        protocol A {
+            func fizz() -> Int
+        }
+
+        protocol B: A {
+            func buzz() -> Int
+        }
+
+        func get<T: B>(t: T) {
+            t.fizz()
+        }
+        ",
+        );
+
+        assert_eq!(
+            decl_ty(2, &ast, &types),
+            Ty::Func(Ty::Param(3.into()).into(), Ty::Int.into())
+        );
+    }
+
+    #[test]
+    fn checks_protocol_protocol_conformance() {
+        let (ast, _types) = typecheck_err(
+            "
+        protocol A {
+            func fizz() -> Int
+        }
+
+        protocol B: A {
+            func buzz() -> Int
+        }
+
+        struct C: B {
+            func buzz() { 123 }
+        }
         ",
         );
 

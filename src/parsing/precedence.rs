@@ -157,6 +157,18 @@ impl Precedence {
                 precedence: Precedence::Primary,
             },
 
+            TokenKind::AmpAmp => ParseHandler {
+                prefix: None,
+                infix: Some(Parser::binary),
+                precedence: Precedence::And,
+            },
+
+            TokenKind::PipePipe => ParseHandler {
+                prefix: None,
+                infix: Some(Parser::binary),
+                precedence: Precedence::Or,
+            },
+
             TokenKind::Plus => ParseHandler {
                 prefix: None,
                 infix: Some(Parser::binary),
@@ -270,7 +282,6 @@ impl Precedence {
 
             TokenKind::CaretEquals => ParseHandler::NONE,
 
-            TokenKind::PipePipe => ParseHandler::NONE,
             TokenKind::Amp => ParseHandler::NONE,
             TokenKind::AmpEquals => ParseHandler::NONE,
 

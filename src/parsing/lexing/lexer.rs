@@ -115,7 +115,7 @@ impl<'a> Lexer<'a> {
             '!' => self.compound('=', BangEquals, Bang),
             '^' => self.compound('=', CaretEquals, Caret),
             '|' => self.compound('|', PipePipe, Pipe),
-            '&' => self.compound('=', AmpEquals, Amp),
+            '&' => self.compound_many(Amp, &[('=', AmpEquals), ('&', AmpAmp)]),
             '<' => self.compound('=', LessEquals, Less),
             '>' => self.compound('=', GreaterEquals, Greater),
             '{' => self.make(LeftBrace),
@@ -217,6 +217,21 @@ impl<'a> Lexer<'a> {
         } else {
             self.make(not_found)
         }
+    }
+
+    fn compound_many(
+        &mut self,
+        not_found: TokenKind,
+        options: &[(char, TokenKind)],
+    ) -> Result<Token, LexerError> {
+        for (expecting, found) in options {
+            if self.peek() == Some(*expecting) {
+                self.advance();
+                return self.make(found.clone());
+            }
+        }
+
+        self.make(not_found)
     }
 
     fn string(&mut self) -> Result<Token, LexerError> {
@@ -499,7 +514,7 @@ mod tests {
 
     #[test]
     fn double_specials() {
-        let mut lexer = Lexer::new("+= -= *= /= == != ~= ^= ||  &= <= >=");
+        let mut lexer = Lexer::new("+= -= *= /= == != ~= ^= ||  &= <= >= &&");
         assert_eq!(lexer.next().unwrap().kind, PlusEquals);
         assert_eq!(lexer.next().unwrap().kind, MinusEquals);
         assert_eq!(lexer.next().unwrap().kind, StarEquals);
@@ -512,6 +527,7 @@ mod tests {
         assert_eq!(lexer.next().unwrap().kind, AmpEquals);
         assert_eq!(lexer.next().unwrap().kind, LessEquals);
         assert_eq!(lexer.next().unwrap().kind, GreaterEquals);
+        assert_eq!(lexer.next().unwrap().kind, AmpAmp);
         assert_eq!(lexer.next().unwrap().kind, EOF);
     }
 

@@ -963,7 +963,8 @@ impl<'a> Parser<'a> {
             TokenKind::Greater,
             TokenKind::GreaterEquals,
             TokenKind::Caret,
-            TokenKind::Pipe,
+            TokenKind::PipePipe,
+            TokenKind::AmpAmp,
         ])?;
 
         let current_precedence = Precedence::handler(&Some(op.clone()))?.precedence;

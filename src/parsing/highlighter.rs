@@ -134,6 +134,7 @@ impl<'a> Higlighter<'a> {
                 TokenKind::EqualsEquals => self.make(tok, Kind::OPERATOR, &mut tokens),
                 TokenKind::BangEquals => self.make(tok, Kind::OPERATOR, &mut tokens),
                 TokenKind::TildeEquals => self.make(tok, Kind::OPERATOR, &mut tokens),
+                TokenKind::AmpAmp => self.make(tok, Kind::OPERATOR, &mut tokens),
                 TokenKind::Caret => (),
                 TokenKind::CaretEquals => (),
                 TokenKind::Pipe => self.make(tok, Kind::OPERATOR, &mut tokens),

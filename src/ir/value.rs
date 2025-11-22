@@ -44,6 +44,14 @@ impl FromStr for Value {
             ));
         }
 
+        if s == "true" {
+            return Ok(Self::Bool(true));
+        }
+
+        if s == "false" {
+            return Ok(Self::Bool(false));
+        }
+
         if s == "void" {
             return Ok(Self::Void);
         }
