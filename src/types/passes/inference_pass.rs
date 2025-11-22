@@ -57,6 +57,9 @@ use crate::{
     },
 };
 
+#[must_use]
+struct ReturnToken {}
+
 #[derive(Debug)]
 pub enum GeneralizationBlock {
     PendingType {
@@ -83,6 +86,7 @@ pub struct InferencePass<'a> {
     instantiations: FxHashMap<NodeID, InstantiationSubstitutions>,
     substitutions: UnificationSubstitutions,
     generalization_blocks: FxHashMap<MetaVarId, GeneralizationBlock>,
+    tracked_returns: Vec<IndexSet<(Span, InferTy)>>,
 }
 
 impl<'a> InferencePass<'a> {
@@ -97,6 +101,7 @@ impl<'a> InferencePass<'a> {
             unsolved: Default::default(),
             substitutions,
             generalization_blocks: Default::default(),
+            tracked_returns: Default::default(),
         };
 
         pass.drive_all();
@@ -849,10 +854,8 @@ impl<'a> InferencePass<'a> {
                 );
                 InferTy::Void
             }
-            #[warn(clippy::todo)]
-            StmtKind::Return(_expr) => todo!(),
-            #[warn(clippy::todo)]
-            StmtKind::Break => todo!(),
+            StmtKind::Return(expr) => self.visit_return(stmt, expr, context),
+            StmtKind::Break => InferTy::Void,
             StmtKind::Loop(cond, block) => {
                 if let Some(cond) = cond {
                     let cond_ty = self.visit_expr(cond, context);
@@ -893,8 +896,7 @@ impl<'a> InferencePass<'a> {
                         .collect_vec(),
                 ),
             },
-            #[warn(clippy::todo)]
-            ExprKind::Block(..) => todo!(),
+            ExprKind::Block(block) => self.infer_block(block, context),
             ExprKind::Binary(box lhs, TokenKind::AmpAmp, box rhs) => {
                 let lhs_ty = self.visit_expr(lhs, context);
                 let rhs_ty = self.visit_expr(rhs, context);
@@ -948,13 +950,32 @@ impl<'a> InferencePass<'a> {
             ExprKind::RecordLiteral { fields, spread } => {
                 self.infer_record_literal(fields, spread, context)
             }
-            #[warn(clippy::todo)]
+            #[allow(clippy::todo)]
             ExprKind::RowVariable(..) => todo!(),
             ExprKind::As(box lhs, rhs) => self.visit_as(lhs, rhs, context),
             _ => unimplemented!(),
         };
 
         self.session.types_by_node.insert(expr.id, ty.clone());
+
+        ty
+    }
+
+    fn visit_return(
+        &mut self,
+        stmt: &Stmt,
+        expr: &Option<Expr>,
+        context: &mut impl Solve,
+    ) -> InferTy {
+        let ty = if let Some(expr) = expr {
+            self.visit_expr(expr, context)
+        } else {
+            InferTy::Void
+        };
+
+        if let Some(returns) = self.tracked_returns.last_mut() {
+            returns.insert((stmt.span, ty.clone()));
+        }
 
         ty
     }
@@ -1897,7 +1918,7 @@ impl<'a> InferencePass<'a> {
                 }
             }
             PatternKind::Wildcard => (),
-            #[warn(clippy::todo)]
+            #[allow(clippy::todo)]
             PatternKind::Struct { .. } => todo!(),
         }
     }
@@ -1963,11 +1984,14 @@ impl<'a> InferencePass<'a> {
 
     #[instrument(level = tracing::Level::TRACE, skip(self, block, context))]
     fn infer_block(&mut self, block: &Block, context: &mut impl Solve) -> InferTy {
+        let tok = self.tracking_returns();
         let mut ret = InferTy::Void;
+
         for node in block.body.iter() {
             ret = self.visit_node(node, context);
         }
 
+        self.verify_returns(tok, ret.clone(), context);
         self.session.types_by_node.insert(block.id, ret.clone());
 
         ret
@@ -2117,10 +2141,14 @@ impl<'a> InferencePass<'a> {
 
     #[instrument(level = tracing::Level::TRACE, skip(self, block, context))]
     fn check_block(&mut self, block: &Block, expected: InferTy, context: &mut impl Solve) {
+        let tok = self.tracking_returns();
         let mut ret = InferTy::Void;
         for node in &block.body {
             ret = self.visit_node(node, context);
         }
+
+        self.verify_returns(tok, ret.clone(), context);
+
         context
             .wants_mut()
             .equals(ret, expected, ConstraintCause::Internal, block.span);
@@ -2357,6 +2385,19 @@ impl<'a> InferencePass<'a> {
         };
 
         self.promote_pattern_bindings(lhs, &ty, &mut context.next())
+    }
+
+    fn tracking_returns(&mut self) -> ReturnToken {
+        self.tracked_returns.push(Default::default());
+        ReturnToken {}
+    }
+
+    fn verify_returns(&mut self, _tok: ReturnToken, ret: InferTy, context: &mut impl Solve) {
+        for (span, tracked_ret) in self.tracked_returns.pop().unwrap_or_else(|| unreachable!()) {
+            context
+                .wants_mut()
+                .equals(tracked_ret, ret.clone(), ConstraintCause::Internal, span);
+        }
     }
 
     fn canonical_row_for(&mut self, symbol: &Symbol, level: Level) -> RowMetaId {

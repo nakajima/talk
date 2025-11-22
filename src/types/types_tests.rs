@@ -601,6 +601,25 @@ pub mod tests {
     }
 
     #[test]
+    fn checks_returns_agree() {
+        let (ast, _types) = typecheck_err(
+            "
+            func fizz() {
+                return 123
+                1.23
+            }
+            ",
+        );
+
+        assert_eq!(
+            ast.diagnostics.len(),
+            1,
+            "did not get diagnostic: {:?}",
+            ast.diagnostics
+        );
+    }
+
+    #[test]
     fn types_single_tuple_value() {
         let (ast, types) = typecheck(
             "
