@@ -963,6 +963,7 @@ impl<'a> Parser<'a> {
             TokenKind::Greater,
             TokenKind::GreaterEquals,
             TokenKind::Caret,
+            TokenKind::Pipe,
             TokenKind::PipePipe,
             TokenKind::AmpAmp,
         ])?;
