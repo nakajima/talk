@@ -2267,4 +2267,24 @@ pub mod tests {
             ast.diagnostics
         );
     }
+
+    #[test]
+    #[ignore = "waiting on better solver"]
+    fn types_fib() {
+        let (ast, types) = typecheck_core(
+            "
+        func fib(n) {
+            if n <= 1 { return n }
+
+            return fib(n - 2) + fib(n - 1)
+        }
+        ",
+        );
+
+        assert_eq!(
+            decl_ty(0, &ast, &types),
+            // We should be able to infer the n is int because there's only one Comparable with RHS int
+            Ty::Func(Ty::Int.into(), Ty::Int.into())
+        )
+    }
 }

@@ -47,6 +47,17 @@ pub fn builtin_scope() -> FxHashMap<Symbol, EnvEntry<InferTy>> {
             ),
         )),
     );
+    res.insert(
+        Symbol::PRINT,
+        EnvEntry::Scheme(Scheme::<InferTy>::new(
+            indexset!(ForAll::Ty(TypeParamId::IR_TYPE_PARAM)),
+            vec![],
+            InferTy::Func(
+                InferTy::Param(TypeParamId::IR_TYPE_PARAM).into(),
+                InferTy::Void.into(),
+            ),
+        )),
+    );
 
     res
 }

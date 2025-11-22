@@ -6,7 +6,7 @@ use crate::{
     id_generator::IDGenerator,
     name::Name,
     name_resolution::{
-        name_resolver::{NameResolver, Scope},
+        name_resolver::{NameResolver, NameResolverError, Scope},
         symbol::{StructId, Symbol},
     },
     node::Node,
@@ -300,6 +300,7 @@ impl<'a> DeclDeclarer<'a> {
     fn enter_nominal(
         &mut self,
         id: NodeID,
+        span: Span,
         name: &mut Name,
         generics: &mut [GenericDecl],
         kind: TypeDefKind,
@@ -311,24 +312,30 @@ impl<'a> DeclDeclarer<'a> {
             TypeDefKind::Extension => self.resolver.lookup(name, Some(id)).unwrap_or(name.clone()),
         };
 
+        let Ok(sym) = name.symbol() else {
+            self.resolver
+                .diagnostic(span, NameResolverError::Unresolved(name.clone()));
+            return;
+        };
+
         if let Some(parent) = self.resolver.nominal_stack.last() {
             self.resolver
                 .phase
                 .child_types
                 .entry(*parent)
                 .or_default()
-                .insert(name.name_str().into(), name.symbol());
+                .insert(name.name_str().into(), sym);
         }
 
-        self.resolver.nominal_stack.push(name.symbol());
+        self.resolver.nominal_stack.push(sym);
         self.type_members.insert(id, TypeMembers::default());
 
-        self.start_scope(Some(name.symbol()), id, false);
+        self.start_scope(Some(sym), id, false);
         self.resolver
             .current_scope_mut()
             .expect("didn't get current scope")
             .types
-            .insert("Self".into(), name.symbol());
+            .insert("Self".into(), sym);
 
         for generic in generics {
             generic.name = self
@@ -400,9 +407,15 @@ impl<'a> DeclDeclarer<'a> {
 
                 if matches!(
                     name.symbol(),
-                    Symbol::InstanceMethod(..) | Symbol::StaticMethod(..) | Symbol::Initializer(..)
+                    Ok(Symbol::InstanceMethod(..)
+                        | Symbol::StaticMethod(..)
+                        | Symbol::Initializer(..))
                 ) {
-                    self.start_scope(Some(func.name.symbol()), *id, false);
+                    self.start_scope(
+                        Some(func.name.symbol().unwrap_or_else(|_| unreachable!())),
+                        *id,
+                        false,
+                    );
                 }
 
                 for generic in generics {
@@ -423,7 +436,7 @@ impl<'a> DeclDeclarer<'a> {
     fn exit_func(&mut self, func: &mut Func) {
         if matches!(
             func.name.symbol(),
-            Symbol::InstanceMethod(..) | Symbol::StaticMethod(..) | Symbol::Initializer(..)
+            Ok(Symbol::InstanceMethod(..) | Symbol::StaticMethod(..) | Symbol::Initializer(..))
         ) {
             self.end_scope();
         }
@@ -444,7 +457,11 @@ impl<'a> DeclDeclarer<'a> {
                     .resolver
                     .declare(name, some!(MethodRequirement), func.id);
 
-                self.start_scope(Some(name.symbol()), func.id, false);
+                self.start_scope(
+                    Some(name.symbol().unwrap_or_else(|_| unreachable!())),
+                    func.id,
+                    false,
+                );
 
                 for generic in generics {
                     generic.name =
@@ -471,15 +488,15 @@ impl<'a> DeclDeclarer<'a> {
     #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn enter_decl(&mut self, decl: &mut Decl) {
         on!(&mut decl.kind, DeclKind::Struct { name, generics, .. }, {
-            self.enter_nominal(decl.id, name, generics, TypeDefKind::Struct);
+            self.enter_nominal(decl.id, decl.span, name, generics, TypeDefKind::Struct);
         });
 
         on!(&mut decl.kind, DeclKind::Enum { name, generics, .. }, {
-            self.enter_nominal(decl.id, name, generics, TypeDefKind::Enum);
+            self.enter_nominal(decl.id, decl.span, name, generics, TypeDefKind::Enum);
         });
 
         on!(&mut decl.kind, DeclKind::Protocol { name, generics, .. }, {
-            self.enter_nominal(decl.id, name, generics, TypeDefKind::Protocol);
+            self.enter_nominal(decl.id, decl.span, name, generics, TypeDefKind::Protocol);
         });
 
         on!(&mut decl.kind, DeclKind::TypeAlias(lhs_name, ..), {
@@ -491,7 +508,10 @@ impl<'a> DeclDeclarer<'a> {
                     .child_types
                     .entry(*parent)
                     .or_default()
-                    .insert(lhs_name.name_str().into(), lhs_name.symbol());
+                    .insert(
+                        lhs_name.name_str().into(),
+                        lhs_name.symbol().unwrap_or_else(|_| unreachable!()),
+                    );
             }
         });
 
@@ -542,7 +562,10 @@ impl<'a> DeclDeclarer<'a> {
                 .child_types
                 .entry(*parent)
                 .or_default()
-                .insert(generic.name.name_str().into(), generic.name.symbol());
+                .insert(
+                    generic.name.name_str().into(),
+                    generic.name.symbol().unwrap_or_else(|_| unreachable!()),
+                );
         });
 
         on!(

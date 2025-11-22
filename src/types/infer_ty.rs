@@ -355,8 +355,17 @@ impl InferTy {
                 associated,
                 protocol_id,
             },
-            InferTy::Constructor { name, params, ret } => InferTy::Constructor {
-                name: Name::Resolved(name.symbol().import(module_id), name.name_str()),
+            InferTy::Constructor {
+                name: name @ Name::Resolved(..),
+                params,
+                ret,
+            } => InferTy::Constructor {
+                name: Name::Resolved(
+                    name.symbol()
+                        .unwrap_or_else(|_| unreachable!())
+                        .import(module_id),
+                    name.name_str(),
+                ),
                 params,
                 ret,
             },
@@ -371,6 +380,7 @@ impl InferTy {
                 symbol: symbol.import(module_id),
                 row: row.import(module_id).into(),
             },
+            _ => self,
         }
     }
 }

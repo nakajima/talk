@@ -449,7 +449,7 @@ impl TypeSession {
         substitute(entry._as_ty().clone(), &skolems)
     }
 
-    #[instrument(level = tracing::Level::TRACE, skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self, unsolved))]
     pub fn generalize(
         &mut self,
         inner: Level,
@@ -562,6 +562,7 @@ impl TypeSession {
         predicates.extend(unsolved.iter().filter_map(|c| {
             let mut metas = Default::default();
             collect_metas_in_constraint(c, &mut metas);
+
             if metas.is_empty() {
                 return None;
             }
@@ -1014,8 +1015,8 @@ pub(super) fn collect_metas_in_constraint(constraint: &Constraint, out: &mut FxH
             // The row meta is handled in your existing HasField block later.
             collect_meta(&has_field.ty, out);
         }
-        Constraint::Conforms(_) => {
-            // No direct metas to generalize here.
+        Constraint::Conforms(c) => {
+            collect_meta(&c.ty, out);
         }
         Constraint::TypeMember(c) => {
             collect_meta(&c.base, out);

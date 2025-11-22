@@ -26,9 +26,14 @@ impl Conforms {
         last_try: bool,
     ) -> Result<bool, TypeError> {
         let symbol = match &self.ty {
-            InferTy::Var { .. } if !last_try => {
-                // Not ready
-                context.wants_mut().push(Constraint::Conforms(self.clone()));
+            InferTy::Var { .. } => {
+                if last_try {
+                    // Let it just be generalized
+                } else {
+                    // Not ready
+                    context.wants_mut().push(Constraint::Conforms(self.clone()));
+                }
+
                 return Ok(false);
             }
             InferTy::Primitive(symbol) => *symbol,

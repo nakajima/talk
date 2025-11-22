@@ -660,7 +660,12 @@ impl NameResolver {
                 | DeclKind::Struct { name, .. }
                 | DeclKind::Protocol { name, .. },
             {
-                self.enter_scope(decl.id, Some(vec![(name.symbol(), decl.id)]));
+                let Ok(sym) = name.symbol() else {
+                    self.diagnostic(decl.span, NameResolverError::Unresolved(name.clone()));
+                    return;
+                };
+
+                self.enter_scope(decl.id, Some(vec![(sym, decl.id)]));
             }
         );
 
@@ -672,14 +677,19 @@ impl NameResolver {
 
             *name = type_name;
 
+            let Ok(sym) = name.symbol() else {
+                self.diagnostic(decl.span, NameResolverError::Unresolved(name.clone()));
+                return;
+            };
+
             self.current_scope_mut()
                 .expect("did not get current scope")
                 .types
-                .insert("Self".into(), name.symbol());
+                .insert("Self".into(), sym);
 
             self.phase.unbound_nodes.push(decl.id);
 
-            self.enter_scope(decl.id, Some(vec![(name.symbol(), decl.id)]));
+            self.enter_scope(decl.id, Some(vec![(sym, decl.id)]));
         });
 
         on!(&mut decl.kind, DeclKind::Init { params, .. }, {

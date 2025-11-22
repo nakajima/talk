@@ -31,7 +31,7 @@ impl<'a> ConstraintSolver<'a> {
     }
 
     pub fn solve(mut self, session: &mut TypeSession) -> IndexSet<Constraint> {
-        let mut remaining_attempts = 5;
+        let mut remaining_attempts = 2;
         while remaining_attempts >= 0 {
             let mut made_progress = false;
 

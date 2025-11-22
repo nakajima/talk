@@ -52,7 +52,7 @@ impl Constraint {
             Constraint::Equals(..) => true,
             Constraint::HasField(..) => true,
             Constraint::Member(..) => true,
-            Constraint::Conforms(..) => false,
+            Constraint::Conforms(..) => true,
             Constraint::TypeMember(..) => true,
             Constraint::Projection(..) => true,
         }
@@ -200,7 +200,7 @@ impl Constraint {
                 rhs: apply(equals.rhs.clone(), substitutions),
             },
             Self::Conforms(conforms) => {
-                let InferTy::Param(param) = conforms.ty else {
+                let InferTy::Param(param) = apply(conforms.ty.clone(), substitutions) else {
                     unreachable!("didn't get param for conforms predicate: {:?}", conforms.ty);
                 };
 

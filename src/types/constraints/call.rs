@@ -48,7 +48,11 @@ impl Call {
 
         match &self.callee {
             InferTy::Constructor { name, .. } => {
-                let Some(returns_type_entry) = session.lookup(&name.symbol()) else {
+                let Ok(sym) = name.symbol() else {
+                    return Err(TypeError::NameNotResolved(name.clone()));
+                };
+
+                let Some(returns_type_entry) = session.lookup(&sym) else {
                     context.wants.defer(Constraint::Call(self.clone()));
                     return Ok(false);
                 };
@@ -58,7 +62,7 @@ impl Call {
                 // TODO: Figure out if we're dealing with a struct vs an enum here and be more explicit.
                 // This is ok for now since enums can't have initializers and structs always have them.
                 let init_ty = if let Some(initializer) = session
-                    .lookup_initializers(&name.symbol())
+                    .lookup_initializers(&sym)
                     .and_then(|i| i.values().next().copied())
                 {
                     args.insert(0, returns_type.clone());
@@ -69,7 +73,7 @@ impl Call {
                         InferTy::Error(TypeError::TypeNotFound(format!("{initializer:?}")).into())
                     }
                 } else {
-                    match session.lookup(&name.symbol()) {
+                    match session.lookup(&sym) {
                         Some(EnvEntry::Mono(ty)) => ty,
                         Some(EnvEntry::Scheme(s)) => s.ty.clone(),
                         _ => InferTy::Error(

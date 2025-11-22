@@ -3,6 +3,7 @@ use derive_visitor::{Drive, DriveMut};
 use crate::{
     impl_into_node, label::Label, name::Name, name_resolution::symbol::Symbol, node_id::NodeID,
     node_kinds::record_field::RecordFieldTypeAnnotation, parsing::span::Span,
+    types::type_error::TypeError,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
@@ -34,10 +35,15 @@ pub enum TypeAnnotationKind {
 }
 
 impl TypeAnnotation {
-    pub fn symbol(&self) -> Symbol {
+    #[allow(clippy::unwrap_used)]
+    pub fn symbol(&self) -> Result<Symbol, TypeError> {
         match &self.kind {
-            TypeAnnotationKind::Nominal { name, .. } => name.symbol(),
-            TypeAnnotationKind::SelfType(name) => name.symbol(),
+            TypeAnnotationKind::Nominal { name, .. } => name
+                .symbol()
+                .map_err(|_| TypeError::NameNotResolved(name.clone())),
+            TypeAnnotationKind::SelfType(name) => name
+                .symbol()
+                .map_err(|_| TypeError::NameNotResolved(name.clone())),
             _ => unreachable!(),
         }
     }

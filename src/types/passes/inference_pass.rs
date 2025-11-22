@@ -142,22 +142,32 @@ impl<'a> InferencePass<'a> {
                 continue;
             };
 
+            let Ok(protocol_sym) = protocol_name.symbol() else {
+                self.asts[idx]
+                    .diagnostics
+                    .push(AnyDiagnostic::Typing(Diagnostic {
+                        span: root.span(),
+                        kind: TypeError::NameNotResolved(protocol_name.clone()),
+                    }));
+                continue;
+            };
+
             for conformance in conformances {
-                let Symbol::Protocol(conforms_to_id) = conformance.symbol() else {
+                let Ok(Symbol::Protocol(conforms_to_id)) = conformance.symbol() else {
                     tracing::error!("did not get protocol for conforms_to");
                     continue;
                 };
 
                 let key = ConformanceKey {
                     protocol_id: conforms_to_id,
-                    conforming_id: protocol_name.symbol(),
+                    conforming_id: protocol_sym,
                 };
 
                 self.session.type_catalog.conformances.insert(
                     key,
                     Conformance {
                         node_id: conformance.id,
-                        conforming_id: protocol_name.symbol(),
+                        conforming_id: protocol_sym,
                         protocol_id: conforms_to_id,
                         witnesses: Default::default(),
                         associated_types: Default::default(),
@@ -193,7 +203,7 @@ impl<'a> InferencePass<'a> {
                     span: root.span(),
                 });
             self.session
-                .insert(protocol_name.symbol(), InferTy::Param(protocol_self_id));
+                .insert(protocol_sym, InferTy::Param(protocol_self_id));
 
             for decl in body.decls.iter() {
                 let DeclKind::Associated { generic } = &decl.kind else {
@@ -219,14 +229,24 @@ impl<'a> InferencePass<'a> {
                     }],
                 };
 
+                let Ok(generic_sym) = generic.name.symbol() else {
+                    self.asts[idx]
+                        .diagnostics
+                        .push(AnyDiagnostic::Typing(Diagnostic {
+                            span: root.span(),
+                            kind: TypeError::NameNotResolved(generic.name.clone()),
+                        }));
+                    continue;
+                };
+
                 self.session
-                    .insert_term(generic.name.symbol(), EnvEntry::Scheme(scheme));
+                    .insert_term(generic_sym, EnvEntry::Scheme(scheme));
                 self.session
                     .type_catalog
                     .associated_types
-                    .entry(protocol_name.symbol())
+                    .entry(protocol_sym)
                     .or_default()
-                    .insert(generic.name.name_str().into(), generic.name.symbol());
+                    .insert(generic.name.name_str().into(), generic_sym);
             }
 
             for decl in body.decls.iter() {
@@ -240,28 +260,39 @@ impl<'a> InferencePass<'a> {
                             &mut context,
                         );
 
-                        binders.insert(func_signature.name.symbol(), ty.clone());
+                        let Ok(func_sym) = func_signature.name.symbol() else {
+                            self.asts[idx]
+                                .diagnostics
+                                .push(AnyDiagnostic::Typing(Diagnostic {
+                                    span: root.span(),
+                                    kind: TypeError::NameNotResolved(func_signature.name.clone()),
+                                }));
+                            continue;
+                        };
 
-                        self.session.insert(func_signature.name.symbol(), ty);
+                        binders.insert(func_sym, ty.clone());
+
+                        self.session.insert(func_sym, ty);
                         self.session
                             .type_catalog
                             .method_requirements
-                            .entry(protocol_name.symbol())
+                            .entry(protocol_sym)
                             .or_default()
-                            .insert(
-                                func_signature.name.name_str().into(),
-                                func_signature.name.symbol(),
-                            );
+                            .insert(func_signature.name.name_str().into(), func_sym);
                     }
 
                     DeclKind::Method { func, is_static } => {
-                        let ty = self.visit_method(
-                            protocol_name.symbol(),
-                            func,
-                            *is_static,
-                            &mut context,
-                        );
-                        binders.insert(func.name.symbol(), ty);
+                        let Ok(func_sym) = func.name.symbol() else {
+                            self.asts[idx]
+                                .diagnostics
+                                .push(AnyDiagnostic::Typing(Diagnostic {
+                                    span: root.span(),
+                                    kind: TypeError::NameNotResolved(func.name.clone()),
+                                }));
+                            continue;
+                        };
+                        let ty = self.visit_method(protocol_sym, func, *is_static, &mut context);
+                        binders.insert(func_sym, ty);
                     }
                     _ => (),
                 }
@@ -384,8 +415,6 @@ impl<'a> InferencePass<'a> {
             .lookup_method_requirements(&key.protocol_id)
             .unwrap_or_default();
 
-        println!("requirements: {requirements:?}");
-
         for (label, sym) in requirements.clone() {
             tracing::trace!("checking req {label:?} {sym:?}");
             let Some(requirement_entry) = self.session.lookup(&sym) else {
@@ -428,8 +457,6 @@ impl<'a> InferencePass<'a> {
                     }));
                 continue;
             }
-
-            println!("WITNESS ENTRY SYM: {witness_entry_sym:?}");
 
             tracing::trace!("Inserting witness {sym:?} {label:?} -> {witness_entry_sym:?}");
             self.session
@@ -982,9 +1009,10 @@ impl<'a> InferencePass<'a> {
 
     fn visit_as(&mut self, lhs: &Expr, rhs: &TypeAnnotation, context: &mut impl Solve) -> InferTy {
         let lhs_ty = self.visit_expr(lhs, context);
-        let Symbol::Protocol(id) = rhs.symbol() else {
+        let Ok(Symbol::Protocol(id)) = rhs.symbol() else {
             return InferTy::Error(
-                TypeError::MissingConformanceRequirement("not a protocol".into()).into(),
+                TypeError::MissingConformanceRequirement(format!("Protocol not found: {rhs:?}"))
+                    .into(),
             );
         };
 
@@ -1024,8 +1052,12 @@ impl<'a> InferencePass<'a> {
     ) -> InferTy {
         for generic in func_signature.generics.iter() {
             let param_id = self.session.new_type_param_id(None);
-            self.session
-                .insert_mono(generic.name.symbol(), InferTy::Param(param_id));
+
+            let Ok(name_sym) = generic.name.symbol() else {
+                return InferTy::Error(TypeError::NameNotResolved(generic.name.clone()).into());
+            };
+
+            self.session.insert_mono(name_sym, InferTy::Param(param_id));
         }
         let params = self.visit_params(&func_signature.params, context);
         let ret = if let Some(ret) = &func_signature.ret {
@@ -1044,7 +1076,10 @@ impl<'a> InferencePass<'a> {
         }];
 
         self.session.insert_term(
-            func_signature.name.symbol(),
+            func_signature
+                .name
+                .symbol()
+                .unwrap_or_else(|_| unreachable!()),
             EnvEntry::Scheme(Scheme {
                 ty: ty.clone(),
                 foralls,
@@ -1109,11 +1144,14 @@ impl<'a> InferencePass<'a> {
             self.register_generic(generic, context);
         }
 
-        let nominal_symbol = name.symbol();
+        let Ok(nominal_symbol) = name.symbol() else {
+            return InferTy::Error(TypeError::NameNotResolved(name.clone()).into());
+        };
+
         let row_placeholder_id = self.canonical_row_for(&nominal_symbol, context.level());
         let row_placeholder = InferRow::Var(row_placeholder_id);
         let ty = InferTy::Nominal {
-            symbol: name.symbol(),
+            symbol: nominal_symbol,
             row: row_placeholder.clone().into(),
         };
 
@@ -1122,18 +1160,18 @@ impl<'a> InferencePass<'a> {
         for decl in body.decls.iter() {
             match &decl.kind {
                 DeclKind::Init { name, params, body } => {
-                    self.visit_init(ty.clone(), name, params, body, &mut context.next());
+                    self.visit_init(decl, ty.clone(), name, params, body, &mut context.next());
                 }
                 DeclKind::Method { func, is_static } => {
                     self.visit_method(nominal_symbol, func, *is_static, &mut context.next());
                 }
-                DeclKind::EnumVariant(name, _, values) => {
+                DeclKind::EnumVariant(name @ Name::Resolved(sym, name_str), _, values) => {
                     self.session
                         .type_catalog
                         .variants
                         .entry(nominal_symbol)
                         .or_default()
-                        .insert(name.name_str().into(), name.symbol());
+                        .insert(name_str.into(), *sym);
 
                     let tys = values
                         .iter()
@@ -1146,7 +1184,7 @@ impl<'a> InferencePass<'a> {
                         _ => InferTy::Tuple(tys.to_vec()),
                     };
 
-                    self.session.insert(name.symbol(), values_ty.clone());
+                    self.session.insert(*sym, values_ty.clone());
                     row_types.push((name.name_str(), values_ty));
                 }
                 DeclKind::Property {
@@ -1159,6 +1197,7 @@ impl<'a> InferencePass<'a> {
                     row_types.push((
                         name.name_str(),
                         self.visit_property(
+                            decl,
                             nominal_symbol,
                             name,
                             *is_static,
@@ -1175,7 +1214,8 @@ impl<'a> InferencePass<'a> {
                     // instantiated at use sites (e.g., Person<A>.T = A ⇒ T specializes to α).
                     let mut foralls: IndexSet<ForAll> = IndexSet::new();
                     for g in generics {
-                        if let Some(entry) = self.session.lookup(&g.name.symbol())
+                        if let Ok(sym) = g.name.symbol()
+                            && let Some(entry) = self.session.lookup(&sym)
                             && let InferTy::Param(pid) = entry._as_ty()
                         {
                             foralls.insert(ForAll::Ty(pid));
@@ -1192,17 +1232,26 @@ impl<'a> InferencePass<'a> {
                         })
                     };
 
-                    self.session.insert_term(lhs.symbol(), entry);
+                    let Ok(lhs_sym) = lhs.symbol() else {
+                        return InferTy::Error(TypeError::NameNotResolved(lhs.clone()).into());
+                    };
+
+                    self.session.insert_term(lhs_sym, entry);
                 }
                 _ => tracing::warn!("Unhandled nominal decl: {:?}", decl.kind),
             }
         }
 
         for conformance in conformances {
+            let Ok(sym) = conformance.symbol() else {
+                tracing::error!("skipping {conformance:?} due to unresolved name");
+                continue;
+            };
+
             self.register_conformance(
                 &ty,
                 nominal_symbol,
-                conformance.symbol(),
+                sym,
                 conformance.id,
                 conformance.span,
                 context,
@@ -1528,24 +1577,34 @@ impl<'a> InferencePass<'a> {
         is_static: bool,
         context: &mut impl Solve,
     ) -> InferTy {
+        let Ok(func_sym) = func.name.symbol() else {
+            self.asts[func.id.0.0 as usize]
+                .diagnostics
+                .push(AnyDiagnostic::Typing(Diagnostic {
+                    span: func.name_span,
+                    kind: TypeError::NameNotResolved(func.name.clone()),
+                }));
+            return InferTy::Error(TypeError::NameNotResolved(func.name.clone()).into());
+        };
+
         if is_static {
             self.session
                 .type_catalog
                 .static_methods
                 .entry(owner_symbol)
                 .or_default()
-                .insert(func.name.name_str().into(), func.name.symbol());
+                .insert(func.name.name_str().into(), func_sym);
         } else {
             self.session
                 .type_catalog
                 .instance_methods
                 .entry(owner_symbol)
                 .or_default()
-                .insert(func.name.name_str().into(), func.name.symbol());
+                .insert(func.name.name_str().into(), func_sym);
         }
 
         let func_ty = self.visit_func(func, context);
-        self.session.insert(func.name.symbol(), func_ty.clone());
+        self.session.insert(func_sym, func_ty.clone());
 
         func_ty
     }
@@ -1553,6 +1612,7 @@ impl<'a> InferencePass<'a> {
     #[instrument(level = tracing::Level::TRACE, skip(self, context))]
     fn visit_property(
         &mut self,
+        decl: &Decl,
         struct_symbol: Symbol,
         name: &Name,
         is_static: bool,
@@ -1560,12 +1620,22 @@ impl<'a> InferencePass<'a> {
         default_value: &Option<Expr>,
         context: &mut impl Solve,
     ) -> InferTy {
+        let Ok(sym) = name.symbol() else {
+            self.asts[decl.id.0.0 as usize]
+                .diagnostics
+                .push(AnyDiagnostic::Typing(Diagnostic {
+                    span: decl.span,
+                    kind: TypeError::NameNotResolved(name.clone()),
+                }));
+            return InferTy::Error(TypeError::NameNotResolved(name.clone()).into());
+        };
+
         self.session
             .type_catalog
             .properties
             .entry(struct_symbol)
             .or_default()
-            .insert(name.name_str().into(), name.symbol());
+            .insert(name.name_str().into(), sym);
 
         let ty = if let Some(anno) = type_annotation {
             self.visit_type_annotation(anno, context)
@@ -1589,14 +1659,14 @@ impl<'a> InferencePass<'a> {
                 .static_methods
                 .entry(struct_symbol)
                 .or_default()
-                .insert(name.name_str().into(), name.symbol());
+                .insert(name.name_str().into(), sym);
         } else {
             self.session
                 .type_catalog
                 .properties
                 .entry(struct_symbol)
                 .or_default()
-                .insert(name.name_str().into(), name.symbol());
+                .insert(name.name_str().into(), sym);
         }
 
         ty
@@ -1605,12 +1675,23 @@ impl<'a> InferencePass<'a> {
     #[instrument(level = tracing::Level::TRACE, skip(self, context))]
     fn visit_init(
         &mut self,
+        decl: &Decl,
         struct_ty: InferTy,
         name: &Name,
         params: &[Parameter],
         body: &Block,
         context: &mut impl Solve,
     ) -> InferTy {
+        let Ok(sym) = name.symbol() else {
+            self.asts[decl.id.0.0 as usize]
+                .diagnostics
+                .push(AnyDiagnostic::Typing(Diagnostic {
+                    span: decl.span,
+                    kind: TypeError::NameNotResolved(name.clone()),
+                }));
+            return InferTy::Error(TypeError::NameNotResolved(name.clone()).into());
+        };
+
         let param_tys = self.visit_params(params, context);
 
         // Init blocks always return self
@@ -1627,7 +1708,7 @@ impl<'a> InferencePass<'a> {
             .initializers
             .entry(*symbol)
             .or_default()
-            .insert(Label::Named("init".into()), name.symbol());
+            .insert(Label::Named("init".into()), sym);
 
         let ty = substitute(ty, &self.session.skolem_map);
         let foralls: IndexSet<_> = ty.collect_foralls().into_iter().collect();
@@ -1640,7 +1721,7 @@ impl<'a> InferencePass<'a> {
                 predicates: Default::default(),
             })
         };
-        self.session.insert_term(name.symbol(), entry);
+        self.session.insert_term(sym, entry);
 
         InferTy::Void
     }
@@ -1729,6 +1810,18 @@ impl<'a> InferencePass<'a> {
                 for field in fields {
                     match &field.kind {
                         RecordFieldPatternKind::Bind(name) => {
+                            let Ok(sym) = name.symbol() else {
+                                self.asts[field.id.0.0 as usize].diagnostics.push(
+                                    AnyDiagnostic::Typing(Diagnostic {
+                                        span: field.span,
+                                        kind: TypeError::NameNotResolved(name.clone()),
+                                    }),
+                                );
+                                return InferTy::Error(
+                                    TypeError::NameNotResolved(name.clone()).into(),
+                                );
+                            };
+
                             let var = self.session.new_ty_meta_var_id(context.level());
                             self.generalization_blocks
                                 .insert(var, GeneralizationBlock::PatternBindLocal);
@@ -1737,7 +1830,7 @@ impl<'a> InferencePass<'a> {
                                 level: context.level(),
                             };
 
-                            self.session.insert(name.symbol(), ty.clone());
+                            self.session.insert(sym, ty.clone());
                             row = InferRow::Extend {
                                 row: row.into(),
                                 label: name.name_str().into(),
@@ -1745,7 +1838,19 @@ impl<'a> InferencePass<'a> {
                             };
                         }
                         RecordFieldPatternKind::Equals { name, value, .. } => {
-                            let ty = if let Some(existing) = self.session.lookup(&name.symbol()) {
+                            let Ok(sym) = name.symbol() else {
+                                self.asts[field.id.0.0 as usize].diagnostics.push(
+                                    AnyDiagnostic::Typing(Diagnostic {
+                                        span: field.span,
+                                        kind: TypeError::NameNotResolved(name.clone()),
+                                    }),
+                                );
+                                return InferTy::Error(
+                                    TypeError::NameNotResolved(name.clone()).into(),
+                                );
+                            };
+
+                            let ty = if let Some(existing) = self.session.lookup(&sym) {
                                 existing._as_ty()
                             } else {
                                 let var = self.session.new_ty_meta_var_id(context.level());
@@ -1845,11 +1950,21 @@ impl<'a> InferencePass<'a> {
                 for field in fields {
                     match &field.kind {
                         RecordFieldPatternKind::Bind(name) => {
+                            let Ok(sym) = name.symbol() else {
+                                self.asts[field.id.0.0 as usize].diagnostics.push(
+                                    AnyDiagnostic::Typing(Diagnostic {
+                                        span: field.span,
+                                        kind: TypeError::NameNotResolved(name.clone()),
+                                    }),
+                                );
+                                continue;
+                            };
+
                             // fresh meta for the field type
                             let field_ty = self.session.new_ty_meta_var(context.level());
 
                             // bind the pattern name
-                            self.session.insert_mono(name.symbol(), field_ty.clone());
+                            self.session.insert_mono(sym, field_ty.clone());
 
                             // ONE RowHas per field, all referring to the same row
                             context.wants_mut()._has_field(
@@ -1999,8 +2114,12 @@ impl<'a> InferencePass<'a> {
 
     #[instrument(level = tracing::Level::TRACE, skip(self, expr, context))]
     fn visit_variable(&mut self, expr: &Expr, name: &Name, context: &mut impl Solve) -> InferTy {
-        let Some(entry) = self.session.lookup(&name.symbol()) else {
-            return InferTy::Error(TypeError::NameNotResolved(name.clone()).into());
+        let Ok(sym) = name.symbol() else {
+            return InferTy::Error(TypeError::TypeNotFound(name.to_string()).into());
+        };
+
+        let Some(entry) = self.session.lookup(&sym) else {
+            return InferTy::Error(TypeError::TypeNotFound(name.to_string()).into());
         };
 
         let ty = entry.instantiate(expr.id, context, self.session, expr.span);
@@ -2123,7 +2242,11 @@ impl<'a> InferencePass<'a> {
     }
 
     fn visit_param(&mut self, param: &Parameter, context: &mut impl Solve) -> InferTy {
-        if let Some(existing) = self.session.lookup(&param.name.symbol()) {
+        let Ok(sym) = param.name.symbol() else {
+            return InferTy::Error(TypeError::NameNotResolved(param.name.clone()).into());
+        };
+
+        if let Some(existing) = self.session.lookup(&sym) {
             return existing._as_ty();
         }
 
@@ -2133,8 +2256,7 @@ impl<'a> InferencePass<'a> {
             self.session.new_ty_meta_var(context.level())
         };
 
-        self.session
-            .insert_term(param.name.symbol(), ty.clone().to_entry());
+        self.session.insert_term(sym, ty.clone().to_entry());
 
         ty
     }
@@ -2168,8 +2290,17 @@ impl<'a> InferencePass<'a> {
         context: &mut impl Solve,
     ) {
         for (param, expected_param_ty) in params.iter().zip(expected_params) {
-            self.session
-                .insert_mono(param.name.symbol(), expected_param_ty);
+            let Ok(sym) = param.name.symbol() else {
+                self.asts[param.id.0.0 as usize]
+                    .diagnostics
+                    .push(AnyDiagnostic::Typing(Diagnostic {
+                        span: param.span,
+                        kind: TypeError::NameNotResolved(param.name.clone()),
+                    }));
+                continue;
+            };
+
+            self.session.insert_mono(sym, expected_param_ty);
         }
 
         if let Some(ret) = ret {
@@ -2193,13 +2324,23 @@ impl<'a> InferencePass<'a> {
     ) -> InferTy {
         match &type_annotation.kind {
             TypeAnnotationKind::Nominal { name, generics, .. } => {
+                let Ok(sym) = name.symbol() else {
+                    self.asts[type_annotation.id.0.0 as usize].diagnostics.push(
+                        AnyDiagnostic::Typing(Diagnostic {
+                            span: type_annotation.span,
+                            kind: TypeError::NameNotResolved(name.clone()),
+                        }),
+                    );
+                    return InferTy::Error(TypeError::NameNotResolved(name.clone()).into());
+                };
+
                 if let (
                     SolveContextKind::Protocol {
                         protocol_self,
                         protocol_id,
                     },
                     Symbol::AssociatedType(..),
-                ) = (context.kind(), name.symbol())
+                ) = (context.kind(), sym)
                 {
                     // Evaluate generic arguments (if any) the usual way (often empty for assoc types)
                     let _generic_args = generics
@@ -2229,8 +2370,9 @@ impl<'a> InferencePass<'a> {
                     return result;
                 }
 
-                if matches!(name.symbol(), Symbol::Builtin(..)) {
-                    return resolve_builtin_type(&name.symbol()).0;
+                if matches!(name.symbol(), Ok(Symbol::Builtin(..))) {
+                    return resolve_builtin_type(&name.symbol().unwrap_or_else(|_| unreachable!()))
+                        .0;
                 }
 
                 let generic_args = generics
@@ -2238,8 +2380,18 @@ impl<'a> InferencePass<'a> {
                     .map(|g| (self.visit_type_annotation(g, context), g.id))
                     .collect_vec();
 
+                let Ok(sym) = name.symbol() else {
+                    self.asts[type_annotation.id.0.0 as usize].diagnostics.push(
+                        AnyDiagnostic::Typing(Diagnostic {
+                            span: type_annotation.span,
+                            kind: TypeError::NameNotResolved(name.clone()),
+                        }),
+                    );
+                    return InferTy::Error(TypeError::NameNotResolved(name.clone()).into());
+                };
+
                 // Do we know about this already? Cool.
-                if let Some(entry) = self.session.lookup(&name.symbol()) {
+                if let Some(entry) = self.session.lookup(&sym) {
                     let (ty, subsitutions) = entry.instantiate_with_args(
                         type_annotation.id,
                         &generic_args,
@@ -2264,7 +2416,7 @@ impl<'a> InferencePass<'a> {
                         node_id: type_annotation.id,
                         span: type_annotation.span,
                         level: context.level(),
-                        type_symbol: name.symbol(),
+                        type_symbol: sym,
                         args: generic_args,
                     },
                 );
@@ -2275,15 +2427,25 @@ impl<'a> InferencePass<'a> {
                 }
             }
             TypeAnnotationKind::SelfType(name) => {
-                if matches!(name.symbol(), Symbol::Builtin(..)) {
-                    return resolve_builtin_type(&name.symbol()).0;
+                let Ok(sym) = name.symbol() else {
+                    self.asts[type_annotation.id.0.0 as usize].diagnostics.push(
+                        AnyDiagnostic::Typing(Diagnostic {
+                            span: type_annotation.span,
+                            kind: TypeError::NameNotResolved(name.clone()),
+                        }),
+                    );
+                    return InferTy::Error(TypeError::NameNotResolved(name.clone()).into());
+                };
+
+                if matches!(name.symbol(), Ok(Symbol::Builtin(..))) {
+                    return resolve_builtin_type(&sym).0;
                 }
 
                 if let SolveContextKind::Protocol { protocol_self, .. } = context.kind() {
                     return InferTy::Param(protocol_self);
                 }
 
-                let Some(entry) = self.session.lookup(&name.symbol()) else {
+                let Some(entry) = self.session.lookup(&sym) else {
                     return InferTy::Error(TypeError::TypeNotFound(format!("{name:?}")).into());
                 };
 
@@ -2324,7 +2486,7 @@ impl<'a> InferencePass<'a> {
                     .collect_vec();
                 let ret = self.session.new_ty_meta_var(context.level());
 
-                if matches!(base.symbol(), Symbol::TypeParameter(..)) {
+                if matches!(base.symbol(), Ok(Symbol::TypeParameter(..))) {
                     context.wants_mut().projection(
                         type_annotation.id,
                         base_ty,
@@ -2436,7 +2598,7 @@ impl<'a> InferencePass<'a> {
         let param_id = self.session.new_type_param_id(None);
 
         for conformance in generic.conformances.iter() {
-            let Symbol::Protocol(protocol_id) = conformance.symbol() else {
+            let Ok(Symbol::Protocol(protocol_id)) = conformance.symbol() else {
                 tracing::warn!("could not determine conformance: {conformance:?}");
                 continue;
             };
@@ -2455,8 +2617,17 @@ impl<'a> InferencePass<'a> {
                 .insert(predicate);
         }
 
-        self.session
-            .insert_mono(generic.name.symbol(), InferTy::Param(param_id));
+        let Ok(sym) = generic.name.symbol() else {
+            self.asts[generic.id.0.0 as usize]
+                .diagnostics
+                .push(AnyDiagnostic::Typing(Diagnostic {
+                    span: generic.span,
+                    kind: TypeError::NameNotResolved(generic.name.clone()),
+                }));
+            return 0.into();
+        };
+
+        self.session.insert_mono(sym, InferTy::Param(param_id));
 
         param_id
     }

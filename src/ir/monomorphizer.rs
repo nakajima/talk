@@ -25,6 +25,7 @@ pub struct Monomorphizer<'a> {
     specializations: IndexMap<Symbol, Vec<Specialization>>,
 }
 
+#[allow(clippy::expect_used)]
 impl<'a> Monomorphizer<'a> {
     pub fn new(lowerer: Lowerer<'a>) -> Self {
         Monomorphizer {
@@ -53,7 +54,7 @@ impl<'a> Monomorphizer<'a> {
     ) {
         for specialization in self
             .specializations
-            .get(&func.name.symbol())
+            .get(&func.name.symbol().expect("name not resolved"))
             .cloned()
             .unwrap_or_default()
         {
@@ -72,7 +73,7 @@ impl<'a> Monomorphizer<'a> {
             register_count: func.register_count,
         };
 
-        result.insert(func.name.symbol(), func);
+        result.insert(func.name.symbol().expect("name not resolved"), func);
     }
 
     #[instrument(skip(self, block), fields(block = %block))]
@@ -237,7 +238,10 @@ impl<'a> Monomorphizer<'a> {
                 .collect(),
         };
 
-        result.insert(specialization.name.symbol(), specialized_func);
+        result.insert(
+            specialization.name.symbol().expect("name not resolved"),
+            specialized_func,
+        );
     }
 }
 

@@ -187,7 +187,7 @@ impl Interpreter {
             .entrypoint()
             .expect("No entrypoint found for program.");
 
-        self.call(entrypoint.name.symbol(), vec![], Register::MAIN);
+        self.call(entrypoint.name.symbol().unwrap(), vec![], Register::MAIN);
 
         while !self.frames.is_empty() {
             self.next();
@@ -197,11 +197,11 @@ impl Interpreter {
     }
 
     pub fn call(&mut self, function: Symbol, args: Vec<Value>, dest: Register) {
-        let caller_name = self.current_func.as_ref().map(|f| f.name.symbol());
+        let caller_name = self.current_func.as_ref().map(|f| f.name.symbol().unwrap());
         if let Some(callee_func) = self.current_func.take() {
             self.program
                 .functions
-                .insert(callee_func.name.symbol(), callee_func);
+                .insert(callee_func.name.symbol().unwrap(), callee_func);
         }
 
         let func = self
@@ -246,7 +246,9 @@ impl Interpreter {
                     unreachable!("but where did the frame come from");
                 };
 
-                self.program.functions.insert(func.name.symbol(), func);
+                self.program
+                    .functions
+                    .insert(func.name.symbol().unwrap(), func);
 
                 if let Some(ret) = frame.ret {
                     let ret_func = self.program.functions.shift_remove(&ret).unwrap();
@@ -332,7 +334,7 @@ impl Interpreter {
             }
             IR::Instr(Instruction::Ref { dest, val, .. }) => {
                 let val = match val {
-                    super::value::Value::Func(name) => Reference::Func(name.symbol()),
+                    super::value::Value::Func(name) => Reference::Func(name.symbol().unwrap()),
                     super::value::Value::Reg(reg) => Reference::Register {
                         frame: self.frames.len(),
                         register: reg.into(),
@@ -409,7 +411,7 @@ impl Interpreter {
 
                 symbol
             }
-            super::value::Value::Func(name) => name.symbol(),
+            super::value::Value::Func(name) => name.symbol().unwrap(),
             _ => panic!("cannot get func from {val:?}"),
         }
     }
@@ -419,7 +421,7 @@ impl Interpreter {
             super::value::Value::Reg(reg) => self.read_register(&Register(reg)),
             super::value::Value::Int(v) => Value::Int(v),
             super::value::Value::Float(v) => Value::Float(v),
-            super::value::Value::Func(v) => Value::Func(v.symbol()),
+            super::value::Value::Func(v) => Value::Func(v.symbol().unwrap()),
             super::value::Value::Void => Value::Void,
             super::value::Value::Bool(v) => Value::Bool(v),
             super::value::Value::Uninit => Value::Uninit,

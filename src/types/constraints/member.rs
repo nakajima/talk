@@ -40,12 +40,6 @@ impl Member {
         let receiver = self.receiver.clone();
         let ty = self.ty.clone();
 
-        tracing::debug!(
-            "Member::solve receiver={receiver:?}, label={:?} id={:?}",
-            self.label,
-            self.node_id
-        );
-
         match &receiver {
             InferTy::Var { id, .. } => {
                 if let Some(param) = session.reverse_instantiations.ty.get(id)
@@ -70,7 +64,11 @@ impl Member {
                 return self.lookup_type_param_member(context, session, &ty, *id);
             }
             InferTy::Constructor { name, .. } => {
-                return self.lookup_static_member(context, session, &name.symbol());
+                return self.lookup_static_member(
+                    context,
+                    session,
+                    &name.symbol().unwrap_or_else(|_| unreachable!()),
+                );
             }
             InferTy::Record(box row) => {
                 context.wants._has_field(
