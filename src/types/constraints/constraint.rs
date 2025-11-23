@@ -15,6 +15,7 @@ use crate::{
         },
     },
 };
+use indexmap::IndexSet;
 use rustc_hash::FxHashMap;
 use tracing::instrument;
 
@@ -220,5 +221,50 @@ impl Constraint {
         };
 
         Some(pred)
+    }
+
+    pub fn collect_metas(&self) -> IndexSet<InferTy> {
+        let mut out = IndexSet::default();
+        match self {
+            Constraint::Projection(c) => {
+                out.extend(c.base.collect_metas());
+                out.extend(c.result.collect_metas());
+            }
+            Constraint::Equals(equals) => {
+                out.extend(equals.lhs.collect_metas());
+                out.extend(equals.rhs.collect_metas());
+            }
+            Constraint::Member(member) => {
+                out.extend(member.receiver.collect_metas());
+                out.extend(member.receiver.collect_metas());
+                out.extend(member.ty.collect_metas());
+            }
+            Constraint::Call(call) => {
+                out.extend(call.callee.collect_metas());
+                for argument in &call.args {
+                    out.extend(argument.collect_metas());
+                }
+                if let Some(receiver) = &call.receiver {
+                    out.extend(receiver.collect_metas());
+                }
+                out.extend(call.returns.collect_metas());
+            }
+            Constraint::HasField(has_field) => {
+                // The row meta is handled in your existing HasField block later.
+                out.extend(has_field.ty.collect_metas());
+            }
+            Constraint::Conforms(c) => {
+                out.extend(c.ty.collect_metas());
+            }
+            Constraint::TypeMember(c) => {
+                out.extend(c.base.collect_metas());
+                out.extend(c.result.collect_metas());
+                for ty in &c.generics {
+                    out.extend(ty.collect_metas());
+                }
+            }
+        }
+
+        out
     }
 }

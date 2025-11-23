@@ -459,11 +459,11 @@ impl TypeSession {
     ) -> EnvEntry<InferTy> {
         // collect metas in ty
         let mut metas = FxHashSet::default();
-        collect_meta(&ty, &mut metas);
+        metas.extend(ty.collect_metas());
 
         // Also collect metas that appear only in constraints
         for constraint in unsolved {
-            collect_metas_in_constraint(constraint, &mut metas);
+            metas.extend(constraint.collect_metas());
         }
 
         let mut foralls: IndexSet<_> = ty.collect_foralls().into_iter().collect();
@@ -560,8 +560,7 @@ impl TypeSession {
         let ty = apply(ty, &mut substitutions);
 
         predicates.extend(unsolved.iter().filter_map(|c| {
-            let mut metas = Default::default();
-            collect_metas_in_constraint(c, &mut metas);
+            let metas = c.collect_metas();
 
             if metas.is_empty() {
                 return None;
@@ -984,88 +983,5 @@ impl TypeSession {
         self.meta_levels.borrow_mut().insert(Meta::Row(id), level);
         tracing::trace!("Fresh {id:?}");
         id
-    }
-}
-
-pub(super) fn collect_metas_in_constraint(constraint: &Constraint, out: &mut FxHashSet<InferTy>) {
-    match constraint {
-        Constraint::Projection(c) => {
-            collect_meta(&c.base, out);
-            collect_meta(&c.result, out);
-        }
-        Constraint::Equals(equals) => {
-            collect_meta(&equals.lhs, out);
-            collect_meta(&equals.rhs, out);
-        }
-        Constraint::Member(member) => {
-            collect_meta(&member.receiver, out);
-            collect_meta(&member.ty, out);
-        }
-        Constraint::Call(call) => {
-            collect_meta(&call.callee, out);
-            for argument in &call.args {
-                collect_meta(argument, out);
-            }
-            if let Some(receiver) = &call.receiver {
-                collect_meta(receiver, out);
-            }
-            collect_meta(&call.returns, out);
-        }
-        Constraint::HasField(has_field) => {
-            // The row meta is handled in your existing HasField block later.
-            collect_meta(&has_field.ty, out);
-        }
-        Constraint::Conforms(c) => {
-            collect_meta(&c.ty, out);
-        }
-        Constraint::TypeMember(c) => {
-            collect_meta(&c.base, out);
-            collect_meta(&c.result, out);
-            for ty in &c.generics {
-                collect_meta(ty, out);
-            }
-        }
-    }
-}
-
-pub fn collect_meta(ty: &InferTy, out: &mut FxHashSet<InferTy>) {
-    match ty {
-        InferTy::Error(..) => {}
-        InferTy::Param(_) => {}
-        InferTy::Var { .. } => {
-            out.insert(ty.clone());
-        }
-        InferTy::Projection { base, .. } => {
-            collect_meta(base, out);
-        }
-        InferTy::Func(dom, codom) => {
-            collect_meta(dom, out);
-            collect_meta(codom, out);
-        }
-        InferTy::Tuple(items) => {
-            for item in items {
-                collect_meta(item, out);
-            }
-        }
-        InferTy::Record(box row) => match row {
-            InferRow::Empty(..) => (),
-            InferRow::Var(..) => {
-                out.insert(ty.clone());
-            }
-            InferRow::Param(..) => (),
-            InferRow::Extend { row, ty, .. } => {
-                collect_meta(ty, out);
-                collect_meta(&InferTy::Record(row.clone()), out);
-            }
-        },
-        InferTy::Nominal { row, .. } => {
-            collect_meta(&InferTy::Record(row.clone()), out);
-        }
-        InferTy::Constructor { params, .. } => {
-            for param in params {
-                collect_meta(param, out);
-            }
-        }
-        InferTy::Primitive(_) | InferTy::Rigid(_) => {}
     }
 }

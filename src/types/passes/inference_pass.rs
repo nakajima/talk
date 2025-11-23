@@ -52,7 +52,7 @@ use crate::{
             InstantiationSubstitutions, UnificationSubstitutions, apply, curry, instantiate_ty,
             substitute,
         },
-        type_session::{TypeDefKind, TypeSession, collect_metas_in_constraint},
+        type_session::{TypeDefKind, TypeSession},
         wants::Wants,
     },
 };
@@ -755,9 +755,7 @@ impl<'a> InferencePass<'a> {
         // generalization. So we need to grab those and set them aside.
         let (generalizable, needs_defer): (IndexSet<_>, IndexSet<_>) =
             unsolved.into_iter().partition(|c| {
-                let mut out = Default::default();
-                collect_metas_in_constraint(c, &mut out);
-                for ty in out {
+                for ty in c.collect_metas() {
                     let InferTy::Var { id, .. } = ty else {
                         continue;
                     };

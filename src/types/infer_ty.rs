@@ -250,6 +250,51 @@ impl InferTy {
         }
     }
 
+    pub fn collect_metas(&self) -> IndexSet<InferTy> {
+        let mut out = IndexSet::default();
+        match self {
+            InferTy::Error(..) => {}
+            InferTy::Param(_) => {}
+            InferTy::Var { .. } => {
+                out.insert(self.clone());
+            }
+            InferTy::Projection { base, .. } => {
+                out.extend(base.collect_metas());
+            }
+            InferTy::Func(dom, codom) => {
+                out.extend(dom.collect_metas());
+                out.extend(codom.collect_metas());
+            }
+            InferTy::Tuple(items) => {
+                for item in items {
+                    out.extend(item.collect_metas());
+                }
+            }
+            InferTy::Record(box row) => match row {
+                InferRow::Empty(..) => (),
+                InferRow::Var(..) => {
+                    out.insert(self.clone());
+                }
+                InferRow::Param(..) => (),
+                InferRow::Extend { row, ty, .. } => {
+                    out.extend(ty.collect_metas());
+                    out.extend(InferTy::Record(row.clone()).collect_metas());
+                }
+            },
+            InferTy::Nominal { row, .. } => {
+                out.extend(InferTy::Record(row.clone()).collect_metas());
+            }
+            InferTy::Constructor { params, .. } => {
+                for param in params {
+                    out.extend(param.collect_metas());
+                }
+            }
+            InferTy::Primitive(_) | InferTy::Rigid(_) => {}
+        }
+
+        out
+    }
+
     pub fn to_entry(&self) -> EnvEntry<InferTy> {
         let foralls: IndexSet<ForAll> = self.collect_foralls().into_iter().collect();
         if foralls.is_empty() {
