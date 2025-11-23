@@ -2269,7 +2269,6 @@ pub mod tests {
     }
 
     #[test]
-    #[ignore = "waiting on better solver"]
     fn types_fib() {
         let (ast, types) = typecheck_core(
             "
