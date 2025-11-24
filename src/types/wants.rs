@@ -9,14 +9,8 @@ use crate::{
     span::Span,
     types::{
         constraints::{
-            call::Call,
-            conforms::Conforms,
-            constraint::{Constraint, ConstraintCause},
-            equals::Equals,
-            has_field::HasField,
-            member::Member,
-            projection::Projection,
-            type_member::TypeMember,
+            call::Call, conforms::Conforms, constraint::Constraint, equals::Equals,
+            has_field::HasField, member::Member, projection::Projection, type_member::TypeMember,
         },
         infer_row::InferRow,
         infer_ty::{InferTy, Level},
@@ -110,7 +104,6 @@ impl Wants {
             name,
             generics,
             result,
-            cause: ConstraintCause::TypeMember(id),
             span,
         }));
     }
@@ -126,7 +119,6 @@ impl Wants {
         returns: InferTy,
         receiver: Option<InferTy>,
         level: Level,
-        cause: ConstraintCause,
         span: Span,
     ) {
         self.defer.push_back(Constraint::Call(Call {
@@ -137,7 +129,6 @@ impl Wants {
             returns,
             receiver,
             level,
-            cause,
             span,
         }))
     }
@@ -150,7 +141,7 @@ impl Wants {
     }
 
     #[instrument(skip(self))]
-    pub fn equals(&mut self, lhs: InferTy, rhs: InferTy, cause: ConstraintCause, span: Span) {
+    pub fn equals(&mut self, lhs: InferTy, rhs: InferTy) {
         if lhs == rhs {
             return;
         }
@@ -168,15 +159,7 @@ impl Wants {
     }
 
     #[instrument(skip(self))]
-    pub fn member(
-        &mut self,
-        node_id: NodeID,
-        receiver: InferTy,
-        label: Label,
-        ty: InferTy,
-        cause: ConstraintCause,
-        span: Span,
-    ) {
+    pub fn member(&mut self, node_id: NodeID, receiver: InferTy, label: Label, ty: InferTy) {
         self.defer.push_back(Constraint::Member(Member {
             node_id,
             receiver,
@@ -188,21 +171,9 @@ impl Wants {
     }
 
     #[instrument(skip(self))]
-    pub fn _has_field(
-        &mut self,
-        row: InferRow,
-        label: Label,
-        ty: InferTy,
-        cause: ConstraintCause,
-        span: Span,
-    ) {
-        self.simple.push_back(Constraint::HasField(HasField {
-            row,
-            label,
-            ty,
-            cause,
-            span,
-        }))
+    pub fn _has_field(&mut self, row: InferRow, label: Label, ty: InferTy) {
+        self.simple
+            .push_back(Constraint::HasField(HasField { row, label, ty }))
     }
 
     #[instrument(skip(self))]
@@ -214,8 +185,6 @@ impl Wants {
         label: Label,
         protocol_id: Option<ProtocolId>,
         result: InferTy,
-        cause: ConstraintCause,
-        span: Span,
     ) {
         self.push(Constraint::Projection(Projection {
             node_id,
@@ -223,8 +192,6 @@ impl Wants {
             protocol_id,
             label,
             result,
-            cause,
-            span,
         }));
     }
 }

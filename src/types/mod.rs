@@ -19,7 +19,7 @@ pub mod type_session;
 pub mod type_snapshot;
 pub mod types_decorator;
 pub mod vars;
-pub mod wants;
+// pub mod wants;
 
 #[cfg(test)]
 pub mod types_tests;

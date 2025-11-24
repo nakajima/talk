@@ -300,7 +300,6 @@ impl<'a> DeclDeclarer<'a> {
     fn enter_nominal(
         &mut self,
         id: NodeID,
-        span: Span,
         name: &mut Name,
         generics: &mut [GenericDecl],
         kind: TypeDefKind,
@@ -314,7 +313,7 @@ impl<'a> DeclDeclarer<'a> {
 
         let Ok(sym) = name.symbol() else {
             self.resolver
-                .diagnostic(span, NameResolverError::Unresolved(name.clone()));
+                .diagnostic(id, NameResolverError::Unresolved(name.clone()));
             return;
         };
 
@@ -488,15 +487,15 @@ impl<'a> DeclDeclarer<'a> {
     #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn enter_decl(&mut self, decl: &mut Decl) {
         on!(&mut decl.kind, DeclKind::Struct { name, generics, .. }, {
-            self.enter_nominal(decl.id, decl.span, name, generics, TypeDefKind::Struct);
+            self.enter_nominal(decl.id, name, generics, TypeDefKind::Struct);
         });
 
         on!(&mut decl.kind, DeclKind::Enum { name, generics, .. }, {
-            self.enter_nominal(decl.id, decl.span, name, generics, TypeDefKind::Enum);
+            self.enter_nominal(decl.id, name, generics, TypeDefKind::Enum);
         });
 
         on!(&mut decl.kind, DeclKind::Protocol { name, generics, .. }, {
-            self.enter_nominal(decl.id, decl.span, name, generics, TypeDefKind::Protocol);
+            self.enter_nominal(decl.id, name, generics, TypeDefKind::Protocol);
         });
 
         on!(&mut decl.kind, DeclKind::TypeAlias(lhs_name, ..), {

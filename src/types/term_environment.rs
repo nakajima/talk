@@ -8,14 +8,14 @@ use crate::{
     span::Span,
     types::{
         builtins::builtin_scope,
-        infer_ty::{InferTy, Level},
+        constraints::store::ConstraintStore,
+        infer_ty::InferTy,
         predicate::Predicate,
         scheme::{ForAll, Scheme},
         solve_context::Solve,
         ty::SomeType,
         type_operations::{InstantiationSubstitutions, UnificationSubstitutions, apply},
         type_session::{TypeEntry, TypeSession},
-        wants::Wants,
     },
 };
 
@@ -143,15 +143,15 @@ impl EnvEntry<InferTy> {
         id: NodeID,
         args: &[(InferTy, NodeID)],
         session: &mut TypeSession,
-        level: Level,
-        wants: &mut Wants,
+        context: &mut impl Solve,
+        constraints: &mut ConstraintStore,
         span: Span,
     ) -> (InferTy, InstantiationSubstitutions) {
         tracing::debug!("inference instantiate (id: {id:?}): {self:?}");
         match self {
             EnvEntry::Mono(ty) => (ty.clone(), Default::default()),
             EnvEntry::Scheme(scheme) => {
-                scheme.instantiate_with_args(id, args, session, level, wants, span)
+                scheme.instantiate_with_args(id, args, session, context, constraints, span)
             }
         }
     }
@@ -159,14 +159,14 @@ impl EnvEntry<InferTy> {
     pub(super) fn instantiate(
         &self,
         id: NodeID,
+        constraints: &mut ConstraintStore,
         context: &mut impl Solve,
         session: &mut TypeSession,
-        span: Span,
     ) -> InferTy {
         tracing::debug!("inference instantiate (id: {id:?}): {self:?}");
         match self {
             EnvEntry::Mono(ty) => ty.clone(),
-            EnvEntry::Scheme(scheme) => scheme.instantiate(id, context, session, span),
+            EnvEntry::Scheme(scheme) => scheme.instantiate(id, constraints, context, session),
         }
     }
 }

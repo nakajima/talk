@@ -11,13 +11,13 @@ use crate::{
     node_id::NodeID,
     types::{
         builtins::builtin_scope,
-        constraints::constraint::Constraint,
+        constraints::{constraint::Constraint, store::ConstraintStore},
         infer_row::{InferRow, RowMetaId, RowParamId},
         infer_ty::{InferTy, Level, Meta, MetaVarId, SkolemId, TypeParamId},
-        passes::inference_pass::GeneralizationBlock,
         predicate::Predicate,
         row::Row,
         scheme::{ForAll, Scheme},
+        solve_context::{Solve, SolveContext, SolveContextKind},
         term_environment::{EnvEntry, TermEnv},
         ty::{SomeType, Ty},
         type_catalog::{MemberWitness, TypeCatalog},
@@ -185,8 +185,8 @@ impl TypeSession {
         }
     }
 
-    #[instrument(level = tracing::Level::TRACE, skip(self))]
-    pub fn insert(&mut self, symbol: Symbol, ty: InferTy) {
+    #[instrument(level = tracing::Level::TRACE, skip(self, constraints))]
+    pub fn insert(&mut self, symbol: Symbol, ty: InferTy, constraints: &mut ConstraintStore) {
         let foralls: IndexSet<_> = ty.collect_foralls().into_iter().collect();
         if foralls.is_empty() {
             self.term_env.insert(symbol, EnvEntry::Mono(ty));
@@ -200,6 +200,8 @@ impl TypeSession {
                 }),
             );
         }
+
+        constraints.wake_symbols(&[symbol]);
     }
 
     pub fn finalize(mut self) -> Result<Types, TypeError> {
@@ -212,6 +214,12 @@ impl TypeSession {
             })
             .collect();
 
+        let mut context = SolveContext::new(
+            UnificationSubstitutions::new(self.meta_levels.clone()),
+            Default::default(),
+            Default::default(),
+            SolveContextKind::Normal,
+        );
         let term_env = std::mem::take(&mut self.term_env);
         let types_by_symbol = term_env
             .symbols
@@ -222,7 +230,7 @@ impl TypeSession {
                     EnvEntry::Scheme(scheme) => {
                         if scheme.ty.contains_var() {
                             // Merge with existing scheme's foralls/predicates
-                            let generalized = self.generalize(Level(0), scheme.ty, &Default::default(), &Default::default());
+                            let generalized = self.generalize(Level(0), scheme.ty, &mut context, &Default::default(), &mut Default::default());
                             let EnvEntry::Scheme(generalized) = generalized
                             else {
                                 unreachable!(
@@ -366,13 +374,20 @@ impl TypeSession {
 
     pub(super) fn finalize_ty(&mut self, ty: InferTy) -> TypeEntry {
         let ty = self.finalize_infer_ty(ty);
+        let mut context = SolveContext::new(
+            UnificationSubstitutions::new(self.meta_levels.clone()),
+            Default::default(),
+            Default::default(),
+            SolveContextKind::Normal,
+        );
 
         if ty.contains_var() {
             self.generalize(
                 Level(0),
                 ty.clone(),
+                &mut context,
                 &Default::default(),
-                &Default::default(),
+                &mut Default::default(),
             )
             .into()
         } else {
@@ -449,13 +464,14 @@ impl TypeSession {
         substitute(entry._as_ty().clone(), &skolems)
     }
 
-    #[instrument(level = tracing::Level::TRACE, skip(self, unsolved))]
+    #[instrument(level = tracing::Level::TRACE, skip(self, unsolved, context, constraints))]
     pub fn generalize(
         &mut self,
         inner: Level,
         ty: InferTy,
+        context: &mut impl Solve,
         unsolved: &IndexSet<Constraint>,
-        generalization_blocks: &FxHashMap<MetaVarId, GeneralizationBlock>,
+        constraints: &mut ConstraintStore,
     ) -> EnvEntry<InferTy> {
         // collect metas in ty
         let mut metas = FxHashSet::default();
@@ -482,8 +498,10 @@ impl TypeSession {
                         continue;
                     }
 
-                    if let Some(block) = generalization_blocks.get(id) {
-                        tracing::warn!("discarding {m:?} due to block: {block:?}");
+                    let canonical_id = context.substitutions_mut().canon_meta(*id);
+                    let blocks = constraints.generalization_blocks_for(canonical_id, context.group());
+                    if !blocks.is_empty() {
+                        tracing::warn!("discarding {m:?} due to generalization block: {blocks:?}");
                         continue;
                     }
 
@@ -626,31 +644,52 @@ impl TypeSession {
         None
     }
 
-    #[instrument(level = tracing::Level::TRACE, skip(self))]
-    pub(super) fn promote(&mut self, sym: Symbol, entry: EnvEntry<InferTy>) {
+    #[instrument(level = tracing::Level::TRACE, skip(self, constraints))]
+    pub(super) fn promote(
+        &mut self,
+        sym: Symbol,
+        entry: EnvEntry<InferTy>,
+        constraints: &mut ConstraintStore,
+    ) {
         if matches!(sym, Symbol::Builtin(..)) {
             tracing::error!("can't override builtin");
             return;
         }
+
+        constraints.wake_symbols(&[sym]);
 
         self.term_env.promote(sym, entry);
     }
 
-    #[instrument(level = tracing::Level::TRACE, skip(self))]
-    pub(super) fn insert_term(&mut self, sym: Symbol, entry: EnvEntry<InferTy>) {
+    #[instrument(level = tracing::Level::TRACE, skip(self, constraints))]
+    pub(super) fn insert_term(
+        &mut self,
+        sym: Symbol,
+        entry: EnvEntry<InferTy>,
+        constraints: &mut ConstraintStore,
+    ) {
         if matches!(sym, Symbol::Builtin(..)) {
             tracing::error!("can't override builtin");
             return;
         }
+
+        constraints.wake_symbols(&[sym]);
 
         self.term_env.insert(sym, entry);
     }
 
-    pub(super) fn insert_mono(&mut self, sym: Symbol, ty: InferTy) {
+    pub(super) fn insert_mono(
+        &mut self,
+        sym: Symbol,
+        ty: InferTy,
+        constraints: &mut ConstraintStore,
+    ) {
         if matches!(sym, Symbol::Builtin(..)) {
             tracing::error!("can't override builtin");
             return;
         }
+
+        constraints.wake_symbols(&[sym]);
 
         self.term_env.insert(sym, EnvEntry::Mono(ty));
     }

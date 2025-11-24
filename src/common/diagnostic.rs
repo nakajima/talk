@@ -1,13 +1,13 @@
 use std::error::Error;
 
 use crate::{
-    name_resolution::name_resolver::NameResolverError, parser_error::ParserError, span::Span,
-    types::type_error::TypeError,
+    name_resolution::name_resolver::NameResolverError, node_id::NodeID, parser_error::ParserError,
+    span::Span, types::type_error::TypeError,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Diagnostic<E: Error> {
-    pub span: Span,
+    pub id: NodeID,
     pub kind: E,
 }
 

@@ -214,7 +214,8 @@ fn unify_rows(
     rhs: &InferRow,
     context: &mut impl Solve,
     session: &mut TypeSession,
-) -> Result<bool, TypeError> {
+) -> Result<Vec<Meta>, TypeError> {
+    let mut result = vec![];
     let (mut lhs_fields, lhs_tail) = normalize_row(lhs.clone(), context.substitutions_mut());
     let (mut rhs_fields, rhs_tail) = normalize_row(rhs.clone(), context.substitutions_mut());
 
@@ -239,8 +240,9 @@ fn unify_rows(
             return Err(TypeError::OccursCheck(InferTy::Record(Box::new(acc))));
         }
         context.substitutions_mut().row.insert(var, acc);
+        result.push(Meta::Row(var));
 
-        return Ok(true);
+        return Ok(result);
     }
 
     // unify common labels
@@ -250,15 +252,16 @@ fn unify_rows(
             let Some(lv) = lhs_fields.remove(&k) else {
                 continue;
             };
-            changed |= unify(&lv, &rv, context, session)?;
+            result.extend(unify(&lv, &rv, context, session)?);
         }
     }
 
     // helper: extend a Var tail with leftover fields (prepend over a fresh tail)
     let mut extend_var_tail =
-        |tail_id: RowMetaId, fields: BTreeMap<Label, InferTy>| -> Result<bool, TypeError> {
+        |tail_id: RowMetaId, fields: BTreeMap<Label, InferTy>| -> Result<Vec<Meta>, TypeError> {
+            let mut result = vec![];
             if fields.is_empty() {
-                return Ok(false);
+                return Ok(result);
             }
             let mut acc = session.new_row_meta_var(context.level());
             for (label, ty) in fields.into_iter().rev() {
@@ -274,14 +277,15 @@ fn unify_rows(
 
             let can = context.substitutions_mut().canon_row(tail_id);
             context.substitutions_mut().row.insert(can, acc);
-            Ok(true)
+            result.push(Meta::Row(can));
+            Ok(result)
         };
 
     // LHS leftovers must be absorbed by RHS tail
     if !lhs_fields.is_empty() {
         match rhs_tail {
             RowTail::Var(id) => {
-                changed |= extend_var_tail(id, lhs_fields)?;
+                result.extend(extend_var_tail(id, lhs_fields)?);
             }
             RowTail::Empty => {
                 return Err(TypeError::InvalidUnification(
@@ -302,7 +306,7 @@ fn unify_rows(
     if !rhs_fields.is_empty() {
         match lhs_tail {
             RowTail::Var(id) => {
-                changed |= extend_var_tail(id, rhs_fields)?;
+                result.extend(extend_var_tail(id, rhs_fields)?);
             }
             RowTail::Empty => {
                 return Err(TypeError::InvalidUnification(
@@ -328,7 +332,8 @@ fn unify_rows(
             let can_a = context.substitutions_mut().canon_row(a);
             let can_b = context.substitutions_mut().canon_row(b);
             context.substitutions_mut().link_row(can_a, can_b);
-            changed = true;
+            result.push(Meta::Row(can_a));
+            result.push(Meta::Row(can_b));
         }
         (RowTail::Param(a), RowTail::Param(b)) if a == b => {}
         (RowTail::Param(_), RowTail::Param(_)) => {
@@ -340,7 +345,7 @@ fn unify_rows(
         _ => {}
     }
 
-    Ok(changed)
+    Ok(result)
 }
 
 // Unify types. Returns true if progress was made.
@@ -350,16 +355,18 @@ pub(super) fn unify(
     rhs: &InferTy,
     context: &mut impl Solve,
     session: &mut TypeSession,
-) -> Result<bool, TypeError> {
+) -> Result<Vec<Meta>, TypeError> {
     let lhs = context.normalize(lhs.clone(), session);
     let rhs = context.normalize(rhs.clone(), session);
     let lhs = apply(lhs, context.substitutions_mut());
     let rhs = apply(rhs, context.substitutions_mut());
 
+    let mut result = vec![];
+
     match (&lhs, &rhs) {
         (InferTy::Primitive(lhs), InferTy::Primitive(rhs)) => {
             if lhs == rhs {
-                Ok(false)
+                Ok(Default::default())
             } else {
                 Err(TypeError::InvalidUnification(
                     InferTy::Primitive(*lhs).into(),
@@ -370,12 +377,12 @@ pub(super) fn unify(
         (InferTy::Tuple(lhs), InferTy::Tuple(rhs)) => {
             let mut did_change = false;
             for (lhs, rhs) in lhs.iter().zip(rhs) {
-                did_change |= unify(lhs, rhs, context, session)?;
+                result.extend(unify(lhs, rhs, context, session)?);
             }
-            Ok(did_change)
+            Ok(result)
         }
-        (InferTy::Rigid(lhs), InferTy::Rigid(rhs)) if lhs == rhs => Ok(false),
-        (InferTy::Param(lhs), InferTy::Param(rhs)) if lhs == rhs => Ok(false),
+        (InferTy::Rigid(lhs), InferTy::Rigid(rhs)) if lhs == rhs => Ok(Default::default()),
+        (InferTy::Param(lhs), InferTy::Param(rhs)) if lhs == rhs => Ok(Default::default()),
         (
             InferTy::Constructor {
                 params, box ret, ..
@@ -407,18 +414,6 @@ pub(super) fn unify(
                 return Err(TypeError::InvalidUnification(lhs.into(), rhs.into()));
             }
 
-            // // Pick the correct row kind (Enum vs Struct) from the rows themselves.
-            // fn row_kind(r: &InferRow) -> Option<TypeDefKind> {
-            //     match r {
-            //         InferRow::Empty(k) => Some(*k),
-            //         InferRow::Extend { row, .. } => row_kind(row),
-            //         InferRow::Var(_) | InferRow::Param(_) => None,
-            //     }
-            // }
-
-            // let kind = row_kind(lhs_row)
-            //     .or_else(|| row_kind(rhs_row))
-            //     .unwrap_or(TypeDefKind::Struct);
             let kind = match lhs_id {
                 Symbol::Struct(..) => TypeDefKind::Struct,
                 Symbol::Enum(..) => TypeDefKind::Enum,
@@ -430,9 +425,9 @@ pub(super) fn unify(
         }
         // (Ty::TypeConstructor(lhs), Ty::TypeConstructor(rhs)) if lhs == rhs => Ok(false),
         (InferTy::Func(lhs_param, lhs_ret), InferTy::Func(rhs_param, rhs_ret)) => {
-            let param = unify(lhs_param, rhs_param, context, session)?;
-            let ret = unify(lhs_ret, rhs_ret, context, session)?;
-            Ok(param || ret)
+            result.extend(unify(lhs_param, rhs_param, context, session)?);
+            result.extend(unify(lhs_ret, rhs_ret, context, session)?);
+            Ok(result)
         }
         (
             InferTy::Var {
@@ -456,9 +451,12 @@ pub(super) fn unify(
                 if let Some(v) = context.substitutions_mut().ty.remove(&lose) {
                     context.substitutions_mut().ty.entry(keep).or_insert(v);
                 }
-                Ok(true)
+
+                result.push(Meta::Ty(keep));
+                result.push(Meta::Ty(lose));
+                Ok(result)
             } else {
-                Ok(false)
+                Ok(Default::default())
             }
         }
         (ty, InferTy::Var { id, .. }) | (InferTy::Var { id, .. }, ty) => {
@@ -468,7 +466,8 @@ pub(super) fn unify(
 
             context.substitutions_mut().ty.insert(*id, ty.clone());
 
-            Ok(true)
+            result.push(Meta::Ty(*id));
+            Ok(result)
         }
         (InferTy::Record(lhs_row), InferTy::Record(rhs_row)) => {
             unify_rows(TypeDefKind::Struct, lhs_row, rhs_row, context, session)

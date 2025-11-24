@@ -3,9 +3,9 @@ use crate::{
     label::Label,
     name_resolution::name_resolver::NameResolved,
     node_id::NodeID,
-    span::Span,
     types::{
-        constraints::constraint::ConstraintCause,
+        constraint_solver::SolveResult,
+        constraints::store::{ConstraintId, ConstraintStore},
         infer_ty::{InferTy, TypeParamId},
         predicate::Predicate,
         solve_context::SolveContext,
@@ -17,27 +17,27 @@ use crate::{
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TypeMember {
+    pub id: ConstraintId,
     pub base: InferTy,
     pub name: Label,
     pub node_id: NodeID,
     pub generics: Vec<InferTy>,
     pub result: InferTy,
-    pub cause: ConstraintCause,
-    pub span: Span,
 }
 
 impl TypeMember {
     pub fn solve(
         &self,
+        constraints: &mut ConstraintStore,
         context: &mut SolveContext,
         session: &mut TypeSession,
         asts: &[AST<NameResolved>],
-    ) -> Result<bool, TypeError> {
+    ) -> SolveResult {
         #[warn(clippy::todo)]
         match &self.base {
             InferTy::Var { .. } => todo!(),
             InferTy::Param(type_param_id) => {
-                self.lookup_for_type_param(context, session, asts, *type_param_id)
+                self.lookup_for_type_param(constraints, context, session, asts, *type_param_id)
             }
             InferTy::Rigid(skolem_id) => {
                 let Some(InferTy::Param(type_param_id)) =
@@ -46,11 +46,11 @@ impl TypeMember {
                     unreachable!();
                 };
 
-                self.lookup_for_type_param(context, session, asts, *type_param_id)
+                self.lookup_for_type_param(constraints, context, session, asts, *type_param_id)
             }
             InferTy::Constructor { .. } => todo!(),
             InferTy::Nominal { .. } => todo!(),
-            _ => Err(TypeError::TypeNotFound(format!(
+            _ => SolveResult::Err(TypeError::TypeNotFound(format!(
                 "Could not find child type {:?} for {:?}",
                 self.name, self.base
             ))),
@@ -60,11 +60,12 @@ impl TypeMember {
     #[allow(clippy::too_many_arguments)]
     fn lookup_for_type_param(
         &self,
+        constraints: &mut ConstraintStore,
         context: &mut SolveContext,
         session: &mut TypeSession,
         asts: &[AST<NameResolved>],
         type_param_id: TypeParamId,
-    ) -> Result<bool, TypeError> {
+    ) -> SolveResult {
         let mut candidates = vec![];
         for given in &context.givens {
             if let Predicate::Conforms {
@@ -83,14 +84,20 @@ impl TypeMember {
                 && let Some(child_sym) = child_types.get(&self.name)
             {
                 let Some(child_entry) = session.lookup(child_sym) else {
-                    return Err(TypeError::TypeNotFound(format!("{child_sym:?}")));
+                    return SolveResult::Err(TypeError::TypeNotFound(format!("{child_sym:?}")));
                 };
 
-                let child_ty = child_entry.instantiate(self.node_id, context, session, self.span);
-                return unify(&child_ty, &self.result, context, session);
-            }
+                let child_ty = child_entry.instantiate(self.node_id, constraints, context, session);
+                return match unify(&child_ty, &self.result, context, session) {
+                    Ok(metas) => SolveResult::Solved(metas),
+                    Err(e) => SolveResult::Err(e),
+                };
+            };
         }
 
-        Ok(false)
+        SolveResult::Err(TypeError::TypeNotFound(format!(
+            "{:?}.{:?}",
+            self.base, self.name
+        )))
     }
 }

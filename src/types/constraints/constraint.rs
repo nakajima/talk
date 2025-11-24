@@ -3,11 +3,17 @@ use crate::{
     span::Span,
     types::{
         constraints::{
-            call::Call, conforms::Conforms, equals::Equals, has_field::HasField, member::Member,
-            projection::Projection, type_member::TypeMember,
+            call::Call,
+            conforms::Conforms,
+            equals::Equals,
+            has_field::HasField,
+            member::Member,
+            projection::Projection,
+            store::{ConstraintId, GroupId},
+            type_member::TypeMember,
         },
         infer_row::InferRow,
-        infer_ty::InferTy,
+        infer_ty::{InferTy, Level},
         predicate::Predicate,
         type_operations::{
             UnificationSubstitutions, apply, apply_mult, apply_row, substitute, substitute_mult,
@@ -47,27 +53,27 @@ pub enum Constraint {
 }
 
 impl Constraint {
-    pub fn is_generalizable(&self) -> bool {
+    pub fn id(&self) -> ConstraintId {
         match self {
-            Constraint::Call(..) => true,
-            Constraint::Equals(..) => true,
-            Constraint::HasField(..) => true,
-            Constraint::Member(..) => true,
-            Constraint::Conforms(..) => true,
-            Constraint::TypeMember(..) => true,
-            Constraint::Projection(..) => true,
+            Constraint::Call(c) => c.id,
+            Constraint::Equals(c) => c.id,
+            Constraint::HasField(c) => c.id,
+            Constraint::Member(c) => c.id,
+            Constraint::Conforms(c) => c.id,
+            Constraint::TypeMember(c) => c.id,
+            Constraint::Projection(c) => c.id,
         }
     }
 
-    pub fn span(&self) -> Span {
+    pub fn is_generalizable(&self) -> bool {
         match self {
-            Constraint::Call(c) => c.span,
-            Constraint::Equals(c) => c.span,
-            Constraint::HasField(c) => c.span,
-            Constraint::Member(c) => c.span,
-            Constraint::Conforms(c) => c.span,
-            Constraint::TypeMember(c) => c.span,
-            Constraint::Projection(c) => c.span,
+            Constraint::Call(..) => false,
+            Constraint::Equals(..) => true,
+            Constraint::HasField(..) => true,
+            Constraint::Member(..) => false,
+            Constraint::Conforms(..) => true,
+            Constraint::TypeMember(..) => true,
+            Constraint::Projection(..) => true,
         }
     }
 
@@ -208,7 +214,6 @@ impl Constraint {
                 Predicate::Conforms {
                     param,
                     protocol_id: conforms.protocol_id,
-                    span: conforms.span,
                 }
             }
             Self::Projection(projection) => Predicate::Projection {

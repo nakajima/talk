@@ -3,11 +3,11 @@ use crate::{
     label::Label,
     name_resolution::{name_resolver::NameResolved, symbol::ProtocolId},
     node_id::NodeID,
-    span::Span,
     types::{
-        constraints::constraint::ConstraintCause,
-        infer_ty::InferTy,
-        solve_context::{Solve, SolveContext},
+        constraint_solver::{DeferralReason, SolveResult},
+        constraints::store::{ConstraintId, ConstraintStore},
+        infer_ty::{InferTy, Level},
+        solve_context::SolveContext,
         type_catalog::ConformanceKey,
         type_error::TypeError,
         type_operations::apply,
@@ -17,22 +17,23 @@ use crate::{
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Projection {
+    pub id: ConstraintId,
     pub protocol_id: Option<ProtocolId>,
     pub node_id: NodeID,
     pub base: InferTy,
     pub label: Label,
     pub result: InferTy,
-    pub cause: ConstraintCause,
-    pub span: Span,
 }
 
 impl Projection {
     pub fn solve(
         &self,
+        level: Level,
+        constraints: &mut ConstraintStore,
         context: &mut SolveContext,
         session: &mut TypeSession,
         asts: &[AST<NameResolved>],
-    ) -> Result<bool, TypeError> {
+    ) -> SolveResult {
         let base = apply(self.base.clone(), &mut context.substitutions);
         let result = apply(self.result.clone(), &mut context.substitutions);
 
@@ -66,37 +67,30 @@ impl Projection {
                     // Instantiate the nominal TYPE scheme at this projection node id.
                     // This yields Type(@Struct(base_sym), row metas_for_A, ...)
                     let Some(nominal_entry) = session.lookup(&base_sym) else {
-                        return Err(TypeError::TypeNotFound(format!("{:?}", self.base)));
+                        return SolveResult::Err(TypeError::TypeNotFound(format!(
+                            "{:?}",
+                            self.base
+                        )));
                     };
 
                     let nominal_inst =
-                        nominal_entry.instantiate(self.node_id, context, session, self.span);
+                        nominal_entry.instantiate(self.node_id, constraints, context, session);
 
                     // Force the base we're projecting from to be "this" instantiation,
                     // so the metas_for_A unify with the actual arguments (Float/Int).
-                    context.wants_mut().equals(
-                        base.clone(),
-                        nominal_inst,
-                        ConstraintCause::Internal,
-                        self.span,
-                    );
+                    constraints.wants_equals(base.clone(), nominal_inst);
 
                     let Some(alias_entry) = session.lookup(&alias_sym) else {
-                        return Err(TypeError::TypeNotFound(format!("{alias_sym:?}")));
+                        return SolveResult::Err(TypeError::TypeNotFound(format!("{alias_sym:?}")));
                     };
 
                     let alias_inst =
-                        alias_entry.instantiate(self.node_id, context, session, self.span);
+                        alias_entry.instantiate(self.node_id, constraints, context, session);
 
                     // Self.T must equal the instantiated alias.
-                    context.wants_mut().equals(
-                        result.clone(),
-                        alias_inst,
-                        ConstraintCause::Internal,
-                        self.span,
-                    );
+                    constraints.wants_equals(result.clone(), alias_inst);
 
-                    return Ok(true);
+                    return SolveResult::Solved(Default::default());
                 }
 
                 // Fallback: no alias symbol recorded; if a concrete (non-param) witness
@@ -104,18 +98,13 @@ impl Projection {
                 if let Some(witness) = conf.associated_types.get(&self.label) {
                     let witness = apply(witness.clone(), &mut context.substitutions);
                     if !matches!(witness, InferTy::Param(_)) {
-                        context.wants_mut().equals(
-                            result,
-                            witness,
-                            ConstraintCause::Internal,
-                            self.span,
-                        );
-                        return Ok(true);
+                        constraints.wants_equals(result, witness);
+                        return SolveResult::Solved(Default::default());
                     }
                 }
             }
         }
 
-        Ok(false)
+        SolveResult::Defer(DeferralReason::Unknown)
     }
 }
