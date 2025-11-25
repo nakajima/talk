@@ -5,7 +5,6 @@ use crate::{
     compiling::module::ModuleId,
     name_resolution::symbol::Symbol,
     node_id::NodeID,
-    span::Span,
     types::{
         builtins::builtin_scope,
         constraints::store::ConstraintStore,
@@ -149,13 +148,12 @@ impl EnvEntry<InferTy> {
         session: &mut TypeSession,
         context: &mut impl Solve,
         constraints: &mut ConstraintStore,
-        span: Span,
     ) -> (InferTy, InstantiationSubstitutions) {
         tracing::debug!("inference instantiate (id: {id:?}): {self:?}");
         match self {
             EnvEntry::Mono(ty) => (ty.clone(), Default::default()),
             EnvEntry::Scheme(scheme) => {
-                scheme.instantiate_with_args(id, args, session, context, constraints, span)
+                scheme.instantiate_with_args(id, args, session, context, constraints)
             }
         }
     }

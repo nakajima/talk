@@ -162,7 +162,7 @@ impl From<InferTy> for Ty {
                 row: Box::new(row.into()),
             },
             InferTy::Projection { .. } => Ty::Param(420420.into()), // FIXME
-            ty => Ty::Param(420420.into()),
+            _ => Ty::Param(420420.into()),
         }
     }
 }

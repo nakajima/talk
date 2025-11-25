@@ -1,5 +1,3 @@
-use itertools::Itertools;
-
 use crate::{
     ast::AST,
     diagnostic::{AnyDiagnostic, Diagnostic},
@@ -7,7 +5,7 @@ use crate::{
     node_id::NodeID,
     types::{
         constraints::{constraint::Constraint, store::ConstraintStore},
-        infer_ty::{InferTy, Level, Meta},
+        infer_ty::{Level, Meta},
         solve_context::SolveContext,
         type_error::TypeError,
         type_operations::{UnificationSubstitutions, unify},
@@ -66,9 +64,7 @@ impl<'a> ConstraintSolver<'a> {
                     Constraint::Member(ref member) => {
                         member.solve(constraints, self.context, session)
                     }
-                    Constraint::Conforms(ref conforms) => {
-                        conforms.solve(self.context, session, false)
-                    }
+                    Constraint::Conforms(ref conforms) => conforms.solve(session),
                     Constraint::TypeMember(ref type_member) => {
                         type_member.solve(constraints, self.context, session, self.asts)
                     }

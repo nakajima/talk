@@ -224,7 +224,6 @@ fn unify_rows(
     }
 
     // unify common labels
-    let mut changed = false;
     for k in lhs_fields.keys().cloned().collect::<Vec<_>>() {
         if let Some(rv) = rhs_fields.remove(&k) {
             let Some(lv) = lhs_fields.remove(&k) else {

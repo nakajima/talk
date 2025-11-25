@@ -280,7 +280,7 @@ impl<'a> DeclDeclarer<'a> {
                     }
                 }
             }
-            #[warn(clippy::todo)]
+            #[allow(clippy::todo)]
             PatternKind::Struct { .. } => {
                 todo!()
             }

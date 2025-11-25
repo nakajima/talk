@@ -6,9 +6,9 @@ use crate::{
     name_resolution::name_resolver::NameResolved,
     node_id::NodeID,
     types::{
-        constraint_solver::SolveResult,
+        constraint_solver::{DeferralReason, SolveResult},
         constraints::store::{ConstraintId, ConstraintStore},
-        infer_ty::{InferTy, TypeParamId},
+        infer_ty::{InferTy, Meta, TypeParamId},
         predicate::Predicate,
         solve_context::SolveContext,
         type_error::TypeError,
@@ -38,7 +38,9 @@ impl TypeMember {
     ) -> SolveResult {
         #[warn(clippy::todo)]
         match &self.base {
-            InferTy::Var { .. } => todo!(),
+            InferTy::Var { id, .. } => {
+                SolveResult::Defer(DeferralReason::WaitingOnMeta(Meta::Ty(*id)))
+            }
             InferTy::Param(type_param_id) => {
                 self.lookup_for_type_param(constraints, context, session, asts, *type_param_id)
             }
@@ -51,7 +53,9 @@ impl TypeMember {
 
                 self.lookup_for_type_param(constraints, context, session, asts, *type_param_id)
             }
+            #[allow(clippy::todo)]
             InferTy::Constructor { .. } => todo!(),
+            #[allow(clippy::todo)]
             InferTy::Nominal { .. } => todo!(),
             _ => SolveResult::Err(TypeError::TypeNotFound(format!(
                 "Could not find child type {:?} for {:?}",

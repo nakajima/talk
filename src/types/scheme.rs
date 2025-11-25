@@ -4,9 +4,8 @@ use tracing::instrument;
 
 use crate::{
     node_id::NodeID,
-    span::Span,
     types::{
-        constraints::{constraint::Constraint, equals::Equals, store::ConstraintStore},
+        constraints::store::ConstraintStore,
         infer_row::{InferRow, RowParamId},
         infer_ty::{InferTy, Level, TypeParamId},
         predicate::Predicate,
@@ -142,7 +141,7 @@ impl Scheme<InferTy> {
         instantiate_ty(id, self.ty.clone(), context.instantiations_mut(), level)
     }
 
-    #[instrument(skip(self, session, context, constraints, span))]
+    #[instrument(skip(self, session, context, constraints,))]
     pub fn instantiate_with_args(
         &self,
         id: NodeID,
@@ -150,7 +149,6 @@ impl Scheme<InferTy> {
         session: &mut TypeSession,
         context: &mut impl Solve,
         constraints: &mut ConstraintStore,
-        span: Span,
     ) -> (InferTy, InstantiationSubstitutions) {
         // Map each quantified meta id to a fresh meta at this use-site level
         let mut substitutions = InstantiationSubstitutions::default();
@@ -174,7 +172,7 @@ impl Scheme<InferTy> {
 
             session.reverse_instantiations.ty.insert(meta_var, *param);
 
-            if let Some((arg_ty, id)) = args.pop() {
+            if let Some((arg_ty, _id)) = args.pop() {
                 constraints.wants_equals(ty.clone(), arg_ty.clone());
             };
 

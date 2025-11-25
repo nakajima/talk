@@ -120,7 +120,7 @@ impl Pattern {
                     }
                 }
             }
-            #[warn(clippy::todo)]
+            #[allow(clippy::todo)]
             PatternKind::Struct { .. } => todo!(),
         }
         result

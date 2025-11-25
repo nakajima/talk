@@ -8,7 +8,6 @@ use crate::{
     node_kinds::{
         call_arg::CallArg,
         expr::{Expr, ExprKind},
-        type_annotation::{TypeAnnotation, TypeAnnotationKind},
     },
     token_kind::TokenKind,
 };
@@ -116,13 +115,11 @@ impl LowerOperators {
 #[cfg(test)]
 pub mod tests {
     use crate::{
-        annotation, any_expr, any_stmt, assert_eq_diff, invocation,
+        any_expr, any_stmt, assert_eq_diff, invocation,
         label::Label,
         name_resolution::transforms::lower_operators::LowerOperators,
         node_id::NodeID,
-        node_kinds::{
-            call_arg::CallArg, expr::ExprKind, stmt::StmtKind, type_annotation::TypeAnnotationKind,
-        },
+        node_kinds::{call_arg::CallArg, expr::ExprKind, stmt::StmtKind},
         parser_tests::tests::parse,
         span::Span,
     };

@@ -6,7 +6,6 @@ use crate::{
         constraint_solver::{DeferralReason, SolveResult},
         constraints::store::ConstraintId,
         infer_ty::{InferTy, Meta},
-        solve_context::SolveContext,
         type_catalog::ConformanceKey,
         type_error::TypeError,
         type_session::TypeSession,
@@ -21,13 +20,8 @@ pub struct Conforms {
 }
 
 impl Conforms {
-    #[instrument(skip(context, session))]
-    pub fn solve(
-        &self,
-        context: &mut SolveContext,
-        session: &mut TypeSession,
-        last_try: bool,
-    ) -> SolveResult {
+    #[instrument(skip(session))]
+    pub fn solve(&self, session: &mut TypeSession) -> SolveResult {
         let symbol = match &self.ty {
             InferTy::Var { id, .. } => {
                 return SolveResult::Defer(DeferralReason::WaitingOnMeta(Meta::Ty(*id)));

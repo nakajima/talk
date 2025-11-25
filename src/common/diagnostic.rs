@@ -2,7 +2,7 @@ use std::error::Error;
 
 use crate::{
     name_resolution::name_resolver::NameResolverError, node_id::NodeID, parser_error::ParserError,
-    span::Span, types::type_error::TypeError,
+    types::type_error::TypeError,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]

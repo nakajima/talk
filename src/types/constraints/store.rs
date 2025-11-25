@@ -20,8 +20,7 @@ use crate::{
             has_field::HasField, member::Member, projection::Projection, type_member::TypeMember,
         },
         infer_row::InferRow,
-        infer_ty::{InferTy, Level, Meta, MetaVarId},
-        passes::inference_pass::GeneralizationBlock,
+        infer_ty::{InferTy, Level, Meta},
         solve_context::SolveContext,
     },
 };
@@ -90,11 +89,8 @@ pub struct ConstraintStore {
     pub(crate) meta: FxHashMap<ConstraintId, ConstraintMeta>,
 
     wants: PriorityQueue<ConstraintId, ConstraintPriority>,
-    givens: IndexSet<ConstraintId>,
     pub(crate) deferred: IndexSet<ConstraintId>,
     solved: IndexSet<ConstraintId>,
-
-    generalization_blocks: FxHashMap<MetaVarId, GeneralizationBlock>,
 }
 
 impl ConstraintStore {
@@ -443,7 +439,7 @@ pub mod tests {
         node_id::NodeID,
         types::{
             constraints::{equals::Equals, member::Member},
-            infer_ty::{InferTy, Level},
+            infer_ty::{InferTy, Level, MetaVarId},
         },
     };
 

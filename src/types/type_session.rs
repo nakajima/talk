@@ -1,6 +1,6 @@
 use std::{cell::RefCell, rc::Rc};
 
-use ena::unify::{InPlaceUnificationTable, UnifyKey};
+use ena::unify::InPlaceUnificationTable;
 use indexmap::{IndexMap, IndexSet};
 use itertools::Itertools;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -247,7 +247,7 @@ impl TypeSession {
                     EnvEntry::Scheme(scheme) => {
                         if scheme.ty.contains_var() {
                             // Merge with existing scheme's foralls/predicates
-                            let generalized = self.generalize(scheme.ty, &mut context, &Default::default(), &mut Default::default());
+                            let generalized = self.generalize(scheme.ty, &mut context, &Default::default());
                             let EnvEntry::Scheme(generalized) = generalized
                             else {
                                 unreachable!(
@@ -399,13 +399,8 @@ impl TypeSession {
         );
 
         if ty.contains_var() {
-            self.generalize(
-                ty.clone(),
-                &mut context,
-                &Default::default(),
-                &mut Default::default(),
-            )
-            .into()
+            self.generalize(ty.clone(), &mut context, &Default::default())
+                .into()
         } else {
             TypeEntry::Mono(ty.clone().into())
         }
@@ -622,13 +617,12 @@ impl TypeSession {
             .unwrap_or_else(|_| unreachable!());
     }
 
-    #[instrument(level = tracing::Level::TRACE, skip(self, unsolved, context, constraints))]
+    #[instrument(level = tracing::Level::TRACE, skip(self, unsolved, context))]
     pub fn generalize(
         &mut self,
         ty: InferTy,
         context: &mut impl Solve,
         unsolved: &IndexSet<Constraint>,
-        constraints: &mut ConstraintStore,
     ) -> EnvEntry<InferTy> {
         // Make sure we're up to date
         let ty = self.apply(ty, context.substitutions_mut());

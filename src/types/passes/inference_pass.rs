@@ -37,10 +37,7 @@ use crate::{
     types::{
         builtins::resolve_builtin_type,
         constraint_solver::ConstraintSolver,
-        constraints::{
-            member::consume_self,
-            store::{ConstraintId, ConstraintStore},
-        },
+        constraints::{member::consume_self, store::ConstraintStore},
         infer_row::{InferRow, RowMetaId},
         infer_ty::{InferTy, Level, Meta, MetaVarId, TypeParamId},
         predicate::Predicate,
@@ -50,7 +47,7 @@ use crate::{
         type_catalog::{Conformance, ConformanceKey, MemberWitness},
         type_error::TypeError,
         type_operations::{
-            InstantiationSubstitutions, UnificationSubstitutions, curry, instantiate_ty, substitute,
+            InstantiationSubstitutions, UnificationSubstitutions, curry, substitute,
         },
         type_session::{TypeDefKind, TypeSession},
     },
@@ -58,21 +55,6 @@ use crate::{
 
 #[must_use]
 struct ReturnToken {}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum GeneralizationBlock {
-    PendingType {
-        node_id: NodeID,
-        span: Span,
-        level: Level,
-        type_symbol: Symbol,
-        args: Vec<(InferTy, NodeID)>,
-    },
-    PatternBindLocal,
-    EmptyArray,
-    Placeholder,
-    UnsolvedConstraint(ConstraintId),
-}
 
 pub type PendingTypeInstances =
     FxHashMap<MetaVarId, (NodeID, Span, Level, Symbol, Vec<(InferTy, NodeID)>)>;
@@ -209,7 +191,7 @@ impl<'a> InferencePass<'a> {
                 let ret_id = self.session.new_type_param_id(None);
                 let ret = InferTy::Param(ret_id);
 
-                #[warn(clippy::todo)]
+                #[allow(clippy::todo)]
                 if !generic.conformances.is_empty() {
                     todo!("not handling associated type conformances yet");
                 }
@@ -529,7 +511,7 @@ impl<'a> InferencePass<'a> {
             .type_catalog
             .member_witnesses
             .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
+            .map(|(k, v)| (*k, v.clone()))
             .collect_vec()
         {
             if let MemberWitness::Meta { receiver, label } = &witness {
@@ -549,7 +531,7 @@ impl<'a> InferencePass<'a> {
                 };
 
                 if let Some(methods) = self.session.type_catalog.instance_methods.get(&symbol)
-                    && let Some(method) = methods.get(&label).cloned()
+                    && let Some(method) = methods.get(label).cloned()
                 {
                     tracing::trace!(
                         "Resolved concrete witness {receiver_ty:?}.{label:?} = {method:?}"
@@ -700,9 +682,7 @@ impl<'a> InferencePass<'a> {
             let ty = self
                 .session
                 .apply(placeholders[i].clone(), &mut context.substitutions);
-            let entry = self
-                .session
-                .generalize(ty, context, &generalizable, &mut self.constraints);
+            let entry = self.session.generalize(ty, context, &generalizable);
             self.session.promote(*binder, entry, &mut self.constraints);
         }
 
@@ -1370,6 +1350,7 @@ impl<'a> InferencePass<'a> {
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self, context))]
+    #[allow(clippy::too_many_arguments)]
     fn visit_property(
         &mut self,
         decl: &Decl,
@@ -1804,7 +1785,7 @@ impl<'a> InferencePass<'a> {
     fn infer_block_with_returns(&mut self, block: &Block, context: &mut impl Solve) -> InferTy {
         let tok = self.tracking_returns();
         let ret = self.infer_block(block, context);
-        self.verify_returns(tok, ret.clone(), context);
+        self.verify_returns(tok, ret.clone());
         ret
     }
 
@@ -1976,7 +1957,7 @@ impl<'a> InferencePass<'a> {
     fn check_block(&mut self, block: &Block, expected: InferTy, context: &mut impl Solve) {
         let tok = self.tracking_returns();
         let ret = self.infer_block(block, context);
-        self.verify_returns(tok, ret.clone(), context);
+        self.verify_returns(tok, ret.clone());
         self.constraints.wants_equals(ret, expected);
     }
 
@@ -2097,7 +2078,6 @@ impl<'a> InferencePass<'a> {
                         self.session,
                         context,
                         &mut self.constraints,
-                        type_annotation.span,
                     );
 
                     self.instantiations.insert(type_annotation.id, subsitutions);
@@ -2223,9 +2203,9 @@ impl<'a> InferencePass<'a> {
         ReturnToken {}
     }
 
-    fn verify_returns(&mut self, _tok: ReturnToken, ret: InferTy, context: &mut impl Solve) {
-        for (span, tracked_ret) in self.tracked_returns.pop().unwrap_or_else(|| unreachable!()) {
-            self.constraints.wants_equals(tracked_ret, ret.clone());
+    fn verify_returns(&mut self, _tok: ReturnToken, ret: InferTy) {
+        for tracked_ret in self.tracked_returns.pop().unwrap_or_else(|| unreachable!()) {
+            self.constraints.wants_equals(tracked_ret.1, ret.clone());
         }
     }
 

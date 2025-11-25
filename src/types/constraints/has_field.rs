@@ -2,13 +2,9 @@ use tracing::instrument;
 
 use crate::{
     label::Label,
-    span::Span,
     types::{
         constraint_solver::{DeferralReason, SolveResult},
-        constraints::{
-            constraint::{Constraint, ConstraintCause},
-            store::{ConstraintId, ConstraintStore},
-        },
+        constraints::store::{ConstraintId, ConstraintStore},
         infer_row::InferRow,
         infer_ty::{InferTy, Level, Meta},
         type_error::TypeError,
