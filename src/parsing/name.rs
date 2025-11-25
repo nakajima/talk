@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use crate::name_resolution::symbol::Symbol;
+use crate::name_resolution::{name_resolver::NameResolverError, symbol::Symbol};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Name {
@@ -29,12 +29,12 @@ impl Name {
     }
 
     #[allow(clippy::panic)]
-    pub fn symbol(&self) -> Symbol {
+    pub fn symbol(&self) -> Result<Symbol, NameResolverError> {
         if let Name::Resolved(sym, _) = self {
-            return *sym;
+            return Ok(*sym);
         }
 
-        panic!("Name not resolved: {self:?}");
+        Err(NameResolverError::UndefinedName(self.name_str()))
     }
 }
 

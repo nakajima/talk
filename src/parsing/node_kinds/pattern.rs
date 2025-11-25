@@ -80,13 +80,17 @@ pub struct Pattern {
 
 impl Pattern {
     pub fn collect_binders(&self) -> Vec<(NodeID, Symbol)> {
-        let mut result = vec![];
+        let mut result: Vec<(NodeID, Symbol)> = vec![];
         match &self.kind {
             PatternKind::LiteralInt(_) => (),
             PatternKind::LiteralFloat(_) => (),
             PatternKind::LiteralTrue => (),
             PatternKind::LiteralFalse => (),
-            PatternKind::Bind(name) => result.push((self.id, name.symbol())),
+            PatternKind::Bind(name) => {
+                if let Ok(sym) = name.symbol() {
+                    result.push((self.id, sym))
+                }
+            }
             PatternKind::Tuple(patterns) => {
                 for pattern in patterns {
                     result.extend(pattern.collect_binders());
@@ -102,17 +106,21 @@ impl Pattern {
                 for field in fields {
                     match &field.kind {
                         RecordFieldPatternKind::Bind(name) => {
-                            result.push((field.id, name.symbol()))
+                            if let Ok(sym) = name.symbol() {
+                                result.push((field.id, sym))
+                            }
                         }
                         RecordFieldPatternKind::Equals { name, value, .. } => {
-                            result.push((field.id, name.symbol()));
+                            if let Ok(sym) = name.symbol() {
+                                result.push((field.id, sym))
+                            }
                             result.extend(value.collect_binders())
                         }
                         RecordFieldPatternKind::Rest => (),
                     }
                 }
             }
-            #[warn(clippy::todo)]
+            #[allow(clippy::todo)]
             PatternKind::Struct { .. } => todo!(),
         }
         result

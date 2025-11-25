@@ -6,4 +6,5 @@ pub fn import_builtins(scope: &mut Scope) {
     scope.types.insert("Bool".into(), Symbol::Bool);
     scope.types.insert("Void".into(), Symbol::Void);
     scope.types.insert("__IR".into(), Symbol::IR);
+    scope.types.insert("print".into(), Symbol::PRINT);
 }

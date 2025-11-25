@@ -3,15 +3,15 @@ use rustc_hash::FxHashMap;
 use std::fmt::Debug;
 
 use crate::{
-    name_resolution::symbol::ProtocolId,
+    name_resolution::{scc_graph::BindingGroup, symbol::ProtocolId},
     types::{
+        constraints::store::GroupId,
         infer_ty::{InferTy, Level, TypeParamId},
         predicate::Predicate,
         type_catalog::ConformanceKey,
         type_error::TypeError,
-        type_operations::{InstantiationSubstitutions, UnificationSubstitutions, apply},
+        type_operations::{InstantiationSubstitutions, UnificationSubstitutions},
         type_session::TypeSession,
-        wants::Wants,
     },
 };
 
@@ -21,12 +21,12 @@ pub struct SolveContext {
     pub(super) projection_placeholders: FxHashMap<InferTy, InferTy>,
     pub(super) substitutions: UnificationSubstitutions,
     pub(super) instantiations: InstantiationSubstitutions,
-    pub(super) wants: Wants,
     pub(super) givens: IndexSet<Predicate<InferTy>>,
     pub(super) level: Level,
+    pub(super) group: GroupId,
 }
 
-pub(super) struct ChildSolveContext<'a> {
+pub struct ChildSolveContext<'a> {
     pub(super) kind: SolveContextKind,
     pub(super) parent: &'a mut SolveContext,
     pub(super) level: Level,
@@ -35,7 +35,7 @@ pub(super) struct ChildSolveContext<'a> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(super) enum SolveContextKind {
+pub enum SolveContextKind {
     Normal,
     Protocol {
         protocol_self: TypeParamId,
@@ -44,19 +44,26 @@ pub(super) enum SolveContextKind {
     Nominal,
 }
 
-pub(super) trait Solve
+pub trait Solve
 where
     Self: Sized,
 {
     fn kind(&self) -> SolveContextKind;
     fn next(&'_ mut self) -> ChildSolveContext<'_>;
+    fn group(&self) -> GroupId;
     fn level(&self) -> Level;
     fn normalize(&mut self, ty: InferTy, session: &mut TypeSession) -> InferTy;
     fn parent(&mut self) -> &mut SolveContext;
-    fn wants_mut(&'_ mut self) -> &mut Wants;
     fn givens_mut(&'_ mut self) -> &mut IndexSet<Predicate<InferTy>>;
     fn substitutions_mut(&'_ mut self) -> &mut UnificationSubstitutions;
     fn instantiations_mut(&'_ mut self) -> &mut InstantiationSubstitutions;
+    fn group_info(&self) -> BindingGroup {
+        BindingGroup {
+            id: self.group(),
+            level: self.level(),
+            binders: Default::default(),
+        }
+    }
 }
 
 impl<'a> Solve for ChildSolveContext<'a> {
@@ -72,10 +79,6 @@ impl<'a> Solve for ChildSolveContext<'a> {
 
     fn kind(&self) -> SolveContextKind {
         self.kind
-    }
-
-    fn wants_mut(&'_ mut self) -> &mut Wants {
-        &mut self.parent().wants
     }
 
     fn givens_mut(&'_ mut self) -> &mut IndexSet<Predicate<InferTy>> {
@@ -101,6 +104,10 @@ impl<'a> Solve for ChildSolveContext<'a> {
 
     fn substitutions_mut(&'_ mut self) -> &mut UnificationSubstitutions {
         &mut self.parent().substitutions
+    }
+
+    fn group(&self) -> GroupId {
+        self.parent.group
     }
 }
 
@@ -131,10 +138,6 @@ impl Solve for SolveContext {
         self.normalize_with_level(ty, session, self.level)
     }
 
-    fn wants_mut(&'_ mut self) -> &mut Wants {
-        &mut self.wants
-    }
-
     fn givens_mut(&'_ mut self) -> &mut IndexSet<Predicate<InferTy>> {
         &mut self.givens
     }
@@ -146,12 +149,17 @@ impl Solve for SolveContext {
     fn substitutions_mut(&'_ mut self) -> &mut UnificationSubstitutions {
         &mut self.substitutions
     }
+
+    fn group(&self) -> GroupId {
+        self.group
+    }
 }
 
 impl SolveContext {
     pub(super) fn new(
         substitutions: UnificationSubstitutions,
         level: Level,
+        group: GroupId,
         kind: SolveContextKind,
     ) -> Self {
         Self {
@@ -159,9 +167,9 @@ impl SolveContext {
             substitutions,
             projection_placeholders: Default::default(),
             givens: Default::default(),
-            wants: Default::default(),
             instantiations: Default::default(),
             level,
+            group,
         }
     }
 
@@ -171,7 +179,7 @@ impl SolveContext {
         session: &mut TypeSession,
         level: Level,
     ) -> InferTy {
-        let ty = apply(ty, &mut self.substitutions);
+        let ty = session.apply(ty, &mut self.substitutions);
         match &ty {
             InferTy::Projection {
                 base: box InferTy::Nominal { symbol, .. },
@@ -279,6 +287,7 @@ pub mod tests {
         let mut context = SolveContext::new(
             UnificationSubstitutions::new(session.meta_levels.clone()),
             Level::default(),
+            Default::default(),
             SolveContextKind::Nominal,
         );
 
@@ -298,6 +307,7 @@ pub mod tests {
         let mut context = SolveContext::new(
             UnificationSubstitutions::new(session.meta_levels.clone()),
             Level::default(),
+            Default::default(),
             SolveContextKind::Nominal,
         );
 

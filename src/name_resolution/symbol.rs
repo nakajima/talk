@@ -193,6 +193,10 @@ impl Symbol {
         module_id: ModuleId::Builtin,
         local_id: 5,
     });
+    pub const PRINT: Symbol = Symbol::Builtin(BuiltinId {
+        module_id: ModuleId::Builtin,
+        local_id: 6,
+    });
 
     pub fn module_id(&self) -> Option<ModuleId> {
         let module_id = match self {

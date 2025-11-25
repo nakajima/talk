@@ -1,3 +1,4 @@
+use ena::unify::{UnifyKey, UnifyValue};
 use indexmap::IndexSet;
 use itertools::Itertools;
 use std::hash::Hash;
@@ -17,7 +18,7 @@ use crate::{
     },
 };
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Meta {
     Ty(MetaVarId),
     Row(RowMetaId),
@@ -28,6 +29,22 @@ pub struct MetaVarId(u32);
 impl From<u32> for MetaVarId {
     fn from(value: u32) -> Self {
         MetaVarId(value)
+    }
+}
+
+impl UnifyKey for MetaVarId {
+    type Value = Level;
+
+    fn index(&self) -> u32 {
+        self.0
+    }
+
+    fn from_index(u: u32) -> Self {
+        Self(u)
+    }
+
+    fn tag() -> &'static str {
+        "meta"
     }
 }
 
@@ -65,6 +82,14 @@ impl Level {
 
     pub fn prev(&self) -> Level {
         Level(self.0.saturating_sub(1))
+    }
+}
+
+impl UnifyValue for Level {
+    type Error = TypeError;
+
+    fn unify_values(lhs: &Self, rhs: &Self) -> Result<Self, Self::Error> {
+        Ok(if lhs.0 > rhs.0 { *rhs } else { *lhs })
     }
 }
 
@@ -137,7 +162,7 @@ impl From<InferTy> for Ty {
                 row: Box::new(row.into()),
             },
             InferTy::Projection { .. } => Ty::Param(420420.into()), // FIXME
-            ty => panic!("Ty cannot contain variables: {ty:?}"),
+            _ => Ty::Param(420420.into()),
         }
     }
 }
@@ -250,6 +275,51 @@ impl InferTy {
         }
     }
 
+    pub fn collect_metas(&self) -> IndexSet<InferTy> {
+        let mut out = IndexSet::default();
+        match self {
+            InferTy::Error(..) => {}
+            InferTy::Param(_) => {}
+            InferTy::Var { .. } => {
+                out.insert(self.clone());
+            }
+            InferTy::Projection { base, .. } => {
+                out.extend(base.collect_metas());
+            }
+            InferTy::Func(dom, codom) => {
+                out.extend(dom.collect_metas());
+                out.extend(codom.collect_metas());
+            }
+            InferTy::Tuple(items) => {
+                for item in items {
+                    out.extend(item.collect_metas());
+                }
+            }
+            InferTy::Record(box row) => match row {
+                InferRow::Empty(..) => (),
+                InferRow::Var(..) => {
+                    out.insert(self.clone());
+                }
+                InferRow::Param(..) => (),
+                InferRow::Extend { row, ty, .. } => {
+                    out.extend(ty.collect_metas());
+                    out.extend(InferTy::Record(row.clone()).collect_metas());
+                }
+            },
+            InferTy::Nominal { row, .. } => {
+                out.extend(InferTy::Record(row.clone()).collect_metas());
+            }
+            InferTy::Constructor { params, .. } => {
+                for param in params {
+                    out.extend(param.collect_metas());
+                }
+            }
+            InferTy::Primitive(_) | InferTy::Rigid(_) => {}
+        }
+
+        out
+    }
+
     pub fn to_entry(&self) -> EnvEntry<InferTy> {
         let foralls: IndexSet<ForAll> = self.collect_foralls().into_iter().collect();
         if foralls.is_empty() {
@@ -355,8 +425,17 @@ impl InferTy {
                 associated,
                 protocol_id,
             },
-            InferTy::Constructor { name, params, ret } => InferTy::Constructor {
-                name: Name::Resolved(name.symbol().import(module_id), name.name_str()),
+            InferTy::Constructor {
+                name: name @ Name::Resolved(..),
+                params,
+                ret,
+            } => InferTy::Constructor {
+                name: Name::Resolved(
+                    name.symbol()
+                        .unwrap_or_else(|_| unreachable!())
+                        .import(module_id),
+                    name.name_str(),
+                ),
                 params,
                 ret,
             },
@@ -371,6 +450,7 @@ impl InferTy {
                 symbol: symbol.import(module_id),
                 row: row.import(module_id).into(),
             },
+            _ => self,
         }
     }
 }

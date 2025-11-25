@@ -176,7 +176,7 @@ pub mod tests {
         assert_eq!(
             resolved.diagnostics[0],
             AnyDiagnostic::NameResolution(Diagnostic::<NameResolverError> {
-                span: Span::ANY,
+                id: NodeID::ANY,
                 kind: NameResolverError::UndefinedName("x".into())
             })
         )

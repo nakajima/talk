@@ -2,25 +2,14 @@ use crate::{
     label::Label,
     name_resolution::symbol::ProtocolId,
     node_id::NodeID,
-    span::Span,
     types::{
-        constraints::{
-            call::Call,
-            conforms::Conforms,
-            constraint::{Constraint, ConstraintCause},
-            equals::Equals,
-            has_field::HasField,
-            member::Member,
-            projection::Projection,
-            type_member::TypeMember,
-        },
+        constraints::{constraint::Constraint, store::ConstraintStore},
         infer_row::{InferRow, RowParamId},
-        infer_ty::{InferTy, Level, TypeParamId},
+        infer_ty::{InferTy, TypeParamId},
+        solve_context::Solve,
         ty::{SomeType, Ty},
-        type_operations::{
-            InstantiationSubstitutions, UnificationSubstitutions, apply, apply_mult,
-            instantiate_row, instantiate_ty,
-        },
+        type_operations::{UnificationSubstitutions, instantiate_row, instantiate_ty},
+        type_session::TypeSession,
     },
 };
 
@@ -42,7 +31,6 @@ pub enum Predicate<T: SomeType> {
     Conforms {
         param: TypeParamId,
         protocol_id: ProtocolId,
-        span: Span,
     },
     Member {
         receiver: T,
@@ -82,15 +70,9 @@ impl From<Predicate<InferTy>> for Predicate<Ty> {
                 returns,
                 protocol_id,
             },
-            Predicate::<InferTy>::Conforms {
-                param,
-                protocol_id,
-                span,
-            } => Self::Conforms {
-                param,
-                protocol_id,
-                span,
-            },
+            Predicate::<InferTy>::Conforms { param, protocol_id } => {
+                Self::Conforms { param, protocol_id }
+            }
             Predicate::<InferTy>::Equals { lhs, rhs } => Self::Equals {
                 lhs: lhs.into(),
                 rhs: rhs.into(),
@@ -151,15 +133,9 @@ impl From<Predicate<Ty>> for Predicate<InferTy> {
                 label,
                 returns,
             },
-            Predicate::<Ty>::Conforms {
-                param,
-                protocol_id,
-                span,
-            } => Self::Conforms {
-                param,
-                protocol_id,
-                span,
-            },
+            Predicate::<Ty>::Conforms { param, protocol_id } => {
+                Self::Conforms { param, protocol_id }
+            }
             Predicate::<Ty>::Equals { lhs, rhs } => Self::Equals {
                 lhs: lhs.into(),
                 rhs: rhs.into(),
@@ -207,7 +183,11 @@ impl From<Predicate<Ty>> for Predicate<InferTy> {
 }
 
 impl Predicate<InferTy> {
-    pub fn apply(&self, substitutions: &mut UnificationSubstitutions) -> Self {
+    pub fn apply(
+        &self,
+        substitutions: &mut UnificationSubstitutions,
+        session: &mut TypeSession,
+    ) -> Self {
         match self {
             Self::Projection {
                 protocol_id,
@@ -216,23 +196,18 @@ impl Predicate<InferTy> {
                 returns,
             } => Self::Projection {
                 protocol_id: *protocol_id,
-                base: apply(base.clone(), substitutions),
-                returns: apply(returns.clone(), substitutions),
+                base: session.apply(base.clone(), substitutions),
+                returns: session.apply(returns.clone(), substitutions),
                 label: label.clone(),
             },
-            Self::Conforms {
-                param,
-                protocol_id,
-                span,
-            } => Self::Conforms {
+            Self::Conforms { param, protocol_id } => Self::Conforms {
                 param: *param,
                 protocol_id: *protocol_id,
-                span: *span,
             },
             Self::HasField { row, label, ty } => Self::HasField {
                 row: *row,
                 label: label.clone(),
-                ty: apply(ty.clone(), substitutions),
+                ty: session.apply(ty.clone(), substitutions),
             },
             Self::Member {
                 receiver,
@@ -240,9 +215,9 @@ impl Predicate<InferTy> {
                 ty,
                 node_id,
             } => Self::Member {
-                receiver: apply(receiver.clone(), substitutions),
+                receiver: session.apply(receiver.clone(), substitutions),
                 label: label.clone(),
-                ty: apply(ty.clone(), substitutions),
+                ty: session.apply(ty.clone(), substitutions),
                 node_id: *node_id,
             },
             Self::TypeMember {
@@ -251,10 +226,10 @@ impl Predicate<InferTy> {
                 returns,
                 generics,
             } => Self::TypeMember {
-                base: apply(owner.clone(), substitutions),
+                base: session.apply(owner.clone(), substitutions),
                 member: member.clone(),
-                returns: apply(returns.clone(), substitutions),
-                generics: apply_mult(generics.clone(), substitutions),
+                returns: session.apply(returns.clone(), substitutions),
+                generics: session.apply_mult(generics.clone(), substitutions),
             },
             Self::Call {
                 callee,
@@ -262,114 +237,112 @@ impl Predicate<InferTy> {
                 returns,
                 receiver,
             } => Self::Call {
-                callee: apply(callee.clone(), substitutions),
+                callee: session.apply(callee.clone(), substitutions),
                 args: args
                     .iter()
-                    .map(|arg| apply(arg.clone(), substitutions))
+                    .map(|arg| session.apply(arg.clone(), substitutions))
                     .collect(),
-                returns: apply(returns.clone(), substitutions),
-                receiver: receiver.as_ref().map(|r| apply(r.clone(), substitutions)),
+                returns: session.apply(returns.clone(), substitutions),
+                receiver: receiver
+                    .as_ref()
+                    .map(|r| session.apply(r.clone(), substitutions)),
             },
             Self::Equals { lhs, rhs } => Self::Equals {
-                lhs: apply(lhs.clone(), substitutions),
-                rhs: apply(rhs.clone(), substitutions),
+                lhs: session.apply(lhs.clone(), substitutions),
+                rhs: session.apply(rhs.clone(), substitutions),
             },
         }
     }
 
-    pub fn instantiate(
+    pub fn instantiate<'a>(
         &self,
         id: NodeID,
-        substitutions: &InstantiationSubstitutions,
-        span: Span,
-        level: Level,
-    ) -> Constraint {
+        constraints: &'a mut ConstraintStore,
+        context: &mut impl Solve,
+    ) -> &'a Constraint {
+        let level = context.level();
         match self.clone() {
             Self::Projection {
                 base,
                 label,
                 returns,
                 protocol_id,
-            } => Constraint::Projection(Projection {
-                node_id: id,
-                protocol_id,
-                base: instantiate_ty(id, base, substitutions, level),
+            } => constraints.wants_projection(
+                id,
+                instantiate_ty(id, base, context.instantiations_mut(), level),
                 label,
-                result: instantiate_ty(id, returns, substitutions, level),
-                cause: ConstraintCause::Internal,
-                span,
-            }),
-            Self::Conforms {
-                param,
                 protocol_id,
-                span,
-            } => Constraint::Conforms(Conforms {
-                ty: instantiate_ty(id, InferTy::Param(param), substitutions, level),
+                instantiate_ty(id, returns, context.instantiations_mut(), level),
+                &context.group_info(),
+            ),
+            Self::Conforms { param, protocol_id } => constraints.wants_conforms(
+                instantiate_ty(
+                    id,
+                    InferTy::Param(param),
+                    context.instantiations_mut(),
+                    level,
+                ),
                 protocol_id,
-                span,
-            }),
-            Self::Equals { lhs, rhs } => Constraint::Equals(Equals {
-                lhs: instantiate_ty(id, lhs, substitutions, level),
-                rhs: instantiate_ty(id, rhs, substitutions, level),
-                cause: ConstraintCause::Internal,
-                span,
-            }),
-            Self::HasField { row, label, ty } => Constraint::HasField(HasField {
-                row: instantiate_row(id, InferRow::Param(row), substitutions, level),
+            ),
+            Self::Equals { lhs, rhs } => constraints.wants_equals(
+                instantiate_ty(id, lhs, context.instantiations_mut(), level),
+                instantiate_ty(id, rhs, context.instantiations_mut(), level),
+            ),
+            Self::HasField { row, label, ty } => constraints._has_field(
+                instantiate_row(
+                    id,
+                    InferRow::Param(row),
+                    context.instantiations_mut(),
+                    level,
+                ),
                 label,
-                ty: instantiate_ty(id, ty, substitutions, level),
-                cause: ConstraintCause::Internal,
-                span,
-            }),
+                instantiate_ty(id, ty, context.instantiations_mut(), level),
+                &context.group_info(),
+            ),
             Self::Member {
                 receiver,
                 label,
                 ty,
                 node_id,
-            } => Constraint::Member(Member {
+            } => constraints.wants_member(
                 node_id,
-                receiver: instantiate_ty(id, receiver, substitutions, level),
+                instantiate_ty(id, receiver, context.instantiations_mut(), level),
                 label,
-                ty: instantiate_ty(id, ty, substitutions, level),
-                cause: ConstraintCause::Internal,
-                span,
-            }),
+                instantiate_ty(id, ty, context.instantiations_mut(), level),
+                &context.group_info(),
+            ),
             Self::TypeMember {
                 base,
                 member,
                 returns,
                 generics,
-            } => Constraint::TypeMember(TypeMember {
-                base: instantiate_ty(id, base, substitutions, level),
-                node_id: id,
-                name: member,
-                generics: generics
+            } => constraints.wants_type_member(
+                instantiate_ty(id, base, context.instantiations_mut(), level),
+                member,
+                generics
                     .iter()
-                    .map(|g| instantiate_ty(id, g.clone(), substitutions, level))
+                    .map(|g| instantiate_ty(id, g.clone(), context.instantiations_mut(), level))
                     .collect(),
-                result: instantiate_ty(id, returns, substitutions, level),
-                cause: ConstraintCause::Internal,
-                span,
-            }),
+                instantiate_ty(id, returns, context.instantiations_mut(), level),
+                id,
+                &context.group_info(),
+            ),
             Self::Call {
                 callee,
                 args,
                 returns,
                 receiver,
-            } => Constraint::Call(Call {
-                callee_id: id,
-                callee: instantiate_ty(id, callee, substitutions, level),
-                args: args
-                    .iter()
-                    .map(|f| instantiate_ty(id, f.clone(), substitutions, level))
+            } => constraints.wants_call(
+                id,
+                instantiate_ty(id, callee, context.instantiations_mut(), level),
+                args.iter()
+                    .map(|f| instantiate_ty(id, f.clone(), context.instantiations_mut(), level))
                     .collect(),
-                type_args: vec![],
-                returns: instantiate_ty(id, returns, substitutions, level),
-                receiver: receiver.map(|r| instantiate_ty(id, r.clone(), substitutions, level)),
-                span,
-                cause: ConstraintCause::Internal,
-                level,
-            }),
+                Default::default(),
+                instantiate_ty(id, returns, context.instantiations_mut(), level),
+                receiver.map(|r| instantiate_ty(id, r, context.instantiations_mut(), level)),
+                &context.group_info(),
+            ),
         }
     }
 }

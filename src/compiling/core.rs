@@ -1,9 +1,19 @@
+use lazy_static::lazy_static;
+
 use crate::compiling::{
     driver::{Driver, DriverConfig, Source},
     module::{Module, ModuleId},
 };
 
+lazy_static! {
+    static ref CORE_MODULE: Module = _compile();
+}
+
 pub fn compile() -> Module {
+    CORE_MODULE.clone()
+}
+
+pub fn _compile() -> Module {
     let _s = tracing::trace_span!("compile_prelude", prelude = true).entered();
     let config = DriverConfig {
         module_id: ModuleId::Core,

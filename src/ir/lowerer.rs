@@ -354,7 +354,7 @@ impl<'a> Lowerer<'a> {
     ) -> Result<(Value, Ty), IRError> {
         let func_ty = match self
             .types
-            .get_symbol(&name.symbol())
+            .get_symbol(&name.symbol().expect("name not resolved"))
             .unwrap_or_else(|| panic!("did not get func ty for {name:?}"))
         {
             TypeEntry::Mono(ty) => ty.clone(),
@@ -376,7 +376,9 @@ impl<'a> Lowerer<'a> {
             unreachable!(
                 "init has no params - param_tys: {param_tys:?} name: {name:?}, sym: {:?}, ty: {:?}, {:?}",
                 #[allow(clippy::unwrap_used)]
-                self.types.get_symbol(&name.symbol()).unwrap(),
+                self.types
+                    .get_symbol(&name.symbol().expect("name not resolved"))
+                    .unwrap(),
                 func_ty,
                 formatter.format(&[Node::Decl(decl.clone())], 80)
             );
@@ -388,7 +390,8 @@ impl<'a> Lowerer<'a> {
         for param in params.iter() {
             let register = self.next_register();
             param_values.push(Value::Reg(register.0));
-            self.bindings.insert(param.name.symbol(), register);
+            self.bindings
+                .insert(param.name.symbol().expect("name not resolved"), register);
         }
 
         let mut ret = Value::Void;
@@ -407,7 +410,7 @@ impl<'a> Lowerer<'a> {
             .expect("did not get current function");
 
         self.functions.insert(
-            name.symbol(),
+            name.symbol().expect("name not resolved"),
             PolyFunction {
                 name: name.clone(),
                 params: param_values,
@@ -432,12 +435,12 @@ impl<'a> Lowerer<'a> {
             StmtKind::If(cond, conseq, alt) => {
                 self.lower_if_stmt(cond, conseq, alt, instantiations)
             }
-            #[warn(clippy::todo)]
+            #[allow(clippy::todo)]
             StmtKind::Return(_expr) => todo!(),
-            #[warn(clippy::todo)]
+            #[allow(clippy::todo)]
             StmtKind::Break => todo!(),
             StmtKind::Assignment(lhs, rhs) => self.lower_assignment(lhs, rhs, instantiations),
-            #[warn(clippy::todo)]
+            #[allow(clippy::todo)]
             StmtKind::Loop(_expr, _block) => todo!(),
         }
     }
@@ -584,7 +587,9 @@ impl<'a> Lowerer<'a> {
 
     fn lower_lvalue(&mut self, expr: &Expr) -> Result<LValue<Label>, IRError> {
         match &expr.kind {
-            ExprKind::Variable(name) => Ok(LValue::Variable(name.symbol())),
+            ExprKind::Variable(name) => {
+                Ok(LValue::Variable(name.symbol().expect("name not resolved")))
+            }
             ExprKind::Member(Some(box receiver), label, _span) => {
                 let receiver_lvalue = self.lower_lvalue(receiver)?;
                 let (receiver_ty, ..) = self.specialized_ty(receiver).expect("didn't get base ty");
@@ -599,32 +604,31 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    #[instrument(level = tracing::Level::TRACE, skip(self, pattern), fields(pattern.id = %pattern.id))]
+    // #[instrument(level = tracing::Level::TRACE, skip(self, pattern), fields(pattern.id = %pattern.id))]
     fn lower_pattern(&mut self, pattern: &Pattern) -> Result<Bind, IRError> {
         match &pattern.kind {
             PatternKind::Bind(name) => {
                 let value = self.next_register();
-                let symbol = name.symbol();
+                let symbol = name.symbol().expect("name not resolved");
                 self.bindings.insert(symbol, value);
                 Ok(Bind::Assigned(value))
             }
-            #[warn(clippy::todo)]
+            #[allow(clippy::todo)]
             PatternKind::LiteralInt(_) => todo!(),
-            #[warn(clippy::todo)]
+            #[allow(clippy::todo)]
             PatternKind::LiteralFloat(_) => todo!(),
-            #[warn(clippy::todo)]
+            #[allow(clippy::todo)]
             PatternKind::LiteralTrue => todo!(),
-            #[warn(clippy::todo)]
+            #[allow(clippy::todo)]
             PatternKind::LiteralFalse => todo!(),
-            #[warn(clippy::todo)]
+            #[allow(clippy::todo)]
             PatternKind::Tuple(..) => todo!(),
-            #[warn(clippy::todo)]
             PatternKind::Wildcard => Ok(Bind::Discard),
-            #[warn(clippy::todo)]
+            #[allow(clippy::todo)]
             PatternKind::Variant { .. } => todo!(),
-            #[warn(clippy::todo)]
+            #[allow(clippy::todo)]
             PatternKind::Record { .. } => todo!(),
-            #[warn(clippy::todo)]
+            #[allow(clippy::todo)]
             PatternKind::Struct { .. } => todo!(),
         }
     }
@@ -638,7 +642,7 @@ impl<'a> Lowerer<'a> {
     ) -> Result<(Value, Ty), IRError> {
         match &expr.kind {
             ExprKind::Func(func) => self.lower_func(func, bind, instantiations),
-            #[warn(clippy::todo)]
+            #[allow(clippy::todo)]
             ExprKind::LiteralArray(_exprs) => todo!(),
             ExprKind::LiteralInt(val) => {
                 let ret = self.ret(bind);
@@ -666,13 +670,13 @@ impl<'a> Lowerer<'a> {
             }
             ExprKind::LiteralTrue => Ok((Value::Bool(true), Ty::Bool)),
             ExprKind::LiteralFalse => Ok((Value::Bool(false), Ty::Bool)),
-            #[warn(clippy::todo)]
+            #[allow(clippy::todo)]
             ExprKind::LiteralString(_) => todo!(),
             ExprKind::Unary(..) => Ok((Value::Void, Ty::Void)), // Converted to calls earlier
             ExprKind::Binary(..) => Ok((Value::Void, Ty::Void)), // Converted to calls earlier
-            #[warn(clippy::todo)]
+            #[allow(clippy::todo)]
             ExprKind::Tuple(..) => todo!(),
-            #[warn(clippy::todo)]
+            #[allow(clippy::todo)]
             ExprKind::Block(..) => todo!(),
 
             ExprKind::Call {
@@ -714,7 +718,7 @@ impl<'a> Lowerer<'a> {
 
             ExprKind::Variable(name) => self.lower_variable(name, expr, instantiations),
             ExprKind::Constructor(name) => self.lower_constructor(name, expr, bind, instantiations),
-            #[warn(clippy::todo)]
+            #[allow(clippy::todo)]
             ExprKind::If(..) => todo!(),
             ExprKind::Match(box scrutinee, arms) => {
                 self.lower_match(scrutinee, arms, bind, instantiations)
@@ -722,7 +726,7 @@ impl<'a> Lowerer<'a> {
             ExprKind::RecordLiteral { fields, .. } => {
                 self.lower_record_literal(expr, fields, bind, instantiations)
             }
-            #[warn(clippy::todo)]
+            #[allow(clippy::todo)]
             ExprKind::RowVariable(..) => todo!(),
             ExprKind::As(lhs, ..) => self.lower_expr(lhs, bind, instantiations),
             _ => unreachable!("cannot lower expr: {expr:?}"),
@@ -948,7 +952,7 @@ impl<'a> Lowerer<'a> {
             .types
             .catalog
             .initializers
-            .get(&name.symbol())
+            .get(&name.symbol().expect("name not resolved"))
             .expect("did not get init")
             .get(&Label::Named("init".into()))
             .expect("did not get init");
@@ -982,7 +986,7 @@ impl<'a> Lowerer<'a> {
         bind: Bind,
         old_instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
-        let enum_symbol = name.symbol();
+        let enum_symbol = name.symbol().expect("name not resolved");
         let constructor_sym = *self
             .types
             .catalog
@@ -1049,7 +1053,7 @@ impl<'a> Lowerer<'a> {
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self, receiver))]
-    #[warn(clippy::todo)]
+    #[allow(clippy::todo)]
     fn lower_member(
         &mut self,
         id: NodeID,
@@ -1122,7 +1126,7 @@ impl<'a> Lowerer<'a> {
             Value::Func(monomorphized_name)
         } else {
             self.bindings
-                .get(&name.symbol())
+                .get(&name.symbol().expect("name not resolved"))
                 .expect("did not get binding for variable")
                 .into()
         };
@@ -1148,7 +1152,7 @@ impl<'a> Lowerer<'a> {
             .types
             .catalog
             .initializers
-            .get(&name.symbol())
+            .get(&name.symbol().expect("name not resolved"))
             .unwrap_or_else(|| panic!("did not get initializers for {name:?}"))
             .get(&Label::Named("init".into()))
             .expect("did not get init");
@@ -1164,7 +1168,7 @@ impl<'a> Lowerer<'a> {
             .types
             .catalog
             .properties
-            .get(&name.symbol())
+            .get(&name.symbol().expect("name not resolved"))
             .expect("did not get properties");
 
         // Extract return type from the initializer function
@@ -1212,7 +1216,7 @@ impl<'a> Lowerer<'a> {
 
         // Handle embedded IR call
         if let ExprKind::Variable(name) = &callee.kind
-            && name.symbol() == Symbol::IR
+            && name.symbol().expect("name not resolved") == Symbol::IR
         {
             return self.lower_embedded_ir_call(call_expr.id, args, dest);
         }
@@ -1246,8 +1250,9 @@ impl<'a> Lowerer<'a> {
             return self.lower_method_call(
                 call_expr,
                 callee,
-                receiver,
+                receiver.clone(),
                 member,
+                args,
                 arg_vals,
                 dest,
                 &instantiations,
@@ -1273,17 +1278,26 @@ impl<'a> Lowerer<'a> {
         &mut self,
         call_expr: &Expr,
         callee_expr: &Expr,
-        receiver: &Expr,
+        mut receiver: Expr,
         label: &Label,
+        arg_exprs: &[CallArg],
         mut args: Vec<Value>,
         dest: Register,
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
         let ty = self.ty_from_id(&call_expr.id)?;
-        let (receiver_ir, _) = self.lower_expr(receiver, Bind::Fresh, instantiations)?;
-        args.insert(0, receiver_ir);
 
-        if let Some(method_sym) = self.lookup_instance_method(receiver, label)? {
+        // Is this an instance method call on a constructor? If so we don't need
+        // to prepend a self arg because it's passed explicitly (like Foo.bar(fizz) where
+        // fizz == self)
+        if let ExprKind::Constructor(_name) = &receiver.kind {
+            receiver = arg_exprs[0].value.clone();
+        } else {
+            let (receiver_ir, _) = self.lower_expr(&receiver, Bind::Fresh, instantiations)?;
+            args.insert(0, receiver_ir);
+        }
+
+        if let Some(method_sym) = self.lookup_instance_method(&receiver, label)? {
             self.check_import(&method_sym);
             self.push_instr(Instruction::Call {
                 dest,
@@ -1308,8 +1322,10 @@ impl<'a> Lowerer<'a> {
         }
 
         Err(IRError::TypeNotFound(format!(
-            "No witness found for {:?} in {:?}.",
-            label, receiver
+            "No witness found for {:?} in {:?} ({:?}).",
+            label,
+            receiver,
+            self.ty_from_id(&receiver.id)
         )))
     }
 
@@ -1320,7 +1336,7 @@ impl<'a> Lowerer<'a> {
         bind: Bind,
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
-        let ty = self.ty_from_symbol(&func.name.symbol())?;
+        let ty = self.ty_from_symbol(&func.name.symbol().expect("name not resolved"))?;
 
         let Ty::Func(param_tys, box mut ret_ty) = ty else {
             panic!("didn't get func ty for {:?}: {ty:?}", func.name);
@@ -1333,7 +1349,8 @@ impl<'a> Lowerer<'a> {
         for param in func.params.iter() {
             let register = self.next_register();
             params.push(Value::Reg(register.0));
-            self.bindings.insert(param.name.symbol(), register);
+            self.bindings
+                .insert(param.name.symbol().expect("name not resolved"), register);
         }
 
         let mut ret = Value::Void;
@@ -1352,7 +1369,7 @@ impl<'a> Lowerer<'a> {
             .expect("did not get current function");
         drop(_s);
         self.functions.insert(
-            func.name.symbol(),
+            func.name.symbol().expect("name not resolved"),
             PolyFunction {
                 name: func.name.clone(),
                 params,
@@ -1520,7 +1537,7 @@ impl<'a> Lowerer<'a> {
                 .program
                 .polyfunctions
                 .get(symbol)
-                .expect("didn't get method for import");
+                .unwrap_or_else(|| panic!("didn't get method for import: {symbol:?}"));
             self.functions.insert(*symbol, method_func.clone());
         }
     }
@@ -1545,7 +1562,7 @@ impl<'a> Lowerer<'a> {
         let new_name = Name::Resolved(new_symbol.into(), new_name_str);
 
         self.specializations
-            .entry(name.symbol())
+            .entry(name.symbol().expect("name not resolved"))
             .or_default()
             .push(Specialization {
                 name: new_name.clone(),
@@ -1593,7 +1610,7 @@ impl<'a> Lowerer<'a> {
             }
         };
 
-        let symbol = name.symbol();
+        let symbol = name.symbol().expect("name not resolved");
 
         let entry = self
             .types

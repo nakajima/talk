@@ -191,6 +191,18 @@ impl<T: SomeType> TypeCatalog<T> {
             return Some(*sym);
         }
 
+        if let Some(entries) = self.instance_methods.get(receiver)
+            && let Some(sym) = entries.get(label)
+        {
+            return Some(*sym);
+        }
+
+        if let Some(entries) = self.method_requirements.get(receiver)
+            && let Some(sym) = entries.get(label)
+        {
+            return Some(*sym);
+        }
+
         None
     }
 

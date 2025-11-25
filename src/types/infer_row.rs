@@ -1,16 +1,17 @@
 use std::collections::BTreeMap;
 
+use ena::unify::UnifyKey;
 use indexmap::IndexMap;
 
 use crate::{
     compiling::module::ModuleId,
     label::Label,
     types::{
-        infer_ty::InferTy,
+        infer_ty::{InferTy, Level},
         row::Row,
         scheme::ForAll,
-        type_operations::{UnificationSubstitutions, apply, apply_row},
-        type_session::TypeDefKind,
+        type_operations::UnificationSubstitutions,
+        type_session::{TypeDefKind, TypeSession},
     },
 };
 
@@ -19,6 +20,22 @@ pub struct RowMetaId(pub u32);
 impl From<u32> for RowMetaId {
     fn from(value: u32) -> Self {
         RowMetaId(value)
+    }
+}
+
+impl UnifyKey for RowMetaId {
+    type Value = Level;
+
+    fn index(&self) -> u32 {
+        self.0
+    }
+
+    fn from_index(u: u32) -> Self {
+        Self(u)
+    }
+
+    fn tag() -> &'static str {
+        "meta"
     }
 }
 
@@ -149,21 +166,22 @@ pub enum RowTail {
 pub fn normalize_row(
     mut row: InferRow,
     subs: &mut UnificationSubstitutions,
+    session: &mut TypeSession,
 ) -> (BTreeMap<Label, InferTy>, RowTail) {
     let mut map = BTreeMap::new();
     loop {
-        row = apply_row(row, subs);
+        row = session.apply_row(row, subs);
         match row {
             InferRow::Extend {
                 row: rest,
                 label,
                 ty,
             } => {
-                map.insert(label, apply(ty, subs));
+                map.insert(label, session.apply(ty, subs));
                 row = *rest;
             }
             InferRow::Empty(..) => break (map, RowTail::Empty),
-            InferRow::Var(id) => break (map, RowTail::Var(subs.canon_row(id))),
+            InferRow::Var(id) => break (map, RowTail::Var(session.canon_row(id))),
             InferRow::Param(id) => break (map, RowTail::Param(id)),
         }
     }
