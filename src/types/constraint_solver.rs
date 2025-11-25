@@ -53,7 +53,6 @@ impl<'a> ConstraintSolver<'a> {
             let worklist = constraints.worklist();
             for want_id in worklist {
                 let want = constraints.get(&want_id).clone();
-                tracing::trace!("solving {want:?}");
                 let constraint = want.apply(&mut self.context.substitutions, session);
                 let solution = match constraint {
                     Constraint::Equals(ref equals) => {

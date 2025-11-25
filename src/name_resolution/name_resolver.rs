@@ -624,7 +624,10 @@ impl NameResolver {
             if matches!(
                 name,
                 Name::Resolved(
-                    Symbol::Struct(_) | Symbol::Enum(_) | Symbol::TypeAlias(_),
+                    Symbol::Struct(..)
+                        | Symbol::Enum(..)
+                        | Symbol::TypeAlias(..)
+                        | Symbol::Protocol(..),
                     _
                 )
             ) {

@@ -324,7 +324,6 @@ fn unify_rows(
 }
 
 // Unify types. Returns true if progress was made.
-#[instrument(level = tracing::Level::TRACE, skip(context, session))]
 pub(super) fn unify(
     lhs: &InferTy,
     rhs: &InferTy,
@@ -335,6 +334,13 @@ pub(super) fn unify(
     let rhs = context.normalize(rhs.clone(), session);
     let lhs = session.apply(lhs, context.substitutions_mut());
     let rhs = session.apply(rhs, context.substitutions_mut());
+
+    if lhs == rhs {
+        return Ok(Default::default());
+    }
+
+    let _s =
+        tracing::trace_span!("unify", lhs = format!("{lhs:?}"), rhs = format!("{rhs:?}")).entered();
 
     let mut result = vec![];
 

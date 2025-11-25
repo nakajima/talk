@@ -73,39 +73,37 @@ impl LowerOperators {
                 };
 
                 let span = lhs.span;
-                let lhs_as = Expr {
+                let protocol_constructor = Expr {
                     id: NodeID(expr.id.0, self.node_ids.next_id()),
                     span,
-                    kind: ExprKind::As(
-                        lhs,
-                        TypeAnnotation {
-                            id: NodeID(expr.id.0, self.node_ids.next_id()),
-                            span,
-                            kind: TypeAnnotationKind::Nominal {
-                                name: protocol_name.into(),
-                                name_span: span,
-                                generics: vec![],
-                            },
-                        },
-                    ),
+                    kind: ExprKind::Variable(protocol_name.into()),
                 };
 
                 let member = Expr {
                     id: NodeID(expr.id.0, self.node_ids.next_id()),
                     span,
-                    kind: ExprKind::Member(Some(lhs_as.into()), label, span),
+                    kind: ExprKind::Member(Some(protocol_constructor.into()), label, span),
                 };
 
                 ExprKind::Call {
                     callee: member.into(),
                     type_args: vec![],
-                    args: vec![CallArg {
-                        id: expr.id,
-                        label: Label::Positional(0),
-                        label_span: expr.span,
-                        value: rhs,
-                        span: expr.span,
-                    }],
+                    args: vec![
+                        CallArg {
+                            id: expr.id,
+                            label: Label::Positional(0),
+                            label_span: expr.span,
+                            value: *lhs,
+                            span: expr.span,
+                        },
+                        CallArg {
+                            id: rhs.id,
+                            label: Label::Positional(1),
+                            label_span: rhs.span,
+                            value: rhs,
+                            span: expr.span,
+                        },
+                    ],
                 }
             }
             _ => return,
@@ -137,22 +135,24 @@ pub mod tests {
         assert_eq_diff!(
             *parsed.roots[0].as_stmt(),
             any_stmt!(StmtKind::Expr(invocation!(
-                ExprKind::As(
-                    any_expr!(ExprKind::LiteralInt("1".into())).into(),
-                    annotation!(TypeAnnotationKind::Nominal {
-                        name: "Add".into(),
-                        name_span: Span::ANY,
-                        generics: vec![]
-                    })
-                ),
+                ExprKind::Variable("Add".into()),
                 "add",
-                vec![CallArg {
-                    id: NodeID::ANY,
-                    label: Label::Positional(0),
-                    label_span: Span::ANY,
-                    value: any_expr!(ExprKind::LiteralInt("2".into())),
-                    span: Span::ANY,
-                }]
+                vec![
+                    CallArg {
+                        id: NodeID::ANY,
+                        label: Label::Positional(0),
+                        label_span: Span::ANY,
+                        value: any_expr!(ExprKind::LiteralInt("1".into())),
+                        span: Span::ANY,
+                    },
+                    CallArg {
+                        id: NodeID::ANY,
+                        label: Label::Positional(1),
+                        label_span: Span::ANY,
+                        value: any_expr!(ExprKind::LiteralInt("2".into())),
+                        span: Span::ANY,
+                    }
+                ]
             )))
         )
     }
@@ -165,22 +165,24 @@ pub mod tests {
         assert_eq_diff!(
             *parsed.roots[0].as_stmt(),
             any_stmt!(StmtKind::Expr(invocation!(
-                ExprKind::As(
-                    any_expr!(ExprKind::LiteralInt("1".into())).into(),
-                    annotation!(TypeAnnotationKind::Nominal {
-                        name: "Subtract".into(),
-                        name_span: Span::ANY,
-                        generics: vec![]
-                    })
-                ),
+                ExprKind::Variable("Subtract".into()),
                 "minus",
-                vec![CallArg {
-                    id: NodeID::ANY,
-                    label: Label::Positional(0),
-                    label_span: Span::ANY,
-                    value: any_expr!(ExprKind::LiteralInt("2".into())),
-                    span: Span::ANY,
-                }]
+                vec![
+                    CallArg {
+                        id: NodeID::ANY,
+                        label: Label::Positional(0),
+                        label_span: Span::ANY,
+                        value: any_expr!(ExprKind::LiteralInt("1".into())),
+                        span: Span::ANY,
+                    },
+                    CallArg {
+                        id: NodeID::ANY,
+                        label: Label::Positional(1),
+                        label_span: Span::ANY,
+                        value: any_expr!(ExprKind::LiteralInt("2".into())),
+                        span: Span::ANY,
+                    }
+                ]
             )))
         )
     }
@@ -193,22 +195,24 @@ pub mod tests {
         assert_eq_diff!(
             *parsed.roots[0].as_stmt(),
             any_stmt!(StmtKind::Expr(invocation!(
-                ExprKind::As(
-                    any_expr!(ExprKind::LiteralInt("1".into())).into(),
-                    annotation!(TypeAnnotationKind::Nominal {
-                        name: "Multiply".into(),
-                        name_span: Span::ANY,
-                        generics: vec![]
-                    })
-                ),
+                ExprKind::Variable("Multiply".into()),
                 "times",
-                vec![CallArg {
-                    id: NodeID::ANY,
-                    label: Label::Positional(0),
-                    label_span: Span::ANY,
-                    value: any_expr!(ExprKind::LiteralInt("2".into())),
-                    span: Span::ANY,
-                }]
+                vec![
+                    CallArg {
+                        id: NodeID::ANY,
+                        label: Label::Positional(0),
+                        label_span: Span::ANY,
+                        value: any_expr!(ExprKind::LiteralInt("1".into())),
+                        span: Span::ANY,
+                    },
+                    CallArg {
+                        id: NodeID::ANY,
+                        label: Label::Positional(1),
+                        label_span: Span::ANY,
+                        value: any_expr!(ExprKind::LiteralInt("2".into())),
+                        span: Span::ANY,
+                    }
+                ]
             )))
         )
     }
@@ -221,22 +225,24 @@ pub mod tests {
         assert_eq_diff!(
             *parsed.roots[0].as_stmt(),
             any_stmt!(StmtKind::Expr(invocation!(
-                ExprKind::As(
-                    any_expr!(ExprKind::LiteralInt("1".into())).into(),
-                    annotation!(TypeAnnotationKind::Nominal {
-                        name: "Divide".into(),
-                        name_span: Span::ANY,
-                        generics: vec![]
-                    })
-                ),
+                ExprKind::Variable("Divide".into()),
                 "divide",
-                vec![CallArg {
-                    id: NodeID::ANY,
-                    label: Label::Positional(0),
-                    label_span: Span::ANY,
-                    value: any_expr!(ExprKind::LiteralInt("2".into())),
-                    span: Span::ANY,
-                }]
+                vec![
+                    CallArg {
+                        id: NodeID::ANY,
+                        label: Label::Positional(0),
+                        label_span: Span::ANY,
+                        value: any_expr!(ExprKind::LiteralInt("1".into())),
+                        span: Span::ANY,
+                    },
+                    CallArg {
+                        id: NodeID::ANY,
+                        label: Label::Positional(1),
+                        label_span: Span::ANY,
+                        value: any_expr!(ExprKind::LiteralInt("2".into())),
+                        span: Span::ANY,
+                    }
+                ]
             )))
         )
     }

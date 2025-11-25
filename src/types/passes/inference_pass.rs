@@ -6,6 +6,7 @@ use tracing::instrument;
 use crate::{
     ast::AST,
     diagnostic::{AnyDiagnostic, Diagnostic},
+    formatter,
     label::Label,
     name::Name,
     name_resolution::{
@@ -676,7 +677,6 @@ impl<'a> InferencePass<'a> {
         self.solve(&mut context, group.binders.clone(), placeholders)
     }
 
-    #[instrument(skip(self, context))]
     fn solve(
         &mut self,
         context: &mut SolveContext,
@@ -695,7 +695,6 @@ impl<'a> InferencePass<'a> {
         );
 
         let generalizable = self.constraints.generalizable_for(context);
-        println!("Generalizable for context: {context:?} -> {generalizable:?}");
 
         for (i, binder) in binders.iter().enumerate() {
             let ty = self
@@ -808,7 +807,7 @@ impl<'a> InferencePass<'a> {
         ty
     }
 
-    #[instrument(level = tracing::Level::TRACE, skip(self, expr, context), fields(expr.id = ?expr.id))]
+    #[instrument(level = tracing::Level::TRACE, skip(self, expr, context), fields(expr.id = ?expr.id, expr = formatter::format_node(&expr.into(), &self.asts[0].meta)))]
     fn visit_expr(&mut self, expr: &Expr, context: &mut impl Solve) -> InferTy {
         let ty = match &expr.kind {
             ExprKind::LiteralArray(items) => self.visit_array(items, context),
@@ -1241,14 +1240,31 @@ impl<'a> InferencePass<'a> {
             self.register_conformance(ty, nominal_symbol, sym, node_id, span, context);
         }
 
-        let associated_types = self
-            .session
-            .type_catalog
-            .associated_types
-            .get(&conformance_symbol)
-            .cloned()
-            .unwrap_or_default()
+        // Get the protocol's associated type declarations
+        // First try ASTs (for locally defined protocols), then type_catalog (for imported protocols)
+        let protocol_associated_types = self
+            .asts
             .iter()
+            .find_map(|ast| ast.phase.child_types.get(&conformance_symbol))
+            .cloned()
+            .or_else(|| {
+                self.session
+                    .type_catalog
+                    .associated_types
+                    .get(&conformance_symbol)
+                    .cloned()
+            })
+            .unwrap_or_default();
+
+        tracing::debug!(
+            "register_conformance: conformance_symbol={:?}, protocol_associated_types={:?}",
+            conformance_symbol,
+            protocol_associated_types
+        );
+
+        let associated_types = protocol_associated_types
+            .iter()
+            .filter(|(_, sym)| matches!(sym, Symbol::AssociatedType(_)))
             .fold(FxHashMap::default(), |mut acc, (label, _)| {
                 let child_types = self
                     .asts
@@ -1264,9 +1280,17 @@ impl<'a> InferencePass<'a> {
                     self.session.new_ty_meta_var(context.level())
                 };
 
+                tracing::debug!(
+                    "  label={:?}, child_types={:?}, associated_ty={:?}",
+                    label,
+                    child_types,
+                    associated_ty
+                );
                 acc.insert(label.clone(), associated_ty);
                 acc
             });
+
+        tracing::debug!("  final associated_types={:?}", associated_types);
 
         self.session.type_catalog.conformances.insert(
             ConformanceKey {
@@ -1766,16 +1790,21 @@ impl<'a> InferencePass<'a> {
 
     #[instrument(level = tracing::Level::TRACE, skip(self, block, context))]
     fn infer_block(&mut self, block: &Block, context: &mut impl Solve) -> InferTy {
-        let tok = self.tracking_returns();
         let mut ret = InferTy::Void;
 
         for node in block.body.iter() {
             ret = self.visit_node(node, context);
         }
 
-        self.verify_returns(tok, ret.clone(), context);
         self.session.types_by_node.insert(block.id, ret.clone());
+        ret
+    }
 
+    #[instrument(level = tracing::Level::TRACE, skip(self, block, context))]
+    fn infer_block_with_returns(&mut self, block: &Block, context: &mut impl Solve) -> InferTy {
+        let tok = self.tracking_returns();
+        let ret = self.infer_block(block, context);
+        self.verify_returns(tok, ret.clone(), context);
         ret
     }
 
@@ -1797,7 +1826,7 @@ impl<'a> InferencePass<'a> {
         ty
     }
 
-    #[instrument(level = tracing::Level::TRACE, skip(self, context))]
+    #[instrument(level = tracing::Level::TRACE, skip(self, context, callee, type_args, args))]
     fn visit_call(
         &mut self,
         callee: &Expr,
@@ -1806,8 +1835,26 @@ impl<'a> InferencePass<'a> {
         context: &mut impl Solve,
     ) -> InferTy {
         let callee_ty = self.visit_expr(callee, context);
+
+        let arg_tys = args
+            .iter()
+            .map(|a| self.visit_expr(&a.value, context))
+            .collect_vec();
+        let type_args = type_args
+            .iter()
+            .map(|a| self.visit_type_annotation(a, context))
+            .collect_vec();
+
         let receiver_ty = match &callee.kind {
             ExprKind::Member(Some(rcv), ..) => {
+                if let ExprKind::Constructor(Name::Resolved(Symbol::Protocol(protocol_id), ..)) =
+                    &rcv.kind
+                    && let Some(first_arg) = arg_tys.first()
+                {
+                    self.constraints
+                        .wants_conforms(first_arg.clone(), *protocol_id);
+                }
+
                 // Reuse the already-computed type if available; otherwise visit.
                 Some(
                     self.session
@@ -1820,15 +1867,6 @@ impl<'a> InferencePass<'a> {
             ExprKind::Member(None, ..) => Some(self.session.new_ty_meta_var(context.level())),
             _ => None,
         };
-
-        let arg_tys = args
-            .iter()
-            .map(|a| self.visit_expr(&a.value, context))
-            .collect_vec();
-        let type_args = type_args
-            .iter()
-            .map(|a| self.visit_type_annotation(a, context))
-            .collect_vec();
 
         let ret = self.session.new_ty_meta_var(context.level());
         let instantiations = self
@@ -1871,7 +1909,7 @@ impl<'a> InferencePass<'a> {
         ret
     }
 
-    #[instrument(level = tracing::Level::TRACE, skip(self, context))]
+    #[instrument(level = tracing::Level::TRACE, skip(self, context, func), fields(func.name = ?func.name))]
     fn visit_func(&mut self, func: &Func, context: &mut impl Solve) -> InferTy {
         for generic in func.generics.iter() {
             self.register_generic(generic, context);
@@ -1884,7 +1922,7 @@ impl<'a> InferencePass<'a> {
             self.check_block(&func.body, ret.clone(), &mut context.next());
             ret
         } else {
-            self.infer_block(&func.body, &mut context.next())
+            self.infer_block_with_returns(&func.body, &mut context.next())
         };
 
         if params.is_empty() {
@@ -1927,13 +1965,8 @@ impl<'a> InferencePass<'a> {
     #[instrument(level = tracing::Level::TRACE, skip(self, block, context))]
     fn check_block(&mut self, block: &Block, expected: InferTy, context: &mut impl Solve) {
         let tok = self.tracking_returns();
-        let mut ret = InferTy::Void;
-        for node in &block.body {
-            ret = self.visit_node(node, context);
-        }
-
+        let ret = self.infer_block(block, context);
         self.verify_returns(tok, ret.clone(), context);
-
         self.constraints.wants_equals(ret, expected);
     }
 
@@ -2152,7 +2185,7 @@ impl<'a> InferencePass<'a> {
         }
     }
 
-    #[instrument(level = tracing::Level::TRACE, skip(self, context))]
+    #[instrument(level = tracing::Level::TRACE, skip(self, context, rhs))]
     fn visit_let(
         &mut self,
         lhs: &Pattern,

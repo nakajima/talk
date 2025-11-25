@@ -1,3 +1,5 @@
+use tracing::instrument;
+
 use crate::{
     label::Label,
     span::Span,
@@ -22,6 +24,7 @@ pub struct HasField {
 }
 
 impl HasField {
+    #[instrument(skip(constraints))]
     pub fn solve(&self, level: Level, constraints: &mut ConstraintStore) -> SolveResult {
         match &self.row {
             InferRow::Empty(..) => SolveResult::Err(TypeError::MemberNotFound(

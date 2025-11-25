@@ -156,16 +156,12 @@ impl Constraint {
         copy
     }
 
-    #[instrument(skip(substitutions), ret)]
+    #[instrument(skip(substitutions, session), ret)]
     pub fn into_predicate(
         &self,
         substitutions: &mut UnificationSubstitutions,
         session: &mut TypeSession,
     ) -> Option<Predicate<InferTy>> {
-        tracing::debug!(
-            "converting {:?} to predicate",
-            self.clone().apply(substitutions, session)
-        );
         let pred = match self {
             #[allow(clippy::panic)]
             Self::HasField(has_field) => {

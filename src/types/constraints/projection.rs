@@ -1,3 +1,5 @@
+use tracing::instrument;
+
 use crate::{
     ast::AST,
     label::Label,
@@ -25,6 +27,7 @@ pub struct Projection {
 }
 
 impl Projection {
+    #[instrument(skip(constraints, context, session, asts))]
     pub fn solve(
         &self,
         level: Level,
@@ -36,11 +39,14 @@ impl Projection {
         let base = session.apply(self.base.clone(), &mut context.substitutions);
         let result = session.apply(self.result.clone(), &mut context.substitutions);
 
-        // Try to reduce when base is a concrete nominal
-        if let InferTy::Nominal {
-            symbol: base_sym, ..
-        } = base
-        {
+        // Try to reduce when base is a concrete nominal or primitive
+        let base_sym = match &base {
+            InferTy::Nominal { symbol, .. } => Some(*symbol),
+            InferTy::Primitive(symbol) => Some(*symbol),
+            _ => None,
+        };
+
+        if let Some(base_sym) = base_sym {
             let conformance = if let Some(protocol_id) = self.protocol_id {
                 session.type_catalog.conformances.get(&ConformanceKey {
                     protocol_id, // add this field to Projection (see below)
@@ -55,6 +61,7 @@ impl Projection {
             };
 
             // Find a conformance for the nominal base that mentions this associated label
+            tracing::debug!("Projection: conformance={:?}", conformance);
             if let Some(conf) = conformance {
                 // Prefer the alias symbol (if the nominal actually provided `typealias T = ...`)
                 if let Some(alias_sym) = asts
@@ -104,10 +111,68 @@ impl Projection {
             }
         }
 
-        // If the base is still a meta variable, defer waiting on it specifically
-        // so we get woken when it's resolved (even if it was unified with another meta)
-        if let InferTy::Var { id, .. } = base {
-            SolveResult::Defer(DeferralReason::WaitingOnMeta(Meta::Ty(id)))
+        // If the base is still a meta variable, try to infer it from the result type
+        if let InferTy::Var { id, .. } = &base {
+            // If we have a concrete result and a known protocol, try to find which type
+            // would give us this associated type value (defaulting)
+            if let Some(protocol_id) = self.protocol_id {
+                tracing::debug!(
+                    "Projection defaulting: base={:?}, result={:?}, protocol={:?}",
+                    base,
+                    result,
+                    protocol_id
+                );
+                if !matches!(result, InferTy::Var { .. }) {
+                    // Find all conformances to this protocol where the associated type matches
+                    // First collect relevant conformance keys to avoid borrow issues
+                    let candidate_keys: Vec<_> = session
+                        .type_catalog
+                        .conformances
+                        .iter()
+                        .filter_map(|(key, conf)| {
+                            if key.protocol_id == protocol_id {
+                                conf.associated_types
+                                    .get(&self.label)
+                                    .map(|assoc_ty| (key.conforming_id, assoc_ty.clone()))
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+
+                    let num_candidates = candidate_keys.len();
+
+                    // Now check which ones match (with mutable access to session)
+                    let matching: Vec<_> = candidate_keys
+                        .into_iter()
+                        .filter(|(_, assoc_ty)| {
+                            let applied =
+                                session.apply(assoc_ty.clone(), &mut context.substitutions);
+                            applied == result
+                        })
+                        .collect();
+
+                    tracing::debug!(
+                        "Projection defaulting: candidates={:?}, matching={:?}",
+                        num_candidates,
+                        matching.len()
+                    );
+
+                    // If exactly one candidate, unify the base with that type
+                    if matching.len() == 1 {
+                        let (conforming_id, _) = &matching[0];
+                        tracing::debug!(
+                            "Projection defaulting: unifying base with {:?}",
+                            conforming_id
+                        );
+                        let conforming_ty = InferTy::Primitive(*conforming_id);
+                        constraints.wants_equals(base.clone(), conforming_ty);
+                        return SolveResult::Solved(vec![Meta::Ty(*id)]);
+                    }
+                }
+            }
+
+            SolveResult::Defer(DeferralReason::WaitingOnMeta(Meta::Ty(*id)))
         } else {
             SolveResult::Defer(DeferralReason::Unknown)
         }

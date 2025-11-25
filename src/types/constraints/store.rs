@@ -23,18 +23,17 @@ use crate::{
         infer_ty::{InferTy, Level, Meta, MetaVarId},
         passes::inference_pass::GeneralizationBlock,
         solve_context::SolveContext,
-        type_operations::UnificationSubstitutions,
     },
 };
 
 #[derive(Debug, PartialEq, PartialOrd, Eq, Ord)]
 pub enum ConstraintPriority {
     Conforms,
+    Call,
     Member,
     TypeMember,
     Projection,
     HasField,
-    Call,
     Equals,
 }
 
@@ -130,7 +129,6 @@ impl ConstraintStore {
 
     #[instrument(skip(self))]
     pub fn defer(&mut self, id: ConstraintId, reason: DeferralReason) {
-        tracing::debug!("defer constraint {:?}: {:?}", id, self.get(&id));
         self.deferred.insert(id);
         let constraint_node = ConstraintStoreNode::Constraint(id);
         match reason {
@@ -156,7 +154,6 @@ impl ConstraintStore {
         }
     }
 
-    #[instrument(skip(self))]
     pub fn solve(&mut self, id: ConstraintId) {
         tracing::debug!("solve constraint {:?}: {:?}", id, self.get(&id));
         self.deferred.swap_remove(&id);
@@ -177,10 +174,9 @@ impl ConstraintStore {
     pub fn generalizable_for(&self, context: &SolveContext) -> IndexSet<Constraint> {
         let mut res = IndexSet::default();
         for (id, constraint) in self.constraints.iter() {
-            println!("considering {:?}", constraint);
             let group = self.meta.get(id).unwrap_or_else(|| unreachable!()).group_id;
             if group != context.group {
-                println!(
+                tracing::trace!(
                     "wrong group: {group:?} (context group is {:?}, skipping",
                     context.group
                 );
@@ -188,7 +184,6 @@ impl ConstraintStore {
             }
 
             if self.solved.contains(id) {
-                println!("constraint is solved, skipping");
                 continue;
             }
 

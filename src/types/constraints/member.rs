@@ -31,6 +31,7 @@ pub struct Member {
 }
 
 impl Member {
+    #[instrument(skip(constraints, context, session))]
     pub fn solve(
         &self,
         constraints: &mut ConstraintStore,
@@ -48,6 +49,8 @@ impl Member {
                 {
                     return SolveResult::Solved(metas);
                 }
+
+                tracing::trace!("waiting on meta {id:?}");
 
                 return SolveResult::Defer(DeferralReason::WaitingOnMeta(Meta::Ty(*id)));
             }
@@ -193,9 +196,10 @@ impl Member {
             };
         }
 
-        constraints.wants_equals(member_ty, self.ty.clone());
-
-        SolveResult::Solved(Default::default())
+        match unify(&member_ty, &self.ty, context, session) {
+            Ok(vars) => SolveResult::Solved(vars),
+            Err(e) => SolveResult::Err(e),
+        }
     }
 
     #[instrument(skip(self, context, session, constraints))]

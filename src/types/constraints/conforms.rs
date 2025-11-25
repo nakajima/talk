@@ -1,3 +1,5 @@
+use tracing::instrument;
+
 use crate::{
     name_resolution::symbol::ProtocolId,
     types::{
@@ -19,6 +21,7 @@ pub struct Conforms {
 }
 
 impl Conforms {
+    #[instrument(skip(context, session))]
     pub fn solve(
         &self,
         context: &mut SolveContext,

@@ -172,6 +172,15 @@ impl TypeSession {
                         )
                     }),
             );
+
+            // Import associated_types (protocol child types) from modules
+            for (sym, entries) in module.1.types.catalog.associated_types.iter() {
+                catalog
+                    .associated_types
+                    .entry(*sym)
+                    .or_default()
+                    .extend(entries.clone());
+            }
         }
 
         TypeSession {
@@ -1150,28 +1159,24 @@ impl TypeSession {
     pub(crate) fn new_ty_meta_var(&mut self, level: Level) -> InferTy {
         let id = self.meta_vars.new_key(level);
         self.meta_levels.borrow_mut().insert(Meta::Ty(id), level);
-        tracing::trace!("Fresh {id:?}");
         InferTy::Var { id, level }
     }
 
     pub(crate) fn new_ty_meta_var_id(&mut self, level: Level) -> MetaVarId {
         let id = self.meta_vars.new_key(level);
         self.meta_levels.borrow_mut().insert(Meta::Ty(id), level);
-        tracing::trace!("Fresh {id:?}");
         id
     }
 
     pub(crate) fn new_row_meta_var(&mut self, level: Level) -> InferRow {
         let id = self.row_vars.new_key(level);
         self.meta_levels.borrow_mut().insert(Meta::Row(id), level);
-        tracing::trace!("Fresh {id:?}");
         InferRow::Var(id)
     }
 
     pub(crate) fn new_row_meta_var_id(&mut self, level: Level) -> RowMetaId {
         let id = self.row_vars.new_key(level);
         self.meta_levels.borrow_mut().insert(Meta::Row(id), level);
-        tracing::trace!("Fresh {id:?}");
         id
     }
 }

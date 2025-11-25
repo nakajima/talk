@@ -1,3 +1,5 @@
+use tracing::instrument;
+
 use crate::{
     ast::AST,
     label::Label,
@@ -26,6 +28,7 @@ pub struct TypeMember {
 }
 
 impl TypeMember {
+    #[instrument(skip(constraints, context, session, asts))]
     pub fn solve(
         &self,
         constraints: &mut ConstraintStore,

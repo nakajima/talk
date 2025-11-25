@@ -1,3 +1,5 @@
+use tracing::instrument;
+
 use crate::{
     node_id::NodeID,
     types::{
@@ -24,6 +26,7 @@ pub struct Call {
 }
 
 impl Call {
+    #[instrument(skip(constraints, context, session))]
     pub fn solve(
         &self,
         constraints: &mut ConstraintStore,
