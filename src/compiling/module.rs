@@ -38,7 +38,7 @@ impl ModuleEnvironment {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Module {
     pub name: String,
     pub types: Types,
