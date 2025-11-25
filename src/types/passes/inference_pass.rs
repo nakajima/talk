@@ -1846,13 +1846,23 @@ impl<'a> InferencePass<'a> {
             .collect_vec();
 
         let receiver_ty = match &callee.kind {
-            ExprKind::Member(Some(rcv), ..) => {
+            ExprKind::Member(Some(rcv), label, ..) => {
                 if let ExprKind::Constructor(Name::Resolved(Symbol::Protocol(protocol_id), ..)) =
                     &rcv.kind
                     && let Some(first_arg) = arg_tys.first()
                 {
                     self.constraints
                         .wants_conforms(first_arg.clone(), *protocol_id);
+
+                    // Store a meta witness for protocol method calls so rectify_witnesses
+                    // can resolve it to the concrete implementation based on the first arg type
+                    self.session.type_catalog.member_witnesses.insert(
+                        callee.id,
+                        MemberWitness::Meta {
+                            receiver: first_arg.clone(),
+                            label: label.clone(),
+                        },
+                    );
                 }
 
                 // Reuse the already-computed type if available; otherwise visit.

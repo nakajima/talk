@@ -1251,8 +1251,9 @@ impl<'a> Lowerer<'a> {
             return self.lower_method_call(
                 call_expr,
                 callee,
-                receiver,
+                receiver.clone(),
                 member,
+                args,
                 arg_vals,
                 dest,
                 &instantiations,
@@ -1278,17 +1279,26 @@ impl<'a> Lowerer<'a> {
         &mut self,
         call_expr: &Expr,
         callee_expr: &Expr,
-        receiver: &Expr,
+        mut receiver: Expr,
         label: &Label,
+        mut arg_exprs: &[CallArg],
         mut args: Vec<Value>,
         dest: Register,
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
         let ty = self.ty_from_id(&call_expr.id)?;
-        let (receiver_ir, _) = self.lower_expr(receiver, Bind::Fresh, instantiations)?;
-        args.insert(0, receiver_ir);
 
-        if let Some(method_sym) = self.lookup_instance_method(receiver, label)? {
+        // Is this an instance method call on a constructor? If so we don't need
+        // to prepend a self arg because it's passed explicitly (like Foo.bar(fizz) where
+        // fizz == self)
+        if let ExprKind::Constructor(name) = &receiver.kind {
+            receiver = arg_exprs[0].value.clone();
+        } else {
+            let (receiver_ir, _) = self.lower_expr(&receiver, Bind::Fresh, instantiations)?;
+            args.insert(0, receiver_ir);
+        }
+
+        if let Some(method_sym) = self.lookup_instance_method(&receiver, label)? {
             self.check_import(&method_sym);
             self.push_instr(Instruction::Call {
                 dest,

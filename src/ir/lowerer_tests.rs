@@ -457,13 +457,13 @@ pub mod tests {
                         Instruction::Constant {
                             ty: IrTy::Int,
                             dest: 1.into(),
-                            val: 2.into(),
+                            val: 1.into(),
                             meta: vec![InstructionMeta::Source(NodeID::ANY)].into(),
                         },
                         Instruction::Constant {
                             ty: IrTy::Int,
                             dest: 2.into(),
-                            val: 1.into(),
+                            val: 2.into(),
                             meta: vec![InstructionMeta::Source(NodeID::ANY)].into(),
                         },
                         Instruction::Call {
@@ -472,11 +472,11 @@ pub mod tests {
                             callee: Value::Func(Name::Resolved(
                                 Symbol::InstanceMethod(InstanceMethodId {
                                     module_id: ModuleId::Core,
-                                    local_id: 1
+                                    local_id: 2
                                 }),
                                 "add".into()
                             )),
-                            args: vec![Register(2).into(), Register(1).into()].into(),
+                            args: vec![Register(1).into(), Register(2).into()].into(),
                             meta: meta()
                         },
                     ],
@@ -492,7 +492,7 @@ pub mod tests {
                 .functions
                 .get(&Symbol::InstanceMethod(InstanceMethodId {
                     module_id: ModuleId::Core,
-                    local_id: 1
+                    local_id: 2
                 }))
                 .is_some()
         )
