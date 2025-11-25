@@ -34,7 +34,6 @@ use crate::{
         type_annotation::{TypeAnnotation, TypeAnnotationKind},
     },
     on, some,
-    span::Span,
     types::infer_ty::Level,
 };
 
@@ -328,7 +327,11 @@ impl NameResolver {
     pub(super) fn track_dependency(&mut self, to: Symbol, id: NodeID) {
         if !matches!(
             to,
-            Symbol::Global(..) | Symbol::StaticMethod(..) | Symbol::DeclaredLocal(..)
+            Symbol::Global(..)
+                | Symbol::StaticMethod(..)
+                | Symbol::DeclaredLocal(..)
+                | Symbol::Enum(..)
+                | Symbol::Variant(..)
         ) {
             return;
         }
@@ -371,9 +374,9 @@ impl NameResolver {
             .add_edge((from_sym, from_id), (to_sym, to_id), to_id);
     }
 
-    pub(super) fn diagnostic(&mut self, span: Span, err: NameResolverError) {
+    pub(super) fn diagnostic(&mut self, id: NodeID, err: NameResolverError) {
         self.diagnostics
-            .push(Diagnostic::<NameResolverError> { kind: err, span });
+            .push(Diagnostic::<NameResolverError> { kind: err, id });
     }
 
     #[instrument(skip(self))]
@@ -499,7 +502,7 @@ impl NameResolver {
             } => {
                 let Some(resolved) = self.lookup(enum_name, None) else {
                     self.diagnostic(
-                        pattern.span,
+                        pattern.id,
                         NameResolverError::UndefinedName(enum_name.name_str()),
                     );
                     return;
@@ -558,18 +561,18 @@ impl NameResolver {
     ///////////////////////////////////////////////////////////////////////////
     fn enter_type_annotation(&mut self, ty: &mut TypeAnnotation) {
         if let TypeAnnotationKind::Nominal { name, .. } = &mut ty.kind {
-            if let Some(resolved_name) = self.lookup(name, None) {
+            if let Some(resolved_name) = self.lookup(name, Some(ty.id)) {
                 *name = resolved_name
             } else {
-                self.diagnostic(ty.span, NameResolverError::UndefinedName(name.name_str()));
+                self.diagnostic(ty.id, NameResolverError::UndefinedName(name.name_str()));
             }
         }
 
         if let TypeAnnotationKind::SelfType(name) = &mut ty.kind {
-            if let Some(resolved_name) = self.lookup(name, None) {
+            if let Some(resolved_name) = self.lookup(name, Some(ty.id)) {
                 *name = resolved_name
             } else {
-                self.diagnostic(ty.span, NameResolverError::UndefinedName(name.name_str()));
+                self.diagnostic(ty.id, NameResolverError::UndefinedName(name.name_str()));
             }
         }
     }
@@ -612,7 +615,7 @@ impl NameResolver {
     fn enter_expr(&mut self, expr: &mut Expr) {
         on!(&mut expr.kind, ExprKind::Variable(name), {
             let Some(resolved_name) = self.lookup(name, Some(expr.id)) else {
-                self.diagnostic(expr.span, NameResolverError::UndefinedName(name.name_str()));
+                self.diagnostic(expr.id, NameResolverError::UndefinedName(name.name_str()));
                 return;
             };
 
@@ -621,7 +624,10 @@ impl NameResolver {
             if matches!(
                 name,
                 Name::Resolved(
-                    Symbol::Struct(_) | Symbol::Enum(_) | Symbol::TypeAlias(_),
+                    Symbol::Struct(..)
+                        | Symbol::Enum(..)
+                        | Symbol::TypeAlias(..)
+                        | Symbol::Protocol(..),
                     _
                 )
             ) {
@@ -661,7 +667,7 @@ impl NameResolver {
                 | DeclKind::Protocol { name, .. },
             {
                 let Ok(sym) = name.symbol() else {
-                    self.diagnostic(decl.span, NameResolverError::Unresolved(name.clone()));
+                    self.diagnostic(decl.id, NameResolverError::Unresolved(name.clone()));
                     return;
                 };
 
@@ -671,14 +677,14 @@ impl NameResolver {
 
         on!(&mut decl.kind, DeclKind::Extend { name, .. }, {
             let Some(type_name) = self.lookup(name, None) else {
-                self.diagnostic(decl.span, NameResolverError::UndefinedName(name.name_str()));
+                self.diagnostic(decl.id, NameResolverError::UndefinedName(name.name_str()));
                 return;
             };
 
             *name = type_name;
 
             let Ok(sym) = name.symbol() else {
-                self.diagnostic(decl.span, NameResolverError::Unresolved(name.clone()));
+                self.diagnostic(decl.id, NameResolverError::Unresolved(name.clone()));
                 return;
             };
 

@@ -435,12 +435,12 @@ impl<'a> Lowerer<'a> {
             StmtKind::If(cond, conseq, alt) => {
                 self.lower_if_stmt(cond, conseq, alt, instantiations)
             }
-            #[warn(clippy::todo)]
+            #[allow(clippy::todo)]
             StmtKind::Return(_expr) => todo!(),
-            #[warn(clippy::todo)]
+            #[allow(clippy::todo)]
             StmtKind::Break => todo!(),
             StmtKind::Assignment(lhs, rhs) => self.lower_assignment(lhs, rhs, instantiations),
-            #[warn(clippy::todo)]
+            #[allow(clippy::todo)]
             StmtKind::Loop(_expr, _block) => todo!(),
         }
     }
@@ -604,7 +604,7 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    #[instrument(level = tracing::Level::TRACE, skip(self, pattern), fields(pattern.id = %pattern.id))]
+    // #[instrument(level = tracing::Level::TRACE, skip(self, pattern), fields(pattern.id = %pattern.id))]
     fn lower_pattern(&mut self, pattern: &Pattern) -> Result<Bind, IRError> {
         match &pattern.kind {
             PatternKind::Bind(name) => {
@@ -613,23 +613,22 @@ impl<'a> Lowerer<'a> {
                 self.bindings.insert(symbol, value);
                 Ok(Bind::Assigned(value))
             }
-            #[warn(clippy::todo)]
+            #[allow(clippy::todo)]
             PatternKind::LiteralInt(_) => todo!(),
-            #[warn(clippy::todo)]
+            #[allow(clippy::todo)]
             PatternKind::LiteralFloat(_) => todo!(),
-            #[warn(clippy::todo)]
+            #[allow(clippy::todo)]
             PatternKind::LiteralTrue => todo!(),
-            #[warn(clippy::todo)]
+            #[allow(clippy::todo)]
             PatternKind::LiteralFalse => todo!(),
-            #[warn(clippy::todo)]
+            #[allow(clippy::todo)]
             PatternKind::Tuple(..) => todo!(),
-            #[warn(clippy::todo)]
             PatternKind::Wildcard => Ok(Bind::Discard),
-            #[warn(clippy::todo)]
+            #[allow(clippy::todo)]
             PatternKind::Variant { .. } => todo!(),
-            #[warn(clippy::todo)]
+            #[allow(clippy::todo)]
             PatternKind::Record { .. } => todo!(),
-            #[warn(clippy::todo)]
+            #[allow(clippy::todo)]
             PatternKind::Struct { .. } => todo!(),
         }
     }
@@ -643,7 +642,7 @@ impl<'a> Lowerer<'a> {
     ) -> Result<(Value, Ty), IRError> {
         match &expr.kind {
             ExprKind::Func(func) => self.lower_func(func, bind, instantiations),
-            #[warn(clippy::todo)]
+            #[allow(clippy::todo)]
             ExprKind::LiteralArray(_exprs) => todo!(),
             ExprKind::LiteralInt(val) => {
                 let ret = self.ret(bind);
@@ -671,13 +670,13 @@ impl<'a> Lowerer<'a> {
             }
             ExprKind::LiteralTrue => Ok((Value::Bool(true), Ty::Bool)),
             ExprKind::LiteralFalse => Ok((Value::Bool(false), Ty::Bool)),
-            #[warn(clippy::todo)]
+            #[allow(clippy::todo)]
             ExprKind::LiteralString(_) => todo!(),
             ExprKind::Unary(..) => Ok((Value::Void, Ty::Void)), // Converted to calls earlier
             ExprKind::Binary(..) => Ok((Value::Void, Ty::Void)), // Converted to calls earlier
-            #[warn(clippy::todo)]
+            #[allow(clippy::todo)]
             ExprKind::Tuple(..) => todo!(),
-            #[warn(clippy::todo)]
+            #[allow(clippy::todo)]
             ExprKind::Block(..) => todo!(),
 
             ExprKind::Call {
@@ -719,7 +718,7 @@ impl<'a> Lowerer<'a> {
 
             ExprKind::Variable(name) => self.lower_variable(name, expr, instantiations),
             ExprKind::Constructor(name) => self.lower_constructor(name, expr, bind, instantiations),
-            #[warn(clippy::todo)]
+            #[allow(clippy::todo)]
             ExprKind::If(..) => todo!(),
             ExprKind::Match(box scrutinee, arms) => {
                 self.lower_match(scrutinee, arms, bind, instantiations)
@@ -727,7 +726,7 @@ impl<'a> Lowerer<'a> {
             ExprKind::RecordLiteral { fields, .. } => {
                 self.lower_record_literal(expr, fields, bind, instantiations)
             }
-            #[warn(clippy::todo)]
+            #[allow(clippy::todo)]
             ExprKind::RowVariable(..) => todo!(),
             ExprKind::As(lhs, ..) => self.lower_expr(lhs, bind, instantiations),
             _ => unreachable!("cannot lower expr: {expr:?}"),
@@ -1054,7 +1053,7 @@ impl<'a> Lowerer<'a> {
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self, receiver))]
-    #[warn(clippy::todo)]
+    #[allow(clippy::todo)]
     fn lower_member(
         &mut self,
         id: NodeID,
@@ -1251,8 +1250,9 @@ impl<'a> Lowerer<'a> {
             return self.lower_method_call(
                 call_expr,
                 callee,
-                receiver,
+                receiver.clone(),
                 member,
+                args,
                 arg_vals,
                 dest,
                 &instantiations,
@@ -1278,17 +1278,26 @@ impl<'a> Lowerer<'a> {
         &mut self,
         call_expr: &Expr,
         callee_expr: &Expr,
-        receiver: &Expr,
+        mut receiver: Expr,
         label: &Label,
+        arg_exprs: &[CallArg],
         mut args: Vec<Value>,
         dest: Register,
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
         let ty = self.ty_from_id(&call_expr.id)?;
-        let (receiver_ir, _) = self.lower_expr(receiver, Bind::Fresh, instantiations)?;
-        args.insert(0, receiver_ir);
 
-        if let Some(method_sym) = self.lookup_instance_method(receiver, label)? {
+        // Is this an instance method call on a constructor? If so we don't need
+        // to prepend a self arg because it's passed explicitly (like Foo.bar(fizz) where
+        // fizz == self)
+        if let ExprKind::Constructor(_name) = &receiver.kind {
+            receiver = arg_exprs[0].value.clone();
+        } else {
+            let (receiver_ir, _) = self.lower_expr(&receiver, Bind::Fresh, instantiations)?;
+            args.insert(0, receiver_ir);
+        }
+
+        if let Some(method_sym) = self.lookup_instance_method(&receiver, label)? {
             self.check_import(&method_sym);
             self.push_instr(Instruction::Call {
                 dest,

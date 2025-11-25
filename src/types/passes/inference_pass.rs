@@ -6,6 +6,7 @@ use tracing::instrument;
 use crate::{
     ast::AST,
     diagnostic::{AnyDiagnostic, Diagnostic},
+    formatter,
     label::Label,
     name::Name,
     name_resolution::{
@@ -36,10 +37,7 @@ use crate::{
     types::{
         builtins::resolve_builtin_type,
         constraint_solver::ConstraintSolver,
-        constraints::{
-            constraint::{Constraint, ConstraintCause},
-            member::consume_self,
-        },
+        constraints::{member::consume_self, store::ConstraintStore},
         infer_row::{InferRow, RowMetaId},
         infer_ty::{InferTy, Level, Meta, MetaVarId, TypeParamId},
         predicate::Predicate,
@@ -49,30 +47,14 @@ use crate::{
         type_catalog::{Conformance, ConformanceKey, MemberWitness},
         type_error::TypeError,
         type_operations::{
-            InstantiationSubstitutions, UnificationSubstitutions, apply, curry, instantiate_ty,
-            substitute,
+            InstantiationSubstitutions, UnificationSubstitutions, curry, substitute,
         },
-        type_session::{TypeDefKind, TypeSession, collect_metas_in_constraint},
-        wants::Wants,
+        type_session::{TypeDefKind, TypeSession},
     },
 };
 
 #[must_use]
 struct ReturnToken {}
-
-#[derive(Debug)]
-pub enum GeneralizationBlock {
-    PendingType {
-        node_id: NodeID,
-        span: Span,
-        level: Level,
-        type_symbol: Symbol,
-        args: Vec<(InferTy, NodeID)>,
-    },
-    PatternBindLocal,
-    EmptyArray,
-    Placeholder,
-}
 
 pub type PendingTypeInstances =
     FxHashMap<MetaVarId, (NodeID, Span, Level, Symbol, Vec<(InferTy, NodeID)>)>;
@@ -81,48 +63,42 @@ pub struct InferencePass<'a> {
     asts: &'a mut [AST<NameResolved>],
     session: &'a mut TypeSession,
     canonical_rows: FxHashMap<Symbol, RowMetaId>,
-    unsolved: IndexSet<Constraint>,
+    constraints: ConstraintStore,
     #[allow(clippy::type_complexity)]
     instantiations: FxHashMap<NodeID, InstantiationSubstitutions>,
     substitutions: UnificationSubstitutions,
-    generalization_blocks: FxHashMap<MetaVarId, GeneralizationBlock>,
     tracked_returns: Vec<IndexSet<(Span, InferTy)>>,
 }
 
 impl<'a> InferencePass<'a> {
-    pub fn drive(asts: &'a mut [AST<NameResolved>], session: &'a mut TypeSession) -> Wants {
-        let result = Wants::default();
+    pub fn drive(asts: &'a mut [AST<NameResolved>], session: &'a mut TypeSession) {
         let substitutions = UnificationSubstitutions::new(session.meta_levels.clone());
         let mut pass = InferencePass {
             asts,
             session,
             canonical_rows: Default::default(),
             instantiations: Default::default(),
-            unsolved: Default::default(),
+            constraints: Default::default(),
             substitutions,
-            generalization_blocks: Default::default(),
             tracked_returns: Default::default(),
         };
 
         pass.drive_all();
-
-        result
     }
 
     fn drive_all(&mut self) {
         for i in 0..self.asts.len() {
             self.discover_protocols(i, Level::default());
-            self.session.apply(&mut self.substitutions);
+            self.session.apply_all(&mut self.substitutions);
         }
 
         for i in 0..self.asts.len() {
             self.generate(i);
-            self.session.apply(&mut self.substitutions);
+            self.session.apply_all(&mut self.substitutions);
         }
 
         self.check_conformances();
-        self.session.apply(&mut self.substitutions);
-        self.rectify_blocks();
+        self.session.apply_all(&mut self.substitutions);
     }
 
     fn discover_protocols(&mut self, idx: usize, level: Level) {
@@ -146,7 +122,7 @@ impl<'a> InferencePass<'a> {
                 self.asts[idx]
                     .diagnostics
                     .push(AnyDiagnostic::Typing(Diagnostic {
-                        span: root.span(),
+                        id: root.node_id(),
                         kind: TypeError::NameNotResolved(protocol_name.clone()),
                     }));
                 continue;
@@ -182,6 +158,7 @@ impl<'a> InferencePass<'a> {
             let mut context = SolveContext::new(
                 self.substitutions.clone(),
                 level,
+                Default::default(),
                 SolveContextKind::Protocol {
                     protocol_id: *protocol_id,
                     protocol_self: protocol_self_id,
@@ -191,7 +168,6 @@ impl<'a> InferencePass<'a> {
             context.givens.insert(Predicate::Conforms {
                 param: protocol_self_id,
                 protocol_id: *protocol_id,
-                span: root.span(),
             });
             self.session
                 .type_param_bounds
@@ -200,10 +176,12 @@ impl<'a> InferencePass<'a> {
                 .insert(Predicate::Conforms {
                     param: protocol_self_id,
                     protocol_id: *protocol_id,
-                    span: root.span(),
                 });
-            self.session
-                .insert(protocol_sym, InferTy::Param(protocol_self_id));
+            self.session.insert(
+                protocol_sym,
+                InferTy::Param(protocol_self_id),
+                &mut self.constraints,
+            );
 
             for decl in body.decls.iter() {
                 let DeclKind::Associated { generic } = &decl.kind else {
@@ -213,7 +191,7 @@ impl<'a> InferencePass<'a> {
                 let ret_id = self.session.new_type_param_id(None);
                 let ret = InferTy::Param(ret_id);
 
-                #[warn(clippy::todo)]
+                #[allow(clippy::todo)]
                 if !generic.conformances.is_empty() {
                     todo!("not handling associated type conformances yet");
                 }
@@ -233,14 +211,17 @@ impl<'a> InferencePass<'a> {
                     self.asts[idx]
                         .diagnostics
                         .push(AnyDiagnostic::Typing(Diagnostic {
-                            span: root.span(),
+                            id: root.node_id(),
                             kind: TypeError::NameNotResolved(generic.name.clone()),
                         }));
                     continue;
                 };
 
-                self.session
-                    .insert_term(generic_sym, EnvEntry::Scheme(scheme));
+                self.session.insert_term(
+                    generic_sym,
+                    EnvEntry::Scheme(scheme),
+                    &mut self.constraints,
+                );
                 self.session
                     .type_catalog
                     .associated_types
@@ -264,7 +245,7 @@ impl<'a> InferencePass<'a> {
                             self.asts[idx]
                                 .diagnostics
                                 .push(AnyDiagnostic::Typing(Diagnostic {
-                                    span: root.span(),
+                                    id: root.node_id(),
                                     kind: TypeError::NameNotResolved(func_signature.name.clone()),
                                 }));
                             continue;
@@ -272,7 +253,7 @@ impl<'a> InferencePass<'a> {
 
                         binders.insert(func_sym, ty.clone());
 
-                        self.session.insert(func_sym, ty);
+                        self.session.insert(func_sym, ty, &mut self.constraints);
                         self.session
                             .type_catalog
                             .method_requirements
@@ -286,7 +267,7 @@ impl<'a> InferencePass<'a> {
                             self.asts[idx]
                                 .diagnostics
                                 .push(AnyDiagnostic::Typing(Diagnostic {
-                                    span: root.span(),
+                                    id: root.node_id(),
                                     kind: TypeError::NameNotResolved(func.name.clone()),
                                 }));
                             continue;
@@ -322,6 +303,7 @@ impl<'a> InferencePass<'a> {
         let mut context = SolveContext::new(
             self.substitutions.clone(),
             Level::default(),
+            Default::default(),
             SolveContextKind::Nominal,
         );
         let Some(protocol_self) = self.session.lookup(&Symbol::Protocol(key.protocol_id)) else {
@@ -331,9 +313,9 @@ impl<'a> InferencePass<'a> {
 
         let protocol_self_meta @ InferTy::Var { .. } = protocol_self.instantiate(
             conformance.node_id,
+            &mut self.constraints,
             &mut context,
             self.session,
-            conformance.span,
         ) else {
             unreachable!();
         };
@@ -345,17 +327,13 @@ impl<'a> InferencePass<'a> {
 
         let conforming_self = conforming_self_entry.instantiate(
             conformance.node_id,
+            &mut self.constraints,
             &mut context,
             self.session,
-            conformance.span,
         );
 
-        context.wants_mut().equals(
-            protocol_self_meta.clone(),
-            conforming_self.clone(),
-            ConstraintCause::Internal,
-            conformance.span,
-        );
+        self.constraints
+            .wants_equals(protocol_self_meta.clone(), conforming_self.clone());
 
         let mut associated_substitutions = FxHashMap::<InferTy, InferTy>::default();
         for child_sym in self.asts[idx]
@@ -378,9 +356,9 @@ impl<'a> InferencePass<'a> {
             {
                 concrete.instantiate(
                     conformance.node_id,
+                    &mut self.constraints,
                     &mut context,
                     self.session,
-                    conformance.span,
                 )
             } else {
                 let Some(ty) = conformance.associated_types.get(child_sym.0).cloned() else {
@@ -399,14 +377,13 @@ impl<'a> InferencePass<'a> {
                 },
                 concrete.clone(),
             );
-            context.wants_mut().projection(
+            self.constraints.wants_projection(
                 conformance.node_id,
                 conforming_self.clone(),
                 child_sym.0.clone(),
                 Some(key.protocol_id),
                 concrete,
-                ConstraintCause::Internal,
-                conformance.span,
+                &Default::default(),
             );
         }
 
@@ -424,7 +401,7 @@ impl<'a> InferencePass<'a> {
                         kind: TypeError::MissingConformanceRequirement(format!(
                             "{label:?} {sym:?}"
                         )),
-                        span: conformance.span,
+                        id: conformance.node_id,
                     }));
 
                 continue;
@@ -439,7 +416,7 @@ impl<'a> InferencePass<'a> {
                         kind: TypeError::MissingConformanceRequirement(format!(
                             "{label:?} {sym:?}"
                         )),
-                        span: conformance.span,
+                        id: conformance.node_id,
                     }));
                 continue;
             };
@@ -453,7 +430,7 @@ impl<'a> InferencePass<'a> {
                         kind: TypeError::MissingConformanceRequirement(format!(
                             "{label:?} {sym:?}"
                         )),
-                        span: conformance.span,
+                        id: conformance.node_id,
                     }));
                 continue;
             }
@@ -473,16 +450,16 @@ impl<'a> InferencePass<'a> {
             };
             let witness_ty = witness_entry.instantiate(
                 NodeID::SYNTHESIZED,
+                &mut self.constraints,
                 &mut context,
                 self.session,
-                conformance.span,
             );
 
             let requirement_ty = requirement_entry.instantiate(
                 NodeID::SYNTHESIZED,
+                &mut self.constraints,
                 &mut context,
                 self.session,
-                conformance.span,
             );
 
             let (req_self, requirement_ty) = consume_self(&requirement_ty);
@@ -490,113 +467,57 @@ impl<'a> InferencePass<'a> {
 
             let requirement_ty = substitute(requirement_ty, &associated_substitutions);
 
-            context.wants_mut().equals(
-                req_self,
-                wit_self,
-                ConstraintCause::Internal,
-                conformance.span,
-            );
-
-            context.wants_mut().equals(
-                requirement_ty,
-                witness_ty,
-                ConstraintCause::Internal,
-                conformance.span,
-            );
+            self.constraints.wants_equals(req_self, wit_self);
+            self.constraints.wants_equals(requirement_ty, witness_ty);
         }
 
-        let solver =
-            ConstraintSolver::new(&mut context, self.asts, std::mem::take(&mut self.unsolved));
+        let solver = ConstraintSolver::new(&mut context, self.asts);
 
-        solver.solve(self.session);
+        solver.solve(
+            Level::default(),
+            &mut self.constraints,
+            self.session,
+            self.substitutions.clone(),
+        );
         self.substitutions.extend(&context.substitutions);
-        self.session.apply(&mut context.substitutions);
+        self.session.apply_all(&mut context.substitutions);
 
         // Rewrite the conformance's associated_types using the solution,
         // so later Projection(Self.T) sees the *solved* witness type.
-        let Some(conf_mut) = self.session.type_catalog.conformances.get_mut(key) else {
-            unreachable!()
-        };
 
-        for ty in conf_mut.associated_types.values_mut() {
-            *ty = apply(ty.clone(), &mut context.substitutions);
-            *ty = instantiate_ty(
-                conformance.node_id,
-                ty.clone(),
-                &context.instantiations,
-                context.level(),
-            );
-        }
-    }
-
-    #[instrument(skip(self))]
-    fn rectify_blocks(&mut self) {
-        tracing::debug!(
-            "Before rectify_blocks, unsolved: {} constraints",
-            self.unsolved.len()
-        );
-        let mut context = SolveContext::new(
-            self.substitutions.clone(),
-            Level::default(),
-            SolveContextKind::Normal,
-        );
-        let generalization_blocks = std::mem::take(&mut self.generalization_blocks);
-        for (var_id, block) in generalization_blocks {
-            tracing::debug!("rectifying generalization blocks: {var_id:?} {block:?}");
-            let GeneralizationBlock::PendingType {
-                node_id,
-                span,
-                level,
-                type_symbol,
-                args,
-            } = &block
-            else {
-                self.generalization_blocks.insert(var_id, block);
-                continue;
+        for (k, ty) in self
+            .session
+            .type_catalog
+            .conformances
+            .get(key)
+            .unwrap_or_else(|| unreachable!())
+            .associated_types
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect_vec()
+        {
+            let ty = self.session.apply(ty.clone(), &mut context.substitutions);
+            let Some(conf_mut) = self.session.type_catalog.conformances.get_mut(key) else {
+                unreachable!()
             };
-
-            let Some(entry) = self.session.lookup(type_symbol) else {
-                self.generalization_blocks.insert(var_id, block);
-                continue;
-            };
-
-            let (instance, instantiations) = entry.instantiate_with_args(
-                *node_id,
-                args,
-                self.session,
-                *level,
-                context.wants_mut(),
-                *span,
-            );
-
-            context.instantiations_mut().ty.extend(instantiations.ty);
-            context.instantiations_mut().row.extend(instantiations.row);
-
-            self.substitutions.ty.insert(var_id, instance);
+            conf_mut.associated_types.insert(k, ty);
         }
-
-        self.session.apply(&mut self.substitutions);
-        context.wants_mut().apply(&mut self.substitutions);
-
-        // Also apply substitutions to unsolved constraints so they can be retried
-        // with resolved types after rectification
-        let mut updated_unsolved = IndexSet::new();
-        for constraint in std::mem::take(&mut self.unsolved) {
-            updated_unsolved.insert(constraint.apply(&mut self.substitutions));
-        }
-        tracing::debug!(
-            "After applying constraints in rectify_blocks, unsolved: {} constraints",
-            updated_unsolved.len()
-        );
-        self.unsolved = updated_unsolved;
-        self.solve(&mut context, vec![], vec![]);
     }
 
     #[instrument(skip(self))]
     fn rectify_witnesses(&mut self) {
-        for (_node_id, witness) in self.session.type_catalog.member_witnesses.iter_mut() {
-            if let MemberWitness::Meta { receiver, label } = witness {
-                let receiver_ty = apply(receiver.clone(), &mut self.substitutions);
+        for (witness_id, witness) in self
+            .session
+            .type_catalog
+            .member_witnesses
+            .iter()
+            .map(|(k, v)| (*k, v.clone()))
+            .collect_vec()
+        {
+            if let MemberWitness::Meta { receiver, label } = &witness {
+                let receiver_ty = self
+                    .session
+                    .apply(receiver.clone(), &mut self.substitutions);
                 let symbol = match receiver_ty {
                     InferTy::Primitive(symbol) => symbol,
                     InferTy::Nominal { symbol, .. } => symbol,
@@ -610,16 +531,17 @@ impl<'a> InferencePass<'a> {
                 };
 
                 if let Some(methods) = self.session.type_catalog.instance_methods.get(&symbol)
-                    && let Some(method) = methods.get(label)
+                    && let Some(method) = methods.get(label).cloned()
                 {
                     tracing::trace!(
                         "Resolved concrete witness {receiver_ty:?}.{label:?} = {method:?}"
                     );
-                    *witness = MemberWitness::Concrete(*method);
+                    self.session
+                        .type_catalog
+                        .member_witnesses
+                        .insert(witness_id, MemberWitness::Concrete(method));
                     continue;
                 }
-
-                tracing::warn!("Unable to resolve witness: {witness:?} for {receiver_ty:?}");
             };
         }
     }
@@ -627,9 +549,9 @@ impl<'a> InferencePass<'a> {
     fn generate(&mut self, idx: usize) {
         let mut groups = self.asts[idx].phase.scc_graph.groups();
 
-        // Sort by level in descending order so inner bindings are generalized first
-        // Use stable sort to preserve topological order for groups at the same level
-        groups.sort_by_key(|group| std::cmp::Reverse(group.level.0));
+        // Process groups in topological order (dependencies first).
+        // Kosaraju returns reverse topological order, so we reverse it.
+        groups.sort_by_key(|group| group.id.0);
 
         for group in groups {
             self.generate_for_group(idx, group);
@@ -638,6 +560,7 @@ impl<'a> InferencePass<'a> {
         let mut context = SolveContext::new(
             self.substitutions.clone(),
             Level::default(),
+            Default::default(),
             SolveContextKind::Normal,
         );
 
@@ -651,14 +574,18 @@ impl<'a> InferencePass<'a> {
             self.visit_node(&node, &mut context);
         }
 
-        let solver =
-            ConstraintSolver::new(&mut context, self.asts, std::mem::take(&mut self.unsolved));
-        let unsolved = solver.solve(self.session);
-        self.unsolved.extend(unsolved);
+        let level = context.level();
+        let solver = ConstraintSolver::new(&mut context, self.asts);
+        solver.solve(
+            level,
+            &mut self.constraints,
+            self.session,
+            self.substitutions.clone(),
+        );
         self.substitutions.extend(&context.substitutions);
 
         // Apply substitutions to types_by_node for top-level expressions
-        self.session.apply(&mut context.substitutions);
+        self.session.apply_all(&mut context.substitutions);
     }
 
     #[instrument(skip(self))]
@@ -666,6 +593,7 @@ impl<'a> InferencePass<'a> {
         let mut context = SolveContext::new(
             self.substitutions.clone(),
             group.level,
+            group.id,
             SolveContextKind::Normal,
         );
 
@@ -680,7 +608,8 @@ impl<'a> InferencePass<'a> {
                     level: context.level(),
                 };
                 tracing::trace!("placeholder {sym:?} = {placeholder:?}");
-                self.session.insert_term(*sym, placeholder.to_entry());
+                self.session
+                    .insert_term(*sym, placeholder.to_entry(), &mut self.constraints);
                 placeholder
             })
             .collect_vec();
@@ -695,8 +624,11 @@ impl<'a> InferencePass<'a> {
                             "capture placeholder {:?} = {placeholder:?}",
                             capture.symbol
                         );
-                        self.session
-                            .insert_term(capture.symbol, placeholder.to_entry());
+                        self.session.insert_term(
+                            capture.symbol,
+                            placeholder.to_entry(),
+                            &mut self.constraints,
+                        );
                     }
                 }
             }
@@ -715,25 +647,16 @@ impl<'a> InferencePass<'a> {
 
             if let Some(existing) = self.session.lookup(binder) {
                 if existing == EnvEntry::Mono(placeholders[i].clone()) {
-                    context.wants_mut().equals(
-                        ty,
-                        placeholders[i].clone(),
-                        ConstraintCause::Internal,
-                        rhs.span(),
-                    );
+                    self.constraints.wants_equals(ty, placeholders[i].clone());
                 } else {
-                    context.wants_mut().equals(
-                        placeholders[i].clone(),
-                        existing._as_ty(),
-                        ConstraintCause::Internal,
-                        rhs.span(),
-                    );
+                    self.constraints
+                        .wants_equals(placeholders[i].clone(), existing._as_ty());
                 }
             }
         }
 
         // Solve this group
-        self.solve(&mut context, group.binders, placeholders)
+        self.solve(&mut context, group.binders.clone(), placeholders)
     }
 
     fn solve(
@@ -743,59 +666,28 @@ impl<'a> InferencePass<'a> {
         placeholders: Vec<InferTy>,
     ) {
         context.substitutions_mut().extend(&self.substitutions);
-        tracing::debug!(
-            "After extend, context substitutions: {:?}",
-            context.substitutions_mut()
+
+        let level = context.level();
+        let solver = ConstraintSolver::new(context, self.asts);
+        solver.solve(
+            level,
+            &mut self.constraints,
+            self.session,
+            self.substitutions.clone(),
         );
-        let solver = ConstraintSolver::new(context, self.asts, std::mem::take(&mut self.unsolved));
-        let unsolved = solver.solve(self.session);
 
-        // Ok, hear me out. I know this is messy. We don't want to generalize metas that have pending type instances
-        // and we want to hang on to constraints that contain them instead of converting them to predicates during
-        // generalization. So we need to grab those and set them aside.
-        let (generalizable, needs_defer): (IndexSet<_>, IndexSet<_>) =
-            unsolved.into_iter().partition(|c| {
-                let mut out = Default::default();
-                collect_metas_in_constraint(c, &mut out);
-                for ty in out {
-                    let InferTy::Var { id, .. } = ty else {
-                        continue;
-                    };
-
-                    if self.generalization_blocks.contains_key(&id) {
-                        tracing::trace!(
-                            "Deferring constraint {:?} because meta({:?}) has generalization block",
-                            c,
-                            id
-                        );
-                        return false;
-                    }
-                }
-
-                tracing::trace!("Considering constraint {:?} as generalizable", c);
-                true
-            });
-
-        tracing::debug!(
-            "After partition: {} generalizable, {} needs_defer",
-            generalizable.len(),
-            needs_defer.len()
-        );
-        self.unsolved.extend(needs_defer);
+        let generalizable = self.constraints.generalizable_for(context);
 
         for (i, binder) in binders.iter().enumerate() {
-            let ty = apply(placeholders[i].clone(), &mut context.substitutions);
-            let entry = self.session.generalize(
-                context.level(),
-                ty,
-                &generalizable,
-                &self.generalization_blocks,
-            );
-            self.session.promote(*binder, entry);
+            let ty = self
+                .session
+                .apply(placeholders[i].clone(), &mut context.substitutions);
+            let entry = self.session.generalize(ty, context, &generalizable);
+            self.session.promote(*binder, entry, &mut self.constraints);
         }
 
         self.substitutions.extend(&context.substitutions);
-        self.session.apply(&mut self.substitutions);
+        self.session.apply_all(&mut self.substitutions);
         self.rectify_witnesses();
     }
 
@@ -873,12 +765,7 @@ impl<'a> InferencePass<'a> {
             StmtKind::Assignment(lhs, rhs) => {
                 let lhs_ty = self.visit_expr(lhs, context);
                 let rhs_ty = self.visit_expr(rhs, context);
-                context.wants_mut().equals(
-                    lhs_ty,
-                    rhs_ty,
-                    ConstraintCause::Assignment(stmt.id),
-                    stmt.span,
-                );
+                self.constraints.wants_equals(lhs_ty, rhs_ty);
                 InferTy::Void
             }
             StmtKind::Return(expr) => self.visit_return(stmt, expr, context),
@@ -886,12 +773,7 @@ impl<'a> InferencePass<'a> {
             StmtKind::Loop(cond, block) => {
                 if let Some(cond) = cond {
                     let cond_ty = self.visit_expr(cond, context);
-                    context.wants_mut().equals(
-                        cond_ty,
-                        InferTy::Bool,
-                        ConstraintCause::Condition(cond.id),
-                        cond.span,
-                    );
+                    self.constraints.wants_equals(cond_ty, InferTy::Bool);
                 }
 
                 self.infer_block(block, context);
@@ -905,7 +787,7 @@ impl<'a> InferencePass<'a> {
         ty
     }
 
-    #[instrument(level = tracing::Level::TRACE, skip(self, expr, context), fields(expr.id = ?expr.id))]
+    #[instrument(level = tracing::Level::TRACE, skip(self, expr, context), fields(expr.id = ?expr.id, expr = formatter::format_node(&expr.into(), &self.asts[0].meta)))]
     fn visit_expr(&mut self, expr: &Expr, context: &mut impl Solve) -> InferTy {
         let ty = match &expr.kind {
             ExprKind::LiteralArray(items) => self.visit_array(items, context),
@@ -927,35 +809,15 @@ impl<'a> InferencePass<'a> {
             ExprKind::Binary(box lhs, TokenKind::AmpAmp, box rhs) => {
                 let lhs_ty = self.visit_expr(lhs, context);
                 let rhs_ty = self.visit_expr(rhs, context);
-                context.wants_mut().equals(
-                    lhs_ty,
-                    InferTy::Bool,
-                    ConstraintCause::Internal,
-                    lhs.span,
-                );
-                context.wants_mut().equals(
-                    rhs_ty,
-                    InferTy::Bool,
-                    ConstraintCause::Internal,
-                    rhs.span,
-                );
+                self.constraints.wants_equals(lhs_ty, InferTy::Bool);
+                self.constraints.wants_equals(rhs_ty, InferTy::Bool);
                 InferTy::Bool
             }
             ExprKind::Binary(box lhs, TokenKind::PipePipe, box rhs) => {
                 let lhs_ty = self.visit_expr(lhs, context);
                 let rhs_ty = self.visit_expr(rhs, context);
-                context.wants_mut().equals(
-                    lhs_ty,
-                    InferTy::Bool,
-                    ConstraintCause::Internal,
-                    lhs.span,
-                );
-                context.wants_mut().equals(
-                    rhs_ty,
-                    InferTy::Bool,
-                    ConstraintCause::Internal,
-                    rhs.span,
-                );
+                self.constraints.wants_equals(lhs_ty, InferTy::Bool);
+                self.constraints.wants_equals(rhs_ty, InferTy::Bool);
                 InferTy::Bool
             }
             ExprKind::Unary(..) | ExprKind::Binary(..) => {
@@ -1016,15 +878,14 @@ impl<'a> InferencePass<'a> {
             );
         };
 
-        context.wants_mut().conforms(lhs_ty.clone(), id, lhs.span);
+        self.constraints.wants_conforms(lhs_ty.clone(), id);
         lhs_ty
     }
 
     fn visit_array(&mut self, items: &[Expr], context: &mut impl Solve) -> InferTy {
         let Some(first_item) = items.first() else {
             let id = self.session.new_ty_meta_var_id(context.level());
-            self.generalization_blocks
-                .insert(id, GeneralizationBlock::EmptyArray);
+
             return InferTy::Array(InferTy::Var {
                 id,
                 level: context.level(),
@@ -1035,9 +896,7 @@ impl<'a> InferencePass<'a> {
 
         for expr in items[1..].iter() {
             let ty = self.visit_expr(expr, context);
-            context
-                .wants_mut()
-                .equals(item_ty.clone(), ty, ConstraintCause::Internal, expr.span);
+            self.constraints.wants_equals(item_ty.clone(), ty);
         }
 
         InferTy::Array(item_ty)
@@ -1057,7 +916,8 @@ impl<'a> InferencePass<'a> {
                 return InferTy::Error(TypeError::NameNotResolved(generic.name.clone()).into());
             };
 
-            self.session.insert_mono(name_sym, InferTy::Param(param_id));
+            self.session
+                .insert_mono(name_sym, InferTy::Param(param_id), &mut self.constraints);
         }
         let params = self.visit_params(&func_signature.params, context);
         let ret = if let Some(ret) = &func_signature.ret {
@@ -1072,7 +932,6 @@ impl<'a> InferencePass<'a> {
         let predicates = vec![Predicate::<InferTy>::Conforms {
             param: protocol_self_id,
             protocol_id,
-            span: func_signature.span,
         }];
 
         self.session.insert_term(
@@ -1085,6 +944,7 @@ impl<'a> InferencePass<'a> {
                 foralls,
                 predicates,
             }),
+            &mut self.constraints,
         );
 
         ty
@@ -1118,19 +978,18 @@ impl<'a> InferencePass<'a> {
 
         let ret = self.session.new_ty_meta_var(context.level().next());
 
-        context.wants_mut().member(
+        self.constraints.wants_member(
             expr.id,
             receiver_ty,
             label.clone(),
             ret.clone(),
-            ConstraintCause::Member(expr.id),
-            expr.span,
+            &context.group_info(),
         );
 
         ret
     }
 
-    #[instrument(level = tracing::Level::TRACE, skip(self, generics, conformances, body, context))]
+    #[instrument(level = tracing::Level::TRACE, skip(self, decl, generics, conformances, body, context))]
     fn visit_nominal(
         &mut self,
         decl: &Decl,
@@ -1184,7 +1043,8 @@ impl<'a> InferencePass<'a> {
                         _ => InferTy::Tuple(tys.to_vec()),
                     };
 
-                    self.session.insert(*sym, values_ty.clone());
+                    self.session
+                        .insert(*sym, values_ty.clone(), &mut self.constraints);
                     row_types.push((name.name_str(), values_ty));
                 }
                 DeclKind::Property {
@@ -1236,7 +1096,8 @@ impl<'a> InferencePass<'a> {
                         return InferTy::Error(TypeError::NameNotResolved(lhs.clone()).into());
                     };
 
-                    self.session.insert_term(lhs_sym, entry);
+                    self.session
+                        .insert_term(lhs_sym, entry, &mut self.constraints);
                 }
                 _ => tracing::warn!("Unhandled nominal decl: {:?}", decl.kind),
             }
@@ -1275,7 +1136,7 @@ impl<'a> InferencePass<'a> {
                     }
                 });
 
-            context.wants_mut().equals(
+            self.constraints.wants_equals(
                 InferTy::Nominal {
                     symbol: nominal_symbol,
                     row: row_placeholder.into(),
@@ -1284,8 +1145,6 @@ impl<'a> InferencePass<'a> {
                     symbol: nominal_symbol,
                     row: real_row.clone().into(),
                 },
-                ConstraintCause::Internal,
-                body.span,
             );
 
             // Replace all instances of the placeholder row
@@ -1306,7 +1165,8 @@ impl<'a> InferencePass<'a> {
                 })
             };
 
-            self.session.insert_term(nominal_symbol, entry);
+            self.session
+                .insert_term(nominal_symbol, entry, &mut self.constraints);
 
             let ty = InferTy::Nominal {
                 symbol: nominal_symbol,
@@ -1360,14 +1220,31 @@ impl<'a> InferencePass<'a> {
             self.register_conformance(ty, nominal_symbol, sym, node_id, span, context);
         }
 
-        let associated_types = self
-            .session
-            .type_catalog
-            .associated_types
-            .get(&conformance_symbol)
-            .cloned()
-            .unwrap_or_default()
+        // Get the protocol's associated type declarations
+        // First try ASTs (for locally defined protocols), then type_catalog (for imported protocols)
+        let protocol_associated_types = self
+            .asts
             .iter()
+            .find_map(|ast| ast.phase.child_types.get(&conformance_symbol))
+            .cloned()
+            .or_else(|| {
+                self.session
+                    .type_catalog
+                    .associated_types
+                    .get(&conformance_symbol)
+                    .cloned()
+            })
+            .unwrap_or_default();
+
+        tracing::debug!(
+            "register_conformance: conformance_symbol={:?}, protocol_associated_types={:?}",
+            conformance_symbol,
+            protocol_associated_types
+        );
+
+        let associated_types = protocol_associated_types
+            .iter()
+            .filter(|(_, sym)| matches!(sym, Symbol::AssociatedType(_)))
             .fold(FxHashMap::default(), |mut acc, (label, _)| {
                 let child_types = self
                     .asts
@@ -1383,9 +1260,17 @@ impl<'a> InferencePass<'a> {
                     self.session.new_ty_meta_var(context.level())
                 };
 
+                tracing::debug!(
+                    "  label={:?}, child_types={:?}, associated_ty={:?}",
+                    label,
+                    child_types,
+                    associated_ty
+                );
                 acc.insert(label.clone(), associated_ty);
                 acc
             });
+
+        tracing::debug!("  final associated_types={:?}", associated_types);
 
         self.session.type_catalog.conformances.insert(
             ConformanceKey {
@@ -1401,154 +1286,8 @@ impl<'a> InferencePass<'a> {
                 span: conformance_span,
             },
         );
-        context
-            .wants_mut()
-            .conforms(ty.clone(), protocol_id, conformance_span);
+        self.constraints.wants_conforms(ty.clone(), protocol_id);
     }
-
-    // fn visit_extend(
-    //     &mut self,
-    //     name: &Name,
-    //     conformances: &[TypeAnnotation],
-    //     generics: &[GenericDecl],
-    //     body: &Body,
-    //     context: &mut impl Solve,
-    // ) -> InferTy {
-    //     for generic in generics.iter() {
-    //         let param_id = self.session.new_type_param_id(None);
-    //         self.session
-    //             .insert_mono(generic.name.symbol(), InferTy::Param(param_id));
-    //     }
-
-    //     let nominal_symbol = name.symbol();
-    //     let row_placeholder_id = self.canonical_row_for(&nominal_symbol, context.level());
-    //     let row_placeholder = InferRow::Var(row_placeholder_id);
-    //     let ty = InferTy::Nominal {
-    //         symbol: name.symbol(),
-    //         row: row_placeholder.clone().into(),
-    //     };
-
-    //     let mut row_types = vec![];
-
-    //     for decl in body.decls.iter() {
-    //         match &decl.kind {
-    //             DeclKind::Init { name, params, body } => {
-    //                 self.visit_init(ty.clone(), name, params, body, &mut context.next());
-    //             }
-    //             DeclKind::Method { func, is_static } => {
-    //                 self.visit_method(nominal_symbol, func, *is_static, &mut context.next());
-    //             }
-    //             DeclKind::EnumVariant(name, _, values) => {
-    //                 self.session
-    //                     .type_catalog
-    //                     .variants
-    //                     .entry(nominal_symbol)
-    //                     .or_default()
-    //                     .insert(name.name_str().into(), name.symbol());
-
-    //                 let tys = values
-    //                     .iter()
-    //                     .map(|v| self.visit_type_annotation(v, context))
-    //                     .collect_vec();
-
-    //                 let values_ty = match tys.len() {
-    //                     0 => InferTy::Void,
-    //                     1 => tys[0].clone(),
-    //                     _ => InferTy::Tuple(tys.to_vec()),
-    //                 };
-
-    //                 self.session.insert(name.symbol(), values_ty.clone());
-    //                 row_types.push((name.name_str(), values_ty));
-    //             }
-    //             DeclKind::Property {
-    //                 name,
-    //                 is_static,
-    //                 type_annotation,
-    //                 default_value,
-    //                 ..
-    //             } => {
-    //                 row_types.push((
-    //                     name.name_str(),
-    //                     self.visit_property(
-    //                         nominal_symbol,
-    //                         name,
-    //                         *is_static,
-    //                         type_annotation,
-    //                         default_value,
-    //                         &mut context.next(),
-    //                     ),
-    //                 ));
-    //             }
-    //             DeclKind::TypeAlias(lhs, .., rhs) => {
-    //                 let rhs_ty = self.visit_type_annotation(rhs, context);
-
-    //                 // Quantify over the enclosing nominal's generics so the alias can be
-    //                 // instantiated at use sites (e.g., Person<A>.T = A ⇒ T specializes to α).
-    //                 let mut foralls: IndexSet<ForAll> = IndexSet::new();
-    //                 for g in generics {
-    //                     if let Some(entry) = self.session.lookup(&g.name.symbol())
-    //                         && let InferTy::Param(pid) = entry._as_ty()
-    //                     {
-    //                         foralls.insert(ForAll::Ty(pid));
-    //                     }
-    //                 }
-
-    //                 let entry = if foralls.is_empty() {
-    //                     EnvEntry::Mono(rhs_ty)
-    //                 } else {
-    //                     EnvEntry::Scheme(Scheme {
-    //                         ty: rhs_ty,
-    //                         foralls,
-    //                         predicates: Default::default(),
-    //                     })
-    //                 };
-
-    //                 self.session.insert_term(lhs.symbol(), entry);
-    //             }
-
-    //             _ => tracing::warn!("Unhandled extend decl: {:?}", decl.kind),
-    //         }
-    //     }
-
-    //     for conformance in conformances {
-    //         let Symbol::Protocol(protocol_id) = conformance.symbol() else {
-    //             unreachable!("didnt get protocol id for conformance: {conformance:?}");
-    //         };
-
-    //         let associated_types = self
-    //             .session
-    //             .type_catalog
-    //             .associated_types
-    //             .get(&conformance.symbol())
-    //             .cloned()
-    //             .unwrap_or_default()
-    //             .iter()
-    //             .fold(FxHashMap::default(), |mut acc, (label, _)| {
-    //                 acc.insert(label.clone(), self.session.new_ty_meta_var(context.level()));
-    //                 acc
-    //             });
-
-    //         self.session.type_catalog.conformances.insert(
-    //             ConformanceKey {
-    //                 protocol_id,
-    //                 conforming_id: nominal_symbol,
-    //             },
-    //             Conformance {
-    //                 node_id: conformance.id,
-    //                 conforming_id: nominal_symbol,
-    //                 protocol_id,
-    //                 witnesses: Default::default(),
-    //                 associated_types,
-    //                 span: conformance.span,
-    //             },
-    //         );
-    //         context
-    //             .wants_mut()
-    //             .conforms(ty.clone(), protocol_id, conformance.span);
-    //     }
-
-    //     ty
-    // }
 
     #[instrument(level = tracing::Level::TRACE, skip(self, context))]
     fn infer_record_literal(
@@ -1581,7 +1320,7 @@ impl<'a> InferencePass<'a> {
             self.asts[func.id.0.0 as usize]
                 .diagnostics
                 .push(AnyDiagnostic::Typing(Diagnostic {
-                    span: func.name_span,
+                    id: func.id,
                     kind: TypeError::NameNotResolved(func.name.clone()),
                 }));
             return InferTy::Error(TypeError::NameNotResolved(func.name.clone()).into());
@@ -1604,12 +1343,14 @@ impl<'a> InferencePass<'a> {
         }
 
         let func_ty = self.visit_func(func, context);
-        self.session.insert(func_sym, func_ty.clone());
+        self.session
+            .insert(func_sym, func_ty.clone(), &mut self.constraints);
 
         func_ty
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self, context))]
+    #[allow(clippy::too_many_arguments)]
     fn visit_property(
         &mut self,
         decl: &Decl,
@@ -1624,7 +1365,7 @@ impl<'a> InferencePass<'a> {
             self.asts[decl.id.0.0 as usize]
                 .diagnostics
                 .push(AnyDiagnostic::Typing(Diagnostic {
-                    span: decl.span,
+                    id: decl.id,
                     kind: TypeError::NameNotResolved(name.clone()),
                 }));
             return InferTy::Error(TypeError::NameNotResolved(name.clone()).into());
@@ -1645,12 +1386,7 @@ impl<'a> InferencePass<'a> {
 
         if let Some(default_value) = default_value {
             let default_ty = self.visit_expr(default_value, context);
-            context.wants_mut().equals(
-                default_ty,
-                ty.clone(),
-                ConstraintCause::Internal,
-                default_value.span,
-            );
+            self.constraints.wants_equals(default_ty, ty.clone());
         }
 
         if is_static {
@@ -1672,7 +1408,7 @@ impl<'a> InferencePass<'a> {
         ty
     }
 
-    #[instrument(level = tracing::Level::TRACE, skip(self, context))]
+    #[instrument(level = tracing::Level::TRACE, skip(self, context, decl))]
     fn visit_init(
         &mut self,
         decl: &Decl,
@@ -1686,7 +1422,7 @@ impl<'a> InferencePass<'a> {
             self.asts[decl.id.0.0 as usize]
                 .diagnostics
                 .push(AnyDiagnostic::Typing(Diagnostic {
-                    span: decl.span,
+                    id: decl.id,
                     kind: TypeError::NameNotResolved(name.clone()),
                 }));
             return InferTy::Error(TypeError::NameNotResolved(name.clone()).into());
@@ -1721,7 +1457,7 @@ impl<'a> InferencePass<'a> {
                 predicates: Default::default(),
             })
         };
-        self.session.insert_term(sym, entry);
+        self.session.insert_term(sym, entry, &mut self.constraints);
 
         InferTy::Void
     }
@@ -1741,12 +1477,8 @@ impl<'a> InferencePass<'a> {
             let arm_ty = self.infer_block(&arm.body, context);
 
             if let Some(last_arm_ty) = &last_arm_ty {
-                context.wants_mut().equals(
-                    arm_ty.clone(),
-                    last_arm_ty.clone(),
-                    ConstraintCause::MatchArm(arm.id),
-                    arm.span,
-                );
+                self.constraints
+                    .wants_equals(arm_ty.clone(), last_arm_ty.clone());
             }
 
             last_arm_ty = Some(arm_ty);
@@ -1765,15 +1497,12 @@ impl<'a> InferencePass<'a> {
         match &pattern.kind {
             PatternKind::Bind(Name::Resolved(sym, _)) => {
                 if let Some(EnvEntry::Mono(existing)) = self.session.lookup(sym) {
-                    context.wants_mut().equals(
-                        expected.clone(),
-                        existing.clone(),
-                        ConstraintCause::Internal,
-                        pattern.span,
-                    );
+                    self.constraints
+                        .wants_equals(expected.clone(), existing.clone());
                 };
 
-                self.session.insert(*sym, expected.clone());
+                self.session
+                    .insert(*sym, expected.clone(), &mut self.constraints);
                 expected.clone()
             }
             PatternKind::Tuple(items) => {
@@ -1782,8 +1511,7 @@ impl<'a> InferencePass<'a> {
                         .iter()
                         .map(|i| {
                             let var = self.session.new_ty_meta_var_id(context.level());
-                            self.generalization_blocks
-                                .insert(var, GeneralizationBlock::PatternBindLocal);
+
                             self.promote_pattern_bindings(
                                 i,
                                 &InferTy::Var {
@@ -1796,12 +1524,7 @@ impl<'a> InferencePass<'a> {
                         .collect_vec(),
                 );
 
-                context.wants_mut().equals(
-                    ty.clone(),
-                    expected.clone(),
-                    ConstraintCause::Internal,
-                    pattern.span,
-                );
+                self.constraints.wants_equals(ty.clone(), expected.clone());
 
                 ty
             }
@@ -1813,7 +1536,7 @@ impl<'a> InferencePass<'a> {
                             let Ok(sym) = name.symbol() else {
                                 self.asts[field.id.0.0 as usize].diagnostics.push(
                                     AnyDiagnostic::Typing(Diagnostic {
-                                        span: field.span,
+                                        id: field.id,
                                         kind: TypeError::NameNotResolved(name.clone()),
                                     }),
                                 );
@@ -1823,14 +1546,12 @@ impl<'a> InferencePass<'a> {
                             };
 
                             let var = self.session.new_ty_meta_var_id(context.level());
-                            self.generalization_blocks
-                                .insert(var, GeneralizationBlock::PatternBindLocal);
                             let ty = InferTy::Var {
                                 id: var,
                                 level: context.level(),
                             };
 
-                            self.session.insert(sym, ty.clone());
+                            self.session.insert(sym, ty.clone(), &mut self.constraints);
                             row = InferRow::Extend {
                                 row: row.into(),
                                 label: name.name_str().into(),
@@ -1841,7 +1562,7 @@ impl<'a> InferencePass<'a> {
                             let Ok(sym) = name.symbol() else {
                                 self.asts[field.id.0.0 as usize].diagnostics.push(
                                     AnyDiagnostic::Typing(Diagnostic {
-                                        span: field.span,
+                                        id: field.id,
                                         kind: TypeError::NameNotResolved(name.clone()),
                                     }),
                                 );
@@ -1854,8 +1575,7 @@ impl<'a> InferencePass<'a> {
                                 existing._as_ty()
                             } else {
                                 let var = self.session.new_ty_meta_var_id(context.level());
-                                self.generalization_blocks
-                                    .insert(var, GeneralizationBlock::PatternBindLocal);
+
                                 InferTy::Var {
                                     id: var,
                                     level: context.level(),
@@ -1873,12 +1593,7 @@ impl<'a> InferencePass<'a> {
                 }
 
                 let ty = InferTy::Record(row.into());
-                context.wants_mut().equals(
-                    ty.clone(),
-                    expected.clone(),
-                    ConstraintCause::Internal,
-                    pattern.span,
-                );
+                self.constraints.wants_equals(ty.clone(), expected.clone());
 
                 ty
             }
@@ -1893,67 +1608,49 @@ impl<'a> InferencePass<'a> {
 
         match kind {
             PatternKind::Bind(Name::Raw(name)) => {
-                context.wants_mut().equals(
+                self.constraints.wants_equals(
                     expected.clone(),
                     InferTy::Error(TypeError::NameNotResolved(name.clone().into()).into()),
-                    ConstraintCause::Internal,
-                    pattern.span,
                 );
             }
             PatternKind::Bind(Name::Resolved(sym, _)) => {
-                self.session.insert_mono(*sym, expected.clone());
+                self.session
+                    .insert_mono(*sym, expected.clone(), &mut self.constraints);
             }
             PatternKind::Bind(Name::SelfType(..)) => (),
             PatternKind::LiteralInt(_) => {
-                context.wants_mut().equals(
-                    expected.clone(),
-                    InferTy::Int,
-                    ConstraintCause::Pattern(pattern.id),
-                    pattern.span,
-                );
+                self.constraints
+                    .wants_equals(expected.clone(), InferTy::Int);
             }
             PatternKind::LiteralFloat(_) => {
-                context.wants_mut().equals(
-                    expected.clone(),
-                    InferTy::Float,
-                    ConstraintCause::Pattern(pattern.id),
-                    pattern.span,
-                );
+                self.constraints
+                    .wants_equals(expected.clone(), InferTy::Float);
             }
             PatternKind::LiteralFalse | PatternKind::LiteralTrue => {
-                context.wants_mut().equals(
-                    expected.clone(),
-                    InferTy::Bool,
-                    ConstraintCause::Pattern(pattern.id),
-                    pattern.span,
-                );
+                self.constraints
+                    .wants_equals(expected.clone(), InferTy::Bool);
             }
             PatternKind::Tuple(patterns) => {
                 let metas: Vec<InferTy> = (0..patterns.len())
                     .map(|_| self.session.new_ty_meta_var(context.level()))
                     .collect();
 
-                context.wants_mut().equals(
-                    expected.clone(),
-                    InferTy::Tuple(metas.clone()),
-                    ConstraintCause::Pattern(pattern.id),
-                    pattern.span,
-                );
+                self.constraints
+                    .wants_equals(expected.clone(), InferTy::Tuple(metas.clone()));
 
                 for (pi, bi) in patterns.iter().zip(metas) {
                     self.check_pattern(pi, &bi, context);
                 }
             }
             PatternKind::Record { fields } => {
-                let expected_row =
-                    self.ensure_row_record(pattern.id, pattern.span, expected, context);
+                let expected_row = self.ensure_row_record(expected, context);
                 for field in fields {
                     match &field.kind {
                         RecordFieldPatternKind::Bind(name) => {
                             let Ok(sym) = name.symbol() else {
                                 self.asts[field.id.0.0 as usize].diagnostics.push(
                                     AnyDiagnostic::Typing(Diagnostic {
-                                        span: field.span,
+                                        id: field.id,
                                         kind: TypeError::NameNotResolved(name.clone()),
                                     }),
                                 );
@@ -1964,26 +1661,25 @@ impl<'a> InferencePass<'a> {
                             let field_ty = self.session.new_ty_meta_var(context.level());
 
                             // bind the pattern name
-                            self.session.insert_mono(sym, field_ty.clone());
+                            self.session
+                                .insert_mono(sym, field_ty.clone(), &mut self.constraints);
 
                             // ONE RowHas per field, all referring to the same row
-                            context.wants_mut()._has_field(
+                            self.constraints._has_field(
                                 expected_row.clone(),
                                 name.name_str().into(),
                                 field_ty,
-                                ConstraintCause::Pattern(field.id),
-                                pattern.span,
+                                &context.group_info(),
                             );
                         }
                         RecordFieldPatternKind::Equals { name, value, .. } => {
                             // optional: pattern field = subpattern; same RowHas then recurse on value
                             let field_ty = self.session.new_ty_meta_var(context.level());
-                            context.wants_mut()._has_field(
+                            self.constraints._has_field(
                                 expected_row.clone(),
                                 name.name_str().into(),
                                 field_ty.clone(),
-                                ConstraintCause::Pattern(field.id),
-                                pattern.span,
+                                &context.group_info(),
                             );
                             self.check_pattern(value, &field_ty, context);
                         }
@@ -2001,9 +1697,6 @@ impl<'a> InferencePass<'a> {
                     .iter()
                     .map(|_| {
                         let var_id = self.session.new_ty_meta_var_id(context.level());
-                        self.generalization_blocks
-                            .insert(var_id, GeneralizationBlock::PatternBindLocal);
-
                         InferTy::Var {
                             id: var_id,
                             level: context.level(),
@@ -2018,13 +1711,12 @@ impl<'a> InferencePass<'a> {
                     curry(field_metas.clone(), expected.clone())
                 };
 
-                context.wants_mut().member(
+                self.constraints.wants_member(
                     pattern.id,
                     expected.clone(),
                     variant_name.into(),
                     payload,
-                    ConstraintCause::Pattern(pattern.id),
-                    pattern.span,
+                    &context.group_info(),
                 );
 
                 // Recursively check each field pattern
@@ -2047,21 +1739,11 @@ impl<'a> InferencePass<'a> {
         context: &mut impl Solve,
     ) -> InferTy {
         let cond_ty = self.visit_expr(cond, context);
-        context.wants_mut().equals(
-            cond_ty,
-            InferTy::Bool,
-            ConstraintCause::Condition(cond.id),
-            cond.span,
-        );
+        self.constraints.wants_equals(cond_ty, InferTy::Bool);
 
         let conseq_ty = self.infer_block(conseq, context);
         let alt_ty = self.infer_block(alt, context);
-        context.wants_mut().equals(
-            conseq_ty.clone(),
-            alt_ty,
-            ConstraintCause::Internal,
-            alt.span,
-        );
+        self.constraints.wants_equals(conseq_ty.clone(), alt_ty);
 
         conseq_ty
     }
@@ -2075,23 +1757,13 @@ impl<'a> InferencePass<'a> {
         context: &mut impl Solve,
     ) -> InferTy {
         let cond_ty = self.visit_expr(cond, context);
-        context.wants_mut().equals(
-            cond_ty,
-            InferTy::Bool,
-            ConstraintCause::Condition(cond.id),
-            cond.span,
-        );
+        self.constraints.wants_equals(cond_ty, InferTy::Bool);
 
         let conseq_ty = self.infer_block(conseq, context);
 
         if let Some(alt) = alt {
             let alt_ty = self.infer_block(alt, context);
-            context.wants_mut().equals(
-                conseq_ty.clone(),
-                alt_ty,
-                ConstraintCause::Internal,
-                alt.span,
-            );
+            self.constraints.wants_equals(conseq_ty.clone(), alt_ty);
         }
 
         conseq_ty
@@ -2099,16 +1771,21 @@ impl<'a> InferencePass<'a> {
 
     #[instrument(level = tracing::Level::TRACE, skip(self, block, context))]
     fn infer_block(&mut self, block: &Block, context: &mut impl Solve) -> InferTy {
-        let tok = self.tracking_returns();
         let mut ret = InferTy::Void;
 
         for node in block.body.iter() {
             ret = self.visit_node(node, context);
         }
 
-        self.verify_returns(tok, ret.clone(), context);
         self.session.types_by_node.insert(block.id, ret.clone());
+        ret
+    }
 
+    #[instrument(level = tracing::Level::TRACE, skip(self, block, context))]
+    fn infer_block_with_returns(&mut self, block: &Block, context: &mut impl Solve) -> InferTy {
+        let tok = self.tracking_returns();
+        let ret = self.infer_block(block, context);
+        self.verify_returns(tok, ret.clone());
         ret
     }
 
@@ -2122,7 +1799,7 @@ impl<'a> InferencePass<'a> {
             return InferTy::Error(TypeError::TypeNotFound(name.to_string()).into());
         };
 
-        let ty = entry.instantiate(expr.id, context, self.session, expr.span);
+        let ty = entry.instantiate(expr.id, &mut self.constraints, context, self.session);
 
         self.instantiations
             .insert(expr.id, context.instantiations_mut().clone());
@@ -2130,7 +1807,7 @@ impl<'a> InferencePass<'a> {
         ty
     }
 
-    #[instrument(level = tracing::Level::TRACE, skip(self, context))]
+    #[instrument(level = tracing::Level::TRACE, skip(self, context, callee, type_args, args))]
     fn visit_call(
         &mut self,
         callee: &Expr,
@@ -2139,8 +1816,36 @@ impl<'a> InferencePass<'a> {
         context: &mut impl Solve,
     ) -> InferTy {
         let callee_ty = self.visit_expr(callee, context);
+
+        let arg_tys = args
+            .iter()
+            .map(|a| self.visit_expr(&a.value, context))
+            .collect_vec();
+        let type_args = type_args
+            .iter()
+            .map(|a| self.visit_type_annotation(a, context))
+            .collect_vec();
+
         let receiver_ty = match &callee.kind {
-            ExprKind::Member(Some(rcv), ..) => {
+            ExprKind::Member(Some(rcv), label, ..) => {
+                if let ExprKind::Constructor(Name::Resolved(Symbol::Protocol(protocol_id), ..)) =
+                    &rcv.kind
+                    && let Some(first_arg) = arg_tys.first()
+                {
+                    self.constraints
+                        .wants_conforms(first_arg.clone(), *protocol_id);
+
+                    // Store a meta witness for protocol method calls so rectify_witnesses
+                    // can resolve it to the concrete implementation based on the first arg type
+                    self.session.type_catalog.member_witnesses.insert(
+                        callee.id,
+                        MemberWitness::Meta {
+                            receiver: first_arg.clone(),
+                            label: label.clone(),
+                        },
+                    );
+                }
+
                 // Reuse the already-computed type if available; otherwise visit.
                 Some(
                     self.session
@@ -2154,15 +1859,6 @@ impl<'a> InferencePass<'a> {
             _ => None,
         };
 
-        let arg_tys = args
-            .iter()
-            .map(|a| self.visit_expr(&a.value, context))
-            .collect_vec();
-        let type_args = type_args
-            .iter()
-            .map(|a| self.visit_type_annotation(a, context))
-            .collect_vec();
-
         let ret = self.session.new_ty_meta_var(context.level());
         let instantiations = self
             .instantiations
@@ -2173,7 +1869,7 @@ impl<'a> InferencePass<'a> {
             .iter()
             .zip(instantiations.ty_mappings(&callee.id).values())
         {
-            context.wants_mut().equals(
+            self.constraints.wants_equals(
                 type_arg.clone(),
                 InferTy::Var {
                     id: *instantiated,
@@ -2185,8 +1881,6 @@ impl<'a> InferencePass<'a> {
                         .copied()
                         .unwrap_or_default(),
                 },
-                ConstraintCause::Internal,
-                callee.span,
             );
         }
 
@@ -2194,22 +1888,19 @@ impl<'a> InferencePass<'a> {
         //     arg_tys.insert(0, ret.clone());
         // }
 
-        let level = context.level();
-        context.wants_mut().call(
+        self.constraints.wants_call(
             callee.id,
             callee_ty,
             arg_tys,
             type_args,
             ret.clone(),
             receiver_ty,
-            level,
-            ConstraintCause::Call(callee.id),
-            callee.span,
+            &context.group_info(),
         );
         ret
     }
 
-    #[instrument(level = tracing::Level::TRACE, skip(self, context))]
+    #[instrument(level = tracing::Level::TRACE, skip(self, context, func), fields(func.name = ?func.name))]
     fn visit_func(&mut self, func: &Func, context: &mut impl Solve) -> InferTy {
         for generic in func.generics.iter() {
             self.register_generic(generic, context);
@@ -2222,7 +1913,7 @@ impl<'a> InferencePass<'a> {
             self.check_block(&func.body, ret.clone(), &mut context.next());
             ret
         } else {
-            self.infer_block(&func.body, &mut context.next())
+            self.infer_block_with_returns(&func.body, &mut context.next())
         };
 
         if params.is_empty() {
@@ -2256,7 +1947,8 @@ impl<'a> InferencePass<'a> {
             self.session.new_ty_meta_var(context.level())
         };
 
-        self.session.insert_term(sym, ty.clone().to_entry());
+        self.session
+            .insert_term(sym, ty.clone().to_entry(), &mut self.constraints);
 
         ty
     }
@@ -2264,16 +1956,9 @@ impl<'a> InferencePass<'a> {
     #[instrument(level = tracing::Level::TRACE, skip(self, block, context))]
     fn check_block(&mut self, block: &Block, expected: InferTy, context: &mut impl Solve) {
         let tok = self.tracking_returns();
-        let mut ret = InferTy::Void;
-        for node in &block.body {
-            ret = self.visit_node(node, context);
-        }
-
-        self.verify_returns(tok, ret.clone(), context);
-
-        context
-            .wants_mut()
-            .equals(ret, expected, ConstraintCause::Internal, block.span);
+        let ret = self.infer_block(block, context);
+        self.verify_returns(tok, ret.clone());
+        self.constraints.wants_equals(ret, expected);
     }
 
     // Checks
@@ -2294,23 +1979,19 @@ impl<'a> InferencePass<'a> {
                 self.asts[param.id.0.0 as usize]
                     .diagnostics
                     .push(AnyDiagnostic::Typing(Diagnostic {
-                        span: param.span,
+                        id: param.id,
                         kind: TypeError::NameNotResolved(param.name.clone()),
                     }));
                 continue;
             };
 
-            self.session.insert_mono(sym, expected_param_ty);
+            self.session
+                .insert_mono(sym, expected_param_ty, &mut self.constraints);
         }
 
         if let Some(ret) = ret {
             let ret_ty = self.visit_type_annotation(ret, context);
-            context.wants_mut().equals(
-                ret_ty,
-                expected_ret.clone(),
-                ConstraintCause::Annotation(ret.id),
-                ret.span,
-            );
+            self.constraints.wants_equals(ret_ty, expected_ret.clone());
         }
 
         self.check_block(body, expected_ret.clone(), context);
@@ -2327,7 +2008,7 @@ impl<'a> InferencePass<'a> {
                 let Ok(sym) = name.symbol() else {
                     self.asts[type_annotation.id.0.0 as usize].diagnostics.push(
                         AnyDiagnostic::Typing(Diagnostic {
-                            span: type_annotation.span,
+                            id: type_annotation.id,
                             kind: TypeError::NameNotResolved(name.clone()),
                         }),
                     );
@@ -2354,14 +2035,13 @@ impl<'a> InferencePass<'a> {
                     // Base is the protocol "Self" variable in this requirement.
                     let base = InferTy::Param(protocol_self);
 
-                    context.wants_mut().projection(
+                    self.constraints.wants_projection(
                         type_annotation.id,
                         base,
                         name.name_str().into(), // "T"
                         Some(protocol_id),
                         result.clone(),
-                        ConstraintCause::Annotation(type_annotation.id),
-                        type_annotation.span,
+                        &context.group_info(),
                     );
 
                     // NOTE: we intentionally DO NOT instantiate the env entry for @AssociatedType here.
@@ -2383,7 +2063,7 @@ impl<'a> InferencePass<'a> {
                 let Ok(sym) = name.symbol() else {
                     self.asts[type_annotation.id.0.0 as usize].diagnostics.push(
                         AnyDiagnostic::Typing(Diagnostic {
-                            span: type_annotation.span,
+                            id: type_annotation.id,
                             kind: TypeError::NameNotResolved(name.clone()),
                         }),
                     );
@@ -2396,9 +2076,8 @@ impl<'a> InferencePass<'a> {
                         type_annotation.id,
                         &generic_args,
                         self.session,
-                        context.level(),
-                        context.wants_mut(),
-                        type_annotation.span,
+                        context,
+                        &mut self.constraints,
                     );
 
                     self.instantiations.insert(type_annotation.id, subsitutions);
@@ -2408,29 +2087,13 @@ impl<'a> InferencePass<'a> {
                     tracing::warn!("nope, did not find anything in the env for {name:?}");
                 }
 
-                let var_id = self.session.new_ty_meta_var_id(context.level());
-
-                self.generalization_blocks.insert(
-                    var_id,
-                    GeneralizationBlock::PendingType {
-                        node_id: type_annotation.id,
-                        span: type_annotation.span,
-                        level: context.level(),
-                        type_symbol: sym,
-                        args: generic_args,
-                    },
-                );
-
-                InferTy::Var {
-                    id: var_id,
-                    level: context.level(),
-                }
+                self.session.new_ty_meta_var(context.level())
             }
             TypeAnnotationKind::SelfType(name) => {
                 let Ok(sym) = name.symbol() else {
                     self.asts[type_annotation.id.0.0 as usize].diagnostics.push(
                         AnyDiagnostic::Typing(Diagnostic {
-                            span: type_annotation.span,
+                            id: type_annotation.id,
                             kind: TypeError::NameNotResolved(name.clone()),
                         }),
                     );
@@ -2451,9 +2114,9 @@ impl<'a> InferencePass<'a> {
 
                 let ty = entry.instantiate(
                     type_annotation.id,
+                    &mut self.constraints,
                     context,
                     self.session,
-                    type_annotation.span,
                 );
 
                 self.instantiations
@@ -2487,23 +2150,22 @@ impl<'a> InferencePass<'a> {
                 let ret = self.session.new_ty_meta_var(context.level());
 
                 if matches!(base.symbol(), Ok(Symbol::TypeParameter(..))) {
-                    context.wants_mut().projection(
+                    self.constraints.wants_projection(
                         type_annotation.id,
                         base_ty,
                         member.clone(),
                         None,
                         ret.clone(),
-                        ConstraintCause::Annotation(type_annotation.id),
-                        type_annotation.span,
+                        &context.group_info(),
                     );
                 } else {
-                    context.wants_mut().type_member(
+                    self.constraints.wants_type_member(
                         base_ty,
                         member.clone(),
                         generics,
                         ret.clone(),
                         type_annotation.id,
-                        type_annotation.span,
+                        &context.group_info(),
                     );
                 }
 
@@ -2513,7 +2175,7 @@ impl<'a> InferencePass<'a> {
         }
     }
 
-    #[instrument(level = tracing::Level::TRACE, skip(self, context))]
+    #[instrument(level = tracing::Level::TRACE, skip(self, context, rhs))]
     fn visit_let(
         &mut self,
         lhs: &Pattern,
@@ -2527,23 +2189,10 @@ impl<'a> InferencePass<'a> {
             (Some(annotation), Some(rhs)) => {
                 let annotated_ty = self.visit_type_annotation(annotation, context);
                 let rhs_ty = self.visit_expr(rhs, context);
-                context.wants_mut().equals(
-                    annotated_ty.clone(),
-                    rhs_ty,
-                    ConstraintCause::Annotation(annotation.id),
-                    annotation.span,
-                );
+                self.constraints.wants_equals(annotated_ty.clone(), rhs_ty);
                 annotated_ty
             }
-            (None, None) => {
-                let id = self.session.new_ty_meta_var_id(context.level().next());
-                self.generalization_blocks
-                    .insert(id, GeneralizationBlock::PatternBindLocal);
-                InferTy::Var {
-                    id,
-                    level: context.level().next(),
-                }
-            }
+            (None, None) => self.session.new_ty_meta_var(context.level().next()),
         };
 
         self.promote_pattern_bindings(lhs, &ty, &mut context.next())
@@ -2554,11 +2203,9 @@ impl<'a> InferencePass<'a> {
         ReturnToken {}
     }
 
-    fn verify_returns(&mut self, _tok: ReturnToken, ret: InferTy, context: &mut impl Solve) {
-        for (span, tracked_ret) in self.tracked_returns.pop().unwrap_or_else(|| unreachable!()) {
-            context
-                .wants_mut()
-                .equals(tracked_ret, ret.clone(), ConstraintCause::Internal, span);
+    fn verify_returns(&mut self, _tok: ReturnToken, ret: InferTy) {
+        for tracked_ret in self.tracked_returns.pop().unwrap_or_else(|| unreachable!()) {
+            self.constraints.wants_equals(tracked_ret.1, ret.clone());
         }
     }
 
@@ -2572,23 +2219,13 @@ impl<'a> InferencePass<'a> {
         id
     }
 
-    fn ensure_row_record(
-        &mut self,
-        id: NodeID,
-        span: Span,
-        expected: &InferTy,
-        context: &mut impl Solve,
-    ) -> InferRow {
+    fn ensure_row_record(&mut self, expected: &InferTy, context: &mut impl Solve) -> InferRow {
         match expected {
             InferTy::Record(box row) => row.clone(),
             _ => {
                 let row = self.session.new_row_meta_var(context.level());
-                context.wants_mut().equals(
-                    expected.clone(),
-                    InferTy::Record(Box::new(row.clone())),
-                    ConstraintCause::Member(id),
-                    span,
-                );
+                self.constraints
+                    .wants_equals(expected.clone(), InferTy::Record(Box::new(row.clone())));
                 row
             }
         }
@@ -2606,7 +2243,6 @@ impl<'a> InferencePass<'a> {
             let predicate = Predicate::Conforms {
                 param: param_id,
                 protocol_id,
-                span: conformance.span,
             };
 
             context.givens_mut().insert(predicate.clone());
@@ -2621,13 +2257,14 @@ impl<'a> InferencePass<'a> {
             self.asts[generic.id.0.0 as usize]
                 .diagnostics
                 .push(AnyDiagnostic::Typing(Diagnostic {
-                    span: generic.span,
+                    id: generic.id,
                     kind: TypeError::NameNotResolved(generic.name.clone()),
                 }));
             return 0.into();
         };
 
-        self.session.insert_mono(sym, InferTy::Param(param_id));
+        self.session
+            .insert_mono(sym, InferTy::Param(param_id), &mut self.constraints);
 
         param_id
     }

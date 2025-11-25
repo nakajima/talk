@@ -1460,6 +1460,12 @@ pub fn format_string(string: &str) -> String {
     format(&ast, 80)
 }
 
+#[allow(clippy::unwrap_used)]
+pub fn format_node(node: &Node, meta: &NodeMetaStorage) -> String {
+    let formatter = Formatter::new(meta);
+    formatter.format(std::slice::from_ref(node), 80)
+}
+
 // Public API
 pub fn format<Phase: ASTPhase>(ast: &AST<Phase>, width: usize) -> String {
     let formatter = Formatter::new(&ast.meta);

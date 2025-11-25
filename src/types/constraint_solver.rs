@@ -1,80 +1,90 @@
-use indexmap::IndexSet;
-
 use crate::{
     ast::AST,
     diagnostic::{AnyDiagnostic, Diagnostic},
-    name_resolution::name_resolver::NameResolved,
+    name_resolution::{name_resolver::NameResolved, symbol::Symbol},
+    node_id::NodeID,
     types::{
-        constraints::constraint::Constraint, solve_context::SolveContext, type_operations::unify,
+        constraints::{constraint::Constraint, store::ConstraintStore},
+        infer_ty::{Level, Meta},
+        solve_context::SolveContext,
+        type_error::TypeError,
+        type_operations::{UnificationSubstitutions, unify},
         type_session::TypeSession,
     },
 };
+
+#[derive(Debug, PartialEq)]
+pub enum DeferralReason {
+    WaitingOnMeta(Meta),
+    WaitingOnSymbol(Symbol),
+    Unknown,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum SolveResult {
+    Solved(Vec<Meta>),
+    Defer(DeferralReason),
+    Err(TypeError),
+}
 
 #[derive(Debug)]
 pub struct ConstraintSolver<'a> {
     context: &'a mut SolveContext,
     asts: &'a mut [AST<NameResolved>],
-    unsolved: IndexSet<Constraint>,
 }
 
 impl<'a> ConstraintSolver<'a> {
-    pub fn new(
-        context: &'a mut SolveContext,
-        asts: &'a mut [AST<NameResolved>],
-        unsolved: IndexSet<Constraint>,
-    ) -> Self {
-        Self {
-            context,
-            unsolved,
-            asts,
-        }
+    pub fn new(context: &'a mut SolveContext, asts: &'a mut [AST<NameResolved>]) -> Self {
+        Self { context, asts }
     }
 
-    pub fn solve(mut self, session: &mut TypeSession) -> IndexSet<Constraint> {
-        let mut remaining_attempts = 2;
-        while remaining_attempts >= 0 {
-            let mut made_progress = false;
-
-            for unsolved in std::mem::take(&mut self.unsolved) {
-                self.context.wants.push(unsolved);
-            }
-
-            let mut wants = std::mem::take(&mut self.context.wants);
-
-            while let Some(want) = wants.pop()
-                && remaining_attempts >= 0
-            {
-                tracing::trace!("solving {want:?}");
-                let constraint = want.apply(&mut self.context.substitutions);
+    pub fn solve(
+        self,
+        level: Level,
+        constraints: &mut ConstraintStore,
+        session: &mut TypeSession,
+        mut substitutions: UnificationSubstitutions,
+    ) {
+        substitutions.extend(&self.context.substitutions);
+        while !constraints.is_stalled() {
+            let mut solved_metas = vec![];
+            let worklist = constraints.worklist();
+            for want_id in worklist {
+                let want = constraints.get(&want_id).clone();
+                let constraint = want.apply(&mut self.context.substitutions, session);
                 let solution = match constraint {
                     Constraint::Equals(ref equals) => {
-                        unify(&equals.lhs, &equals.rhs, self.context, session)
+                        match unify(&equals.lhs, &equals.rhs, self.context, session) {
+                            Ok(metas) => SolveResult::Solved(metas),
+                            Err(e) => SolveResult::Err(e),
+                        }
                     }
-                    Constraint::Call(ref call) => call.solve(self.context, session),
-                    Constraint::HasField(ref has_field) => has_field.solve(self.context),
-                    Constraint::Member(ref member) => member.solve(self.context, session),
-                    Constraint::Conforms(ref conforms) => {
-                        conforms.solve(self.context, session, remaining_attempts == 0)
+                    Constraint::Call(ref call) => call.solve(constraints, self.context, session),
+                    Constraint::HasField(ref has_field) => has_field.solve(level, constraints),
+                    Constraint::Member(ref member) => {
+                        member.solve(constraints, self.context, session)
                     }
+                    Constraint::Conforms(ref conforms) => conforms.solve(session),
                     Constraint::TypeMember(ref type_member) => {
-                        type_member.solve(self.context, session, self.asts)
+                        type_member.solve(constraints, self.context, session, self.asts)
                     }
                     Constraint::Projection(ref projection) => {
-                        projection.solve(self.context, session, self.asts)
+                        projection.solve(level, constraints, self.context, session, self.asts)
                     }
                 };
 
                 match solution {
-                    Ok(true) => {
-                        made_progress |= true;
-                    } // We're good
-                    Ok(false) => {
-                        self.unsolved.insert(constraint);
+                    SolveResult::Solved(metas) => {
+                        constraints.solve(want_id);
+                        solved_metas.extend(metas)
                     }
-                    Err(e) => {
+                    SolveResult::Defer(reason) => {
+                        constraints.defer(want_id, reason);
+                    }
+                    SolveResult::Err(e) => {
                         tracing::error!("Error solving constraint: {e:?}");
                         let diagnostic = AnyDiagnostic::Typing(Diagnostic {
-                            span: constraint.span(),
+                            id: NodeID::SYNTHESIZED,
                             kind: e,
                         });
                         if !self.asts[0].diagnostics.contains(&diagnostic) {
@@ -85,19 +95,7 @@ impl<'a> ConstraintSolver<'a> {
                 }
             }
 
-            if !made_progress {
-                remaining_attempts -= 1;
-            }
-
-            if self.context.wants.is_empty() {
-                tracing::trace!("no more wants found, breaking");
-                break;
-            }
-
-            if remaining_attempts == 0 {
-                tracing::warn!("did not make forward progress, moving on.");
-            }
+            constraints.wake_metas(&solved_metas);
         }
-        self.unsolved
     }
 }

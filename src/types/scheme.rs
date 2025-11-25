@@ -4,9 +4,8 @@ use tracing::instrument;
 
 use crate::{
     node_id::NodeID,
-    span::Span,
     types::{
-        constraints::constraint::ConstraintCause,
+        constraints::store::ConstraintStore,
         infer_row::{InferRow, RowParamId},
         infer_ty::{InferTy, Level, TypeParamId},
         predicate::Predicate,
@@ -15,7 +14,6 @@ use crate::{
         ty::{SomeType, Ty},
         type_operations::{InstantiationSubstitutions, instantiate_ty},
         type_session::TypeSession,
-        wants::Wants,
     },
 };
 
@@ -73,13 +71,13 @@ impl Scheme<Ty> {
 }
 
 impl Scheme<InferTy> {
-    #[instrument(skip(self, session, context), ret)]
+    #[instrument(skip(self, session, context, constraints), ret)]
     pub(super) fn instantiate(
         &self,
         id: NodeID,
+        constraints: &mut ConstraintStore,
         context: &mut impl Solve,
         session: &mut TypeSession,
-        span: Span,
     ) -> InferTy {
         let level = context.level();
         for forall in &self.foralls {
@@ -132,9 +130,7 @@ impl Scheme<InferTy> {
         }
 
         for predicate in &self.predicates {
-            let constraint = predicate.instantiate(id, context.instantiations_mut(), span, level);
-            tracing::trace!("predicate instantiated: {predicate:?} -> {constraint:?}");
-            context.wants_mut().push(constraint);
+            predicate.instantiate(id, constraints, context);
         }
 
         tracing::trace!(
@@ -145,15 +141,14 @@ impl Scheme<InferTy> {
         instantiate_ty(id, self.ty.clone(), context.instantiations_mut(), level)
     }
 
-    #[instrument(skip(self, session, level, wants, span))]
+    #[instrument(skip(self, session, context, constraints,))]
     pub fn instantiate_with_args(
         &self,
         id: NodeID,
         args: &[(InferTy, NodeID)],
         session: &mut TypeSession,
-        level: Level,
-        wants: &mut Wants,
-        span: Span,
+        context: &mut impl Solve,
+        constraints: &mut ConstraintStore,
     ) -> (InferTy, InstantiationSubstitutions) {
         // Map each quantified meta id to a fresh meta at this use-site level
         let mut substitutions = InstantiationSubstitutions::default();
@@ -170,20 +165,16 @@ impl Scheme<InferTy> {
                 unreachable!()
             };
 
-            let ty @ InferTy::Var { id: meta_var, .. } = session.new_ty_meta_var(level) else {
+            let ty @ InferTy::Var { id: meta_var, .. } = session.new_ty_meta_var(context.level())
+            else {
                 unreachable!();
             };
 
             session.reverse_instantiations.ty.insert(meta_var, *param);
 
-            if let Some((arg_ty, id)) = args.pop() {
-                wants.equals(
-                    ty.clone(),
-                    arg_ty.clone(),
-                    ConstraintCause::CallTypeArg(*id),
-                    span,
-                );
-            }
+            if let Some((arg_ty, _id)) = args.pop() {
+                constraints.wants_equals(ty.clone(), arg_ty.clone());
+            };
 
             substitutions.insert_ty(id, *param, meta_var);
             session.type_catalog.instantiations.ty.insert(
@@ -200,7 +191,7 @@ impl Scheme<InferTy> {
                 unreachable!();
             };
 
-            let InferRow::Var(row_meta) = session.new_row_meta_var(level) else {
+            let InferRow::Var(row_meta) = session.new_row_meta_var(context.level()) else {
                 unreachable!()
             };
             substitutions.insert_row(id, row_param, row_meta);
@@ -216,13 +207,11 @@ impl Scheme<InferTy> {
         }
 
         for predicate in &self.predicates {
-            let constraint = predicate.instantiate(id, &substitutions, span, level);
-            tracing::trace!("predicate instantiated: {predicate:?} -> {constraint:?}");
-            wants.push(constraint);
+            predicate.instantiate(id, constraints, context);
         }
 
         (
-            instantiate_ty(id, self.ty.clone(), &substitutions, level),
+            instantiate_ty(id, self.ty.clone(), &substitutions, context.level()),
             substitutions,
         )
     }

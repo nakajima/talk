@@ -5,10 +5,15 @@ use petgraph::{
 use rustc_hash::FxHashMap;
 use tracing::instrument;
 
-use crate::{name_resolution::symbol::Symbol, node_id::NodeID, types::infer_ty::Level};
+use crate::{
+    name_resolution::symbol::Symbol,
+    node_id::NodeID,
+    types::{constraints::store::GroupId, infer_ty::Level},
+};
 
 #[derive(Default, Debug, Clone, PartialEq)]
 pub struct BindingGroup {
+    pub id: GroupId,
     pub level: Level,
     pub binders: Vec<Symbol>,
 }
@@ -29,9 +34,11 @@ impl SCCGraph {
     pub fn groups(&self) -> Vec<BindingGroup> {
         kosaraju_scc(&self.graph)
             .iter()
-            .map(|ids| {
+            .enumerate()
+            .map(|(i, ids)| {
                 let mut level = Level::default();
                 BindingGroup {
+                    id: GroupId(i as u32),
                     binders: ids
                         .iter()
                         .map(|id| {

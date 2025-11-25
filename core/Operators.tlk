@@ -30,13 +30,13 @@ protocol Equatable {
 
   func equals(rhs: RHS) -> Bool
 
-  // func notEquals(rhs: RHS) -> Bool {
-  //   if self.equals(rhs: rhs) {
-	// 		false
-	// 	} else {
-	// 		true
-	// 	}
-  // }
+  func notEquals(rhs: RHS) -> Bool {
+    if self.equals(rhs: rhs) {
+			false
+		} else {
+			true
+		}
+  }
 }
 
 protocol Negatable {
@@ -102,23 +102,23 @@ extend Float: Divide {
 
 // Equatable Conformances (x == y)
 
-// extend Int: Equatable {
-//   func equals(rhs: Int) -> Bool {
-//     __IR("$? = cmp int %0 == %1")
-//   }
-// }
+extend Int: Equatable {
+  func equals(rhs: Int) -> Bool {
+    __IR("$? = cmp int %0 == %1")
+  }
+}
 
-// extend Float: Equatable {
-//   func equals(rhs: Int) -> Bool {
-//     __IR("$? = cmp float %0 == %1")
-//   }
-// }
+extend Float: Equatable {
+  func equals(rhs: Int) -> Bool {
+    __IR("$? = cmp float %0 == %1")
+  }
+}
 
-// extend Bool: Equatable {
-//   func equals(rhs: Bool) -> Bool {
-//     __IR("$? = cmp bool %0 == %1")
-//   }
-// }
+extend Bool: Equatable {
+  func equals(rhs: Bool) -> Bool {
+    __IR("$? = cmp bool %0 == %1")
+  }
+}
 
 // Negatable Conformances (-x)
 
@@ -137,6 +137,12 @@ extend Float: Negatable {
 extend Bool: Negatable {
 	func negated() -> Bool {
 		__IR("$? = cmp bool %0 == true")
+	}
+}
+
+extend Bool: Not {
+	func not() -> Bool {
+		__IR("$? = cmp bool %0 == false")
 	}
 }
 
