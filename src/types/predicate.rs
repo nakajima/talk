@@ -3,19 +3,13 @@ use crate::{
     name_resolution::symbol::ProtocolId,
     node_id::NodeID,
     types::{
-        constraints::{
-            call::Call, conforms::Conforms, constraint::Constraint, equals::Equals,
-            has_field::HasField, member::Member, projection::Projection, store::ConstraintStore,
-            type_member::TypeMember,
-        },
+        constraints::{constraint::Constraint, store::ConstraintStore},
         infer_row::{InferRow, RowParamId},
-        infer_ty::{InferTy, Level, TypeParamId},
+        infer_ty::{InferTy, TypeParamId},
         solve_context::Solve,
         ty::{SomeType, Ty},
-        type_operations::{
-            InstantiationSubstitutions, UnificationSubstitutions, apply, apply_mult,
-            instantiate_row, instantiate_ty,
-        },
+        type_operations::{UnificationSubstitutions, instantiate_row, instantiate_ty},
+        type_session::TypeSession,
     },
 };
 
@@ -189,7 +183,11 @@ impl From<Predicate<Ty>> for Predicate<InferTy> {
 }
 
 impl Predicate<InferTy> {
-    pub fn apply(&self, substitutions: &mut UnificationSubstitutions) -> Self {
+    pub fn apply(
+        &self,
+        substitutions: &mut UnificationSubstitutions,
+        session: &mut TypeSession,
+    ) -> Self {
         match self {
             Self::Projection {
                 protocol_id,
@@ -198,8 +196,8 @@ impl Predicate<InferTy> {
                 returns,
             } => Self::Projection {
                 protocol_id: *protocol_id,
-                base: apply(base.clone(), substitutions),
-                returns: apply(returns.clone(), substitutions),
+                base: session.apply(base.clone(), substitutions),
+                returns: session.apply(returns.clone(), substitutions),
                 label: label.clone(),
             },
             Self::Conforms { param, protocol_id } => Self::Conforms {
@@ -209,7 +207,7 @@ impl Predicate<InferTy> {
             Self::HasField { row, label, ty } => Self::HasField {
                 row: *row,
                 label: label.clone(),
-                ty: apply(ty.clone(), substitutions),
+                ty: session.apply(ty.clone(), substitutions),
             },
             Self::Member {
                 receiver,
@@ -217,9 +215,9 @@ impl Predicate<InferTy> {
                 ty,
                 node_id,
             } => Self::Member {
-                receiver: apply(receiver.clone(), substitutions),
+                receiver: session.apply(receiver.clone(), substitutions),
                 label: label.clone(),
-                ty: apply(ty.clone(), substitutions),
+                ty: session.apply(ty.clone(), substitutions),
                 node_id: *node_id,
             },
             Self::TypeMember {
@@ -228,10 +226,10 @@ impl Predicate<InferTy> {
                 returns,
                 generics,
             } => Self::TypeMember {
-                base: apply(owner.clone(), substitutions),
+                base: session.apply(owner.clone(), substitutions),
                 member: member.clone(),
-                returns: apply(returns.clone(), substitutions),
-                generics: apply_mult(generics.clone(), substitutions),
+                returns: session.apply(returns.clone(), substitutions),
+                generics: session.apply_mult(generics.clone(), substitutions),
             },
             Self::Call {
                 callee,
@@ -239,17 +237,19 @@ impl Predicate<InferTy> {
                 returns,
                 receiver,
             } => Self::Call {
-                callee: apply(callee.clone(), substitutions),
+                callee: session.apply(callee.clone(), substitutions),
                 args: args
                     .iter()
-                    .map(|arg| apply(arg.clone(), substitutions))
+                    .map(|arg| session.apply(arg.clone(), substitutions))
                     .collect(),
-                returns: apply(returns.clone(), substitutions),
-                receiver: receiver.as_ref().map(|r| apply(r.clone(), substitutions)),
+                returns: session.apply(returns.clone(), substitutions),
+                receiver: receiver
+                    .as_ref()
+                    .map(|r| session.apply(r.clone(), substitutions)),
             },
             Self::Equals { lhs, rhs } => Self::Equals {
-                lhs: apply(lhs.clone(), substitutions),
-                rhs: apply(rhs.clone(), substitutions),
+                lhs: session.apply(lhs.clone(), substitutions),
+                rhs: session.apply(rhs.clone(), substitutions),
             },
         }
     }

@@ -10,7 +10,7 @@ use crate::{
         predicate::Predicate,
         type_catalog::ConformanceKey,
         type_error::TypeError,
-        type_operations::{InstantiationSubstitutions, UnificationSubstitutions, apply},
+        type_operations::{InstantiationSubstitutions, UnificationSubstitutions},
         type_session::TypeSession,
     },
 };
@@ -179,7 +179,7 @@ impl SolveContext {
         session: &mut TypeSession,
         level: Level,
     ) -> InferTy {
-        let ty = apply(ty, &mut self.substitutions);
+        let ty = session.apply(ty, &mut self.substitutions);
         match &ty {
             InferTy::Projection {
                 base: box InferTy::Nominal { symbol, .. },

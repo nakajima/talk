@@ -1,4 +1,4 @@
-use indexmap::IndexSet;
+use itertools::Itertools;
 
 use crate::{
     ast::AST,
@@ -7,7 +7,7 @@ use crate::{
     node_id::NodeID,
     types::{
         constraints::{constraint::Constraint, store::ConstraintStore},
-        infer_ty::{Level, Meta},
+        infer_ty::{InferTy, Level, Meta},
         solve_context::SolveContext,
         type_error::TypeError,
         type_operations::{UnificationSubstitutions, unify},
@@ -46,7 +46,7 @@ impl<'a> ConstraintSolver<'a> {
         constraints: &mut ConstraintStore,
         session: &mut TypeSession,
         mut substitutions: UnificationSubstitutions,
-    ) -> IndexSet<Constraint> {
+    ) {
         substitutions.extend(&self.context.substitutions);
         while !constraints.is_stalled() {
             let mut solved_metas = vec![];
@@ -54,7 +54,7 @@ impl<'a> ConstraintSolver<'a> {
             for want_id in worklist {
                 let want = constraints.get(&want_id).clone();
                 tracing::trace!("solving {want:?}");
-                let constraint = want.apply(&mut self.context.substitutions);
+                let constraint = want.apply(&mut self.context.substitutions, session);
                 let solution = match constraint {
                     Constraint::Equals(ref equals) => {
                         match unify(&equals.lhs, &equals.rhs, self.context, session) {
@@ -100,10 +100,7 @@ impl<'a> ConstraintSolver<'a> {
                 }
             }
 
-            tracing::trace!("solved: {solved_metas:?}");
             constraints.wake_metas(&solved_metas);
         }
-
-        constraints.take_deferred()
     }
 }

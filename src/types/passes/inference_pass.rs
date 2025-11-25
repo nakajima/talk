@@ -49,8 +49,7 @@ use crate::{
         type_catalog::{Conformance, ConformanceKey, MemberWitness},
         type_error::TypeError,
         type_operations::{
-            InstantiationSubstitutions, UnificationSubstitutions, apply, curry, instantiate_ty,
-            substitute,
+            InstantiationSubstitutions, UnificationSubstitutions, curry, instantiate_ty, substitute,
         },
         type_session::{TypeDefKind, TypeSession},
     },
@@ -102,38 +101,21 @@ impl<'a> InferencePass<'a> {
         };
 
         pass.drive_all();
-
-        for id in pass.constraints.deferred.clone() {
-            let c = pass.constraints.get(&id);
-            pass.constraints.wants(id, c.clone(), &Default::default());
-        }
-        pass.solve(
-            &Default::default(),
-            &mut SolveContext::new(
-                pass.substitutions.clone(),
-                Default::default(),
-                Default::default(),
-                SolveContextKind::Normal,
-            ),
-            Default::default(),
-            Default::default(),
-        );
     }
 
     fn drive_all(&mut self) {
         for i in 0..self.asts.len() {
             self.discover_protocols(i, Level::default());
-            self.session.apply(&mut self.substitutions);
+            self.session.apply_all(&mut self.substitutions);
         }
 
         for i in 0..self.asts.len() {
             self.generate(i);
-            self.session.apply(&mut self.substitutions);
+            self.session.apply_all(&mut self.substitutions);
         }
 
         self.check_conformances();
-        self.session.apply(&mut self.substitutions);
-        self.rectify_blocks();
+        self.session.apply_all(&mut self.substitutions);
     }
 
     fn discover_protocols(&mut self, idx: usize, level: Level) {
@@ -315,7 +297,7 @@ impl<'a> InferencePass<'a> {
             }
 
             let (binders, placeholders) = binders.into_iter().unzip();
-            self.solve(&Default::default(), &mut context, binders, placeholders)
+            self.solve(&mut context, binders, placeholders)
         }
         _ = std::mem::replace(&mut self.asts[idx].roots, roots);
     }
@@ -515,49 +497,44 @@ impl<'a> InferencePass<'a> {
             self.substitutions.clone(),
         );
         self.substitutions.extend(&context.substitutions);
-        self.session.apply(&mut context.substitutions);
+        self.session.apply_all(&mut context.substitutions);
 
         // Rewrite the conformance's associated_types using the solution,
         // so later Projection(Self.T) sees the *solved* witness type.
-        let Some(conf_mut) = self.session.type_catalog.conformances.get_mut(key) else {
-            unreachable!()
-        };
 
-        for ty in conf_mut.associated_types.values_mut() {
-            *ty = apply(ty.clone(), &mut context.substitutions);
-            *ty = instantiate_ty(
-                conformance.node_id,
-                ty.clone(),
-                &context.instantiations,
-                context.level(),
-            );
+        for (k, ty) in self
+            .session
+            .type_catalog
+            .conformances
+            .get(key)
+            .unwrap_or_else(|| unreachable!())
+            .associated_types
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect_vec()
+        {
+            let ty = self.session.apply(ty.clone(), &mut context.substitutions);
+            let Some(conf_mut) = self.session.type_catalog.conformances.get_mut(key) else {
+                unreachable!()
+            };
+            conf_mut.associated_types.insert(k, ty);
         }
     }
 
     #[instrument(skip(self))]
-    fn rectify_blocks(&mut self) {
-        let mut context = SolveContext::new(
-            self.substitutions.clone(),
-            Level::default(),
-            Default::default(),
-            SolveContextKind::Normal,
-        );
-
-        self.constraints
-            .rectify_blocks(&mut context, &mut self.session);
-        self.substitutions.extend(&context.substitutions);
-
-        self.session.apply(&mut self.substitutions);
-        self.constraints.apply(&mut self.substitutions);
-
-        self.solve(&Default::default(), &mut context, vec![], vec![]);
-    }
-
-    #[instrument(skip(self))]
     fn rectify_witnesses(&mut self) {
-        for (_node_id, witness) in self.session.type_catalog.member_witnesses.iter_mut() {
-            if let MemberWitness::Meta { receiver, label } = witness {
-                let receiver_ty = apply(receiver.clone(), &mut self.substitutions);
+        for (witness_id, witness) in self
+            .session
+            .type_catalog
+            .member_witnesses
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect_vec()
+        {
+            if let MemberWitness::Meta { receiver, label } = &witness {
+                let receiver_ty = self
+                    .session
+                    .apply(receiver.clone(), &mut self.substitutions);
                 let symbol = match receiver_ty {
                     InferTy::Primitive(symbol) => symbol,
                     InferTy::Nominal { symbol, .. } => symbol,
@@ -571,16 +548,17 @@ impl<'a> InferencePass<'a> {
                 };
 
                 if let Some(methods) = self.session.type_catalog.instance_methods.get(&symbol)
-                    && let Some(method) = methods.get(label)
+                    && let Some(method) = methods.get(&label).cloned()
                 {
                     tracing::trace!(
                         "Resolved concrete witness {receiver_ty:?}.{label:?} = {method:?}"
                     );
-                    *witness = MemberWitness::Concrete(*method);
+                    self.session
+                        .type_catalog
+                        .member_witnesses
+                        .insert(witness_id, MemberWitness::Concrete(method));
                     continue;
                 }
-
-                tracing::warn!("Unable to resolve witness: {witness:?} for {receiver_ty:?}");
             };
         }
     }
@@ -588,9 +566,9 @@ impl<'a> InferencePass<'a> {
     fn generate(&mut self, idx: usize) {
         let mut groups = self.asts[idx].phase.scc_graph.groups();
 
-        // Sort by level in descending order so inner bindings are generalized first
-        // Use stable sort to preserve topological order for groups at the same level
-        // groups.sort_by_key(|group| std::cmp::Reverse(group.level.0));
+        // Process groups in topological order (dependencies first).
+        // Kosaraju returns reverse topological order, so we reverse it.
+        groups.sort_by_key(|group| group.id.0);
 
         for group in groups {
             self.generate_for_group(idx, group);
@@ -615,7 +593,7 @@ impl<'a> InferencePass<'a> {
 
         let level = context.level();
         let solver = ConstraintSolver::new(&mut context, self.asts);
-        let unsolved = solver.solve(
+        solver.solve(
             level,
             &mut self.constraints,
             self.session,
@@ -624,7 +602,7 @@ impl<'a> InferencePass<'a> {
         self.substitutions.extend(&context.substitutions);
 
         // Apply substitutions to types_by_node for top-level expressions
-        self.session.apply(&mut context.substitutions);
+        self.session.apply_all(&mut context.substitutions);
     }
 
     #[instrument(skip(self))]
@@ -695,82 +673,42 @@ impl<'a> InferencePass<'a> {
         }
 
         // Solve this group
-        self.solve(&group, &mut context, group.binders.clone(), placeholders)
+        self.solve(&mut context, group.binders.clone(), placeholders)
     }
 
+    #[instrument(skip(self, context))]
     fn solve(
         &mut self,
-        group: &BindingGroup,
         context: &mut SolveContext,
         binders: Vec<Symbol>,
         placeholders: Vec<InferTy>,
     ) {
         context.substitutions_mut().extend(&self.substitutions);
-        tracing::debug!(
-            "After extend, context substitutions: {:?}",
-            context.substitutions_mut()
-        );
+
         let level = context.level();
         let solver = ConstraintSolver::new(context, self.asts);
-        let unsolved = solver.solve(
+        solver.solve(
             level,
             &mut self.constraints,
             self.session,
             self.substitutions.clone(),
         );
 
-        let (generalizable, needs_defer): (IndexSet<_>, IndexSet<_>) =
-            unsolved.into_iter().partition(|c| {
-                if !c.is_generalizable() {
-                    return false;
-                }
-
-                for ty in c.collect_metas() {
-                    let InferTy::Var { id, .. } = apply(ty, &mut self.substitutions) else {
-                        continue;
-                    };
-
-                    let canonical_id = self.substitutions.canon_meta(id);
-                    let blocks = self.constraints.generalization_blocks_for(canonical_id, context.group);
-                    if !blocks.is_empty() {
-                        tracing::trace!(
-                            "Deferring constraint {:?} because meta({:?}) has generalization blocks: {blocks:?}",
-                            c,
-                            id
-                        );
-                        return false;
-                    } else {
-                        println!(
-                            "ID is generalizable: {id:?}, Constraints: {:#?}",
-                            self.constraints
-                        );
-                    }
-                }
-
-                tracing::trace!("Considering constraint {:?} as generalizable", c);
-                true
-            });
-
-        tracing::debug!(
-            "After partition: {} generalizable, {} needs_defer",
-            generalizable.len(),
-            needs_defer.len()
-        );
+        let generalizable = self.constraints.generalizable_for(context);
+        println!("Generalizable for context: {context:?} -> {generalizable:?}");
 
         for (i, binder) in binders.iter().enumerate() {
-            let ty = apply(placeholders[i].clone(), &mut context.substitutions);
-            let entry = self.session.generalize(
-                context.level(),
-                ty,
-                context,
-                &generalizable,
-                &mut self.constraints,
-            );
+            let ty = self
+                .session
+                .apply(placeholders[i].clone(), &mut context.substitutions);
+            let entry = self
+                .session
+                .generalize(ty, context, &generalizable, &mut self.constraints);
             self.session.promote(*binder, entry, &mut self.constraints);
         }
 
         self.substitutions.extend(&context.substitutions);
-        self.session.apply(&mut self.substitutions);
+        self.session.apply_all(&mut self.substitutions);
         self.rectify_witnesses();
     }
 
@@ -968,8 +906,7 @@ impl<'a> InferencePass<'a> {
     fn visit_array(&mut self, items: &[Expr], context: &mut impl Solve) -> InferTy {
         let Some(first_item) = items.first() else {
             let id = self.session.new_ty_meta_var_id(context.level());
-            self.constraints
-                .block_generalization(id, GeneralizationBlock::EmptyArray);
+
             return InferTy::Array(InferTy::Var {
                 id,
                 level: context.level(),
@@ -1569,8 +1506,7 @@ impl<'a> InferencePass<'a> {
                         .iter()
                         .map(|i| {
                             let var = self.session.new_ty_meta_var_id(context.level());
-                            self.constraints
-                                .block_generalization(var, GeneralizationBlock::PatternBindLocal);
+
                             self.promote_pattern_bindings(
                                 i,
                                 &InferTy::Var {
@@ -1605,8 +1541,6 @@ impl<'a> InferencePass<'a> {
                             };
 
                             let var = self.session.new_ty_meta_var_id(context.level());
-                            self.constraints
-                                .block_generalization(var, GeneralizationBlock::PatternBindLocal);
                             let ty = InferTy::Var {
                                 id: var,
                                 level: context.level(),
@@ -1636,10 +1570,7 @@ impl<'a> InferencePass<'a> {
                                 existing._as_ty()
                             } else {
                                 let var = self.session.new_ty_meta_var_id(context.level());
-                                self.constraints.block_generalization(
-                                    var,
-                                    GeneralizationBlock::PatternBindLocal,
-                                );
+
                                 InferTy::Var {
                                     id: var,
                                     level: context.level(),
@@ -1707,8 +1638,7 @@ impl<'a> InferencePass<'a> {
                 }
             }
             PatternKind::Record { fields } => {
-                let expected_row =
-                    self.ensure_row_record(pattern.id, pattern.span, expected, context);
+                let expected_row = self.ensure_row_record(expected, context);
                 for field in fields {
                     match &field.kind {
                         RecordFieldPatternKind::Bind(name) => {
@@ -1762,9 +1692,6 @@ impl<'a> InferencePass<'a> {
                     .iter()
                     .map(|_| {
                         let var_id = self.session.new_ty_meta_var_id(context.level());
-                        self.constraints
-                            .block_generalization(var_id, GeneralizationBlock::PatternBindLocal);
-
                         InferTy::Var {
                             id: var_id,
                             level: context.level(),
@@ -2137,23 +2064,7 @@ impl<'a> InferencePass<'a> {
                     tracing::warn!("nope, did not find anything in the env for {name:?}");
                 }
 
-                let var_id = self.session.new_ty_meta_var_id(context.level());
-
-                self.constraints.block_generalization(
-                    var_id,
-                    GeneralizationBlock::PendingType {
-                        node_id: type_annotation.id,
-                        span: type_annotation.span,
-                        level: context.level(),
-                        type_symbol: sym,
-                        args: generic_args,
-                    },
-                );
-
-                InferTy::Var {
-                    id: var_id,
-                    level: context.level(),
-                }
+                self.session.new_ty_meta_var(context.level())
             }
             TypeAnnotationKind::SelfType(name) => {
                 let Ok(sym) = name.symbol() else {
@@ -2258,15 +2169,7 @@ impl<'a> InferencePass<'a> {
                 self.constraints.wants_equals(annotated_ty.clone(), rhs_ty);
                 annotated_ty
             }
-            (None, None) => {
-                let id = self.session.new_ty_meta_var_id(context.level().next());
-                self.constraints
-                    .block_generalization(id, GeneralizationBlock::PatternBindLocal);
-                InferTy::Var {
-                    id,
-                    level: context.level().next(),
-                }
-            }
+            (None, None) => self.session.new_ty_meta_var(context.level().next()),
         };
 
         self.promote_pattern_bindings(lhs, &ty, &mut context.next())
@@ -2293,13 +2196,7 @@ impl<'a> InferencePass<'a> {
         id
     }
 
-    fn ensure_row_record(
-        &mut self,
-        id: NodeID,
-        span: Span,
-        expected: &InferTy,
-        context: &mut impl Solve,
-    ) -> InferRow {
+    fn ensure_row_record(&mut self, expected: &InferTy, context: &mut impl Solve) -> InferRow {
         match expected {
             InferTy::Record(box row) => row.clone(),
             _ => {

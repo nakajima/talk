@@ -7,7 +7,7 @@ use crate::{
         solve_context::SolveContext,
         term_environment::EnvEntry,
         type_error::TypeError,
-        type_operations::{apply, curry, unify},
+        type_operations::{curry, unify},
         type_session::TypeSession,
     },
 };
@@ -30,8 +30,8 @@ impl Call {
         context: &mut SolveContext,
         session: &mut TypeSession,
     ) -> SolveResult {
-        let callee = apply(self.callee.clone(), &mut context.substitutions);
-        let returns = apply(self.returns.clone(), &mut context.substitutions);
+        let callee = session.apply(self.callee.clone(), &mut context.substitutions);
+        let returns = session.apply(self.returns.clone(), &mut context.substitutions);
 
         if let InferTy::Var { id, .. } = &callee {
             tracing::trace!(

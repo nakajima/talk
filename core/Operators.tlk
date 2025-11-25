@@ -140,6 +140,12 @@ extend Bool: Negatable {
 	}
 }
 
+extend Bool: Not {
+	func not() -> Bool {
+		__IR("$? = cmp bool %0 == false")
+	}
+}
+
 protocol Comparable: Equatable {
   associated RHS
 

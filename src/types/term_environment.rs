@@ -14,7 +14,7 @@ use crate::{
         scheme::{ForAll, Scheme},
         solve_context::Solve,
         ty::SomeType,
-        type_operations::{InstantiationSubstitutions, UnificationSubstitutions, apply},
+        type_operations::{InstantiationSubstitutions, UnificationSubstitutions},
         type_session::{TypeEntry, TypeSession},
     },
 };
@@ -93,10 +93,14 @@ impl<T: SomeType> EnvEntry<T> {
 }
 
 impl EnvEntry<InferTy> {
-    pub fn apply(&self, substitutions: &mut UnificationSubstitutions) -> Self {
+    pub fn apply(
+        &self,
+        substitutions: &mut UnificationSubstitutions,
+        session: &mut TypeSession,
+    ) -> Self {
         match self.clone() {
             EnvEntry::Mono(ty) => {
-                let ty = apply(ty, substitutions);
+                let ty = session.apply(ty, substitutions);
                 let foralls = ty.collect_foralls();
                 if foralls.is_empty() {
                     EnvEntry::Mono(ty)
@@ -113,9 +117,9 @@ impl EnvEntry<InferTy> {
                 predicates: scheme
                     .predicates
                     .into_iter()
-                    .map(|p| p.apply(substitutions))
+                    .map(|p| p.apply(substitutions, session))
                     .collect(),
-                ty: apply(scheme.ty, substitutions),
+                ty: session.apply(scheme.ty, substitutions),
             }),
         }
     }

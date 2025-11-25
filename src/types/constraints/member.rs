@@ -4,23 +4,19 @@ use tracing::instrument;
 
 use crate::{
     label::Label,
-    name_resolution::{scc_graph::BindingGroup, symbol::Symbol},
+    name_resolution::symbol::Symbol,
     node_id::NodeID,
     types::{
         constraint_solver::{DeferralReason, SolveResult},
-        constraints::{
-            constraint::Constraint,
-            has_field::HasField,
-            store::{ConstraintId, ConstraintStore},
-        },
+        constraints::store::{ConstraintId, ConstraintStore},
         infer_row::InferRow,
-        infer_ty::{InferTy, Level, Meta, TypeParamId},
+        infer_ty::{InferTy, Meta, TypeParamId},
         passes::uncurry_function,
         predicate::Predicate,
         solve_context::SolveContext,
         type_catalog::MemberWitness,
         type_error::TypeError,
-        type_operations::{apply, curry, unify},
+        type_operations::{curry, unify},
         type_session::{MemberSource, TypeSession},
     },
 };
@@ -105,7 +101,7 @@ impl Member {
             _ => {}
         }
 
-        SolveResult::Solved(Default::default())
+        SolveResult::Defer(DeferralReason::Unknown)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -232,7 +228,7 @@ impl Member {
                     ));
                 };
                 let method = entry.instantiate(self.node_id, constraints, context, session);
-                let method = apply(method, &mut context.substitutions);
+                let method = session.apply(method, &mut context.substitutions);
                 let (method_receiver, method_fn) = consume_self(&method);
 
                 if let MemberSource::Protocol(protocol_id) = source {

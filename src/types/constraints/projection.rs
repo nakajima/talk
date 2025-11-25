@@ -6,11 +6,10 @@ use crate::{
     types::{
         constraint_solver::{DeferralReason, SolveResult},
         constraints::store::{ConstraintId, ConstraintStore},
-        infer_ty::{InferTy, Level},
+        infer_ty::{InferTy, Level, Meta},
         solve_context::SolveContext,
         type_catalog::ConformanceKey,
         type_error::TypeError,
-        type_operations::apply,
         type_session::TypeSession,
     },
 };
@@ -34,8 +33,8 @@ impl Projection {
         session: &mut TypeSession,
         asts: &[AST<NameResolved>],
     ) -> SolveResult {
-        let base = apply(self.base.clone(), &mut context.substitutions);
-        let result = apply(self.result.clone(), &mut context.substitutions);
+        let base = session.apply(self.base.clone(), &mut context.substitutions);
+        let result = session.apply(self.result.clone(), &mut context.substitutions);
 
         // Try to reduce when base is a concrete nominal
         if let InferTy::Nominal {
@@ -96,7 +95,7 @@ impl Projection {
                 // Fallback: no alias symbol recorded; if a concrete (non-param) witness
                 // was recorded for this conformance, equate to it. Otherwise leave unsolved.
                 if let Some(witness) = conf.associated_types.get(&self.label) {
-                    let witness = apply(witness.clone(), &mut context.substitutions);
+                    let witness = session.apply(witness.clone(), &mut context.substitutions);
                     if !matches!(witness, InferTy::Param(_)) {
                         constraints.wants_equals(result, witness);
                         return SolveResult::Solved(Default::default());
@@ -105,6 +104,12 @@ impl Projection {
             }
         }
 
-        SolveResult::Defer(DeferralReason::Unknown)
+        // If the base is still a meta variable, defer waiting on it specifically
+        // so we get woken when it's resolved (even if it was unified with another meta)
+        if let InferTy::Var { id, .. } = base {
+            SolveResult::Defer(DeferralReason::WaitingOnMeta(Meta::Ty(id)))
+        } else {
+            SolveResult::Defer(DeferralReason::Unknown)
+        }
     }
 }

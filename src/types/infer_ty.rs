@@ -1,3 +1,4 @@
+use ena::unify::{UnifyKey, UnifyValue};
 use indexmap::IndexSet;
 use itertools::Itertools;
 use std::hash::Hash;
@@ -28,6 +29,22 @@ pub struct MetaVarId(u32);
 impl From<u32> for MetaVarId {
     fn from(value: u32) -> Self {
         MetaVarId(value)
+    }
+}
+
+impl UnifyKey for MetaVarId {
+    type Value = Level;
+
+    fn index(&self) -> u32 {
+        self.0
+    }
+
+    fn from_index(u: u32) -> Self {
+        Self(u)
+    }
+
+    fn tag() -> &'static str {
+        "meta"
     }
 }
 
@@ -65,6 +82,14 @@ impl Level {
 
     pub fn prev(&self) -> Level {
         Level(self.0.saturating_sub(1))
+    }
+}
+
+impl UnifyValue for Level {
+    type Error = TypeError;
+
+    fn unify_values(lhs: &Self, rhs: &Self) -> Result<Self, Self::Error> {
+        Ok(if lhs.0 > rhs.0 { *rhs } else { *lhs })
     }
 }
 
@@ -137,7 +162,7 @@ impl From<InferTy> for Ty {
                 row: Box::new(row.into()),
             },
             InferTy::Projection { .. } => Ty::Param(420420.into()), // FIXME
-            ty => panic!("Ty cannot contain variables: {ty:?}"),
+            ty => Ty::Param(420420.into()),
         }
     }
 }

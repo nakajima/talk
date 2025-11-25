@@ -54,6 +54,7 @@ smallvec = "1.15.1"
 petgraph = "0.8.2"
 sscanf = "0.4.3"
 priority-queue = "2.7.0"
+ena = "0.14.3"
 
 [features]
 default = ["cli"]

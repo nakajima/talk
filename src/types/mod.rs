@@ -1,7 +1,6 @@
 pub mod builtins;
 pub mod constraint_solver;
 pub mod constraints;
-pub mod dsu;
 pub mod infer_row;
 pub mod infer_ty;
 pub mod kind;

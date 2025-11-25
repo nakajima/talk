@@ -1,6 +1,8 @@
 use std::{cell::RefCell, rc::Rc};
 
+use ena::unify::{InPlaceUnificationTable, UnifyKey};
 use indexmap::{IndexMap, IndexSet};
+use itertools::Itertools;
 use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::instrument;
 
@@ -22,7 +24,7 @@ use crate::{
         ty::{SomeType, Ty},
         type_catalog::{MemberWitness, TypeCatalog},
         type_error::TypeError,
-        type_operations::{UnificationSubstitutions, apply, apply_row, substitute},
+        type_operations::{UnificationSubstitutions, substitute},
         vars::Vars,
     },
 };
@@ -51,6 +53,9 @@ pub struct TypeSession {
     pub(super) modules: Rc<ModuleEnvironment>,
     pub aliases: FxHashMap<Symbol, Scheme<InferTy>>,
     pub(super) reverse_instantiations: ReverseInstantiations,
+
+    meta_vars: InPlaceUnificationTable<MetaVarId>,
+    row_vars: InPlaceUnificationTable<RowMetaId>,
 }
 
 pub struct Typed {}
@@ -182,6 +187,9 @@ impl TypeSession {
             type_catalog: catalog,
             modules,
             aliases: Default::default(),
+
+            meta_vars: Default::default(),
+            row_vars: Default::default(),
         }
     }
 
@@ -230,7 +238,7 @@ impl TypeSession {
                     EnvEntry::Scheme(scheme) => {
                         if scheme.ty.contains_var() {
                             // Merge with existing scheme's foralls/predicates
-                            let generalized = self.generalize(Level(0), scheme.ty, &mut context, &Default::default(), &mut Default::default());
+                            let generalized = self.generalize(scheme.ty, &mut context, &Default::default(), &mut Default::default());
                             let EnvEntry::Scheme(generalized) = generalized
                             else {
                                 unreachable!(
@@ -383,7 +391,6 @@ impl TypeSession {
 
         if ty.contains_var() {
             self.generalize(
-                Level(0),
                 ty.clone(),
                 &mut context,
                 &Default::default(),
@@ -419,30 +426,150 @@ impl TypeSession {
         }
     }
 
+    pub(super) fn apply_row(
+        &mut self,
+        row: InferRow,
+        substitutions: &mut UnificationSubstitutions,
+    ) -> InferRow {
+        match row {
+            InferRow::Empty(kind) => InferRow::Empty(kind),
+            InferRow::Var(id) => {
+                let rep = self.canon_row(id);
+                if let Some(bound) = substitutions.row.get(&rep).cloned() {
+                    self.apply_row(bound, substitutions)
+                } else {
+                    InferRow::Var(rep)
+                }
+            }
+            InferRow::Param(_) => row,
+            InferRow::Extend { row, label, ty } => InferRow::Extend {
+                row: Box::new(self.apply_row(*row, substitutions)),
+                label,
+                ty: self.apply(ty, substitutions),
+            },
+        }
+    }
+
+    pub(super) fn apply(
+        &mut self,
+        ty: InferTy,
+        substitutions: &mut UnificationSubstitutions,
+    ) -> InferTy {
+        match ty {
+            InferTy::Error(..) => ty,
+            InferTy::Param(..) => ty,
+            InferTy::Rigid(..) => ty,
+            InferTy::Projection {
+                box base,
+                associated,
+                protocol_id,
+            } => InferTy::Projection {
+                base: self.apply(base, substitutions).into(),
+                associated,
+                protocol_id,
+            },
+            InferTy::Var { id, .. } => {
+                let rep = self.canon_meta(id);
+                if let Some(bound) = substitutions.ty.get(&rep).cloned()
+                    && !matches!(bound, InferTy::Var { id, .. } if rep == id)
+                {
+                    self.apply(bound, substitutions) // keep collapsing
+                } else {
+                    InferTy::Var {
+                        id: rep,
+                        level: substitutions
+                            .meta_levels
+                            .borrow()
+                            .get(&Meta::Ty(rep))
+                            .copied()
+                            .unwrap_or_default(),
+                    }
+                }
+            }
+            InferTy::Constructor { name, params, ret } => InferTy::Constructor {
+                name,
+                params: params
+                    .into_iter()
+                    .map(|p| self.apply(p, substitutions))
+                    .collect(),
+                ret: Box::new(self.apply(*ret, substitutions)),
+            },
+            InferTy::Primitive(..) => ty,
+            InferTy::Func(params, ret) => InferTy::Func(
+                Box::new(self.apply(*params, substitutions)),
+                Box::new(self.apply(*ret, substitutions)),
+            ),
+            InferTy::Tuple(items) => InferTy::Tuple(
+                items
+                    .into_iter()
+                    .map(|t| self.apply(t, substitutions))
+                    .collect(),
+            ),
+            InferTy::Record(row) => InferTy::Record(Box::new(self.apply_row(*row, substitutions))),
+            InferTy::Nominal { symbol, box row } => InferTy::Nominal {
+                symbol,
+                row: Box::new(self.apply_row(row, substitutions)),
+            },
+        }
+    }
+
+    pub fn apply_mult(
+        &mut self,
+        tys: Vec<InferTy>,
+        substitutions: &mut UnificationSubstitutions,
+    ) -> Vec<InferTy> {
+        tys.into_iter()
+            .map(|ty| self.apply(ty, substitutions))
+            .collect()
+    }
+
     #[instrument(level = tracing::Level::TRACE, skip(self, substitutions))]
-    pub fn apply(&mut self, substitutions: &mut UnificationSubstitutions) {
-        for ty in self.types_by_node.values_mut() {
-            if matches!(ty, InferTy::Primitive(_)) {
-                continue;
-            }
-
-            *ty = apply(ty.clone(), substitutions);
+    pub fn apply_all(&mut self, substitutions: &mut UnificationSubstitutions) {
+        for key in self.types_by_node.keys().copied().collect_vec() {
+            let ty = self
+                .types_by_node
+                .remove(&key)
+                .unwrap_or_else(|| unreachable!());
+            let ty = self.apply(ty.clone(), substitutions);
+            self.types_by_node.insert(key, ty);
         }
 
-        for entry in self.term_env.symbols.values_mut() {
-            *entry = entry.apply(substitutions);
+        for key in self.term_env.symbols.keys().copied().collect_vec() {
+            let entry = self
+                .term_env
+                .symbols
+                .remove(&key)
+                .unwrap_or_else(|| unreachable!());
+            let entry = entry.apply(substitutions, self);
+            self.term_env.insert(key, entry);
         }
 
-        for ty in self.type_catalog.instantiations.ty.values_mut() {
-            if matches!(ty, InferTy::Primitive(_)) {
-                continue;
-            }
-
-            *ty = apply(ty.clone(), substitutions);
+        #[allow(clippy::unwrap_used)]
+        for key in self
+            .type_catalog
+            .instantiations
+            .ty
+            .keys()
+            .copied()
+            .collect_vec()
+        {
+            let ty = self.type_catalog.instantiations.ty.remove(&key).unwrap();
+            let ty = self.apply(ty.clone(), substitutions);
+            self.type_catalog.instantiations.ty.insert(key, ty);
         }
 
-        for row in self.type_catalog.instantiations.row.values_mut() {
-            *row = apply_row(row.clone(), substitutions);
+        #[allow(clippy::unwrap_used)]
+        for key in self
+            .type_catalog
+            .instantiations
+            .row
+            .keys()
+            .copied()
+            .collect_vec()
+        {
+            let row = self.type_catalog.instantiations.row.remove(&key).unwrap();
+            let row = self.apply_row(row, substitutions);
+            self.type_catalog.instantiations.row.insert(key, row);
         }
     }
 
@@ -464,21 +591,46 @@ impl TypeSession {
         substitute(entry._as_ty().clone(), &skolems)
     }
 
+    pub fn canon_row(&mut self, id: RowMetaId) -> RowMetaId {
+        self.row_vars.find(id)
+    }
+
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
+    pub fn link_row(&mut self, a: RowMetaId, b: RowMetaId) {
+        self.row_vars
+            .unify_var_var(a, b)
+            .unwrap_or_else(|_| unreachable!());
+    }
+
+    pub fn canon_meta(&mut self, id: MetaVarId) -> MetaVarId {
+        self.meta_vars.find(id)
+    }
+
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
+    pub fn link_meta(&mut self, a: MetaVarId, b: MetaVarId) {
+        self.meta_vars
+            .unify_var_var(a, b)
+            .unwrap_or_else(|_| unreachable!());
+    }
+
     #[instrument(level = tracing::Level::TRACE, skip(self, unsolved, context, constraints))]
     pub fn generalize(
         &mut self,
-        inner: Level,
         ty: InferTy,
         context: &mut impl Solve,
         unsolved: &IndexSet<Constraint>,
         constraints: &mut ConstraintStore,
     ) -> EnvEntry<InferTy> {
+        // Make sure we're up to date
+        let ty = self.apply(ty, context.substitutions_mut());
+
         // collect metas in ty
         let mut metas = FxHashSet::default();
         metas.extend(ty.collect_metas());
 
         // Also collect metas that appear only in constraints
         for constraint in unsolved {
+            let constraint = constraint.clone().apply(context.substitutions_mut(), self);
             metas.extend(constraint.collect_metas());
         }
 
@@ -493,15 +645,11 @@ impl TypeSession {
                 }
 
                 InferTy::Var { level, id } => {
-                    if *level < inner {
-                        tracing::warn!("discarding {m:?} due to level ({level:?} < {inner:?})");
-                        continue;
-                    }
-
-                    let canonical_id = context.substitutions_mut().canon_meta(*id);
-                    let blocks = constraints.generalization_blocks_for(canonical_id, context.group());
-                    if !blocks.is_empty() {
-                        tracing::warn!("discarding {m:?} due to generalization block: {blocks:?}");
+                    if *level < context.level() {
+                        tracing::warn!(
+                            "discarding {m:?} due to level ({level:?} < {:?})",
+                            context.level()
+                        );
                         continue;
                     }
 
@@ -527,8 +675,11 @@ impl TypeSession {
                 } => {
                     let levels = self.meta_levels.borrow();
                     let level = levels.get(&Meta::Row(*id)).copied().unwrap_or_default();
-                    if level < inner {
-                        tracing::trace!("discarding {m:?} due to level ({level:?} < {inner:?})");
+                    if level < context.level() {
+                        tracing::trace!(
+                            "discarding {m:?} due to level ({level:?} < {:?})",
+                            context.level()
+                        );
                         continue;
                     }
 
@@ -557,12 +708,12 @@ impl TypeSession {
         for c in unsolved {
             if let Constraint::HasField(h) = c {
                 tracing::info!("got unsolved hasfield: {c:?}");
-                let r = apply_row(h.row.clone(), &mut substitutions);
+                let r = self.apply_row(h.row.clone(), &mut substitutions);
                 if let InferRow::Var(row_meta) = r {
                     // quantify if its level is above the binder's level
                     let levels = self.meta_levels.borrow();
                     let lvl = levels.get(&Meta::Row(row_meta)).unwrap_or(&Level(0));
-                    if *lvl >= inner {
+                    if *lvl >= context.level() {
                         let param_id = self.vars.row_params.next_id();
                         foralls.insert(ForAll::Row(param_id));
                         substitutions
@@ -575,7 +726,7 @@ impl TypeSession {
 
         // De-skolemize
         let ty = substitute(ty, &self.skolem_map);
-        let ty = apply(ty, &mut substitutions);
+        let ty = self.apply(ty, &mut substitutions);
 
         predicates.extend(unsolved.iter().filter_map(|c| {
             let metas = c.collect_metas();
@@ -588,16 +739,16 @@ impl TypeSession {
             // Predicates should only reference quantified variables (foralls), not
             // ungeneralized metas from outer scopes
             for meta in &metas {
-                if let InferTy::Var { level, .. } = meta && *level < inner {
+                if let InferTy::Var { level, .. } = meta && *level < context.level() {
                         tracing::debug!(
-                            "skipping constraint {c:?} with outer-scope meta {meta:?} (level {level:?} < {inner:?})"
+                            "skipping constraint {c:?} with outer-scope meta {meta:?} (level {level:?} < {:?})", context.level()
                         );
                         return None;
                 }
             }
 
             c.substitute(&self.skolem_map)
-                .into_predicate(&mut substitutions)
+                .into_predicate(&mut substitutions, self)
         }));
 
         if foralls.is_empty() && predicates.is_empty() {
@@ -997,28 +1148,28 @@ impl TypeSession {
     }
 
     pub(crate) fn new_ty_meta_var(&mut self, level: Level) -> InferTy {
-        let id = self.vars.ty_metas.next_id();
+        let id = self.meta_vars.new_key(level);
         self.meta_levels.borrow_mut().insert(Meta::Ty(id), level);
         tracing::trace!("Fresh {id:?}");
         InferTy::Var { id, level }
     }
 
     pub(crate) fn new_ty_meta_var_id(&mut self, level: Level) -> MetaVarId {
-        let id = self.vars.ty_metas.next_id();
+        let id = self.meta_vars.new_key(level);
         self.meta_levels.borrow_mut().insert(Meta::Ty(id), level);
         tracing::trace!("Fresh {id:?}");
         id
     }
 
     pub(crate) fn new_row_meta_var(&mut self, level: Level) -> InferRow {
-        let id = self.vars.row_metas.next_id();
+        let id = self.row_vars.new_key(level);
         self.meta_levels.borrow_mut().insert(Meta::Row(id), level);
         tracing::trace!("Fresh {id:?}");
         InferRow::Var(id)
     }
 
     pub(crate) fn new_row_meta_var_id(&mut self, level: Level) -> RowMetaId {
-        let id = self.vars.row_metas.next_id();
+        let id = self.row_vars.new_key(level);
         self.meta_levels.borrow_mut().insert(Meta::Row(id), level);
         tracing::trace!("Fresh {id:?}");
         id

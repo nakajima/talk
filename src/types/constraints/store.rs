@@ -13,25 +13,17 @@ use crate::{
         symbol::{ProtocolId, Symbol},
     },
     node_id::NodeID,
-    span::Span,
     types::{
         constraint_solver::DeferralReason,
         constraints::{
-            call::Call,
-            conforms::Conforms,
-            constraint::{Constraint, ConstraintCause},
-            equals::Equals,
-            has_field::HasField,
-            member::Member,
-            projection::Projection,
-            type_member::TypeMember,
+            call::Call, conforms::Conforms, constraint::Constraint, equals::Equals,
+            has_field::HasField, member::Member, projection::Projection, type_member::TypeMember,
         },
         infer_row::InferRow,
         infer_ty::{InferTy, Level, Meta, MetaVarId},
         passes::inference_pass::GeneralizationBlock,
-        solve_context::Solve,
+        solve_context::SolveContext,
         type_operations::UnificationSubstitutions,
-        type_session::TypeSession,
     },
 };
 
@@ -120,78 +112,6 @@ impl ConstraintStore {
             .unwrap_or_else(|| unreachable!("did not find constraint"))
     }
 
-    pub fn rectify_blocks(&mut self, context: &mut impl Solve, session: &mut TypeSession) {
-        let generalization_blocks = std::mem::take(&mut self.generalization_blocks);
-        for (var_id, block) in generalization_blocks {
-            tracing::debug!("rectifying generalization blocks: {var_id:?} {block:?}");
-            let GeneralizationBlock::PendingType {
-                node_id,
-                span,
-                level,
-                type_symbol,
-                args,
-            } = &block
-            else {
-                self.generalization_blocks.insert(var_id, block);
-                continue;
-            };
-
-            let Some(entry) = session.lookup(type_symbol) else {
-                self.generalization_blocks.insert(var_id, block);
-                continue;
-            };
-
-            let (instance, instantiations) =
-                entry.instantiate_with_args(*node_id, args, session, context, self, *span);
-
-            context.instantiations_mut().ty.extend(instantiations.ty);
-            context.instantiations_mut().row.extend(instantiations.row);
-            context.substitutions_mut().ty.insert(var_id, instance);
-        }
-    }
-
-    #[instrument(skip(self))]
-    pub fn generalization_blocks_for(
-        &self,
-        id: MetaVarId,
-        group_id: GroupId,
-    ) -> IndexSet<GeneralizationBlock> {
-        let mut res = IndexSet::default();
-        if let Some(block) = self.generalization_blocks.get(&id).cloned() {
-            res.insert(block);
-        }
-
-        for dep in self.meta_dependents_for(Meta::Ty(id)) {
-            if self.deferred.contains(&dep) {
-                res.insert(GeneralizationBlock::UnsolvedConstraint(dep));
-            }
-        }
-
-        res
-    }
-
-    pub fn generalization_blocks(&self) -> &FxHashMap<MetaVarId, GeneralizationBlock> {
-        &self.generalization_blocks
-    }
-
-    pub fn block_generalization(&mut self, id: MetaVarId, block: GeneralizationBlock) {
-        self.generalization_blocks.insert(id, block);
-    }
-
-    pub fn is_generalizable(&self, id: MetaVarId) -> bool {
-        if self.generalization_blocks.contains_key(&id) {
-            return false;
-        }
-
-        for dep in self.meta_dependents_for(Meta::Ty(id)) {
-            if self.deferred.contains(&dep) {
-                return false;
-            }
-        }
-
-        true
-    }
-
     pub fn copy_group(&self, id: ConstraintId) -> BindingGroup {
         BindingGroup {
             id: self
@@ -206,13 +126,6 @@ impl ConstraintStore {
 
     pub fn is_stalled(&self) -> bool {
         self.wants.is_empty()
-    }
-
-    pub fn apply(&mut self, substitutions: &mut UnificationSubstitutions) {
-        self.constraints = std::mem::take(&mut self.constraints)
-            .into_iter()
-            .map(|(k, v)| (k, v.apply(substitutions)))
-            .collect();
     }
 
     #[instrument(skip(self))]
@@ -256,33 +169,32 @@ impl ConstraintStore {
             .collect_vec();
         for other in edges {
             self.storage.remove_edge(constraint_node, other);
+            self.storage.remove_edge(other, constraint_node);
         }
     }
 
     #[instrument(skip(self))]
-    pub fn take_deferred(&mut self) -> IndexSet<Constraint> {
-        let mut result = IndexSet::default();
-        let deferred = self.deferred.iter().copied().collect_vec();
-        for id in deferred {
-            let constraint = self.get(&id).clone();
-            if !constraint.is_generalizable() {
-                continue;
-            }
-            if !constraint.collect_metas().iter().all(|meta| {
-                if let InferTy::Var { id, .. } = meta {
-                    self.is_generalizable(*id)
-                } else {
-                    true
-                }
-            }) {
+    pub fn generalizable_for(&self, context: &SolveContext) -> IndexSet<Constraint> {
+        let mut res = IndexSet::default();
+        for (id, constraint) in self.constraints.iter() {
+            println!("considering {:?}", constraint);
+            let group = self.meta.get(id).unwrap_or_else(|| unreachable!()).group_id;
+            if group != context.group {
+                println!(
+                    "wrong group: {group:?} (context group is {:?}, skipping",
+                    context.group
+                );
                 continue;
             }
 
-            self.deferred.swap_remove(&id);
-            result.insert(constraint);
+            if self.solved.contains(id) {
+                println!("constraint is solved, skipping");
+                continue;
+            }
+
+            res.insert(constraint.clone());
         }
-
-        result
+        res
     }
 
     #[instrument(skip(self))]
@@ -306,6 +218,9 @@ impl ConstraintStore {
     pub fn wake_symbols(&mut self, symbols: &[Symbol]) {
         let mut awakened = IndexSet::<ConstraintId>::default();
         for symbol in symbols {
+            if matches!(symbol, Symbol::Global(..)) {
+                continue;
+            }
             awakened.extend(self.symbol_dependents_for(*symbol));
         }
 

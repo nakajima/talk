@@ -327,7 +327,11 @@ impl NameResolver {
     pub(super) fn track_dependency(&mut self, to: Symbol, id: NodeID) {
         if !matches!(
             to,
-            Symbol::Global(..) | Symbol::StaticMethod(..) | Symbol::DeclaredLocal(..)
+            Symbol::Global(..)
+                | Symbol::StaticMethod(..)
+                | Symbol::DeclaredLocal(..)
+                | Symbol::Enum(..)
+                | Symbol::Variant(..)
         ) {
             return;
         }
@@ -557,7 +561,7 @@ impl NameResolver {
     ///////////////////////////////////////////////////////////////////////////
     fn enter_type_annotation(&mut self, ty: &mut TypeAnnotation) {
         if let TypeAnnotationKind::Nominal { name, .. } = &mut ty.kind {
-            if let Some(resolved_name) = self.lookup(name, None) {
+            if let Some(resolved_name) = self.lookup(name, Some(ty.id)) {
                 *name = resolved_name
             } else {
                 self.diagnostic(ty.id, NameResolverError::UndefinedName(name.name_str()));
@@ -565,7 +569,7 @@ impl NameResolver {
         }
 
         if let TypeAnnotationKind::SelfType(name) = &mut ty.kind {
-            if let Some(resolved_name) = self.lookup(name, None) {
+            if let Some(resolved_name) = self.lookup(name, Some(ty.id)) {
                 *name = resolved_name
             } else {
                 self.diagnostic(ty.id, NameResolverError::UndefinedName(name.name_str()));
