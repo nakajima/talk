@@ -84,6 +84,12 @@ pub enum MemberWitness<T> {
     Concrete(Symbol),
     Requirement(Symbol),
     Meta { receiver: T, label: Label },
+    /// Call to a default protocol method - needs conformance context for resolving
+    /// internal method requirement calls
+    DefaultMethod {
+        method: Symbol,
+        conformance: ConformanceKey,
+    },
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -168,6 +174,9 @@ impl TypeCatalog<InferTy> {
                                 receiver: session.finalize_ty(receiver).as_mono_ty().clone(),
                                 label,
                             },
+                            MemberWitness::DefaultMethod { method, conformance } => {
+                                MemberWitness::DefaultMethod { method, conformance }
+                            }
                         },
                     )
                 })

@@ -168,6 +168,9 @@ impl TypeSession {
                                     receiver: receiver.into(),
                                     label,
                                 },
+                                MemberWitness::DefaultMethod { method, conformance } => {
+                                    MemberWitness::DefaultMethod { method, conformance }
+                                }
                             },
                         )
                     }),
