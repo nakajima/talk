@@ -1,5 +1,7 @@
 #[cfg(test)]
 pub mod tests {
+    use std::str::FromStr;
+
     use crate::{
         assert_eq_diff,
         compiling::{
@@ -499,6 +501,67 @@ pub mod tests {
     }
 
     #[test]
+    fn lowers_default_implementations() {
+        let program = lower("1 <= 2");
+        assert_eq_diff!(
+            *program
+                .functions
+                .get(&Symbol::Synthesized(SynthesizedId::from(1)))
+                .unwrap(),
+            Function {
+                name: Name::Resolved(SynthesizedId::from(1).into(), "main".into()),
+                params: vec![].into(),
+                register_count: 3,
+                ty: IrTy::Func(vec![], IrTy::Bool.into()),
+                blocks: vec![BasicBlock::<IrTy> {
+                    id: BasicBlockId(0),
+                    phis: Default::default(),
+                    instructions: vec![
+                        Instruction::Constant {
+                            ty: IrTy::Int,
+                            dest: 1.into(),
+                            val: 1.into(),
+                            meta: vec![InstructionMeta::Source(NodeID::ANY)].into(),
+                        },
+                        Instruction::Constant {
+                            ty: IrTy::Int,
+                            dest: 2.into(),
+                            val: 2.into(),
+                            meta: vec![InstructionMeta::Source(NodeID::ANY)].into(),
+                        },
+                        Instruction::Call {
+                            dest: Register(0),
+                            ty: IrTy::Bool,
+                            callee: Value::Func(Name::Resolved(
+                                Symbol::InstanceMethod(InstanceMethodId {
+                                    module_id: ModuleId::Core,
+                                    local_id: 19
+                                }),
+                                "lte".into()
+                            )),
+                            args: vec![Register(1).into(), Register(2).into()].into(),
+                            meta: meta()
+                        },
+                    ],
+                    terminator: Terminator::Ret {
+                        val: Value::Reg(0),
+                        ty: IrTy::Bool
+                    }
+                }],
+            }
+        );
+        assert!(
+            program
+                .functions
+                .get(&Symbol::InstanceMethod(InstanceMethodId {
+                    module_id: ModuleId::Core,
+                    local_id: 19
+                }))
+                .is_some()
+        )
+    }
+
+    #[test]
     fn lowers_struct_method() {
         let program = lower(
             "
@@ -983,5 +1046,57 @@ pub mod tests {
                 ]
             }
         );
+    }
+
+    #[test]
+    fn lowers_loop() {
+        let program = lower(
+            "
+            loop {
+                123
+            }
+            ",
+        );
+
+        assert_eq!(
+            *program
+                .functions
+                .get(&Symbol::Synthesized(SynthesizedId::from(1)))
+                .unwrap()
+                .blocks,
+            vec![
+                BasicBlock::from_str(
+                    "
+                #0:
+                    jmp #1   
+                    "
+                )
+                .unwrap(),
+                BasicBlock::from_str(
+                    "
+                #1:
+                    jmp #2
+                    "
+                )
+                .unwrap(),
+                BasicBlock::from_str(
+                    "
+                #2:
+                    %4294967295 = const int 123 (id:0:1)
+                    jmp #1
+
+                    "
+                )
+                .unwrap(),
+                BasicBlock::from_str(
+                    "
+                #3:
+                   ret void void 
+
+                    "
+                )
+                .unwrap()
+            ]
+        )
     }
 }

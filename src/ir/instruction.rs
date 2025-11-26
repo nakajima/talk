@@ -74,7 +74,7 @@ impl FromStr for CmpOperator {
         if s.starts_with("<=") {
             return Ok(CmpOperator::LessEquals);
         }
-        if s.starts_with(">") {
+        if s.starts_with("<") {
             return Ok(CmpOperator::Less);
         }
         if s.starts_with("==") {

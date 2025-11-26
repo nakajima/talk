@@ -3,7 +3,7 @@ use std::{fmt::Display, str::FromStr};
 use itertools::Itertools;
 
 use crate::ir::{
-    instruction::Instruction, ir_error::IRError, list::List, register::Register,
+    instruction::Instruction, ir_error::IRError, ir_ty::IrTy, list::List, register::Register,
     terminator::Terminator,
 };
 
@@ -71,6 +71,27 @@ pub struct Phi<T> {
     pub sources: List<PhiSource>,
 }
 
+impl FromStr for Phi<IrTy> {
+    type Err = IRError;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let lhs_rhs = s.split("=").collect_vec();
+        if lhs_rhs.len() != 2 {
+            return Err(IRError::CouldNotParse("invalid phi".into()));
+        }
+
+        let dest = Register::from_str(lhs_rhs[0])?;
+        let ty_sources = lhs_rhs[1].trim().splitn(2, " ").collect_vec();
+        if ty_sources.len() != 2 {
+            return Err(IRError::CouldNotParse("invalid phi".into()));
+        }
+
+        let ty = IrTy::from_str(ty_sources[0])?;
+        let sources = List::<PhiSource>::from_str(ty_sources[1])?;
+
+        Ok(Phi { dest, ty, sources })
+    }
+}
+
 impl<T: Display> std::fmt::Display for Phi<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{} = phi {} {}", self.dest, self.ty, self.sources)
@@ -103,5 +124,54 @@ where
         parts.push(format!("  {}", self.terminator));
 
         write!(f, "{}", parts.join("\n"))
+    }
+}
+
+impl FromStr for BasicBlock<IrTy> {
+    type Err = IRError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut lines = s.trim().lines();
+
+        let Some(first_line) = lines.next() else {
+            return Err(IRError::CouldNotParse("no input".into()));
+        };
+
+        let Some(without_colon) = first_line.trim().strip_suffix(":") else {
+            return Err(IRError::CouldNotParse("no input".into()));
+        };
+
+        let id = BasicBlockId::from_str(without_colon)?;
+        let mut phis = vec![];
+        let mut instructions = vec![];
+        let mut terminator = Terminator::Unreachable;
+        for line in lines {
+            let line = line.trim();
+            if let Ok(phi) = Phi::from_str(line) {
+                phis.push(phi);
+                continue;
+            }
+
+            if let Ok(instr) = Instruction::from_str(line) {
+                instructions.push(instr);
+                continue;
+            }
+
+            if let Ok(term) = Terminator::from_str(line) {
+                terminator = term;
+                continue;
+            }
+
+            return Err(IRError::CouldNotParse(format!(
+                "Could not parse IR line: {line:?}"
+            )));
+        }
+
+        Ok(BasicBlock {
+            id,
+            phis,
+            instructions,
+            terminator,
+        })
     }
 }

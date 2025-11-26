@@ -530,9 +530,8 @@ impl<'a> InferencePass<'a> {
                     }
                 };
 
-                if let Some(methods) = self.session.type_catalog.instance_methods.get(&symbol)
-                    && let Some(method) = methods.get(label).cloned()
-                {
+                // Use lookup_member which checks instance_methods, conformances, and modules
+                if let Some((method, _source)) = self.session.lookup_member(&symbol, label) {
                     tracing::trace!(
                         "Resolved concrete witness {receiver_ty:?}.{label:?} = {method:?}"
                     );
@@ -586,6 +585,9 @@ impl<'a> InferencePass<'a> {
 
         // Apply substitutions to types_by_node for top-level expressions
         self.session.apply_all(&mut context.substitutions);
+
+        // Rectify witnesses for stragglers (top-level expressions like protocol method calls)
+        self.rectify_witnesses();
     }
 
     #[instrument(skip(self))]

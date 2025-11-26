@@ -1,5 +1,7 @@
 use std::str::FromStr;
 
+use crate::ir::ir_error::IRError;
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct List<T: std::fmt::Debug + Clone + PartialEq + FromStr> {
     pub items: Vec<T>,
@@ -16,7 +18,7 @@ where
     T: std::fmt::Debug + Clone + PartialEq + FromStr,
     <T as FromStr>::Err: std::fmt::Display,
 {
-    type Err = anyhow::Error;
+    type Err = IRError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         // Trim and strip optional wrappers
@@ -33,10 +35,9 @@ where
             .split(|c: char| c == ',' || c == ';' || c.is_whitespace())
             .filter(|t| !t.is_empty())
         {
-            items.push(
-                tok.parse::<T>()
-                    .map_err(|e| anyhow::anyhow!("failed to parse list item `{tok}`: {e}"))?,
-            );
+            items.push(tok.parse::<T>().map_err(|e| {
+                IRError::CouldNotParse(format!("failed to parse list item `{tok}`: {e}"))
+            })?);
         }
         Ok(List { items })
     }

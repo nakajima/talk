@@ -14,6 +14,7 @@ pub enum Value {
     Bool(bool),
     Void,
     Uninit,
+    Poison,
 }
 
 impl Value {
@@ -84,6 +85,7 @@ impl std::fmt::Display for Value {
             Value::Bool(b) => write!(f, "{}", if *b { "true" } else { "false" }),
             Value::Void => write!(f, "void"),
             Value::Uninit => write!(f, "uninit"),
+            Value::Poison => write!(f, "poison"),
         }
     }
 }

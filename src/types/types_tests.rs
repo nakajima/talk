@@ -2277,6 +2277,8 @@ pub mod tests {
 
             return fib(n - 2) + fib(n - 1)
         }
+
+        fib(3)
         ",
         );
 

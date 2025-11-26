@@ -172,6 +172,10 @@ pub struct Interpreter {
 #[allow(clippy::panic)]
 impl Interpreter {
     pub fn new(program: Program) -> Self {
+        if std::env::var("SHOW_IR").is_ok() {
+            println!("{program}");
+        }
+
         Self {
             program,
             frames: Default::default(),
@@ -425,6 +429,7 @@ impl Interpreter {
             super::value::Value::Void => Value::Void,
             super::value::Value::Bool(v) => Value::Bool(v),
             super::value::Value::Uninit => Value::Uninit,
+            super::value::Value::Poison => panic!("unreachable reached"),
         }
     }
 }
@@ -535,6 +540,24 @@ pub mod tests {
                 "
             ),
             Value::Int(3)
+        );
+    }
+
+    #[test]
+    pub fn fib() {
+        assert_eq!(
+            interpret(
+                "
+                func fib(n) {
+                    if n <= 1 { return n }
+
+                    return fib(n - 2) + fib(n - 1)
+                }
+
+                fib(7) 
+                "
+            ),
+            Value::Int(13)
         );
     }
 }

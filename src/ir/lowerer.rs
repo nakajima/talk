@@ -51,6 +51,7 @@ use crate::{
         type_session::{TypeEntry, Types},
     },
 };
+use crate::token_kind::TokenKind;
 use indexmap::IndexMap;
 use rustc_hash::FxHashMap;
 use tracing::instrument;
@@ -305,7 +306,7 @@ impl<'a> Lowerer<'a> {
                 let bind = self.lower_pattern(lhs)?;
                 self.lower_expr(value, bind, instantiations)?;
             }
-            DeclKind::Struct { body, .. } => {
+            DeclKind::Struct { body, .. } | DeclKind::Protocol { body, .. } => {
                 for decl in &body.decls {
                     self.lower_decl(decl, instantiations)?;
                 }
@@ -398,10 +399,15 @@ impl<'a> Lowerer<'a> {
         for node in body.body.iter() {
             (ret, ret_ty) = self.lower_node(node, instantiations)?;
         }
-        self.push_terminator(Terminator::Ret {
-            val: ret.clone(),
-            ty: ret_ty.clone(),
-        });
+
+        if ret == Value::Poison {
+            self.push_terminator(Terminator::Unreachable);
+        } else {
+            self.push_terminator(Terminator::Ret {
+                val: ret.clone(),
+                ty: ret_ty.clone(),
+            });
+        }
 
         #[allow(clippy::expect_used)]
         let current_function = self
@@ -435,14 +441,68 @@ impl<'a> Lowerer<'a> {
             StmtKind::If(cond, conseq, alt) => {
                 self.lower_if_stmt(cond, conseq, alt, instantiations)
             }
-            #[allow(clippy::todo)]
-            StmtKind::Return(_expr) => todo!(),
+            StmtKind::Return(expr) => self.lower_return(expr, bind, instantiations),
             #[allow(clippy::todo)]
             StmtKind::Break => todo!(),
             StmtKind::Assignment(lhs, rhs) => self.lower_assignment(lhs, rhs, instantiations),
-            #[allow(clippy::todo)]
-            StmtKind::Loop(_expr, _block) => todo!(),
+            StmtKind::Loop(cond, block) => self.lower_loop(cond, block, instantiations),
         }
+    }
+
+    fn lower_loop(
+        &mut self,
+        cond: &Option<Expr>,
+        block: &Block,
+        instantiations: &Substitutions,
+    ) -> Result<(Value, Ty), IRError> {
+        let top_block_id = self.new_basic_block();
+        let body_block_id = self.new_basic_block();
+        let join_block_id = self.new_basic_block();
+
+        self.push_terminator(Terminator::Jump { to: top_block_id });
+
+        self.in_basic_block(top_block_id, |lowerer| {
+            if let Some(cond) = cond {
+                let (val, _) = lowerer.lower_expr(cond, Bind::Fresh, instantiations)?;
+                lowerer.push_terminator(Terminator::Branch {
+                    cond: val,
+                    conseq: body_block_id,
+                    alt: join_block_id,
+                });
+            } else {
+                lowerer.push_terminator(Terminator::Jump { to: body_block_id });
+            }
+
+            Ok(())
+        })?;
+
+        self.in_basic_block(body_block_id, |lowerer| {
+            lowerer.lower_block(block, Bind::Discard, instantiations)?;
+            lowerer.push_terminator(Terminator::Jump { to: top_block_id });
+
+            Ok(())
+        })?;
+
+        self.set_current_block(join_block_id);
+
+        Ok((Value::Void, Ty::Void))
+    }
+
+    fn lower_return(
+        &mut self,
+        expr: &Option<Expr>,
+        bind: Bind,
+        instantiations: &Substitutions,
+    ) -> Result<(Value, Ty), IRError> {
+        let (val, ty) = if let Some(expr) = expr {
+            self.lower_expr(expr, bind, instantiations)?
+        } else {
+            (Value::Void, Ty::Void)
+        };
+
+        self.push_terminator(Terminator::Ret { val, ty });
+
+        Ok((Value::Void, Ty::Void))
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self, cond, conseq, alt))]
@@ -673,7 +733,9 @@ impl<'a> Lowerer<'a> {
             #[allow(clippy::todo)]
             ExprKind::LiteralString(_) => todo!(),
             ExprKind::Unary(..) => Ok((Value::Void, Ty::Void)), // Converted to calls earlier
-            ExprKind::Binary(..) => Ok((Value::Void, Ty::Void)), // Converted to calls earlier
+            ExprKind::Binary(box lhs, op, box rhs) => {
+                self.lower_binary(expr, lhs, op.clone(), rhs, bind, instantiations)
+            }
             #[allow(clippy::todo)]
             ExprKind::Tuple(..) => todo!(),
             #[allow(clippy::todo)]
@@ -1203,7 +1265,7 @@ impl<'a> Lowerer<'a> {
         Ok((dest.into(), ret))
     }
 
-    #[instrument(level = tracing::Level::TRACE, skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self, call_expr, callee, args, parent_instantiations))]
     fn lower_call(
         &mut self,
         call_expr: &Expr,
@@ -1273,7 +1335,7 @@ impl<'a> Lowerer<'a> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[instrument(level = tracing::Level::TRACE, skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self, call_expr, callee_expr, receiver, arg_exprs, args, instantiations ))]
     fn lower_method_call(
         &mut self,
         call_expr: &Expr,
@@ -1358,10 +1420,14 @@ impl<'a> Lowerer<'a> {
             (ret, ret_ty) = self.lower_node(node, instantiations)?;
         }
 
-        self.push_terminator(Terminator::Ret {
-            val: ret,
-            ty: ret_ty.clone(),
-        });
+        if ret == Value::Poison {
+            self.push_terminator(Terminator::Unreachable);
+        } else {
+            self.push_terminator(Terminator::Ret {
+                val: ret,
+                ty: ret_ty.clone(),
+            });
+        }
 
         let current_function = self
             .current_function_stack
@@ -1498,7 +1564,13 @@ impl<'a> Lowerer<'a> {
             .current_block_idx
             .last()
             .expect("didn't get current block idx");
-        current_function.blocks[*current_block_idx].terminator = terminator;
+
+        let block = &mut current_function.blocks[*current_block_idx];
+        // Don't override an existing terminator (e.g., from an early return)
+        if block.terminator != Terminator::Unreachable {
+            return;
+        }
+        block.terminator = terminator;
     }
 
     fn next_register(&mut self) -> Register {
@@ -1626,7 +1698,7 @@ impl<'a> Lowerer<'a> {
         Ok((ty, substitutions))
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip(self, entry))]
     fn specialize(
         &mut self,
         entry: &TypeEntry,
