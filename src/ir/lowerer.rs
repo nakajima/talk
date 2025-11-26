@@ -1,3 +1,4 @@
+use crate::compiling::driver::DriverConfig;
 use crate::compiling::module::{ModuleEnvironment, ModuleId};
 use crate::formatter;
 use crate::ir::basic_block::{Phi, PhiSource};
@@ -10,6 +11,7 @@ use crate::name_resolution::symbol::{InstanceMethodId, Symbols};
 use crate::node_kinds::match_arm::MatchArm;
 use crate::node_kinds::parameter::Parameter;
 use crate::node_kinds::record_field::RecordField;
+use crate::token_kind::TokenKind;
 use crate::types::infer_row::RowParamId;
 use crate::types::infer_ty::TypeParamId;
 use crate::types::row::Row;
@@ -51,7 +53,6 @@ use crate::{
         type_session::{TypeEntry, Types},
     },
 };
-use crate::token_kind::TokenKind;
 use indexmap::IndexMap;
 use rustc_hash::FxHashMap;
 use tracing::instrument;
@@ -141,10 +142,10 @@ pub struct Lowerer<'a> {
     pub(super) types: &'a mut Types,
     pub(super) functions: IndexMap<Symbol, PolyFunction>,
     pub(super) current_function_stack: Vec<CurrentFunction>,
+    pub(super) config: &'a DriverConfig,
 
     symbols: &'a mut Symbols,
     bindings: FxHashMap<Symbol, Register>,
-    modules: &'a ModuleEnvironment,
     pub(super) specializations: IndexMap<Symbol, Vec<Specialization>>,
 }
 
@@ -155,7 +156,7 @@ impl<'a> Lowerer<'a> {
         asts: &'a mut IndexMap<Source, AST<NameResolved>>,
         types: &'a mut Types,
         symbols: &'a mut Symbols,
-        modules: &'a ModuleEnvironment,
+        config: &'a DriverConfig,
     ) -> Self {
         Self {
             asts,
@@ -165,7 +166,7 @@ impl<'a> Lowerer<'a> {
             bindings: Default::default(),
             symbols,
             specializations: Default::default(),
-            modules,
+            config,
         }
     }
 
@@ -175,8 +176,7 @@ impl<'a> Lowerer<'a> {
         }
 
         // Do we have a main func?
-        let mut asts = std::mem::take(self.asts);
-        let has_main_func = asts.iter_mut().flat_map(|a| &a.1.roots).any(is_main_func);
+        let has_main_func = self.asts.iter().flat_map(|a| &a.1.roots).any(is_main_func);
         if !has_main_func {
             let main_symbol = Symbol::Synthesized(self.symbols.next_synthesized(ModuleId::Current));
             let mut ret_ty = Ty::Void;
@@ -199,7 +199,8 @@ impl<'a> Lowerer<'a> {
                         file_id: FileID(0),
                     },
                     body: {
-                        let roots: Vec<Node> = asts
+                        let roots: Vec<Node> = self
+                            .asts
                             .values_mut()
                             .flat_map(|a| std::mem::take(&mut a.roots))
                             .collect();
@@ -223,7 +224,7 @@ impl<'a> Lowerer<'a> {
             };
 
             #[allow(clippy::unwrap_used)]
-            let ast = asts.iter_mut().next().unwrap();
+            let ast = self.asts.iter_mut().next().unwrap();
             ast.1.roots.push(Node::Decl(Decl {
                 id: NodeID(FileID::SYNTHESIZED, 0),
                 span: Span::SYNTHESIZED,
@@ -253,13 +254,14 @@ impl<'a> Lowerer<'a> {
 
         self.current_function_stack.push(CurrentFunction::default());
 
-        for ast in asts.values_mut() {
-            for root in ast.roots.iter() {
+        for i in 0..self.asts.len() {
+            let roots = std::mem::take(&mut self.asts[i].roots);
+            for root in roots.iter() {
                 self.lower_node(root, &Default::default())?;
             }
-        }
 
-        _ = std::mem::replace(self.asts, asts);
+            _ = std::mem::replace(&mut self.asts[i].roots, roots);
+        }
 
         let mut monomorphizer = Monomorphizer::new(self);
 
@@ -500,9 +502,12 @@ impl<'a> Lowerer<'a> {
             (Value::Void, Ty::Void)
         };
 
-        self.push_terminator(Terminator::Ret { val, ty });
+        self.push_terminator(Terminator::Ret {
+            val: val.clone(),
+            ty: ty.clone(),
+        });
 
-        Ok((Value::Void, Ty::Void))
+        Ok((val, ty))
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self, cond, conseq, alt))]
@@ -545,6 +550,124 @@ impl<'a> Lowerer<'a> {
         self.set_current_block(join_block_id);
 
         Ok((Value::Void, Ty::Void))
+    }
+
+    /// Lower binary operators. Most binary operators are converted to method calls
+    /// earlier in the pipeline, but `||` and `&&` need short-circuit evaluation.
+    fn lower_binary(
+        &mut self,
+        expr: &Expr,
+        lhs: &Expr,
+        op: TokenKind,
+        rhs: &Expr,
+        bind: Bind,
+        instantiations: &Substitutions,
+    ) -> Result<(Value, Ty), IRError> {
+        match op {
+            TokenKind::PipePipe => self.lower_or(expr, lhs, rhs, bind, instantiations),
+            TokenKind::AmpAmp => self.lower_and(expr, lhs, rhs, bind, instantiations),
+            _ => Ok((Value::Void, Ty::Void)), // Other operators converted to calls earlier
+        }
+    }
+
+    #[instrument(level = tracing::Level::TRACE, skip(self, lhs, rhs, instantiations))]
+    fn lower_or(
+        &mut self,
+        expr: &Expr,
+        lhs: &Expr,
+        rhs: &Expr,
+        bind: Bind,
+        instantiations: &Substitutions,
+    ) -> Result<(Value, Ty), IRError> {
+        let lhs_block_id = self.get_current_block();
+        let rhs_block_id = self.new_basic_block();
+        let rhs_register = self.next_register();
+        let join_block_id = self.new_basic_block();
+
+        let (lhs_val, lhs_ty) = self.lower_expr(lhs, Bind::Fresh, instantiations)?;
+        assert_eq!(lhs_ty, Ty::Bool);
+
+        self.push_terminator(Terminator::Branch {
+            cond: lhs_val,
+            conseq: join_block_id,
+            alt: rhs_block_id,
+        });
+
+        self.in_basic_block(rhs_block_id, |lowerer| {
+            lowerer.lower_expr(rhs, Bind::Assigned(rhs_register), instantiations)?;
+            lowerer.push_terminator(Terminator::Jump { to: join_block_id });
+            Ok(())
+        })?;
+
+        let ret = self.ret(bind);
+        self.set_current_block(join_block_id);
+        self.push_phi(Phi {
+            dest: ret,
+            ty: Ty::Bool,
+            sources: vec![
+                PhiSource {
+                    from_id: lhs_block_id,
+                    value: Value::Bool(true),
+                },
+                PhiSource {
+                    from_id: rhs_block_id,
+                    value: rhs_register.into(),
+                },
+            ]
+            .into(),
+        });
+
+        Ok((ret.into(), Ty::Bool))
+    }
+
+    #[instrument(level = tracing::Level::TRACE, skip(self, lhs, rhs, instantiations))]
+    fn lower_and(
+        &mut self,
+        expr: &Expr,
+        lhs: &Expr,
+        rhs: &Expr,
+        bind: Bind,
+        instantiations: &Substitutions,
+    ) -> Result<(Value, Ty), IRError> {
+        let lhs_block_id = self.get_current_block();
+        let rhs_block_id = self.new_basic_block();
+        let rhs_register = self.next_register();
+        let join_block_id = self.new_basic_block();
+
+        let (lhs_val, lhs_ty) = self.lower_expr(lhs, Bind::Fresh, instantiations)?;
+        assert_eq!(lhs_ty, Ty::Bool);
+
+        self.push_terminator(Terminator::Branch {
+            cond: lhs_val,
+            conseq: rhs_block_id,
+            alt: join_block_id,
+        });
+
+        self.in_basic_block(rhs_block_id, |lowerer| {
+            lowerer.lower_expr(rhs, Bind::Assigned(rhs_register), instantiations)?;
+            lowerer.push_terminator(Terminator::Jump { to: join_block_id });
+            Ok(())
+        })?;
+
+        let ret = self.ret(bind);
+        self.set_current_block(join_block_id);
+        self.push_phi(Phi {
+            dest: ret,
+            ty: Ty::Bool,
+            sources: vec![
+                PhiSource {
+                    from_id: lhs_block_id,
+                    value: Value::Bool(false),
+                },
+                PhiSource {
+                    from_id: rhs_block_id,
+                    value: rhs_register.into(),
+                },
+            ]
+            .into(),
+        });
+
+        Ok((ret.into(), Ty::Bool))
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self, block), fields(block.id = %block.id))]
@@ -700,7 +823,7 @@ impl<'a> Lowerer<'a> {
         bind: Bind,
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
-        match &expr.kind {
+        let (value, ty) = match &expr.kind {
             ExprKind::Func(func) => self.lower_func(func, bind, instantiations),
             #[allow(clippy::todo)]
             ExprKind::LiteralArray(_exprs) => todo!(),
@@ -728,8 +851,32 @@ impl<'a> Lowerer<'a> {
                 });
                 Ok((ret.into(), Ty::Float))
             }
-            ExprKind::LiteralTrue => Ok((Value::Bool(true), Ty::Bool)),
-            ExprKind::LiteralFalse => Ok((Value::Bool(false), Ty::Bool)),
+            ExprKind::LiteralTrue => {
+                if let Bind::Assigned(reg) = bind {
+                    self.push_instr(Instruction::Constant {
+                        dest: reg,
+                        ty: Ty::Bool,
+                        val: Value::Bool(true),
+                        meta: vec![InstructionMeta::Source(expr.id)].into(),
+                    });
+                    Ok((reg.into(), Ty::Bool))
+                } else {
+                    Ok((Value::Bool(true), Ty::Bool))
+                }
+            }
+            ExprKind::LiteralFalse => {
+                if let Bind::Assigned(reg) = bind {
+                    self.push_instr(Instruction::Constant {
+                        dest: reg,
+                        ty: Ty::Bool,
+                        val: Value::Bool(false),
+                        meta: vec![InstructionMeta::Source(expr.id)].into(),
+                    });
+                    Ok((reg.into(), Ty::Bool))
+                } else {
+                    Ok((Value::Bool(false), Ty::Bool))
+                }
+            }
             #[allow(clippy::todo)]
             ExprKind::LiteralString(_) => todo!(),
             ExprKind::Unary(..) => Ok((Value::Void, Ty::Void)), // Converted to calls earlier
@@ -792,7 +939,19 @@ impl<'a> Lowerer<'a> {
             ExprKind::RowVariable(..) => todo!(),
             ExprKind::As(lhs, ..) => self.lower_expr(lhs, bind, instantiations),
             _ => unreachable!("cannot lower expr: {expr:?}"),
+        }?;
+
+        // Quick check to make sure types are right
+        if let Ok(expected_ty) = self.ty_from_id(&expr.id) {
+            assert_eq!(
+                ty,
+                expected_ty,
+                "type mismatch {:?}",
+                formatter::format_node(&expr.into(), &self.asts[expr.id.0.0 as usize].meta)
+            );
         }
+
+        Ok((value, ty))
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
@@ -1526,6 +1685,19 @@ impl<'a> Lowerer<'a> {
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
+    fn get_current_block(&mut self) -> BasicBlockId {
+        BasicBlockId(
+            self.current_function_stack
+                .last_mut()
+                .expect("didn't get current func")
+                .current_block_idx
+                .last()
+                .copied()
+                .expect("didnt get current block id") as u32,
+        )
+    }
+
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn set_current_block(&mut self, id: BasicBlockId) {
         self.current_function_stack
             .last_mut()
@@ -1593,12 +1765,18 @@ impl<'a> Lowerer<'a> {
 
     /// Check to see if this symbol comes from an external module, if so we need to import the code into our program.
     fn check_import(&mut self, symbol: &Symbol) {
+        if self.config.module_id == ModuleId::Core {
+            // No imports can happen from core.
+            return;
+        }
+
         if let Symbol::InstanceMethod(InstanceMethodId {
             module_id: module_id @ (ModuleId::Core | ModuleId::Builtin | ModuleId::External(..)),
             ..
         }) = symbol
         {
             let module = self
+                .config
                 .modules
                 .modules
                 .get(module_id)
@@ -1755,7 +1933,7 @@ impl<'a> Lowerer<'a> {
             return Some(witness);
         }
 
-        for module in self.modules.modules.values() {
+        for module in self.config.modules.modules.values() {
             if let Some(MemberWitness::Concrete(witness) | MemberWitness::Requirement(witness)) =
                 module.types.catalog.member_witnesses.get(node_id)
             {

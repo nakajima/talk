@@ -220,13 +220,14 @@ impl Interpreter {
         }
         self.frames.push(frame);
         self.current_func = Some(func);
+
+        tracing::trace!("{:?}", self.frames.last().unwrap());
     }
 
     pub fn next(&mut self) {
         let next_instruction = self.next_instr();
 
         tracing::trace!("{next_instruction}");
-        tracing::trace!("{:?}", self.frames.last().unwrap());
 
         match next_instruction {
             IR::Phi(phi) => {
@@ -237,7 +238,7 @@ impl Interpreter {
                     .iter()
                     .find(|s| s.from_id == BasicBlockId(prev as u32))
                     .unwrap();
-                let val = self.read_register(&source.register);
+                let val = self.val(source.value.clone());
                 self.write_register(&phi.dest, val);
             }
             IR::Term(Terminator::Ret { val, .. }) => {
@@ -559,5 +560,21 @@ pub mod tests {
             ),
             Value::Int(13)
         );
+    }
+
+    #[test]
+    fn interprets_or() {
+        assert_eq!(interpret("true || false"), Value::Bool(true));
+        assert_eq!(interpret("false || true"), Value::Bool(true));
+        assert_eq!(interpret("true || true"), Value::Bool(true));
+        assert_eq!(interpret("false || false"), Value::Bool(false));
+    }
+
+    #[test]
+    fn interprets_and() {
+        assert_eq!(interpret("true && true"), Value::Bool(true));
+        assert_eq!(interpret("true && false"), Value::Bool(false));
+        assert_eq!(interpret("false && true"), Value::Bool(false));
+        assert_eq!(interpret("false && false"), Value::Bool(false));
     }
 }

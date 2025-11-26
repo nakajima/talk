@@ -4,7 +4,7 @@ use itertools::Itertools;
 
 use crate::ir::{
     instruction::Instruction, ir_error::IRError, ir_ty::IrTy, list::List, register::Register,
-    terminator::Terminator,
+    terminator::Terminator, value::Value,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -27,12 +27,12 @@ impl FromStr for BasicBlockId {
 #[derive(Debug, Clone, PartialEq)]
 pub struct PhiSource {
     pub from_id: BasicBlockId,
-    pub register: Register,
+    pub value: Value,
 }
 
 impl std::fmt::Display for PhiSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}: {}", self.from_id, self.register)
+        write!(f, "{}: {}", self.from_id, self.value)
     }
 }
 
@@ -40,7 +40,7 @@ impl From<(BasicBlockId, Register)> for PhiSource {
     fn from(value: (BasicBlockId, Register)) -> Self {
         Self {
             from_id: value.0,
-            register: value.1,
+            value: value.1.into(),
         }
     }
 }
@@ -57,10 +57,10 @@ impl FromStr for PhiSource {
 
         let from_id = str::parse::<BasicBlockId>(parts[0])
             .map_err(|e| IRError::CouldNotParse(format!("{e:?}")))?;
-        let register = str::parse::<Register>(parts[1])
-            .map_err(|e| IRError::CouldNotParse(format!("{e:?}")))?;
+        let value =
+            str::parse::<Value>(parts[1]).map_err(|e| IRError::CouldNotParse(format!("{e:?}")))?;
 
-        Ok(Self { from_id, register })
+        Ok(Self { from_id, value })
     }
 }
 

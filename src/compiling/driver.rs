@@ -237,7 +237,7 @@ impl Driver<Typed> {
             &mut self.phase.asts,
             &mut self.phase.types,
             &mut self.phase.symbols,
-            &self.config.modules,
+            &self.config,
         );
         let program = lowerer.lower().map_err(CompileError::Lowering)?;
         Ok(Driver {

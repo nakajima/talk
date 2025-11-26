@@ -44,7 +44,7 @@ pub mod tests {
             &mut typed.phase.asts,
             &mut typed.phase.types,
             &mut typed.phase.symbols,
-            &typed.config.modules,
+            &typed.config,
         );
         lowerer.lower().unwrap()
     }
@@ -960,15 +960,15 @@ pub mod tests {
                             sources: vec![
                                 PhiSource {
                                     from_id: BasicBlockId(2),
-                                    register: Register(2),
+                                    value: Register(2).into(),
                                 },
                                 PhiSource {
                                     from_id: BasicBlockId(3),
-                                    register: Register(3),
+                                    value: Register(3).into(),
                                 },
                                 PhiSource {
                                     from_id: BasicBlockId(4),
-                                    register: Register(4),
+                                    value: Register(4).into(),
                                 },
                             ]
                             .into(),
