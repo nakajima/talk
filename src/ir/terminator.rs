@@ -54,7 +54,7 @@ impl FromStr for Terminator<IrTy> {
             _ => return Err(IRError::CouldNotParse("invalid terminator syntax".into())),
         }
 
-        return Err(IRError::CouldNotParse("invalid terminator syntax".into()));
+        Err(IRError::CouldNotParse("invalid terminator syntax".into()))
     }
 }
 

@@ -4,4 +4,4 @@ func fib(n) {
 	return fib(n - 2) + fib(n - 1)
 }
 
-fib(7)
+fib(24)

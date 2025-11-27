@@ -1,5 +1,5 @@
 use crate::compiling::driver::DriverConfig;
-use crate::compiling::module::{ModuleEnvironment, ModuleId};
+use crate::compiling::module::ModuleId;
 use crate::formatter;
 use crate::ir::basic_block::{Phi, PhiSource};
 use crate::ir::instruction::CmpOperator;
@@ -7,7 +7,7 @@ use crate::ir::ir_ty::IrTy;
 use crate::ir::monomorphizer::uncurry_function;
 use crate::ir::parse_instruction;
 use crate::label::Label;
-use crate::name_resolution::symbol::{InstanceMethodId, ProtocolId, Symbols};
+use crate::name_resolution::symbol::{InstanceMethodId, Symbols};
 use crate::node_kinds::match_arm::MatchArm;
 use crate::node_kinds::parameter::Parameter;
 use crate::node_kinds::record_field::RecordField;
@@ -15,7 +15,7 @@ use crate::token_kind::TokenKind;
 use crate::types::infer_row::RowParamId;
 use crate::types::infer_ty::TypeParamId;
 use crate::types::row::Row;
-use crate::types::type_catalog::{ConformanceKey, MemberWitness};
+use crate::types::type_catalog::MemberWitness;
 use crate::types::type_session::TypeDefKind;
 use crate::{
     ast::AST,
@@ -1545,7 +1545,7 @@ impl<'a> Lowerer<'a> {
 
             // Try to specialize for conformance if this is a protocol method call
             let specialized = 'specialize: {
-                let Some(protocol_id) = protocol_id else {
+                let Some(..) = protocol_id else {
                     tracing::trace!("no protocol_id");
                     break 'specialize None;
                 };
@@ -1595,11 +1595,10 @@ impl<'a> Lowerer<'a> {
                             .catalog
                             .method_requirements
                             .get(&Symbol::Protocol(conf_protocol))
+                            && let Some(req_symbol) = req_methods.get(method_label)
                         {
-                            if let Some(req_symbol) = req_methods.get(method_label) {
-                                subs.witnesses.insert(*req_symbol, *impl_symbol);
-                                self.check_import(impl_symbol);
-                            }
+                            subs.witnesses.insert(*req_symbol, *impl_symbol);
+                            self.check_import(impl_symbol);
                         }
                         // Check module method requirements
                         for module in self.config.modules.modules.values() {
@@ -1608,11 +1607,10 @@ impl<'a> Lowerer<'a> {
                                 .catalog
                                 .method_requirements
                                 .get(&Symbol::Protocol(conf_protocol))
+                                && let Some(req_symbol) = req_methods.get(method_label)
                             {
-                                if let Some(req_symbol) = req_methods.get(method_label) {
-                                    subs.witnesses.insert(*req_symbol, *impl_symbol);
-                                    self.check_import(impl_symbol);
-                                }
+                                subs.witnesses.insert(*req_symbol, *impl_symbol);
+                                self.check_import(impl_symbol);
                             }
                         }
                     }

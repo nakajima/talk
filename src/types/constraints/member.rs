@@ -1,6 +1,5 @@
 use std::assert_matches::assert_matches;
 
-use indexmap::IndexSet;
 use tracing::instrument;
 
 use crate::{
