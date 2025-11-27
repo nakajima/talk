@@ -1,5 +1,7 @@
 use std::fmt::Display;
 
+use itertools::Itertools;
+
 use crate::{
     ir::{
         basic_block::{BasicBlock, BasicBlockId, Phi},
@@ -95,13 +97,15 @@ impl Value {
         match (&self, &other) {
             (Self::Int(lhs), Self::Int(rhs)) => Self::Bool(lhs == rhs),
             (Self::Float(lhs), Self::Float(rhs)) => Self::Bool(lhs == rhs),
-            _ => panic!("can't compare {self:?} > {other:?}"),
+            (Self::Bool(lhs), Self::Bool(rhs)) => Self::Bool(lhs == rhs),
+            _ => panic!("can't compare {self:?} == {other:?}"),
         }
     }
     pub fn ne(self, other: Value) -> Value {
         match (&self, &other) {
             (Self::Int(lhs), Self::Int(rhs)) => Self::Bool(lhs != rhs),
             (Self::Float(lhs), Self::Float(rhs)) => Self::Bool(lhs != rhs),
+            (Self::Bool(lhs), Self::Bool(rhs)) => Self::Bool(lhs != rhs),
             _ => panic!("can't compare {self:?} > {other:?}"),
         }
     }
@@ -212,7 +216,17 @@ impl Interpreter {
             .program
             .functions
             .shift_remove(&function)
-            .unwrap_or_else(|| panic!("did not find function: {:?}", function));
+            .unwrap_or_else(|| {
+                panic!(
+                    "did not find function: {:?} {:?}",
+                    function,
+                    self.program
+                        .functions
+                        .iter()
+                        .map(|f| &f.1.name)
+                        .collect_vec()
+                )
+            });
         let mut frame = Frame::new(dest, caller_name);
         frame.registers.resize(func.register_count, Value::Uninit);
         for (i, arg) in args.into_iter().enumerate() {
@@ -560,6 +574,27 @@ pub mod tests {
             ),
             Value::Int(13)
         );
+    }
+
+    #[test]
+    fn interprets_comparisons() {
+        assert_eq!(interpret("1 < 2"), Value::Bool(true));
+        assert_eq!(interpret("1 <= 2"), Value::Bool(true));
+        assert_eq!(interpret("2 < 1"), Value::Bool(false));
+        assert_eq!(interpret("2 <= 1"), Value::Bool(false));
+        assert_eq!(interpret("2 <= 2"), Value::Bool(true));
+
+        assert_eq!(interpret("1 > 2"), Value::Bool(false));
+        assert_eq!(interpret("1 >= 2"), Value::Bool(false));
+        assert_eq!(interpret("2 > 1"), Value::Bool(true));
+        assert_eq!(interpret("2 >= 1"), Value::Bool(true));
+        assert_eq!(interpret("2 >= 2"), Value::Bool(true));
+    }
+
+    #[test]
+    fn interprets_not() {
+        assert_eq!(interpret("!false"), Value::Bool(true));
+        assert_eq!(interpret("!true"), Value::Bool(false));
     }
 
     #[test]

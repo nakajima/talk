@@ -82,8 +82,11 @@ impl<T: SomeType> Default for TrackedInstantiations<T> {
 #[derive(Debug, PartialEq, Clone)]
 pub enum MemberWitness<T> {
     Concrete(Symbol),
-    Requirement(Symbol),
-    Meta { receiver: T, label: Label },
+    Requirement(Symbol, T),
+    Meta {
+        receiver: T,
+        label: Label,
+    },
     /// Call to a default protocol method - needs conformance context for resolving
     /// internal method requirement calls
     DefaultMethod {
@@ -169,14 +172,20 @@ impl TypeCatalog<InferTy> {
                         k,
                         match v {
                             MemberWitness::Concrete(sym) => MemberWitness::Concrete(sym),
-                            MemberWitness::Requirement(sym) => MemberWitness::Requirement(sym),
+                            MemberWitness::Requirement(sym, ty) => {
+                                MemberWitness::Requirement(sym, ty.into())
+                            }
                             MemberWitness::Meta { receiver, label } => MemberWitness::Meta {
                                 receiver: session.finalize_ty(receiver).as_mono_ty().clone(),
                                 label,
                             },
-                            MemberWitness::DefaultMethod { method, conformance } => {
-                                MemberWitness::DefaultMethod { method, conformance }
-                            }
+                            MemberWitness::DefaultMethod {
+                                method,
+                                conformance,
+                            } => MemberWitness::DefaultMethod {
+                                method,
+                                conformance,
+                            },
                         },
                     )
                 })

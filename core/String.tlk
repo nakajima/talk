@@ -1,13 +1,9 @@
 struct String {}
 
 extend String: Add {
-  func add(rhs: String) -> String {
-    self
-  }
+	func add(rhs: String) -> String { self }
 }
 
-extend String: Equals {
-  func equals(rhs: String) -> Bool {
-    false
-  }
+extend String: Equatable {
+	func equals(rhs: String) -> Bool { false }
 }

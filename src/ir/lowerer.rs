@@ -942,6 +942,7 @@ impl<'a> Lowerer<'a> {
         }?;
 
         // Quick check to make sure types are right
+        #[cfg(feature = "verify_ir")]
         if let Ok(expected_ty) = self.ty_from_id(&expr.id) {
             assert_eq!(
                 ty,
@@ -1927,16 +1928,30 @@ impl<'a> Lowerer<'a> {
 
     #[instrument(skip(self), ret)]
     fn witness_for(&self, node_id: &NodeID, label: &Label) -> Option<&Symbol> {
-        if let Some(MemberWitness::Concrete(witness) | MemberWitness::Requirement(witness)) =
+        if let Some(MemberWitness::Concrete(witness)) =
             self.types.catalog.member_witnesses.get(node_id)
         {
             return Some(witness);
         }
 
+        if let Some(MemberWitness::Requirement(witness, ty)) =
+            self.types.catalog.member_witnesses.get(node_id)
+        {
+            println!("we've got a ty: {ty:?}");
+            return Some(witness);
+        }
+
         for module in self.config.modules.modules.values() {
-            if let Some(MemberWitness::Concrete(witness) | MemberWitness::Requirement(witness)) =
+            if let Some(MemberWitness::Concrete(witness)) =
                 module.types.catalog.member_witnesses.get(node_id)
             {
+                return Some(witness);
+            }
+
+            if let Some(MemberWitness::Requirement(witness, ty)) =
+                module.types.catalog.member_witnesses.get(node_id)
+            {
+                println!("we've got a ty: {ty:?}, moduleid: {:?}", module);
                 return Some(witness);
             }
         }

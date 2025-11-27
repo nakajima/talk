@@ -463,8 +463,8 @@ impl std::fmt::Debug for InferTy {
             InferTy::Rigid(id) => write!(f, "rigid(α{})", id.0),
             InferTy::Var { id, level } => write!(f, "meta(α{}, {})", id.0, level.0),
             InferTy::Primitive(primitive) => write!(f, "{primitive:?}"),
-            InferTy::Constructor { params, .. } => {
-                write!(f, "Constructor({params:?})")
+            InferTy::Constructor { name, params, .. } => {
+                write!(f, "Constructor({name:?},{params:?})")
             }
             InferTy::Projection {
                 base,

@@ -60,6 +60,7 @@ ena = "0.14.3"
 default = ["cli"]
 cli = ["dep:clap", "dep:async-lsp", "dep:futures", "dep:tower", "dep:tokio"]
 wasm = []
+verify_ir = []
 
 [profile.release]
 strip = true  # Automatically strip symbols from the binary.

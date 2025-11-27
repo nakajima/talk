@@ -474,7 +474,7 @@ pub mod tests {
                             callee: Value::Func(Name::Resolved(
                                 Symbol::InstanceMethod(InstanceMethodId {
                                     module_id: ModuleId::Core,
-                                    local_id: 2
+                                    local_id: 3
                                 }),
                                 "add".into()
                             )),
@@ -494,7 +494,7 @@ pub mod tests {
                 .functions
                 .get(&Symbol::InstanceMethod(InstanceMethodId {
                     module_id: ModuleId::Core,
-                    local_id: 2
+                    local_id: 3
                 }))
                 .is_some()
         )
@@ -535,7 +535,7 @@ pub mod tests {
                             callee: Value::Func(Name::Resolved(
                                 Symbol::InstanceMethod(InstanceMethodId {
                                     module_id: ModuleId::Core,
-                                    local_id: 19
+                                    local_id: 18
                                 }),
                                 "lte".into()
                             )),
@@ -555,7 +555,7 @@ pub mod tests {
                 .functions
                 .get(&Symbol::InstanceMethod(InstanceMethodId {
                     module_id: ModuleId::Core,
-                    local_id: 19
+                    local_id: 18
                 }))
                 .is_some()
         )

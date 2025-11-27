@@ -51,6 +51,12 @@ protocol Not {
   func not() -> Ret
 }
 
+extend Bool: Not {
+	func not() -> Bool {
+		__IR<Bool>("$? = cmp bool %0 == false")
+	}
+}
+
 extend Int: Add {
   func add(rhs: Int) -> Int {
     __IR("$? = add int %0 %1")
@@ -109,7 +115,7 @@ extend Int: Equatable {
 }
 
 extend Float: Equatable {
-  func equals(rhs: Int) -> Bool {
+  func equals(rhs: Float) -> Bool {
     __IR("$? = cmp float %0 == %1")
   }
 }
@@ -132,18 +138,6 @@ extend Float: Negatable {
   func negated() -> Float {
     __IR("$? = sub float 0 %0")
   }
-}
-
-extend Bool: Negatable {
-	func negated() -> Bool {
-		__IR("$? = cmp bool %0 == true")
-	}
-}
-
-extend Bool: Not {
-	func not() -> Bool {
-		__IR("$? = cmp bool %0 == false")
-	}
 }
 
 protocol Comparable: Equatable {

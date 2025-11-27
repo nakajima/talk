@@ -1,5 +1,6 @@
 use std::assert_matches::assert_matches;
 
+use indexmap::IndexSet;
 use tracing::instrument;
 
 use crate::{
@@ -117,6 +118,7 @@ impl Member {
         ty: &InferTy,
         type_param_id: TypeParamId,
     ) -> SolveResult {
+        let mut solved_metas: Vec<Meta> = Default::default();
         let mut candidates = vec![];
         for given in &context.givens {
             if let Predicate::Conforms {
@@ -138,19 +140,31 @@ impl Member {
                 };
                 let req_ty = entry.instantiate(self.node_id, constraints, context, session);
                 let (req_self, req_func) = consume_self(&req_ty);
-                constraints.wants_equals(req_self.clone(), self.receiver.clone());
+
+                match unify(&req_self, &self.receiver, context, session) {
+                    Ok(metas) => {
+                        solved_metas.extend(metas);
+                    }
+                    Err(e) => return SolveResult::Err(e),
+                }
 
                 // Store the method requirement symbol directly as a concrete witness
                 // since it represents the protocol method that will be called
-                session
-                    .type_catalog
-                    .member_witnesses
-                    .insert(self.node_id, MemberWitness::Requirement(req));
+                println!(
+                    "member witness: {req:?}, rec: {:?} req_self: {req_self:?}",
+                    self.receiver
+                );
+                session.type_catalog.member_witnesses.insert(
+                    self.node_id,
+                    MemberWitness::Requirement(req, req_self.clone()),
+                );
 
-                return match unify(ty, &req_func, context, session) {
-                    Ok(metas) => SolveResult::Solved(metas),
-                    Err(e) => SolveResult::Err(e),
+                match unify(ty, &req_func, context, session) {
+                    Ok(metas) => solved_metas.extend(metas),
+                    Err(e) => return SolveResult::Err(e),
                 };
+
+                return SolveResult::Solved(solved_metas);
             }
         }
 
@@ -211,6 +225,7 @@ impl Member {
         symbol: &Symbol,
         row: Option<&InferRow>,
     ) -> SolveResult {
+        let mut solved_metas: Vec<Meta> = Default::default();
         let Some((member_sym, source)) = session.lookup_member(symbol, &self.label) else {
             return SolveResult::Err(TypeError::MemberNotFound(
                 self.receiver.clone(),
@@ -239,10 +254,17 @@ impl Member {
                     tracing::trace!("member found in protocol: {protocol_id:?}");
                 }
 
-                constraints.wants_equals(method_receiver, self.receiver.clone());
-                constraints.wants_equals(method_fn, self.ty.clone());
+                match unify(&method_receiver, &self.receiver, context, session) {
+                    Ok(metas) => solved_metas.extend(metas),
+                    Err(e) => return SolveResult::Err(e),
+                };
 
-                return SolveResult::Solved(Default::default());
+                match unify(&method_fn, &self.ty, context, session) {
+                    Ok(metas) => solved_metas.extend(metas),
+                    Err(e) => return SolveResult::Err(e),
+                };
+
+                return SolveResult::Solved(solved_metas);
             }
             Symbol::Variant(..) => {
                 let Some(row) = row else {

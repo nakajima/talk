@@ -163,14 +163,20 @@ impl TypeSession {
                             k,
                             match v {
                                 MemberWitness::Concrete(sym) => MemberWitness::Concrete(sym),
-                                MemberWitness::Requirement(sym) => MemberWitness::Requirement(sym),
+                                MemberWitness::Requirement(sym, ty) => {
+                                    MemberWitness::Requirement(sym, ty.into())
+                                }
                                 MemberWitness::Meta { receiver, label } => MemberWitness::Meta {
                                     receiver: receiver.into(),
                                     label,
                                 },
-                                MemberWitness::DefaultMethod { method, conformance } => {
-                                    MemberWitness::DefaultMethod { method, conformance }
-                                }
+                                MemberWitness::DefaultMethod {
+                                    method,
+                                    conformance,
+                                } => MemberWitness::DefaultMethod {
+                                    method,
+                                    conformance,
+                                },
                             },
                         )
                     }),
@@ -550,6 +556,20 @@ impl TypeSession {
             let entry = entry.apply(substitutions, self);
             self.term_env.insert(key, entry);
         }
+
+        let mut witnesses = std::mem::take(&mut self.type_catalog.member_witnesses);
+        for witness in witnesses.values_mut() {
+            match witness {
+                MemberWitness::Meta { receiver, .. } => {
+                    *receiver = self.apply(receiver.clone(), substitutions);
+                }
+                MemberWitness::Requirement(.., ty) => {
+                    *ty = self.apply(ty.clone(), substitutions);
+                }
+                _ => continue,
+            }
+        }
+        _ = std::mem::replace(&mut self.type_catalog.member_witnesses, witnesses);
 
         #[allow(clippy::unwrap_used)]
         for key in self

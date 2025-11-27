@@ -23,7 +23,6 @@ pub fn _compile() -> Module {
         vec![
             Source::from(include_str!("../../core/Optional.tlk")),
             Source::from(include_str!("../../core/Operators.tlk")),
-            Source::from(include_str!("../../core/Equals.tlk")),
             Source::from(include_str!("../../core/String.tlk")),
             Source::from(include_str!("../../core/Array.tlk")),
         ],
