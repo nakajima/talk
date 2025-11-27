@@ -150,10 +150,6 @@ impl Member {
 
                 // Store the method requirement symbol directly as a concrete witness
                 // since it represents the protocol method that will be called
-                println!(
-                    "member witness: {req:?}, rec: {:?} req_self: {req_self:?}",
-                    self.receiver
-                );
                 session.type_catalog.member_witnesses.insert(
                     self.node_id,
                     MemberWitness::Requirement(req, req_self.clone()),

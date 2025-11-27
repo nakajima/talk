@@ -11,6 +11,7 @@ use crate::{
         ir_ty::IrTy,
         lowerer::{Lowerer, PolyFunction, Specialization, Substitutions},
         terminator::Terminator,
+        value::Value,
     },
     name::Name,
     name_resolution::{name_resolver::NameResolved, symbol::Symbol},
@@ -125,6 +126,28 @@ impl<'a> Monomorphizer<'a> {
         instruction: Instruction<Ty>,
         substitutions: &Substitutions,
     ) -> Instruction<IrTy> {
+        // Handle Call instructions specially to substitute MethodRequirement callees
+        if let Instruction::Call { dest, ty, callee, args, meta } = instruction {
+            let new_callee = match &callee {
+                Value::Func(Name::Resolved(sym @ Symbol::MethodRequirement(_), name)) => {
+                    if let Some(impl_sym) = substitutions.witnesses.get(sym) {
+                        Value::Func(Name::Resolved(*impl_sym, name.clone()))
+                    } else {
+                        callee
+                    }
+                }
+                _ => callee,
+            };
+
+            return Instruction::Call {
+                dest,
+                ty: self.monomorphize_ty(ty, substitutions),
+                callee: new_callee,
+                args,
+                meta,
+            };
+        }
+
         instruction.map_type(|ty| self.monomorphize_ty(ty, substitutions))
     }
 

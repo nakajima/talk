@@ -7,7 +7,7 @@ use crate::ir::ir_ty::IrTy;
 use crate::ir::monomorphizer::uncurry_function;
 use crate::ir::parse_instruction;
 use crate::label::Label;
-use crate::name_resolution::symbol::{InstanceMethodId, Symbols};
+use crate::name_resolution::symbol::{InstanceMethodId, ProtocolId, Symbols};
 use crate::node_kinds::match_arm::MatchArm;
 use crate::node_kinds::parameter::Parameter;
 use crate::node_kinds::record_field::RecordField;
@@ -15,7 +15,7 @@ use crate::token_kind::TokenKind;
 use crate::types::infer_row::RowParamId;
 use crate::types::infer_ty::TypeParamId;
 use crate::types::row::Row;
-use crate::types::type_catalog::MemberWitness;
+use crate::types::type_catalog::{ConformanceKey, MemberWitness};
 use crate::types::type_session::TypeDefKind;
 use crate::{
     ast::AST,
@@ -112,12 +112,15 @@ impl RegisterAllocator {
 pub(super) struct Substitutions {
     pub ty: FxHashMap<TypeParamId, Ty>,
     pub row: FxHashMap<RowParamId, Row>,
+    /// Maps MethodRequirement symbols to their concrete implementations for witness specialization
+    pub witnesses: FxHashMap<Symbol, Symbol>,
 }
 
 impl Substitutions {
     pub fn extend(&mut self, other: Substitutions) {
         self.ty.extend(other.ty);
         self.row.extend(other.row);
+        self.witnesses.extend(other.witnesses);
     }
 }
 
@@ -1509,6 +1512,12 @@ impl<'a> Lowerer<'a> {
     ) -> Result<(Value, Ty), IRError> {
         let ty = self.ty_from_id(&call_expr.id)?;
 
+        // Capture protocol ID before we replace receiver (for witness specialization)
+        let protocol_id = match &receiver.kind {
+            ExprKind::Constructor(Name::Resolved(Symbol::Protocol(id), _)) => Some(*id),
+            _ => None,
+        };
+
         // Is this an instance method call on a constructor? If so we don't need
         // to prepend a self arg because it's passed explicitly (like Foo.bar(fizz) where
         // fizz == self)
@@ -1533,10 +1542,99 @@ impl<'a> Lowerer<'a> {
 
         if let Some(witness) = self.witness_for(&callee_expr.id, label).copied() {
             self.check_import(&witness);
+
+            // Try to specialize for conformance if this is a protocol method call
+            let specialized = 'specialize: {
+                let Some(protocol_id) = protocol_id else {
+                    tracing::trace!("no protocol_id");
+                    break 'specialize None;
+                };
+                let Ok(receiver_ty) = self.ty_from_id(&receiver.id) else {
+                    tracing::trace!("couldn't get receiver ty");
+                    break 'specialize None;
+                };
+
+                let conforming_id = match &receiver_ty {
+                    Ty::Primitive(sym) => *sym,
+                    Ty::Nominal { symbol, .. } => *symbol,
+                    _ => {
+                        tracing::trace!("receiver ty not primitive/nominal: {receiver_ty:?}");
+                        break 'specialize None;
+                    }
+                };
+
+                // Build witness substitutions from ALL conformances for this type
+                // (needed because protocols can extend other protocols, e.g. Comparable: Equatable)
+                let mut subs = Substitutions::default();
+
+                // Collect all conformances for this type from local and modules
+                let all_conformances: Vec<_> = self
+                    .types
+                    .catalog
+                    .conformances
+                    .values()
+                    .filter(|c| c.conforming_id == conforming_id)
+                    .cloned()
+                    .chain(
+                        self.config
+                            .modules
+                            .modules
+                            .values()
+                            .flat_map(|m| m.types.catalog.conformances.values())
+                            .filter(|c| c.conforming_id == conforming_id)
+                            .cloned(),
+                    )
+                    .collect();
+
+                for conformance in &all_conformances {
+                    for (method_label, impl_symbol) in &conformance.witnesses {
+                        let conf_protocol = conformance.protocol_id;
+                        // Check local method requirements
+                        if let Some(req_methods) = self
+                            .types
+                            .catalog
+                            .method_requirements
+                            .get(&Symbol::Protocol(conf_protocol))
+                        {
+                            if let Some(req_symbol) = req_methods.get(method_label) {
+                                subs.witnesses.insert(*req_symbol, *impl_symbol);
+                                self.check_import(impl_symbol);
+                            }
+                        }
+                        // Check module method requirements
+                        for module in self.config.modules.modules.values() {
+                            if let Some(req_methods) = module
+                                .types
+                                .catalog
+                                .method_requirements
+                                .get(&Symbol::Protocol(conf_protocol))
+                            {
+                                if let Some(req_symbol) = req_methods.get(method_label) {
+                                    subs.witnesses.insert(*req_symbol, *impl_symbol);
+                                    self.check_import(impl_symbol);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                tracing::trace!("witness subs: {:?}", subs.witnesses);
+                if subs.witnesses.is_empty() {
+                    break 'specialize None;
+                }
+
+                let name = Name::Resolved(witness, label.to_string());
+                let specialized_name = self.monomorphize_name(name, &subs);
+                tracing::trace!("specialized to: {specialized_name:?}");
+                Some(specialized_name)
+            };
+
+            let callee = specialized.unwrap_or_else(|| Name::Resolved(witness, label.to_string()));
+
             self.push_instr(Instruction::Call {
                 dest,
                 ty: ty.clone(),
-                callee: Value::Func(Name::Resolved(witness, label.to_string())),
+                callee: Value::Func(callee),
                 args: args.into(),
                 meta: vec![InstructionMeta::Source(call_expr.id)].into(),
             });
@@ -1771,6 +1869,11 @@ impl<'a> Lowerer<'a> {
             return;
         }
 
+        // Already imported, avoid infinite recursion
+        if self.functions.contains_key(symbol) {
+            return;
+        }
+
         if let Symbol::InstanceMethod(InstanceMethodId {
             module_id: module_id @ (ModuleId::Core | ModuleId::Builtin | ModuleId::External(..)),
             ..
@@ -1790,25 +1893,45 @@ impl<'a> Lowerer<'a> {
                 .get(symbol)
                 .unwrap_or_else(|| panic!("didn't get method for import: {symbol:?}"));
             self.functions.insert(*symbol, method_func.clone());
+
+            // Recursively import any functions this function calls
+            let callees: Vec<Symbol> = method_func
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .filter_map(|instr| {
+                    if let Instruction::Call {
+                        callee: Value::Func(Name::Resolved(sym, _)),
+                        ..
+                    } = instr
+                    {
+                        Some(*sym)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            for callee_sym in callees {
+                self.check_import(&callee_sym);
+            }
         }
     }
 
     fn monomorphize_name(&mut self, name: Name, instantiations: &Substitutions) -> Name {
-        if instantiations.ty.is_empty() {
+        if instantiations.ty.is_empty() && instantiations.witnesses.is_empty() {
             return name;
         }
 
         let new_symbol = self.symbols.next_synthesized(ModuleId::Current);
-        let new_name_str = format!(
-            "{}[{}]",
-            name,
-            instantiations
-                .ty
-                .values()
-                .map(|v| format!("{v}"))
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
+        let ty_parts: Vec<String> = instantiations.ty.values().map(|v| format!("{v}")).collect();
+        let witness_parts: Vec<String> = instantiations
+            .witnesses
+            .values()
+            .map(|v| format!("{v}"))
+            .collect();
+        let all_parts: Vec<String> = ty_parts.into_iter().chain(witness_parts).collect();
+        let new_name_str = format!("{}[{}]", name, all_parts.join(", "));
 
         let new_name = Name::Resolved(new_symbol.into(), new_name_str);
 
@@ -1934,10 +2057,9 @@ impl<'a> Lowerer<'a> {
             return Some(witness);
         }
 
-        if let Some(MemberWitness::Requirement(witness, ty)) =
+        if let Some(MemberWitness::Requirement(witness, _ty)) =
             self.types.catalog.member_witnesses.get(node_id)
         {
-            println!("we've got a ty: {ty:?}");
             return Some(witness);
         }
 
@@ -1948,10 +2070,9 @@ impl<'a> Lowerer<'a> {
                 return Some(witness);
             }
 
-            if let Some(MemberWitness::Requirement(witness, ty)) =
+            if let Some(MemberWitness::Requirement(witness, _ty)) =
                 module.types.catalog.member_witnesses.get(node_id)
             {
-                println!("we've got a ty: {ty:?}, moduleid: {:?}", module);
                 return Some(witness);
             }
         }

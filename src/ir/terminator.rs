@@ -46,7 +46,6 @@ impl FromStr for Terminator<IrTy> {
             }
             Some("jmp") => {
                 if let Some(to) = parts.next() {
-                    println!("to: {to:?}");
                     let to = BasicBlockId::from_str(to)?;
                     return Ok(Terminator::Jump { to });
                 }

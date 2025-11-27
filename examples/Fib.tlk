@@ -4,10 +4,4 @@ func fib(n) {
 	return fib(n - 2) + fib(n - 1)
 }
 
-let i = 0
-
-// Calculate some numbers
-loop i < 15 {
-	// print(fib(i))
-	i = i + 1
-}
+fib(7)

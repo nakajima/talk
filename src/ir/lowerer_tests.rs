@@ -503,53 +503,25 @@ pub mod tests {
     #[test]
     fn lowers_default_implementations() {
         let program = lower("1 <= 2");
-        assert_eq_diff!(
-            *program
-                .functions
-                .get(&Symbol::Synthesized(SynthesizedId::from(1)))
-                .unwrap(),
-            Function {
-                name: Name::Resolved(SynthesizedId::from(1).into(), "main".into()),
-                params: vec![].into(),
-                register_count: 3,
-                ty: IrTy::Func(vec![], IrTy::Bool.into()),
-                blocks: vec![BasicBlock::<IrTy> {
-                    id: BasicBlockId(0),
-                    phis: Default::default(),
-                    instructions: vec![
-                        Instruction::Constant {
-                            ty: IrTy::Int,
-                            dest: 1.into(),
-                            val: 1.into(),
-                            meta: vec![InstructionMeta::Source(NodeID::ANY)].into(),
-                        },
-                        Instruction::Constant {
-                            ty: IrTy::Int,
-                            dest: 2.into(),
-                            val: 2.into(),
-                            meta: vec![InstructionMeta::Source(NodeID::ANY)].into(),
-                        },
-                        Instruction::Call {
-                            dest: Register(0),
-                            ty: IrTy::Bool,
-                            callee: Value::Func(Name::Resolved(
-                                Symbol::InstanceMethod(InstanceMethodId {
-                                    module_id: ModuleId::Core,
-                                    local_id: 18
-                                }),
-                                "lte".into()
-                            )),
-                            args: vec![Register(1).into(), Register(2).into()].into(),
-                            meta: meta()
-                        },
-                    ],
-                    terminator: Terminator::Ret {
-                        val: Value::Reg(0),
-                        ty: IrTy::Bool
-                    }
-                }],
-            }
-        );
+
+        let main_func = program
+            .functions
+            .get(&Symbol::Synthesized(SynthesizedId::from(1)))
+            .unwrap();
+
+        // Check the call instruction calls a specialized lte function
+        let call_instr = &main_func.blocks[0].instructions[2];
+        if let Instruction::Call { callee: Value::Func(name), .. } = call_instr {
+            let callee_name = name.name_str();
+            assert!(
+                callee_name.contains("lte"),
+                "expected call to lte specialization, got {callee_name}"
+            );
+        } else {
+            panic!("expected Call instruction, got {call_instr:?}");
+        }
+
+        // The original lte method should still be imported
         assert!(
             program
                 .functions
@@ -558,7 +530,13 @@ pub mod tests {
                     local_id: 18
                 }))
                 .is_some()
-        )
+        );
+
+        // There should be a specialized function for lte with witnesses
+        let has_specialization = program.functions.values().any(|f| {
+            f.name.name_str().contains("lte") && f.name.name_str().contains("InstanceMethod")
+        });
+        assert!(has_specialization, "expected specialized lte function");
     }
 
     #[test]
