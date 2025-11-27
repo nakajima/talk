@@ -514,6 +514,62 @@ impl<'a> Lowerer<'a> {
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self, cond, conseq, alt))]
+    fn lower_if_expr(
+        &mut self,
+        cond: &Expr,
+        conseq: &Block,
+        alt: &Block,
+        bind: Bind,
+        instantiations: &Substitutions,
+    ) -> Result<(Value, Ty), IRError> {
+        let cond_ir = self.lower_expr(cond, Bind::Fresh, instantiations)?;
+
+        let conseq_block_id = self.new_basic_block();
+        let alt_block_id = self.new_basic_block();
+        let join_block_id = self.new_basic_block();
+
+        let conseq_val = self.in_basic_block(conseq_block_id, |lowerer| {
+            let (val, _) = lowerer.lower_block(conseq, Bind::Fresh, instantiations)?;
+            lowerer.push_terminator(Terminator::Jump { to: join_block_id });
+            Ok(val)
+        })?;
+
+        let alt_val = self.in_basic_block(alt_block_id, |lowerer| {
+            let (val, _) = lowerer.lower_block(alt, Bind::Fresh, instantiations)?;
+            lowerer.push_terminator(Terminator::Jump { to: join_block_id });
+            Ok(val)
+        })?;
+
+        self.push_terminator(Terminator::Branch {
+            cond: cond_ir.0,
+            conseq: conseq_block_id,
+            alt: alt_block_id,
+        });
+
+        let ret = self.ret(bind);
+        let ty = self.ty_from_id(&conseq.id)?;
+
+        self.set_current_block(join_block_id);
+        self.push_phi(Phi {
+            dest: ret,
+            ty: ty.clone(),
+            sources: vec![
+                PhiSource {
+                    from_id: conseq_block_id,
+                    value: conseq_val,
+                },
+                PhiSource {
+                    from_id: alt_block_id,
+                    value: alt_val,
+                },
+            ]
+            .into(),
+        });
+
+        Ok((ret.into(), ty))
+    }
+
+    #[instrument(level = tracing::Level::TRACE, skip(self, cond, conseq, alt))]
     fn lower_if_stmt(
         &mut self,
         cond: &Expr,
@@ -930,8 +986,9 @@ impl<'a> Lowerer<'a> {
 
             ExprKind::Variable(name) => self.lower_variable(name, expr, instantiations),
             ExprKind::Constructor(name) => self.lower_constructor(name, expr, bind, instantiations),
-            #[allow(clippy::todo)]
-            ExprKind::If(..) => todo!(),
+            ExprKind::If(cond, conseq, alt) => {
+                self.lower_if_expr(cond, conseq, alt, bind, instantiations)
+            }
             ExprKind::Match(box scrutinee, arms) => {
                 self.lower_match(scrutinee, arms, bind, instantiations)
             }

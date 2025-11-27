@@ -612,4 +612,22 @@ pub mod tests {
         assert_eq!(interpret("false && true"), Value::Bool(false));
         assert_eq!(interpret("false && false"), Value::Bool(false));
     }
+
+    #[test]
+    fn interprets_if_expr() {
+        assert_eq!(
+            interpret(
+                "
+        let a = if false {
+          1 + 2
+        } else {
+          3 + 4
+        }
+
+        a
+       "
+            ),
+            Value::Int(7)
+        );
+    }
 }

@@ -1,4 +1,3 @@
-// It's a dog
 struct Dog {
 	let age: Int
 	let count: Int
@@ -10,3 +9,4 @@ struct Dog {
 }
 
 let person = Dog(age: 123)
+person.age
