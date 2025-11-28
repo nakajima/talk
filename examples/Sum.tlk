@@ -1,3 +1,4 @@
 let a = if false { 1 + 2 } else { 3 + 4 }
+print(a)
 
 2 + 3 * 3

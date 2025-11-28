@@ -173,6 +173,8 @@ pub enum Instruction<T> {
         field: Label,
         meta: List<InstructionMeta>,
     },
+    #[doc = "_print $val"]
+    _Print { val: Value },
 }
 
 impl<T> Instruction<T> {
@@ -313,6 +315,7 @@ impl<T> Instruction<T> {
                 meta,
                 ty: map(ty),
             },
+            Instruction::_Print { val } => Instruction::_Print { val },
         }
     }
 }

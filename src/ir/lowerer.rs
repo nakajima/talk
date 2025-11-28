@@ -1503,6 +1503,15 @@ impl<'a> Lowerer<'a> {
             return self.lower_embedded_ir_call(call_expr.id, args, dest);
         }
 
+        if let ExprKind::Variable(name) = &callee.kind
+            && name.symbol().expect("name not resolved") == Symbol::PRINT
+        {
+            let arg =
+                self.lower_expr(&args[0].value, Bind::Assigned(dest), parent_instantiations)?;
+            self.push_instr(Instruction::_Print { val: arg.0 });
+            return Ok((Value::Void, Ty::Void));
+        }
+
         let (_callee_ty, mut instantiations) = self
             .specialized_ty(callee)
             .expect("did not get specialized ty for callee");

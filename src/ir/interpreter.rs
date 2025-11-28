@@ -377,6 +377,16 @@ impl Interpreter {
 
                 self.write_register(&dest, val);
             }
+            IR::Instr(Instruction::_Print { val }) => match self.val(val) {
+                Value::Int(val) => println!("{val}"),
+                Value::Float(val) => println!("{val}"),
+                Value::Bool(val) => println!("{val}"),
+                Value::Record(values) => println!("{values:?}"),
+                Value::Func(symbol) => println!("fn({symbol:?})"),
+                Value::Void => println!("void"),
+                Value::Ref(reference) => println!("{reference:?}"),
+                Value::Uninit => println!("UNINIT"),
+            },
         }
     }
 

@@ -5,8 +5,9 @@ struct Dog {
 	init(age: Int) {
 		self.age = age
 		self.count = 0
+		self
 	}
 }
 
 let person = Dog(age: 123)
-person.age
+print(person)
