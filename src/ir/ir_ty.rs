@@ -15,6 +15,8 @@ pub enum IrTy {
     Func(Vec<IrTy>, Box<IrTy>),
     // { 123, 4.56, true }
     Record(Vec<IrTy>),
+    RawPtr,
+    Byte,
     Void,
 }
 
@@ -75,6 +77,8 @@ impl std::fmt::Display for IrTy {
             IrTy::Int => write!(f, "int"),
             IrTy::Float => write!(f, "float"),
             IrTy::Bool => write!(f, "bool"),
+            IrTy::Byte => write!(f, "byte"),
+            IrTy::RawPtr => write!(f, "rawptr"),
             IrTy::Func(items, ir_ty) => write!(
                 f,
                 "({}) -> {}",
@@ -110,6 +114,8 @@ impl From<IrTy> for Ty {
             IrTy::Int => Ty::Int,
             IrTy::Float => Ty::Float,
             IrTy::Bool => Ty::Bool,
+            IrTy::RawPtr => Ty::RawPtr,
+            IrTy::Byte => Ty::Byte,
             IrTy::Func(params, box ret) => params
                 .into_iter()
                 .collect::<Vec<_>>()

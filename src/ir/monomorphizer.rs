@@ -127,7 +127,14 @@ impl<'a> Monomorphizer<'a> {
         substitutions: &Substitutions,
     ) -> Instruction<IrTy> {
         // Handle Call instructions specially to substitute MethodRequirement callees
-        if let Instruction::Call { dest, ty, callee, args, meta } = instruction {
+        if let Instruction::Call {
+            dest,
+            ty,
+            callee,
+            args,
+            meta,
+        } = instruction
+        {
             let new_callee = match &callee {
                 Value::Func(Name::Resolved(sym @ Symbol::MethodRequirement(_), name)) => {
                     if let Some(impl_sym) = substitutions.witnesses.get(sym) {
@@ -160,6 +167,8 @@ impl<'a> Monomorphizer<'a> {
                 Symbol::Float => IrTy::Float,
                 Symbol::Bool => IrTy::Bool,
                 Symbol::Void => IrTy::Void,
+                Symbol::RawPtr => IrTy::RawPtr,
+                Symbol::Byte => IrTy::Byte,
                 _ => unreachable!(),
             },
             Ty::Param(param) => {

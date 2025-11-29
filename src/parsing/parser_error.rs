@@ -14,6 +14,7 @@ pub enum ParserError {
     LetNotAllowed(BlockContext),
     InitNotAllowed(BlockContext),
     IncompleteFuncSignature(String),
+    ConversionError(String),
 }
 
 impl Display for ParserError {
@@ -47,6 +48,7 @@ impl Display for ParserError {
             Self::LetNotAllowed(context) => write!(f, "Cannot use `let` in {context:?} body"),
             Self::InitNotAllowed(_context) => write!(f, "Cannot use `init` in this context"),
             Self::IncompleteFuncSignature(msg) => write!(f, "{}", msg),
+            Self::ConversionError(msg) => write!(f, "{}", msg),
         }
     }
 }

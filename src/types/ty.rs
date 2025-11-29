@@ -1,7 +1,6 @@
 use crate::{
-    compiling::module::ModuleId,
     name::Name,
-    name_resolution::symbol::{StructId, Symbol},
+    name_resolution::symbol::Symbol,
     types::{
         infer_ty::{InferTy, TypeParamId},
         row::Row,
@@ -50,6 +49,7 @@ impl std::fmt::Display for Ty {
                 Symbol::Float => write!(f, "Float"),
                 Symbol::Bool => write!(f, "Bool"),
                 Symbol::Void => write!(f, "Void"),
+                Symbol::RawPtr => write!(f, "RawPtr"),
                 _ => write!(f, "{symbol}"),
             },
             Ty::Param(type_param_id) => write!(f, "{:?}", type_param_id),
@@ -103,13 +103,26 @@ impl Ty {
     pub const Float: Ty = Ty::Primitive(Symbol::Float);
     pub const Bool: Ty = Ty::Primitive(Symbol::Bool);
     pub const Void: Ty = Ty::Primitive(Symbol::Void);
+    pub const Byte: Ty = Ty::Primitive(Symbol::Byte);
+    pub const RawPtr: Ty = Ty::Primitive(Symbol::RawPtr);
     pub fn String() -> Ty {
         Ty::Nominal {
-            symbol: Symbol::Struct(StructId {
-                module_id: ModuleId::Core,
-                local_id: 2,
+            symbol: Symbol::String,
+            row: Box::new(Row::Extend {
+                row: Row::Extend {
+                    row: Row::Extend {
+                        row: Row::Empty(TypeDefKind::Struct).into(),
+                        label: "length".into(),
+                        ty: Ty::Int,
+                    }
+                    .into(),
+                    label: "capacity".into(),
+                    ty: Ty::Int,
+                }
+                .into(),
+                label: "base".into(),
+                ty: Ty::RawPtr,
             }),
-            row: Box::new(Row::Empty(TypeDefKind::Struct)),
         }
     }
     pub fn Array(t: InferTy) -> Ty {

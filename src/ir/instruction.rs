@@ -3,6 +3,7 @@ use std::str::FromStr;
 use crate::{
     ir::{ir_error::IRError, ir_ty::IrTy, list::List, register::Register, value::Value},
     label::Label,
+    name_resolution::symbol::Symbol,
     node_id::{FileID, NodeID},
     types::ty::Ty,
 };
@@ -149,6 +150,15 @@ pub enum Instruction<T> {
         args: List<Value>,
         meta: List<InstructionMeta>,
     },
+    #[doc = "$dest = struct $sym $ty $record $meta"]
+    Struct {
+        dest: Register,
+        sym: Symbol,
+        ty: T,
+        record: List<Value>,
+        meta: List<InstructionMeta>,
+    },
+
     #[doc = "$dest = record $ty $record $meta"]
     Record {
         dest: Register,
@@ -175,11 +185,28 @@ pub enum Instruction<T> {
     },
     #[doc = "_print $val"]
     _Print { val: Value },
+    #[doc = "$dest = alloc $ty $count"]
+    Alloc { dest: Register, ty: T, count: Value },
+    #[doc = "free $addr"]
+    Free { addr: Value },
+    #[doc = "$dest = load $ty $addr"]
+    Load { dest: Register, ty: T, addr: Value },
 }
 
 impl<T> Instruction<T> {
     pub fn map_type<U>(self, mut map: impl FnMut(T) -> U) -> Instruction<U> {
         match self {
+            Instruction::Alloc { dest, ty, count } => Instruction::Alloc {
+                dest,
+                ty: map(ty),
+                count,
+            },
+            Instruction::Free { addr } => Instruction::Free { addr },
+            Instruction::Load { dest, ty, addr } => Instruction::Load {
+                dest,
+                ty: map(ty),
+                addr,
+            },
             Instruction::Constant {
                 dest,
                 val,
@@ -201,6 +228,19 @@ impl<T> Instruction<T> {
                 ty: map(ty),
                 record,
                 meta,
+            },
+            Instruction::Struct {
+                dest,
+                ty,
+                record,
+                meta,
+                sym,
+            } => Instruction::Struct {
+                dest,
+                ty: map(ty),
+                record,
+                meta,
+                sym,
             },
             Instruction::GetField {
                 dest,

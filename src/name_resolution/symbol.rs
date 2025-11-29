@@ -1,5 +1,5 @@
-use crate::{compiling::module::ModuleId, id_generator::IDGenerator};
-use std::fmt::Display;
+use crate::{compiling::module::ModuleId, id_generator::IDGenerator, ir::ir_error::IRError};
+use std::{fmt::Display, str::FromStr};
 
 // Macro for cross-module IDs (with ModuleId)
 macro_rules! impl_module_symbol_id {
@@ -149,6 +149,8 @@ impl std::fmt::Debug for Symbol {
             Symbol::Float => write!(f, "Float"),
             Symbol::Bool => write!(f, "Bool"),
             Symbol::Void => write!(f, "Void"),
+            Symbol::RawPtr => write!(f, "RawPtr"),
+            Symbol::Byte => write!(f, "Byte"),
             Symbol::Struct(type_id) => write!(f, "@Struct({type_id:?})"),
             Symbol::Enum(type_id) => write!(f, "@Enum({type_id:?})"),
             Symbol::TypeAlias(type_id) => write!(f, "@TypeAlias({type_id:?})"),
@@ -196,6 +198,19 @@ impl Symbol {
     pub const PRINT: Symbol = Symbol::Builtin(BuiltinId {
         module_id: ModuleId::Builtin,
         local_id: 6,
+    });
+    pub const RawPtr: Symbol = Symbol::Builtin(BuiltinId {
+        module_id: ModuleId::Builtin,
+        local_id: 7,
+    });
+    pub const Byte: Symbol = Symbol::Builtin(BuiltinId {
+        module_id: ModuleId::Builtin,
+        local_id: 8,
+    });
+
+    pub const String: Symbol = Symbol::Struct(StructId {
+        module_id: ModuleId::Core,
+        local_id: 2,
     });
 
     pub fn module_id(&self) -> Option<ModuleId> {
@@ -339,6 +354,13 @@ impl Display for Symbol {
             Symbol::AssociatedType(associated_type_id) => write!(f, "{}", associated_type_id),
             Symbol::MethodRequirement(id) => write!(f, "{}", id),
         }
+    }
+}
+
+impl FromStr for Symbol {
+    type Err = IRError;
+    fn from_str(_s: &str) -> Result<Self, Self::Err> {
+        Err(IRError::CouldNotParse("todo".into()))
     }
 }
 

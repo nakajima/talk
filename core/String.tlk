@@ -1,4 +1,8 @@
-struct String {}
+struct String {
+	let base: RawPtr
+	let length: Int
+	let capacity: Int
+}
 
 extend String: Add {
 	func add(rhs: String) -> String { self }

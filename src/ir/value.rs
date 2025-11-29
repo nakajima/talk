@@ -12,6 +12,7 @@ pub enum Value {
     Float(f64),
     Func(Name),
     Bool(bool),
+    RawPtr(usize),
     Void,
     Uninit,
     Poison,
@@ -86,6 +87,7 @@ impl std::fmt::Display for Value {
             Value::Void => write!(f, "void"),
             Value::Uninit => write!(f, "uninit"),
             Value::Poison => write!(f, "poison"),
+            Value::RawPtr(val) => write!(f, "rawptr({val})"),
         }
     }
 }

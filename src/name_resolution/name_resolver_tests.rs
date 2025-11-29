@@ -205,8 +205,12 @@ pub mod tests {
                     generics: vec![],
                     params: vec![param!(ParamLocalId(1), "x"), param!(ParamLocalId(2), "y"),],
                     body: any_block!(vec![
-                        any_stmt!(StmtKind::Expr(variable!(ParamLocalId(1), "x"))).into(),
-                        any_stmt!(StmtKind::Expr(variable!(ParamLocalId(2), "y"))).into(),
+                        any_stmt!(StmtKind::Expr(variable!(ParamLocalId(1), "x")))
+                            .try_into()
+                            .unwrap(),
+                        any_stmt!(StmtKind::Expr(variable!(ParamLocalId(2), "y")))
+                            .try_into()
+                            .unwrap(),
                     ]),
                     ret: None,
                     attributes: vec![],

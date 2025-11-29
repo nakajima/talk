@@ -93,14 +93,6 @@ impl UnifyValue for Level {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-pub enum Primitive {
-    Int(Symbol),
-    Float(Symbol),
-    Bool(Symbol),
-    Void(Symbol),
-}
-
 #[derive(PartialEq, Eq, Clone, Hash)]
 pub enum InferTy {
     Primitive(Symbol),
@@ -239,14 +231,27 @@ impl InferTy {
     pub const Int: InferTy = InferTy::Primitive(Symbol::Int);
     pub const Float: InferTy = InferTy::Primitive(Symbol::Float);
     pub const Bool: InferTy = InferTy::Primitive(Symbol::Bool);
+    pub const RawPtr: InferTy = InferTy::Primitive(Symbol::RawPtr);
     pub const Void: InferTy = InferTy::Primitive(Symbol::Void);
+    pub const Byte: InferTy = InferTy::Primitive(Symbol::Byte);
     pub fn String() -> InferTy {
         InferTy::Nominal {
-            symbol: Symbol::Struct(StructId {
-                module_id: ModuleId::Core,
-                local_id: 2,
+            symbol: Symbol::String,
+            row: Box::new(InferRow::Extend {
+                row: InferRow::Extend {
+                    row: InferRow::Extend {
+                        row: InferRow::Empty(TypeDefKind::Struct).into(),
+                        label: "length".into(),
+                        ty: InferTy::Int,
+                    }
+                    .into(),
+                    label: "capacity".into(),
+                    ty: InferTy::Int,
+                }
+                .into(),
+                label: "base".into(),
+                ty: InferTy::RawPtr,
             }),
-            row: Box::new(InferRow::Empty(TypeDefKind::Struct)),
         }
     }
     pub fn Array(_t: InferTy) -> InferTy {

@@ -511,7 +511,11 @@ pub mod tests {
 
         // Check the call instruction calls a specialized lte function
         let call_instr = &main_func.blocks[0].instructions[2];
-        if let Instruction::Call { callee: Value::Func(name), .. } = call_instr {
+        if let Instruction::Call {
+            callee: Value::Func(name),
+            ..
+        } = call_instr
+        {
             let callee_name = name.name_str();
             assert!(
                 callee_name.contains("lte"),
@@ -1076,5 +1080,39 @@ pub mod tests {
                 .unwrap()
             ]
         )
+    }
+
+    #[test]
+    fn lowers_string_literal() {
+        let program = lower("\"hello\"");
+        assert_eq!(
+            *program
+                .functions
+                .get(&Symbol::Synthesized(SynthesizedId::from(1)))
+                .unwrap()
+                .blocks,
+            vec![BasicBlock {
+                id: BasicBlockId(0),
+                phis: Default::default(),
+                instructions: vec![
+                    Instruction::Alloc {
+                        dest: 1.into(),
+                        ty: IrTy::Byte,
+                        count: Value::Int(5)
+                    },
+                    Instruction::Struct {
+                        dest: 0.into(),
+                        sym: Symbol::String,
+                        ty: IrTy::Record(vec![IrTy::RawPtr, IrTy::Int, IrTy::Int]),
+                        record: vec![Value::Reg(1), Value::Int(5), Value::Int(5)].into(),
+                        meta: meta()
+                    }
+                ],
+                terminator: Terminator::Ret {
+                    val: Register(0).into(),
+                    ty: IrTy::Record(vec![IrTy::RawPtr, IrTy::Int, IrTy::Int]),
+                }
+            }]
+        );
     }
 }

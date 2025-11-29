@@ -54,6 +54,7 @@ use crate::{
     },
 };
 use indexmap::IndexMap;
+use itertools::Itertools;
 use rustc_hash::FxHashMap;
 use tracing::instrument;
 
@@ -936,8 +937,9 @@ impl<'a> Lowerer<'a> {
                     Ok((Value::Bool(false), Ty::Bool))
                 }
             }
-            #[allow(clippy::todo)]
-            ExprKind::LiteralString(_) => todo!(),
+            ExprKind::LiteralString(string) => {
+                self.lower_string(expr, string, bind, instantiations)
+            }
             ExprKind::Unary(..) => Ok((Value::Void, Ty::Void)), // Converted to calls earlier
             ExprKind::Binary(box lhs, op, box rhs) => {
                 self.lower_binary(expr, lhs, op.clone(), rhs, bind, instantiations)
@@ -1013,6 +1015,40 @@ impl<'a> Lowerer<'a> {
         }
 
         Ok((value, ty))
+    }
+
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
+    fn lower_string(
+        &mut self,
+        expr: &Expr,
+        string: &String,
+        bind: Bind,
+        instantiations: &Substitutions,
+    ) -> Result<(Value, Ty), IRError> {
+        let ret = self.ret(bind);
+        let bytes = string.bytes().collect_vec();
+
+        let base_reg = self.next_register();
+        self.push_instr(Instruction::Alloc {
+            dest: base_reg,
+            ty: Ty::Byte,
+            count: Value::Int(bytes.len() as i64),
+        });
+
+        self.push_instr(Instruction::Struct {
+            dest: ret,
+            sym: Symbol::String,
+            ty: Ty::String(),
+            record: vec![
+                base_reg.into(),
+                Value::Int(bytes.len() as i64),
+                Value::Int(bytes.len() as i64),
+            ]
+            .into(),
+            meta: vec![InstructionMeta::Source(expr.id)].into(),
+        });
+
+        Ok((ret.into(), Ty::String()))
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]

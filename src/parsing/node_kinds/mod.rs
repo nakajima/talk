@@ -24,13 +24,19 @@ macro_rules! impl_into_node {
     ($variant:ident, $ty:ty) => {
         impl $crate::node::NodeType for $ty {}
 
-        impl From<$crate::parsing::node::Node> for $ty {
-            fn from(node: $crate::parsing::node::Node) -> $ty {
+        impl TryFrom<$crate::parsing::node::Node> for $ty {
+            type Error = $crate::parsing::parser_error::ParserError;
+
+            fn try_from(node: $crate::parsing::node::Node) -> Result<$ty, Self::Error> {
                 let $crate::parsing::node::Node::$variant(val) = node else {
-                    panic!("Unable to convert {node:?} to {}", stringify!($ty));
+                    return Err(Self::Error::ConversionError(format!(
+                        "could not convert node to {:?}: {:?}",
+                        stringify!($ty),
+                        node
+                    )));
                 };
 
-                val
+                Ok(val)
             }
         }
 

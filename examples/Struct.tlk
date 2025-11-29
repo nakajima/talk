@@ -10,4 +10,4 @@ struct Dog {
 }
 
 let person = Dog(age: 123)
-print(person)
+print(person.age)

@@ -27,10 +27,12 @@ pub enum Value {
     Int(i64),
     Float(f64),
     Bool(bool),
-    Record(Vec<Value>),
+    Record(Option<Symbol>, Vec<Value>),
     Func(Symbol),
     Void,
     Ref(Reference),
+    RawPtr(usize),
+    Buffer(Vec<u8>),
     Uninit,
 }
 
@@ -164,11 +166,18 @@ impl Display for IR {
     }
 }
 
+#[derive(Default)]
+pub struct Heap {
+    mem: Vec<u8>,
+    next_addr: usize,
+}
+
 pub struct Interpreter {
     program: Program,
     frames: Vec<Frame>,
     current_func: Option<Function<IrTy>>,
     main_result: Option<Value>,
+    heap: Heap,
 }
 
 #[allow(clippy::unwrap_used)]
@@ -185,6 +194,7 @@ impl Interpreter {
             frames: Default::default(),
             current_func: None,
             main_result: None,
+            heap: Default::default(),
         }
     }
 
@@ -313,9 +323,15 @@ impl Interpreter {
                 let args = args.items.iter().map(|v| self.val(v.clone())).collect();
                 self.call(func, args, dest);
             }
+            IR::Instr(Instruction::Struct {
+                dest, record, sym, ..
+            }) => {
+                let fields = record.items.iter().map(|v| self.val(v.clone())).collect();
+                self.write_register(&dest, Value::Record(Some(sym), fields));
+            }
             IR::Instr(Instruction::Record { dest, record, .. }) => {
                 let fields = record.items.iter().map(|v| self.val(v.clone())).collect();
-                self.write_register(&dest, Value::Record(fields));
+                self.write_register(&dest, Value::Record(None, fields));
             }
             IR::Instr(Instruction::GetField {
                 dest,
@@ -327,7 +343,7 @@ impl Interpreter {
                     panic!("did not get positional index for record field: {field:?}");
                 };
 
-                let Value::Record(fields) = self.read_register(&record) else {
+                let Value::Record(_, fields) = self.read_register(&record) else {
                     panic!("did not get record from {record:?}");
                 };
 
@@ -344,12 +360,12 @@ impl Interpreter {
                     panic!("did not get positional index for record field");
                 };
 
-                let Value::Record(mut fields) = self.read_register(&record) else {
+                let Value::Record(sym, mut fields) = self.read_register(&record) else {
                     panic!("did not get record from {record:?}");
                 };
 
                 fields[idx] = self.val(val);
-                self.write_register(&dest, Value::Record(fields));
+                self.write_register(&dest, Value::Record(sym, fields));
             }
             IR::Instr(Instruction::Ref { dest, val, .. }) => {
                 let val = match val {
@@ -381,12 +397,20 @@ impl Interpreter {
                 Value::Int(val) => println!("{val}"),
                 Value::Float(val) => println!("{val}"),
                 Value::Bool(val) => println!("{val}"),
-                Value::Record(values) => println!("{values:?}"),
+                Value::Record(sym, values) => {
+                    if sym == Some(Symbol::String) {}
+
+                    println!("{sym:?}{values:?}")
+                }
                 Value::Func(symbol) => println!("fn({symbol:?})"),
                 Value::Void => println!("void"),
+                Value::RawPtr(val) => println!("rawptr({val})"),
                 Value::Ref(reference) => println!("{reference:?}"),
                 Value::Uninit => println!("UNINIT"),
+                Value::Buffer(bytes) => println!("buf({bytes:?})"),
             },
+            IR::Instr(Instruction::Alloc { dest, ty, count }) => {}
+            IR::Instr(Instruction::Free { .. } | Instruction::Load { .. }) => unimplemented!(),
         }
     }
 
@@ -454,6 +478,7 @@ impl Interpreter {
             super::value::Value::Void => Value::Void,
             super::value::Value::Bool(v) => Value::Bool(v),
             super::value::Value::Uninit => Value::Uninit,
+            super::value::Value::RawPtr(v) => Value::RawPtr(v),
             super::value::Value::Poison => panic!("unreachable reached"),
         }
     }

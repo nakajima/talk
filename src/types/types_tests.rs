@@ -163,6 +163,12 @@ pub mod tests {
     }
 
     #[test]
+    fn types_alloc() {
+        let (ast, types) = typecheck("let x: RawPtr = __IR(\"$? = alloc int 1\"); x");
+        assert_eq!(ty(1, &ast, &types), Ty::RawPtr);
+    }
+
+    #[test]
     fn types_array_properties() {
         let (ast, types) = typecheck_core("[1,2,3].count");
         assert_eq!(ty(0, &ast, &types), Ty::Int);

@@ -1492,7 +1492,7 @@ impl<'a> Parser<'a> {
                 continue;
             }
 
-            body.push(self.decl(context, false)?.into());
+            body.push(self.decl(context, false)?.try_into()?);
 
             self.skip_semicolons_and_newlines();
         }
@@ -1548,7 +1548,7 @@ impl<'a> Parser<'a> {
                 self.consume(TokenKind::DotDotDot)?;
                 let expr = self.expr_with_precedence(Precedence::Assignment)?;
 
-                spread = Some(Box::new(expr.into()));
+                spread = Some(Box::new(expr.try_into()?));
 
                 // Spread must be the last thing in the record
                 self.consume(TokenKind::RightBrace)?;
@@ -1558,13 +1558,15 @@ impl<'a> Parser<'a> {
                 let field_tok = self.push_source_location();
                 let (label, label_span) = self.identifier()?;
                 self.consume(TokenKind::Colon)?;
-                let value = self.expr_with_precedence(Precedence::Assignment)?;
+                let value = self
+                    .expr_with_precedence(Precedence::Assignment)?
+                    .try_into()?;
                 fields.push(self.save_meta(field_tok, |id, span| RecordField {
                     id,
                     span,
                     label: Name::Raw(label),
                     label_span,
-                    value: value.into(),
+                    value,
                 })?);
             }
 
