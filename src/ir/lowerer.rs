@@ -151,6 +151,7 @@ pub struct Lowerer<'a> {
     symbols: &'a mut Symbols,
     bindings: FxHashMap<Symbol, Register>,
     pub(super) specializations: IndexMap<Symbol, Vec<Specialization>>,
+    statics: Vec<Value>,
 }
 
 #[allow(clippy::panic)]
@@ -170,6 +171,7 @@ impl<'a> Lowerer<'a> {
             bindings: Default::default(),
             symbols,
             specializations: Default::default(),
+            statics: Default::default(),
             config,
         }
     }
@@ -267,11 +269,13 @@ impl<'a> Lowerer<'a> {
             _ = std::mem::replace(&mut self.asts[i].roots, roots);
         }
 
+        let statics = std::mem::take(&mut self.statics);
         let mut monomorphizer = Monomorphizer::new(self);
 
         Ok(Program {
             functions: monomorphizer.monomorphize(),
             polyfunctions: monomorphizer.functions,
+            statics,
         })
     }
 
@@ -1027,22 +1031,19 @@ impl<'a> Lowerer<'a> {
     ) -> Result<(Value, Ty), IRError> {
         let ret = self.ret(bind);
         let bytes = string.bytes().collect_vec();
+        let bytes_len = bytes.len() as i64;
+        let ptr = self.statics.len();
 
-        let base_reg = self.next_register();
-        self.push_instr(Instruction::Alloc {
-            dest: base_reg,
-            ty: Ty::Byte,
-            count: Value::Int(bytes.len() as i64),
-        });
+        self.statics.push(Value::Buffer(bytes));
 
         self.push_instr(Instruction::Struct {
             dest: ret,
             sym: Symbol::String,
             ty: Ty::String(),
             record: vec![
-                base_reg.into(),
-                Value::Int(bytes.len() as i64),
-                Value::Int(bytes.len() as i64),
+                Value::RawPtr(ptr),
+                Value::Int(bytes_len),
+                Value::Int(bytes_len),
             ]
             .into(),
             meta: vec![InstructionMeta::Source(expr.id)].into(),

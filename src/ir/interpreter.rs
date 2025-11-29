@@ -168,7 +168,7 @@ impl Display for IR {
 
 #[derive(Default)]
 pub struct Heap {
-    mem: Vec<u8>,
+    mem: Vec<Value>,
     next_addr: usize,
 }
 
@@ -480,6 +480,7 @@ impl Interpreter {
             super::value::Value::Uninit => Value::Uninit,
             super::value::Value::RawPtr(v) => Value::RawPtr(v),
             super::value::Value::Poison => panic!("unreachable reached"),
+            super::value::Value::Buffer(v) => Value::Buffer(v),
         }
     }
 }

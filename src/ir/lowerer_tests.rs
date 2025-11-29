@@ -2,6 +2,8 @@
 pub mod tests {
     use std::str::FromStr;
 
+    use itertools::Itertools;
+
     use crate::{
         assert_eq_diff,
         compiling::{
@@ -1094,25 +1096,22 @@ pub mod tests {
             vec![BasicBlock {
                 id: BasicBlockId(0),
                 phis: Default::default(),
-                instructions: vec![
-                    Instruction::Alloc {
-                        dest: 1.into(),
-                        ty: IrTy::Byte,
-                        count: Value::Int(5)
-                    },
-                    Instruction::Struct {
-                        dest: 0.into(),
-                        sym: Symbol::String,
-                        ty: IrTy::Record(vec![IrTy::RawPtr, IrTy::Int, IrTy::Int]),
-                        record: vec![Value::Reg(1), Value::Int(5), Value::Int(5)].into(),
-                        meta: meta()
-                    }
-                ],
+                instructions: vec![Instruction::Struct {
+                    dest: 0.into(),
+                    sym: Symbol::String,
+                    ty: IrTy::Record(vec![IrTy::RawPtr, IrTy::Int, IrTy::Int]),
+                    record: vec![Value::RawPtr(0), Value::Int(5), Value::Int(5)].into(),
+                    meta: meta()
+                }],
                 terminator: Terminator::Ret {
                     val: Register(0).into(),
                     ty: IrTy::Record(vec![IrTy::RawPtr, IrTy::Int, IrTy::Int]),
                 }
             }]
         );
+        assert_eq!(
+            program.statics,
+            vec![Value::Buffer("hello".bytes().collect_vec())]
+        )
     }
 }

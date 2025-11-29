@@ -13,6 +13,7 @@ pub enum Value {
     Func(Name),
     Bool(bool),
     RawPtr(usize),
+    Buffer(Vec<u8>),
     Void,
     Uninit,
     Poison,
@@ -80,6 +81,7 @@ impl std::fmt::Display for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Value::Reg(reg) => write!(f, "%{reg}"),
+            Value::Buffer(v) => write!(f, "[{v:?}]"),
             Value::Int(i) => write!(f, "{i}"),
             Value::Float(i) => write!(f, "{i}"),
             Value::Func(name) => write!(f, "@{}", name.name_str()),
