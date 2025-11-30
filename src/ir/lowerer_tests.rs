@@ -24,7 +24,9 @@ pub mod tests {
         },
         label::Label,
         name::Name,
-        name_resolution::symbol::{GlobalId, InstanceMethodId, Symbol, SynthesizedId},
+        name_resolution::symbol::{
+            EnumId, GlobalId, InstanceMethodId, StructId, Symbol, SynthesizedId,
+        },
         node_id::NodeID,
     };
 
@@ -182,10 +184,7 @@ pub mod tests {
                         Instruction::Ref {
                             dest: 0.into(),
                             ty: IrTy::Func(vec![IrTy::Int], IrTy::Int.into()),
-                            val: Value::Func(Name::Resolved(
-                                GlobalId::from(1).into(),
-                                "foo".into()
-                            ))
+                            val: Value::Func(GlobalId::from(1).into())
                         },
                         Instruction::Constant {
                             ty: IrTy::Int,
@@ -196,10 +195,7 @@ pub mod tests {
                         Instruction::Call {
                             dest: 1.into(),
                             ty: IrTy::Int,
-                            callee: Value::Func(Name::Resolved(
-                                GlobalId::from(1).into(),
-                                "foo".into()
-                            )),
+                            callee: Value::Func(GlobalId::from(1).into(),),
                             args: vec![Value::Reg(2)].into(),
                             meta: meta()
                         }
@@ -265,17 +261,20 @@ pub mod tests {
                         },
                         Instruction::Record {
                             dest: 2.into(),
-                            ty: IrTy::Record(vec![IrTy::Int]),
+                            ty: IrTy::Record(
+                                Some(Symbol::Struct(StructId::from(1))),
+                                vec![IrTy::Int]
+                            ),
                             record: vec![Value::Uninit].into(),
                             meta: meta()
                         },
                         Instruction::Call {
                             dest: 0.into(),
-                            ty: IrTy::Record(vec![IrTy::Int]),
-                            callee: Value::Func(Name::Resolved(
-                                Symbol::from(SynthesizedId::from(1)),
-                                "@Foo:Struct(_:1)_init".into(),
-                            )),
+                            ty: IrTy::Record(
+                                Some(Symbol::Struct(StructId::from(1))),
+                                vec![IrTy::Int]
+                            ),
+                            callee: Value::Func(Symbol::from(SynthesizedId::from(1))),
                             args: vec![Register(2).into(), Register(1).into()].into(),
                             meta: meta(),
                         },
@@ -327,17 +326,20 @@ pub mod tests {
                         },
                         Instruction::Record {
                             dest: 2.into(),
-                            ty: IrTy::Record(vec![IrTy::Int]),
+                            ty: IrTy::Record(
+                                Some(Symbol::Struct(StructId::from(1))),
+                                vec![IrTy::Int]
+                            ),
                             record: vec![Value::Uninit].into(),
                             meta: meta()
                         },
                         Instruction::Call {
                             dest: 0.into(),
-                            ty: IrTy::Record(vec![IrTy::Int]),
-                            callee: Value::Func(Name::Resolved(
-                                Symbol::from(SynthesizedId::from(4)),
-                                "@@Foo:Struct(_:1)_init:Synthesized(_:1)[Int]".into()
-                            )),
+                            ty: IrTy::Record(
+                                Some(Symbol::Struct(StructId::from(1))),
+                                vec![IrTy::Int]
+                            ),
+                            callee: Value::Func(Symbol::from(SynthesizedId::from(4))),
                             args: vec![Register(2).into(), Register(1).into()].into(),
                             meta: meta(),
                         },
@@ -370,19 +372,22 @@ pub mod tests {
                 name: Name::Resolved(SynthesizedId::from(1).into(), "main".into()),
                 params: vec![].into(),
                 register_count: 1,
-                ty: IrTy::Func(vec![], IrTy::Record(vec![IrTy::Int]).into()),
+                ty: IrTy::Func(
+                    vec![],
+                    IrTy::Record(Some(Symbol::Enum(EnumId::from(1))), vec![IrTy::Int]).into()
+                ),
                 blocks: vec![BasicBlock::<IrTy> {
                     id: BasicBlockId(0),
                     phis: Default::default(),
                     instructions: vec![Instruction::Record {
                         dest: 0.into(),
-                        ty: IrTy::Record(vec![IrTy::Int]),
+                        ty: IrTy::Record(Some(Symbol::Enum(EnumId::from(1))), vec![IrTy::Int]),
                         record: vec![Value::Int(1)].into(),
                         meta: meta()
                     }],
                     terminator: Terminator::Ret {
                         val: Value::Reg(0),
-                        ty: IrTy::Record(vec![IrTy::Int]),
+                        ty: IrTy::Record(Some(Symbol::Enum(EnumId::from(1))), vec![IrTy::Int]),
                     }
                 }],
             }
@@ -407,7 +412,11 @@ pub mod tests {
                 register_count: 3,
                 ty: IrTy::Func(
                     vec![],
-                    IrTy::Record(vec![IrTy::Int, IrTy::Float, IrTy::Int]).into()
+                    IrTy::Record(
+                        Some(Symbol::Enum(EnumId::from(1))),
+                        vec![IrTy::Int, IrTy::Float, IrTy::Int]
+                    )
+                    .into()
                 ),
                 blocks: vec![BasicBlock::<IrTy> {
                     id: BasicBlockId(0),
@@ -427,14 +436,20 @@ pub mod tests {
                         },
                         Instruction::Record {
                             dest: 2.into(),
-                            ty: IrTy::Record(vec![IrTy::Int, IrTy::Float, IrTy::Int]),
+                            ty: IrTy::Record(
+                                Some(Symbol::Enum(EnumId::from(1))),
+                                vec![IrTy::Int, IrTy::Float, IrTy::Int]
+                            ),
                             record: vec![Value::Int(1), Value::Reg(0), Value::Reg(1)].into(),
                             meta: meta()
                         }
                     ],
                     terminator: Terminator::Ret {
                         val: Value::Reg(2),
-                        ty: IrTy::Record(vec![IrTy::Int, IrTy::Float, IrTy::Int]),
+                        ty: IrTy::Record(
+                            Some(Symbol::Enum(EnumId::from(1))),
+                            vec![IrTy::Int, IrTy::Float, IrTy::Int]
+                        ),
                     }
                 }],
             }
@@ -473,13 +488,10 @@ pub mod tests {
                         Instruction::Call {
                             dest: Register(0),
                             ty: IrTy::Int,
-                            callee: Value::Func(Name::Resolved(
-                                Symbol::InstanceMethod(InstanceMethodId {
-                                    module_id: ModuleId::Core,
-                                    local_id: 3
-                                }),
-                                "add".into()
-                            )),
+                            callee: Value::Func(Symbol::InstanceMethod(InstanceMethodId {
+                                module_id: ModuleId::Core,
+                                local_id: 3
+                            })),
                             args: vec![Register(1).into(), Register(2).into()].into(),
                             meta: meta()
                         },
@@ -510,22 +522,6 @@ pub mod tests {
             .functions
             .get(&Symbol::Synthesized(SynthesizedId::from(1)))
             .unwrap();
-
-        // Check the call instruction calls a specialized lte function
-        let call_instr = &main_func.blocks[0].instructions[2];
-        if let Instruction::Call {
-            callee: Value::Func(name),
-            ..
-        } = call_instr
-        {
-            let callee_name = name.name_str();
-            assert!(
-                callee_name.contains("lte"),
-                "expected call to lte specialization, got {callee_name}"
-            );
-        } else {
-            panic!("expected Call instruction, got {call_instr:?}");
-        }
 
         // The original lte method should still be imported
         assert!(
@@ -583,27 +579,27 @@ pub mod tests {
                         },
                         Instruction::Record {
                             dest: 3.into(),
-                            ty: IrTy::Record(vec![IrTy::Int]),
+                            ty: IrTy::Record(
+                                Some(Symbol::Struct(StructId::from(1))),
+                                vec![IrTy::Int]
+                            ),
                             record: vec![Value::Uninit].into(),
                             meta: meta()
                         },
                         Instruction::Call {
                             dest: 1.into(),
-                            ty: IrTy::Record(vec![IrTy::Int]),
-                            callee: Value::Func(Name::Resolved(
-                                Symbol::from(SynthesizedId::from(1)),
-                                "@Foo:Struct(_:1)_init".into()
-                            )),
+                            ty: IrTy::Record(
+                                Some(Symbol::Struct(StructId::from(1))),
+                                vec![IrTy::Int]
+                            ),
+                            callee: Value::Func(Symbol::from(SynthesizedId::from(1))),
                             args: vec![Register(3).into(), Register(2).into()].into(),
                             meta: meta(),
                         },
                         Instruction::Call {
                             dest: 0.into(),
                             ty: IrTy::Int,
-                            callee: Value::Func(Name::Resolved(
-                                InstanceMethodId::from(1).into(),
-                                "getBar".into()
-                            )),
+                            callee: Value::Func(InstanceMethodId::from(1).into()),
                             args: vec![Register(1).into()].into(),
                             meta: meta(),
                         },
@@ -729,10 +725,7 @@ pub mod tests {
                         Instruction::Ref {
                             dest: 0.into(),
                             ty: IrTy::Func(vec![IrTy::Void], IrTy::Void.into()),
-                            val: Value::Func(Name::Resolved(
-                                Symbol::Global(GlobalId::from(1)),
-                                "id".into()
-                            ))
+                            val: Value::Func(Symbol::Global(GlobalId::from(1)))
                         },
                         Instruction::Constant {
                             ty: IrTy::Int,
@@ -743,10 +736,7 @@ pub mod tests {
                         Instruction::Call {
                             dest: 1.into(),
                             ty: IrTy::Int,
-                            callee: Value::Func(Name::Resolved(
-                                Symbol::Synthesized(SynthesizedId::from(4)),
-                                "@id:Global(_:1)[Int]".into()
-                            )),
+                            callee: Value::Func(Symbol::Synthesized(SynthesizedId::from(4))),
                             args: vec![Value::Reg(2)].into(),
                             meta: meta(),
                         },
@@ -759,10 +749,7 @@ pub mod tests {
                         Instruction::Call {
                             dest: 3.into(),
                             ty: IrTy::Float,
-                            callee: Value::Func(Name::Resolved(
-                                Symbol::Synthesized(SynthesizedId::from(7)),
-                                "@id:Global(_:1)[Float]".into()
-                            )),
+                            callee: Value::Func(Symbol::Synthesized(SynthesizedId::from(7))),
                             args: vec![Value::Reg(4)].into(),
                             meta: meta(),
                         },
@@ -1099,19 +1086,25 @@ pub mod tests {
                 instructions: vec![Instruction::Struct {
                     dest: 0.into(),
                     sym: Symbol::String,
-                    ty: IrTy::Record(vec![IrTy::RawPtr, IrTy::Int, IrTy::Int]),
+                    ty: IrTy::Record(
+                        Some(Symbol::String),
+                        vec![IrTy::RawPtr, IrTy::Int, IrTy::Int]
+                    ),
                     record: vec![Value::RawPtr(0), Value::Int(5), Value::Int(5)].into(),
                     meta: meta()
                 }],
                 terminator: Terminator::Ret {
                     val: Register(0).into(),
-                    ty: IrTy::Record(vec![IrTy::RawPtr, IrTy::Int, IrTy::Int]),
+                    ty: IrTy::Record(
+                        Some(Symbol::String),
+                        vec![IrTy::RawPtr, IrTy::Int, IrTy::Int]
+                    ),
                 }
             }]
         );
         assert_eq!(
-            program.statics,
-            vec![Value::Buffer("hello".bytes().collect_vec())]
+            program.static_memory.data[0..5],
+            "hello".bytes().collect_vec()
         )
     }
 }

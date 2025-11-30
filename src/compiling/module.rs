@@ -6,21 +6,33 @@ use rustc_hash::FxHashMap;
 use crate::{ir::program::Program, name_resolution::symbol::Symbol, types::type_session::Types};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
-pub enum ModuleId {
-    Core,
-    Builtin,
-    #[default]
-    Current,
-    External(u32),
+pub struct ModuleId(pub u16);
+
+#[allow(non_snake_case, non_upper_case_globals)]
+impl ModuleId {
+    pub const Current: ModuleId = ModuleId(0);
+    pub const Builtin: ModuleId = ModuleId(1);
+    pub const Core: ModuleId = ModuleId(2);
+    pub const fn External(i: u16) -> ModuleId {
+        ModuleId(i + 3)
+    }
+
+    pub fn is_external_or_core(&self) -> bool {
+        self.0 > 1
+    }
+
+    pub fn is_external(&self) -> bool {
+        self.0 > 2
+    }
 }
 
 impl Display for ModuleId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
+        match *self {
             Self::Core => write!(f, "C"),
             Self::Builtin => write!(f, "B"),
             Self::Current => write!(f, "_"),
-            Self::External(id) => write!(f, "{id}"),
+            id => write!(f, "{id}"),
         }
     }
 }

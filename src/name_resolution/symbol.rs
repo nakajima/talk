@@ -121,6 +121,7 @@ macro_rules! impl_local_symbol_id {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[repr(u8)]
 pub enum Symbol {
     Struct(StructId),
     Enum(EnumId),
@@ -213,6 +214,123 @@ impl Symbol {
         local_id: 2,
     });
 
+    #[allow(clippy::expect_used)]
+    pub fn from_bytes(bytes: &[u8; 8]) -> Symbol {
+        let discriminant = bytes[0];
+        let local_id = u32::from_le_bytes(bytes[1..5].try_into().expect("did not get byte array"));
+        let module_id = ModuleId(u16::from_le_bytes(
+            bytes[5..7].try_into().expect("did not get byte array"),
+        ));
+
+        match discriminant {
+            0 => Symbol::Struct(StructId {
+                module_id,
+                local_id,
+            }),
+            1 => Symbol::Enum(EnumId {
+                module_id,
+                local_id,
+            }),
+            2 => Symbol::TypeAlias(TypeAliasId {
+                module_id,
+                local_id,
+            }),
+            3 => Symbol::TypeParameter(TypeParameterId(local_id)),
+            4 => Symbol::Global(GlobalId {
+                module_id,
+                local_id,
+            }),
+            5 => Symbol::DeclaredLocal(DeclaredLocalId(local_id)),
+            6 => Symbol::PatternBindLocal(PatternBindLocalId(local_id)),
+            7 => Symbol::ParamLocal(ParamLocalId(local_id)),
+            8 => Symbol::Builtin(BuiltinId {
+                module_id,
+                local_id,
+            }),
+            9 => Symbol::Property(PropertyId {
+                module_id,
+                local_id,
+            }),
+            10 => Symbol::Synthesized(SynthesizedId {
+                module_id,
+                local_id,
+            }),
+            11 => Symbol::InstanceMethod(InstanceMethodId {
+                module_id,
+                local_id,
+            }),
+            12 => Symbol::Initializer(InitializerId {
+                module_id,
+                local_id,
+            }),
+            13 => Symbol::StaticMethod(StaticMethodId {
+                module_id,
+                local_id,
+            }),
+            14 => Symbol::Variant(VariantId {
+                module_id,
+                local_id,
+            }),
+            15 => Symbol::Protocol(ProtocolId {
+                module_id,
+                local_id,
+            }),
+            16 => Symbol::AssociatedType(AssociatedTypeId {
+                module_id,
+                local_id,
+            }),
+            17 => Symbol::MethodRequirement(MethodRequirementId {
+                module_id,
+                local_id,
+            }),
+            _ => unreachable!("Invalid Symbol discriminant: {}", discriminant),
+        }
+    }
+
+    pub fn as_bytes(&self) -> [u8; 8] {
+        let mut res = [0; 8];
+        let mut c = vec![self.discriminant()];
+        c.extend(self.inner_bytes());
+        c.extend(if let Some(id) = self.module_id() {
+            id.0.to_le_bytes()
+        } else {
+            [0, 0]
+        });
+        res.copy_from_slice(&c);
+        res
+    }
+
+    fn discriminant(&self) -> u8 {
+        // SAFETY: Because `Self` is marked `repr(u8)`, its layout is a `repr(C)` `union`
+        // between `repr(C)` structs, each of which has the `u8` discriminant as its first
+        // field, so we can read the discriminant without offsetting the pointer.
+        unsafe { *<*const _>::from(self).cast::<u8>() }
+    }
+
+    fn inner_bytes(&self) -> Vec<u8> {
+        match self {
+            Symbol::Struct(v) => v.local_id.to_le_bytes(),
+            Symbol::Enum(v) => v.local_id.to_le_bytes(),
+            Symbol::TypeAlias(v) => v.local_id.to_le_bytes(),
+            Symbol::TypeParameter(v) => v.0.to_le_bytes(),
+            Symbol::Global(v) => v.local_id.to_le_bytes(),
+            Symbol::DeclaredLocal(v) => v.0.to_le_bytes(),
+            Symbol::PatternBindLocal(v) => v.0.to_le_bytes(),
+            Symbol::ParamLocal(v) => v.0.to_le_bytes(),
+            Symbol::Builtin(v) => v.local_id.to_le_bytes(),
+            Symbol::Property(v) => v.local_id.to_le_bytes(),
+            Symbol::Synthesized(v) => v.local_id.to_le_bytes(),
+            Symbol::InstanceMethod(v) => v.local_id.to_le_bytes(),
+            Symbol::Initializer(v) => v.local_id.to_le_bytes(),
+            Symbol::StaticMethod(v) => v.local_id.to_le_bytes(),
+            Symbol::Variant(v) => v.local_id.to_le_bytes(),
+            Symbol::Protocol(v) => v.local_id.to_le_bytes(),
+            Symbol::AssociatedType(v) => v.local_id.to_le_bytes(),
+            Symbol::MethodRequirement(v) => v.local_id.to_le_bytes(),
+        }
+        .to_vec()
+    }
+
     pub fn module_id(&self) -> Option<ModuleId> {
         let module_id = match self {
             Symbol::Struct(StructId { module_id, .. })
@@ -234,7 +352,31 @@ impl Symbol {
             }
         };
 
-        match module_id {
+        Some(*module_id)
+    }
+
+    pub fn external_module_id(&self) -> Option<ModuleId> {
+        let module_id = match self {
+            Symbol::Struct(StructId { module_id, .. })
+            | Symbol::Global(GlobalId { module_id, .. })
+            | Symbol::Builtin(BuiltinId { module_id, .. })
+            | Symbol::Property(PropertyId { module_id, .. })
+            | Symbol::Synthesized(SynthesizedId { module_id, .. })
+            | Symbol::InstanceMethod(InstanceMethodId { module_id, .. })
+            | Symbol::MethodRequirement(MethodRequirementId { module_id, .. })
+            | Symbol::Initializer(InitializerId { module_id, .. })
+            | Symbol::StaticMethod(StaticMethodId { module_id, .. })
+            | Symbol::Variant(VariantId { module_id, .. })
+            | Symbol::Protocol(ProtocolId { module_id, .. })
+            | Symbol::AssociatedType(AssociatedTypeId { module_id, .. })
+            | Symbol::Enum(EnumId { module_id, .. }) => module_id,
+            _ => {
+                tracing::warn!("looking up module id for non-module symbol: {self:?}");
+                return None;
+            }
+        };
+
+        match *module_id {
             ModuleId::Current | ModuleId::Builtin => None,
             _ => Some(*module_id),
         }

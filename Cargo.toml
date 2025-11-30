@@ -45,7 +45,6 @@ tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter", "json"] }
 tracing-tree = "0.4.0"
 miette = { version = "7.6.0", features = ["fancy"] }
-bincode = "2.0.1"
 anyhow = "1.0.99"
 rustc-hash = "2.1.1"
 generational-arena = "0.2.9"
@@ -65,7 +64,7 @@ verify_ir = []
 [profile.release]
 strip = true  # Automatically strip symbols from the binary.
 debug = false
-opt-level=1
+#opt-level=1
 
 [lints.clippy]
 approx_constant = "allow"

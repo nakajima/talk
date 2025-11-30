@@ -89,6 +89,36 @@ impl Default for CurrentFunction {
     }
 }
 
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct StaticMemory {
+    pub data: Vec<u8>,
+}
+
+impl StaticMemory {
+    pub fn write(&mut self, value: Value) -> usize {
+        let addr = self.data.len();
+        self.data.extend(value.as_bytes());
+        addr
+    }
+
+    #[allow(clippy::unwrap_used)]
+    #[warn(clippy::todo)]
+    pub fn load(&self, at: usize, len: usize, ty: IrTy) -> Value {
+        let bytes = &self.data[at..len];
+        match ty {
+            IrTy::Int => Value::Int(i64::from_le_bytes(bytes.try_into().unwrap())),
+            IrTy::Float => Value::Float(f64::from_le_bytes(bytes.try_into().unwrap())),
+            IrTy::Bool => Value::Bool(bytes[0] == 1),
+            IrTy::Func(..) => Value::Func(Symbol::from_bytes(bytes.try_into().unwrap())),
+            IrTy::Record(..) => unreachable!("can only load primitives"),
+            IrTy::RawPtr => Value::RawPtr(usize::from_le_bytes(bytes.try_into().unwrap())),
+            IrTy::Byte => todo!(),
+            IrTy::Void => todo!(),
+            IrTy::Buffer(..) => Value::Buffer(bytes.to_vec()),
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 enum Bind {
     Assigned(Register),
@@ -151,7 +181,7 @@ pub struct Lowerer<'a> {
     symbols: &'a mut Symbols,
     bindings: FxHashMap<Symbol, Register>,
     pub(super) specializations: IndexMap<Symbol, Vec<Specialization>>,
-    statics: Vec<Value>,
+    static_memory: StaticMemory,
 }
 
 #[allow(clippy::panic)]
@@ -171,7 +201,7 @@ impl<'a> Lowerer<'a> {
             bindings: Default::default(),
             symbols,
             specializations: Default::default(),
-            statics: Default::default(),
+            static_memory: Default::default(),
             config,
         }
     }
@@ -269,13 +299,13 @@ impl<'a> Lowerer<'a> {
             _ = std::mem::replace(&mut self.asts[i].roots, roots);
         }
 
-        let statics = std::mem::take(&mut self.statics);
+        let static_memory = std::mem::take(&mut self.static_memory);
         let mut monomorphizer = Monomorphizer::new(self);
 
         Ok(Program {
             functions: monomorphizer.monomorphize(),
             polyfunctions: monomorphizer.functions,
-            statics,
+            static_memory,
         })
     }
 
@@ -1032,9 +1062,7 @@ impl<'a> Lowerer<'a> {
         let ret = self.ret(bind);
         let bytes = string.bytes().collect_vec();
         let bytes_len = bytes.len() as i64;
-        let ptr = self.statics.len();
-
-        self.statics.push(Value::Buffer(bytes));
+        let ptr = self.static_memory.write(Value::Buffer(bytes));
 
         self.push_instr(Instruction::Struct {
             dest: ret,
@@ -1247,7 +1275,7 @@ impl<'a> Lowerer<'a> {
             };
         }
 
-        let ty = Ty::Record(field_row.into());
+        let ty = Ty::Record(None, field_row.into());
         let dest = self.ret(bind);
         self.push_instr(Instruction::Record {
             dest,
@@ -1289,7 +1317,7 @@ impl<'a> Lowerer<'a> {
         self.push_instr(Instruction::Ref {
             dest,
             ty: ty.clone(),
-            val: Value::Func(Name::Resolved(constructor_sym, format!("{}_init", name))),
+            val: Value::Func(constructor_sym),
         });
 
         Ok((dest.into(), ty))
@@ -1359,7 +1387,7 @@ impl<'a> Lowerer<'a> {
                     ty: ty.clone(),
                 });
 
-        let ty = Ty::Record(row.into());
+        let ty = Ty::Record(Some(enum_symbol), row.into());
         let dest = self.ret(bind);
         self.push_instr(Instruction::Record {
             dest,
@@ -1400,7 +1428,7 @@ impl<'a> Lowerer<'a> {
                 self.push_instr(Instruction::Ref {
                     dest,
                     ty: ty.clone(),
-                    val: Value::Func(Name::Resolved(method, label.to_string())),
+                    val: Value::Func(method),
                 });
             } else if let Some(witness) = self.witness_for(&id, label).copied()
                 && matches!(witness, Symbol::InstanceMethod(..))
@@ -1410,7 +1438,7 @@ impl<'a> Lowerer<'a> {
                 self.push_instr(Instruction::Ref {
                     dest,
                     ty: ty.clone(),
-                    val: Value::Func(Name::Resolved(witness, label.to_string())),
+                    val: Value::Func(witness),
                 });
             } else {
                 let label = self.field_index(&receiver_ty, label);
@@ -1441,7 +1469,10 @@ impl<'a> Lowerer<'a> {
 
         let ret = if matches!(monomorphized_ty, Ty::Func(..)) {
             // It's a func reference so we pass the name
-            let monomorphized_name = self.monomorphize_name(name.clone(), &instantiations);
+            let monomorphized_name = self
+                .monomorphize_name(name.clone(), &instantiations)
+                .symbol()
+                .expect("did not get symbol");
             Value::Func(monomorphized_name)
         } else {
             self.bindings
@@ -1514,7 +1545,7 @@ impl<'a> Lowerer<'a> {
         self.push_instr(Instruction::Call {
             dest,
             ty: ret.clone(),
-            callee: Value::Func(init),
+            callee: Value::Func(init.symbol().expect("did not get symbol")),
             args: args.into(),
             meta: vec![InstructionMeta::Source(id)].into(),
         });
@@ -1636,7 +1667,7 @@ impl<'a> Lowerer<'a> {
             self.push_instr(Instruction::Call {
                 dest,
                 ty: ty.clone(),
-                callee: Value::Func(Name::Resolved(method_sym, label.to_string())),
+                callee: Value::Func(method_sym),
                 args: args.into(),
                 meta: vec![InstructionMeta::Source(call_expr.id)].into(),
             });
@@ -1735,7 +1766,7 @@ impl<'a> Lowerer<'a> {
             self.push_instr(Instruction::Call {
                 dest,
                 ty: ty.clone(),
-                callee: Value::Func(callee),
+                callee: Value::Func(callee.symbol().expect("did not get symbol")),
                 args: args.into(),
                 meta: vec![InstructionMeta::Source(call_expr.id)].into(),
             });
@@ -1804,7 +1835,7 @@ impl<'a> Lowerer<'a> {
             },
         );
 
-        let func = Value::Func(func.name.clone());
+        let func = Value::Func(func.name.symbol().expect("did not get symbol"));
         if bind != Bind::Discard {
             let dest = self.ret(bind);
             self.push_instr(Instruction::Ref {
@@ -1975,10 +2006,8 @@ impl<'a> Lowerer<'a> {
             return;
         }
 
-        if let Symbol::InstanceMethod(InstanceMethodId {
-            module_id: module_id @ (ModuleId::Core | ModuleId::Builtin | ModuleId::External(..)),
-            ..
-        }) = symbol
+        if let Symbol::InstanceMethod(InstanceMethodId { module_id, .. }) = symbol
+            && *module_id != ModuleId::Current
         {
             let module = self
                 .config
@@ -2002,7 +2031,7 @@ impl<'a> Lowerer<'a> {
                 .flat_map(|block| &block.instructions)
                 .filter_map(|instr| {
                     if let Instruction::Call {
-                        callee: Value::Func(Name::Resolved(sym, _)),
+                        callee: Value::Func(sym),
                         ..
                     } = instr
                     {
@@ -2182,7 +2211,7 @@ impl<'a> Lowerer<'a> {
     }
 
     fn field_index(&self, receiver_ty: &Ty, label: &Label) -> Label {
-        if let Ty::Record(row) | Ty::Nominal { row, .. } = receiver_ty
+        if let Ty::Record(None, row) | Ty::Nominal { row, .. } = receiver_ty
             && let Some(idx) = row.close().get_index_of(label)
         {
             Label::Positional(idx)
@@ -2253,7 +2282,7 @@ fn substitute(ty: Ty, substitutions: &Substitutions) -> Ty {
                 .map(|i| substitute(i, substitutions))
                 .collect(),
         ),
-        Ty::Record(box row) => Ty::Record(substitute_row(row, substitutions).into()),
+        Ty::Record(sym, box row) => Ty::Record(sym, substitute_row(row, substitutions).into()),
         Ty::Nominal { symbol, box row } => Ty::Nominal {
             symbol,
             row: substitute_row(row, substitutions).into(),
