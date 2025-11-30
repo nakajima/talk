@@ -191,11 +191,29 @@ pub enum Instruction<T> {
     Free { addr: Value },
     #[doc = "$dest = load $ty $addr"]
     Load { dest: Register, ty: T, addr: Value },
+    #[doc = "copy $ty $from $to $length"]
+    Copy {
+        ty: T,
+        from: Value,
+        to: Value,
+        length: Value,
+    },
 }
 
 impl<T> Instruction<T> {
     pub fn map_type<U>(self, mut map: impl FnMut(T) -> U) -> Instruction<U> {
         match self {
+            Instruction::Copy {
+                ty,
+                from,
+                to,
+                length,
+            } => Instruction::Copy {
+                ty: map(ty),
+                from,
+                to,
+                length,
+            },
             Instruction::Alloc { dest, ty, count } => Instruction::Alloc {
                 dest,
                 ty: map(ty),

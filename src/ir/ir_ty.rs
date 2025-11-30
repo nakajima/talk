@@ -3,6 +3,7 @@ use std::str::FromStr;
 use crate::{
     ir::ir_error::IRError,
     label::Label,
+    name_resolution::symbol::Symbol,
     types::{row::Row, ty::Ty, type_session::TypeDefKind},
 };
 
@@ -14,10 +15,29 @@ pub enum IrTy {
     // (123, true) -> false
     Func(Vec<IrTy>, Box<IrTy>),
     // { 123, 4.56, true }
-    Record(Vec<IrTy>),
+    Record(Option<Symbol>, Vec<IrTy>),
     RawPtr,
     Byte,
     Void,
+    Buffer(u32),
+}
+
+impl IrTy {
+    pub fn bytes_len(&self) -> usize {
+        match self {
+            IrTy::Int => 8,
+            IrTy::Float => 8,
+            IrTy::Bool => 1,
+            IrTy::Func(args, ret) => {
+                ret.bytes_len() + args.iter().map(|a| a.bytes_len()).sum::<usize>()
+            }
+            IrTy::Record(_sym, fields) => fields.iter().map(|a| a.bytes_len()).sum::<usize>(), // Including space for a symbol
+            IrTy::RawPtr => 8,
+            IrTy::Byte => 1,
+            IrTy::Void => 0,
+            IrTy::Buffer(len) => *len as usize,
+        }
+    }
 }
 
 impl FromStr for IrTy {
@@ -64,7 +84,7 @@ impl FromStr for IrTy {
                 // adjust this line if your Label has a different constructor
                 map.push(part.parse()?);
             }
-            return Ok(IrTy::Record(map));
+            return Ok(IrTy::Record(None, map));
         }
 
         Err(IRError::CouldNotParse(format!("no IrTy for {s:?}")))
@@ -89,13 +109,23 @@ impl std::fmt::Display for IrTy {
                     .join(", "),
                 ir_ty
             ),
-            IrTy::Record(fields) => {
+            IrTy::Record(sym, fields) => {
                 let mut items = vec![];
                 for item in fields {
                     items.push(format!("{item}"));
                 }
-                write!(f, "{{ {} }}", items.join(", "))
+                write!(
+                    f,
+                    "{{ {}{} }}",
+                    if let Some(sym) = sym {
+                        format!("{sym}")
+                    } else {
+                        "".to_string()
+                    },
+                    items.join(", ")
+                )
             }
+            IrTy::Buffer(len) => write!(f, "buf({len})"),
             IrTy::Void => write!(f, "void"),
         }
     }
@@ -116,6 +146,7 @@ impl From<IrTy> for Ty {
             IrTy::Bool => Ty::Bool,
             IrTy::RawPtr => Ty::RawPtr,
             IrTy::Byte => Ty::Byte,
+            IrTy::Buffer(..) => Ty::RawPtr,
             IrTy::Func(params, box ret) => params
                 .into_iter()
                 .collect::<Vec<_>>()
@@ -123,7 +154,7 @@ impl From<IrTy> for Ty {
                 .rfold(ret.into(), |acc, p| {
                     Ty::Func(Box::new(p.into()), Box::new(acc))
                 }),
-            IrTy::Record(tys) => {
+            IrTy::Record(sym, tys) => {
                 let mut row = Row::Empty(TypeDefKind::Struct);
                 for (i, ty) in tys.iter().enumerate() {
                     row = Row::Extend {
@@ -133,7 +164,7 @@ impl From<IrTy> for Ty {
                     }
                 }
 
-                Ty::Record(row.into())
+                Ty::Record(sym, row.into())
             }
             IrTy::Void => Ty::Void,
         }

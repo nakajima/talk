@@ -986,7 +986,7 @@ pub mod tests {
         "#,
         );
 
-        let Ty::Record(row) = ty(1, &ast, &types) else {
+        let Ty::Record(None, row) = ty(1, &ast, &types) else {
             panic!("did not get record");
         };
 
@@ -1011,7 +1011,7 @@ pub mod tests {
         ",
         );
 
-        let Ty::Record(row) = ty(1, &ast, &types) else {
+        let Ty::Record(None, row) = ty(1, &ast, &types) else {
             panic!("Didn't get row");
         };
 

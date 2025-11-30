@@ -148,7 +148,7 @@ impl From<InferTy> for Ty {
                 Ty::Func(Box::new(param.into()), Box::new(ret.into()))
             }
             InferTy::Tuple(items) => Ty::Tuple(items.into_iter().map(|t| t.into()).collect()),
-            InferTy::Record(box infer_row) => Ty::Record(Box::new(infer_row.into())),
+            InferTy::Record(box infer_row) => Ty::Record(None, Box::new(infer_row.into())),
             InferTy::Nominal { symbol, box row } => Ty::Nominal {
                 symbol,
                 row: Box::new(row.into()),
@@ -177,7 +177,7 @@ impl From<Ty> for InferTy {
                 InferTy::Func(Box::new(param.into()), Box::new(ret.into()))
             }
             Ty::Tuple(items) => InferTy::Tuple(items.into_iter().map(|t| t.into()).collect()),
-            Ty::Record(box infer_row) => InferTy::Record(Box::new(infer_row.into())),
+            Ty::Record(.., box infer_row) => InferTy::Record(Box::new(infer_row.into())),
             Ty::Nominal { symbol, box row } => InferTy::Nominal {
                 symbol,
                 row: Box::new(row.into()),

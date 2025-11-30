@@ -5,7 +5,9 @@ struct String {
 }
 
 extend String: Add {
-	func add(rhs: String) -> String { self }
+	func add(rhs: String) -> String {
+		self
+	}
 }
 
 extend String: Equatable {

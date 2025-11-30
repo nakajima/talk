@@ -172,9 +172,10 @@ impl TypeCatalog<InferTy> {
                         k,
                         match v {
                             MemberWitness::Concrete(sym) => MemberWitness::Concrete(sym),
-                            MemberWitness::Requirement(sym, ty) => {
-                                MemberWitness::Requirement(sym, ty.into())
-                            }
+                            MemberWitness::Requirement(sym, ty) => MemberWitness::Requirement(
+                                sym,
+                                session.finalize_ty(ty).as_mono_ty().clone(),
+                            ),
                             MemberWitness::Meta { receiver, label } => MemberWitness::Meta {
                                 receiver: session.finalize_ty(receiver).as_mono_ty().clone(),
                                 label,

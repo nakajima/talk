@@ -32,7 +32,7 @@ pub enum Ty {
 
     Func(Box<Ty>, Box<Ty>),
     Tuple(Vec<Ty>),
-    Record(Box<Row>),
+    Record(Option<Symbol>, Box<Row>),
 
     // Nominal types (we look up their information from the TypeCatalog)
     Nominal {
@@ -80,7 +80,7 @@ impl std::fmt::Display for Ty {
                         .join(", ")
                 )
             }
-            Ty::Record(row) => write!(
+            Ty::Record(.., row) => write!(
                 f,
                 "{{ {} }}",
                 row.close()

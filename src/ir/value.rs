@@ -2,16 +2,24 @@ use std::str::FromStr;
 
 use crate::{
     ir::{ir_error::IRError, register::Register},
-    name::Name,
+    name_resolution::symbol::Symbol,
 };
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Reference {
+    Func(Symbol),
+    Register { frame: usize, register: Register },
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     Reg(u32),
     Int(i64),
     Float(f64),
-    Func(Name),
+    Func(Symbol),
     Bool(bool),
+    Ref(Reference),
+    Record(Option<Symbol>, Vec<Value>),
     RawPtr(usize),
     Buffer(Vec<u8>),
     Void,
@@ -28,6 +36,30 @@ impl Value {
         Err(IRError::InvalidValueConversion(format!(
             "Cannot convert {self:?} to register"
         )))
+    }
+
+    #[allow(clippy::unwrap_used)]
+    pub fn as_bytes(&self) -> Vec<u8> {
+        match self {
+            Value::Int(v) => v.to_le_bytes().to_vec(),
+            Value::Float(v) => v.to_le_bytes().to_vec(),
+            Value::Func(..) => unreachable!(),
+            Value::Bool(v) => {
+                if *v {
+                    vec![1u8]
+                } else {
+                    vec![0u8]
+                }
+            }
+            Value::Ref(v) => match v {
+                Reference::Func(symbol) => symbol.as_bytes().to_vec(),
+                Reference::Register { .. } => unimplemented!(),
+            },
+            Value::Record(..) => unimplemented!("only primitives can be stored"),
+            Value::RawPtr(v) => v.to_le_bytes().to_vec(),
+            Value::Buffer(bytes) => bytes.to_vec(),
+            other => unreachable!("Cannot serialize {other:?}"),
+        }
     }
 }
 
@@ -80,11 +112,22 @@ impl From<f64> for Value {
 impl std::fmt::Display for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Value::Ref(reference) => write!(f, "&{reference:?}"),
             Value::Reg(reg) => write!(f, "%{reg}"),
             Value::Buffer(v) => write!(f, "[{v:?}]"),
+            Value::Record(sym, fields) => write!(
+                f,
+                "{{ {}{:?} }}",
+                if let Some(sym) = sym {
+                    format!("{sym} @ ")
+                } else {
+                    "".to_string()
+                },
+                fields
+            ),
             Value::Int(i) => write!(f, "{i}"),
             Value::Float(i) => write!(f, "{i}"),
-            Value::Func(name) => write!(f, "@{}", name.name_str()),
+            Value::Func(name) => write!(f, "F({})", name),
             Value::Bool(b) => write!(f, "{}", if *b { "true" } else { "false" }),
             Value::Void => write!(f, "void"),
             Value::Uninit => write!(f, "uninit"),

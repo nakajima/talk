@@ -11,30 +11,25 @@ use crate::{
         program::Program,
         register::Register,
         terminator::Terminator,
+        value::{Reference, Value},
     },
     label::Label,
     name_resolution::symbol::Symbol,
 };
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum Reference {
-    Func(Symbol),
-    Register { frame: usize, register: Register },
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum Value {
-    Int(i64),
-    Float(f64),
-    Bool(bool),
-    Record(Option<Symbol>, Vec<Value>),
-    Func(Symbol),
-    Void,
-    Ref(Reference),
-    RawPtr(usize),
-    Buffer(Vec<u8>),
-    Uninit,
-}
+// #[derive(Debug, Clone, PartialEq)]
+// pub enum Value {
+//     Int(i64),
+//     Float(f64),
+//     Bool(bool),
+//     Record(Option<Symbol>, Vec<Value>),
+//     Func(Symbol),
+//     Void,
+//     Ref(Reference),
+//     RawPtr(usize),
+//     Buffer(Vec<u8>),
+//     Uninit,
+// }
 
 #[allow(clippy::panic)]
 #[allow(clippy::should_implement_trait)]
@@ -167,8 +162,9 @@ impl Display for IR {
 }
 
 #[derive(Default)]
-pub struct Heap {
+pub struct Memory {
     mem: Vec<Value>,
+    static_end: usize,
     next_addr: usize,
 }
 
@@ -177,7 +173,7 @@ pub struct Interpreter {
     frames: Vec<Frame>,
     current_func: Option<Function<IrTy>>,
     main_result: Option<Value>,
-    heap: Heap,
+    memory: Memory,
 }
 
 #[allow(clippy::unwrap_used)]
@@ -194,7 +190,7 @@ impl Interpreter {
             frames: Default::default(),
             current_func: None,
             main_result: None,
-            heap: Default::default(),
+            memory: Default::default(),
         }
     }
 
@@ -369,7 +365,7 @@ impl Interpreter {
             }
             IR::Instr(Instruction::Ref { dest, val, .. }) => {
                 let val = match val {
-                    super::value::Value::Func(name) => Reference::Func(name.symbol().unwrap()),
+                    super::value::Value::Func(name) => Reference::Func(name),
                     super::value::Value::Reg(reg) => Reference::Register {
                         frame: self.frames.len(),
                         register: reg.into(),
@@ -393,24 +389,59 @@ impl Interpreter {
 
                 self.write_register(&dest, val);
             }
-            IR::Instr(Instruction::_Print { val }) => match self.val(val) {
-                Value::Int(val) => println!("{val}"),
-                Value::Float(val) => println!("{val}"),
-                Value::Bool(val) => println!("{val}"),
-                Value::Record(sym, values) => {
-                    if sym == Some(Symbol::String) {}
-
-                    println!("{sym:?}{values:?}")
-                }
-                Value::Func(symbol) => println!("fn({symbol:?})"),
-                Value::Void => println!("void"),
-                Value::RawPtr(val) => println!("rawptr({val})"),
-                Value::Ref(reference) => println!("{reference:?}"),
-                Value::Uninit => println!("UNINIT"),
-                Value::Buffer(bytes) => println!("buf({bytes:?})"),
-            },
+            IR::Instr(Instruction::_Print { val }) => {
+                let val = self.val(val.clone());
+                println!("{}", self.display(val));
+            }
             IR::Instr(Instruction::Alloc { dest, ty, count }) => {}
+            IR::Instr(Instruction::Copy {
+                ty,
+                from,
+                to,
+                length,
+            }) => {}
             IR::Instr(Instruction::Free { .. } | Instruction::Load { .. }) => unimplemented!(),
+        }
+    }
+
+    fn display(&mut self, val: Value) -> String {
+        match val {
+            Value::Int(val) => format!("{val}"),
+            Value::Reg(reg) => format!("%{reg}"),
+            Value::Poison => format!("<POISON>"),
+            Value::Float(val) => format!("{val}"),
+            Value::Bool(val) => format!("{val}"),
+            Value::Record(sym, values) => {
+                if sym == Some(Symbol::String) {
+                    let Value::RawPtr(i) = &values[0] else {
+                        unreachable!()
+                    };
+
+                    let Value::Int(len) = &values[1] else {
+                        unreachable!()
+                    };
+
+                    let Value::Buffer(data) = self.val(self.program.static_memory.load(
+                        *i,
+                        *len as usize,
+                        IrTy::Byte,
+                    )) else {
+                        unreachable!()
+                    };
+
+                    let s = str::from_utf8(&data).unwrap();
+                    return format!("{s}");
+                }
+
+                let values = values.into_iter().map(|v| self.display(v)).collect_vec();
+                format!("{sym:?}{values:?}")
+            }
+            Value::Func(symbol) => format!("fn({symbol:?})"),
+            Value::Void => "void".into(),
+            Value::RawPtr(val) => format!("rawptr({val})"),
+            Value::Ref(reference) => format!("{reference:?}"),
+            Value::Uninit => "UNINIT".into(),
+            Value::Buffer(bytes) => format!("buf({bytes:?})"),
         }
     }
 
@@ -464,23 +495,16 @@ impl Interpreter {
 
                 symbol
             }
-            super::value::Value::Func(name) => name.symbol().unwrap(),
+            super::value::Value::Func(name) => name,
             _ => panic!("cannot get func from {val:?}"),
         }
     }
 
-    fn val(&mut self, val: super::value::Value) -> Value {
+    fn val(&mut self, val: Value) -> Value {
         match val {
             super::value::Value::Reg(reg) => self.read_register(&Register(reg)),
-            super::value::Value::Int(v) => Value::Int(v),
-            super::value::Value::Float(v) => Value::Float(v),
-            super::value::Value::Func(v) => Value::Func(v.symbol().unwrap()),
-            super::value::Value::Void => Value::Void,
-            super::value::Value::Bool(v) => Value::Bool(v),
-            super::value::Value::Uninit => Value::Uninit,
-            super::value::Value::RawPtr(v) => Value::RawPtr(v),
             super::value::Value::Poison => panic!("unreachable reached"),
-            super::value::Value::Buffer(v) => Value::Buffer(v),
+            _ => val,
         }
     }
 }
@@ -664,6 +688,17 @@ pub mod tests {
        "
             ),
             Value::Int(7)
+        );
+    }
+
+    #[test]
+    fn interprets_string_plus() {
+        assert_eq!(
+            interpret("let a = \"hello \" + \"world\"; a"),
+            Value::Record(
+                Some(Symbol::String),
+                vec![Value::RawPtr(2), Value::Int(11), Value::Int(11)]
+            )
         );
     }
 }

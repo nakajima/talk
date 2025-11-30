@@ -136,9 +136,9 @@ impl<'a> Monomorphizer<'a> {
         } = instruction
         {
             let new_callee = match &callee {
-                Value::Func(Name::Resolved(sym @ Symbol::MethodRequirement(_), name)) => {
+                Value::Func(sym @ Symbol::MethodRequirement(_)) => {
                     if let Some(impl_sym) = substitutions.witnesses.get(sym) {
-                        Value::Func(Name::Resolved(*impl_sym, name.clone()))
+                        Value::Func(*impl_sym)
                     } else {
                         callee
                     }
@@ -179,7 +179,7 @@ impl<'a> Monomorphizer<'a> {
                 }
             }
             Ty::Constructor {
-                name: Name::Resolved(Symbol::Variant(..), ..),
+                name: Name::Resolved(sym @ Symbol::Variant(..), ..),
                 params,
                 ..
             } => {
@@ -193,7 +193,7 @@ impl<'a> Monomorphizer<'a> {
                 };
                 values.insert(0, IrTy::Int);
 
-                IrTy::Record(values)
+                IrTy::Record(Some(sym), values)
             }
             Ty::Constructor {
                 name: Name::Resolved(Symbol::Struct(..), _),
@@ -218,14 +218,16 @@ impl<'a> Monomorphizer<'a> {
                 )
             }
             Ty::Tuple(items) => IrTy::Record(
+                None,
                 items
                     .into_iter()
                     .map(|i| self.monomorphize_ty(i, substitutions))
                     .collect(),
             ),
-            Ty::Record(row) => {
+            Ty::Record(sym, row) => {
                 let closed = row.close();
                 IrTy::Record(
+                    sym,
                     closed
                         .values()
                         .map(|v| self.monomorphize_ty(v.clone(), substitutions))
@@ -235,10 +237,11 @@ impl<'a> Monomorphizer<'a> {
             Ty::Nominal { symbol, row, .. } => {
                 if matches!(symbol, Symbol::Enum(..)) {
                     // TODO: Handle variants
-                    IrTy::Record(vec![IrTy::Int])
+                    IrTy::Record(Some(symbol), vec![IrTy::Int])
                 } else {
                     let closed = row.close();
                     IrTy::Record(
+                        Some(symbol),
                         closed
                             .values()
                             .map(|v| self.monomorphize_ty(v.clone(), substitutions))

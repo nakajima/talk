@@ -794,7 +794,7 @@ impl TypeSession {
             return Some(entry);
         }
 
-        if let Some(module_id) = sym.module_id()
+        if let Some(module_id) = sym.external_module_id()
             && let Some(module) = self.modules.modules.get(&module_id)
         {
             // Try looking up with the symbol's current module_id first (for Core/Prelude),
@@ -1008,13 +1008,15 @@ impl TypeSession {
             return Some(reqs);
         }
 
+        #[allow(irrefutable_let_patterns)]
         if let ProtocolId {
-            module_id: module_id @ (ModuleId::External(..) | ModuleId::Core),
+            module_id,
             local_id,
         } = *protocol_id
+            && module_id.is_external_or_core()
             && let Some(module) = self.modules.modules.get(&module_id)
         {
-            let module_key = if matches!(module_id, ModuleId::External(..)) {
+            let module_key = if module_id.is_external() {
                 ModuleId::Current
             } else {
                 module_id
@@ -1052,12 +1054,13 @@ impl TypeSession {
         }
 
         if let Symbol::Struct(StructId {
-            module_id: module_id @ (ModuleId::External(..) | ModuleId::Core),
+            module_id,
             local_id,
         }) = *symbol
+            && module_id.is_external_or_core()
             && let Some(module) = self.modules.modules.get(&module_id)
         {
-            let module_key = if matches!(module_id, ModuleId::External(..)) {
+            let module_key = if module_id.is_external() {
                 ModuleId::Current
             } else {
                 module_id
@@ -1095,12 +1098,13 @@ impl TypeSession {
         }
 
         if let Symbol::Struct(StructId {
-            module_id: module_id @ (ModuleId::External(..) | ModuleId::Core),
+            module_id,
             local_id,
         }) = *symbol
+            && module_id.is_external_or_core()
             && let Some(module) = self.modules.modules.get(&module_id)
         {
-            let module_key = if matches!(module_id, ModuleId::External(..)) {
+            let module_key = if module_id.is_external() {
                 ModuleId::Current
             } else {
                 module_id
