@@ -352,14 +352,6 @@ impl<'a> InferencePass<'a> {
         self.constraints
             .wants_equals(protocol_self_meta.clone(), conforming_self.clone());
 
-        let protocol_associated_types = self
-            .session
-            .type_catalog
-            .associated_types
-            .get(&key.protocol_id.into())
-            .cloned()
-            .unwrap_or_default();
-
         let mut associated_substitutions = FxHashMap::<InferTy, InferTy>::default();
         for child_sym in self
             .session
