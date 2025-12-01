@@ -25,6 +25,7 @@ pub fn _compile() -> Module {
             Source::from(include_str!("../../core/Operators.tlk")),
             Source::from(include_str!("../../core/String.tlk")),
             Source::from(include_str!("../../core/Array.tlk")),
+            Source::from(include_str!("../../core/Memory.tlk")),
         ],
         config,
     );

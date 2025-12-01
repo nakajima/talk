@@ -1,0 +1,15 @@
+func _alloc(count: Int) -> RawPtr {
+	__IR("$? = alloc byte %0")
+}
+
+func _copy(from: RawPtr, to: RawPtr, length: Int) -> Void {
+	__IR<Void>("copy byte %0 %1 %2")
+}
+
+func _ptr_add(ptr: RawPtr, offset: Int) -> RawPtr {
+	__IR("$? = add int %0 %1")
+}
+
+func _int_add(a: Int, b: Int) -> Int {
+	__IR("$? = add int %0 %1")
+}
