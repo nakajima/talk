@@ -320,6 +320,7 @@ impl Symbol {
         } else {
             [0, 0]
         });
+        c.push(0); // padding byte
         res.copy_from_slice(&c);
         res
     }
@@ -369,7 +370,8 @@ impl Symbol {
             | Symbol::Variant(VariantId { module_id, .. })
             | Symbol::Protocol(ProtocolId { module_id, .. })
             | Symbol::AssociatedType(AssociatedTypeId { module_id, .. })
-            | Symbol::Enum(EnumId { module_id, .. }) => module_id,
+            | Symbol::Enum(EnumId { module_id, .. })
+            | Symbol::TypeAlias(TypeAliasId { module_id, .. }) => module_id,
             _ => {
                 tracing::warn!("looking up module id for non-module symbol: {self:?}");
                 return None;
@@ -393,7 +395,8 @@ impl Symbol {
             | Symbol::Variant(VariantId { module_id, .. })
             | Symbol::Protocol(ProtocolId { module_id, .. })
             | Symbol::AssociatedType(AssociatedTypeId { module_id, .. })
-            | Symbol::Enum(EnumId { module_id, .. }) => module_id,
+            | Symbol::Enum(EnumId { module_id, .. })
+            | Symbol::TypeAlias(TypeAliasId { module_id, .. }) => module_id,
             _ => {
                 tracing::warn!("looking up module id for non-module symbol: {self:?}");
                 return None;
@@ -627,5 +630,230 @@ impl Symbols {
 
     pub fn next_synthesized(&mut self, module_id: ModuleId) -> SynthesizedId {
         SynthesizedId::new(module_id, self.synthesized.next_id())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn roundtrip_struct() {
+        let symbol = Symbol::Struct(StructId::new(ModuleId(42), 123));
+        let bytes = symbol.as_bytes();
+        let recovered = Symbol::from_bytes(&bytes);
+        assert_eq!(symbol, recovered);
+    }
+
+    #[test]
+    fn roundtrip_enum() {
+        let symbol = Symbol::Enum(EnumId::new(ModuleId(10), 456));
+        let bytes = symbol.as_bytes();
+        let recovered = Symbol::from_bytes(&bytes);
+        assert_eq!(symbol, recovered);
+    }
+
+    #[test]
+    fn roundtrip_type_alias() {
+        let symbol = Symbol::TypeAlias(TypeAliasId::new(ModuleId(5), 789));
+        let bytes = symbol.as_bytes();
+        let recovered = Symbol::from_bytes(&bytes);
+        assert_eq!(symbol, recovered);
+    }
+
+    #[test]
+    fn roundtrip_type_parameter() {
+        let symbol = Symbol::TypeParameter(TypeParameterId(999));
+        let bytes = symbol.as_bytes();
+        let recovered = Symbol::from_bytes(&bytes);
+        assert_eq!(symbol, recovered);
+    }
+
+    #[test]
+    fn roundtrip_global() {
+        let symbol = Symbol::Global(GlobalId::new(ModuleId(100), 200));
+        let bytes = symbol.as_bytes();
+        let recovered = Symbol::from_bytes(&bytes);
+        assert_eq!(symbol, recovered);
+    }
+
+    #[test]
+    fn roundtrip_declared_local() {
+        let symbol = Symbol::DeclaredLocal(DeclaredLocalId(12345));
+        let bytes = symbol.as_bytes();
+        let recovered = Symbol::from_bytes(&bytes);
+        assert_eq!(symbol, recovered);
+    }
+
+    #[test]
+    fn roundtrip_pattern_bind_local() {
+        let symbol = Symbol::PatternBindLocal(PatternBindLocalId(54321));
+        let bytes = symbol.as_bytes();
+        let recovered = Symbol::from_bytes(&bytes);
+        assert_eq!(symbol, recovered);
+    }
+
+    #[test]
+    fn roundtrip_param_local() {
+        let symbol = Symbol::ParamLocal(ParamLocalId(777));
+        let bytes = symbol.as_bytes();
+        let recovered = Symbol::from_bytes(&bytes);
+        assert_eq!(symbol, recovered);
+    }
+
+    #[test]
+    fn roundtrip_builtin() {
+        let symbol = Symbol::Builtin(BuiltinId::new(ModuleId::Builtin, 8));
+        let bytes = symbol.as_bytes();
+        let recovered = Symbol::from_bytes(&bytes);
+        assert_eq!(symbol, recovered);
+    }
+
+    #[test]
+    fn roundtrip_property() {
+        let symbol = Symbol::Property(PropertyId::new(ModuleId(3), 44));
+        let bytes = symbol.as_bytes();
+        let recovered = Symbol::from_bytes(&bytes);
+        assert_eq!(symbol, recovered);
+    }
+
+    #[test]
+    fn roundtrip_synthesized() {
+        let symbol = Symbol::Synthesized(SynthesizedId::new(ModuleId(7), 88));
+        let bytes = symbol.as_bytes();
+        let recovered = Symbol::from_bytes(&bytes);
+        assert_eq!(symbol, recovered);
+    }
+
+    #[test]
+    fn roundtrip_instance_method() {
+        let symbol = Symbol::InstanceMethod(InstanceMethodId::new(ModuleId(15), 30));
+        let bytes = symbol.as_bytes();
+        let recovered = Symbol::from_bytes(&bytes);
+        assert_eq!(symbol, recovered);
+    }
+
+    #[test]
+    fn roundtrip_initializer() {
+        let symbol = Symbol::Initializer(InitializerId::new(ModuleId(20), 40));
+        let bytes = symbol.as_bytes();
+        let recovered = Symbol::from_bytes(&bytes);
+        assert_eq!(symbol, recovered);
+    }
+
+    #[test]
+    fn roundtrip_static_method() {
+        let symbol = Symbol::StaticMethod(StaticMethodId::new(ModuleId(25), 50));
+        let bytes = symbol.as_bytes();
+        let recovered = Symbol::from_bytes(&bytes);
+        assert_eq!(symbol, recovered);
+    }
+
+    #[test]
+    fn roundtrip_variant() {
+        let symbol = Symbol::Variant(VariantId::new(ModuleId(30), 60));
+        let bytes = symbol.as_bytes();
+        let recovered = Symbol::from_bytes(&bytes);
+        assert_eq!(symbol, recovered);
+    }
+
+    #[test]
+    fn roundtrip_protocol() {
+        let symbol = Symbol::Protocol(ProtocolId::new(ModuleId(35), 70));
+        let bytes = symbol.as_bytes();
+        let recovered = Symbol::from_bytes(&bytes);
+        assert_eq!(symbol, recovered);
+    }
+
+    #[test]
+    fn roundtrip_associated_type() {
+        let symbol = Symbol::AssociatedType(AssociatedTypeId::new(ModuleId(40), 80));
+        let bytes = symbol.as_bytes();
+        let recovered = Symbol::from_bytes(&bytes);
+        assert_eq!(symbol, recovered);
+    }
+
+    #[test]
+    fn roundtrip_method_requirement() {
+        let symbol = Symbol::MethodRequirement(MethodRequirementId::new(ModuleId(45), 90));
+        let bytes = symbol.as_bytes();
+        let recovered = Symbol::from_bytes(&bytes);
+        assert_eq!(symbol, recovered);
+    }
+
+    #[test]
+    fn roundtrip_builtin_constants() {
+        // Test the well-known builtin constants
+        for symbol in [
+            Symbol::Int,
+            Symbol::Float,
+            Symbol::Bool,
+            Symbol::Void,
+            Symbol::IR,
+            Symbol::PRINT,
+            Symbol::RawPtr,
+            Symbol::Byte,
+            Symbol::String,
+        ] {
+            let bytes = symbol.as_bytes();
+            let recovered = Symbol::from_bytes(&bytes);
+            assert_eq!(symbol, recovered, "Failed for {:?}", symbol);
+        }
+    }
+
+    #[test]
+    fn roundtrip_special_module_ids() {
+        // Test with special module IDs
+        let symbols = [
+            Symbol::Struct(StructId::new(ModuleId::Current, 1)),
+            Symbol::Struct(StructId::new(ModuleId::Core, 2)),
+            Symbol::Struct(StructId::new(ModuleId::Builtin, 3)),
+        ];
+
+        for symbol in symbols {
+            let bytes = symbol.as_bytes();
+            let recovered = Symbol::from_bytes(&bytes);
+            assert_eq!(symbol, recovered, "Failed for {:?}", symbol);
+        }
+    }
+
+    #[test]
+    fn roundtrip_max_values() {
+        // Test with maximum u32 local_id values
+        let symbol = Symbol::Global(GlobalId::new(ModuleId(u16::MAX), u32::MAX));
+        let bytes = symbol.as_bytes();
+        let recovered = Symbol::from_bytes(&bytes);
+        assert_eq!(symbol, recovered);
+    }
+
+    #[test]
+    fn roundtrip_zero_values() {
+        // Test with zero values
+        let symbol = Symbol::Struct(StructId::new(ModuleId(0), 0));
+        let bytes = symbol.as_bytes();
+        let recovered = Symbol::from_bytes(&bytes);
+        assert_eq!(symbol, recovered);
+    }
+
+    #[test]
+    fn as_bytes_produces_8_bytes() {
+        let symbol = Symbol::Struct(StructId::new(ModuleId(1), 2));
+        let bytes = symbol.as_bytes();
+        assert_eq!(bytes.len(), 8);
+    }
+
+    #[test]
+    fn discriminant_is_first_byte() {
+        // Struct has discriminant 0
+        let struct_symbol = Symbol::Struct(StructId::new(ModuleId(1), 2));
+        assert_eq!(struct_symbol.as_bytes()[0], 0);
+
+        // Enum has discriminant 1
+        let enum_symbol = Symbol::Enum(EnumId::new(ModuleId(1), 2));
+        assert_eq!(enum_symbol.as_bytes()[0], 1);
+
+        // Protocol has discriminant 15
+        let protocol_symbol = Symbol::Protocol(ProtocolId::new(ModuleId(1), 2));
+        assert_eq!(protocol_symbol.as_bytes()[0], 15);
     }
 }
