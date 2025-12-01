@@ -1066,7 +1066,7 @@ impl<'a> Lowerer<'a> {
         let bytes_len = bytes.len() as i64;
         let ptr = self.static_memory.write(Value::Buffer(bytes));
 
-        self.push_instr(Instruction::Struct {
+        self.push_instr(Instruction::Nominal {
             dest: ret,
             sym: Symbol::String,
             ty: Ty::String(),
@@ -1282,7 +1282,7 @@ impl<'a> Lowerer<'a> {
         // Check if this record literal is typed as a nominal struct
         if let Ok(Ty::Nominal { symbol, .. }) = self.ty_from_id(&expr.id) {
             let ty = Ty::Record(Some(symbol), field_row.into());
-            self.push_instr(Instruction::Struct {
+            self.push_instr(Instruction::Nominal {
                 dest,
                 sym: symbol,
                 ty: ty.clone(),
@@ -1405,7 +1405,8 @@ impl<'a> Lowerer<'a> {
 
         let ty = Ty::Record(Some(enum_symbol), row.into());
         let dest = self.ret(bind);
-        self.push_instr(Instruction::Record {
+        self.push_instr(Instruction::Nominal {
+            sym: enum_symbol,
             dest,
             ty: ty.clone(),
             record: args.into(),
@@ -1541,7 +1542,8 @@ impl<'a> Lowerer<'a> {
         let mut params = init_ty.clone().uncurry_params();
         let ret = params.pop().expect("did not get init ret");
 
-        self.push_instr(Instruction::Record {
+        self.push_instr(Instruction::Nominal {
+            sym: name.symbol().expect("did nto get nominal sym"),
             dest: record_dest,
             ty: ret.clone(),
             record: properties

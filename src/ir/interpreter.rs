@@ -335,7 +335,7 @@ impl Interpreter {
                 let args = args.items.iter().map(|v| self.val(v.clone())).collect();
                 self.call(func, args, dest);
             }
-            IR::Instr(Instruction::Struct {
+            IR::Instr(Instruction::Nominal {
                 dest, record, sym, ..
             }) => {
                 let fields = record.items.iter().map(|v| self.val(v.clone())).collect();
@@ -796,14 +796,10 @@ pub mod tests {
 
     #[test]
     fn interprets_string_plus() {
-        // String concatenation allocates a new string on the heap
-        // Static memory: "hello " (6 bytes) + "world" (5 bytes) = 11 bytes
-        // Heap starts at offset 11, so new string is at RawPtr(11)
-        // Result: "hello world" (11 chars)
         assert_eq!(
             interpret("let a = \"hello \" + \"world\"; a"),
             Value::Record(
-                None, // TODO: Should be Some(Symbol::String) but struct construction in core module produces anonymous record
+                Some(Symbol::String),
                 vec![Value::RawPtr(11), Value::Int(11), Value::Int(11)]
             )
         );

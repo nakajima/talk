@@ -151,7 +151,7 @@ pub enum Instruction<T> {
         meta: List<InstructionMeta>,
     },
     #[doc = "$dest = struct $sym $ty $record $meta"]
-    Struct {
+    Nominal {
         dest: Register,
         sym: Symbol,
         ty: T,
@@ -247,13 +247,13 @@ impl<T> Instruction<T> {
                 record,
                 meta,
             },
-            Instruction::Struct {
+            Instruction::Nominal {
                 dest,
                 ty,
                 record,
                 meta,
                 sym,
-            } => Instruction::Struct {
+            } => Instruction::Nominal {
                 dest,
                 ty: map(ty),
                 record,

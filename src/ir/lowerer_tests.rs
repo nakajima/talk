@@ -273,7 +273,8 @@ pub mod tests {
                             val: 123.into(),
                             meta: meta()
                         },
-                        Instruction::Record {
+                        Instruction::Nominal {
+                            sym: Symbol::Struct(StructId::from(1)),
                             dest: 2.into(),
                             ty: IrTy::Record(
                                 Some(Symbol::Struct(StructId::from(1))),
@@ -338,7 +339,8 @@ pub mod tests {
                             val: 123.into(),
                             meta: meta()
                         },
-                        Instruction::Record {
+                        Instruction::Nominal {
+                            sym: Symbol::Struct(StructId::from(1)),
                             dest: 2.into(),
                             ty: IrTy::Record(
                                 Some(Symbol::Struct(StructId::from(1))),
@@ -393,7 +395,8 @@ pub mod tests {
                 blocks: vec![BasicBlock::<IrTy> {
                     id: BasicBlockId(0),
                     phis: Default::default(),
-                    instructions: vec![Instruction::Record {
+                    instructions: vec![Instruction::Nominal {
+                        sym: Symbol::Enum(EnumId::from(1)),
                         dest: 0.into(),
                         ty: IrTy::Record(Some(Symbol::Enum(EnumId::from(1))), vec![IrTy::Int]),
                         record: vec![Value::Int(1)].into(),
@@ -448,7 +451,8 @@ pub mod tests {
                             val: 456.into(),
                             meta: meta()
                         },
-                        Instruction::Record {
+                        Instruction::Nominal {
+                            sym: Symbol::Enum(EnumId::from(1)),
                             dest: 2.into(),
                             ty: IrTy::Record(
                                 Some(Symbol::Enum(EnumId::from(1))),
@@ -586,7 +590,8 @@ pub mod tests {
                             val: 123.into(),
                             meta: meta()
                         },
-                        Instruction::Record {
+                        Instruction::Nominal {
+                            sym: Symbol::Struct(StructId::from(1)),
                             dest: 3.into(),
                             ty: IrTy::Record(
                                 Some(Symbol::Struct(StructId::from(1))),
@@ -1092,7 +1097,7 @@ pub mod tests {
             vec![BasicBlock {
                 id: BasicBlockId(0),
                 phis: Default::default(),
-                instructions: vec![Instruction::Struct {
+                instructions: vec![Instruction::Nominal {
                     dest: 0.into(),
                     sym: Symbol::String,
                     ty: IrTy::Record(
