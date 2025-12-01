@@ -32,7 +32,7 @@ impl Display for ModuleId {
             Self::Core => write!(f, "C"),
             Self::Builtin => write!(f, "B"),
             Self::Current => write!(f, "_"),
-            id => write!(f, "{id}"),
+            id => write!(f, "{}", id.0),
         }
     }
 }
