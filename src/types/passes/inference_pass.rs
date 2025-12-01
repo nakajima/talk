@@ -279,21 +279,12 @@ impl<'a> InferencePass<'a> {
             }
 
             if let Some(child_types) = self.asts[idx].phase.child_types.get(&protocol_sym) {
-                println!("REGISTERING CHILD TYPES WITH CATALOG FOR {protocol_sym:?}");
                 self.session
                     .type_catalog
                     .associated_types
                     .entry(protocol_sym)
                     .or_default()
                     .extend(child_types.clone());
-            } else {
-                println!(
-                    "NOT CHILD TYPES FOUND FOR {protocol_sym:?} BUT WE HAVE: {:?}",
-                    self.session
-                        .type_catalog
-                        .associated_types
-                        .get(&protocol_sym)
-                )
             }
 
             let (binders, placeholders) = binders.into_iter().unzip();

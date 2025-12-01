@@ -804,4 +804,18 @@ pub mod tests {
             )
         );
     }
+
+    #[test]
+    fn interprets_closure() {
+        assert_eq!(
+            interpret(
+                "
+            let a = 123
+            func b() { a }
+            b()
+            "
+            ),
+            Value::Int(123)
+        );
+    }
 }

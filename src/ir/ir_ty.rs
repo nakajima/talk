@@ -31,7 +31,7 @@ impl IrTy {
             IrTy::Func(args, ret) => {
                 ret.bytes_len() + args.iter().map(|a| a.bytes_len()).sum::<usize>()
             }
-            IrTy::Record(_sym, fields) => fields.iter().map(|a| a.bytes_len()).sum::<usize>(), // Including space for a symbol
+            IrTy::Record(_sym, fields) => fields.iter().map(|a| a.bytes_len()).sum::<usize>(),
             IrTy::RawPtr => 8,
             IrTy::Byte => 1,
             IrTy::Void => 0,
