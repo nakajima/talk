@@ -532,11 +532,6 @@ pub mod tests {
     fn lowers_default_implementations() {
         let program = lower("1 <= 2");
 
-        let main_func = program
-            .functions
-            .get(&Symbol::Synthesized(SynthesizedId::from(1)))
-            .unwrap();
-
         // The original lte method should still be imported
         assert!(
             program

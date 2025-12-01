@@ -114,8 +114,8 @@ impl StaticMemory {
             IrTy::Func(..) => Value::Func(Symbol::from_bytes(bytes.try_into().unwrap())),
             IrTy::Record(..) => unreachable!("can only load primitives"),
             IrTy::RawPtr => Value::RawPtr(usize::from_le_bytes(bytes.try_into().unwrap())),
-            IrTy::Byte => todo!(),
-            IrTy::Void => todo!(),
+            IrTy::Byte => Value::Buffer(bytes.to_vec()),
+            IrTy::Void => unreachable!("cannot load the void"),
             IrTy::Buffer(..) => Value::Buffer(bytes.to_vec()),
         }
     }
