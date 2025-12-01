@@ -1,5 +1,29 @@
 use crate::{compiling::module::ModuleId, id_generator::IDGenerator, ir::ir_error::IRError};
-use std::{fmt::Display, str::FromStr};
+use rustc_hash::FxHashMap;
+use std::{cell::RefCell, fmt::Display, str::FromStr};
+
+thread_local! {
+    static SYMBOL_NAMES: RefCell<Option<FxHashMap<Symbol, String>>> = const { RefCell::new(None) };
+}
+
+/// RAII guard that clears symbol names on drop
+pub struct SymbolDisplayContext;
+
+impl Drop for SymbolDisplayContext {
+    fn drop(&mut self) {
+        SYMBOL_NAMES.with(|cell| cell.borrow_mut().take());
+    }
+}
+
+/// Set symbol names for Display. Returns guard that clears on drop.
+pub fn set_symbol_names(names: FxHashMap<Symbol, String>) -> SymbolDisplayContext {
+    SYMBOL_NAMES.with(|cell| *cell.borrow_mut() = Some(names));
+    SymbolDisplayContext
+}
+
+fn lookup_symbol_name(sym: &Symbol) -> Option<String> {
+    SYMBOL_NAMES.with(|cell| cell.borrow().as_ref().and_then(|map| map.get(sym).cloned()))
+}
 
 // Macro for cross-module IDs (with ModuleId)
 macro_rules! impl_module_symbol_id {
@@ -474,6 +498,10 @@ impl_local_symbol_id!(PatternBindLocal, PatternBindLocalId);
 
 impl Display for Symbol {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(name) = lookup_symbol_name(self) {
+            return write!(f, "{}", name);
+        }
+
         match self {
             Symbol::Struct(type_id) => write!(f, "{}", type_id),
             Symbol::Enum(type_id) => write!(f, "{}", type_id),

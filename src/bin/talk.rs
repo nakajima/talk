@@ -59,7 +59,8 @@ async fn main() {
                 .lower()
                 .unwrap()
                 .module("talkin");
-            let interpreter = Interpreter::new(module.program);
+
+            let interpreter = Interpreter::new(module.program, Some(module.symbol_names));
             let result = interpreter.run();
             println!("{result:?}");
         }

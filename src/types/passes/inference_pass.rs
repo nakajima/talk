@@ -64,7 +64,6 @@ pub struct InferencePass<'a> {
     session: &'a mut TypeSession,
     canonical_rows: FxHashMap<Symbol, RowMetaId>,
     constraints: ConstraintStore,
-    #[allow(clippy::type_complexity)]
     instantiations: FxHashMap<NodeID, InstantiationSubstitutions>,
     substitutions: UnificationSubstitutions,
     tracked_returns: Vec<IndexSet<(Span, InferTy)>>,
@@ -279,6 +278,24 @@ impl<'a> InferencePass<'a> {
                 }
             }
 
+            if let Some(child_types) = self.asts[idx].phase.child_types.get(&protocol_sym) {
+                println!("REGISTERING CHILD TYPES WITH CATALOG FOR {protocol_sym:?}");
+                self.session
+                    .type_catalog
+                    .associated_types
+                    .entry(protocol_sym)
+                    .or_default()
+                    .extend(child_types.clone());
+            } else {
+                println!(
+                    "NOT CHILD TYPES FOUND FOR {protocol_sym:?} BUT WE HAVE: {:?}",
+                    self.session
+                        .type_catalog
+                        .associated_types
+                        .get(&protocol_sym)
+                )
+            }
+
             let (binders, placeholders) = binders.into_iter().unzip();
             self.solve(&mut context, binders, placeholders)
         }
@@ -335,10 +352,19 @@ impl<'a> InferencePass<'a> {
         self.constraints
             .wants_equals(protocol_self_meta.clone(), conforming_self.clone());
 
+        let protocol_associated_types = self
+            .session
+            .type_catalog
+            .associated_types
+            .get(&key.protocol_id.into())
+            .cloned()
+            .unwrap_or_default();
+
         let mut associated_substitutions = FxHashMap::<InferTy, InferTy>::default();
-        for child_sym in self.asts[idx]
-            .phase
-            .child_types
+        for child_sym in self
+            .session
+            .type_catalog
+            .associated_types
             .get(&key.protocol_id.into())
             .cloned()
             .unwrap_or_default()
@@ -449,14 +475,14 @@ impl<'a> InferencePass<'a> {
                 continue;
             };
             let witness_ty = witness_entry.instantiate(
-                NodeID::SYNTHESIZED,
+                conformance.node_id,
                 &mut self.constraints,
                 &mut context,
                 self.session,
             );
 
             let requirement_ty = requirement_entry.instantiate(
-                NodeID::SYNTHESIZED,
+                conformance.node_id,
                 &mut self.constraints,
                 &mut context,
                 self.session,
@@ -1273,12 +1299,27 @@ impl<'a> InferencePass<'a> {
             });
 
         tracing::debug!("  final associated_types={:?}", associated_types);
+        use crate::types::ty::SomeType;
+
+        let key = ConformanceKey {
+            protocol_id,
+            conforming_id: nominal_symbol,
+        };
+
+        // Skip if already imported with solved types
+        if let Some(existing) = self.session.type_catalog.conformances.get(&key)
+            && !existing
+                .associated_types
+                .values()
+                .any(|ty| ty.contains_var())
+        {
+            // Already has concrete types, don't overwrite
+            self.constraints.wants_conforms(ty.clone(), protocol_id);
+            return;
+        }
 
         self.session.type_catalog.conformances.insert(
-            ConformanceKey {
-                protocol_id,
-                conforming_id: nominal_symbol,
-            },
+            key,
             Conformance {
                 node_id: conformance_node_id,
                 conforming_id: nominal_symbol,

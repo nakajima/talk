@@ -54,6 +54,7 @@ impl ModuleEnvironment {
 pub struct Module {
     pub name: String,
     pub types: Types,
+    pub symbol_names: FxHashMap<Symbol, String>,
     pub exports: IndexMap<String, Symbol>,
     pub program: Program,
 }

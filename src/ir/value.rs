@@ -117,9 +117,9 @@ impl std::fmt::Display for Value {
             Value::Buffer(v) => write!(f, "[{v:?}]"),
             Value::Record(sym, fields) => write!(
                 f,
-                "{{ {}{:?} }}",
+                "{}{{ {:?} }}",
                 if let Some(sym) = sym {
-                    format!("{sym} @ ")
+                    format!("{sym} ")
                 } else {
                     "".to_string()
                 },
@@ -127,7 +127,7 @@ impl std::fmt::Display for Value {
             ),
             Value::Int(i) => write!(f, "{i}"),
             Value::Float(i) => write!(f, "{i}"),
-            Value::Func(name) => write!(f, "F({})", name),
+            Value::Func(name) => write!(f, "{}()", name),
             Value::Bool(b) => write!(f, "{}", if *b { "true" } else { "false" }),
             Value::Void => write!(f, "void"),
             Value::Uninit => write!(f, "uninit"),

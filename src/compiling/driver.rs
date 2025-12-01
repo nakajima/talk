@@ -1,6 +1,7 @@
 use std::{io, path::PathBuf, rc::Rc};
 
 use indexmap::IndexMap;
+use rustc_hash::FxHashMap;
 
 use crate::{
     ast::{self, AST},
@@ -256,11 +257,25 @@ impl Driver<Typed> {
 
 impl Driver<Lowered> {
     pub fn module<T: Into<String>>(self, name: T) -> Module {
+        let mut symbol_names =
+            self.phase
+                .asts
+                .into_iter()
+                .fold(FxHashMap::default(), |mut acc, (_, ast)| {
+                    acc.extend(ast.phase.symbols_to_string);
+                    acc
+                });
+
+        for module in self.config.modules.modules.values() {
+            symbol_names.extend(module.symbol_names.clone());
+        }
+
         Module {
             name: name.into(),
             types: self.phase.types,
             exports: self.phase.exports,
             program: self.phase.program,
+            symbol_names,
         }
     }
 }

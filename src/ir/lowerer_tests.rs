@@ -8,7 +8,7 @@ pub mod tests {
         assert_eq_diff,
         compiling::{
             driver::{Driver, Source},
-            module::ModuleId,
+            module::{Module, ModuleId},
         },
         ir::{
             basic_block::{BasicBlock, BasicBlockId, Phi, PhiSource},
@@ -51,6 +51,20 @@ pub mod tests {
             &typed.config,
         );
         lowerer.lower().unwrap()
+    }
+
+    pub fn lower_module(input: &str) -> Module {
+        let driver = Driver::new(vec![Source::from(input)], Default::default());
+        driver
+            .parse()
+            .unwrap()
+            .resolve_names()
+            .unwrap()
+            .typecheck()
+            .unwrap()
+            .lower()
+            .unwrap()
+            .module("TestModule")
     }
 
     #[test]

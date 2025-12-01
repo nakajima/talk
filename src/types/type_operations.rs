@@ -449,6 +449,41 @@ pub(super) fn unify(
         (InferTy::Record(lhs_row), InferTy::Record(rhs_row)) => {
             unify_rows(TypeDefKind::Struct, lhs_row, rhs_row, context, session)
         }
+        // Handle Projection vs concrete type                                                                         13:48:55 [35/2876]
+        (
+            InferTy::Projection {
+                base: box base_ty,
+                associated,
+                protocol_id,
+            },
+            other,
+        )
+        | (
+            other,
+            InferTy::Projection {
+                base: box base_ty,
+                associated,
+                protocol_id,
+            },
+        ) => {
+            let projection = InferTy::Projection {
+                base: Box::new(base_ty.clone()),
+                associated: associated.clone(),
+                protocol_id: *protocol_id,
+            };
+            let normalized = context.normalize(projection.clone(), session);
+
+            // If normalization resolved it (not still a Projection), unify recursively
+            if !matches!(&normalized, InferTy::Projection { .. }) {
+                unify(&normalized, other, context, session)
+            } else {
+                // Base is still unknown - error (the constraint solver will defer)
+                Err(TypeError::InvalidUnification(
+                    projection.into(),
+                    other.clone().into(),
+                ))
+            }
+        }
 
         (_, InferTy::Rigid(_)) | (InferTy::Rigid(_), _) => {
             Err(TypeError::InvalidUnification(lhs.into(), rhs.into()))

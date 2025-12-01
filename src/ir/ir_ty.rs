@@ -60,6 +60,14 @@ impl FromStr for IrTy {
             return Ok(IrTy::Void);
         }
 
+        if s == "byte" {
+            return Ok(IrTy::Byte);
+        }
+
+        if s == "rawptr" {
+            return Ok(IrTy::RawPtr);
+        }
+
         // function: (a, b, c) -> r
         if let Some((lhs, rhs)) = s.split_once("->") {
             let args_str = lhs.trim().trim_start_matches('(').trim_end_matches(')');
@@ -116,9 +124,9 @@ impl std::fmt::Display for IrTy {
                 }
                 write!(
                     f,
-                    "{{ {}{} }}",
+                    "{}{{ {} }}",
                     if let Some(sym) = sym {
-                        format!("{sym}")
+                        format!("{sym} ")
                     } else {
                         "".to_string()
                     },

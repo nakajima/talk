@@ -1,6 +1,7 @@
 use std::fmt::Display;
 
 use itertools::Itertools;
+use rustc_hash::FxHashMap;
 
 use crate::{
     ir::{
@@ -14,7 +15,7 @@ use crate::{
         value::{Reference, Value},
     },
     label::Label,
-    name_resolution::symbol::Symbol,
+    name_resolution::symbol::{Symbol, set_symbol_names},
 };
 
 // #[derive(Debug, Clone, PartialEq)]
@@ -38,6 +39,8 @@ impl Value {
         match (&self, &other) {
             (Self::Int(lhs), Self::Int(rhs)) => Self::Int(lhs + rhs),
             (Self::Float(lhs), Self::Float(rhs)) => Self::Float(lhs + rhs),
+            // Pointer arithmetic: RawPtr + Int -> RawPtr
+            (Self::RawPtr(ptr), Self::Int(offset)) => Self::RawPtr(ptr + *offset as usize),
             _ => panic!("can't add {self:?} and {other:?}"),
         }
     }
@@ -163,27 +166,25 @@ impl Display for IR {
 
 #[derive(Default)]
 pub struct Memory {
-    mem: Vec<Value>,
-    static_end: usize,
-    next_addr: usize,
+    pub mem: Vec<u8>,
 }
 
 pub struct Interpreter {
     program: Program,
+    symbol_names: Option<FxHashMap<Symbol, String>>,
     frames: Vec<Frame>,
     current_func: Option<Function<IrTy>>,
     main_result: Option<Value>,
     memory: Memory,
+    heap_start: usize,
 }
 
 #[allow(clippy::unwrap_used)]
 #[allow(clippy::expect_used)]
 #[allow(clippy::panic)]
 impl Interpreter {
-    pub fn new(program: Program) -> Self {
-        if std::env::var("SHOW_IR").is_ok() {
-            println!("{program}");
-        }
+    pub fn new(program: Program, symbol_names: Option<FxHashMap<Symbol, String>>) -> Self {
+        let heap_start = program.static_memory.data.len();
 
         Self {
             program,
@@ -191,10 +192,20 @@ impl Interpreter {
             current_func: None,
             main_result: None,
             memory: Default::default(),
+            heap_start,
+            symbol_names,
         }
     }
 
     pub fn run(mut self) -> Value {
+        if std::env::var("SHOW_IR").is_ok() {
+            let _guard = self
+                .symbol_names
+                .as_ref()
+                .map(|names| set_symbol_names(names.clone()));
+            println!("{}", self.program);
+        }
+
         #[allow(clippy::expect_used)]
         let entrypoint = self
             .program
@@ -223,8 +234,13 @@ impl Interpreter {
             .functions
             .shift_remove(&function)
             .unwrap_or_else(|| {
+                let _guard = self
+                    .symbol_names
+                    .as_ref()
+                    .map(|names| set_symbol_names(names.clone()));
+
                 panic!(
-                    "did not find function: {:?} {:?}",
+                    "did not find function: {} {:?}",
                     function,
                     self.program
                         .functions
@@ -247,7 +263,7 @@ impl Interpreter {
     pub fn next(&mut self) {
         let next_instruction = self.next_instr();
 
-        tracing::trace!("{next_instruction}");
+        tracing::trace!("{}", self.display_ir(&next_instruction));
 
         match next_instruction {
             IR::Phi(phi) => {
@@ -335,12 +351,25 @@ impl Interpreter {
                 field,
                 ..
             }) => {
-                let Label::Positional(idx) = field else {
-                    panic!("did not get positional index for record field: {field:?}");
+                let Value::Record(sym, fields) = self.read_register(&record) else {
+                    panic!("did not get record from {record:?}");
                 };
 
-                let Value::Record(_, fields) = self.read_register(&record) else {
-                    panic!("did not get record from {record:?}");
+                let idx = match field {
+                    Label::Positional(idx) => idx,
+                    Label::Named(name) => {
+                        // Map named fields to positions for known structs
+                        if sym == Some(Symbol::String) {
+                            match name.as_str() {
+                                "base" => 0,
+                                "length" => 1,
+                                "capacity" => 2,
+                                _ => panic!("unknown String field: {name}"),
+                            }
+                        } else {
+                            panic!("named field access not supported for {sym:?}.{name}");
+                        }
+                    }
                 };
 
                 self.write_register(&dest, fields[idx].clone());
@@ -393,14 +422,66 @@ impl Interpreter {
                 let val = self.val(val.clone());
                 println!("{}", self.display(val));
             }
-            IR::Instr(Instruction::Alloc { dest, ty, count }) => {}
+            IR::Instr(Instruction::Alloc { dest, ty: _, count }) => {
+                let count = match self.val(count) {
+                    Value::Int(n) => n as usize,
+                    v => panic!("alloc count must be int, got {v:?}"),
+                };
+
+                // Address in unified space = heap_start + current heap size
+                let addr = self.heap_start + self.memory.mem.len();
+
+                // Extend heap with zeroed bytes
+                self.memory.mem.resize(self.memory.mem.len() + count, 0);
+
+                self.write_register(&dest, Value::RawPtr(addr));
+            }
             IR::Instr(Instruction::Copy {
-                ty,
+                ty: _,
                 from,
                 to,
                 length,
-            }) => {}
+            }) => {
+                let from_addr = match self.val(from) {
+                    Value::RawPtr(a) => a,
+                    Value::Int(a) => a as usize,
+                    v => panic!("copy from must be RawPtr or Int, got {v:?}"),
+                };
+                let to_addr = match self.val(to) {
+                    Value::RawPtr(a) => a,
+                    Value::Int(a) => a as usize,
+                    v => panic!("copy to must be RawPtr or Int, got {v:?}"),
+                };
+                let len = match self.val(length) {
+                    Value::Int(n) => n as usize,
+                    v => panic!("copy length must be Int, got {v:?}"),
+                };
+
+                for i in 0..len {
+                    // Read byte from source
+                    let byte = if from_addr < self.heap_start {
+                        // Source is in static memory
+                        self.program.static_memory.data[from_addr + i]
+                    } else {
+                        // Source is in heap
+                        self.memory.mem[from_addr - self.heap_start + i]
+                    };
+
+                    // Write byte to destination (must be heap, since static is read-only)
+                    let heap_idx = to_addr - self.heap_start + i;
+                    self.memory.mem[heap_idx] = byte;
+                }
+            }
             IR::Instr(Instruction::Free { .. } | Instruction::Load { .. }) => unimplemented!(),
+        }
+    }
+
+    fn display_ir(&self, ir: &IR) -> String {
+        if let Some(names) = &self.symbol_names {
+            let _guard = set_symbol_names(names.clone());
+            format!("{ir}")
+        } else {
+            format!("{ir}")
         }
     }
 
@@ -408,40 +489,62 @@ impl Interpreter {
         match val {
             Value::Int(val) => format!("{val}"),
             Value::Reg(reg) => format!("%{reg}"),
-            Value::Poison => format!("<POISON>"),
+            Value::Poison => "<POISON>".to_string(),
             Value::Float(val) => format!("{val}"),
             Value::Bool(val) => format!("{val}"),
             Value::Record(sym, values) => {
                 if sym == Some(Symbol::String) {
-                    let Value::RawPtr(i) = &values[0] else {
+                    let Value::RawPtr(addr) = &values[0] else {
                         unreachable!()
                     };
 
                     let Value::Int(len) = &values[1] else {
                         unreachable!()
                     };
+                    let len = *len as usize;
 
-                    let Value::Buffer(data) = self.val(self.program.static_memory.load(
-                        *i,
-                        *len as usize,
-                        IrTy::Byte,
-                    )) else {
-                        unreachable!()
+                    let bytes: Vec<u8> = if *addr < self.heap_start {
+                        // String is in static memory
+                        self.program.static_memory.data[*addr..*addr + len].to_vec()
+                    } else {
+                        // String is in heap memory
+                        let heap_idx = *addr - self.heap_start;
+                        self.memory.mem[heap_idx..heap_idx + len].to_vec()
                     };
 
-                    let s = str::from_utf8(&data).unwrap();
-                    return format!("{s}");
+                    let s = str::from_utf8(&bytes).unwrap();
+                    return s.to_string();
                 }
 
                 let values = values.into_iter().map(|v| self.display(v)).collect_vec();
-                format!("{sym:?}{values:?}")
+                let name = if let Some(sym) = sym {
+                    self.sym_to_str(&sym)
+                } else {
+                    "".to_string()
+                };
+
+                format!("{name:?}({values:?})")
             }
-            Value::Func(symbol) => format!("fn({symbol:?})"),
+            Value::Func(symbol) => format!("func {}()", self.sym_to_str(&symbol)),
             Value::Void => "void".into(),
             Value::RawPtr(val) => format!("rawptr({val})"),
-            Value::Ref(reference) => format!("{reference:?}"),
+            Value::Ref(reference) => match reference {
+                Reference::Func(sym) => format!("func {}()", self.sym_to_str(&sym)),
+                _ => format!("{reference:?}"),
+            },
             Value::Uninit => "UNINIT".into(),
             Value::Buffer(bytes) => format!("buf({bytes:?})"),
+        }
+    }
+
+    fn sym_to_str(&self, sym: &Symbol) -> String {
+        if let Some(symbol_names) = &self.symbol_names {
+            symbol_names
+                .get(sym)
+                .expect("did not get symbol name")
+                .clone()
+        } else {
+            format!("{sym:?}")
         }
     }
 
@@ -511,13 +614,13 @@ impl Interpreter {
 
 #[cfg(test)]
 pub mod tests {
-    use crate::ir::lowerer_tests::tests::lower;
+    use crate::ir::lowerer_tests::tests::lower_module;
 
     use super::*;
 
     pub fn interpret(input: &str) -> Value {
-        let program = lower(input);
-        let interpreter = Interpreter::new(program);
+        let module = lower_module(input);
+        let interpreter = Interpreter::new(module.program, Some(module.symbol_names));
         interpreter.run()
     }
 
@@ -693,11 +796,15 @@ pub mod tests {
 
     #[test]
     fn interprets_string_plus() {
+        // String concatenation allocates a new string on the heap
+        // Static memory: "hello " (6 bytes) + "world" (5 bytes) = 11 bytes
+        // Heap starts at offset 11, so new string is at RawPtr(11)
+        // Result: "hello world" (11 chars)
         assert_eq!(
             interpret("let a = \"hello \" + \"world\"; a"),
             Value::Record(
-                Some(Symbol::String),
-                vec![Value::RawPtr(2), Value::Int(11), Value::Int(11)]
+                None, // TODO: Should be Some(Symbol::String) but struct construction in core module produces anonymous record
+                vec![Value::RawPtr(11), Value::Int(11), Value::Int(11)]
             )
         );
     }

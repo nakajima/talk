@@ -7,7 +7,9 @@ use crate::ir::ir_ty::IrTy;
 use crate::ir::monomorphizer::uncurry_function;
 use crate::ir::parse_instruction;
 use crate::label::Label;
-use crate::name_resolution::symbol::{InstanceMethodId, Symbols};
+use crate::name_resolution::symbol::{
+    GlobalId, InitializerId, InstanceMethodId, StaticMethodId, Symbols,
+};
 use crate::node_kinds::match_arm::MatchArm;
 use crate::node_kinds::parameter::Parameter;
 use crate::node_kinds::record_field::RecordField;
@@ -1275,8 +1277,22 @@ impl<'a> Lowerer<'a> {
             };
         }
 
-        let ty = Ty::Record(None, field_row.into());
         let dest = self.ret(bind);
+
+        // Check if this record literal is typed as a nominal struct
+        if let Ok(Ty::Nominal { symbol, .. }) = self.ty_from_id(&expr.id) {
+            let ty = Ty::Record(Some(symbol), field_row.into());
+            self.push_instr(Instruction::Struct {
+                dest,
+                sym: symbol,
+                ty: ty.clone(),
+                record: field_vals.into(),
+                meta: vec![InstructionMeta::Source(expr.id)].into(),
+            });
+            return Ok((dest.into(), ty));
+        }
+
+        let ty = Ty::Record(None, field_row.into());
         self.push_instr(Instruction::Record {
             dest,
             ty: ty.clone(),
@@ -1568,7 +1584,7 @@ impl<'a> Lowerer<'a> {
         if let ExprKind::Variable(name) = &callee.kind
             && name.symbol().expect("name not resolved") == Symbol::IR
         {
-            return self.lower_embedded_ir_call(call_expr.id, args, dest);
+            return self.lower_embedded_ir_call(call_expr.id, args, dest, parent_instantiations);
         }
 
         if let ExprKind::Variable(name) = &callee.kind
@@ -1852,6 +1868,7 @@ impl<'a> Lowerer<'a> {
         id: NodeID,
         args: &[CallArg],
         dest: Register,
+        parent_instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
         let ExprKind::LiteralString(string) = &args[0].value.kind else {
             unreachable!()
@@ -1859,8 +1876,18 @@ impl<'a> Lowerer<'a> {
 
         let mut string = string.clone();
 
+        // Replace $? with destination register
         if string.contains("$?") {
             string = string.replace("$?", &format!("%{}", dest.0));
+        }
+
+        // Lower additional arguments and substitute $1, $2, $3, etc.
+        for (i, arg) in args.iter().skip(1).enumerate() {
+            let placeholder = format!("${}", i + 1);
+            if string.contains(&placeholder) {
+                let (val, _ty) = self.lower_expr(&arg.value, Bind::Fresh, parent_instantiations)?;
+                string = string.replace(&placeholder, &val.to_string());
+            }
         }
 
         self.push_instr(parse_instruction::<IrTy>(&string).into());
@@ -2006,45 +2033,58 @@ impl<'a> Lowerer<'a> {
             return;
         }
 
-        if let Symbol::InstanceMethod(InstanceMethodId { module_id, .. }) = symbol
-            && *module_id != ModuleId::Current
-        {
-            let module = self
-                .config
-                .modules
-                .modules
-                .get(module_id)
-                .expect("didn't get module for import");
-            tracing::debug!("importing {symbol:?} from {module_id}");
-            // TODO: This won't work with external methods yet, only core works.
-            let method_func = module
-                .program
-                .polyfunctions
-                .get(symbol)
-                .unwrap_or_else(|| panic!("didn't get method for import: {symbol:?}"));
-            self.functions.insert(*symbol, method_func.clone());
+        let module_id = match symbol {
+            Symbol::InstanceMethod(InstanceMethodId { module_id, .. }) => Some(*module_id),
+            Symbol::StaticMethod(StaticMethodId { module_id, .. }) => Some(*module_id),
+            Symbol::Initializer(InitializerId { module_id, .. }) => Some(*module_id),
+            Symbol::Global(GlobalId { module_id, .. }) => Some(*module_id),
+            Symbol::Synthesized(SynthesizedId { module_id, .. }) => Some(*module_id),
+            _ => None,
+        };
 
-            // Recursively import any functions this function calls
-            let callees: Vec<Symbol> = method_func
-                .blocks
-                .iter()
-                .flat_map(|block| &block.instructions)
-                .filter_map(|instr| {
-                    if let Instruction::Call {
-                        callee: Value::Func(sym),
-                        ..
-                    } = instr
-                    {
-                        Some(*sym)
-                    } else {
-                        None
-                    }
-                })
-                .collect();
+        let Some(module_id) = module_id else {
+            return;
+        };
 
-            for callee_sym in callees {
-                self.check_import(&callee_sym);
-            }
+        if module_id == ModuleId::Current {
+            return;
+        }
+
+        let module = self
+            .config
+            .modules
+            .modules
+            .get(&module_id)
+            .expect("didn't get module for import");
+        tracing::debug!("importing {symbol:?} from {module_id}");
+        // TODO: This won't work with external methods yet, only core works.
+        let method_func = module
+            .program
+            .polyfunctions
+            .get(symbol)
+            .unwrap_or_else(|| panic!("didn't get method for import: {symbol:?}"));
+        self.functions.insert(*symbol, method_func.clone());
+
+        // Recursively import any functions this function calls
+        let callees: Vec<Symbol> = method_func
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instructions)
+            .filter_map(|instr| {
+                if let Instruction::Call {
+                    callee: Value::Func(sym),
+                    ..
+                } = instr
+                {
+                    Some(*sym)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        for callee_sym in callees {
+            self.check_import(&callee_sym);
         }
     }
 

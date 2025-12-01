@@ -4,9 +4,32 @@ struct String {
 	let capacity: Int
 }
 
+func _alloc(count: Int) -> RawPtr {
+	__IR("$? = alloc byte %0")
+}
+
+func _copy(from: RawPtr, to: RawPtr, length: Int) -> Void {
+	__IR<Void>("copy byte %0 %1 %2")
+}
+
+func _ptr_add(ptr: RawPtr, offset: Int) -> RawPtr {
+	__IR("$? = add int %0 %1")
+}
+
+func _int_add(a: Int, b: Int) -> Int {
+	__IR("$? = add int %0 %1")
+}
+
 extend String: Add {
 	func add(rhs: String) -> String {
-		self
+		let selfLen: Int = self.length
+		let rhsLen: Int = rhs.length
+		let newLen: Int = _int_add(selfLen, rhsLen)
+		let newBase: RawPtr = _alloc(newLen)
+		_copy(self.base, newBase, selfLen)
+		let rhsDest: RawPtr = _ptr_add(newBase, selfLen)
+		_copy(rhs.base, rhsDest, rhsLen)
+		String(base: newBase, length: newLen, capacity: newLen)
 	}
 }
 

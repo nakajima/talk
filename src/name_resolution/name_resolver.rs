@@ -96,6 +96,7 @@ pub struct NameResolved {
     pub captures: FxHashMap<Symbol, FxHashSet<Capture>>,
     pub is_captured: FxHashSet<Symbol>,
     pub scopes: FxHashMap<NodeID, Scope>,
+    pub symbols_to_string: FxHashMap<Symbol, String>,
     pub symbols_to_node: FxHashMap<Symbol, NodeID>,
     pub scc_graph: SCCGraph,
     pub unbound_nodes: Vec<NodeID>,
@@ -475,6 +476,7 @@ impl NameResolver {
         };
 
         self.phase.symbols_to_node.insert(symbol, node_id);
+        self.phase.symbols_to_string.insert(symbol, name.name_str());
 
         tracing::debug!(
             "declare type {} -> {symbol:?} {:?}",

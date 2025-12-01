@@ -5,7 +5,6 @@ use crate::{
         function::Function,
         ir_ty::IrTy,
         lowerer::{PolyFunction, StaticMemory},
-        value::Value,
     },
     name_resolution::symbol::Symbol,
 };
