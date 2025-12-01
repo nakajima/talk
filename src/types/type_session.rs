@@ -190,6 +190,15 @@ impl TypeSession {
                     .or_default()
                     .extend(entries.clone());
             }
+
+            // Import child_types from modules
+            for (sym, entries) in module.1.types.catalog.child_types.iter() {
+                catalog
+                    .child_types
+                    .entry(*sym)
+                    .or_default()
+                    .extend(entries.clone());
+            }
         }
 
         TypeSession {

@@ -556,9 +556,6 @@ impl<'a> DeclDeclarer<'a> {
                 .nominal_stack
                 .last()
                 .expect("did not get parent protocol for associated type");
-            println!("DEBUG: Adding child_type parent={parent:?} name={} sym={:?}",
-                generic.name.name_str(),
-                generic.name.symbol());
             self.resolver
                 .phase
                 .child_types

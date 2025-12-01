@@ -12,7 +12,7 @@ use crate::{
     name_resolution::{
         name_resolver::NameResolved,
         scc_graph::BindingGroup,
-        symbol::{ProtocolId, Symbol, set_symbol_names},
+        symbol::{ProtocolId, Symbol},
     },
     node::Node,
     node_id::NodeID,
@@ -86,6 +86,11 @@ impl<'a> InferencePass<'a> {
     }
 
     fn drive_all(&mut self) {
+        // Register extension conformances first, so they're available when processing protocol default methods
+        for i in 0..self.asts.len() {
+            self.discover_conformances(i);
+        }
+
         for i in 0..self.asts.len() {
             self.discover_protocols(i, Level::default());
             self.session.apply_all(&mut self.substitutions);
@@ -98,6 +103,64 @@ impl<'a> InferencePass<'a> {
 
         self.check_conformances();
         self.session.apply_all(&mut self.substitutions);
+
+        // Transfer child_types from AST phases to the catalog for module export
+        for ast in self.asts.iter() {
+            for (sym, entries) in ast.phase.child_types.iter() {
+                self.session
+                    .type_catalog
+                    .child_types
+                    .entry(*sym)
+                    .or_default()
+                    .extend(entries.iter().map(|(k, v)| (k.to_string(), *v)));
+            }
+        }
+    }
+
+    /// Pre-register extension conformances so they're available when processing protocol default methods.
+    /// This ensures that when `Comparable` uses `!` operator on Bool, the `Bool: Not` conformance is known.
+    fn discover_conformances(&mut self, idx: usize) {
+        for root in self.asts[idx].roots.iter() {
+            let Node::Decl(Decl {
+                kind:
+                    DeclKind::Extend {
+                        name, conformances, ..
+                    },
+                ..
+            }) = root
+            else {
+                continue;
+            };
+
+            let Ok(nominal_symbol) = name.symbol() else {
+                continue;
+            };
+
+            for conformance in conformances {
+                let Ok(Symbol::Protocol(protocol_id)) = conformance.symbol() else {
+                    continue;
+                };
+
+                let key = ConformanceKey {
+                    protocol_id,
+                    conforming_id: nominal_symbol,
+                };
+
+                // Only insert if not already present (e.g. from imports)
+                self.session
+                    .type_catalog
+                    .conformances
+                    .entry(key)
+                    .or_insert_with(|| Conformance {
+                        node_id: conformance.id,
+                        conforming_id: nominal_symbol,
+                        protocol_id,
+                        witnesses: Default::default(),
+                        associated_types: Default::default(),
+                        span: conformance.span,
+                    });
+            }
+        }
     }
 
     fn discover_protocols(&mut self, idx: usize, level: Level) {
@@ -295,10 +358,6 @@ impl<'a> InferencePass<'a> {
 
     #[instrument(skip(self))]
     fn check_conformances(&mut self) {
-        println!("DEBUG check_conformances: {} ASTs", self.asts.len());
-        for (i, ast) in self.asts.iter().enumerate() {
-            println!("  AST {}: child_types keys = {:?}", i, ast.phase.child_types.keys().collect::<Vec<_>>());
-        }
         for i in 0..self.asts.len() {
             for (key, conformance) in self.session.type_catalog.conformances.clone().iter() {
                 self.check_conformance(i, key, conformance);
@@ -358,13 +417,19 @@ impl<'a> InferencePass<'a> {
             .iter()
             .filter(|sym| matches!(sym.1, Symbol::AssociatedType(..)))
         {
-            // Search all ASTs for child_types - cross-file dependencies may have
-            // the definition in a different file
-            let conforming_children = self
+            // Search ASTs and type_catalog for child_types - may be in a different file
+            // or imported from another module
+            let conforming_children: FxHashMap<Label, Symbol> = self
                 .asts
                 .iter()
-                .find_map(|ast| ast.phase.child_types.get(&key.conforming_id))
-                .cloned()
+                .find_map(|ast| ast.phase.child_types.get(&key.conforming_id).cloned())
+                .or_else(|| {
+                    self.session
+                        .type_catalog
+                        .child_types
+                        .get(&key.conforming_id)
+                        .map(|m| m.iter().map(|(k, v)| (k.clone().into(), *v)).collect())
+                })
                 .unwrap_or_default();
             let concrete = if let Some(conforming) = conforming_children.get(child_sym.0)
                 && let Some(concrete) = self.session.lookup(conforming)
@@ -377,21 +442,8 @@ impl<'a> InferencePass<'a> {
                 )
             } else {
                 let Some(ty) = conformance.associated_types.get(child_sym.0).cloned() else {
-                    let s = self.asts.iter().fold(FxHashMap::default(), |mut acc, ast| {
-                        acc.extend(ast.phase.symbols_to_string.clone());
-                        acc
-                    });
-                    let _s = set_symbol_names(s);
                     tracing::error!("Did not get associated type {child_sym:?}");
-                    println!("child sym: {} {}", child_sym.0, child_sym.1);
-                    println!("protocol: {}", Symbol::Protocol(key.protocol_id));
-                    println!("conforming: {}", key.conforming_id);
-                    println!("conforming_children: {:?}", conforming_children);
-                    println!("all child_types keys (per AST):");
-                    for (i, ast) in self.asts.iter().enumerate() {
-                        println!("  AST {}: {:?}", i, ast.phase.child_types.keys().collect::<Vec<_>>());
-                    }
-                    unimplemented!("Did not get associated type {child_sym:?}, key: {key:?}",);
+                    continue;
                 };
 
                 ty
@@ -542,34 +594,53 @@ impl<'a> InferencePass<'a> {
             .map(|(k, v)| (*k, v.clone()))
             .collect_vec()
         {
-            if let MemberWitness::Meta { receiver, label } = &witness {
-                let receiver_ty = self
-                    .session
-                    .apply(receiver.clone(), &mut self.substitutions);
-                let symbol = match receiver_ty {
-                    InferTy::Primitive(symbol) => symbol,
-                    InferTy::Nominal { symbol, .. } => symbol,
-                    _ => {
-                        tracing::warn!(
-                            "Unable to resolve witness: {witness:?} for {receiver_ty:?} (original: {:?})",
-                            receiver.clone()
-                        );
-                        continue;
-                    }
-                };
-
-                // Use lookup_member which checks instance_methods, conformances, and modules
-                if let Some((method, _source)) = self.session.lookup_member(&symbol, label) {
-                    tracing::trace!(
-                        "Resolved concrete witness {receiver_ty:?}.{label:?} = {method:?}"
-                    );
-                    self.session
-                        .type_catalog
-                        .member_witnesses
-                        .insert(witness_id, MemberWitness::Concrete(method));
-                    continue;
+            match &witness {
+                MemberWitness::Meta { receiver, label } => {
+                    self.resolve_witness_to_concrete(witness_id, receiver, label);
                 }
-            };
+                MemberWitness::Requirement(method_req, receiver) => {
+                    // Get the method label from the requirement symbol
+                    let Some(label) = self
+                        .session
+                        .type_catalog
+                        .method_requirement_label(method_req)
+                    else {
+                        continue;
+                    };
+                    self.resolve_witness_to_concrete(witness_id, receiver, &label);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn resolve_witness_to_concrete(
+        &mut self,
+        witness_id: NodeID,
+        receiver: &InferTy,
+        label: &Label,
+    ) {
+        let receiver_ty = self
+            .session
+            .apply(receiver.clone(), &mut self.substitutions);
+        let symbol = match receiver_ty {
+            InferTy::Primitive(symbol) => symbol,
+            InferTy::Nominal { symbol, .. } => symbol,
+            _ => {
+                tracing::warn!("Unable to resolve witness for {receiver_ty:?}.{label:?}");
+                return;
+            }
+        };
+
+        // Use lookup_member which checks instance_methods, conformances, and modules
+        if let Some((method, _source)) = self.session.lookup_member(&symbol, label)
+            && matches!(method, Symbol::InstanceMethod(..))
+        {
+            tracing::trace!("Resolved concrete witness {receiver_ty:?}.{label:?} = {method:?}");
+            self.session
+                .type_catalog
+                .member_witnesses
+                .insert(witness_id, MemberWitness::Concrete(method));
         }
     }
 
@@ -1314,8 +1385,9 @@ impl<'a> InferencePass<'a> {
             conforming_id: nominal_symbol,
         };
 
-        // Skip if already imported with solved types
+        // Skip if already imported with solved types (non-empty and no type vars)
         if let Some(existing) = self.session.type_catalog.conformances.get(&key)
+            && !existing.associated_types.is_empty()
             && !existing
                 .associated_types
                 .values()

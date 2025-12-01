@@ -270,4 +270,16 @@ impl<T: SomeType> TypeCatalog<T> {
 
         None
     }
+
+    /// Look up the label for a method requirement symbol by searching all protocols
+    pub fn method_requirement_label(&self, method_req: &Symbol) -> Option<Label> {
+        for entries in self.method_requirements.values() {
+            for (label, sym) in entries {
+                if sym == method_req {
+                    return Some(label.clone());
+                }
+            }
+        }
+        None
+    }
 }

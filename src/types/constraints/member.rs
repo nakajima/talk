@@ -17,7 +17,7 @@ use crate::{
         type_catalog::MemberWitness,
         type_error::TypeError,
         type_operations::{curry, unify},
-        type_session::{MemberSource, TypeSession},
+        type_session::TypeSession,
     },
 };
 
@@ -221,20 +221,29 @@ impl Member {
         row: Option<&InferRow>,
     ) -> SolveResult {
         let mut solved_metas: Vec<Meta> = Default::default();
-        let Some((member_sym, source)) = session.lookup_member(symbol, &self.label) else {
+        let Some((member_sym, _source)) = session.lookup_member(symbol, &self.label) else {
             return SolveResult::Err(TypeError::MemberNotFound(
                 self.receiver.clone(),
                 self.label.to_string(),
             ));
         };
 
-        session
-            .type_catalog
-            .member_witnesses
-            .insert(self.node_id, MemberWitness::Concrete(member_sym));
-
         match member_sym {
-            Symbol::InstanceMethod(..) => {
+            Symbol::InstanceMethod(..) | Symbol::MethodRequirement(..) => {
+                // For InstanceMethod, record as Concrete (direct call)
+                // For MethodRequirement (from protocol conformance), defer resolution using
+                // Requirement witness - can't use Meta because the implementing InstanceMethod
+                // may not be registered yet (extensions processed later in generate)
+                let witness = if matches!(member_sym, Symbol::InstanceMethod(..)) {
+                    MemberWitness::Concrete(member_sym)
+                } else {
+                    MemberWitness::Requirement(member_sym, self.receiver.clone())
+                };
+                session
+                    .type_catalog
+                    .member_witnesses
+                    .insert(self.node_id, witness);
+
                 let Some(entry) = session.lookup(&member_sym) else {
                     return SolveResult::Err(TypeError::MemberNotFound(
                         self.receiver.clone(),
@@ -244,10 +253,6 @@ impl Member {
                 let method = entry.instantiate(self.node_id, constraints, context, session);
                 let method = session.apply(method, &mut context.substitutions);
                 let (method_receiver, method_fn) = consume_self(&method);
-
-                if let MemberSource::Protocol(protocol_id) = source {
-                    tracing::trace!("member found in protocol: {protocol_id:?}");
-                }
 
                 match unify(&method_receiver, &self.receiver, context, session) {
                     Ok(metas) => solved_metas.extend(metas),
