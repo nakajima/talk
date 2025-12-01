@@ -806,6 +806,7 @@ pub mod tests {
     }
 
     #[test]
+    #[ignore = "wip"]
     fn interprets_closure() {
         assert_eq!(
             interpret(

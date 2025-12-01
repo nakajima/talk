@@ -51,10 +51,6 @@ impl Value {
                     vec![0u8]
                 }
             }
-            Value::Ref(v) => match v {
-                Reference::Func(symbol) => symbol.as_bytes().to_vec(),
-                Reference::Register { .. } => unimplemented!(),
-            },
             Value::Record(..) => unimplemented!("only primitives can be stored"),
             Value::RawPtr(v) => v.to_le_bytes().to_vec(),
             Value::Buffer(bytes) => bytes.to_vec(),
