@@ -2251,7 +2251,7 @@ impl<'a> Lowerer<'a> {
     }
 
     fn field_index(&self, receiver_ty: &Ty, label: &Label) -> Label {
-        if let Ty::Record(None, row) | Ty::Nominal { row, .. } = receiver_ty
+        if let Ty::Record(_, row) | Ty::Nominal { row, .. } = receiver_ty
             && let Some(idx) = row.close().get_index_of(label)
         {
             Label::Positional(idx)
