@@ -12,7 +12,7 @@ use crate::{
     name_resolution::{
         name_resolver::NameResolved,
         scc_graph::BindingGroup,
-        symbol::{ProtocolId, Symbol},
+        symbol::{ProtocolId, Symbol, set_symbol_names},
     },
     node::Node,
     node_id::NodeID,
@@ -295,6 +295,10 @@ impl<'a> InferencePass<'a> {
 
     #[instrument(skip(self))]
     fn check_conformances(&mut self) {
+        println!("DEBUG check_conformances: {} ASTs", self.asts.len());
+        for (i, ast) in self.asts.iter().enumerate() {
+            println!("  AST {}: child_types keys = {:?}", i, ast.phase.child_types.keys().collect::<Vec<_>>());
+        }
         for i in 0..self.asts.len() {
             for (key, conformance) in self.session.type_catalog.conformances.clone().iter() {
                 self.check_conformance(i, key, conformance);
@@ -354,10 +358,12 @@ impl<'a> InferencePass<'a> {
             .iter()
             .filter(|sym| matches!(sym.1, Symbol::AssociatedType(..)))
         {
-            let conforming_children = self.asts[idx]
-                .phase
-                .child_types
-                .get(&key.conforming_id)
+            // Search all ASTs for child_types - cross-file dependencies may have
+            // the definition in a different file
+            let conforming_children = self
+                .asts
+                .iter()
+                .find_map(|ast| ast.phase.child_types.get(&key.conforming_id))
                 .cloned()
                 .unwrap_or_default();
             let concrete = if let Some(conforming) = conforming_children.get(child_sym.0)
@@ -371,8 +377,21 @@ impl<'a> InferencePass<'a> {
                 )
             } else {
                 let Some(ty) = conformance.associated_types.get(child_sym.0).cloned() else {
+                    let s = self.asts.iter().fold(FxHashMap::default(), |mut acc, ast| {
+                        acc.extend(ast.phase.symbols_to_string.clone());
+                        acc
+                    });
+                    let _s = set_symbol_names(s);
                     tracing::error!("Did not get associated type {child_sym:?}");
-                    continue;
+                    println!("child sym: {} {}", child_sym.0, child_sym.1);
+                    println!("protocol: {}", Symbol::Protocol(key.protocol_id));
+                    println!("conforming: {}", key.conforming_id);
+                    println!("conforming_children: {:?}", conforming_children);
+                    println!("all child_types keys (per AST):");
+                    for (i, ast) in self.asts.iter().enumerate() {
+                        println!("  AST {}: {:?}", i, ast.phase.child_types.keys().collect::<Vec<_>>());
+                    }
+                    unimplemented!("Did not get associated type {child_sym:?}, key: {key:?}",);
                 };
 
                 ty
@@ -644,7 +663,13 @@ impl<'a> InferencePass<'a> {
                 }
             }
 
-            let Some(rhs_id) = self.asts[idx].phase.scc_graph.rhs_id_for(binder) else {
+            // Search all ASTs for the rhs_id - cross-file dependencies within a module
+            // may have the definition in a different file's SCC graph
+            let Some(rhs_id) = self
+                .asts
+                .iter()
+                .find_map(|ast| ast.phase.scc_graph.rhs_id_for(binder))
+            else {
                 tracing::error!("did not find rhs_id for binder: {binder:?}");
                 return;
             };
