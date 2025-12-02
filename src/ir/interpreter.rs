@@ -346,9 +346,6 @@ impl Interpreter {
                 };
 
                 self.call(func, arg_vals, dest);
-                // let func = self.func(callee);
-                // let args = args.items.iter().map(|v| self.val(v.clone())).collect();
-                // self.call(func, args, dest);
             }
             IR::Instr(Instruction::Nominal {
                 dest, record, sym, ..
@@ -508,7 +505,7 @@ impl Interpreter {
                 self.write_register(&dest, value);
             }
 
-            IR::Instr(Instruction::Store { value, ty, addr }) => {
+            IR::Instr(Instruction::Store { value, addr, .. }) => {
                 let val = self.val(value);
                 let addr_val = self.val(addr);
                 let Value::RawPtr(ptr) = addr_val else {
@@ -523,7 +520,7 @@ impl Interpreter {
                 }
             }
 
-            IR::Instr(Instruction::Move { from, ty, to }) => {
+            IR::Instr(Instruction::Move { from, to, .. }) => {
                 // Move is like Store but maybe with different semantics?
                 // If it's the same as Store:
                 let val = self.val(from);
