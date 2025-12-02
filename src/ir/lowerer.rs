@@ -1575,17 +1575,28 @@ impl<'a> Lowerer<'a> {
             if let Some(captures) = self.asts[self.current_ast_id]
                 .phase
                 .captures
-                .get(&monomorphized_name)
+                .get(&name.symbol().expect("did not get symbol"))
                 .cloned()
                 && !captures.is_empty()
             {
                 let env: Vec<Value> = captures
                     .iter()
                     .map(
-                        |cap| match self.current_func_mut().bindings.get(&cap.symbol) {
-                            Some(Binding::Pointer(addr)) => addr.clone(),
-                            Some(Binding::Register(reg)) => Value::Reg(*reg),
-                            _ => panic!("unexpected binding for capture"),
+                        |cap| match self.current_func_mut().bindings.get(&cap.symbol).cloned() {
+                            Some(Binding::Pointer(addr)) => addr,
+                            Some(Binding::Register(reg)) => Value::Reg(reg),
+                            Some(Binding::Capture { index, ty }) => {
+                                let dest = self.next_register();
+                                self.push_instr(Instruction::GetField {
+                                    dest,
+                                    ty,
+                                    record: Register(0),
+                                    field: Label::Positional(index),
+                                    meta: vec![].into(),
+                                });
+                                dest.into()
+                            }
+                            other => panic!("unexpected binding for capture: {other:?}"),
                         },
                     )
                     .collect();
@@ -1929,14 +1940,29 @@ impl<'a> Lowerer<'a> {
                     .ty_from_symbol(&capture.symbol)
                     .expect("didn't get capture ty")
                     .clone();
-                let Some(Binding::Pointer(val)) = self
+
+                let val = match self
                     .current_func_mut()
                     .bindings
                     .get(&capture.symbol)
                     .cloned()
-                else {
-                    unreachable!("didn't get pointer for captured binding");
+                {
+                    Some(Binding::Pointer(val)) => val,
+                    Some(Binding::Capture { index, ty }) => {
+                        // Captured from outer closure's env - emit getfield
+                        let dest = self.next_register();
+                        self.push_instr(Instruction::GetField {
+                            dest,
+                            ty: Ty::RawPtr,
+                            record: 0.into(), // env is always %0
+                            field: Label::Positional(index),
+                            meta: vec![].into(),
+                        });
+                        Value::Reg(dest.0)
+                    }
+                    other => unreachable!("unexpected binding for capture: {other:?}"),
                 };
+
                 env_fields.push((capture.symbol, ty.clone(), val));
             }
 

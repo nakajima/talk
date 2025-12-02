@@ -1182,7 +1182,7 @@ impl<'a> Parser<'a> {
     #[instrument(level = tracing::Level::TRACE, skip(self))]
     pub(crate) fn call(
         &mut self,
-        _can_assign: bool,
+        can_assign: bool,
         type_args: Vec<TypeAnnotation>,
         callee: Expr,
     ) -> Result<Expr, ParserError> {
@@ -1197,14 +1197,20 @@ impl<'a> Parser<'a> {
             args
         };
 
-        self.add_expr(
+        let call = self.add_expr(
             ExprKind::Call {
                 callee: Box::new(callee),
                 type_args,
                 args,
             },
             tok,
-        )
+        )?;
+
+        if let Some(next_call) = self.check_call(&call, can_assign)? {
+            Ok(next_call)
+        } else {
+            Ok(call)
+        }
     }
 
     // MARK: Helpers

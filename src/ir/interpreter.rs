@@ -334,7 +334,7 @@ impl Interpreter {
                 let mut arg_vals: Vec<Value> =
                     args.items.iter().map(|v| self.val(v.clone())).collect();
 
-                let func = match callee {
+                let func = match self.val(callee) {
                     Value::Closure { func, env } => {
                         // Evaluate env values and prepend as a record
                         let env_vals: Vec<Value> =
@@ -364,7 +364,10 @@ impl Interpreter {
                 ..
             }) => {
                 let Value::Record(sym, fields) = self.read_register(&record) else {
-                    panic!("did not get record from {record:?}");
+                    panic!(
+                        "did not get record from {record:?}: {:?}",
+                        self.read_register(&record)
+                    );
                 };
 
                 let idx = match field {
@@ -654,16 +657,14 @@ impl Interpreter {
 
     fn func(&self, val: Value) -> Symbol {
         match val {
-            Value::Reg(reg) => {
-                let Value::Func(symbol) = self.read_register(&Register(reg)) else {
-                    panic!(
-                        "didn't get func symbol from {val:?}: {:?}",
-                        self.read_register(&Register(reg))
-                    );
-                };
-
-                symbol
-            }
+            Value::Reg(reg) => match self.read_register(&Register(reg)) {
+                Value::Func(symbol) => symbol,
+                Value::Closure { func, .. } => func,
+                _ => panic!(
+                    "didn't get func symbol from {val:?}: {:?}",
+                    self.read_register(&Register(reg))
+                ),
+            },
             Value::Func(name) => name,
             _ => panic!("cannot get func from {val:?}"),
         }
@@ -672,6 +673,15 @@ impl Interpreter {
     fn val(&mut self, val: Value) -> Value {
         match val {
             super::value::Value::Reg(reg) => self.read_register(&Register(reg)),
+            super::value::Value::Closure { func, env } => {
+                // Resolve env values now, while we're in the right frame
+                let resolved_env: Vec<Value> =
+                    env.items.iter().map(|v| self.val(v.clone())).collect();
+                Value::Closure {
+                    func,
+                    env: resolved_env.into(),
+                }
+            }
             super::value::Value::Poison => panic!("unreachable reached"),
             _ => val,
         }
@@ -879,6 +889,25 @@ pub mod tests {
             let a = 123
             func b() { a }
             b()
+            "
+            ),
+            Value::Int(123)
+        );
+    }
+
+    #[test]
+    fn interprets_nested_closure() {
+        assert_eq!(
+            interpret(
+                "
+            let a = 123
+            func b() {
+                func c() {
+                    a
+                }
+                c
+            }
+            b()()
             "
             ),
             Value::Int(123)
