@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 use crate::compiling::driver::DriverConfig;
 use crate::compiling::module::ModuleId;
 use crate::formatter;
@@ -62,16 +64,16 @@ use rustc_hash::FxHashMap;
 use tracing::instrument;
 
 #[derive(Debug)]
-enum LValue<F: std::fmt::Debug> {
+enum LValue {
     Field {
-        base: Box<LValue<F>>,
-        field: F,
+        base: Box<LValue>,
+        field: Label,
         ty: Ty,
     },
     Variable(Symbol),
 }
 
-impl<F: std::fmt::Debug> std::fmt::Display for LValue<F> {
+impl Display for LValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{self:?}")
     }
@@ -847,11 +849,7 @@ impl<'a> Lowerer<'a> {
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self, receiver_ty))]
-    fn emit_load_lvalue(
-        &mut self,
-        receiver_ty: &Ty,
-        lvalue: &LValue<Label>,
-    ) -> Result<Register, IRError> {
+    fn emit_load_lvalue(&mut self, receiver_ty: &Ty, lvalue: &LValue) -> Result<Register, IRError> {
         match lvalue {
             LValue::Variable(sym) => {
                 // Variable is already in a register
@@ -875,13 +873,10 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    fn emit_lvalue_store(&mut self, lvalue: LValue<Label>, value: Value) -> Result<(), IRError> {
+    fn emit_lvalue_store(&mut self, lvalue: LValue, value: Value) -> Result<(), IRError> {
         match lvalue {
             LValue::Variable(sym) => {
-                // Simple rebind
-                let reg = value.as_register()?;
-                tracing::warn!("this probably needs to handle captures");
-                self.insert_binding(sym, reg.into());
+                self.set_binding(&sym, value.as_register()?);
                 Ok(())
             }
             LValue::Field {
@@ -911,7 +906,7 @@ impl<'a> Lowerer<'a> {
         &mut self,
         expr: &Expr,
         instantiations: &Substitutions,
-    ) -> Result<LValue<Label>, IRError> {
+    ) -> Result<LValue, IRError> {
         match &expr.kind {
             ExprKind::Variable(name) => {
                 Ok(LValue::Variable(name.symbol().expect("name not resolved")))
@@ -2255,7 +2250,7 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    fn _set_binding(&mut self, symbol: &Symbol, value_register: Register) {
+    fn set_binding(&mut self, symbol: &Symbol, value_register: Register) {
         let ty = self
             .types
             .get_symbol(symbol)
@@ -2276,8 +2271,21 @@ impl<'a> Lowerer<'a> {
                     .bindings
                     .insert(*symbol, value_register.into());
             }
-            Binding::Capture { .. } => {
-                unimplemented!()
+            Binding::Capture { index, ty } => {
+                let dest = self.next_register();
+                self.push_instr(Instruction::GetField {
+                    dest,
+                    ty: Ty::RawPtr,
+                    record: Register(0),
+                    field: Label::Positional(index),
+                    meta: vec![].into(),
+                });
+
+                self.push_instr(Instruction::Store {
+                    value: value_register.into(),
+                    ty,
+                    addr: dest.into(),
+                });
             }
             Binding::Pointer(addr) => {
                 self.push_instr(Instruction::Store {
@@ -2392,6 +2400,10 @@ impl<'a> Lowerer<'a> {
         }
 
         let new_symbol = self.symbols.next_synthesized(ModuleId::Current);
+        self.asts[self.current_ast_id]
+            .phase
+            .symbols_to_string
+            .insert(new_symbol.into(), name.name_str());
         let ty_parts: Vec<String> = instantiations.ty.values().map(|v| format!("{v}")).collect();
         let witness_parts: Vec<String> = instantiations
             .witnesses

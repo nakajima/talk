@@ -674,6 +674,7 @@ impl<'a> DeclDeclarer<'a> {
     fn synthesize_init(&mut self, body: &mut Body, type_members: &TypeMembers, type_id: StructId) {
         let init_id = NodeID(FileID::SYNTHESIZED, self.node_ids.next_id());
         tracing::debug!("synthesizing init for type {type_id:?} as: {init_id:?}");
+
         let init_name = self
             .resolver
             .declare(&"init".into(), some!(Synthesized), init_id);

@@ -2,6 +2,7 @@ use std::fmt::Display;
 
 use itertools::Itertools;
 use rustc_hash::FxHashMap;
+use tracing::span::EnteredSpan;
 
 use crate::{
     ir::{
@@ -133,11 +134,13 @@ pub struct Frame {
     pc: usize,
     current_block: usize,
     prev_block: Option<usize>,
+    _span: EnteredSpan,
 }
 
 impl Frame {
-    pub fn new(dest: Register, ret: Option<Symbol>) -> Self {
+    pub fn new(span: EnteredSpan, dest: Register, ret: Option<Symbol>) -> Self {
         Self {
+            _span: span,
             ret,
             dest,
             registers: Default::default(),
@@ -249,7 +252,13 @@ impl Interpreter {
                         .collect_vec()
                 )
             });
-        let mut frame = Frame::new(dest, caller_name);
+
+        let _guard = self
+            .symbol_names
+            .as_ref()
+            .map(|names| set_symbol_names(names.clone()));
+        let span = tracing::trace_span!("call", func = format!("{function}")).entered();
+        let mut frame = Frame::new(span, dest, caller_name);
         frame.registers.resize(func.register_count, Value::Uninit);
         for (i, arg) in args.into_iter().enumerate() {
             frame.registers[i] = arg;
@@ -892,6 +901,21 @@ pub mod tests {
             "
             ),
             Value::Int(123)
+        );
+    }
+
+    #[test]
+    fn interprets_mut_closure() {
+        assert_eq!(
+            interpret(
+                "
+            let a = 123
+            func b() { a = a + 1; a }
+            b()
+            a
+            "
+            ),
+            Value::Int(124)
         );
     }
 
