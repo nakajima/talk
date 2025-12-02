@@ -1,5 +1,3 @@
-use std::env;
-
 use crate::compiling::driver::DriverConfig;
 use crate::compiling::module::ModuleId;
 use crate::formatter;
@@ -843,7 +841,7 @@ impl<'a> Lowerer<'a> {
         let lvalue = self.lower_lvalue(lhs, instantiations)?;
         let (value, ty) = self.lower_expr(rhs, Bind::Fresh, instantiations)?;
 
-        self.emit_lvalue_store(&ty, lvalue, value)?;
+        self.emit_lvalue_store(lvalue, value)?;
 
         Ok((Value::Void, ty))
     }
@@ -877,12 +875,7 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    fn emit_lvalue_store(
-        &mut self,
-        ty: &Ty,
-        lvalue: LValue<Label>,
-        value: Value,
-    ) -> Result<(), IRError> {
+    fn emit_lvalue_store(&mut self, lvalue: LValue<Label>, value: Value) -> Result<(), IRError> {
         match lvalue {
             LValue::Variable(sym) => {
                 // Simple rebind
@@ -907,7 +900,7 @@ impl<'a> Lowerer<'a> {
                     meta: vec![].into(),
                 });
 
-                self.emit_lvalue_store(ty, base, dest.into())?;
+                self.emit_lvalue_store(base, dest.into())?;
 
                 Ok(())
             }
@@ -2236,7 +2229,7 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    fn set_binding(&mut self, symbol: &Symbol, value_register: Register) {
+    fn _set_binding(&mut self, symbol: &Symbol, value_register: Register) {
         let ty = self
             .types
             .get_symbol(symbol)
