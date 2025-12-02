@@ -2060,12 +2060,20 @@ impl<'a> InferencePass<'a> {
             return InferTy::Error(TypeError::NameNotResolved(param.name.clone()).into());
         };
 
-        if let Some(existing) = self.session.lookup(&sym) {
-            return existing._as_ty();
-        }
+        // If there's an existing entry (e.g., from capture placeholder), get its type
+        // so we can unify with it if we have a type annotation
+        let existing_ty = self.session.lookup(&sym).map(|e| e._as_ty());
 
         let ty = if let Some(type_annotation) = &param.type_annotation {
-            self.visit_type_annotation(type_annotation, context)
+            let annotation_ty = self.visit_type_annotation(type_annotation, context);
+            // If there was a placeholder, unify it with the annotated type
+            if let Some(existing) = existing_ty {
+                self.constraints.wants_equals(existing, annotation_ty.clone());
+            }
+            annotation_ty
+        } else if let Some(existing) = existing_ty {
+            // No annotation but have existing - use it
+            return existing;
         } else {
             self.session.new_ty_meta_var(context.level())
         };

@@ -12,7 +12,7 @@ use crate::{
         program::Program,
         register::Register,
         terminator::Terminator,
-        value::{Reference, Value},
+        value::{Addr, Reference, Value},
     },
     label::Label,
     name_resolution::symbol::{Symbol, set_symbol_names},
@@ -40,7 +40,7 @@ impl Value {
             (Self::Int(lhs), Self::Int(rhs)) => Self::Int(lhs + rhs),
             (Self::Float(lhs), Self::Float(rhs)) => Self::Float(lhs + rhs),
             // Pointer arithmetic: RawPtr + Int -> RawPtr
-            (Self::RawPtr(ptr), Self::Int(offset)) => Self::RawPtr(ptr + *offset as usize),
+            (Self::RawPtr(ptr), Self::Int(offset)) => Self::RawPtr(Addr(ptr.0 + *offset as usize)),
             _ => panic!("can't add {self:?} and {other:?}"),
         }
     }
@@ -358,17 +358,7 @@ impl Interpreter {
                 let idx = match field {
                     Label::Positional(idx) => idx,
                     Label::Named(name) => {
-                        // Map named fields to positions for known structs
-                        if sym == Some(Symbol::String) {
-                            match name.as_str() {
-                                "base" => 0,
-                                "length" => 1,
-                                "capacity" => 2,
-                                _ => panic!("unknown String field: {name}"),
-                            }
-                        } else {
-                            panic!("named field access not supported for {sym:?}.{name}");
-                        }
+                        panic!("named field access not supported for {sym:?}.{name}");
                     }
                 };
 
@@ -434,7 +424,7 @@ impl Interpreter {
                 // Extend heap with zeroed bytes
                 self.memory.mem.resize(self.memory.mem.len() + count, 0);
 
-                self.write_register(&dest, Value::RawPtr(addr));
+                self.write_register(&dest, Value::RawPtr(Addr(addr)));
             }
             IR::Instr(Instruction::Copy {
                 ty: _,
@@ -444,12 +434,12 @@ impl Interpreter {
             }) => {
                 let from_addr = match self.val(from) {
                     Value::RawPtr(a) => a,
-                    Value::Int(a) => a as usize,
+                    Value::Int(a) => Addr(a as usize),
                     v => panic!("copy from must be RawPtr or Int, got {v:?}"),
                 };
                 let to_addr = match self.val(to) {
                     Value::RawPtr(a) => a,
-                    Value::Int(a) => a as usize,
+                    Value::Int(a) => Addr(a as usize),
                     v => panic!("copy to must be RawPtr or Int, got {v:?}"),
                 };
                 let len = match self.val(length) {
@@ -459,20 +449,25 @@ impl Interpreter {
 
                 for i in 0..len {
                     // Read byte from source
-                    let byte = if from_addr < self.heap_start {
+                    let byte = if from_addr.0 < self.heap_start {
                         // Source is in static memory
-                        self.program.static_memory.data[from_addr + i]
+                        self.program.static_memory.data[from_addr.0 + i]
                     } else {
                         // Source is in heap
-                        self.memory.mem[from_addr - self.heap_start + i]
+                        self.memory.mem[from_addr.0 - self.heap_start + i]
                     };
 
                     // Write byte to destination (must be heap, since static is read-only)
-                    let heap_idx = to_addr - self.heap_start + i;
+                    let heap_idx = to_addr.0 - self.heap_start + i;
                     self.memory.mem[heap_idx] = byte;
                 }
             }
-            IR::Instr(Instruction::Free { .. } | Instruction::Load { .. }) => unimplemented!(),
+            IR::Instr(
+                Instruction::Free { .. }
+                | Instruction::Load { .. }
+                | Instruction::Store { .. }
+                | Instruction::Move { .. },
+            ) => unimplemented!(),
         }
     }
 
@@ -489,6 +484,7 @@ impl Interpreter {
         match val {
             Value::Int(val) => format!("{val}"),
             Value::Reg(reg) => format!("%{reg}"),
+            Value::Capture { .. } => format!("{val}"),
             Value::Poison => "<POISON>".to_string(),
             Value::Float(val) => format!("{val}"),
             Value::Bool(val) => format!("{val}"),
@@ -503,12 +499,12 @@ impl Interpreter {
                     };
                     let len = *len as usize;
 
-                    let bytes: Vec<u8> = if *addr < self.heap_start {
+                    let bytes: Vec<u8> = if addr.0 < self.heap_start {
                         // String is in static memory
-                        self.program.static_memory.data[*addr..*addr + len].to_vec()
+                        self.program.static_memory.data[addr.0..addr.0 + len].to_vec()
                     } else {
                         // String is in heap memory
-                        let heap_idx = *addr - self.heap_start;
+                        let heap_idx = addr.0 - self.heap_start;
                         self.memory.mem[heap_idx..heap_idx + len].to_vec()
                     };
 
@@ -526,8 +522,9 @@ impl Interpreter {
                 format!("{name:?}({values:?})")
             }
             Value::Func(symbol) => format!("func {}()", self.sym_to_str(&symbol)),
+            Value::Closure { func, env } => format!("func {}[{env}]()", self.sym_to_str(&func)),
             Value::Void => "void".into(),
-            Value::RawPtr(val) => format!("rawptr({val})"),
+            Value::RawPtr(val) => format!("rawptr({})", val.0),
             Value::Ref(reference) => match reference {
                 Reference::Func(sym) => format!("func {}()", self.sym_to_str(&sym)),
                 _ => format!("{reference:?}"),
@@ -614,7 +611,7 @@ impl Interpreter {
 
 #[cfg(test)]
 pub mod tests {
-    use crate::ir::lowerer_tests::tests::lower_module;
+    use crate::ir::{lowerer_tests::tests::lower_module, value::Addr};
 
     use super::*;
 
@@ -800,7 +797,7 @@ pub mod tests {
             interpret("let a = \"hello \" + \"world\"; a"),
             Value::Record(
                 Some(Symbol::String),
-                vec![Value::RawPtr(11), Value::Int(11), Value::Int(11)]
+                vec![Value::RawPtr(Addr(11)), Value::Int(11), Value::Int(11)]
             )
         );
     }

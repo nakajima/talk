@@ -20,7 +20,7 @@ pub mod tests {
             program::Program,
             register::Register,
             terminator::Terminator,
-            value::Value,
+            value::{Addr, Value},
         },
         label::Label,
         name::Name,
@@ -1104,7 +1104,7 @@ pub mod tests {
                         Some(Symbol::String),
                         vec![IrTy::RawPtr, IrTy::Int, IrTy::Int]
                     ),
-                    record: vec![Value::RawPtr(0), Value::Int(5), Value::Int(5)].into(),
+                    record: vec![Value::RawPtr(Addr(0)), Value::Int(5), Value::Int(5)].into(),
                     meta: meta()
                 }],
                 terminator: Terminator::Ret {
@@ -1120,5 +1120,109 @@ pub mod tests {
             program.static_memory.data[0..5],
             "hello".bytes().collect_vec()
         )
+    }
+
+    #[test]
+    fn lowers_closure() {
+        let program = lower(
+            "
+        let a = 123
+        func b() { a }
+        b()
+        a // Make sure we know to load from heap now since it's a capture
+        ",
+        );
+
+        println!("{program}");
+
+        assert_eq_diff!(
+            program
+                .functions
+                .get(&Symbol::Synthesized(SynthesizedId::from(1)))
+                .unwrap()
+                .blocks,
+            &[BasicBlock {
+                id: BasicBlockId(0),
+                phis: Default::default(),
+                instructions: vec![
+                    Instruction::Alloc {
+                        dest: 0.into(),
+                        ty: IrTy::Int,
+                        count: Value::Int(1),
+                    },
+                    Instruction::Constant {
+                        dest: 1.into(),
+                        ty: IrTy::Int,
+                        val: Value::Int(123),
+                        meta: meta()
+                    },
+                    Instruction::Store {
+                        value: Value::Reg(1),
+                        ty: IrTy::Int,
+                        addr: Value::Reg(0)
+                    },
+                    Instruction::Ref {
+                        dest: 2.into(),
+                        ty: IrTy::Func(
+                            vec![IrTy::Record(None, vec![IrTy::RawPtr,])],
+                            IrTy::Int.into()
+                        ),
+                        val: Value::Closure {
+                            func: GlobalId::from(2).into(),
+                            env: vec![Value::Reg(0)].into()
+                        }
+                    },
+                    Instruction::Call {
+                        dest: 3.into(),
+                        ty: IrTy::Int,
+                        callee: Value::Closure {
+                            func: GlobalId::from(2).into(),
+                            env: vec![Value::Reg(0)].into()
+                        },
+                        args: vec![].into(),
+                        meta: meta(),
+                    },
+                    Instruction::Load {
+                        dest: 4.into(),
+                        ty: IrTy::Int,
+                        addr: Value::Reg(0),
+                    }
+                ],
+                terminator: Terminator::Ret {
+                    val: Value::Reg(4),
+                    ty: IrTy::Int,
+                }
+            }]
+        );
+
+        assert_eq_diff!(
+            program
+                .functions
+                .get(&Symbol::Global(GlobalId::from(2)))
+                .unwrap()
+                .blocks,
+            &[BasicBlock {
+                id: BasicBlockId(0),
+                phis: Default::default(),
+                instructions: vec![
+                    Instruction::GetField {
+                        dest: 1.into(),
+                        ty: IrTy::RawPtr,
+                        record: 0.into(),
+                        field: Label::Positional(0),
+                        meta: vec![].into()
+                    },
+                    Instruction::Load {
+                        dest: 2.into(),
+                        ty: IrTy::Int,
+                        addr: Value::Reg(1)
+                    }
+                ],
+                terminator: Terminator::Ret {
+                    val: Value::Reg(2),
+                    ty: IrTy::Int,
+                }
+            }]
+        );
     }
 }

@@ -191,6 +191,10 @@ pub enum Instruction<T> {
     Free { addr: Value },
     #[doc = "$dest = load $ty $addr"]
     Load { dest: Register, ty: T, addr: Value },
+    #[doc = "store $ty $value $addr"]
+    Store { value: Value, ty: T, addr: Value },
+    #[doc = "move $ty $from $to"]
+    Move { from: Value, ty: T, to: Value },
     #[doc = "copy $ty $from $to $length"]
     Copy {
         ty: T,
@@ -224,6 +228,20 @@ impl<T> Instruction<T> {
                 dest,
                 ty: map(ty),
                 addr,
+            },
+            Instruction::Store { value, ty, addr } => Instruction::Store {
+                value,
+                ty: map(ty),
+                addr,
+            },
+            Instruction::Move {
+                from: value,
+                ty,
+                to: addr,
+            } => Instruction::Move {
+                from: value,
+                ty: map(ty),
+                to: addr,
             },
             Instruction::Constant {
                 dest,

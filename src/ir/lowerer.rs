@@ -1,3 +1,5 @@
+use std::env;
+
 use crate::compiling::driver::DriverConfig;
 use crate::compiling::module::ModuleId;
 use crate::formatter;
@@ -6,6 +8,7 @@ use crate::ir::instruction::CmpOperator;
 use crate::ir::ir_ty::IrTy;
 use crate::ir::monomorphizer::uncurry_function;
 use crate::ir::parse_instruction;
+use crate::ir::value::Addr;
 use crate::label::Label;
 use crate::name_resolution::symbol::{
     GlobalId, InitializerId, InstanceMethodId, StaticMethodId, Symbols,
@@ -60,7 +63,8 @@ use itertools::Itertools;
 use rustc_hash::FxHashMap;
 use tracing::instrument;
 
-enum LValue<F> {
+#[derive(Debug)]
+enum LValue<F: std::fmt::Debug> {
     Field {
         base: Box<LValue<F>>,
         field: F,
@@ -69,11 +73,18 @@ enum LValue<F> {
     Variable(Symbol),
 }
 
+impl<F: std::fmt::Debug> std::fmt::Display for LValue<F> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{self:?}")
+    }
+}
+
 #[derive(Debug)]
 pub(super) struct CurrentFunction {
     current_block_idx: Vec<usize>,
     blocks: Vec<BasicBlock<Ty>>,
     pub registers: RegisterAllocator,
+    bindings: FxHashMap<Symbol, Binding<Ty>>,
 }
 
 impl Default for CurrentFunction {
@@ -87,6 +98,7 @@ impl Default for CurrentFunction {
                 terminator: Terminator::Unreachable,
             }],
             registers: Default::default(),
+            bindings: Default::default(),
         }
     }
 }
@@ -113,7 +125,7 @@ impl StaticMemory {
             IrTy::Bool => Value::Bool(bytes[0] == 1),
             IrTy::Func(..) => Value::Func(Symbol::from_bytes(bytes.try_into().unwrap())),
             IrTy::Record(..) => unreachable!("can only load primitives"),
-            IrTy::RawPtr => Value::RawPtr(usize::from_le_bytes(bytes.try_into().unwrap())),
+            IrTy::RawPtr => Value::RawPtr(Addr(usize::from_le_bytes(bytes.try_into().unwrap()))),
             IrTy::Byte => Value::Buffer(bytes.to_vec()),
             IrTy::Void => unreachable!("cannot load the void"),
             IrTy::Buffer(..) => Value::Buffer(bytes.to_vec()),
@@ -124,6 +136,7 @@ impl StaticMemory {
 #[derive(Debug, PartialEq, Eq)]
 enum Bind {
     Assigned(Register),
+    Indirect(Register, Symbol),
     Fresh,
     Discard,
 }
@@ -172,6 +185,25 @@ pub struct Specialization {
     pub(super) substitutions: Substitutions,
 }
 
+#[derive(Debug, Clone)]
+pub enum Binding<T> {
+    Register(u32),
+    Pointer(Value),
+    Capture { index: usize, ty: T },
+}
+
+impl<T> From<Register> for Binding<T> {
+    fn from(value: Register) -> Self {
+        Binding::Register(value.0)
+    }
+}
+
+impl<T> From<Value> for Binding<T> {
+    fn from(value: Value) -> Self {
+        Binding::Pointer(value)
+    }
+}
+
 // Lowers an AST with Types to a monomorphized IR
 pub struct Lowerer<'a> {
     pub(super) asts: &'a mut IndexMap<Source, AST<NameResolved>>,
@@ -180,8 +212,8 @@ pub struct Lowerer<'a> {
     pub(super) current_function_stack: Vec<CurrentFunction>,
     pub(super) config: &'a DriverConfig,
 
+    current_ast_id: usize,
     symbols: &'a mut Symbols,
-    bindings: FxHashMap<Symbol, Register>,
     pub(super) specializations: IndexMap<Symbol, Vec<Specialization>>,
     static_memory: StaticMemory,
 }
@@ -200,11 +232,11 @@ impl<'a> Lowerer<'a> {
             types,
             functions: Default::default(),
             current_function_stack: Default::default(),
-            bindings: Default::default(),
             symbols,
             specializations: Default::default(),
             static_memory: Default::default(),
             config,
+            current_ast_id: 0,
         }
     }
 
@@ -293,6 +325,7 @@ impl<'a> Lowerer<'a> {
         self.current_function_stack.push(CurrentFunction::default());
 
         for i in 0..self.asts.len() {
+            self.current_ast_id = i;
             let roots = std::mem::take(&mut self.asts[i].roots);
             for root in roots.iter() {
                 self.lower_node(root, &Default::default())?;
@@ -346,7 +379,16 @@ impl<'a> Lowerer<'a> {
                 ..
             } => {
                 let bind = self.lower_pattern(lhs)?;
-                self.lower_expr(value, bind, instantiations)?;
+                if let Bind::Indirect(reg, ..) = &bind {
+                    let (val, ty) = self.lower_expr(value, Bind::Fresh, instantiations)?;
+                    self.push_instr(Instruction::Store {
+                        value: val,
+                        ty,
+                        addr: reg.into(),
+                    });
+                } else {
+                    self.lower_expr(value, bind, instantiations)?;
+                }
             }
             DeclKind::Struct { body, .. } | DeclKind::Protocol { body, .. } => {
                 for decl in &body.decls {
@@ -433,8 +475,10 @@ impl<'a> Lowerer<'a> {
         for param in params.iter() {
             let register = self.next_register();
             param_values.push(Value::Reg(register.0));
-            self.bindings
-                .insert(param.name.symbol().expect("name not resolved"), register);
+            self.insert_binding(
+                param.name.symbol().expect("name not resolved"),
+                register.into(),
+            );
         }
 
         let mut ret = Value::Void;
@@ -796,14 +840,15 @@ impl<'a> Lowerer<'a> {
         rhs: &Expr,
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
-        let lvalue = self.lower_lvalue(lhs)?;
+        let lvalue = self.lower_lvalue(lhs, instantiations)?;
         let (value, ty) = self.lower_expr(rhs, Bind::Fresh, instantiations)?;
 
-        self.emit_lvalue_store(lvalue, value)?;
+        self.emit_lvalue_store(&ty, lvalue, value)?;
 
         Ok((Value::Void, ty))
     }
 
+    #[instrument(level = tracing::Level::TRACE, skip(self, receiver_ty))]
     fn emit_load_lvalue(
         &mut self,
         receiver_ty: &Ty,
@@ -812,8 +857,7 @@ impl<'a> Lowerer<'a> {
         match lvalue {
             LValue::Variable(sym) => {
                 // Variable is already in a register
-                #[allow(clippy::unwrap_used)]
-                Ok(*self.bindings.get(sym).unwrap())
+                Ok(self.get_binding(sym))
             }
             LValue::Field { base, field, ty } => {
                 // Recursively load base, then extract field
@@ -833,12 +877,18 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    fn emit_lvalue_store(&mut self, lvalue: LValue<Label>, value: Value) -> Result<(), IRError> {
+    fn emit_lvalue_store(
+        &mut self,
+        ty: &Ty,
+        lvalue: LValue<Label>,
+        value: Value,
+    ) -> Result<(), IRError> {
         match lvalue {
             LValue::Variable(sym) => {
                 // Simple rebind
                 let reg = value.as_register()?;
-                self.bindings.insert(sym, reg);
+                tracing::warn!("this probably needs to handle captures");
+                self.insert_binding(sym, reg.into());
                 Ok(())
             }
             LValue::Field {
@@ -857,21 +907,29 @@ impl<'a> Lowerer<'a> {
                     meta: vec![].into(),
                 });
 
-                self.emit_lvalue_store(base, dest.into())?;
+                self.emit_lvalue_store(ty, base, dest.into())?;
 
                 Ok(())
             }
         }
     }
 
-    fn lower_lvalue(&mut self, expr: &Expr) -> Result<LValue<Label>, IRError> {
+    fn lower_lvalue(
+        &mut self,
+        expr: &Expr,
+        instantiations: &Substitutions,
+    ) -> Result<LValue<Label>, IRError> {
         match &expr.kind {
             ExprKind::Variable(name) => {
                 Ok(LValue::Variable(name.symbol().expect("name not resolved")))
             }
             ExprKind::Member(Some(box receiver), label, _span) => {
-                let receiver_lvalue = self.lower_lvalue(receiver)?;
-                let (receiver_ty, ..) = self.specialized_ty(receiver).expect("didn't get base ty");
+                let receiver_lvalue = self.lower_lvalue(receiver, instantiations)?;
+                let (receiver_ty, mut new_instantiations) =
+                    self.specialized_ty(receiver).expect("didn't get base ty");
+                new_instantiations.extend(instantiations.clone());
+
+                let receiver_ty = substitute(receiver_ty, &new_instantiations);
 
                 Ok(LValue::Field {
                     base: receiver_lvalue.into(),
@@ -887,10 +945,31 @@ impl<'a> Lowerer<'a> {
     fn lower_pattern(&mut self, pattern: &Pattern) -> Result<Bind, IRError> {
         match &pattern.kind {
             PatternKind::Bind(name) => {
-                let value = self.next_register();
                 let symbol = name.symbol().expect("name not resolved");
-                self.bindings.insert(symbol, value);
-                Ok(Bind::Assigned(value))
+                let value = if self.asts[self.current_ast_id]
+                    .phase
+                    .is_captured
+                    .contains(&symbol)
+                {
+                    let ty = self
+                        .ty_from_symbol(&symbol)
+                        .expect("did not get ty for sym");
+                    let heap_addr = self.next_register();
+                    self.push_instr(Instruction::Alloc {
+                        dest: heap_addr,
+                        ty,
+                        count: 1.into(),
+                    });
+                    self.insert_binding(symbol, Binding::Pointer(heap_addr.into()));
+                    Bind::Indirect(heap_addr, symbol)
+                } else {
+                    let val = self.next_register();
+
+                    self.insert_binding(symbol, val.into());
+                    Bind::Assigned(val)
+                };
+
+                Ok(value)
             }
             #[allow(clippy::todo)]
             PatternKind::LiteralInt(_) => todo!(),
@@ -925,6 +1004,7 @@ impl<'a> Lowerer<'a> {
             ExprKind::LiteralArray(_exprs) => todo!(),
             ExprKind::LiteralInt(val) => {
                 let ret = self.ret(bind);
+
                 self.push_instr(Instruction::Constant {
                     dest: ret,
                     val: Value::Int(str::parse(val).map_err(|_| {
@@ -1071,7 +1151,7 @@ impl<'a> Lowerer<'a> {
             sym: Symbol::String,
             ty: Ty::String(),
             record: vec![
-                Value::RawPtr(ptr),
+                Value::RawPtr(Addr(ptr)),
                 Value::Int(bytes_len),
                 Value::Int(bytes_len),
             ]
@@ -1459,6 +1539,7 @@ impl<'a> Lowerer<'a> {
                 });
             } else {
                 let label = self.field_index(&receiver_ty, label);
+                tracing::debug!("lowering field {label}");
                 self.push_instr(Instruction::GetField {
                     dest,
                     ty: ty.clone(),
@@ -1486,16 +1567,47 @@ impl<'a> Lowerer<'a> {
 
         let ret = if matches!(monomorphized_ty, Ty::Func(..)) {
             // It's a func reference so we pass the name
+            // let monomorphized_name = self
+            //     .monomorphize_name(name.clone(), &instantiations)
+            //     .symbol()
+            //     .expect("did not get symbol");
+            // Value::Func(monomorphized_name)
+
             let monomorphized_name = self
                 .monomorphize_name(name.clone(), &instantiations)
                 .symbol()
                 .expect("did not get symbol");
-            Value::Func(monomorphized_name)
+
+            // Check if this function has captures
+            if let Some(captures) = self.asts[self.current_ast_id]
+                .phase
+                .captures
+                .get(&monomorphized_name)
+                .cloned()
+                && !captures.is_empty()
+            {
+                let env: Vec<Value> = captures
+                    .iter()
+                    .map(
+                        |cap| match self.current_func_mut().bindings.get(&cap.symbol) {
+                            Some(Binding::Pointer(addr)) => addr.clone(),
+                            Some(Binding::Register(reg)) => Value::Reg(*reg),
+                            _ => panic!("unexpected binding for capture"),
+                        },
+                    )
+                    .collect();
+                Value::Closure {
+                    func: monomorphized_name,
+                    env: env.into(),
+                }
+            } else {
+                Value::Func(monomorphized_name)
+            }
         } else {
-            self.bindings
-                .get(&name.symbol().expect("name not resolved"))
-                .expect("did not get binding for variable")
-                .into()
+            Value::Reg(
+                self.get_binding(&name.symbol().expect("name not resolved"))
+                    .0,
+            )
         };
 
         Ok((ret, ty))
@@ -1808,19 +1920,81 @@ impl<'a> Lowerer<'a> {
     ) -> Result<(Value, Ty), IRError> {
         let ty = self.ty_from_symbol(&func.name.symbol().expect("name not resolved"))?;
 
-        let Ty::Func(param_tys, box mut ret_ty) = ty else {
-            panic!("didn't get func ty for {:?}: {ty:?}", func.name);
+        let (mut param_tys, mut ret_ty) = uncurry_function(ty);
+
+        // Do we have captures? If so this is a closure
+        let capture_env = if let Some(captures) = self.asts[self.current_ast_id]
+            .phase
+            .captures
+            .get(&func.name.symbol().expect("didn't get sym"))
+            .cloned()
+            && !captures.is_empty()
+        {
+            let mut env_fields = vec![];
+            for capture in captures.clone() {
+                let ty = self
+                    .ty_from_symbol(&capture.symbol)
+                    .expect("didn't get capture ty")
+                    .clone();
+                let Some(Binding::Pointer(val)) = self
+                    .current_func_mut()
+                    .bindings
+                    .get(&capture.symbol)
+                    .cloned()
+                else {
+                    unreachable!("didn't get pointer for captured binding");
+                };
+                env_fields.push((capture.symbol, ty.clone(), val));
+            }
+
+            Some(env_fields)
+        } else {
+            None
         };
 
         let _s = tracing::trace_span!("pushing new current function");
         self.current_function_stack.push(CurrentFunction::default());
 
         let mut params = vec![];
+
+        if let Some(env_fields) = capture_env.clone() {
+            for (i, (binding, ty, ..)) in env_fields.iter().enumerate() {
+                self.insert_binding(
+                    *binding,
+                    Binding::Capture {
+                        index: i,
+                        ty: ty.clone(),
+                    },
+                );
+            }
+
+            // Allocate env as %0
+            let env_reg = self.next_register();
+            params.push(Value::Reg(env_reg.0));
+            param_tys.insert(
+                0,
+                Ty::Record(
+                    None,
+                    env_fields
+                        .iter()
+                        .enumerate()
+                        .fold(Row::Empty(TypeDefKind::Struct), |row, (i, _)| Row::Extend {
+                            row: row.into(),
+                            label: Label::Positional(i),
+                            ty: Ty::RawPtr,
+                        })
+                        .into(),
+                ),
+            );
+        }
+
         for param in func.params.iter() {
             let register = self.next_register();
             params.push(Value::Reg(register.0));
-            self.bindings
-                .insert(param.name.symbol().expect("name not resolved"), register);
+            self.insert_binding(
+                param.name.symbol().expect("name not resolved"),
+                register.into(),
+            );
         }
 
         let mut ret = Value::Void;
@@ -1842,27 +2016,39 @@ impl<'a> Lowerer<'a> {
             .pop()
             .expect("did not get current function");
         drop(_s);
+
+        let func_ty = curry_ty(param_tys.iter(), ret_ty);
         self.functions.insert(
             func.name.symbol().expect("name not resolved"),
             PolyFunction {
                 name: func.name.clone(),
                 params,
                 blocks: current_function.blocks,
-                ty: Ty::Func(param_tys.clone(), ret_ty.clone().into()),
+                ty: func_ty.clone(),
                 register_count: (current_function.registers.next) as usize,
             },
         );
 
-        let func = Value::Func(func.name.symbol().expect("did not get symbol"));
+        let func_sym = func.name.symbol().expect("did not get symbol");
+        let func_val = if let Some(env) = capture_env {
+            Value::Closure {
+                func: func_sym,
+                env: env.into_iter().map(|e| e.2.clone()).collect_vec().into(),
+            }
+        } else {
+            Value::Func(func_sym)
+        };
+
         if bind != Bind::Discard {
             let dest = self.ret(bind);
             self.push_instr(Instruction::Ref {
                 dest,
-                ty: Ty::Func(param_tys.clone(), ret_ty.clone().into()),
-                val: func.clone(),
+                ty: func_ty.clone(),
+                val: func_val.clone(),
             });
         }
-        Ok((func, Ty::Func(param_tys, ret_ty.into())))
+
+        Ok((func_val, func_ty))
     }
 
     fn lower_embedded_ir_call(
@@ -2005,12 +2191,93 @@ impl<'a> Lowerer<'a> {
         block.terminator = terminator;
     }
 
-    fn next_register(&mut self) -> Register {
-        let current_function = self
-            .current_function_stack
+    fn insert_binding(&mut self, symbol: Symbol, binding: Binding<Ty>) {
+        self.current_func_mut().bindings.insert(symbol, binding);
+    }
+
+    fn get_binding(&mut self, symbol: &Symbol) -> Register {
+        let binding = self
+            .current_func_mut()
+            .bindings
+            .get(symbol)
+            .cloned()
+            .unwrap_or_else(|| panic!("did not get binding for {symbol:?}"));
+        let ty = self
+            .types
+            .get_symbol(symbol)
+            .unwrap_or_else(|| panic!("did not get ty for {symbol:?}"))
+            .as_mono_ty()
+            .clone();
+
+        match binding {
+            Binding::Register(reg) => Register(reg),
+            Binding::Capture { index, ty } => {
+                let ptr = self.next_register();
+                self.push_instr(Instruction::GetField {
+                    dest: ptr,
+                    ty: Ty::RawPtr,
+                    record: 0.into(),
+                    field: Label::Positional(index),
+                    meta: vec![].into(),
+                });
+                let dest = self.next_register();
+                self.push_instr(Instruction::Load {
+                    dest,
+                    ty,
+                    addr: ptr.into(),
+                });
+                dest
+            }
+            Binding::Pointer(addr) => {
+                let dest = self.next_register();
+                self.push_instr(Instruction::Load { dest, ty, addr });
+                dest
+            }
+        }
+    }
+
+    fn set_binding(&mut self, symbol: &Symbol, value_register: Register) {
+        let ty = self
+            .types
+            .get_symbol(symbol)
+            .expect("did not get ty for {symbol:?}")
+            .as_mono_ty()
+            .clone();
+
+        let binding = self
+            .current_func_mut()
+            .bindings
+            .get(symbol)
+            .cloned()
+            .expect("did not get binding");
+
+        match binding {
+            Binding::Register(..) => {
+                self.current_func_mut()
+                    .bindings
+                    .insert(*symbol, value_register.into());
+            }
+            Binding::Capture { .. } => {
+                unimplemented!()
+            }
+            Binding::Pointer(addr) => {
+                self.push_instr(Instruction::Store {
+                    value: value_register.into(),
+                    ty,
+                    addr: addr.clone(),
+                });
+            }
+        }
+    }
+
+    fn current_func_mut(&mut self) -> &mut CurrentFunction {
+        self.current_function_stack
             .last_mut()
-            .expect("didn't get current function");
-        let register = current_function.registers.next();
+            .expect("didn't get current function")
+    }
+
+    fn next_register(&mut self) -> Register {
+        let register = self.current_func_mut().registers.next();
         tracing::trace!("allocated register: {register}");
         register
     }
@@ -2020,6 +2287,16 @@ impl<'a> Lowerer<'a> {
             Bind::Assigned(value) => value,
             Bind::Fresh => self.next_register(),
             Bind::Discard => Register::DROP,
+            Bind::Indirect(reg, sym) => {
+                let ty = self.ty_from_symbol(&sym).expect("did not get ty for bind");
+                let value = self.next_register();
+                self.push_instr(Instruction::Store {
+                    value: value.into(),
+                    ty,
+                    addr: reg.into(),
+                });
+                value
+            }
         }
     }
 
@@ -2258,7 +2535,7 @@ impl<'a> Lowerer<'a> {
         {
             Label::Positional(idx)
         } else {
-            label.clone()
+            panic!("unable to determine field index of {receiver_ty}.{label}");
         }
     }
 
@@ -2370,9 +2647,11 @@ fn is_main_func(node: &Node) -> bool {
 }
 
 pub fn curry_ty<'a, I: IntoIterator<Item = &'a Ty>>(params: I, ret: Ty) -> Ty {
+    let mut params = params.into_iter().collect::<Vec<_>>();
+    if params.is_empty() {
+        params.push(&Ty::Void);
+    }
     params
-        .into_iter()
-        .collect::<Vec<_>>()
         .into_iter()
         .rfold(ret, |acc, p| Ty::Func(Box::new(p.clone()), Box::new(acc)))
 }
