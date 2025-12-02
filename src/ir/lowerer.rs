@@ -1948,7 +1948,7 @@ impl<'a> Lowerer<'a> {
                     .cloned()
                 {
                     Some(Binding::Pointer(val)) => val,
-                    Some(Binding::Capture { index, ty }) => {
+                    Some(Binding::Capture { index, .. }) => {
                         // Captured from outer closure's env - emit getfield
                         let dest = self.next_register();
                         self.push_instr(Instruction::GetField {
