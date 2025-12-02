@@ -331,9 +331,24 @@ impl Interpreter {
             IR::Instr(Instruction::Call {
                 dest, callee, args, ..
             }) => {
-                let func = self.func(callee);
-                let args = args.items.iter().map(|v| self.val(v.clone())).collect();
-                self.call(func, args, dest);
+                let mut arg_vals: Vec<Value> =
+                    args.items.iter().map(|v| self.val(v.clone())).collect();
+
+                let func = match callee {
+                    Value::Closure { func, env } => {
+                        // Evaluate env values and prepend as a record
+                        let env_vals: Vec<Value> =
+                            env.items.iter().map(|v| self.val(v.clone())).collect();
+                        arg_vals.insert(0, Value::Record(None, env_vals));
+                        func
+                    }
+                    other => self.func(other),
+                };
+
+                self.call(func, arg_vals, dest);
+                // let func = self.func(callee);
+                // let args = args.items.iter().map(|v| self.val(v.clone())).collect();
+                // self.call(func, args, dest);
             }
             IR::Instr(Instruction::Nominal {
                 dest, record, sym, ..
@@ -389,6 +404,7 @@ impl Interpreter {
                         frame: self.frames.len(),
                         register: reg.into(),
                     },
+                    Value::Closure { func, .. } => Reference::Func(func),
                     _ => unimplemented!("don't know how to take ref of {val:?}"),
                 };
 
@@ -412,7 +428,7 @@ impl Interpreter {
                 let val = self.val(val.clone());
                 println!("{}", self.display(val));
             }
-            IR::Instr(Instruction::Alloc { dest, ty: _, count }) => {
+            IR::Instr(Instruction::Alloc { dest, ty, count }) => {
                 let count = match self.val(count) {
                     Value::Int(n) => n as usize,
                     v => panic!("alloc count must be int, got {v:?}"),
@@ -422,7 +438,9 @@ impl Interpreter {
                 let addr = self.heap_start + self.memory.mem.len();
 
                 // Extend heap with zeroed bytes
-                self.memory.mem.resize(self.memory.mem.len() + count, 0);
+                self.memory
+                    .mem
+                    .resize(self.memory.mem.len() + ty.bytes_len() + count, 0);
 
                 self.write_register(&dest, Value::RawPtr(Addr(addr)));
             }
@@ -462,12 +480,66 @@ impl Interpreter {
                     self.memory.mem[heap_idx] = byte;
                 }
             }
-            IR::Instr(
-                Instruction::Free { .. }
-                | Instruction::Load { .. }
-                | Instruction::Store { .. }
-                | Instruction::Move { .. },
-            ) => unimplemented!(),
+            IR::Instr(Instruction::Load { dest, ty, addr }) => {
+                let addr_val = self.val(addr);
+                let Value::RawPtr(ptr) = addr_val else {
+                    panic!("Load expects RawPtr, got {addr_val:?}");
+                };
+
+                let size = ty.bytes_len();
+                let bytes = if ptr.0 < self.heap_start {
+                    // Static memory
+                    &self.program.static_memory.data[ptr.0..ptr.0 + size]
+                } else {
+                    // Heap memory
+                    let heap_idx = ptr.0 - self.heap_start;
+                    &self.memory.mem[heap_idx..heap_idx + size]
+                };
+
+                let value = match ty {
+                    IrTy::Int => Value::Int(i64::from_le_bytes(bytes.try_into().unwrap())),
+                    IrTy::Float => Value::Float(f64::from_le_bytes(bytes.try_into().unwrap())),
+                    IrTy::Bool => Value::Bool(bytes[0] != 0),
+                    IrTy::RawPtr => {
+                        Value::RawPtr(Addr(usize::from_le_bytes(bytes.try_into().unwrap())))
+                    }
+                    _ => panic!("Load not implemented for {ty:?}"),
+                };
+                self.write_register(&dest, value);
+            }
+
+            IR::Instr(Instruction::Store { value, ty, addr }) => {
+                let val = self.val(value);
+                let addr_val = self.val(addr);
+                let Value::RawPtr(ptr) = addr_val else {
+                    panic!("Store expects RawPtr, got {addr_val:?}");
+                };
+
+                let bytes = val.as_bytes();
+                let heap_idx = ptr.0 - self.heap_start;
+
+                for (i, byte) in bytes.iter().enumerate() {
+                    self.memory.mem[heap_idx + i] = *byte;
+                }
+            }
+
+            IR::Instr(Instruction::Move { from, ty, to }) => {
+                // Move is like Store but maybe with different semantics?
+                // If it's the same as Store:
+                let val = self.val(from);
+                let addr_val = self.val(to);
+                let Value::RawPtr(ptr) = addr_val else {
+                    panic!("Move expects RawPtr destination, got {addr_val:?}");
+                };
+
+                let bytes = val.as_bytes();
+                let heap_idx = ptr.0 - self.heap_start;
+
+                for (i, byte) in bytes.iter().enumerate() {
+                    self.memory.mem[heap_idx + i] = *byte;
+                }
+            }
+            IR::Instr(Instruction::Free { .. }) => unimplemented!(),
         }
     }
 
@@ -583,9 +655,9 @@ impl Interpreter {
             .clone()
     }
 
-    fn func(&self, val: super::value::Value) -> Symbol {
+    fn func(&self, val: Value) -> Symbol {
         match val {
-            super::value::Value::Reg(reg) => {
+            Value::Reg(reg) => {
                 let Value::Func(symbol) = self.read_register(&Register(reg)) else {
                     panic!(
                         "didn't get func symbol from {val:?}: {:?}",
@@ -595,7 +667,7 @@ impl Interpreter {
 
                 symbol
             }
-            super::value::Value::Func(name) => name,
+            Value::Func(name) => name,
             _ => panic!("cannot get func from {val:?}"),
         }
     }
@@ -803,7 +875,6 @@ pub mod tests {
     }
 
     #[test]
-    #[ignore = "wip"]
     fn interprets_closure() {
         assert_eq!(
             interpret(
