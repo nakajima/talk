@@ -454,7 +454,7 @@ impl Interpreter {
                 // Extend heap with zeroed bytes
                 self.memory
                     .mem
-                    .resize(self.memory.mem.len() + ty.bytes_len() + count, 0);
+                    .resize(self.memory.mem.len() + ty.bytes_len() * count, 0);
 
                 self.write_register(&dest, Value::RawPtr(Addr(addr)));
             }
