@@ -8,26 +8,34 @@ use crate::{
 #[derive(Debug, Clone, PartialEq)]
 pub enum Reference {
     Func(Symbol),
+    Closure(Symbol, List<Value>),
     Register { frame: usize, register: Register },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Addr(pub(super) usize);
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Default, Debug, Clone, PartialEq)]
 pub enum Value {
     Reg(u32),
     Int(i64),
     Float(f64),
     Func(Symbol),
-    Closure { func: Symbol, env: List<Value> },
+    Closure {
+        func: Symbol,
+        env: List<Value>,
+    },
     Bool(bool),
     Ref(Reference),
-    Capture { depth: usize, reg: Register },
+    Capture {
+        depth: usize,
+        reg: Register,
+    },
     Record(Option<Symbol>, Vec<Value>),
     RawPtr(Addr),
     Buffer(Vec<u8>),
     Void,
+    #[default]
     Uninit,
     Poison,
 }
@@ -48,7 +56,7 @@ impl Value {
         match self {
             Value::Int(v) => v.to_le_bytes().to_vec(),
             Value::Float(v) => v.to_le_bytes().to_vec(),
-            Value::Func(..) => unreachable!(),
+            Value::Func(v) => v.as_bytes().to_vec(),
             Value::Bool(v) => {
                 if *v {
                     vec![1u8]

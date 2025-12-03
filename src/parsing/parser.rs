@@ -1206,7 +1206,9 @@ impl<'a> Parser<'a> {
             tok,
         )?;
 
-        if let Some(next_call) = self.check_call(&call, can_assign)? {
+        if self.peek_is(TokenKind::LeftParen)
+            && let Some(next_call) = self.check_call(&call, can_assign)?
+        {
             Ok(next_call)
         } else {
             Ok(call)

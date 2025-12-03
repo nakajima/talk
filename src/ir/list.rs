@@ -7,6 +7,14 @@ pub struct List<T: std::fmt::Debug + Clone + PartialEq + FromStr> {
     pub items: Vec<T>,
 }
 
+impl<T: std::fmt::Debug + Clone + PartialEq + FromStr> Default for List<T> {
+    fn default() -> Self {
+        List {
+            items: Default::default(),
+        }
+    }
+}
+
 impl<T: std::fmt::Debug + Clone + PartialEq + FromStr> From<Vec<T>> for List<T> {
     fn from(value: Vec<T>) -> Self {
         List { items: value }

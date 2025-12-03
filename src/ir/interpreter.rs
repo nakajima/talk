@@ -10,6 +10,7 @@ use crate::{
         function::Function,
         instruction::{CmpOperator, Instruction},
         ir_ty::IrTy,
+        list::List,
         program::Program,
         register::Register,
         terminator::Terminator,
@@ -343,16 +344,13 @@ impl Interpreter {
                 let mut arg_vals: Vec<Value> =
                     args.items.iter().map(|v| self.val(v.clone())).collect();
 
-                let func = match self.val(callee) {
-                    Value::Closure { func, env } => {
-                        // Evaluate env values and prepend as a record
-                        let env_vals: Vec<Value> =
-                            env.items.iter().map(|v| self.val(v.clone())).collect();
-                        arg_vals.insert(0, Value::Record(None, env_vals));
-                        func
-                    }
-                    other => self.func(other),
-                };
+                let val = self.val(callee);
+                let (func, env) = self.func(val);
+                if !env.items.is_empty() {
+                    let env_vals: Vec<Value> =
+                        env.items.iter().map(|v| self.val(v.clone())).collect();
+                    arg_vals.insert(0, Value::Record(None, env_vals));
+                }
 
                 self.call(func, arg_vals, dest);
             }
@@ -413,7 +411,14 @@ impl Interpreter {
                         frame: self.frames.len(),
                         register: reg.into(),
                     },
-                    Value::Closure { func, .. } => Reference::Func(func),
+                    Value::Closure { func, env } => Reference::Closure(
+                        func,
+                        env.items
+                            .into_iter()
+                            .map(|f| self.val(f))
+                            .collect_vec()
+                            .into(),
+                    ),
                     _ => unimplemented!("don't know how to take ref of {val:?}"),
                 };
 
@@ -512,6 +517,7 @@ impl Interpreter {
                     IrTy::RawPtr => {
                         Value::RawPtr(Addr(usize::from_le_bytes(bytes.try_into().unwrap())))
                     }
+                    IrTy::Func(..) => Value::Func(Symbol::from_bytes(bytes.try_into().unwrap())),
                     _ => panic!("Load not implemented for {ty:?}"),
                 };
                 self.write_register(&dest, value);
@@ -664,17 +670,19 @@ impl Interpreter {
             .clone()
     }
 
-    fn func(&self, val: Value) -> Symbol {
+    fn func(&self, val: Value) -> (Symbol, List<Value>) {
         match val {
             Value::Reg(reg) => match self.read_register(&Register(reg)) {
-                Value::Func(symbol) => symbol,
-                Value::Closure { func, .. } => func,
+                Value::Func(symbol) => (symbol, Default::default()),
+                Value::Closure { func, env } => (func, env),
                 _ => panic!(
                     "didn't get func symbol from {val:?}: {:?}",
                     self.read_register(&Register(reg))
                 ),
             },
-            Value::Func(name) => name,
+            Value::Func(name) => (name, Default::default()),
+            Value::Ref(Reference::Func(sym)) => (sym, Default::default()),
+            Value::Ref(Reference::Closure(sym, env)) => (sym, env),
             _ => panic!("cannot get func from {val:?}"),
         }
     }
@@ -936,5 +944,29 @@ pub mod tests {
             ),
             Value::Int(123)
         );
+    }
+
+    #[test]
+    fn interprets_counter() {
+        assert_eq!(
+            interpret(
+                "
+            func makeCounter() {
+                let a = 0
+                func count() {
+                    a = a + 1
+                    a
+                }
+                count
+            }
+
+            let a = makeCounter()
+            let b = makeCounter()
+            a() ; a()
+            (a(), b())
+            "
+            ),
+            Value::Record(None, vec![Value::Int(3), Value::Int(1)])
+        )
     }
 }

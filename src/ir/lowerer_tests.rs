@@ -209,7 +209,7 @@ pub mod tests {
                         Instruction::Call {
                             dest: 1.into(),
                             ty: IrTy::Int,
-                            callee: Value::Func(GlobalId::from(1).into(),),
+                            callee: Value::Reg(0),
                             args: vec![Value::Reg(2)].into(),
                             meta: meta()
                         }
@@ -750,7 +750,7 @@ pub mod tests {
                         Instruction::Call {
                             dest: 1.into(),
                             ty: IrTy::Int,
-                            callee: Value::Func(Symbol::Synthesized(SynthesizedId::from(4))),
+                            callee: Value::Reg(0),
                             args: vec![Value::Reg(2)].into(),
                             meta: meta(),
                         },
@@ -763,7 +763,7 @@ pub mod tests {
                         Instruction::Call {
                             dest: 3.into(),
                             ty: IrTy::Float,
-                            callee: Value::Func(Symbol::Synthesized(SynthesizedId::from(7))),
+                            callee: Value::Reg(0),
                             args: vec![Value::Reg(4)].into(),
                             meta: meta(),
                         },
@@ -1175,10 +1175,7 @@ pub mod tests {
                     Instruction::Call {
                         dest: 3.into(),
                         ty: IrTy::Int,
-                        callee: Value::Closure {
-                            func: GlobalId::from(2).into(),
-                            env: vec![Value::Reg(0)].into()
-                        },
+                        callee: Value::Reg(2),
                         args: vec![].into(),
                         meta: meta(),
                     },

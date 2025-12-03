@@ -320,6 +320,10 @@ impl<'a> Lowerer<'a> {
                 main_symbol,
                 TypeEntry::Mono(Ty::Func(Ty::Void.into(), ret_ty.into())),
             );
+            ast.1
+                .phase
+                .symbols_to_string
+                .insert(main_symbol, "main(synthesized)".to_string());
         }
 
         self.current_function_stack.push(CurrentFunction::default());
@@ -1048,8 +1052,7 @@ impl<'a> Lowerer<'a> {
             ExprKind::Binary(box lhs, op, box rhs) => {
                 self.lower_binary(expr, lhs, op.clone(), rhs, bind, instantiations)
             }
-            #[allow(clippy::todo)]
-            ExprKind::Tuple(..) => todo!(),
+            ExprKind::Tuple(items) => self.lower_tuple(expr.id, items, bind, instantiations),
             #[allow(clippy::todo)]
             ExprKind::Block(..) => todo!(),
 
@@ -1119,6 +1122,32 @@ impl<'a> Lowerer<'a> {
         }
 
         Ok((value, ty))
+    }
+
+    #[instrument(level = tracing::Level::TRACE, skip(self, items))]
+    fn lower_tuple(
+        &mut self,
+        id: NodeID,
+        items: &[Expr],
+        bind: Bind,
+        instantiations: &Substitutions,
+    ) -> Result<(Value, Ty), IRError> {
+        let item_irs: Vec<(Value, Ty)> = items
+            .iter()
+            .map(|expr| self.lower_expr(expr, Bind::Fresh, instantiations))
+            .try_collect()?;
+
+        let (item_irs, item_tys): (Vec<Value>, Vec<Ty>) = item_irs.into_iter().unzip();
+        let ty = Ty::Tuple(item_tys);
+        let dest = self.ret(bind);
+        self.push_instr(Instruction::Record {
+            dest,
+            ty: ty.clone(),
+            record: item_irs.into(),
+            meta: vec![InstructionMeta::Source(id)].into(),
+        });
+
+        Ok((dest.into(), ty))
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
@@ -1552,6 +1581,17 @@ impl<'a> Lowerer<'a> {
     ) -> Result<(Value, Ty), IRError> {
         let (ty, instantiations) = self.specialized_ty(expr)?;
         let monomorphized_ty = substitute(ty.clone(), &instantiations);
+
+        let original_name_sym = name.symbol().expect("did not get symbol");
+
+        // If we currently have a binding for this symbol, prefer that over just passing names around
+        if self
+            .current_func_mut()
+            .bindings
+            .contains_key(&original_name_sym)
+        {
+            return Ok((self.get_binding(&original_name_sym).into(), ty));
+        }
 
         let ret = if matches!(monomorphized_ty, Ty::Func(..)) {
             // It's a func reference so we pass the name
