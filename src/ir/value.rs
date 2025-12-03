@@ -1,5 +1,7 @@
 use std::str::FromStr;
 
+use itertools::Itertools;
+
 use crate::{
     ir::{ir_error::IRError, list::List, register::Register},
     name_resolution::symbol::Symbol,
@@ -33,7 +35,7 @@ pub enum Value {
     },
     Record(Option<Symbol>, Vec<Value>),
     RawPtr(Addr),
-    Buffer(Vec<u8>),
+    RawBuffer(Vec<u8>),
     Void,
     #[default]
     Uninit,
@@ -64,9 +66,9 @@ impl Value {
                     vec![0u8]
                 }
             }
-            Value::Record(..) => unimplemented!("only primitives can be stored"),
+            Value::Record(.., values) => values.iter().flat_map(|v| v.as_bytes()).collect_vec(),
             Value::RawPtr(v) => v.0.to_le_bytes().to_vec(),
-            Value::Buffer(bytes) => bytes.to_vec(),
+            Value::RawBuffer(bytes) => bytes.to_vec(),
             other => unreachable!("Cannot serialize {other:?}"),
         }
     }
@@ -124,7 +126,7 @@ impl std::fmt::Display for Value {
             Value::Capture { depth, reg } => write!(f, "%{reg}^{depth}"),
             Value::Ref(reference) => write!(f, "&{reference:?}"),
             Value::Reg(reg) => write!(f, "%{reg}"),
-            Value::Buffer(v) => write!(f, "[{v:?}]"),
+            Value::RawBuffer(v) => write!(f, "[{v:?}]"),
             Value::Record(sym, fields) => write!(
                 f,
                 "{}{{ {:?} }}",

@@ -125,8 +125,8 @@ impl Ty {
             }),
         }
     }
-    pub fn Array(t: InferTy) -> Ty {
-        InferTy::Array(t).into()
+    pub fn Array(t: Ty) -> Ty {
+        InferTy::Array(t.into()).into()
     }
 
     pub(crate) fn uncurry_params(self) -> Vec<Ty> {

@@ -202,11 +202,29 @@ pub enum Instruction<T> {
         to: Value,
         length: Value,
     },
+    #[doc = "$dest = gep $ty $addr $offset_index"]
+    Gep {
+        dest: Register,
+        ty: T,
+        addr: Value,
+        offset_index: Value,
+    },
 }
 
 impl<T> Instruction<T> {
     pub fn map_type<U>(self, mut map: impl FnMut(T) -> U) -> Instruction<U> {
         match self {
+            Instruction::Gep {
+                dest,
+                ty,
+                addr,
+                offset_index,
+            } => Instruction::Gep {
+                dest,
+                ty: map(ty),
+                addr,
+                offset_index,
+            },
             Instruction::Copy {
                 ty,
                 from,

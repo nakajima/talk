@@ -1123,6 +1123,75 @@ pub mod tests {
     }
 
     #[test]
+    fn lowers_array_literal() {
+        let program = lower("[1,2,3]");
+        assert_eq_diff!(
+            program
+                .functions
+                .get(&Symbol::Synthesized(SynthesizedId::from(1)))
+                .unwrap()
+                .blocks,
+            &[BasicBlock {
+                id: BasicBlockId(0),
+                phis: Default::default(),
+                instructions: vec![
+                    Instruction::Constant {
+                        dest: 0.into(),
+                        ty: IrTy::Int,
+                        val: Value::Int(1),
+                        meta: meta()
+                    },
+                    Instruction::Constant {
+                        dest: 1.into(),
+                        ty: IrTy::Int,
+                        val: Value::Int(2),
+                        meta: meta()
+                    },
+                    Instruction::Constant {
+                        dest: 2.into(),
+                        ty: IrTy::Int,
+                        val: Value::Int(3),
+                        meta: meta()
+                    },
+                    Instruction::Record {
+                        dest: 3.into(),
+                        ty: IrTy::Record(None, vec![IrTy::Int, IrTy::Int, IrTy::Int]),
+                        record: vec![Value::Reg(0), Value::Reg(1), Value::Reg(2)].into(),
+                        meta: meta(),
+                    },
+                    Instruction::Alloc {
+                        dest: 4.into(),
+                        ty: IrTy::Record(None, vec![IrTy::Int, IrTy::Int, IrTy::Int]),
+                        count: Value::Int(1)
+                    },
+                    Instruction::Store {
+                        value: Value::Reg(3),
+                        ty: IrTy::Record(None, vec![IrTy::Int, IrTy::Int, IrTy::Int]),
+                        addr: Value::Reg(4),
+                    },
+                    Instruction::Nominal {
+                        dest: 5.into(),
+                        sym: Symbol::Array,
+                        ty: IrTy::Record(
+                            Some(Symbol::Array),
+                            vec![IrTy::RawPtr, IrTy::Int, IrTy::Int]
+                        ),
+                        record: vec![Value::Reg(4), Value::Int(3), Value::Int(3)].into(),
+                        meta: meta()
+                    }
+                ],
+                terminator: Terminator::Ret {
+                    val: Register(5).into(),
+                    ty: IrTy::Record(
+                        Some(Symbol::Array),
+                        vec![IrTy::RawPtr, IrTy::Int, IrTy::Int]
+                    ),
+                }
+            }]
+        );
+    }
+
+    #[test]
     fn lowers_closure() {
         let program = lower(
             "

@@ -554,6 +554,24 @@ impl Interpreter {
                     self.memory.mem[heap_idx + i] = *byte;
                 }
             }
+            IR::Instr(Instruction::Gep {
+                dest,
+                ty,
+                addr,
+                offset_index,
+            }) => {
+                let Value::RawPtr(ptr) = self.val(addr) else {
+                    panic!("Addr must be pointer")
+                };
+
+                let Value::Int(offset) = self.val(offset_index) else {
+                    panic!("offset_index must be int")
+                };
+
+                let offset = ty.bytes_len() * offset as usize;
+                let new_ptr = Value::RawPtr(Addr(ptr.0 + offset));
+                self.write_register(&dest, new_ptr);
+            }
             IR::Instr(Instruction::Free { .. }) => unimplemented!(),
         }
     }
@@ -617,7 +635,7 @@ impl Interpreter {
                 _ => format!("{reference:?}"),
             },
             Value::Uninit => "UNINIT".into(),
-            Value::Buffer(bytes) => format!("buf({bytes:?})"),
+            Value::RawBuffer(bytes) => format!("buf({bytes:?})"),
         }
     }
 
@@ -967,6 +985,18 @@ pub mod tests {
             "
             ),
             Value::Record(None, vec![Value::Int(3), Value::Int(1)])
+        )
+    }
+
+    #[test]
+    fn interprets_array_literal_properties() {
+        assert_eq!(
+            interpret(
+                "
+            [10,20,30].count
+            "
+            ),
+            Value::Int(3)
         )
     }
 }

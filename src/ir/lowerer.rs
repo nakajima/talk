@@ -126,9 +126,9 @@ impl StaticMemory {
             IrTy::Func(..) => Value::Func(Symbol::from_bytes(bytes.try_into().unwrap())),
             IrTy::Record(..) => unreachable!("can only load primitives"),
             IrTy::RawPtr => Value::RawPtr(Addr(usize::from_le_bytes(bytes.try_into().unwrap()))),
-            IrTy::Byte => Value::Buffer(bytes.to_vec()),
+            IrTy::Byte => Value::RawBuffer(bytes.to_vec()),
             IrTy::Void => unreachable!("cannot load the void"),
-            IrTy::Buffer(..) => Value::Buffer(bytes.to_vec()),
+            IrTy::Buffer(..) => Value::RawBuffer(bytes.to_vec()),
         }
     }
 }
@@ -992,8 +992,7 @@ impl<'a> Lowerer<'a> {
     ) -> Result<(Value, Ty), IRError> {
         let (value, ty) = match &expr.kind {
             ExprKind::Func(func) => self.lower_func(func, bind, instantiations),
-            #[allow(clippy::todo)]
-            ExprKind::LiteralArray(_exprs) => todo!(),
+            ExprKind::LiteralArray(exprs) => self.lower_array(expr, exprs, bind, instantiations),
             ExprKind::LiteralInt(val) => {
                 let ret = self.ret(bind);
 
@@ -1124,6 +1123,64 @@ impl<'a> Lowerer<'a> {
         Ok((value, ty))
     }
 
+    #[instrument(level = tracing::Level::TRACE, skip(self, expr, items))]
+    fn lower_array(
+        &mut self,
+        expr: &Expr,
+        items: &[Expr],
+        bind: Bind,
+        instantiations: &Substitutions,
+    ) -> Result<(Value, Ty), IRError> {
+        let item_irs: Vec<(Value, Ty)> = items
+            .iter()
+            .map(|item| self.lower_expr(item, Bind::Fresh, instantiations))
+            .try_collect()?;
+
+        let (item_irs, item_tys): (Vec<Value>, Vec<Ty>) = item_irs.into_iter().unzip();
+        let item_ty = if let Some(item) = items.first() {
+            self.ty_from_id(&item.id)?
+        } else {
+            Ty::Void
+        };
+
+        let record_reg = self.next_register();
+        self.push_instr(Instruction::Record {
+            dest: record_reg,
+            ty: Ty::Tuple(item_tys.clone()), // This is sort of a hack, it's really a record but it's a pain to wrap a row and this still lowers to IrTy::Record
+            record: item_irs.into(),
+            meta: vec![InstructionMeta::Source(expr.id)].into(),
+        });
+
+        let alloc_reg = self.next_register();
+        self.push_instr(Instruction::Alloc {
+            dest: alloc_reg,
+            ty: Ty::Tuple(item_tys.clone()),
+            count: Value::Int(1),
+        });
+
+        self.push_instr(Instruction::Store {
+            value: record_reg.into(),
+            ty: Ty::Tuple(item_tys),
+            addr: alloc_reg.into(),
+        });
+
+        let dest = self.ret(bind);
+        self.push_instr(Instruction::Nominal {
+            dest,
+            sym: Symbol::Array,
+            ty: Ty::Array(item_ty.clone()),
+            record: vec![
+                alloc_reg.into(),
+                Value::Int(items.len() as i64),
+                Value::Int(items.len() as i64),
+            ]
+            .into(),
+            meta: vec![InstructionMeta::Source(expr.id)].into(),
+        });
+
+        Ok((dest.into(), Ty::Array(item_ty)))
+    }
+
     #[instrument(level = tracing::Level::TRACE, skip(self, items))]
     fn lower_tuple(
         &mut self,
@@ -1161,7 +1218,7 @@ impl<'a> Lowerer<'a> {
         let ret = self.ret(bind);
         let bytes = string.bytes().collect_vec();
         let bytes_len = bytes.len() as i64;
-        let ptr = self.static_memory.write(Value::Buffer(bytes));
+        let ptr = self.static_memory.write(Value::RawBuffer(bytes));
 
         self.push_instr(Instruction::Nominal {
             dest: ret,

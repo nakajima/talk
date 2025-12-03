@@ -2068,7 +2068,8 @@ impl<'a> InferencePass<'a> {
             let annotation_ty = self.visit_type_annotation(type_annotation, context);
             // If there was a placeholder, unify it with the annotated type
             if let Some(existing) = existing_ty {
-                self.constraints.wants_equals(existing, annotation_ty.clone());
+                self.constraints
+                    .wants_equals(existing, annotation_ty.clone());
             }
             annotation_ty
         } else if let Some(existing) = existing_ty {

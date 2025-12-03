@@ -237,6 +237,10 @@ impl Symbol {
         module_id: ModuleId::Core,
         local_id: 2,
     });
+    pub const Array: Symbol = Symbol::Struct(StructId {
+        module_id: ModuleId::Core,
+        local_id: 3,
+    });
 
     #[allow(clippy::expect_used)]
     pub fn from_bytes(bytes: &[u8; 8]) -> Symbol {

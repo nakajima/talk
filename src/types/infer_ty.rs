@@ -268,7 +268,7 @@ impl InferTy {
             }
             .into(),
             label: "storage".into(),
-            ty: InferTy::Int,
+            ty: InferTy::RawPtr,
         };
 
         InferTy::Nominal {

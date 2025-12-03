@@ -1,11 +1,11 @@
 struct Array<Element> {
 	let count: Int
 	let capacity: Int
-	let storage: Int
+	let storage: RawPtr
 
 	init(capacity: Int) {
 		self.capacity = capacity
 		self.count = 0
-		self.storage = 0
+		self.storage = _alloc<Element>(capacity)
 	}
 }
