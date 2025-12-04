@@ -69,5 +69,6 @@ fn expr_class(kind: &ExprKind) -> &'static str {
         ExprKind::Match(..) => "match",
         ExprKind::RecordLiteral { .. } => "record",
         ExprKind::RowVariable(..) => "row",
+        ExprKind::InlineIR(..) => "inline-ir",
     }
 }

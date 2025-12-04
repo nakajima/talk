@@ -3,8 +3,9 @@ use crate::{
     node_kinds::{
         attribute::Attribute, block::Block, body::Body, call_arg::CallArg, decl::Decl, expr::Expr,
         func::Func, func_signature::FuncSignature, generic_decl::GenericDecl,
-        incomplete_expr::IncompleteExpr, match_arm::MatchArm, parameter::Parameter,
-        pattern::Pattern, record_field::RecordField, stmt::Stmt, type_annotation::TypeAnnotation,
+        incomplete_expr::IncompleteExpr, inline_ir_instruction::InlineIRInstruction,
+        match_arm::MatchArm, parameter::Parameter, pattern::Pattern, record_field::RecordField,
+        stmt::Stmt, type_annotation::TypeAnnotation,
     },
     span::Span,
 };
@@ -31,6 +32,8 @@ pub enum Node {
     IncompleteExpr(IncompleteExpr),
     CallArg(CallArg),
     FuncSignature(FuncSignature),
+    #[drive(skip)]
+    InlineIRInstruction(InlineIRInstruction),
 }
 
 impl Node {
@@ -56,6 +59,7 @@ impl Node {
             },
             Node::CallArg(call_arg) => call_arg.span,
             Node::FuncSignature(sig) => sig.span,
+            Node::InlineIRInstruction(ir) => ir.span,
         }
     }
 
@@ -77,6 +81,7 @@ impl Node {
             Node::IncompleteExpr(..) => NodeID(FileID(0), 0),
             Node::CallArg(call_arg) => call_arg.id,
             Node::FuncSignature(sig) => sig.id,
+            Node::InlineIRInstruction(ir) => ir.id,
         }
     }
 

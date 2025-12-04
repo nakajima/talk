@@ -94,6 +94,9 @@ impl<'a> Higlighter<'a> {
 
         while let Ok(tok) = &lexer.next() {
             match tok.kind {
+                TokenKind::Percent => self.make(tok, Kind::OPERATOR, &mut tokens),
+                TokenKind::IRRegister(..) => self.make(tok, Kind::PARAMETER, &mut tokens),
+                TokenKind::Attribute(..) => self.make(tok, Kind::DECORATOR, &mut tokens),
                 TokenKind::As => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::At => self.make(tok, Kind::DECORATOR, &mut tokens),
                 TokenKind::LineComment(_) => self.make(tok, Kind::COMMENT, &mut tokens),
@@ -193,6 +196,7 @@ impl<'a> Higlighter<'a> {
         let end = meta.end.end;
 
         match &node {
+            Node::InlineIRInstruction(_ir) => {}
             Node::Attribute(..) => {
                 result.push(HighlightToken {
                     kind: Kind::DECORATOR,
@@ -430,6 +434,9 @@ impl<'a> Higlighter<'a> {
                 ExprKind::Match(..) => (),
                 ExprKind::RecordLiteral { .. } => (),
                 ExprKind::RowVariable(..) => (),
+                ExprKind::InlineIR(instr) => {
+                    result.push(self.make_span(Kind::KEYWORD, instr.instr_name_span))
+                }
             },
             Node::Body(..) => (),
             Node::Pattern(..) => (),

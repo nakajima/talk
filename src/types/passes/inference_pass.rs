@@ -25,6 +25,7 @@ use crate::{
         func::Func,
         func_signature::FuncSignature,
         generic_decl::GenericDecl,
+        inline_ir_instruction::InlineIRInstruction,
         match_arm::MatchArm,
         parameter::Parameter,
         pattern::{Pattern, PatternKind, RecordFieldPatternKind},
@@ -897,6 +898,7 @@ impl<'a> InferencePass<'a> {
     #[instrument(level = tracing::Level::TRACE, skip(self, expr, context), fields(expr.id = ?expr.id, expr = formatter::format_node(&expr.into(), &self.asts[0].meta)))]
     fn visit_expr(&mut self, expr: &Expr, context: &mut impl Solve) -> InferTy {
         let ty = match &expr.kind {
+            ExprKind::Incomplete(..) => self.session.new_ty_meta_var(context.level()),
             ExprKind::LiteralArray(items) => self.visit_array(items, context),
             ExprKind::LiteralInt(_) => InferTy::Int,
             ExprKind::LiteralFloat(_) => InferTy::Float,
@@ -949,12 +951,20 @@ impl<'a> InferencePass<'a> {
             #[allow(clippy::todo)]
             ExprKind::RowVariable(..) => todo!(),
             ExprKind::As(box lhs, rhs) => self.visit_as(lhs, rhs, context),
-            _ => unimplemented!(),
+            ExprKind::InlineIR(instr) => self.visit_inline_ir(instr, context),
         };
 
         self.session.types_by_node.insert(expr.id, ty.clone());
 
         ty
+    }
+
+    fn visit_inline_ir(
+        &mut self,
+        _instr: &InlineIRInstruction,
+        context: &mut impl Solve,
+    ) -> InferTy {
+        self.session.new_ty_meta_var(context.level())
     }
 
     fn visit_return(

@@ -18,6 +18,9 @@ pub mod tests {
             func::Func,
             func_signature::FuncSignature,
             generic_decl::GenericDecl,
+            inline_ir_instruction::{
+                InlineIRInstruction, InlineIRInstructionKind, Register, Value,
+            },
             match_arm::MatchArm,
             parameter::Parameter,
             pattern::{Pattern, PatternKind, RecordFieldPattern, RecordFieldPatternKind},
@@ -116,6 +119,21 @@ pub mod tests {
                 id: NodeID::ANY,
                 span: $crate::parsing::span::Span::ANY,
                 kind: $expr,
+            }
+        };
+    }
+
+    #[macro_export]
+    macro_rules! nominal_annotation {
+        ($expr:expr) => {
+            $crate::parsing::node_kinds::type_annotation::TypeAnnotation {
+                id: NodeID::ANY,
+                span: $crate::parsing::span::Span::ANY,
+                kind: $crate::parsing::node_kinds::type_annotation::TypeAnnotationKind::Nominal {
+                    name: $expr.to_string().into(),
+                    name_span: $crate::parsing::span::Span::ANY,
+                    generics: Default::default(),
+                },
             }
         };
     }
@@ -2332,6 +2350,62 @@ pub mod tests {
                 rhs: None
             })
         )
+    }
+
+    #[test]
+    fn parses_inline_ir() {
+        let parsed = parse(
+            "
+           @_ir { _print 123 }
+           @_ir { %? = const Int 123 }
+           @_ir { %? = cmp Int %0 < %1 } 
+           @_ir { %? = add Int 123 %1 } 
+           @_ir { %? = sub Int 123 %1 } 
+           @_ir { %? = mul Int 123 %1 } 
+           @_ir { %? = div Int 123 %1 } 
+           @_ir { %? = ref Int 123 } 
+           @_ir { %? = call Int %1 () } 
+           @_ir { %? = record { fizz: Int } (123) } 
+           @_ir { %? = getfield Int %1 0 }
+           @_ir { %? = setfield Int %1 0 123 }
+           @_ir { %? = alloc Int 1 }
+           @_ir { free %1 }
+           @_ir { %? = load Int %1 }
+           @_ir { move Int %1 %2 }
+           @_ir { copy Int %1 %2 3 }
+            ",
+        );
+        assert_eq!(
+            *parsed.roots[0].as_stmt(),
+            any_expr_stmt!(ExprKind::InlineIR(any!(InlineIRInstruction, {
+                instr_name_span: Span::ANY,
+                kind: InlineIRInstructionKind::_Print { val: Value::Int(123) }
+            })))
+        );
+        assert_eq!(
+            *parsed.roots[1].as_stmt(),
+            any_expr_stmt!(ExprKind::InlineIR(any!(InlineIRInstruction, {
+                instr_name_span: Span::ANY,
+                kind: InlineIRInstructionKind::Constant {
+                    dest: Register("?".to_string()),
+                    ty: nominal_annotation!("Int"),
+                    val: Value::Int(123)
+                }
+            })))
+        );
+        assert_eq!(
+            *parsed.roots[2].as_stmt(),
+            any_expr_stmt!(ExprKind::InlineIR(any!(InlineIRInstruction, {
+                instr_name_span: Span::ANY,
+                kind: InlineIRInstructionKind::Cmp {
+                    dest: Register("?".to_string()),
+                    lhs: Value::Reg(0),
+                    rhs: Value::Reg(1),
+                    ty: nominal_annotation!("Int"),
+                    op: TokenKind::Less
+                }
+            })))
+        );
     }
 
     // #[test]

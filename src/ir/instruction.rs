@@ -5,6 +5,7 @@ use crate::{
     label::Label,
     name_resolution::symbol::Symbol,
     node_id::{FileID, NodeID},
+    token_kind::TokenKind,
     types::ty::Ty,
 };
 
@@ -87,6 +88,20 @@ impl FromStr for CmpOperator {
         Err(IRError::CouldNotParse(format!(
             "No match cmp operator: {s:?}"
         )))
+    }
+}
+
+impl From<TokenKind> for CmpOperator {
+    fn from(value: TokenKind) -> Self {
+        match value {
+            TokenKind::Greater => CmpOperator::Greater,
+            TokenKind::GreaterEquals => CmpOperator::GreaterEquals,
+            TokenKind::Less => CmpOperator::Less,
+            TokenKind::LessEquals => CmpOperator::LessEquals,
+            TokenKind::EqualsEquals => CmpOperator::Equals,
+            TokenKind::BangEquals => CmpOperator::NotEquals,
+            _ => unreachable!("{value:?}"),
+        }
     }
 }
 

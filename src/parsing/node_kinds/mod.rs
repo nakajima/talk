@@ -8,6 +8,7 @@ pub mod func;
 pub mod func_signature;
 pub mod generic_decl;
 pub mod incomplete_expr;
+pub mod inline_ir_instruction;
 pub mod match_arm;
 pub mod parameter;
 pub mod pattern;

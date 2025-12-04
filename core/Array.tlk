@@ -6,6 +6,6 @@ struct Array<Element> {
 	init(capacity: Int) {
 		self.capacity = capacity
 		self.count = 0
-		self.storage = _alloc<Element>(capacity)
+		self.storage = @_ir { %? = alloc Element %0 }
 	}
 }

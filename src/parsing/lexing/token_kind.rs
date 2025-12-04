@@ -66,6 +66,7 @@ pub enum TokenKind {
     RightParen,
     LeftBracket,
     RightBracket,
+    Percent,
     Comma,
     Struct,
     Static,
@@ -74,6 +75,7 @@ pub enum TokenKind {
     Float(String),
     Identifier(String),
     StringLiteral(String),
+    Attribute(String),
     Func,
     Init,
     Let,
@@ -82,6 +84,7 @@ pub enum TokenKind {
     Generated,
     DotDot,
     DotDotDot,
+    IRRegister(String),
 }
 
 impl Display for TokenKind {
@@ -93,7 +96,10 @@ impl Display for TokenKind {
 impl TokenKind {
     pub fn as_str(&self) -> String {
         let text = match &self {
+            TokenKind::Percent => "%",
+            TokenKind::IRRegister(v) => &format!("%{v}"),
             TokenKind::As => "as",
+            TokenKind::Attribute(attr) => &format!("@{attr}"),
             TokenKind::Typealias => "typealias",
             TokenKind::LineComment(text) => &format!("// {text}"),
             TokenKind::If => "if",

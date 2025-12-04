@@ -28,6 +28,7 @@ use crate::{
         expr::{Expr, ExprKind},
         func::Func,
         func_signature::FuncSignature,
+        inline_ir_instruction::InlineIRInstructionKind,
         match_arm::MatchArm,
         pattern::{Pattern, PatternKind, RecordFieldPatternKind},
         stmt::{Stmt, StmtKind},
@@ -615,6 +616,30 @@ impl NameResolver {
     }
 
     fn enter_expr(&mut self, expr: &mut Expr) {
+        on!(&mut expr.kind, ExprKind::InlineIR(instr), {
+            match &mut instr.kind {
+                InlineIRInstructionKind::Constant { ty, .. } => self.enter_type_annotation(ty),
+                InlineIRInstructionKind::Cmp { ty, .. } => self.enter_type_annotation(ty),
+                InlineIRInstructionKind::Add { ty, .. } => self.enter_type_annotation(ty),
+                InlineIRInstructionKind::Sub { ty, .. } => self.enter_type_annotation(ty),
+                InlineIRInstructionKind::Mul { ty, .. } => self.enter_type_annotation(ty),
+                InlineIRInstructionKind::Div { ty, .. } => self.enter_type_annotation(ty),
+                InlineIRInstructionKind::Ref { ty, .. } => self.enter_type_annotation(ty),
+                InlineIRInstructionKind::Call { ty, .. } => self.enter_type_annotation(ty),
+                InlineIRInstructionKind::Record { ty, .. } => self.enter_type_annotation(ty),
+                InlineIRInstructionKind::GetField { ty, .. } => self.enter_type_annotation(ty),
+                InlineIRInstructionKind::SetField { ty, .. } => self.enter_type_annotation(ty),
+                InlineIRInstructionKind::_Print { .. } => (),
+                InlineIRInstructionKind::Alloc { ty, .. } => self.enter_type_annotation(ty),
+                InlineIRInstructionKind::Free { .. } => (),
+                InlineIRInstructionKind::Load { ty, .. } => self.enter_type_annotation(ty),
+                InlineIRInstructionKind::Store { ty, .. } => self.enter_type_annotation(ty),
+                InlineIRInstructionKind::Move { ty, .. } => self.enter_type_annotation(ty),
+                InlineIRInstructionKind::Copy { ty, .. } => self.enter_type_annotation(ty),
+                InlineIRInstructionKind::Gep { ty, .. } => self.enter_type_annotation(ty),
+            }
+        });
+
         on!(&mut expr.kind, ExprKind::Variable(name), {
             let Some(resolved_name) = self.lookup(name, Some(expr.id)) else {
                 self.diagnostic(expr.id, NameResolverError::UndefinedName(name.name_str()));

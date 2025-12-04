@@ -7,7 +7,8 @@ use crate::{
     node_id::NodeID,
     node_kinds::{
         block::Block, call_arg::CallArg, func::Func, incomplete_expr::IncompleteExpr,
-        match_arm::MatchArm, record_field::RecordField, type_annotation::TypeAnnotation,
+        inline_ir_instruction::InlineIRInstruction, match_arm::MatchArm, record_field::RecordField,
+        type_annotation::TypeAnnotation,
     },
     parsing::span::Span,
     token_kind::TokenKind,
@@ -18,6 +19,9 @@ pub enum ExprKind {
     // These first expressions only exist to assist with LSP operations
     #[drive(skip)]
     Incomplete(IncompleteExpr),
+
+    #[drive(skip)]
+    InlineIR(InlineIRInstruction),
 
     As(Box<Expr>, TypeAnnotation),
 
@@ -91,6 +95,7 @@ impl ExprKind {
             | ExprKind::Binary(..)
             | ExprKind::Member(..)
             | ExprKind::As(..)
+            | ExprKind::InlineIR(..)
             | ExprKind::RowVariable(..) => false,
 
             ExprKind::Func(..) => true,

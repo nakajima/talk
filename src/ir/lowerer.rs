@@ -13,9 +13,11 @@ use crate::label::Label;
 use crate::name_resolution::symbol::{
     GlobalId, InitializerId, InstanceMethodId, StaticMethodId, Symbols,
 };
+use crate::node_kinds::inline_ir_instruction::{InlineIRInstruction, InlineIRInstructionKind};
 use crate::node_kinds::match_arm::MatchArm;
 use crate::node_kinds::parameter::Parameter;
 use crate::node_kinds::record_field::RecordField;
+use crate::node_kinds::type_annotation::TypeAnnotation;
 use crate::token_kind::TokenKind;
 use crate::types::infer_row::RowParamId;
 use crate::types::infer_ty::TypeParamId;
@@ -1106,6 +1108,7 @@ impl<'a> Lowerer<'a> {
             #[allow(clippy::todo)]
             ExprKind::RowVariable(..) => todo!(),
             ExprKind::As(lhs, ..) => self.lower_expr(lhs, bind, instantiations),
+            ExprKind::InlineIR(instr) => self.lower_inline_ir(instr, bind, instantiations),
             _ => unreachable!("cannot lower expr: {expr:?}"),
         }?;
 
@@ -1121,6 +1124,293 @@ impl<'a> Lowerer<'a> {
         }
 
         Ok((value, ty))
+    }
+
+    #[allow(clippy::todo)]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
+    fn lower_inline_ir(
+        &mut self,
+        instr: &InlineIRInstruction,
+        bind: Bind,
+        instantiations: &Substitutions,
+    ) -> Result<(Value, Ty), IRError> {
+        match &instr.kind {
+            InlineIRInstructionKind::Constant { dest, ty, val } => {
+                let ret = self.ret(bind);
+                let dest = self.parsed_register(dest, ret);
+                let ty = self.parsed_ty(ty, instr.id);
+                let val = self.parsed_value(val);
+                self.push_instr(Instruction::Constant {
+                    dest,
+                    ty: ty.clone(),
+                    val,
+                    meta: vec![InstructionMeta::Source(instr.id)].into(),
+                });
+                Ok((dest.into(), ty))
+            }
+            InlineIRInstructionKind::Cmp {
+                dest,
+                lhs,
+                rhs,
+                ty,
+                op,
+            } => {
+                let ret = self.ret(bind);
+                let dest = self.parsed_register(dest, ret);
+                let ty = self.parsed_ty(ty, instr.id);
+                let lhs = self.parsed_value(lhs);
+                let rhs = self.parsed_value(rhs);
+                self.push_instr(Instruction::Cmp {
+                    dest,
+                    ty: ty.clone(),
+                    lhs,
+                    rhs,
+                    op: op.clone().into(),
+                    meta: vec![InstructionMeta::Source(instr.id)].into(),
+                });
+                Ok((dest.into(), ty))
+            }
+            InlineIRInstructionKind::Add { dest, ty, a, b }
+            | InlineIRInstructionKind::Sub { dest, ty, a, b }
+            | InlineIRInstructionKind::Mul { dest, ty, a, b }
+            | InlineIRInstructionKind::Div { dest, ty, a, b } => {
+                let ty = self.parsed_ty(ty, instr.id);
+                let ret = self.ret(bind);
+                let dest = self.parsed_register(dest, ret);
+                let a = self.parsed_value(a);
+                let b = self.parsed_value(b);
+
+                match &instr.kind {
+                    InlineIRInstructionKind::Add { .. } => self.push_instr(Instruction::Add {
+                        dest,
+                        ty: ty.clone(),
+                        a,
+                        b,
+                        meta: vec![InstructionMeta::Source(instr.id)].into(),
+                    }),
+                    InlineIRInstructionKind::Sub { .. } => self.push_instr(Instruction::Sub {
+                        dest,
+                        ty: ty.clone(),
+                        a,
+                        b,
+                        meta: vec![InstructionMeta::Source(instr.id)].into(),
+                    }),
+                    InlineIRInstructionKind::Mul { .. } => self.push_instr(Instruction::Mul {
+                        dest,
+                        ty: ty.clone(),
+                        a,
+                        b,
+                        meta: vec![InstructionMeta::Source(instr.id)].into(),
+                    }),
+                    InlineIRInstructionKind::Div { .. } => self.push_instr(Instruction::Div {
+                        dest,
+                        ty: ty.clone(),
+                        a,
+                        b,
+                        meta: vec![InstructionMeta::Source(instr.id)].into(),
+                    }),
+                    _ => unreachable!(),
+                }
+
+                Ok((dest.into(), ty))
+            }
+
+            InlineIRInstructionKind::Ref { dest, ty, val } => {
+                let ret = self.ret(bind);
+                let dest = self.parsed_register(dest, ret);
+                let ty = self.parsed_ty(ty, instr.id);
+                let val = self.parsed_value(val);
+                self.push_instr(Instruction::Ref {
+                    dest,
+                    ty: ty.clone(),
+                    val,
+                });
+                Ok((dest.into(), ty))
+            }
+            InlineIRInstructionKind::Call {
+                dest,
+                ty,
+                callee,
+                args,
+            } => {
+                let ret = self.ret(bind);
+                let dest = self.parsed_register(dest, ret);
+                let ty = self.parsed_ty(ty, instr.id);
+                let callee = self.parsed_value(callee);
+                let args = args
+                    .iter()
+                    .map(|a| self.parsed_value(a))
+                    .collect_vec()
+                    .into();
+                self.push_instr(Instruction::Call {
+                    dest,
+                    ty: ty.clone(),
+                    callee,
+                    args,
+                    meta: vec![InstructionMeta::Source(instr.id)].into(),
+                });
+                Ok((dest.into(), ty))
+            }
+            InlineIRInstructionKind::Record { dest, ty, record } => {
+                let ret = self.ret(bind);
+                let dest = self.parsed_register(dest, ret);
+                let ty = self.parsed_ty(ty, instr.id);
+                let record = record
+                    .iter()
+                    .map(|a| self.parsed_value(a))
+                    .collect_vec()
+                    .into();
+                self.push_instr(Instruction::Record {
+                    dest,
+                    ty: ty.clone(),
+                    record,
+                    meta: vec![InstructionMeta::Source(instr.id)].into(),
+                });
+                Ok((dest.into(), ty))
+            }
+            InlineIRInstructionKind::GetField {
+                dest,
+                ty,
+                record,
+                field,
+            } => {
+                let ty = self.parsed_ty(ty, instr.id);
+                let record = self.parsed_register(record, Register::DROP);
+                let Value::Int(pos) = self.parsed_value(field) else {
+                    unreachable!("field must be an int");
+                };
+                let field = Label::Positional(pos as usize);
+                let ret = self.ret(bind);
+                let dest = self.parsed_register(dest, ret);
+                self.push_instr(Instruction::GetField {
+                    dest,
+                    ty: ty.clone(),
+                    record,
+                    field,
+                    meta: vec![InstructionMeta::Source(instr.id)].into(),
+                });
+                Ok((dest.into(), ty))
+            }
+            InlineIRInstructionKind::SetField {
+                dest,
+                val,
+                ty,
+                record,
+                field,
+            } => {
+                let ty = self.parsed_ty(ty, instr.id);
+                let val = self.parsed_value(val);
+                let record = self.parsed_register(record, Register::DROP);
+                let Value::Int(pos) = self.parsed_value(field) else {
+                    unreachable!("field must be an int");
+                };
+                let field = Label::Positional(pos as usize);
+                let ret = self.ret(bind);
+                let dest = self.parsed_register(dest, ret);
+                self.push_instr(Instruction::SetField {
+                    dest,
+                    val,
+                    ty: ty.clone(),
+                    record,
+                    field: field.clone(),
+                    meta: vec![InstructionMeta::Source(instr.id)].into(),
+                });
+                Ok((Value::Void, Ty::Void))
+            }
+            InlineIRInstructionKind::_Print { val } => {
+                let val = self.parsed_value(val);
+                self.push_instr(Instruction::_Print { val });
+                Ok((Value::Void, Ty::Void))
+            }
+            InlineIRInstructionKind::Alloc { dest, ty, count } => {
+                let ty = self.parsed_ty(ty, instr.id);
+                let ret = self.ret(bind);
+                let dest = self.parsed_register(dest, ret);
+                let count = self.parsed_value(count);
+                self.push_instr(Instruction::Alloc {
+                    dest,
+                    ty: ty.clone(),
+                    count,
+                });
+                Ok((dest.into(), ty))
+            }
+            InlineIRInstructionKind::Free { addr } => {
+                let addr = self.parsed_value(addr);
+                self.push_instr(Instruction::Free { addr });
+                Ok((Value::Void, Ty::Void))
+            }
+            InlineIRInstructionKind::Load { dest, ty, addr } => {
+                let ty = self.parsed_ty(ty, instr.id);
+                let addr = self.parsed_value(addr);
+                let ret = self.ret(bind);
+                let dest = self.parsed_register(dest, ret);
+                self.push_instr(Instruction::Load {
+                    dest,
+                    ty: ty.clone(),
+                    addr,
+                });
+                Ok((dest.into(), ty))
+            }
+            InlineIRInstructionKind::Store { value, ty, addr } => {
+                let ty = self.parsed_ty(ty, instr.id);
+                let value = self.parsed_value(value);
+                let addr = self.parsed_value(addr);
+                self.push_instr(Instruction::Store {
+                    value,
+                    ty: ty.clone(),
+                    addr,
+                });
+                Ok((Value::Void, Ty::Void))
+            }
+            InlineIRInstructionKind::Move { from, ty, to } => {
+                let ty = self.parsed_ty(ty, instr.id);
+                let from = self.parsed_value(from);
+                let to = self.parsed_value(to);
+                self.push_instr(Instruction::Move {
+                    ty: ty.clone(),
+                    from,
+                    to,
+                });
+                Ok((Value::Void, Ty::Void))
+            }
+            InlineIRInstructionKind::Copy {
+                ty,
+                from,
+                to,
+                length,
+            } => {
+                let ty = self.parsed_ty(ty, instr.id);
+                let from = self.parsed_value(from);
+                let to = self.parsed_value(to);
+                let length = self.parsed_value(length);
+                self.push_instr(Instruction::Copy {
+                    ty: ty.clone(),
+                    from,
+                    to,
+                    length,
+                });
+                Ok((Value::Void, Ty::Void))
+            }
+            InlineIRInstructionKind::Gep {
+                dest,
+                ty,
+                addr,
+                offset_index,
+            } => {
+                let ty = self.parsed_ty(ty, instr.id);
+                let addr = self.parsed_value(addr);
+                let offset_index = self.parsed_value(offset_index);
+                let ret = self.ret(bind);
+                let dest = self.parsed_register(dest, ret);
+                self.push_instr(Instruction::Gep {
+                    dest,
+                    ty: ty.clone(),
+                    addr,
+                    offset_index,
+                });
+                Ok((dest.into(), ty))
+            }
+        }
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self, expr, items))]
@@ -2521,6 +2811,53 @@ impl<'a> Lowerer<'a> {
             });
 
         new_name
+    }
+
+    fn parsed_ty(&mut self, ty: &TypeAnnotation, id: NodeID) -> Ty {
+        let entry = self
+            .types
+            .types_by_symbol
+            .get(&ty.symbol().expect("did not get ty symbol"))
+            .cloned()
+            .expect("did not get entry");
+        let (ty, _) = self
+            .specialize(&entry, id)
+            .expect("unable to specialize ty");
+        ty
+    }
+
+    fn parsed_register(
+        &self,
+        reg: &crate::node_kinds::inline_ir_instruction::Register,
+        dest: Register,
+    ) -> Register {
+        if reg.0 == "?" {
+            dest
+        } else {
+            Register(reg.0.parse().expect("did not get register"))
+        }
+    }
+
+    fn parsed_value(&self, value: &crate::node_kinds::inline_ir_instruction::Value) -> Value {
+        match value {
+            crate::node_kinds::inline_ir_instruction::Value::Reg(v) => Value::Reg(*v),
+            crate::node_kinds::inline_ir_instruction::Value::Int(v) => Value::Int(*v),
+            crate::node_kinds::inline_ir_instruction::Value::Float(v) => Value::Float(*v),
+            crate::node_kinds::inline_ir_instruction::Value::Bool(v) => Value::Bool(*v),
+            crate::node_kinds::inline_ir_instruction::Value::Void => Value::Void,
+            crate::node_kinds::inline_ir_instruction::Value::Uninit => Value::Uninit,
+            crate::node_kinds::inline_ir_instruction::Value::Poison => Value::Poison,
+            crate::node_kinds::inline_ir_instruction::Value::Record(symbol, values) => {
+                Value::Record(
+                    *symbol,
+                    values.iter().map(|v| self.parsed_value(v)).collect(),
+                )
+            }
+            crate::node_kinds::inline_ir_instruction::Value::RawPtr(v) => Value::RawPtr(Addr(*v)),
+            crate::node_kinds::inline_ir_instruction::Value::RawBuffer(items) => {
+                Value::RawBuffer(items.to_vec())
+            }
+        }
     }
 
     fn lookup_instance_method(

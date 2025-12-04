@@ -105,6 +105,7 @@ impl ASTNodeFinder {
             Node::IncompleteExpr(incomplete_expr) => self.check(incomplete_expr),
             Node::CallArg(call_arg) => self.check(call_arg),
             Node::FuncSignature(sig) => self.check(sig),
+            Node::InlineIRInstruction(instr) => self.check(instr),
         }
     }
     fn enter_attribute(&mut self, node: &Attribute) {

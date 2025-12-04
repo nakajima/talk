@@ -15,6 +15,7 @@ use crate::{
         func::Func,
         func_signature::FuncSignature,
         generic_decl::GenericDecl,
+        inline_ir_instruction::InlineIRInstruction,
         match_arm::MatchArm,
         parameter::Parameter,
         pattern::{Pattern, PatternKind, RecordFieldPatternKind},
@@ -244,7 +245,12 @@ impl<'a> Formatter<'a> {
             Node::IncompleteExpr(_) => Doc::Empty,
             Node::CallArg(arg) => self.format_call_arg(arg),
             Node::FuncSignature(sig) => self.format_func_signature(sig),
+            Node::InlineIRInstruction(ir) => self.format_inline_ir_instruction(ir),
         }
+    }
+
+    fn format_inline_ir_instruction(&self, ir: &InlineIRInstruction) -> Doc {
+        text(format!("{ir}"))
     }
 
     fn format_attribute(&self, attr: &Attribute) -> Doc {
@@ -284,6 +290,10 @@ impl<'a> Formatter<'a> {
                 self.format_record_literal(fields, spread)
             }
             ExprKind::RowVariable(name) => join(vec![text(".."), text(name.name_str())], text("")),
+            ExprKind::InlineIR(instruction) => join(
+                vec![text("@_ir {"), text(format!("{instruction}"))],
+                text("}"),
+            ),
         };
 
         self.decorators
