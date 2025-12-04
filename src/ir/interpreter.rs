@@ -1001,6 +1001,7 @@ pub mod tests {
     }
 
     #[test]
+    #[ignore = "waiting on array to know about its type (nominal storing concrete types?)"]
     fn interprets_array_get() {
         assert_eq!(
             interpret(

@@ -343,7 +343,6 @@ impl<'a> Lowerer<'a> {
         // Check for required imports
         let funcs = self.functions.keys().cloned().collect_vec();
         for sym in funcs {
-            println!("SYM: {sym:?}");
             self.check_import(&sym);
         }
 
@@ -1897,6 +1896,7 @@ impl<'a> Lowerer<'a> {
                 && let Some(method) = methods.get(label).cloned()
             {
                 tracing::debug!("lowering method: {label} {method:?}");
+                self.check_import(&method);
 
                 self.push_instr(Instruction::Ref {
                     dest,
@@ -1907,6 +1907,7 @@ impl<'a> Lowerer<'a> {
                 && matches!(witness, Symbol::InstanceMethod(..))
             {
                 tracing::debug!("lowering req {label} {witness:?}");
+                self.check_import(&witness);
                 self.push_instr(Instruction::Ref {
                     dest,
                     ty: ty.clone(),
@@ -2190,6 +2191,7 @@ impl<'a> Lowerer<'a> {
         }
 
         if let Some(method_sym) = self.lookup_instance_method(&receiver, label)? {
+            self.check_import(&method_sym);
             self.push_instr(Instruction::Call {
                 dest,
                 ty: ty.clone(),
@@ -2201,6 +2203,7 @@ impl<'a> Lowerer<'a> {
         };
 
         if let Some(witness) = self.witness_for(&callee_expr.id, label).copied() {
+            self.check_import(&witness);
             // Try to specialize for conformance if this is a protocol method call
             let specialized = 'specialize: {
                 let Some(..) = protocol_id else {
@@ -2256,6 +2259,7 @@ impl<'a> Lowerer<'a> {
                             && let Some(req_symbol) = req_methods.get(method_label)
                         {
                             subs.witnesses.insert(*req_symbol, *impl_symbol);
+                            self.check_import(impl_symbol);
                         }
                         // Check module method requirements
                         for module in self.config.modules.modules.values() {
@@ -2267,6 +2271,7 @@ impl<'a> Lowerer<'a> {
                                 && let Some(req_symbol) = req_methods.get(method_label)
                             {
                                 subs.witnesses.insert(*req_symbol, *impl_symbol);
+                                self.check_import(impl_symbol);
                             }
                         }
                     }
@@ -2727,18 +2732,13 @@ impl<'a> Lowerer<'a> {
             return;
         }
 
-        println!("check_import {symbol:?}");
-
         let module_id = match symbol {
             Symbol::InstanceMethod(InstanceMethodId { module_id, .. }) => Some(*module_id),
             Symbol::StaticMethod(StaticMethodId { module_id, .. }) => Some(*module_id),
             Symbol::Initializer(InitializerId { module_id, .. }) => Some(*module_id),
             Symbol::Global(GlobalId { module_id, .. }) => Some(*module_id),
             Symbol::Synthesized(SynthesizedId { module_id, .. }) => Some(*module_id),
-            _ => {
-                println!("no module id for {symbol:?}");
-                None
-            }
+            _ => None,
         };
 
         let Some(module_id) = module_id else {
@@ -2746,12 +2746,7 @@ impl<'a> Lowerer<'a> {
         };
 
         let func = if module_id == self.config.module_id {
-            println!("it's current module id? {symbol:?}");
             let Some(func) = self.functions.get(symbol) else {
-                println!(
-                    "didn't find it in {:?}",
-                    self.functions.keys().collect_vec()
-                );
                 return;
             };
 
@@ -2788,7 +2783,6 @@ impl<'a> Lowerer<'a> {
                     ..
                 } = instr
                 {
-                    println!("  sub call: {} (under {symbol:?})", sym);
                     Some(*sym)
                 } else {
                     None
@@ -2796,12 +2790,9 @@ impl<'a> Lowerer<'a> {
             })
             .collect();
 
-        println!("CALLEES: {callees:?}");
-
         for callee_sym in callees {
             // Already imported, avoid infinite recursion
             if self.functions.contains_key(&callee_sym) {
-                println!("already got it, bailing: {symbol:?}");
                 continue;
             }
             self.check_import(&callee_sym);
@@ -2829,7 +2820,6 @@ impl<'a> Lowerer<'a> {
 
         let new_name = Name::Resolved(new_symbol.into(), new_name_str);
 
-        println!("monomorphized {name:?} -> {new_name:?}");
         tracing::trace!("monomorphized {name:?} -> {new_name:?}");
 
         self.specializations
@@ -2940,8 +2930,6 @@ impl<'a> Lowerer<'a> {
                     return Ok((self.ty_from_id(&expr.id)?, Default::default()));
                 };
 
-                println!("{member:?}");
-
                 &Name::Resolved(member, label.to_string())
             }
             _ => {
@@ -3049,12 +3037,7 @@ impl<'a> Lowerer<'a> {
         if let Ty::Record(_, row) | Ty::Nominal { row, .. } = receiver_ty
             && let Some(idx) = row.close().get_index_of(label)
         {
-            println!(
-                "field '{label}' index: {idx}, row: {:?} len: {}",
-                row.close(),
-                row.close().len()
-            );
-            Label::Positional(row.close().len() - idx - 1)
+            Label::Positional(idx)
         } else {
             panic!("unable to determine field index of {receiver_ty}.{label}");
         }

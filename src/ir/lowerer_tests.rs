@@ -1202,8 +1202,6 @@ pub mod tests {
         ",
         );
 
-        println!("{program}");
-
         assert_eq_diff!(
             program
                 .functions

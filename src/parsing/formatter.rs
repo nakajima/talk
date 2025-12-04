@@ -290,8 +290,8 @@ impl<'a> Formatter<'a> {
                 self.format_record_literal(fields, spread)
             }
             ExprKind::RowVariable(name) => join(vec![text(".."), text(name.name_str())], text("")),
-            ExprKind::InlineIR(instruction) => join(
-                vec![text("@_ir {"), text(format!("{instruction}"))],
+            ExprKind::InlineIR(instruction) => concat(
+                concat(text("@_ir {"), text(format!("{instruction}"))),
                 text("}"),
             ),
         };

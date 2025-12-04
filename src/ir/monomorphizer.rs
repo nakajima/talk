@@ -4,7 +4,10 @@ use tracing::instrument;
 
 use crate::{
     ast::AST,
-    compiling::driver::{DriverConfig, Source},
+    compiling::{
+        driver::{DriverConfig, Source},
+        module::ModuleId,
+    },
     ir::{
         basic_block::{BasicBlock, Phi},
         function::Function,
@@ -48,14 +51,23 @@ impl<'a> Monomorphizer<'a> {
             self.monomorphize_func(func, &mut result);
         }
 
+        let mut checked = IndexSet::default();
         for sym in result.keys().cloned().collect_vec() {
-            self.check_imports(&sym, &mut result)
+            self.check_imports(&sym, &mut result, &mut checked)
         }
 
         result
     }
 
-    fn check_imports(&mut self, sym: &Symbol, result: &mut IndexMap<Symbol, Function<IrTy>>) {
+    fn check_imports(
+        &mut self,
+        sym: &Symbol,
+        result: &mut IndexMap<Symbol, Function<IrTy>>,
+        checked: &mut IndexSet<Symbol>,
+    ) {
+        if !checked.insert(*sym) {
+            return; // Already checked
+        }
         let mut callees: IndexSet<&Symbol> = IndexSet::default();
         let Some(func) = result.get(sym).cloned() else {
             return;
@@ -71,7 +83,6 @@ impl<'a> Monomorphizer<'a> {
                 } = instruction
                 {
                     callees.insert(sym);
-                    self.check_imports(sym, result);
                 }
             }
         }
@@ -82,8 +93,8 @@ impl<'a> Monomorphizer<'a> {
                 return;
             };
 
-            if module_id != self.config.module_id {
-                let imported = self
+            if module_id != self.config.module_id
+                && let Some(imported) = self
                     .config
                     .modules
                     .modules
@@ -98,13 +109,12 @@ impl<'a> Monomorphizer<'a> {
                     .program
                     .functions
                     .get(callee)
-                    .expect("Import not found")
-                    .clone();
-
+                    .cloned()
+            {
                 result.insert(*callee, imported);
-            }
+            };
 
-            self.check_imports(callee, result);
+            self.check_imports(callee, result, checked);
         }
     }
 
