@@ -85,6 +85,8 @@ pub enum TokenKind {
     DotDot,
     DotDotDot,
     IRRegister(String),
+    BoundVar(String),
+    Dollar,
 }
 
 impl Display for TokenKind {
@@ -96,6 +98,8 @@ impl Display for TokenKind {
 impl TokenKind {
     pub fn as_str(&self) -> String {
         let text = match &self {
+            TokenKind::Dollar => "$",
+            TokenKind::BoundVar(v) => &format!("${v}"),
             TokenKind::Percent => "%",
             TokenKind::IRRegister(v) => &format!("%{v}"),
             TokenKind::As => "as",

@@ -2,7 +2,10 @@ use crate::{
     impl_into_node,
     name_resolution::symbol::Symbol,
     node_id::NodeID,
-    node_kinds::type_annotation::{TypeAnnotation, TypeAnnotationKind},
+    node_kinds::{
+        expr::Expr,
+        type_annotation::{TypeAnnotation, TypeAnnotationKind},
+    },
     span::Span,
     token_kind::TokenKind,
 };
@@ -23,6 +26,7 @@ pub enum Value {
     Record(Option<Symbol>, Vec<Value>),
     RawPtr(usize),
     RawBuffer(Vec<u8>),
+    Bind(usize),
 }
 
 impl PartialEq for Value {
@@ -38,6 +42,7 @@ impl PartialEq for Value {
             (Value::Record(a, b), Value::Record(c, d)) => a == c && b == d,
             (Value::RawPtr(a), Value::RawPtr(b)) => a == b,
             (Value::RawBuffer(a), Value::RawBuffer(b)) => a == b,
+            (Value::Bind(a), Value::Bind(b)) => a == b,
             _ => false,
         }
     }
@@ -171,6 +176,7 @@ pub enum InlineIRInstructionKind {
 pub struct InlineIRInstruction {
     pub id: NodeID,
     pub span: Span,
+    pub binds: Vec<Expr>,
     pub instr_name_span: Span,
     pub kind: InlineIRInstructionKind,
 }
@@ -194,6 +200,7 @@ impl Display for Value {
             Value::Record(sym, fields) => write!(f, "{sym:?} {{ {:?} }}", fields),
             Value::RawPtr(ptr) => write!(f, "rawptr({})", ptr),
             Value::RawBuffer(buffer) => write!(f, "[{:?}]", buffer),
+            Value::Bind(i) => write!(f, "${i}"),
         }
     }
 }

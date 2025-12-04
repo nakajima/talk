@@ -244,7 +244,7 @@ impl Interpreter {
                     .map(|names| set_symbol_names(names.clone()));
 
                 panic!(
-                    "did not find function: {} {:?}",
+                    "did not find function: {:?} {:?}",
                     function,
                     self.program
                         .functions
@@ -997,6 +997,18 @@ pub mod tests {
             "
             ),
             Value::Int(3)
+        )
+    }
+
+    #[test]
+    fn interprets_array_get() {
+        assert_eq!(
+            interpret(
+                "
+            [10,20,30,40].get(1)
+            "
+            ),
+            Value::Int(20)
         )
     }
 }

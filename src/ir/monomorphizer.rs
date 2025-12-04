@@ -1,9 +1,10 @@
-use indexmap::IndexMap;
+use indexmap::{IndexMap, IndexSet};
+use itertools::Itertools;
 use tracing::instrument;
 
 use crate::{
     ast::AST,
-    compiling::driver::Source,
+    compiling::driver::{DriverConfig, Source},
     ir::{
         basic_block::{BasicBlock, Phi},
         function::Function,
@@ -11,7 +12,7 @@ use crate::{
         ir_ty::IrTy,
         lowerer::{Lowerer, PolyFunction, Specialization, Substitutions},
         terminator::Terminator,
-        value::Value,
+        value::{Reference, Value},
     },
     name::Name,
     name_resolution::{name_resolver::NameResolved, symbol::Symbol},
@@ -22,6 +23,7 @@ use crate::{
 pub struct Monomorphizer<'a> {
     asts: &'a mut IndexMap<Source, AST<NameResolved>>,
     types: &'a mut Types,
+    config: &'a DriverConfig,
     pub(super) functions: IndexMap<Symbol, PolyFunction>,
     specializations: IndexMap<Symbol, Vec<Specialization>>,
 }
@@ -34,6 +36,7 @@ impl<'a> Monomorphizer<'a> {
             types: lowerer.types,
             functions: lowerer.functions,
             specializations: lowerer.specializations,
+            config: lowerer.config,
         }
     }
 
@@ -44,7 +47,65 @@ impl<'a> Monomorphizer<'a> {
         for func in functions.into_values() {
             self.monomorphize_func(func, &mut result);
         }
+
+        for sym in result.keys().cloned().collect_vec() {
+            self.check_imports(&sym, &mut result)
+        }
+
         result
+    }
+
+    fn check_imports(&mut self, sym: &Symbol, result: &mut IndexMap<Symbol, Function<IrTy>>) {
+        let mut callees: IndexSet<&Symbol> = IndexSet::default();
+        let Some(func) = result.get(sym).cloned() else {
+            return;
+        };
+        for block in func.blocks.iter() {
+            for instruction in block.instructions.iter() {
+                if let Instruction::Call {
+                    callee:
+                        Value::Func(sym)
+                        | Value::Ref(Reference::Func(sym))
+                        | Value::Ref(Reference::Closure(sym, ..)),
+                    ..
+                } = instruction
+                {
+                    callees.insert(sym);
+                    self.check_imports(sym, result);
+                }
+            }
+        }
+
+        for callee in callees {
+            let Some(module_id) = callee.module_id() else {
+                tracing::warn!("Trying to import {callee:?}, no module ID found");
+                return;
+            };
+
+            if module_id != self.config.module_id {
+                let imported = self
+                    .config
+                    .modules
+                    .modules
+                    .get(&module_id)
+                    .unwrap_or_else(|| {
+                        unreachable!(
+                            "Module not found: {module_id:?} in {:?}, Current: {:?}",
+                            self.config.modules.modules.keys().collect_vec(),
+                            self.config.module_id
+                        )
+                    })
+                    .program
+                    .functions
+                    .get(callee)
+                    .expect("Import not found")
+                    .clone();
+
+                result.insert(*callee, imported);
+            }
+
+            self.check_imports(callee, result);
+        }
     }
 
     #[instrument(skip(self, result))]

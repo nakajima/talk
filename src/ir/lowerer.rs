@@ -8,7 +8,7 @@ use crate::ir::instruction::CmpOperator;
 use crate::ir::ir_ty::IrTy;
 use crate::ir::monomorphizer::uncurry_function;
 use crate::ir::parse_instruction;
-use crate::ir::value::Addr;
+use crate::ir::value::{Addr, Reference};
 use crate::label::Label;
 use crate::name_resolution::symbol::{
     GlobalId, InitializerId, InstanceMethodId, StaticMethodId, Symbols,
@@ -340,6 +340,13 @@ impl<'a> Lowerer<'a> {
             _ = std::mem::replace(&mut self.asts[i].roots, roots);
         }
 
+        // Check for required imports
+        let funcs = self.functions.keys().cloned().collect_vec();
+        for sym in funcs {
+            println!("SYM: {sym:?}");
+            self.check_import(&sym);
+        }
+
         let static_memory = std::mem::take(&mut self.static_memory);
         let mut monomorphizer = Monomorphizer::new(self);
 
@@ -424,6 +431,7 @@ impl<'a> Lowerer<'a> {
             DeclKind::FuncSignature(..) => (),
             DeclKind::MethodRequirement(..) => (),
             DeclKind::TypeAlias(..) => (),
+
             _ => (), // Nothing to do
         }
 
@@ -1134,12 +1142,17 @@ impl<'a> Lowerer<'a> {
         bind: Bind,
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
+        let binds: Vec<_> = instr
+            .binds
+            .iter()
+            .map(|b| self.lower_expr(b, Bind::Fresh, instantiations).map(|b| b.0))
+            .try_collect()?;
         match &instr.kind {
             InlineIRInstructionKind::Constant { dest, ty, val } => {
                 let ret = self.ret(bind);
                 let dest = self.parsed_register(dest, ret);
                 let ty = self.parsed_ty(ty, instr.id);
-                let val = self.parsed_value(val);
+                let val = self.parsed_value(val, &binds);
                 self.push_instr(Instruction::Constant {
                     dest,
                     ty: ty.clone(),
@@ -1158,8 +1171,8 @@ impl<'a> Lowerer<'a> {
                 let ret = self.ret(bind);
                 let dest = self.parsed_register(dest, ret);
                 let ty = self.parsed_ty(ty, instr.id);
-                let lhs = self.parsed_value(lhs);
-                let rhs = self.parsed_value(rhs);
+                let lhs = self.parsed_value(lhs, &binds);
+                let rhs = self.parsed_value(rhs, &binds);
                 self.push_instr(Instruction::Cmp {
                     dest,
                     ty: ty.clone(),
@@ -1177,8 +1190,8 @@ impl<'a> Lowerer<'a> {
                 let ty = self.parsed_ty(ty, instr.id);
                 let ret = self.ret(bind);
                 let dest = self.parsed_register(dest, ret);
-                let a = self.parsed_value(a);
-                let b = self.parsed_value(b);
+                let a = self.parsed_value(a, &binds);
+                let b = self.parsed_value(b, &binds);
 
                 match &instr.kind {
                     InlineIRInstructionKind::Add { .. } => self.push_instr(Instruction::Add {
@@ -1219,7 +1232,7 @@ impl<'a> Lowerer<'a> {
                 let ret = self.ret(bind);
                 let dest = self.parsed_register(dest, ret);
                 let ty = self.parsed_ty(ty, instr.id);
-                let val = self.parsed_value(val);
+                let val = self.parsed_value(val, &binds);
                 self.push_instr(Instruction::Ref {
                     dest,
                     ty: ty.clone(),
@@ -1236,10 +1249,10 @@ impl<'a> Lowerer<'a> {
                 let ret = self.ret(bind);
                 let dest = self.parsed_register(dest, ret);
                 let ty = self.parsed_ty(ty, instr.id);
-                let callee = self.parsed_value(callee);
+                let callee = self.parsed_value(callee, &binds);
                 let args = args
                     .iter()
-                    .map(|a| self.parsed_value(a))
+                    .map(|a| self.parsed_value(a, &binds))
                     .collect_vec()
                     .into();
                 self.push_instr(Instruction::Call {
@@ -1257,7 +1270,7 @@ impl<'a> Lowerer<'a> {
                 let ty = self.parsed_ty(ty, instr.id);
                 let record = record
                     .iter()
-                    .map(|a| self.parsed_value(a))
+                    .map(|a| self.parsed_value(a, &binds))
                     .collect_vec()
                     .into();
                 self.push_instr(Instruction::Record {
@@ -1276,7 +1289,7 @@ impl<'a> Lowerer<'a> {
             } => {
                 let ty = self.parsed_ty(ty, instr.id);
                 let record = self.parsed_register(record, Register::DROP);
-                let Value::Int(pos) = self.parsed_value(field) else {
+                let Value::Int(pos) = self.parsed_value(field, &binds) else {
                     unreachable!("field must be an int");
                 };
                 let field = Label::Positional(pos as usize);
@@ -1299,9 +1312,9 @@ impl<'a> Lowerer<'a> {
                 field,
             } => {
                 let ty = self.parsed_ty(ty, instr.id);
-                let val = self.parsed_value(val);
+                let val = self.parsed_value(val, &binds);
                 let record = self.parsed_register(record, Register::DROP);
-                let Value::Int(pos) = self.parsed_value(field) else {
+                let Value::Int(pos) = self.parsed_value(field, &binds) else {
                     unreachable!("field must be an int");
                 };
                 let field = Label::Positional(pos as usize);
@@ -1318,7 +1331,7 @@ impl<'a> Lowerer<'a> {
                 Ok((Value::Void, Ty::Void))
             }
             InlineIRInstructionKind::_Print { val } => {
-                let val = self.parsed_value(val);
+                let val = self.parsed_value(val, &binds);
                 self.push_instr(Instruction::_Print { val });
                 Ok((Value::Void, Ty::Void))
             }
@@ -1326,7 +1339,7 @@ impl<'a> Lowerer<'a> {
                 let ty = self.parsed_ty(ty, instr.id);
                 let ret = self.ret(bind);
                 let dest = self.parsed_register(dest, ret);
-                let count = self.parsed_value(count);
+                let count = self.parsed_value(count, &binds);
                 self.push_instr(Instruction::Alloc {
                     dest,
                     ty: ty.clone(),
@@ -1335,13 +1348,13 @@ impl<'a> Lowerer<'a> {
                 Ok((dest.into(), ty))
             }
             InlineIRInstructionKind::Free { addr } => {
-                let addr = self.parsed_value(addr);
+                let addr = self.parsed_value(addr, &binds);
                 self.push_instr(Instruction::Free { addr });
                 Ok((Value::Void, Ty::Void))
             }
             InlineIRInstructionKind::Load { dest, ty, addr } => {
                 let ty = self.parsed_ty(ty, instr.id);
-                let addr = self.parsed_value(addr);
+                let addr = self.parsed_value(addr, &binds);
                 let ret = self.ret(bind);
                 let dest = self.parsed_register(dest, ret);
                 self.push_instr(Instruction::Load {
@@ -1353,8 +1366,8 @@ impl<'a> Lowerer<'a> {
             }
             InlineIRInstructionKind::Store { value, ty, addr } => {
                 let ty = self.parsed_ty(ty, instr.id);
-                let value = self.parsed_value(value);
-                let addr = self.parsed_value(addr);
+                let value = self.parsed_value(value, &binds);
+                let addr = self.parsed_value(addr, &binds);
                 self.push_instr(Instruction::Store {
                     value,
                     ty: ty.clone(),
@@ -1364,8 +1377,8 @@ impl<'a> Lowerer<'a> {
             }
             InlineIRInstructionKind::Move { from, ty, to } => {
                 let ty = self.parsed_ty(ty, instr.id);
-                let from = self.parsed_value(from);
-                let to = self.parsed_value(to);
+                let from = self.parsed_value(from, &binds);
+                let to = self.parsed_value(to, &binds);
                 self.push_instr(Instruction::Move {
                     ty: ty.clone(),
                     from,
@@ -1380,9 +1393,9 @@ impl<'a> Lowerer<'a> {
                 length,
             } => {
                 let ty = self.parsed_ty(ty, instr.id);
-                let from = self.parsed_value(from);
-                let to = self.parsed_value(to);
-                let length = self.parsed_value(length);
+                let from = self.parsed_value(from, &binds);
+                let to = self.parsed_value(to, &binds);
+                let length = self.parsed_value(length, &binds);
                 self.push_instr(Instruction::Copy {
                     ty: ty.clone(),
                     from,
@@ -1398,8 +1411,8 @@ impl<'a> Lowerer<'a> {
                 offset_index,
             } => {
                 let ty = self.parsed_ty(ty, instr.id);
-                let addr = self.parsed_value(addr);
-                let offset_index = self.parsed_value(offset_index);
+                let addr = self.parsed_value(addr, &binds);
+                let offset_index = self.parsed_value(offset_index, &binds);
                 let ret = self.ret(bind);
                 let dest = self.parsed_register(dest, ret);
                 self.push_instr(Instruction::Gep {
@@ -1885,7 +1898,6 @@ impl<'a> Lowerer<'a> {
             {
                 tracing::debug!("lowering method: {label} {method:?}");
 
-                self.check_import(&method);
                 self.push_instr(Instruction::Ref {
                     dest,
                     ty: ty.clone(),
@@ -1895,7 +1907,6 @@ impl<'a> Lowerer<'a> {
                 && matches!(witness, Symbol::InstanceMethod(..))
             {
                 tracing::debug!("lowering req {label} {witness:?}");
-                self.check_import(&witness);
                 self.push_instr(Instruction::Ref {
                     dest,
                     ty: ty.clone(),
@@ -2179,7 +2190,6 @@ impl<'a> Lowerer<'a> {
         }
 
         if let Some(method_sym) = self.lookup_instance_method(&receiver, label)? {
-            self.check_import(&method_sym);
             self.push_instr(Instruction::Call {
                 dest,
                 ty: ty.clone(),
@@ -2191,8 +2201,6 @@ impl<'a> Lowerer<'a> {
         };
 
         if let Some(witness) = self.witness_for(&callee_expr.id, label).copied() {
-            self.check_import(&witness);
-
             // Try to specialize for conformance if this is a protocol method call
             let specialized = 'specialize: {
                 let Some(..) = protocol_id else {
@@ -2248,7 +2256,6 @@ impl<'a> Lowerer<'a> {
                             && let Some(req_symbol) = req_methods.get(method_label)
                         {
                             subs.witnesses.insert(*req_symbol, *impl_symbol);
-                            self.check_import(impl_symbol);
                         }
                         // Check module method requirements
                         for module in self.config.modules.modules.values() {
@@ -2260,7 +2267,6 @@ impl<'a> Lowerer<'a> {
                                 && let Some(req_symbol) = req_methods.get(method_label)
                             {
                                 subs.witnesses.insert(*req_symbol, *impl_symbol);
-                                self.check_import(impl_symbol);
                             }
                         }
                     }
@@ -2714,17 +2720,14 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    /// Check to see if this symbol comes from an external module, if so we need to import the code into our program.
+    /// Check to see if this symbol calls any symbols we don't have
     fn check_import(&mut self, symbol: &Symbol) {
         if self.config.module_id == ModuleId::Core {
             // No imports can happen from core.
             return;
         }
 
-        // Already imported, avoid infinite recursion
-        if self.functions.contains_key(symbol) {
-            return;
-        }
+        println!("check_import {symbol:?}");
 
         let module_id = match symbol {
             Symbol::InstanceMethod(InstanceMethodId { module_id, .. }) => Some(*module_id),
@@ -2732,43 +2735,60 @@ impl<'a> Lowerer<'a> {
             Symbol::Initializer(InitializerId { module_id, .. }) => Some(*module_id),
             Symbol::Global(GlobalId { module_id, .. }) => Some(*module_id),
             Symbol::Synthesized(SynthesizedId { module_id, .. }) => Some(*module_id),
-            _ => None,
+            _ => {
+                println!("no module id for {symbol:?}");
+                None
+            }
         };
 
         let Some(module_id) = module_id else {
             return;
         };
 
-        if module_id == ModuleId::Current {
-            return;
-        }
+        let func = if module_id == self.config.module_id {
+            println!("it's current module id? {symbol:?}");
+            let Some(func) = self.functions.get(symbol) else {
+                println!(
+                    "didn't find it in {:?}",
+                    self.functions.keys().collect_vec()
+                );
+                return;
+            };
 
-        let module = self
-            .config
-            .modules
-            .modules
-            .get(&module_id)
-            .expect("didn't get module for import");
-        tracing::debug!("importing {symbol:?} from {module_id}");
-        // TODO: This won't work with external methods yet, only core works.
-        let method_func = module
-            .program
-            .polyfunctions
-            .get(symbol)
-            .unwrap_or_else(|| panic!("didn't get method for import: {symbol:?}"));
-        self.functions.insert(*symbol, method_func.clone());
+            func
+        } else {
+            let module = self
+                .config
+                .modules
+                .modules
+                .get(&module_id)
+                .expect("didn't get module for import");
+
+            tracing::debug!("importing {symbol:?} from {module_id}");
+
+            // TODO: This won't work with external methods yet, only core works.
+            let Some(method_func) = module.program.polyfunctions.get(symbol) else {
+                return;
+            };
+            self.functions.insert(*symbol, method_func.clone());
+            method_func
+        };
 
         // Recursively import any functions this function calls
-        let callees: Vec<Symbol> = method_func
+        let callees: Vec<Symbol> = func
             .blocks
             .iter()
             .flat_map(|block| &block.instructions)
             .filter_map(|instr| {
                 if let Instruction::Call {
-                    callee: Value::Func(sym),
+                    callee:
+                        Value::Func(sym)
+                        | Value::Ref(Reference::Func(sym))
+                        | Value::Ref(Reference::Closure(sym, ..)),
                     ..
                 } = instr
                 {
+                    println!("  sub call: {} (under {symbol:?})", sym);
                     Some(*sym)
                 } else {
                     None
@@ -2776,7 +2796,14 @@ impl<'a> Lowerer<'a> {
             })
             .collect();
 
+        println!("CALLEES: {callees:?}");
+
         for callee_sym in callees {
+            // Already imported, avoid infinite recursion
+            if self.functions.contains_key(&callee_sym) {
+                println!("already got it, bailing: {symbol:?}");
+                continue;
+            }
             self.check_import(&callee_sym);
         }
     }
@@ -2786,7 +2813,7 @@ impl<'a> Lowerer<'a> {
             return name;
         }
 
-        let new_symbol = self.symbols.next_synthesized(ModuleId::Current);
+        let new_symbol = self.symbols.next_synthesized(self.config.module_id);
         self.asts[self.current_ast_id]
             .phase
             .symbols_to_string
@@ -2801,6 +2828,9 @@ impl<'a> Lowerer<'a> {
         let new_name_str = format!("{}[{}]", name, all_parts.join(", "));
 
         let new_name = Name::Resolved(new_symbol.into(), new_name_str);
+
+        println!("monomorphized {name:?} -> {new_name:?}");
+        tracing::trace!("monomorphized {name:?} -> {new_name:?}");
 
         self.specializations
             .entry(name.symbol().expect("name not resolved"))
@@ -2838,7 +2868,11 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    fn parsed_value(&self, value: &crate::node_kinds::inline_ir_instruction::Value) -> Value {
+    fn parsed_value(
+        &self,
+        value: &crate::node_kinds::inline_ir_instruction::Value,
+        binds: &[Value],
+    ) -> Value {
         match value {
             crate::node_kinds::inline_ir_instruction::Value::Reg(v) => Value::Reg(*v),
             crate::node_kinds::inline_ir_instruction::Value::Int(v) => Value::Int(*v),
@@ -2850,13 +2884,14 @@ impl<'a> Lowerer<'a> {
             crate::node_kinds::inline_ir_instruction::Value::Record(symbol, values) => {
                 Value::Record(
                     *symbol,
-                    values.iter().map(|v| self.parsed_value(v)).collect(),
+                    values.iter().map(|v| self.parsed_value(v, binds)).collect(),
                 )
             }
             crate::node_kinds::inline_ir_instruction::Value::RawPtr(v) => Value::RawPtr(Addr(*v)),
             crate::node_kinds::inline_ir_instruction::Value::RawBuffer(items) => {
                 Value::RawBuffer(items.to_vec())
             }
+            crate::node_kinds::inline_ir_instruction::Value::Bind(i) => binds[*i].clone(),
         }
     }
 
@@ -2892,6 +2927,23 @@ impl<'a> Lowerer<'a> {
             ExprKind::Variable(name) => name,
             ExprKind::Func(func) => &func.name,
             ExprKind::Constructor(name) => name,
+            ExprKind::Member(Some(receiver), label, ..) => {
+                let Ty::Constructor { name, .. } = self.ty_from_id(&receiver.id)? else {
+                    return Ok((self.ty_from_id(&expr.id)?, Default::default()));
+                };
+
+                let Some((member, _)) = self
+                    .types
+                    .catalog
+                    .lookup_member(&name.symbol().expect("didn't get sym"), label)
+                else {
+                    return Ok((self.ty_from_id(&expr.id)?, Default::default()));
+                };
+
+                println!("{member:?}");
+
+                &Name::Resolved(member, label.to_string())
+            }
             _ => {
                 tracing::trace!("expr has no substitutions: {expr:?}");
                 return Ok((self.ty_from_id(&expr.id)?, Default::default()));
@@ -2899,7 +2951,6 @@ impl<'a> Lowerer<'a> {
         };
 
         let symbol = name.symbol().expect("name not resolved");
-
         let entry = self
             .types
             .get_symbol(&symbol)
@@ -2998,7 +3049,12 @@ impl<'a> Lowerer<'a> {
         if let Ty::Record(_, row) | Ty::Nominal { row, .. } = receiver_ty
             && let Some(idx) = row.close().get_index_of(label)
         {
-            Label::Positional(idx)
+            println!(
+                "field '{label}' index: {idx}, row: {:?} len: {}",
+                row.close(),
+                row.close().len()
+            );
+            Label::Positional(row.close().len() - idx - 1)
         } else {
             panic!("unable to determine field index of {receiver_ty}.{label}");
         }

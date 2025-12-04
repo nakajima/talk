@@ -127,6 +127,7 @@ impl<'a> Lexer<'a> {
             ';' => self.make(Semicolon),
             '%' => self.percent(),
             '@' => self.at(),
+            '$' => self.dollar(),
             '"' => self.string(),
             '\n' => self.newline(),
             '_' => {
@@ -323,6 +324,31 @@ impl<'a> Lexer<'a> {
 
         let string = self.string_from(starting_at, self.current);
         self.make(TokenKind::Attribute(string))
+    }
+
+    fn dollar(&mut self) -> Result<Token, LexerError> {
+        if !self
+            .peek()
+            .map(|c| c.is_alphanumeric() || c == '_')
+            .unwrap_or(false)
+        {
+            // It's a standalone $
+            return self.make(TokenKind::Dollar);
+        }
+
+        let starting_at = self.current;
+
+        // It's an attribute
+        while let Some(ch) = self.peek() {
+            if ch.is_alphanumeric() || ch == '_' {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+
+        let string = self.string_from(starting_at, self.current);
+        self.make(TokenKind::BoundVar(string))
     }
 
     fn percent(&mut self) -> Result<Token, LexerError> {
@@ -708,6 +734,17 @@ mod tests {
         assert_eq!(lexer.next().unwrap().kind, IRRegister("123".into()));
         assert_eq!(lexer.next().unwrap().kind, Percent);
         assert_eq!(lexer.next().unwrap().kind, Int("1".into()));
+        assert_eq!(lexer.next().unwrap().kind, EOF);
+    }
+
+    #[test]
+    fn bound_var() {
+        let mut lexer = Lexer::new("$1 $2 $sup $ sup");
+        assert_eq!(lexer.next().unwrap().kind, BoundVar("1".into()));
+        assert_eq!(lexer.next().unwrap().kind, BoundVar("2".into()));
+        assert_eq!(lexer.next().unwrap().kind, BoundVar("sup".into()));
+        assert_eq!(lexer.next().unwrap().kind, Dollar);
+        assert_eq!(lexer.next().unwrap().kind, Identifier("sup".into()));
         assert_eq!(lexer.next().unwrap().kind, EOF);
     }
 }

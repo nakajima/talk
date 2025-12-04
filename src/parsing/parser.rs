@@ -361,7 +361,12 @@ impl<'a> Parser<'a> {
                 generics,
                 body,
             },
-            _ => unreachable!("tried to call nominal_decl with wrong context: {context:?}"),
+            _ => {
+                return Err(ParserError::UnexpectedToken {
+                    expected: "Wrong context".into(),
+                    actual: format!("{context:?}"),
+                });
+            }
         };
 
         self.save_meta(tok, |id, span| Decl { id, span, kind })
@@ -658,6 +663,15 @@ impl<'a> Parser<'a> {
     }
 
     fn inline_ir(&mut self, tok: LocToken) -> Result<Node, ParserError> {
+        let mut binds = vec![];
+
+        if self.did_match(TokenKind::LeftParen)? {
+            while !(self.did_match(TokenKind::RightParen)? || self.did_match(TokenKind::EOF)?) {
+                binds.push(self.expr()?.as_expr());
+                self.consume(TokenKind::Comma).ok();
+            }
+        }
+
         self.consume(TokenKind::LeftBrace)?;
 
         let Some(current) = self.current.clone() else {
@@ -676,6 +690,7 @@ impl<'a> Parser<'a> {
                     self.save_meta(tok, |id, span| InlineIRInstruction {
                         id,
                         span,
+                        binds,
                         instr_name_span: instr_span,
                         kind: InlineIRInstructionKind::Constant { dest, ty, val },
                     })
@@ -705,6 +720,7 @@ impl<'a> Parser<'a> {
                     self.save_meta(tok, |id, span| InlineIRInstruction {
                         id,
                         span,
+                        binds,
                         instr_name_span: instr_span,
                         kind: InlineIRInstructionKind::Cmp {
                             dest,
@@ -729,6 +745,7 @@ impl<'a> Parser<'a> {
                     self.save_meta(tok, |id, span| InlineIRInstruction {
                         id,
                         span,
+                        binds,
                         instr_name_span: instr_span,
                         kind,
                     })
@@ -739,6 +756,7 @@ impl<'a> Parser<'a> {
                     self.save_meta(tok, |id, span| InlineIRInstruction {
                         id,
                         span,
+                        binds,
                         instr_name_span: instr_span,
                         kind: InlineIRInstructionKind::Ref { dest, ty, val },
                     })
@@ -750,6 +768,7 @@ impl<'a> Parser<'a> {
                     self.save_meta(tok, |id, span| InlineIRInstruction {
                         id,
                         span,
+                        binds,
                         instr_name_span: instr_span,
                         kind: InlineIRInstructionKind::Call {
                             dest,
@@ -765,6 +784,7 @@ impl<'a> Parser<'a> {
                     self.save_meta(tok, |id, span| InlineIRInstruction {
                         id,
                         span,
+                        binds,
                         instr_name_span: instr_span,
                         kind: InlineIRInstructionKind::Record { dest, ty, record },
                     })
@@ -776,6 +796,7 @@ impl<'a> Parser<'a> {
                     self.save_meta(tok, |id, span| InlineIRInstruction {
                         id,
                         span,
+                        binds,
                         instr_name_span: instr_span,
                         kind: InlineIRInstructionKind::GetField {
                             dest,
@@ -793,6 +814,7 @@ impl<'a> Parser<'a> {
                     self.save_meta(tok, |id, span| InlineIRInstruction {
                         id,
                         span,
+                        binds,
                         instr_name_span: instr_span,
                         kind: InlineIRInstructionKind::SetField {
                             dest,
@@ -809,6 +831,7 @@ impl<'a> Parser<'a> {
                     self.save_meta(tok, |id, span| InlineIRInstruction {
                         id,
                         span,
+                        binds,
                         instr_name_span: instr_span,
                         kind: InlineIRInstructionKind::Alloc { dest, ty, count },
                     })
@@ -819,6 +842,7 @@ impl<'a> Parser<'a> {
                     self.save_meta(tok, |id, span| InlineIRInstruction {
                         id,
                         span,
+                        binds,
                         instr_name_span: instr_span,
                         kind: InlineIRInstructionKind::Load { dest, ty, addr },
                     })
@@ -830,6 +854,7 @@ impl<'a> Parser<'a> {
                     self.save_meta(tok, |id, span| InlineIRInstruction {
                         id,
                         span,
+                        binds,
                         instr_name_span: instr_span,
                         kind: InlineIRInstructionKind::Gep {
                             dest,
@@ -854,6 +879,7 @@ impl<'a> Parser<'a> {
                     self.save_meta(tok, |id, span| InlineIRInstruction {
                         id,
                         span,
+                        binds,
                         instr_name_span: instr_span,
                         kind: InlineIRInstructionKind::_Print { val },
                     })
@@ -865,6 +891,7 @@ impl<'a> Parser<'a> {
                     self.save_meta(tok, |id, span| InlineIRInstruction {
                         id,
                         span,
+                        binds,
                         instr_name_span: instr_span,
                         kind: InlineIRInstructionKind::Store { value, ty, addr },
                     })
@@ -876,6 +903,7 @@ impl<'a> Parser<'a> {
                     self.save_meta(tok, |id, span| InlineIRInstruction {
                         id,
                         span,
+                        binds,
                         instr_name_span: instr_span,
                         kind: InlineIRInstructionKind::Move { ty, from, to },
                     })
@@ -888,6 +916,7 @@ impl<'a> Parser<'a> {
                     self.save_meta(tok, |id, span| InlineIRInstruction {
                         id,
                         span,
+                        binds,
                         instr_name_span: instr_span,
                         kind: InlineIRInstructionKind::Copy {
                             ty,
@@ -903,6 +932,7 @@ impl<'a> Parser<'a> {
                     self.save_meta(tok, |id, span| InlineIRInstruction {
                         id,
                         span,
+                        binds,
                         instr_name_span: instr_span,
                         kind: InlineIRInstructionKind::Free { addr },
                     })
@@ -947,8 +977,26 @@ impl<'a> Parser<'a> {
             TokenKind::Float(int) => Value::Float(parse_lexed(int)),
             TokenKind::True => Value::Bool(true),
             TokenKind::False => Value::Bool(false),
+            TokenKind::BoundVar(v) => {
+                if !v.chars().all(|c| c.is_numeric()) {
+                    return Err(ParserError::UnexpectedToken {
+                        expected: "Numeric bound var".into(),
+                        actual: v.into(),
+                    });
+                }
+
+                let i = v
+                    .parse()
+                    .map_err(|e| ParserError::BadLabel(format!("{e}")))?;
+                Value::Bind(i)
+            }
             TokenKind::Identifier(v) if v == "void" => Value::Void,
-            _ => unimplemented!("Unhandled inline IR value: {:?}", current),
+            _ => {
+                return Err(ParserError::UnexpectedToken {
+                    expected: "IR".to_string(),
+                    actual: format!("{current:?}"),
+                });
+            }
         };
 
         self.advance();
@@ -1085,7 +1133,12 @@ impl<'a> Parser<'a> {
                 self.parse_record_pattern()?
             }
 
-            _ => unimplemented!("{:?}", current.kind),
+            _ => {
+                return Err(ParserError::UnexpectedToken {
+                    expected: "Pattern".into(),
+                    actual: format!("{:?}", current.kind),
+                });
+            }
         };
 
         self.save_meta(tok, |id, span| Pattern { id, span, kind })

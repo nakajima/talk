@@ -2356,7 +2356,7 @@ pub mod tests {
     fn parses_inline_ir() {
         let parsed = parse(
             "
-           @_ir { _print 123 }
+           @_ir(123) { _print $0 }
            @_ir { %? = const Int 123 }
            @_ir { %? = cmp Int %0 < %1 } 
            @_ir { %? = add Int 123 %1 } 
@@ -2379,13 +2379,15 @@ pub mod tests {
             *parsed.roots[0].as_stmt(),
             any_expr_stmt!(ExprKind::InlineIR(any!(InlineIRInstruction, {
                 instr_name_span: Span::ANY,
-                kind: InlineIRInstructionKind::_Print { val: Value::Int(123) }
+                binds: vec![any_expr!(ExprKind::LiteralInt("123".into()))],
+                kind: InlineIRInstructionKind::_Print { val: Value::Bind(0) }
             })))
         );
         assert_eq!(
             *parsed.roots[1].as_stmt(),
             any_expr_stmt!(ExprKind::InlineIR(any!(InlineIRInstruction, {
                 instr_name_span: Span::ANY,
+                binds: vec![],
                 kind: InlineIRInstructionKind::Constant {
                     dest: Register("?".to_string()),
                     ty: nominal_annotation!("Int"),
@@ -2397,6 +2399,7 @@ pub mod tests {
             *parsed.roots[2].as_stmt(),
             any_expr_stmt!(ExprKind::InlineIR(any!(InlineIRInstruction, {
                 instr_name_span: Span::ANY,
+                binds: vec![],
                 kind: InlineIRInstructionKind::Cmp {
                     dest: Register("?".to_string()),
                     lhs: Value::Reg(0),

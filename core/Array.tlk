@@ -8,4 +8,14 @@ struct Array<Element> {
 		self.count = 0
 		self.storage = @_ir { %? = alloc Element %0 }
 	}
+
+	func get(index: Int) -> Optional<Element> {
+		if index >= self.count {
+			return Optional.none
+		}
+
+		let ptr = self.storage
+		let res: Element = @_ir(ptr) { %? = load Element $0 }
+		res
+	}
 }

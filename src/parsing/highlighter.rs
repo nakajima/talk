@@ -94,6 +94,8 @@ impl<'a> Higlighter<'a> {
 
         while let Ok(tok) = &lexer.next() {
             match tok.kind {
+                TokenKind::Dollar => self.make(tok, Kind::OPERATOR, &mut tokens),
+                TokenKind::BoundVar(..) => self.make(tok, Kind::VARIABLE, &mut tokens),
                 TokenKind::Percent => self.make(tok, Kind::OPERATOR, &mut tokens),
                 TokenKind::IRRegister(..) => self.make(tok, Kind::PARAMETER, &mut tokens),
                 TokenKind::Attribute(..) => self.make(tok, Kind::DECORATOR, &mut tokens),

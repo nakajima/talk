@@ -961,9 +961,13 @@ impl<'a> InferencePass<'a> {
 
     fn visit_inline_ir(
         &mut self,
-        _instr: &InlineIRInstruction,
+        instr: &InlineIRInstruction,
         context: &mut impl Solve,
     ) -> InferTy {
+        for bind in instr.binds.iter() {
+            self.visit_expr(bind, context);
+        }
+
         self.session.new_ty_meta_var(context.level())
     }
 

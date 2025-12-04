@@ -617,6 +617,10 @@ impl NameResolver {
 
     fn enter_expr(&mut self, expr: &mut Expr) {
         on!(&mut expr.kind, ExprKind::InlineIR(instr), {
+            for bind in &mut instr.binds {
+                self.enter_expr(bind);
+            }
+
             match &mut instr.kind {
                 InlineIRInstructionKind::Constant { ty, .. } => self.enter_type_annotation(ty),
                 InlineIRInstructionKind::Cmp { ty, .. } => self.enter_type_annotation(ty),
