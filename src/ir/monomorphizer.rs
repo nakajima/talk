@@ -4,10 +4,7 @@ use tracing::instrument;
 
 use crate::{
     ast::AST,
-    compiling::{
-        driver::{DriverConfig, Source},
-        module::ModuleId,
-    },
+    compiling::driver::{DriverConfig, Source},
     ir::{
         basic_block::{BasicBlock, Phi},
         function::Function,
