@@ -23,11 +23,20 @@ pub enum ForAll {
     Row(RowParamId),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Scheme<T: SomeType> {
     pub(crate) foralls: IndexSet<ForAll>,
     pub(super) predicates: Vec<Predicate<T>>,
     pub(crate) ty: T,
+}
+
+impl<T: SomeType> std::hash::Hash for Scheme<T> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.ty.hash(state);
+        for forall in self.foralls.iter() {
+            forall.hash(state);
+        }
+    }
 }
 
 impl<T: SomeType> SomeType for EnvEntry<T> {

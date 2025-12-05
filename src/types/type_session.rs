@@ -22,7 +22,7 @@ use crate::{
         solve_context::{Solve, SolveContext, SolveContextKind},
         term_environment::{EnvEntry, TermEnv},
         ty::{SomeType, Ty},
-        type_catalog::{MemberWitness, TypeCatalog},
+        type_catalog::{MemberWitness, Nominal, TypeCatalog},
         type_error::TypeError,
         type_operations::{UnificationSubstitutions, substitute},
         vars::Vars,
@@ -120,6 +120,48 @@ impl TypeSession {
         }
 
         let mut catalog = TypeCatalog::<InferTy>::default();
+
+        // Import builtin nominals
+        catalog.nominals.insert(
+            Symbol::Bool,
+            Nominal {
+                properties: Default::default(),
+                variants: Default::default(),
+                type_params: Default::default(),
+            },
+        );
+        catalog.nominals.insert(
+            Symbol::Int,
+            Nominal {
+                properties: Default::default(),
+                variants: Default::default(),
+                type_params: Default::default(),
+            },
+        );
+        catalog.nominals.insert(
+            Symbol::Float,
+            Nominal {
+                properties: Default::default(),
+                variants: Default::default(),
+                type_params: Default::default(),
+            },
+        );
+        catalog.nominals.insert(
+            Symbol::RawPtr,
+            Nominal {
+                properties: Default::default(),
+                variants: Default::default(),
+                type_params: Default::default(),
+            },
+        );
+        catalog.nominals.insert(
+            Symbol::Byte,
+            Nominal {
+                properties: Default::default(),
+                variants: Default::default(),
+                type_params: Default::default(),
+            },
+        );
 
         // Import reqs
         for module in &modules.modules {
@@ -394,9 +436,12 @@ impl TypeSession {
                     .collect(),
             ),
             InferTy::Record(box row) => InferTy::Record(self.shallow_generalize_row(row).into()),
-            InferTy::Nominal { symbol, box row } => InferTy::Nominal {
+            InferTy::Nominal { symbol, type_args } => InferTy::Nominal {
                 symbol,
-                row: self.shallow_generalize_row(row).into(),
+                type_args: type_args
+                    .into_iter()
+                    .map(|a| self.shallow_generalize(a))
+                    .collect(),
             },
             ty => ty,
         }
@@ -510,10 +555,7 @@ impl TypeSession {
             }
             InferTy::Constructor { name, params, ret } => InferTy::Constructor {
                 name,
-                params: params
-                    .into_iter()
-                    .map(|p| self.apply(p, substitutions))
-                    .collect(),
+                params: self.apply_mult(params, substitutions),
                 ret: Box::new(self.apply(*ret, substitutions)),
             },
             InferTy::Primitive(..) => ty,
@@ -521,16 +563,11 @@ impl TypeSession {
                 Box::new(self.apply(*params, substitutions)),
                 Box::new(self.apply(*ret, substitutions)),
             ),
-            InferTy::Tuple(items) => InferTy::Tuple(
-                items
-                    .into_iter()
-                    .map(|t| self.apply(t, substitutions))
-                    .collect(),
-            ),
+            InferTy::Tuple(items) => InferTy::Tuple(self.apply_mult(items, substitutions)),
             InferTy::Record(row) => InferTy::Record(Box::new(self.apply_row(*row, substitutions))),
-            InferTy::Nominal { symbol, box row } => InferTy::Nominal {
+            InferTy::Nominal { symbol, type_args } => InferTy::Nominal {
                 symbol,
-                row: Box::new(self.apply_row(row, substitutions)),
+                type_args: self.apply_mult(type_args, substitutions),
             },
         }
     }
@@ -703,11 +740,7 @@ impl TypeSession {
                     foralls.insert(ForAll::Ty(param_id));
                     substitutions.ty.insert(*id, InferTy::Param(param_id));
                 }
-                InferTy::Record(box InferRow::Var(id))
-                | InferTy::Nominal {
-                    row: box InferRow::Var(id),
-                    ..
-                } => {
+                InferTy::Record(box InferRow::Var(id)) => {
                     let levels = self.meta_levels.borrow();
                     let level = levels.get(&Meta::Row(*id)).copied().unwrap_or_default();
                     if level < context.level() {
@@ -878,6 +911,30 @@ impl TypeSession {
         constraints.wake_symbols(&[sym]);
 
         self.term_env.insert(sym, EnvEntry::Mono(ty));
+    }
+
+    pub fn lookup_nominal(&mut self, symbol: &Symbol) -> Option<Nominal<InferTy>> {
+        if let Some(nominal) = self.type_catalog.nominals.get(symbol).cloned() {
+            return Some(nominal);
+        }
+
+        for module in self.modules.modules.values() {
+            if let Some(nominal) = module
+                .types
+                .catalog
+                .nominals
+                .get(&symbol.current())
+                .cloned()
+            {
+                self.type_catalog
+                    .nominals
+                    .insert(*symbol, nominal.clone().into());
+                println!("Got external nominal {nominal:?}");
+                return Some(nominal.into());
+            }
+        }
+
+        None
     }
 
     #[instrument(skip(self))]
@@ -1098,50 +1155,6 @@ impl TypeSession {
         None
     }
 
-    pub(super) fn _lookup_properties(
-        &mut self,
-        symbol: &Symbol,
-    ) -> Option<IndexMap<Label, Symbol>> {
-        if let Some(properties) = self.type_catalog.properties.get(symbol).cloned() {
-            return Some(properties);
-        }
-
-        if let Symbol::Struct(StructId {
-            module_id,
-            local_id,
-        }) = *symbol
-            && module_id.is_external_or_core()
-            && let Some(module) = self.modules.modules.get(&module_id)
-        {
-            let module_key = if module_id.is_external() {
-                ModuleId::Current
-            } else {
-                module_id
-            };
-            let properties = module
-                .types
-                .catalog
-                .properties
-                .get(&Symbol::Struct(StructId {
-                    module_id: module_key,
-                    local_id,
-                }))
-                .cloned()?;
-
-            let imported: IndexMap<Label, Symbol> = properties
-                .into_iter()
-                .map(|(label, sym)| (label, sym.import(module_id)))
-                .collect();
-
-            self.type_catalog
-                .properties
-                .insert(*symbol, imported.clone());
-            return Some(imported);
-        }
-
-        None
-    }
-
     pub(crate) fn new_type_param(&mut self, meta: Option<MetaVarId>) -> InferTy {
         let id = self.vars.type_params.next_id();
         if let Some(meta) = meta {
@@ -1202,11 +1215,5 @@ impl TypeSession {
         let id = self.row_vars.new_key(level);
         self.meta_levels.borrow_mut().insert(Meta::Row(id), level);
         InferRow::Var(id)
-    }
-
-    pub(crate) fn new_row_meta_var_id(&mut self, level: Level) -> RowMetaId {
-        let id = self.row_vars.new_key(level);
-        self.meta_levels.borrow_mut().insert(Meta::Row(id), level);
-        id
     }
 }

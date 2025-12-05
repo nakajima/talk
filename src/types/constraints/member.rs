@@ -9,7 +9,6 @@ use crate::{
     types::{
         constraint_solver::{DeferralReason, SolveResult},
         constraints::store::{ConstraintId, ConstraintStore},
-        infer_row::InferRow,
         infer_ty::{InferTy, Meta, TypeParamId},
         passes::uncurry_function,
         predicate::Predicate,
@@ -90,15 +89,21 @@ impl Member {
                 return SolveResult::Solved(Default::default());
             }
             InferTy::Primitive(symbol) => {
-                return self.lookup_nominal_member(constraints, context, session, symbol, None);
-            }
-            InferTy::Nominal { symbol, box row } => {
                 return self.lookup_nominal_member(
                     constraints,
                     context,
                     session,
                     symbol,
-                    Some(row),
+                    Default::default(),
+                );
+            }
+            InferTy::Nominal { symbol, type_args } => {
+                return self.lookup_nominal_member(
+                    constraints,
+                    context,
+                    session,
+                    symbol,
+                    type_args,
                 );
             }
             _ => {}
@@ -201,7 +206,13 @@ impl Member {
                     other => curry(vec![other], enum_ty),
                 }
             } else {
-                InferTy::Error(TypeError::TypeNotFound(format!("{nominal_symbol:?}")).into())
+                InferTy::Error(
+                    TypeError::TypeNotFound(format!(
+                        "{nominal_symbol:?} while looking up static member {:?}",
+                        self.label
+                    ))
+                    .into(),
+                )
             };
         }
 
@@ -218,14 +229,27 @@ impl Member {
         context: &mut SolveContext,
         session: &mut TypeSession,
         symbol: &Symbol,
-        row: Option<&InferRow>,
+        type_args: &[InferTy],
     ) -> SolveResult {
         let mut solved_metas: Vec<Meta> = Default::default();
+
         let Some((member_sym, _source)) = session.lookup_member(symbol, &self.label) else {
-            return SolveResult::Err(TypeError::MemberNotFound(
-                self.receiver.clone(),
-                self.label.to_string(),
-            ));
+            // If the nominal is registered but member not found, it's a real error
+            // If the nominal isn't registered yet, defer
+            if session.lookup_nominal(symbol).is_some() {
+                return SolveResult::Err(TypeError::MemberNotFound(
+                    self.receiver.clone(),
+                    self.label.to_string(),
+                ));
+            }
+            return SolveResult::Defer(DeferralReason::WaitingOnSymbol(*symbol));
+        };
+
+        let Some(nominal) = session.lookup_nominal(symbol) else {
+            return SolveResult::Err(TypeError::TypeNotFound(format!(
+                "{symbol:?} not found while looking up {:?}.",
+                self.label
+            )));
         };
 
         match member_sym {
@@ -239,6 +263,7 @@ impl Member {
                 } else {
                     MemberWitness::Requirement(member_sym, self.receiver.clone())
                 };
+
                 session
                     .type_catalog
                     .member_witnesses
@@ -250,6 +275,7 @@ impl Member {
                         self.label.to_string(),
                     ));
                 };
+
                 let method = entry.instantiate(self.node_id, constraints, context, session);
                 let method = session.apply(method, &mut context.substitutions);
                 let (method_receiver, method_fn) = consume_self(&method);
@@ -267,21 +293,20 @@ impl Member {
                 return SolveResult::Solved(solved_metas);
             }
             Symbol::Variant(..) => {
-                let Some(row) = row else {
-                    return SolveResult::Err(TypeError::ExpectedRow(self.receiver.clone()));
-                };
-
-                let Some(variant) = self.lookup_variant(row) else {
+                let Some(values) = nominal
+                    .substituted_variant_values(type_args)
+                    .get(&self.label)
+                    .cloned()
+                else {
                     return SolveResult::Err(TypeError::MemberNotFound(
                         self.receiver.clone(),
                         self.label.to_string(),
                     ));
                 };
 
-                let constructor_ty = match variant {
-                    InferTy::Void => self.receiver.clone(),
-                    InferTy::Tuple(values) => curry(values, self.receiver.clone()),
-                    other => curry(vec![other], self.receiver.clone()),
+                let constructor_ty = match values.len() {
+                    0 => self.receiver.clone(),
+                    _ => curry(values, self.receiver.clone()),
                 };
 
                 constraints.wants_equals(constructor_ty, self.ty.clone());
@@ -294,28 +319,21 @@ impl Member {
         }
 
         // If all else fails, see if it's a property
-        let Some(row) = row else {
-            return SolveResult::Err(TypeError::ExpectedRow(self.receiver.clone()));
-        };
-        constraints._has_field(
-            row.clone(),
-            self.label.clone(),
-            self.ty.clone(),
-            &constraints.copy_group(self.id),
-        );
-        SolveResult::Solved(Default::default())
-    }
-
-    fn lookup_variant(&self, row: &InferRow) -> Option<InferTy> {
-        if let InferRow::Extend { row, label, ty } = row {
-            if *label == self.label {
-                return Some(ty.clone());
+        if let Some(ty) = nominal
+            .substitute_properties(type_args)
+            .get(&self.label)
+            .cloned()
+        {
+            match unify(&self.ty, &ty, context, session) {
+                Ok(vars) => SolveResult::Solved(vars),
+                Err(e) => SolveResult::Err(e),
             }
-
-            return self.lookup_variant(row);
+        } else {
+            SolveResult::Err(TypeError::MemberNotFound(
+                self.receiver.clone(),
+                self.label.to_string(),
+            ))
         }
-
-        None
     }
 }
 

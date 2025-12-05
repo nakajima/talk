@@ -8,7 +8,6 @@ pub mod tests {
         },
         diagnostic::Diagnostic,
         ir::monomorphizer::uncurry_function,
-        make_row,
         name_resolution::{
             name_resolver::NameResolved,
             symbol::{EnumId, GlobalId, ProtocolId, StructId, Symbol, SynthesizedId},
@@ -18,12 +17,11 @@ pub mod tests {
             stmt::{Stmt, StmtKind},
         },
         types::{
-            row::Row,
             scheme::{ForAll, Scheme},
             ty::Ty,
             type_catalog::ConformanceKey,
             type_error::TypeError,
-            type_session::{TypeDefKind, TypeEntry, Types},
+            type_session::{TypeEntry, Types},
         },
     };
 
@@ -1328,7 +1326,7 @@ pub mod tests {
 
         let nominal = Ty::Nominal {
             symbol: StructId::from(1).into(),
-            row: Box::new(make_row!(Struct, "height" => Ty::Float, "age" => Ty::Int)),
+            type_args: Default::default(),
         };
 
         let (params, _ret) = uncurry_function(
@@ -1508,7 +1506,7 @@ pub mod tests {
             ty(3, &ast, &types),
             Ty::Nominal {
                 symbol: StructId::from(1).into(),
-                row: make_row!(Struct, "value" => Ty::Int).into()
+                type_args: vec![Ty::Int],
             }
         );
     }
@@ -1621,14 +1619,14 @@ pub mod tests {
             ty(1, &ast, &types),
             Ty::Nominal {
                 symbol: EnumId::from(1).into(),
-                row: Box::new(make_row!(Enum, "foo" => Ty::Void, "bar" => Ty::Void)),
+                type_args: Default::default(),
             }
         );
         assert_eq!(
             ty(2, &ast, &types),
             Ty::Nominal {
                 symbol: EnumId::from(1).into(),
-                row: Box::new(make_row!(Enum, "foo" => Ty::Void, "bar" => Ty::Void)),
+                type_args: Default::default(),
             }
         );
     }
@@ -1650,18 +1648,14 @@ pub mod tests {
             ty(1, &ast, &types),
             Ty::Nominal {
                 symbol: EnumId::from(1).into(),
-                row: Box::new(
-                    make_row!(Enum, "foo" => Ty::Tuple(vec![Ty::Int, Ty::Bool]), "bar" => Ty::Float)
-                ),
+                type_args: Default::default(),
             }
         );
         assert_eq!(
             ty(2, &ast, &types),
             Ty::Nominal {
                 symbol: EnumId::from(1).into(),
-                row: Box::new(
-                    make_row!(Enum, "foo" => Ty::Tuple(vec![Ty::Int, Ty::Bool]), "bar" => Ty::Float)
-                ),
+                type_args: Default::default(),
             }
         );
     }
@@ -1684,21 +1678,21 @@ pub mod tests {
             ty(1, &ast, &types),
             Ty::Nominal {
                 symbol: EnumId::from(1).into(),
-                row: Box::new(make_row!(Enum, "some" => Ty::Int, "none" => Ty::Void)),
+                type_args: vec![Ty::Int],
             }
         );
         assert_eq!(
             ty(2, &ast, &types),
             Ty::Nominal {
                 symbol: EnumId::from(1).into(),
-                row: Box::new(make_row!(Enum, "some" => Ty::Float, "none" => Ty::Void)),
+                type_args: vec![Ty::Float],
             }
         );
         assert_eq!(
             ty(3, &ast, &types),
             Ty::Nominal {
                 symbol: EnumId::from(1).into(),
-                row: Box::new(make_row!(Enum, "some" => Ty::Param(1.into()), "none" => Ty::Void)),
+                type_args: vec![Ty::Param(1.into())],
             }
         );
     }
@@ -2026,7 +2020,7 @@ pub mod tests {
                     module_id: ModuleId::Core,
                     local_id: 1
                 }),
-                row: make_row!(Enum, "some" => Ty::Int, "none" => Ty::Void).into()
+                type_args: vec![Ty::Int],
             }
         );
 
@@ -2038,7 +2032,7 @@ pub mod tests {
                     module_id: ModuleId::Current,
                     local_id: 1
                 }),
-                row: make_row!(Enum, "some" => Ty::Float, "none" => Ty::Void).into()
+                type_args: vec![Ty::Float],
             }
         );
     }
@@ -2140,7 +2134,7 @@ pub mod tests {
             ty(4, &ast, &types),
             Ty::Nominal {
                 symbol: StructId::from(3).into(),
-                row: Row::Empty(TypeDefKind::Struct).into()
+                type_args: vec![],
             }
         );
     }

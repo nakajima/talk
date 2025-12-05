@@ -3034,12 +3034,23 @@ impl<'a> Lowerer<'a> {
     }
 
     fn field_index(&self, receiver_ty: &Ty, label: &Label) -> Label {
-        if let Ty::Record(_, row) | Ty::Nominal { row, .. } = receiver_ty
-            && let Some(idx) = row.close().get_index_of(label)
-        {
-            Label::Positional(idx)
-        } else {
-            panic!("unable to determine field index of {receiver_ty}.{label}");
+        match receiver_ty {
+            Ty::Record(_, row) if let Some(idx) = row.close().get_index_of(label) => {
+                Label::Positional(idx)
+            }
+            Ty::Nominal { symbol, .. }
+                if let Some(idx) = self
+                    .types
+                    .catalog
+                    .nominals
+                    .get(symbol)
+                    .expect("didn't find nominal")
+                    .properties
+                    .get_index_of(label) =>
+            {
+                Label::Positional(idx)
+            }
+            _ => panic!("unable to determine field index of {receiver_ty}.{label}"),
         }
     }
 
@@ -3106,9 +3117,12 @@ fn substitute(ty: Ty, substitutions: &Substitutions) -> Ty {
                 .collect(),
         ),
         Ty::Record(sym, box row) => Ty::Record(sym, substitute_row(row, substitutions).into()),
-        Ty::Nominal { symbol, box row } => Ty::Nominal {
+        Ty::Nominal { symbol, type_args } => Ty::Nominal {
             symbol,
-            row: substitute_row(row, substitutions).into(),
+            type_args: type_args
+                .into_iter()
+                .map(|a| substitute(a, substitutions))
+                .collect(),
         },
     }
 }

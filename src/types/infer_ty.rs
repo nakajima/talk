@@ -14,7 +14,6 @@ use crate::{
         term_environment::EnvEntry,
         ty::{SomeType, Ty},
         type_error::TypeError,
-        type_session::TypeDefKind,
     },
 };
 
@@ -123,7 +122,7 @@ pub enum InferTy {
     // Nominal types (we look up their information from the TypeCatalog)
     Nominal {
         symbol: Symbol,
-        row: Box<InferRow>,
+        type_args: Vec<InferTy>,
     },
 
     Error(Box<TypeError>),
@@ -149,9 +148,9 @@ impl From<InferTy> for Ty {
             }
             InferTy::Tuple(items) => Ty::Tuple(items.into_iter().map(|t| t.into()).collect()),
             InferTy::Record(box infer_row) => Ty::Record(None, Box::new(infer_row.into())),
-            InferTy::Nominal { symbol, box row } => Ty::Nominal {
+            InferTy::Nominal { symbol, type_args } => Ty::Nominal {
                 symbol,
-                row: Box::new(row.into()),
+                type_args: type_args.into_iter().map(|p| p.into()).collect(),
             },
             InferTy::Projection { .. } => Ty::Param(420420.into()), // FIXME
             _ => Ty::Param(420420.into()),
@@ -178,9 +177,9 @@ impl From<Ty> for InferTy {
             }
             Ty::Tuple(items) => InferTy::Tuple(items.into_iter().map(|t| t.into()).collect()),
             Ty::Record(.., box infer_row) => InferTy::Record(Box::new(infer_row.into())),
-            Ty::Nominal { symbol, box row } => InferTy::Nominal {
+            Ty::Nominal { symbol, type_args } => InferTy::Nominal {
                 symbol,
-                row: Box::new(row.into()),
+                type_args: type_args.into_iter().map(|t| t.into()).collect(),
             },
         }
     }
@@ -206,21 +205,7 @@ impl SomeType for InferTy {
                 InferRow::Var(_) => true,
                 _ => false,
             },
-            InferTy::Nominal { box row, .. } => {
-                let row_contains = match row {
-                    InferRow::Extend { row, ty, .. } => {
-                        InferTy::Record(row.clone()).contains_var() || ty.contains_var()
-                    }
-                    InferRow::Var(_) => true,
-                    _ => false,
-                };
-
-                if row_contains {
-                    return true;
-                }
-
-                false
-            }
+            InferTy::Nominal { type_args, .. } => type_args.contains(self),
         }
     }
 }
@@ -237,46 +222,16 @@ impl InferTy {
     pub fn String() -> InferTy {
         InferTy::Nominal {
             symbol: Symbol::String,
-            row: Box::new(InferRow::Extend {
-                row: InferRow::Extend {
-                    row: InferRow::Extend {
-                        row: InferRow::Empty(TypeDefKind::Struct).into(),
-                        label: "length".into(),
-                        ty: InferTy::Int,
-                    }
-                    .into(),
-                    label: "capacity".into(),
-                    ty: InferTy::Int,
-                }
-                .into(),
-                label: "base".into(),
-                ty: InferTy::RawPtr,
-            }),
+            type_args: Default::default(),
         }
     }
-    pub fn Array(_t: InferTy) -> InferTy {
-        let row = InferRow::Extend {
-            row: InferRow::Extend {
-                row: InferRow::Extend {
-                    row: InferRow::Empty(TypeDefKind::Struct).into(),
-                    label: "count".into(),
-                    ty: InferTy::Int,
-                }
-                .into(),
-                label: "capacity".into(),
-                ty: InferTy::Int,
-            }
-            .into(),
-            label: "storage".into(),
-            ty: InferTy::RawPtr,
-        };
-
+    pub fn Array(t: InferTy) -> InferTy {
         InferTy::Nominal {
             symbol: Symbol::Struct(StructId {
                 module_id: ModuleId::Core,
                 local_id: 3,
             }),
-            row: row.into(),
+            type_args: vec![t],
         }
     }
 
@@ -311,8 +266,10 @@ impl InferTy {
                     out.extend(InferTy::Record(row.clone()).collect_metas());
                 }
             },
-            InferTy::Nominal { row, .. } => {
-                out.extend(InferTy::Record(row.clone()).collect_metas());
+            InferTy::Nominal { type_args, .. } => {
+                for arg in type_args {
+                    out.extend(arg.collect_metas());
+                }
             }
             InferTy::Constructor { params, .. } => {
                 for param in params {
@@ -348,6 +305,11 @@ impl InferTy {
             InferTy::Rigid(..) => (),
             InferTy::Var { .. } => (),
             InferTy::Primitive(..) => (),
+            InferTy::Nominal { type_args, .. } => {
+                for arg in type_args {
+                    result.extend(arg.collect_foralls());
+                }
+            }
             InferTy::Projection { base, .. } => {
                 result.extend(base.collect_foralls());
             }
@@ -365,53 +327,11 @@ impl InferTy {
                     result.extend(item.collect_foralls());
                 }
             }
-            InferTy::Nominal { box row, .. } | InferTy::Record(box row) => {
+            InferTy::Record(box row) => {
                 result.extend(row.collect_foralls());
             }
         }
         result
-    }
-
-    pub fn fold<T, F: FnMut(&InferTy) -> T>(&self, f: &mut F) -> T {
-        match self {
-            InferTy::Primitive(..) => f(self),
-            InferTy::Param(..) => f(self),
-            InferTy::Rigid(..) => f(self),
-            InferTy::Var { .. } => f(self),
-            InferTy::Error(..) => f(self),
-            InferTy::Constructor { params, ret, .. } => {
-                _ = params.iter().map(&mut *f);
-                _ = f(ret);
-                f(self)
-            }
-            InferTy::Projection { base, .. } => {
-                _ = f(base);
-                f(self)
-            }
-            InferTy::Func(ty, ty1) => {
-                f(ty);
-                f(ty1);
-                f(self)
-            }
-            InferTy::Tuple(items) => {
-                _ = items.iter().map(&mut *f);
-                f(self)
-            }
-            InferTy::Record(box row) => match row {
-                InferRow::Extend { ty, .. } => {
-                    f(ty);
-                    f(self)
-                }
-                _ => f(self),
-            },
-            InferTy::Nominal { box row, .. } => match row {
-                InferRow::Extend { ty, .. } => {
-                    f(ty);
-                    f(self)
-                }
-                _ => f(self),
-            },
-        }
     }
 
     pub fn import(self, module_id: ModuleId) -> InferTy {
@@ -451,9 +371,9 @@ impl InferTy {
                 InferTy::Tuple(items.into_iter().map(|i| i.import(module_id)).collect())
             }
             InferTy::Record(row) => InferTy::Record(row.import(module_id).into()),
-            InferTy::Nominal { symbol, row } => InferTy::Nominal {
+            InferTy::Nominal { symbol, type_args } => InferTy::Nominal {
                 symbol: symbol.import(module_id),
-                row: row.import(module_id).into(),
+                type_args: type_args.into_iter().map(|f| f.import(module_id)).collect(),
             },
             _ => self,
         }
@@ -480,8 +400,8 @@ impl std::fmt::Debug for InferTy {
             InferTy::Tuple(items) => {
                 write!(f, "({})", items.iter().map(|i| format!("{i:?}")).join(", "))
             }
-            InferTy::Nominal { symbol, row } => {
-                write!(f, "Type({symbol:?}, {row:?})")
+            InferTy::Nominal { symbol, type_args } => {
+                write!(f, "Type({symbol:?}, {type_args:?})")
             }
             InferTy::Record(box row) => {
                 let row_debug = match row {

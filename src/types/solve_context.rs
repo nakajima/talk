@@ -244,12 +244,11 @@ pub mod tests {
         node_id::NodeID,
         span::Span,
         types::{
-            infer_row::InferRow,
             infer_ty::{InferTy, Level},
             solve_context::{Solve, SolveContext, SolveContextKind},
             type_catalog::{Conformance, ConformanceKey},
             type_operations::UnificationSubstitutions,
-            type_session::{TypeDefKind, TypeSession},
+            type_session::TypeSession,
         },
     };
 
@@ -278,7 +277,7 @@ pub mod tests {
             protocol_id: ProtocolId::from(1),
             base: InferTy::Nominal {
                 symbol: Symbol::Struct(1.into()),
-                row: InferRow::Empty(TypeDefKind::Struct).into(),
+                type_args: Default::default(),
             }
             .into(),
             associated: Label::Named("foo".into()),

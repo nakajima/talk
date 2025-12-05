@@ -312,6 +312,7 @@ pub mod tests {
             .get(&Source::from(current_dir.join("dev/fixtures/b.tlk")))
             .unwrap();
 
+        assert!(ast.diagnostics.is_empty());
         assert_eq!(types_tests::tests::ty(1, ast, &typed.phase.types), Ty::Int);
     }
 
@@ -338,6 +339,7 @@ pub mod tests {
             .get(&Source::from(current_dir.join("dev/fixtures/b.tlk")))
             .unwrap();
 
+        assert!(ast.diagnostics.is_empty(), "{:?}", ast.diagnostics);
         assert_eq!(types_tests::tests::ty(1, ast, &typed.phase.types), Ty::Int);
     }
 

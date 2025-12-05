@@ -302,19 +302,40 @@ impl<'a> Monomorphizer<'a> {
                         .collect(),
                 )
             }
-            Ty::Nominal { symbol, row, .. } => {
+            Ty::Nominal { symbol, type_args } => {
+                let nominal = if let Some(module_id) = symbol.module_id()
+                    && module_id != self.config.module_id
+                {
+                    self.config
+                        .modules
+                        .modules
+                        .get(&module_id)
+                        .expect("didn't get module")
+                        .types
+                        .catalog
+                        .nominals
+                        .get(&symbol)
+                        .cloned()
+                        .expect("didn't get external nominal")
+                } else {
+                    self.types
+                        .catalog
+                        .nominals
+                        .get(&symbol)
+                        .cloned()
+                        .unwrap_or_else(|| unreachable!("didn't get nominal: {symbol:?}"))
+                };
+
+                let properties = nominal.substitute_properties(&type_args);
+
                 if matches!(symbol, Symbol::Enum(..)) {
-                    // TODO: Handle variants
                     IrTy::Record(Some(symbol), vec![IrTy::Int])
                 } else {
-                    let closed = row.close();
-                    IrTy::Record(
-                        Some(symbol),
-                        closed
-                            .values()
-                            .map(|v| self.monomorphize_ty(v.clone(), substitutions))
-                            .collect(),
-                    )
+                    let values = properties
+                        .values()
+                        .map(|v| self.monomorphize_ty(v.clone(), substitutions))
+                        .collect();
+                    IrTy::Record(Some(symbol), values)
                 }
             }
             other => unreachable!("{other:?}"),

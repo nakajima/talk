@@ -39,13 +39,13 @@ use crate::{
         builtins::resolve_builtin_type,
         constraint_solver::ConstraintSolver,
         constraints::{member::consume_self, store::ConstraintStore},
-        infer_row::{InferRow, RowMetaId},
+        infer_row::InferRow,
         infer_ty::{InferTy, Level, Meta, MetaVarId, TypeParamId},
         predicate::Predicate,
         scheme::{ForAll, Scheme},
         solve_context::{Solve, SolveContext, SolveContextKind},
         term_environment::EnvEntry,
-        type_catalog::{Conformance, ConformanceKey, MemberWitness},
+        type_catalog::{Conformance, ConformanceKey, MemberWitness, Nominal},
         type_error::TypeError,
         type_operations::{
             InstantiationSubstitutions, UnificationSubstitutions, curry, substitute,
@@ -63,7 +63,6 @@ pub type PendingTypeInstances =
 pub struct InferencePass<'a> {
     asts: &'a mut [AST<NameResolved>],
     session: &'a mut TypeSession,
-    canonical_rows: FxHashMap<Symbol, RowMetaId>,
     constraints: ConstraintStore,
     instantiations: FxHashMap<NodeID, InstantiationSubstitutions>,
     substitutions: UnificationSubstitutions,
@@ -76,7 +75,6 @@ impl<'a> InferencePass<'a> {
         let mut pass = InferencePass {
             asts,
             session,
-            canonical_rows: Default::default(),
             instantiations: Default::default(),
             constraints: Default::default(),
             substitutions,
@@ -1120,22 +1118,39 @@ impl<'a> InferencePass<'a> {
         body: &Body,
         context: &mut impl Solve,
     ) -> InferTy {
+        let mut type_params = vec![];
         for generic in generics.iter() {
-            self.register_generic(generic, context);
+            type_params.push(InferTy::Param(self.register_generic(generic, context)));
         }
 
         let Ok(nominal_symbol) = name.symbol() else {
             return InferTy::Error(TypeError::NameNotResolved(name.clone()).into());
         };
 
-        let row_placeholder_id = self.canonical_row_for(&nominal_symbol, context.level());
-        let row_placeholder = InferRow::Var(row_placeholder_id);
         let ty = InferTy::Nominal {
             symbol: nominal_symbol,
-            row: row_placeholder.clone().into(),
+            type_args: type_params.clone(),
         };
 
+        if !matches!(decl.kind, DeclKind::Extend { .. }) {
+            let foralls: IndexSet<_> = ty.collect_foralls().into_iter().collect();
+            let entry = if foralls.is_empty() {
+                EnvEntry::Mono(ty.clone())
+            } else {
+                EnvEntry::Scheme(Scheme {
+                    foralls,
+                    predicates: vec![],
+                    ty: ty.clone(),
+                })
+            };
+
+            self.session
+                .insert_term(nominal_symbol, entry, &mut self.constraints);
+        }
+
         let mut row_types = vec![];
+        let mut properties: IndexMap<Label, InferTy> = IndexMap::default();
+        let mut variants: IndexMap<Label, Vec<InferTy>> = IndexMap::default();
 
         for decl in body.decls.iter() {
             match &decl.kind {
@@ -1158,6 +1173,8 @@ impl<'a> InferencePass<'a> {
                         .map(|v| self.visit_type_annotation(v, &mut context.next()))
                         .collect_vec();
 
+                    variants.insert(name.name_str().into(), tys.clone());
+
                     let values_ty = match tys.len() {
                         0 => InferTy::Void,
                         1 => tys[0].clone(),
@@ -1175,8 +1192,8 @@ impl<'a> InferencePass<'a> {
                     default_value,
                     ..
                 } => {
-                    row_types.push((
-                        name.name_str(),
+                    properties.insert(
+                        name.name_str().into(),
                         self.visit_property(
                             decl,
                             nominal_symbol,
@@ -1186,7 +1203,7 @@ impl<'a> InferencePass<'a> {
                             default_value,
                             context,
                         ),
-                    ));
+                    );
                 }
                 DeclKind::TypeAlias(lhs, .., rhs) => {
                     let rhs_ty = self.visit_type_annotation(rhs, context);
@@ -1241,58 +1258,14 @@ impl<'a> InferencePass<'a> {
         }
 
         if !matches!(decl.kind, DeclKind::Extend { .. }) {
-            let empty_kind = if matches!(nominal_symbol, Symbol::Struct(..)) {
-                TypeDefKind::Struct
-            } else {
-                TypeDefKind::Enum
-            };
-
-            let real_row = row_types
-                .iter()
-                .fold(InferRow::Empty(empty_kind), |acc, (name, ty)| {
-                    InferRow::Extend {
-                        row: acc.into(),
-                        label: name.into(),
-                        ty: substitute(ty.clone(), &self.session.skolem_map),
-                    }
-                });
-
-            self.constraints.wants_equals(
-                InferTy::Nominal {
-                    symbol: nominal_symbol,
-                    row: row_placeholder.into(),
-                },
-                InferTy::Nominal {
-                    symbol: nominal_symbol,
-                    row: real_row.clone().into(),
+            self.session.type_catalog.nominals.insert(
+                nominal_symbol,
+                Nominal {
+                    properties,
+                    variants,
+                    type_params: type_params.clone(),
                 },
             );
-
-            // Replace all instances of the placeholder row
-            let mut substitutions = UnificationSubstitutions::new(self.session.meta_levels.clone());
-
-            substitutions
-                .row
-                .insert(row_placeholder_id, real_row.clone());
-
-            let foralls: IndexSet<_> = ty.collect_foralls().into_iter().collect();
-            let entry = if foralls.is_empty() {
-                EnvEntry::Mono(ty.clone())
-            } else {
-                EnvEntry::Scheme(Scheme {
-                    foralls,
-                    predicates: vec![],
-                    ty: ty.clone(),
-                })
-            };
-
-            self.session
-                .insert_term(nominal_symbol, entry, &mut self.constraints);
-
-            let ty = InferTy::Nominal {
-                symbol: nominal_symbol,
-                row: real_row.into(),
-            };
 
             return ty;
         }
@@ -1565,7 +1538,18 @@ impl<'a> InferencePass<'a> {
             return InferTy::Error(TypeError::NameNotResolved(name.clone()).into());
         };
 
-        let param_tys = self.visit_params(params, context);
+        // Handle self param directly with struct_ty - don't instantiate!
+        if let Some(self_param) = params.first()
+            && let Ok(sym) = self_param.name.symbol()
+        {
+            self.session
+                .insert_term(sym, struct_ty.clone().to_entry(), &mut self.constraints);
+        }
+
+        // Visit remaining params normally (they can instantiate type params)
+        let param_tys: Vec<_> = std::iter::once(struct_ty.clone())
+            .chain(params.iter().skip(1).map(|p| self.visit_param(p, context)))
+            .collect();
 
         // Init blocks always return self
         _ = self.infer_block(body, context);
@@ -2093,8 +2077,14 @@ impl<'a> InferencePass<'a> {
             self.session.new_ty_meta_var(context.level())
         };
 
-        self.session
-            .insert_term(sym, ty.clone().to_entry(), &mut self.constraints);
+        // This feels janky to me.
+        if param.name.name_str() == "self" {
+            self.session
+                .insert_mono(sym, ty.clone(), &mut self.constraints);
+        } else {
+            self.session
+                .insert_term(sym, ty.clone().to_entry(), &mut self.constraints);
+        }
 
         ty
     }
@@ -2232,8 +2222,10 @@ impl<'a> InferencePass<'a> {
                 } else {
                     tracing::warn!("nope, did not find anything in the env for {name:?}");
                 }
-
-                self.session.new_ty_meta_var(context.level())
+                InferTy::Nominal {
+                    symbol: sym,
+                    type_args: generic_args.into_iter().map(|a| a.0).collect(),
+                }
             }
             TypeAnnotationKind::SelfType(name) => {
                 let Ok(sym) = name.symbol() else {
@@ -2254,21 +2246,18 @@ impl<'a> InferencePass<'a> {
                     return InferTy::Param(protocol_self);
                 }
 
+                if self.session.lookup_nominal(&sym).is_some() {
+                    return InferTy::Nominal {
+                        symbol: sym,
+                        type_args: vec![],
+                    };
+                }
+
                 let Some(entry) = self.session.lookup(&sym) else {
                     return InferTy::Error(TypeError::TypeNotFound(format!("{name:?}")).into());
                 };
 
-                let ty = entry.instantiate(
-                    type_annotation.id,
-                    &mut self.constraints,
-                    context,
-                    self.session,
-                );
-
-                self.instantiations
-                    .insert(type_annotation.id, context.instantiations_mut().clone());
-
-                ty
+                entry._as_ty()
             }
             TypeAnnotationKind::Record { fields } => {
                 let mut row = InferRow::Empty(TypeDefKind::Struct);
@@ -2353,16 +2342,6 @@ impl<'a> InferencePass<'a> {
         for tracked_ret in self.tracked_returns.pop().unwrap_or_else(|| unreachable!()) {
             self.constraints.wants_equals(tracked_ret.1, ret.clone());
         }
-    }
-
-    fn canonical_row_for(&mut self, symbol: &Symbol, level: Level) -> RowMetaId {
-        if let Some(existing) = self.canonical_rows.get(symbol).copied() {
-            return existing;
-        }
-
-        let id = self.session.new_row_meta_var_id(level);
-        self.canonical_rows.insert(*symbol, id);
-        id
     }
 
     fn ensure_row_record(&mut self, expected: &InferTy, context: &mut impl Solve) -> InferRow {

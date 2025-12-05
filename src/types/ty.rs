@@ -1,14 +1,15 @@
+use std::hash::Hash;
+
 use crate::{
     name::Name,
     name_resolution::symbol::Symbol,
     types::{
         infer_ty::{InferTy, TypeParamId},
         row::Row,
-        type_session::TypeDefKind,
     },
 };
 
-pub trait SomeType: std::fmt::Debug + PartialEq + Clone {
+pub trait SomeType: std::fmt::Debug + PartialEq + Clone + Eq + Hash {
     type RowType: PartialEq + Clone + std::fmt::Debug;
     fn contains_var(&self) -> bool;
 }
@@ -37,7 +38,7 @@ pub enum Ty {
     // Nominal types (we look up their information from the TypeCatalog)
     Nominal {
         symbol: Symbol,
-        row: Box<Row>,
+        type_args: Vec<Ty>,
     },
 }
 
@@ -108,21 +109,7 @@ impl Ty {
     pub fn String() -> Ty {
         Ty::Nominal {
             symbol: Symbol::String,
-            row: Box::new(Row::Extend {
-                row: Row::Extend {
-                    row: Row::Extend {
-                        row: Row::Empty(TypeDefKind::Struct).into(),
-                        label: "length".into(),
-                        ty: Ty::Int,
-                    }
-                    .into(),
-                    label: "capacity".into(),
-                    ty: Ty::Int,
-                }
-                .into(),
-                label: "base".into(),
-                ty: Ty::RawPtr,
-            }),
+            type_args: Default::default(),
         }
     }
     pub fn Array(t: Ty) -> Ty {

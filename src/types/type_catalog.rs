@@ -58,6 +58,88 @@ impl From<Conformance<Ty>> for Conformance<InferTy> {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Nominal<T: SomeType> {
+    pub properties: IndexMap<Label, T>,
+    pub variants: IndexMap<Label, Vec<T>>,
+    pub type_params: Vec<T>,
+}
+
+impl<T: SomeType> Nominal<T> {
+    pub fn substituted_variant_values(&self, type_args: &[T]) -> IndexMap<Label, Vec<T>> {
+        let substitutions: FxHashMap<T, T> = self
+            .type_params
+            .clone()
+            .into_iter()
+            .zip(type_args.iter().cloned())
+            .collect();
+        self.variants.clone().into_iter().fold(
+            IndexMap::<Label, Vec<T>>::default(),
+            |mut acc, (label, tys)| {
+                let values = tys
+                    .into_iter()
+                    .map(|t| substitutions.get(&t).unwrap_or(&t).clone())
+                    .collect();
+                acc.insert(label, values);
+                acc
+            },
+        )
+    }
+
+    pub fn substitute_properties(&self, type_args: &[T]) -> IndexMap<Label, T> {
+        let substitutions: FxHashMap<T, T> = self
+            .type_params
+            .clone()
+            .into_iter()
+            .zip(type_args.iter().cloned())
+            .collect();
+        self.properties.clone().into_iter().fold(
+            IndexMap::<Label, T>::default(),
+            |mut acc, (label, ty)| {
+                let t = substitutions.get(&ty);
+                acc.insert(label, t.unwrap_or(&ty).clone());
+                acc
+            },
+        )
+    }
+}
+
+impl From<Nominal<Ty>> for Nominal<InferTy> {
+    fn from(value: Nominal<Ty>) -> Self {
+        Nominal::<InferTy> {
+            properties: value
+                .properties
+                .into_iter()
+                .map(|(label, ty)| (label, ty.into()))
+                .collect(),
+            variants: value
+                .variants
+                .into_iter()
+                .map(|(label, tys)| (label, tys.into_iter().map(|t| t.into()).collect()))
+                .collect(),
+            type_params: value.type_params.into_iter().map(|ty| ty.into()).collect(),
+        }
+    }
+}
+
+impl From<Nominal<InferTy>> for Nominal<Ty> {
+    fn from(value: Nominal<InferTy>) -> Self {
+        Nominal::<Ty> {
+            properties: value
+                .properties
+                .into_iter()
+                .map(|(label, ty)| (label, ty.into()))
+                .collect(),
+            variants: value
+                .variants
+                .into_iter()
+                .map(|(label, tys)| (label, tys.into_iter().map(|t| t.into()).collect()))
+                .collect(),
+            type_params: value.type_params.into_iter().map(|ty| ty.into()).collect(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ConformanceKey {
     pub protocol_id: ProtocolId,
@@ -97,18 +179,17 @@ pub enum MemberWitness<T> {
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct TypeCatalog<T: SomeType> {
+    pub nominals: FxHashMap<Symbol, Nominal<T>>,
     pub conformances: FxHashMap<ConformanceKey, Conformance<T>>,
     pub associated_types: FxHashMap<Symbol, FxHashMap<Label, Symbol>>,
     pub extensions: FxHashMap<Symbol, FxHashMap<Label, Symbol>>,
     pub child_types: FxHashMap<Symbol, FxHashMap<String, Symbol>>,
-
     pub initializers: FxHashMap<Symbol, FxHashMap<Label, Symbol>>,
     pub properties: FxHashMap<Symbol, IndexMap<Label, Symbol>>,
     pub instance_methods: FxHashMap<Symbol, FxHashMap<Label, Symbol>>,
     pub static_methods: FxHashMap<Symbol, FxHashMap<Label, Symbol>>,
     pub variants: FxHashMap<Symbol, IndexMap<Label, Symbol>>,
     pub method_requirements: FxHashMap<Symbol, IndexMap<Label, Symbol>>,
-
     pub instantiations: TrackedInstantiations<T>,
     pub member_witnesses: FxHashMap<NodeID, MemberWitness<T>>,
 }
@@ -116,6 +197,7 @@ pub struct TypeCatalog<T: SomeType> {
 impl<T: SomeType> Default for TypeCatalog<T> {
     fn default() -> Self {
         Self {
+            nominals: Default::default(),
             conformances: Default::default(),
             extensions: Default::default(),
             child_types: Default::default(),
@@ -150,6 +232,11 @@ impl TypeCatalog<InferTy> {
                 .insert(key, session.finalize_row(infer_row));
         }
         TypeCatalog {
+            nominals: self
+                .nominals
+                .into_iter()
+                .map(|(k, v)| (k, v.into()))
+                .collect(),
             associated_types: self.associated_types,
             conformances: self
                 .conformances
