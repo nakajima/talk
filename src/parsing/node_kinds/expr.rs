@@ -20,7 +20,6 @@ pub enum ExprKind {
     #[drive(skip)]
     Incomplete(IncompleteExpr),
 
-    #[drive(skip)]
     InlineIR(InlineIRInstruction),
 
     As(Box<Expr>, TypeAnnotation),

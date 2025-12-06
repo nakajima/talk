@@ -1,3 +1,5 @@
+use derive_visitor::{Drive, DriveMut};
+
 use crate::{
     impl_into_node,
     name_resolution::symbol::Symbol,
@@ -172,12 +174,16 @@ pub enum InlineIRInstructionKind {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
 pub struct InlineIRInstruction {
+    #[drive(skip)]
     pub id: NodeID,
+    #[drive(skip)]
     pub span: Span,
     pub binds: Vec<Expr>,
+    #[drive(skip)]
     pub instr_name_span: Span,
+    #[drive(skip)]
     pub kind: InlineIRInstructionKind,
 }
 

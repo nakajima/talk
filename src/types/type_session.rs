@@ -929,7 +929,6 @@ impl TypeSession {
                 self.type_catalog
                     .nominals
                     .insert(*symbol, nominal.clone().into());
-                println!("Got external nominal {nominal:?}");
                 return Some(nominal.into());
             }
         }

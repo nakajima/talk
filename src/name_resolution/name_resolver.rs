@@ -615,6 +615,7 @@ impl NameResolver {
         self.exit_scope(arm.id);
     }
 
+    #[instrument(skip(self))]
     fn enter_expr(&mut self, expr: &mut Expr) {
         on!(&mut expr.kind, ExprKind::InlineIR(instr), {
             for bind in &mut instr.binds {
