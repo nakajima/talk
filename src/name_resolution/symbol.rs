@@ -201,35 +201,35 @@ impl std::fmt::Debug for Symbol {
 #[allow(non_upper_case_globals)]
 impl Symbol {
     pub const Int: Symbol = Symbol::Builtin(BuiltinId {
-        module_id: ModuleId::Builtin,
+        module_id: ModuleId::Core,
         local_id: 1,
     });
     pub const Float: Symbol = Symbol::Builtin(BuiltinId {
-        module_id: ModuleId::Builtin,
+        module_id: ModuleId::Core,
         local_id: 2,
     });
     pub const Bool: Symbol = Symbol::Builtin(BuiltinId {
-        module_id: ModuleId::Builtin,
+        module_id: ModuleId::Core,
         local_id: 3,
     });
     pub const Void: Symbol = Symbol::Builtin(BuiltinId {
-        module_id: ModuleId::Builtin,
+        module_id: ModuleId::Core,
         local_id: 4,
     });
     pub const IR: Symbol = Symbol::Builtin(BuiltinId {
-        module_id: ModuleId::Builtin,
+        module_id: ModuleId::Core,
         local_id: 5,
     });
     pub const PRINT: Symbol = Symbol::Builtin(BuiltinId {
-        module_id: ModuleId::Builtin,
+        module_id: ModuleId::Core,
         local_id: 6,
     });
     pub const RawPtr: Symbol = Symbol::Builtin(BuiltinId {
-        module_id: ModuleId::Builtin,
+        module_id: ModuleId::Core,
         local_id: 7,
     });
     pub const Byte: Symbol = Symbol::Builtin(BuiltinId {
-        module_id: ModuleId::Builtin,
+        module_id: ModuleId::Core,
         local_id: 8,
     });
 

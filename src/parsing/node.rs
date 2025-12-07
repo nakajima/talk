@@ -1,11 +1,23 @@
 use crate::{
     node_id::{FileID, NodeID},
     node_kinds::{
-        attribute::Attribute, block::Block, body::Body, call_arg::CallArg, decl::Decl, expr::Expr,
-        func::Func, func_signature::FuncSignature, generic_decl::GenericDecl,
-        incomplete_expr::IncompleteExpr, inline_ir_instruction::InlineIRInstruction,
-        match_arm::MatchArm, parameter::Parameter, pattern::Pattern, record_field::RecordField,
-        stmt::Stmt, type_annotation::TypeAnnotation,
+        attribute::Attribute,
+        block::Block,
+        body::Body,
+        call_arg::CallArg,
+        decl::Decl,
+        expr::{Expr, ExprKind},
+        func::Func,
+        func_signature::FuncSignature,
+        generic_decl::GenericDecl,
+        incomplete_expr::IncompleteExpr,
+        inline_ir_instruction::InlineIRInstruction,
+        match_arm::MatchArm,
+        parameter::Parameter,
+        pattern::Pattern,
+        record_field::RecordField,
+        stmt::Stmt,
+        type_annotation::TypeAnnotation,
     },
     span::Span,
 };
@@ -87,6 +99,15 @@ impl Node {
 
     #[allow(clippy::panic)]
     pub fn as_expr(self) -> Expr {
+        if let Node::InlineIRInstruction(ref instr) = self {
+            // This feels janky
+            return Expr {
+                id: self.node_id(),
+                span: self.span(),
+                kind: ExprKind::InlineIR(instr.to_owned()),
+            };
+        }
+
         let Node::Expr(expr) = self else {
             panic!("Node.as_expr() failed for {self:?}")
         };

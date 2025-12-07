@@ -1,3 +1,5 @@
+use std::ops::Add;
+
 use crate::{
     ast::{AST, ASTPhase},
     label::Label,
@@ -40,6 +42,13 @@ pub enum Doc {
     Concat(Box<Doc>, Box<Doc>),
     Group(Box<Doc>),
     Annotation(String),
+}
+
+impl Add for Doc {
+    type Output = Doc;
+    fn add(self, rhs: Self) -> Self::Output {
+        concat(self, rhs)
+    }
 }
 
 impl Doc {
@@ -260,10 +269,14 @@ impl<'a> Formatter<'a> {
     fn format_expr(&self, expr: &Expr) -> Doc {
         let doc = match &expr.kind {
             ExprKind::Incomplete(_) => Doc::Empty,
-            ExprKind::As(lhs, rhs) => join(
-                vec![self.format_expr(lhs), self.format_type_annotation(rhs)],
-                text(" as "),
-            ),
+            ExprKind::As(lhs, rhs) => {
+                text("(")
+                    + join(
+                        vec![self.format_expr(lhs), self.format_type_annotation(rhs)],
+                        text(" as "),
+                    )
+                    + text(")")
+            }
             ExprKind::LiteralArray(items) => self.format_array_literal(items),
             ExprKind::LiteralString(string) => self.format_string_literal(string),
             ExprKind::LiteralInt(val) => text(val),

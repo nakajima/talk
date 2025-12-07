@@ -91,7 +91,12 @@ impl Call {
                     if let Some(entry) = session.lookup(&initializer) {
                         entry.instantiate(self.callee_id, constraints, context, session)
                     } else {
-                        InferTy::Error(TypeError::TypeNotFound(format!("{initializer:?}")).into())
+                        InferTy::Error(
+                            TypeError::TypeNotFound(format!(
+                                "Initializer not found {initializer:?}"
+                            ))
+                            .into(),
+                        )
                     }
                 } else {
                     match session.lookup(&sym) {

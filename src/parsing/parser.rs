@@ -1199,7 +1199,11 @@ impl<'a> Parser<'a> {
                         self.save_meta(tok, |id, span| RecordFieldPattern { id, span, kind })?;
                     fields.push(field);
                 }
-                _ => unimplemented!("{current:?} field pattern not implemented yet"),
+                pat => {
+                    return Err(ParserError::BadLabel(format!(
+                        "Patter not handled: {pat:?}"
+                    )));
+                }
             }
             self.consume(TokenKind::Comma).ok();
         }

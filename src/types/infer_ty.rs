@@ -383,7 +383,7 @@ impl InferTy {
 impl std::fmt::Debug for InferTy {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            InferTy::Error(err) => write!(f, "Err: {err}"),
+            InferTy::Error(err) => write!(f, "Error Ty: {err}"),
             InferTy::Param(id) => write!(f, "typeparam(α{})", id.0),
             InferTy::Rigid(id) => write!(f, "rigid(α{})", id.0),
             InferTy::Var { id, level } => write!(f, "meta(α{}, {})", id.0, level.0),
@@ -401,7 +401,7 @@ impl std::fmt::Debug for InferTy {
                 write!(f, "({})", items.iter().map(|i| format!("{i:?}")).join(", "))
             }
             InferTy::Nominal { symbol, type_args } => {
-                write!(f, "Type({symbol:?}, {type_args:?})")
+                write!(f, "Nominal({symbol:?}, {type_args:?})")
             }
             InferTy::Record(box row) => {
                 let row_debug = match row {

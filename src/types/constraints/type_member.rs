@@ -91,7 +91,9 @@ impl TypeMember {
                 && let Some(child_sym) = child_types.get(&self.name)
             {
                 let Some(child_entry) = session.lookup(child_sym) else {
-                    return SolveResult::Err(TypeError::TypeNotFound(format!("{child_sym:?}")));
+                    return SolveResult::Err(TypeError::TypeNotFound(format!(
+                        "Child entry not found for type member {child_sym:?}"
+                    )));
                 };
 
                 let child_ty = child_entry.instantiate(self.node_id, constraints, context, session);

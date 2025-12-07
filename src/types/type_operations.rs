@@ -351,6 +351,17 @@ pub(super) fn unify(
                 ))
             }
         }
+        (InferTy::Primitive(lhs), InferTy::Nominal { symbol: rhs, .. })
+        | (InferTy::Nominal { symbol: rhs, .. }, InferTy::Primitive(lhs)) => {
+            if lhs == rhs {
+                Ok(Default::default())
+            } else {
+                Err(TypeError::InvalidUnification(
+                    InferTy::Primitive(*lhs).into(),
+                    InferTy::Primitive(*rhs).into(),
+                ))
+            }
+        }
         (InferTy::Tuple(lhs), InferTy::Tuple(rhs)) => {
             for (lhs, rhs) in lhs.iter().zip(rhs) {
                 result.extend(unify(lhs, rhs, context, session)?);

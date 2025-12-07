@@ -346,7 +346,7 @@ impl<'a> DeclDeclarer<'a> {
     ///////////////////////////////////////////////////////////////////////////
     // Block expr decls
     ///////////////////////////////////////////////////////////////////////////
-    #[instrument(level = tracing::Level::TRACE, skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self, stmt))]
     fn enter_stmt(&mut self, stmt: &mut Stmt) {
         if let StmtKind::Expr(Expr {
             kind: ExprKind::Block(block),
@@ -370,7 +370,7 @@ impl<'a> DeclDeclarer<'a> {
     ///////////////////////////////////////////////////////////////////////////
     // Block scoping
     ///////////////////////////////////////////////////////////////////////////
-    #[instrument(level = tracing::Level::TRACE, skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self, arm))]
     fn enter_match_arm(&mut self, arm: &mut MatchArm) {
         self.start_scope(None, arm.id, false);
         self.declare_pattern(&mut arm.pattern, some!(PatternBindLocal));
@@ -383,7 +383,7 @@ impl<'a> DeclDeclarer<'a> {
     ///////////////////////////////////////////////////////////////////////////
     // Funcs
     ///////////////////////////////////////////////////////////////////////////
-    #[instrument(level = tracing::Level::TRACE, skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self, func))]
     fn enter_func(&mut self, func: &mut Func) {
         let func_id = func.id;
         on!(
@@ -441,7 +441,7 @@ impl<'a> DeclDeclarer<'a> {
         }
     }
 
-    #[instrument(level = tracing::Level::TRACE, skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self, func))]
     fn enter_func_signature(&mut self, func: &mut FuncSignature) {
         on!(
             func,
@@ -484,7 +484,7 @@ impl<'a> DeclDeclarer<'a> {
     ///////////////////////////////////////////////////////////////////////////
     // Struct decls
     ///////////////////////////////////////////////////////////////////////////
-    #[instrument(level = tracing::Level::TRACE, skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self, decl))]
     fn enter_decl(&mut self, decl: &mut Decl) {
         on!(&mut decl.kind, DeclKind::Struct { name, generics, .. }, {
             self.enter_nominal(decl.id, name, generics, TypeDefKind::Struct);

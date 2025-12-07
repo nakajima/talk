@@ -418,20 +418,6 @@ impl NameResolver {
 
         self.current_scope_id = current_scope.parent_id;
         self.current_symbol_scope.pop();
-        // Pop from symbol scope stack if this scope matches
-        // match self.current_symbol_scope.last() {
-        //     Some(None) => {
-        //         // Always pop None entries when exiting any scope
-        //         self.current_symbol_scope.pop();
-        //     }
-        //     Some(Some(scope)) if scope.1 == node_id => {
-        //         // Pop symbol entries that match this scope
-        //         self.current_symbol_scope.pop();
-        //     }
-        //     _ => {
-        //         // Don't pop if it doesn't match
-        //     }
-        // }
     }
 
     pub(super) fn declare(&mut self, name: &Name, kind: Symbol, node_id: NodeID) -> Name {
@@ -615,7 +601,7 @@ impl NameResolver {
         self.exit_scope(arm.id);
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip(self, expr))]
     fn enter_expr(&mut self, expr: &mut Expr) {
         on!(&mut expr.kind, ExprKind::InlineIR(instr), {
             for bind in &mut instr.binds {
