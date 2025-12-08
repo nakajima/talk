@@ -8,7 +8,7 @@ use crate::{
         infer_ty::{InferTy, Meta, TypeParamId},
         predicate::Predicate,
         scheme::Scheme,
-        solve_context::{Solve, SolveContext},
+        solve_context::SolveContext,
         term_environment::EnvEntry,
         type_error::TypeError,
         type_operations::{substitute, unify},
@@ -115,7 +115,7 @@ impl Conforms {
                     return SolveResult::Defer(DeferralReason::WaitingOnSymbol(*witness_type_sym));
                 }
             } else if let Some(projection) = protocol_projections.get(&label) {
-                let ret = substitutions
+                substitutions
                     .entry(projection.clone())
                     .or_insert_with(|| {
                         #[allow(clippy::expect_used)]
@@ -126,8 +126,7 @@ impl Conforms {
                             .cloned()
                             .expect("discover_conformances didn't set associated type")
                     })
-                    .clone();
-                ret
+                    .clone()
             } else {
                 #[allow(clippy::expect_used)]
                 conformance

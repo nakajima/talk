@@ -11,7 +11,7 @@ use crate::ir::parse_instruction;
 use crate::ir::value::{Addr, Reference};
 use crate::label::Label;
 use crate::name_resolution::symbol::{
-    GlobalId, InitializerId, InstanceMethodId, StaticMethodId, Symbols, set_symbol_names,
+    GlobalId, InitializerId, InstanceMethodId, StaticMethodId, Symbols,
 };
 use crate::node_kinds::inline_ir_instruction::{InlineIRInstruction, InlineIRInstructionKind};
 use crate::node_kinds::match_arm::MatchArm;
@@ -373,6 +373,7 @@ impl<'a> Lowerer<'a> {
         match node {
             Node::Decl(decl) => self.lower_decl(decl, instantiations),
             Node::Stmt(stmt) => self.lower_stmt(stmt, instantiations, bind),
+            Node::Expr(expr) => self.lower_expr(expr, bind, instantiations),
             _ => unreachable!("node not handled: {node:?}"),
         }
     }
@@ -2221,6 +2222,8 @@ impl<'a> Lowerer<'a> {
                 self.ty_from_id(&receiver.id)
             )));
         };
+
+        // Go through the method and make sure all witnesses are resolved inside it
 
         Ok((val, ty))
     }

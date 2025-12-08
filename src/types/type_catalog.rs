@@ -3,9 +3,8 @@ use rustc_hash::FxHashMap;
 
 use crate::{
     label::Label,
-    name_resolution::symbol::{ProtocolId, Symbol},
+    name_resolution::symbol::Symbol,
     node_id::NodeID,
-    span::Span,
     types::{
         conformance::{Conformance, ConformanceKey},
         infer_row::RowParamId,

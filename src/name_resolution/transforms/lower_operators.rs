@@ -4,11 +4,14 @@ use crate::{
     ast::{AST, Parsed},
     id_generator::IDGenerator,
     label::Label,
+    node::Node,
     node_id::NodeID,
     node_kinds::{
+        block::Block,
         call_arg::CallArg,
         expr::{Expr, ExprKind},
     },
+    span::Span,
     token_kind::TokenKind,
 };
 
@@ -52,57 +55,99 @@ impl LowerOperators {
                 }
             }
             ExprKind::Binary(lhs, op, box rhs) => {
-                let (protocol_name, label) = match op {
-                    // Arithmetic
-                    TokenKind::Plus => ("Add", Label::Named("add".into())),
-                    TokenKind::Minus => ("Subtract", Label::Named("minus".into())),
-                    TokenKind::Star => ("Multiply", Label::Named("times".into())),
-                    TokenKind::Slash => ("Divide", Label::Named("divide".into())),
-
-                    // Comparisons
-                    TokenKind::Greater => ("Comparable", Label::Named("gt".into())),
-                    TokenKind::GreaterEquals => ("Comparable", Label::Named("gte".into())),
-                    TokenKind::Less => ("Comparable", Label::Named("lt".into())),
-                    TokenKind::LessEquals => ("Comparable", Label::Named("lte".into())),
-
-                    // Equatables
-                    TokenKind::EqualsEquals => ("Equatable", Label::Named("equals".into())),
-                    TokenKind::BangEquals => ("Equatable", Label::Named("notEquals".into())),
-                    _ => return,
-                };
-
-                let span = lhs.span;
-                let protocol_constructor = Expr {
-                    id: NodeID(expr.id.0, self.node_ids.next_id()),
-                    span,
-                    kind: ExprKind::Variable(protocol_name.into()),
-                };
-
-                let member = Expr {
-                    id: NodeID(expr.id.0, self.node_ids.next_id()),
-                    span,
-                    kind: ExprKind::Member(Some(protocol_constructor.into()), label, span),
-                };
-
-                ExprKind::Call {
-                    callee: member.into(),
-                    type_args: vec![],
-                    args: vec![
-                        CallArg {
-                            id: expr.id,
-                            label: Label::Positional(0),
-                            label_span: expr.span,
-                            value: *lhs,
-                            span: expr.span,
-                        },
-                        CallArg {
+                if op == TokenKind::AmpAmp {
+                    ExprKind::If(
+                        lhs,
+                        Block {
                             id: rhs.id,
-                            label: Label::Positional(1),
-                            label_span: rhs.span,
-                            value: rhs,
-                            span: expr.span,
+                            span: rhs.span,
+                            args: Default::default(),
+                            body: vec![Node::Expr(rhs)],
                         },
-                    ],
+                        Block {
+                            id: expr.id,
+                            span: expr.span,
+                            args: Default::default(),
+                            body: vec![Node::Expr(Expr {
+                                id: NodeID(expr.id.0, self.node_ids.next_id()),
+                                kind: ExprKind::LiteralFalse,
+                                span: Span::SYNTHESIZED,
+                            })],
+                        },
+                    )
+                } else if op == TokenKind::PipePipe {
+                    ExprKind::If(
+                        lhs,
+                        Block {
+                            id: expr.id,
+                            span: expr.span,
+                            args: Default::default(),
+                            body: vec![Node::Expr(Expr {
+                                id: NodeID(expr.id.0, self.node_ids.next_id()),
+                                kind: ExprKind::LiteralTrue,
+                                span: Span::SYNTHESIZED,
+                            })],
+                        },
+                        Block {
+                            id: rhs.id,
+                            span: rhs.span,
+                            args: Default::default(),
+                            body: vec![Node::Expr(rhs)],
+                        },
+                    )
+                } else {
+                    let (protocol_name, label) = match op {
+                        // Arithmetic
+                        TokenKind::Plus => ("Add", Label::Named("add".into())),
+                        TokenKind::Minus => ("Subtract", Label::Named("minus".into())),
+                        TokenKind::Star => ("Multiply", Label::Named("times".into())),
+                        TokenKind::Slash => ("Divide", Label::Named("divide".into())),
+
+                        // Comparisons
+                        TokenKind::Greater => ("Comparable", Label::Named("gt".into())),
+                        TokenKind::GreaterEquals => ("Comparable", Label::Named("gte".into())),
+                        TokenKind::Less => ("Comparable", Label::Named("lt".into())),
+                        TokenKind::LessEquals => ("Comparable", Label::Named("lte".into())),
+
+                        // Equatables
+                        TokenKind::EqualsEquals => ("Equatable", Label::Named("equals".into())),
+                        TokenKind::BangEquals => ("Equatable", Label::Named("notEquals".into())),
+                        _ => return,
+                    };
+
+                    let span = lhs.span;
+                    let protocol_constructor = Expr {
+                        id: NodeID(expr.id.0, self.node_ids.next_id()),
+                        span,
+                        kind: ExprKind::Variable(protocol_name.into()),
+                    };
+
+                    let member = Expr {
+                        id: NodeID(expr.id.0, self.node_ids.next_id()),
+                        span,
+                        kind: ExprKind::Member(Some(protocol_constructor.into()), label, span),
+                    };
+
+                    ExprKind::Call {
+                        callee: member.into(),
+                        type_args: vec![],
+                        args: vec![
+                            CallArg {
+                                id: expr.id,
+                                label: Label::Positional(0),
+                                label_span: expr.span,
+                                value: *lhs,
+                                span: expr.span,
+                            },
+                            CallArg {
+                                id: rhs.id,
+                                label: Label::Positional(1),
+                                label_span: rhs.span,
+                                value: rhs,
+                                span: expr.span,
+                            },
+                        ],
+                    }
                 }
             }
             _ => return,
