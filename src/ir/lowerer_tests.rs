@@ -25,7 +25,7 @@ pub mod tests {
         label::Label,
         name::Name,
         name_resolution::symbol::{
-            EnumId, GlobalId, InstanceMethodId, StructId, Symbol, SynthesizedId,
+            EnumId, GlobalId, InstanceMethodId, StructId, Symbol, SynthesizedId, set_symbol_names,
         },
         node_id::NodeID,
     };
@@ -355,7 +355,7 @@ pub mod tests {
                                 Some(Symbol::Struct(StructId::from(1))),
                                 vec![IrTy::Int]
                             ),
-                            callee: Value::Func(Symbol::from(SynthesizedId::from(4))),
+                            callee: Value::Func(Symbol::from(SynthesizedId::from(3))),
                             args: vec![Register(2).into(), Register(1).into()].into(),
                             meta: meta(),
                         },
@@ -534,7 +534,11 @@ pub mod tests {
 
     #[test]
     fn lowers_default_implementations() {
-        let program = lower("1 <= 2");
+        let module = lower_module("1 <= 2");
+        let _s = set_symbol_names(module.symbol_names.clone());
+        let program = module.program;
+
+        println!("{program}");
 
         // The original lte method should still be imported
         assert!(
@@ -544,7 +548,13 @@ pub mod tests {
                     module_id: ModuleId::Core,
                     local_id: 18
                 }))
-                .is_some()
+                .is_some(),
+            "did not find {} in {:?}",
+            Symbol::InstanceMethod(InstanceMethodId {
+                module_id: ModuleId::Core,
+                local_id: 18
+            }),
+            program.functions.keys().collect_vec()
         );
 
         // There should be a specialized function for lte with witnesses
@@ -664,9 +674,7 @@ pub mod tests {
     fn embedded_ir_uses_variables() {
         let program = lower(
             "
-        let a = 1
-        let b = 2
-        __IR<Int>(\"$? = add int %0 %1\")
+        @_ir(1, 2) { %? = add Int $0 $1 }
         ",
         );
         assert_eq!(
@@ -700,7 +708,7 @@ pub mod tests {
                             ty: IrTy::Int,
                             a: Value::Reg(0),
                             b: Value::Reg(1),
-                            meta: vec![].into(),
+                            meta: meta()
                         }
                     ],
                     terminator: Terminator::Ret {
@@ -779,10 +787,10 @@ pub mod tests {
         assert_eq_diff!(
             *program
                 .functions
-                .get(&Symbol::from(SynthesizedId::from(3)))
+                .get(&Symbol::from(SynthesizedId::from(2)))
                 .unwrap(),
             Function {
-                name: Name::Resolved(SynthesizedId::from(3).into(), "@id:Global(_:1)[Int]".into()),
+                name: Name::Resolved(SynthesizedId::from(2).into(), "@id:Global(_:1)[Int]".into()),
                 params: vec![Value::Reg(0)].into(),
                 ty: IrTy::Func(vec![IrTy::Int], IrTy::Int.into()),
                 register_count: 1,
@@ -801,11 +809,11 @@ pub mod tests {
         assert_eq_diff!(
             *program
                 .functions
-                .get(&Symbol::from(SynthesizedId::from(5)))
+                .get(&Symbol::from(SynthesizedId::from(3)))
                 .unwrap(),
             Function {
                 name: Name::Resolved(
-                    SynthesizedId::from(5).into(),
+                    SynthesizedId::from(3).into(),
                     "@id:Global(_:1)[Float]".into()
                 ),
                 params: vec![Value::Reg(0)].into(),

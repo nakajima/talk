@@ -37,15 +37,16 @@ use crate::{
     token_kind::TokenKind,
     types::{
         builtins::resolve_builtin_type,
+        conformance::{Conformance, ConformanceKey, Witnesses},
         constraint_solver::ConstraintSolver,
-        constraints::{member::consume_self, store::ConstraintStore},
+        constraints::store::ConstraintStore,
         infer_row::InferRow,
         infer_ty::{InferTy, Level, Meta, MetaVarId, TypeParamId},
         predicate::Predicate,
         scheme::{ForAll, Scheme},
         solve_context::{Solve, SolveContext, SolveContextKind},
         term_environment::EnvEntry,
-        type_catalog::{Conformance, ConformanceKey, MemberWitness, Nominal},
+        type_catalog::{MemberWitness, Nominal},
         type_error::TypeError,
         type_operations::{
             InstantiationSubstitutions, UnificationSubstitutions, curry, substitute,
@@ -100,9 +101,6 @@ impl<'a> InferencePass<'a> {
             self.session.apply_all(&mut self.substitutions);
         }
 
-        self.check_conformances();
-        self.session.apply_all(&mut self.substitutions);
-
         // Transfer child_types from AST phases to the catalog for module export
         for ast in self.asts.iter() {
             for (sym, entries) in ast.phase.child_types.iter() {
@@ -155,7 +153,6 @@ impl<'a> InferencePass<'a> {
                         conforming_id: nominal_symbol,
                         protocol_id,
                         witnesses: Default::default(),
-                        associated_types: Default::default(),
                         span: conformance.span,
                     });
             }
@@ -207,7 +204,6 @@ impl<'a> InferencePass<'a> {
                         conforming_id: protocol_sym,
                         protocol_id: conforms_to_id,
                         witnesses: Default::default(),
-                        associated_types: Default::default(),
                         span: conformance.span,
                     },
                 );
@@ -244,6 +240,7 @@ impl<'a> InferencePass<'a> {
                 &mut self.constraints,
             );
 
+            // Process associated types
             for decl in body.decls.iter() {
                 let DeclKind::Associated { generic } = &decl.kind else {
                     continue;
@@ -252,9 +249,8 @@ impl<'a> InferencePass<'a> {
                 let ret_id = self.session.new_type_param_id(None);
                 let ret = InferTy::Param(ret_id);
 
-                #[allow(clippy::todo)]
                 if !generic.conformances.is_empty() {
-                    todo!("not handling associated type conformances yet");
+                    unimplemented!("not handling associated type conformances yet");
                 }
 
                 let scheme = Scheme {
@@ -353,234 +349,6 @@ impl<'a> InferencePass<'a> {
             self.solve(&mut context, binders, placeholders)
         }
         _ = std::mem::replace(&mut self.asts[idx].roots, roots);
-    }
-
-    #[instrument(skip(self))]
-    fn check_conformances(&mut self) {
-        for i in 0..self.asts.len() {
-            for (key, conformance) in self.session.type_catalog.conformances.clone().iter() {
-                self.check_conformance(i, key, conformance);
-            }
-        }
-    }
-
-    fn check_conformance(
-        &mut self,
-        idx: usize,
-        key: &ConformanceKey,
-        conformance: &Conformance<InferTy>,
-    ) {
-        let mut context = SolveContext::new(
-            self.substitutions.clone(),
-            Level::default(),
-            Default::default(),
-            SolveContextKind::Nominal,
-        );
-        let Some(protocol_self) = self.session.lookup(&Symbol::Protocol(key.protocol_id)) else {
-            tracing::error!("did not get protocol_self for {key:?}");
-            return;
-        };
-
-        let protocol_self_meta @ InferTy::Var { .. } = protocol_self.instantiate(
-            conformance.node_id,
-            &mut self.constraints,
-            &mut context,
-            self.session,
-        ) else {
-            unreachable!();
-        };
-
-        let Some(conforming_self_entry) = self.session.lookup(&key.conforming_id) else {
-            tracing::error!("Could not find conforming_self_entry for {key:?}");
-            return;
-        };
-
-        let conforming_self = conforming_self_entry.instantiate(
-            conformance.node_id,
-            &mut self.constraints,
-            &mut context,
-            self.session,
-        );
-
-        self.constraints
-            .wants_equals(protocol_self_meta.clone(), conforming_self.clone());
-
-        let mut associated_substitutions = FxHashMap::<InferTy, InferTy>::default();
-        for child_sym in self
-            .session
-            .type_catalog
-            .associated_types
-            .get(&key.protocol_id.into())
-            .cloned()
-            .unwrap_or_default()
-            .iter()
-            .filter(|sym| matches!(sym.1, Symbol::AssociatedType(..)))
-        {
-            // Search ASTs and type_catalog for child_types - may be in a different file
-            // or imported from another module
-            let conforming_children: FxHashMap<Label, Symbol> = self
-                .asts
-                .iter()
-                .find_map(|ast| ast.phase.child_types.get(&key.conforming_id).cloned())
-                .or_else(|| {
-                    self.session
-                        .type_catalog
-                        .child_types
-                        .get(&key.conforming_id)
-                        .map(|m| m.iter().map(|(k, v)| (k.clone().into(), *v)).collect())
-                })
-                .unwrap_or_default();
-            let concrete = if let Some(conforming) = conforming_children.get(child_sym.0)
-                && let Some(concrete) = self.session.lookup(conforming)
-            {
-                concrete.instantiate(
-                    conformance.node_id,
-                    &mut self.constraints,
-                    &mut context,
-                    self.session,
-                )
-            } else {
-                let Some(ty) = conformance.associated_types.get(child_sym.0).cloned() else {
-                    tracing::error!("Did not get associated type {child_sym:?}");
-                    continue;
-                };
-
-                ty
-            };
-
-            associated_substitutions.insert(
-                InferTy::Projection {
-                    base: protocol_self_meta.clone().into(),
-                    associated: child_sym.0.clone(),
-                    protocol_id: key.protocol_id,
-                },
-                concrete.clone(),
-            );
-            self.constraints.wants_projection(
-                conformance.node_id,
-                conforming_self.clone(),
-                child_sym.0.clone(),
-                Some(key.protocol_id),
-                concrete,
-                &Default::default(),
-            );
-        }
-
-        let requirements = self
-            .session
-            .lookup_method_requirements(&key.protocol_id)
-            .unwrap_or_default();
-
-        for (label, sym) in requirements.clone() {
-            tracing::trace!("checking req {label:?} {sym:?}");
-            let Some(requirement_entry) = self.session.lookup(&sym) else {
-                self.asts[idx]
-                    .diagnostics
-                    .push(AnyDiagnostic::Typing(Diagnostic {
-                        kind: TypeError::MissingConformanceRequirement(format!(
-                            "{label:?} {sym:?}"
-                        )),
-                        id: conformance.node_id,
-                    }));
-
-                continue;
-            };
-
-            let Some((witness_entry_sym, _)) =
-                self.session.lookup_member(&key.conforming_id, &label)
-            else {
-                self.asts[idx]
-                    .diagnostics
-                    .push(AnyDiagnostic::Typing(Diagnostic {
-                        kind: TypeError::MissingConformanceRequirement(format!(
-                            "{label:?} {sym:?}"
-                        )),
-                        id: conformance.node_id,
-                    }));
-                continue;
-            };
-
-            if !matches!(key.conforming_id, Symbol::Protocol(..))
-                && matches!(witness_entry_sym, Symbol::MethodRequirement(..))
-            {
-                self.asts[idx]
-                    .diagnostics
-                    .push(AnyDiagnostic::Typing(Diagnostic {
-                        kind: TypeError::MissingConformanceRequirement(format!(
-                            "{label:?} {sym:?}"
-                        )),
-                        id: conformance.node_id,
-                    }));
-                continue;
-            }
-
-            tracing::trace!("Inserting witness {sym:?} {label:?} -> {witness_entry_sym:?}");
-            self.session
-                .type_catalog
-                .conformances
-                .entry(*key)
-                .and_modify(|conformance| {
-                    conformance.witnesses.insert(label, witness_entry_sym);
-                });
-
-            let Some(witness_entry) = self.session.lookup(&witness_entry_sym) else {
-                tracing::error!("did not find witness entry for {witness_entry_sym:?}");
-                continue;
-            };
-            let witness_ty = witness_entry.instantiate(
-                conformance.node_id,
-                &mut self.constraints,
-                &mut context,
-                self.session,
-            );
-
-            let requirement_ty = requirement_entry.instantiate(
-                conformance.node_id,
-                &mut self.constraints,
-                &mut context,
-                self.session,
-            );
-
-            let (req_self, requirement_ty) = consume_self(&requirement_ty);
-            let (wit_self, witness_ty) = consume_self(&witness_ty);
-
-            let requirement_ty = substitute(requirement_ty, &associated_substitutions);
-
-            self.constraints.wants_equals(req_self, wit_self);
-            self.constraints.wants_equals(requirement_ty, witness_ty);
-        }
-
-        let solver = ConstraintSolver::new(&mut context, self.asts);
-
-        solver.solve(
-            Level::default(),
-            &mut self.constraints,
-            self.session,
-            self.substitutions.clone(),
-        );
-        self.substitutions.extend(&context.substitutions);
-        self.session.apply_all(&mut context.substitutions);
-
-        // Rewrite the conformance's associated_types using the solution,
-        // so later Projection(Self.T) sees the *solved* witness type.
-
-        for (k, ty) in self
-            .session
-            .type_catalog
-            .conformances
-            .get(key)
-            .unwrap_or_else(|| unreachable!())
-            .associated_types
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect_vec()
-        {
-            let ty = self.session.apply(ty.clone(), &mut context.substitutions);
-            let Some(conf_mut) = self.session.type_catalog.conformances.get_mut(key) else {
-                unreachable!()
-            };
-            conf_mut.associated_types.insert(k, ty);
-        }
     }
 
     #[instrument(skip(self))]
@@ -1132,7 +900,13 @@ impl<'a> InferencePass<'a> {
             type_args: type_params.clone(),
         };
 
-        if !matches!(decl.kind, DeclKind::Extend { .. }) {
+        if !matches!(decl.kind, DeclKind::Extend { .. })
+            && !self
+                .session
+                .type_catalog
+                .nominals
+                .contains_key(&nominal_symbol)
+        {
             let foralls: IndexSet<_> = ty.collect_foralls().into_iter().collect();
             let entry = if foralls.is_empty() {
                 EnvEntry::Mono(ty.clone())
@@ -1235,6 +1009,13 @@ impl<'a> InferencePass<'a> {
                     };
 
                     self.session
+                        .type_catalog
+                        .child_types
+                        .entry(nominal_symbol)
+                        .or_default()
+                        .insert(lhs.name_str(), lhs_sym);
+
+                    self.session
                         .insert_term(lhs_sym, entry, &mut self.constraints);
                 }
                 _ => tracing::warn!("Unhandled nominal decl: {:?}", decl.kind),
@@ -1257,7 +1038,9 @@ impl<'a> InferencePass<'a> {
             );
         }
 
-        if !matches!(decl.kind, DeclKind::Extend { .. }) {
+        if !matches!(decl.kind, DeclKind::Extend { .. })
+            && self.session.lookup_nominal(&nominal_symbol).is_none()
+        {
             self.session.type_catalog.nominals.insert(
                 nominal_symbol,
                 Nominal {
@@ -1287,7 +1070,7 @@ impl<'a> InferencePass<'a> {
             return;
         };
 
-        let indirect_conformance_keys = self
+        let transitive_conformance_keys = self
             .session
             .type_catalog
             .conformances
@@ -1296,7 +1079,7 @@ impl<'a> InferencePass<'a> {
             .copied()
             .collect_vec();
 
-        for indirect_conformance in indirect_conformance_keys {
+        for indirect_conformance in transitive_conformance_keys {
             let (sym, node_id, span) = {
                 let indirect = self
                     .session
@@ -1330,12 +1113,6 @@ impl<'a> InferencePass<'a> {
             })
             .unwrap_or_default();
 
-        tracing::debug!(
-            "register_conformance: conformance_symbol={:?}, protocol_associated_types={:?}",
-            conformance_symbol,
-            protocol_associated_types
-        );
-
         let associated_types = protocol_associated_types
             .iter()
             .filter(|(_, sym)| matches!(sym, Symbol::AssociatedType(_)))
@@ -1365,37 +1142,35 @@ impl<'a> InferencePass<'a> {
             });
 
         tracing::debug!("  final associated_types={:?}", associated_types);
-        use crate::types::ty::SomeType;
 
         let key = ConformanceKey {
             protocol_id,
             conforming_id: nominal_symbol,
         };
 
-        // Skip if already imported with solved types (non-empty and no type vars)
-        if let Some(existing) = self.session.type_catalog.conformances.get(&key)
-            && !existing.associated_types.is_empty()
-            && !existing
-                .associated_types
-                .values()
-                .any(|ty| ty.contains_var())
-        {
-            // Already has concrete types, don't overwrite
-            self.constraints.wants_conforms(ty.clone(), protocol_id);
-            return;
-        }
-
-        self.session.type_catalog.conformances.insert(
-            key,
-            Conformance {
+        let mut conformance = self
+            .session
+            .type_catalog
+            .conformances
+            .remove(&key)
+            .unwrap_or_else(|| Conformance {
                 node_id: conformance_node_id,
                 conforming_id: nominal_symbol,
                 protocol_id,
-                witnesses: Default::default(),
-                associated_types,
+                witnesses: Witnesses::default(),
                 span: conformance_span,
-            },
-        );
+            });
+
+        conformance
+            .witnesses
+            .associated_types
+            .extend(associated_types);
+
+        self.session
+            .type_catalog
+            .conformances
+            .insert(key, conformance);
+
         self.constraints.wants_conforms(ty.clone(), protocol_id);
     }
 
@@ -1913,11 +1688,13 @@ impl<'a> InferencePass<'a> {
     #[instrument(level = tracing::Level::TRACE, skip(self, expr, context))]
     fn visit_variable(&mut self, expr: &Expr, name: &Name, context: &mut impl Solve) -> InferTy {
         let Ok(sym) = name.symbol() else {
-            return InferTy::Error(TypeError::TypeNotFound(name.to_string()).into());
+            return InferTy::Error(TypeError::NameNotResolved(name.clone()).into());
         };
 
         let Some(entry) = self.session.lookup(&sym) else {
-            return InferTy::Error(TypeError::TypeNotFound(name.to_string()).into());
+            return InferTy::Error(
+                TypeError::TypeNotFound(format!("Entry not found for variable {:?}", name)).into(),
+            );
         };
 
         let ty = entry.instantiate(expr.id, &mut self.constraints, context, self.session);
@@ -1928,7 +1705,7 @@ impl<'a> InferencePass<'a> {
         ty
     }
 
-    #[instrument(level = tracing::Level::TRACE, skip(self, context, callee, type_args, args))]
+    #[instrument(level = tracing::Level::TRACE, skip(self, context, ))]
     fn visit_call(
         &mut self,
         callee: &Expr,
@@ -2077,13 +1854,13 @@ impl<'a> InferencePass<'a> {
             self.session.new_ty_meta_var(context.level())
         };
 
-        // This feels janky to me.
+        // I feel like params are always monotypes? But tests were failing when we
+        // made them all mono..., i dont know
         if param.name.name_str() == "self" {
             self.session
                 .insert_mono(sym, ty.clone(), &mut self.constraints);
         } else {
-            self.session
-                .insert_term(sym, ty.clone().to_entry(), &mut self.constraints);
+            self.session.insert(sym, ty.clone(), &mut self.constraints);
         }
 
         ty
@@ -2151,6 +1928,11 @@ impl<'a> InferencePass<'a> {
                     return InferTy::Error(TypeError::NameNotResolved(name.clone()).into());
                 };
 
+                let generic_args = generics
+                    .iter()
+                    .map(|g| (self.visit_type_annotation(g, context), g.id))
+                    .collect_vec();
+
                 if let (
                     SolveContextKind::Protocol {
                         protocol_self,
@@ -2159,12 +1941,6 @@ impl<'a> InferencePass<'a> {
                     Symbol::AssociatedType(..),
                 ) = (context.kind(), sym)
                 {
-                    // Evaluate generic arguments (if any) the usual way (often empty for assoc types)
-                    let _generic_args = generics
-                        .iter()
-                        .map(|g| (self.visit_type_annotation(g, context), g.id))
-                        .collect_vec();
-
                     // Fresh variable for the associated type's value in this position.
                     let result = self.session.new_ty_meta_var(context.level());
 
@@ -2180,9 +1956,6 @@ impl<'a> InferencePass<'a> {
                         &context.group_info(),
                     );
 
-                    // NOTE: we intentionally DO NOT instantiate the env entry for @AssociatedType here.
-                    // That entry encodes the *law* (`projection(Self.T) -> α`) but instantiating it would
-                    // re-introduce a pathy return type. The constraint above is sufficient.
                     return result;
                 }
 
@@ -2190,21 +1963,6 @@ impl<'a> InferencePass<'a> {
                     return resolve_builtin_type(&name.symbol().unwrap_or_else(|_| unreachable!()))
                         .0;
                 }
-
-                let generic_args = generics
-                    .iter()
-                    .map(|g| (self.visit_type_annotation(g, context), g.id))
-                    .collect_vec();
-
-                let Ok(sym) = name.symbol() else {
-                    self.asts[type_annotation.id.0.0 as usize].diagnostics.push(
-                        AnyDiagnostic::Typing(Diagnostic {
-                            id: type_annotation.id,
-                            kind: TypeError::NameNotResolved(name.clone()),
-                        }),
-                    );
-                    return InferTy::Error(TypeError::NameNotResolved(name.clone()).into());
-                };
 
                 // Do we know about this already? Cool.
                 if let Some(entry) = self.session.lookup(&sym) {
@@ -2222,6 +1980,7 @@ impl<'a> InferencePass<'a> {
                 } else {
                     tracing::warn!("nope, did not find anything in the env for {name:?}");
                 }
+
                 InferTy::Nominal {
                     symbol: sym,
                     type_args: generic_args.into_iter().map(|a| a.0).collect(),
@@ -2254,7 +2013,12 @@ impl<'a> InferencePass<'a> {
                 }
 
                 let Some(entry) = self.session.lookup(&sym) else {
-                    return InferTy::Error(TypeError::TypeNotFound(format!("{name:?}")).into());
+                    return InferTy::Error(
+                        TypeError::TypeNotFound(format!(
+                            "Type annotation entry not found {name:?}"
+                        ))
+                        .into(),
+                    );
                 };
 
                 entry._as_ty()
@@ -2306,7 +2070,12 @@ impl<'a> InferencePass<'a> {
 
                 ret
             }
-            _ => InferTy::Error(TypeError::TypeNotFound(format!("{type_annotation:?}")).into()),
+            _ => InferTy::Error(
+                TypeError::TypeNotFound(format!(
+                    "Type annotation unable to be determined {type_annotation:?}"
+                ))
+                .into(),
+            ),
         }
     }
 

@@ -6,11 +6,11 @@ use crate::{
     name_resolution::{name_resolver::NameResolved, symbol::ProtocolId},
     node_id::NodeID,
     types::{
+        conformance::ConformanceKey,
         constraint_solver::{DeferralReason, SolveResult},
         constraints::store::{ConstraintId, ConstraintStore},
         infer_ty::{InferTy, Level, Meta},
         solve_context::SolveContext,
-        type_catalog::ConformanceKey,
         type_error::TypeError,
         type_session::TypeSession,
     },
@@ -74,8 +74,8 @@ impl Projection {
                     // This yields Type(@Struct(base_sym), row metas_for_A, ...)
                     let Some(nominal_entry) = session.lookup(&base_sym) else {
                         return SolveResult::Err(TypeError::TypeNotFound(format!(
-                            "{:?}",
-                            self.base
+                            "Projection {:?} not found for {:?}",
+                            self.label, self.base
                         )));
                     };
 
@@ -87,7 +87,10 @@ impl Projection {
                     constraints.wants_equals(base.clone(), nominal_inst);
 
                     let Some(alias_entry) = session.lookup(&alias_sym) else {
-                        return SolveResult::Err(TypeError::TypeNotFound(format!("{alias_sym:?}")));
+                        return SolveResult::Err(TypeError::TypeNotFound(format!(
+                            "Type alias {:?} not found for projection {alias_sym:?}",
+                            self.label
+                        )));
                     };
 
                     let alias_inst =
@@ -101,7 +104,7 @@ impl Projection {
 
                 // Fallback: no alias symbol recorded; if a concrete (non-param) witness
                 // was recorded for this conformance, equate to it. Otherwise leave unsolved.
-                if let Some(witness) = conf.associated_types.get(&self.label) {
+                if let Some(witness) = conf.witnesses.associated_types.get(&self.label) {
                     let witness = session.apply(witness.clone(), &mut context.substitutions);
                     if !matches!(witness, InferTy::Param(_)) {
                         constraints.wants_equals(result, witness);
@@ -131,7 +134,8 @@ impl Projection {
                         .iter()
                         .filter_map(|(key, conf)| {
                             if key.protocol_id == protocol_id {
-                                conf.associated_types
+                                conf.witnesses
+                                    .associated_types
                                     .get(&self.label)
                                     .map(|assoc_ty| (key.conforming_id, assoc_ty.clone()))
                             } else {

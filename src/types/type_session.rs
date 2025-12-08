@@ -631,6 +631,14 @@ impl TypeSession {
             self.type_catalog.instantiations.ty.insert(key, ty);
         }
 
+        let mut conformances = std::mem::take(&mut self.type_catalog.conformances);
+        for conformance in conformances.values_mut() {
+            for ty in conformance.witnesses.associated_types.values_mut() {
+                *ty = self.apply(ty.clone(), substitutions);
+            }
+        }
+        _ = std::mem::replace(&mut self.type_catalog.conformances, conformances);
+
         #[allow(clippy::unwrap_used)]
         for key in self
             .type_catalog
@@ -943,6 +951,21 @@ impl TypeSession {
         label: &Label,
     ) -> Option<(Symbol, MemberSource)> {
         if let Some(sym) = self.type_catalog.lookup_member(receiver, label) {
+            if matches!(sym.0, Symbol::InstanceMethod(..))
+                && !self
+                    .type_catalog
+                    .instance_methods
+                    .entry(*receiver)
+                    .or_default()
+                    .contains_key(label)
+            {
+                self.type_catalog
+                    .instance_methods
+                    .entry(*receiver)
+                    .or_default()
+                    .insert(label.clone(), sym.0);
+            }
+
             return Some(sym);
         }
 

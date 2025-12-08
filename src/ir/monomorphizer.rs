@@ -48,11 +48,6 @@ impl<'a> Monomorphizer<'a> {
             self.monomorphize_func(func, &mut result);
         }
 
-        let mut checked = IndexSet::default();
-        for sym in result.keys().cloned().collect_vec() {
-            self.check_imports(&sym, &mut result, &mut checked)
-        }
-
         result
     }
 
@@ -60,6 +55,7 @@ impl<'a> Monomorphizer<'a> {
         &mut self,
         sym: &Symbol,
         result: &mut IndexMap<Symbol, Function<IrTy>>,
+        specialization: Option<&Specialization>,
         checked: &mut IndexSet<Symbol>,
     ) {
         if !checked.insert(*sym) {
@@ -111,7 +107,29 @@ impl<'a> Monomorphizer<'a> {
                 result.insert(*callee, imported);
             };
 
-            self.check_imports(callee, result, checked);
+            if let Some(specialization) = specialization
+                && module_id != self.config.module_id
+                && let Some(imported) = self
+                    .config
+                    .modules
+                    .modules
+                    .get(&module_id)
+                    .unwrap_or_else(|| {
+                        unreachable!(
+                            "Module not found: {module_id:?} in {:?}, Current: {:?}",
+                            self.config.modules.modules.keys().collect_vec(),
+                            self.config.module_id
+                        )
+                    })
+                    .program
+                    .polyfunctions
+                    .get(callee)
+                    .cloned()
+            {
+                self.generate_specialized_function(&imported, specialization, result);
+            };
+
+            self.check_imports(callee, result, specialization, checked);
         }
     }
 
@@ -239,10 +257,13 @@ impl<'a> Monomorphizer<'a> {
                 Symbol::Byte => IrTy::Byte,
                 _ => unreachable!(),
             },
-            Ty::Param(param) => {
-                if let Some(replaced) = substitutions.ty.get(&param).cloned() {
+            Ty::Param(_param) => {
+                if let Some(replaced) = substitutions.ty.get(&ty).cloned() {
                     self.monomorphize_ty(replaced, substitutions)
                 } else {
+                    //unreachable!("did not specialize {ty:?}");
+
+                    #[allow(unreachable_code)]
                     IrTy::Void
                 }
             }
@@ -366,6 +387,11 @@ impl<'a> Monomorphizer<'a> {
             specialization.name.symbol().expect("name not resolved"),
             specialized_func,
         );
+
+        let mut checked = IndexSet::default();
+        for sym in result.keys().cloned().collect_vec() {
+            self.check_imports(&sym, result, Some(specialization), &mut checked)
+        }
     }
 }
 

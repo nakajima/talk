@@ -17,9 +17,9 @@ pub mod tests {
             stmt::{Stmt, StmtKind},
         },
         types::{
+            conformance::ConformanceKey,
             scheme::{ForAll, Scheme},
             ty::Ty,
-            type_catalog::ConformanceKey,
             type_error::TypeError,
             type_session::{TypeEntry, Types},
         },
@@ -47,6 +47,11 @@ pub mod tests {
 
         let types = typed.phase.types;
         let ast = typed.phase.asts.into_iter().next().unwrap().1;
+        assert!(
+            ast.diagnostics.is_empty(),
+            "diagnostics not empty: {:?}",
+            ast.diagnostics
+        );
 
         (ast, types)
     }
@@ -1985,7 +1990,11 @@ pub mod tests {
     fn add_protocol_prototype() {
         let (ast, session) = typecheck(
             "
-        protocol Addy { func addy<Ret, RHS>(rhs: RHS) -> Ret }
+        protocol Addy {
+            associated RHS
+            associated Ret
+            func addy(rhs: RHS) -> Ret
+        }
 
         extend Int: Addy {
             func addy(rhs: Int) -> Int {

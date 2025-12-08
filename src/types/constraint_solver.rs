@@ -64,7 +64,7 @@ impl<'a> ConstraintSolver<'a> {
                     Constraint::Member(ref member) => {
                         member.solve(constraints, self.context, session)
                     }
-                    Constraint::Conforms(ref conforms) => conforms.solve(session),
+                    Constraint::Conforms(ref conforms) => conforms.solve(self.context, session),
                     Constraint::TypeMember(ref type_member) => {
                         type_member.solve(constraints, self.context, session, self.asts)
                     }
@@ -82,14 +82,16 @@ impl<'a> ConstraintSolver<'a> {
                         constraints.defer(want_id, reason);
                     }
                     SolveResult::Err(e) => {
-                        tracing::error!("Error solving constraint: {e:?}");
+                        tracing::error!("Error solving constraint: {constraint:?} {e:?}");
                         //unimplemented!("Error solving constraint: {constraint:?} {e:?}");
                         let diagnostic = AnyDiagnostic::Typing(Diagnostic {
                             id: NodeID::SYNTHESIZED,
                             kind: e,
                         });
                         if !self.asts[0].diagnostics.contains(&diagnostic) {
-                            tracing::error!("Just adding it to the first constraint. Fixme.");
+                            tracing::error!(
+                                "Just adding it to the first ast's diagnostics. Fixme."
+                            );
                             self.asts[0].diagnostics.push(diagnostic);
                         }
                     }

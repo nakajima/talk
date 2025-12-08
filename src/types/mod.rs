@@ -1,4 +1,5 @@
 pub mod builtins;
+pub mod conformance;
 pub mod constraint_solver;
 pub mod constraints;
 pub mod infer_row;

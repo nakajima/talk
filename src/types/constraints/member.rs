@@ -233,89 +233,78 @@ impl Member {
     ) -> SolveResult {
         let mut solved_metas: Vec<Meta> = Default::default();
 
-        let Some((member_sym, _source)) = session.lookup_member(symbol, &self.label) else {
-            // If the nominal is registered but member not found, it's a real error
-            // If the nominal isn't registered yet, defer
-            if session.lookup_nominal(symbol).is_some() {
-                return SolveResult::Err(TypeError::MemberNotFound(
-                    self.receiver.clone(),
-                    self.label.to_string(),
-                ));
-            }
+        // First get the nominal - if it doesn't exist yet, defer
+        let Some(nominal) = session.lookup_nominal(symbol) else {
             return SolveResult::Defer(DeferralReason::WaitingOnSymbol(*symbol));
         };
 
-        let Some(nominal) = session.lookup_nominal(symbol) else {
-            return SolveResult::Err(TypeError::TypeNotFound(format!(
-                "{symbol:?} not found while looking up {:?}.",
-                self.label
-            )));
-        };
+        // Try to find a method/variant via lookup_member
+        if let Some((member_sym, _source)) = session.lookup_member(symbol, &self.label) {
+            match member_sym {
+                Symbol::InstanceMethod(..) | Symbol::MethodRequirement(..) => {
+                    // For InstanceMethod, record as Concrete (direct call)
+                    // For MethodRequirement (from protocol conformance), defer resolution using
+                    // Requirement witness - can't use Meta because the implementing InstanceMethod
+                    // may not be registered yet (extensions processed later in generate)
+                    let witness = if matches!(member_sym, Symbol::InstanceMethod(..)) {
+                        MemberWitness::Concrete(member_sym)
+                    } else {
+                        MemberWitness::Requirement(member_sym, self.receiver.clone())
+                    };
 
-        match member_sym {
-            Symbol::InstanceMethod(..) | Symbol::MethodRequirement(..) => {
-                // For InstanceMethod, record as Concrete (direct call)
-                // For MethodRequirement (from protocol conformance), defer resolution using
-                // Requirement witness - can't use Meta because the implementing InstanceMethod
-                // may not be registered yet (extensions processed later in generate)
-                let witness = if matches!(member_sym, Symbol::InstanceMethod(..)) {
-                    MemberWitness::Concrete(member_sym)
-                } else {
-                    MemberWitness::Requirement(member_sym, self.receiver.clone())
-                };
+                    session
+                        .type_catalog
+                        .member_witnesses
+                        .insert(self.node_id, witness);
 
-                session
-                    .type_catalog
-                    .member_witnesses
-                    .insert(self.node_id, witness);
+                    let Some(entry) = session.lookup(&member_sym) else {
+                        return SolveResult::Err(TypeError::MemberNotFound(
+                            self.receiver.clone(),
+                            self.label.to_string(),
+                        ));
+                    };
 
-                let Some(entry) = session.lookup(&member_sym) else {
-                    return SolveResult::Err(TypeError::MemberNotFound(
-                        self.receiver.clone(),
-                        self.label.to_string(),
-                    ));
-                };
+                    let method = entry.instantiate(self.node_id, constraints, context, session);
+                    let method = session.apply(method, &mut context.substitutions);
+                    let (method_receiver, method_fn) = consume_self(&method);
 
-                let method = entry.instantiate(self.node_id, constraints, context, session);
-                let method = session.apply(method, &mut context.substitutions);
-                let (method_receiver, method_fn) = consume_self(&method);
+                    match unify(&method_receiver, &self.receiver, context, session) {
+                        Ok(metas) => solved_metas.extend(metas),
+                        Err(e) => return SolveResult::Err(e),
+                    };
 
-                match unify(&method_receiver, &self.receiver, context, session) {
-                    Ok(metas) => solved_metas.extend(metas),
-                    Err(e) => return SolveResult::Err(e),
-                };
+                    match unify(&method_fn, &self.ty, context, session) {
+                        Ok(metas) => solved_metas.extend(metas),
+                        Err(e) => return SolveResult::Err(e),
+                    };
 
-                match unify(&method_fn, &self.ty, context, session) {
-                    Ok(metas) => solved_metas.extend(metas),
-                    Err(e) => return SolveResult::Err(e),
-                };
+                    return SolveResult::Solved(solved_metas);
+                }
+                Symbol::Variant(..) => {
+                    let Some(values) = nominal
+                        .substituted_variant_values(type_args)
+                        .get(&self.label)
+                        .cloned()
+                    else {
+                        return SolveResult::Err(TypeError::MemberNotFound(
+                            self.receiver.clone(),
+                            self.label.to_string(),
+                        ));
+                    };
 
-                return SolveResult::Solved(solved_metas);
+                    let constructor_ty = match values.len() {
+                        0 => self.receiver.clone(),
+                        _ => curry(values, self.receiver.clone()),
+                    };
+
+                    constraints.wants_equals(constructor_ty, self.ty.clone());
+                    return SolveResult::Solved(Default::default());
+                }
+                Symbol::StaticMethod(..) => {
+                    return self.lookup_static_member(constraints, context, session, symbol);
+                }
+                _ => (),
             }
-            Symbol::Variant(..) => {
-                let Some(values) = nominal
-                    .substituted_variant_values(type_args)
-                    .get(&self.label)
-                    .cloned()
-                else {
-                    return SolveResult::Err(TypeError::MemberNotFound(
-                        self.receiver.clone(),
-                        self.label.to_string(),
-                    ));
-                };
-
-                let constructor_ty = match values.len() {
-                    0 => self.receiver.clone(),
-                    _ => curry(values, self.receiver.clone()),
-                };
-
-                constraints.wants_equals(constructor_ty, self.ty.clone());
-                return SolveResult::Solved(Default::default());
-            }
-            Symbol::StaticMethod(..) => {
-                return self.lookup_static_member(constraints, context, session, symbol);
-            }
-            _ => (),
         }
 
         // If all else fails, see if it's a property

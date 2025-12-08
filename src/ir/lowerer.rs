@@ -11,7 +11,7 @@ use crate::ir::parse_instruction;
 use crate::ir::value::{Addr, Reference};
 use crate::label::Label;
 use crate::name_resolution::symbol::{
-    GlobalId, InitializerId, InstanceMethodId, StaticMethodId, Symbols,
+    GlobalId, InitializerId, InstanceMethodId, StaticMethodId, Symbols, set_symbol_names,
 };
 use crate::node_kinds::inline_ir_instruction::{InlineIRInstruction, InlineIRInstructionKind};
 use crate::node_kinds::match_arm::MatchArm;
@@ -20,7 +20,6 @@ use crate::node_kinds::record_field::RecordField;
 use crate::node_kinds::type_annotation::TypeAnnotation;
 use crate::token_kind::TokenKind;
 use crate::types::infer_row::RowParamId;
-use crate::types::infer_ty::TypeParamId;
 use crate::types::row::Row;
 use crate::types::type_catalog::MemberWitness;
 use crate::types::type_session::TypeDefKind;
@@ -158,7 +157,7 @@ impl RegisterAllocator {
 
 #[derive(Default, Clone, Debug)]
 pub(super) struct Substitutions {
-    pub ty: FxHashMap<TypeParamId, Ty>,
+    pub ty: FxHashMap<Ty, Ty>,
     pub row: FxHashMap<RowParamId, Row>,
     /// Maps MethodRequirement symbols to their concrete implementations for witness specialization
     pub witnesses: FxHashMap<Symbol, Symbol>,
@@ -412,7 +411,7 @@ impl<'a> Lowerer<'a> {
             }
             DeclKind::Property { .. } => (),
             DeclKind::Method { func, .. } => {
-                self.lower_method(func)?;
+                self.lower_method(func, instantiations)?;
             }
             DeclKind::Associated { .. } => (),
             DeclKind::Func(..) => (), // Handled by DeclKind::Let
@@ -437,8 +436,12 @@ impl<'a> Lowerer<'a> {
         Ok((Value::Void, Ty::Void))
     }
 
-    fn lower_method(&mut self, func: &Func) -> Result<(Value, Ty), IRError> {
-        self.lower_func(func, Bind::Discard, &Default::default())
+    fn lower_method(
+        &mut self,
+        func: &Func,
+        instantiations: &Substitutions,
+    ) -> Result<(Value, Ty), IRError> {
+        self.lower_func(func, Bind::Discard, instantiations)
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self, decl, body))]
@@ -925,12 +928,12 @@ impl<'a> Lowerer<'a> {
                 Ok(LValue::Variable(name.symbol().expect("name not resolved")))
             }
             ExprKind::Member(Some(box receiver), label, _span) => {
-                let receiver_lvalue = self.lower_lvalue(receiver, instantiations)?;
-                let (receiver_ty, mut new_instantiations) =
-                    self.specialized_ty(receiver).expect("didn't get base ty");
-                new_instantiations.extend(instantiations.clone());
+                let (receiver_ty, instantiations) = self
+                    .specialized_ty(receiver, instantiations)
+                    .expect("didn't get base ty");
+                let receiver_lvalue = self.lower_lvalue(receiver, &instantiations)?;
 
-                let receiver_ty = substitute(receiver_ty, &new_instantiations);
+                let receiver_ty = substitute(receiver_ty, &instantiations);
 
                 Ok(LValue::Field {
                     base: receiver_lvalue.into(),
@@ -1889,25 +1892,23 @@ impl<'a> Lowerer<'a> {
             let ty = self.ty_from_id(&id)?;
             let dest = self.ret(bind);
 
-            let (receiver_ty, _) = self.specialized_ty(receiver)?;
+            let (receiver_ty, _) = self.specialized_ty(receiver, instantiations)?;
 
             if let Ty::Nominal { symbol, .. } = &receiver_ty
                 && let Some(methods) = self.types.catalog.instance_methods.get(symbol)
                 && let Some(method) = methods.get(label).cloned()
             {
                 tracing::debug!("lowering method: {label} {method:?}");
-                self.check_import(&method);
 
                 self.push_instr(Instruction::Ref {
                     dest,
                     ty: ty.clone(),
                     val: Value::Func(method),
                 });
-            } else if let Some(witness) = self.witness_for(&id, label).copied()
+            } else if let Some(witness) = self.witness_for(&id, label)
                 && matches!(witness, Symbol::InstanceMethod(..))
             {
                 tracing::debug!("lowering req {label} {witness:?}");
-                self.check_import(&witness);
                 self.push_instr(Instruction::Ref {
                     dest,
                     ty: ty.clone(),
@@ -1938,7 +1939,7 @@ impl<'a> Lowerer<'a> {
         expr: &Expr,
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
-        let (ty, instantiations) = self.specialized_ty(expr)?;
+        let (ty, instantiations) = self.specialized_ty(expr, instantiations)?;
         let monomorphized_ty = substitute(ty.clone(), &instantiations);
 
         let original_name_sym = name.symbol().expect("did not get symbol");
@@ -1952,14 +1953,10 @@ impl<'a> Lowerer<'a> {
             return Ok((self.get_binding(&original_name_sym).into(), ty));
         }
 
-        let ret = if matches!(monomorphized_ty, Ty::Func(..)) {
-            // It's a func reference so we pass the name
-            // let monomorphized_name = self
-            //     .monomorphize_name(name.clone(), &instantiations)
-            //     .symbol()
-            //     .expect("did not get symbol");
-            // Value::Func(monomorphized_name)
+        // If it's a func we've registered, lower it with instantiations
+        let (_, instantiations) = self.specialized_ty(expr, &instantiations)?;
 
+        let ret = if matches!(monomorphized_ty, Ty::Func(..)) {
             let monomorphized_name = self
                 .monomorphize_name(name.clone(), &instantiations)
                 .symbol()
@@ -2108,10 +2105,7 @@ impl<'a> Lowerer<'a> {
             return Ok((Value::Void, Ty::Void));
         }
 
-        let (_callee_ty, mut instantiations) = self
-            .specialized_ty(callee)
-            .expect("did not get specialized ty for callee");
-        instantiations.extend(parent_instantiations.clone());
+        let instantiations = parent_instantiations.clone();
 
         let ty = self.ty_from_id(&call_expr.id)?;
         let mut arg_vals = vec![];
@@ -2172,13 +2166,8 @@ impl<'a> Lowerer<'a> {
         dest: Register,
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
-        let ty = self.ty_from_id(&call_expr.id)?;
-
-        // Capture protocol ID before we replace receiver (for witness specialization)
-        let protocol_id = match &receiver.kind {
-            ExprKind::Constructor(Name::Resolved(Symbol::Protocol(id), _)) => Some(*id),
-            _ => None,
-        };
+        let (_, instantiations) = self.specialized_ty(callee_expr, instantiations)?;
+        let (ty, instantiations) = self.specialized_ty(call_expr, &instantiations)?;
 
         // Is this an instance method call on a constructor? If so we don't need
         // to prepend a self arg because it's passed explicitly (like Foo.bar(fizz) where
@@ -2186,126 +2175,54 @@ impl<'a> Lowerer<'a> {
         if let ExprKind::Constructor(_name) = &receiver.kind {
             receiver = arg_exprs[0].value.clone();
         } else {
-            let (receiver_ir, _) = self.lower_expr(&receiver, Bind::Fresh, instantiations)?;
+            let (receiver_ir, _) = self.lower_expr(&receiver, Bind::Fresh, &instantiations)?;
             args.insert(0, receiver_ir);
         }
 
-        if let Some(method_sym) = self.lookup_instance_method(&receiver, label)? {
+        let (method_sym, val, ty) = if let Some(method_sym) =
+            self.lookup_instance_method(&receiver, label, &instantiations)?
+        {
+            let method = self.monomorphize_name(
+                Name::Resolved(method_sym, label.to_string()),
+                &instantiations,
+            );
             self.check_import(&method_sym);
             self.push_instr(Instruction::Call {
                 dest,
                 ty: ty.clone(),
-                callee: Value::Func(method_sym),
+                callee: Value::Func(method.symbol().expect("didn't get method sym")),
                 args: args.into(),
                 meta: vec![InstructionMeta::Source(call_expr.id)].into(),
             });
-            return Ok((dest.into(), ty));
-        };
 
-        if let Some(witness) = self.witness_for(&callee_expr.id, label).copied() {
+            (method_sym, dest.into(), ty)
+        } else if let Some(witness) = self.witness_for(&callee_expr.id, label) {
+            // For method calls on type parameters, look up the witness at the callee expression's node ID.
+            // This returns a MethodRequirement symbol that the monomorphizer will substitute with
+            // the concrete implementation when specializing.
+            let method =
+                self.monomorphize_name(Name::Resolved(witness, label.to_string()), &instantiations);
+
             self.check_import(&witness);
-            // Try to specialize for conformance if this is a protocol method call
-            let specialized = 'specialize: {
-                let Some(..) = protocol_id else {
-                    tracing::trace!("no protocol_id");
-                    break 'specialize None;
-                };
-                let Ok(receiver_ty) = self.ty_from_id(&receiver.id) else {
-                    tracing::trace!("couldn't get receiver ty");
-                    break 'specialize None;
-                };
-
-                let conforming_id = match &receiver_ty {
-                    Ty::Primitive(sym) => *sym,
-                    Ty::Nominal { symbol, .. } => *symbol,
-                    _ => {
-                        tracing::trace!("receiver ty not primitive/nominal: {receiver_ty:?}");
-                        break 'specialize None;
-                    }
-                };
-
-                // Build witness substitutions from ALL conformances for this type
-                // (needed because protocols can extend other protocols, e.g. Comparable: Equatable)
-                let mut subs = Substitutions::default();
-
-                // Collect all conformances for this type from local and modules
-                let all_conformances: Vec<_> = self
-                    .types
-                    .catalog
-                    .conformances
-                    .values()
-                    .filter(|c| c.conforming_id == conforming_id)
-                    .cloned()
-                    .chain(
-                        self.config
-                            .modules
-                            .modules
-                            .values()
-                            .flat_map(|m| m.types.catalog.conformances.values())
-                            .filter(|c| c.conforming_id == conforming_id)
-                            .cloned(),
-                    )
-                    .collect();
-
-                for conformance in &all_conformances {
-                    for (method_label, impl_symbol) in &conformance.witnesses {
-                        let conf_protocol = conformance.protocol_id;
-                        // Check local method requirements
-                        if let Some(req_methods) = self
-                            .types
-                            .catalog
-                            .method_requirements
-                            .get(&Symbol::Protocol(conf_protocol))
-                            && let Some(req_symbol) = req_methods.get(method_label)
-                        {
-                            subs.witnesses.insert(*req_symbol, *impl_symbol);
-                            self.check_import(impl_symbol);
-                        }
-                        // Check module method requirements
-                        for module in self.config.modules.modules.values() {
-                            if let Some(req_methods) = module
-                                .types
-                                .catalog
-                                .method_requirements
-                                .get(&Symbol::Protocol(conf_protocol))
-                                && let Some(req_symbol) = req_methods.get(method_label)
-                            {
-                                subs.witnesses.insert(*req_symbol, *impl_symbol);
-                                self.check_import(impl_symbol);
-                            }
-                        }
-                    }
-                }
-
-                tracing::trace!("witness subs: {:?}", subs.witnesses);
-                if subs.witnesses.is_empty() {
-                    break 'specialize None;
-                }
-
-                let name = Name::Resolved(witness, label.to_string());
-                let specialized_name = self.monomorphize_name(name, &subs);
-                tracing::trace!("specialized to: {specialized_name:?}");
-                Some(specialized_name)
-            };
-
-            let callee = specialized.unwrap_or_else(|| Name::Resolved(witness, label.to_string()));
-
             self.push_instr(Instruction::Call {
                 dest,
                 ty: ty.clone(),
-                callee: Value::Func(callee.symbol().expect("did not get symbol")),
+                callee: Value::Func(method.symbol().expect("did not get witness sym")),
                 args: args.into(),
                 meta: vec![InstructionMeta::Source(call_expr.id)].into(),
             });
-            return Ok((dest.into(), ty));
-        }
 
-        Err(IRError::TypeNotFound(format!(
-            "No witness found for {:?} in {:?} ({:?}).",
-            label,
-            receiver,
-            self.ty_from_id(&receiver.id)
-        )))
+            (witness, dest.into(), ty)
+        } else {
+            return Err(IRError::TypeNotFound(format!(
+                "No witness found for {:?} in {:?} ({:?}).",
+                label,
+                receiver,
+                self.ty_from_id(&receiver.id)
+            )));
+        };
+
+        Ok((val, ty))
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self, func), fields(func.name = %func.name))]
@@ -2727,10 +2644,11 @@ impl<'a> Lowerer<'a> {
 
     /// Check to see if this symbol calls any symbols we don't have
     fn check_import(&mut self, symbol: &Symbol) {
-        if self.config.module_id == ModuleId::Core {
-            // No imports can happen from core.
-            return;
-        }
+        // if self.config.module_id == ModuleId::Core {
+        //     println!("not core: {symbol}");
+        //     // No imports can happen from core.
+        //     return;
+        // }
 
         let module_id = match symbol {
             Symbol::InstanceMethod(InstanceMethodId { module_id, .. }) => Some(*module_id),
@@ -2745,7 +2663,9 @@ impl<'a> Lowerer<'a> {
             return;
         };
 
-        let func = if module_id == self.config.module_id {
+        let func = if module_id == self.config.module_id
+            || (module_id == ModuleId::Current && self.config.module_id == ModuleId::Core)
+        {
             let Some(func) = self.functions.get(symbol) else {
                 return;
             };
@@ -2757,7 +2677,12 @@ impl<'a> Lowerer<'a> {
                 .modules
                 .modules
                 .get(&module_id)
-                .expect("didn't get module for import");
+                .unwrap_or_else(|| {
+                    panic!(
+                        "didn't get module for import: {module_id:?}, config: {:?}",
+                        self.config.module_id
+                    )
+                });
 
             tracing::debug!("importing {symbol:?} from {module_id}");
 
@@ -2791,6 +2716,10 @@ impl<'a> Lowerer<'a> {
             .collect();
 
         for callee_sym in callees {
+            if matches!(callee_sym, Symbol::MethodRequirement(..)) {
+                println!(" not so fast wise guy: {callee_sym:?}");
+            }
+
             // Already imported, avoid infinite recursion
             if self.functions.contains_key(&callee_sym) {
                 continue;
@@ -2834,10 +2763,11 @@ impl<'a> Lowerer<'a> {
     }
 
     fn parsed_ty(&mut self, ty: &TypeAnnotation, id: NodeID) -> Ty {
+        let sym = ty.symbol().expect("did not get ty symbol");
         let entry = self
             .types
             .types_by_symbol
-            .get(&ty.symbol().expect("did not get ty symbol"))
+            .get(&sym)
             .cloned()
             .expect("did not get entry");
         let (ty, _) = self
@@ -2889,13 +2819,16 @@ impl<'a> Lowerer<'a> {
         &mut self,
         expr: &Expr,
         label: &Label,
+        instantiations: &Substitutions,
     ) -> Result<Option<Symbol>, IRError> {
-        let symbol = match &expr.kind {
-            ExprKind::LiteralInt(_) => Symbol::Int,
-            ExprKind::LiteralFloat(_) => Symbol::Float,
-            ExprKind::LiteralTrue | ExprKind::LiteralFalse => Symbol::Bool,
+        let ty = self.ty_from_id(&expr.id)?;
+
+        let symbol = match ty {
+            Ty::Primitive(primitive) => primitive,
+            Ty::Nominal { symbol, .. } => symbol,
             _ => {
-                let Ty::Nominal { symbol, .. } = self.specialized_ty(expr)?.0 else {
+                let specialized = self.specialized_ty(expr, instantiations)?.0;
+                let Ty::Nominal { symbol, .. } = specialized else {
                     return Ok(None);
                 };
 
@@ -2903,16 +2836,26 @@ impl<'a> Lowerer<'a> {
             }
         };
 
-        if let Some(methods) = self.types.catalog.instance_methods.get(&symbol)
+        if let Some(module_id) = symbol.module_id()
+            && let Some(module) = self.config.modules.modules.get(&module_id)
+            && let Some(methods) = module.types.catalog.instance_methods.get(&symbol)
             && let Some(method) = methods.get(label)
         {
-            return Ok(Some(*method));
+            Ok(Some(*method))
+        } else if let Some(methods) = self.types.catalog.instance_methods.get(&symbol)
+            && let Some(method) = methods.get(label)
+        {
+            Ok(Some(*method))
+        } else {
+            Ok(None)
         }
-
-        Ok(None)
     }
 
-    fn specialized_ty(&mut self, expr: &Expr) -> Result<(Ty, Substitutions), IRError> {
+    fn specialized_ty(
+        &mut self,
+        expr: &Expr,
+        instantiations: &Substitutions,
+    ) -> Result<(Ty, Substitutions), IRError> {
         let name = match &expr.kind {
             ExprKind::Variable(name) => name,
             ExprKind::Func(func) => &func.name,
@@ -2938,7 +2881,9 @@ impl<'a> Lowerer<'a> {
             }
         };
 
-        let symbol = name.symbol().expect("name not resolved");
+        let symbol = name
+            .symbol()
+            .unwrap_or_else(|_| unreachable!("name not resolved: {expr:?}"));
         let entry = self
             .types
             .get_symbol(&symbol)
@@ -2950,7 +2895,10 @@ impl<'a> Lowerer<'a> {
         let (ty, substitutions) = self.specialize(&entry, expr.id)?;
         _ = self.monomorphize_name(name.clone(), &substitutions);
 
-        Ok((ty, substitutions))
+        let mut instantiations = instantiations.clone();
+        instantiations.extend(substitutions);
+
+        Ok((ty, instantiations))
     }
 
     #[instrument(skip(self, entry))]
@@ -2976,7 +2924,7 @@ impl<'a> Lowerer<'a> {
                                 .unwrap_or(Ty::Param(*param));
 
                             if Ty::Param(*param) != ty {
-                                substitutions.ty.insert(*param, ty);
+                                substitutions.ty.insert(Ty::Param(*param), ty);
                             }
                         }
 
@@ -3003,29 +2951,45 @@ impl<'a> Lowerer<'a> {
     }
 
     #[instrument(skip(self), ret)]
-    fn witness_for(&self, node_id: &NodeID, label: &Label) -> Option<&Symbol> {
+    fn witness_for(&mut self, node_id: &NodeID, label: &Label) -> Option<Symbol> {
         if let Some(MemberWitness::Concrete(witness)) =
-            self.types.catalog.member_witnesses.get(node_id)
+            self.types.catalog.member_witnesses.get(node_id).cloned()
         {
+            self.monomorphize_name(
+                Name::Resolved(witness, label.to_string()),
+                &Default::default(),
+            );
             return Some(witness);
         }
 
         if let Some(MemberWitness::Requirement(witness, _ty)) =
-            self.types.catalog.member_witnesses.get(node_id)
+            self.types.catalog.member_witnesses.get(node_id).cloned()
         {
+            self.monomorphize_name(
+                Name::Resolved(witness, label.to_string()),
+                &Default::default(),
+            );
             return Some(witness);
         }
 
         for module in self.config.modules.modules.values() {
             if let Some(MemberWitness::Concrete(witness)) =
-                module.types.catalog.member_witnesses.get(node_id)
+                module.types.catalog.member_witnesses.get(node_id).cloned()
             {
+                self.monomorphize_name(
+                    Name::Resolved(witness, label.to_string()),
+                    &Default::default(),
+                );
                 return Some(witness);
             }
 
             if let Some(MemberWitness::Requirement(witness, _ty)) =
-                module.types.catalog.member_witnesses.get(node_id)
+                module.types.catalog.member_witnesses.get(node_id).cloned()
             {
+                self.monomorphize_name(
+                    Name::Resolved(witness, label.to_string()),
+                    &Default::default(),
+                );
                 return Some(witness);
             }
         }
@@ -3058,7 +3022,9 @@ impl<'a> Lowerer<'a> {
         match self.types.get(id) {
             Some(TypeEntry::Mono(ty)) => Ok(ty.clone()),
             Some(TypeEntry::Poly(scheme)) => Ok(scheme.ty.clone()),
-            None => Err(IRError::TypeNotFound(format!("{id:?}"))),
+            None => Err(IRError::TypeNotFound(format!(
+                "No type found for id: {id:?}"
+            ))),
         }
     }
 
@@ -3076,7 +3042,9 @@ impl<'a> Lowerer<'a> {
                 ) {
                     Ok(Ty::Func(Ty::Void.into(), Ty::Void.into()))
                 } else {
-                    Err(IRError::TypeNotFound(format!("{symbol}")))
+                    Err(IRError::TypeNotFound(format!(
+                        "Type not found for symbol: {symbol}"
+                    )))
                 }
             }
         }
@@ -3088,7 +3056,7 @@ fn substitute(ty: Ty, substitutions: &Substitutions) -> Ty {
         Ty::Primitive(..) => ty,
         Ty::Param(type_param_id) => substitutions
             .ty
-            .get(&type_param_id)
+            .get(&ty)
             .unwrap_or_else(|| {
                 tracing::trace!("didn't find id {type_param_id:?} in {substitutions:?}");
                 &ty

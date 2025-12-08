@@ -7,56 +7,13 @@ use crate::{
     node_id::NodeID,
     span::Span,
     types::{
+        conformance::{Conformance, ConformanceKey},
         infer_row::RowParamId,
         infer_ty::{InferTy, TypeParamId},
         ty::{SomeType, Ty},
         type_session::{MemberSource, TypeEntry, TypeSession},
     },
 };
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct Conformance<T> {
-    pub node_id: NodeID,
-    pub conforming_id: Symbol,
-    pub protocol_id: ProtocolId,
-    pub witnesses: FxHashMap<Label, Symbol>,
-    pub associated_types: FxHashMap<Label, T>,
-    pub span: Span,
-}
-
-impl Conformance<InferTy> {
-    fn finalize(self, session: &mut TypeSession) -> Conformance<Ty> {
-        Conformance {
-            node_id: self.node_id,
-            conforming_id: self.conforming_id,
-            protocol_id: self.protocol_id,
-            witnesses: self.witnesses,
-            associated_types: self
-                .associated_types
-                .into_iter()
-                .map(|(k, v)| (k, session.finalize_ty(v).as_mono_ty().clone()))
-                .collect(),
-            span: self.span,
-        }
-    }
-}
-
-impl From<Conformance<Ty>> for Conformance<InferTy> {
-    fn from(value: Conformance<Ty>) -> Self {
-        Conformance {
-            node_id: value.node_id,
-            conforming_id: value.conforming_id,
-            protocol_id: value.protocol_id,
-            witnesses: value.witnesses,
-            associated_types: value
-                .associated_types
-                .into_iter()
-                .map(|(k, v)| (k, v.into()))
-                .collect(),
-            span: value.span,
-        }
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Nominal<T: SomeType> {
@@ -66,13 +23,16 @@ pub struct Nominal<T: SomeType> {
 }
 
 impl<T: SomeType> Nominal<T> {
-    pub fn substituted_variant_values(&self, type_args: &[T]) -> IndexMap<Label, Vec<T>> {
-        let substitutions: FxHashMap<T, T> = self
-            .type_params
+    pub fn substitutions(&self, type_args: &[T]) -> FxHashMap<T, T> {
+        self.type_params
             .clone()
             .into_iter()
             .zip(type_args.iter().cloned())
-            .collect();
+            .collect()
+    }
+
+    pub fn substituted_variant_values(&self, type_args: &[T]) -> IndexMap<Label, Vec<T>> {
+        let substitutions = self.substitutions(type_args);
         self.variants.clone().into_iter().fold(
             IndexMap::<Label, Vec<T>>::default(),
             |mut acc, (label, tys)| {
@@ -87,12 +47,7 @@ impl<T: SomeType> Nominal<T> {
     }
 
     pub fn substitute_properties(&self, type_args: &[T]) -> IndexMap<Label, T> {
-        let substitutions: FxHashMap<T, T> = self
-            .type_params
-            .clone()
-            .into_iter()
-            .zip(type_args.iter().cloned())
-            .collect();
+        let substitutions = self.substitutions(type_args);
         self.properties.clone().into_iter().fold(
             IndexMap::<Label, T>::default(),
             |mut acc, (label, ty)| {
@@ -138,12 +93,6 @@ impl From<Nominal<InferTy>> for Nominal<Ty> {
             type_params: value.type_params.into_iter().map(|ty| ty.into()).collect(),
         }
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct ConformanceKey {
-    pub protocol_id: ProtocolId,
-    pub conforming_id: Symbol,
 }
 
 #[derive(Debug, PartialEq, Clone)]

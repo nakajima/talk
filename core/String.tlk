@@ -11,6 +11,7 @@ extend String: Add {
 		let newLen: Int = _int_add(selfLen, rhsLen)
 		let newBase: RawPtr = _alloc(newLen)
 		_copy(self.base, newBase, selfLen)
+		
 		let rhsDest: RawPtr = _ptr_add(newBase, selfLen)
 		_copy(rhs.base, rhsDest, rhsLen)
 		String(base: newBase, length: newLen, capacity: newLen)
