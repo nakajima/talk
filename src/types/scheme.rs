@@ -42,6 +42,10 @@ impl<T: SomeType> std::hash::Hash for Scheme<T> {
 impl<T: SomeType> SomeType for EnvEntry<T> {
     type RowType = InferRow;
 
+    fn void() -> Self {
+        EnvEntry::Mono(T::void())
+    }
+
     fn contains_var(&self) -> bool {
         match self {
             Self::Mono(ty) => ty.contains_var(),

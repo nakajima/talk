@@ -1,7 +1,7 @@
 use std::{cell::RefCell, rc::Rc};
 
 use ena::unify::InPlaceUnificationTable;
-use indexmap::{IndexMap, IndexSet};
+use indexmap::IndexSet;
 use itertools::Itertools;
 use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::instrument;

@@ -187,6 +187,11 @@ impl From<Ty> for InferTy {
 
 impl SomeType for InferTy {
     type RowType = InferRow;
+
+    fn void() -> Self {
+        InferTy::Void
+    }
+
     fn contains_var(&self) -> bool {
         match self {
             InferTy::Param(..) => false,

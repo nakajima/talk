@@ -1,6 +1,7 @@
 use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
 use indexmap::IndexMap;
+use itertools::Itertools;
 use rustc_hash::FxHashMap;
 use tracing::instrument;
 
@@ -509,6 +510,10 @@ pub(super) fn unify(
 }
 
 pub fn curry<I: IntoIterator<Item = InferTy>>(params: I, ret: InferTy) -> InferTy {
+    let mut params = params.into_iter().collect_vec();
+    if params.is_empty() {
+        params.push(InferTy::Void);
+    }
     params
         .into_iter()
         .collect::<Vec<_>>()

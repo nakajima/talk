@@ -11,11 +11,17 @@ use crate::{
 
 pub trait SomeType: std::fmt::Debug + PartialEq + Clone + Eq + Hash {
     type RowType: PartialEq + Clone + std::fmt::Debug;
+    fn void() -> Self;
     fn contains_var(&self) -> bool;
 }
 
 impl SomeType for Ty {
     type RowType = Row;
+
+    fn void() -> Self {
+        Ty::Void
+    }
+
     fn contains_var(&self) -> bool {
         false
     }
