@@ -12,9 +12,10 @@ use crate::{
     label::Label,
     name::Name,
     name_resolution::{
+        builtins,
         decl_declarer::DeclDeclarer,
         scc_graph::SCCGraph,
-        symbol::{Symbol, SymbolNameId, SymbolNames, Symbols},
+        symbol::{Symbol, Symbols},
         transforms::{
             lower_funcs_to_lets::LowerFuncsToLets, lower_operators::LowerOperators,
             prepend_self_to_methods::PrependSelfToMethods,
@@ -57,8 +58,8 @@ impl Display for NameResolverError {
 pub struct Scope {
     pub node_id: NodeID,
     pub parent_id: Option<NodeID>,
-    pub values: FxHashMap<SymbolNameId, Symbol>,
-    pub types: FxHashMap<SymbolNameId, Symbol>,
+    pub values: FxHashMap<String, Symbol>,
+    pub types: FxHashMap<String, Symbol>,
     pub depth: u32,
     pub binder: Option<Symbol>,
     pub level: Level,
@@ -96,7 +97,7 @@ pub struct NameResolved {
     pub captures: FxHashMap<Symbol, FxHashSet<Capture>>,
     pub is_captured: FxHashSet<Symbol>,
     pub scopes: FxHashMap<NodeID, Scope>,
-    pub symbol_names: SymbolNames,
+    pub symbol_names: FxHashMap<Symbol, String>,
     pub symbols_to_node: FxHashMap<Symbol, NodeID>,
     pub scc_graph: SCCGraph,
     pub unbound_nodes: Vec<NodeID>,
@@ -169,22 +170,7 @@ impl NameResolver {
             .get_mut(&NodeID(FileID(0), 0))
             .expect("root scope");
 
-        let id = self.phase.symbol_names.get("Int".into());
-        scope.types.insert(id, Symbol::Int);
-        let id = self.phase.symbol_names.get("Float".into());
-        scope.types.insert(id, Symbol::Float);
-        let id = self.phase.symbol_names.get("Bool".into());
-        scope.types.insert(id, Symbol::Bool);
-        let id = self.phase.symbol_names.get("Void".into());
-        scope.types.insert(id, Symbol::Void);
-        let id = self.phase.symbol_names.get("RawPtr".into());
-        scope.types.insert(id, Symbol::RawPtr);
-        let id = self.phase.symbol_names.get("__IR".into());
-        scope.types.insert(id, Symbol::IR);
-        let id = self.phase.symbol_names.get("print".into());
-        scope.types.insert(id, Symbol::PRINT);
-        let id = self.phase.symbol_names.get("Byte".into());
-        scope.types.insert(id, Symbol::Byte);
+        builtins::import_builtins(scope);
 
         // First pass: run transforms and declare all types
         for ast in &mut asts {
@@ -243,7 +229,7 @@ impl NameResolver {
                 roots,
                 diagnostics,
                 meta,
-                phase: std::mem::take(&mut self.phase),
+                phase: self.phase.clone(),
                 node_ids,
                 file_id,
                 synthsized_ids,
@@ -275,17 +261,11 @@ impl NameResolver {
             .get_mut(&scope_id)
             .unwrap_or_else(|| unreachable!("scope not found: {scope_id:?}, {:?}", name));
 
-        if let Some(symbol) = scope
-            .types
-            .get(&self.phase.symbol_names.get(name.name_str()))
-        {
+        if let Some(symbol) = scope.types.get(&name.name_str()) {
             return Some(*symbol);
         }
 
-        if let Some(symbol) = scope
-            .values
-            .get(&self.phase.symbol_names.get(name.name_str()))
-        {
+        if let Some(symbol) = scope.values.get(&name.name_str()) {
             return Some(*symbol);
         }
 
@@ -367,6 +347,7 @@ impl NameResolver {
         {
             for (from_sym, from_id) in symbols {
                 tracing::debug!("track_dependency from {from_sym:?} to {to:?}");
+
                 self.phase
                     .scc_graph
                     .add_edge((from_sym, from_id), (to, id), id);
@@ -460,7 +441,7 @@ impl NameResolver {
                 Symbol::PatternBindLocal(self.symbols.next_pattern_bind())
             }
             Symbol::ParamLocal(..) => Symbol::ParamLocal(self.symbols.next_param()),
-            Symbol::Builtin(..) => Symbol::Builtin(self.symbols.next_builtin(module_id)),
+            Symbol::Builtin(..) => unreachable!("should not be generating symbols for builtins"),
             Symbol::Property(..) => Symbol::Property(self.symbols.next_property(module_id)),
             Symbol::Synthesized(..) => {
                 Symbol::Synthesized(self.symbols.next_synthesized(module_id))
@@ -485,17 +466,15 @@ impl NameResolver {
         };
 
         self.phase.symbols_to_node.insert(symbol, node_id);
-        self.phase.symbol_names.define(name.name_str(), symbol);
+        self.phase.symbol_names.insert(symbol, name.name_str());
 
         tracing::debug!(
-            "declare type {} -> {symbol:?} {:?}",
+            "declare type {name} {} -> {symbol:?} {:?}",
             name.name_str(),
             self.current_scope_id
         );
 
-        scope
-            .types
-            .insert(self.phase.symbol_names.get(name.name_str()), symbol);
+        scope.types.insert(name.name_str(), symbol);
 
         Name::Resolved(symbol, name.name_str())
     }
@@ -730,11 +709,10 @@ impl NameResolver {
                 return;
             };
 
-            let id = self.phase.symbol_names.get("Self".into());
             self.current_scope_mut()
                 .expect("did not get current scope")
                 .types
-                .insert(id, sym);
+                .insert("Self".into(), sym);
 
             self.phase.unbound_nodes.push(decl.id);
 

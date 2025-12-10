@@ -423,6 +423,7 @@ impl<'a> InferencePass<'a> {
                     TypedNode::Stmt(typed_stmt) => stmts.push(typed_stmt),
                     _ => {
                         tracing::error!("hrm");
+                        println!("hrm: {node:?}");
                         continue;
                     }
                 },
@@ -518,11 +519,11 @@ impl<'a> InferencePass<'a> {
 
             let node = self
                 .visit_node(&rhs, &mut context)
-                .unwrap_or_else(|_| unimplemented!());
+                .unwrap_or_else(|e| unimplemented!("{e:?}"));
             match &node {
                 TypedNode::Decl(decl) => decls.push(decl.clone()),
                 TypedNode::Stmt(stmt) => stmts.push(stmt.clone()),
-                _ => (),
+                other => println!("wat {other:?}"),
             }
 
             if let Some(existing) = self.session.lookup(binder) {

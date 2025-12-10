@@ -170,7 +170,7 @@ pub mod tests {
             types
                 .phase
                 .scc_graph
-                .neighbors_for(&Symbol::Struct(1.into()))
+                .neighbors_for(&Symbol::Struct(2.into()))
         );
     }
 
@@ -207,7 +207,7 @@ pub mod tests {
             types
                 .phase
                 .scc_graph
-                .neighbors_for(&Symbol::Struct(1.into()))
+                .neighbors_for(&Symbol::Struct(2.into()))
         );
     }
 
@@ -233,8 +233,8 @@ pub mod tests {
         assert_eq!(
             group_b.binders,
             vec![
-                Symbol::DeclaredLocal(DeclaredLocalId(1)),
-                Symbol::DeclaredLocal(DeclaredLocalId(2))
+                Symbol::DeclaredLocal(DeclaredLocalId(2)),
+                Symbol::DeclaredLocal(DeclaredLocalId(3))
             ]
         );
     }

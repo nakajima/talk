@@ -30,12 +30,11 @@ pub struct TypedAST<T: SomeType> {
 
 impl TypedAST<Ty> {
     pub fn roots(&self) -> Vec<TypedNode<Ty>> {
-        self.decls
-            .iter()
-            .cloned()
-            .map(TypedNode::Decl)
-            .chain(self.stmts.iter().cloned().map(TypedNode::Stmt))
-            .collect()
+        let mut result = vec![];
+        result.extend(self.decls.iter().cloned().map(TypedNode::Decl));
+        result.extend(self.stmts.iter().cloned().map(TypedNode::Stmt));
+        result.sort_by(|a, b| a.node_id().1.cmp(&b.node_id().1));
+        result
     }
 }
 

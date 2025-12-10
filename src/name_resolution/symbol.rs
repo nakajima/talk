@@ -9,58 +9,6 @@ thread_local! {
 /// RAII guard that clears symbol names on drop
 pub struct SymbolDisplayContext;
 
-// Interns strings and provides reverse lookups
-#[derive(Default, Debug, Clone)]
-pub struct SymbolNames {
-    names: FxHashMap<String, SymbolNameId>,
-    names_by_id: FxHashMap<SymbolNameId, String>,
-    names_by_symbol: FxHashMap<Symbol, SymbolNameId>,
-}
-
-#[derive(Default, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct SymbolNameId(u32);
-
-impl SymbolNames {
-    pub fn export(&self) -> FxHashMap<Symbol, String> {
-        self.names_by_symbol
-            .iter()
-            .fold(FxHashMap::default(), |mut acc, (symbol, id)| {
-                let s = self.string(id);
-                acc.insert(*symbol, s);
-                acc
-            })
-    }
-
-    pub fn get(&mut self, string: String) -> SymbolNameId {
-        if let Some(existing) = self.names.get(&string) {
-            return *existing;
-        }
-
-        let id = SymbolNameId(self.names.len() as u32);
-        self.names.insert(string.clone(), id);
-        self.names_by_id.insert(id, string);
-        id
-    }
-
-    #[allow(clippy::expect_used)]
-    pub fn string(&self, id: &SymbolNameId) -> String {
-        self.names_by_id
-            .get(id)
-            .expect("didnt get name")
-            .to_string()
-    }
-
-    pub fn define(&mut self, name: String, symbol: Symbol) {
-        let id = self.get(name);
-        self.names_by_symbol.insert(symbol, id);
-    }
-
-    pub fn lookup_symbol(&self, symbol: &Symbol) -> Option<&String> {
-        let id = self.names_by_symbol.get(symbol)?;
-        self.names_by_id.get(id)
-    }
-}
-
 impl Drop for SymbolDisplayContext {
     fn drop(&mut self) {
         SYMBOL_NAMES.with(|cell| cell.borrow_mut().take());

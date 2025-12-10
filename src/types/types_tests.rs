@@ -542,7 +542,7 @@ pub mod tests {
 
     #[test]
     fn generalizes_locals() {
-        let (ast, types) = typecheck(
+        let (ast, _types) = typecheck(
             "
         func outer() {
             func id(x) { x }
@@ -553,7 +553,7 @@ pub mod tests {
         ",
         );
 
-        assert_eq!(ty(1, &ast, &types), Ty::Tuple(vec![Ty::Int, Ty::Bool]));
+        assert_eq!(ast.stmts[0].ty, Ty::Tuple(vec![Ty::Int, Ty::Bool]));
     }
 
     #[test]

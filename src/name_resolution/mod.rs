@@ -1,3 +1,4 @@
+pub mod builtins;
 pub mod decl_declarer;
 pub mod name_resolver;
 pub mod scc_graph;
