@@ -2,32 +2,23 @@ use std::fmt::Display;
 
 use crate::compiling::driver::DriverConfig;
 use crate::compiling::module::ModuleId;
-use crate::formatter;
 use crate::ir::basic_block::{Phi, PhiSource};
 use crate::ir::instruction::CmpOperator;
 use crate::ir::ir_ty::IrTy;
 use crate::ir::monomorphizer::uncurry_function;
-use crate::ir::parse_instruction;
 use crate::ir::value::{Addr, Reference};
 use crate::label::Label;
 use crate::name_resolution::symbol::{
-    self, GlobalId, InitializerId, InstanceMethodId, StaticMethodId, SymbolNames, Symbols,
+    GlobalId, InitializerId, InstanceMethodId, StaticMethodId, Symbols,
 };
-use crate::node_kinds::inline_ir_instruction::{
-    InlineIRInstruction, InlineIRInstructionKind, TypedInlineIRInstruction,
-};
-use crate::node_kinds::match_arm::MatchArm;
-use crate::node_kinds::parameter::Parameter;
-use crate::node_kinds::record_field::RecordField;
+use crate::node_kinds::inline_ir_instruction::{InlineIRInstructionKind, TypedInlineIRInstruction};
 use crate::node_kinds::type_annotation::TypeAnnotation;
-use crate::token_kind::TokenKind;
 use crate::types::infer_row::RowParamId;
 use crate::types::row::Row;
 use crate::types::type_session::TypeDefKind;
 use crate::types::typed_ast::{
     TypedAST, TypedBlock, TypedDecl, TypedDeclKind, TypedExpr, TypedExprKind, TypedFunc,
-    TypedMatchArm, TypedNode, TypedParameter, TypedPattern, TypedRecordField, TypedStmt,
-    TypedStmtKind,
+    TypedMatchArm, TypedNode, TypedPattern, TypedRecordField, TypedStmt, TypedStmtKind,
 };
 use crate::{
     compiling::driver::Source,
@@ -43,18 +34,8 @@ use crate::{
     },
     name::Name,
     name_resolution::symbol::{Symbol, SynthesizedId},
-    node::Node,
     node_id::{FileID, NodeID},
-    node_kinds::{
-        block::Block,
-        call_arg::CallArg,
-        decl::{Decl, DeclKind},
-        expr::{Expr, ExprKind},
-        func::Func,
-        pattern::{Pattern, PatternKind},
-        stmt::{Stmt, StmtKind},
-    },
-    span::Span,
+    node_kinds::pattern::PatternKind,
     types::{
         scheme::ForAll,
         ty::Ty,
@@ -217,7 +198,7 @@ pub struct Lowerer<'a> {
 
     current_ast_id: usize,
     symbols: &'a mut Symbols,
-    symbol_names: &'a mut SymbolNames,
+    symbol_names: &'a mut FxHashMap<Symbol, String>,
     pub(super) specializations: IndexMap<Symbol, Vec<Specialization>>,
     static_memory: StaticMemory,
 }
@@ -229,7 +210,7 @@ impl<'a> Lowerer<'a> {
         asts: &'a mut IndexMap<Source, TypedAST<Ty>>,
         types: &'a mut Types,
         symbols: &'a mut Symbols,
-        symbol_names: &'a mut SymbolNames,
+        symbol_names: &'a mut FxHashMap<Symbol, String>,
         config: &'a DriverConfig,
     ) -> Self {
         Self {
@@ -256,7 +237,7 @@ impl<'a> Lowerer<'a> {
             .asts
             .iter()
             .flat_map(|a| &a.1.decls)
-            .any(|d| is_main_func(d, &self.symbol_names));
+            .any(|d| is_main_func(d, self.symbol_names));
         if !has_main_func {
             let main_symbol = Symbol::Synthesized(self.symbols.next_synthesized(ModuleId::Current));
             let mut ret_ty = Ty::Void;
@@ -283,7 +264,24 @@ impl<'a> Lowerer<'a> {
             };
 
             #[allow(clippy::unwrap_used)]
-            let ast = self.asts.iter_mut().next().unwrap();
+            let (_, ast) = self.asts.iter_mut().next().unwrap();
+            ast.decls.push(TypedDecl {
+                id: NodeID(FileID(0), 0),
+                ty: Ty::Func(Ty::Void.into(), Ty::Void.into()),
+                kind: TypedDeclKind::Let {
+                    pattern: TypedPattern {
+                        id: NodeID(FileID(0), 0),
+                        ty: Ty::Func(Ty::Void.into(), Ty::Void.into()),
+                        kind: PatternKind::Bind(Name::Resolved(Symbol::Main, "main".into())),
+                    },
+                    ty: Ty::Func(Ty::Void.into(), Ty::Void.into()),
+                    initializer: Some(TypedExpr {
+                        id: NodeID(FileID(0), 0),
+                        ty: Ty::Func(Ty::Void.into(), Ty::Void.into()),
+                        kind: TypedExprKind::Func(func),
+                    }),
+                },
+            });
 
             self.types.define(
                 main_symbol,
@@ -291,7 +289,7 @@ impl<'a> Lowerer<'a> {
             );
 
             self.symbol_names
-                .define("main(synthesized)".to_string(), main_symbol);
+                .insert(main_symbol, "main(synthesized)".to_string());
         }
 
         self.current_function_stack.push(CurrentFunction::default());
@@ -1707,7 +1705,7 @@ impl<'a> Lowerer<'a> {
                     ty: ty.clone(),
                     val: Value::Func(method),
                 });
-            } else if let Some(witness) = self.witness_for(&id, label)
+            } else if let Some(witness) = self.witness_for(receiver, label)
                 && matches!(witness, Symbol::InstanceMethod(..))
             {
                 tracing::debug!("lowering req {label} {witness:?}");
@@ -1981,7 +1979,7 @@ impl<'a> Lowerer<'a> {
             });
 
             (method_sym, dest.into(), ty)
-        } else if let Some(witness) = self.witness_for(&callee_expr.id, label) {
+        } else if let Some(witness) = self.witness_for(&receiver, label) {
             // For method calls on type parameters, look up the witness at the callee expression's node ID.
             // This returns a MethodRequirement symbol that the monomorphizer will substitute with
             // the concrete implementation when specializing.
@@ -1998,6 +1996,7 @@ impl<'a> Lowerer<'a> {
 
             (witness, dest.into(), ty)
         } else {
+            println!("no witness found : {call_expr:?}");
             return Err(IRError::TypeNotFound(format!(
                 "No witness found for {:?} in {:?} ({:?}).",
                 label,
@@ -2477,12 +2476,31 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    fn resolve_name(&self, sym: &Symbol) -> Option<&String> {
+        if let Some(string) = self.symbol_names.get(sym) {
+            return Some(string);
+        }
+
+        for module in self.config.modules.modules.values() {
+            println!("checking {}: {:?}", module.name, module.symbol_names);
+            if let Some(string) = module.symbol_names.get(&sym.current()) {
+                return Some(string);
+            }
+        }
+
+        None
+    }
+
     fn monomorphize_name(&mut self, symbol: Symbol, instantiations: &Substitutions) -> Name {
         let name = Name::Resolved(
             symbol,
-            self.symbol_names
-                .lookup_symbol(&symbol)
-                .expect("did not get symbol name")
+            self.resolve_name(&symbol)
+                .unwrap_or_else(|| {
+                    unreachable!(
+                        "did not get symbol name: {symbol:?} in {:?}",
+                        self.symbol_names
+                    )
+                })
                 .to_string(),
         );
 
@@ -2491,7 +2509,7 @@ impl<'a> Lowerer<'a> {
         }
 
         let new_symbol = self.symbols.next_synthesized(self.config.module_id);
-        self.symbol_names.define(name.name_str(), new_symbol.into());
+        self.symbol_names.insert(new_symbol.into(), name.name_str());
         let ty_parts: Vec<String> = instantiations.ty.values().map(|v| format!("{v}")).collect();
         let witness_parts: Vec<String> = instantiations
             .witnesses
@@ -2702,7 +2720,8 @@ impl<'a> Lowerer<'a> {
     }
 
     #[instrument(skip(self), ret)]
-    fn witness_for(&mut self, node_id: &NodeID, label: &Label) -> Option<Symbol> {
+    fn witness_for(&mut self, receiver: &TypedExpr<Ty>, label: &Label) -> Option<Symbol> {
+        println!("looking for witness: {receiver:?}");
         None
     }
 
@@ -2816,7 +2835,7 @@ fn substitute_row(row: Row, substitutions: &Substitutions) -> Row {
     }
 }
 
-fn is_main_func(node: &TypedDecl<Ty>, symbol_names: &SymbolNames) -> bool {
+fn is_main_func(node: &TypedDecl<Ty>, symbol_names: &FxHashMap<Symbol, String>) -> bool {
     if let TypedDeclKind::Let {
         initializer:
             Some(TypedExpr {
@@ -2825,7 +2844,7 @@ fn is_main_func(node: &TypedDecl<Ty>, symbol_names: &SymbolNames) -> bool {
             }),
         ..
     } = &node.kind
-        && symbol_names.lookup_symbol(func_sym).map(|s| s.as_str()) == Some("main")
+        && symbol_names.get(func_sym).map(|s| s.as_str()) == Some("main")
     {
         return true;
     }

@@ -1,8 +1,3 @@
-use std::{io, path::PathBuf, rc::Rc};
-
-use indexmap::IndexMap;
-use rustc_hash::FxHashMap;
-
 use crate::{
     ast::{self, AST},
     compiling::module::{Module, ModuleEnvironment, ModuleId},
@@ -10,7 +5,7 @@ use crate::{
     lexer::Lexer,
     name_resolution::{
         name_resolver::{self, NameResolver},
-        symbol::{Symbol, SymbolNames, Symbols},
+        symbol::{Symbol, Symbols},
     },
     node_id::{FileID, NodeID},
     parser::Parser,
@@ -23,6 +18,9 @@ use crate::{
         typed_ast::TypedAST,
     },
 };
+use indexmap::IndexMap;
+use rustc_hash::FxHashMap;
+use std::{io, path::PathBuf, rc::Rc};
 
 pub trait DriverPhase {}
 
@@ -40,7 +38,7 @@ impl DriverPhase for NameResolved {}
 pub struct NameResolved {
     pub asts: IndexMap<Source, AST<name_resolver::NameResolved>>,
     pub symbols: Symbols,
-    pub symbol_names: SymbolNames,
+    pub symbol_names: FxHashMap<Symbol, String>,
 }
 
 impl DriverPhase for Typed {}
@@ -48,7 +46,7 @@ pub struct Typed {
     pub asts: IndexMap<Source, TypedAST<Ty>>,
     pub types: Types,
     pub exports: Exports,
-    pub symbol_names: SymbolNames,
+    pub symbol_names: FxHashMap<Symbol, String>,
     pub symbols: Symbols,
 }
 
@@ -57,7 +55,7 @@ pub struct Lowered {
     pub asts: IndexMap<Source, TypedAST<Ty>>,
     pub types: Types,
     pub exports: Exports,
-    pub symbol_names: SymbolNames,
+    pub symbol_names: FxHashMap<Symbol, String>,
     pub symbols: Symbols,
     pub program: Program,
 }
@@ -184,12 +182,17 @@ impl Driver<Parsed> {
 
         let asts = paths.into_iter().zip(resolved).collect();
 
+        let mut symbol_names = resolver.phase.symbol_names;
+        for module in self.config.modules.modules.values() {
+            symbol_names.extend(module.symbol_names.clone());
+        }
+
         Ok(Driver {
             files: self.files,
             config: self.config,
             phase: NameResolved {
                 asts,
-                symbol_names: resolver.phase.symbol_names,
+                symbol_names,
                 symbols: resolver.symbols,
             },
         })
@@ -205,13 +208,17 @@ impl Driver<NameResolved> {
                 #[allow(clippy::unwrap_used)]
                 let root = ast.phase.scopes.get(&NodeID(FileID(0), 0)).unwrap();
                 for (string, sym) in root.types.iter() {
-                    let string = ast.phase.symbol_names.string(string);
-                    acc.insert(string, *sym);
+                    if matches!(sym, Symbol::Builtin(..)) {
+                        continue;
+                    }
+                    acc.insert(string.clone(), *sym);
                 }
 
                 for (string, sym) in root.values.iter() {
-                    let string = ast.phase.symbol_names.string(string);
-                    acc.insert(string, *sym);
+                    if matches!(sym, Symbol::Builtin(..)) {
+                        continue;
+                    }
+                    acc.insert(string.clone(), *sym);
                 }
 
                 acc
@@ -268,7 +275,15 @@ impl Driver<Typed> {
 
 impl Driver<Lowered> {
     pub fn module<T: Into<String>>(self, name: T) -> Module {
-        let mut symbol_names = self.phase.symbol_names.export();
+        let mut symbol_names =
+            self.phase
+                .asts
+                .into_iter()
+                .fold(FxHashMap::default(), |mut acc, (_, ast)| {
+                    acc.extend(ast.phase.symbol_names);
+                    acc
+                });
+
         for module in self.config.modules.modules.values() {
             symbol_names.extend(module.symbol_names.clone());
         }

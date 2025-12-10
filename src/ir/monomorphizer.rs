@@ -3,7 +3,6 @@ use itertools::Itertools;
 use tracing::instrument;
 
 use crate::{
-    ast::AST,
     compiling::driver::{DriverConfig, Source},
     ir::{
         basic_block::{BasicBlock, Phi},
@@ -371,7 +370,7 @@ impl<'a> Monomorphizer<'a> {
         result: &mut IndexMap<Symbol, Function<IrTy>>,
     ) {
         let specialized_func = Function {
-            name: specialization.name.clone(),
+            name: specialization.name,
             ty: self.monomorphize_ty(func.ty.clone(), &specialization.substitutions),
             params: func.params.clone().into(),
             register_count: func.register_count,
