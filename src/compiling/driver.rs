@@ -10,15 +10,17 @@ use crate::{
     lexer::Lexer,
     name_resolution::{
         name_resolver::{self, NameResolver},
-        symbol::{Symbol, Symbols},
+        symbol::{Symbol, SymbolNames, Symbols},
     },
     node_id::{FileID, NodeID},
     parser::Parser,
     parser_error::ParserError,
     types::{
         passes::inference_pass::InferencePass,
+        ty::Ty,
         type_error::TypeError,
         type_session::{TypeSession, Types},
+        typed_ast::TypedAST,
     },
 };
 
@@ -38,21 +40,24 @@ impl DriverPhase for NameResolved {}
 pub struct NameResolved {
     pub asts: IndexMap<Source, AST<name_resolver::NameResolved>>,
     pub symbols: Symbols,
+    pub symbol_names: SymbolNames,
 }
 
 impl DriverPhase for Typed {}
 pub struct Typed {
-    pub asts: IndexMap<Source, AST<name_resolver::NameResolved>>,
+    pub asts: IndexMap<Source, TypedAST<Ty>>,
     pub types: Types,
     pub exports: Exports,
+    pub symbol_names: SymbolNames,
     pub symbols: Symbols,
 }
 
 impl DriverPhase for Lowered {}
 pub struct Lowered {
-    pub asts: IndexMap<Source, AST<name_resolver::NameResolved>>,
+    pub asts: IndexMap<Source, TypedAST<Ty>>,
     pub types: Types,
     pub exports: Exports,
+    pub symbol_names: SymbolNames,
     pub symbols: Symbols,
     pub program: Program,
 }
@@ -184,6 +189,7 @@ impl Driver<Parsed> {
             config: self.config,
             phase: NameResolved {
                 asts,
+                symbol_names: resolver.phase.symbol_names,
                 symbols: resolver.symbols,
             },
         })
@@ -199,11 +205,13 @@ impl Driver<NameResolved> {
                 #[allow(clippy::unwrap_used)]
                 let root = ast.phase.scopes.get(&NodeID(FileID(0), 0)).unwrap();
                 for (string, sym) in root.types.iter() {
-                    acc.insert(string.to_string(), *sym);
+                    let string = ast.phase.symbol_names.string(string);
+                    acc.insert(string, *sym);
                 }
 
                 for (string, sym) in root.values.iter() {
-                    acc.insert(string.to_string(), *sym);
+                    let string = ast.phase.symbol_names.string(string);
+                    acc.insert(string, *sym);
                 }
 
                 acc
@@ -215,9 +223,9 @@ impl Driver<NameResolved> {
         let exports = self.exports();
 
         let (paths, mut asts): (Vec<_>, Vec<_>) = self.phase.asts.into_iter().unzip();
-        InferencePass::drive(&mut asts, &mut session);
+        let asts = InferencePass::drive(&mut asts, &mut session);
 
-        let asts: IndexMap<Source, AST<_>> = paths.into_iter().zip(asts).collect();
+        let asts: IndexMap<Source, TypedAST<_>> = paths.into_iter().zip(asts).collect();
 
         Ok(Driver {
             files: self.files,
@@ -226,6 +234,7 @@ impl Driver<NameResolved> {
                 asts,
                 types: session.finalize().map_err(CompileError::Typing)?,
                 exports,
+                symbol_names: self.phase.symbol_names,
                 symbols: self.phase.symbols,
             },
         })
@@ -238,6 +247,7 @@ impl Driver<Typed> {
             &mut self.phase.asts,
             &mut self.phase.types,
             &mut self.phase.symbols,
+            &mut self.phase.symbol_names,
             &self.config,
         );
         let program = lowerer.lower().map_err(CompileError::Lowering)?;
@@ -246,6 +256,7 @@ impl Driver<Typed> {
             config: self.config,
             phase: Lowered {
                 asts: self.phase.asts,
+                symbol_names: self.phase.symbol_names,
                 types: self.phase.types,
                 exports: self.phase.exports,
                 symbols: self.phase.symbols,
@@ -257,15 +268,7 @@ impl Driver<Typed> {
 
 impl Driver<Lowered> {
     pub fn module<T: Into<String>>(self, name: T) -> Module {
-        let mut symbol_names =
-            self.phase
-                .asts
-                .into_iter()
-                .fold(FxHashMap::default(), |mut acc, (_, ast)| {
-                    acc.extend(ast.phase.symbols_to_string);
-                    acc
-                });
-
+        let mut symbol_names = self.phase.symbol_names.export();
         for module in self.config.modules.modules.values() {
             symbol_names.extend(module.symbol_names.clone());
         }

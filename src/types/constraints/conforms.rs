@@ -36,6 +36,41 @@ impl Conforms {
             }
             InferTy::Primitive(symbol) => *symbol,
             InferTy::Nominal { symbol, .. } => *symbol,
+            InferTy::Param(param_id) => {
+                // For type parameters, check if any given conformance implies conformance
+                // to the target protocol through protocol inheritance.
+                //
+                // Example: if we have `T: B` as a given, and `protocol B: A`, then
+                // `T: A` is satisfied because B inherits from A.
+                for given in &context.givens {
+                    if let Predicate::Conforms {
+                        param,
+                        protocol_id: given_protocol_id,
+                    } = given
+                        && param == param_id
+                    {
+                        // Direct conformance: param conforms to exactly the protocol we need
+                        if *given_protocol_id == self.protocol_id {
+                            return SolveResult::Solved(Default::default());
+                        }
+
+                        // Transitive conformance: param conforms to a protocol that
+                        // itself conforms to the target protocol
+                        let key = ConformanceKey {
+                            conforming_id: Symbol::Protocol(*given_protocol_id),
+                            protocol_id: self.protocol_id,
+                        };
+                        if session.type_catalog.conformances.contains_key(&key) {
+                            return SolveResult::Solved(Default::default());
+                        }
+                    }
+                }
+
+                return SolveResult::Err(TypeError::TypesCannotConform {
+                    ty: self.ty.clone(),
+                    protocol_id: self.protocol_id,
+                });
+            }
             _ => {
                 return SolveResult::Err(TypeError::TypesCannotConform {
                     ty: self.ty.clone(),

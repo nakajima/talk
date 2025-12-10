@@ -330,11 +330,12 @@ impl<'a> DeclDeclarer<'a> {
         self.type_members.insert(id, TypeMembers::default());
 
         self.start_scope(Some(sym), id, false);
+        let id = self.resolver.phase.symbol_names.get("Self".into());
         self.resolver
             .current_scope_mut()
             .expect("didn't get current scope")
             .types
-            .insert("Self".into(), sym);
+            .insert(id, sym);
 
         for generic in generics {
             generic.name = self

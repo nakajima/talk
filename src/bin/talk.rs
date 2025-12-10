@@ -79,7 +79,6 @@ async fn main() {
             );
             let resolved = driver.parse().unwrap().resolve_names().unwrap();
             let meta = resolved.phase.asts[0].meta.clone();
-            let typed = resolved.typecheck().unwrap();
 
             let formatter = Formatter::new_with_decorators(
                 &meta,
@@ -93,7 +92,7 @@ async fn main() {
 
             println!(
                 "{}",
-                formatter.format(&typed.phase.asts[0].roots.clone(), 80)
+                formatter.format(&resolved.phase.asts[0].roots.clone(), 80)
             );
         }
     }

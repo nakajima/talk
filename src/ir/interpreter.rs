@@ -216,7 +216,7 @@ impl Interpreter {
             .entrypoint()
             .expect("No entrypoint found for program.");
 
-        self.call(entrypoint.name.symbol().unwrap(), vec![], Register::MAIN);
+        self.call(entrypoint.name, vec![], Register::MAIN);
 
         while !self.frames.is_empty() {
             self.next();
@@ -226,11 +226,9 @@ impl Interpreter {
     }
 
     pub fn call(&mut self, function: Symbol, args: Vec<Value>, dest: Register) {
-        let caller_name = self.current_func.as_ref().map(|f| f.name.symbol().unwrap());
+        let caller_name = self.current_func.as_ref().map(|f| f.name);
         if let Some(callee_func) = self.current_func.take() {
-            self.program
-                .functions
-                .insert(callee_func.name.symbol().unwrap(), callee_func);
+            self.program.functions.insert(callee_func.name, callee_func);
         }
 
         let func = self
@@ -297,9 +295,7 @@ impl Interpreter {
                     unreachable!("but where did the frame come from");
                 };
 
-                self.program
-                    .functions
-                    .insert(func.name.symbol().unwrap(), func);
+                self.program.functions.insert(func.name, func);
 
                 if let Some(ret) = frame.ret {
                     let ret_func = self.program.functions.shift_remove(&ret).unwrap();

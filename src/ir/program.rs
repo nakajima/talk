@@ -19,7 +19,7 @@ pub struct Program {
 impl Program {
     pub fn entrypoint(&self) -> Option<&Function<IrTy>> {
         for (sym, func) in self.functions.iter() {
-            if func.name.name_str() == "main"
+            if matches!(func.name, Symbol::Main)
                 && matches!(sym, Symbol::Global(..) | Symbol::Synthesized(..))
             {
                 return Some(func);

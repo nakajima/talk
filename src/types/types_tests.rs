@@ -12,20 +12,17 @@ pub mod tests {
             name_resolver::NameResolved,
             symbol::{EnumId, GlobalId, ProtocolId, StructId, Symbol, SynthesizedId},
         },
-        node_kinds::{
-            expr::{Expr, ExprKind},
-            stmt::{Stmt, StmtKind},
-        },
         types::{
             conformance::ConformanceKey,
             scheme::{ForAll, Scheme},
             ty::Ty,
             type_error::TypeError,
             type_session::{TypeEntry, Types},
+            typed_ast::{TypedAST, TypedExpr, TypedExprKind, TypedStmt, TypedStmtKind},
         },
     };
 
-    fn typecheck(code: &'static str) -> (AST<NameResolved>, Types) {
+    fn typecheck(code: &'static str) -> (TypedAST<Ty>, Types) {
         let (ast, types) = typecheck_err(code);
         assert!(
             ast.diagnostics.is_empty(),
@@ -35,7 +32,7 @@ pub mod tests {
         (ast, types)
     }
 
-    fn typecheck_core(code: &'static str) -> (AST<NameResolved>, Types) {
+    fn typecheck_core(code: &'static str) -> (TypedAST<Ty>, Types) {
         let driver = Driver::new(vec![Source::from(code)], DriverConfig::default());
         let typed = driver
             .parse()
@@ -56,7 +53,7 @@ pub mod tests {
         (ast, types)
     }
 
-    fn typecheck_err(code: &'static str) -> (AST<NameResolved>, Types) {
+    fn typecheck_err(code: &'static str) -> (TypedAST<Ty>, Types) {
         let driver = Driver::new_bare(vec![Source::from(code)], DriverConfig::default());
         let typed = driver
             .parse()
@@ -81,15 +78,8 @@ pub mod tests {
         }
     }
 
-    pub fn ty(i: usize, ast: &AST<NameResolved>, session: &Types) -> Ty {
-        let entry = session
-            .get(&ast.roots[i].as_stmt().clone().as_expr().id)
-            .unwrap();
-
-        match entry {
-            TypeEntry::Mono(ty) => ty.clone(),
-            TypeEntry::Poly(scheme) => scheme.ty.clone(),
-        }
+    pub fn ty(i: usize, ast: &TypedAST<Ty>, _session: &Types) -> Ty {
+        ast.roots()[i].ty()
     }
 
     #[test]
@@ -227,31 +217,32 @@ pub mod tests {
         ",
         );
 
-        let Stmt {
+        let TypedStmt {
             kind:
-                StmtKind::Expr(Expr {
+                TypedStmtKind::Expr(TypedExpr {
                     kind:
-                        ExprKind::Call {
+                        TypedExprKind::Call {
                             callee: box root_1, ..
                         },
                     ..
                 }),
             ..
-        } = ast.roots[1].as_stmt()
+        } = &ast.stmts[0]
         else {
             panic!("didn't get expr");
         };
-        let Stmt {
+
+        let TypedStmt {
             kind:
-                StmtKind::Expr(Expr {
+                TypedStmtKind::Expr(TypedExpr {
                     kind:
-                        ExprKind::Call {
+                        TypedExprKind::Call {
                             callee: box root_2, ..
                         },
                     ..
                 }),
             ..
-        } = ast.roots[2].as_stmt()
+        } = &ast.stmts[1]
         else {
             panic!("didn't get expr");
         };
@@ -299,14 +290,14 @@ pub mod tests {
         );
 
         // Extract the constructor calls
-        let Stmt {
+        let TypedStmt {
             kind:
-                StmtKind::Expr(Expr {
+                TypedStmtKind::Expr(TypedExpr {
                     kind:
-                        ExprKind::Call {
+                        TypedExprKind::Call {
                             callee:
-                                box Expr {
-                                    kind: ExprKind::Constructor(_),
+                                box TypedExpr {
+                                    kind: TypedExprKind::Constructor(..),
                                     id: constructor_1_id,
                                     ..
                                 },
@@ -315,19 +306,19 @@ pub mod tests {
                     ..
                 }),
             ..
-        } = ast.roots[1].as_stmt()
+        } = &ast.stmts[0]
         else {
             panic!("didn't get first constructor call");
         };
 
-        let Stmt {
+        let TypedStmt {
             kind:
-                StmtKind::Expr(Expr {
+                TypedStmtKind::Expr(TypedExpr {
                     kind:
-                        ExprKind::Call {
+                        TypedExprKind::Call {
                             callee:
-                                box Expr {
-                                    kind: ExprKind::Constructor(_),
+                                box TypedExpr {
+                                    kind: TypedExprKind::Constructor(..),
                                     id: constructor_2_id,
                                     ..
                                 },
@@ -336,7 +327,7 @@ pub mod tests {
                     ..
                 }),
             ..
-        } = ast.roots[2].as_stmt()
+        } = &ast.stmts[1]
         else {
             panic!("didn't get second constructor call");
         };
@@ -391,14 +382,14 @@ pub mod tests {
         );
 
         // Extract the variant access calls
-        let Stmt {
+        let TypedStmt {
             kind:
-                StmtKind::Expr(Expr {
+                TypedStmtKind::Expr(TypedExpr {
                     kind:
-                        ExprKind::Call {
+                        TypedExprKind::Call {
                             callee:
-                                box Expr {
-                                    kind: ExprKind::Member(..),
+                                box TypedExpr {
+                                    kind: TypedExprKind::Member(..),
                                     id: member_1_id,
                                     ..
                                 },
@@ -407,19 +398,19 @@ pub mod tests {
                     ..
                 }),
             ..
-        } = ast.roots[1].as_stmt()
+        } = &ast.stmts[0]
         else {
             panic!("didn't get first enum variant call");
         };
 
-        let Stmt {
+        let TypedStmt {
             kind:
-                StmtKind::Expr(Expr {
+                TypedStmtKind::Expr(TypedExpr {
                     kind:
-                        ExprKind::Call {
+                        TypedExprKind::Call {
                             callee:
-                                box Expr {
-                                    kind: ExprKind::Member(..),
+                                box TypedExpr {
+                                    kind: TypedExprKind::Member(..),
                                     id: member_2_id,
                                     ..
                                 },
@@ -428,7 +419,7 @@ pub mod tests {
                     ..
                 }),
             ..
-        } = ast.roots[2].as_stmt()
+        } = &ast.stmts[1]
         else {
             panic!("didn't get second enum variant call");
         };
@@ -2228,7 +2219,7 @@ pub mod tests {
 
     #[test]
     fn protocols_on_protocols() {
-        let (ast, types) = typecheck(
+        let (_ast, types) = typecheck(
             "
         protocol A {
             func fizz() -> Int
@@ -2245,7 +2236,10 @@ pub mod tests {
         );
 
         assert_eq!(
-            decl_ty(2, &ast, &types),
+            *types
+                .get_symbol(&GlobalId::from(1).into())
+                .unwrap()
+                .as_mono_ty(),
             Ty::Func(Ty::Param(3.into()).into(), Ty::Int.into())
         );
     }
@@ -2278,7 +2272,7 @@ pub mod tests {
 
     #[test]
     fn types_fib() {
-        let (ast, types) = typecheck_core(
+        let (_ast, types) = typecheck_core(
             "
         func fib(n) {
             if n <= 1 { return n }
@@ -2291,7 +2285,10 @@ pub mod tests {
         );
 
         assert_eq!(
-            decl_ty(0, &ast, &types),
+            *types
+                .get_symbol(&GlobalId::from(1).into())
+                .unwrap()
+                .as_mono_ty(),
             // We should be able to infer the n is int because there's only one Comparable with RHS int
             Ty::Func(Ty::Int.into(), Ty::Int.into())
         )

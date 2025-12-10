@@ -10,6 +10,10 @@ use crate::{
     },
     span::Span,
     token_kind::TokenKind,
+    types::{
+        ty::SomeType,
+        typed_ast::{TyMappable, TypedExpr},
+    },
 };
 use std::fmt::Display;
 
@@ -185,6 +189,28 @@ pub struct InlineIRInstruction {
     pub instr_name_span: Span,
     #[drive(skip)]
     pub kind: InlineIRInstructionKind,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypedInlineIRInstruction<T: SomeType> {
+    pub id: NodeID,
+    pub span: Span,
+    pub binds: Vec<TypedExpr<T>>,
+    pub instr_name_span: Span,
+    pub kind: InlineIRInstructionKind,
+}
+
+impl<T: SomeType, U: SomeType> TyMappable<T, U> for TypedInlineIRInstruction<T> {
+    type Output = TypedInlineIRInstruction<U>;
+    fn map_ty(self, m: &mut impl FnMut(&T) -> U) -> Self::Output {
+        TypedInlineIRInstruction {
+            id: self.id,
+            span: self.span,
+            binds: self.binds.into_iter().map(|b| b.map_ty(m)).collect(),
+            instr_name_span: self.instr_name_span,
+            kind: self.kind,
+        }
+    }
 }
 
 impl Display for Register {

@@ -15,13 +15,13 @@ use crate::{
         value::{Reference, Value},
     },
     name::Name,
-    name_resolution::{name_resolver::NameResolved, symbol::Symbol},
-    types::{ty::Ty, type_session::Types},
+    name_resolution::symbol::Symbol,
+    types::{ty::Ty, type_session::Types, typed_ast::TypedAST},
 };
 
 #[allow(dead_code)]
 pub struct Monomorphizer<'a> {
-    asts: &'a mut IndexMap<Source, AST<NameResolved>>,
+    asts: &'a mut IndexMap<Source, TypedAST<Ty>>,
     types: &'a mut Types,
     config: &'a DriverConfig,
     pub(super) functions: IndexMap<Symbol, PolyFunction>,
@@ -141,7 +141,7 @@ impl<'a> Monomorphizer<'a> {
     ) {
         for specialization in self
             .specializations
-            .get(&func.name.symbol().expect("name not resolved"))
+            .get(&func.name)
             .cloned()
             .unwrap_or_default()
         {
@@ -160,7 +160,7 @@ impl<'a> Monomorphizer<'a> {
             register_count: func.register_count,
         };
 
-        result.insert(func.name.symbol().expect("name not resolved"), func);
+        result.insert(func.name, func);
     }
 
     #[instrument(skip(self, block), fields(block = %block))]
@@ -383,10 +383,7 @@ impl<'a> Monomorphizer<'a> {
                 .collect(),
         };
 
-        result.insert(
-            specialization.name.symbol().expect("name not resolved"),
-            specialized_func,
-        );
+        result.insert(specialization.name, specialized_func);
 
         let mut checked = IndexSet::default();
         for sym in result.keys().cloned().collect_vec() {

@@ -25,7 +25,7 @@ use crate::{
         func::Func,
         func_signature::FuncSignature,
         generic_decl::GenericDecl,
-        inline_ir_instruction::InlineIRInstruction,
+        inline_ir_instruction::{InlineIRInstruction, TypedInlineIRInstruction},
         match_arm::MatchArm,
         parameter::Parameter,
         pattern::{Pattern, PatternKind, RecordFieldPatternKind},
@@ -45,16 +45,17 @@ use crate::{
         scheme::{ForAll, Scheme},
         solve_context::{Solve, SolveContext, SolveContextKind},
         term_environment::EnvEntry,
-        type_catalog::MemberWitness,
+        ty::Ty,
+        type_catalog::Nominal,
         type_error::TypeError,
         type_operations::{
             InstantiationSubstitutions, UnificationSubstitutions, curry, substitute,
         },
         type_session::{TypeDefKind, TypeSession},
         typed_ast::{
-            TypedAST, TypedBlock, TypedDecl, TypedDeclKind, TypedExpr, TypedExprKind, TypedFunc,
-            TypedMatchArm, TypedNode, TypedParameter, TypedPattern, TypedRecordField, TypedStmt,
-            TypedStmtKind,
+            TyMappable, TypedAST, TypedBlock, TypedDecl, TypedDeclKind, TypedExpr, TypedExprKind,
+            TypedFunc, TypedMatchArm, TypedNode, TypedParameter, TypedPattern, TypedRecordField,
+            TypedStmt, TypedStmtKind,
         },
     },
 };
@@ -77,7 +78,10 @@ pub struct InferencePass<'a> {
 }
 
 impl<'a> InferencePass<'a> {
-    pub fn drive(asts: &'a mut [AST<NameResolved>], session: &'a mut TypeSession) {
+    pub fn drive(
+        asts: &'a mut [AST<NameResolved>],
+        session: &'a mut TypeSession,
+    ) -> Vec<TypedAST<Ty>> {
         let substitutions = UnificationSubstitutions::new(session.meta_levels.clone());
         let mut pass = InferencePass {
             asts,
@@ -88,10 +92,10 @@ impl<'a> InferencePass<'a> {
             tracked_returns: Default::default(),
         };
 
-        pass.drive_all();
+        pass.drive_all()
     }
 
-    fn drive_all(&mut self) {
+    fn drive_all(&mut self) -> Vec<TypedAST<Ty>> {
         // Register extension conformances first, so they're available when processing protocol default methods
         for i in 0..self.asts.len() {
             self.discover_conformances(i);
@@ -102,8 +106,11 @@ impl<'a> InferencePass<'a> {
             self.session.apply_all(&mut self.substitutions);
         }
 
+        let mut typed_asts = vec![];
         for i in 0..self.asts.len() {
-            self.generate(i);
+            let typed_ast = self.generate(i);
+            let typed_ast = typed_ast.apply(&mut self.substitutions, self.session);
+            typed_asts.push(typed_ast);
             self.session.apply_all(&mut self.substitutions);
         }
 
@@ -118,10 +125,13 @@ impl<'a> InferencePass<'a> {
                     .extend(entries.iter().map(|(k, v)| (k.to_string(), *v)));
             }
         }
+
+        typed_asts
+            .into_iter()
+            .map(|a| a.map_ty(&mut |t| self.session.finalize_ty(t.clone()).as_mono_ty().clone()))
+            .collect()
     }
 
-    /// Pre-register extension conformances so they're available when processing protocol default methods.
-    /// This ensures that when `Comparable` uses `!` operator on Bool, the `Bool: Not` conformance is known.
     fn discover_conformances(&mut self, idx: usize) {
         for root in self.asts[idx].roots.iter() {
             let Node::Decl(Decl {
@@ -192,6 +202,17 @@ impl<'a> InferencePass<'a> {
                 continue;
             };
 
+            let protocol_self_id = self.session.new_type_param_id(None);
+            let mut context = SolveContext::new(
+                self.substitutions.clone(),
+                level,
+                Default::default(),
+                SolveContextKind::Protocol {
+                    protocol_id: *protocol_id,
+                    protocol_self: protocol_self_id,
+                },
+            );
+
             for conformance in conformances {
                 let Ok(Symbol::Protocol(conforms_to_id)) = conformance.symbol() else {
                     tracing::error!("did not get protocol for conforms_to");
@@ -202,6 +223,16 @@ impl<'a> InferencePass<'a> {
                     protocol_id: conforms_to_id,
                     conforming_id: protocol_sym,
                 };
+
+                self.register_conformance(
+                    &InferTy::Param(protocol_self_id),
+                    protocol_sym,
+                    conforms_to_id.into(),
+                    conformance.id,
+                    conformance.span,
+                    &mut context,
+                )
+                .ok();
 
                 self.session.type_catalog.conformances.insert(
                     key,
@@ -215,18 +246,7 @@ impl<'a> InferencePass<'a> {
                 );
             }
 
-            let protocol_self_id = self.session.new_type_param_id(None);
             let mut binders: IndexMap<Symbol, InferTy> = IndexMap::default();
-
-            let mut context = SolveContext::new(
-                self.substitutions.clone(),
-                level,
-                Default::default(),
-                SolveContextKind::Protocol {
-                    protocol_id: *protocol_id,
-                    protocol_self: protocol_self_id,
-                },
-            );
 
             context.givens.insert(Predicate::Conforms {
                 param: protocol_self_id,
@@ -337,10 +357,17 @@ impl<'a> InferencePass<'a> {
                                 }));
                             continue;
                         };
-                        let ty = self
+
+                        let typed_func = self
                             .visit_method(protocol_sym, func, *is_static, &mut context)
                             .unwrap_or_else(|_| unimplemented!());
-                        binders.insert(func_sym, ty.ret.clone());
+                        binders.insert(
+                            func_sym,
+                            curry(
+                                typed_func.params.iter().map(|p| p.ty.clone()),
+                                typed_func.ret.clone(),
+                            ),
+                        );
                     }
                     _ => (),
                 }
@@ -361,69 +388,21 @@ impl<'a> InferencePass<'a> {
         _ = std::mem::replace(&mut self.asts[idx].roots, roots);
     }
 
-    #[instrument(skip(self))]
-    fn rectify_witnesses(&mut self) {
-        for (witness_id, witness) in self
-            .session
-            .type_catalog
-            .member_witnesses
-            .iter()
-            .map(|(k, v)| (*k, v.clone()))
-            .collect_vec()
-        {
-            match &witness {
-                MemberWitness::Meta { receiver, label } => {
-                    self.resolve_witness_to_concrete(witness_id, receiver, label);
-                }
-                MemberWitness::Requirement(method_req, receiver) => {
-                    // Get the method label from the requirement symbol
-                    let Some(label) = self
-                        .session
-                        .type_catalog
-                        .method_requirement_label(method_req)
-                    else {
-                        continue;
-                    };
-                    self.resolve_witness_to_concrete(witness_id, receiver, &label);
-                }
-                _ => {}
-            }
-        }
-    }
-
-    fn resolve_witness_to_concrete(
-        &mut self,
-        witness_id: NodeID,
-        receiver: &InferTy,
-        label: &Label,
-    ) {
-        let receiver_ty = self
-            .session
-            .apply(receiver.clone(), &mut self.substitutions);
-        let symbol = match receiver_ty {
-            InferTy::Primitive(symbol) => symbol,
-            InferTy::Nominal { symbol, .. } => symbol,
-            _ => {
-                tracing::warn!("Unable to resolve witness for {receiver_ty:?}.{label:?}");
-                return;
-            }
-        };
-
-        // Use lookup_member which checks instance_methods, conformances, and modules
-        if let Some((method, _source)) = self.session.lookup_member(&symbol, label)
-            && matches!(method, Symbol::InstanceMethod(..))
-        {
-            tracing::trace!("Resolved concrete witness {receiver_ty:?}.{label:?} = {method:?}");
-            self.session
-                .type_catalog
-                .member_witnesses
-                .insert(witness_id, MemberWitness::Concrete(method));
-        }
-    }
-
     fn generate(&mut self, idx: usize) -> TypedAST<InferTy> {
+        let mut groups = self.asts[idx].phase.scc_graph.groups();
+
+        // Process groups in topological order (dependencies first).
+        // Kosaraju returns reverse topological order, so we reverse it.
+        groups.sort_by_key(|group| group.id.0);
         let mut decls = vec![];
         let mut stmts = vec![];
+
+        for group in groups {
+            let (new_decls, new_stmts) = self.generate_for_group(idx, group);
+            decls.extend(new_decls);
+            stmts.extend(new_stmts);
+        }
+
         let mut context = SolveContext::new(
             self.substitutions.clone(),
             Level::default(),
@@ -431,74 +410,53 @@ impl<'a> InferencePass<'a> {
             SolveContextKind::Normal,
         );
 
-        let roots = std::mem::take(&mut self.asts[idx].roots);
-        for root in roots.iter() {
-            match self.visit_node(root, &mut context) {
-                Ok(typed_node) => match typed_node {
-                    TypedNode::Decl(decl) => decls.push(decl),
-                    TypedNode::Stmt(stmt) => stmts.push(stmt),
-                    TypedNode::Expr(_) => unreachable!(),
+        tracing::debug!("visiting stragglers");
+        for id in self.asts[idx].phase.unbound_nodes.clone() {
+            let Some(node) = self.asts.iter().find_map(|ast| ast.find(id)) else {
+                tracing::error!("Did not find ast node for id: {id:?}");
+                continue;
+            };
+
+            match self.visit_node(&node, &mut context) {
+                Ok(node) => match node {
+                    TypedNode::Decl(typed_decl) => decls.push(typed_decl),
+                    TypedNode::Stmt(typed_stmt) => stmts.push(typed_stmt),
+                    _ => {
+                        tracing::error!("hrm");
+                        continue;
+                    }
                 },
-                Err(e) => {
-                    self.asts[idx]
-                        .diagnostics
-                        .push(AnyDiagnostic::Typing(Diagnostic {
-                            id: root.node_id(),
-                            kind: e,
-                        }));
-                }
+                Err(e) => self.asts[idx]
+                    .diagnostics
+                    .push(AnyDiagnostic::Typing(Diagnostic {
+                        id: node.node_id(),
+                        kind: e,
+                    })),
             }
         }
-        _ = std::mem::replace(&mut self.asts[idx].roots, roots);
 
-        // let mut groups = self.asts[idx].phase.scc_graph.groups();
-
-        // // Process groups in topological order (dependencies first).
-        // // Kosaraju returns reverse topological order, so we reverse it.
-        // groups.sort_by_key(|group| group.id.0);
-
-        // for group in groups {
-        //     self.generate_for_group(idx, group);
-        // }
-
-        // let mut context = SolveContext::new(
-        //     self.substitutions.clone(),
-        //     Level::default(),
-        //     Default::default(),
-        //     SolveContextKind::Normal,
-        // );
-
-        // tracing::debug!("visiting stragglers");
-        // for id in self.asts[idx].phase.unbound_nodes.clone() {
-        //     let Some(node) = self.asts.iter().find_map(|ast| ast.find(id)) else {
-        //         tracing::error!("Did not find ast node for id: {id:?}");
-        //         continue;
-        //     };
-
-        //     self.visit_node(&node, &mut context);
-        // }
-
-        let level = context.level();
-        let solver = ConstraintSolver::new(&mut context, self.asts);
-        solver.solve(
-            level,
-            &mut self.constraints,
-            self.session,
-            self.substitutions.clone(),
-        );
-        self.substitutions.extend(&context.substitutions);
+        self.solve(&mut context, Default::default(), Default::default());
 
         // Apply substitutions to types_by_node for top-level expressions
         self.session.apply_all(&mut context.substitutions);
 
-        // Rectify witnesses for stragglers (top-level expressions like protocol method calls)
-        self.rectify_witnesses();
-
-        TypedAST { decls, stmts }
+        TypedAST {
+            decls,
+            stmts,
+            diagnostics: std::mem::take(&mut self.asts[idx].diagnostics),
+            phase: std::mem::take(&mut self.asts[idx].phase),
+        }
     }
 
     #[instrument(skip(self))]
-    fn _generate_for_group(&mut self, idx: usize, group: BindingGroup) {
+    fn generate_for_group(
+        &mut self,
+        idx: usize,
+        group: BindingGroup,
+    ) -> (Vec<TypedDecl<InferTy>>, Vec<TypedStmt<InferTy>>) {
+        let mut decls = vec![];
+        let mut stmts = vec![];
+
         let mut context = SolveContext::new(
             self.substitutions.clone(),
             group.level,
@@ -550,22 +508,27 @@ impl<'a> InferencePass<'a> {
                 .find_map(|ast| ast.phase.scc_graph.rhs_id_for(binder))
             else {
                 tracing::error!("did not find rhs_id for binder: {binder:?}");
-                return;
+                return (decls, stmts);
             };
 
             let Some(rhs) = self.asts.iter().find_map(|ast| ast.find(*rhs_id)) else {
                 tracing::error!("did not find rhs for id: {rhs_id:?}, binder: {binder:?}");
-                return;
+                return (decls, stmts);
             };
 
-            let expr = self
-                .visit_expr(&rhs.as_expr(), &mut context)
+            let node = self
+                .visit_node(&rhs, &mut context)
                 .unwrap_or_else(|_| unimplemented!());
+            match &node {
+                TypedNode::Decl(decl) => decls.push(decl.clone()),
+                TypedNode::Stmt(stmt) => stmts.push(stmt.clone()),
+                _ => (),
+            }
 
             if let Some(existing) = self.session.lookup(binder) {
                 if existing == EnvEntry::Mono(placeholders[i].clone()) {
                     self.constraints
-                        .wants_equals(expr.ty, placeholders[i].clone());
+                        .wants_equals(node.ty(), placeholders[i].clone());
                 } else {
                     self.constraints
                         .wants_equals(placeholders[i].clone(), existing._as_ty());
@@ -574,7 +537,8 @@ impl<'a> InferencePass<'a> {
         }
 
         // Solve this group
-        self.solve(&mut context, group.binders.clone(), placeholders)
+        self.solve(&mut context, group.binders.clone(), placeholders);
+        (decls, stmts)
     }
 
     fn solve(
@@ -606,7 +570,6 @@ impl<'a> InferencePass<'a> {
 
         self.substitutions.extend(&context.substitutions);
         self.session.apply_all(&mut self.substitutions);
-        self.rectify_witnesses();
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self, node, context), fields(node.id = ?node.node_id()))]
@@ -685,10 +648,14 @@ impl<'a> InferencePass<'a> {
         context: &mut impl Solve,
     ) -> TypedRet<TypedStmt<InferTy>> {
         let ty = match &stmt.kind {
-            StmtKind::Expr(expr) => TypedStmt {
-                id: stmt.id,
-                kind: TypedStmtKind::Expr(self.visit_expr(expr, context)?),
-            },
+            StmtKind::Expr(expr) => {
+                let typed_expr = self.visit_expr(expr, context)?;
+                TypedStmt {
+                    id: stmt.id,
+                    ty: typed_expr.ty.clone(),
+                    kind: TypedStmtKind::Expr(typed_expr),
+                }
+            }
             StmtKind::If(cond, conseq, alt) => {
                 self.visit_if_stmt(stmt.id, cond, conseq, alt, context)?
             }
@@ -699,12 +666,14 @@ impl<'a> InferencePass<'a> {
                     .wants_equals(lhs_ty.ty.clone(), rhs_ty.ty.clone());
                 TypedStmt {
                     id: stmt.id,
+                    ty: lhs_ty.ty.clone(),
                     kind: TypedStmtKind::Assignment(lhs_ty, rhs_ty),
                 }
             }
             StmtKind::Return(expr) => self.visit_return(stmt, expr, context)?,
             StmtKind::Break => TypedStmt {
                 id: stmt.id,
+                ty: InferTy::Void,
                 kind: TypedStmtKind::Break,
             },
             StmtKind::Loop(cond, block) => {
@@ -725,6 +694,7 @@ impl<'a> InferencePass<'a> {
 
                 TypedStmt {
                     id: stmt.id,
+                    ty: InferTy::Void,
                     kind: TypedStmtKind::Loop(cond_ty, block),
                 }
             }
@@ -853,7 +823,20 @@ impl<'a> InferencePass<'a> {
         Ok(TypedExpr {
             id: instr.id,
             ty,
-            kind: TypedExprKind::InlineIR(instr.clone().into()),
+            kind: TypedExprKind::InlineIR(
+                TypedInlineIRInstruction {
+                    id: instr.id,
+                    span: instr.span,
+                    binds: instr
+                        .binds
+                        .iter()
+                        .map(|e| self.visit_expr(e, context))
+                        .try_collect()?,
+                    instr_name_span: instr.instr_name_span,
+                    kind: instr.kind.clone(),
+                }
+                .into(),
+            ),
         })
     }
 
@@ -877,6 +860,10 @@ impl<'a> InferencePass<'a> {
 
         Ok(TypedStmt {
             id: stmt.id,
+            ty: ty_expr
+                .as_ref()
+                .map(|t| t.ty.clone())
+                .unwrap_or(InferTy::Void),
             kind: TypedStmtKind::Return(ty_expr),
         })
     }
@@ -1039,13 +1026,13 @@ impl<'a> InferencePass<'a> {
         })
     }
 
-    #[instrument(level = tracing::Level::TRACE, skip(self, decl, generics, conformances, body, context))]
+    #[instrument(level = tracing::Level::TRACE, skip(self, decl, _generics, _conformances, body, context))]
     fn visit_protocol(
         &mut self,
         decl: &Decl,
         name: &Name,
-        generics: &[GenericDecl],
-        conformances: &[TypeAnnotation],
+        _generics: &[GenericDecl],
+        _conformances: &[TypeAnnotation],
         body: &Body,
         context: &mut impl Solve,
     ) -> TypedRet<TypedDecl<InferTy>> {
@@ -1095,6 +1082,11 @@ impl<'a> InferencePass<'a> {
 
         Ok(TypedDecl {
             id: decl.id,
+            ty: self
+                .session
+                .lookup(&symbol)
+                .unwrap_or_else(|| unreachable!("did not find ty for {symbol:?}"))
+                ._as_ty(),
             kind: TypedDeclKind::ProtocolDef {
                 symbol,
                 instance_methods,
@@ -1136,32 +1128,33 @@ impl<'a> InferencePass<'a> {
                 .nominals
                 .contains_key(&nominal_symbol)
         {
-            let foralls: IndexSet<_> = ty.collect_foralls().into_iter().collect();
-            let entry = if foralls.is_empty() {
-                EnvEntry::Mono(ty.clone())
-            } else {
-                EnvEntry::Scheme(Scheme {
-                    foralls,
-                    predicates: vec![],
-                    ty: ty.clone(),
-                })
-            };
-
             self.session
-                .insert_term(nominal_symbol, entry, &mut self.constraints);
+                .insert(nominal_symbol, ty.clone(), &mut self.constraints);
         }
 
         let mut row_types = vec![];
+        let mut initializers = IndexMap::<Label, TypedFunc<InferTy>>::default();
         let mut instance_methods = IndexMap::<Label, TypedFunc<InferTy>>::default();
         let mut properties: IndexMap<Label, InferTy> = IndexMap::default();
         let mut variants: IndexMap<Label, Vec<InferTy>> = IndexMap::default();
         let mut typealiases: IndexMap<Label, InferTy> = IndexMap::default();
-        let mut nominal_conformances: Vec<Conformance<InferTy>> = vec![];
 
         for decl in body.decls.iter() {
             match &decl.kind {
                 DeclKind::Init { name, params, body } => {
-                    self.visit_init(decl, ty.clone(), name, params, body, &mut context.next());
+                    let func =
+                        self.visit_init(decl, ty.clone(), name, params, body, &mut context.next())?;
+                    initializers.insert("init".into(), func);
+                    self.session
+                        .type_catalog
+                        .initializers
+                        .entry(nominal_symbol)
+                        .or_default()
+                        .insert(
+                            name.name_str().into(),
+                            name.symbol()
+                                .map_err(|_| TypeError::NameNotResolved(name.clone()))?,
+                        );
                 }
                 DeclKind::Method { func, is_static } => {
                     let func =
@@ -1260,34 +1253,47 @@ impl<'a> InferencePass<'a> {
                 conformance.id,
                 conformance.span,
                 context,
-            );
+            )?;
         }
 
         let kind = match &decl.kind {
             DeclKind::Struct { .. } => TypedDeclKind::StructDef {
+                initializers,
                 symbol: nominal_symbol,
-                properties,
+                properties: properties.clone(),
                 instance_methods,
                 typealiases,
-                conformances: nominal_conformances,
             },
             DeclKind::Enum { .. } => TypedDeclKind::EnumDef {
                 symbol: nominal_symbol,
-                variants,
+                variants: variants.clone(),
                 instance_methods,
                 typealiases,
-                conformances: nominal_conformances,
             },
             DeclKind::Extend { .. } => TypedDeclKind::Extend {
                 symbol: nominal_symbol,
                 instance_methods,
                 typealiases,
-                conformances: nominal_conformances,
             },
             _ => unreachable!(),
         };
 
-        Ok(TypedDecl { id: decl.id, kind })
+        if !matches!(decl.kind, DeclKind::Extend { .. }) {
+            self.session.type_catalog.nominals.insert(
+                nominal_symbol,
+                Nominal {
+                    properties,
+                    variants,
+                    type_params,
+                },
+            );
+        }
+
+        Ok(TypedDecl {
+            id: decl.id,
+            ty,
+            kind,
+        })
     }
 
     fn register_conformance(
@@ -1298,10 +1304,13 @@ impl<'a> InferencePass<'a> {
         conformance_node_id: NodeID,
         conformance_span: Span,
         context: &mut impl Solve,
-    ) {
+    ) -> TypedRet<()> {
         let Symbol::Protocol(protocol_id) = conformance_symbol else {
             tracing::error!("didnt get protocol id for conformance: {conformance_symbol:?}");
-            return;
+            return Err(TypeError::NameNotResolved(Name::Resolved(
+                conformance_symbol,
+                "".into(),
+            )));
         };
 
         let transitive_conformance_keys = self
@@ -1328,7 +1337,7 @@ impl<'a> InferencePass<'a> {
                 )
             };
 
-            self.register_conformance(ty, nominal_symbol, sym, node_id, span, context);
+            self.register_conformance(ty, nominal_symbol, sym, node_id, span, context)?;
         }
 
         // Get the protocol's associated type declarations
@@ -1403,9 +1412,11 @@ impl<'a> InferencePass<'a> {
         self.session
             .type_catalog
             .conformances
-            .insert(key, conformance);
+            .insert(key, conformance.clone());
 
         self.constraints.wants_conforms(ty.clone(), protocol_id);
+
+        Ok(())
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self, context))]
@@ -1536,10 +1547,10 @@ impl<'a> InferencePass<'a> {
         Ok(ty)
     }
 
-    #[instrument(level = tracing::Level::TRACE, skip(self, context, decl))]
+    #[instrument(level = tracing::Level::TRACE, skip(self, context, _decl))]
     fn visit_init(
         &mut self,
-        decl: &Decl,
+        _decl: &Decl,
         struct_ty: InferTy,
         name: &Name,
         params: &[Parameter],
@@ -1569,6 +1580,7 @@ impl<'a> InferencePass<'a> {
             .or_default()
             .insert(Label::Named("init".into()), sym);
 
+        let foralls = ty.collect_foralls();
         let ty = substitute(ty, &self.session.skolem_map);
         self.session.insert(sym, ty, &mut self.constraints);
 
@@ -1576,6 +1588,7 @@ impl<'a> InferencePass<'a> {
             name: sym,
             params,
             body: block,
+            foralls,
             ret: struct_ty,
         })
     }
@@ -1896,6 +1909,7 @@ impl<'a> InferencePass<'a> {
         })
     }
 
+    // TODO: We should be smarter about whether we've got an if stmt vs an if expr
     #[instrument(level = tracing::Level::TRACE, skip(self, cond, conseq, alt, context))]
     fn visit_if_stmt(
         &mut self,
@@ -1911,21 +1925,28 @@ impl<'a> InferencePass<'a> {
 
         let conseq_ty = self.infer_block(conseq, context)?;
 
-        let alt_ty = if let Some(alt) = alt {
-            self.infer_block(alt, context)?
+        let (alt_ty, result_ty) = if let Some(alt) = alt {
+            let alt_ty = self.infer_block(alt, context)?;
+            self.constraints
+                .wants_equals(conseq_ty.ret.clone(), alt_ty.ret.clone());
+            (alt_ty, conseq_ty.ret.clone())
         } else {
-            TypedBlock {
-                id: NodeID(id.0, self.asts[id.0.0 as usize].node_ids.next_id()),
-                body: vec![],
-                ret: InferTy::Void,
-            }
+            (
+                TypedBlock {
+                    id: NodeID(id.0, self.asts[id.0.0 as usize].node_ids.next_id()),
+                    body: vec![],
+                    ret: InferTy::Void,
+                },
+                InferTy::Void,
+            )
         };
 
         Ok(TypedStmt {
             id,
+            ty: result_ty.clone(),
             kind: TypedStmtKind::Expr(TypedExpr {
                 id,
-                ty: InferTy::Void,
+                ty: result_ty,
                 kind: TypedExprKind::If(cond_ty.into(), conseq_ty, alt_ty),
             }),
         })
@@ -2091,11 +2112,18 @@ impl<'a> InferencePass<'a> {
         func: &Func,
         context: &mut impl Solve,
     ) -> TypedRet<TypedFunc<InferTy>> {
+        let func_sym = func
+            .name
+            .symbol()
+            .map_err(|_| TypeError::NameNotResolved(func.name.clone()))?;
+
         for generic in func.generics.iter() {
             self.register_generic(generic, context);
         }
 
         let params = self.visit_params(&func.params, context)?;
+
+        let mut foralls = IndexSet::default();
 
         let body = if let Some(ret) = &func.ret {
             let ret = self.visit_type_annotation(ret, context)?;
@@ -2104,17 +2132,31 @@ impl<'a> InferencePass<'a> {
             self.infer_block_with_returns(&func.body, &mut context.next())?
         };
 
+        foralls.extend(body.ret.collect_foralls());
+
+        let params = params
+            .iter()
+            .map(|t| {
+                let ty = substitute(t.ty.clone(), &self.session.skolem_map);
+                foralls.extend(ty.collect_foralls());
+                TypedParameter { name: t.name, ty }
+            })
+            .collect_vec();
+
+        let ret = substitute(body.ret.clone(), &self.session.skolem_map);
+
+        self.session.insert(
+            func_sym,
+            curry(params.iter().map(|t| t.ty.clone()), ret.clone()),
+            &mut Default::default(),
+        );
+
         Ok(TypedFunc {
-            name: func.name.symbol().unwrap_or_else(|_| unimplemented!()),
-            params: params
-                .iter()
-                .map(|t| TypedParameter {
-                    name: t.name,
-                    ty: substitute(t.ty.clone(), &self.session.skolem_map),
-                })
-                .collect(),
-            ret: substitute(body.ret.clone(), &self.session.skolem_map),
+            name: func_sym,
+            params,
+            foralls,
             body,
+            ret,
         })
     }
 
@@ -2395,25 +2437,30 @@ impl<'a> InferencePass<'a> {
         rhs: &Option<Expr>,
         context: &mut impl Solve,
     ) -> TypedRet<TypedDecl<InferTy>> {
-        let ty = match (&type_annotation, &rhs) {
-            (None, Some(expr)) => self.visit_expr(expr, context)?.ty,
-            (Some(annotation), None) => self.visit_type_annotation(annotation, context)?,
+        let (ty, initializer) = match (&type_annotation, &rhs) {
+            (None, Some(expr)) => {
+                let expr = self.visit_expr(expr, context)?;
+                (expr.ty.clone(), Some(expr))
+            }
+            (Some(annotation), None) => (self.visit_type_annotation(annotation, context)?, None),
             (Some(annotation), Some(rhs)) => {
                 let annotated_ty = self.visit_type_annotation(annotation, context)?;
                 let rhs_ty = self.visit_expr(rhs, context)?;
                 self.constraints
-                    .wants_equals(annotated_ty.clone(), rhs_ty.ty);
-                annotated_ty
+                    .wants_equals(annotated_ty.clone(), rhs_ty.ty.clone());
+                (annotated_ty, Some(rhs_ty))
             }
-            (None, None) => self.session.new_ty_meta_var(context.level().next()),
+            (None, None) => (self.session.new_ty_meta_var(context.level().next()), None),
         };
 
         let typed_pattern = self.check_pattern(lhs, &ty, context);
 
         Ok(TypedDecl {
             id,
+            ty: ty.clone(),
             kind: TypedDeclKind::Let {
                 pattern: typed_pattern,
+                initializer,
                 ty,
             },
         })

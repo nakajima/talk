@@ -48,6 +48,7 @@ pub mod tests {
             &mut typed.phase.asts,
             &mut typed.phase.types,
             &mut typed.phase.symbols,
+            &mut typed.phase.symbol_names,
             &typed.config,
         );
         lowerer.lower().unwrap()
@@ -74,7 +75,7 @@ pub mod tests {
             program.functions,
             indexmap::indexmap!(GlobalId::from(1).into() => Function {
                 register_count: 1,
-                name: Name::Resolved(GlobalId::from(1).into(), "main".into()),
+                name: GlobalId::from(1).into() ,
                 params: vec![].into(),
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
                 blocks: vec![BasicBlock {
@@ -98,7 +99,7 @@ pub mod tests {
         assert_eq!(
             program.functions,
             indexmap::indexmap!(GlobalId::from(1).into() => Function {
-                name: Name::Resolved(GlobalId::from(1).into(), "main".into()),
+                name: GlobalId::from(1).into(),
                 register_count: 1,
                 params: vec![].into(),
                 ty: IrTy::Func(vec![], IrTy::Float.into()),
@@ -128,7 +129,7 @@ pub mod tests {
         assert_eq!(
             program.functions,
             indexmap::indexmap!(SynthesizedId::from(1).into() => Function {
-                name: Name::Resolved(SynthesizedId::from(1).into(), "main".into()),
+                name: SynthesizedId::from(1).into(),
                 params: vec![].into(),
                 register_count: 1,
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
@@ -153,7 +154,7 @@ pub mod tests {
         assert_eq!(
             program.functions,
             indexmap::indexmap!(SynthesizedId::from(1).into() => Function {
-                name: Name::Resolved(SynthesizedId::from(1).into(), "main".into()),
+                name: SynthesizedId::from(1).into(),
                 params: vec![].into(),
                 register_count: 1,
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
@@ -187,7 +188,7 @@ pub mod tests {
                 .get(&Symbol::from(SynthesizedId::from(1)))
                 .unwrap(),
             Function {
-                name: Name::Resolved(SynthesizedId::from(1).into(), "main".into()),
+                name: SynthesizedId::from(1).into(),
                 params: vec![].into(),
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
                 register_count: 3,
@@ -227,7 +228,7 @@ pub mod tests {
                 .get(&Symbol::from(GlobalId::from(1)))
                 .unwrap(),
             Function {
-                name: Name::Resolved(GlobalId::from(1).into(), "foo".into()),
+                name: GlobalId::from(1).into(),
                 params: vec![Value::Reg(0)].into(),
                 register_count: 1,
                 ty: IrTy::Func(vec![IrTy::Int], IrTy::Int.into()),
@@ -259,7 +260,7 @@ pub mod tests {
                 .get(&Symbol::from(SynthesizedId::from(2)))
                 .unwrap(),
             Function {
-                name: Name::Resolved(SynthesizedId::from(2).into(), "main".into()),
+                name: SynthesizedId::from(2).into(),
                 params: vec![].into(),
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
                 register_count: 4,
@@ -325,7 +326,7 @@ pub mod tests {
                 .get(&Symbol::from(SynthesizedId::from(2)))
                 .unwrap(),
             Function {
-                name: Name::Resolved(SynthesizedId::from(2).into(), "main".into()),
+                name: SynthesizedId::from(2).into(),
                 params: vec![].into(),
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
                 register_count: 4,
@@ -385,7 +386,7 @@ pub mod tests {
                 .get(&Symbol::Synthesized(SynthesizedId::from(1)))
                 .unwrap(),
             Function {
-                name: Name::Resolved(SynthesizedId::from(1).into(), "main".into()),
+                name: SynthesizedId::from(1).into(),
                 params: vec![].into(),
                 register_count: 1,
                 ty: IrTy::Func(
@@ -424,7 +425,7 @@ pub mod tests {
                 .get(&Symbol::Synthesized(SynthesizedId::from(1)))
                 .unwrap(),
             Function {
-                name: Name::Resolved(SynthesizedId::from(1).into(), "main".into()),
+                name: SynthesizedId::from(1).into(),
                 params: vec![].into(),
                 register_count: 3,
                 ty: IrTy::Func(
@@ -483,7 +484,7 @@ pub mod tests {
                 .get(&Symbol::Synthesized(SynthesizedId::from(1)))
                 .unwrap(),
             Function {
-                name: Name::Resolved(SynthesizedId::from(1).into(), "main".into()),
+                name: SynthesizedId::from(1).into(),
                 params: vec![].into(),
                 register_count: 3,
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
@@ -558,9 +559,11 @@ pub mod tests {
         );
 
         // There should be a specialized function for lte with witnesses
-        let has_specialization = program.functions.values().any(|f| {
-            f.name.name_str().contains("lte") && f.name.name_str().contains("InstanceMethod")
-        });
+        let _s = set_symbol_names(module.symbol_names.clone());
+        let has_specialization = program
+            .functions
+            .values()
+            .any(|f| format!("{f}").contains("lte"));
         assert!(has_specialization, "expected specialized lte function");
     }
 
@@ -586,7 +589,7 @@ pub mod tests {
                 .get(&Symbol::from(SynthesizedId::from(2)))
                 .unwrap(),
             Function {
-                name: Name::Resolved(SynthesizedId::from(2).into(), "main".into()),
+                name: SynthesizedId::from(2).into(),
                 params: vec![].into(),
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
                 register_count: 4,
@@ -647,7 +650,7 @@ pub mod tests {
         assert_eq!(
             program.functions,
             indexmap::indexmap!(SynthesizedId::from(1).into() => Function {
-                name: Name::Resolved(SynthesizedId::from(1).into(), "main".into()),
+                name: SynthesizedId::from(1).into(),
                 params: vec![].into(),
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
                 register_count: 1,
@@ -683,7 +686,7 @@ pub mod tests {
                 .get(&Symbol::from(SynthesizedId::from(1)))
                 .unwrap(),
             Function {
-                name: Name::Resolved(SynthesizedId::from(1).into(), "main".into()),
+                name: SynthesizedId::from(1).into(),
                 params: vec![].into(),
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
                 register_count: 3,
@@ -736,7 +739,7 @@ pub mod tests {
                 .get(&Symbol::from(SynthesizedId::from(1)))
                 .unwrap(),
             Function {
-                name: Name::Resolved(SynthesizedId::from(1).into(), "main".into()),
+                name: SynthesizedId::from(1).into(),
                 params: vec![].into(),
                 ty: IrTy::Func(vec![], IrTy::Float.into()),
                 register_count: 5,
@@ -790,7 +793,7 @@ pub mod tests {
                 .get(&Symbol::from(SynthesizedId::from(2)))
                 .unwrap(),
             Function {
-                name: Name::Resolved(SynthesizedId::from(2).into(), "@id:Global(_:1)[Int]".into()),
+                name: SynthesizedId::from(2).into(),
                 params: vec![Value::Reg(0)].into(),
                 ty: IrTy::Func(vec![IrTy::Int], IrTy::Int.into()),
                 register_count: 1,
@@ -812,10 +815,8 @@ pub mod tests {
                 .get(&Symbol::from(SynthesizedId::from(3)))
                 .unwrap(),
             Function {
-                name: Name::Resolved(
-                    SynthesizedId::from(3).into(),
-                    "@id:Global(_:1)[Float]".into()
-                ),
+                name: SynthesizedId::from(3).into(),
+
                 params: vec![Value::Reg(0)].into(),
                 ty: IrTy::Func(vec![IrTy::Float], IrTy::Float.into()),
                 register_count: 1,
@@ -849,7 +850,7 @@ pub mod tests {
                 .get(&Symbol::Synthesized(SynthesizedId::from(1)))
                 .unwrap(),
             Function::<IrTy> {
-                name: Name::Resolved(SynthesizedId::from(1).into(), "main".into()),
+                name: SynthesizedId::from(1).into(),
                 params: vec![].into(),
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
                 register_count: 1,
@@ -914,7 +915,7 @@ pub mod tests {
                 .get(&Symbol::Synthesized(SynthesizedId::from(1)))
                 .unwrap(),
             Function::<IrTy> {
-                name: Name::Resolved(SynthesizedId::from(1).into(), "main".into()),
+                name: SynthesizedId::from(1).into(),
                 params: vec![].into(),
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
                 // allocator got up to Register(9), so next is 10

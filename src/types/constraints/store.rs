@@ -22,7 +22,6 @@ use crate::{
         infer_row::InferRow,
         infer_ty::{InferTy, Level, Meta},
         solve_context::SolveContext,
-        typed_ast::TypedExpr,
     },
 };
 

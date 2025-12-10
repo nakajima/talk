@@ -110,22 +110,6 @@ impl<T: SomeType> Default for TrackedInstantiations<T> {
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub enum MemberWitness<T> {
-    Concrete(Symbol),
-    Requirement(Symbol, T),
-    Meta {
-        receiver: T,
-        label: Label,
-    },
-    /// Call to a default protocol method - needs conformance context for resolving
-    /// internal method requirement calls
-    DefaultMethod {
-        method: Symbol,
-        conformance: ConformanceKey,
-    },
-}
-
-#[derive(Debug, PartialEq, Clone)]
 pub struct TypeCatalog<T: SomeType> {
     pub nominals: FxHashMap<Symbol, Nominal<T>>,
     pub conformances: FxHashMap<ConformanceKey, Conformance<T>>,
@@ -139,7 +123,6 @@ pub struct TypeCatalog<T: SomeType> {
     pub variants: FxHashMap<Symbol, IndexMap<Label, Symbol>>,
     pub method_requirements: FxHashMap<Symbol, IndexMap<Label, Symbol>>,
     pub instantiations: TrackedInstantiations<T>,
-    pub member_witnesses: FxHashMap<NodeID, MemberWitness<T>>,
 }
 
 impl<T: SomeType> Default for TypeCatalog<T> {
@@ -159,7 +142,6 @@ impl<T: SomeType> Default for TypeCatalog<T> {
             method_requirements: Default::default(),
 
             instantiations: Default::default(),
-            member_witnesses: Default::default(),
         }
     }
 }
@@ -199,33 +181,6 @@ impl TypeCatalog<InferTy> {
             static_methods: self.static_methods,
             variants: self.variants,
             method_requirements: self.method_requirements,
-            member_witnesses: self
-                .member_witnesses
-                .into_iter()
-                .map(|(k, v)| {
-                    (
-                        k,
-                        match v {
-                            MemberWitness::Concrete(sym) => MemberWitness::Concrete(sym),
-                            MemberWitness::Requirement(sym, ty) => MemberWitness::Requirement(
-                                sym,
-                                session.finalize_ty(ty).as_mono_ty().clone(),
-                            ),
-                            MemberWitness::Meta { receiver, label } => MemberWitness::Meta {
-                                receiver: session.finalize_ty(receiver).as_mono_ty().clone(),
-                                label,
-                            },
-                            MemberWitness::DefaultMethod {
-                                method,
-                                conformance,
-                            } => MemberWitness::DefaultMethod {
-                                method,
-                                conformance,
-                            },
-                        },
-                    )
-                })
-                .collect(),
             instantiations,
         }
     }

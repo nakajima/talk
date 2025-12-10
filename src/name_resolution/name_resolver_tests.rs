@@ -6,7 +6,6 @@ pub mod tests {
 
     use crate::{
         annotation, any, any_block, any_body, any_decl, any_expr, any_expr_stmt, any_stmt,
-        assert_eq_diff,
         ast::AST,
         compiling::module::{ModuleEnvironment, ModuleId},
         diagnostic::{AnyDiagnostic, Diagnostic},
@@ -186,7 +185,7 @@ pub mod tests {
     fn resolves_func_params() {
         let tree = resolve("func foo(x, y) { x ; y }");
 
-        assert_eq_diff!(
+        assert_eq!(
             *tree.roots[0].as_decl(),
             any_decl!(DeclKind::Let {
                 lhs: Pattern {
@@ -228,7 +227,7 @@ pub mod tests {
           ",
         );
 
-        assert_eq_diff!(
+        assert_eq!(
             *resolved.roots[0].as_decl(),
             any_decl!(DeclKind::Let {
                 lhs: Pattern {
@@ -257,7 +256,7 @@ pub mod tests {
             })
         );
 
-        assert_eq_diff!(
+        assert_eq!(
             *resolved.roots[1].as_decl(),
             any_decl!(DeclKind::Let {
                 lhs: Pattern {
@@ -291,7 +290,7 @@ pub mod tests {
     fn resolves_nested_shadowing_correctly() {
         let tree = resolve("func foo(x, y) { func bar(x) { x \n y }\nx }\n");
 
-        assert_eq_diff!(
+        assert_eq!(
             *tree.roots[0].as_decl(),
             any_decl!(DeclKind::Let {
                 lhs: Pattern {
@@ -374,7 +373,7 @@ pub mod tests {
             })
         );
 
-        assert_eq_diff!(
+        assert_eq!(
             *resolved.roots[1].as_decl(),
             any_decl!(DeclKind::Let {
                 lhs: any_pattern!(PatternKind::Bind(Name::Resolved(
@@ -387,9 +386,9 @@ pub mod tests {
                     name: Name::Resolved(Symbol::Global(GlobalId::from(2)), "counter".into()),
                     name_span: Span::ANY,
                     generics: vec![],
-                    params: vec![param!(ParamLocalId(1), "x")],
+                    params: vec![param!(ParamLocalId(3), "x")],
                     body: any_block!(vec![
-                        any_stmt!(StmtKind::Expr(variable!(ParamLocalId(1), "x"))).into(),
+                        any_stmt!(StmtKind::Expr(variable!(ParamLocalId(3), "x"))).into(),
                         any_stmt!(StmtKind::Expr(variable!(GlobalId::from(1), "count"))).into(),
                         any_stmt!(StmtKind::Expr(variable!(GlobalId::from(1), "count"))).into(),
                     ]),
@@ -463,7 +462,7 @@ pub mod tests {
             level: Level(1),
         });
 
-        assert_eq_diff!(
+        assert_eq!(
             resolved.phase.captures.get(&DeclaredLocalId(2).into()),
             Some(&expected),
         );
@@ -477,7 +476,7 @@ pub mod tests {
         ",
         );
 
-        assert_eq_diff!(
+        assert_eq!(
             *resolved.roots[0].as_decl(),
             any_decl!(DeclKind::Let {
                 lhs: Pattern {
@@ -496,7 +495,7 @@ pub mod tests {
                     generics: vec![GenericDecl {
                         id: NodeID::ANY,
                         span: Span::ANY,
-                        name: Name::Resolved(Symbol::TypeParameter(TypeParameterId(1)), "T".into()),
+                        name: Name::Resolved(Symbol::TypeParameter(TypeParameterId(2)), "T".into()),
                         name_span: Span::ANY,
                         generics: vec![],
                         conformances: vec![],
@@ -506,7 +505,7 @@ pub mod tests {
                         "t",
                         annotation!(TypeAnnotationKind::Nominal {
                             name: Name::Resolved(
-                                Symbol::TypeParameter(TypeParameterId(1)),
+                                Symbol::TypeParameter(TypeParameterId(2)),
                                 "T".into()
                             ),
                             name_span: Span::ANY,
@@ -514,10 +513,10 @@ pub mod tests {
                         })
                     ),],
                     body: any_block!(vec![
-                        any_stmt!(StmtKind::Expr(variable!(ParamLocalId(1), "t"))).into(),
+                        any_stmt!(StmtKind::Expr(variable!(ParamLocalId(3), "t"))).into(),
                     ]),
                     ret: Some(annotation!(TypeAnnotationKind::Nominal {
-                        name: Name::Resolved(Symbol::TypeParameter(TypeParameterId(1)), "T".into()),
+                        name: Name::Resolved(Symbol::TypeParameter(TypeParameterId(3)), "T".into()),
                         name_span: Span::ANY,
                         generics: vec![]
                     })),
@@ -610,7 +609,7 @@ pub mod tests {
     #[test]
     fn resolves_struct() {
         let resolved = resolve("struct Person {}");
-        assert_eq_diff!(
+        assert_eq!(
             *resolved.roots[0].as_decl(),
             any_decl!(DeclKind::Struct {
                 name: Name::Resolved(StructId::from(1).into(), "Person".into()),
@@ -645,7 +644,7 @@ pub mod tests {
         }
         ",
         );
-        assert_eq_diff!(
+        assert_eq!(
             *resolved.roots[0].as_decl(),
             any_decl!(DeclKind::Struct {
                 name: Name::Resolved(StructId::from(1).into(), "Person".into()),
@@ -715,7 +714,7 @@ pub mod tests {
         }
         ",
         );
-        assert_eq_diff!(
+        assert_eq!(
             *resolved.roots[0].as_decl(),
             any_decl!(DeclKind::Struct {
                 name: Name::Resolved(StructId::from(1).into(), "Person".into()),
@@ -750,7 +749,7 @@ pub mod tests {
         }
         ",
         );
-        assert_eq_diff!(
+        assert_eq!(
             *resolved.roots[0].as_decl(),
             any_decl!(DeclKind::Struct {
                 name: Name::Resolved(StructId::from(1).into(), "Person".into()),
@@ -828,7 +827,7 @@ pub mod tests {
                 static func fizz() {}
             }",
         );
-        assert_eq_diff!(
+        assert_eq!(
             *resolved.roots[0].as_decl(),
             any_decl!(DeclKind::Struct {
                 name: Name::Resolved(StructId::from(1).into(), "Person".into()),
@@ -885,7 +884,7 @@ pub mod tests {
                 }
             }",
         );
-        assert_eq_diff!(
+        assert_eq!(
             *resolved.roots[0].as_decl(),
             any_decl!(DeclKind::Struct {
                 name: Name::Resolved(StructId::from(1).into(), "Person".into()),
@@ -1038,7 +1037,7 @@ pub mod tests {
         struct Person {}
         ",
         );
-        assert_eq_diff!(
+        assert_eq!(
             *resolved.roots[0].as_decl(),
             any_decl!(DeclKind::Extend {
                 name: Name::Resolved(Symbol::Struct(StructId::from(1)), "Person".into()),
@@ -1120,8 +1119,8 @@ pub mod tests {
                 .unwrap(),
             fxhashmap! {
                 "B".into() => Symbol::Struct(StructId::from(2)),
-                "C".into() => Symbol::TypeAlias(TypeAliasId::from(3)),
-                "D".into() => Symbol::Enum(EnumId::from(4))
+                "C".into() => Symbol::TypeAlias(TypeAliasId::from(5)),
+                "D".into() => Symbol::Enum(EnumId::from(6))
             }
         )
     }
@@ -1172,12 +1171,12 @@ pub mod tests {
                 generics: vec![],
                 body: any_body!(vec![
                     any_decl!(DeclKind::EnumVariant(
-                        Name::Resolved(Symbol::Variant(VariantId::from(1)), "foo".into()),
+                        Name::Resolved(Symbol::Variant(VariantId::from(2)), "foo".into()),
                         Span::ANY,
                         vec![]
                     )),
                     any_decl!(DeclKind::EnumVariant(
-                        Name::Resolved(Symbol::Variant(VariantId::from(2)), "bar".into()),
+                        Name::Resolved(Symbol::Variant(VariantId::from(3)), "bar".into()),
                         Span::ANY,
                         vec![]
                     )),
@@ -1196,7 +1195,7 @@ pub mod tests {
         ",
         );
 
-        assert_eq_diff!(
+        assert_eq!(
             *resolved.roots[0].as_decl(),
             any_decl!(DeclKind::Protocol {
                 name: Name::Resolved(Symbol::Protocol(ProtocolId::from(1)), "Fizzable".into()),
@@ -1240,7 +1239,7 @@ pub mod tests {
         ",
         );
 
-        assert_eq_diff!(
+        assert_eq!(
             *resolved.roots[0].as_decl(),
             any_decl!(DeclKind::Protocol {
                 name: Name::Resolved(Symbol::Protocol(ProtocolId::from(1)), "Fizzable".into()),

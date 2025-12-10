@@ -11,9 +11,11 @@ use crate::ir::parse_instruction;
 use crate::ir::value::{Addr, Reference};
 use crate::label::Label;
 use crate::name_resolution::symbol::{
-    GlobalId, InitializerId, InstanceMethodId, StaticMethodId, Symbols,
+    self, GlobalId, InitializerId, InstanceMethodId, StaticMethodId, SymbolNames, Symbols,
 };
-use crate::node_kinds::inline_ir_instruction::{InlineIRInstruction, InlineIRInstructionKind};
+use crate::node_kinds::inline_ir_instruction::{
+    InlineIRInstruction, InlineIRInstructionKind, TypedInlineIRInstruction,
+};
 use crate::node_kinds::match_arm::MatchArm;
 use crate::node_kinds::parameter::Parameter;
 use crate::node_kinds::record_field::RecordField;
@@ -21,10 +23,13 @@ use crate::node_kinds::type_annotation::TypeAnnotation;
 use crate::token_kind::TokenKind;
 use crate::types::infer_row::RowParamId;
 use crate::types::row::Row;
-use crate::types::type_catalog::MemberWitness;
 use crate::types::type_session::TypeDefKind;
+use crate::types::typed_ast::{
+    TypedAST, TypedBlock, TypedDecl, TypedDeclKind, TypedExpr, TypedExprKind, TypedFunc,
+    TypedMatchArm, TypedNode, TypedParameter, TypedPattern, TypedRecordField, TypedStmt,
+    TypedStmtKind,
+};
 use crate::{
-    ast::AST,
     compiling::driver::Source,
     ir::{
         basic_block::{BasicBlock, BasicBlockId},
@@ -37,10 +42,7 @@ use crate::{
         value::Value,
     },
     name::Name,
-    name_resolution::{
-        name_resolver::NameResolved,
-        symbol::{Symbol, SynthesizedId},
-    },
+    name_resolution::symbol::{Symbol, SynthesizedId},
     node::Node,
     node_id::{FileID, NodeID},
     node_kinds::{
@@ -173,7 +175,7 @@ impl Substitutions {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct PolyFunction {
-    pub name: Name,
+    pub name: Symbol,
     pub params: Vec<Value>,
     pub blocks: Vec<BasicBlock<Ty>>,
     pub ty: Ty,
@@ -182,7 +184,7 @@ pub struct PolyFunction {
 
 #[derive(Debug, Clone)]
 pub struct Specialization {
-    pub name: Name,
+    pub name: Symbol,
     pub(super) substitutions: Substitutions,
 }
 
@@ -207,7 +209,7 @@ impl<T> From<Value> for Binding<T> {
 
 // Lowers an AST with Types to a monomorphized IR
 pub struct Lowerer<'a> {
-    pub(super) asts: &'a mut IndexMap<Source, AST<NameResolved>>,
+    pub(super) asts: &'a mut IndexMap<Source, TypedAST<Ty>>,
     pub(super) types: &'a mut Types,
     pub(super) functions: IndexMap<Symbol, PolyFunction>,
     pub(super) current_function_stack: Vec<CurrentFunction>,
@@ -215,6 +217,7 @@ pub struct Lowerer<'a> {
 
     current_ast_id: usize,
     symbols: &'a mut Symbols,
+    symbol_names: &'a mut SymbolNames,
     pub(super) specializations: IndexMap<Symbol, Vec<Specialization>>,
     static_memory: StaticMemory,
 }
@@ -223,9 +226,10 @@ pub struct Lowerer<'a> {
 #[allow(clippy::expect_used)]
 impl<'a> Lowerer<'a> {
     pub fn new(
-        asts: &'a mut IndexMap<Source, AST<NameResolved>>,
+        asts: &'a mut IndexMap<Source, TypedAST<Ty>>,
         types: &'a mut Types,
         symbols: &'a mut Symbols,
+        symbol_names: &'a mut SymbolNames,
         config: &'a DriverConfig,
     ) -> Self {
         Self {
@@ -234,6 +238,7 @@ impl<'a> Lowerer<'a> {
             functions: Default::default(),
             current_function_stack: Default::default(),
             symbols,
+            symbol_names,
             specializations: Default::default(),
             static_memory: Default::default(),
             config,
@@ -247,96 +252,55 @@ impl<'a> Lowerer<'a> {
         }
 
         // Do we have a main func?
-        let has_main_func = self.asts.iter().flat_map(|a| &a.1.roots).any(is_main_func);
+        let has_main_func = self
+            .asts
+            .iter()
+            .flat_map(|a| &a.1.decls)
+            .any(|d| is_main_func(d, &self.symbol_names));
         if !has_main_func {
             let main_symbol = Symbol::Synthesized(self.symbols.next_synthesized(ModuleId::Current));
             let mut ret_ty = Ty::Void;
-            let func = Func {
-                id: NodeID(FileID::SYNTHESIZED, 0),
-                name: Name::Resolved(main_symbol, "main".into()),
-                name_span: Span {
-                    start: 0,
-                    end: 0,
-                    file_id: FileID(0),
-                },
-                generics: vec![],
-                params: vec![],
-                body: Block {
-                    id: NodeID(FileID(0), 0),
-                    args: vec![],
-                    span: Span {
-                        start: 0,
-                        end: 0,
-                        file_id: FileID(0),
-                    },
+
+            let func = TypedFunc::<Ty> {
+                name: main_symbol,
+                foralls: Default::default(),
+                params: Default::default(),
+                body: TypedBlock {
                     body: {
-                        let roots: Vec<Node> = self
-                            .asts
-                            .values_mut()
-                            .flat_map(|a| std::mem::take(&mut a.roots))
-                            .collect();
+                        let roots: Vec<TypedNode<Ty>> =
+                            self.asts.values_mut().flat_map(|a| a.roots()).collect();
 
                         if let Some(last) = roots.last() {
-                            ret_ty = match self
-                                .types
-                                .get(&last.node_id())
-                                .unwrap_or(&TypeEntry::Mono(Ty::Void))
-                            {
-                                TypeEntry::Mono(ty) => ty.clone(),
-                                TypeEntry::Poly(scheme) => scheme.ty.clone(),
-                            };
+                            ret_ty = last.ty();
                         }
 
                         roots
                     },
+                    id: NodeID(FileID(0), 0),
+                    ret: Ty::Void,
                 },
-                ret: None,
-                attributes: vec![],
+                ret: Ty::Void,
             };
 
             #[allow(clippy::unwrap_used)]
             let ast = self.asts.iter_mut().next().unwrap();
-            ast.1.roots.push(Node::Decl(Decl {
-                id: NodeID(FileID::SYNTHESIZED, 0),
-                span: Span::SYNTHESIZED,
-                kind: DeclKind::Let {
-                    lhs: Pattern {
-                        id: NodeID(FileID::SYNTHESIZED, 0),
-                        span: Span::SYNTHESIZED,
-                        kind: PatternKind::Bind(Name::Resolved(
-                            SynthesizedId::from(0).into(),
-                            "main".into(),
-                        )),
-                    },
-                    type_annotation: None,
-                    rhs: Some(Expr {
-                        id: NodeID(FileID::SYNTHESIZED, 0),
-                        span: Span::SYNTHESIZED,
-                        kind: ExprKind::Func(func),
-                    }),
-                },
-            }));
 
             self.types.define(
                 main_symbol,
                 TypeEntry::Mono(Ty::Func(Ty::Void.into(), ret_ty.into())),
             );
-            ast.1
-                .phase
-                .symbols_to_string
-                .insert(main_symbol, "main(synthesized)".to_string());
+
+            self.symbol_names
+                .define("main(synthesized)".to_string(), main_symbol);
         }
 
         self.current_function_stack.push(CurrentFunction::default());
 
         for i in 0..self.asts.len() {
             self.current_ast_id = i;
-            let roots = std::mem::take(&mut self.asts[i].roots);
-            for root in roots.iter() {
-                self.lower_node(root, &Default::default())?;
+            for root in self.asts[i].roots() {
+                self.lower_node(&root, &Default::default())?;
             }
-
-            _ = std::mem::replace(&mut self.asts[i].roots, roots);
         }
 
         // Check for required imports
@@ -357,7 +321,7 @@ impl<'a> Lowerer<'a> {
 
     fn lower_node(
         &mut self,
-        node: &Node,
+        node: &TypedNode<Ty>,
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
         self.lower_node_with_bind(node, instantiations, Bind::Fresh)
@@ -366,72 +330,69 @@ impl<'a> Lowerer<'a> {
     #[instrument(level = tracing::Level::TRACE, skip(self, node), fields(node.id = %node.node_id()))]
     fn lower_node_with_bind(
         &mut self,
-        node: &Node,
+        node: &TypedNode<Ty>,
         instantiations: &Substitutions,
         bind: Bind,
     ) -> Result<(Value, Ty), IRError> {
         match node {
-            Node::Decl(decl) => self.lower_decl(decl, instantiations),
-            Node::Stmt(stmt) => self.lower_stmt(stmt, instantiations, bind),
-            Node::Expr(expr) => self.lower_expr(expr, bind, instantiations),
-            _ => unreachable!("node not handled: {node:?}"),
+            TypedNode::Decl(decl) => self.lower_decl(decl, instantiations),
+            TypedNode::Stmt(stmt) => self.lower_stmt(stmt, instantiations, bind),
+            TypedNode::Expr(expr) => self.lower_expr(expr, bind, instantiations),
         }
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self, decl), fields(decl.id = %decl.id))]
     fn lower_decl(
         &mut self,
-        decl: &Decl,
+        decl: &TypedDecl<Ty>,
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
         match &decl.kind {
-            DeclKind::Let {
-                lhs,
-                rhs: Some(value),
+            TypedDeclKind::Let {
+                pattern,
+                initializer,
                 ..
             } => {
-                let bind = self.lower_pattern(lhs)?;
-                if let Bind::Indirect(reg, ..) = &bind {
-                    let (val, ty) = self.lower_expr(value, Bind::Fresh, instantiations)?;
-                    self.push_instr(Instruction::Store {
-                        value: val,
-                        ty,
-                        addr: reg.into(),
-                    });
-                } else {
-                    self.lower_expr(value, bind, instantiations)?;
+                let bind = self.lower_pattern(pattern)?;
+                if let Some(initializer) = initializer {
+                    self.lower_expr(initializer, bind, instantiations)?;
                 }
             }
-            DeclKind::Struct { body, .. } | DeclKind::Protocol { body, .. } => {
-                for decl in &body.decls {
-                    self.lower_decl(decl, instantiations)?;
+            TypedDeclKind::StructDef {
+                symbol,
+                initializers,
+                instance_methods,
+                ..
+            } => {
+                for initializer in initializers.values() {
+                    self.lower_init(decl, symbol, initializer, instantiations)?;
                 }
-            }
-            DeclKind::Init { name, params, body } => {
-                self.lower_init(decl, name, params, body, instantiations)?;
-            }
-            DeclKind::Property { .. } => (),
-            DeclKind::Method { func, .. } => {
-                self.lower_method(func, instantiations)?;
-            }
-            DeclKind::Associated { .. } => (),
-            DeclKind::Func(..) => (), // Handled by DeclKind::Let
-            DeclKind::Extend { body, .. } => {
-                for decl in &body.decls {
-                    self.lower_decl(decl, instantiations)?;
-                }
-            }
-            DeclKind::Enum { body, .. } => {
-                for decl in &body.decls {
-                    self.lower_decl(decl, instantiations)?;
-                }
-            }
-            DeclKind::EnumVariant(..) => (),
-            DeclKind::FuncSignature(..) => (),
-            DeclKind::MethodRequirement(..) => (),
-            DeclKind::TypeAlias(..) => (),
 
-            _ => (), // Nothing to do
+                for method in instance_methods.values() {
+                    self.lower_method(method, instantiations)?;
+                }
+            }
+            TypedDeclKind::Extend {
+                instance_methods, ..
+            } => {
+                for method in instance_methods.values() {
+                    self.lower_method(method, instantiations)?;
+                }
+            }
+            TypedDeclKind::EnumDef {
+                instance_methods, ..
+            } => {
+                for method in instance_methods.values() {
+                    self.lower_method(method, instantiations)?;
+                }
+            }
+            TypedDeclKind::ProtocolDef {
+                instance_methods, ..
+            } => {
+                for method in instance_methods.values() {
+                    self.lower_method(method, instantiations)?;
+                }
+            }
         }
 
         Ok((Value::Void, Ty::Void))
@@ -439,67 +400,52 @@ impl<'a> Lowerer<'a> {
 
     fn lower_method(
         &mut self,
-        func: &Func,
+        func: &TypedFunc<Ty>,
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
         self.lower_func(func, Bind::Discard, instantiations)
     }
 
-    #[instrument(level = tracing::Level::TRACE, skip(self, decl, body))]
+    #[instrument(level = tracing::Level::TRACE, skip(self, decl, initializer))]
     fn lower_init(
         &mut self,
-        decl: &Decl,
-        name: &Name,
-        params: &[Parameter],
-        body: &Block,
+        decl: &TypedDecl<Ty>,
+        name: &Symbol,
+        initializer: &TypedFunc<Ty>,
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
-        let func_ty = match self
-            .types
-            .get_symbol(&name.symbol().expect("name not resolved"))
-            .unwrap_or_else(|| panic!("did not get func ty for {name:?}"))
-        {
-            TypeEntry::Mono(ty) => ty.clone(),
-            TypeEntry::Poly(scheme) => scheme.ty.clone(),
-        };
+        let param_tys = initializer.params.iter().map(|p| &p.ty).collect_vec();
+        let func_ty = curry_ty(param_tys.iter().cloned(), decl.ty.clone());
 
         let Ty::Func(..) = func_ty else {
             unreachable!();
         };
 
-        let (param_tys, mut ret_ty) = uncurry_function(func_ty.clone());
-
         // Build param_ty from all params (for now, just use the first one for compatibility)
         let param_ty = if !param_tys.is_empty() {
             param_tys[0].clone()
         } else {
-            let meta = Default::default();
-            let formatter = formatter::Formatter::new(&meta);
             unreachable!(
                 "init has no params - param_tys: {param_tys:?} name: {name:?}, sym: {:?}, ty: {:?}, {:?}",
                 #[allow(clippy::unwrap_used)]
-                self.types
-                    .get_symbol(&name.symbol().expect("name not resolved"))
-                    .unwrap(),
+                self.types.get_symbol(name).unwrap(),
                 func_ty,
-                formatter.format(&[Node::Decl(decl.clone())], 80)
+                decl
             );
         };
 
         self.current_function_stack.push(CurrentFunction::default());
 
         let mut param_values = vec![];
-        for param in params.iter() {
+        for param in initializer.params.iter() {
             let register = self.next_register();
             param_values.push(Value::Reg(register.0));
-            self.insert_binding(
-                param.name.symbol().expect("name not resolved"),
-                register.into(),
-            );
+            self.insert_binding(param.name, register.into());
         }
 
+        let mut ret_ty = initializer.ret.clone();
         let mut ret = Value::Void;
-        for node in body.body.iter() {
+        for node in initializer.body.body.iter() {
             (ret, ret_ty) = self.lower_node(node, instantiations)?;
         }
 
@@ -519,9 +465,9 @@ impl<'a> Lowerer<'a> {
             .expect("did not get current function");
 
         self.functions.insert(
-            name.symbol().expect("name not resolved"),
+            *name,
             PolyFunction {
-                name: name.clone(),
+                name: *name,
                 params: param_values,
                 blocks: current_function.blocks,
                 ty: Ty::Func(Box::new(param_ty.clone()), Box::new(ret_ty.clone())),
@@ -535,27 +481,28 @@ impl<'a> Lowerer<'a> {
     #[instrument(level = tracing::Level::TRACE, skip(self, stmt), fields(stmt.id = %stmt.id))]
     fn lower_stmt(
         &mut self,
-        stmt: &Stmt,
+        stmt: &TypedStmt<Ty>,
         instantiations: &Substitutions,
         bind: Bind,
     ) -> Result<(Value, Ty), IRError> {
         match &stmt.kind {
-            StmtKind::Expr(expr) => self.lower_expr(expr, bind, instantiations),
-            StmtKind::If(cond, conseq, alt) => {
-                self.lower_if_stmt(cond, conseq, alt, instantiations)
+            TypedStmtKind::Expr(typed_expr) => self.lower_expr(typed_expr, bind, instantiations),
+            TypedStmtKind::Assignment(lhs, rhs) => self.lower_assignment(lhs, rhs, instantiations),
+            TypedStmtKind::Return(typed_expr) => {
+                self.lower_return(typed_expr, bind, instantiations)
             }
-            StmtKind::Return(expr) => self.lower_return(expr, bind, instantiations),
-            #[allow(clippy::todo)]
-            StmtKind::Break => todo!(),
-            StmtKind::Assignment(lhs, rhs) => self.lower_assignment(lhs, rhs, instantiations),
-            StmtKind::Loop(cond, block) => self.lower_loop(cond, block, instantiations),
+            TypedStmtKind::Loop(cond, typed_block) => {
+                self.lower_loop(&Some(cond.clone()), typed_block, instantiations)
+            }
+            #[warn(clippy::todo)]
+            TypedStmtKind::Break => todo!(),
         }
     }
 
     fn lower_loop(
         &mut self,
-        cond: &Option<Expr>,
-        block: &Block,
+        cond: &Option<TypedExpr<Ty>>,
+        block: &TypedBlock<Ty>,
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
         let top_block_id = self.new_basic_block();
@@ -593,7 +540,7 @@ impl<'a> Lowerer<'a> {
 
     fn lower_return(
         &mut self,
-        expr: &Option<Expr>,
+        expr: &Option<TypedExpr<Ty>>,
         bind: Bind,
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
@@ -614,9 +561,9 @@ impl<'a> Lowerer<'a> {
     #[instrument(level = tracing::Level::TRACE, skip(self, cond, conseq, alt))]
     fn lower_if_expr(
         &mut self,
-        cond: &Expr,
-        conseq: &Block,
-        alt: &Block,
+        cond: &TypedExpr<Ty>,
+        conseq: &TypedBlock<Ty>,
+        alt: &TypedBlock<Ty>,
         bind: Bind,
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
@@ -670,9 +617,9 @@ impl<'a> Lowerer<'a> {
     #[instrument(level = tracing::Level::TRACE, skip(self, cond, conseq, alt))]
     fn lower_if_stmt(
         &mut self,
-        cond: &Expr,
-        conseq: &Block,
-        alt: &Option<Block>,
+        cond: &TypedExpr<Ty>,
+        conseq: &TypedBlock<Ty>,
+        alt: &Option<TypedBlock<Ty>>,
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
         let cond_ir = self.lower_expr(cond, Bind::Fresh, instantiations)?;
@@ -709,128 +656,10 @@ impl<'a> Lowerer<'a> {
         Ok((Value::Void, Ty::Void))
     }
 
-    /// Lower binary operators. Most binary operators are converted to method calls
-    /// earlier in the pipeline, but `||` and `&&` need short-circuit evaluation.
-    fn lower_binary(
-        &mut self,
-        expr: &Expr,
-        lhs: &Expr,
-        op: TokenKind,
-        rhs: &Expr,
-        bind: Bind,
-        instantiations: &Substitutions,
-    ) -> Result<(Value, Ty), IRError> {
-        match op {
-            TokenKind::PipePipe => self.lower_or(expr, lhs, rhs, bind, instantiations),
-            TokenKind::AmpAmp => self.lower_and(expr, lhs, rhs, bind, instantiations),
-            _ => Ok((Value::Void, Ty::Void)), // Other operators converted to calls earlier
-        }
-    }
-
-    #[instrument(level = tracing::Level::TRACE, skip(self, lhs, rhs, instantiations))]
-    fn lower_or(
-        &mut self,
-        expr: &Expr,
-        lhs: &Expr,
-        rhs: &Expr,
-        bind: Bind,
-        instantiations: &Substitutions,
-    ) -> Result<(Value, Ty), IRError> {
-        let lhs_block_id = self.get_current_block();
-        let rhs_block_id = self.new_basic_block();
-        let rhs_register = self.next_register();
-        let join_block_id = self.new_basic_block();
-
-        let (lhs_val, lhs_ty) = self.lower_expr(lhs, Bind::Fresh, instantiations)?;
-        assert_eq!(lhs_ty, Ty::Bool);
-
-        self.push_terminator(Terminator::Branch {
-            cond: lhs_val,
-            conseq: join_block_id,
-            alt: rhs_block_id,
-        });
-
-        self.in_basic_block(rhs_block_id, |lowerer| {
-            lowerer.lower_expr(rhs, Bind::Assigned(rhs_register), instantiations)?;
-            lowerer.push_terminator(Terminator::Jump { to: join_block_id });
-            Ok(())
-        })?;
-
-        let ret = self.ret(bind);
-        self.set_current_block(join_block_id);
-        self.push_phi(Phi {
-            dest: ret,
-            ty: Ty::Bool,
-            sources: vec![
-                PhiSource {
-                    from_id: lhs_block_id,
-                    value: Value::Bool(true),
-                },
-                PhiSource {
-                    from_id: rhs_block_id,
-                    value: rhs_register.into(),
-                },
-            ]
-            .into(),
-        });
-
-        Ok((ret.into(), Ty::Bool))
-    }
-
-    #[instrument(level = tracing::Level::TRACE, skip(self, lhs, rhs, instantiations))]
-    fn lower_and(
-        &mut self,
-        expr: &Expr,
-        lhs: &Expr,
-        rhs: &Expr,
-        bind: Bind,
-        instantiations: &Substitutions,
-    ) -> Result<(Value, Ty), IRError> {
-        let lhs_block_id = self.get_current_block();
-        let rhs_block_id = self.new_basic_block();
-        let rhs_register = self.next_register();
-        let join_block_id = self.new_basic_block();
-
-        let (lhs_val, lhs_ty) = self.lower_expr(lhs, Bind::Fresh, instantiations)?;
-        assert_eq!(lhs_ty, Ty::Bool);
-
-        self.push_terminator(Terminator::Branch {
-            cond: lhs_val,
-            conseq: rhs_block_id,
-            alt: join_block_id,
-        });
-
-        self.in_basic_block(rhs_block_id, |lowerer| {
-            lowerer.lower_expr(rhs, Bind::Assigned(rhs_register), instantiations)?;
-            lowerer.push_terminator(Terminator::Jump { to: join_block_id });
-            Ok(())
-        })?;
-
-        let ret = self.ret(bind);
-        self.set_current_block(join_block_id);
-        self.push_phi(Phi {
-            dest: ret,
-            ty: Ty::Bool,
-            sources: vec![
-                PhiSource {
-                    from_id: lhs_block_id,
-                    value: Value::Bool(false),
-                },
-                PhiSource {
-                    from_id: rhs_block_id,
-                    value: rhs_register.into(),
-                },
-            ]
-            .into(),
-        });
-
-        Ok((ret.into(), Ty::Bool))
-    }
-
     #[instrument(level = tracing::Level::TRACE, skip(self, block), fields(block.id = %block.id))]
     fn lower_block(
         &mut self,
-        block: &Block,
+        block: &TypedBlock<Ty>,
         bind: Bind,
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
@@ -853,8 +682,8 @@ impl<'a> Lowerer<'a> {
     #[instrument(level = tracing::Level::TRACE, skip(self, lhs, rhs), fields(lhs.id = %lhs.id, rhs.id = %rhs.id))]
     fn lower_assignment(
         &mut self,
-        lhs: &Expr,
-        rhs: &Expr,
+        lhs: &TypedExpr<Ty>,
+        rhs: &TypedExpr<Ty>,
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
         let lvalue = self.lower_lvalue(lhs, instantiations)?;
@@ -921,14 +750,12 @@ impl<'a> Lowerer<'a> {
 
     fn lower_lvalue(
         &mut self,
-        expr: &Expr,
+        expr: &TypedExpr<Ty>,
         instantiations: &Substitutions,
     ) -> Result<LValue, IRError> {
         match &expr.kind {
-            ExprKind::Variable(name) => {
-                Ok(LValue::Variable(name.symbol().expect("name not resolved")))
-            }
-            ExprKind::Member(Some(box receiver), label, _span) => {
+            TypedExprKind::Variable(name) => Ok(LValue::Variable(*name)),
+            TypedExprKind::Member(box receiver, label) => {
                 let (receiver_ty, instantiations) = self
                     .specialized_ty(receiver, instantiations)
                     .expect("didn't get base ty");
@@ -947,7 +774,7 @@ impl<'a> Lowerer<'a> {
     }
 
     // #[instrument(level = tracing::Level::TRACE, skip(self, pattern), fields(pattern.id = %pattern.id))]
-    fn lower_pattern(&mut self, pattern: &Pattern) -> Result<Bind, IRError> {
+    fn lower_pattern(&mut self, pattern: &TypedPattern<Ty>) -> Result<Bind, IRError> {
         match &pattern.kind {
             PatternKind::Bind(name) => {
                 let symbol = name.symbol().expect("name not resolved");
@@ -999,16 +826,20 @@ impl<'a> Lowerer<'a> {
     #[instrument(level = tracing::Level::TRACE, skip(self, expr), fields(expr.id = %expr.id))]
     fn lower_expr(
         &mut self,
-        expr: &Expr,
+        expr: &TypedExpr<Ty>,
         bind: Bind,
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
         let (value, ty) = match &expr.kind {
-            ExprKind::Func(func) => self.lower_func(func, bind, instantiations),
-            ExprKind::LiteralArray(exprs) => self.lower_array(expr, exprs, bind, instantiations),
-            ExprKind::LiteralInt(val) => {
+            TypedExprKind::Hole => Err(IRError::TypeNotFound(format!("nope"))),
+            TypedExprKind::InlineIR(inline_irinstruction) => {
+                self.lower_inline_ir(inline_irinstruction, bind, instantiations)
+            }
+            TypedExprKind::LiteralArray(typed_exprs) => {
+                self.lower_array(expr, typed_exprs, bind, instantiations)
+            }
+            TypedExprKind::LiteralInt(val) => {
                 let ret = self.ret(bind);
-
                 self.push_instr(Instruction::Constant {
                     dest: ret,
                     val: Value::Int(str::parse(val).map_err(|_| {
@@ -1019,7 +850,7 @@ impl<'a> Lowerer<'a> {
                 });
                 Ok((ret.into(), Ty::Int))
             }
-            ExprKind::LiteralFloat(val) => {
+            TypedExprKind::LiteralFloat(val) => {
                 let ret = self.ret(bind);
                 self.push_instr(Instruction::Constant {
                     dest: ret,
@@ -1031,7 +862,7 @@ impl<'a> Lowerer<'a> {
                 });
                 Ok((ret.into(), Ty::Float))
             }
-            ExprKind::LiteralTrue => {
+            TypedExprKind::LiteralTrue => {
                 if let Bind::Assigned(reg) = bind {
                     self.push_instr(Instruction::Constant {
                         dest: reg,
@@ -1044,7 +875,7 @@ impl<'a> Lowerer<'a> {
                     Ok((Value::Bool(true), Ty::Bool))
                 }
             }
-            ExprKind::LiteralFalse => {
+            TypedExprKind::LiteralFalse => {
                 if let Bind::Assigned(reg) = bind {
                     self.push_instr(Instruction::Constant {
                         dest: reg,
@@ -1057,70 +888,37 @@ impl<'a> Lowerer<'a> {
                     Ok((Value::Bool(false), Ty::Bool))
                 }
             }
-            ExprKind::LiteralString(string) => {
-                self.lower_string(expr, string, bind, instantiations)
+            TypedExprKind::LiteralString(val) => self.lower_string(expr, val, bind, instantiations),
+            TypedExprKind::Tuple(typed_exprs) => {
+                self.lower_tuple(expr.id, typed_exprs, bind, instantiations)
             }
-            ExprKind::Unary(..) => Ok((Value::Void, Ty::Void)), // Converted to calls earlier
-            ExprKind::Binary(box lhs, op, box rhs) => {
-                self.lower_binary(expr, lhs, op.clone(), rhs, bind, instantiations)
+            TypedExprKind::Block(typed_block) => {
+                self.lower_block(typed_block, bind, instantiations)
             }
-            ExprKind::Tuple(items) => self.lower_tuple(expr.id, items, bind, instantiations),
-            #[allow(clippy::todo)]
-            ExprKind::Block(..) => todo!(),
-
-            ExprKind::Call {
-                callee:
-                    box Expr {
-                        kind:
-                            ExprKind::Member(
-                                Some(box Expr {
-                                    kind:
-                                        ExprKind::Constructor(
-                                            name @ Name::Resolved(Symbol::Enum(..), ..),
-                                        ),
-                                    ..
-                                }),
-                                label,
-                                ..,
-                            ),
-                        ..
-                    },
-                args,
-                ..
-            } => self.lower_enum_constructor(expr.id, name, label, args, bind, instantiations),
-
-            ExprKind::Call {
-                box callee, args, ..
-            } => self.lower_call(expr, callee, args, bind, instantiations),
-
-            ExprKind::Member(
-                Some(box Expr {
-                    kind: ExprKind::Constructor(name @ Name::Resolved(Symbol::Enum(..), ..)),
-                    ..
-                }),
+            TypedExprKind::Call { callee, args, .. } => {
+                self.lower_call(expr, callee, args, bind, instantiations)
+            }
+            TypedExprKind::Member(receiver, label) => self.lower_member(
+                expr.id,
+                &Some(receiver.clone()),
                 label,
-                ..,
-            ) => self.lower_enum_constructor(expr.id, name, label, &[], bind, instantiations),
-            ExprKind::Member(member, label, ..) => {
-                self.lower_member(expr.id, member, label, bind, instantiations)
+                bind,
+                instantiations,
+            ),
+            TypedExprKind::Func(typed_func) => self.lower_func(typed_func, bind, instantiations),
+            TypedExprKind::Variable(symbol) => self.lower_variable(symbol, expr, instantiations),
+            TypedExprKind::Constructor(symbol, _items) => {
+                self.lower_constructor(symbol, expr, bind, instantiations)
             }
-
-            ExprKind::Variable(name) => self.lower_variable(name, expr, instantiations),
-            ExprKind::Constructor(name) => self.lower_constructor(name, expr, bind, instantiations),
-            ExprKind::If(cond, conseq, alt) => {
+            TypedExprKind::If(cond, conseq, alt) => {
                 self.lower_if_expr(cond, conseq, alt, bind, instantiations)
             }
-            ExprKind::Match(box scrutinee, arms) => {
+            TypedExprKind::Match(scrutinee, arms) => {
                 self.lower_match(scrutinee, arms, bind, instantiations)
             }
-            ExprKind::RecordLiteral { fields, .. } => {
+            TypedExprKind::RecordLiteral { fields } => {
                 self.lower_record_literal(expr, fields, bind, instantiations)
             }
-            #[allow(clippy::todo)]
-            ExprKind::RowVariable(..) => todo!(),
-            ExprKind::As(lhs, ..) => self.lower_expr(lhs, bind, instantiations),
-            ExprKind::InlineIR(instr) => self.lower_inline_ir(instr, bind, instantiations),
-            _ => unreachable!("cannot lower expr: {expr:?}"),
         }?;
 
         // Quick check to make sure types are right
@@ -1141,7 +939,7 @@ impl<'a> Lowerer<'a> {
     #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn lower_inline_ir(
         &mut self,
-        instr: &InlineIRInstruction,
+        instr: &TypedInlineIRInstruction<Ty>,
         bind: Bind,
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
@@ -1432,8 +1230,8 @@ impl<'a> Lowerer<'a> {
     #[instrument(level = tracing::Level::TRACE, skip(self, expr, items))]
     fn lower_array(
         &mut self,
-        expr: &Expr,
-        items: &[Expr],
+        expr: &TypedExpr<Ty>,
+        items: &[TypedExpr<Ty>],
         bind: Bind,
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
@@ -1491,7 +1289,7 @@ impl<'a> Lowerer<'a> {
     fn lower_tuple(
         &mut self,
         id: NodeID,
-        items: &[Expr],
+        items: &[TypedExpr<Ty>],
         bind: Bind,
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
@@ -1516,7 +1314,7 @@ impl<'a> Lowerer<'a> {
     #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn lower_string(
         &mut self,
-        expr: &Expr,
+        expr: &TypedExpr<Ty>,
         string: &String,
         bind: Bind,
         instantiations: &Substitutions,
@@ -1545,8 +1343,8 @@ impl<'a> Lowerer<'a> {
     #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn lower_match(
         &mut self,
-        scrutinee: &Expr,
-        arms: &[MatchArm],
+        scrutinee: &TypedExpr<Ty>,
+        arms: &[TypedMatchArm<Ty>],
         bind: Bind,
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
@@ -1603,9 +1401,9 @@ impl<'a> Lowerer<'a> {
 
     fn build_match_dispatch(
         &mut self,
-        scrutinee_expr: &Expr,
+        scrutinee_expr: &TypedExpr<Ty>,
         scrutinee_value: Value,
-        arms: &[MatchArm],
+        arms: &[TypedMatchArm<Ty>],
         arm_block_ids: &[BasicBlockId],
     ) -> Result<(), IRError> {
         assert_eq!(
@@ -1680,7 +1478,10 @@ impl<'a> Lowerer<'a> {
         Ok(())
     }
 
-    fn lower_pattern_literal_value(&mut self, pattern: &Pattern) -> Result<(Value, Ty), IRError> {
+    fn lower_pattern_literal_value(
+        &mut self,
+        pattern: &TypedPattern<Ty>,
+    ) -> Result<(Value, Ty), IRError> {
         match &pattern.kind {
             PatternKind::LiteralInt(text) => {
                 let parsed = text.parse::<i64>().map_err(|error| {
@@ -1720,8 +1521,8 @@ impl<'a> Lowerer<'a> {
 
     fn lower_record_literal(
         &mut self,
-        expr: &Expr,
-        fields: &[RecordField],
+        expr: &TypedExpr<Ty>,
+        fields: &[TypedRecordField<Ty>],
         bind: Bind,
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
@@ -1732,7 +1533,7 @@ impl<'a> Lowerer<'a> {
             field_vals.push(val);
             field_row = Row::Extend {
                 row: field_row.into(),
-                label: field.label.name_str().into(),
+                label: field.name.clone(),
                 ty,
             };
         }
@@ -1766,8 +1567,8 @@ impl<'a> Lowerer<'a> {
     #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn lower_constructor(
         &mut self,
-        name: &Name,
-        expr: &Expr,
+        name: &Symbol,
+        expr: &TypedExpr<Ty>,
         bind: Bind,
         old_instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
@@ -1775,7 +1576,7 @@ impl<'a> Lowerer<'a> {
             .types
             .catalog
             .initializers
-            .get(&name.symbol().expect("name not resolved"))
+            .get(name)
             .expect("did not get init")
             .get(&Label::Named("init".into()))
             .expect("did not get init");
@@ -1805,7 +1606,7 @@ impl<'a> Lowerer<'a> {
         id: NodeID,
         name: &Name,
         variant_name: &Label,
-        values: &[CallArg],
+        values: &[TypedExpr<Ty>],
         bind: Bind,
         old_instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
@@ -1845,7 +1646,7 @@ impl<'a> Lowerer<'a> {
         let mut args: Vec<Value> = Default::default();
         let mut args_tys: Vec<Ty> = vec![Ty::Int];
         for value in values.iter() {
-            let (val, ty) = self.lower_expr(&value.value, Bind::Fresh, &instantiations)?;
+            let (val, ty) = self.lower_expr(&value, Bind::Fresh, &instantiations)?;
             args.push(val);
             args_tys.push(ty);
         }
@@ -1881,7 +1682,7 @@ impl<'a> Lowerer<'a> {
     fn lower_member(
         &mut self,
         id: NodeID,
-        receiver: &Option<Box<Expr>>,
+        receiver: &Option<Box<TypedExpr<Ty>>>,
         label: &Label,
         bind: Bind,
         instantiations: &Substitutions,
@@ -1936,14 +1737,14 @@ impl<'a> Lowerer<'a> {
     #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn lower_variable(
         &mut self,
-        name: &Name,
-        expr: &Expr,
+        name: &Symbol,
+        expr: &TypedExpr<Ty>,
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
         let (ty, instantiations) = self.specialized_ty(expr, instantiations)?;
         let monomorphized_ty = substitute(ty.clone(), &instantiations);
 
-        let original_name_sym = name.symbol().expect("did not get symbol");
+        let original_name_sym = name;
 
         // If we currently have a binding for this symbol, prefer that over just passing names around
         if self
@@ -1967,7 +1768,7 @@ impl<'a> Lowerer<'a> {
             if let Some(captures) = self.asts[self.current_ast_id]
                 .phase
                 .captures
-                .get(&name.symbol().expect("did not get symbol"))
+                .get(&name)
                 .cloned()
                 && !captures.is_empty()
             {
@@ -2000,10 +1801,7 @@ impl<'a> Lowerer<'a> {
                 Value::Func(monomorphized_name)
             }
         } else {
-            Value::Reg(
-                self.get_binding(&name.symbol().expect("name not resolved"))
-                    .0,
-            )
+            Value::Reg(self.get_binding(&name).0)
         };
 
         Ok((ret, ty))
@@ -2014,8 +1812,8 @@ impl<'a> Lowerer<'a> {
     fn lower_constructor_call(
         &mut self,
         id: NodeID,
-        name: &Name,
-        callee: &Expr,
+        name: &Symbol,
+        callee: &TypedExpr<Ty>,
         mut args: Vec<Value>,
         dest: Register,
         instantiations: &Substitutions,
@@ -2027,7 +1825,7 @@ impl<'a> Lowerer<'a> {
             .types
             .catalog
             .initializers
-            .get(&name.symbol().expect("name not resolved"))
+            .get(&name)
             .unwrap_or_else(|| panic!("did not get initializers for {name:?}"))
             .get(&Label::Named("init".into()))
             .expect("did not get init");
@@ -2043,7 +1841,7 @@ impl<'a> Lowerer<'a> {
             .types
             .catalog
             .properties
-            .get(&name.symbol().expect("name not resolved"))
+            .get(&name)
             .expect("did not get properties");
 
         // Extract return type from the initializer function
@@ -2051,7 +1849,7 @@ impl<'a> Lowerer<'a> {
         let ret = params.pop().expect("did not get init ret");
 
         self.push_instr(Instruction::Nominal {
-            sym: name.symbol().expect("did nto get nominal sym"),
+            sym: *name,
             dest: record_dest,
             ty: ret.clone(),
             record: properties
@@ -2063,10 +1861,7 @@ impl<'a> Lowerer<'a> {
         });
         args.insert(0, record_dest.into());
 
-        let init = self.monomorphize_name(
-            Name::Resolved(init_sym, format!("{}_init", name)),
-            &concrete_tys,
-        );
+        let init = self.monomorphize_name(init_sym, &concrete_tys);
 
         self.push_instr(Instruction::Call {
             dest,
@@ -2082,26 +1877,18 @@ impl<'a> Lowerer<'a> {
     #[instrument(level = tracing::Level::TRACE, skip(self, call_expr, callee, args, parent_instantiations))]
     fn lower_call(
         &mut self,
-        call_expr: &Expr,
-        callee: &Expr,
-        args: &[CallArg],
+        call_expr: &TypedExpr<Ty>,
+        callee: &TypedExpr<Ty>,
+        args: &[TypedExpr<Ty>],
         bind: Bind,
         parent_instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
         let dest = self.ret(bind);
 
-        // Handle embedded IR call
-        if let ExprKind::Variable(name) = &callee.kind
-            && name.symbol().expect("name not resolved") == Symbol::IR
+        if let TypedExprKind::Variable(name) = &callee.kind
+            && name == &Symbol::PRINT
         {
-            return self.lower_embedded_ir_call(call_expr.id, args, dest, parent_instantiations);
-        }
-
-        if let ExprKind::Variable(name) = &callee.kind
-            && name.symbol().expect("name not resolved") == Symbol::PRINT
-        {
-            let arg =
-                self.lower_expr(&args[0].value, Bind::Assigned(dest), parent_instantiations)?;
+            let arg = self.lower_expr(&args[0], Bind::Assigned(dest), parent_instantiations)?;
             self.push_instr(Instruction::_Print { val: arg.0 });
             return Ok((Value::Void, Ty::Void));
         }
@@ -2112,12 +1899,12 @@ impl<'a> Lowerer<'a> {
         let mut arg_vals = vec![];
         let mut arg_tys = vec![];
         for arg in args {
-            let (arg, arg_ty) = self.lower_expr(&arg.value, Bind::Fresh, &instantiations)?;
+            let (arg, arg_ty) = self.lower_expr(&arg, Bind::Fresh, &instantiations)?;
             arg_vals.push(arg);
             arg_tys.push(arg_ty)
         }
 
-        if let ExprKind::Constructor(name) = &callee.kind {
+        if let TypedExprKind::Constructor(name, ..) = &callee.kind {
             return self.lower_constructor_call(
                 call_expr.id,
                 name,
@@ -2128,7 +1915,7 @@ impl<'a> Lowerer<'a> {
             );
         }
 
-        if let ExprKind::Member(Some(box receiver), member, ..) = &callee.kind {
+        if let TypedExprKind::Member(box receiver, member) = &callee.kind {
             return self.lower_method_call(
                 call_expr,
                 callee,
@@ -2158,11 +1945,11 @@ impl<'a> Lowerer<'a> {
     #[instrument(level = tracing::Level::TRACE, skip(self, call_expr, callee_expr, receiver, arg_exprs, args, instantiations ))]
     fn lower_method_call(
         &mut self,
-        call_expr: &Expr,
-        callee_expr: &Expr,
-        mut receiver: Expr,
+        call_expr: &TypedExpr<Ty>,
+        callee_expr: &TypedExpr<Ty>,
+        mut receiver: TypedExpr<Ty>,
         label: &Label,
-        arg_exprs: &[CallArg],
+        arg_exprs: &[TypedExpr<Ty>],
         mut args: Vec<Value>,
         dest: Register,
         instantiations: &Substitutions,
@@ -2173,8 +1960,8 @@ impl<'a> Lowerer<'a> {
         // Is this an instance method call on a constructor? If so we don't need
         // to prepend a self arg because it's passed explicitly (like Foo.bar(fizz) where
         // fizz == self)
-        if let ExprKind::Constructor(_name) = &receiver.kind {
-            receiver = arg_exprs[0].value.clone();
+        if let TypedExprKind::Constructor(_name, ..) = &receiver.kind {
+            receiver = arg_exprs[0].clone();
         } else {
             let (receiver_ir, _) = self.lower_expr(&receiver, Bind::Fresh, &instantiations)?;
             args.insert(0, receiver_ir);
@@ -2183,10 +1970,7 @@ impl<'a> Lowerer<'a> {
         let (method_sym, val, ty) = if let Some(method_sym) =
             self.lookup_instance_method(&receiver, label, &instantiations)?
         {
-            let method = self.monomorphize_name(
-                Name::Resolved(method_sym, label.to_string()),
-                &instantiations,
-            );
+            let method = self.monomorphize_name(method_sym, &instantiations);
             self.check_import(&method_sym);
             self.push_instr(Instruction::Call {
                 dest,
@@ -2201,8 +1985,7 @@ impl<'a> Lowerer<'a> {
             // For method calls on type parameters, look up the witness at the callee expression's node ID.
             // This returns a MethodRequirement symbol that the monomorphizer will substitute with
             // the concrete implementation when specializing.
-            let method =
-                self.monomorphize_name(Name::Resolved(witness, label.to_string()), &instantiations);
+            let method = self.monomorphize_name(witness, &instantiations);
 
             self.check_import(&witness);
             self.push_instr(Instruction::Call {
@@ -2231,11 +2014,11 @@ impl<'a> Lowerer<'a> {
     #[instrument(level = tracing::Level::TRACE, skip(self, func), fields(func.name = %func.name))]
     fn lower_func(
         &mut self,
-        func: &Func,
+        func: &TypedFunc<Ty>,
         bind: Bind,
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
-        let ty = self.ty_from_symbol(&func.name.symbol().expect("name not resolved"))?;
+        let ty = self.ty_from_symbol(&func.name)?;
 
         let (mut param_tys, mut ret_ty) = uncurry_function(ty);
 
@@ -2243,7 +2026,7 @@ impl<'a> Lowerer<'a> {
         let capture_env = if let Some(captures) = self.asts[self.current_ast_id]
             .phase
             .captures
-            .get(&func.name.symbol().expect("didn't get sym"))
+            .get(&func.name)
             .cloned()
             && !captures.is_empty()
         {
@@ -2323,10 +2106,7 @@ impl<'a> Lowerer<'a> {
         for param in func.params.iter() {
             let register = self.next_register();
             params.push(Value::Reg(register.0));
-            self.insert_binding(
-                param.name.symbol().expect("name not resolved"),
-                register.into(),
-            );
+            self.insert_binding(param.name, register.into());
         }
 
         let mut ret = Value::Void;
@@ -2351,9 +2131,9 @@ impl<'a> Lowerer<'a> {
 
         let func_ty = curry_ty(param_tys.iter(), ret_ty);
         self.functions.insert(
-            func.name.symbol().expect("name not resolved"),
+            func.name,
             PolyFunction {
-                name: func.name.clone(),
+                name: func.name,
                 params,
                 blocks: current_function.blocks,
                 ty: func_ty.clone(),
@@ -2361,7 +2141,7 @@ impl<'a> Lowerer<'a> {
             },
         );
 
-        let func_sym = func.name.symbol().expect("did not get symbol");
+        let func_sym = func.name;
         let func_val = if let Some(env) = capture_env {
             Value::Closure {
                 func: func_sym,
@@ -2381,40 +2161,6 @@ impl<'a> Lowerer<'a> {
         }
 
         Ok((func_val, func_ty))
-    }
-
-    fn lower_embedded_ir_call(
-        &mut self,
-        id: NodeID,
-        args: &[CallArg],
-        dest: Register,
-        parent_instantiations: &Substitutions,
-    ) -> Result<(Value, Ty), IRError> {
-        let ExprKind::LiteralString(string) = &args[0].value.kind else {
-            unreachable!()
-        };
-
-        let mut string = string.clone();
-
-        // Replace $? with destination register
-        if string.contains("$?") {
-            string = string.replace("$?", &format!("%{}", dest.0));
-        }
-
-        // Lower additional arguments and substitute $1, $2, $3, etc.
-        for (i, arg) in args.iter().skip(1).enumerate() {
-            let placeholder = format!("${}", i + 1);
-            if string.contains(&placeholder) {
-                let (val, _ty) = self.lower_expr(&arg.value, Bind::Fresh, parent_instantiations)?;
-                string = string.replace(&placeholder, &val.to_string());
-            }
-        }
-
-        self.push_instr(parse_instruction::<IrTy>(&string).into());
-
-        let ty = self.ty_from_id(&id)?;
-
-        Ok((dest.into(), ty))
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
@@ -2731,16 +2477,21 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    fn monomorphize_name(&mut self, name: Name, instantiations: &Substitutions) -> Name {
+    fn monomorphize_name(&mut self, symbol: Symbol, instantiations: &Substitutions) -> Name {
+        let name = Name::Resolved(
+            symbol,
+            self.symbol_names
+                .lookup_symbol(&symbol)
+                .expect("did not get symbol name")
+                .to_string(),
+        );
+
         if instantiations.ty.is_empty() && instantiations.witnesses.is_empty() {
             return name;
         }
 
         let new_symbol = self.symbols.next_synthesized(self.config.module_id);
-        self.asts[self.current_ast_id]
-            .phase
-            .symbols_to_string
-            .insert(new_symbol.into(), name.name_str());
+        self.symbol_names.define(name.name_str(), new_symbol.into());
         let ty_parts: Vec<String> = instantiations.ty.values().map(|v| format!("{v}")).collect();
         let witness_parts: Vec<String> = instantiations
             .witnesses
@@ -2758,7 +2509,7 @@ impl<'a> Lowerer<'a> {
             .entry(name.symbol().expect("name not resolved"))
             .or_default()
             .push(Specialization {
-                name: new_name.clone(),
+                name: new_symbol.into(),
                 substitutions: instantiations.clone(),
             });
 
@@ -2820,7 +2571,7 @@ impl<'a> Lowerer<'a> {
 
     fn lookup_instance_method(
         &mut self,
-        expr: &Expr,
+        expr: &TypedExpr<Ty>,
         label: &Label,
         instantiations: &Substitutions,
     ) -> Result<Option<Symbol>, IRError> {
@@ -2856,14 +2607,14 @@ impl<'a> Lowerer<'a> {
 
     fn specialized_ty(
         &mut self,
-        expr: &Expr,
+        expr: &TypedExpr<Ty>,
         instantiations: &Substitutions,
     ) -> Result<(Ty, Substitutions), IRError> {
-        let name = match &expr.kind {
-            ExprKind::Variable(name) => name,
-            ExprKind::Func(func) => &func.name,
-            ExprKind::Constructor(name) => name,
-            ExprKind::Member(Some(receiver), label, ..) => {
+        let symbol = match &expr.kind {
+            TypedExprKind::Variable(name) => *name,
+            TypedExprKind::Func(func) => func.name,
+            TypedExprKind::Constructor(name, ..) => *name,
+            TypedExprKind::Member(receiver, label) => {
                 let Ty::Constructor { name, .. } = self.ty_from_id(&receiver.id)? else {
                     return Ok((self.ty_from_id(&expr.id)?, Default::default()));
                 };
@@ -2876,7 +2627,7 @@ impl<'a> Lowerer<'a> {
                     return Ok((self.ty_from_id(&expr.id)?, Default::default()));
                 };
 
-                &Name::Resolved(member, label.to_string())
+                member
             }
             _ => {
                 tracing::trace!("expr has no substitutions: {expr:?}");
@@ -2884,9 +2635,6 @@ impl<'a> Lowerer<'a> {
             }
         };
 
-        let symbol = name
-            .symbol()
-            .unwrap_or_else(|_| unreachable!("name not resolved: {expr:?}"));
         let entry = self
             .types
             .get_symbol(&symbol)
@@ -2896,7 +2644,7 @@ impl<'a> Lowerer<'a> {
             )))?;
 
         let (ty, substitutions) = self.specialize(&entry, expr.id)?;
-        _ = self.monomorphize_name(name.clone(), &substitutions);
+        _ = self.monomorphize_name(symbol, &substitutions);
 
         let mut instantiations = instantiations.clone();
         instantiations.extend(substitutions);
@@ -2955,48 +2703,6 @@ impl<'a> Lowerer<'a> {
 
     #[instrument(skip(self), ret)]
     fn witness_for(&mut self, node_id: &NodeID, label: &Label) -> Option<Symbol> {
-        if let Some(MemberWitness::Concrete(witness)) =
-            self.types.catalog.member_witnesses.get(node_id).cloned()
-        {
-            self.monomorphize_name(
-                Name::Resolved(witness, label.to_string()),
-                &Default::default(),
-            );
-            return Some(witness);
-        }
-
-        if let Some(MemberWitness::Requirement(witness, _ty)) =
-            self.types.catalog.member_witnesses.get(node_id).cloned()
-        {
-            self.monomorphize_name(
-                Name::Resolved(witness, label.to_string()),
-                &Default::default(),
-            );
-            return Some(witness);
-        }
-
-        for module in self.config.modules.modules.values() {
-            if let Some(MemberWitness::Concrete(witness)) =
-                module.types.catalog.member_witnesses.get(node_id).cloned()
-            {
-                self.monomorphize_name(
-                    Name::Resolved(witness, label.to_string()),
-                    &Default::default(),
-                );
-                return Some(witness);
-            }
-
-            if let Some(MemberWitness::Requirement(witness, _ty)) =
-                module.types.catalog.member_witnesses.get(node_id).cloned()
-            {
-                self.monomorphize_name(
-                    Name::Resolved(witness, label.to_string()),
-                    &Default::default(),
-                );
-                return Some(witness);
-            }
-        }
-
         None
     }
 
@@ -3110,24 +2816,16 @@ fn substitute_row(row: Row, substitutions: &Substitutions) -> Row {
     }
 }
 
-fn is_main_func(node: &Node) -> bool {
-    if let Node::Decl(Decl {
-        kind:
-            DeclKind::Let {
-                rhs:
-                    Some(Expr {
-                        kind:
-                            ExprKind::Func(Func {
-                                name: Name::Resolved(Symbol::Global(..), name),
-                                ..
-                            }),
-                        ..
-                    }),
+fn is_main_func(node: &TypedDecl<Ty>, symbol_names: &SymbolNames) -> bool {
+    if let TypedDeclKind::Let {
+        initializer:
+            Some(TypedExpr {
+                kind: TypedExprKind::Func(TypedFunc { name: func_sym, .. }),
                 ..
-            },
+            }),
         ..
-    }) = node
-        && name == "main"
+    } = &node.kind
+        && symbol_names.lookup_symbol(func_sym).map(|s| s.as_str()) == Some("main")
     {
         return true;
     }

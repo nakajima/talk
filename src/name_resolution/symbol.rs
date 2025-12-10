@@ -9,6 +9,58 @@ thread_local! {
 /// RAII guard that clears symbol names on drop
 pub struct SymbolDisplayContext;
 
+// Interns strings and provides reverse lookups
+#[derive(Default, Debug, Clone)]
+pub struct SymbolNames {
+    names: FxHashMap<String, SymbolNameId>,
+    names_by_id: FxHashMap<SymbolNameId, String>,
+    names_by_symbol: FxHashMap<Symbol, SymbolNameId>,
+}
+
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SymbolNameId(u32);
+
+impl SymbolNames {
+    pub fn export(&self) -> FxHashMap<Symbol, String> {
+        self.names_by_symbol
+            .iter()
+            .fold(FxHashMap::default(), |mut acc, (symbol, id)| {
+                let s = self.string(id);
+                acc.insert(*symbol, s);
+                acc
+            })
+    }
+
+    pub fn get(&mut self, string: String) -> SymbolNameId {
+        if let Some(existing) = self.names.get(&string) {
+            return *existing;
+        }
+
+        let id = SymbolNameId(self.names.len() as u32);
+        self.names.insert(string.clone(), id);
+        self.names_by_id.insert(id, string);
+        id
+    }
+
+    #[allow(clippy::expect_used)]
+    pub fn string(&self, id: &SymbolNameId) -> String {
+        self.names_by_id
+            .get(id)
+            .expect("didnt get name")
+            .to_string()
+    }
+
+    pub fn define(&mut self, name: String, symbol: Symbol) {
+        let id = self.get(name);
+        self.names_by_symbol.insert(symbol, id);
+    }
+
+    pub fn lookup_symbol(&self, symbol: &Symbol) -> Option<&String> {
+        let id = self.names_by_symbol.get(symbol)?;
+        self.names_by_id.get(id)
+    }
+}
+
 impl Drop for SymbolDisplayContext {
     fn drop(&mut self) {
         SYMBOL_NAMES.with(|cell| cell.borrow_mut().take());
@@ -165,11 +217,13 @@ pub enum Symbol {
     Protocol(ProtocolId),
     AssociatedType(AssociatedTypeId),
     MethodRequirement(MethodRequirementId),
+    Main,
 }
 
 impl std::fmt::Debug for Symbol {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match *self {
+            Symbol::Main => write!(f, "main"),
             Symbol::Int => write!(f, "Int"),
             Symbol::Float => write!(f, "Float"),
             Symbol::Bool => write!(f, "Bool"),
@@ -311,6 +365,7 @@ impl Symbol {
                 module_id,
                 local_id,
             }),
+            18 => Symbol::Main,
             _ => unreachable!("Invalid Symbol discriminant: {}", discriminant),
         }
     }
@@ -338,6 +393,7 @@ impl Symbol {
 
     fn inner_bytes(&self) -> Vec<u8> {
         match self {
+            Symbol::Main => 0u32.to_le_bytes(),
             Symbol::Struct(v) => v.local_id.to_le_bytes(),
             Symbol::Enum(v) => v.local_id.to_le_bytes(),
             Symbol::TypeAlias(v) => v.local_id.to_le_bytes(),
@@ -510,6 +566,7 @@ impl Display for Symbol {
         }
 
         match self {
+            Symbol::Main => write!(f, "main"),
             Symbol::Struct(type_id) => write!(f, "{}", type_id),
             Symbol::Enum(type_id) => write!(f, "{}", type_id),
             Symbol::TypeAlias(type_id) => write!(f, "{}", type_id),
@@ -543,97 +600,82 @@ impl FromStr for Symbol {
 
 #[derive(Debug, Clone, Default)]
 pub struct Symbols {
-    decls: IDGenerator,
-    values: IDGenerator,
-    params: IDGenerator,
-    pattern_binds: IDGenerator,
-    locals: IDGenerator,
-    properties: IDGenerator,
-    instance_methods: IDGenerator,
-    initializers: IDGenerator,
-    method_requirements: IDGenerator,
-    static_methods: IDGenerator,
-    variants: IDGenerator,
-    synthesized: IDGenerator,
-    builtins: IDGenerator,
-    associated_types: IDGenerator,
-    type_parameters: IDGenerator,
-    protocols: IDGenerator,
+    ids: IDGenerator,
 }
 
 impl Symbols {
     // Cross-module IDs (need ModuleId)
     pub fn next_struct(&mut self, module_id: ModuleId) -> StructId {
-        StructId::new(module_id, self.decls.next_id())
+        StructId::new(module_id, self.ids.next_id())
     }
 
     pub fn next_type_alias(&mut self, module_id: ModuleId) -> TypeAliasId {
-        TypeAliasId::new(module_id, self.decls.next_id())
+        TypeAliasId::new(module_id, self.ids.next_id())
     }
 
     pub fn next_enum(&mut self, module_id: ModuleId) -> EnumId {
-        EnumId::new(module_id, self.decls.next_id())
+        EnumId::new(module_id, self.ids.next_id())
     }
 
     pub fn next_property(&mut self, module_id: ModuleId) -> PropertyId {
-        PropertyId::new(module_id, self.properties.next_id())
+        PropertyId::new(module_id, self.ids.next_id())
     }
 
     pub fn next_global(&mut self, module_id: ModuleId) -> GlobalId {
-        GlobalId::new(module_id, self.values.next_id())
+        GlobalId::new(module_id, self.ids.next_id())
     }
 
     pub fn next_associated_type(&mut self, module_id: ModuleId) -> AssociatedTypeId {
-        AssociatedTypeId::new(module_id, self.associated_types.next_id())
+        AssociatedTypeId::new(module_id, self.ids.next_id())
     }
 
     pub fn next_variant(&mut self, module_id: ModuleId) -> VariantId {
-        VariantId::new(module_id, self.variants.next_id())
+        VariantId::new(module_id, self.ids.next_id())
     }
 
     pub fn next_instance_method(&mut self, module_id: ModuleId) -> InstanceMethodId {
-        InstanceMethodId::new(module_id, self.instance_methods.next_id())
+        InstanceMethodId::new(module_id, self.ids.next_id())
     }
 
     pub fn next_initializer(&mut self, module_id: ModuleId) -> InitializerId {
-        InitializerId::new(module_id, self.initializers.next_id())
+        InitializerId::new(module_id, self.ids.next_id())
     }
 
     pub fn next_method_requirement(&mut self, module_id: ModuleId) -> MethodRequirementId {
-        MethodRequirementId::new(module_id, self.method_requirements.next_id())
+        MethodRequirementId::new(module_id, self.ids.next_id())
     }
 
     pub fn next_static_method(&mut self, module_id: ModuleId) -> StaticMethodId {
-        StaticMethodId::new(module_id, self.static_methods.next_id())
+        StaticMethodId::new(module_id, self.ids.next_id())
     }
 
     pub fn next_builtin(&mut self, module_id: ModuleId) -> BuiltinId {
-        BuiltinId::new(module_id, self.builtins.next_id())
+        BuiltinId::new(module_id, self.ids.next_id())
     }
 
     pub fn next_protocol(&mut self, module_id: ModuleId) -> ProtocolId {
-        ProtocolId::new(module_id, self.protocols.next_id())
+        ProtocolId::new(module_id, self.ids.next_id())
     }
 
     // Local-only IDs (no ModuleId needed)
     pub fn next_type_parameter(&mut self) -> TypeParameterId {
-        TypeParameterId(self.type_parameters.next_id())
+        TypeParameterId(self.ids.next_id())
     }
 
     pub fn next_param(&mut self) -> ParamLocalId {
-        ParamLocalId(self.params.next_id())
+        ParamLocalId(self.ids.next_id())
     }
 
     pub fn next_pattern_bind(&mut self) -> PatternBindLocalId {
-        PatternBindLocalId(self.pattern_binds.next_id())
+        PatternBindLocalId(self.ids.next_id())
     }
 
     pub fn next_local(&mut self) -> DeclaredLocalId {
-        DeclaredLocalId(self.locals.next_id())
+        DeclaredLocalId(self.ids.next_id())
     }
 
     pub fn next_synthesized(&mut self, module_id: ModuleId) -> SynthesizedId {
-        SynthesizedId::new(module_id, self.synthesized.next_id())
+        SynthesizedId::new(module_id, self.ids.next_id())
     }
 }
 

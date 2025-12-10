@@ -13,7 +13,6 @@ use crate::{
         passes::uncurry_function,
         predicate::Predicate,
         solve_context::SolveContext,
-        type_catalog::MemberWitness,
         type_error::TypeError,
         type_operations::{curry, unify},
         type_session::TypeSession,
@@ -152,13 +151,6 @@ impl Member {
                     Err(e) => return SolveResult::Err(e),
                 }
 
-                // Store the method requirement symbol directly as a concrete witness
-                // since it represents the protocol method that will be called
-                session.type_catalog.member_witnesses.insert(
-                    self.node_id,
-                    MemberWitness::Requirement(req, req_self.clone()),
-                );
-
                 match unify(ty, &req_func, context, session) {
                     Ok(metas) => solved_metas.extend(metas),
                     Err(e) => return SolveResult::Err(e),
@@ -222,7 +214,7 @@ impl Member {
         }
     }
 
-    #[instrument(skip(self, context, session, constraints))]
+    #[instrument(skip(self, context, session, constraints), fields(label = self.label.to_string()))]
     fn lookup_nominal_member(
         &self,
         constraints: &mut ConstraintStore,
@@ -242,21 +234,6 @@ impl Member {
         if let Some((member_sym, _source)) = session.lookup_member(symbol, &self.label) {
             match member_sym {
                 Symbol::InstanceMethod(..) | Symbol::MethodRequirement(..) => {
-                    // For InstanceMethod, record as Concrete (direct call)
-                    // For MethodRequirement (from protocol conformance), defer resolution using
-                    // Requirement witness - can't use Meta because the implementing InstanceMethod
-                    // may not be registered yet (extensions processed later in generate)
-                    let witness = if matches!(member_sym, Symbol::InstanceMethod(..)) {
-                        MemberWitness::Concrete(member_sym)
-                    } else {
-                        MemberWitness::Requirement(member_sym, self.receiver.clone())
-                    };
-
-                    session
-                        .type_catalog
-                        .member_witnesses
-                        .insert(self.node_id, witness);
-
                     let Some(entry) = session.lookup(&member_sym) else {
                         return SolveResult::Err(TypeError::MemberNotFound(
                             self.receiver.clone(),
