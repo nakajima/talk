@@ -79,6 +79,13 @@ impl TypeEntry {
             Self::Poly(scheme) => &scheme.ty,
         }
     }
+
+    pub fn import(self, module_id: ModuleId) -> Self {
+        match self {
+            Self::Mono(ty) => Self::Mono(ty.import(module_id)),
+            Self::Poly(scheme) => Self::Poly(scheme.import(module_id)),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default)]

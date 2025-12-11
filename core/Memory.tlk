@@ -9,7 +9,3 @@ func _copy(from: RawPtr, to: RawPtr, length: Int) -> Void {
 func _ptr_add(ptr: RawPtr, offset: Int) -> RawPtr {
 	@_ir(ptr, offset) { %? = add Int $0 $1 }
 }
-
-func _int_add(a: Int, b: Int) -> Int {
-	@_ir(a, b) { %? = add Int $0 $1 }
-}

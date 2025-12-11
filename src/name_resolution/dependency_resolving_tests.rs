@@ -1,6 +1,7 @@
 #[cfg(test)]
 pub mod tests {
     use crate::{
+        compiling::driver::{Driver, Source},
         name_resolution::{
             name_resolver_tests::tests::resolve,
             scc_graph::SCCGraph,
@@ -90,6 +91,26 @@ pub mod tests {
     }
 
     #[test]
+    fn graph_ignores_imports() {
+        let driver = Driver::new(
+            vec![Source::from("func f(){ Optional.none }")],
+            Default::default(),
+        )
+        .parse()
+        .unwrap()
+        .resolve_names()
+        .unwrap();
+
+        assert!(
+            driver.phase.asts[0]
+                .phase
+                .scc_graph
+                .neighbors_for(&Symbol::Global(1.into()))
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn contains_node_for_lets() {
         let types = resolve(
             r#"
@@ -170,7 +191,7 @@ pub mod tests {
             types
                 .phase
                 .scc_graph
-                .neighbors_for(&Symbol::Struct(2.into()))
+                .neighbors_for(&Symbol::Struct(1.into()))
         );
     }
 
@@ -207,7 +228,7 @@ pub mod tests {
             types
                 .phase
                 .scc_graph
-                .neighbors_for(&Symbol::Struct(2.into()))
+                .neighbors_for(&Symbol::Struct(1.into()))
         );
     }
 
@@ -233,8 +254,8 @@ pub mod tests {
         assert_eq!(
             group_b.binders,
             vec![
-                Symbol::DeclaredLocal(DeclaredLocalId(2)),
-                Symbol::DeclaredLocal(DeclaredLocalId(3))
+                Symbol::DeclaredLocal(DeclaredLocalId(1)),
+                Symbol::DeclaredLocal(DeclaredLocalId(2))
             ]
         );
     }

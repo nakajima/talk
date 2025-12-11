@@ -2,6 +2,7 @@ use indexmap::IndexMap;
 use rustc_hash::FxHashMap;
 
 use crate::{
+    compiling::module::ModuleId,
     label::Label,
     name_resolution::symbol::Symbol,
     node_id::NodeID,

@@ -224,6 +224,7 @@ impl NameResolver {
 
             self.phase.scopes = self.scopes.clone();
 
+
             out.push(AST {
                 path,
                 roots,

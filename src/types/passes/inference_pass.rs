@@ -12,7 +12,7 @@ use crate::{
     name_resolution::{
         name_resolver::NameResolved,
         scc_graph::BindingGroup,
-        symbol::{ProtocolId, Symbol},
+        symbol::{ProtocolId, Symbol, set_symbol_names},
     },
     node::Node,
     node_id::NodeID,
@@ -418,21 +418,24 @@ impl<'a> InferencePass<'a> {
             };
 
             match self.visit_node(&node, &mut context) {
-                Ok(node) => match node {
+                Ok(typed_node) => match typed_node {
                     TypedNode::Decl(typed_decl) => decls.push(typed_decl),
                     TypedNode::Stmt(typed_stmt) => stmts.push(typed_stmt),
                     _ => {
                         tracing::error!("hrm");
-                        println!("hrm: {node:?}");
+                        println!("hrm: {typed_node:?}");
                         continue;
                     }
                 },
-                Err(e) => self.asts[idx]
-                    .diagnostics
-                    .push(AnyDiagnostic::Typing(Diagnostic {
-                        id: node.node_id(),
-                        kind: e,
-                    })),
+                Err(e) => {
+                    println!("    error: {e:?}");
+                    self.asts[idx]
+                        .diagnostics
+                        .push(AnyDiagnostic::Typing(Diagnostic {
+                            id: node.node_id(),
+                            kind: e,
+                        }));
+                }
             }
         }
 
@@ -523,7 +526,7 @@ impl<'a> InferencePass<'a> {
             match &node {
                 TypedNode::Decl(decl) => decls.push(decl.clone()),
                 TypedNode::Stmt(stmt) => stmts.push(stmt.clone()),
-                other => println!("wat {other:?}"),
+                other => println!("{other:?}"),
             }
 
             if let Some(existing) = self.session.lookup(binder) {

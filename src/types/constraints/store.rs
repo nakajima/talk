@@ -172,10 +172,6 @@ impl ConstraintStore {
         for (id, constraint) in self.constraints.iter() {
             let group = self.meta.get(id).unwrap_or_else(|| unreachable!()).group_id;
             if group != context.group {
-                tracing::trace!(
-                    "wrong group: {group:?} (context group is {:?}, skipping",
-                    context.group
-                );
                 continue;
             }
 

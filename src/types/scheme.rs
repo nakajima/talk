@@ -3,6 +3,7 @@ use itertools::Itertools;
 use tracing::instrument;
 
 use crate::{
+    compiling::module::ModuleId,
     node_id::NodeID,
     types::{
         constraints::store::ConstraintStore,
@@ -28,6 +29,20 @@ pub struct Scheme<T: SomeType> {
     pub(crate) foralls: IndexSet<ForAll>,
     pub(super) predicates: Vec<Predicate<T>>,
     pub(crate) ty: T,
+}
+
+impl Scheme<Ty> {
+    pub fn import(self, module_id: ModuleId) -> Self {
+        Self {
+            foralls: self.foralls,
+            predicates: self
+                .predicates
+                .into_iter()
+                .map(|p| p.import(module_id))
+                .collect(),
+            ty: self.ty.import(module_id),
+        }
+    }
 }
 
 impl<T: SomeType> std::hash::Hash for Scheme<T> {

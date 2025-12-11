@@ -13,10 +13,10 @@ pub fn compile() -> Module {
     CORE_MODULE.clone()
 }
 
-pub fn _compile() -> Module {
+fn _compile() -> Module {
     let _s = tracing::trace_span!("compile_prelude", prelude = true).entered();
     let config = DriverConfig {
-        module_id: ModuleId::Core,
+        module_id: ModuleId::Current,
         ..Default::default()
     };
     let driver = Driver::new_bare(
@@ -24,7 +24,7 @@ pub fn _compile() -> Module {
             Source::from(include_str!("../../core/Optional.tlk")),
             Source::from(include_str!("../../core/Operators.tlk")),
             Source::from(include_str!("../../core/String.tlk")),
-            Source::from(include_str!("../../core/Array.tlk")),
+            // Source::from(include_str!("../../core/Array.tlk")),
             Source::from(include_str!("../../core/Memory.tlk")),
         ],
         config,

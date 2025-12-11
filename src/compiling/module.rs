@@ -11,18 +11,17 @@ pub struct ModuleId(pub u16);
 #[allow(non_snake_case, non_upper_case_globals)]
 impl ModuleId {
     pub const Current: ModuleId = ModuleId(0);
-    pub const Builtin: ModuleId = ModuleId(1);
-    pub const Core: ModuleId = ModuleId(2);
+    pub const Core: ModuleId = ModuleId(1);
     pub const fn External(i: u16) -> ModuleId {
-        ModuleId(i + 3)
+        ModuleId(i + 2)
     }
 
     pub fn is_external_or_core(&self) -> bool {
-        self.0 > 1
+        self.0 > 0
     }
 
     pub fn is_external(&self) -> bool {
-        self.0 > 2
+        self.0 > 1
     }
 }
 
@@ -30,7 +29,6 @@ impl Display for ModuleId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match *self {
             Self::Core => write!(f, "C"),
-            Self::Builtin => write!(f, "B"),
             Self::Current => write!(f, "_"),
             id => write!(f, "{}", id.0),
         }

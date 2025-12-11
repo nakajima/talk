@@ -9,7 +9,7 @@ use crate::ir::monomorphizer::uncurry_function;
 use crate::ir::value::{Addr, Reference};
 use crate::label::Label;
 use crate::name_resolution::symbol::{
-    GlobalId, InitializerId, InstanceMethodId, StaticMethodId, Symbols,
+    GlobalId, InitializerId, InstanceMethodId, StaticMethodId, Symbols, set_symbol_names,
 };
 use crate::node_kinds::inline_ir_instruction::{InlineIRInstructionKind, TypedInlineIRInstruction};
 use crate::node_kinds::type_annotation::TypeAnnotation;
@@ -1644,7 +1644,7 @@ impl<'a> Lowerer<'a> {
         let mut args: Vec<Value> = Default::default();
         let mut args_tys: Vec<Ty> = vec![Ty::Int];
         for value in values.iter() {
-            let (val, ty) = self.lower_expr(&value, Bind::Fresh, &instantiations)?;
+            let (val, ty) = self.lower_expr(value, Bind::Fresh, &instantiations)?;
             args.push(val);
             args_tys.push(ty);
         }
@@ -1739,6 +1739,10 @@ impl<'a> Lowerer<'a> {
         expr: &TypedExpr<Ty>,
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
+        let s = set_symbol_names(self.symbol_names.clone());
+        println!("lower_variable: {name:?}");
+        drop(s);
+
         let (ty, instantiations) = self.specialized_ty(expr, instantiations)?;
         let monomorphized_ty = substitute(ty.clone(), &instantiations);
 
@@ -1748,9 +1752,9 @@ impl<'a> Lowerer<'a> {
         if self
             .current_func_mut()
             .bindings
-            .contains_key(&original_name_sym)
+            .contains_key(original_name_sym)
         {
-            return Ok((self.get_binding(&original_name_sym).into(), ty));
+            return Ok((self.get_binding(original_name_sym).into(), ty));
         }
 
         // If it's a func we've registered, lower it with instantiations
@@ -1758,7 +1762,7 @@ impl<'a> Lowerer<'a> {
 
         let ret = if matches!(monomorphized_ty, Ty::Func(..)) {
             let monomorphized_name = self
-                .monomorphize_name(name.clone(), &instantiations)
+                .monomorphize_name(*name, &instantiations)
                 .symbol()
                 .expect("did not get symbol");
 
@@ -1766,7 +1770,7 @@ impl<'a> Lowerer<'a> {
             if let Some(captures) = self.asts[self.current_ast_id]
                 .phase
                 .captures
-                .get(&name)
+                .get(name)
                 .cloned()
                 && !captures.is_empty()
             {
@@ -1799,7 +1803,7 @@ impl<'a> Lowerer<'a> {
                 Value::Func(monomorphized_name)
             }
         } else {
-            Value::Reg(self.get_binding(&name).0)
+            Value::Reg(self.get_binding(name).0)
         };
 
         Ok((ret, ty))
@@ -1882,6 +1886,8 @@ impl<'a> Lowerer<'a> {
         parent_instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
         let dest = self.ret(bind);
+
+        println!("lower call: {call_expr:?}");
 
         if let TypedExprKind::Variable(name) = &callee.kind
             && name == &Symbol::PRINT
@@ -2102,6 +2108,8 @@ impl<'a> Lowerer<'a> {
             );
         }
 
+        println!("lower_func {:?} {:?}", func.name, func.params);
+
         for param in func.params.iter() {
             let register = self.next_register();
             params.push(Value::Reg(register.0));
@@ -2314,6 +2322,9 @@ impl<'a> Lowerer<'a> {
     }
 
     fn set_binding(&mut self, symbol: &Symbol, value_register: Register) {
+        let _s = set_symbol_names(self.symbol_names.clone());
+        println!("set_binding {symbol:?} : {value_register:?}");
+
         let ty = self
             .types
             .get_symbol(symbol)
@@ -2411,9 +2422,7 @@ impl<'a> Lowerer<'a> {
             return;
         };
 
-        let func = if module_id == self.config.module_id
-            || (module_id == ModuleId::Current && self.config.module_id == ModuleId::Core)
-        {
+        let func = if module_id == self.config.module_id || (module_id == ModuleId::Current) {
             let Some(func) = self.functions.get(symbol) else {
                 return;
             };

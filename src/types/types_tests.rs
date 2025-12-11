@@ -79,7 +79,7 @@ pub mod tests {
     }
 
     pub fn ty(i: usize, ast: &TypedAST<Ty>, _session: &Types) -> Ty {
-        ast.roots()[i].ty()
+        ast.stmts[i].ty.clone()
     }
 
     #[test]
@@ -91,20 +91,20 @@ pub mod tests {
     #[test]
     fn types_int() {
         let (ast, types) = typecheck("let a = 123; a");
-        assert_eq!(ty(1, &ast, &types), Ty::Int);
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
     }
 
     #[test]
     fn types_float() {
         let (ast, types) = typecheck("let a = 1.23; a");
-        assert_eq!(ty(1, &ast, &types), Ty::Float);
+        assert_eq!(ty(0, &ast, &types), Ty::Float);
     }
 
     #[test]
     fn types_bool() {
         let (ast, types) = typecheck("let a = true; a ; let b = false ; b");
+        assert_eq!(ty(0, &ast, &types), Ty::Bool);
         assert_eq!(ty(1, &ast, &types), Ty::Bool);
-        assert_eq!(ty(3, &ast, &types), Ty::Bool);
     }
 
     #[test]
@@ -157,7 +157,7 @@ pub mod tests {
     #[test]
     fn types_alloc() {
         let (ast, types) = typecheck("let x: RawPtr = __IR(\"$? = alloc int 1\"); x");
-        assert_eq!(ty(1, &ast, &types), Ty::RawPtr);
+        assert_eq!(ty(0, &ast, &types), Ty::RawPtr);
     }
 
     #[test]
@@ -169,7 +169,7 @@ pub mod tests {
     #[test]
     fn types_basic_binary() {
         let (ast, types) = typecheck_core("func a(x) { x + 1 } ; a(123)");
-        assert_eq!(ty(1, &ast, &types), Ty::Int);
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
     }
 
     #[test]
@@ -180,7 +180,7 @@ pub mod tests {
         a
     "#,
         );
-        assert_eq!(ty(1, &ast, &types), Ty::Int);
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
     }
 
     #[test]
@@ -203,8 +203,8 @@ pub mod tests {
         identity(true)
         ",
         );
-        assert_eq!(ty(1, &ast, &types), Ty::Int);
-        assert_eq!(ty(2, &ast, &types), Ty::Bool);
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
+        assert_eq!(ty(1, &ast, &types), Ty::Bool);
     }
 
     #[test]
@@ -473,7 +473,7 @@ pub mod tests {
             ",
         );
 
-        assert_eq!(ty(1, &ast, &types), Ty::Tuple(vec![Ty::Int, Ty::Float]));
+        assert_eq!(ty(0, &ast, &types), Ty::Tuple(vec![Ty::Int, Ty::Float]));
     }
 
     #[test]
@@ -489,7 +489,7 @@ pub mod tests {
         "#,
         );
 
-        assert_eq!(ty(1, &ast, &types), Ty::Int);
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
     }
 
     #[test]
@@ -520,8 +520,8 @@ pub mod tests {
     "#,
         );
 
-        assert_eq!(ty(1, &ast, &types), Ty::Int);
-        assert_eq!(ty(2, &ast, &types), Ty::Bool);
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
+        assert_eq!(ty(1, &ast, &types), Ty::Bool);
     }
 
     #[test]
@@ -567,8 +567,8 @@ pub mod tests {
         b
         ",
         );
-        assert_eq!(ty(3, &ast, &types), Ty::Int);
-        assert_eq!(ty(4, &ast, &types), Ty::Float);
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
+        assert_eq!(ty(1, &ast, &types), Ty::Float);
     }
 
     #[test]
@@ -580,8 +580,8 @@ pub mod tests {
         identity(identity(true))
         ",
         );
-        assert_eq!(ty(1, &ast, &types), Ty::Int);
-        assert_eq!(ty(2, &ast, &types), Ty::Bool);
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
+        assert_eq!(ty(1, &ast, &types), Ty::Bool);
     }
 
     #[test]
@@ -596,7 +596,7 @@ pub mod tests {
             ",
         );
 
-        assert_eq!(ty(1, &ast, &types), Ty::Tuple(vec![Ty::Int, Ty::Bool]));
+        assert_eq!(ty(0, &ast, &types), Ty::Tuple(vec![Ty::Int, Ty::Bool]));
     }
 
     #[test]
@@ -637,7 +637,7 @@ pub mod tests {
         z
         ",
         );
-        assert_eq!(ty(1, &ast, &types), Ty::Tuple(vec![Ty::Int, Ty::Bool]));
+        assert_eq!(ty(0, &ast, &types), Ty::Tuple(vec![Ty::Int, Ty::Bool]));
     }
 
     #[test]
@@ -650,8 +650,8 @@ pub mod tests {
         y
         ",
         );
-        assert_eq!(ty(2, &ast, &types), Ty::Int);
-        assert_eq!(ty(3, &ast, &types), Ty::Float);
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
+        assert_eq!(ty(1, &ast, &types), Ty::Float);
     }
 
     #[test]
@@ -664,8 +664,8 @@ pub mod tests {
         y
         ",
         );
-        assert_eq!(ty(2, &ast, &types), Ty::Int);
-        assert_eq!(ty(3, &ast, &types), Ty::Float);
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
+        assert_eq!(ty(1, &ast, &types), Ty::Float);
     }
 
     #[test]
@@ -676,7 +676,7 @@ pub mod tests {
         z
         ",
         );
-        assert_eq!(ty(1, &ast, &types), Ty::Int);
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
     }
 
     #[test]
@@ -883,7 +883,7 @@ pub mod tests {
         ",
         );
 
-        assert_eq!(ty(1, &ast, &types), Ty::Int);
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
     }
 
     #[test]
@@ -967,7 +967,7 @@ pub mod tests {
         (id(123), id(true))
     "#,
         );
-        assert_eq!(ty(1, &ast, &types), Ty::Tuple(vec![Ty::Int, Ty::Bool]));
+        assert_eq!(ty(0, &ast, &types), Ty::Tuple(vec![Ty::Int, Ty::Bool]));
     }
 
     #[test]
@@ -979,7 +979,7 @@ pub mod tests {
         "#,
         );
 
-        let Ty::Record(None, row) = ty(1, &ast, &types) else {
+        let Ty::Record(None, row) = ty(0, &ast, &types) else {
             panic!("did not get record");
         };
 
@@ -1004,7 +1004,7 @@ pub mod tests {
         ",
         );
 
-        let Ty::Record(None, row) = ty(1, &ast, &types) else {
+        let Ty::Record(None, row) = ty(0, &ast, &types) else {
             panic!("Didn't get row");
         };
 
@@ -1025,9 +1025,9 @@ pub mod tests {
         "#,
         );
 
-        assert_eq!(ty(1, &ast, &types), Ty::Bool);
-        assert_eq!(ty(2, &ast, &types), Ty::Int);
-        assert_eq!(ty(3, &ast, &types), Ty::Float);
+        assert_eq!(ty(0, &ast, &types), Ty::Bool);
+        assert_eq!(ty(1, &ast, &types), Ty::Int);
+        assert_eq!(ty(2, &ast, &types), Ty::Float);
     }
 
     #[test]
@@ -1039,7 +1039,7 @@ pub mod tests {
         "#,
         );
 
-        assert_eq!(ty(1, &ast, &types), Ty::Float);
+        assert_eq!(ty(0, &ast, &types), Ty::Float);
     }
 
     #[test]
@@ -1053,7 +1053,7 @@ pub mod tests {
         "#,
         );
 
-        assert_eq!(ty(1, &ast, &types), Ty::Tuple(vec![Ty::Int, Ty::Bool]));
+        assert_eq!(ty(0, &ast, &types), Ty::Tuple(vec![Ty::Int, Ty::Bool]));
     }
 
     #[test]
@@ -1067,7 +1067,7 @@ pub mod tests {
         "#,
         );
 
-        assert_eq!(ty(1, &ast, &types), Ty::Bool);
+        assert_eq!(ty(0, &ast, &types), Ty::Bool);
     }
 
     #[test]
@@ -1081,7 +1081,7 @@ pub mod tests {
         "#,
         );
 
-        assert_eq!(ty(1, &ast, &types), Ty::Bool);
+        assert_eq!(ty(0, &ast, &types), Ty::Bool);
     }
 
     #[test]
@@ -1133,7 +1133,7 @@ pub mod tests {
     "#,
         );
 
-        assert_eq!(ty(1, &ast, &types), Ty::Tuple(vec![Ty::Int, Ty::Bool]));
+        assert_eq!(ty(0, &ast, &types), Ty::Tuple(vec![Ty::Int, Ty::Bool]));
     }
 
     /// Simple polymorphic projection: fstA extracts `a` from any record that has it.
@@ -1146,7 +1146,7 @@ pub mod tests {
     "#,
         );
 
-        assert_eq!(ty(1, &ast, &types), Ty::Tuple(vec![Ty::Int, Ty::Int]));
+        assert_eq!(ty(0, &ast, &types), Ty::Tuple(vec![Ty::Int, Ty::Int]));
     }
 
     /// Local `let` that returns an *env row* must NOT generalize its tail.
@@ -1170,8 +1170,6 @@ pub mod tests {
         assert_eq!(ast.diagnostics.len(), 1, "{:?}", ast.diagnostics);
     }
 
-    /// Local `let` with a fresh row in RHS should generalize its row tail.
-    /// Using it twice with different shapes must type independently.
     #[test]
     fn row_generalizes_in_local_let_when_fresh() {
         let (ast, types) = typecheck(
@@ -1184,7 +1182,7 @@ pub mod tests {
     "#,
         );
 
-        assert_eq!(ty(1, &ast, &types), Ty::Tuple(vec![Ty::Int, Ty::Bool]));
+        assert_eq!(ty(0, &ast, &types), Ty::Tuple(vec![Ty::Int, Ty::Bool]));
     }
 
     /// Instantiation stability: once a row param is instantiated at a call site,
@@ -1199,7 +1197,7 @@ pub mod tests {
     "#,
         );
 
-        assert_eq!(ty(2, &ast, &types), Ty::Tuple(vec![Ty::Int, Ty::Bool]));
+        assert_eq!(ty(0, &ast, &types), Ty::Tuple(vec![Ty::Int, Ty::Bool]));
     }
 
     /// Polymorphic consumer: a function requiring presence of `a` should accept any record
@@ -1213,7 +1211,7 @@ pub mod tests {
     "#,
         );
 
-        assert_eq!(ty(1, &ast, &types), Ty::Tuple(vec![Ty::Int, Ty::Int]));
+        assert_eq!(ty(0, &ast, &types), Ty::Tuple(vec![Ty::Int, Ty::Int]));
     }
 
     #[test]
@@ -1247,7 +1245,7 @@ pub mod tests {
         ",
         );
 
-        assert_eq!(ty(1, &ast, &types), Ty::Tuple(vec![Ty::Int, Ty::Bool]));
+        assert_eq!(ty(0, &ast, &types), Ty::Tuple(vec![Ty::Int, Ty::Bool]));
     }
 
     #[test]
@@ -1283,8 +1281,8 @@ pub mod tests {
         ",
         );
 
-        assert_eq!(ty(1, &ast, &types), Ty::Tuple(vec![Ty::Int, Ty::Float]));
-        assert_eq!(ty(2, &ast, &types), Ty::Tuple(vec![Ty::Int, Ty::Int]));
+        assert_eq!(ty(0, &ast, &types), Ty::Tuple(vec![Ty::Int, Ty::Float]));
+        assert_eq!(ty(1, &ast, &types), Ty::Tuple(vec![Ty::Int, Ty::Int]));
     }
 
     #[test]
@@ -1335,7 +1333,7 @@ pub mod tests {
         );
 
         assert_eq!(params.len(), 3);
-        assert_eq!(ty(1, &ast, &types), nominal);
+        assert_eq!(ty(0, &ast, &types), nominal);
     }
 
     #[test]
@@ -1354,7 +1352,7 @@ pub mod tests {
         ",
         );
 
-        assert_eq!(ty(2, &ast, &types), Ty::Int);
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
     }
 
     #[test]
@@ -1370,7 +1368,7 @@ pub mod tests {
         ",
         );
 
-        assert_eq!(ty(1, &ast, &types), Ty::Int);
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
     }
 
     #[test]
@@ -1385,7 +1383,7 @@ pub mod tests {
         ",
         );
 
-        assert_eq!(ty(1, &ast, &types), Ty::Int);
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
     }
 
     #[test]
@@ -1423,7 +1421,7 @@ pub mod tests {
         ",
         );
 
-        assert_eq!(ty(1, &ast, &types), Ty::Int);
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
     }
 
     #[test]
@@ -1438,7 +1436,7 @@ pub mod tests {
         ",
         );
 
-        assert_eq!(ty(1, &ast, &types), Ty::Int);
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
     }
 
     #[test]
@@ -1457,7 +1455,7 @@ pub mod tests {
         ",
         );
 
-        assert_eq!(ty(1, &ast, &types), Ty::Int);
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
     }
 
     #[test]
@@ -1481,7 +1479,7 @@ pub mod tests {
         ",
         );
 
-        assert_eq!(ty(2, &ast, &types), Ty::Int);
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
     }
 
     #[test]
@@ -1499,7 +1497,7 @@ pub mod tests {
         );
 
         assert_eq!(
-            ty(3, &ast, &types),
+            ty(0, &ast, &types),
             Ty::Nominal {
                 symbol: StructId::from(1).into(),
                 type_args: vec![Ty::Int],
@@ -1545,8 +1543,8 @@ pub mod tests {
         ",
         );
 
-        assert_eq!(ty(1, &ast, &types), Ty::Int);
-        assert_eq!(ty(2, &ast, &types), Ty::Float);
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
+        assert_eq!(ty(1, &ast, &types), Ty::Float);
     }
 
     #[test]
@@ -1566,8 +1564,8 @@ pub mod tests {
         ",
         );
 
-        assert_eq!(ty(1, &ast, &types), Ty::Int);
-        assert_eq!(ty(2, &ast, &types), Ty::Float);
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
+        assert_eq!(ty(1, &ast, &types), Ty::Float);
     }
 
     #[test]
@@ -1594,8 +1592,8 @@ pub mod tests {
         ",
         );
 
-        assert_eq!(ty(6, &ast, &types), Ty::Bool);
-        assert_eq!(ty(7, &ast, &types), Ty::Bool);
+        assert_eq!(ty(0, &ast, &types), Ty::Bool);
+        assert_eq!(ty(1, &ast, &types), Ty::Bool);
     }
 
     #[test]
@@ -1612,14 +1610,14 @@ pub mod tests {
         );
 
         assert_eq!(
-            ty(1, &ast, &types),
+            ty(0, &ast, &types),
             Ty::Nominal {
                 symbol: EnumId::from(1).into(),
                 type_args: Default::default(),
             }
         );
         assert_eq!(
-            ty(2, &ast, &types),
+            ty(1, &ast, &types),
             Ty::Nominal {
                 symbol: EnumId::from(1).into(),
                 type_args: Default::default(),
@@ -1641,14 +1639,14 @@ pub mod tests {
         );
 
         assert_eq!(
-            ty(1, &ast, &types),
+            ty(0, &ast, &types),
             Ty::Nominal {
                 symbol: EnumId::from(1).into(),
                 type_args: Default::default(),
             }
         );
         assert_eq!(
-            ty(2, &ast, &types),
+            ty(1, &ast, &types),
             Ty::Nominal {
                 symbol: EnumId::from(1).into(),
                 type_args: Default::default(),
@@ -1671,21 +1669,21 @@ pub mod tests {
         );
 
         assert_eq!(
-            ty(1, &ast, &types),
+            ty(0, &ast, &types),
             Ty::Nominal {
                 symbol: EnumId::from(1).into(),
                 type_args: vec![Ty::Int],
             }
         );
         assert_eq!(
-            ty(2, &ast, &types),
+            ty(1, &ast, &types),
             Ty::Nominal {
                 symbol: EnumId::from(1).into(),
                 type_args: vec![Ty::Float],
             }
         );
         assert_eq!(
-            ty(3, &ast, &types),
+            ty(2, &ast, &types),
             Ty::Nominal {
                 symbol: EnumId::from(1).into(),
                 type_args: vec![Ty::Param(1.into())],
@@ -1708,7 +1706,7 @@ pub mod tests {
             ",
         );
 
-        assert_eq!(ty(1, &ast, &types), Ty::Int);
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
     }
 
     #[test]
@@ -1725,7 +1723,7 @@ pub mod tests {
             ",
         );
 
-        assert_eq!(ty(1, &ast, &types), Ty::Int);
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
     }
 
     #[test]
@@ -1747,7 +1745,7 @@ pub mod tests {
             ",
         );
 
-        assert_eq!(ty(1, &ast, &types), Ty::Int);
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
     }
 
     #[test]
@@ -1765,7 +1763,7 @@ pub mod tests {
             ",
         );
 
-        assert_eq!(ty(1, &ast, &types), Ty::Int);
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
     }
 
     #[test]
@@ -1787,7 +1785,7 @@ pub mod tests {
             ",
         );
 
-        assert_eq!(ty(2, &ast, &types), Ty::Int);
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
     }
 
     #[test]
@@ -1861,7 +1859,7 @@ pub mod tests {
         ",
         );
 
-        assert_eq!(ty(3, &ast, &types), Ty::Int)
+        assert_eq!(ty(0, &ast, &types), Ty::Int)
     }
 
     #[test]
@@ -1885,7 +1883,7 @@ pub mod tests {
             ",
         );
 
-        assert_eq!(ty(5, &ast, &types), Ty::Int)
+        assert_eq!(ty(0, &ast, &types), Ty::Int)
     }
 
     #[test]
@@ -1919,8 +1917,8 @@ pub mod tests {
         ",
         );
 
-        assert_eq!(ty(4, &ast, &types), Ty::Int);
-        assert_eq!(ty(5, &ast, &types), Ty::Float);
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
+        assert_eq!(ty(1, &ast, &types), Ty::Float);
     }
 
     #[test]
@@ -1956,8 +1954,8 @@ pub mod tests {
         ",
         );
 
-        assert_eq!(ty(4, &ast, &types), Ty::Float);
-        assert_eq!(ty(5, &ast, &types), Ty::Int);
+        assert_eq!(ty(0, &ast, &types), Ty::Float);
+        assert_eq!(ty(1, &ast, &types), Ty::Int);
     }
 
     #[test]
@@ -1974,7 +1972,7 @@ pub mod tests {
         ",
         );
 
-        assert_eq!(ty(2, &ast, &types), Ty::Int);
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
     }
 
     #[test]
@@ -1997,7 +1995,7 @@ pub mod tests {
         ",
         );
 
-        assert_eq!(ty(2, &ast, &session), Ty::Int);
+        assert_eq!(ty(0, &ast, &session), Ty::Int);
     }
 
     #[test]
@@ -2014,7 +2012,7 @@ pub mod tests {
         );
 
         assert_eq!(
-            ty(1, &ast, &session),
+            ty(0, &ast, &session),
             Ty::Nominal {
                 symbol: Symbol::Enum(EnumId {
                     module_id: ModuleId::Core,
@@ -2026,7 +2024,7 @@ pub mod tests {
 
         // Make sure it doesn't clash
         assert_eq!(
-            ty(2, &ast, &session),
+            ty(1, &ast, &session),
             Ty::Nominal {
                 symbol: Symbol::Enum(EnumId {
                     module_id: ModuleId::Current,
@@ -2131,7 +2129,7 @@ pub mod tests {
         );
 
         assert_eq!(
-            ty(4, &ast, &types),
+            ty(0, &ast, &types),
             Ty::Nominal {
                 symbol: StructId::from(3).into(),
                 type_args: vec![],
@@ -2158,7 +2156,7 @@ pub mod tests {
         ",
         );
 
-        assert_eq!(ty(2, &ast, &types), Ty::Int);
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
     }
 
     #[test]

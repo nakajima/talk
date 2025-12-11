@@ -1,4 +1,5 @@
 use crate::{
+    compiling::module::ModuleId,
     label::Label,
     types::{
         infer_row::{ClosedRow, RowParamId},
@@ -17,6 +18,18 @@ pub enum Row {
 impl Row {
     pub fn close(&self) -> ClosedRow<Ty> {
         close(self, ClosedRow::default())
+    }
+
+    pub fn import(self, module_id: ModuleId) -> Self {
+        match self {
+            Row::Empty(v) => Row::Empty(v),
+            Row::Param(v) => Row::Param(v),
+            Row::Extend { box row, label, ty } => Row::Extend {
+                row: row.import(module_id).into(),
+                label,
+                ty: ty.import(module_id),
+            },
+        }
     }
 }
 

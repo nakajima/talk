@@ -81,7 +81,7 @@ impl SCCGraph {
         idx
     }
 
-    fn ensure_node(&mut self, node: Symbol) -> NodeIndex {
+    pub fn ensure_node(&mut self, node: Symbol) -> NodeIndex {
         #[cfg(debug_assertions)]
         if matches!(node, Symbol::Builtin(..)) {
             unreachable!("should not have builtin in graph: {node:?}");

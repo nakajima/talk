@@ -1,6 +1,7 @@
 use std::hash::Hash;
 
 use crate::{
+    compiling::module::ModuleId,
     name::Name,
     name_resolution::symbol::Symbol,
     types::{
@@ -120,6 +121,35 @@ impl Ty {
     }
     pub fn Array(t: Ty) -> Ty {
         InferTy::Array(t.into()).into()
+    }
+
+    pub fn import(self, module_id: ModuleId) -> Self {
+        match self {
+            Ty::Primitive(symbol) => Ty::Primitive(symbol),
+            Ty::Param(type_param_id) => Ty::Param(type_param_id),
+            Ty::Constructor {
+                name: Name::Resolved(sym, name),
+                params,
+                ret,
+            } => Ty::Constructor {
+                name: Name::Resolved(sym.import(module_id), name),
+                params: params.into_iter().map(|p| p.import(module_id)).collect(),
+                ret: ret.import(module_id).into(),
+            },
+            Ty::Func(param, ret) => {
+                Ty::Func(param.import(module_id).into(), ret.import(module_id).into())
+            }
+            Ty::Tuple(items) => Ty::Tuple(items.into_iter().map(|t| t.import(module_id)).collect()),
+            Ty::Record(symbol, box row) => Ty::Record(
+                symbol.map(|s| s.import(module_id)),
+                row.import(module_id).into(),
+            ),
+            Ty::Nominal { symbol, type_args } => Ty::Nominal {
+                symbol: symbol.import(module_id),
+                type_args: type_args.into_iter().map(|t| t.import(module_id)).collect(),
+            },
+            other => other,
+        }
     }
 
     pub(crate) fn uncurry_params(self) -> Vec<Ty> {
