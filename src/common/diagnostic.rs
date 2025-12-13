@@ -5,13 +5,13 @@ use crate::{
     types::type_error::TypeError,
 };
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Diagnostic<E: Error> {
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Diagnostic<E: Error + std::hash::Hash> {
     pub id: NodeID,
     pub kind: E,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum AnyDiagnostic {
     Parsing(Diagnostic<ParserError>),
     NameResolution(Diagnostic<NameResolverError>),

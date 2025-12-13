@@ -1,5 +1,6 @@
 use std::assert_matches::assert_matches;
 
+use rustc_hash::FxHashMap;
 use tracing::instrument;
 
 use crate::{
@@ -14,7 +15,7 @@ use crate::{
         predicate::Predicate,
         solve_context::SolveContext,
         type_error::TypeError,
-        type_operations::{curry, unify},
+        type_operations::{curry, instantiate_ty, unify},
         type_session::TypeSession,
     },
 };
@@ -141,6 +142,7 @@ impl Member {
                         self.label.to_string(),
                     ));
                 };
+
                 let req_ty = entry.instantiate(self.node_id, constraints, context, session);
                 let (req_self, req_func) = consume_self(&req_ty);
 
@@ -155,6 +157,9 @@ impl Member {
                     Ok(metas) => solved_metas.extend(metas),
                     Err(e) => return SolveResult::Err(e),
                 };
+
+                // Record the witness for protocol member access
+                session.protocol_member_witnesses.insert(self.node_id, req);
 
                 return SolveResult::Solved(solved_metas);
             }
@@ -175,27 +180,53 @@ impl Member {
         nominal_symbol: &Symbol,
     ) -> SolveResult {
         let Some(member_sym) = session.lookup_static_member(nominal_symbol, &self.label) else {
-            return SolveResult::Err(TypeError::MemberNotFound(
-                self.receiver.clone(),
-                self.label.to_string(),
-            ));
+            return SolveResult::Defer(DeferralReason::WaitingOnSymbol(*nominal_symbol));
         };
 
         let mut member_ty = if let Some(entry) = session.lookup(&member_sym) {
             entry.instantiate(self.node_id, constraints, context, session)
         } else {
-            InferTy::Error(
-                TypeError::MemberNotFound(self.receiver.clone(), self.label.to_string()).into(),
-            )
+            return SolveResult::Defer(DeferralReason::WaitingOnSymbol(member_sym));
+            // InferTy::Error(
+            //     TypeError::MemberNotFound(self.receiver.clone(), self.label.to_string()).into(),
+            // )
         };
 
         if let Symbol::Variant(..) = member_sym {
+            let Some(nominal) = session.lookup_nominal(nominal_symbol) else {
+                return SolveResult::Defer(DeferralReason::WaitingOnSymbol(*nominal_symbol));
+            };
+
+            let Some(variant) = nominal.variants.get(&self.label) else {
+                return SolveResult::Defer(DeferralReason::WaitingOnSymbol(member_sym));
+            };
+
             member_ty = if let Some(enum_entry) = session.lookup(nominal_symbol) {
-                let enum_ty = enum_entry.instantiate(self.node_id, constraints, context, session);
-                match member_ty {
-                    InferTy::Void => enum_ty,
-                    InferTy::Tuple(values) => curry(values, enum_ty),
-                    other => curry(vec![other], enum_ty),
+                let enum_ty = instantiate_ty(
+                    self.node_id,
+                    enum_entry._as_ty(),
+                    &context.instantiations,
+                    context.level,
+                );
+
+                match variant.len() {
+                    0 => enum_ty,
+                    _ => curry(
+                        variant.iter().map(|v| {
+                            instantiate_ty(
+                                self.node_id,
+                                v.clone(),
+                                &context.instantiations,
+                                context.level,
+                            )
+                        }),
+                        instantiate_ty(
+                            self.node_id,
+                            enum_ty,
+                            &context.instantiations,
+                            context.level,
+                        ),
+                    ),
                 }
             } else {
                 InferTy::Error(
@@ -290,6 +321,7 @@ impl Member {
             .get(&self.label)
             .cloned()
         {
+            println!("it's a {nominal:?} property bestie: {ty:?}");
             match unify(&self.ty, &ty, context, session) {
                 Ok(vars) => SolveResult::Solved(vars),
                 Err(e) => SolveResult::Err(e),

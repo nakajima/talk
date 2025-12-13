@@ -348,6 +348,7 @@ impl Predicate<InferTy> {
                 &context.group_info(),
             ),
             Self::Conforms { param, protocol_id } => constraints.wants_conforms(
+                id,
                 instantiate_ty(
                     id,
                     InferTy::Param(param),

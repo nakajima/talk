@@ -1,3 +1,4 @@
+use crate::node_id::NodeID;
 use crate::types::conformance::ConformanceKey;
 use crate::{
     label::Label,
@@ -23,6 +24,7 @@ type CheckWitnessResult = (Vec<(Label, Symbol)>, Vec<Meta>);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Conforms {
     pub id: ConstraintId,
+    pub conformance_node_id: NodeID,
     pub ty: InferTy,
     pub protocol_id: ProtocolId,
 }
@@ -37,11 +39,6 @@ impl Conforms {
             InferTy::Primitive(symbol) => *symbol,
             InferTy::Nominal { symbol, .. } => *symbol,
             InferTy::Param(param_id) => {
-                // For type parameters, check if any given conformance implies conformance
-                // to the target protocol through protocol inheritance.
-                //
-                // Example: if we have `T: B` as a given, and `protocol B: A`, then
-                // `T: A` is satisfied because B inherits from A.
                 for given in &context.givens {
                     if let Predicate::Conforms {
                         param,
@@ -60,6 +57,7 @@ impl Conforms {
                             conforming_id: Symbol::Protocol(*given_protocol_id),
                             protocol_id: self.protocol_id,
                         };
+
                         if session.type_catalog.conformances.contains_key(&key) {
                             return SolveResult::Solved(Default::default());
                         }
@@ -80,19 +78,22 @@ impl Conforms {
         };
 
         // Make sure a conformance is declared, otherwise what's even the point of checking anything else
-        let Some(conformance) = session
-            .type_catalog
-            .conformances
-            .get(&ConformanceKey {
-                conforming_id: conforming_ty_sym,
-                protocol_id: self.protocol_id,
-            })
-            .cloned()
-        else {
-            return SolveResult::Err(TypeError::TypesDoesNotConform {
-                symbol: conforming_ty_sym,
-                protocol_id: self.protocol_id,
-            });
+        let key = ConformanceKey {
+            conforming_id: conforming_ty_sym,
+            protocol_id: self.protocol_id,
+        };
+        let Some(conformance) = session.lookup_conformance(&key) else {
+            println!(
+                "Wait wat: {self:?} - {:?} {key:?}",
+                Symbol::Protocol(self.protocol_id)
+            );
+
+            return SolveResult::Defer(DeferralReason::WaitingOnConformance(key));
+
+            // return SolveResult::Err(TypeError::TypesDoesNotConform {
+            //     symbol: conforming_ty_sym,
+            //     protocol_id: self.protocol_id,
+            // });
         };
 
         let Some(EnvEntry::Scheme(Scheme {
@@ -112,10 +113,7 @@ impl Conforms {
 
         let mut protocol_projections = FxHashMap::<Label, InferTy>::default();
         for (label, associated_sym) in session
-            .type_catalog
-            .associated_types
-            .get(&self.protocol_id.into())
-            .cloned()
+            .lookup_associated_types(self.protocol_id.into())
             .unwrap_or_default()
         {
             let Some(associated_entry) = session.lookup(&associated_sym) else {
@@ -142,7 +140,7 @@ impl Conforms {
                 .get(&conforming_ty_sym)
                 .cloned()
                 .unwrap_or_default()
-                .get(&label.to_string())
+                .get(&label)
             {
                 if let Some(entry) = session.lookup(witness_type_sym) {
                     entry._as_ty()
@@ -159,7 +157,7 @@ impl Conforms {
                             .associated_types
                             .get(&label)
                             .cloned()
-                            .expect("discover_conformances didn't set associated type")
+                            .unwrap_or_else(|| session.new_ty_meta_var(context.level))
                     })
                     .clone()
             } else {
@@ -169,7 +167,7 @@ impl Conforms {
                     .associated_types
                     .get(&label)
                     .cloned()
-                    .expect("discover_conformances didn't set associated type")
+                    .unwrap_or_else(|| session.new_ty_meta_var(context.level))
             };
 
             substitutions.insert(associated_entry._as_ty(), associated_witness_ty);
@@ -187,9 +185,12 @@ impl Conforms {
                 if missing_conformances.is_empty() {
                     SolveResult::Solved(solved_vars)
                 } else {
-                    SolveResult::Err(TypeError::MissingConformanceRequirement(format!(
-                        "{missing_conformances:?}"
-                    )))
+                    SolveResult::Defer(DeferralReason::WaitingOnSymbols(
+                        missing_conformances.iter().map(|c| c.1).collect(),
+                    ))
+                    // SolveResult::Err(TypeError::MissingConformanceRequirement(format!(
+                    //     "{missing_conformances:?}"
+                    // )))
                 }
             }
             Err(e) => SolveResult::Err(e),
@@ -208,21 +209,10 @@ impl Conforms {
         let mut missing_witnesses = vec![];
         let mut solved_metas = vec![];
 
-        let Some(requirements) = session
-            .type_catalog
-            .method_requirements
-            .get(&self.protocol_id.into())
-            .cloned()
-        else {
+        let Some(requirements) = session.lookup_method_requirements(self.protocol_id.into()) else {
+            println!("lol no requirements are u kidding");
             return Ok((missing_witnesses, solved_metas));
         };
-
-        let instance_methods = session
-            .type_catalog
-            .instance_methods
-            .get(conforming_ty_sym)
-            .cloned()
-            .unwrap_or_default();
 
         for (label, required_sym) in requirements {
             let Some(required_entry) = session.lookup(&required_sym).clone() else {
@@ -248,15 +238,19 @@ impl Conforms {
 
             let required_ty = substitute(required_entry._as_ty(), &substitutions);
 
-            let Some(witness_sym) = instance_methods.get(&label) else {
+            let Some(witness_sym) = session.lookup_concrete_member(conforming_ty_sym, &label)
+            else {
                 missing_witnesses.push((label, required_sym));
                 continue;
             };
 
-            let Some(witness) = session.lookup(witness_sym).clone() else {
+            let Some(witness) = session.lookup(&witness_sym).clone() else {
                 tracing::error!("Didn't get witness for sym: {witness_sym:?}");
+                missing_witnesses.push((label, witness_sym));
                 continue;
             };
+
+            println!("found a witness bestie: {witness_sym:?} = {witness:?}");
 
             match unify(&required_ty, &witness._as_ty(), context, session) {
                 Ok(vars) => solved_metas.extend(vars),

@@ -1,17 +1,14 @@
 #[cfg(test)]
 pub mod tests {
     use crate::{
-        ast::AST,
+        ast::{AST, NameResolved},
         compiling::{
             driver::{Driver, DriverConfig, Source},
             module::ModuleId,
         },
-        diagnostic::Diagnostic,
+        diagnostic::{AnyDiagnostic, Diagnostic},
         ir::monomorphizer::uncurry_function,
-        name_resolution::{
-            name_resolver::NameResolved,
-            symbol::{EnumId, GlobalId, ProtocolId, StructId, Symbol, SynthesizedId},
-        },
+        name_resolution::symbol::{EnumId, GlobalId, ProtocolId, StructId, Symbol, SynthesizedId},
         types::{
             conformance::ConformanceKey,
             scheme::{ForAll, Scheme},
@@ -23,17 +20,17 @@ pub mod tests {
     };
 
     fn typecheck(code: &'static str) -> (TypedAST<Ty>, Types) {
-        let (ast, types) = typecheck_err(code);
+        let (ast, types, diagnostics) = typecheck_err(code);
         assert!(
-            ast.diagnostics.is_empty(),
+            diagnostics.is_empty(),
             "diagnostics not empty: {:?}",
-            ast.diagnostics
+            diagnostics
         );
         (ast, types)
     }
 
     fn typecheck_core(code: &'static str) -> (TypedAST<Ty>, Types) {
-        let driver = Driver::new(vec![Source::from(code)], DriverConfig::default());
+        let driver = Driver::new(vec![Source::from(code)], DriverConfig::new("TestDriver"));
         let typed = driver
             .parse()
             .unwrap()
@@ -43,18 +40,18 @@ pub mod tests {
             .unwrap();
 
         let types = typed.phase.types;
-        let ast = typed.phase.asts.into_iter().next().unwrap().1;
+        let ast = typed.phase.ast;
         assert!(
-            ast.diagnostics.is_empty(),
+            typed.phase.diagnostics.is_empty(),
             "diagnostics not empty: {:?}",
-            ast.diagnostics
+            typed.phase.diagnostics
         );
 
         (ast, types)
     }
 
-    fn typecheck_err(code: &'static str) -> (TypedAST<Ty>, Types) {
-        let driver = Driver::new_bare(vec![Source::from(code)], DriverConfig::default());
+    fn typecheck_err(code: &'static str) -> (TypedAST<Ty>, Types, Vec<AnyDiagnostic>) {
+        let driver = Driver::new_bare(vec![Source::from(code)], DriverConfig::new("TestDriver"));
         let typed = driver
             .parse()
             .unwrap()
@@ -63,10 +60,7 @@ pub mod tests {
             .typecheck()
             .unwrap();
 
-        let types = typed.phase.types;
-        let ast = typed.phase.asts.into_iter().next().unwrap().1;
-
-        (ast, types)
+        (typed.phase.ast, typed.phase.types, typed.phase.diagnostics)
     }
 
     pub fn decl_ty(i: usize, ast: &AST<NameResolved>, session: &Types) -> Ty {
@@ -185,13 +179,13 @@ pub mod tests {
 
     #[test]
     fn monomorphic_let_annotation_mismatch() {
-        let (ast, _types) = typecheck_err(
+        let (_ast, _types, diagnostics) = typecheck_err(
             r#"
         let a: Bool = 123
         a
     "#,
         );
-        assert_eq!(ast.diagnostics.len(), 1);
+        assert_eq!(diagnostics.len(), 1);
     }
 
     #[test]
@@ -389,7 +383,7 @@ pub mod tests {
                         TypedExprKind::Call {
                             callee:
                                 box TypedExpr {
-                                    kind: TypedExprKind::Member(..),
+                                    kind: TypedExprKind::Member { .. },
                                     id: member_1_id,
                                     ..
                                 },
@@ -410,7 +404,7 @@ pub mod tests {
                         TypedExprKind::Call {
                             callee:
                                 box TypedExpr {
-                                    kind: TypedExprKind::Member(..),
+                                    kind: TypedExprKind::Member { .. },
                                     id: member_2_id,
                                     ..
                                 },
@@ -526,17 +520,17 @@ pub mod tests {
 
     #[test]
     fn generic_function_body_must_respect_its_own_type_vars() {
-        let (ast, _types) = typecheck_err(
+        let (_ast, _types, diagnostics) = typecheck_err(
             r#"
         func bad<T>(x: T) -> T { 0 } // 0 == Int != T
         bad(true)
     "#,
         );
         assert_eq!(
-            ast.diagnostics.len(),
+            diagnostics.len(),
             1,
             "didn't get correct diagnostic: {:?}",
-            ast.diagnostics
+            diagnostics
         );
     }
 
@@ -601,7 +595,7 @@ pub mod tests {
 
     #[test]
     fn checks_returns_agree() {
-        let (ast, _types) = typecheck_err(
+        let (_ast, _types, diagnostics) = typecheck_err(
             "
             func fizz() {
                 return 123
@@ -611,10 +605,10 @@ pub mod tests {
         );
 
         assert_eq!(
-            ast.diagnostics.len(),
+            diagnostics.len(),
             1,
             "did not get diagnostic: {:?}",
-            ast.diagnostics
+            diagnostics
         );
     }
 
@@ -626,7 +620,7 @@ pub mod tests {
         z
         ",
         );
-        assert_eq!(ty(1, &ast, &types), Ty::Int);
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
     }
 
     #[test]
@@ -681,37 +675,37 @@ pub mod tests {
 
     #[test]
     fn requires_if_expr_cond_to_be_bool() {
-        let (ast, _types) = typecheck_err(
+        let (_ast, _types, diagnostics) = typecheck_err(
             "
         let z = if 123 { 123 } else { 456 }
         z
         ",
         );
 
-        assert_eq!(ast.diagnostics.len(), 1);
+        assert_eq!(diagnostics.len(), 1);
     }
 
     #[test]
     fn requires_if_expr_arms_to_match() {
-        let (ast, _types) = typecheck_err(
+        let (_ast, _types, diagnostics) = typecheck_err(
             "
         let z = if true { 123 } else { false }
         z
         ",
         );
 
-        assert_eq!(ast.diagnostics.len(), 1);
+        assert_eq!(diagnostics.len(), 1);
     }
 
     #[test]
     fn requires_if_stmt_cond_to_be_bool() {
-        let (ast, _types) = typecheck_err(
+        let (_ast, _types, diagnostics) = typecheck_err(
             "
         if 123 { 123 }
         ",
         );
 
-        assert_eq!(ast.diagnostics.len(), 1);
+        assert_eq!(diagnostics.len(), 1);
     }
 
     #[test]
@@ -818,19 +812,19 @@ pub mod tests {
     #[test]
     fn call_time_type_args_are_checked() {
         // Should be a type error because <Bool> contradicts the actual arg 123.
-        let (ast, _types) = typecheck_err(
+        let (_ast, _types, diagnostics) = typecheck_err(
             r#"
         func id<T>(x: T) -> T { x }
         id<Bool>(123)
     "#,
         );
-        assert_eq!(ast.diagnostics.len(), 1, "expected 1 diagnostic");
+        assert_eq!(diagnostics.len(), 1, "expected 1 diagnostic");
     }
 
     #[test]
     fn match_arms_must_agree_on_result_type() {
         // Arms return Int vs Bool → should be an error.
-        let (ast, _types) = typecheck_err(
+        let (_ast, _types, diagnostics) = typecheck_err(
             r#"
         match 123 {
             123 -> 1,
@@ -839,7 +833,7 @@ pub mod tests {
     "#,
         );
         assert_eq!(
-            ast.diagnostics.len(),
+            diagnostics.len(),
             1,
             "match arms not constrained to same type"
         );
@@ -847,24 +841,24 @@ pub mod tests {
 
     #[test]
     fn param_annotation_is_enforced_at_call() {
-        let (ast, _types) = typecheck_err(
+        let (_ast, _types, diagnostics) = typecheck_err(
             r#"
         func f(x: Int) -> Int { x }
         f(true)
     "#,
         );
-        assert_eq!(ast.diagnostics.len(), 1);
+        assert_eq!(diagnostics.len(), 1);
     }
 
     #[test]
     fn return_annotation_is_enforced_in_body() {
-        let (ast, _types) = typecheck_err(
+        let (_ast, _types, diagnostics) = typecheck_err(
             r#"
         func f(x: Int) -> Int { true }
         f(1)
     "#,
         );
-        assert_eq!(ast.diagnostics.len(), 1);
+        assert_eq!(diagnostics.len(), 1);
     }
 
     #[test]
@@ -889,7 +883,7 @@ pub mod tests {
     #[test]
     fn recursion_is_monomorphic_within_binding_group() {
         // Polymorphic recursion should NOT be inferred.
-        let (ast, _types) = typecheck_err(
+        let (_ast, _types, diagnostics) = typecheck_err(
             r#"
         func g(x) {
             // Force a shape change on the recursive call to try to “polymorphically” recurse.
@@ -902,12 +896,12 @@ pub mod tests {
         // We expect either an occurs check error or an invalid unification error
         // Both indicate that polymorphic recursion is not allowed
         assert!(
-            !ast.diagnostics.is_empty(),
+            !diagnostics.is_empty(),
             "expected errors for polymorphic recursion"
         );
 
         // Check that we have the expected error types
-        let has_occurs_check = ast.diagnostics.iter().any(|d| {
+        let has_occurs_check = diagnostics.iter().any(|d| {
             matches!(
                 d,
                 crate::diagnostic::AnyDiagnostic::Typing(Diagnostic {
@@ -917,7 +911,7 @@ pub mod tests {
             )
         });
 
-        let has_invalid_unification = ast.diagnostics.iter().any(|d| {
+        let has_invalid_unification = diagnostics.iter().any(|d| {
             matches!(
                 d,
                 crate::diagnostic::AnyDiagnostic::Typing(Diagnostic {
@@ -930,7 +924,7 @@ pub mod tests {
         assert!(
             has_occurs_check || has_invalid_unification,
             "expected OccursCheck or InvalidUnification error for polymorphic recursion, got {:?}",
-            ast.diagnostics
+            diagnostics
         );
     }
 
@@ -1086,7 +1080,7 @@ pub mod tests {
 
     #[test]
     fn checks_fields_exist() {
-        let (ast, _types) = typecheck_err(
+        let (_ast, _types, diagnostics) = typecheck_err(
             r#"
         let rec = { a: 123, b: true }
         match rec {
@@ -1096,16 +1090,16 @@ pub mod tests {
         );
 
         assert_eq!(
-            ast.diagnostics.len(),
+            diagnostics.len(),
             1,
             "did not get diagnostic: {:?}",
-            ast.diagnostics
+            diagnostics
         );
     }
 
     #[test]
     fn checks_field_types() {
-        let (ast, _types) = typecheck_err(
+        let (_ast, _types, diagnostics) = typecheck_err(
             r#"
         let rec = { a: 123 }
         match rec {
@@ -1115,10 +1109,10 @@ pub mod tests {
         );
 
         assert_eq!(
-            ast.diagnostics.len(),
+            diagnostics.len(),
             1,
             "did not get diagnostic: {:?}",
-            ast.diagnostics
+            diagnostics
         );
     }
 
@@ -1153,7 +1147,7 @@ pub mod tests {
     /// Matching on a field that isn't known in the env row should fail inside `outer`.
     #[test]
     fn row_env_tail_not_generalized_in_local_let() {
-        let (ast, _types) = typecheck_err(
+        let (_ast, _types, diagnostics) = typecheck_err(
             r#"
         func outer(r) {
             let _x = r.a;               // forces r to have field `a`
@@ -1167,7 +1161,7 @@ pub mod tests {
         );
 
         // exactly one "missing field" diagnostic
-        assert_eq!(ast.diagnostics.len(), 1, "{:?}", ast.diagnostics);
+        assert_eq!(diagnostics.len(), 1, "{:?}", diagnostics);
     }
 
     #[test]
@@ -1218,7 +1212,7 @@ pub mod tests {
     fn row_meta_levels_prevent_leak() {
         // Outer forces r to be an open record { a: Int | row_var } by projecting r.a.
         // Then local let k = func(){ r } must NOT generalize row_var; match should fail on { c }.
-        let (ast, _types) = typecheck_err(
+        let (_ast, _types, diagnostics) = typecheck_err(
             r#"
         func outer(r) {
             let x = r.a; // creates an internal Row::Var tail for r's row (your ensure_row/projection does this)
@@ -1230,7 +1224,7 @@ pub mod tests {
         outer({ a: 1 })
     "#,
         );
-        assert_eq!(ast.diagnostics.len(), 1);
+        assert_eq!(diagnostics.len(), 1);
     }
 
     #[test]
@@ -1250,7 +1244,7 @@ pub mod tests {
 
     #[test]
     fn enforces_non_annotated_record() {
-        let (ast, _types) = typecheck_err(
+        let (_ast, _types, diagnostics) = typecheck_err(
             "
         func foo(point) {
             (point.x, point.y)
@@ -1260,12 +1254,7 @@ pub mod tests {
         ",
         );
 
-        assert_eq!(
-            ast.diagnostics.len(),
-            1,
-            "diagnostics: {:?}",
-            ast.diagnostics
-        );
+        assert_eq!(diagnostics.len(), 1, "diagnostics: {:?}", diagnostics);
     }
 
     #[test]
@@ -1287,7 +1276,7 @@ pub mod tests {
 
     #[test]
     fn enforces_row_type_as_params() {
-        let (ast, _types) = typecheck_err(
+        let (_ast, _types, diagnostics) = typecheck_err(
             "
         func foo(x: { y: Int, z: Bool }) {
             (x.y, x.z)
@@ -1297,12 +1286,7 @@ pub mod tests {
         ",
         );
 
-        assert_eq!(
-            ast.diagnostics.len(),
-            1,
-            "diagnostics: {:?}",
-            ast.diagnostics
-        );
+        assert_eq!(diagnostics.len(), 1, "diagnostics: {:?}", diagnostics);
     }
 
     #[test]
@@ -1388,7 +1372,7 @@ pub mod tests {
 
     #[test]
     fn checks_struct_init_args() {
-        let (ast, _types) = typecheck_err(
+        let (_ast, _types, diagnostics) = typecheck_err(
             "
         struct Person {
             let age: Int
@@ -1402,7 +1386,7 @@ pub mod tests {
         ",
         );
 
-        assert_eq!(ast.diagnostics.len(), 1, "{:?}", ast.diagnostics);
+        assert_eq!(diagnostics.len(), 1, "{:?}", diagnostics);
     }
 
     #[test]
@@ -1507,7 +1491,7 @@ pub mod tests {
 
     #[test]
     fn checks_struct_method_on_arg() {
-        let (ast, _types) = typecheck_err(
+        let (_ast, _types, diagnostics) = typecheck_err(
             "
         struct Person {
             let age: Int
@@ -1524,9 +1508,9 @@ pub mod tests {
 
         assert_eq!(
             1,
-            ast.diagnostics.len(),
+            diagnostics.len(),
             "should have no method error: {:?}",
-            ast.diagnostics
+            diagnostics
         );
     }
 
@@ -1814,7 +1798,7 @@ pub mod tests {
 
     #[test]
     fn checks_method_protocol_conformance() {
-        let (ast, _types) = typecheck_err(
+        let (_ast, _types, diagnostics) = typecheck_err(
             "
             protocol Countable {
                 func getCount() -> Int
@@ -1832,9 +1816,9 @@ pub mod tests {
 
         assert_eq!(
             1,
-            ast.diagnostics.len(),
+            diagnostics.len(),
             "didn't get diagnostic: {:?}",
-            ast.diagnostics
+            diagnostics
         );
     }
 
@@ -2167,12 +2151,12 @@ pub mod tests {
             add(2)
             ",
         );
-        assert_eq!(ty(1, &ast, &types), Ty::Int);
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
     }
 
     #[test]
     fn checks_as() {
-        let (ast, _types) = typecheck_err(
+        let (_ast, _types, diagnostics) = typecheck_err(
             "
         protocol Fizz {
             func fizz() -> Int
@@ -2189,15 +2173,15 @@ pub mod tests {
 
         assert_eq!(
             1,
-            ast.diagnostics.len(),
+            diagnostics.len(),
             "didn't get diagnostic: {:?}",
-            ast.diagnostics
+            diagnostics
         );
     }
 
     #[test]
     fn checks_basic_conformance() {
-        let (ast, _types) = typecheck_err(
+        let (_ast, _types, diagnostics) = typecheck_err(
             "
         protocol A {
             func fizz() -> Int
@@ -2209,9 +2193,9 @@ pub mod tests {
 
         assert_eq!(
             1,
-            ast.diagnostics.len(),
+            diagnostics.len(),
             "didn't get diagnostic: {:?}",
-            ast.diagnostics
+            diagnostics
         );
     }
 
@@ -2244,7 +2228,7 @@ pub mod tests {
 
     #[test]
     fn checks_protocol_protocol_conformance() {
-        let (ast, _types) = typecheck_err(
+        let (_ast, _types, diagnostics) = typecheck_err(
             "
         protocol A {
             func fizz() -> Int
@@ -2262,9 +2246,9 @@ pub mod tests {
 
         assert_eq!(
             1,
-            ast.diagnostics.len(),
+            diagnostics.len(),
             "didn't get diagnostic: {:?}",
-            ast.diagnostics
+            diagnostics
         );
     }
 

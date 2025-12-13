@@ -158,6 +158,7 @@ pub enum Symbol {
     AssociatedType(AssociatedTypeId),
     MethodRequirement(MethodRequirementId),
     Main,
+    Library,
 }
 
 impl std::fmt::Debug for Symbol {
@@ -169,6 +170,7 @@ impl std::fmt::Debug for Symbol {
         };
         match *self {
             Symbol::Main => write!(f, "main"),
+            Symbol::Library => write!(f, "lib"),
             Symbol::Int => write!(f, "Int"),
             Symbol::Float => write!(f, "Float"),
             Symbol::Bool => write!(f, "Bool"),
@@ -339,6 +341,7 @@ impl Symbol {
     fn inner_bytes(&self) -> Vec<u8> {
         match self {
             Symbol::Main => 0u32.to_le_bytes(),
+            Symbol::Library => u32::MAX.to_le_bytes(),
             Symbol::Struct(v) => v.local_id.to_le_bytes(),
             Symbol::Enum(v) => v.local_id.to_le_bytes(),
             Symbol::TypeAlias(v) => v.local_id.to_le_bytes(),
@@ -512,6 +515,7 @@ impl Display for Symbol {
 
         match self {
             Symbol::Main => write!(f, "main"),
+            Symbol::Library => write!(f, "lib"),
             Symbol::Struct(type_id) => write!(f, "{}", type_id),
             Symbol::Enum(type_id) => write!(f, "{}", type_id),
             Symbol::TypeAlias(type_id) => write!(f, "{}", type_id),

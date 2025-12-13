@@ -82,8 +82,8 @@ impl<'a> Higlighter<'a> {
             return result;
         };
 
-        for root in ast.roots.iter() {
-            result.extend(self.tokens_from_expr(&root, &ast));
+        for root in ast.0.roots.iter() {
+            result.extend(self.tokens_from_expr(&root, &ast.0));
         }
 
         result

@@ -1,7 +1,6 @@
 use derive_visitor::{Drive, Visitor};
 
 use crate::{
-    diagnostic::AnyDiagnostic,
     id_generator::IDGenerator,
     node::Node,
     node_id::{FileID, NodeID},
@@ -24,10 +23,27 @@ pub struct Parsed;
 impl ASTPhase for Parsed {}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NameResolved;
+impl ASTPhase for NameResolved {}
+
+impl From<AST<Parsed>> for AST<NameResolved> {
+    fn from(value: AST<Parsed>) -> Self {
+        AST {
+            path: value.path,
+            roots: value.roots,
+            meta: value.meta,
+            phase: NameResolved {},
+            node_ids: value.node_ids,
+            synthsized_ids: value.synthsized_ids,
+            file_id: value.file_id,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AST<Phase: ASTPhase = NewAST> {
     pub path: String,
     pub roots: Vec<Node>,
-    pub diagnostics: Vec<AnyDiagnostic>,
     pub meta: NodeMetaStorage,
     pub phase: Phase,
     pub node_ids: IDGenerator,

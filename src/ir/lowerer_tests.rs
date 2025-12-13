@@ -7,7 +7,7 @@ pub mod tests {
     use crate::{
         assert_eq_diff,
         compiling::{
-            driver::{Driver, Source},
+            driver::{Driver, DriverConfig, Source},
             module::{Module, ModuleId},
         },
         ir::{
@@ -35,7 +35,7 @@ pub mod tests {
     }
 
     pub fn lower(input: &str) -> Program {
-        let driver = Driver::new(vec![Source::from(input)], Default::default());
+        let driver = Driver::new(vec![Source::from(input)], DriverConfig::new("TestDriver"));
         let mut typed = driver
             .parse()
             .unwrap()
@@ -45,17 +45,18 @@ pub mod tests {
             .unwrap();
 
         let lowerer = Lowerer::new(
-            &mut typed.phase.asts,
+            &mut typed.phase.ast,
             &mut typed.phase.types,
             &mut typed.phase.symbols,
             &mut typed.phase.symbol_names,
+            &typed.phase.resolved_names,
             &typed.config,
         );
         lowerer.lower().unwrap()
     }
 
     pub fn lower_module(input: &str) -> Module {
-        let driver = Driver::new(vec![Source::from(input)], Default::default());
+        let driver = Driver::new(vec![Source::from(input)], DriverConfig::new("TestDriver"));
         driver
             .parse()
             .unwrap()
@@ -538,8 +539,6 @@ pub mod tests {
         let module = lower_module("1 <= 2");
         let _s = set_symbol_names(module.symbol_names.clone());
         let program = module.program;
-
-        println!("{program}");
 
         // The original lte method should still be imported
         assert!(

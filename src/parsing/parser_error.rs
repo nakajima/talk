@@ -1,7 +1,7 @@
 use crate::{parser::BlockContext, token::Token, token_kind::TokenKind};
 use std::{error::Error, fmt::Display};
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ParserError {
     UnexpectedToken { expected: String, actual: String },
     UnexpectedEndOfInput(Option<String>),

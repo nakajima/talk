@@ -1,9 +1,13 @@
+use indexmap::IndexSet;
+use itertools::Itertools;
 use tracing::instrument;
 
 use crate::{
-    ast::AST,
     label::Label,
-    name_resolution::{name_resolver::NameResolved, symbol::ProtocolId},
+    name_resolution::{
+        name_resolver::ResolvedNames,
+        symbol::{ProtocolId, Symbol},
+    },
     node_id::NodeID,
     types::{
         conformance::ConformanceKey,
@@ -27,14 +31,14 @@ pub struct Projection {
 }
 
 impl Projection {
-    #[instrument(skip(constraints, context, session, asts))]
+    #[instrument(skip(constraints, context, session, resolved_names))]
     pub fn solve(
         &self,
         level: Level,
         constraints: &mut ConstraintStore,
         context: &mut SolveContext,
         session: &mut TypeSession,
-        asts: &[AST<NameResolved>],
+        resolved_names: &ResolvedNames,
     ) -> SolveResult {
         let base = session.apply(self.base.clone(), &mut context.substitutions);
         let result = session.apply(self.result.clone(), &mut context.substitutions);
@@ -64,9 +68,9 @@ impl Projection {
             tracing::debug!("Projection: conformance={:?}", conformance);
             if let Some(conf) = conformance {
                 // Prefer the alias symbol (if the nominal actually provided `typealias T = ...`)
-                if let Some(alias_sym) = asts
-                    .iter()
-                    .find_map(|ast| ast.phase.child_types.get(&base_sym))
+                if let Some(alias_sym) = resolved_names
+                    .child_types
+                    .get(&base_sym)
                     .and_then(|t| t.get(&self.label))
                     .cloned()
                 {
@@ -125,34 +129,31 @@ impl Projection {
                     result,
                     protocol_id
                 );
+
                 if !matches!(result, InferTy::Var { .. }) {
                     // Find all conformances to this protocol where the associated type matches
                     // First collect relevant conformance keys to avoid borrow issues
-                    let candidate_keys: Vec<_> = session
-                        .type_catalog
-                        .conformances
-                        .iter()
-                        .filter_map(|(key, conf)| {
-                            if key.protocol_id == protocol_id {
-                                conf.witnesses
-                                    .associated_types
-                                    .get(&self.label)
-                                    .map(|assoc_ty| (key.conforming_id, assoc_ty.clone()))
-                            } else {
-                                None
-                            }
-                        })
-                        .collect();
 
+                    let candidate_keys: Vec<_> = session.lookup_protocol_conformances(&protocol_id);
                     let num_candidates = candidate_keys.len();
 
                     // Now check which ones match (with mutable access to session)
-                    let matching: Vec<_> = candidate_keys
+                    let matching: IndexSet<_> = candidate_keys
                         .into_iter()
-                        .filter(|(_, assoc_ty)| {
+                        .filter_map(|key| {
+                            let conformance = session.lookup_conformance(&key)?;
+                            let assoc_ty = conformance
+                                .witnesses
+                                .associated_types
+                                .get(&self.label)?
+                                .clone();
                             let applied =
                                 session.apply(assoc_ty.clone(), &mut context.substitutions);
-                            applied == result
+                            if applied == result {
+                                Some((key, assoc_ty))
+                            } else {
+                                None
+                            }
                         })
                         .collect();
 
@@ -163,22 +164,32 @@ impl Projection {
                     );
 
                     // If exactly one candidate, unify the base with that type
-                    if matching.len() == 1 {
-                        let (conforming_id, _) = &matching[0];
-                        tracing::debug!(
-                            "Projection defaulting: unifying base with {:?}",
-                            conforming_id
-                        );
-                        let conforming_ty = InferTy::Primitive(*conforming_id);
-                        constraints.wants_equals(base.clone(), conforming_ty);
-                        return SolveResult::Solved(vec![Meta::Ty(*id)]);
-                    }
+                    return match matching.len() {
+                        0 => SolveResult::Defer(DeferralReason::WaitingOnMeta(Meta::Ty(*id))),
+                        1 => {
+                            let (key, _) = &matching[0];
+                            let conforming_ty = if matches!(key.conforming_id, Symbol::Builtin(..))
+                            {
+                                InferTy::Primitive(key.conforming_id)
+                            } else {
+                                InferTy::Nominal {
+                                    symbol: key.conforming_id,
+                                    type_args: Default::default(),
+                                }
+                            };
+                            constraints.wants_equals(base.clone(), conforming_ty);
+                            return SolveResult::Solved(vec![Meta::Ty(*id)]);
+                        }
+                        _ => {
+                            unimplemented!("ambiguous: {matching:?}");
+                        }
+                    };
                 }
             }
 
-            SolveResult::Defer(DeferralReason::WaitingOnMeta(Meta::Ty(*id)))
-        } else {
-            SolveResult::Defer(DeferralReason::Unknown)
+            return SolveResult::Defer(DeferralReason::WaitingOnMeta(Meta::Ty(*id)));
         }
+
+        SolveResult::Defer(DeferralReason::Unknown)
     }
 }

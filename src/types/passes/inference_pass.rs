@@ -4,13 +4,13 @@ use rustc_hash::FxHashMap;
 use tracing::instrument;
 
 use crate::{
-    ast::AST,
+    ast::{AST, NameResolved},
     diagnostic::{AnyDiagnostic, Diagnostic},
     formatter,
     label::Label,
     name::Name,
     name_resolution::{
-        name_resolver::NameResolved,
+        name_resolver::ResolvedNames,
         scc_graph::BindingGroup,
         symbol::{ProtocolId, Symbol, set_symbol_names},
     },
@@ -38,7 +38,7 @@ use crate::{
         builtins::resolve_builtin_type,
         conformance::{Conformance, ConformanceKey, Witnesses},
         constraint_solver::ConstraintSolver,
-        constraints::store::ConstraintStore,
+        constraints::{constraint::Constraint, store::ConstraintStore},
         infer_row::InferRow,
         infer_ty::{InferTy, Level, Meta, MetaVarId, TypeParamId},
         predicate::Predicate,
@@ -53,9 +53,9 @@ use crate::{
         },
         type_session::{TypeDefKind, TypeSession},
         typed_ast::{
-            TyMappable, TypedAST, TypedBlock, TypedDecl, TypedDeclKind, TypedExpr, TypedExprKind,
-            TypedFunc, TypedMatchArm, TypedNode, TypedParameter, TypedPattern, TypedRecordField,
-            TypedStmt, TypedStmtKind,
+            TypedAST, TypedBlock, TypedDecl, TypedDeclKind, TypedExpr, TypedExprKind, TypedFunc,
+            TypedMatchArm, TypedNode, TypedParameter, TypedPattern, TypedRecordField, TypedStmt,
+            TypedStmtKind,
         },
     },
 };
@@ -75,27 +75,34 @@ pub struct InferencePass<'a> {
     instantiations: FxHashMap<NodeID, InstantiationSubstitutions>,
     substitutions: UnificationSubstitutions,
     tracked_returns: Vec<IndexSet<(Span, InferTy)>>,
+    resolved_names: &'a ResolvedNames,
+    diagnostics: IndexSet<AnyDiagnostic>,
 }
 
 impl<'a> InferencePass<'a> {
     pub fn drive(
         asts: &'a mut [AST<NameResolved>],
+        resolved_names: &ResolvedNames,
         session: &'a mut TypeSession,
-    ) -> Vec<TypedAST<Ty>> {
+    ) -> (TypedAST<Ty>, Vec<AnyDiagnostic>) {
         let substitutions = UnificationSubstitutions::new(session.meta_levels.clone());
-        let mut pass = InferencePass {
+        let pass = InferencePass {
             asts,
             session,
             instantiations: Default::default(),
             constraints: Default::default(),
             substitutions,
             tracked_returns: Default::default(),
+            resolved_names,
+            diagnostics: Default::default(),
         };
 
         pass.drive_all()
     }
 
-    fn drive_all(&mut self) -> Vec<TypedAST<Ty>> {
+    fn drive_all(mut self) -> (TypedAST<Ty>, Vec<AnyDiagnostic>) {
+        let _s = set_symbol_names(self.resolved_names.symbol_names.clone());
+
         // Register extension conformances first, so they're available when processing protocol default methods
         for i in 0..self.asts.len() {
             self.discover_conformances(i);
@@ -106,37 +113,92 @@ impl<'a> InferencePass<'a> {
             self.session.apply_all(&mut self.substitutions);
         }
 
-        let mut typed_asts = vec![];
-        for i in 0..self.asts.len() {
-            let typed_ast = self.generate(i);
-            let typed_ast = typed_ast.apply(&mut self.substitutions, self.session);
-            typed_asts.push(typed_ast);
-            self.session.apply_all(&mut self.substitutions);
-        }
+        let typed_asts = self.generate();
+        self.session.apply_all(&mut self.substitutions);
 
         // Transfer child_types from AST phases to the catalog for module export
-        for ast in self.asts.iter() {
-            for (sym, entries) in ast.phase.child_types.iter() {
-                self.session
-                    .type_catalog
-                    .child_types
-                    .entry(*sym)
-                    .or_default()
-                    .extend(entries.iter().map(|(k, v)| (k.to_string(), *v)));
+        for (sym, entries) in self.resolved_names.child_types.iter() {
+            self.session
+                .type_catalog
+                .child_types
+                .entry(*sym)
+                .or_default()
+                .extend(entries.iter().map(|(k, v)| (k.clone(), *v)));
+        }
+
+        // At this point, any unsolved constraints are errors
+        for constraint in self.constraints.unsolved() {
+            match constraint {
+                Constraint::Call(..) => (),
+                Constraint::Equals(..) => (),
+                Constraint::HasField(..) => (),
+                Constraint::Member(..) => (),
+                Constraint::Conforms(conforms) => {
+                    println!(
+                        "Conforms not solve ({:?}): {conforms:?} {:?}",
+                        self.constraints
+                            .constraint_symbol_dependents_for(conforms.id),
+                        Symbol::Protocol(conforms.protocol_id)
+                    );
+
+                    match &conforms.ty {
+                        InferTy::Nominal { symbol, .. } | InferTy::Primitive(symbol) => {
+                            self.diagnostics.insert(AnyDiagnostic::Typing(Diagnostic {
+                                id: conforms.conformance_node_id,
+                                kind: TypeError::TypesDoesNotConform {
+                                    symbol: *symbol,
+                                    protocol_id: conforms.protocol_id,
+                                },
+                            }));
+                        }
+                        InferTy::Constructor { name, .. } => {
+                            self.diagnostics.insert(AnyDiagnostic::Typing(Diagnostic {
+                                id: conforms.conformance_node_id,
+                                kind: TypeError::TypesDoesNotConform {
+                                    symbol: name
+                                        .symbol()
+                                        .unwrap_or_else(|_| unreachable!("did not resolve name")),
+                                    protocol_id: conforms.protocol_id,
+                                },
+                            }));
+                        }
+                        ty => {
+                            self.diagnostics.insert(AnyDiagnostic::Typing(Diagnostic {
+                                id: conforms.conformance_node_id,
+                                kind: TypeError::TypesCannotConform {
+                                    ty: ty.clone(),
+                                    protocol_id: conforms.protocol_id,
+                                },
+                            }));
+                        }
+                    };
+                }
+                Constraint::TypeMember(..) => (),
+                Constraint::Projection(..) => (),
             }
         }
 
-        typed_asts
-            .into_iter()
-            .map(|a| a.map_ty(&mut |t| self.session.finalize_ty(t.clone()).as_mono_ty().clone()))
-            .collect()
+        let ast = typed_asts
+            .apply(&mut self.substitutions, self.session)
+            .finalize(
+                self.session,
+                &self.session.protocol_member_witnesses.clone(),
+            );
+
+        (ast, self.diagnostics.into_iter().collect())
     }
 
     fn discover_conformances(&mut self, idx: usize) {
         for root in self.asts[idx].roots.iter() {
             let Node::Decl(Decl {
                 kind:
-                    DeclKind::Extend {
+                    DeclKind::Struct {
+                        name, conformances, ..
+                    }
+                    | DeclKind::Enum {
+                        name, conformances, ..
+                    }
+                    | DeclKind::Extend {
                         name, conformances, ..
                     },
                 ..
@@ -193,12 +255,10 @@ impl<'a> InferencePass<'a> {
             };
 
             let Ok(protocol_sym) = protocol_name.symbol() else {
-                self.asts[idx]
-                    .diagnostics
-                    .push(AnyDiagnostic::Typing(Diagnostic {
-                        id: root.node_id(),
-                        kind: TypeError::NameNotResolved(protocol_name.clone()),
-                    }));
+                self.diagnostics.insert(AnyDiagnostic::Typing(Diagnostic {
+                    id: root.node_id(),
+                    kind: TypeError::NameNotResolved(protocol_name.clone()),
+                }));
                 continue;
             };
 
@@ -291,12 +351,10 @@ impl<'a> InferencePass<'a> {
                 };
 
                 let Ok(generic_sym) = generic.name.symbol() else {
-                    self.asts[idx]
-                        .diagnostics
-                        .push(AnyDiagnostic::Typing(Diagnostic {
-                            id: root.node_id(),
-                            kind: TypeError::NameNotResolved(generic.name.clone()),
-                        }));
+                    self.diagnostics.insert(AnyDiagnostic::Typing(Diagnostic {
+                        id: root.node_id(),
+                        kind: TypeError::NameNotResolved(generic.name.clone()),
+                    }));
                     continue;
                 };
 
@@ -327,18 +385,19 @@ impl<'a> InferencePass<'a> {
                             .unwrap_or_else(|_| unimplemented!());
 
                         let Ok(func_sym) = func_signature.name.symbol() else {
-                            self.asts[idx]
-                                .diagnostics
-                                .push(AnyDiagnostic::Typing(Diagnostic {
-                                    id: root.node_id(),
-                                    kind: TypeError::NameNotResolved(func_signature.name.clone()),
-                                }));
+                            self.diagnostics.insert(AnyDiagnostic::Typing(Diagnostic {
+                                id: root.node_id(),
+                                kind: TypeError::NameNotResolved(func_signature.name.clone()),
+                            }));
                             continue;
                         };
 
                         binders.insert(func_sym, ty.clone());
 
-                        self.session.insert(func_sym, ty, &mut self.constraints);
+                        // Note: The scheme is already stored inside visit_func_signature
+                        // via insert_term with the proper predicates. Don't call insert()
+                        // here as it would overwrite with empty predicates.
+
                         self.session
                             .type_catalog
                             .method_requirements
@@ -349,12 +408,10 @@ impl<'a> InferencePass<'a> {
 
                     DeclKind::Method { func, is_static } => {
                         let Ok(func_sym) = func.name.symbol() else {
-                            self.asts[idx]
-                                .diagnostics
-                                .push(AnyDiagnostic::Typing(Diagnostic {
-                                    id: root.node_id(),
-                                    kind: TypeError::NameNotResolved(func.name.clone()),
-                                }));
+                            self.diagnostics.insert(AnyDiagnostic::Typing(Diagnostic {
+                                id: root.node_id(),
+                                kind: TypeError::NameNotResolved(func.name.clone()),
+                            }));
                             continue;
                         };
 
@@ -373,7 +430,7 @@ impl<'a> InferencePass<'a> {
                 }
             }
 
-            if let Some(child_types) = self.asts[idx].phase.child_types.get(&protocol_sym) {
+            if let Some(child_types) = self.resolved_names.child_types.get(&protocol_sym) {
                 self.session
                     .type_catalog
                     .associated_types
@@ -388,19 +445,29 @@ impl<'a> InferencePass<'a> {
         _ = std::mem::replace(&mut self.asts[idx].roots, roots);
     }
 
-    fn generate(&mut self, idx: usize) -> TypedAST<InferTy> {
-        let mut groups = self.asts[idx].phase.scc_graph.groups();
+    fn generate(&mut self) -> TypedAST<InferTy> {
+        if self.asts.is_empty() {
+            return TypedAST {
+                decls: Default::default(),
+                stmts: Default::default(),
+                phase: self.resolved_names.clone(),
+                diagnostics: Default::default(),
+            };
+        }
 
-        // Process groups in topological order (dependencies first).
-        // Kosaraju returns reverse topological order, so we reverse it.
+        let mut groups = self.resolved_names.scc_graph.groups();
         groups.sort_by_key(|group| group.id.0);
+
         let mut decls = vec![];
         let mut stmts = vec![];
 
         for group in groups {
-            let (new_decls, new_stmts) = self.generate_for_group(idx, group);
-            decls.extend(new_decls);
-            stmts.extend(new_stmts);
+            let is_top_level = group.level == Level::default();
+            let (new_decls, new_stmts) = self.generate_for_group(group);
+            if is_top_level {
+                decls.extend(new_decls);
+                stmts.extend(new_stmts);
+            }
         }
 
         let mut context = SolveContext::new(
@@ -411,9 +478,8 @@ impl<'a> InferencePass<'a> {
         );
 
         tracing::debug!("visiting stragglers");
-        for id in self.asts[idx].phase.unbound_nodes.clone() {
+        for id in self.resolved_names.unbound_nodes.clone() {
             let Some(node) = self.asts.iter().find_map(|ast| ast.find(id)) else {
-                tracing::error!("Did not find ast node for id: {id:?}");
                 continue;
             };
 
@@ -422,19 +488,14 @@ impl<'a> InferencePass<'a> {
                     TypedNode::Decl(typed_decl) => decls.push(typed_decl),
                     TypedNode::Stmt(typed_stmt) => stmts.push(typed_stmt),
                     _ => {
-                        tracing::error!("hrm");
-                        println!("hrm: {typed_node:?}");
                         continue;
                     }
                 },
                 Err(e) => {
-                    println!("    error: {e:?}");
-                    self.asts[idx]
-                        .diagnostics
-                        .push(AnyDiagnostic::Typing(Diagnostic {
-                            id: node.node_id(),
-                            kind: e,
-                        }));
+                    self.diagnostics.insert(AnyDiagnostic::Typing(Diagnostic {
+                        id: node.node_id(),
+                        kind: e,
+                    }));
                 }
             }
         }
@@ -447,15 +508,14 @@ impl<'a> InferencePass<'a> {
         TypedAST {
             decls,
             stmts,
-            diagnostics: std::mem::take(&mut self.asts[idx].diagnostics),
-            phase: std::mem::take(&mut self.asts[idx].phase),
+            diagnostics: self.diagnostics.clone().into_iter().collect(),
+            phase: self.resolved_names.clone(),
         }
     }
 
     #[instrument(skip(self))]
     fn generate_for_group(
         &mut self,
-        idx: usize,
         group: BindingGroup,
     ) -> (Vec<TypedDecl<InferTy>>, Vec<TypedStmt<InferTy>>) {
         let mut decls = vec![];
@@ -487,7 +547,7 @@ impl<'a> InferencePass<'a> {
 
         // Visit each binder
         for (i, binder) in group.binders.iter().enumerate() {
-            if let Some(captures) = self.asts[idx].phase.captures.get(binder) {
+            if let Some(captures) = self.resolved_names.captures.get(binder) {
                 for capture in captures {
                     if self.session.lookup(&capture.symbol).is_none() {
                         let placeholder = self.session.new_ty_meta_var(capture.level);
@@ -503,14 +563,9 @@ impl<'a> InferencePass<'a> {
                     }
                 }
             }
-
             // Search all ASTs for the rhs_id - cross-file dependencies within a module
             // may have the definition in a different file's SCC graph
-            let Some(rhs_id) = self
-                .asts
-                .iter()
-                .find_map(|ast| ast.phase.scc_graph.rhs_id_for(binder))
-            else {
+            let Some(rhs_id) = self.resolved_names.scc_graph.rhs_id_for(binder) else {
                 tracing::error!("did not find rhs_id for binder: {binder:?}");
                 return (decls, stmts);
             };
@@ -523,10 +578,11 @@ impl<'a> InferencePass<'a> {
             let node = self
                 .visit_node(&rhs, &mut context)
                 .unwrap_or_else(|e| unimplemented!("{e:?}"));
+
             match &node {
                 TypedNode::Decl(decl) => decls.push(decl.clone()),
                 TypedNode::Stmt(stmt) => stmts.push(stmt.clone()),
-                other => println!("{other:?}"),
+                _ => unreachable!(),
             }
 
             if let Some(existing) = self.session.lookup(binder) {
@@ -554,13 +610,15 @@ impl<'a> InferencePass<'a> {
         context.substitutions_mut().extend(&self.substitutions);
 
         let level = context.level();
-        let solver = ConstraintSolver::new(context, self.asts);
-        solver.solve(
+        let solver = ConstraintSolver::new(context, &self.resolved_names);
+        let diagnostics = solver.solve(
             level,
             &mut self.constraints,
             self.session,
             self.substitutions.clone(),
         );
+
+        self.diagnostics.extend(diagnostics);
 
         let generalizable = self.constraints.generalizable_for(context);
 
@@ -568,7 +626,9 @@ impl<'a> InferencePass<'a> {
             let ty = self
                 .session
                 .apply(placeholders[i].clone(), &mut context.substitutions);
-            let entry = self.session.generalize(ty, context, &generalizable);
+            let entry = self
+                .session
+                .generalize(ty, context, &generalizable, &mut self.constraints);
             self.session.promote(*binder, entry, &mut self.constraints);
         }
 
@@ -641,7 +701,7 @@ impl<'a> InferencePass<'a> {
             | DeclKind::Property { .. }
             | DeclKind::MethodRequirement(..)
             | DeclKind::FuncSignature(..)
-            | DeclKind::EnumVariant(..) => unreachable!("handled elsewhere"),
+            | DeclKind::EnumVariant(..) => unreachable!("skipped: {decl:?}"),
         }
     }
 
@@ -885,7 +945,8 @@ impl<'a> InferencePass<'a> {
             )));
         };
 
-        self.constraints.wants_conforms(lhs_ty.ty.clone(), id);
+        self.constraints
+            .wants_conforms(lhs.id, lhs_ty.ty.clone(), id);
         Ok(lhs_ty)
     }
 
@@ -1026,7 +1087,10 @@ impl<'a> InferencePass<'a> {
         Ok(TypedExpr {
             id: expr.id,
             ty: ret,
-            kind: TypedExprKind::Member(Box::new(receiver_ty), label.clone()),
+            kind: TypedExprKind::Member {
+                receiver: Box::new(receiver_ty),
+                label: label.clone(),
+            },
         })
     }
 
@@ -1161,9 +1225,22 @@ impl<'a> InferencePass<'a> {
                         );
                 }
                 DeclKind::Method { func, is_static } => {
+                    let func_name = &func.name;
                     let func =
                         self.visit_method(nominal_symbol, func, *is_static, &mut context.next())?;
                     instance_methods.insert(func.name.to_string().into(), func);
+
+                    self.session
+                        .type_catalog
+                        .instance_methods
+                        .entry(nominal_symbol)
+                        .or_default()
+                        .insert(
+                            func_name.name_str().into(),
+                            func_name
+                                .symbol()
+                                .map_err(|_| TypeError::NameNotResolved(name.clone()))?,
+                        );
                 }
                 DeclKind::EnumVariant(name @ Name::Resolved(sym, name_str), _, values) => {
                     self.session
@@ -1185,10 +1262,20 @@ impl<'a> InferencePass<'a> {
                         1 => tys[0].clone(),
                         _ => InferTy::Tuple(tys.to_vec()),
                     };
-
+                    println!("register_nominal variant: {nominal_symbol:?} {:?}", name);
                     self.session
                         .insert(*sym, values_ty.clone(), &mut self.constraints);
                     row_types.push((name.name_str(), values_ty));
+                    self.session
+                        .type_catalog
+                        .variants
+                        .entry(nominal_symbol)
+                        .or_default()
+                        .insert(
+                            name.name_str().into(),
+                            name.symbol()
+                                .map_err(|_| TypeError::NameNotResolved(name.clone()))?,
+                        );
                 }
                 DeclKind::Property {
                     name,
@@ -1236,7 +1323,7 @@ impl<'a> InferencePass<'a> {
                         .child_types
                         .entry(nominal_symbol)
                         .or_default()
-                        .insert(lhs.name_str(), lhs_sym);
+                        .insert(lhs.name_str().into(), lhs_sym);
 
                     self.session.insert(lhs_sym, rhs_ty, &mut self.constraints);
                 }
@@ -1303,16 +1390,18 @@ impl<'a> InferencePass<'a> {
     fn register_conformance(
         &mut self,
         ty: &InferTy,
-        nominal_symbol: Symbol,
-        conformance_symbol: Symbol,
+        conforming_symbol: Symbol,
+        protocol_symbol: Symbol,
         conformance_node_id: NodeID,
         conformance_span: Span,
         context: &mut impl Solve,
     ) -> TypedRet<()> {
-        let Symbol::Protocol(protocol_id) = conformance_symbol else {
-            tracing::error!("didnt get protocol id for conformance: {conformance_symbol:?}");
+        let _s = set_symbol_names(self.resolved_names.symbol_names.clone());
+
+        let Symbol::Protocol(protocol_id) = protocol_symbol else {
+            tracing::error!("didnt get protocol id for conformance: {protocol_symbol:?}");
             return Err(TypeError::NameNotResolved(Name::Resolved(
-                conformance_symbol,
+                protocol_symbol,
                 "".into(),
             )));
         };
@@ -1322,7 +1411,7 @@ impl<'a> InferencePass<'a> {
             .type_catalog
             .conformances
             .keys()
-            .filter(|c| c.conforming_id == conformance_symbol)
+            .filter(|c| c.conforming_id == protocol_symbol)
             .copied()
             .collect_vec();
 
@@ -1341,68 +1430,62 @@ impl<'a> InferencePass<'a> {
                 )
             };
 
-            self.register_conformance(ty, nominal_symbol, sym, node_id, span, context)?;
+            self.register_conformance(ty, conforming_symbol, sym, node_id, span, context)?;
         }
 
         // Get the protocol's associated type declarations
         // First try ASTs (for locally defined protocols), then type_catalog (for imported protocols)
         let protocol_associated_types = self
-            .asts
-            .iter()
-            .find_map(|ast| ast.phase.child_types.get(&conformance_symbol))
+            .resolved_names
+            .child_types
+            .get(&protocol_symbol)
             .cloned()
-            .or_else(|| {
-                self.session
-                    .type_catalog
-                    .associated_types
-                    .get(&conformance_symbol)
-                    .cloned()
-            })
+            .or_else(|| self.session.lookup_associated_types(protocol_symbol))
             .unwrap_or_default();
 
-        let associated_types = protocol_associated_types
-            .iter()
-            .filter(|(_, sym)| matches!(sym, Symbol::AssociatedType(_)))
-            .fold(FxHashMap::default(), |mut acc, (label, _)| {
-                let child_types = self
-                    .asts
-                    .iter()
-                    .find_map(|ast| ast.phase.child_types.get(&nominal_symbol))
-                    .cloned();
-                let associated_ty = if let Some(child_types) = &child_types
-                    && let Some(child_sym) = child_types.get(label)
-                    && let Some(entry) = self.session.lookup(child_sym)
-                {
-                    entry._as_ty()
-                } else {
-                    self.session.new_ty_meta_var(context.level())
-                };
+        let associated_types =
+            protocol_associated_types
+                .iter()
+                .fold(FxHashMap::default(), |mut acc, (label, _)| {
+                    let child_types = self
+                        .resolved_names
+                        .child_types
+                        .get(&conforming_symbol)
+                        .cloned();
+                    let associated_ty = if let Some(child_types) = &child_types
+                        && let Some(child_sym) = child_types.get(label)
+                        && let Some(entry) = self.session.lookup(child_sym)
+                    {
+                        entry._as_ty()
+                    } else {
+                        self.session.new_ty_meta_var(context.level())
+                    };
 
-                tracing::debug!(
-                    "  label={:?}, child_types={:?}, associated_ty={:?}",
-                    label,
-                    child_types,
-                    associated_ty
-                );
-                acc.insert(label.clone(), associated_ty);
-                acc
-            });
+                    tracing::debug!(
+                        "  label={:?}, child_types={:?}, associated_ty={:?}",
+                        label,
+                        child_types,
+                        associated_ty
+                    );
+                    acc.insert(label.clone(), associated_ty);
+                    acc
+                });
 
         tracing::debug!("  final associated_types={:?}", associated_types);
 
         let key = ConformanceKey {
             protocol_id,
-            conforming_id: nominal_symbol,
+            conforming_id: conforming_symbol,
         };
 
         let mut conformance = self
             .session
             .type_catalog
             .conformances
-            .remove(&key)
+            .swap_remove(&key)
             .unwrap_or_else(|| Conformance {
                 node_id: conformance_node_id,
-                conforming_id: nominal_symbol,
+                conforming_id: conforming_symbol,
                 protocol_id,
                 witnesses: Witnesses::default(),
                 span: conformance_span,
@@ -1418,7 +1501,10 @@ impl<'a> InferencePass<'a> {
             .conformances
             .insert(key, conformance.clone());
 
-        self.constraints.wants_conforms(ty.clone(), protocol_id);
+        self.constraints
+            .wants_conforms(conformance.node_id, ty.clone(), protocol_id);
+
+        self.constraints.wake_conformances(&[key]);
 
         Ok(())
     }
@@ -1681,12 +1767,10 @@ impl<'a> InferencePass<'a> {
                     match &field.kind {
                         RecordFieldPatternKind::Bind(name) => {
                             let Ok(sym) = name.symbol() else {
-                                self.asts[field.id.0.0 as usize].diagnostics.push(
-                                    AnyDiagnostic::Typing(Diagnostic {
-                                        id: field.id,
-                                        kind: TypeError::NameNotResolved(name.clone()),
-                                    }),
-                                );
+                                self.diagnostics.insert(AnyDiagnostic::Typing(Diagnostic {
+                                    id: field.id,
+                                    kind: TypeError::NameNotResolved(name.clone()),
+                                }));
                                 return InferTy::Error(
                                     TypeError::NameNotResolved(name.clone()).into(),
                                 );
@@ -1707,12 +1791,10 @@ impl<'a> InferencePass<'a> {
                         }
                         RecordFieldPatternKind::Equals { name, value, .. } => {
                             let Ok(sym) = name.symbol() else {
-                                self.asts[field.id.0.0 as usize].diagnostics.push(
-                                    AnyDiagnostic::Typing(Diagnostic {
-                                        id: field.id,
-                                        kind: TypeError::NameNotResolved(name.clone()),
-                                    }),
-                                );
+                                self.diagnostics.insert(AnyDiagnostic::Typing(Diagnostic {
+                                    id: field.id,
+                                    kind: TypeError::NameNotResolved(name.clone()),
+                                }));
                                 return InferTy::Error(
                                     TypeError::NameNotResolved(name.clone()).into(),
                                 );
@@ -1800,12 +1882,10 @@ impl<'a> InferencePass<'a> {
                     match &field.kind {
                         RecordFieldPatternKind::Bind(name) => {
                             let Ok(sym) = name.symbol() else {
-                                self.asts[field.id.0.0 as usize].diagnostics.push(
-                                    AnyDiagnostic::Typing(Diagnostic {
-                                        id: field.id,
-                                        kind: TypeError::NameNotResolved(name.clone()),
-                                    }),
-                                );
+                                self.diagnostics.insert(AnyDiagnostic::Typing(Diagnostic {
+                                    id: field.id,
+                                    kind: TypeError::NameNotResolved(name.clone()),
+                                }));
                                 continue;
                             };
 
@@ -2047,7 +2127,7 @@ impl<'a> InferencePass<'a> {
                     && let Some(first_arg) = arg_tys.first()
                 {
                     self.constraints
-                        .wants_conforms(first_arg.ty.clone(), *protocol_id);
+                        .wants_conforms(rcv.id, first_arg.ty.clone(), *protocol_id);
                 }
 
                 Some(self.visit_expr(rcv, context)?)
@@ -2247,12 +2327,10 @@ impl<'a> InferencePass<'a> {
     ) -> TypedRet<()> {
         for (param, expected_param_ty) in params.iter().zip(expected_params) {
             let Ok(sym) = param.name.symbol() else {
-                self.asts[param.id.0.0 as usize]
-                    .diagnostics
-                    .push(AnyDiagnostic::Typing(Diagnostic {
-                        id: param.id,
-                        kind: TypeError::NameNotResolved(param.name.clone()),
-                    }));
+                self.diagnostics.insert(AnyDiagnostic::Typing(Diagnostic {
+                    id: param.id,
+                    kind: TypeError::NameNotResolved(param.name.clone()),
+                }));
                 continue;
             };
 
@@ -2347,12 +2425,10 @@ impl<'a> InferencePass<'a> {
             }
             TypeAnnotationKind::SelfType(name) => {
                 let Ok(sym) = name.symbol() else {
-                    self.asts[type_annotation.id.0.0 as usize].diagnostics.push(
-                        AnyDiagnostic::Typing(Diagnostic {
-                            id: type_annotation.id,
-                            kind: TypeError::NameNotResolved(name.clone()),
-                        }),
-                    );
+                    self.diagnostics.insert(AnyDiagnostic::Typing(Diagnostic {
+                        id: type_annotation.id,
+                        kind: TypeError::NameNotResolved(name.clone()),
+                    }));
                     return Err(TypeError::NameNotResolved(name.clone()));
                 };
 
@@ -2516,12 +2592,10 @@ impl<'a> InferencePass<'a> {
         }
 
         let Ok(sym) = generic.name.symbol() else {
-            self.asts[generic.id.0.0 as usize]
-                .diagnostics
-                .push(AnyDiagnostic::Typing(Diagnostic {
-                    id: generic.id,
-                    kind: TypeError::NameNotResolved(generic.name.clone()),
-                }));
+            self.diagnostics.insert(AnyDiagnostic::Typing(Diagnostic {
+                id: generic.id,
+                kind: TypeError::NameNotResolved(generic.name.clone()),
+            }));
             return 0.into();
         };
 

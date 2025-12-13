@@ -1,7 +1,7 @@
 use std::{cell::RefCell, rc::Rc};
 
 use ena::unify::InPlaceUnificationTable;
-use indexmap::IndexSet;
+use indexmap::{IndexMap, IndexSet};
 use itertools::Itertools;
 use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::instrument;
@@ -9,10 +9,11 @@ use tracing::instrument;
 use crate::{
     compiling::module::{ModuleEnvironment, ModuleId},
     label::Label,
-    name_resolution::symbol::{ProtocolId, StructId, Symbol},
+    name_resolution::symbol::{ProtocolId, Symbol},
     node_id::NodeID,
     types::{
         builtins::builtin_scope,
+        conformance::{Conformance, ConformanceKey},
         constraints::{constraint::Constraint, store::ConstraintStore},
         infer_row::{InferRow, RowMetaId, RowParamId},
         infer_ty::{InferTy, Level, Meta, MetaVarId, SkolemId, TypeParamId},
@@ -53,6 +54,9 @@ pub struct TypeSession {
     pub(super) modules: Rc<ModuleEnvironment>,
     pub aliases: FxHashMap<Symbol, Scheme<InferTy>>,
     pub(super) reverse_instantiations: ReverseInstantiations,
+
+    /// Maps NodeID of member access expressions on type parameters to their witness (method requirement) symbol
+    pub protocol_member_witnesses: FxHashMap<NodeID, Symbol>,
 
     meta_vars: InPlaceUnificationTable<MetaVarId>,
     row_vars: InPlaceUnificationTable<RowMetaId>,
@@ -113,6 +117,22 @@ impl Types {
     pub fn get_symbol(&self, sym: &Symbol) -> Option<&TypeEntry> {
         self.types_by_symbol.get(sym)
     }
+
+    pub fn import_as(self, module_id: ModuleId) -> Types {
+        Types {
+            types_by_node: self
+                .types_by_node
+                .into_iter()
+                .map(|(k, v)| (k, v.import(module_id)))
+                .collect(),
+            types_by_symbol: self
+                .types_by_symbol
+                .into_iter()
+                .map(|(k, v)| (k.import(module_id), v.import(module_id)))
+                .collect(),
+            catalog: self.catalog.import_as(module_id),
+        }
+    }
 }
 
 #[allow(clippy::expect_used)]
@@ -170,53 +190,53 @@ impl TypeSession {
             },
         );
 
-        // Import reqs
-        for module in &modules.modules {
-            for (sym, reqs) in module.1.types.catalog.method_requirements.iter() {
-                catalog
-                    .method_requirements
-                    .entry(*sym)
-                    .or_default()
-                    .extend(reqs.clone());
-            }
+        // // Import reqs
+        // for module in &modules.modules {
+        //     for (sym, reqs) in module.1.types.catalog.method_requirements.iter() {
+        //         catalog
+        //             .method_requirements
+        //             .entry(*sym)
+        //             .or_default()
+        //             .extend(reqs.clone());
+        //     }
 
-            for (sym, reqs) in module.1.types.catalog.instance_methods.iter() {
-                catalog
-                    .instance_methods
-                    .entry(*sym)
-                    .or_default()
-                    .extend(reqs.clone());
-            }
+        //     for (sym, reqs) in module.1.types.catalog.instance_methods.iter() {
+        //         catalog
+        //             .instance_methods
+        //             .entry(*sym)
+        //             .or_default()
+        //             .extend(reqs.clone());
+        //     }
 
-            catalog.conformances.extend(
-                module
-                    .1
-                    .types
-                    .catalog
-                    .conformances
-                    .clone()
-                    .into_iter()
-                    .map(|(k, v)| (k, v.into())),
-            );
+        //     catalog.conformances.extend(
+        //         module
+        //             .1
+        //             .types
+        //             .catalog
+        //             .conformances
+        //             .clone()
+        //             .into_iter()
+        //             .map(|(k, v)| (k, v.into())),
+        //     );
 
-            // Import associated_types (protocol child types) from modules
-            for (sym, entries) in module.1.types.catalog.associated_types.iter() {
-                catalog
-                    .associated_types
-                    .entry(*sym)
-                    .or_default()
-                    .extend(entries.clone());
-            }
+        //     // Import associated_types (protocol child types) from modules
+        //     for (sym, entries) in module.1.types.catalog.associated_types.iter() {
+        //         catalog
+        //             .associated_types
+        //             .entry(*sym)
+        //             .or_default()
+        //             .extend(entries.clone());
+        //     }
 
-            // Import child_types from modules
-            for (sym, entries) in module.1.types.catalog.child_types.iter() {
-                catalog
-                    .child_types
-                    .entry(*sym)
-                    .or_default()
-                    .extend(entries.clone());
-            }
-        }
+        //     // Import child_types from modules
+        //     for (sym, entries) in module.1.types.catalog.child_types.iter() {
+        //         catalog
+        //             .child_types
+        //             .entry(*sym)
+        //             .or_default()
+        //             .extend(entries.clone());
+        //     }
+        // }
 
         TypeSession {
             current_module_id,
@@ -231,6 +251,7 @@ impl TypeSession {
             type_catalog: catalog,
             modules,
             aliases: Default::default(),
+            protocol_member_witnesses: Default::default(),
 
             meta_vars: Default::default(),
             row_vars: Default::default(),
@@ -282,7 +303,7 @@ impl TypeSession {
                     EnvEntry::Scheme(scheme) => {
                         if scheme.ty.contains_var() {
                             // Merge with existing scheme's foralls/predicates
-                            let generalized = self.generalize(scheme.ty, &mut context, &Default::default());
+                            let generalized = self.generalize(scheme.ty, &mut context, &Default::default(), &mut Default::default());
                             let EnvEntry::Scheme(generalized) = generalized
                             else {
                                 unreachable!(
@@ -381,7 +402,7 @@ impl TypeSession {
                         let InferTy::Param(id) = self.new_type_param(Some(meta)) else {
                             unreachable!()
                         };
-                        tracing::warn!("did not solve {meta:?}");
+                        tracing::warn!("did not solve {meta:?}, generating a type param even tho that's probably not what we want.");
                         self.reverse_instantiations.ty.insert(meta, id);
                         id
                     });
@@ -437,8 +458,13 @@ impl TypeSession {
         );
 
         if ty.contains_var() {
-            self.generalize(ty.clone(), &mut context, &Default::default())
-                .into()
+            self.generalize(
+                ty.clone(),
+                &mut context,
+                &Default::default(),
+                &mut Default::default(),
+            )
+            .into()
         } else {
             TypeEntry::Mono(ty.clone().into())
         }
@@ -661,6 +687,7 @@ impl TypeSession {
         ty: InferTy,
         context: &mut impl Solve,
         unsolved: &IndexSet<Constraint>,
+        constraints: &mut ConstraintStore,
     ) -> EnvEntry<InferTy> {
         // Make sure we're up to date
         let ty = self.apply(ty, context.substitutions_mut());
@@ -784,6 +811,8 @@ impl TypeSession {
                 }
             }
 
+            constraints.solve(c.id());
+
             c.substitute(&self.skolem_map)
                 .into_predicate(&mut substitutions, self)
         }));
@@ -805,22 +834,12 @@ impl TypeSession {
             return Some(entry);
         }
 
-        if let Some(module_id) = sym.external_module_id()
-            && let Some(module) = self.modules.modules.get(&module_id)
-        {
-            // Try looking up with the symbol's current module_id first (for Core/Prelude),
-            // then fall back to Current (for External modules)
-            let entry = module
-                .types
-                .get_symbol(sym)
-                .or_else(|| module.types.get_symbol(&sym.current()))
-                .cloned()?;
+        if let Some(entry) = self.modules.lookup(sym) {
             let entry: EnvEntry<InferTy> = match entry.clone() {
                 TypeEntry::Mono(t) => EnvEntry::Mono(t.into()),
                 TypeEntry::Poly(..) => entry.into(),
             };
 
-            let entry = entry.import(module_id);
             self.term_env.insert(*sym, entry.clone());
             return Some(entry);
         }
@@ -882,24 +901,166 @@ impl TypeSession {
         self.term_env.insert(sym, EnvEntry::Mono(ty));
     }
 
+    pub fn lookup_conformance(&mut self, key: &ConformanceKey) -> Option<Conformance<InferTy>> {
+        if let Some(conformance) = self.type_catalog.conformances.get(key) {
+            return Some(conformance.clone());
+        }
+
+        if let Some(conformance) = self.modules.lookup_conformance(key) {
+            self.type_catalog
+                .conformances
+                .insert(*key, conformance.clone().into());
+            return Some(conformance.clone().into());
+        }
+
+        None
+    }
+
+    pub fn lookup_associated_types(
+        &mut self,
+        protocol_id: Symbol,
+    ) -> Option<IndexMap<Label, Symbol>> {
+        if let Some(associated_types) = self
+            .type_catalog
+            .associated_types
+            .get(&protocol_id)
+            .cloned()
+        {
+            return Some(associated_types);
+        }
+
+        if let Some(associated_types) = self.modules.lookup_associated_types(&protocol_id) {
+            self.type_catalog
+                .associated_types
+                .insert(protocol_id, associated_types.clone());
+            return Some(associated_types);
+        }
+
+        None
+    }
+
+    pub fn lookup_method_requirements(
+        &mut self,
+        protocol_id: Symbol,
+    ) -> Option<IndexMap<Label, Symbol>> {
+        if let Some(method_requirements) = self
+            .type_catalog
+            .method_requirements
+            .get(&protocol_id)
+            .cloned()
+        {
+            return Some(method_requirements);
+        }
+
+        if let Some(method_requirements) = self.modules.lookup_method_requirements(&protocol_id) {
+            self.type_catalog
+                .method_requirements
+                .insert(protocol_id, method_requirements.clone());
+            return Some(method_requirements);
+        }
+
+        None
+    }
+
+    pub fn lookup_protocol_conformances(
+        &mut self,
+        protocol_id: &ProtocolId,
+    ) -> Vec<ConformanceKey> {
+        let mut result = vec![];
+
+        for key in self.type_catalog.conformances.keys() {
+            if key.protocol_id == *protocol_id {
+                result.push(*key);
+            }
+        }
+
+        result.extend(self.modules.lookup_protocol_conformances(protocol_id));
+        result
+    }
+
     pub fn lookup_nominal(&mut self, symbol: &Symbol) -> Option<Nominal<InferTy>> {
         if let Some(nominal) = self.type_catalog.nominals.get(symbol).cloned() {
             return Some(nominal);
         }
 
-        for module in self.modules.modules.values() {
-            if let Some(nominal) = module
-                .types
-                .catalog
+        if let Some(nominal) = self.modules.lookup_nominal(symbol).cloned() {
+            self.type_catalog
                 .nominals
-                .get(&symbol.current())
-                .cloned()
+                .insert(*symbol, nominal.clone().into());
+            return Some(nominal.into());
+        }
+
+        None
+    }
+
+    #[instrument(skip(self))]
+    pub(super) fn lookup_concrete_member(
+        &mut self,
+        receiver: &Symbol,
+        label: &Label,
+    ) -> Option<Symbol> {
+        if let Some((sym, _)) = self.type_catalog.lookup_concrete_member(receiver, label) {
+            if matches!(sym, Symbol::InstanceMethod(..))
+                && !self
+                    .type_catalog
+                    .instance_methods
+                    .entry(*receiver)
+                    .or_default()
+                    .contains_key(label)
             {
                 self.type_catalog
-                    .nominals
-                    .insert(*symbol, nominal.clone().into());
-                return Some(nominal.into());
+                    .instance_methods
+                    .entry(*receiver)
+                    .or_default()
+                    .insert(label.clone(), sym);
             }
+
+            return Some(sym);
+        }
+
+        if let Some(sym) = self.modules.lookup_concrete_member(receiver, label) {
+            match sym {
+                Symbol::InstanceMethod(..) => {
+                    self.type_catalog
+                        .instance_methods
+                        .entry(*receiver)
+                        .or_default()
+                        .insert(label.clone(), sym);
+                }
+                Symbol::Property(..) => {
+                    self.type_catalog
+                        .properties
+                        .entry(*receiver)
+                        .or_default()
+                        .insert(label.clone(), sym);
+                }
+                Symbol::StaticMethod(..) => {
+                    self.type_catalog
+                        .static_methods
+                        .entry(*receiver)
+                        .or_default()
+                        .insert(label.clone(), sym);
+                }
+                Symbol::MethodRequirement(..) => {
+                    self.type_catalog
+                        .method_requirements
+                        .entry(*receiver)
+                        .or_default()
+                        .insert(label.clone(), sym);
+                }
+                Symbol::Variant(..) => {
+                    self.type_catalog
+                        .variants
+                        .entry(*receiver)
+                        .or_default()
+                        .insert(label.clone(), sym);
+                }
+                _ => {
+                    tracing::warn!("found unhandled nominal member: {sym:?}");
+                }
+            }
+
+            return Some(sym);
         }
 
         None
@@ -930,55 +1091,49 @@ impl TypeSession {
             return Some(sym);
         }
 
-        for module in self.modules.modules.values() {
-            if let Some((sym, source)) = module
-                .types
-                .catalog
-                .lookup_member(&receiver.current(), label)
-            {
-                match sym {
-                    Symbol::InstanceMethod(..) => {
-                        self.type_catalog
-                            .instance_methods
-                            .entry(*receiver)
-                            .or_default()
-                            .insert(label.clone(), sym);
-                    }
-                    Symbol::Property(..) => {
-                        self.type_catalog
-                            .properties
-                            .entry(*receiver)
-                            .or_default()
-                            .insert(label.clone(), sym);
-                    }
-                    Symbol::StaticMethod(..) => {
-                        self.type_catalog
-                            .static_methods
-                            .entry(*receiver)
-                            .or_default()
-                            .insert(label.clone(), sym);
-                    }
-                    Symbol::MethodRequirement(..) => {
-                        self.type_catalog
-                            .method_requirements
-                            .entry(*receiver)
-                            .or_default()
-                            .insert(label.clone(), sym);
-                    }
-                    Symbol::Variant(..) => {
-                        self.type_catalog
-                            .variants
-                            .entry(*receiver)
-                            .or_default()
-                            .insert(label.clone(), sym);
-                    }
-                    _ => {
-                        tracing::warn!("found unhandled nominal member: {sym:?}");
-                    }
+        if let Some(sym) = self.modules.lookup_member(receiver, label) {
+            match sym {
+                Symbol::InstanceMethod(..) => {
+                    self.type_catalog
+                        .instance_methods
+                        .entry(*receiver)
+                        .or_default()
+                        .insert(label.clone(), sym);
                 }
-
-                return Some((sym, source));
+                Symbol::Property(..) => {
+                    self.type_catalog
+                        .properties
+                        .entry(*receiver)
+                        .or_default()
+                        .insert(label.clone(), sym);
+                }
+                Symbol::StaticMethod(..) => {
+                    self.type_catalog
+                        .static_methods
+                        .entry(*receiver)
+                        .or_default()
+                        .insert(label.clone(), sym);
+                }
+                Symbol::MethodRequirement(..) => {
+                    self.type_catalog
+                        .method_requirements
+                        .entry(*receiver)
+                        .or_default()
+                        .insert(label.clone(), sym);
+                }
+                Symbol::Variant(..) => {
+                    self.type_catalog
+                        .variants
+                        .entry(*receiver)
+                        .or_default()
+                        .insert(label.clone(), sym);
+                }
+                _ => {
+                    tracing::warn!("found unhandled nominal member: {sym:?}");
+                }
             }
+
+            return Some((sym, MemberSource::SelfMember));
         }
 
         None
@@ -993,32 +1148,26 @@ impl TypeSession {
             return Some(sym);
         }
 
-        for module in self.modules.modules.values() {
-            if let Some(sym) = module
-                .types
-                .catalog
-                .lookup_static_member(&receiver.current(), label)
-            {
-                match sym {
-                    Symbol::StaticMethod(..) => {
-                        self.type_catalog
-                            .static_methods
-                            .entry(*receiver)
-                            .or_default()
-                            .insert(label.clone(), sym);
-                    }
-                    Symbol::Variant(..) => {
-                        self.type_catalog
-                            .variants
-                            .entry(*receiver)
-                            .or_default()
-                            .insert(label.clone(), sym);
-                    }
-                    _ => (),
+        if let Some(sym) = self.modules.lookup_static_member(receiver, label) {
+            match sym {
+                Symbol::StaticMethod(..) => {
+                    self.type_catalog
+                        .static_methods
+                        .entry(*receiver)
+                        .or_default()
+                        .insert(label.clone(), sym);
                 }
-
-                return Some(sym);
+                Symbol::Variant(..) => {
+                    self.type_catalog
+                        .variants
+                        .entry(*receiver)
+                        .or_default()
+                        .insert(label.clone(), sym);
+                }
+                _ => (),
             }
+
+            return Some(sym);
         }
 
         None
@@ -1027,42 +1176,17 @@ impl TypeSession {
     pub(super) fn lookup_initializers(
         &mut self,
         symbol: &Symbol,
-    ) -> Option<FxHashMap<Label, Symbol>> {
+    ) -> Option<IndexMap<Label, Symbol>> {
         if let Some(initializers) = self.type_catalog.initializers.get(symbol).cloned() {
             return Some(initializers);
         }
 
-        if let Symbol::Struct(StructId {
-            module_id,
-            local_id,
-        }) = *symbol
-            && module_id.is_external_or_core()
-            && let Some(module) = self.modules.modules.get(&module_id)
-        {
-            let module_key = if module_id.is_external() {
-                ModuleId::Current
-            } else {
-                module_id
-            };
-            let initializers = module
-                .types
-                .catalog
-                .initializers
-                .get(&Symbol::Struct(StructId {
-                    module_id: module_key,
-                    local_id,
-                }))
-                .cloned()?;
-
-            let imported: FxHashMap<Label, Symbol> = initializers
-                .into_iter()
-                .map(|(label, sym)| (label, sym.import(module_id)))
-                .collect();
-
+        if let Some(initializers) = self.modules.lookup_initializers(symbol) {
             self.type_catalog
                 .initializers
-                .insert(*symbol, imported.clone());
-            return Some(imported);
+                .entry(*symbol)
+                .and_modify(|e| e.extend(initializers.clone()));
+            return Some(initializers);
         }
 
         None

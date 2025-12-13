@@ -55,6 +55,8 @@ petgraph = "0.8.2"
 sscanf = "0.4.3"
 priority-queue = "2.7.0"
 ena = "0.14.3"
+petgraph-graphml = "5.0.0"
+sha2 = "0.10.9"
 
 [features]
 default = ["cli"]

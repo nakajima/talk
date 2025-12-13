@@ -1480,7 +1480,7 @@ impl<'a> Formatter<'a> {
 pub fn format_string(string: &str) -> String {
     let lexer = Lexer::new(string);
     let ast = Parser::new("", FileID(0), lexer).parse().unwrap();
-    format(&ast, 80)
+    format(&ast.0, 80)
 }
 
 #[allow(clippy::unwrap_used)]
@@ -1506,7 +1506,7 @@ mod formatter_tests {
     fn parse(code: &str) -> AST<Parsed> {
         let lexer = Lexer::new(code);
         let parser = Parser::new("-", FileID(0), lexer);
-        parser.parse().unwrap()
+        parser.parse().unwrap().0
     }
 
     fn format_code(input: &str, width: usize) -> String {

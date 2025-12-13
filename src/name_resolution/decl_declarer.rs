@@ -321,12 +321,12 @@ impl<'a> DeclDeclarer<'a> {
             self.resolver
                 .phase
                 .child_types
-                .entry(*parent)
+                .entry(parent.0)
                 .or_default()
                 .insert(name.name_str().into(), sym);
         }
 
-        self.resolver.nominal_stack.push(sym);
+        self.resolver.nominal_stack.push((sym, id));
         self.type_members.insert(id, TypeMembers::default());
 
         self.start_scope(Some(sym), id, false);
@@ -383,7 +383,7 @@ impl<'a> DeclDeclarer<'a> {
     ///////////////////////////////////////////////////////////////////////////
     // Funcs
     ///////////////////////////////////////////////////////////////////////////
-    #[instrument(level = tracing::Level::TRACE, skip(self, func))]
+    #[instrument(level = tracing::Level::TRACE, skip(self, func), fields(func.name = ?func.name))]
     fn enter_func(&mut self, func: &mut Func) {
         let func_id = func.id;
         on!(
@@ -404,18 +404,18 @@ impl<'a> DeclDeclarer<'a> {
                     .lookup(name, Some(*id))
                     .unwrap_or_else(|| self.resolver.declare(name, some!(Global), func_id));
 
-                if matches!(
-                    name.symbol(),
-                    Ok(Symbol::InstanceMethod(..)
-                        | Symbol::StaticMethod(..)
-                        | Symbol::Initializer(..))
-                ) {
-                    self.start_scope(
-                        Some(func.name.symbol().unwrap_or_else(|_| unreachable!())),
-                        *id,
-                        false,
-                    );
-                }
+                // if matches!(
+                //     name.symbol(),
+                //     Ok(Symbol::InstanceMethod(..)
+                //         | Symbol::StaticMethod(..)
+                //         | Symbol::Initializer(..))
+                // ) {
+                self.start_scope(
+                    Some(func.name.symbol().unwrap_or_else(|_| unreachable!())),
+                    *id,
+                    false,
+                );
+                // }
 
                 for generic in generics {
                     generic.name =
@@ -432,13 +432,8 @@ impl<'a> DeclDeclarer<'a> {
         )
     }
 
-    fn exit_func(&mut self, func: &mut Func) {
-        if matches!(
-            func.name.symbol(),
-            Ok(Symbol::InstanceMethod(..) | Symbol::StaticMethod(..) | Symbol::Initializer(..))
-        ) {
-            self.end_scope();
-        }
+    fn exit_func(&mut self, _func: &mut Func) {
+        self.end_scope();
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self, func))]
@@ -498,6 +493,10 @@ impl<'a> DeclDeclarer<'a> {
             self.enter_nominal(decl.id, name, generics, TypeDefKind::Protocol);
         });
 
+        on!(&mut decl.kind, DeclKind::Extend { name, generics, .. }, {
+            self.enter_nominal(decl.id, name, generics, TypeDefKind::Extension);
+        });
+
         on!(&mut decl.kind, DeclKind::TypeAlias(lhs_name, ..), {
             *lhs_name = self.resolver.declare(lhs_name, some!(TypeAlias), decl.id);
 
@@ -505,22 +504,12 @@ impl<'a> DeclDeclarer<'a> {
                 self.resolver
                     .phase
                     .child_types
-                    .entry(*parent)
+                    .entry(parent.0)
                     .or_default()
                     .insert(
                         lhs_name.name_str().into(),
                         lhs_name.symbol().unwrap_or_else(|_| unreachable!()),
                     );
-            }
-        });
-
-        on!(&mut decl.kind, DeclKind::Extend { generics, .. }, {
-            self.start_scope(None, decl.id, false);
-
-            for generic in generics {
-                generic.name =
-                    self.resolver
-                        .declare(&generic.name, some!(TypeParameter), generic.id);
             }
         });
 
@@ -531,7 +520,7 @@ impl<'a> DeclDeclarer<'a> {
         on!(
             &mut decl.kind,
             DeclKind::Method {
-                func: box Func { name, generics, .. },
+                func: box Func { id, name, generics, .. },
                 is_static
             },
             {
@@ -541,6 +530,12 @@ impl<'a> DeclDeclarer<'a> {
                     self.resolver.declare(name, some!(InstanceMethod), decl.id)
                 };
 
+                let (nominal_sym, nominal_id) = self.resolver.nominal_stack.last().cloned().unwrap_or_else(|| unreachable!("no nominal stack entry found for {name:?}"));
+                let method_sym = name.symbol().unwrap_or_else(|_|unreachable!());
+                self.resolver.track_dependency_from_to(method_sym, *id, nominal_sym, nominal_id);
+                self.resolver.track_dependency_from_to(nominal_sym, nominal_id, method_sym, *id);
+
+                // self.start_scope(name.symbol().ok(), *id, true);
                 for generic in generics {
                     generic.name = self.resolver.declare(&generic.name, some!(TypeParameter), decl.id);
                 }
@@ -559,7 +554,7 @@ impl<'a> DeclDeclarer<'a> {
             self.resolver
                 .phase
                 .child_types
-                .entry(*parent)
+                .entry(parent.0)
                 .or_default()
                 .insert(
                     generic.name.name_str().into(),
@@ -569,9 +564,26 @@ impl<'a> DeclDeclarer<'a> {
 
         on!(
             &mut decl.kind,
-            DeclKind::FuncSignature(FuncSignature { name, generics, .. }),
+            DeclKind::FuncSignature(FuncSignature {
+                id,
+                name,
+                generics,
+                ..
+            }),
             {
                 *name = self.resolver.declare(name, some!(Global), decl.id);
+
+                let (nominal_sym, nominal_id) = self
+                    .resolver
+                    .nominal_stack
+                    .last()
+                    .cloned()
+                    .unwrap_or_else(|| unreachable!());
+                let method_sym = name.symbol().unwrap_or_else(|_| unreachable!());
+                self.resolver
+                    .track_dependency_from_to(method_sym, *id, nominal_sym, nominal_id);
+                self.resolver
+                    .track_dependency_from_to(nominal_sym, nominal_id, method_sym, *id);
 
                 for generic in generics {
                     generic.name =
@@ -658,6 +670,10 @@ impl<'a> DeclDeclarer<'a> {
                 self.end_scope();
             }
         });
+
+        // on!(&mut decl.kind, DeclKind::Method { .. }, {
+        //     self.end_scope();
+        // });
 
         on!(
             &mut decl.kind,

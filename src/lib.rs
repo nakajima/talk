@@ -9,6 +9,7 @@
 #![feature(try_blocks)]
 #![feature(try_trait_v2)]
 #![feature(never_type)]
+#![feature(hasher_prefixfree_extras)]
 #![allow(clippy::uninlined_format_args)]
 #![cfg_attr(not(test), deny(clippy::unwrap_used))]
 #![cfg_attr(not(test), deny(clippy::expect_used))]

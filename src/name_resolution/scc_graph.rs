@@ -24,6 +24,7 @@ pub struct SCCGraph {
     pub graph: DiGraph<Symbol, NodeID>,
     rhs_ids: FxHashMap<Symbol, NodeID>,
     level_map: FxHashMap<NodeIndex, Level>,
+    ast_idx: usize,
 }
 
 impl SCCGraph {
@@ -35,28 +36,43 @@ impl SCCGraph {
         kosaraju_scc(&self.graph)
             .iter()
             .enumerate()
-            .map(|(i, ids)| {
+            .filter_map(|(i, ids)| {
                 let mut level = Level::default();
-                BindingGroup {
-                    id: GroupId(i as u32),
-                    binders: ids
-                        .iter()
-                        .map(|id| {
+                // Only include binders that have an rhs_id (i.e., are actually defined
+                // in this AST, not just referenced from another AST)
+                let binders: Vec<_> = ids
+                    .iter()
+                    .filter_map(|id| {
+                        let symbol = self.graph[*id];
+                        // Only include if this symbol is defined in this graph
+                        if self.rhs_ids.contains_key(&symbol) {
                             if self.level_map[id] > level {
                                 level = self.level_map[id];
                             }
-                            self.graph[*id]
-                        })
-                        .collect(),
-                    level,
+                            Some(symbol)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+
+                // Skip empty groups (all binders were references, not definitions)
+                if binders.is_empty() {
+                    return None;
                 }
+
+                Some(BindingGroup {
+                    id: GroupId(i as u32),
+                    binders,
+                    level,
+                })
             })
             .collect()
     }
 
     pub fn add_definition(&mut self, node: Symbol, rhs_id: NodeID, level: Level) -> NodeIndex {
         #[cfg(debug_assertions)]
-        if matches!(node, Symbol::Builtin(..)) {
+        if matches!(node, Symbol::Builtin(..) | Symbol::InstanceMethod(..)) {
             unreachable!()
         }
 
@@ -83,7 +99,7 @@ impl SCCGraph {
 
     pub fn ensure_node(&mut self, node: Symbol) -> NodeIndex {
         #[cfg(debug_assertions)]
-        if matches!(node, Symbol::Builtin(..)) {
+        if matches!(node, Symbol::Builtin(..) | Symbol::InstanceMethod(..)) {
             unreachable!("should not have builtin in graph: {node:?}");
         }
 

@@ -1,6 +1,7 @@
 use std::str::FromStr;
 
 use crate::ast::{AST, NewAST, Parsed};
+use crate::diagnostic::AnyDiagnostic;
 use crate::label::Label;
 use crate::lexer::Lexer;
 use crate::name::Name;
@@ -45,7 +46,7 @@ enum FuncOrFuncSignature {
     FuncSignature(FuncSignature),
 }
 
-#[derive(PartialEq, Clone, Copy, Debug, Eq, PartialOrd, Ord)]
+#[derive(PartialEq, Clone, Copy, Debug, Eq, PartialOrd, Ord, Hash)]
 pub enum BlockContext {
     Struct,
     Protocol,
@@ -74,6 +75,7 @@ pub struct Parser<'a> {
     previous_before_newline: Option<Token>,
     ast: AST,
     file_id: FileID,
+    diagnostics: Vec<AnyDiagnostic>,
 }
 
 #[allow(clippy::expect_used)]
@@ -87,10 +89,10 @@ impl<'a> Parser<'a> {
             previous_before_newline: None,
             source_location_stack: Default::default(),
             file_id,
+            diagnostics: Default::default(),
             ast: AST::<NewAST> {
                 path: path.into(),
                 roots: Default::default(),
-                diagnostics: Default::default(),
                 meta: Default::default(),
                 phase: (),
                 node_ids: Default::default(),
@@ -100,7 +102,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    pub fn parse(mut self) -> Result<AST<Parsed>, ParserError> {
+    pub fn parse(mut self) -> Result<(AST<Parsed>, Vec<AnyDiagnostic>), ParserError> {
         self.advance();
         self.advance();
         self.skip_semicolons_and_newlines();
@@ -129,7 +131,6 @@ impl<'a> Parser<'a> {
         let ast = AST::<Parsed> {
             path: self.ast.path,
             roots: self.ast.roots,
-            diagnostics: self.ast.diagnostics,
             meta: self.ast.meta,
             phase: Parsed,
             node_ids: self.ast.node_ids,
@@ -137,7 +138,7 @@ impl<'a> Parser<'a> {
             synthsized_ids: self.ast.synthsized_ids,
         };
 
-        Ok(ast)
+        Ok((ast, self.diagnostics))
     }
 
     fn next_root(&mut self, kind: &TokenKind) -> Result<Node, ParserError> {

@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use crate::compiling::driver::DriverConfig;
+use crate::compiling::driver::{CompilationMode, DriverConfig};
 use crate::compiling::module::ModuleId;
 use crate::ir::basic_block::{Phi, PhiSource};
 use crate::ir::instruction::CmpOperator;
@@ -8,8 +8,9 @@ use crate::ir::ir_ty::IrTy;
 use crate::ir::monomorphizer::uncurry_function;
 use crate::ir::value::{Addr, Reference};
 use crate::label::Label;
+use crate::name_resolution::name_resolver::ResolvedNames;
 use crate::name_resolution::symbol::{
-    GlobalId, InitializerId, InstanceMethodId, StaticMethodId, Symbols, set_symbol_names,
+    GlobalId, InitializerId, InstanceMethodId, StaticMethodId, Symbols,
 };
 use crate::node_kinds::inline_ir_instruction::{InlineIRInstructionKind, TypedInlineIRInstruction};
 use crate::node_kinds::type_annotation::TypeAnnotation;
@@ -21,7 +22,6 @@ use crate::types::typed_ast::{
     TypedMatchArm, TypedNode, TypedPattern, TypedRecordField, TypedStmt, TypedStmtKind,
 };
 use crate::{
-    compiling::driver::Source,
     ir::{
         basic_block::{BasicBlock, BasicBlockId},
         instruction::{Instruction, InstructionMeta},
@@ -65,15 +65,17 @@ impl Display for LValue {
 
 #[derive(Debug)]
 pub(super) struct CurrentFunction {
+    name: Symbol,
     current_block_idx: Vec<usize>,
     blocks: Vec<BasicBlock<Ty>>,
     pub registers: RegisterAllocator,
     bindings: FxHashMap<Symbol, Binding<Ty>>,
 }
 
-impl Default for CurrentFunction {
-    fn default() -> Self {
+impl CurrentFunction {
+    fn new(name: Symbol) -> Self {
         CurrentFunction {
+            name,
             current_block_idx: vec![0],
             blocks: vec![BasicBlock::<Ty> {
                 phis: Default::default(),
@@ -190,15 +192,15 @@ impl<T> From<Value> for Binding<T> {
 
 // Lowers an AST with Types to a monomorphized IR
 pub struct Lowerer<'a> {
-    pub(super) asts: &'a mut IndexMap<Source, TypedAST<Ty>>,
+    pub(super) ast: &'a mut TypedAST<Ty>,
     pub(super) types: &'a mut Types,
     pub(super) functions: IndexMap<Symbol, PolyFunction>,
     pub(super) current_function_stack: Vec<CurrentFunction>,
     pub(super) config: &'a DriverConfig,
 
-    current_ast_id: usize,
     symbols: &'a mut Symbols,
     symbol_names: &'a mut FxHashMap<Symbol, String>,
+    resolved_names: &'a ResolvedNames,
     pub(super) specializations: IndexMap<Symbol, Vec<Specialization>>,
     static_memory: StaticMemory,
 }
@@ -207,14 +209,15 @@ pub struct Lowerer<'a> {
 #[allow(clippy::expect_used)]
 impl<'a> Lowerer<'a> {
     pub fn new(
-        asts: &'a mut IndexMap<Source, TypedAST<Ty>>,
+        ast: &'a mut TypedAST<Ty>,
         types: &'a mut Types,
         symbols: &'a mut Symbols,
         symbol_names: &'a mut FxHashMap<Symbol, String>,
+        resolved_names: &'a ResolvedNames,
         config: &'a DriverConfig,
     ) -> Self {
         Self {
-            asts,
+            ast,
             types,
             functions: Default::default(),
             current_function_stack: Default::default(),
@@ -223,20 +226,50 @@ impl<'a> Lowerer<'a> {
             specializations: Default::default(),
             static_memory: Default::default(),
             config,
-            current_ast_id: 0,
+            resolved_names,
         }
     }
 
     pub fn lower(mut self) -> Result<Program, IRError> {
-        if self.asts.is_empty() {
+        if self.ast.roots().is_empty() {
             return Ok(Program::default());
         }
 
+        if self.config.mode == CompilationMode::Executable {
+            self.lower_main();
+            self.current_function_stack
+                .push(CurrentFunction::new(Symbol::Main));
+        } else {
+            self.current_function_stack
+                .push(CurrentFunction::new(Symbol::Library));
+        }
+
+        for root in self.ast.roots() {
+            self.lower_node(&root, &Default::default())?;
+        }
+
+        // Check for required imports
+        let funcs = self.functions.keys().cloned().collect_vec();
+        for sym in funcs {
+            self.check_import(&sym);
+        }
+
+        let static_memory = std::mem::take(&mut self.static_memory);
+        let mut monomorphizer = Monomorphizer::new(self);
+
+        Ok(Program {
+            functions: monomorphizer.monomorphize(),
+            polyfunctions: monomorphizer.functions,
+            static_memory,
+        })
+    }
+
+    fn lower_main(&mut self) {
         // Do we have a main func?
         let has_main_func = self
-            .asts
+            .ast
+            .decls
             .iter()
-            .flat_map(|a| &a.1.decls)
             .any(|d| is_main_func(d, self.symbol_names));
         if !has_main_func {
             let main_symbol = Symbol::Synthesized(self.symbols.next_synthesized(ModuleId::Current));
@@ -248,14 +281,21 @@ impl<'a> Lowerer<'a> {
                 params: Default::default(),
                 body: TypedBlock {
                     body: {
-                        let roots: Vec<TypedNode<Ty>> =
-                            self.asts.values_mut().flat_map(|a| a.roots()).collect();
+                        // Only include top-level statements (expressions) in the synthesized main,
+                        // not declarations. Declarations are lowered separately via the normal
+                        // AST iteration.
+                        let stmts: Vec<TypedNode<Ty>> = self
+                            .ast
+                            .stmts
+                            .iter()
+                            .map(|a| TypedNode::Stmt(a.clone()))
+                            .collect();
 
-                        if let Some(last) = roots.last() {
+                        if let Some(last) = stmts.last() {
                             ret_ty = last.ty();
                         }
 
-                        roots
+                        stmts
                     },
                     id: NodeID(FileID(0), 0),
                     ret: Ty::Void,
@@ -264,8 +304,7 @@ impl<'a> Lowerer<'a> {
             };
 
             #[allow(clippy::unwrap_used)]
-            let (_, ast) = self.asts.iter_mut().next().unwrap();
-            ast.decls.push(TypedDecl {
+            self.ast.decls.push(TypedDecl {
                 id: NodeID(FileID(0), 0),
                 ty: Ty::Func(Ty::Void.into(), Ty::Void.into()),
                 kind: TypedDeclKind::Let {
@@ -291,30 +330,6 @@ impl<'a> Lowerer<'a> {
             self.symbol_names
                 .insert(main_symbol, "main(synthesized)".to_string());
         }
-
-        self.current_function_stack.push(CurrentFunction::default());
-
-        for i in 0..self.asts.len() {
-            self.current_ast_id = i;
-            for root in self.asts[i].roots() {
-                self.lower_node(&root, &Default::default())?;
-            }
-        }
-
-        // Check for required imports
-        let funcs = self.functions.keys().cloned().collect_vec();
-        for sym in funcs {
-            self.check_import(&sym);
-        }
-
-        let static_memory = std::mem::take(&mut self.static_memory);
-        let mut monomorphizer = Monomorphizer::new(self);
-
-        Ok(Program {
-            functions: monomorphizer.monomorphize(),
-            polyfunctions: monomorphizer.functions,
-            static_memory,
-        })
     }
 
     fn lower_node(
@@ -332,6 +347,7 @@ impl<'a> Lowerer<'a> {
         instantiations: &Substitutions,
         bind: Bind,
     ) -> Result<(Value, Ty), IRError> {
+        tracing::info!("{node:?}");
         match node {
             TypedNode::Decl(decl) => self.lower_decl(decl, instantiations),
             TypedNode::Stmt(stmt) => self.lower_stmt(stmt, instantiations, bind),
@@ -432,7 +448,8 @@ impl<'a> Lowerer<'a> {
             );
         };
 
-        self.current_function_stack.push(CurrentFunction::default());
+        self.current_function_stack
+            .push(CurrentFunction::new(*name));
 
         let mut param_values = vec![];
         for param in initializer.params.iter() {
@@ -590,12 +607,11 @@ impl<'a> Lowerer<'a> {
         });
 
         let ret = self.ret(bind);
-        let ty = self.ty_from_id(&conseq.id)?;
 
         self.set_current_block(join_block_id);
         self.push_phi(Phi {
             dest: ret,
-            ty: ty.clone(),
+            ty: conseq.ret.clone(),
             sources: vec![
                 PhiSource {
                     from_id: conseq_block_id,
@@ -609,7 +625,7 @@ impl<'a> Lowerer<'a> {
             .into(),
         });
 
-        Ok((ret.into(), ty))
+        Ok((ret.into(), conseq.ret.clone()))
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self, cond, conseq, alt))]
@@ -753,7 +769,10 @@ impl<'a> Lowerer<'a> {
     ) -> Result<LValue, IRError> {
         match &expr.kind {
             TypedExprKind::Variable(name) => Ok(LValue::Variable(*name)),
-            TypedExprKind::Member(box receiver, label) => {
+            TypedExprKind::Member {
+                receiver: box receiver,
+                label,
+            } => {
                 let (receiver_ty, instantiations) = self
                     .specialized_ty(receiver, instantiations)
                     .expect("didn't get base ty");
@@ -776,11 +795,7 @@ impl<'a> Lowerer<'a> {
         match &pattern.kind {
             PatternKind::Bind(name) => {
                 let symbol = name.symbol().expect("name not resolved");
-                let value = if self.asts[self.current_ast_id]
-                    .phase
-                    .is_captured
-                    .contains(&symbol)
-                {
+                let value = if self.resolved_names.is_captured.contains(&symbol) {
                     let ty = self
                         .ty_from_symbol(&symbol)
                         .expect("did not get ty for sym");
@@ -896,10 +911,23 @@ impl<'a> Lowerer<'a> {
             TypedExprKind::Call { callee, args, .. } => {
                 self.lower_call(expr, callee, args, bind, instantiations)
             }
-            TypedExprKind::Member(receiver, label) => self.lower_member(
-                expr.id,
+            TypedExprKind::Member { receiver, label } => self.lower_member(
+                expr,
                 &Some(receiver.clone()),
                 label,
+                None,
+                bind,
+                instantiations,
+            ),
+            TypedExprKind::ProtocolMember {
+                receiver,
+                label,
+                witness,
+            } => self.lower_member(
+                expr,
+                &Some(receiver.clone()),
+                label,
+                Some(*witness),
                 bind,
                 instantiations,
             ),
@@ -1240,7 +1268,7 @@ impl<'a> Lowerer<'a> {
 
         let (item_irs, item_tys): (Vec<Value>, Vec<Ty>) = item_irs.into_iter().unzip();
         let item_ty = if let Some(item) = items.first() {
-            self.ty_from_id(&item.id)?
+            item.ty.clone()
         } else {
             Ty::Void
         };
@@ -1346,11 +1374,7 @@ impl<'a> Lowerer<'a> {
         bind: Bind,
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
-        let result_type = {
-            let first_arm_expr_id = arms[0].body.id;
-            self.ty_from_id(&first_arm_expr_id)?
-        };
-
+        let result_type = arms.first().map(|a| a.body.ret.clone()).unwrap_or(Ty::Void);
         let result_register = self.ret(bind);
 
         let (scrutinee_value, _scrutinee_type) =
@@ -1411,7 +1435,7 @@ impl<'a> Lowerer<'a> {
         );
 
         // Type of scrutinee; used for the Cmp instruction.
-        let scrutinee_type = self.ty_from_id(&scrutinee_expr.id)?;
+        let scrutinee_type = scrutinee_expr.ty.clone();
 
         // Start dispatch from the block where the scrutinee was just computed.
         let current_function = self
@@ -1539,11 +1563,11 @@ impl<'a> Lowerer<'a> {
         let dest = self.ret(bind);
 
         // Check if this record literal is typed as a nominal struct
-        if let Ok(Ty::Nominal { symbol, .. }) = self.ty_from_id(&expr.id) {
-            let ty = Ty::Record(Some(symbol), field_row.into());
+        if let Ty::Nominal { symbol, .. } = &expr.ty {
+            let ty = Ty::Record(Some(*symbol), field_row.into());
             self.push_instr(Instruction::Nominal {
                 dest,
-                sym: symbol,
+                sym: *symbol,
                 ty: ty.clone(),
                 record: field_vals.into(),
                 meta: vec![InstructionMeta::Source(expr.id)].into(),
@@ -1575,9 +1599,9 @@ impl<'a> Lowerer<'a> {
             .catalog
             .initializers
             .get(name)
-            .expect("did not get init")
+            .unwrap_or_else(|| unreachable!("did not get inits for {name:?}"))
             .get(&Label::Named("init".into()))
-            .expect("did not get init");
+            .unwrap_or_else(|| unreachable!("did not get init for {name:?}"));
 
         let init_entry = self
             .types
@@ -1602,27 +1626,26 @@ impl<'a> Lowerer<'a> {
     fn lower_enum_constructor(
         &mut self,
         id: NodeID,
-        name: &Name,
+        enum_symbol: &Symbol,
         variant_name: &Label,
         values: &[TypedExpr<Ty>],
         bind: Bind,
         old_instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
-        let enum_symbol = name.symbol().expect("name not resolved");
         let constructor_sym = *self
             .types
             .catalog
             .variants
-            .get(&enum_symbol)
+            .get(enum_symbol)
             .unwrap_or_else(|| panic!("did not get variants for {enum_symbol:?}"))
             .get(variant_name)
-            .unwrap_or_else(|| panic!("didn't get {:?}", name));
+            .unwrap_or_else(|| panic!("didn't get {:?}", enum_symbol));
 
         let tag = self
             .types
             .catalog
             .variants
-            .get(&enum_symbol)
+            .get(enum_symbol)
             .unwrap_or_else(|| panic!("did not get variants for {enum_symbol:?}"))
             .get_index_of(variant_name)
             .unwrap_or_else(|| panic!("did not get tag for {enum_symbol:?} {variant_name:?}"));
@@ -1662,10 +1685,10 @@ impl<'a> Lowerer<'a> {
                     ty: ty.clone(),
                 });
 
-        let ty = Ty::Record(Some(enum_symbol), row.into());
+        let ty = Ty::Record(Some(*enum_symbol), row.into());
         let dest = self.ret(bind);
         self.push_instr(Instruction::Nominal {
-            sym: enum_symbol,
+            sym: *enum_symbol,
             dest,
             ty: ty.clone(),
             record: args.into(),
@@ -1679,17 +1702,29 @@ impl<'a> Lowerer<'a> {
     #[allow(clippy::todo)]
     fn lower_member(
         &mut self,
-        id: NodeID,
+        expr: &TypedExpr<Ty>,
         receiver: &Option<Box<TypedExpr<Ty>>>,
         label: &Label,
+        witness: Option<Symbol>,
         bind: Bind,
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
         if let Some(box receiver) = &receiver {
+            if let TypedExprKind::Constructor(name, ..) = &receiver.kind {
+                return self.lower_enum_constructor(
+                    receiver.id,
+                    name,
+                    label,
+                    Default::default(),
+                    bind,
+                    instantiations,
+                );
+            }
+
             let reg = self.next_register();
             let member_bind = Bind::Assigned(reg);
             let (receiver_val, _) = self.lower_expr(receiver, member_bind, instantiations)?;
-            let ty = self.ty_from_id(&id)?;
+            let ty = expr.ty.clone();
             let dest = self.ret(bind);
 
             let (receiver_ty, _) = self.specialized_ty(receiver, instantiations)?;
@@ -1705,7 +1740,7 @@ impl<'a> Lowerer<'a> {
                     ty: ty.clone(),
                     val: Value::Func(method),
                 });
-            } else if let Some(witness) = self.witness_for(receiver, label)
+            } else if let Some(witness) = witness.or_else(|| self.witness_for(receiver, label))
                 && matches!(witness, Symbol::InstanceMethod(..))
             {
                 tracing::debug!("lowering req {label} {witness:?}");
@@ -1722,7 +1757,7 @@ impl<'a> Lowerer<'a> {
                     ty: ty.clone(),
                     record: receiver_val.as_register()?,
                     field: label,
-                    meta: vec![InstructionMeta::Source(id)].into(),
+                    meta: vec![InstructionMeta::Source(expr.id)].into(),
                 });
             };
 
@@ -1739,10 +1774,6 @@ impl<'a> Lowerer<'a> {
         expr: &TypedExpr<Ty>,
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
-        let s = set_symbol_names(self.symbol_names.clone());
-        println!("lower_variable: {name:?}");
-        drop(s);
-
         let (ty, instantiations) = self.specialized_ty(expr, instantiations)?;
         let monomorphized_ty = substitute(ty.clone(), &instantiations);
 
@@ -1767,11 +1798,7 @@ impl<'a> Lowerer<'a> {
                 .expect("did not get symbol");
 
             // Check if this function has captures
-            if let Some(captures) = self.asts[self.current_ast_id]
-                .phase
-                .captures
-                .get(name)
-                .cloned()
+            if let Some(captures) = self.resolved_names.captures.get(name).cloned()
                 && !captures.is_empty()
             {
                 let env: Vec<Value> = captures
@@ -1827,7 +1854,7 @@ impl<'a> Lowerer<'a> {
             .types
             .catalog
             .initializers
-            .get(&name)
+            .get(name)
             .unwrap_or_else(|| panic!("did not get initializers for {name:?}"))
             .get(&Label::Named("init".into()))
             .expect("did not get init");
@@ -1843,7 +1870,7 @@ impl<'a> Lowerer<'a> {
             .types
             .catalog
             .properties
-            .get(&name)
+            .get(name)
             .expect("did not get properties");
 
         // Extract return type from the initializer function
@@ -1887,8 +1914,6 @@ impl<'a> Lowerer<'a> {
     ) -> Result<(Value, Ty), IRError> {
         let dest = self.ret(bind);
 
-        println!("lower call: {call_expr:?}");
-
         if let TypedExprKind::Variable(name) = &callee.kind
             && name == &Symbol::PRINT
         {
@@ -1899,7 +1924,7 @@ impl<'a> Lowerer<'a> {
 
         let instantiations = parent_instantiations.clone();
 
-        let ty = self.ty_from_id(&call_expr.id)?;
+        let ty = call_expr.ty.clone();
         let mut arg_vals = vec![];
         let mut arg_tys = vec![];
         for arg in args {
@@ -1919,12 +1944,36 @@ impl<'a> Lowerer<'a> {
             );
         }
 
-        if let TypedExprKind::Member(box receiver, member) = &callee.kind {
+        if let TypedExprKind::Member {
+            receiver: box receiver,
+            label: member,
+        } = &callee.kind
+        {
             return self.lower_method_call(
                 call_expr,
                 callee,
                 receiver.clone(),
                 member,
+                None,
+                args,
+                arg_vals,
+                dest,
+                &instantiations,
+            );
+        }
+
+        if let TypedExprKind::ProtocolMember {
+            receiver: box receiver,
+            label: member,
+            witness,
+        } = &callee.kind
+        {
+            return self.lower_method_call(
+                call_expr,
+                callee,
+                receiver.clone(),
+                member,
+                Some(*witness),
                 args,
                 arg_vals,
                 dest,
@@ -1953,6 +2002,7 @@ impl<'a> Lowerer<'a> {
         callee_expr: &TypedExpr<Ty>,
         mut receiver: TypedExpr<Ty>,
         label: &Label,
+        witness: Option<Symbol>,
         arg_exprs: &[TypedExpr<Ty>],
         mut args: Vec<Value>,
         dest: Register,
@@ -1985,7 +2035,7 @@ impl<'a> Lowerer<'a> {
             });
 
             (method_sym, dest.into(), ty)
-        } else if let Some(witness) = self.witness_for(&receiver, label) {
+        } else if let Some(witness) = witness.or_else(|| self.witness_for(&receiver, label)) {
             // For method calls on type parameters, look up the witness at the callee expression's node ID.
             // This returns a MethodRequirement symbol that the monomorphizer will substitute with
             // the concrete implementation when specializing.
@@ -2002,13 +2052,20 @@ impl<'a> Lowerer<'a> {
 
             (witness, dest.into(), ty)
         } else {
-            println!("no witness found : {call_expr:?}");
-            return Err(IRError::TypeNotFound(format!(
+            tracing::warn!(
                 "No witness found for {:?} in {:?} ({:?}).",
                 label,
                 receiver,
-                self.ty_from_id(&receiver.id)
-            )));
+                receiver.ty.clone()
+            );
+
+            return Ok((Value::Void, Ty::Void));
+            // return Err(IRError::TypeNotFound(format!(
+            //     "No witness found for {:?} in {:?} ({:?}).",
+            //     label,
+            //     receiver,
+            //     receiver.ty.clone(),
+            // )));
         };
 
         // Go through the method and make sure all witnesses are resolved inside it
@@ -2028,11 +2085,8 @@ impl<'a> Lowerer<'a> {
         let (mut param_tys, mut ret_ty) = uncurry_function(ty);
 
         // Do we have captures? If so this is a closure
-        let capture_env = if let Some(captures) = self.asts[self.current_ast_id]
-            .phase
-            .captures
-            .get(&func.name)
-            .cloned()
+        let capture_env = if let Some(captures) =
+            self.resolved_names.captures.get(&func.name).cloned()
             && !captures.is_empty()
         {
             let mut env_fields = vec![];
@@ -2073,7 +2127,8 @@ impl<'a> Lowerer<'a> {
         };
 
         let _s = tracing::trace_span!("pushing new current function");
-        self.current_function_stack.push(CurrentFunction::default());
+        self.current_function_stack
+            .push(CurrentFunction::new(func.name));
 
         let mut params = vec![];
 
@@ -2107,8 +2162,6 @@ impl<'a> Lowerer<'a> {
                 ),
             );
         }
-
-        println!("lower_func {:?} {:?}", func.name, func.params);
 
         for param in func.params.iter() {
             let register = self.next_register();
@@ -2322,9 +2375,6 @@ impl<'a> Lowerer<'a> {
     }
 
     fn set_binding(&mut self, symbol: &Symbol, value_register: Register) {
-        let _s = set_symbol_names(self.symbol_names.clone());
-        println!("set_binding {symbol:?} : {value_register:?}");
-
         let ty = self
             .types
             .get_symbol(symbol)
@@ -2429,22 +2479,11 @@ impl<'a> Lowerer<'a> {
 
             func
         } else {
-            let module = self
-                .config
-                .modules
-                .modules
-                .get(&module_id)
-                .unwrap_or_else(|| {
-                    panic!(
-                        "didn't get module for import: {module_id:?}, config: {:?}",
-                        self.config.module_id
-                    )
-                });
-
-            tracing::debug!("importing {symbol:?} from {module_id}");
-
+            let Some(program) = self.config.modules.program_for(module_id) else {
+                return;
+            };
             // TODO: This won't work with external methods yet, only core works.
-            let Some(method_func) = module.program.polyfunctions.get(symbol) else {
+            let Some(method_func) = program.polyfunctions.get(symbol) else {
                 return;
             };
             self.functions.insert(*symbol, method_func.clone());
@@ -2490,11 +2529,8 @@ impl<'a> Lowerer<'a> {
             return Some(string);
         }
 
-        for module in self.config.modules.modules.values() {
-            println!("checking {}: {:?}", module.name, module.symbol_names);
-            if let Some(string) = module.symbol_names.get(&sym.current()) {
-                return Some(string);
-            }
+        if let Some(string) = self.config.modules.resolve_name(sym) {
+            return Some(string);
         }
 
         None
@@ -2602,7 +2638,7 @@ impl<'a> Lowerer<'a> {
         label: &Label,
         instantiations: &Substitutions,
     ) -> Result<Option<Symbol>, IRError> {
-        let ty = self.ty_from_id(&expr.id)?;
+        let ty = expr.ty.clone();
 
         let symbol = match ty {
             Ty::Primitive(primitive) => primitive,
@@ -2617,12 +2653,10 @@ impl<'a> Lowerer<'a> {
             }
         };
 
-        if let Some(module_id) = symbol.module_id()
-            && let Some(module) = self.config.modules.modules.get(&module_id)
-            && let Some(methods) = module.types.catalog.instance_methods.get(&symbol)
-            && let Some(method) = methods.get(label)
+        if let Some(sym) = self.config.modules.lookup_concrete_member(&symbol, label)
+            && matches!(sym, Symbol::InstanceMethod(..))
         {
-            Ok(Some(*method))
+            Ok(Some(sym))
         } else if let Some(methods) = self.types.catalog.instance_methods.get(&symbol)
             && let Some(method) = methods.get(label)
         {
@@ -2632,6 +2666,7 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn specialized_ty(
         &mut self,
         expr: &TypedExpr<Ty>,
@@ -2641,9 +2676,9 @@ impl<'a> Lowerer<'a> {
             TypedExprKind::Variable(name) => *name,
             TypedExprKind::Func(func) => func.name,
             TypedExprKind::Constructor(name, ..) => *name,
-            TypedExprKind::Member(receiver, label) => {
-                let Ty::Constructor { name, .. } = self.ty_from_id(&receiver.id)? else {
-                    return Ok((self.ty_from_id(&expr.id)?, Default::default()));
+            TypedExprKind::Member { receiver, label } => {
+                let Ty::Constructor { name, .. } = &receiver.ty else {
+                    return Ok((expr.ty.clone(), Default::default()));
                 };
 
                 let Some((member, _)) = self
@@ -2651,14 +2686,15 @@ impl<'a> Lowerer<'a> {
                     .catalog
                     .lookup_member(&name.symbol().expect("didn't get sym"), label)
                 else {
-                    return Ok((self.ty_from_id(&expr.id)?, Default::default()));
+                    return Ok((expr.ty.clone(), Default::default()));
                 };
 
                 member
             }
+            TypedExprKind::ProtocolMember { witness, .. } => *witness,
             _ => {
                 tracing::trace!("expr has no substitutions: {expr:?}");
-                return Ok((self.ty_from_id(&expr.id)?, Default::default()));
+                return Ok((expr.ty.clone(), Default::default()));
             }
         };
 
@@ -2752,16 +2788,6 @@ impl<'a> Lowerer<'a> {
                 Label::Positional(idx)
             }
             _ => panic!("unable to determine field index of {receiver_ty}.{label}"),
-        }
-    }
-
-    fn ty_from_id(&self, id: &NodeID) -> Result<Ty, IRError> {
-        match self.types.get(id) {
-            Some(TypeEntry::Mono(ty)) => Ok(ty.clone()),
-            Some(TypeEntry::Poly(scheme)) => Ok(scheme.ty.clone()),
-            None => Err(IRError::TypeNotFound(format!(
-                "No type found for id: {id:?}"
-            ))),
         }
     }
 

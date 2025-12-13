@@ -20,7 +20,7 @@ use crate::{
 
 #[allow(dead_code)]
 pub struct Monomorphizer<'a> {
-    asts: &'a mut IndexMap<Source, TypedAST<Ty>>,
+    ast: &'a mut TypedAST<Ty>,
     types: &'a mut Types,
     config: &'a DriverConfig,
     pub(super) functions: IndexMap<Symbol, PolyFunction>,
@@ -31,7 +31,7 @@ pub struct Monomorphizer<'a> {
 impl<'a> Monomorphizer<'a> {
     pub fn new(lowerer: Lowerer<'a>) -> Self {
         Monomorphizer {
-            asts: lowerer.asts,
+            ast: lowerer.ast,
             types: lowerer.types,
             functions: lowerer.functions,
             specializations: lowerer.specializations,
@@ -86,44 +86,16 @@ impl<'a> Monomorphizer<'a> {
             };
 
             if module_id != self.config.module_id
-                && let Some(imported) = self
-                    .config
-                    .modules
-                    .modules
-                    .get(&module_id)
-                    .unwrap_or_else(|| {
-                        unreachable!(
-                            "Module not found: {module_id:?} in {:?}, Current: {:?}",
-                            self.config.modules.modules.keys().collect_vec(),
-                            self.config.module_id
-                        )
-                    })
-                    .program
-                    .functions
-                    .get(callee)
-                    .cloned()
+                && let Some(program) = self.config.modules.program_for(module_id)
+                && let Some(imported) = program.functions.get(callee).cloned()
             {
                 result.insert(*callee, imported);
             };
 
             if let Some(specialization) = specialization
                 && module_id != self.config.module_id
-                && let Some(imported) = self
-                    .config
-                    .modules
-                    .modules
-                    .get(&module_id)
-                    .unwrap_or_else(|| {
-                        unreachable!(
-                            "Module not found: {module_id:?} in {:?}, Current: {:?}",
-                            self.config.modules.modules.keys().collect_vec(),
-                            self.config.module_id
-                        )
-                    })
-                    .program
-                    .polyfunctions
-                    .get(callee)
-                    .cloned()
+                && let Some(program) = self.config.modules.program_for(module_id)
+                && let Some(imported) = program.polyfunctions.get(callee).cloned()
             {
                 self.generate_specialized_function(&imported, specialization, result);
             };
@@ -328,13 +300,7 @@ impl<'a> Monomorphizer<'a> {
                 {
                     self.config
                         .modules
-                        .modules
-                        .get(&module_id)
-                        .expect("didn't get module")
-                        .types
-                        .catalog
-                        .nominals
-                        .get(&symbol)
+                        .lookup_nominal(&symbol)
                         .cloned()
                         .expect("didn't get external nominal")
                 } else {

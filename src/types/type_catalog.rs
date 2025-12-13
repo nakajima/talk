@@ -7,7 +7,7 @@ use crate::{
     name_resolution::symbol::Symbol,
     node_id::NodeID,
     types::{
-        conformance::{Conformance, ConformanceKey},
+        conformance::{Conformance, ConformanceKey, Witnesses},
         infer_row::RowParamId,
         infer_ty::{InferTy, TypeParamId},
         ty::{SomeType, Ty},
@@ -20,6 +20,28 @@ pub struct Nominal<T: SomeType> {
     pub properties: IndexMap<Label, T>,
     pub variants: IndexMap<Label, Vec<T>>,
     pub type_params: Vec<T>,
+}
+
+impl Nominal<Ty> {
+    pub fn import_as(self, module_id: ModuleId) -> Nominal<Ty> {
+        Nominal {
+            properties: self
+                .properties
+                .into_iter()
+                .map(|(k, v)| (k, v.import(module_id)))
+                .collect(),
+            variants: self
+                .variants
+                .into_iter()
+                .map(|(k, v)| (k, v.into_iter().map(|v| v.import(module_id)).collect()))
+                .collect(),
+            type_params: self
+                .type_params
+                .into_iter()
+                .map(|v| v.import(module_id))
+                .collect(),
+        }
+    }
 }
 
 impl<T: SomeType> Nominal<T> {
@@ -112,17 +134,17 @@ impl<T: SomeType> Default for TrackedInstantiations<T> {
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct TypeCatalog<T: SomeType> {
-    pub nominals: FxHashMap<Symbol, Nominal<T>>,
-    pub conformances: FxHashMap<ConformanceKey, Conformance<T>>,
-    pub associated_types: FxHashMap<Symbol, FxHashMap<Label, Symbol>>,
-    pub extensions: FxHashMap<Symbol, FxHashMap<Label, Symbol>>,
-    pub child_types: FxHashMap<Symbol, FxHashMap<String, Symbol>>,
-    pub initializers: FxHashMap<Symbol, FxHashMap<Label, Symbol>>,
-    pub properties: FxHashMap<Symbol, IndexMap<Label, Symbol>>,
-    pub instance_methods: FxHashMap<Symbol, FxHashMap<Label, Symbol>>,
-    pub static_methods: FxHashMap<Symbol, FxHashMap<Label, Symbol>>,
-    pub variants: FxHashMap<Symbol, IndexMap<Label, Symbol>>,
-    pub method_requirements: FxHashMap<Symbol, IndexMap<Label, Symbol>>,
+    pub nominals: IndexMap<Symbol, Nominal<T>>,
+    pub conformances: IndexMap<ConformanceKey, Conformance<T>>,
+    pub associated_types: IndexMap<Symbol, IndexMap<Label, Symbol>>,
+    pub extensions: IndexMap<Symbol, IndexMap<Label, Symbol>>,
+    pub child_types: IndexMap<Symbol, IndexMap<Label, Symbol>>,
+    pub initializers: IndexMap<Symbol, IndexMap<Label, Symbol>>,
+    pub properties: IndexMap<Symbol, IndexMap<Label, Symbol>>,
+    pub instance_methods: IndexMap<Symbol, IndexMap<Label, Symbol>>,
+    pub static_methods: IndexMap<Symbol, IndexMap<Label, Symbol>>,
+    pub variants: IndexMap<Symbol, IndexMap<Label, Symbol>>,
+    pub method_requirements: IndexMap<Symbol, IndexMap<Label, Symbol>>,
     pub instantiations: TrackedInstantiations<T>,
 }
 
@@ -188,6 +210,10 @@ impl TypeCatalog<InferTy> {
 }
 
 impl<T: SomeType> TypeCatalog<T> {
+    pub fn lookup_initializers(&self, receiver: &Symbol) -> Option<IndexMap<Label, Symbol>> {
+        self.initializers.get(receiver).cloned()
+    }
+
     pub fn lookup_static_member(&self, receiver: &Symbol, label: &Label) -> Option<Symbol> {
         if let Some(entries) = self.static_methods.get(receiver)
             && let Some(sym) = entries.get(label)
@@ -262,6 +288,45 @@ impl<T: SomeType> TypeCatalog<T> {
         None
     }
 
+    pub fn lookup_concrete_member(
+        &self,
+        receiver: &Symbol,
+        label: &Label,
+    ) -> Option<(Symbol, MemberSource)> {
+        if let Some(entries) = self.properties.get(receiver)
+            && let Some(sym) = entries.get(label)
+        {
+            return Some((*sym, MemberSource::SelfMember));
+        }
+
+        if let Some(entries) = self.instance_methods.get(receiver)
+            && let Some(sym) = entries.get(label)
+        {
+            return Some((*sym, MemberSource::SelfMember));
+        }
+
+        if let Some(entries) = self.variants.get(receiver)
+            && let Some(sym) = entries.get(label)
+        {
+            return Some((*sym, MemberSource::SelfMember));
+        }
+
+        if let Some(entries) = self.method_requirements.get(receiver)
+            && let Some(sym) = entries.get(label)
+        {
+            return Some((*sym, MemberSource::SelfMember));
+        }
+
+        None
+    }
+
+    pub fn instance_methods_for(&self, receiver: &Symbol) -> IndexMap<Label, Symbol> {
+        self.instance_methods
+            .get(receiver)
+            .cloned()
+            .unwrap_or_default()
+    }
+
     /// Look up the label for a method requirement symbol by searching all protocols
     pub fn method_requirement_label(&self, method_req: &Symbol) -> Option<Label> {
         for entries in self.method_requirements.values() {
@@ -273,4 +338,93 @@ impl<T: SomeType> TypeCatalog<T> {
         }
         None
     }
+}
+
+impl TypeCatalog<Ty> {
+    pub fn import_as(self, module_id: ModuleId) -> TypeCatalog<Ty> {
+        TypeCatalog {
+            nominals: self
+                .nominals
+                .into_iter()
+                .map(|(k, v)| (k.import(module_id), v.import_as(module_id)))
+                .collect(),
+            conformances: self
+                .conformances
+                .into_iter()
+                .map(|(k, v)| {
+                    (
+                        ConformanceKey {
+                            protocol_id: k.protocol_id.import(module_id),
+                            conforming_id: k.conforming_id.import(module_id),
+                        },
+                        Conformance {
+                            node_id: v.node_id,
+                            conforming_id: v.conforming_id.import(module_id),
+                            protocol_id: v.protocol_id.import(module_id),
+                            witnesses: Witnesses::<Ty> {
+                                methods: import_mapped(v.witnesses.methods, module_id),
+                                associated_types: v
+                                    .witnesses
+                                    .associated_types
+                                    .into_iter()
+                                    .map(|(k, v)| (k, v.import(module_id)))
+                                    .collect(),
+                            },
+                            span: v.span,
+                        },
+                    )
+                })
+                .collect(),
+            associated_types: import_nominal_mapped(self.associated_types, module_id),
+            extensions: import_nominal_mapped(self.extensions, module_id),
+            child_types: import_nominal_mapped(self.child_types, module_id),
+            initializers: import_nominal_mapped(self.initializers, module_id),
+            properties: import_nominal_mapped(self.properties, module_id),
+            instance_methods: import_nominal_mapped(self.instance_methods, module_id),
+            static_methods: import_nominal_mapped(self.static_methods, module_id),
+            variants: import_nominal_mapped(self.variants, module_id),
+            method_requirements: import_nominal_mapped(self.method_requirements, module_id),
+            instantiations: TrackedInstantiations {
+                ty: self
+                    .instantiations
+                    .ty
+                    .into_iter()
+                    .map(|(k, v)| (k, v.import(module_id)))
+                    .collect(),
+                row: self
+                    .instantiations
+                    .row
+                    .into_iter()
+                    .map(|(k, v)| (k, v.import(module_id)))
+                    .collect(),
+            },
+        }
+    }
+}
+
+fn import_mapped(
+    mapping: FxHashMap<Label, Symbol>,
+    module_id: ModuleId,
+) -> FxHashMap<Label, Symbol> {
+    mapping
+        .into_iter()
+        .map(|(k, v)| (k, v.import(module_id)))
+        .collect()
+}
+
+fn import_nominal_mapped(
+    mapping: IndexMap<Symbol, IndexMap<Label, Symbol>>,
+    module_id: ModuleId,
+) -> IndexMap<Symbol, IndexMap<Label, Symbol>> {
+    mapping
+        .into_iter()
+        .map(|(key, value)| {
+            let key = key.import(module_id);
+            let value = value
+                .into_iter()
+                .map(|(k, v)| (k, v.import(module_id)))
+                .collect();
+            (key, value)
+        })
+        .collect()
 }

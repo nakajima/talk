@@ -152,7 +152,7 @@ pub mod tests {
     pub fn parse(code: &'static str) -> AST<Parsed> {
         let lexer = Lexer::new(code);
         let parser = Parser::new("-", FileID(0), lexer);
-        parser.parse().unwrap()
+        parser.parse().unwrap().0
     }
 
     fn parse_pattern(input: &'static str) -> Pattern {
