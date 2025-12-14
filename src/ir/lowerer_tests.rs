@@ -58,7 +58,10 @@ pub mod tests {
     }
 
     pub fn lower_module(input: &str) -> Module {
-        let driver = Driver::new(vec![Source::from(input)], DriverConfig::new("TestDriver"));
+        let driver = Driver::new(
+            vec![Source::from(input)],
+            DriverConfig::new("TestDriver").executable(),
+        );
         driver
             .parse()
             .unwrap()
@@ -131,8 +134,8 @@ pub mod tests {
         let program = lower("123");
         assert_eq!(
             program.functions,
-            indexmap::indexmap!(SynthesizedId::from(1).into() => Function {
-                name: SynthesizedId::from(1).into(),
+            indexmap::indexmap!(Symbol::Main => Function {
+                name: Symbol::Main,
                 params: vec![].into(),
                 register_count: 1,
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
@@ -156,8 +159,8 @@ pub mod tests {
         let program = lower("let a = 123 ; a");
         assert_eq!(
             program.functions,
-            indexmap::indexmap!(SynthesizedId::from(1).into() => Function {
-                name: SynthesizedId::from(1).into(),
+            indexmap::indexmap!(Symbol::Main => Function {
+                name: Symbol::Main,
                 params: vec![].into(),
                 register_count: 1,
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
@@ -186,12 +189,9 @@ pub mod tests {
         );
 
         assert_eq_diff!(
-            *program
-                .functions
-                .get(&Symbol::from(SynthesizedId::from(1)))
-                .unwrap(),
+            *program.functions.get(&Symbol::Main).unwrap(),
             Function {
-                name: SynthesizedId::from(1).into(),
+                name: Symbol::Main,
                 params: vec![].into(),
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
                 register_count: 3,
@@ -258,12 +258,9 @@ pub mod tests {
         );
 
         assert_eq_diff!(
-            *program
-                .functions
-                .get(&Symbol::from(SynthesizedId::from(2)))
-                .unwrap(),
+            *program.functions.get(&Symbol::Main).unwrap(),
             Function {
-                name: SynthesizedId::from(2).into(),
+                name: Symbol::Main,
                 params: vec![].into(),
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
                 register_count: 4,
@@ -324,12 +321,9 @@ pub mod tests {
         );
 
         assert_eq_diff!(
-            *program
-                .functions
-                .get(&Symbol::from(SynthesizedId::from(2)))
-                .unwrap(),
+            *program.functions.get(&Symbol::Main).unwrap(),
             Function {
-                name: SynthesizedId::from(2).into(),
+                name: Symbol::Main,
                 params: vec![].into(),
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
                 register_count: 4,
@@ -359,7 +353,7 @@ pub mod tests {
                                 Some(Symbol::Struct(StructId::from(1))),
                                 vec![IrTy::Int]
                             ),
-                            callee: Value::Func(Symbol::from(SynthesizedId::from(3))),
+                            callee: Value::Func(Symbol::from(SynthesizedId::from(2))),
                             args: vec![Register(2).into(), Register(1).into()].into(),
                             meta: meta(),
                         },
@@ -384,12 +378,9 @@ pub mod tests {
     fn lowers_enum_constructor_with_no_vals() {
         let program = lower("enum Fizz { case foo, bar } ; Fizz.bar");
         assert_eq_diff!(
-            *program
-                .functions
-                .get(&Symbol::Synthesized(SynthesizedId::from(1)))
-                .unwrap(),
+            *program.functions.get(&Symbol::Main).unwrap(),
             Function {
-                name: SynthesizedId::from(1).into(),
+                name: Symbol::Main,
                 params: vec![].into(),
                 register_count: 1,
                 ty: IrTy::Func(
@@ -423,12 +414,9 @@ pub mod tests {
             Fizz.bar(1.23, 456)",
         );
         assert_eq_diff!(
-            *program
-                .functions
-                .get(&Symbol::Synthesized(SynthesizedId::from(1)))
-                .unwrap(),
+            *program.functions.get(&Symbol::Main).unwrap(),
             Function {
-                name: SynthesizedId::from(1).into(),
+                name: Symbol::Main,
                 params: vec![].into(),
                 register_count: 3,
                 ty: IrTy::Func(
@@ -482,12 +470,9 @@ pub mod tests {
     fn lowers_add() {
         let program = lower("1 + 2");
         assert_eq_diff!(
-            *program
-                .functions
-                .get(&Symbol::Synthesized(SynthesizedId::from(1)))
-                .unwrap(),
+            *program.functions.get(&Symbol::Main).unwrap(),
             Function {
-                name: SynthesizedId::from(1).into(),
+                name: Symbol::Main,
                 params: vec![].into(),
                 register_count: 3,
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
@@ -585,12 +570,9 @@ pub mod tests {
         );
 
         assert_eq_diff!(
-            *program
-                .functions
-                .get(&Symbol::from(SynthesizedId::from(2)))
-                .unwrap(),
+            *program.functions.get(&Symbol::Main).unwrap(),
             Function {
-                name: SynthesizedId::from(2).into(),
+                name: Symbol::Main,
                 params: vec![].into(),
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
                 register_count: 4,
@@ -650,8 +632,8 @@ pub mod tests {
         );
         assert_eq!(
             program.functions,
-            indexmap::indexmap!(SynthesizedId::from(1).into() => Function {
-                name: SynthesizedId::from(1).into(),
+            indexmap::indexmap!(Symbol::Main => Function {
+                name: Symbol::Main,
                 params: vec![].into(),
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
                 register_count: 1,
@@ -682,12 +664,9 @@ pub mod tests {
         ",
         );
         assert_eq!(
-            *program
-                .functions
-                .get(&Symbol::from(SynthesizedId::from(1)))
-                .unwrap(),
+            *program.functions.get(&Symbol::Main).unwrap(),
             Function {
-                name: SynthesizedId::from(1).into(),
+                name: Symbol::Main,
                 params: vec![].into(),
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
                 register_count: 3,
@@ -735,12 +714,9 @@ pub mod tests {
         );
 
         assert_eq_diff!(
-            *program
-                .functions
-                .get(&Symbol::from(SynthesizedId::from(1)))
-                .unwrap(),
+            *program.functions.get(&Symbol::Main).unwrap(),
             Function {
-                name: SynthesizedId::from(1).into(),
+                name: Symbol::Main,
                 params: vec![].into(),
                 ty: IrTy::Func(vec![], IrTy::Float.into()),
                 register_count: 5,
@@ -791,10 +767,10 @@ pub mod tests {
         assert_eq_diff!(
             *program
                 .functions
-                .get(&Symbol::from(SynthesizedId::from(2)))
+                .get(&Symbol::Synthesized(1.into()))
                 .unwrap(),
             Function {
-                name: SynthesizedId::from(2).into(),
+                name: Symbol::Synthesized(1.into()),
                 params: vec![Value::Reg(0)].into(),
                 ty: IrTy::Func(vec![IrTy::Int], IrTy::Int.into()),
                 register_count: 1,
@@ -813,11 +789,10 @@ pub mod tests {
         assert_eq_diff!(
             *program
                 .functions
-                .get(&Symbol::from(SynthesizedId::from(3)))
+                .get(&Symbol::Synthesized(2.into()))
                 .unwrap(),
             Function {
-                name: SynthesizedId::from(3).into(),
-
+                name: Symbol::Synthesized(2.into()),
                 params: vec![Value::Reg(0)].into(),
                 ty: IrTy::Func(vec![IrTy::Float], IrTy::Float.into()),
                 register_count: 1,
@@ -846,12 +821,9 @@ pub mod tests {
         );
 
         assert_eq_diff!(
-            *program
-                .functions
-                .get(&Symbol::Synthesized(SynthesizedId::from(1)))
-                .unwrap(),
+            *program.functions.get(&Symbol::Main).unwrap(),
             Function::<IrTy> {
-                name: SynthesizedId::from(1).into(),
+                name: Symbol::Main,
                 params: vec![].into(),
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
                 register_count: 3,
@@ -933,12 +905,9 @@ pub mod tests {
         );
 
         assert_eq_diff!(
-            *program
-                .functions
-                .get(&Symbol::Synthesized(SynthesizedId::from(1)))
-                .unwrap(),
+            *program.functions.get(&Symbol::Main).unwrap(),
             Function::<IrTy> {
-                name: SynthesizedId::from(1).into(),
+                name: Symbol::Main,
                 params: vec![].into(),
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
                 // allocator got up to Register(9), so next is 10
@@ -1076,11 +1045,7 @@ pub mod tests {
         );
 
         assert_eq_diff!(
-            program
-                .functions
-                .get(&Symbol::Synthesized(SynthesizedId::from(1)))
-                .unwrap()
-                .blocks,
+            program.functions.get(&Symbol::Main).unwrap().blocks,
             &[
                 BasicBlock::from_str(
                     "
@@ -1121,11 +1086,7 @@ pub mod tests {
     fn lowers_string_literal() {
         let program = lower("\"hello\"");
         assert_eq!(
-            *program
-                .functions
-                .get(&Symbol::Synthesized(SynthesizedId::from(1)))
-                .unwrap()
-                .blocks,
+            *program.functions.get(&Symbol::Main).unwrap().blocks,
             vec![BasicBlock {
                 id: BasicBlockId(0),
                 phis: Default::default(),
@@ -1158,11 +1119,7 @@ pub mod tests {
     fn lowers_array_literal() {
         let program = lower("[1,2,3]");
         assert_eq!(
-            program
-                .functions
-                .get(&Symbol::Synthesized(SynthesizedId::from(1)))
-                .unwrap()
-                .blocks,
+            program.functions.get(&Symbol::Main).unwrap().blocks,
             &[BasicBlock {
                 id: BasicBlockId(0),
                 phis: Default::default(),
@@ -1235,11 +1192,7 @@ pub mod tests {
         );
 
         assert_eq_diff!(
-            program
-                .functions
-                .get(&Symbol::Synthesized(SynthesizedId::from(1)))
-                .unwrap()
-                .blocks,
+            program.functions.get(&Symbol::Main).unwrap().blocks,
             &[BasicBlock {
                 id: BasicBlockId(0),
                 phis: Default::default(),

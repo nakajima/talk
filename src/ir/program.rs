@@ -18,10 +18,8 @@ pub struct Program {
 
 impl Program {
     pub fn entrypoint(&self) -> Option<&Function<IrTy>> {
-        for (sym, func) in self.functions.iter() {
-            if matches!(func.name, Symbol::Main)
-                && matches!(sym, Symbol::Global(..) | Symbol::Synthesized(..))
-            {
+        for func in self.functions.values() {
+            if matches!(func.name, Symbol::Main) {
                 return Some(func);
             }
         }

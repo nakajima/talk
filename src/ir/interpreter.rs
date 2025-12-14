@@ -307,8 +307,10 @@ impl Interpreter {
                 let cond_val = self.val(cond);
                 let next_block = if cond_val == Value::Bool(true) {
                     conseq
-                } else {
+                } else if cond_val == Value::Bool(false) {
                     alt
+                } else {
+                    panic!("Branch condition not a bool: {cond_val:?}");
                 };
 
                 self.jump(next_block);

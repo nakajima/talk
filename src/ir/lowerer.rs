@@ -272,7 +272,7 @@ impl<'a> Lowerer<'a> {
             .iter()
             .any(|d| is_main_func(d, self.symbol_names));
         if !has_main_func {
-            let main_symbol = Symbol::Synthesized(self.symbols.next_synthesized(ModuleId::Current));
+            let main_symbol = Symbol::Main;
             let mut ret_ty = Ty::Void;
 
             let func = TypedFunc::<Ty> {
