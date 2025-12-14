@@ -23,7 +23,6 @@ pub mod tests {
             value::{Addr, Value},
         },
         label::Label,
-        name::Name,
         name_resolution::symbol::{
             EnumId, GlobalId, InstanceMethodId, StructId, Symbol, SynthesizedId, set_symbol_names,
         },
@@ -35,7 +34,10 @@ pub mod tests {
     }
 
     pub fn lower(input: &str) -> Program {
-        let driver = Driver::new(vec![Source::from(input)], DriverConfig::new("TestDriver"));
+        let driver = Driver::new(
+            vec![Source::from(input)],
+            DriverConfig::new("TestDriver").executable(),
+        );
         let mut typed = driver
             .parse()
             .unwrap()
@@ -443,29 +445,29 @@ pub mod tests {
                     instructions: vec![
                         Instruction::Constant {
                             ty: IrTy::Float,
-                            dest: 0.into(),
+                            dest: 1.into(),
                             val: 1.23.into(),
                             meta: meta()
                         },
                         Instruction::Constant {
                             ty: IrTy::Int,
-                            dest: 1.into(),
+                            dest: 2.into(),
                             val: 456.into(),
                             meta: meta()
                         },
                         Instruction::Nominal {
                             sym: Symbol::Enum(EnumId::from(1)),
-                            dest: 2.into(),
+                            dest: 0.into(),
                             ty: IrTy::Record(
                                 Some(Symbol::Enum(EnumId::from(1))),
                                 vec![IrTy::Int, IrTy::Float, IrTy::Int]
                             ),
-                            record: vec![Value::Int(1), Value::Reg(0), Value::Reg(1)].into(),
+                            record: vec![Value::Int(1), Value::Reg(1), Value::Reg(2)].into(),
                             meta: meta()
                         }
                     ],
                     terminator: Terminator::Ret {
-                        val: Value::Reg(2),
+                        val: Value::Reg(0),
                         ty: IrTy::Record(
                             Some(Symbol::Enum(EnumId::from(1))),
                             vec![IrTy::Int, IrTy::Float, IrTy::Int]
@@ -640,10 +642,10 @@ pub mod tests {
     }
 
     #[test]
-    fn embedded_ir() {
+    fn simple_embedded_ir() {
         let program = lower(
             "
-        __IR<Int>(\"$? = add int 1 2\")
+        @_ir { %? = add Int 1 2 }
         ",
         );
         assert_eq!(
@@ -661,7 +663,7 @@ pub mod tests {
                         ty: IrTy::Int,
                         a: Value::Int(1),
                         b: Value::Int(2),
-                        meta: vec![].into(),
+                        meta: meta(),
                     }],
                     terminator: Terminator::Ret {
                         val: Value::Reg(0),
@@ -852,7 +854,7 @@ pub mod tests {
                 name: SynthesizedId::from(1).into(),
                 params: vec![].into(),
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
-                register_count: 1,
+                register_count: 3,
                 blocks: vec![
                     BasicBlock {
                         id: BasicBlockId(0),
@@ -868,26 +870,48 @@ pub mod tests {
                         id: BasicBlockId(1),
                         phis: Default::default(),
                         instructions: vec![Instruction::Constant {
-                            dest: Register::DROP,
+                            dest: Register(0),
                             ty: IrTy::Int,
                             val: Value::Int(456),
                             meta: meta()
                         }],
                         terminator: Terminator::Jump {
-                            to: BasicBlockId(2)
+                            to: BasicBlockId(3)
                         }
                     },
                     BasicBlock {
                         id: BasicBlockId(2),
                         phis: Default::default(),
+                        instructions: Default::default(),
+                        terminator: Terminator::Jump {
+                            to: BasicBlockId(3)
+                        }
+                    },
+                    BasicBlock {
+                        id: BasicBlockId(3),
+                        phis: vec![Phi {
+                            dest: 1.into(),
+                            ty: IrTy::Int,
+                            sources: vec![
+                                PhiSource {
+                                    from_id: BasicBlockId(1),
+                                    value: Value::Reg(0)
+                                },
+                                PhiSource {
+                                    from_id: BasicBlockId(2),
+                                    value: Value::Void
+                                }
+                            ]
+                            .into()
+                        }],
                         instructions: vec![Instruction::Constant {
-                            dest: 0.into(),
+                            dest: 2.into(),
                             ty: IrTy::Int,
                             val: Value::Int(123),
                             meta: meta()
                         }],
                         terminator: Terminator::Ret {
-                            val: Value::Reg(0),
+                            val: Value::Reg(2),
                             ty: IrTy::Int
                         }
                     }
@@ -1051,13 +1075,13 @@ pub mod tests {
             ",
         );
 
-        assert_eq!(
-            *program
+        assert_eq_diff!(
+            program
                 .functions
                 .get(&Symbol::Synthesized(SynthesizedId::from(1)))
                 .unwrap()
                 .blocks,
-            vec![
+            &[
                 BasicBlock::from_str(
                     "
                 #0:
@@ -1068,7 +1092,7 @@ pub mod tests {
                 BasicBlock::from_str(
                     "
                 #1:
-                    jmp #2
+                    br true #2 #3
                     "
                 )
                 .unwrap(),
@@ -1133,7 +1157,7 @@ pub mod tests {
     #[test]
     fn lowers_array_literal() {
         let program = lower("[1,2,3]");
-        assert_eq_diff!(
+        assert_eq!(
             program
                 .functions
                 .get(&Symbol::Synthesized(SynthesizedId::from(1)))

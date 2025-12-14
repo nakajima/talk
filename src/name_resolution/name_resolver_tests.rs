@@ -350,11 +350,13 @@ pub mod tests {
     fn resolves_captures() {
         let resolved = resolve(
             "
-        let count = 0
-        func counter(x) {
-            x
-            count
-            count
+        func fizz() {
+            let count = 0
+            func counter(x) {
+                x
+                count
+                count
+            }
         }
         ",
         );
@@ -364,47 +366,112 @@ pub mod tests {
             any_decl!(DeclKind::Let {
                 lhs: any_pattern!(PatternKind::Bind(Name::Resolved(
                     Symbol::Global(GlobalId::from(1)),
-                    "count".into()
-                ))),
-                type_annotation: None,
-                rhs: Some(any_expr!(ExprKind::LiteralInt("0".into())))
-            })
-        );
-
-        assert_eq_diff!(
-            *resolved.0.roots[1].as_decl(),
-            any_decl!(DeclKind::Let {
-                lhs: any_pattern!(PatternKind::Bind(Name::Resolved(
-                    Symbol::Global(GlobalId::from(2)),
-                    "counter".into()
+                    "fizz".into()
                 ))),
                 type_annotation: None,
                 rhs: Some(any_expr!(ExprKind::Func(Func {
                     id: NodeID::ANY,
-                    name: Name::Resolved(Symbol::Global(GlobalId::from(2)), "counter".into()),
+                    name: Name::Resolved(Symbol::Global(GlobalId::from(1)), "fizz".into()),
                     name_span: Span::ANY,
-                    generics: vec![],
-                    params: vec![param!(ParamLocalId(1), "x")],
+                    generics: Default::default(),
+                    params: Default::default(),
                     body: any_block!(vec![
-                        any_stmt!(StmtKind::Expr(variable!(ParamLocalId(1), "x"))).into(),
-                        any_stmt!(StmtKind::Expr(variable!(GlobalId::from(1), "count"))).into(),
-                        any_stmt!(StmtKind::Expr(variable!(GlobalId::from(1), "count"))).into(),
+                        any_decl!(DeclKind::Let {
+                            lhs: any_pattern!(PatternKind::Bind(Name::Resolved(
+                                Symbol::DeclaredLocal(DeclaredLocalId(1)),
+                                "count".into()
+                            ))),
+                            type_annotation: None,
+                            rhs: Some(any_expr!(ExprKind::LiteralInt("0".into())))
+                        })
+                        .into(),
+                        any_decl!(DeclKind::Let {
+                            lhs: any_pattern!(PatternKind::Bind(Name::Resolved(
+                                Symbol::DeclaredLocal(DeclaredLocalId(2)),
+                                "counter".into()
+                            ))),
+                            type_annotation: None,
+                            rhs: Some(any_expr!(ExprKind::Func(Func {
+                                id: NodeID::ANY,
+                                name: Name::Resolved(
+                                    Symbol::DeclaredLocal(DeclaredLocalId(2)),
+                                    "counter".into()
+                                ),
+                                name_span: Span::ANY,
+                                generics: vec![],
+                                params: vec![param!(ParamLocalId(1), "x")],
+                                body: any_block!(vec![
+                                    any_stmt!(StmtKind::Expr(variable!(ParamLocalId(1), "x")))
+                                        .into(),
+                                    any_stmt!(StmtKind::Expr(variable!(
+                                        DeclaredLocalId(1),
+                                        "count"
+                                    )))
+                                    .into(),
+                                    any_stmt!(StmtKind::Expr(variable!(
+                                        DeclaredLocalId(1),
+                                        "count"
+                                    )))
+                                    .into(),
+                                ]),
+                                ret: None,
+                                attributes: vec![]
+                            })))
+                        })
+                        .into()
                     ]),
                     ret: None,
-                    attributes: vec![]
+                    attributes: Default::default()
                 })))
             })
         );
 
+        // assert_eq!(
+        //     *resolved.0.roots[0].as_decl(),
+        //     any_decl!(DeclKind::Let {
+        //         lhs: any_pattern!(PatternKind::Bind(Name::Resolved(
+        //             Symbol::Global(GlobalId::from(1)),
+        //             "count".into()
+        //         ))),
+        //         type_annotation: None,
+        //         rhs: Some(any_expr!(ExprKind::LiteralInt("0".into())))
+        //     })
+        // );
+
+        // assert_eq_diff!(
+        //     *resolved.0.roots[1].as_decl(),
+        //     any_decl!(DeclKind::Let {
+        //         lhs: any_pattern!(PatternKind::Bind(Name::Resolved(
+        //             Symbol::Global(GlobalId::from(2)),
+        //             "counter".into()
+        //         ))),
+        //         type_annotation: None,
+        //         rhs: Some(any_expr!(ExprKind::Func(Func {
+        //             id: NodeID::ANY,
+        //             name: Name::Resolved(Symbol::Global(GlobalId::from(2)), "counter".into()),
+        //             name_span: Span::ANY,
+        //             generics: vec![],
+        //             params: vec![param!(ParamLocalId(1), "x")],
+        //             body: any_block!(vec![
+        //                 any_stmt!(StmtKind::Expr(variable!(ParamLocalId(1), "x"))).into(),
+        //                 any_stmt!(StmtKind::Expr(variable!(GlobalId::from(1), "count"))).into(),
+        //                 any_stmt!(StmtKind::Expr(variable!(GlobalId::from(1), "count"))).into(),
+        //             ]),
+        //             ret: None,
+        //             attributes: vec![]
+        //         })))
+        //     })
+        // );
+
         let mut expected = FxHashSet::default();
         expected.insert(Capture {
-            symbol: Symbol::Global(GlobalId::from(1)),
-            parent_binder: None,
+            symbol: Symbol::DeclaredLocal(DeclaredLocalId(1)),
+            parent_binder: Some(Symbol::Global(GlobalId::from(1))),
             level: Level(1),
         });
 
         assert_eq!(
-            resolved.1.captures.get(&GlobalId::from(2).into()),
+            resolved.1.captures.get(&DeclaredLocalId(2).into()),
             Some(&expected),
             "{:?}",
             resolved.1.captures
@@ -443,7 +510,7 @@ pub mod tests {
         let mut expected = FxHashSet::default();
         expected.insert(Capture {
             symbol: Symbol::DeclaredLocal(DeclaredLocalId(1)),
-            parent_binder: Some(Symbol::Global(GlobalId::from(1))),
+            parent_binder: Some(GlobalId::from(1).into()),
             level: Level(1),
         });
 
@@ -453,7 +520,7 @@ pub mod tests {
             level: Level(1),
         });
 
-        assert_eq_diff!(
+        assert_eq!(
             resolved.1.captures.get(&DeclaredLocalId(2).into()),
             Some(&expected),
         );
@@ -1085,8 +1152,8 @@ pub mod tests {
                 .unwrap(),
             indexmap::indexmap! {
                 "B".into() => Symbol::Struct(StructId::from(2)),
-                "C".into() => Symbol::TypeAlias(TypeAliasId::from(3)),
-                "D".into() => Symbol::Enum(EnumId::from(4))
+                "C".into() => Symbol::TypeAlias(TypeAliasId::from(4)),
+                "D".into() => Symbol::Enum(EnumId::from(3))
             }
         )
     }
@@ -1110,8 +1177,8 @@ pub mod tests {
                 .unwrap(),
             indexmap::indexmap! {
                 "B".into() => Symbol::Struct(StructId::from(2)),
-                "C".into() => Symbol::TypeAlias(TypeAliasId::from(3)),
-                "D".into() => Symbol::Enum(EnumId::from(4))
+                "C".into() => Symbol::TypeAlias(TypeAliasId::from(4)),
+                "D".into() => Symbol::Enum(EnumId::from(3))
             }
         )
     }
@@ -1136,8 +1203,8 @@ pub mod tests {
                 .unwrap(),
             indexmap::indexmap! {
                 "B".into() => Symbol::Struct(StructId::from(1)),
-                "C".into() => Symbol::TypeAlias(TypeAliasId::from(2)),
-                "D".into() => Symbol::Enum(EnumId::from(3)),
+                "C".into() => Symbol::TypeAlias(TypeAliasId::from(3)),
+                "D".into() => Symbol::Enum(EnumId::from(2)),
                 "E".into() => Symbol::AssociatedType(AssociatedTypeId::from(1))
             }
         )

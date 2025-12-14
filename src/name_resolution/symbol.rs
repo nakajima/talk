@@ -445,7 +445,7 @@ impl Symbol {
             Symbol::MethodRequirement(method_requirement_id) => {
                 Symbol::MethodRequirement(method_requirement_id.import(module_id))
             }
-            _ => unreachable!("{self:?} not exportable"),
+            _ => self,
         }
     }
 

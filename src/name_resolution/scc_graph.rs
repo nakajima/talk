@@ -16,6 +16,7 @@ pub struct BindingGroup {
     pub id: GroupId,
     pub level: Level,
     pub binders: Vec<Symbol>,
+    pub is_top_level: bool,
 }
 
 #[derive(Default, Debug, Clone)]
@@ -24,7 +25,6 @@ pub struct SCCGraph {
     pub graph: DiGraph<Symbol, NodeID>,
     rhs_ids: FxHashMap<Symbol, NodeID>,
     level_map: FxHashMap<NodeIndex, Level>,
-    ast_idx: usize,
 }
 
 impl SCCGraph {
@@ -38,12 +38,14 @@ impl SCCGraph {
             .enumerate()
             .filter_map(|(i, ids)| {
                 let mut level = Level::default();
+                let mut is_top_level = false;
                 // Only include binders that have an rhs_id (i.e., are actually defined
                 // in this AST, not just referenced from another AST)
                 let binders: Vec<_> = ids
                     .iter()
                     .filter_map(|id| {
                         let symbol = self.graph[*id];
+                        is_top_level |= matches!(symbol, Symbol::Global(..));
                         // Only include if this symbol is defined in this graph
                         if self.rhs_ids.contains_key(&symbol) {
                             if self.level_map[id] > level {
@@ -65,6 +67,7 @@ impl SCCGraph {
                     id: GroupId(i as u32),
                     binders,
                     level,
+                    is_top_level,
                 })
             })
             .collect()

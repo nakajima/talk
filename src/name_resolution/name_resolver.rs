@@ -191,6 +191,19 @@ impl NameResolver {
             // One declarer per AST so the single &mut self borrow ends after each AST.
             for ast in asts.iter_mut() {
                 let mut declarer = DeclDeclarer::new(self, &mut ast.node_ids);
+                declarer.predeclare_nominals(
+                    ast.roots
+                        .iter()
+                        .filter_map(|r| {
+                            if let Node::Decl(decl) = r {
+                                Some(decl)
+                            } else {
+                                None
+                            }
+                        })
+                        .collect_vec()
+                        .as_slice(),
+                );
                 for root in &mut ast.roots {
                     match root {
                         Node::Stmt(Stmt { id, .. }) => {
@@ -273,7 +286,6 @@ impl NameResolver {
             && let Some(captured) = self.lookup_in_scope(name, parent)
             && parent != scope_id
         {
-            let parent_scope = self.scopes.get(&parent).expect("did not find parent scope");
             let scope = self.scopes.get(&scope_id).expect("did not find scope");
 
             if scope.binder == Some(captured) {
@@ -284,13 +296,19 @@ impl NameResolver {
                 return Some(captured);
             };
 
-            if !matches!(captured, Symbol::DeclaredLocal(..) | Symbol::ParamLocal(..)) {
+            if !matches!(
+                captured,
+                Symbol::DeclaredLocal(..) | Symbol::ParamLocal(..) | Symbol::Global(..)
+            ) {
                 return Some(captured);
             }
 
+            let parent_binder =
+                self.nearest_enclosing_binder_from(Some(parent), current_scope_binder);
+
             let capture = Capture {
                 symbol: captured,
-                parent_binder: parent_scope.binder,
+                parent_binder,
                 level: scope.level,
             };
 
@@ -368,6 +386,10 @@ impl NameResolver {
                 | Symbol::ParamLocal(..)
                 | Symbol::MethodRequirement(..)
         ) {
+            return;
+        }
+
+        if to_sym.external_module_id().is_some() {
             return;
         }
 
@@ -478,6 +500,28 @@ impl NameResolver {
         scope.types.insert(name.name_str(), symbol);
 
         Name::Resolved(symbol, name.name_str())
+    }
+
+    fn nearest_enclosing_binder_from(
+        &self,
+        mut scope_id: Option<NodeID>,
+        skip: Symbol,
+    ) -> Option<Symbol> {
+        while let Some(id) = scope_id {
+            let scope = self
+                .scopes
+                .get(&id)
+                .unwrap_or_else(|| unreachable!("scope not found: {id:?}"));
+
+            if let Some(binder) = scope.binder
+                && binder != skip
+            {
+                return Some(binder);
+            }
+
+            scope_id = scope.parent_id;
+        }
+        None
     }
 
     fn enter_pattern(&mut self, pattern: &mut Pattern) {

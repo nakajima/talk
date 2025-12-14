@@ -100,6 +100,11 @@ impl DriverConfig {
             module_name: module_name.into(),
         }
     }
+
+    pub fn executable(mut self) -> Self {
+        self.mode = CompilationMode::Executable;
+        self
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
@@ -341,7 +346,7 @@ pub mod tests {
 
         let ast = typed.phase.ast;
         assert!(ast.diagnostics.is_empty());
-        assert_eq!(types_tests::tests::ty(1, &ast, &typed.phase.types), Ty::Int);
+        assert_eq!(types_tests::tests::ty(0, &ast, &typed.phase.types), Ty::Int);
     }
 
     #[test]
@@ -364,7 +369,7 @@ pub mod tests {
         let ast = typed.phase.ast;
 
         assert!(ast.diagnostics.is_empty(), "{:?}", ast.diagnostics);
-        assert_eq!(types_tests::tests::ty(1, &ast, &typed.phase.types), Ty::Int);
+        assert_eq!(types_tests::tests::ty(0, &ast, &typed.phase.types), Ty::Int);
     }
 
     #[test]
@@ -410,7 +415,7 @@ pub mod tests {
             .unwrap();
         let ast = typed.phase.ast;
 
-        assert_eq!(types_tests::tests::ty(2, &ast, &typed.phase.types), Ty::Int);
+        assert_eq!(types_tests::tests::ty(0, &ast, &typed.phase.types), Ty::Int);
     }
 
     #[test]
@@ -453,7 +458,7 @@ pub mod tests {
             .unwrap();
         let ast = typed.phase.ast;
 
-        assert_eq!(types_tests::tests::ty(1, &ast, &typed.phase.types), Ty::Int);
+        assert_eq!(types_tests::tests::ty(0, &ast, &typed.phase.types), Ty::Int);
     }
 
     #[test]

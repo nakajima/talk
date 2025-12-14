@@ -134,13 +134,6 @@ impl<'a> InferencePass<'a> {
                 Constraint::HasField(..) => (),
                 Constraint::Member(..) => (),
                 Constraint::Conforms(conforms) => {
-                    println!(
-                        "Conforms not solve ({:?}): {conforms:?} {:?}",
-                        self.constraints
-                            .constraint_symbol_dependents_for(conforms.id),
-                        Symbol::Protocol(conforms.protocol_id)
-                    );
-
                     match &conforms.ty {
                         InferTy::Nominal { symbol, .. } | InferTy::Primitive(symbol) => {
                             self.diagnostics.insert(AnyDiagnostic::Typing(Diagnostic {
@@ -462,7 +455,7 @@ impl<'a> InferencePass<'a> {
         let mut stmts = vec![];
 
         for group in groups {
-            let is_top_level = group.level == Level::default();
+            let is_top_level = group.is_top_level;
             let (new_decls, new_stmts) = self.generate_for_group(group);
             if is_top_level {
                 decls.extend(new_decls);
@@ -971,7 +964,7 @@ impl<'a> InferencePass<'a> {
 
         let item_ty = self.visit_expr(first_item, context)?;
 
-        let mut typed_items = vec![];
+        let mut typed_items = vec![item_ty.clone()];
         for expr in items[1..].iter() {
             let ty = self.visit_expr(expr, context)?;
             self.constraints
@@ -1262,7 +1255,6 @@ impl<'a> InferencePass<'a> {
                         1 => tys[0].clone(),
                         _ => InferTy::Tuple(tys.to_vec()),
                     };
-                    println!("register_nominal variant: {nominal_symbol:?} {:?}", name);
                     self.session
                         .insert(*sym, values_ty.clone(), &mut self.constraints);
                     row_types.push((name.name_str(), values_ty));

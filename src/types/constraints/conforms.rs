@@ -250,8 +250,6 @@ impl Conforms {
                 continue;
             };
 
-            println!("found a witness bestie: {witness_sym:?} = {witness:?}");
-
             match unify(&required_ty, &witness._as_ty(), context, session) {
                 Ok(vars) => solved_metas.extend(vars),
                 Err(e) => {

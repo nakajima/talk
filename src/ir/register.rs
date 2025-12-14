@@ -2,7 +2,7 @@ use std::str::FromStr;
 
 use crate::ir::{ir_error::IRError, value::Value};
 
-#[derive(Debug, Clone, Copy, PartialEq, Hash, Eq)]
+#[derive(Clone, Copy, PartialEq, Hash, Eq)]
 pub struct Register(pub u32);
 
 impl Register {
@@ -34,6 +34,20 @@ impl FromStr for Register {
         Ok(str::parse::<u32>(&s[1..])
             .map_err(|e| IRError::CouldNotParse(format!("{e:?}")))?
             .into())
+    }
+}
+
+impl std::fmt::Debug for Register {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.0 == Self::DROP.0 {
+            return write!(f, "%DROP");
+        }
+
+        if self.0 == Self::MAIN.0 {
+            return write!(f, "%MAIN");
+        }
+
+        write!(f, "%{}", self.0)
     }
 }
 

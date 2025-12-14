@@ -1,5 +1,3 @@
-use std::path::Display;
-
 use indexmap::IndexSet;
 use itertools::Itertools;
 use petgraph::prelude::DiGraphMap;
@@ -61,6 +59,7 @@ pub struct ConstraintMeta {
     pub id: ConstraintId,
     pub group_id: GroupId,
     pub level: Level,
+    pub is_top_level: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -134,14 +133,12 @@ impl ConstraintStore {
     }
 
     pub fn copy_group(&self, id: ConstraintId) -> BindingGroup {
+        let existing = self.meta.get(&id).unwrap_or_else(|| unreachable!());
         BindingGroup {
-            id: self
-                .meta
-                .get(&id)
-                .unwrap_or_else(|| unreachable!())
-                .group_id,
-            level: self.meta.get(&id).unwrap_or_else(|| unreachable!()).level,
+            id: existing.group_id,
+            level: existing.level,
             binders: Default::default(),
+            is_top_level: existing.is_top_level,
         }
     }
 
@@ -299,6 +296,7 @@ impl ConstraintStore {
                 id: constraint_id,
                 group_id: group.id,
                 level: group.level,
+                is_top_level: group.is_top_level,
             },
         );
 
@@ -384,6 +382,7 @@ impl ConstraintStore {
                 id: Default::default(),
                 level: Default::default(),
                 binders: Default::default(),
+                is_top_level: Default::default(),
             },
         )
     }

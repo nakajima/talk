@@ -321,7 +321,6 @@ impl Member {
             .get(&self.label)
             .cloned()
         {
-            println!("it's a {nominal:?} property bestie: {ty:?}");
             match unify(&self.ty, &ty, context, session) {
                 Ok(vars) => SolveResult::Solved(vars),
                 Err(e) => SolveResult::Err(e),

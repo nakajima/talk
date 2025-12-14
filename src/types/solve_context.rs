@@ -60,6 +60,7 @@ where
             id: self.group(),
             level: self.level(),
             binders: Default::default(),
+            is_top_level: Default::default(),
         }
     }
 }

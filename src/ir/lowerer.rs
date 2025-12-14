@@ -284,18 +284,13 @@ impl<'a> Lowerer<'a> {
                         // Only include top-level statements (expressions) in the synthesized main,
                         // not declarations. Declarations are lowered separately via the normal
                         // AST iteration.
-                        let stmts: Vec<TypedNode<Ty>> = self
-                            .ast
-                            .stmts
-                            .iter()
-                            .map(|a| TypedNode::Stmt(a.clone()))
-                            .collect();
+                        let nodes: Vec<TypedNode<Ty>> = self.ast.roots();
 
-                        if let Some(last) = stmts.last() {
+                        if let Some(last) = nodes.last() {
                             ret_ty = last.ty();
                         }
 
-                        stmts
+                        nodes
                     },
                     id: NodeID(FileID(0), 0),
                     ret: Ty::Void,
@@ -369,7 +364,26 @@ impl<'a> Lowerer<'a> {
             } => {
                 let bind = self.lower_pattern(pattern)?;
                 if let Some(initializer) = initializer {
-                    self.lower_expr(initializer, bind, instantiations)?;
+                    match bind {
+                        Bind::Assigned(reg) => {
+                            self.lower_expr(initializer, Bind::Assigned(reg), instantiations)?;
+                        }
+                        Bind::Fresh => {
+                            self.lower_expr(initializer, Bind::Fresh, instantiations)?;
+                        }
+                        Bind::Discard => {
+                            self.lower_expr(initializer, Bind::Discard, instantiations)?;
+                        }
+                        Bind::Indirect(reg, ..) => {
+                            let (val, ty) =
+                                self.lower_expr(initializer, Bind::Fresh, instantiations)?;
+                            self.push_instr(Instruction::Store {
+                                value: val,
+                                ty,
+                                addr: reg.into(),
+                            });
+                        }
+                    }
                 }
             }
             TypedDeclKind::StructDef {
@@ -1623,12 +1637,14 @@ impl<'a> Lowerer<'a> {
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
+    #[allow(clippy::too_many_arguments)]
     fn lower_enum_constructor(
         &mut self,
         id: NodeID,
         enum_symbol: &Symbol,
         variant_name: &Label,
-        values: &[TypedExpr<Ty>],
+        arg_exprs: &[TypedExpr<Ty>],
+        mut args: Vec<Value>,
         bind: Bind,
         old_instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
@@ -1652,7 +1668,7 @@ impl<'a> Lowerer<'a> {
 
         let enum_entry = self
             .types
-            .get_symbol(&enum_symbol)
+            .get_symbol(enum_symbol)
             .unwrap_or_else(|| panic!("did not get enum entry {enum_symbol:?}"))
             .clone();
         let (_, _ty_instantiations) = self.specialize(&enum_entry, id)?;
@@ -1664,12 +1680,9 @@ impl<'a> Lowerer<'a> {
         let (_, mut instantiations) = self.specialize(&init_entry, id)?;
         instantiations.extend(old_instantiations.clone());
 
-        let mut args: Vec<Value> = Default::default();
         let mut args_tys: Vec<Ty> = vec![Ty::Int];
-        for value in values.iter() {
-            let (val, ty) = self.lower_expr(value, Bind::Fresh, &instantiations)?;
-            args.push(val);
-            args_tys.push(ty);
+        for value in arg_exprs.iter() {
+            args_tys.push(value.ty.clone());
         }
 
         // Set the tag as the first entry
@@ -1715,6 +1728,7 @@ impl<'a> Lowerer<'a> {
                     receiver.id,
                     name,
                     label,
+                    Default::default(),
                     Default::default(),
                     bind,
                     instantiations,
@@ -1928,7 +1942,7 @@ impl<'a> Lowerer<'a> {
         let mut arg_vals = vec![];
         let mut arg_tys = vec![];
         for arg in args {
-            let (arg, arg_ty) = self.lower_expr(&arg, Bind::Fresh, &instantiations)?;
+            let (arg, arg_ty) = self.lower_expr(arg, Bind::Fresh, &instantiations)?;
             arg_vals.push(arg);
             arg_tys.push(arg_ty)
         }
@@ -2010,6 +2024,22 @@ impl<'a> Lowerer<'a> {
     ) -> Result<(Value, Ty), IRError> {
         let (_, instantiations) = self.specialized_ty(callee_expr, instantiations)?;
         let (ty, instantiations) = self.specialized_ty(call_expr, &instantiations)?;
+
+        if let Ty::Constructor {
+            name: Name::Resolved(enum_symbol @ Symbol::Enum(..), ..),
+            ..
+        } = &receiver.ty
+        {
+            return self.lower_enum_constructor(
+                callee_expr.id,
+                enum_symbol,
+                label,
+                arg_exprs,
+                args,
+                Bind::Assigned(dest),
+                &instantiations,
+            );
+        }
 
         // Is this an instance method call on a constructor? If so we don't need
         // to prepend a self arg because it's passed explicitly (like Foo.bar(fizz) where
@@ -2438,16 +2468,7 @@ impl<'a> Lowerer<'a> {
             Bind::Assigned(value) => value,
             Bind::Fresh => self.next_register(),
             Bind::Discard => Register::DROP,
-            Bind::Indirect(reg, sym) => {
-                let ty = self.ty_from_symbol(&sym).expect("did not get ty for bind");
-                let value = self.next_register();
-                self.push_instr(Instruction::Store {
-                    value: value.into(),
-                    ty,
-                    addr: reg.into(),
-                });
-                value
-            }
+            Bind::Indirect(..) => self.next_register(),
         }
     }
 
@@ -2766,7 +2787,7 @@ impl<'a> Lowerer<'a> {
 
     #[instrument(skip(self), ret)]
     fn witness_for(&mut self, receiver: &TypedExpr<Ty>, label: &Label) -> Option<Symbol> {
-        println!("looking for witness: {receiver:?}");
+        // println!("looking for witness: {receiver:?}");
         None
     }
 

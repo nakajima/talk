@@ -1,4 +1,5 @@
 use derive_visitor::VisitorMut;
+use itertools::Itertools;
 use rustc_hash::FxHashMap;
 use tracing::instrument;
 
@@ -235,6 +236,29 @@ impl<'a> DeclDeclarer<'a> {
         self.resolver.current_scope_id = current.parent_id;
     }
 
+    pub(super) fn predeclare_nominals(&mut self, decls: &[&Decl]) {
+        for decl in decls.iter() {
+            if let Decl {
+                id,
+                kind:
+                    kind @ (DeclKind::Struct { name, .. }
+                    | DeclKind::Enum { name, .. }
+                    | DeclKind::Protocol { name, .. }),
+                ..
+            } = decl
+            {
+                let kind = match kind {
+                    DeclKind::Struct { .. } => some!(Struct),
+                    DeclKind::Enum { .. } => some!(Enum),
+                    DeclKind::Protocol { .. } => some!(Protocol),
+                    _ => unreachable!(),
+                };
+
+                self.resolver.declare(name, kind, *id);
+            }
+        }
+    }
+
     ///////////////////////////////////////////////////////////////////////////
     // Local decls
     ///////////////////////////////////////////////////////////////////////////
@@ -302,14 +326,10 @@ impl<'a> DeclDeclarer<'a> {
         id: NodeID,
         name: &mut Name,
         generics: &mut [GenericDecl],
-        kind: TypeDefKind,
+        decls: &[Decl],
     ) {
-        *name = match kind {
-            TypeDefKind::Protocol => self.resolver.declare(name, some!(Protocol), id),
-            TypeDefKind::Struct => self.resolver.declare(name, some!(Struct), id),
-            TypeDefKind::Enum => self.resolver.declare(name, some!(Enum), id),
-            TypeDefKind::Extension => self.resolver.lookup(name, Some(id)).unwrap_or(name.clone()),
-        };
+        // Should be set by predeclare_nominals
+        *name = self.resolver.lookup(name, Some(id)).unwrap_or(name.clone());
 
         let Ok(sym) = name.symbol() else {
             self.resolver
@@ -341,6 +361,8 @@ impl<'a> DeclDeclarer<'a> {
                 .resolver
                 .declare(&generic.name, some!(TypeParameter), generic.id);
         }
+
+        self.predeclare_nominals(decls.iter().collect_vec().as_slice());
     }
 
     ///////////////////////////////////////////////////////////////////////////
@@ -404,18 +426,7 @@ impl<'a> DeclDeclarer<'a> {
                     .lookup(name, Some(*id))
                     .unwrap_or_else(|| self.resolver.declare(name, some!(Global), func_id));
 
-                // if matches!(
-                //     name.symbol(),
-                //     Ok(Symbol::InstanceMethod(..)
-                //         | Symbol::StaticMethod(..)
-                //         | Symbol::Initializer(..))
-                // ) {
-                self.start_scope(
-                    Some(func.name.symbol().unwrap_or_else(|_| unreachable!())),
-                    *id,
-                    false,
-                );
-                // }
+                self.start_scope(None, *id, false);
 
                 for generic in generics {
                     generic.name =
@@ -481,21 +492,57 @@ impl<'a> DeclDeclarer<'a> {
     ///////////////////////////////////////////////////////////////////////////
     #[instrument(level = tracing::Level::TRACE, skip(self, decl))]
     fn enter_decl(&mut self, decl: &mut Decl) {
-        on!(&mut decl.kind, DeclKind::Struct { name, generics, .. }, {
-            self.enter_nominal(decl.id, name, generics, TypeDefKind::Struct);
-        });
+        on!(
+            &mut decl.kind,
+            DeclKind::Struct {
+                name,
+                generics,
+                body,
+                ..
+            },
+            {
+                self.enter_nominal(decl.id, name, generics, &body.decls);
+            }
+        );
 
-        on!(&mut decl.kind, DeclKind::Enum { name, generics, .. }, {
-            self.enter_nominal(decl.id, name, generics, TypeDefKind::Enum);
-        });
+        on!(
+            &mut decl.kind,
+            DeclKind::Enum {
+                name,
+                generics,
+                body,
+                ..
+            },
+            {
+                self.enter_nominal(decl.id, name, generics, &body.decls);
+            }
+        );
 
-        on!(&mut decl.kind, DeclKind::Protocol { name, generics, .. }, {
-            self.enter_nominal(decl.id, name, generics, TypeDefKind::Protocol);
-        });
+        on!(
+            &mut decl.kind,
+            DeclKind::Protocol {
+                name,
+                generics,
+                body,
+                ..
+            },
+            {
+                self.enter_nominal(decl.id, name, generics, &body.decls);
+            }
+        );
 
-        on!(&mut decl.kind, DeclKind::Extend { name, generics, .. }, {
-            self.enter_nominal(decl.id, name, generics, TypeDefKind::Extension);
-        });
+        on!(
+            &mut decl.kind,
+            DeclKind::Extend {
+                name,
+                generics,
+                body,
+                ..
+            },
+            {
+                self.enter_nominal(decl.id, name, generics, &body.decls);
+            }
+        );
 
         on!(&mut decl.kind, DeclKind::TypeAlias(lhs_name, ..), {
             *lhs_name = self.resolver.declare(lhs_name, some!(TypeAlias), decl.id);
