@@ -210,7 +210,6 @@ impl Conforms {
         let mut solved_metas = vec![];
 
         let Some(requirements) = session.lookup_method_requirements(self.protocol_id.into()) else {
-            println!("lol no requirements are u kidding");
             return Ok((missing_witnesses, solved_metas));
         };
 

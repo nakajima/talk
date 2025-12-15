@@ -109,7 +109,7 @@ impl<'a> InferencePass<'a> {
         }
 
         for i in 0..self.asts.len() {
-            self.discover_protocols(i, Level::default());
+            let protocol_decls = self.discover_protocols(i, Level::default());
             self.session.apply_all(&mut self.substitutions);
         }
 
@@ -233,16 +233,19 @@ impl<'a> InferencePass<'a> {
     fn discover_protocols(&mut self, idx: usize, level: Level) {
         let roots = std::mem::take(&mut self.asts[idx].roots);
         for root in roots.iter() {
-            let Node::Decl(Decl {
-                kind:
-                    DeclKind::Protocol {
-                        name: protocol_name @ Name::Resolved(Symbol::Protocol(protocol_id), ..),
-                        body,
-                        conformances,
-                        ..
-                    },
-                ..
-            }) = root
+            let Node::Decl(
+                decl @ Decl {
+                    kind:
+                        DeclKind::Protocol {
+                            name: protocol_name @ Name::Resolved(Symbol::Protocol(protocol_id), ..),
+                            generics,
+                            conformances,
+                            body,
+                            ..
+                        },
+                    ..
+                },
+            ) = root
             else {
                 continue;
             };
@@ -256,6 +259,12 @@ impl<'a> InferencePass<'a> {
             };
 
             let protocol_self_id = self.session.new_type_param_id(None);
+            self.session.insert(
+                protocol_sym,
+                InferTy::Param(protocol_self_id),
+                &mut self.constraints,
+            );
+
             let mut context = SolveContext::new(
                 self.substitutions.clone(),
                 level,
@@ -266,176 +275,258 @@ impl<'a> InferencePass<'a> {
                 },
             );
 
-            for conformance in conformances {
-                let Ok(Symbol::Protocol(conforms_to_id)) = conformance.symbol() else {
-                    tracing::error!("did not get protocol for conforms_to");
-                    continue;
-                };
-
-                let key = ConformanceKey {
-                    protocol_id: conforms_to_id,
-                    conforming_id: protocol_sym,
-                };
-
-                self.register_conformance(
-                    &InferTy::Param(protocol_self_id),
-                    protocol_sym,
-                    conforms_to_id.into(),
-                    conformance.id,
-                    conformance.span,
-                    &mut context,
-                )
-                .ok();
-
-                self.session.type_catalog.conformances.insert(
-                    key,
-                    Conformance {
-                        node_id: conformance.id,
-                        conforming_id: protocol_sym,
-                        protocol_id: conforms_to_id,
-                        witnesses: Default::default(),
-                        span: conformance.span,
-                    },
-                );
-            }
-
-            let mut binders: IndexMap<Symbol, InferTy> = IndexMap::default();
-
             context.givens.insert(Predicate::Conforms {
                 param: protocol_self_id,
                 protocol_id: *protocol_id,
             });
-            self.session
-                .type_param_bounds
-                .entry(protocol_self_id)
-                .or_default()
-                .insert(Predicate::Conforms {
-                    param: protocol_self_id,
-                    protocol_id: *protocol_id,
-                });
-            self.session.insert(
-                protocol_sym,
-                InferTy::Param(protocol_self_id),
-                &mut self.constraints,
-            );
 
-            // Process associated types
-            for decl in body.decls.iter() {
-                let DeclKind::Associated { generic } = &decl.kind else {
-                    continue;
-                };
+            let mut binders = IndexMap::<Symbol, InferTy>::default();
 
-                let ret_id = self.session.new_type_param_id(None);
-                let ret = InferTy::Param(ret_id);
-
-                if !generic.conformances.is_empty() {
-                    unimplemented!("not handling associated type conformances yet");
-                }
-
-                let scheme = Scheme {
-                    ty: ret.clone(),
-                    foralls: indexset! { ForAll::Ty(protocol_self_id), ForAll::Ty(ret_id) },
-                    predicates: vec![Predicate::Projection {
-                        base: InferTy::Param(protocol_self_id),
-                        label: generic.name.name_str().into(),
-                        protocol_id: Some(*protocol_id),
-                        returns: ret,
-                    }],
-                };
-
-                let Ok(generic_sym) = generic.name.symbol() else {
+            match self.visit_protocol(
+                decl,
+                protocol_name,
+                generics,
+                conformances,
+                body,
+                &mut context,
+            ) {
+                Ok((_, new_binders)) => binders.extend(new_binders),
+                Err(e) => {
                     self.diagnostics.insert(AnyDiagnostic::Typing(Diagnostic {
-                        id: root.node_id(),
-                        kind: TypeError::NameNotResolved(generic.name.clone()),
+                        id: decl.id,
+                        kind: e,
                     }));
-                    continue;
-                };
-
-                self.session.insert_term(
-                    generic_sym,
-                    EnvEntry::Scheme(scheme),
-                    &mut self.constraints,
-                );
-                self.session
-                    .type_catalog
-                    .associated_types
-                    .entry(protocol_sym)
-                    .or_default()
-                    .insert(generic.name.name_str().into(), generic_sym);
-            }
-
-            for decl in body.decls.iter() {
-                match &decl.kind {
-                    DeclKind::MethodRequirement(func_signature)
-                    | DeclKind::FuncSignature(func_signature) => {
-                        let ty = self
-                            .visit_func_signature(
-                                protocol_self_id,
-                                *protocol_id,
-                                func_signature,
-                                &mut context,
-                            )
-                            .unwrap_or_else(|_| unimplemented!());
-
-                        let Ok(func_sym) = func_signature.name.symbol() else {
-                            self.diagnostics.insert(AnyDiagnostic::Typing(Diagnostic {
-                                id: root.node_id(),
-                                kind: TypeError::NameNotResolved(func_signature.name.clone()),
-                            }));
-                            continue;
-                        };
-
-                        binders.insert(func_sym, ty.clone());
-
-                        // Note: The scheme is already stored inside visit_func_signature
-                        // via insert_term with the proper predicates. Don't call insert()
-                        // here as it would overwrite with empty predicates.
-
-                        self.session
-                            .type_catalog
-                            .method_requirements
-                            .entry(protocol_sym)
-                            .or_default()
-                            .insert(func_signature.name.name_str().into(), func_sym);
-                    }
-
-                    DeclKind::Method { func, is_static } => {
-                        let Ok(func_sym) = func.name.symbol() else {
-                            self.diagnostics.insert(AnyDiagnostic::Typing(Diagnostic {
-                                id: root.node_id(),
-                                kind: TypeError::NameNotResolved(func.name.clone()),
-                            }));
-                            continue;
-                        };
-
-                        let typed_func = self
-                            .visit_method(protocol_sym, func, *is_static, &mut context)
-                            .unwrap_or_else(|_| unimplemented!());
-                        binders.insert(
-                            func_sym,
-                            curry(
-                                typed_func.params.iter().map(|p| p.ty.clone()),
-                                typed_func.ret.clone(),
-                            ),
-                        );
-                    }
-                    _ => (),
                 }
-            }
-
-            if let Some(child_types) = self.resolved_names.child_types.get(&protocol_sym) {
-                self.session
-                    .type_catalog
-                    .associated_types
-                    .entry(protocol_sym)
-                    .or_default()
-                    .extend(child_types.clone());
             }
 
             let (binders, placeholders) = binders.into_iter().unzip();
             self.solve(&mut context, binders, placeholders)
         }
         _ = std::mem::replace(&mut self.asts[idx].roots, roots);
+    }
+
+    fn visit_associated_type(
+        &mut self,
+        generic: &GenericDecl,
+        protocol_self_id: TypeParamId,
+        protocol_symbol: Symbol,
+    ) -> TypedRet<InferTy> {
+        let Symbol::Protocol(protocol_id) = protocol_symbol else {
+            unreachable!()
+        };
+
+        let ret_id = self.session.new_type_param_id(None);
+        let ret = InferTy::Param(ret_id);
+
+        if !generic.conformances.is_empty() {
+            unimplemented!("not handling associated type conformances yet");
+        }
+
+        let scheme = Scheme {
+            ty: ret.clone(),
+            foralls: indexset! { ForAll::Ty(protocol_self_id), ForAll::Ty(ret_id) },
+            predicates: vec![Predicate::Projection {
+                base: InferTy::Param(protocol_self_id),
+                label: generic.name.name_str().into(),
+                protocol_id: Some(protocol_id),
+                returns: ret.clone(),
+            }],
+        };
+
+        let Ok(generic_sym) = generic.name.symbol() else {
+            self.diagnostics.insert(AnyDiagnostic::Typing(Diagnostic {
+                id: generic.id,
+                kind: TypeError::NameNotResolved(generic.name.clone()),
+            }));
+            return Err(TypeError::NameNotResolved(generic.name.clone()));
+        };
+
+        self.session
+            .insert_term(generic_sym, EnvEntry::Scheme(scheme), &mut self.constraints);
+        self.session
+            .type_catalog
+            .associated_types
+            .entry(protocol_symbol)
+            .or_default()
+            .insert(generic.name.name_str().into(), generic_sym);
+
+        Ok(ret)
+    }
+
+    #[instrument(level = tracing::Level::TRACE, skip(self, decl, _generics, conformances, body, context))]
+    fn visit_protocol(
+        &mut self,
+        decl: &Decl,
+        name: &Name,
+        _generics: &[GenericDecl],
+        conformances: &[TypeAnnotation],
+        body: &Body,
+        context: &mut impl Solve,
+    ) -> TypedRet<(TypedDecl<InferTy>, IndexMap<Symbol, InferTy>)> {
+        let Ok(protocol_symbol @ Symbol::Protocol(protocol_id)) = name.symbol() else {
+            return Err(TypeError::NameNotResolved(name.clone()));
+        };
+
+        let Some(InferTy::Param(protocol_self_id)) =
+            self.session.lookup(&protocol_symbol).map(|s| s._as_ty())
+        else {
+            return Err(TypeError::TypeNotFound(
+                "Didn't get self id for {protocol_symbol:?}".into(),
+            ));
+        };
+
+        let mut binders: IndexMap<Symbol, InferTy> = IndexMap::default();
+
+        for conformance in conformances {
+            let Ok(Symbol::Protocol(conforms_to_id)) = conformance.symbol() else {
+                tracing::error!("did not get protocol for conforms_to");
+                continue;
+            };
+
+            let key = ConformanceKey {
+                protocol_id: conforms_to_id,
+                conforming_id: protocol_symbol,
+            };
+
+            self.register_conformance(
+                &InferTy::Param(protocol_self_id),
+                protocol_symbol,
+                conforms_to_id.into(),
+                conformance.id,
+                conformance.span,
+                context,
+            )
+            .ok();
+
+            self.session.type_catalog.conformances.insert(
+                key,
+                Conformance {
+                    node_id: conformance.id,
+                    conforming_id: protocol_symbol,
+                    protocol_id: conforms_to_id,
+                    witnesses: Default::default(),
+                    span: conformance.span,
+                },
+            );
+        }
+
+        context.givens_mut().insert(Predicate::Conforms {
+            param: protocol_self_id,
+            protocol_id,
+        });
+
+        self.session
+            .type_param_bounds
+            .entry(protocol_self_id)
+            .or_default()
+            .insert(Predicate::Conforms {
+                param: protocol_self_id,
+                protocol_id,
+            });
+        self.session.insert(
+            protocol_symbol,
+            InferTy::Param(protocol_self_id),
+            &mut self.constraints,
+        );
+
+        let mut instance_methods = IndexMap::default();
+        let mut instance_method_requirements = IndexMap::default();
+        let mut associated_types = IndexMap::default();
+
+        for decl in &body.decls {
+            match &decl.kind {
+                DeclKind::Method {
+                    func,
+                    is_static: false,
+                } => {
+                    let func_sym = func
+                        .name
+                        .symbol()
+                        .map_err(|_| TypeError::NameNotResolved(func.name.clone()))?;
+
+                    self.session
+                        .type_catalog
+                        .instance_methods
+                        .entry(protocol_symbol)
+                        .or_default()
+                        .insert(
+                            func.name.name_str().into(),
+                            func.name
+                                .symbol()
+                                .map_err(|_| TypeError::NameNotResolved(name.clone()))?,
+                        );
+
+                    let typed_func = self.visit_func(func, context)?;
+                    instance_methods.insert(func.name.name_str().into(), typed_func.clone());
+
+                    binders.insert(
+                        func_sym,
+                        curry(
+                            typed_func.params.iter().map(|p| p.ty.clone()),
+                            typed_func.ret.clone(),
+                        ),
+                    );
+                }
+                DeclKind::Associated { generic } => {
+                    if let Ok(ty) =
+                        self.visit_associated_type(generic, protocol_self_id, protocol_symbol)
+                    {
+                        associated_types.insert(generic.name.name_str().into(), ty);
+                    }
+                }
+                DeclKind::MethodRequirement(func_signature)
+                | DeclKind::FuncSignature(func_signature) => {
+                    let ty = self.visit_func_signature(
+                        protocol_self_id,
+                        protocol_id,
+                        func_signature,
+                        context,
+                    )?;
+                    binders.insert(
+                        func_signature
+                            .name
+                            .symbol()
+                            .map_err(|_| TypeError::NameNotResolved(func_signature.name.clone()))?,
+                        ty.clone(),
+                    );
+                    instance_method_requirements.insert(func_signature.name.name_str().into(), ty);
+                }
+                _ => {
+                    tracing::error!("unhandled decl: {decl:?}");
+                    continue;
+                }
+            }
+        }
+
+        if let Some(child_types) = self.resolved_names.child_types.get(&protocol_symbol) {
+            self.session
+                .type_catalog
+                .associated_types
+                .entry(protocol_symbol)
+                .or_default()
+                .extend(child_types.clone());
+        }
+
+        println!("ok we got here tho: {protocol_symbol:?}");
+
+        Ok((
+            TypedDecl {
+                id: decl.id,
+                ty: self
+                    .session
+                    .lookup(&protocol_symbol)
+                    .unwrap_or_else(|| unreachable!("did not find ty for {protocol_symbol:?}"))
+                    ._as_ty(),
+                kind: TypedDeclKind::ProtocolDef {
+                    symbol: protocol_symbol,
+                    instance_methods,
+                    instance_method_requirements,
+                    typealiases: Default::default(),
+                    associated_types,
+                },
+            },
+            binders,
+        ))
     }
 
     fn generate(&mut self) -> TypedAST<InferTy> {
@@ -457,6 +548,7 @@ impl<'a> InferencePass<'a> {
         for group in groups {
             let is_top_level = group.is_top_level;
             let (new_decls, new_stmts) = self.generate_for_group(group);
+
             if is_top_level {
                 decls.extend(new_decls);
                 stmts.extend(new_stmts);
@@ -478,13 +570,17 @@ impl<'a> InferencePass<'a> {
 
             match self.visit_node(&node, &mut context) {
                 Ok(typed_node) => match typed_node {
-                    TypedNode::Decl(typed_decl) => decls.push(typed_decl),
+                    TypedNode::Decl(typed_decl) => {
+                        decls.push(typed_decl);
+                    }
                     TypedNode::Stmt(typed_stmt) => stmts.push(typed_stmt),
-                    _ => {
+                    k => {
+                        println!("skipping {k:?}");
                         continue;
                     }
                 },
                 Err(e) => {
+                    tracing::error!("{e:?}");
                     self.diagnostics.insert(AnyDiagnostic::Typing(Diagnostic {
                         id: node.node_id(),
                         kind: e,
@@ -603,7 +699,7 @@ impl<'a> InferencePass<'a> {
         context.substitutions_mut().extend(&self.substitutions);
 
         let level = context.level();
-        let solver = ConstraintSolver::new(context, &self.resolved_names);
+        let solver = ConstraintSolver::new(context, self.resolved_names);
         let diagnostics = solver.solve(
             level,
             &mut self.constraints,
@@ -670,7 +766,9 @@ impl<'a> InferencePass<'a> {
                 body,
                 conformances,
                 ..
-            } => self.visit_protocol(decl, name, generics, conformances, body, context),
+            } => Ok(self
+                .visit_protocol(decl, name, generics, conformances, body, context)?
+                .0),
             DeclKind::Extend {
                 name,
                 conformances,
@@ -1024,6 +1122,18 @@ impl<'a> InferencePass<'a> {
             &mut self.constraints,
         );
 
+        self.session
+            .type_catalog
+            .method_requirements
+            .entry(protocol_id.into())
+            .or_default()
+            .insert(
+                func_signature.name.name_str().into(),
+                func_signature.name.symbol().map_err(|_| {
+                    TypeError::NameNotResolved(Name::Raw(format!("{protocol_id}")).clone())
+                })?,
+            );
+
         Ok(ty)
     }
 
@@ -1083,77 +1193,6 @@ impl<'a> InferencePass<'a> {
             kind: TypedExprKind::Member {
                 receiver: Box::new(receiver_ty),
                 label: label.clone(),
-            },
-        })
-    }
-
-    #[instrument(level = tracing::Level::TRACE, skip(self, decl, _generics, _conformances, body, context))]
-    fn visit_protocol(
-        &mut self,
-        decl: &Decl,
-        name: &Name,
-        _generics: &[GenericDecl],
-        _conformances: &[TypeAnnotation],
-        body: &Body,
-        context: &mut impl Solve,
-    ) -> TypedRet<TypedDecl<InferTy>> {
-        let Ok(symbol) = name.symbol() else {
-            return Err(TypeError::NameNotResolved(name.clone()));
-        };
-
-        let mut instance_methods = IndexMap::default();
-        let mut instance_method_requirements = IndexMap::default();
-        let mut associated_types = IndexMap::default();
-
-        for decl in &body.decls {
-            match &decl.kind {
-                DeclKind::Method {
-                    func,
-                    is_static: false,
-                } => {
-                    instance_methods
-                        .insert(func.name.name_str().into(), self.visit_func(func, context)?);
-                }
-                DeclKind::Associated { generic } => {
-                    let id = self.register_generic(generic, context);
-                    associated_types.insert(generic.name.name_str().into(), InferTy::Param(id));
-                }
-                DeclKind::MethodRequirement(func_signature)
-                | DeclKind::FuncSignature(func_signature) => {
-                    let params = self
-                        .visit_params(&func_signature.params, context)?
-                        .into_iter()
-                        .map(|p| p.ty)
-                        .collect_vec();
-                    let ret = func_signature
-                        .ret
-                        .as_ref()
-                        .map(|ret| self.visit_type_annotation(ret, context))
-                        .transpose()?
-                        .unwrap_or(InferTy::Void);
-                    instance_method_requirements
-                        .insert(func_signature.name.name_str().into(), curry(params, ret));
-                }
-                _ => {
-                    tracing::error!("unhandled decl: {decl:?}");
-                    continue;
-                }
-            }
-        }
-
-        Ok(TypedDecl {
-            id: decl.id,
-            ty: self
-                .session
-                .lookup(&symbol)
-                .unwrap_or_else(|| unreachable!("did not find ty for {symbol:?}"))
-                ._as_ty(),
-            kind: TypedDeclKind::ProtocolDef {
-                symbol,
-                instance_methods,
-                instance_method_requirements,
-                typealiases: Default::default(),
-                associated_types,
             },
         })
     }

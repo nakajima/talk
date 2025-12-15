@@ -216,9 +216,6 @@ impl NameResolver {
                             kind: DeclKind::Extend { .. },
                             ..
                         }) => {
-                            // Extend declarations don't create new symbols (they extend existing
-                            // types), so they're not in binding groups. Add them to unbound_nodes
-                            // so they get processed during type inference.
                             declarer.resolver.phase.unbound_nodes.push(*id);
                         }
                         _ => {}

@@ -8,6 +8,7 @@ pub mod tests {
         },
         diagnostic::{AnyDiagnostic, Diagnostic},
         ir::monomorphizer::uncurry_function,
+        label::Label,
         name_resolution::symbol::{EnumId, GlobalId, ProtocolId, StructId, Symbol, SynthesizedId},
         types::{
             conformance::ConformanceKey,
@@ -15,7 +16,10 @@ pub mod tests {
             ty::Ty,
             type_error::TypeError,
             type_session::{TypeEntry, Types},
-            typed_ast::{TypedAST, TypedExpr, TypedExprKind, TypedStmt, TypedStmtKind},
+            typed_ast::{
+                TypedAST, TypedDeclKind, TypedExpr, TypedExprKind, TypedNode, TypedStmt,
+                TypedStmtKind,
+            },
         },
     };
 
@@ -2274,5 +2278,137 @@ pub mod tests {
             // We should be able to infer the n is int because there's only one Comparable with RHS int
             Ty::Func(Ty::Int.into(), Ty::Int.into())
         )
+    }
+
+    #[test]
+    fn witness_for_type_param_method_call() {
+        let (ast, types) = typecheck(
+            "
+          protocol Countable { func getCount() -> Int }
+
+          struct Person { let count: Int }
+          extend Person: Countable {
+              func getCount() { self.count }
+          }
+
+          func getCount<T: Countable>(countable: T) {
+              countable.getCount()
+          }
+
+          let person = Person(count: 1)
+          getCount(person)
+          ",
+        );
+
+        // Grab the generic `getCount` function (first global func in this snippet)
+        let func = ast
+            .decls
+            .iter()
+            .find_map(|d| match &d.kind {
+                TypedDeclKind::Let {
+                    initializer:
+                        Some(TypedExpr {
+                            kind: TypedExprKind::Func(f),
+                            ..
+                        }),
+                    ..
+                } if f.name == Symbol::Global(GlobalId::from(1)) => Some(f),
+                _ => None,
+            })
+            .unwrap();
+
+        // First node in body should be `countable.getCount()`
+        let expr = match &func.body.body[0] {
+            TypedNode::Expr(e) => e,
+            TypedNode::Stmt(TypedStmt {
+                kind: TypedStmtKind::Expr(e),
+                ..
+            }) => e,
+            other => panic!("expected expr, got {other:?}"),
+        };
+
+        let TypedExprKind::Call { callee, .. } = &expr.kind else {
+            panic!("expected call, got {expr:?}");
+        };
+
+        let TypedExprKind::ProtocolMember { label, witness, .. } = &callee.kind else {
+            panic!("expected ProtocolMember callee, got {callee:?}");
+        };
+
+        assert_eq!(label.to_string(), "getCount");
+        assert!(matches!(witness, Symbol::MethodRequirement(_)));
+
+        let req = *types
+            .catalog
+            .method_requirements
+            .get(&Symbol::Protocol(ProtocolId::from(1)))
+            .unwrap()
+            .get(&Label::Named("getCount".into()))
+            .unwrap();
+
+        assert_eq!(*witness, req);
+    }
+
+    #[test]
+    fn witness_in_default_method_body_for_superprotocol_requirement() {
+        let (ast, types) = typecheck(
+            "
+          protocol P { func p() -> Int }
+
+          protocol Q: P {
+              func q() -> Int {
+                  self.p()
+              }
+          }
+
+          extend Int: Q {
+              func p() { 1 }
+          }
+
+          1.q()
+          ",
+        );
+
+        // Find Q.q
+        let q = ast
+            .decls
+            .iter()
+            .find_map(|d| match &d.kind {
+                TypedDeclKind::ProtocolDef {
+                    instance_methods, ..
+                } => instance_methods.get(&Label::Named("q".into())),
+                _ => None,
+            })
+            .unwrap();
+
+        let expr = match &q.body.body[0] {
+            TypedNode::Expr(e) => e,
+            TypedNode::Stmt(TypedStmt {
+                kind: TypedStmtKind::Expr(e),
+                ..
+            }) => e,
+            other => panic!("expected expr, got {other:?}"),
+        };
+
+        let TypedExprKind::Call { callee, .. } = &expr.kind else {
+            panic!("expected call, got {expr:?}");
+        };
+
+        let TypedExprKind::ProtocolMember { label, witness, .. } = &callee.kind else {
+            panic!("expected ProtocolMember callee, got {callee:?}");
+        };
+
+        assert_eq!(label.to_string(), "p");
+        assert!(matches!(witness, Symbol::MethodRequirement(_)));
+
+        let p_req = *types
+            .catalog
+            .method_requirements
+            .get(&Symbol::Protocol(ProtocolId::from(1)))
+            .unwrap()
+            .get(&Label::Named("p".into()))
+            .unwrap();
+
+        assert_eq!(*witness, p_req);
     }
 }
