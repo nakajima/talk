@@ -473,15 +473,27 @@ impl<'a> InferencePass<'a> {
                         );
 
                     let typed_func = self.visit_func(func, context)?;
+                    let func_ty = curry(
+                        typed_func.params.iter().map(|p| p.ty.clone()),
+                        typed_func.ret.clone(),
+                    );
+
+                    // We want to override the func to include the self predicate
+                    let foralls = func_ty.collect_foralls();
+                    let entry = EnvEntry::Scheme(Scheme {
+                        foralls,
+                        predicates: vec![Predicate::Conforms {
+                            param: protocol_self_id,
+                            protocol_id,
+                        }],
+                        ty: func_ty.clone(),
+                    });
+
+                    self.session.promote(func_sym, entry, &mut self.constraints);
+
                     instance_methods.insert(func.name.name_str().into(), typed_func.clone());
 
-                    binders.insert(
-                        func_sym,
-                        curry(
-                            typed_func.params.iter().map(|p| p.ty.clone()),
-                            typed_func.ret.clone(),
-                        ),
-                    );
+                    binders.insert(func_sym, func_ty);
                 }
                 DeclKind::Associated { generic } => {
                     if let Ok(ty) =
