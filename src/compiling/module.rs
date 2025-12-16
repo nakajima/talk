@@ -1,7 +1,7 @@
 use indexmap::IndexMap;
 use itertools::Itertools;
 use rustc_hash::FxHashMap;
-use sha2::{Digest, Sha256, digest::typenum::Quot};
+use sha2::{Digest, Sha256};
 use std::fmt::Display;
 use tracing::instrument;
 
@@ -34,7 +34,7 @@ impl StableModuleId {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
 pub struct ModuleId(pub u16);
 
 #[allow(non_snake_case, non_upper_case_globals)]
@@ -55,6 +55,16 @@ impl ModuleId {
 }
 
 impl Display for ModuleId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match *self {
+            Self::Core => write!(f, "C"),
+            Self::Current => write!(f, "_"),
+            id => write!(f, "{}", id.0),
+        }
+    }
+}
+
+impl std::fmt::Debug for ModuleId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match *self {
             Self::Core => write!(f, "C"),

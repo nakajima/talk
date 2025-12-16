@@ -201,12 +201,12 @@ impl Interpreter {
         }
     }
 
-    pub fn run(mut self) -> Value {
+    pub fn run(&mut self) -> Value {
         if std::env::var("SHOW_IR").is_ok() {
-            let _guard = self
-                .symbol_names
-                .as_ref()
-                .map(|names| set_symbol_names(names.clone()));
+            //let _guard = self
+            //    .symbol_names
+            //    .as_ref()
+            //    .map(|names| set_symbol_names(names.clone()));
             println!("{}", self.program);
         }
 
@@ -222,7 +222,7 @@ impl Interpreter {
             self.next();
         }
 
-        self.main_result.unwrap_or(Value::Void)
+        self.main_result.clone().unwrap_or(Value::Void)
     }
 
     pub fn call(&mut self, function: Symbol, args: Vec<Value>, dest: Register) {
@@ -251,6 +251,10 @@ impl Interpreter {
                         .collect_vec()
                 )
             });
+
+        if func.blocks.is_empty() {
+            return;
+        }
 
         let _guard = self
             .symbol_names
@@ -723,13 +727,21 @@ impl Interpreter {
 
 #[cfg(test)]
 pub mod tests {
-    use crate::ir::{lowerer_tests::tests::lower_module, value::Addr};
+    use crate::ir::lowerer_tests::tests::lower_module;
 
     use super::*;
 
+    pub fn interpret_with(input: &str) -> (Value, Interpreter) {
+        let module = lower_module(input);
+        let mut interpreter = Interpreter::new(module.program, Some(module.symbol_names));
+
+        (interpreter.run(), interpreter)
+    }
+
     pub fn interpret(input: &str) -> Value {
         let module = lower_module(input);
-        let interpreter = Interpreter::new(module.program, Some(module.symbol_names));
+        let mut interpreter = Interpreter::new(module.program, Some(module.symbol_names));
+
         interpreter.run()
     }
 
@@ -905,13 +917,9 @@ pub mod tests {
 
     #[test]
     fn interprets_string_plus() {
-        assert_eq!(
-            interpret("let a = \"hello \" + \"world\"; a"),
-            Value::Record(
-                Some(Symbol::String),
-                vec![Value::RawPtr(Addr(11)), Value::Int(11), Value::Int(11)]
-            )
-        );
+        let (value, mut interpreter) = interpret_with("let a = \"hello \" + \"world\"; a");
+        let val = interpreter.display(value);
+        assert_eq!(val, format!("hello world"));
     }
 
     #[test]

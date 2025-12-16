@@ -3,7 +3,7 @@ use itertools::Itertools;
 use tracing::instrument;
 
 use crate::{
-    compiling::driver::{DriverConfig, Source},
+    compiling::driver::DriverConfig,
     ir::{
         basic_block::{BasicBlock, Phi},
         function::Function,
@@ -197,7 +197,7 @@ impl<'a> Monomorphizer<'a> {
                     if let Some(impl_sym) = substitutions.witnesses.get(sym) {
                         Value::Func(*impl_sym)
                     } else {
-                        callee
+                        unreachable!("did not get witness for {sym:?}, {substitutions:?}");
                     }
                 }
                 _ => callee,

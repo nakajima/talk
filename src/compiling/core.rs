@@ -30,7 +30,7 @@ fn _compile() -> Module {
     );
 
     #[allow(clippy::unwrap_used)]
-    driver
+    let module = driver
         .parse()
         .unwrap()
         .resolve_names()
@@ -39,5 +39,7 @@ fn _compile() -> Module {
         .unwrap()
         .lower()
         .unwrap()
-        .module("Core")
+        .module("Core");
+
+    module
 }

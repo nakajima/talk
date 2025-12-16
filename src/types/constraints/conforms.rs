@@ -1,5 +1,6 @@
 use crate::node_id::NodeID;
-use crate::types::conformance::ConformanceKey;
+use crate::span::Span;
+use crate::types::conformance::{Conformance, ConformanceKey, Witnesses};
 use crate::{
     label::Label,
     name_resolution::symbol::{ProtocolId, Symbol},
@@ -248,6 +249,26 @@ impl Conforms {
                 missing_witnesses.push((label, witness_sym));
                 continue;
             };
+
+            // Update witnesses
+            let key = ConformanceKey {
+                protocol_id: self.protocol_id,
+                conforming_id: *conforming_ty_sym,
+            };
+
+            let entry = session
+                .type_catalog
+                .conformances
+                .entry(key)
+                .or_insert(Conformance {
+                    node_id: self.conformance_node_id,
+                    conforming_id: *conforming_ty_sym,
+                    protocol_id: self.protocol_id,
+                    witnesses: Witnesses::default(),
+                    span: Span::SYNTHESIZED,
+                });
+
+            entry.witnesses.methods.insert(label.clone(), witness_sym);
 
             match unify(&required_ty, &witness._as_ty(), context, session) {
                 Ok(vars) => solved_metas.extend(vars),

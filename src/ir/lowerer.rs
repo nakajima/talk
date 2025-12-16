@@ -3,15 +3,14 @@ use std::fmt::Display;
 use crate::compiling::driver::{CompilationMode, DriverConfig};
 use crate::compiling::module::ModuleId;
 use crate::ir::basic_block::{Phi, PhiSource};
+use crate::ir::function::Function;
 use crate::ir::instruction::CmpOperator;
 use crate::ir::ir_ty::IrTy;
 use crate::ir::monomorphizer::uncurry_function;
 use crate::ir::value::{Addr, Reference};
 use crate::label::Label;
 use crate::name_resolution::name_resolver::ResolvedNames;
-use crate::name_resolution::symbol::{
-    GlobalId, InitializerId, InstanceMethodId, StaticMethodId, Symbols,
-};
+use crate::name_resolution::symbol::{MethodRequirementId, Symbols, set_symbol_names};
 use crate::node_kinds::inline_ir_instruction::{InlineIRInstructionKind, TypedInlineIRInstruction};
 use crate::node_kinds::type_annotation::TypeAnnotation;
 use crate::types::infer_row::RowParamId;
@@ -65,7 +64,6 @@ impl Display for LValue {
 
 #[derive(Debug)]
 pub(super) struct CurrentFunction {
-    name: Symbol,
     current_block_idx: Vec<usize>,
     blocks: Vec<BasicBlock<Ty>>,
     pub registers: RegisterAllocator,
@@ -73,9 +71,8 @@ pub(super) struct CurrentFunction {
 }
 
 impl CurrentFunction {
-    fn new(name: Symbol) -> Self {
+    fn new() -> Self {
         CurrentFunction {
-            name,
             current_block_idx: vec![0],
             blocks: vec![BasicBlock::<Ty> {
                 phis: Default::default(),
@@ -232,16 +229,25 @@ impl<'a> Lowerer<'a> {
 
     pub fn lower(mut self) -> Result<Program, IRError> {
         if self.ast.roots().is_empty() {
-            return Ok(Program::default());
+            let mut program = Program::default();
+            program.functions.insert(
+                Symbol::Main,
+                Function {
+                    name: Symbol::Main,
+                    params: Default::default(),
+                    blocks: Default::default(),
+                    ty: IrTy::Void,
+                    register_count: 0,
+                },
+            );
+            return Ok(program);
         }
 
         if self.config.mode == CompilationMode::Executable {
             self.lower_main();
-            self.current_function_stack
-                .push(CurrentFunction::new(Symbol::Main));
+            self.current_function_stack.push(CurrentFunction::new());
         } else {
-            self.current_function_stack
-                .push(CurrentFunction::new(Symbol::Library));
+            self.current_function_stack.push(CurrentFunction::new());
         }
 
         for root in self.ast.roots() {
@@ -251,7 +257,7 @@ impl<'a> Lowerer<'a> {
         // Check for required imports
         let funcs = self.functions.keys().cloned().collect_vec();
         for sym in funcs {
-            self.check_import(&sym);
+            self.check_import(&sym, &Default::default());
         }
 
         let static_memory = std::mem::take(&mut self.static_memory);
@@ -281,9 +287,6 @@ impl<'a> Lowerer<'a> {
                 params: Default::default(),
                 body: TypedBlock {
                     body: {
-                        // Only include top-level statements (expressions) in the synthesized main,
-                        // not declarations. Declarations are lowered separately via the normal
-                        // AST iteration.
                         let nodes: Vec<TypedNode<Ty>> = self.ast.roots();
 
                         if let Some(last) = nodes.last() {
@@ -462,8 +465,7 @@ impl<'a> Lowerer<'a> {
             );
         };
 
-        self.current_function_stack
-            .push(CurrentFunction::new(*name));
+        self.current_function_stack.push(CurrentFunction::new());
 
         let mut param_values = vec![];
         for param in initializer.params.iter() {
@@ -494,9 +496,9 @@ impl<'a> Lowerer<'a> {
             .expect("did not get current function");
 
         self.functions.insert(
-            *name,
+            initializer.name,
             PolyFunction {
-                name: *name,
+                name: initializer.name,
                 params: param_values,
                 blocks: current_function.blocks,
                 ty: Ty::Func(Box::new(param_ty.clone()), Box::new(ret_ty.clone())),
@@ -523,7 +525,7 @@ impl<'a> Lowerer<'a> {
             TypedStmtKind::Loop(cond, typed_block) => {
                 self.lower_loop(&Some(cond.clone()), typed_block, instantiations)
             }
-            #[warn(clippy::todo)]
+            #[allow(clippy::todo)]
             TypedStmtKind::Break => todo!(),
         }
     }
@@ -640,48 +642,6 @@ impl<'a> Lowerer<'a> {
         });
 
         Ok((ret.into(), conseq.ret.clone()))
-    }
-
-    #[instrument(level = tracing::Level::TRACE, skip(self, cond, conseq, alt))]
-    fn lower_if_stmt(
-        &mut self,
-        cond: &TypedExpr<Ty>,
-        conseq: &TypedBlock<Ty>,
-        alt: &Option<TypedBlock<Ty>>,
-        instantiations: &Substitutions,
-    ) -> Result<(Value, Ty), IRError> {
-        let cond_ir = self.lower_expr(cond, Bind::Fresh, instantiations)?;
-
-        let conseq_block_id = self.new_basic_block();
-        let join_block_id = self.new_basic_block();
-
-        self.in_basic_block(conseq_block_id, |lowerer| {
-            lowerer.lower_block(conseq, Bind::Discard, instantiations)?;
-            lowerer.push_terminator(Terminator::Jump { to: join_block_id });
-            Ok(())
-        })?;
-
-        let else_id = if let Some(alt) = alt {
-            let alt_block_id = self.new_basic_block();
-            self.in_basic_block(alt_block_id, |lowerer| {
-                lowerer.lower_block(alt, Bind::Discard, instantiations)?;
-                lowerer.push_terminator(Terminator::Jump { to: join_block_id });
-                Ok(())
-            })?;
-            alt_block_id
-        } else {
-            join_block_id
-        };
-
-        self.push_terminator(Terminator::Branch {
-            cond: cond_ir.0,
-            conseq: conseq_block_id,
-            alt: else_id,
-        });
-
-        self.set_current_block(join_block_id);
-
-        Ok((Value::Void, Ty::Void))
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self, block), fields(block.id = %block.id))]
@@ -858,7 +818,7 @@ impl<'a> Lowerer<'a> {
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
         let (value, ty) = match &expr.kind {
-            TypedExprKind::Hole => Err(IRError::TypeNotFound(format!("nope"))),
+            TypedExprKind::Hole => Err(IRError::TypeNotFound("nope".into())),
             TypedExprKind::InlineIR(inline_irinstruction) => {
                 self.lower_inline_ir(inline_irinstruction, bind, instantiations)
             }
@@ -933,18 +893,18 @@ impl<'a> Lowerer<'a> {
                 bind,
                 instantiations,
             ),
-            TypedExprKind::ProtocolMember {
-                receiver,
-                label,
-                witness,
-            } => self.lower_member(
-                expr,
-                &Some(receiver.clone()),
-                label,
-                Some(*witness),
-                bind,
-                instantiations,
-            ),
+            // TypedExprKind::ProtocolMember {
+            //     receiver,
+            //     label,
+            //     witness,
+            // } => self.lower_member(
+            //     expr,
+            //     &Some(receiver.clone()),
+            //     label,
+            //     Some(*witness),
+            //     bind,
+            //     instantiations,
+            // ),
             TypedExprKind::Func(typed_func) => self.lower_func(typed_func, bind, instantiations),
             TypedExprKind::Variable(symbol) => self.lower_variable(symbol, expr, instantiations),
             TypedExprKind::Constructor(symbol, _items) => {
@@ -1754,7 +1714,8 @@ impl<'a> Lowerer<'a> {
                     ty: ty.clone(),
                     val: Value::Func(method),
                 });
-            } else if let Some(witness) = witness.or_else(|| self.witness_for(receiver, label))
+            } else if let Some(witness) =
+                witness.or_else(|| self.witness_for(receiver, label, instantiations))
                 && matches!(witness, Symbol::InstanceMethod(..))
             {
                 tracing::debug!("lowering req {label} {witness:?}");
@@ -1864,14 +1825,25 @@ impl<'a> Lowerer<'a> {
         let record_dest = self.next_register();
 
         // Look up the initializer and specialize it using the already-computed instantiations
-        let init_sym = *self
+        let init_sym = self
             .types
             .catalog
             .initializers
             .get(name)
-            .unwrap_or_else(|| panic!("did not get initializers for {name:?}"))
+            .unwrap_or_else(|| panic!("didn't get initializers for {name:?}"))
             .get(&Label::Named("init".into()))
-            .expect("did not get init");
+            .copied()
+            .unwrap_or_else(|| {
+                self.config
+                    .modules
+                    .lookup_initializers(name)
+                    .unwrap_or_else(|| panic!("did not get initializers for {name:?}"))
+                    .get(&Label::Named("init".into()))
+                    .copied()
+                    .expect("did not get init")
+            });
+
+        self.check_import(&init_sym, instantiations);
 
         let init_entry = self
             .types
@@ -1976,24 +1948,24 @@ impl<'a> Lowerer<'a> {
             );
         }
 
-        if let TypedExprKind::ProtocolMember {
-            receiver: box receiver,
-            label: member,
-            witness,
-        } = &callee.kind
-        {
-            return self.lower_method_call(
-                call_expr,
-                callee,
-                receiver.clone(),
-                member,
-                Some(*witness),
-                args,
-                arg_vals,
-                dest,
-                &instantiations,
-            );
-        }
+        // if let TypedExprKind::ProtocolMember {
+        //     receiver: box receiver,
+        //     label: member,
+        //     witness,
+        // } = &callee.kind
+        // {
+        //     return self.lower_method_call(
+        //         call_expr,
+        //         callee,
+        //         receiver.clone(),
+        //         member,
+        //         Some(*witness),
+        //         args,
+        //         arg_vals,
+        //         dest,
+        //         &instantiations,
+        //     );
+        // }
 
         let callee_ir = self.lower_expr(callee, Bind::Fresh, &instantiations)?.0;
 
@@ -2051,11 +2023,11 @@ impl<'a> Lowerer<'a> {
             args.insert(0, receiver_ir);
         }
 
-        let (method_sym, val, ty) = if let Some(method_sym) =
+        let (_method_sym, val, ty) = if let Some(method_sym) =
             self.lookup_instance_method(&receiver, label, &instantiations)?
         {
             let method = self.monomorphize_name(method_sym, &instantiations);
-            self.check_import(&method_sym);
+            self.check_import(&method_sym, &instantiations);
             self.push_instr(Instruction::Call {
                 dest,
                 ty: ty.clone(),
@@ -2065,13 +2037,11 @@ impl<'a> Lowerer<'a> {
             });
 
             (method_sym, dest.into(), ty)
-        } else if let Some(witness) = witness.or_else(|| self.witness_for(&receiver, label)) {
-            // For method calls on type parameters, look up the witness at the callee expression's node ID.
-            // This returns a MethodRequirement symbol that the monomorphizer will substitute with
-            // the concrete implementation when specializing.
+        } else if let Some(witness) =
+            witness.or_else(|| self.witness_for(&receiver, label, &instantiations))
+        {
             let method = self.monomorphize_name(witness, &instantiations);
-
-            self.check_import(&witness);
+            self.check_import(&witness, &instantiations);
             self.push_instr(Instruction::Call {
                 dest,
                 ty: ty.clone(),
@@ -2090,12 +2060,6 @@ impl<'a> Lowerer<'a> {
             );
 
             return Ok((Value::Void, Ty::Void));
-            // return Err(IRError::TypeNotFound(format!(
-            //     "No witness found for {:?} in {:?} ({:?}).",
-            //     label,
-            //     receiver,
-            //     receiver.ty.clone(),
-            // )));
         };
 
         // Go through the method and make sure all witnesses are resolved inside it
@@ -2157,8 +2121,7 @@ impl<'a> Lowerer<'a> {
         };
 
         let _s = tracing::trace_span!("pushing new current function");
-        self.current_function_stack
-            .push(CurrentFunction::new(func.name));
+        self.current_function_stack.push(CurrentFunction::new());
 
         let mut params = vec![];
 
@@ -2296,19 +2259,6 @@ impl<'a> Lowerer<'a> {
         };
         current_function.blocks.push(new_block);
         id
-    }
-
-    #[instrument(level = tracing::Level::TRACE, skip(self))]
-    fn get_current_block(&mut self) -> BasicBlockId {
-        BasicBlockId(
-            self.current_function_stack
-                .last_mut()
-                .expect("didn't get current func")
-                .current_block_idx
-                .last()
-                .copied()
-                .expect("didnt get current block id") as u32,
-        )
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
@@ -2472,44 +2422,24 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    fn find_function(&self, symbol: &Symbol) -> Option<&PolyFunction> {
+        let module_id = symbol.module_id().unwrap_or(ModuleId::Current);
+        if module_id == self.config.module_id || (module_id == ModuleId::Current) {
+            self.functions.get(symbol)
+        } else {
+            let program = self.config.modules.program_for(module_id)?;
+            program.polyfunctions.get(symbol)
+        }
+    }
+
     /// Check to see if this symbol calls any symbols we don't have
-    fn check_import(&mut self, symbol: &Symbol) {
-        // if self.config.module_id == ModuleId::Core {
-        //     println!("not core: {symbol}");
-        //     // No imports can happen from core.
-        //     return;
-        // }
-
-        let module_id = match symbol {
-            Symbol::InstanceMethod(InstanceMethodId { module_id, .. }) => Some(*module_id),
-            Symbol::StaticMethod(StaticMethodId { module_id, .. }) => Some(*module_id),
-            Symbol::Initializer(InitializerId { module_id, .. }) => Some(*module_id),
-            Symbol::Global(GlobalId { module_id, .. }) => Some(*module_id),
-            Symbol::Synthesized(SynthesizedId { module_id, .. }) => Some(*module_id),
-            _ => None,
-        };
-
-        let Some(module_id) = module_id else {
+    fn check_import(&mut self, symbol: &Symbol, instantiations: &Substitutions) {
+        let Some(func) = self.find_function(symbol).cloned() else {
             return;
         };
 
-        let func = if module_id == self.config.module_id || (module_id == ModuleId::Current) {
-            let Some(func) = self.functions.get(symbol) else {
-                return;
-            };
-
-            func
-        } else {
-            let Some(program) = self.config.modules.program_for(module_id) else {
-                return;
-            };
-            // TODO: This won't work with external methods yet, only core works.
-            let Some(method_func) = program.polyfunctions.get(symbol) else {
-                return;
-            };
-            self.functions.insert(*symbol, method_func.clone());
-            method_func
-        };
+        self.monomorphize_name(*symbol, instantiations);
+        self.functions.insert(*symbol, func.clone());
 
         // Recursively import any functions this function calls
         let callees: Vec<Symbol> = func
@@ -2533,15 +2463,11 @@ impl<'a> Lowerer<'a> {
             .collect();
 
         for callee_sym in callees {
-            if matches!(callee_sym, Symbol::MethodRequirement(..)) {
-                println!(" not so fast wise guy: {callee_sym:?}");
-            }
-
             // Already imported, avoid infinite recursion
             if self.functions.contains_key(&callee_sym) {
                 continue;
             }
-            self.check_import(&callee_sym);
+            self.check_import(&callee_sym, instantiations);
         }
     }
 
@@ -2712,7 +2638,7 @@ impl<'a> Lowerer<'a> {
 
                 member
             }
-            TypedExprKind::ProtocolMember { witness, .. } => *witness,
+            // TypedExprKind::ProtocolMember { witness, .. } => *witness,
             _ => {
                 tracing::trace!("expr has no substitutions: {expr:?}");
                 return Ok((expr.ty.clone(), Default::default()));
@@ -2786,9 +2712,73 @@ impl<'a> Lowerer<'a> {
     }
 
     #[instrument(skip(self), ret)]
-    fn witness_for(&mut self, receiver: &TypedExpr<Ty>, label: &Label) -> Option<Symbol> {
-        // println!("looking for witness: {receiver:?}");
+    fn witness_for(
+        &mut self,
+        receiver: &TypedExpr<Ty>,
+        label: &Label,
+        instantiations: &Substitutions,
+    ) -> Option<Symbol> {
+        let sym = self.symbol_for_ty(&receiver.ty)?;
+
+        // See if there's a witness
+        if let Some(methods) = self.types.catalog.instance_methods.get(&sym)
+            && let Some(witness) = methods.get(label)
+        {
+            return Some(*witness);
+        }
+
+        let conformances = self
+            .types
+            .catalog
+            .conformances
+            .values()
+            .filter(|c| c.conforming_id == sym)
+            .collect_vec();
+
+        if conformances.is_empty() {
+            return None;
+        }
+
+        for conformance in conformances {
+            if let Some(witness) = conformance.witnesses.methods.get(label).copied() {
+                self.check_import(&witness, instantiations);
+                println!("witness: {witness:?}");
+                return Some(witness);
+            }
+
+            // See if there's a default method
+            let Some(member) = self
+                .types
+                .catalog
+                .instance_methods
+                .entry(Symbol::Protocol(conformance.protocol_id))
+                .or_default()
+                .get(label)
+                .copied()
+                .or_else(|| {
+                    self.config
+                        .modules
+                        .lookup_concrete_member(&Symbol::Protocol(conformance.protocol_id), label)
+                })
+            else {
+                continue;
+            };
+
+            self.check_import(&member, instantiations);
+            let m = self.monomorphize_name(member, instantiations);
+
+            return Some(member);
+        }
+
         None
+    }
+
+    fn symbol_for_ty(&self, ty: &Ty) -> Option<Symbol> {
+        match ty {
+            Ty::Primitive(symbol) => Some(*symbol),
+            Ty::Nominal { symbol, .. } => Some(*symbol),
+            _ => None,
+        }
     }
 
     fn field_index(&self, receiver_ty: &Ty, label: &Label) -> Label {

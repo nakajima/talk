@@ -28,7 +28,6 @@ use crate::{
     },
     on,
     span::Span,
-    types::type_session::TypeDefKind,
 };
 
 // Dummy values for symbol type discrimination - actual values created by declare()

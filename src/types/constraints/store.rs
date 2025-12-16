@@ -90,6 +90,7 @@ impl std::fmt::Display for ConstraintStoreNode {
 }
 
 #[derive(Debug, Clone, Copy)]
+#[allow(clippy::enum_variant_names)]
 pub(crate) enum ConstraintStoreEdge {
     MetaDependency,
     SymbolDependency,

@@ -33,6 +33,30 @@ pub mod tests {
         vec![InstructionMeta::Source(NodeID::ANY)].into()
     }
 
+    pub fn lower_bare(input: &str) -> Program {
+        let driver = Driver::new_bare(
+            vec![Source::from(input)],
+            DriverConfig::new("TestDriver").executable(),
+        );
+        let mut typed = driver
+            .parse()
+            .unwrap()
+            .resolve_names()
+            .unwrap()
+            .typecheck()
+            .unwrap();
+
+        let lowerer = Lowerer::new(
+            &mut typed.phase.ast,
+            &mut typed.phase.types,
+            &mut typed.phase.symbols,
+            &mut typed.phase.symbol_names,
+            &typed.phase.resolved_names,
+            &typed.config,
+        );
+        lowerer.lower().unwrap()
+    }
+
     pub fn lower(input: &str) -> Program {
         let driver = Driver::new(
             vec![Source::from(input)],
@@ -536,7 +560,7 @@ pub mod tests {
                     local_id: 18
                 }))
                 .is_some(),
-            "did not find {} in {:?}",
+            "did not find {:?} in {:?}",
             Symbol::InstanceMethod(InstanceMethodId {
                 module_id: ModuleId::Core,
                 local_id: 18

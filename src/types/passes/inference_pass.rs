@@ -77,6 +77,8 @@ pub struct InferencePass<'a> {
     tracked_returns: Vec<IndexSet<(Span, InferTy)>>,
     resolved_names: &'a ResolvedNames,
     diagnostics: IndexSet<AnyDiagnostic>,
+    root_decls: Vec<TypedDecl<InferTy>>,
+    root_stmts: Vec<TypedStmt<InferTy>>,
 }
 
 impl<'a> InferencePass<'a> {
@@ -95,6 +97,8 @@ impl<'a> InferencePass<'a> {
             tracked_returns: Default::default(),
             resolved_names,
             diagnostics: Default::default(),
+            root_decls: Default::default(),
+            root_stmts: Default::default(),
         };
 
         pass.drive_all()
@@ -109,11 +113,11 @@ impl<'a> InferencePass<'a> {
         }
 
         for i in 0..self.asts.len() {
-            let protocol_decls = self.discover_protocols(i, Level::default());
+            self.discover_protocols(i, Level::default());
             self.session.apply_all(&mut self.substitutions);
         }
 
-        let typed_asts = self.generate();
+        self.generate();
         self.session.apply_all(&mut self.substitutions);
 
         // Transfer child_types from AST phases to the catalog for module export
@@ -171,7 +175,13 @@ impl<'a> InferencePass<'a> {
             }
         }
 
-        let ast = typed_asts
+        let typed_ast = TypedAST {
+            decls: self.root_decls,
+            stmts: self.root_stmts,
+            phase: self.resolved_names.clone(),
+        };
+
+        let ast = typed_ast
             .apply(&mut self.substitutions, self.session)
             .finalize(
                 self.session,
@@ -231,6 +241,7 @@ impl<'a> InferencePass<'a> {
     }
 
     fn discover_protocols(&mut self, idx: usize, level: Level) {
+        let mut result = vec![];
         let roots = std::mem::take(&mut self.asts[idx].roots);
         for root in roots.iter() {
             let Node::Decl(
@@ -290,7 +301,10 @@ impl<'a> InferencePass<'a> {
                 body,
                 &mut context,
             ) {
-                Ok((_, new_binders)) => binders.extend(new_binders),
+                Ok((decl, new_binders)) => {
+                    result.push(decl);
+                    binders.extend(new_binders)
+                }
                 Err(e) => {
                     self.diagnostics.insert(AnyDiagnostic::Typing(Diagnostic {
                         id: decl.id,
@@ -303,6 +317,8 @@ impl<'a> InferencePass<'a> {
             self.solve(&mut context, binders, placeholders)
         }
         _ = std::mem::replace(&mut self.asts[idx].roots, roots);
+
+        self.root_decls.extend(result);
     }
 
     fn visit_associated_type(
@@ -507,8 +523,6 @@ impl<'a> InferencePass<'a> {
                 .extend(child_types.clone());
         }
 
-        println!("ok we got here tho: {protocol_symbol:?}");
-
         Ok((
             TypedDecl {
                 id: decl.id,
@@ -529,29 +543,21 @@ impl<'a> InferencePass<'a> {
         ))
     }
 
-    fn generate(&mut self) -> TypedAST<InferTy> {
+    fn generate(&mut self) {
         if self.asts.is_empty() {
-            return TypedAST {
-                decls: Default::default(),
-                stmts: Default::default(),
-                phase: self.resolved_names.clone(),
-                diagnostics: Default::default(),
-            };
+            return;
         }
 
         let mut groups = self.resolved_names.scc_graph.groups();
         groups.sort_by_key(|group| group.id.0);
 
-        let mut decls = vec![];
-        let mut stmts = vec![];
-
         for group in groups {
             let is_top_level = group.is_top_level;
-            let (new_decls, new_stmts) = self.generate_for_group(group);
+            let (new_decls, new_stmts) = self.generate_for_group(group.clone());
 
             if is_top_level {
-                decls.extend(new_decls);
-                stmts.extend(new_stmts);
+                self.root_decls.extend(new_decls);
+                self.root_stmts.extend(new_stmts);
             }
         }
 
@@ -571,11 +577,10 @@ impl<'a> InferencePass<'a> {
             match self.visit_node(&node, &mut context) {
                 Ok(typed_node) => match typed_node {
                     TypedNode::Decl(typed_decl) => {
-                        decls.push(typed_decl);
+                        self.root_decls.push(typed_decl);
                     }
-                    TypedNode::Stmt(typed_stmt) => stmts.push(typed_stmt),
-                    k => {
-                        println!("skipping {k:?}");
+                    TypedNode::Stmt(typed_stmt) => self.root_stmts.push(typed_stmt),
+                    _ => {
                         continue;
                     }
                 },
@@ -593,13 +598,6 @@ impl<'a> InferencePass<'a> {
 
         // Apply substitutions to types_by_node for top-level expressions
         self.session.apply_all(&mut context.substitutions);
-
-        TypedAST {
-            decls,
-            stmts,
-            diagnostics: self.diagnostics.clone().into_iter().collect(),
-            phase: self.resolved_names.clone(),
-        }
     }
 
     #[instrument(skip(self))]

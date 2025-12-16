@@ -2,7 +2,6 @@ use indexmap::{IndexMap, IndexSet};
 use rustc_hash::FxHashMap;
 
 use crate::{
-    diagnostic::AnyDiagnostic,
     label::Label,
     name_resolution::{name_resolver::ResolvedNames, symbol::Symbol},
     node_id::NodeID,
@@ -26,7 +25,6 @@ pub struct TypedAST<T: SomeType> {
     pub decls: Vec<TypedDecl<T>>,
     pub stmts: Vec<TypedStmt<T>>,
     pub phase: ResolvedNames,
-    pub diagnostics: Vec<AnyDiagnostic>,
 }
 
 impl TypedAST<Ty> {
@@ -65,7 +63,6 @@ impl TypedAST<InferTy> {
                 .into_iter()
                 .map(|s| s.finalize(session, witnesses))
                 .collect(),
-            diagnostics: self.diagnostics,
             phase: self.phase,
         }
     }
@@ -94,9 +91,10 @@ impl TypedStmtKind<InferTy> {
         use TypedStmtKind::*;
         match self {
             Expr(typed_expr) => Expr(typed_expr.finalize(session, witnesses)),
-            Assignment(lhs, rhs) => {
-                Assignment(lhs.finalize(session, witnesses), rhs.finalize(session, witnesses))
-            }
+            Assignment(lhs, rhs) => Assignment(
+                lhs.finalize(session, witnesses),
+                rhs.finalize(session, witnesses),
+            ),
             Return(typed_expr) => Return(typed_expr.map(|e| e.finalize(session, witnesses))),
             Loop(cond, block) => Loop(
                 cond.finalize(session, witnesses),
@@ -354,17 +352,23 @@ impl TypedExprKind<InferTy> {
                     .map_ty(&mut |t| session.finalize_ty(t.clone()).as_mono_ty().clone())
                     .into(),
             ),
-            LiteralArray(exprs) => {
-                LiteralArray(exprs.into_iter().map(|e| e.finalize(session, witnesses)).collect())
-            }
+            LiteralArray(exprs) => LiteralArray(
+                exprs
+                    .into_iter()
+                    .map(|e| e.finalize(session, witnesses))
+                    .collect(),
+            ),
             LiteralInt(v) => LiteralInt(v),
             LiteralFloat(v) => LiteralFloat(v),
             LiteralTrue => LiteralTrue,
             LiteralFalse => LiteralFalse,
             LiteralString(v) => LiteralString(v),
-            Tuple(exprs) => {
-                Tuple(exprs.into_iter().map(|e| e.finalize(session, witnesses)).collect())
-            }
+            Tuple(exprs) => Tuple(
+                exprs
+                    .into_iter()
+                    .map(|e| e.finalize(session, witnesses))
+                    .collect(),
+            ),
             Block(block) => Block(block.finalize(session, witnesses)),
             Call {
                 callee,
@@ -376,32 +380,35 @@ impl TypedExprKind<InferTy> {
                     .into_iter()
                     .map(|t| session.finalize_ty(t).as_mono_ty().clone())
                     .collect(),
-                args: args.into_iter().map(|e| e.finalize(session, witnesses)).collect(),
+                args: args
+                    .into_iter()
+                    .map(|e| e.finalize(session, witnesses))
+                    .collect(),
             },
             Member { receiver, label } => {
                 // Check if this member access has a recorded witness (protocol member)
-                if let Some(&witness) = witnesses.get(&node_id) {
-                    ProtocolMember {
-                        receiver: receiver.finalize(session, witnesses).into(),
-                        label,
-                        witness,
-                    }
-                } else {
-                    Member {
-                        receiver: receiver.finalize(session, witnesses).into(),
-                        label,
-                    }
+                // if let Some(&witness) = witnesses.get(&node_id) {
+                //     ProtocolMember {
+                //         receiver: receiver.finalize(session, witnesses).into(),
+                //         label,
+                //         witness,
+                //     }
+                // } else {
+                Member {
+                    receiver: receiver.finalize(session, witnesses).into(),
+                    label,
                 }
+                // }
             }
-            ProtocolMember {
-                receiver,
-                label,
-                witness,
-            } => ProtocolMember {
-                receiver: receiver.finalize(session, witnesses).into(),
-                label,
-                witness,
-            },
+            // ProtocolMember {
+            //     receiver,
+            //     label,
+            //     witness,
+            // } => ProtocolMember {
+            //     receiver: receiver.finalize(session, witnesses).into(),
+            //     label,
+            //     witness,
+            // },
             Func(func) => Func(func.finalize(session, witnesses)),
             Variable(sym) => Variable(sym),
             Constructor(sym, items) => Constructor(
@@ -418,7 +425,9 @@ impl TypedExprKind<InferTy> {
             ),
             Match(scrutinee, arms) => Match(
                 scrutinee.finalize(session, witnesses).into(),
-                arms.into_iter().map(|a| a.finalize(session, witnesses)).collect(),
+                arms.into_iter()
+                    .map(|a| a.finalize(session, witnesses))
+                    .collect(),
             ),
             RecordLiteral { fields } => RecordLiteral {
                 fields: fields
@@ -436,7 +445,6 @@ impl<T: SomeType, U: SomeType> TyMappable<T, U> for TypedAST<T> {
         TypedAST::<U> {
             decls: self.decls.into_iter().map(|d| d.map_ty(m)).collect(),
             stmts: self.stmts.into_iter().map(|d| d.map_ty(m)).collect(),
-            diagnostics: self.diagnostics,
             phase: self.phase,
         }
     }
@@ -775,11 +783,11 @@ pub enum TypedExprKind<T: SomeType> {
         label: Label,
     },
     // A protocol method call on a type parameter, with the method requirement as witness
-    ProtocolMember {
-        receiver: Box<TypedExpr<T>>,
-        label: Label,
-        witness: Symbol,
-    },
+    // ProtocolMember {
+    //     receiver: Box<TypedExpr<T>>,
+    //     label: Label,
+    //     witness: Symbol,
+    // },
     // Function stuff
     Func(TypedFunc<T>),
     Variable(Symbol),
@@ -833,15 +841,15 @@ impl<T: SomeType, U: SomeType> TyMappable<T, U> for TypedExprKind<T> {
                 receiver: receiver.map_ty(m).into(),
                 label,
             },
-            ProtocolMember {
-                receiver,
-                label,
-                witness,
-            } => ProtocolMember {
-                receiver: receiver.map_ty(m).into(),
-                label,
-                witness,
-            },
+            // ProtocolMember {
+            //     receiver,
+            //     label,
+            //     witness,
+            // } => ProtocolMember {
+            //     receiver: receiver.map_ty(m).into(),
+            //     label,
+            //     witness,
+            // },
             Func(typed_func) => Func(typed_func.map_ty(m)),
             Variable(symbol) => Variable(symbol),
             Constructor(symbol, items) => Constructor(symbol, items.iter().map(m).collect()),

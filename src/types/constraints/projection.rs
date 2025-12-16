@@ -1,5 +1,4 @@
 use indexmap::IndexSet;
-use itertools::Itertools;
 use tracing::instrument;
 
 use crate::{

@@ -345,7 +345,7 @@ pub mod tests {
             .unwrap();
 
         let ast = typed.phase.ast;
-        assert!(ast.diagnostics.is_empty());
+        assert!(typed.phase.diagnostics.is_empty());
         assert_eq!(types_tests::tests::ty(0, &ast, &typed.phase.types), Ty::Int);
     }
 
@@ -368,7 +368,11 @@ pub mod tests {
 
         let ast = typed.phase.ast;
 
-        assert!(ast.diagnostics.is_empty(), "{:?}", ast.diagnostics);
+        assert!(
+            typed.phase.diagnostics.is_empty(),
+            "{:?}",
+            typed.phase.diagnostics
+        );
         assert_eq!(types_tests::tests::ty(0, &ast, &typed.phase.types), Ty::Int);
     }
 

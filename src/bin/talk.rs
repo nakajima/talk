@@ -50,7 +50,7 @@ async fn main() {
                 .iter()
                 .map(|filename| Source::from(PathBuf::from(filename)))
                 .collect();
-            let driver = Driver::new(sources, DriverConfig::new("talk"));
+            let driver = Driver::new(sources, DriverConfig::new("talk").executable());
             let module = driver
                 .parse()
                 .unwrap()
@@ -62,7 +62,7 @@ async fn main() {
                 .unwrap()
                 .module("talkin");
 
-            let interpreter = Interpreter::new(module.program, Some(module.symbol_names));
+            let mut interpreter = Interpreter::new(module.program, Some(module.symbol_names));
             let result = interpreter.run();
             println!("{result:?}");
         }

@@ -3,7 +3,7 @@ use std::{error::Error, fmt::Display};
 use crate::{
     name::Name,
     name_resolution::symbol::{ProtocolId, Symbol},
-    types::infer_ty::InferTy,
+    types::{conformance::ConformanceKey, infer_ty::InferTy},
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -13,6 +13,10 @@ pub enum TypeError {
     GenericArgCount {
         expected: u8,
         actual: u8,
+    },
+    AmbiguousWitness {
+        conformance_key: ConformanceKey,
+        label: String,
     },
     InvalidUnification(Box<InferTy>, Box<InferTy>),
     OccursCheck(InferTy),
@@ -35,6 +39,10 @@ impl Error for TypeError {}
 impl Display for TypeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::AmbiguousWitness {
+                conformance_key,
+                label,
+            } => write!(f, "Ambiguous witness for {conformance_key:?}.{label}"),
             Self::TypeConstructorNotFound(id) => write!(f, "Type constructor not found: {id:?}"),
             Self::GenericArgCount { expected, actual } => {
                 write!(f, "Expected {expected} type arguments, got {actual}")

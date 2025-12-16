@@ -1,6 +1,4 @@
 use std::assert_matches::assert_matches;
-
-use rustc_hash::FxHashMap;
 use tracing::instrument;
 
 use crate::{

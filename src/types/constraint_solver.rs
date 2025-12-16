@@ -1,7 +1,4 @@
-use indexmap::IndexSet;
-
 use crate::{
-    ast::{AST, NameResolved},
     diagnostic::{AnyDiagnostic, Diagnostic},
     name_resolution::{name_resolver::ResolvedNames, symbol::Symbol},
     node_id::NodeID,

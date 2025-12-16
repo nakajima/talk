@@ -45,7 +45,11 @@ impl SCCGraph {
                     .iter()
                     .filter_map(|id| {
                         let symbol = self.graph[*id];
-                        is_top_level |= matches!(symbol, Symbol::Global(..));
+                        is_top_level |= matches!(symbol, Symbol::Global(..))
+                            || (matches!(
+                                symbol,
+                                Symbol::Struct(..) | Symbol::Enum(..) | Symbol::Protocol(..)
+                            ) && level == Level(0));
                         // Only include if this symbol is defined in this graph
                         if self.rhs_ids.contains_key(&symbol) {
                             if self.level_map[id] > level {
