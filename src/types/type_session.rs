@@ -1019,47 +1019,7 @@ impl TypeSession {
         }
 
         if let Some(sym) = self.modules.lookup_concrete_member(receiver, label) {
-            match sym {
-                Symbol::InstanceMethod(..) => {
-                    self.type_catalog
-                        .instance_methods
-                        .entry(*receiver)
-                        .or_default()
-                        .insert(label.clone(), sym);
-                }
-                Symbol::Property(..) => {
-                    self.type_catalog
-                        .properties
-                        .entry(*receiver)
-                        .or_default()
-                        .insert(label.clone(), sym);
-                }
-                Symbol::StaticMethod(..) => {
-                    self.type_catalog
-                        .static_methods
-                        .entry(*receiver)
-                        .or_default()
-                        .insert(label.clone(), sym);
-                }
-                Symbol::MethodRequirement(..) => {
-                    self.type_catalog
-                        .method_requirements
-                        .entry(*receiver)
-                        .or_default()
-                        .insert(label.clone(), sym);
-                }
-                Symbol::Variant(..) => {
-                    self.type_catalog
-                        .variants
-                        .entry(*receiver)
-                        .or_default()
-                        .insert(label.clone(), sym);
-                }
-                _ => {
-                    tracing::warn!("found unhandled nominal member: {sym:?}");
-                }
-            }
-
+            self.cache_member(sym, receiver, label);
             return Some(sym);
         }
 
@@ -1092,47 +1052,7 @@ impl TypeSession {
         }
 
         if let Some(sym) = self.modules.lookup_member(receiver, label) {
-            match sym {
-                Symbol::InstanceMethod(..) => {
-                    self.type_catalog
-                        .instance_methods
-                        .entry(*receiver)
-                        .or_default()
-                        .insert(label.clone(), sym);
-                }
-                Symbol::Property(..) => {
-                    self.type_catalog
-                        .properties
-                        .entry(*receiver)
-                        .or_default()
-                        .insert(label.clone(), sym);
-                }
-                Symbol::StaticMethod(..) => {
-                    self.type_catalog
-                        .static_methods
-                        .entry(*receiver)
-                        .or_default()
-                        .insert(label.clone(), sym);
-                }
-                Symbol::MethodRequirement(..) => {
-                    self.type_catalog
-                        .method_requirements
-                        .entry(*receiver)
-                        .or_default()
-                        .insert(label.clone(), sym);
-                }
-                Symbol::Variant(..) => {
-                    self.type_catalog
-                        .variants
-                        .entry(*receiver)
-                        .or_default()
-                        .insert(label.clone(), sym);
-                }
-                _ => {
-                    tracing::warn!("found unhandled nominal member: {sym:?}");
-                }
-            }
-
+            self.cache_member(sym, receiver, label);
             return Some((sym, MemberSource::SelfMember));
         }
 
@@ -1149,24 +1069,7 @@ impl TypeSession {
         }
 
         if let Some(sym) = self.modules.lookup_static_member(receiver, label) {
-            match sym {
-                Symbol::StaticMethod(..) => {
-                    self.type_catalog
-                        .static_methods
-                        .entry(*receiver)
-                        .or_default()
-                        .insert(label.clone(), sym);
-                }
-                Symbol::Variant(..) => {
-                    self.type_catalog
-                        .variants
-                        .entry(*receiver)
-                        .or_default()
-                        .insert(label.clone(), sym);
-                }
-                _ => (),
-            }
-
+            self.cache_member(sym, receiver, label);
             return Some(sym);
         }
 
@@ -1190,6 +1093,49 @@ impl TypeSession {
         }
 
         None
+    }
+
+    fn cache_member(&mut self, sym: Symbol, receiver: &Symbol, label: &Label) {
+        match sym {
+            Symbol::InstanceMethod(..) => {
+                self.type_catalog
+                    .instance_methods
+                    .entry(*receiver)
+                    .or_default()
+                    .insert(label.clone(), sym);
+            }
+            Symbol::Property(..) => {
+                self.type_catalog
+                    .properties
+                    .entry(*receiver)
+                    .or_default()
+                    .insert(label.clone(), sym);
+            }
+            Symbol::StaticMethod(..) => {
+                self.type_catalog
+                    .static_methods
+                    .entry(*receiver)
+                    .or_default()
+                    .insert(label.clone(), sym);
+            }
+            Symbol::MethodRequirement(..) => {
+                self.type_catalog
+                    .method_requirements
+                    .entry(*receiver)
+                    .or_default()
+                    .insert(label.clone(), sym);
+            }
+            Symbol::Variant(..) => {
+                self.type_catalog
+                    .variants
+                    .entry(*receiver)
+                    .or_default()
+                    .insert(label.clone(), sym);
+            }
+            _ => {
+                tracing::warn!("found unhandled nominal member: {sym:?}");
+            }
+        }
     }
 
     pub(crate) fn new_type_param(&mut self, meta: Option<MetaVarId>) -> InferTy {
