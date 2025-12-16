@@ -197,7 +197,8 @@ impl<'a> Monomorphizer<'a> {
                     if let Some(impl_sym) = substitutions.witnesses.get(sym) {
                         Value::Func(*impl_sym)
                     } else {
-                        unreachable!("did not get witness for {sym:?}, {substitutions:?}");
+                        tracing::error!("did not get witness for {sym:?}, {substitutions:?}");
+                        callee
                     }
                 }
                 _ => callee,
