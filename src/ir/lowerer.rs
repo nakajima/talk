@@ -893,18 +893,18 @@ impl<'a> Lowerer<'a> {
                 bind,
                 instantiations,
             ),
-            // TypedExprKind::ProtocolMember {
-            //     receiver,
-            //     label,
-            //     witness,
-            // } => self.lower_member(
-            //     expr,
-            //     &Some(receiver.clone()),
-            //     label,
-            //     Some(*witness),
-            //     bind,
-            //     instantiations,
-            // ),
+            TypedExprKind::ProtocolMember {
+                receiver,
+                label,
+                witness,
+            } => self.lower_member(
+                expr,
+                &Some(receiver.clone()),
+                label,
+                Some(*witness),
+                bind,
+                instantiations,
+            ),
             TypedExprKind::Func(typed_func) => self.lower_func(typed_func, bind, instantiations),
             TypedExprKind::Variable(symbol) => self.lower_variable(symbol, expr, instantiations),
             TypedExprKind::Constructor(symbol, _items) => {
@@ -1948,24 +1948,24 @@ impl<'a> Lowerer<'a> {
             );
         }
 
-        // if let TypedExprKind::ProtocolMember {
-        //     receiver: box receiver,
-        //     label: member,
-        //     witness,
-        // } = &callee.kind
-        // {
-        //     return self.lower_method_call(
-        //         call_expr,
-        //         callee,
-        //         receiver.clone(),
-        //         member,
-        //         Some(*witness),
-        //         args,
-        //         arg_vals,
-        //         dest,
-        //         &instantiations,
-        //     );
-        // }
+        if let TypedExprKind::ProtocolMember {
+            receiver: box receiver,
+            label: member,
+            witness,
+        } = &callee.kind
+        {
+            return self.lower_method_call(
+                call_expr,
+                callee,
+                receiver.clone(),
+                member,
+                Some(*witness),
+                args,
+                arg_vals,
+                dest,
+                &instantiations,
+            );
+        }
 
         let callee_ir = self.lower_expr(callee, Bind::Fresh, &instantiations)?.0;
 
@@ -2638,7 +2638,7 @@ impl<'a> Lowerer<'a> {
 
                 member
             }
-            // TypedExprKind::ProtocolMember { witness, .. } => *witness,
+            TypedExprKind::ProtocolMember { witness, .. } => *witness,
             _ => {
                 tracing::trace!("expr has no substitutions: {expr:?}");
                 return Ok((expr.ty.clone(), Default::default()));

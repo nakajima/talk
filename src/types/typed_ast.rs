@@ -387,28 +387,28 @@ impl TypedExprKind<InferTy> {
             },
             Member { receiver, label } => {
                 // Check if this member access has a recorded witness (protocol member)
-                // if let Some(&witness) = witnesses.get(&node_id) {
-                //     ProtocolMember {
-                //         receiver: receiver.finalize(session, witnesses).into(),
-                //         label,
-                //         witness,
-                //     }
-                // } else {
-                Member {
-                    receiver: receiver.finalize(session, witnesses).into(),
-                    label,
+                if let Some(&witness) = witnesses.get(&node_id) {
+                    ProtocolMember {
+                        receiver: receiver.finalize(session, witnesses).into(),
+                        label,
+                        witness,
+                    }
+                } else {
+                    Member {
+                        receiver: receiver.finalize(session, witnesses).into(),
+                        label,
+                    }
                 }
-                // }
             }
-            // ProtocolMember {
-            //     receiver,
-            //     label,
-            //     witness,
-            // } => ProtocolMember {
-            //     receiver: receiver.finalize(session, witnesses).into(),
-            //     label,
-            //     witness,
-            // },
+            ProtocolMember {
+                receiver,
+                label,
+                witness,
+            } => ProtocolMember {
+                receiver: receiver.finalize(session, witnesses).into(),
+                label,
+                witness,
+            },
             Func(func) => Func(func.finalize(session, witnesses)),
             Variable(sym) => Variable(sym),
             Constructor(sym, items) => Constructor(
@@ -783,11 +783,11 @@ pub enum TypedExprKind<T: SomeType> {
         label: Label,
     },
     // A protocol method call on a type parameter, with the method requirement as witness
-    // ProtocolMember {
-    //     receiver: Box<TypedExpr<T>>,
-    //     label: Label,
-    //     witness: Symbol,
-    // },
+    ProtocolMember {
+        receiver: Box<TypedExpr<T>>,
+        label: Label,
+        witness: Symbol,
+    },
     // Function stuff
     Func(TypedFunc<T>),
     Variable(Symbol),
@@ -841,15 +841,15 @@ impl<T: SomeType, U: SomeType> TyMappable<T, U> for TypedExprKind<T> {
                 receiver: receiver.map_ty(m).into(),
                 label,
             },
-            // ProtocolMember {
-            //     receiver,
-            //     label,
-            //     witness,
-            // } => ProtocolMember {
-            //     receiver: receiver.map_ty(m).into(),
-            //     label,
-            //     witness,
-            // },
+            ProtocolMember {
+                receiver,
+                label,
+                witness,
+            } => ProtocolMember {
+                receiver: receiver.map_ty(m).into(),
+                label,
+                witness,
+            },
             Func(typed_func) => Func(typed_func.map_ty(m)),
             Variable(symbol) => Variable(symbol),
             Constructor(symbol, items) => Constructor(symbol, items.iter().map(m).collect()),

@@ -2327,21 +2327,21 @@ pub mod tests {
             panic!("expected call, got {expr:?}");
         };
 
-        // let TypedExprKind::ProtocolMember { label, witness, .. } = &callee.kind else {
-        //     panic!("expected ProtocolMember callee, got {callee:?}");
-        // };
+        let TypedExprKind::ProtocolMember { label, witness, .. } = &callee.kind else {
+            panic!("expected ProtocolMember callee, got {callee:?}");
+        };
 
-        // assert_eq!(label.to_string(), "getCount");
-        // assert!(matches!(witness, Symbol::MethodRequirement(_)));
+        assert_eq!(label.to_string(), "getCount");
+        assert!(matches!(witness, Symbol::MethodRequirement(_)));
 
-        // let req = *types
-        //     .catalog
-        //     .method_requirements
-        //     .get(&Symbol::Protocol(ProtocolId::from(1)))
-        //     .unwrap()
-        //     .get(&Label::Named("getCount".into()))
-        //     .unwrap();
+        let req = *types
+            .catalog
+            .method_requirements
+            .get(&Symbol::Protocol(ProtocolId::from(1)))
+            .unwrap()
+            .get(&Label::Named("getCount".into()))
+            .unwrap();
 
-        // assert_eq!(*witness, req);
+        assert_eq!(*witness, req);
     }
 }
