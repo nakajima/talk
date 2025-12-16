@@ -55,9 +55,6 @@ pub struct TypeSession {
     pub aliases: FxHashMap<Symbol, Scheme<InferTy>>,
     pub(super) reverse_instantiations: ReverseInstantiations,
 
-    /// Maps NodeID of member access expressions on type parameters to their witness (method requirement) symbol
-    pub protocol_member_witnesses: FxHashMap<NodeID, Symbol>,
-
     meta_vars: InPlaceUnificationTable<MetaVarId>,
     row_vars: InPlaceUnificationTable<RowMetaId>,
 }
@@ -251,7 +248,6 @@ impl TypeSession {
             type_catalog: catalog,
             modules,
             aliases: Default::default(),
-            protocol_member_witnesses: Default::default(),
 
             meta_vars: Default::default(),
             row_vars: Default::default(),

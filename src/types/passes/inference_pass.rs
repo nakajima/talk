@@ -183,10 +183,7 @@ impl<'a> InferencePass<'a> {
 
         let ast = typed_ast
             .apply(&mut self.substitutions, self.session)
-            .finalize(
-                self.session,
-                &self.session.protocol_member_witnesses.clone(),
-            );
+            .finalize(self.session);
 
         (ast, self.diagnostics.into_iter().collect())
     }
