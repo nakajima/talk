@@ -17,7 +17,8 @@ use crate::{
         type_session::TypeSession,
     },
 };
-use rustc_hash::FxHashMap;
+use itertools::Itertools;
+use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::instrument;
 
 type CheckWitnessResult = (Vec<(Label, Symbol)>, Vec<Meta>);
@@ -84,17 +85,7 @@ impl Conforms {
             protocol_id: self.protocol_id,
         };
         let Some(conformance) = session.lookup_conformance(&key) else {
-            println!(
-                "Wait wat: {self:?} - {:?} {key:?}",
-                Symbol::Protocol(self.protocol_id)
-            );
-
             return SolveResult::Defer(DeferralReason::WaitingOnConformance(key));
-
-            // return SolveResult::Err(TypeError::TypesDoesNotConform {
-            //     symbol: conforming_ty_sym,
-            //     protocol_id: self.protocol_id,
-            // });
         };
 
         let Some(EnvEntry::Scheme(Scheme {
@@ -102,15 +93,25 @@ impl Conforms {
             ..
         })) = session.lookup(&self.protocol_id.into())
         else {
-            return SolveResult::Err(TypeError::TypeNotFound(format!(
-                "did not find protocol self: {:?}",
-                self.protocol_id
-            )));
+            return SolveResult::Defer(DeferralReason::WaitingOnSymbol(self.protocol_id.into()));
         };
 
         // Build up some substitutions so we're not playing with the protocol's type params anymore
         let mut substitutions: FxHashMap<InferTy, InferTy> = FxHashMap::default();
         substitutions.insert(InferTy::Param(protocol_self_id), self.ty.clone());
+
+        // If we're registering a conformance for a nominal, copy specialized versions of default methods
+        if !matches!(conforming_ty_sym, Symbol::Protocol(..))
+            && let Err(e) = self.specialize_methods(
+                &conforming_ty_sym,
+                self.protocol_id,
+                session,
+                substitutions.clone(),
+                Default::default(),
+            )
+        {
+            return SolveResult::Err(e);
+        };
 
         let mut protocol_projections = FxHashMap::<Label, InferTy>::default();
         for (label, associated_sym) in session
@@ -196,6 +197,87 @@ impl Conforms {
             }
             Err(e) => SolveResult::Err(e),
         }
+    }
+
+    fn specialize_methods(
+        &self,
+        conforming_ty_sym: &Symbol,
+        protocol_id: ProtocolId,
+        session: &mut TypeSession,
+        mut substitutions: FxHashMap<InferTy, InferTy>,
+        mut seen: FxHashSet<ProtocolId>,
+    ) -> Result<(), TypeError> {
+        if seen.contains(&protocol_id) {
+            return Ok(());
+        }
+
+        seen.insert(protocol_id);
+
+        let Some(EnvEntry::Scheme(Scheme {
+            ty: InferTy::Param(protocol_self_id),
+            ..
+        })) = session.lookup(&protocol_id.into())
+        else {
+            return Err(TypeError::TypeNotFound(format!(
+                "Did not find protocol self for {:?}",
+                protocol_id
+            )));
+        };
+
+        substitutions.insert(InferTy::Param(protocol_self_id), self.ty.clone());
+
+        for (label, sym) in session.lookup_instance_methods(&protocol_id.into()) {
+            let Some(entry) = session.lookup(&sym) else {
+                tracing::error!("didn't get entry for {sym:?}");
+                continue;
+            };
+
+            let specialized_entry = entry.substitute(&substitutions);
+            let specialized_symbol = session
+                .symbols
+                .next_instance_method(session.current_module_id);
+            let name_str = session
+                .resolved_names
+                .symbol_names
+                .get(&sym)
+                .unwrap_or_else(|| unreachable!())
+                .clone();
+            session
+                .resolved_names
+                .symbol_names
+                .insert(specialized_symbol.into(), name_str.clone());
+
+            session.insert_term(
+                specialized_symbol.into(),
+                specialized_entry,
+                &mut Default::default(),
+            );
+
+            session
+                .type_catalog
+                .instance_methods
+                .entry(*conforming_ty_sym)
+                .or_default()
+                .insert(label, specialized_symbol.into());
+
+            for key in session
+                .type_catalog
+                .conformances
+                .keys()
+                .cloned()
+                .collect_vec()
+            {
+                self.specialize_methods(
+                    conforming_ty_sym,
+                    key.protocol_id,
+                    session,
+                    substitutions.clone(),
+                    seen.clone(),
+                )?;
+            }
+        }
+
+        Ok(())
     }
 
     fn check_witnesses(

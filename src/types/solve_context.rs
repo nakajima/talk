@@ -254,7 +254,12 @@ pub mod tests {
 
     #[test]
     fn normalizes_projection_on_meta() {
-        let mut session = TypeSession::new(ModuleId::Current, Default::default());
+        let mut session = TypeSession::new(
+            ModuleId::Current,
+            Default::default(),
+            Default::default(),
+            Default::default(),
+        );
         let var = session.new_ty_meta_var(Level::default());
         let ty = InferTy::Projection {
             protocol_id: ProtocolId::from(1),

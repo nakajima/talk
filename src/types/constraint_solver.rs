@@ -32,15 +32,11 @@ pub enum SolveResult {
 #[derive(Debug)]
 pub struct ConstraintSolver<'a> {
     context: &'a mut SolveContext,
-    resolved_names: &'a ResolvedNames,
 }
 
 impl<'a> ConstraintSolver<'a> {
-    pub fn new(context: &'a mut SolveContext, resolved_names: &'a ResolvedNames) -> Self {
-        Self {
-            context,
-            resolved_names,
-        }
+    pub fn new(context: &'a mut SolveContext) -> Self {
+        Self { context }
     }
 
     pub fn solve(
@@ -72,15 +68,11 @@ impl<'a> ConstraintSolver<'a> {
                     }
                     Constraint::Conforms(ref conforms) => conforms.solve(self.context, session),
                     Constraint::TypeMember(ref type_member) => {
-                        type_member.solve(constraints, self.context, session, self.resolved_names)
+                        type_member.solve(constraints, self.context, session)
                     }
-                    Constraint::Projection(ref projection) => projection.solve(
-                        level,
-                        constraints,
-                        self.context,
-                        session,
-                        self.resolved_names,
-                    ),
+                    Constraint::Projection(ref projection) => {
+                        projection.solve(level, constraints, self.context, session)
+                    }
                 };
 
                 match solution {

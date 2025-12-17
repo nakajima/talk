@@ -2,7 +2,7 @@ use tracing::instrument;
 
 use crate::{
     label::Label,
-    name_resolution::{name_resolver::ResolvedNames, symbol::Symbol},
+    name_resolution::symbol::Symbol,
     node_id::NodeID,
     types::{
         constraint_solver::{DeferralReason, SolveResult},
@@ -27,26 +27,21 @@ pub struct TypeMember {
 }
 
 impl TypeMember {
-    #[instrument(skip(constraints, context, session, resolved_names))]
+    #[instrument(skip(constraints, context, session,))]
     pub fn solve(
         &self,
         constraints: &mut ConstraintStore,
         context: &mut SolveContext,
         session: &mut TypeSession,
-        resolved_names: &ResolvedNames,
     ) -> SolveResult {
         #[warn(clippy::todo)]
         match &self.base {
             InferTy::Var { id, .. } => {
                 SolveResult::Defer(DeferralReason::WaitingOnMeta(Meta::Ty(*id)))
             }
-            InferTy::Param(type_param_id) => self.lookup_for_type_param(
-                constraints,
-                context,
-                session,
-                resolved_names,
-                *type_param_id,
-            ),
+            InferTy::Param(type_param_id) => {
+                self.lookup_for_type_param(constraints, context, session, *type_param_id)
+            }
             InferTy::Rigid(skolem_id) => {
                 let Some(InferTy::Param(type_param_id)) =
                     session.skolem_map.get(&InferTy::Rigid(*skolem_id))
@@ -54,13 +49,7 @@ impl TypeMember {
                     unreachable!();
                 };
 
-                self.lookup_for_type_param(
-                    constraints,
-                    context,
-                    session,
-                    resolved_names,
-                    *type_param_id,
-                )
+                self.lookup_for_type_param(constraints, context, session, *type_param_id)
             }
             #[allow(clippy::todo)]
             InferTy::Constructor { .. } => todo!(),
@@ -79,7 +68,6 @@ impl TypeMember {
         constraints: &mut ConstraintStore,
         context: &mut SolveContext,
         session: &mut TypeSession,
-        resolved_names: &ResolvedNames,
         type_param_id: TypeParamId,
     ) -> SolveResult {
         let mut candidates = vec![];
@@ -94,9 +82,11 @@ impl TypeMember {
         }
 
         for candidate in candidates {
-            if let Some(child_types) = resolved_names
+            if let Some(child_types) = session
+                .resolved_names
                 .child_types
                 .get(&Symbol::Protocol(*candidate))
+                .cloned()
                 && let Some(child_sym) = child_types.get(&self.name)
             {
                 let Some(child_entry) = session.lookup(child_sym) else {

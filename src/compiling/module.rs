@@ -180,6 +180,18 @@ impl ModuleEnvironment {
             .cloned()
     }
 
+    pub fn lookup_instance_methods(&self, symbol: &Symbol) -> Option<IndexMap<Label, Symbol>> {
+        let module_id = symbol.external_module_id()?;
+        let stable_id = self.modules_by_local.get(&module_id)?;
+        let module = self.modules.get(stable_id)?;
+        tracing::trace!(
+            "lookup_instance_methods \"{:?}\" in {}",
+            symbol,
+            module.name
+        );
+        module.types.catalog.instance_methods.get(symbol).cloned()
+    }
+
     pub fn lookup_concrete_member(&self, receiver: &Symbol, label: &Label) -> Option<Symbol> {
         let module_id = receiver.external_module_id()?;
         let stable_id = self.modules_by_local.get(&module_id)?;

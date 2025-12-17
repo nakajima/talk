@@ -2344,4 +2344,48 @@ pub mod tests {
 
         assert_eq!(*witness, req);
     }
+
+    #[test]
+    fn tracks_transitive_witnesses() {
+        let (ast, types) = typecheck(
+            "
+            protocol A {
+                func default() { 123 }
+            }
+
+            protocol B: A {
+                func callsDefault() { self.default() }
+            }
+
+            extend Int: B {}
+
+            123.callsDefault()
+        ",
+        );
+
+        assert!(
+            types
+                .catalog
+                .conformances
+                .get(&ConformanceKey {
+                    protocol_id: ProtocolId::from(1),
+                    conforming_id: Symbol::Int,
+                })
+                .is_some()
+        );
+
+        let member_sym = types
+            .catalog
+            .instance_methods
+            .get(&Symbol::Int)
+            .unwrap()
+            .get(&Label::Named("default".into()))
+            .unwrap();
+
+        let member_entry = types.get_symbol(member_sym).unwrap();
+        assert_eq!(
+            *member_entry,
+            TypeEntry::Mono(Ty::Func(Ty::Int.into(), Ty::Int.into()))
+        );
+    }
 }

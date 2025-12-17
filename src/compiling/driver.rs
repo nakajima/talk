@@ -251,14 +251,21 @@ impl Driver<NameResolved> {
     }
 
     pub fn typecheck(mut self) -> Result<Driver<Typed>, CompileError> {
-        let mut session = TypeSession::new(self.config.module_id, self.config.modules.clone());
+        let mut session = TypeSession::new(
+            self.config.module_id,
+            self.config.modules.clone(),
+            std::mem::take(&mut self.phase.symbols),
+            std::mem::take(&mut self.phase.resolved_names),
+        );
+
         let exports = self.exports();
 
         let (_paths, mut asts): (Vec<_>, Vec<_>) = self.phase.asts.into_iter().unzip();
-        let (ast, diagnostics) =
-            InferencePass::drive(&mut asts, &self.phase.resolved_names, &mut session);
+        let (ast, diagnostics) = InferencePass::drive(&mut asts, &mut session);
 
         self.phase.diagnostics.extend(diagnostics);
+        let symbols = std::mem::take(&mut session.symbols);
+        let resolved_names = std::mem::take(&mut session.resolved_names);
 
         Ok(Driver {
             files: self.files,
@@ -268,8 +275,8 @@ impl Driver<NameResolved> {
                 types: session.finalize().map_err(CompileError::Typing)?,
                 exports,
                 symbol_names: self.phase.symbol_names,
-                symbols: self.phase.symbols,
-                resolved_names: self.phase.resolved_names,
+                symbols,
+                resolved_names,
                 diagnostics: self.phase.diagnostics,
             },
         })

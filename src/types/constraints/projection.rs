@@ -3,10 +3,7 @@ use tracing::instrument;
 
 use crate::{
     label::Label,
-    name_resolution::{
-        name_resolver::ResolvedNames,
-        symbol::{ProtocolId, Symbol},
-    },
+    name_resolution::symbol::{ProtocolId, Symbol},
     node_id::NodeID,
     types::{
         conformance::ConformanceKey,
@@ -30,14 +27,13 @@ pub struct Projection {
 }
 
 impl Projection {
-    #[instrument(skip(constraints, context, session, resolved_names))]
+    #[instrument(skip(constraints, context, session,))]
     pub fn solve(
         &self,
         level: Level,
         constraints: &mut ConstraintStore,
         context: &mut SolveContext,
         session: &mut TypeSession,
-        resolved_names: &ResolvedNames,
     ) -> SolveResult {
         let base = session.apply(self.base.clone(), &mut context.substitutions);
         let result = session.apply(self.result.clone(), &mut context.substitutions);
@@ -67,7 +63,8 @@ impl Projection {
             tracing::debug!("Projection: conformance={:?}", conformance);
             if let Some(conf) = conformance {
                 // Prefer the alias symbol (if the nominal actually provided `typealias T = ...`)
-                if let Some(alias_sym) = resolved_names
+                if let Some(alias_sym) = session
+                    .resolved_names
                     .child_types
                     .get(&base_sym)
                     .and_then(|t| t.get(&self.label))

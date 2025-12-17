@@ -9,7 +9,10 @@ use tracing::instrument;
 use crate::{
     compiling::module::{ModuleEnvironment, ModuleId},
     label::Label,
-    name_resolution::symbol::{ProtocolId, Symbol},
+    name_resolution::{
+        name_resolver::ResolvedNames,
+        symbol::{ProtocolId, Symbol, Symbols},
+    },
     node_id::NodeID,
     types::{
         builtins::builtin_scope,
@@ -55,8 +58,9 @@ pub struct TypeSession {
     pub aliases: FxHashMap<Symbol, Scheme<InferTy>>,
     pub(super) reverse_instantiations: ReverseInstantiations,
 
-    /// Maps NodeID of member access expressions on type parameters to their witness (method requirement) symbol
     pub protocol_member_witnesses: FxHashMap<NodeID, Symbol>,
+    pub(crate) symbols: Symbols,
+    pub(crate) resolved_names: ResolvedNames,
 
     meta_vars: InPlaceUnificationTable<MetaVarId>,
     row_vars: InPlaceUnificationTable<RowMetaId>,
@@ -137,7 +141,12 @@ impl Types {
 
 #[allow(clippy::expect_used)]
 impl TypeSession {
-    pub fn new(current_module_id: ModuleId, modules: Rc<ModuleEnvironment>) -> Self {
+    pub fn new(
+        current_module_id: ModuleId,
+        modules: Rc<ModuleEnvironment>,
+        symbols: Symbols,
+        resolved_names: ResolvedNames,
+    ) -> Self {
         let mut term_env = TermEnv {
             symbols: FxHashMap::default(),
         };
@@ -190,54 +199,6 @@ impl TypeSession {
             },
         );
 
-        // // Import reqs
-        // for module in &modules.modules {
-        //     for (sym, reqs) in module.1.types.catalog.method_requirements.iter() {
-        //         catalog
-        //             .method_requirements
-        //             .entry(*sym)
-        //             .or_default()
-        //             .extend(reqs.clone());
-        //     }
-
-        //     for (sym, reqs) in module.1.types.catalog.instance_methods.iter() {
-        //         catalog
-        //             .instance_methods
-        //             .entry(*sym)
-        //             .or_default()
-        //             .extend(reqs.clone());
-        //     }
-
-        //     catalog.conformances.extend(
-        //         module
-        //             .1
-        //             .types
-        //             .catalog
-        //             .conformances
-        //             .clone()
-        //             .into_iter()
-        //             .map(|(k, v)| (k, v.into())),
-        //     );
-
-        //     // Import associated_types (protocol child types) from modules
-        //     for (sym, entries) in module.1.types.catalog.associated_types.iter() {
-        //         catalog
-        //             .associated_types
-        //             .entry(*sym)
-        //             .or_default()
-        //             .extend(entries.clone());
-        //     }
-
-        //     // Import child_types from modules
-        //     for (sym, entries) in module.1.types.catalog.child_types.iter() {
-        //         catalog
-        //             .child_types
-        //             .entry(*sym)
-        //             .or_default()
-        //             .extend(entries.clone());
-        //     }
-        // }
-
         TypeSession {
             current_module_id,
             vars: Default::default(),
@@ -255,6 +216,9 @@ impl TypeSession {
 
             meta_vars: Default::default(),
             row_vars: Default::default(),
+
+            symbols,
+            resolved_names,
         }
     }
 
@@ -830,6 +794,10 @@ impl TypeSession {
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
     pub(super) fn lookup(&mut self, sym: &Symbol) -> Option<EnvEntry<InferTy>> {
+        if let Some(entry) = builtin_scope().get(sym).cloned() {
+            return Some(entry);
+        }
+
         if let Some(entry) = self.term_env.lookup(sym).cloned() {
             return Some(entry);
         }
@@ -960,6 +928,25 @@ impl TypeSession {
         }
 
         None
+    }
+
+    pub fn lookup_instance_methods(&mut self, symbol: &Symbol) -> IndexMap<Label, Symbol> {
+        let mut instance_methods = IndexMap::<Label, Symbol>::default();
+
+        if let Some(methods) = self.modules.lookup_instance_methods(symbol) {
+            self.type_catalog
+                .instance_methods
+                .entry(*symbol)
+                .or_default()
+                .extend(methods.clone());
+            instance_methods.extend(methods);
+        }
+
+        if let Some(methods) = self.type_catalog.instance_methods.get(symbol).cloned() {
+            instance_methods.extend(methods);
+        }
+
+        instance_methods
     }
 
     pub fn lookup_protocol_conformances(

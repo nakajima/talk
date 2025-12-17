@@ -3,7 +3,7 @@ use rustc_hash::FxHashMap;
 
 use crate::{
     label::Label,
-    name_resolution::{name_resolver::ResolvedNames, symbol::Symbol},
+    name_resolution::symbol::Symbol,
     node_id::NodeID,
     node_kinds::{inline_ir_instruction::TypedInlineIRInstruction, pattern::PatternKind},
     types::{
@@ -24,7 +24,6 @@ pub trait TyMappable<T: SomeType, U: SomeType> {
 pub struct TypedAST<T: SomeType> {
     pub decls: Vec<TypedDecl<T>>,
     pub stmts: Vec<TypedStmt<T>>,
-    pub phase: ResolvedNames,
 }
 
 impl TypedAST<Ty> {
@@ -46,7 +45,6 @@ impl TypedAST<InferTy> {
         self.map_ty(&mut |ty| session.apply(ty.clone(), substitutions))
     }
 
-    /// Transforms types from InferTy to Ty and converts Member to ProtocolMember where we have witnesses
     pub fn finalize(
         self,
         session: &mut TypeSession,
@@ -63,7 +61,6 @@ impl TypedAST<InferTy> {
                 .into_iter()
                 .map(|s| s.finalize(session, witnesses))
                 .collect(),
-            phase: self.phase,
         }
     }
 }
@@ -445,7 +442,6 @@ impl<T: SomeType, U: SomeType> TyMappable<T, U> for TypedAST<T> {
         TypedAST::<U> {
             decls: self.decls.into_iter().map(|d| d.map_ty(m)).collect(),
             stmts: self.stmts.into_iter().map(|d| d.map_ty(m)).collect(),
-            phase: self.phase,
         }
     }
 }
@@ -782,12 +778,6 @@ pub enum TypedExprKind<T: SomeType> {
         receiver: Box<TypedExpr<T>>,
         label: Label,
     },
-    // A protocol method call on a type parameter, with the method requirement as witness
-    ProtocolMember {
-        receiver: Box<TypedExpr<T>>,
-        label: Label,
-        witness: Symbol,
-    },
     // Function stuff
     Func(TypedFunc<T>),
     Variable(Symbol),
@@ -840,15 +830,6 @@ impl<T: SomeType, U: SomeType> TyMappable<T, U> for TypedExprKind<T> {
             Member { receiver, label } => Member {
                 receiver: receiver.map_ty(m).into(),
                 label,
-            },
-            ProtocolMember {
-                receiver,
-                label,
-                witness,
-            } => ProtocolMember {
-                receiver: receiver.map_ty(m).into(),
-                label,
-                witness,
             },
             Func(typed_func) => Func(typed_func.map_ty(m)),
             Variable(symbol) => Variable(symbol),

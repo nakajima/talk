@@ -33,7 +33,7 @@ pub mod tests {
         vec![InstructionMeta::Source(NodeID::ANY)].into()
     }
 
-    pub fn lower_bare(input: &str) -> Program {
+    pub fn lower_bare(input: &str) -> Module {
         let driver = Driver::new_bare(
             vec![Source::from(input)],
             DriverConfig::new("TestDriver").executable(),
@@ -54,7 +54,8 @@ pub mod tests {
             &typed.phase.resolved_names,
             &typed.config,
         );
-        lowerer.lower().unwrap()
+
+        typed.lower().unwrap().module("TestModule")
     }
 
     pub fn lower(input: &str) -> Program {
@@ -1297,5 +1298,29 @@ pub mod tests {
                 }
             }]
         );
+    }
+
+    #[test]
+    fn specializes_transitive_conformance_default_methods() {
+        let module = lower_bare(
+            "
+            protocol A {
+                func default() { 123 }
+            }
+
+            protocol B: A {
+                func callsDefault() { self.default() }
+            }
+
+            extend Int: B {}
+
+            123.callsDefault()
+        ",
+        );
+
+        set_symbol_names(module.symbol_names.clone());
+
+        println!("{:#?}", module.program);
+        println!("{}", module.program);
     }
 }

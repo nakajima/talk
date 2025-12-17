@@ -10,7 +10,6 @@ use crate::{
     label::Label,
     name::Name,
     name_resolution::{
-        name_resolver::ResolvedNames,
         scc_graph::BindingGroup,
         symbol::{ProtocolId, Symbol, set_symbol_names},
     },
@@ -75,7 +74,7 @@ pub struct InferencePass<'a> {
     instantiations: FxHashMap<NodeID, InstantiationSubstitutions>,
     substitutions: UnificationSubstitutions,
     tracked_returns: Vec<IndexSet<(Span, InferTy)>>,
-    resolved_names: &'a ResolvedNames,
+    nominal_placeholders: FxHashMap<Symbol, (MetaVarId, Level)>,
     diagnostics: IndexSet<AnyDiagnostic>,
     root_decls: Vec<TypedDecl<InferTy>>,
     root_stmts: Vec<TypedStmt<InferTy>>,
@@ -84,7 +83,6 @@ pub struct InferencePass<'a> {
 impl<'a> InferencePass<'a> {
     pub fn drive(
         asts: &'a mut [AST<NameResolved>],
-        resolved_names: &ResolvedNames,
         session: &'a mut TypeSession,
     ) -> (TypedAST<Ty>, Vec<AnyDiagnostic>) {
         let substitutions = UnificationSubstitutions::new(session.meta_levels.clone());
@@ -95,8 +93,8 @@ impl<'a> InferencePass<'a> {
             constraints: Default::default(),
             substitutions,
             tracked_returns: Default::default(),
-            resolved_names,
             diagnostics: Default::default(),
+            nominal_placeholders: Default::default(),
             root_decls: Default::default(),
             root_stmts: Default::default(),
         };
@@ -105,7 +103,7 @@ impl<'a> InferencePass<'a> {
     }
 
     fn drive_all(mut self) -> (TypedAST<Ty>, Vec<AnyDiagnostic>) {
-        let _s = set_symbol_names(self.resolved_names.symbol_names.clone());
+        let _s = set_symbol_names(self.session.resolved_names.symbol_names.clone());
 
         // Register extension conformances first, so they're available when processing protocol default methods
         for i in 0..self.asts.len() {
@@ -121,7 +119,7 @@ impl<'a> InferencePass<'a> {
         self.session.apply_all(&mut self.substitutions);
 
         // Transfer child_types from AST phases to the catalog for module export
-        for (sym, entries) in self.resolved_names.child_types.iter() {
+        for (sym, entries) in self.session.resolved_names.child_types.iter() {
             self.session
                 .type_catalog
                 .child_types
@@ -159,14 +157,15 @@ impl<'a> InferencePass<'a> {
                                 },
                             }));
                         }
-                        ty => {
-                            self.diagnostics.insert(AnyDiagnostic::Typing(Diagnostic {
-                                id: conforms.conformance_node_id,
-                                kind: TypeError::TypesCannotConform {
-                                    ty: ty.clone(),
-                                    protocol_id: conforms.protocol_id,
-                                },
-                            }));
+                        _ty => {
+                            tracing::error!("did not solve {conforms:?}");
+                            // self.diagnostics.insert(AnyDiagnostic::Typing(Diagnostic {
+                            //     id: conforms.conformance_node_id,
+                            //     kind: TypeError::TypesCannotConform {
+                            //         ty: ty.clone(),
+                            //         protocol_id: conforms.protocol_id,
+                            //     },
+                            // }));
                         }
                     };
                 }
@@ -178,7 +177,6 @@ impl<'a> InferencePass<'a> {
         let typed_ast = TypedAST {
             decls: self.root_decls,
             stmts: self.root_stmts,
-            phase: self.resolved_names.clone(),
         };
 
         let ast = typed_ast
@@ -192,7 +190,8 @@ impl<'a> InferencePass<'a> {
     }
 
     fn discover_conformances(&mut self, idx: usize) {
-        for root in self.asts[idx].roots.iter() {
+        let roots = std::mem::take(&mut self.asts[idx].roots);
+        for root in roots.iter() {
             let Node::Decl(Decl {
                 kind:
                     DeclKind::Struct {
@@ -224,6 +223,42 @@ impl<'a> InferencePass<'a> {
                     conforming_id: nominal_symbol,
                 };
 
+                let protocol_symbol = Symbol::Protocol(protocol_id);
+                let Some(conforming_id) = name.symbol().ok() else {
+                    tracing::error!("did not resolve {name:?}");
+                    continue;
+                };
+
+                let conforming_ty = self
+                    .session
+                    .lookup(&nominal_symbol)
+                    .map(|s| s._as_ty())
+                    .unwrap_or_else(|| {
+                        let id = self.session.new_ty_meta_var_id(Default::default());
+                        let var_ty = InferTy::Var {
+                            id,
+                            level: Default::default(),
+                        };
+                        self.nominal_placeholders
+                            .insert(nominal_symbol, (id, Default::default()));
+                        var_ty
+                    });
+
+                self.register_conformance(
+                    &conforming_ty,
+                    conforming_id,
+                    protocol_symbol,
+                    conformance.id,
+                    conformance.span,
+                    &mut SolveContext::new(
+                        UnificationSubstitutions::new(self.session.meta_levels.clone()),
+                        Level::default(),
+                        Default::default(),
+                        SolveContextKind::Nominal,
+                    ),
+                )
+                .ok();
+
                 // Only insert if not already present (e.g. from imports)
                 self.session
                     .type_catalog
@@ -238,6 +273,7 @@ impl<'a> InferencePass<'a> {
                     });
             }
         }
+        _ = std::mem::replace(&mut self.asts[idx].roots, roots);
     }
 
     fn discover_protocols(&mut self, idx: usize, level: Level) {
@@ -526,7 +562,12 @@ impl<'a> InferencePass<'a> {
             }
         }
 
-        if let Some(child_types) = self.resolved_names.child_types.get(&protocol_symbol) {
+        if let Some(child_types) = self
+            .session
+            .resolved_names
+            .child_types
+            .get(&protocol_symbol)
+        {
             self.session
                 .type_catalog
                 .associated_types
@@ -560,7 +601,7 @@ impl<'a> InferencePass<'a> {
             return;
         }
 
-        let mut groups = self.resolved_names.scc_graph.groups();
+        let mut groups = self.session.resolved_names.scc_graph.groups();
         groups.sort_by_key(|group| group.id.0);
 
         for group in groups {
@@ -581,7 +622,7 @@ impl<'a> InferencePass<'a> {
         );
 
         tracing::debug!("visiting stragglers");
-        for id in self.resolved_names.unbound_nodes.clone() {
+        for id in self.session.resolved_names.unbound_nodes.clone() {
             let Some(node) = self.asts.iter().find_map(|ast| ast.find(id)) else {
                 continue;
             };
@@ -646,7 +687,7 @@ impl<'a> InferencePass<'a> {
 
         // Visit each binder
         for (i, binder) in group.binders.iter().enumerate() {
-            if let Some(captures) = self.resolved_names.captures.get(binder) {
+            if let Some(captures) = self.session.resolved_names.captures.get(binder).cloned() {
                 for capture in captures {
                     if self.session.lookup(&capture.symbol).is_none() {
                         let placeholder = self.session.new_ty_meta_var(capture.level);
@@ -664,7 +705,7 @@ impl<'a> InferencePass<'a> {
             }
             // Search all ASTs for the rhs_id - cross-file dependencies within a module
             // may have the definition in a different file's SCC graph
-            let Some(rhs_id) = self.resolved_names.scc_graph.rhs_id_for(binder) else {
+            let Some(rhs_id) = self.session.resolved_names.scc_graph.rhs_id_for(binder) else {
                 tracing::error!("did not find rhs_id for binder: {binder:?}");
                 return (decls, stmts);
             };
@@ -709,7 +750,7 @@ impl<'a> InferencePass<'a> {
         context.substitutions_mut().extend(&self.substitutions);
 
         let level = context.level();
-        let solver = ConstraintSolver::new(context, self.resolved_names);
+        let solver = ConstraintSolver::new(context);
         let diagnostics = solver.solve(
             level,
             &mut self.constraints,
@@ -1226,9 +1267,13 @@ impl<'a> InferencePass<'a> {
             return Err(TypeError::NameNotResolved(name.clone()));
         };
 
-        let ty = InferTy::Nominal {
-            symbol: nominal_symbol,
-            type_args: type_params.clone(),
+        let ty = if matches!(nominal_symbol, Symbol::Builtin(..)) {
+            InferTy::Primitive(nominal_symbol)
+        } else {
+            InferTy::Nominal {
+                symbol: nominal_symbol,
+                type_args: type_params.clone(),
+            }
         };
 
         if !matches!(decl.kind, DeclKind::Extend { .. })
@@ -1419,6 +1464,11 @@ impl<'a> InferencePass<'a> {
                     type_params,
                 },
             );
+
+            if let Some((id, level)) = self.nominal_placeholders.remove(&nominal_symbol) {
+                self.constraints
+                    .wants_equals(ty.clone(), InferTy::Var { id, level });
+            }
         }
 
         Ok(TypedDecl {
@@ -1437,7 +1487,7 @@ impl<'a> InferencePass<'a> {
         conformance_span: Span,
         context: &mut impl Solve,
     ) -> TypedRet<()> {
-        let _s = set_symbol_names(self.resolved_names.symbol_names.clone());
+        let _s = set_symbol_names(self.session.resolved_names.symbol_names.clone());
 
         let Symbol::Protocol(protocol_id) = protocol_symbol else {
             tracing::error!("didnt get protocol id for conformance: {protocol_symbol:?}");
@@ -1477,6 +1527,7 @@ impl<'a> InferencePass<'a> {
         // Get the protocol's associated type declarations
         // First try ASTs (for locally defined protocols), then type_catalog (for imported protocols)
         let protocol_associated_types = self
+            .session
             .resolved_names
             .child_types
             .get(&protocol_symbol)
@@ -1489,6 +1540,7 @@ impl<'a> InferencePass<'a> {
                 .iter()
                 .fold(FxHashMap::default(), |mut acc, (label, _)| {
                     let child_types = self
+                        .session
                         .resolved_names
                         .child_types
                         .get(&conforming_symbol)

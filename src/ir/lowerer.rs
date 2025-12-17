@@ -10,10 +10,11 @@ use crate::ir::monomorphizer::uncurry_function;
 use crate::ir::value::{Addr, Reference};
 use crate::label::Label;
 use crate::name_resolution::name_resolver::ResolvedNames;
-use crate::name_resolution::symbol::{MethodRequirementId, Symbols, set_symbol_names};
+use crate::name_resolution::symbol::Symbols;
 use crate::node_kinds::inline_ir_instruction::{InlineIRInstructionKind, TypedInlineIRInstruction};
 use crate::node_kinds::type_annotation::TypeAnnotation;
 use crate::types::infer_row::RowParamId;
+use crate::types::predicate::Predicate;
 use crate::types::row::Row;
 use crate::types::type_session::TypeDefKind;
 use crate::types::typed_ast::{
@@ -68,11 +69,13 @@ pub(super) struct CurrentFunction {
     blocks: Vec<BasicBlock<Ty>>,
     pub registers: RegisterAllocator,
     bindings: FxHashMap<Symbol, Binding<Ty>>,
+    symbol: Symbol,
 }
 
 impl CurrentFunction {
-    fn new() -> Self {
+    fn new(symbol: Symbol) -> Self {
         CurrentFunction {
+            symbol,
             current_block_idx: vec![0],
             blocks: vec![BasicBlock::<Ty> {
                 phis: Default::default(),
@@ -245,9 +248,11 @@ impl<'a> Lowerer<'a> {
 
         if self.config.mode == CompilationMode::Executable {
             self.lower_main();
-            self.current_function_stack.push(CurrentFunction::new());
+            self.current_function_stack
+                .push(CurrentFunction::new(Symbol::Main));
         } else {
-            self.current_function_stack.push(CurrentFunction::new());
+            self.current_function_stack
+                .push(CurrentFunction::new(Symbol::Library));
         }
 
         for root in self.ast.roots() {
@@ -465,7 +470,8 @@ impl<'a> Lowerer<'a> {
             );
         };
 
-        self.current_function_stack.push(CurrentFunction::new());
+        self.current_function_stack
+            .push(CurrentFunction::new(*name));
 
         let mut param_values = vec![];
         for param in initializer.params.iter() {
@@ -890,18 +896,6 @@ impl<'a> Lowerer<'a> {
                 &Some(receiver.clone()),
                 label,
                 None,
-                bind,
-                instantiations,
-            ),
-            TypedExprKind::ProtocolMember {
-                receiver,
-                label,
-                witness,
-            } => self.lower_member(
-                expr,
-                &Some(receiver.clone()),
-                label,
-                Some(*witness),
                 bind,
                 instantiations,
             ),
@@ -1948,25 +1942,6 @@ impl<'a> Lowerer<'a> {
             );
         }
 
-        if let TypedExprKind::ProtocolMember {
-            receiver: box receiver,
-            label: member,
-            witness,
-        } = &callee.kind
-        {
-            return self.lower_method_call(
-                call_expr,
-                callee,
-                receiver.clone(),
-                member,
-                Some(*witness),
-                args,
-                arg_vals,
-                dest,
-                &instantiations,
-            );
-        }
-
         let callee_ir = self.lower_expr(callee, Bind::Fresh, &instantiations)?.0;
 
         self.push_instr(Instruction::Call {
@@ -2059,7 +2034,10 @@ impl<'a> Lowerer<'a> {
                 receiver.ty.clone()
             );
 
-            return Ok((Value::Void, Ty::Void));
+            return Err(IRError::WitnessNotFound(format!(
+                "No witness found for {label:?} in {receiver:?} ({:?}). Instantiations: {instantiations:?}",
+                receiver.ty
+            )));
         };
 
         // Go through the method and make sure all witnesses are resolved inside it
@@ -2121,7 +2099,8 @@ impl<'a> Lowerer<'a> {
         };
 
         let _s = tracing::trace_span!("pushing new current function");
-        self.current_function_stack.push(CurrentFunction::new());
+        self.current_function_stack
+            .push(CurrentFunction::new(func.name));
 
         let mut params = vec![];
 
@@ -2472,7 +2451,7 @@ impl<'a> Lowerer<'a> {
     }
 
     fn resolve_name(&self, sym: &Symbol) -> Option<&String> {
-        if let Some(string) = self.symbol_names.get(sym) {
+        if let Some(string) = self.resolved_names.symbol_names.get(sym) {
             return Some(string);
         }
 
@@ -2601,7 +2580,7 @@ impl<'a> Lowerer<'a> {
         };
 
         if let Some(sym) = self.config.modules.lookup_concrete_member(&symbol, label)
-            && matches!(sym, Symbol::InstanceMethod(..))
+        // && matches!(sym, Symbol::InstanceMethod(..))
         {
             Ok(Some(sym))
         } else if let Some(methods) = self.types.catalog.instance_methods.get(&symbol)
@@ -2638,7 +2617,6 @@ impl<'a> Lowerer<'a> {
 
                 member
             }
-            TypedExprKind::ProtocolMember { witness, .. } => *witness,
             _ => {
                 tracing::trace!("expr has no substitutions: {expr:?}");
                 return Ok((expr.ty.clone(), Default::default()));
@@ -2718,6 +2696,37 @@ impl<'a> Lowerer<'a> {
         label: &Label,
         instantiations: &Substitutions,
     ) -> Option<Symbol> {
+        // First try with any known type substitutions (important for `Self`-like params).
+        let receiver_ty = substitute(receiver.ty.clone(), instantiations);
+
+        // Concrete receiver: proceed as before.
+        if let Some(sym) = self.symbol_for_ty(&receiver_ty)
+            && let Some(methods) = self.types.catalog.instance_methods.get(&sym)
+            && let Some(witness) = methods.get(label)
+        {
+            return Some(*witness);
+        } else if let Ty::Param(param_id) = receiver_ty {
+            // Abstract receiver (e.g. protocol `Self`): use the current function’s Scheme
+            // predicates to find a constraining protocol, then resolve the member against
+            // that protocol (including transitive superprotocol lookup).
+            let current_func_sym = self.current_func_mut().symbol;
+            if let Some(TypeEntry::Poly(scheme)) = self.types.get_symbol(&current_func_sym) {
+                for pred in &scheme.predicates {
+                    if let Predicate::Conforms { param, protocol_id } = pred
+                        && *param == param_id
+                    {
+                        let proto = Symbol::Protocol(*protocol_id);
+                        if let Some((member, _src)) =
+                            self.types.catalog.lookup_member(&proto, label)
+                        {
+                            return Some(member);
+                        }
+                    }
+                }
+            }
+            return None;
+        }
+
         let sym = self.symbol_for_ty(&receiver.ty)?;
 
         // See if there's a witness
@@ -2742,7 +2751,6 @@ impl<'a> Lowerer<'a> {
         for conformance in conformances {
             if let Some(witness) = conformance.witnesses.methods.get(label).copied() {
                 self.check_import(&witness, instantiations);
-                println!("witness: {witness:?}");
                 return Some(witness);
             }
 
@@ -2765,7 +2773,7 @@ impl<'a> Lowerer<'a> {
             };
 
             self.check_import(&member, instantiations);
-            let m = self.monomorphize_name(member, instantiations);
+            let _m = self.monomorphize_name(member, instantiations);
 
             return Some(member);
         }
