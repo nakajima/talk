@@ -1,6 +1,6 @@
 use crate::{
     diagnostic::{AnyDiagnostic, Diagnostic},
-    name_resolution::{name_resolver::ResolvedNames, symbol::Symbol},
+    name_resolution::symbol::Symbol,
     node_id::NodeID,
     types::{
         conformance::ConformanceKey,

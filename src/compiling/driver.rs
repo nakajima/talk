@@ -6,9 +6,9 @@ use crate::{
     lexer::Lexer,
     name_resolution::{
         name_resolver::{NameResolver, ResolvedNames},
-        symbol::{Symbol, Symbols, set_symbol_names},
+        symbol::{Symbol, Symbols},
     },
-    node_id::{FileID, NodeID},
+    node_id::FileID,
     parser::Parser,
     parser_error::ParserError,
     types::{
@@ -20,7 +20,6 @@ use crate::{
     },
 };
 use indexmap::IndexMap;
-use petgraph::dot::{Config, Dot};
 use rustc_hash::FxHashMap;
 use std::{io, path::PathBuf, rc::Rc};
 
@@ -41,7 +40,6 @@ impl DriverPhase for NameResolved {}
 pub struct NameResolved {
     pub asts: IndexMap<Source, AST<crate::parsing::ast::NameResolved>>,
     pub symbols: Symbols,
-    pub symbol_names: FxHashMap<Symbol, String>,
     pub resolved_names: ResolvedNames,
     pub diagnostics: Vec<AnyDiagnostic>,
 }
@@ -51,7 +49,6 @@ pub struct Typed {
     pub ast: TypedAST<Ty>,
     pub types: Types,
     pub exports: Exports,
-    pub symbol_names: FxHashMap<Symbol, String>,
     pub symbols: Symbols,
     pub resolved_names: ResolvedNames,
     pub diagnostics: Vec<AnyDiagnostic>,
@@ -207,20 +204,7 @@ impl Driver<Parsed> {
 
         let (paths, asts): (Vec<_>, Vec<_>) = self.phase.asts.into_iter().unzip();
         let (asts, resolved) = resolver.resolve(asts);
-
         let asts = paths.into_iter().zip(asts).collect();
-
-        let mut symbol_names = resolver.phase.symbol_names;
-        symbol_names.extend(self.config.modules.imported_symbol_names());
-
-        let _s = set_symbol_names(symbol_names.clone());
-        let graph = resolver.phase.scc_graph.clone();
-        std::fs::write(
-            format!("./{}-graph.dot", self.config.module_name),
-            Dot::with_config(&graph.graph, &[Config::EdgeNoLabel]).to_string(),
-        )
-        .unwrap_or_else(|_| unreachable!("did not dump graph"));
-
         self.phase.diagnostics.extend(resolver.phase.diagnostics);
 
         Ok(Driver {
@@ -228,7 +212,6 @@ impl Driver<Parsed> {
             config: self.config,
             phase: NameResolved {
                 asts,
-                symbol_names,
                 symbols: resolver.symbols,
                 resolved_names: resolved,
                 diagnostics: self.phase.diagnostics,
@@ -238,18 +221,6 @@ impl Driver<Parsed> {
 }
 
 impl Driver<NameResolved> {
-    pub fn exports(&self) -> Exports {
-        let mut res = Exports::default();
-        if let Some(scope) = self.phase.resolved_names.scopes.get(&NodeID(FileID(0), 0)) {
-            res.extend(scope.types.clone());
-            res.extend(scope.values.clone());
-        }
-
-        res.into_iter()
-            .filter(|e| !matches!(e.1, Symbol::Builtin(..)))
-            .collect()
-    }
-
     pub fn typecheck(mut self) -> Result<Driver<Typed>, CompileError> {
         let mut session = TypeSession::new(
             self.config.module_id,
@@ -258,9 +229,7 @@ impl Driver<NameResolved> {
             std::mem::take(&mut self.phase.resolved_names),
         );
 
-        let exports = self.exports();
-
-        let (_paths, mut asts): (Vec<_>, Vec<_>) = self.phase.asts.into_iter().unzip();
+        let (_paths, mut asts): (Vec<_>, Vec<_>) = self.phase.asts.iter_mut().unzip();
         let (ast, diagnostics) = InferencePass::drive(&mut asts, &mut session);
 
         self.phase.diagnostics.extend(diagnostics);
@@ -273,8 +242,7 @@ impl Driver<NameResolved> {
             phase: Typed {
                 ast,
                 types: session.finalize().map_err(CompileError::Typing)?,
-                exports,
-                symbol_names: self.phase.symbol_names,
+                exports: resolved_names.exports(),
                 symbols,
                 resolved_names,
                 diagnostics: self.phase.diagnostics,
@@ -289,8 +257,7 @@ impl Driver<Typed> {
             &mut self.phase.ast,
             &mut self.phase.types,
             &mut self.phase.symbols,
-            &mut self.phase.symbol_names,
-            &self.phase.resolved_names,
+            &mut self.phase.resolved_names,
             &self.config,
         );
 
@@ -301,7 +268,7 @@ impl Driver<Typed> {
             config: self.config,
             phase: Lowered {
                 ast: self.phase.ast,
-                symbol_names: self.phase.symbol_names,
+                symbol_names: self.phase.resolved_names.symbol_names,
                 types: self.phase.types,
                 exports: self.phase.exports,
                 symbols: self.phase.symbols,

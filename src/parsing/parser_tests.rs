@@ -220,7 +220,6 @@ pub mod tests {
                 name: "Person".into(),
                 name_span: Span::ANY,
                 generics: vec![],
-                conformances: vec![],
                 body: any_body!(vec![])
             })
         );
@@ -1177,7 +1176,6 @@ pub mod tests {
                 name: "Fizz".into(),
                 name_span: Span::ANY,
                 generics: vec![],
-                conformances: vec![],
                 body: any_body!(vec![])
             })
         );
@@ -1257,7 +1255,6 @@ pub mod tests {
                         conformances: vec![]
                     },
                 ],
-                conformances: vec![],
                 body: any_body!(vec![
                     any_decl!(DeclKind::EnumVariant(
                         Name::Raw("foo".into()),
@@ -1307,7 +1304,6 @@ pub mod tests {
                 name: "Fizz".into(),
                 name_span: Span::ANY,
                 generics: vec![],
-                conformances: vec![],
                 body: any_body!(
                     (vec![
                         any_decl!(DeclKind::EnumVariant(
@@ -1344,7 +1340,6 @@ pub mod tests {
                 name: "Fizz".into(),
                 name_span: Span::ANY,
                 generics: vec![],
-                conformances: vec![],
                 body: any_body!(vec![
                     any_decl!(DeclKind::EnumVariant(
                         Name::Raw("foo".into()),
@@ -1604,7 +1599,6 @@ pub mod tests {
                 name: "MyEnum".into(),
                 name_span: Span::ANY,
                 generics: vec![],
-                conformances: vec![],
                 body: any_body!(vec![
                     any_decl!(DeclKind::EnumVariant(
                         Name::Raw("val".into()),
@@ -1829,7 +1823,6 @@ pub mod tests {
                 name: "Person".into(),
                 name_span: Span::ANY,
                 generics: vec![],
-                conformances: vec![],
                 body: any_body!(vec![])
             })
         );
@@ -1853,7 +1846,6 @@ pub mod tests {
                 name: "Person".into(),
                 name_span: Span::ANY,
                 generics: vec![],
-                conformances: vec![],
                 body: any_body!(vec![
                     any_decl!(DeclKind::Property {
                         name: "age".into(),
@@ -1907,7 +1899,6 @@ pub mod tests {
                 name: "Person".into(),
                 name_span: Span::ANY,
                 generics: vec![],
-                conformances: vec![],
                 body: any_body!(vec![
                     any_decl!(DeclKind::Property {
                         name: "age".into(),
@@ -1961,7 +1952,6 @@ pub mod tests {
                 name: "Person".into(),
                 name_span: Span::ANY,
                 generics: vec![],
-                conformances: vec![],
                 body: any_body!(vec![any_decl!(DeclKind::Method {
                     is_static: true,
                     func: Func {
@@ -1998,7 +1988,6 @@ pub mod tests {
                 name: "Person".into(),
                 name_span: Span::ANY,
                 generics: vec![],
-                conformances: vec![],
                 body: any_body!(vec![any_decl!(DeclKind::Method {
                     is_static: false,
                     func: Func {
@@ -2035,7 +2024,6 @@ pub mod tests {
                 name: "Person".into(),
                 name_span: Span::ANY,
                 generics: vec![],
-                conformances: vec![],
                 body: any_body!(vec![any_decl!(DeclKind::Init {
                     name: Name::Raw("init".into()),
                     params: vec![Parameter {

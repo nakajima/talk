@@ -237,15 +237,12 @@ impl Conforms {
                 .symbols
                 .next_instance_method(session.current_module_id);
             let name_str = session
-                .resolved_names
-                .symbol_names
-                .get(&sym)
-                .unwrap_or_else(|| unreachable!())
-                .clone();
+                .resolve_name(&sym)
+                .unwrap_or_else(|| unreachable!("Didn't get name for symbol: {sym:}"));
             session
                 .resolved_names
                 .symbol_names
-                .insert(specialized_symbol.into(), name_str.clone());
+                .insert(specialized_symbol.into(), name_str.to_string());
 
             session.insert_term(
                 specialized_symbol.into(),

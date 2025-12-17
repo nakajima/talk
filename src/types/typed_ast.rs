@@ -778,6 +778,11 @@ pub enum TypedExprKind<T: SomeType> {
         receiver: Box<TypedExpr<T>>,
         label: Label,
     },
+    ProtocolMember {
+        receiver: Box<TypedExpr<T>>,
+        label: Label,
+        witness: Symbol,
+    },
     // Function stuff
     Func(TypedFunc<T>),
     Variable(Symbol),
@@ -830,6 +835,15 @@ impl<T: SomeType, U: SomeType> TyMappable<T, U> for TypedExprKind<T> {
             Member { receiver, label } => Member {
                 receiver: receiver.map_ty(m).into(),
                 label,
+            },
+            ProtocolMember {
+                receiver,
+                label,
+                witness,
+            } => ProtocolMember {
+                receiver: receiver.map_ty(m).into(),
+                label,
+                witness,
             },
             Func(typed_func) => Func(typed_func.map_ty(m)),
             Variable(symbol) => Variable(symbol),

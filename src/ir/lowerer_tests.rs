@@ -38,22 +38,13 @@ pub mod tests {
             vec![Source::from(input)],
             DriverConfig::new("TestDriver").executable(),
         );
-        let mut typed = driver
+        let typed = driver
             .parse()
             .unwrap()
             .resolve_names()
             .unwrap()
             .typecheck()
             .unwrap();
-
-        let lowerer = Lowerer::new(
-            &mut typed.phase.ast,
-            &mut typed.phase.types,
-            &mut typed.phase.symbols,
-            &mut typed.phase.symbol_names,
-            &typed.phase.resolved_names,
-            &typed.config,
-        );
 
         typed.lower().unwrap().module("TestModule")
     }
@@ -75,8 +66,7 @@ pub mod tests {
             &mut typed.phase.ast,
             &mut typed.phase.types,
             &mut typed.phase.symbols,
-            &mut typed.phase.symbol_names,
-            &typed.phase.resolved_names,
+            &mut typed.phase.resolved_names,
             &typed.config,
         );
         lowerer.lower().unwrap()

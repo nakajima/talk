@@ -673,7 +673,6 @@ pub mod tests {
                 name: Name::Resolved(StructId::from(1).into(), "Person".into()),
                 name_span: Span::ANY,
                 generics: vec![],
-                conformances: vec![],
                 body: any_body!(vec![any_decl!(DeclKind::Init {
                     name: Name::Resolved(SynthesizedId::from(1).into(), "init".into()),
                     params: vec![param!(
@@ -708,7 +707,6 @@ pub mod tests {
                 name: Name::Resolved(StructId::from(1).into(), "Person".into()),
                 name_span: Span::ANY,
                 generics: vec![],
-                conformances: vec![],
                 body: any_body!(vec![
                     any_decl!(DeclKind::Init {
                         name: Name::Resolved(SynthesizedId::from(1).into(), "init".into()),
@@ -778,7 +776,6 @@ pub mod tests {
                 name: Name::Resolved(StructId::from(1).into(), "Person".into()),
                 name_span: Span::ANY,
                 generics: vec![],
-                conformances: vec![],
                 body: any_body!(vec![any_decl!(DeclKind::Init {
                     name: Name::Resolved(
                         Symbol::Initializer(InitializerId::from(1)),
@@ -820,7 +817,6 @@ pub mod tests {
                     conformances: vec![],
                     span: Span::ANY
                 }],
-                conformances: vec![],
                 body: any_body!(vec![
                     any_decl!(DeclKind::Init {
                         name: Name::Resolved(SynthesizedId::from(1).into(), "init".into()),
@@ -891,7 +887,6 @@ pub mod tests {
                 name: Name::Resolved(StructId::from(1).into(), "Person".into()),
                 name_span: Span::ANY,
                 generics: vec![],
-                conformances: vec![],
                 body: any_body!(vec![
                     any_decl!(DeclKind::Init {
                         name: Name::Resolved(SynthesizedId::from(1).into(), "init".into()),
@@ -948,7 +943,6 @@ pub mod tests {
                 name: Name::Resolved(StructId::from(1).into(), "Person".into()),
                 name_span: Span::ANY,
                 generics: vec![],
-                conformances: vec![],
                 body: any_body!(vec![
                     any_decl!(DeclKind::Init {
                         name: Name::Resolved(SynthesizedId::from(1).into(), "init".into()),
@@ -1225,7 +1219,6 @@ pub mod tests {
             any_decl!(DeclKind::Enum {
                 name: Name::Resolved(Symbol::Enum(EnumId::from(1)), "Fizz".into()),
                 name_span: Span::ANY,
-                conformances: vec![],
                 generics: vec![],
                 body: any_body!(vec![
                     any_decl!(DeclKind::EnumVariant(

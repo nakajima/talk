@@ -59,6 +59,12 @@ pub enum BlockContext {
     None,
 }
 
+impl BlockContext {
+    pub fn allows_conformances(&self) -> bool {
+        matches!(self, BlockContext::Extend | BlockContext::Protocol)
+    }
+}
+
 // for tracking begin/end tokens
 pub struct SourceLocationStart {
     token: Token,
@@ -325,7 +331,7 @@ impl<'a> Parser<'a> {
         let (name, name_span) = self.identifier()?;
         let generics = self.generics()?;
 
-        let conformances = if self.did_match(TokenKind::Colon)? {
+        let conformances = if context.allows_conformances() && self.did_match(TokenKind::Colon)? {
             self.conformances()?
         } else {
             vec![]
@@ -337,14 +343,12 @@ impl<'a> Parser<'a> {
             BlockContext::Enum => DeclKind::Enum {
                 name: name.into(),
                 name_span,
-                conformances,
                 generics,
                 body,
             },
             BlockContext::Struct => DeclKind::Struct {
                 name: name.into(),
                 name_span,
-                conformances,
                 generics,
                 body,
             },

@@ -210,14 +210,12 @@ impl<'a> Higlighter<'a> {
                 DeclKind::Import(_) => (),
                 DeclKind::Struct {
                     generics,
-                    conformances,
                     body,
                     name_span,
                     ..
                 } => {
                     result.push(self.make_span(Kind::TYPE, *name_span));
                     result.extend(self.tokens_from_exprs(generics, ast));
-                    result.extend(self.tokens_from_exprs(conformances, ast));
                     result.extend(self.tokens_from_expr(body, ast));
                 }
                 DeclKind::Let {
@@ -286,7 +284,6 @@ impl<'a> Higlighter<'a> {
                     result.extend(self.tokens_from_expr(body, ast));
                 }
                 DeclKind::Enum {
-                    conformances,
                     generics,
                     body,
                     name_span,
@@ -294,7 +291,6 @@ impl<'a> Higlighter<'a> {
                 } => {
                     result.push(self.make_span(Kind::TYPE, *name_span));
                     result.extend(self.tokens_from_exprs(generics, ast));
-                    result.extend(self.tokens_from_exprs(conformances, ast));
                     result.extend(self.tokens_from_expr(body, ast));
                 }
                 DeclKind::EnumVariant(.., type_annotations) => {

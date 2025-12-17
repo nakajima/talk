@@ -9,7 +9,10 @@ use tracing::instrument;
 
 use crate::{
     ast::{AST, NameResolved, Parsed},
-    compiling::module::{ModuleEnvironment, ModuleId},
+    compiling::{
+        driver::Exports,
+        module::{ModuleEnvironment, ModuleId},
+    },
     diagnostic::{AnyDiagnostic, Diagnostic},
     label::Label,
     name::Name,
@@ -109,6 +112,20 @@ pub struct ResolvedNames {
     pub unbound_nodes: Vec<NodeID>,
     pub child_types: IndexMap<Symbol, IndexMap<Label, Symbol>>,
     pub diagnostics: Vec<AnyDiagnostic>,
+}
+
+impl ResolvedNames {
+    pub fn exports(&self) -> Exports {
+        let mut res = Exports::default();
+        if let Some(scope) = self.scopes.get(&NodeID(FileID(0), 0)) {
+            res.extend(scope.types.clone());
+            res.extend(scope.values.clone());
+        }
+
+        res.into_iter()
+            .filter(|e| !matches!(e.1, Symbol::Builtin(..)))
+            .collect()
+    }
 }
 
 pub type ScopeId = Index;
@@ -321,8 +338,16 @@ impl NameResolver {
 
         let matching_imported_names = self.modules.lookup_name(&name.name_str());
         match matching_imported_names.len() {
-            0 => (),
-            1 => return Some(matching_imported_names[0]),
+            0 => {
+                println!("No external import named: {name:?}");
+            }
+            1 => {
+                println!(
+                    "Found external import named: {:?}",
+                    matching_imported_names[0]
+                );
+                return Some(matching_imported_names[0]);
+            }
             _ => {
                 self.diagnostic(
                     scope_id,

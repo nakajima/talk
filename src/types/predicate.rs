@@ -356,6 +356,7 @@ impl Predicate<InferTy> {
                     level,
                 ),
                 protocol_id,
+                &context.group_info(),
             ),
             Self::Equals { lhs, rhs } => constraints.wants_equals(
                 instantiate_ty(id, lhs, context.instantiations_mut(), level),

@@ -1880,13 +1880,15 @@ pub mod tests {
             func getAge() -> T
         }
 
-        struct Inty: Aged {
+        struct Inty {}
+        extend Inty: Aged {
             func getAge() {
                 123
             }
         }
 
-        struct Floaty: Aged {
+        struct Floaty {}
+        extend Floaty: Aged {
             func getAge() {
                 1.23
             }
@@ -1915,11 +1917,13 @@ pub mod tests {
             func getAge() -> T
         }
 
-        struct Person<A>: Aged {
+        struct Person<A> {
             typealias T = A
             let age: A
+        }
 
-            func getAge() -> A {
+        extend Person: Aged {
+            func getAge() -> Person.A {
                 self.age
             }
         }
@@ -2132,7 +2136,8 @@ pub mod tests {
             }
         }
 
-        struct A: Fizz {
+        struct A {}
+        extend A: Fizz {
             func fizz() { 123 }
         }
 
@@ -2155,7 +2160,7 @@ pub mod tests {
     }
 
     #[test]
-    fn checks_as() {
+    fn check_as() {
         let (_ast, _types, diagnostics) = typecheck_err(
             "
         protocol Fizz {
@@ -2187,7 +2192,8 @@ pub mod tests {
             func fizz() -> Int
         }
 
-        struct B: A {}
+        struct B {}
+        extend B: A {} 
         ",
         );
 
@@ -2238,7 +2244,8 @@ pub mod tests {
             func buzz() -> Int
         }
 
-        struct C: B {
+        struct C {}
+        extend C: B {
             func buzz() { 123 }
         }
         ",
@@ -2347,7 +2354,7 @@ pub mod tests {
 
     #[test]
     fn tracks_transitive_witnesses() {
-        let (ast, types) = typecheck(
+        let (_ast, types) = typecheck(
             "
             protocol A {
                 func default() { 123 }

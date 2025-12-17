@@ -1,3 +1,4 @@
+use itertools::Itertools;
 use tracing::instrument;
 
 use crate::{
@@ -34,8 +35,17 @@ impl TypeMember {
         context: &mut SolveContext,
         session: &mut TypeSession,
     ) -> SolveResult {
-        #[warn(clippy::todo)]
-        match &self.base {
+        self.solve_for(&self.base, constraints, context, session)
+    }
+
+    fn solve_for(
+        &self,
+        ty: &InferTy,
+        constraints: &mut ConstraintStore,
+        context: &mut SolveContext,
+        session: &mut TypeSession,
+    ) -> SolveResult {
+        match ty {
             InferTy::Var { id, .. } => {
                 SolveResult::Defer(DeferralReason::WaitingOnMeta(Meta::Ty(*id)))
             }
@@ -54,7 +64,43 @@ impl TypeMember {
             #[allow(clippy::todo)]
             InferTy::Constructor { .. } => todo!(),
             #[allow(clippy::todo)]
-            InferTy::Nominal { .. } => todo!(),
+            InferTy::Nominal { symbol, type_args } => {
+                if let Some(children) = session.type_catalog.child_types.get(symbol)
+                    && let Some(child_sym) = children.get(&self.name).copied()
+                    && let Some(ty) = session.lookup(&child_sym)
+                {
+                    if !type_args.is_empty() {
+                        let ty = ty
+                            .instantiate_with_args(
+                                self.node_id,
+                                type_args
+                                    .iter()
+                                    .map(|a| (a.clone(), NodeID::SYNTHESIZED))
+                                    .collect_vec()
+                                    .as_slice(),
+                                session,
+                                context,
+                                constraints,
+                            )
+                            .0;
+                        match unify(&ty, &self.result, context, session) {
+                            Ok(vars) => return SolveResult::Solved(vars),
+                            Err(e) => return SolveResult::Err(e),
+                        }
+                    }
+                    println!("CHILD TYPE: {ty:?}");
+                    self.solve_for(&ty._as_ty(), constraints, context, session)
+                } else {
+                    println!(
+                        "CHILDREN: {:?}",
+                        session.type_catalog.child_types.get(symbol)
+                    );
+                    SolveResult::Err(TypeError::TypeNotFound(format!(
+                        "Did not find child type {symbol:?}.{}",
+                        self.name
+                    )))
+                }
+            }
             _ => SolveResult::Err(TypeError::TypeNotFound(format!(
                 "Could not find child type {:?} for {:?}",
                 self.name, self.base

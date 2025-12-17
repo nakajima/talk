@@ -792,6 +792,14 @@ impl TypeSession {
         ))
     }
 
+    pub(super) fn resolve_name(&self, sym: &Symbol) -> Option<&str> {
+        if let Some(name) = self.resolved_names.symbol_names.get(sym) {
+            return Some(name);
+        }
+
+        self.modules.resolve_name(sym).map(|x| x.as_str())
+    }
+
     #[instrument(level = tracing::Level::TRACE, skip(self))]
     pub(super) fn lookup(&mut self, sym: &Symbol) -> Option<EnvEntry<InferTy>> {
         if let Some(entry) = builtin_scope().get(sym).cloned() {

@@ -37,7 +37,10 @@ use crate::{
         builtins::resolve_builtin_type,
         conformance::{Conformance, ConformanceKey, Witnesses},
         constraint_solver::ConstraintSolver,
-        constraints::{constraint::Constraint, store::ConstraintStore},
+        constraints::{
+            constraint::Constraint,
+            store::{ConstraintStore, GroupId},
+        },
         infer_row::InferRow,
         infer_ty::{InferTy, Level, Meta, MetaVarId, TypeParamId},
         predicate::Predicate,
@@ -68,7 +71,7 @@ pub type PendingTypeInstances =
     FxHashMap<MetaVarId, (NodeID, Span, Level, Symbol, Vec<(InferTy, NodeID)>)>;
 
 pub struct InferencePass<'a> {
-    asts: &'a mut [AST<NameResolved>],
+    asts: &'a mut [&'a mut AST<NameResolved>],
     session: &'a mut TypeSession,
     constraints: ConstraintStore,
     instantiations: FxHashMap<NodeID, InstantiationSubstitutions>,
@@ -82,7 +85,7 @@ pub struct InferencePass<'a> {
 
 impl<'a> InferencePass<'a> {
     pub fn drive(
-        asts: &'a mut [AST<NameResolved>],
+        asts: &'a mut [&'a mut AST<NameResolved>],
         session: &'a mut TypeSession,
     ) -> (TypedAST<Ty>, Vec<AnyDiagnostic>) {
         let substitutions = UnificationSubstitutions::new(session.meta_levels.clone());
@@ -157,15 +160,15 @@ impl<'a> InferencePass<'a> {
                                 },
                             }));
                         }
-                        _ty => {
+                        ty => {
                             tracing::error!("did not solve {conforms:?}");
-                            // self.diagnostics.insert(AnyDiagnostic::Typing(Diagnostic {
-                            //     id: conforms.conformance_node_id,
-                            //     kind: TypeError::TypesCannotConform {
-                            //         ty: ty.clone(),
-                            //         protocol_id: conforms.protocol_id,
-                            //     },
-                            // }));
+                            self.diagnostics.insert(AnyDiagnostic::Typing(Diagnostic {
+                                id: conforms.conformance_node_id,
+                                kind: TypeError::TypesCannotConform {
+                                    ty: ty.clone(),
+                                    protocol_id: conforms.protocol_id,
+                                },
+                            }));
                         }
                     };
                 }
@@ -194,13 +197,7 @@ impl<'a> InferencePass<'a> {
         for root in roots.iter() {
             let Node::Decl(Decl {
                 kind:
-                    DeclKind::Struct {
-                        name, conformances, ..
-                    }
-                    | DeclKind::Enum {
-                        name, conformances, ..
-                    }
-                    | DeclKind::Extend {
+                    DeclKind::Extend {
                         name, conformances, ..
                     },
                 ..
@@ -229,23 +226,7 @@ impl<'a> InferencePass<'a> {
                     continue;
                 };
 
-                let conforming_ty = self
-                    .session
-                    .lookup(&nominal_symbol)
-                    .map(|s| s._as_ty())
-                    .unwrap_or_else(|| {
-                        let id = self.session.new_ty_meta_var_id(Default::default());
-                        let var_ty = InferTy::Var {
-                            id,
-                            level: Default::default(),
-                        };
-                        self.nominal_placeholders
-                            .insert(nominal_symbol, (id, Default::default()));
-                        var_ty
-                    });
-
                 self.register_conformance(
-                    &conforming_ty,
                     conforming_id,
                     protocol_symbol,
                     conformance.id,
@@ -253,7 +234,7 @@ impl<'a> InferencePass<'a> {
                     &mut SolveContext::new(
                         UnificationSubstitutions::new(self.session.meta_levels.clone()),
                         Level::default(),
-                        Default::default(),
+                        GroupId(u32::MAX),
                         SolveContextKind::Nominal,
                     ),
                 )
@@ -441,7 +422,6 @@ impl<'a> InferencePass<'a> {
             };
 
             self.register_conformance(
-                &InferTy::Param(protocol_self_id),
                 protocol_symbol,
                 conforms_to_id.into(),
                 conformance.id,
@@ -807,10 +787,9 @@ impl<'a> InferencePass<'a> {
             DeclKind::Struct {
                 name,
                 generics,
-                conformances,
                 body,
                 ..
-            } => self.visit_nominal(decl, name, generics, conformances, body, context),
+            } => self.visit_nominal(decl, name, generics, Default::default(), body, context),
             DeclKind::Protocol {
                 name,
                 generics,
@@ -830,10 +809,9 @@ impl<'a> InferencePass<'a> {
             DeclKind::Enum {
                 name,
                 generics,
-                conformances,
                 body,
                 ..
-            } => self.visit_nominal(decl, name, generics, conformances, body, context),
+            } => self.visit_nominal(decl, name, generics, Default::default(), body, context),
             DeclKind::Import(_) => unimplemented!(),
             DeclKind::Func(..)
             | DeclKind::Init { .. }
@@ -1088,7 +1066,8 @@ impl<'a> InferencePass<'a> {
         };
 
         self.constraints
-            .wants_conforms(lhs.id, lhs_ty.ty.clone(), id);
+            .wants_conforms(lhs.id, lhs_ty.ty.clone(), id, &context.group_info());
+
         Ok(lhs_ty)
     }
 
@@ -1258,14 +1237,29 @@ impl<'a> InferencePass<'a> {
         body: &Body,
         context: &mut impl Solve,
     ) -> TypedRet<TypedDecl<InferTy>> {
-        let mut type_params = vec![];
-        for generic in generics.iter() {
-            type_params.push(InferTy::Param(self.register_generic(generic, context)));
-        }
-
         let Ok(nominal_symbol) = name.symbol() else {
             return Err(TypeError::NameNotResolved(name.clone()));
         };
+
+        let mut type_params = vec![];
+        for generic in generics.iter() {
+            let id = self.register_generic(generic, context);
+            type_params.push(InferTy::Param(id));
+            let name = generic
+                .name
+                .symbol()
+                .map_err(|_| TypeError::NameNotResolved(generic.name.clone()))?;
+            println!(
+                "INSERTING GENERIC: {nominal_symbol:?}.{:?}",
+                generic.name.name_str()
+            );
+            self.session
+                .type_catalog
+                .child_types
+                .entry(nominal_symbol)
+                .or_default()
+                .insert(generic.name.name_str().into(), name);
+        }
 
         let ty = if matches!(nominal_symbol, Symbol::Builtin(..)) {
             InferTy::Primitive(nominal_symbol)
@@ -1423,14 +1417,25 @@ impl<'a> InferencePass<'a> {
                 continue;
             };
 
-            self.register_conformance(
-                &ty,
-                nominal_symbol,
-                sym,
+            let Symbol::Protocol(protocol_id) = sym else {
+                continue;
+            };
+
+            // self.register_conformance(
+            //     &ty,
+            //     nominal_symbol,
+            //     sym,
+            //     conformance.id,
+            //     conformance.span,
+            //     context,
+            // )?;
+
+            self.constraints.wants_conforms(
                 conformance.id,
-                conformance.span,
-                context,
-            )?;
+                ty.clone(),
+                protocol_id,
+                &context.group_info(),
+            );
         }
 
         let kind = match &decl.kind {
@@ -1480,7 +1485,6 @@ impl<'a> InferencePass<'a> {
 
     fn register_conformance(
         &mut self,
-        ty: &InferTy,
         conforming_symbol: Symbol,
         protocol_symbol: Symbol,
         conformance_node_id: NodeID,
@@ -1521,7 +1525,7 @@ impl<'a> InferencePass<'a> {
                 )
             };
 
-            self.register_conformance(ty, conforming_symbol, sym, node_id, span, context)?;
+            self.register_conformance(conforming_symbol, sym, node_id, span, context)?;
         }
 
         // Get the protocol's associated type declarations
@@ -1593,9 +1597,6 @@ impl<'a> InferencePass<'a> {
             .type_catalog
             .conformances
             .insert(key, conformance.clone());
-
-        self.constraints
-            .wants_conforms(conformance.node_id, ty.clone(), protocol_id);
 
         self.constraints.wake_conformances(&[key]);
 
@@ -2219,8 +2220,12 @@ impl<'a> InferencePass<'a> {
                     &rcv.kind
                     && let Some(first_arg) = arg_tys.first()
                 {
-                    self.constraints
-                        .wants_conforms(rcv.id, first_arg.ty.clone(), *protocol_id);
+                    self.constraints.wants_conforms(
+                        rcv.id,
+                        first_arg.ty.clone(),
+                        *protocol_id,
+                        &context.group_info(),
+                    );
                 }
 
                 Some(self.visit_expr(rcv, context)?)

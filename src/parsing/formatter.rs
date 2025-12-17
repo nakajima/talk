@@ -320,10 +320,9 @@ impl<'a> Formatter<'a> {
             DeclKind::Struct {
                 name,
                 generics,
-                conformances,
                 body,
                 ..
-            } => self.format_struct(name, generics, conformances, body),
+            } => self.format_struct(name, generics, body),
             DeclKind::Let {
                 lhs,
                 type_annotation,
@@ -361,11 +360,10 @@ impl<'a> Formatter<'a> {
             } => self.format_extend(name, generics, conformances, body),
             DeclKind::Enum {
                 name,
-                conformances,
                 generics,
                 body,
                 ..
-            } => self.format_enum_decl(name, generics, conformances, body),
+            } => self.format_enum_decl(name, generics, body),
             DeclKind::EnumVariant(name, .., types) => self.format_enum_variant(name, types),
             DeclKind::FuncSignature(sig) => self.format_func_signature(sig),
             DeclKind::MethodRequirement(sig) => self.format_func_signature(sig),
@@ -765,13 +763,7 @@ impl<'a> Formatter<'a> {
         }
     }
 
-    fn format_struct(
-        &self,
-        name: &Name,
-        generics: &[GenericDecl],
-        conformances: &[TypeAnnotation],
-        body: &Body,
-    ) -> Doc {
+    fn format_struct(&self, name: &Name, generics: &[GenericDecl], body: &Body) -> Doc {
         let mut result = concat_space(text("struct"), self.format_name(name));
 
         if !generics.is_empty() {
@@ -786,17 +778,6 @@ impl<'a> Formatter<'a> {
                     text("<"),
                     concat(join(generic_docs, concat(text(","), text(" "))), text(">")),
                 ),
-            );
-        }
-
-        if !conformances.is_empty() {
-            let conformances_docs = conformances
-                .iter()
-                .map(|ty| self.format_type_annotation(ty))
-                .collect();
-            result = concat(
-                result,
-                concat(text(": "), join(conformances_docs, text(", "))),
             );
         }
 
@@ -1112,13 +1093,7 @@ impl<'a> Formatter<'a> {
         result
     }
 
-    fn format_enum_decl(
-        &self,
-        name: &Name,
-        generics: &[GenericDecl],
-        conformances: &[TypeAnnotation],
-        body: &Body,
-    ) -> Doc {
+    fn format_enum_decl(&self, name: &Name, generics: &[GenericDecl], body: &Body) -> Doc {
         let mut result = concat_space(text("enum"), self.format_name(name));
 
         if !generics.is_empty() {
@@ -1133,17 +1108,6 @@ impl<'a> Formatter<'a> {
                     text("<"),
                     concat(join(generic_docs, concat(text(","), text(" "))), text(">")),
                 ),
-            );
-        }
-
-        if !conformances.is_empty() {
-            let conformances_docs = conformances
-                .iter()
-                .map(|ty| self.format_type_annotation(ty))
-                .collect();
-            result = concat(
-                result,
-                concat(text(": "), join(conformances_docs, text(", "))),
             );
         }
 

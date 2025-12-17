@@ -418,6 +418,7 @@ impl ConstraintStore {
         conformance_node_id: NodeID,
         ty: InferTy,
         protocol_id: ProtocolId,
+        group: &BindingGroup,
     ) -> &Constraint {
         let id = self.ids.next_id();
         self.wants(
@@ -428,7 +429,7 @@ impl ConstraintStore {
                 ty,
                 protocol_id,
             }),
-            &Default::default(),
+            group,
         )
     }
 

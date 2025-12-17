@@ -199,8 +199,7 @@ pub struct Lowerer<'a> {
     pub(super) config: &'a DriverConfig,
 
     symbols: &'a mut Symbols,
-    symbol_names: &'a mut FxHashMap<Symbol, String>,
-    resolved_names: &'a ResolvedNames,
+    resolved_names: &'a mut ResolvedNames,
     pub(super) specializations: IndexMap<Symbol, Vec<Specialization>>,
     static_memory: StaticMemory,
 }
@@ -212,8 +211,7 @@ impl<'a> Lowerer<'a> {
         ast: &'a mut TypedAST<Ty>,
         types: &'a mut Types,
         symbols: &'a mut Symbols,
-        symbol_names: &'a mut FxHashMap<Symbol, String>,
-        resolved_names: &'a ResolvedNames,
+        resolved_names: &'a mut ResolvedNames,
         config: &'a DriverConfig,
     ) -> Self {
         Self {
@@ -222,7 +220,6 @@ impl<'a> Lowerer<'a> {
             functions: Default::default(),
             current_function_stack: Default::default(),
             symbols,
-            symbol_names,
             specializations: Default::default(),
             static_memory: Default::default(),
             config,
@@ -281,7 +278,7 @@ impl<'a> Lowerer<'a> {
             .ast
             .decls
             .iter()
-            .any(|d| is_main_func(d, self.symbol_names));
+            .any(|d| is_main_func(d, &self.resolved_names.symbol_names));
         if !has_main_func {
             let main_symbol = Symbol::Main;
             let mut ret_ty = Ty::Void;
@@ -330,7 +327,8 @@ impl<'a> Lowerer<'a> {
                 TypeEntry::Mono(Ty::Func(Ty::Void.into(), ret_ty.into())),
             );
 
-            self.symbol_names
+            self.resolved_names
+                .symbol_names
                 .insert(main_symbol, "main(synthesized)".to_string());
         }
     }
@@ -896,6 +894,18 @@ impl<'a> Lowerer<'a> {
                 &Some(receiver.clone()),
                 label,
                 None,
+                bind,
+                instantiations,
+            ),
+            TypedExprKind::ProtocolMember {
+                receiver,
+                label,
+                witness,
+            } => self.lower_member(
+                expr,
+                &Some(receiver.clone()),
+                label,
+                Some(*witness),
                 bind,
                 instantiations,
             ),
@@ -1942,6 +1952,25 @@ impl<'a> Lowerer<'a> {
             );
         }
 
+        if let TypedExprKind::ProtocolMember {
+            receiver: box receiver,
+            label: member,
+            witness,
+        } = &callee.kind
+        {
+            return self.lower_method_call(
+                call_expr,
+                callee,
+                receiver.clone(),
+                member,
+                Some(*witness),
+                args,
+                arg_vals,
+                dest,
+                &instantiations,
+            );
+        }
+
         let callee_ir = self.lower_expr(callee, Bind::Fresh, &instantiations)?.0;
 
         self.push_instr(Instruction::Call {
@@ -2450,7 +2479,15 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    fn resolve_name(&self, sym: &Symbol) -> Option<&String> {
+    fn resolve_name(&self, sym: &Symbol) -> Option<&str> {
+        if matches!(sym, Symbol::Main) {
+            return Some("main");
+        }
+
+        if matches!(sym, Symbol::Library) {
+            return Some("lib");
+        }
+
         if let Some(string) = self.resolved_names.symbol_names.get(sym) {
             return Some(string);
         }
@@ -2469,7 +2506,7 @@ impl<'a> Lowerer<'a> {
                 .unwrap_or_else(|| {
                     unreachable!(
                         "did not get symbol name: {symbol:?} in {:?}",
-                        self.symbol_names
+                        self.resolved_names.symbol_names
                     )
                 })
                 .to_string(),
@@ -2480,7 +2517,9 @@ impl<'a> Lowerer<'a> {
         }
 
         let new_symbol = self.symbols.next_synthesized(self.config.module_id);
-        self.symbol_names.insert(new_symbol.into(), name.name_str());
+        self.resolved_names
+            .symbol_names
+            .insert(new_symbol.into(), name.name_str());
         let ty_parts: Vec<String> = instantiations.ty.values().map(|v| format!("{v}")).collect();
         let witness_parts: Vec<String> = instantiations
             .witnesses
