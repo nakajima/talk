@@ -156,6 +156,9 @@ impl Member {
                     Err(e) => return SolveResult::Err(e),
                 };
 
+                // Record the witness for protocol member access
+                session.protocol_member_witnesses.insert(self.node_id, req);
+
                 return SolveResult::Solved(solved_metas);
             }
         }

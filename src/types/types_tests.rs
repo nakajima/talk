@@ -16,7 +16,10 @@ pub mod tests {
             ty::Ty,
             type_error::TypeError,
             type_session::{TypeEntry, Types},
-            typed_ast::{TypedAST, TypedExpr, TypedExprKind, TypedStmt, TypedStmtKind},
+            typed_ast::{
+                TypedAST, TypedDeclKind, TypedExpr, TypedExprKind, TypedNode, TypedStmt,
+                TypedStmtKind,
+            },
         },
     };
 
@@ -2275,7 +2278,7 @@ pub mod tests {
 
     #[test]
     fn witness_for_type_param_method_call() {
-        let (_ast, types) = typecheck(
+        let (ast, types) = typecheck(
             "
           protocol Countable { func getCount() -> Int }
 
@@ -2293,6 +2296,44 @@ pub mod tests {
           ",
         );
 
+        // Grab the generic `getCount` function (first global func in this snippet)
+        let func = ast
+            .decls
+            .iter()
+            .find_map(|d| match &d.kind {
+                TypedDeclKind::Let {
+                    initializer:
+                        Some(TypedExpr {
+                            kind: TypedExprKind::Func(f),
+                            ..
+                        }),
+                    ..
+                } if f.name == Symbol::Global(GlobalId::from(1)) => Some(f),
+                _ => None,
+            })
+            .unwrap();
+
+        // First node in body should be `countable.getCount()`
+        let expr = match &func.body.body[0] {
+            TypedNode::Expr(e) => e,
+            TypedNode::Stmt(TypedStmt {
+                kind: TypedStmtKind::Expr(e),
+                ..
+            }) => e,
+            other => panic!("expected expr, got {other:?}"),
+        };
+
+        let TypedExprKind::Call { callee, .. } = &expr.kind else {
+            panic!("expected call, got {expr:?}");
+        };
+
+        let TypedExprKind::ProtocolMember { label, witness, .. } = &callee.kind else {
+            panic!("expected ProtocolMember callee, got {callee:?}");
+        };
+
+        assert_eq!(label.to_string(), "getCount");
+        assert!(matches!(witness, Symbol::MethodRequirement(_)));
+
         let req = *types
             .catalog
             .method_requirements
@@ -2301,6 +2342,6 @@ pub mod tests {
             .get(&Label::Named("getCount".into()))
             .unwrap();
 
-        assert_eq!(req, Symbol::MethodRequirement(1.into()));
+        assert_eq!(*witness, req);
     }
 }
