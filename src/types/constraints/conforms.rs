@@ -21,7 +21,11 @@ use itertools::Itertools;
 use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::instrument;
 
-type CheckWitnessResult = (Vec<(Label, Symbol)>, Vec<Meta>);
+enum CheckWitnessResult {
+    Ok(Vec<(Label, Symbol)>, Vec<Meta>),
+    Defer(Vec<DeferralReason>),
+    Err(TypeError),
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Conforms {
@@ -66,34 +70,77 @@ impl Conforms {
                     }
                 }
 
-                return SolveResult::Err(TypeError::TypesCannotConform {
+                return SolveResult::Err(TypeError::TypeCannotConform {
                     ty: self.ty.clone(),
                     protocol_id: self.protocol_id,
                 });
             }
             _ => {
-                return SolveResult::Err(TypeError::TypesCannotConform {
+                return SolveResult::Err(TypeError::TypeCannotConform {
                     ty: self.ty.clone(),
                     protocol_id: self.protocol_id,
                 });
             }
         };
 
+        match self.check_conformance(conforming_ty_sym, self.protocol_id, context, session) {
+            CheckWitnessResult::Ok(conformances, vars) => {
+                if conformances.is_empty() {
+                    SolveResult::Solved(vars)
+                } else {
+                    SolveResult::Defer(DeferralReason::WaitingOnSymbols(
+                        conformances.iter().map(|c| c.1).collect(),
+                    ))
+                }
+            }
+            CheckWitnessResult::Defer(reason) => SolveResult::Defer(DeferralReason::Multi(reason)),
+            CheckWitnessResult::Err(e) => SolveResult::Err(e),
+        }
+    }
+
+    #[instrument(level = tracing::Level::TRACE, skip(context, session))]
+    fn check_conformance(
+        &self,
+        conforming_ty_sym: Symbol,
+        protocol_id: ProtocolId,
+        context: &mut SolveContext,
+        session: &mut TypeSession,
+    ) -> CheckWitnessResult {
+        let mut missing_conformances = vec![];
+        let mut solved_vars = vec![];
+
         // Make sure a conformance is declared, otherwise what's even the point of checking anything else
         let key = ConformanceKey {
             conforming_id: conforming_ty_sym,
-            protocol_id: self.protocol_id,
+            protocol_id,
         };
-        let Some(conformance) = session.lookup_conformance(&key) else {
-            return SolveResult::Defer(DeferralReason::WaitingOnConformance(key));
+
+        let conformance = if let Some(conformance) = session.lookup_conformance(&key) {
+            conformance
+        } else {
+            let conformance = Conformance::<InferTy> {
+                node_id: self.conformance_node_id,
+                conforming_id: conforming_ty_sym,
+                protocol_id,
+                witnesses: Witnesses::default(),
+                span: Span::SYNTHESIZED,
+            };
+            session
+                .type_catalog
+                .conformances
+                .entry(key)
+                .or_insert(conformance.clone());
+            conformance
         };
 
         let Some(EnvEntry::Scheme(Scheme {
             ty: InferTy::Param(protocol_self_id),
             ..
-        })) = session.lookup(&self.protocol_id.into())
+        })) = session.lookup(&protocol_id.into())
         else {
-            return SolveResult::Defer(DeferralReason::WaitingOnSymbol(self.protocol_id.into()));
+            return CheckWitnessResult::Defer(vec![DeferralReason::WaitingOnSymbol(
+                self.protocol_id.into(),
+            )]);
         };
 
         // Build up some substitutions so we're not playing with the protocol's type params anymore
@@ -104,22 +151,25 @@ impl Conforms {
         if !matches!(conforming_ty_sym, Symbol::Protocol(..))
             && let Err(e) = self.specialize_methods(
                 &conforming_ty_sym,
-                self.protocol_id,
+                protocol_id,
                 session,
                 substitutions.clone(),
                 Default::default(),
             )
         {
-            return SolveResult::Err(e);
+            return CheckWitnessResult::Err(e);
         };
+
+        let mut deferral_reasons = vec![];
 
         let mut protocol_projections = FxHashMap::<Label, InferTy>::default();
         for (label, associated_sym) in session
-            .lookup_associated_types(self.protocol_id.into())
+            .lookup_associated_types(protocol_id.into())
             .unwrap_or_default()
         {
             let Some(associated_entry) = session.lookup(&associated_sym) else {
-                return SolveResult::Defer(DeferralReason::WaitingOnSymbol(associated_sym));
+                deferral_reasons.push(DeferralReason::WaitingOnSymbol(associated_sym));
+                continue;
             };
 
             for predicate in associated_entry.predicates() {
@@ -127,9 +177,9 @@ impl Conforms {
                     base,
                     label,
                     returns,
-                    protocol_id,
+                    protocol_id: id,
                 } = predicate
-                    && protocol_id == Some(self.protocol_id)
+                    && id == Some(protocol_id)
                     && base == InferTy::Param(protocol_self_id)
                 {
                     protocol_projections.insert(label, returns);
@@ -144,11 +194,12 @@ impl Conforms {
                 .unwrap_or_default()
                 .get(&label)
             {
-                if let Some(entry) = session.lookup(witness_type_sym) {
-                    entry._as_ty()
-                } else {
-                    return SolveResult::Defer(DeferralReason::WaitingOnSymbol(*witness_type_sym));
-                }
+                let Some(entry) = session.lookup(witness_type_sym) else {
+                    deferral_reasons.push(DeferralReason::WaitingOnSymbol(*witness_type_sym));
+                    continue;
+                };
+
+                entry._as_ty()
             } else if let Some(projection) = protocol_projections.get(&label) {
                 substitutions
                     .entry(projection.clone())
@@ -175,27 +226,56 @@ impl Conforms {
             substitutions.insert(associated_entry._as_ty(), associated_witness_ty);
         }
 
+        // Check super protocols
+        for conformance in session
+            .type_catalog
+            .conformances
+            .keys()
+            .copied()
+            .collect_vec()
+        {
+            if conformance.conforming_id == protocol_id.into() {
+                match self.check_conformance(
+                    conforming_ty_sym,
+                    conformance.protocol_id,
+                    context,
+                    session,
+                ) {
+                    CheckWitnessResult::Ok(missing, vars) => {
+                        missing_conformances.extend(missing);
+                        solved_vars.extend(vars);
+                    }
+                    CheckWitnessResult::Defer(reasons) => deferral_reasons.extend(reasons),
+                    CheckWitnessResult::Err(e) => return CheckWitnessResult::Err(e),
+                };
+            }
+        }
+
         match self.check_witnesses(
             context,
             session,
+            protocol_id,
             &protocol_self_id,
             &conforming_ty_sym,
             protocol_projections,
             substitutions,
         ) {
-            Ok((missing_conformances, solved_vars)) => {
-                if missing_conformances.is_empty() {
-                    SolveResult::Solved(solved_vars)
-                } else {
-                    SolveResult::Defer(DeferralReason::WaitingOnSymbols(
-                        missing_conformances.iter().map(|c| c.1).collect(),
-                    ))
-                    // SolveResult::Err(TypeError::MissingConformanceRequirement(format!(
-                    //     "{missing_conformances:?}"
-                    // )))
+            Ok(res) => match res {
+                CheckWitnessResult::Ok(missing, vars) => {
+                    missing_conformances.extend(missing);
+                    solved_vars.extend(vars);
                 }
-            }
-            Err(e) => SolveResult::Err(e),
+
+                CheckWitnessResult::Defer(reasons) => deferral_reasons.extend(reasons),
+                CheckWitnessResult::Err(e) => return CheckWitnessResult::Err(e),
+            },
+            Err(e) => return CheckWitnessResult::Err(e),
+        }
+
+        if deferral_reasons.is_empty() {
+            CheckWitnessResult::Ok(missing_conformances, solved_vars)
+        } else {
+            CheckWitnessResult::Defer(deferral_reasons)
         }
     }
 
@@ -277,10 +357,12 @@ impl Conforms {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn check_witnesses(
         &self,
         context: &mut SolveContext,
         session: &mut TypeSession,
+        protocol_id: ProtocolId,
         protocol_self_id: &TypeParamId,
         conforming_ty_sym: &Symbol,
         projections: FxHashMap<Label, InferTy>,
@@ -289,8 +371,8 @@ impl Conforms {
         let mut missing_witnesses = vec![];
         let mut solved_metas = vec![];
 
-        let Some(requirements) = session.lookup_method_requirements(self.protocol_id.into()) else {
-            return Ok((missing_witnesses, solved_metas));
+        let Some(requirements) = session.lookup_method_requirements(protocol_id.into()) else {
+            return Ok(CheckWitnessResult::Ok(missing_witnesses, solved_metas));
         };
 
         for (label, required_sym) in requirements {
@@ -358,6 +440,6 @@ impl Conforms {
             }
         }
 
-        Ok((missing_witnesses, solved_metas))
+        Ok(CheckWitnessResult::Ok(missing_witnesses, solved_metas))
     }
 }

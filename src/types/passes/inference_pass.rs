@@ -143,7 +143,7 @@ impl<'a> InferencePass<'a> {
                         InferTy::Nominal { symbol, .. } | InferTy::Primitive(symbol) => {
                             self.diagnostics.insert(AnyDiagnostic::Typing(Diagnostic {
                                 id: conforms.conformance_node_id,
-                                kind: TypeError::TypesDoesNotConform {
+                                kind: TypeError::TypeDoesNotConform {
                                     symbol: *symbol,
                                     protocol_id: conforms.protocol_id,
                                 },
@@ -152,7 +152,7 @@ impl<'a> InferencePass<'a> {
                         InferTy::Constructor { name, .. } => {
                             self.diagnostics.insert(AnyDiagnostic::Typing(Diagnostic {
                                 id: conforms.conformance_node_id,
-                                kind: TypeError::TypesDoesNotConform {
+                                kind: TypeError::TypeDoesNotConform {
                                     symbol: name
                                         .symbol()
                                         .unwrap_or_else(|_| unreachable!("did not resolve name")),
@@ -164,7 +164,7 @@ impl<'a> InferencePass<'a> {
                             tracing::error!("did not solve {conforms:?}");
                             self.diagnostics.insert(AnyDiagnostic::Typing(Diagnostic {
                                 id: conforms.conformance_node_id,
-                                kind: TypeError::TypesCannotConform {
+                                kind: TypeError::TypeCannotConform {
                                     ty: ty.clone(),
                                     protocol_id: conforms.protocol_id,
                                 },

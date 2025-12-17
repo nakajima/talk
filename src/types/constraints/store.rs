@@ -190,6 +190,11 @@ impl ConstraintStore {
                     );
                 }
             }
+            DeferralReason::Multi(reasons) => {
+                for reason in reasons {
+                    self.defer(id, reason);
+                }
+            }
             DeferralReason::Unknown => {}
         }
     }

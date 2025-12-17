@@ -25,11 +25,11 @@ pub enum TypeError {
     NameNotResolved(Name),
     MissingConformanceRequirement(String),
     TypeNotFound(String),
-    TypesDoesNotConform {
+    TypeDoesNotConform {
         symbol: Symbol,
         protocol_id: ProtocolId,
     },
-    TypesCannotConform {
+    TypeCannotConform {
         ty: InferTy,
         protocol_id: ProtocolId,
     },
@@ -64,10 +64,10 @@ impl Display for TypeError {
             Self::MissingConformanceRequirement(string) => {
                 write!(f, "Missing conformance requirement: {string:?}")
             }
-            Self::TypesDoesNotConform { .. } => {
+            Self::TypeDoesNotConform { .. } => {
                 write!(f, "Type does not conform wip")
             }
-            Self::TypesCannotConform { ty, .. } => {
+            Self::TypeCannotConform { ty, .. } => {
                 write!(f, "Type cannot conform: {ty:?}")
             }
             Self::NameNotResolved(name) => {

@@ -19,6 +19,7 @@ pub enum DeferralReason {
     WaitingOnSymbol(Symbol),
     WaitingOnSymbols(Vec<Symbol>),
     WaitingOnConformance(ConformanceKey),
+    Multi(Vec<DeferralReason>),
     Unknown,
 }
 
