@@ -9,11 +9,8 @@ struct Array<Element> {
 		self.storage = @_ir {%? = alloc Element %0}
 	}
 
-	func get(index: Int) -> Optional<Element> {
-		if index >= self.count {
-			return Optional.none
-		}
-
-		Optional.some(@_ir(self.storage) { %? = load Element $0 })
+	func get(index: Int) -> Element {
+		let ptr = @_ir(self.storage, index) { %? = gep Element $0 $1 }
+		@_ir(ptr) { %? = load Element $0 }
 	}
 }

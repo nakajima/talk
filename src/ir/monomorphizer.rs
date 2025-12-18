@@ -1,5 +1,4 @@
 use indexmap::{IndexMap, IndexSet};
-use itertools::Itertools;
 use tracing::instrument;
 
 use crate::{
@@ -47,6 +46,13 @@ impl<'a> Monomorphizer<'a> {
             self.monomorphize_func(func, &mut result);
         }
 
+        // Ensure all external callees referenced by monomorphized functions are imported.
+        let mut checked = IndexSet::default();
+        let syms: Vec<Symbol> = result.keys().copied().collect();
+        for sym in syms {
+            self.check_imports(&sym, &mut result, &mut checked);
+        }
+
         result
     }
 
@@ -54,7 +60,6 @@ impl<'a> Monomorphizer<'a> {
         &mut self,
         sym: &Symbol,
         result: &mut IndexMap<Symbol, Function<IrTy>>,
-        specialization: Option<&Specialization>,
         checked: &mut IndexSet<Symbol>,
     ) {
         if !checked.insert(*sym) {
@@ -82,7 +87,7 @@ impl<'a> Monomorphizer<'a> {
         for callee in callees {
             let Some(module_id) = callee.module_id() else {
                 tracing::warn!("Trying to import {callee:?}, no module ID found");
-                return;
+                continue;
             };
 
             if module_id != self.config.module_id
@@ -92,15 +97,7 @@ impl<'a> Monomorphizer<'a> {
                 result.insert(*callee, imported);
             };
 
-            if let Some(specialization) = specialization
-                && module_id != self.config.module_id
-                && let Some(program) = self.config.modules.program_for(module_id)
-                && let Some(imported) = program.polyfunctions.get(callee).cloned()
-            {
-                self.generate_specialized_function(&imported, specialization, result);
-            };
-
-            self.check_imports(callee, result, specialization, checked);
+            self.check_imports(callee, result, checked);
         }
     }
 
@@ -352,9 +349,7 @@ impl<'a> Monomorphizer<'a> {
         result.insert(specialization.name, specialized_func);
 
         let mut checked = IndexSet::default();
-        for sym in result.keys().cloned().collect_vec() {
-            self.check_imports(&sym, result, Some(specialization), &mut checked)
-        }
+        self.check_imports(&specialization.name, result, &mut checked);
     }
 }
 

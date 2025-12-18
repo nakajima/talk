@@ -369,6 +369,10 @@ impl TypeCatalog<Ty> {
                                     .into_iter()
                                     .map(|(k, v)| (k, v.import(module_id)))
                                     .collect(),
+                                requirements: import_symbol_mapped(
+                                    v.witnesses.requirements,
+                                    module_id,
+                                ),
                             },
                             span: v.span,
                         },
@@ -409,6 +413,16 @@ fn import_mapped(
     mapping
         .into_iter()
         .map(|(k, v)| (k, v.import(module_id)))
+        .collect()
+}
+
+fn import_symbol_mapped(
+    mapping: FxHashMap<Symbol, Symbol>,
+    module_id: ModuleId,
+) -> FxHashMap<Symbol, Symbol> {
+    mapping
+        .into_iter()
+        .map(|(k, v)| (k.import(module_id), v.import(module_id)))
         .collect()
 }
 

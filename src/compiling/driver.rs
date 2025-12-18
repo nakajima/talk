@@ -235,13 +235,14 @@ impl Driver<NameResolved> {
         self.phase.diagnostics.extend(diagnostics);
         let symbols = std::mem::take(&mut session.symbols);
         let resolved_names = std::mem::take(&mut session.resolved_names);
+        let types = session.finalize().map_err(CompileError::Typing)?;
 
         Ok(Driver {
             files: self.files,
             config: self.config,
             phase: Typed {
                 ast,
-                types: session.finalize().map_err(CompileError::Typing)?,
+                types,
                 exports: resolved_names.exports(),
                 symbols,
                 resolved_names,

@@ -1626,6 +1626,9 @@ impl<'a> InferencePass<'a> {
                 value: typed_field,
             });
         }
+        // We iterate `fields` in reverse to build a row whose closed order matches the source
+        // order, but we still want to evaluate and lower the record fields in source order.
+        typed_fields.reverse();
 
         Ok(TypedExpr {
             id,
@@ -2284,6 +2287,7 @@ impl<'a> InferencePass<'a> {
                 callee: callee_ty.into(),
                 type_args,
                 args: arg_tys,
+                resolved: None,
             },
         })
     }

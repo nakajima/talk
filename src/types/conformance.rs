@@ -18,6 +18,10 @@ pub struct ConformanceKey {
 pub struct Witnesses<T> {
     pub methods: FxHashMap<Label, Symbol>,
     pub associated_types: FxHashMap<Label, T>,
+    /// Direct mapping from `@MethodRequirement` symbol → concrete witness symbol.
+    ///
+    /// This avoids having to re-derive requirement symbols from labels during lowering/HIR work.
+    pub requirements: FxHashMap<Symbol, Symbol>,
 }
 
 impl<T> Default for Witnesses<T> {
@@ -25,6 +29,7 @@ impl<T> Default for Witnesses<T> {
         Self {
             methods: Default::default(),
             associated_types: Default::default(),
+            requirements: Default::default(),
         }
     }
 }
@@ -52,6 +57,7 @@ impl Conformance<InferTy> {
                     .into_iter()
                     .map(|(k, v)| (k, session.finalize_ty(v).as_mono_ty().clone()))
                     .collect(),
+                requirements: self.witnesses.requirements,
             },
             span: self.span,
         }
@@ -72,6 +78,7 @@ impl From<Conformance<Ty>> for Conformance<InferTy> {
                     .into_iter()
                     .map(|(k, v)| (k, v.into()))
                     .collect(),
+                requirements: value.witnesses.requirements,
             },
             span: value.span,
         }

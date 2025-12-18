@@ -7,6 +7,7 @@ use crate::{
     node_id::NodeID,
     node_kinds::{inline_ir_instruction::TypedInlineIRInstruction, pattern::PatternKind},
     types::{
+        conformance::ConformanceKey,
         infer_ty::InferTy,
         scheme::ForAll,
         ty::{SomeType, Ty},
@@ -371,17 +372,28 @@ impl TypedExprKind<InferTy> {
                 callee,
                 type_args,
                 args,
-            } => Call {
-                callee: callee.finalize(session, witnesses).into(),
-                type_args: type_args
+                resolved,
+            } => {
+                let callee = callee.finalize(session, witnesses);
+                let type_args = type_args
                     .into_iter()
                     .map(|t| session.finalize_ty(t).as_mono_ty().clone())
-                    .collect(),
-                args: args
+                    .collect();
+                let args: Vec<_> = args
                     .into_iter()
                     .map(|e| e.finalize(session, witnesses))
-                    .collect(),
-            },
+                    .collect();
+
+                let resolved = resolved
+                    .or_else(|| try_resolve_protocol_constructor_default_call(&callee, &args, session));
+
+                Call {
+                    callee: callee.into(),
+                    type_args,
+                    args,
+                    resolved,
+                }
+            }
             Member { receiver, label } => {
                 // Check if this member access has a recorded witness (protocol member)
                 if let Some(&witness) = witnesses.get(&node_id) {
@@ -756,6 +768,13 @@ pub struct TypedRecordField<T: SomeType> {
     pub value: TypedExpr<T>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedCallTarget {
+    pub symbol: Symbol,
+    /// Maps `@MethodRequirement` symbols to their concrete implementations for this call site.
+    pub witness_subs: FxHashMap<Symbol, Symbol>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypedExprKind<T: SomeType> {
     Hole,
@@ -772,6 +791,7 @@ pub enum TypedExprKind<T: SomeType> {
         callee: Box<TypedExpr<T>>,
         type_args: Vec<T>,
         args: Vec<TypedExpr<T>>,
+        resolved: Option<ResolvedCallTarget>,
     },
     // A member access on a concrete type (property, instance method, etc.)
     Member {
@@ -827,10 +847,12 @@ impl<T: SomeType, U: SomeType> TyMappable<T, U> for TypedExprKind<T> {
                 callee,
                 type_args,
                 args,
+                resolved,
             } => Call {
                 callee: callee.map_ty(m).into(),
                 type_args: type_args.iter().map(&mut *m).collect(),
                 args: args.into_iter().map(|e| e.map_ty(m)).collect(),
+                resolved,
             },
             Member { receiver, label } => Member {
                 receiver: receiver.map_ty(m).into(),
@@ -882,4 +904,62 @@ impl<T: SomeType, U: SomeType> TyMappable<T, U> for TypedExpr<T> {
             kind: self.kind.map_ty(m),
         }
     }
+}
+
+fn symbol_for_concrete_ty(ty: &Ty) -> Option<Symbol> {
+    match ty {
+        Ty::Primitive(sym) => Some(*sym),
+        Ty::Nominal { symbol, .. } => Some(*symbol),
+        _ => None,
+    }
+}
+
+fn witness_subs_for_conformance(
+    session: &mut TypeSession,
+    protocol_sym: Symbol,
+    conforming_sym: Symbol,
+) -> FxHashMap<Symbol, Symbol> {
+    let Symbol::Protocol(protocol_id) = protocol_sym else {
+        return Default::default();
+    };
+
+    let key = ConformanceKey {
+        protocol_id,
+        conforming_id: conforming_sym,
+    };
+    session
+        .lookup_conformance(&key)
+        .map(|c| c.witnesses.requirements)
+        .unwrap_or_default()
+}
+
+fn try_resolve_protocol_constructor_default_call(
+    callee: &TypedExpr<Ty>,
+    args: &[TypedExpr<Ty>],
+    session: &mut TypeSession,
+) -> Option<ResolvedCallTarget> {
+    let TypedExprKind::Member { receiver, label } = &callee.kind else {
+        return None;
+    };
+    let TypedExprKind::Constructor(protocol_sym @ Symbol::Protocol(_), _) = &receiver.kind else {
+        return None;
+    };
+
+    let member_sym = session
+        .type_catalog
+        .lookup_member(protocol_sym, label)
+        .map(|(sym, _src)| sym)
+        .or_else(|| session.modules.lookup_member(protocol_sym, label))?;
+    if !matches!(member_sym, Symbol::InstanceMethod(_)) {
+        return None;
+    }
+
+    let self_arg = args.first()?;
+    let conforming_sym = symbol_for_concrete_ty(&self_arg.ty)?;
+
+    let witness_subs = witness_subs_for_conformance(session, *protocol_sym, conforming_sym);
+    Some(ResolvedCallTarget {
+        symbol: member_sym,
+        witness_subs,
+    })
 }

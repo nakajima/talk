@@ -203,10 +203,10 @@ impl Interpreter {
 
     pub fn run(&mut self) -> Value {
         if std::env::var("SHOW_IR").is_ok() {
-            //let _guard = self
-            //    .symbol_names
-            //    .as_ref()
-            //    .map(|names| set_symbol_names(names.clone()));
+            let _guard = self
+                .symbol_names
+                .as_ref()
+                .map(|names| set_symbol_names(names.clone()));
             println!("{}", self.program);
         }
 

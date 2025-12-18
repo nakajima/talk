@@ -14,6 +14,7 @@ use crate::name_resolution::symbol::Symbols;
 use crate::node_kinds::inline_ir_instruction::{InlineIRInstructionKind, TypedInlineIRInstruction};
 use crate::node_kinds::type_annotation::TypeAnnotation;
 use crate::types::infer_row::RowParamId;
+use crate::types::infer_ty::TypeParamId;
 use crate::types::predicate::Predicate;
 use crate::types::row::Row;
 use crate::types::type_session::TypeDefKind;
@@ -171,6 +172,56 @@ pub struct Specialization {
     pub(super) substitutions: Substitutions,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct SpecializationKey {
+    ty: Vec<(TypeParamId, Ty)>,
+    row: Vec<(RowParamId, Row)>,
+    witnesses: Vec<(Symbol, Symbol)>,
+}
+
+impl SpecializationKey {
+    fn new(substitutions: &Substitutions) -> Self {
+        let mut ty: Vec<(TypeParamId, Ty)> = substitutions
+            .ty
+            .iter()
+            .filter_map(|(k, v)| match k {
+                Ty::Param(param) => Some((*param, v.clone())),
+                other => {
+                    tracing::warn!("unexpected type substitution key: {other:?} -> {v:?}");
+                    None
+                }
+            })
+            .collect();
+        ty.sort_by_key(|(param, _)| *param);
+
+        let mut row: Vec<(RowParamId, Row)> = substitutions
+            .row
+            .iter()
+            .filter_map(|(param, row)| {
+                if *row == Row::Param(*param) {
+                    None
+                } else {
+                    Some((*param, row.clone()))
+                }
+            })
+            .collect();
+        row.sort_by_key(|(param, _)| *param);
+
+        let mut witnesses: Vec<(Symbol, Symbol)> = substitutions
+            .witnesses
+            .iter()
+            .map(|(req, imp)| (*req, *imp))
+            .collect();
+        witnesses.sort_by_key(|(req, _)| *req);
+
+        Self { ty, row, witnesses }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.ty.is_empty() && self.row.is_empty() && self.witnesses.is_empty()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Binding<T> {
     Register(u32),
@@ -201,6 +252,7 @@ pub struct Lowerer<'a> {
     symbols: &'a mut Symbols,
     resolved_names: &'a mut ResolvedNames,
     pub(super) specializations: IndexMap<Symbol, Vec<Specialization>>,
+    specialization_intern: FxHashMap<Symbol, FxHashMap<SpecializationKey, Symbol>>,
     static_memory: StaticMemory,
 }
 
@@ -221,6 +273,7 @@ impl<'a> Lowerer<'a> {
             current_function_stack: Default::default(),
             symbols,
             specializations: Default::default(),
+            specialization_intern: Default::default(),
             static_memory: Default::default(),
             config,
             resolved_names,
@@ -259,7 +312,7 @@ impl<'a> Lowerer<'a> {
         // Check for required imports
         let funcs = self.functions.keys().cloned().collect_vec();
         for sym in funcs {
-            self.check_import(&sym, &Default::default());
+            _ = self.check_import(&sym, &Default::default());
         }
 
         let static_memory = std::mem::take(&mut self.static_memory);
@@ -1150,7 +1203,7 @@ impl<'a> Lowerer<'a> {
                     ty: ty.clone(),
                     count,
                 });
-                Ok((dest.into(), ty))
+                Ok((dest.into(), Ty::RawPtr))
             }
             InlineIRInstructionKind::Free { addr } => {
                 let addr = self.parsed_value(addr, &binds);
@@ -1226,7 +1279,7 @@ impl<'a> Lowerer<'a> {
                     addr,
                     offset_index,
                 });
-                Ok((dest.into(), ty))
+                Ok((dest.into(), Ty::RawPtr))
             }
         }
     }
@@ -1526,38 +1579,78 @@ impl<'a> Lowerer<'a> {
         bind: Bind,
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
-        let mut field_vals = vec![];
-        let mut field_row = Row::Empty(TypeDefKind::Struct);
+        let mut field_vals_by_label: FxHashMap<Label, (Value, Ty)> = FxHashMap::default();
         for field in fields.iter() {
             let (val, ty) = self.lower_expr(&field.value, Bind::Fresh, instantiations)?;
-            field_vals.push(val);
-            field_row = Row::Extend {
-                row: field_row.into(),
-                label: field.name.clone(),
-                ty,
-            };
+            field_vals_by_label.insert(field.name.clone(), (val, ty));
         }
 
         let dest = self.ret(bind);
 
+        let ty = substitute(expr.ty.clone(), instantiations);
+
         // Check if this record literal is typed as a nominal struct
-        if let Ty::Nominal { symbol, .. } = &expr.ty {
-            let ty = Ty::Record(Some(*symbol), field_row.into());
+        if let Ty::Nominal { symbol, type_args } = &ty {
+            let nominal = if let Some(module_id) = symbol.module_id()
+                && module_id != self.config.module_id
+            {
+                self.config
+                    .modules
+                    .lookup_nominal(symbol)
+                    .cloned()
+                    .expect("didn't get external nominal")
+            } else {
+                self.types
+                    .catalog
+                    .nominals
+                    .get(symbol)
+                    .cloned()
+                    .unwrap_or_else(|| unreachable!("didn't get nominal: {symbol:?}"))
+            };
+            let properties = nominal.substitute_properties(type_args);
+            let record_vals = properties
+                .keys()
+                .map(|label| {
+                    field_vals_by_label
+                        .get(label)
+                        .unwrap_or_else(|| unreachable!("missing record literal field {label:?}"))
+                        .0
+                        .clone()
+                })
+                .collect::<Vec<_>>();
+
             self.push_instr(Instruction::Nominal {
                 dest,
                 sym: *symbol,
                 ty: ty.clone(),
-                record: field_vals.into(),
+                record: record_vals.into(),
                 meta: vec![InstructionMeta::Source(expr.id)].into(),
             });
             return Ok((dest.into(), ty));
         }
 
-        let ty = Ty::Record(None, field_row.into());
+        let Ty::Record(_, row) = &ty else {
+            return Err(IRError::TypeNotFound(format!(
+                "expected record type for record literal, got: {ty:?}"
+            )));
+        };
+
+        let record_vals = row
+            .close()
+            .keys()
+            .map(|label| {
+                field_vals_by_label
+                    .get(label)
+                    .unwrap_or_else(|| unreachable!("missing record literal field {label:?}"))
+                    .0
+                    .clone()
+            })
+            .collect::<Vec<_>>();
+
         self.push_instr(Instruction::Record {
             dest,
             ty: ty.clone(),
-            record: field_vals.into(),
+            record: record_vals.into(),
             meta: vec![InstructionMeta::Source(expr.id)].into(),
         });
 
@@ -1847,7 +1940,7 @@ impl<'a> Lowerer<'a> {
                     .expect("did not get init")
             });
 
-        self.check_import(&init_sym, instantiations);
+        _ = self.check_import(&init_sym, instantiations);
 
         let init_entry = self
             .types
@@ -1921,6 +2014,31 @@ impl<'a> Lowerer<'a> {
             let (arg, arg_ty) = self.lower_expr(arg, Bind::Fresh, &instantiations)?;
             arg_vals.push(arg);
             arg_tys.push(arg_ty)
+        }
+
+        if let TypedExprKind::Call {
+            resolved: Some(target),
+            ..
+        } = &call_expr.kind
+        {
+            let (_, mut call_instantiations) = self.specialized_ty(callee, parent_instantiations)?;
+            call_instantiations
+                .witnesses
+                .extend(target.witness_subs.iter().map(|(k, v)| (*k, *v)));
+
+            let name = self
+                .check_import(&target.symbol, &call_instantiations)
+                .unwrap_or_else(|| self.monomorphize_name(target.symbol, &call_instantiations));
+
+            self.push_instr(Instruction::Call {
+                dest,
+                ty: ty.clone(),
+                callee: Value::Func(name.symbol().expect("did not get resolved call symbol")),
+                args: arg_vals.into(),
+                meta: vec![InstructionMeta::Source(call_expr.id)].into(),
+            });
+
+            return Ok((dest.into(), ty));
         }
 
         if let TypedExprKind::Constructor(name, ..) = &callee.kind {
@@ -1999,7 +2117,7 @@ impl<'a> Lowerer<'a> {
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
         let (_, instantiations) = self.specialized_ty(callee_expr, instantiations)?;
-        let (ty, instantiations) = self.specialized_ty(call_expr, &instantiations)?;
+        let (ty, mut instantiations) = self.specialized_ty(call_expr, &instantiations)?;
 
         if let Ty::Constructor {
             name: Name::Resolved(enum_symbol @ Symbol::Enum(..), ..),
@@ -2027,11 +2145,36 @@ impl<'a> Lowerer<'a> {
             args.insert(0, receiver_ir);
         }
 
+        // If the receiver is a nominal type with type arguments (e.g. `Array<Int>`), extend the
+        // current substitutions with the nominal’s own type-parameter substitutions so generic
+        // method bodies (e.g. inline-IR `load Element`) monomorphize correctly.
+        let receiver_ty = substitute(receiver.ty.clone(), &instantiations);
+        if let Ty::Nominal { symbol, type_args } = &receiver_ty {
+            let nominal = if let Some(module_id) = symbol.module_id()
+                && module_id != self.config.module_id
+            {
+                self.config
+                    .modules
+                    .lookup_nominal(symbol)
+                    .cloned()
+                    .expect("didn't get external nominal")
+            } else {
+                self.types
+                    .catalog
+                    .nominals
+                    .get(symbol)
+                    .cloned()
+                    .unwrap_or_else(|| unreachable!("didn't get nominal: {symbol:?}"))
+            };
+            instantiations.ty.extend(nominal.substitutions(type_args));
+        }
+
         let (_method_sym, val, ty) = if let Some(method_sym) =
             self.lookup_instance_method(&receiver, label, &instantiations)?
         {
-            let method = self.monomorphize_name(method_sym, &instantiations);
-            self.check_import(&method_sym, &instantiations);
+            let method = self
+                .check_import(&method_sym, &instantiations)
+                .unwrap_or_else(|| self.monomorphize_name(method_sym, &instantiations));
             self.push_instr(Instruction::Call {
                 dest,
                 ty: ty.clone(),
@@ -2044,8 +2187,9 @@ impl<'a> Lowerer<'a> {
         } else if let Some(witness) =
             witness.or_else(|| self.witness_for(&receiver, label, &instantiations))
         {
-            let method = self.monomorphize_name(witness, &instantiations);
-            self.check_import(&witness, &instantiations);
+            let method = self
+                .check_import(&witness, &instantiations)
+                .unwrap_or_else(|| self.monomorphize_name(witness, &instantiations));
             self.push_instr(Instruction::Call {
                 dest,
                 ty: ty.clone(),
@@ -2440,13 +2584,16 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    /// Check to see if this symbol calls any symbols we don't have
-    fn check_import(&mut self, symbol: &Symbol, instantiations: &Substitutions) {
+    /// Check to see if this symbol calls any symbols we don't have.
+    ///
+    /// Returns the monomorphized `Name` for `symbol` under `instantiations` when the symbol’s body
+    /// can be found (either in the current module or an imported module).
+    fn check_import(&mut self, symbol: &Symbol, instantiations: &Substitutions) -> Option<Name> {
         let Some(func) = self.find_function(symbol).cloned() else {
-            return;
+            return None;
         };
 
-        self.monomorphize_name(*symbol, instantiations);
+        let name = self.monomorphize_name(*symbol, instantiations);
         self.functions.insert(*symbol, func.clone());
 
         // Recursively import any functions this function calls
@@ -2475,8 +2622,10 @@ impl<'a> Lowerer<'a> {
             if self.functions.contains_key(&callee_sym) {
                 continue;
             }
-            self.check_import(&callee_sym, instantiations);
+            _ = self.check_import(&callee_sym, instantiations);
         }
+
+        Some(name)
     }
 
     fn resolve_name(&self, sym: &Symbol) -> Option<&str> {
@@ -2512,36 +2661,57 @@ impl<'a> Lowerer<'a> {
                 .to_string(),
         );
 
-        if instantiations.ty.is_empty() && instantiations.witnesses.is_empty() {
+        let key = SpecializationKey::new(instantiations);
+        if key.is_empty() {
             return name;
         }
 
-        let new_symbol = self.symbols.next_synthesized(self.config.module_id);
+        if let Some(existing) = self
+            .specialization_intern
+            .get(&symbol)
+            .and_then(|m| m.get(&key))
+            .copied()
+        {
+            let parts = self.specialization_parts(&key);
+            let new_name_str = format!("{}[{}]", name.name_str(), parts.join(", "));
+            return Name::Resolved(existing, new_name_str);
+        }
+
+        let new_symbol: Symbol = self.symbols.next_synthesized(self.config.module_id).into();
         self.resolved_names
             .symbol_names
             .insert(new_symbol.into(), name.name_str());
-        let ty_parts: Vec<String> = instantiations.ty.values().map(|v| format!("{v}")).collect();
-        let witness_parts: Vec<String> = instantiations
-            .witnesses
-            .values()
-            .map(|v| format!("{v}"))
-            .collect();
-        let all_parts: Vec<String> = ty_parts.into_iter().chain(witness_parts).collect();
-        let new_name_str = format!("{}[{}]", name, all_parts.join(", "));
-
-        let new_name = Name::Resolved(new_symbol.into(), new_name_str);
+        let parts = self.specialization_parts(&key);
+        let new_name_str = format!("{}[{}]", name.name_str(), parts.join(", "));
+        let new_name = Name::Resolved(new_symbol, new_name_str);
 
         tracing::trace!("monomorphized {name:?} -> {new_name:?}");
+
+        self.specialization_intern
+            .entry(symbol)
+            .or_default()
+            .insert(key, new_symbol);
 
         self.specializations
             .entry(name.symbol().expect("name not resolved"))
             .or_default()
             .push(Specialization {
-                name: new_symbol.into(),
+                name: new_symbol,
                 substitutions: instantiations.clone(),
             });
 
         new_name
+    }
+
+    fn specialization_parts(&self, key: &SpecializationKey) -> Vec<String> {
+        let mut parts: Vec<String> = key.ty.iter().map(|(_p, ty)| format!("{ty}")).collect();
+        parts.extend(key.row.iter().map(|(p, row)| format!("{p:?}={row:?}")));
+        parts.extend(
+            key.witnesses
+                .iter()
+                .map(|(req, imp)| format!("{req}->{imp}")),
+        );
+        parts
     }
 
     fn parsed_ty(&mut self, ty: &TypeAnnotation, id: NodeID) -> Ty {
@@ -2642,15 +2812,25 @@ impl<'a> Lowerer<'a> {
             TypedExprKind::Func(func) => func.name,
             TypedExprKind::Constructor(name, ..) => *name,
             TypedExprKind::Member { receiver, label } => {
-                let Ty::Constructor { name, .. } = &receiver.ty else {
-                    return Ok((expr.ty.clone(), Default::default()));
+                let receiver_ty = substitute(receiver.ty.clone(), instantiations);
+                let receiver_sym = match &receiver_ty {
+                    Ty::Constructor { name, .. } => name.symbol().expect("didn't get sym"),
+                    _ => {
+                        let Some(sym) = self.symbol_for_ty(&receiver_ty) else {
+                            return Ok((expr.ty.clone(), Default::default()));
+                        };
+                        sym
+                    }
                 };
 
-                let Some((member, _)) = self
-                    .types
-                    .catalog
-                    .lookup_member(&name.symbol().expect("didn't get sym"), label)
-                else {
+                let member = if let Some((member, _)) =
+                    self.types.catalog.lookup_member(&receiver_sym, label)
+                {
+                    member
+                } else if let Some(member) = self.config.modules.lookup_member(&receiver_sym, label)
+                {
+                    member
+                } else {
                     return Ok((expr.ty.clone(), Default::default()));
                 };
 
@@ -2789,7 +2969,7 @@ impl<'a> Lowerer<'a> {
 
         for conformance in conformances {
             if let Some(witness) = conformance.witnesses.methods.get(label).copied() {
-                self.check_import(&witness, instantiations);
+                _ = self.check_import(&witness, instantiations);
                 return Some(witness);
             }
 
@@ -2811,7 +2991,7 @@ impl<'a> Lowerer<'a> {
                 continue;
             };
 
-            self.check_import(&member, instantiations);
+            _ = self.check_import(&member, instantiations);
             let _m = self.monomorphize_name(member, instantiations);
 
             return Some(member);
