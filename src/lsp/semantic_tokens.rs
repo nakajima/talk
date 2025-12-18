@@ -73,33 +73,29 @@ impl<'a> SemanticTokenCollector<'a> {
     }
 
     fn line_col_for(&self, position: u32) -> Option<Position> {
-        if position as usize > self.source.len() {
-            return None;
-        }
-
-        let before = &self.source[..position as usize];
-        let line = before.matches('\n').count(); // Remove the +1 here
-        let column = before
-            .rfind('\n')
-            .map(|i| &before[i + 1..])
-            .unwrap_or(before)
-            .chars()
-            .count(); // Also remove the +1 here
+        let position = position as usize;
+        let before = self.source.get(..position)?;
+        let line = before.matches('\n').count();
+        let line_start = before.rfind('\n').map(|i| i + 1).unwrap_or(0);
+        let column = self
+            .source
+            .get(line_start..position)?
+            .encode_utf16()
+            .count();
 
         Some(Position::new(line as u32, column as u32))
     }
 
     fn get_range_for(&self, start: u32, end: u32) -> Option<(Range, u32)> {
-        if let Some(start_pos) = self.line_col_for(start)
-            && let Some(end_pos) = self.line_col_for(end)
-        {
-            Some((Range::new(start_pos, end_pos), end.saturating_sub(start)))
-        } else {
-            Some((
-                Range::new(Position::new(0, 0), Position::new(0, 0)),
-                end.saturating_sub(start),
-            ))
+        if start > end {
+            return None;
         }
+
+        let start_pos = self.line_col_for(start)?;
+        let end_pos = self.line_col_for(end)?;
+        let slice = self.source.get(start as usize..end as usize)?;
+        let length = slice.encode_utf16().count() as u32;
+        Some((Range::new(start_pos, end_pos), length))
     }
 
     // fn range_for(&self, expr_id: &ExprID) -> Option<(Range, u32)> {
@@ -303,6 +299,29 @@ mod tests {
                 token_type: pos(SemanticTokenType::STRING),
                 token_modifiers_bitset: 0
             }]
+        )
+    }
+
+    #[test]
+    fn uses_utf16_units_for_positions_and_lengths() {
+        assert_eq!(
+            lexed_tokens_for("\"😀\" 1"),
+            vec![
+                SemanticToken {
+                    delta_line: 0,
+                    delta_start: 0,
+                    length: 4,
+                    token_type: pos(SemanticTokenType::STRING),
+                    token_modifiers_bitset: 0
+                },
+                SemanticToken {
+                    delta_line: 0,
+                    delta_start: 5,
+                    length: 1,
+                    token_type: pos(SemanticTokenType::NUMBER),
+                    token_modifiers_bitset: 0
+                },
+            ]
         )
     }
 }

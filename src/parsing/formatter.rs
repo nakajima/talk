@@ -1443,8 +1443,10 @@ impl<'a> Formatter<'a> {
 #[allow(clippy::unwrap_used)]
 pub fn format_string(string: &str) -> String {
     let lexer = Lexer::new(string);
-    let ast = Parser::new("", FileID(0), lexer).parse().unwrap();
-    format(&ast.0, 80)
+    match Parser::new("", FileID(0), lexer).parse() {
+        Ok((ast, _diagnostics)) => format(&ast, 80),
+        Err(_err) => string.to_string(),
+    }
 }
 
 #[allow(clippy::unwrap_used)]
