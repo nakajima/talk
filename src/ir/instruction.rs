@@ -5,6 +5,7 @@ use crate::{
     label::Label,
     name_resolution::symbol::Symbol,
     node_id::{FileID, NodeID},
+    token_kind::TokenKind,
     types::ty::Ty,
 };
 
@@ -90,6 +91,20 @@ impl FromStr for CmpOperator {
     }
 }
 
+impl From<TokenKind> for CmpOperator {
+    fn from(value: TokenKind) -> Self {
+        match value {
+            TokenKind::Greater => CmpOperator::Greater,
+            TokenKind::GreaterEquals => CmpOperator::GreaterEquals,
+            TokenKind::Less => CmpOperator::Less,
+            TokenKind::LessEquals => CmpOperator::LessEquals,
+            TokenKind::EqualsEquals => CmpOperator::Equals,
+            TokenKind::BangEquals => CmpOperator::NotEquals,
+            _ => unreachable!("{value:?}"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Instruction<T> {
     #[doc = "$dest = const $ty $val $meta"]
@@ -151,7 +166,7 @@ pub enum Instruction<T> {
         meta: List<InstructionMeta>,
     },
     #[doc = "$dest = struct $sym $ty $record $meta"]
-    Struct {
+    Nominal {
         dest: Register,
         sym: Symbol,
         ty: T,
@@ -191,11 +206,51 @@ pub enum Instruction<T> {
     Free { addr: Value },
     #[doc = "$dest = load $ty $addr"]
     Load { dest: Register, ty: T, addr: Value },
+    #[doc = "store $ty $value $addr"]
+    Store { value: Value, ty: T, addr: Value },
+    #[doc = "move $ty $from $to"]
+    Move { from: Value, ty: T, to: Value },
+    #[doc = "copy $ty $from $to $length"]
+    Copy {
+        ty: T,
+        from: Value,
+        to: Value,
+        length: Value,
+    },
+    #[doc = "$dest = gep $ty $addr $offset_index"]
+    Gep {
+        dest: Register,
+        ty: T,
+        addr: Value,
+        offset_index: Value,
+    },
 }
 
 impl<T> Instruction<T> {
     pub fn map_type<U>(self, mut map: impl FnMut(T) -> U) -> Instruction<U> {
         match self {
+            Instruction::Gep {
+                dest,
+                ty,
+                addr,
+                offset_index,
+            } => Instruction::Gep {
+                dest,
+                ty: map(ty),
+                addr,
+                offset_index,
+            },
+            Instruction::Copy {
+                ty,
+                from,
+                to,
+                length,
+            } => Instruction::Copy {
+                ty: map(ty),
+                from,
+                to,
+                length,
+            },
             Instruction::Alloc { dest, ty, count } => Instruction::Alloc {
                 dest,
                 ty: map(ty),
@@ -206,6 +261,20 @@ impl<T> Instruction<T> {
                 dest,
                 ty: map(ty),
                 addr,
+            },
+            Instruction::Store { value, ty, addr } => Instruction::Store {
+                value,
+                ty: map(ty),
+                addr,
+            },
+            Instruction::Move {
+                from: value,
+                ty,
+                to: addr,
+            } => Instruction::Move {
+                from: value,
+                ty: map(ty),
+                to: addr,
             },
             Instruction::Constant {
                 dest,
@@ -229,13 +298,13 @@ impl<T> Instruction<T> {
                 record,
                 meta,
             },
-            Instruction::Struct {
+            Instruction::Nominal {
                 dest,
                 ty,
                 record,
                 meta,
                 sym,
-            } => Instruction::Struct {
+            } => Instruction::Nominal {
                 dest,
                 ty: map(ty),
                 record,

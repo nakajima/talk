@@ -1,9 +1,9 @@
+use itertools::Itertools;
 use tracing::instrument;
 
 use crate::{
-    ast::AST,
     label::Label,
-    name_resolution::name_resolver::NameResolved,
+    name_resolution::symbol::Symbol,
     node_id::NodeID,
     types::{
         constraint_solver::{DeferralReason, SolveResult},
@@ -28,21 +28,29 @@ pub struct TypeMember {
 }
 
 impl TypeMember {
-    #[instrument(skip(constraints, context, session, asts))]
+    #[instrument(skip(constraints, context, session,))]
     pub fn solve(
         &self,
         constraints: &mut ConstraintStore,
         context: &mut SolveContext,
         session: &mut TypeSession,
-        asts: &[AST<NameResolved>],
     ) -> SolveResult {
-        #[warn(clippy::todo)]
-        match &self.base {
+        self.solve_for(&self.base, constraints, context, session)
+    }
+
+    fn solve_for(
+        &self,
+        ty: &InferTy,
+        constraints: &mut ConstraintStore,
+        context: &mut SolveContext,
+        session: &mut TypeSession,
+    ) -> SolveResult {
+        match ty {
             InferTy::Var { id, .. } => {
                 SolveResult::Defer(DeferralReason::WaitingOnMeta(Meta::Ty(*id)))
             }
             InferTy::Param(type_param_id) => {
-                self.lookup_for_type_param(constraints, context, session, asts, *type_param_id)
+                self.lookup_for_type_param(constraints, context, session, *type_param_id)
             }
             InferTy::Rigid(skolem_id) => {
                 let Some(InferTy::Param(type_param_id)) =
@@ -51,12 +59,48 @@ impl TypeMember {
                     unreachable!();
                 };
 
-                self.lookup_for_type_param(constraints, context, session, asts, *type_param_id)
+                self.lookup_for_type_param(constraints, context, session, *type_param_id)
             }
             #[allow(clippy::todo)]
             InferTy::Constructor { .. } => todo!(),
             #[allow(clippy::todo)]
-            InferTy::Nominal { .. } => todo!(),
+            InferTy::Nominal { symbol, type_args } => {
+                if let Some(children) = session.type_catalog.child_types.get(symbol)
+                    && let Some(child_sym) = children.get(&self.name).copied()
+                    && let Some(ty) = session.lookup(&child_sym)
+                {
+                    if !type_args.is_empty() {
+                        let ty = ty
+                            .instantiate_with_args(
+                                self.node_id,
+                                type_args
+                                    .iter()
+                                    .map(|a| (a.clone(), NodeID::SYNTHESIZED))
+                                    .collect_vec()
+                                    .as_slice(),
+                                session,
+                                context,
+                                constraints,
+                            )
+                            .0;
+                        match unify(&ty, &self.result, context, session) {
+                            Ok(vars) => return SolveResult::Solved(vars),
+                            Err(e) => return SolveResult::Err(e),
+                        }
+                    }
+                    println!("CHILD TYPE: {ty:?}");
+                    self.solve_for(&ty._as_ty(), constraints, context, session)
+                } else {
+                    println!(
+                        "CHILDREN: {:?}",
+                        session.type_catalog.child_types.get(symbol)
+                    );
+                    SolveResult::Err(TypeError::TypeNotFound(format!(
+                        "Did not find child type {symbol:?}.{}",
+                        self.name
+                    )))
+                }
+            }
             _ => SolveResult::Err(TypeError::TypeNotFound(format!(
                 "Could not find child type {:?} for {:?}",
                 self.name, self.base
@@ -70,7 +114,6 @@ impl TypeMember {
         constraints: &mut ConstraintStore,
         context: &mut SolveContext,
         session: &mut TypeSession,
-        asts: &[AST<NameResolved>],
         type_param_id: TypeParamId,
     ) -> SolveResult {
         let mut candidates = vec![];
@@ -85,13 +128,17 @@ impl TypeMember {
         }
 
         for candidate in candidates {
-            if let Some(child_types) = asts
-                .iter()
-                .find_map(|ast| ast.phase.child_types.get(&candidate.into()))
+            if let Some(child_types) = session
+                .resolved_names
+                .child_types
+                .get(&Symbol::Protocol(*candidate))
+                .cloned()
                 && let Some(child_sym) = child_types.get(&self.name)
             {
                 let Some(child_entry) = session.lookup(child_sym) else {
-                    return SolveResult::Err(TypeError::TypeNotFound(format!("{child_sym:?}")));
+                    return SolveResult::Err(TypeError::TypeNotFound(format!(
+                        "Child entry not found for type member {child_sym:?}"
+                    )));
                 };
 
                 let child_ty = child_entry.instantiate(self.node_id, constraints, context, session);

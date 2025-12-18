@@ -1,5 +1,1 @@
-func add(x) { x + 1 }
-func add2(x) { (x as Add).add(1) }
-
-add(2)
-
+print("hello world")

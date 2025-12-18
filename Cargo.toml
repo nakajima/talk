@@ -20,6 +20,7 @@ ctor = "0.4.2"
 indoc = "2.0.6"
 prettydiff = "0.8.0"
 criterion = { version = "0.6", features = ["html_reports"] }
+color-eyre = "0.6"
 
 [dependencies]
 clap = { version = "4.5.39", features = ["derive"], optional = true }
@@ -45,7 +46,6 @@ tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter", "json"] }
 tracing-tree = "0.4.0"
 miette = { version = "7.6.0", features = ["fancy"] }
-bincode = "2.0.1"
 anyhow = "1.0.99"
 rustc-hash = "2.1.1"
 generational-arena = "0.2.9"
@@ -55,6 +55,8 @@ petgraph = "0.8.2"
 sscanf = "0.4.3"
 priority-queue = "2.7.0"
 ena = "0.14.3"
+petgraph-graphml = "5.0.0"
+sha2 = "0.10.9"
 
 [features]
 default = ["cli"]
@@ -65,7 +67,7 @@ verify_ir = []
 [profile.release]
 strip = true  # Automatically strip symbols from the binary.
 debug = false
-opt-level=1
+#opt-level=1
 
 [lints.clippy]
 approx_constant = "allow"

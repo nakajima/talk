@@ -53,56 +53,55 @@ protocol Not {
 
 extend Bool: Not {
 	func not() -> Bool {
-		__IR<Bool>("$? = cmp bool %0 == false")
+    @_ir { %? = cmp Bool %0 == false }
 	}
 }
 
 extend Int: Add {
   func add(rhs: Int) -> Int {
-    __IR("$? = add int %0 %1")
+    @_ir { %? = add Int %0 %1 }
   }
 }
 
 extend Float: Add {
   func add(rhs: Float) -> Float {
-    __IR("$? = add float %0 %1")
+    @_ir { %? = add Float %0 %1 }
   }
 }
 
-
 extend Int: Subtract {
   func minus(rhs: Int) -> Int {
-    __IR("$? = sub int %0 %1")
+    @_ir { %? = sub Int %0 %1 }
   }
 }
 
 extend Float: Subtract {
   func minus(rhs: Float) -> Float {
-    __IR("$? = sub float %0 %1")
+    @_ir { %? = sub Float %0 %1 }
   }
 }
 
 extend Int: Multiply {
   func times(rhs: Int) -> Int {
-    __IR("$? = mul int %0 %1")
+    @_ir { %? = mul Int %0 %1 }
   }
 }
 
 extend Float: Multiply {
   func times(rhs: Float) -> Float {
-    __IR("$? = mul float %0 %1")
+    @_ir { %? = mul Float %0 %1 }
   }
 }
 
 extend Int: Divide {
   func divide(rhs: Int) -> Int {
-    __IR("$? = div int %0 %1")
+    @_ir { %? = div Int %0 %1 }
   }
 }
 
 extend Float: Divide {
   func divide(rhs: Float) -> Float {
-    __IR("$? = div float %0 %1")
+    @_ir { %? = div Float %0 %1 }
   }
 }
 
@@ -110,19 +109,19 @@ extend Float: Divide {
 
 extend Int: Equatable {
   func equals(rhs: Int) -> Bool {
-    __IR("$? = cmp int %0 == %1")
+    @_ir { %? = cmp Int %0 == %1 }
   }
 }
 
 extend Float: Equatable {
   func equals(rhs: Float) -> Bool {
-    __IR("$? = cmp float %0 == %1")
+    @_ir { %? = cmp Float %0 == %1 }
   }
 }
 
 extend Bool: Equatable {
   func equals(rhs: Bool) -> Bool {
-    __IR("$? = cmp bool %0 == %1")
+    @_ir { %? = cmp Bool %0 == %1 }
   }
 }
 
@@ -130,13 +129,13 @@ extend Bool: Equatable {
 
 extend Int: Negatable {
   func negated() -> Int {
-    __IR("$? = sub int 0 %0")
+    @_ir { %? = sub Int 0 %0 }
   }
 }
 
 extend Float: Negatable {
   func negated() -> Float {
-    __IR("$? = sub float 0 %0")
+    @_ir { %? = sub Float 0 %0 }
   }
 }
 
@@ -160,6 +159,6 @@ protocol Comparable: Equatable {
 
 extend Int: Comparable {
   func gt(rhs: Int) -> Bool {
-    __IR("$? = cmp int %0 > %1")
+    @_ir { %? = cmp Int %0 > %1 }
   }
 }

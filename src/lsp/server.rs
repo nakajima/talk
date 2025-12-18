@@ -249,7 +249,7 @@ pub async fn start() {
                         // Minimal config; you can pass a real ModuleEnvironment if needed.
                         let driver = Driver::new_bare(
                             vec![Source::from(document.text.as_str())],
-                            DriverConfig::default(),
+                            DriverConfig::new("TestDriver"),
                         );
 
                         let diagnostics_result = driver

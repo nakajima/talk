@@ -1,7 +1,11 @@
 use indexmap::IndexMap;
 
 use crate::{
-    ir::{function::Function, ir_ty::IrTy, lowerer::PolyFunction, value::Value},
+    ir::{
+        function::Function,
+        ir_ty::IrTy,
+        lowerer::{PolyFunction, StaticMemory},
+    },
     name_resolution::symbol::Symbol,
 };
 
@@ -9,15 +13,13 @@ use crate::{
 pub struct Program {
     pub functions: IndexMap<Symbol, Function<IrTy>>,
     pub polyfunctions: IndexMap<Symbol, PolyFunction>,
-    pub statics: Vec<Value>,
+    pub static_memory: StaticMemory,
 }
 
 impl Program {
     pub fn entrypoint(&self) -> Option<&Function<IrTy>> {
-        for (sym, func) in self.functions.iter() {
-            if func.name.name_str() == "main"
-                && matches!(sym, Symbol::Global(..) | Symbol::Synthesized(..))
-            {
+        for func in self.functions.values() {
+            if matches!(func.name, Symbol::Main) {
                 return Some(func);
             }
         }

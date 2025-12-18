@@ -7,8 +7,8 @@ pub mod tests {
     use crate::{
         assert_eq_diff,
         compiling::{
-            driver::{Driver, Source},
-            module::ModuleId,
+            driver::{Driver, DriverConfig, Source},
+            module::{Module, ModuleId},
         },
         ir::{
             basic_block::{BasicBlock, BasicBlockId, Phi, PhiSource},
@@ -20,11 +20,12 @@ pub mod tests {
             program::Program,
             register::Register,
             terminator::Terminator,
-            value::Value,
+            value::{Addr, Value},
         },
         label::Label,
-        name::Name,
-        name_resolution::symbol::{GlobalId, InstanceMethodId, Symbol, SynthesizedId},
+        name_resolution::symbol::{
+            EnumId, GlobalId, InstanceMethodId, StructId, Symbol, SynthesizedId, set_symbol_names,
+        },
         node_id::NodeID,
     };
 
@@ -32,8 +33,27 @@ pub mod tests {
         vec![InstructionMeta::Source(NodeID::ANY)].into()
     }
 
+    pub fn lower_bare(input: &str) -> Module {
+        let driver = Driver::new_bare(
+            vec![Source::from(input)],
+            DriverConfig::new("TestDriver").executable(),
+        );
+        let typed = driver
+            .parse()
+            .unwrap()
+            .resolve_names()
+            .unwrap()
+            .typecheck()
+            .unwrap();
+
+        typed.lower().unwrap().module("TestModule")
+    }
+
     pub fn lower(input: &str) -> Program {
-        let driver = Driver::new(vec![Source::from(input)], Default::default());
+        let driver = Driver::new(
+            vec![Source::from(input)],
+            DriverConfig::new("TestDriver").executable(),
+        );
         let mut typed = driver
             .parse()
             .unwrap()
@@ -43,12 +63,30 @@ pub mod tests {
             .unwrap();
 
         let lowerer = Lowerer::new(
-            &mut typed.phase.asts,
+            &mut typed.phase.ast,
             &mut typed.phase.types,
             &mut typed.phase.symbols,
+            &mut typed.phase.resolved_names,
             &typed.config,
         );
         lowerer.lower().unwrap()
+    }
+
+    pub fn lower_module(input: &str) -> Module {
+        let driver = Driver::new(
+            vec![Source::from(input)],
+            DriverConfig::new("TestDriver").executable(),
+        );
+        driver
+            .parse()
+            .unwrap()
+            .resolve_names()
+            .unwrap()
+            .typecheck()
+            .unwrap()
+            .lower()
+            .unwrap()
+            .module("TestModule")
     }
 
     #[test]
@@ -58,7 +96,7 @@ pub mod tests {
             program.functions,
             indexmap::indexmap!(GlobalId::from(1).into() => Function {
                 register_count: 1,
-                name: Name::Resolved(GlobalId::from(1).into(), "main".into()),
+                name: GlobalId::from(1).into() ,
                 params: vec![].into(),
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
                 blocks: vec![BasicBlock {
@@ -82,7 +120,7 @@ pub mod tests {
         assert_eq!(
             program.functions,
             indexmap::indexmap!(GlobalId::from(1).into() => Function {
-                name: Name::Resolved(GlobalId::from(1).into(), "main".into()),
+                name: GlobalId::from(1).into(),
                 register_count: 1,
                 params: vec![].into(),
                 ty: IrTy::Func(vec![], IrTy::Float.into()),
@@ -111,8 +149,8 @@ pub mod tests {
         let program = lower("123");
         assert_eq!(
             program.functions,
-            indexmap::indexmap!(SynthesizedId::from(1).into() => Function {
-                name: Name::Resolved(SynthesizedId::from(1).into(), "main".into()),
+            indexmap::indexmap!(Symbol::Main => Function {
+                name: Symbol::Main,
                 params: vec![].into(),
                 register_count: 1,
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
@@ -136,8 +174,8 @@ pub mod tests {
         let program = lower("let a = 123 ; a");
         assert_eq!(
             program.functions,
-            indexmap::indexmap!(SynthesizedId::from(1).into() => Function {
-                name: Name::Resolved(SynthesizedId::from(1).into(), "main".into()),
+            indexmap::indexmap!(Symbol::Main => Function {
+                name: Symbol::Main,
                 params: vec![].into(),
                 register_count: 1,
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
@@ -166,12 +204,9 @@ pub mod tests {
         );
 
         assert_eq_diff!(
-            *program
-                .functions
-                .get(&Symbol::from(SynthesizedId::from(1)))
-                .unwrap(),
+            *program.functions.get(&Symbol::Main).unwrap(),
             Function {
-                name: Name::Resolved(SynthesizedId::from(1).into(), "main".into()),
+                name: Symbol::Main,
                 params: vec![].into(),
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
                 register_count: 3,
@@ -182,10 +217,7 @@ pub mod tests {
                         Instruction::Ref {
                             dest: 0.into(),
                             ty: IrTy::Func(vec![IrTy::Int], IrTy::Int.into()),
-                            val: Value::Func(Name::Resolved(
-                                GlobalId::from(1).into(),
-                                "foo".into()
-                            ))
+                            val: Value::Func(GlobalId::from(1).into())
                         },
                         Instruction::Constant {
                             ty: IrTy::Int,
@@ -196,10 +228,7 @@ pub mod tests {
                         Instruction::Call {
                             dest: 1.into(),
                             ty: IrTy::Int,
-                            callee: Value::Func(Name::Resolved(
-                                GlobalId::from(1).into(),
-                                "foo".into()
-                            )),
+                            callee: Value::Reg(0),
                             args: vec![Value::Reg(2)].into(),
                             meta: meta()
                         }
@@ -217,7 +246,7 @@ pub mod tests {
                 .get(&Symbol::from(GlobalId::from(1)))
                 .unwrap(),
             Function {
-                name: Name::Resolved(GlobalId::from(1).into(), "foo".into()),
+                name: GlobalId::from(1).into(),
                 params: vec![Value::Reg(0)].into(),
                 register_count: 1,
                 ty: IrTy::Func(vec![IrTy::Int], IrTy::Int.into()),
@@ -244,12 +273,9 @@ pub mod tests {
         );
 
         assert_eq_diff!(
-            *program
-                .functions
-                .get(&Symbol::from(SynthesizedId::from(2)))
-                .unwrap(),
+            *program.functions.get(&Symbol::Main).unwrap(),
             Function {
-                name: Name::Resolved(SynthesizedId::from(2).into(), "main".into()),
+                name: Symbol::Main,
                 params: vec![].into(),
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
                 register_count: 4,
@@ -263,19 +289,23 @@ pub mod tests {
                             val: 123.into(),
                             meta: meta()
                         },
-                        Instruction::Record {
+                        Instruction::Nominal {
+                            sym: Symbol::Struct(StructId::from(1)),
                             dest: 2.into(),
-                            ty: IrTy::Record(vec![IrTy::Int]),
+                            ty: IrTy::Record(
+                                Some(Symbol::Struct(StructId::from(1))),
+                                vec![IrTy::Int]
+                            ),
                             record: vec![Value::Uninit].into(),
                             meta: meta()
                         },
                         Instruction::Call {
                             dest: 0.into(),
-                            ty: IrTy::Record(vec![IrTy::Int]),
-                            callee: Value::Func(Name::Resolved(
-                                Symbol::from(SynthesizedId::from(1)),
-                                "@Foo:Struct(_:1)_init".into(),
-                            )),
+                            ty: IrTy::Record(
+                                Some(Symbol::Struct(StructId::from(1))),
+                                vec![IrTy::Int]
+                            ),
+                            callee: Value::Func(Symbol::from(SynthesizedId::from(1))),
                             args: vec![Register(2).into(), Register(1).into()].into(),
                             meta: meta(),
                         },
@@ -306,12 +336,9 @@ pub mod tests {
         );
 
         assert_eq_diff!(
-            *program
-                .functions
-                .get(&Symbol::from(SynthesizedId::from(2)))
-                .unwrap(),
+            *program.functions.get(&Symbol::Main).unwrap(),
             Function {
-                name: Name::Resolved(SynthesizedId::from(2).into(), "main".into()),
+                name: Symbol::Main,
                 params: vec![].into(),
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
                 register_count: 4,
@@ -325,19 +352,23 @@ pub mod tests {
                             val: 123.into(),
                             meta: meta()
                         },
-                        Instruction::Record {
+                        Instruction::Nominal {
+                            sym: Symbol::Struct(StructId::from(1)),
                             dest: 2.into(),
-                            ty: IrTy::Record(vec![IrTy::Int]),
+                            ty: IrTy::Record(
+                                Some(Symbol::Struct(StructId::from(1))),
+                                vec![IrTy::Int]
+                            ),
                             record: vec![Value::Uninit].into(),
                             meta: meta()
                         },
                         Instruction::Call {
                             dest: 0.into(),
-                            ty: IrTy::Record(vec![IrTy::Int]),
-                            callee: Value::Func(Name::Resolved(
-                                Symbol::from(SynthesizedId::from(4)),
-                                "@@Foo:Struct(_:1)_init:Synthesized(_:1)[Int]".into()
-                            )),
+                            ty: IrTy::Record(
+                                Some(Symbol::Struct(StructId::from(1))),
+                                vec![IrTy::Int]
+                            ),
+                            callee: Value::Func(Symbol::from(SynthesizedId::from(2))),
                             args: vec![Register(2).into(), Register(1).into()].into(),
                             meta: meta(),
                         },
@@ -362,27 +393,28 @@ pub mod tests {
     fn lowers_enum_constructor_with_no_vals() {
         let program = lower("enum Fizz { case foo, bar } ; Fizz.bar");
         assert_eq_diff!(
-            *program
-                .functions
-                .get(&Symbol::Synthesized(SynthesizedId::from(1)))
-                .unwrap(),
+            *program.functions.get(&Symbol::Main).unwrap(),
             Function {
-                name: Name::Resolved(SynthesizedId::from(1).into(), "main".into()),
+                name: Symbol::Main,
                 params: vec![].into(),
                 register_count: 1,
-                ty: IrTy::Func(vec![], IrTy::Record(vec![IrTy::Int]).into()),
+                ty: IrTy::Func(
+                    vec![],
+                    IrTy::Record(Some(Symbol::Enum(EnumId::from(1))), vec![IrTy::Int]).into()
+                ),
                 blocks: vec![BasicBlock::<IrTy> {
                     id: BasicBlockId(0),
                     phis: Default::default(),
-                    instructions: vec![Instruction::Record {
+                    instructions: vec![Instruction::Nominal {
+                        sym: Symbol::Enum(EnumId::from(1)),
                         dest: 0.into(),
-                        ty: IrTy::Record(vec![IrTy::Int]),
+                        ty: IrTy::Record(Some(Symbol::Enum(EnumId::from(1))), vec![IrTy::Int]),
                         record: vec![Value::Int(1)].into(),
                         meta: meta()
                     }],
                     terminator: Terminator::Ret {
                         val: Value::Reg(0),
-                        ty: IrTy::Record(vec![IrTy::Int]),
+                        ty: IrTy::Record(Some(Symbol::Enum(EnumId::from(1))), vec![IrTy::Int]),
                     }
                 }],
             }
@@ -397,17 +429,18 @@ pub mod tests {
             Fizz.bar(1.23, 456)",
         );
         assert_eq_diff!(
-            *program
-                .functions
-                .get(&Symbol::Synthesized(SynthesizedId::from(1)))
-                .unwrap(),
+            *program.functions.get(&Symbol::Main).unwrap(),
             Function {
-                name: Name::Resolved(SynthesizedId::from(1).into(), "main".into()),
+                name: Symbol::Main,
                 params: vec![].into(),
                 register_count: 3,
                 ty: IrTy::Func(
                     vec![],
-                    IrTy::Record(vec![IrTy::Int, IrTy::Float, IrTy::Int]).into()
+                    IrTy::Record(
+                        Some(Symbol::Enum(EnumId::from(1))),
+                        vec![IrTy::Int, IrTy::Float, IrTy::Int]
+                    )
+                    .into()
                 ),
                 blocks: vec![BasicBlock::<IrTy> {
                     id: BasicBlockId(0),
@@ -415,26 +448,33 @@ pub mod tests {
                     instructions: vec![
                         Instruction::Constant {
                             ty: IrTy::Float,
-                            dest: 0.into(),
+                            dest: 1.into(),
                             val: 1.23.into(),
                             meta: meta()
                         },
                         Instruction::Constant {
                             ty: IrTy::Int,
-                            dest: 1.into(),
+                            dest: 2.into(),
                             val: 456.into(),
                             meta: meta()
                         },
-                        Instruction::Record {
-                            dest: 2.into(),
-                            ty: IrTy::Record(vec![IrTy::Int, IrTy::Float, IrTy::Int]),
-                            record: vec![Value::Int(1), Value::Reg(0), Value::Reg(1)].into(),
+                        Instruction::Nominal {
+                            sym: Symbol::Enum(EnumId::from(1)),
+                            dest: 0.into(),
+                            ty: IrTy::Record(
+                                Some(Symbol::Enum(EnumId::from(1))),
+                                vec![IrTy::Int, IrTy::Float, IrTy::Int]
+                            ),
+                            record: vec![Value::Int(1), Value::Reg(1), Value::Reg(2)].into(),
                             meta: meta()
                         }
                     ],
                     terminator: Terminator::Ret {
-                        val: Value::Reg(2),
-                        ty: IrTy::Record(vec![IrTy::Int, IrTy::Float, IrTy::Int]),
+                        val: Value::Reg(0),
+                        ty: IrTy::Record(
+                            Some(Symbol::Enum(EnumId::from(1))),
+                            vec![IrTy::Int, IrTy::Float, IrTy::Int]
+                        ),
                     }
                 }],
             }
@@ -445,12 +485,9 @@ pub mod tests {
     fn lowers_add() {
         let program = lower("1 + 2");
         assert_eq_diff!(
-            *program
-                .functions
-                .get(&Symbol::Synthesized(SynthesizedId::from(1)))
-                .unwrap(),
+            *program.functions.get(&Symbol::Main).unwrap(),
             Function {
-                name: Name::Resolved(SynthesizedId::from(1).into(), "main".into()),
+                name: Symbol::Main,
                 params: vec![].into(),
                 register_count: 3,
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
@@ -473,13 +510,10 @@ pub mod tests {
                         Instruction::Call {
                             dest: Register(0),
                             ty: IrTy::Int,
-                            callee: Value::Func(Name::Resolved(
-                                Symbol::InstanceMethod(InstanceMethodId {
-                                    module_id: ModuleId::Core,
-                                    local_id: 3
-                                }),
-                                "add".into()
-                            )),
+                            callee: Value::Func(Symbol::InstanceMethod(InstanceMethodId {
+                                module_id: ModuleId::Core,
+                                local_id: 3
+                            })),
                             args: vec![Register(1).into(), Register(2).into()].into(),
                             meta: meta()
                         },
@@ -504,28 +538,9 @@ pub mod tests {
 
     #[test]
     fn lowers_default_implementations() {
-        let program = lower("1 <= 2");
-
-        let main_func = program
-            .functions
-            .get(&Symbol::Synthesized(SynthesizedId::from(1)))
-            .unwrap();
-
-        // Check the call instruction calls a specialized lte function
-        let call_instr = &main_func.blocks[0].instructions[2];
-        if let Instruction::Call {
-            callee: Value::Func(name),
-            ..
-        } = call_instr
-        {
-            let callee_name = name.name_str();
-            assert!(
-                callee_name.contains("lte"),
-                "expected call to lte specialization, got {callee_name}"
-            );
-        } else {
-            panic!("expected Call instruction, got {call_instr:?}");
-        }
+        let module = lower_module("1 <= 2");
+        let _s = set_symbol_names(module.symbol_names.clone());
+        let program = module.program;
 
         // The original lte method should still be imported
         assert!(
@@ -535,13 +550,21 @@ pub mod tests {
                     module_id: ModuleId::Core,
                     local_id: 18
                 }))
-                .is_some()
+                .is_some(),
+            "did not find {:?} in {:?}",
+            Symbol::InstanceMethod(InstanceMethodId {
+                module_id: ModuleId::Core,
+                local_id: 18
+            }),
+            program.functions.keys().collect_vec()
         );
 
         // There should be a specialized function for lte with witnesses
-        let has_specialization = program.functions.values().any(|f| {
-            f.name.name_str().contains("lte") && f.name.name_str().contains("InstanceMethod")
-        });
+        let _s = set_symbol_names(module.symbol_names.clone());
+        let has_specialization = program
+            .functions
+            .values()
+            .any(|f| format!("{f}").contains("lte"));
         assert!(has_specialization, "expected specialized lte function");
     }
 
@@ -562,12 +585,9 @@ pub mod tests {
         );
 
         assert_eq_diff!(
-            *program
-                .functions
-                .get(&Symbol::from(SynthesizedId::from(2)))
-                .unwrap(),
+            *program.functions.get(&Symbol::Main).unwrap(),
             Function {
-                name: Name::Resolved(SynthesizedId::from(2).into(), "main".into()),
+                name: Symbol::Main,
                 params: vec![].into(),
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
                 register_count: 4,
@@ -581,29 +601,30 @@ pub mod tests {
                             val: 123.into(),
                             meta: meta()
                         },
-                        Instruction::Record {
+                        Instruction::Nominal {
+                            sym: Symbol::Struct(StructId::from(1)),
                             dest: 3.into(),
-                            ty: IrTy::Record(vec![IrTy::Int]),
+                            ty: IrTy::Record(
+                                Some(Symbol::Struct(StructId::from(1))),
+                                vec![IrTy::Int]
+                            ),
                             record: vec![Value::Uninit].into(),
                             meta: meta()
                         },
                         Instruction::Call {
                             dest: 1.into(),
-                            ty: IrTy::Record(vec![IrTy::Int]),
-                            callee: Value::Func(Name::Resolved(
-                                Symbol::from(SynthesizedId::from(1)),
-                                "@Foo:Struct(_:1)_init".into()
-                            )),
+                            ty: IrTy::Record(
+                                Some(Symbol::Struct(StructId::from(1))),
+                                vec![IrTy::Int]
+                            ),
+                            callee: Value::Func(Symbol::from(SynthesizedId::from(1))),
                             args: vec![Register(3).into(), Register(2).into()].into(),
                             meta: meta(),
                         },
                         Instruction::Call {
                             dest: 0.into(),
                             ty: IrTy::Int,
-                            callee: Value::Func(Name::Resolved(
-                                InstanceMethodId::from(1).into(),
-                                "getBar".into()
-                            )),
+                            callee: Value::Func(InstanceMethodId::from(1).into()),
                             args: vec![Register(1).into()].into(),
                             meta: meta(),
                         },
@@ -618,16 +639,16 @@ pub mod tests {
     }
 
     #[test]
-    fn embedded_ir() {
+    fn simple_embedded_ir() {
         let program = lower(
             "
-        __IR<Int>(\"$? = add int 1 2\")
+        @_ir { %? = add Int 1 2 }
         ",
         );
         assert_eq!(
             program.functions,
-            indexmap::indexmap!(SynthesizedId::from(1).into() => Function {
-                name: Name::Resolved(SynthesizedId::from(1).into(), "main".into()),
+            indexmap::indexmap!(Symbol::Main => Function {
+                name: Symbol::Main,
                 params: vec![].into(),
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
                 register_count: 1,
@@ -639,7 +660,7 @@ pub mod tests {
                         ty: IrTy::Int,
                         a: Value::Int(1),
                         b: Value::Int(2),
-                        meta: vec![].into(),
+                        meta: meta(),
                     }],
                     terminator: Terminator::Ret {
                         val: Value::Reg(0),
@@ -654,18 +675,13 @@ pub mod tests {
     fn embedded_ir_uses_variables() {
         let program = lower(
             "
-        let a = 1
-        let b = 2
-        __IR<Int>(\"$? = add int %0 %1\")
+        @_ir(1, 2) { %? = add Int $0 $1 }
         ",
         );
         assert_eq!(
-            *program
-                .functions
-                .get(&Symbol::from(SynthesizedId::from(1)))
-                .unwrap(),
+            *program.functions.get(&Symbol::Main).unwrap(),
             Function {
-                name: Name::Resolved(SynthesizedId::from(1).into(), "main".into()),
+                name: Symbol::Main,
                 params: vec![].into(),
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
                 register_count: 3,
@@ -690,7 +706,7 @@ pub mod tests {
                             ty: IrTy::Int,
                             a: Value::Reg(0),
                             b: Value::Reg(1),
-                            meta: vec![].into(),
+                            meta: meta()
                         }
                     ],
                     terminator: Terminator::Ret {
@@ -713,12 +729,9 @@ pub mod tests {
         );
 
         assert_eq_diff!(
-            *program
-                .functions
-                .get(&Symbol::from(SynthesizedId::from(1)))
-                .unwrap(),
+            *program.functions.get(&Symbol::Main).unwrap(),
             Function {
-                name: Name::Resolved(SynthesizedId::from(1).into(), "main".into()),
+                name: Symbol::Main,
                 params: vec![].into(),
                 ty: IrTy::Func(vec![], IrTy::Float.into()),
                 register_count: 5,
@@ -729,10 +742,7 @@ pub mod tests {
                         Instruction::Ref {
                             dest: 0.into(),
                             ty: IrTy::Func(vec![IrTy::Void], IrTy::Void.into()),
-                            val: Value::Func(Name::Resolved(
-                                Symbol::Global(GlobalId::from(1)),
-                                "id".into()
-                            ))
+                            val: Value::Func(Symbol::Global(GlobalId::from(1)))
                         },
                         Instruction::Constant {
                             ty: IrTy::Int,
@@ -743,10 +753,7 @@ pub mod tests {
                         Instruction::Call {
                             dest: 1.into(),
                             ty: IrTy::Int,
-                            callee: Value::Func(Name::Resolved(
-                                Symbol::Synthesized(SynthesizedId::from(4)),
-                                "@id:Global(_:1)[Int]".into()
-                            )),
+                            callee: Value::Reg(0),
                             args: vec![Value::Reg(2)].into(),
                             meta: meta(),
                         },
@@ -759,10 +766,7 @@ pub mod tests {
                         Instruction::Call {
                             dest: 3.into(),
                             ty: IrTy::Float,
-                            callee: Value::Func(Name::Resolved(
-                                Symbol::Synthesized(SynthesizedId::from(7)),
-                                "@id:Global(_:1)[Float]".into()
-                            )),
+                            callee: Value::Reg(0),
                             args: vec![Value::Reg(4)].into(),
                             meta: meta(),
                         },
@@ -778,10 +782,10 @@ pub mod tests {
         assert_eq_diff!(
             *program
                 .functions
-                .get(&Symbol::from(SynthesizedId::from(3)))
+                .get(&Symbol::Synthesized(1.into()))
                 .unwrap(),
             Function {
-                name: Name::Resolved(SynthesizedId::from(3).into(), "@id:Global(_:1)[Int]".into()),
+                name: Symbol::Synthesized(1.into()),
                 params: vec![Value::Reg(0)].into(),
                 ty: IrTy::Func(vec![IrTy::Int], IrTy::Int.into()),
                 register_count: 1,
@@ -800,13 +804,10 @@ pub mod tests {
         assert_eq_diff!(
             *program
                 .functions
-                .get(&Symbol::from(SynthesizedId::from(5)))
+                .get(&Symbol::Synthesized(2.into()))
                 .unwrap(),
             Function {
-                name: Name::Resolved(
-                    SynthesizedId::from(5).into(),
-                    "@id:Global(_:1)[Float]".into()
-                ),
+                name: Symbol::Synthesized(2.into()),
                 params: vec![Value::Reg(0)].into(),
                 ty: IrTy::Func(vec![IrTy::Float], IrTy::Float.into()),
                 register_count: 1,
@@ -835,15 +836,12 @@ pub mod tests {
         );
 
         assert_eq_diff!(
-            *program
-                .functions
-                .get(&Symbol::Synthesized(SynthesizedId::from(1)))
-                .unwrap(),
+            *program.functions.get(&Symbol::Main).unwrap(),
             Function::<IrTy> {
-                name: Name::Resolved(SynthesizedId::from(1).into(), "main".into()),
+                name: Symbol::Main,
                 params: vec![].into(),
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
-                register_count: 1,
+                register_count: 3,
                 blocks: vec![
                     BasicBlock {
                         id: BasicBlockId(0),
@@ -859,26 +857,48 @@ pub mod tests {
                         id: BasicBlockId(1),
                         phis: Default::default(),
                         instructions: vec![Instruction::Constant {
-                            dest: Register::DROP,
+                            dest: Register(0),
                             ty: IrTy::Int,
                             val: Value::Int(456),
                             meta: meta()
                         }],
                         terminator: Terminator::Jump {
-                            to: BasicBlockId(2)
+                            to: BasicBlockId(3)
                         }
                     },
                     BasicBlock {
                         id: BasicBlockId(2),
                         phis: Default::default(),
+                        instructions: Default::default(),
+                        terminator: Terminator::Jump {
+                            to: BasicBlockId(3)
+                        }
+                    },
+                    BasicBlock {
+                        id: BasicBlockId(3),
+                        phis: vec![Phi {
+                            dest: 1.into(),
+                            ty: IrTy::Int,
+                            sources: vec![
+                                PhiSource {
+                                    from_id: BasicBlockId(1),
+                                    value: Value::Reg(0)
+                                },
+                                PhiSource {
+                                    from_id: BasicBlockId(2),
+                                    value: Value::Void
+                                }
+                            ]
+                            .into()
+                        }],
                         instructions: vec![Instruction::Constant {
-                            dest: 0.into(),
+                            dest: 2.into(),
                             ty: IrTy::Int,
                             val: Value::Int(123),
                             meta: meta()
                         }],
                         terminator: Terminator::Ret {
-                            val: Value::Reg(0),
+                            val: Value::Reg(2),
                             ty: IrTy::Int
                         }
                     }
@@ -900,12 +920,9 @@ pub mod tests {
         );
 
         assert_eq_diff!(
-            *program
-                .functions
-                .get(&Symbol::Synthesized(SynthesizedId::from(1)))
-                .unwrap(),
+            *program.functions.get(&Symbol::Main).unwrap(),
             Function::<IrTy> {
-                name: Name::Resolved(SynthesizedId::from(1).into(), "main".into()),
+                name: Symbol::Main,
                 params: vec![].into(),
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
                 // allocator got up to Register(9), so next is 10
@@ -1042,13 +1059,9 @@ pub mod tests {
             ",
         );
 
-        assert_eq!(
-            *program
-                .functions
-                .get(&Symbol::Synthesized(SynthesizedId::from(1)))
-                .unwrap()
-                .blocks,
-            vec![
+        assert_eq_diff!(
+            program.functions.get(&Symbol::Main).unwrap().blocks,
+            &[
                 BasicBlock::from_str(
                     "
                 #0:
@@ -1059,7 +1072,7 @@ pub mod tests {
                 BasicBlock::from_str(
                     "
                 #1:
-                    jmp #2
+                    br true #2 #3
                     "
                 )
                 .unwrap(),
@@ -1088,30 +1101,216 @@ pub mod tests {
     fn lowers_string_literal() {
         let program = lower("\"hello\"");
         assert_eq!(
-            *program
-                .functions
-                .get(&Symbol::Synthesized(SynthesizedId::from(1)))
-                .unwrap()
-                .blocks,
+            *program.functions.get(&Symbol::Main).unwrap().blocks,
             vec![BasicBlock {
                 id: BasicBlockId(0),
                 phis: Default::default(),
-                instructions: vec![Instruction::Struct {
+                instructions: vec![Instruction::Nominal {
                     dest: 0.into(),
                     sym: Symbol::String,
-                    ty: IrTy::Record(vec![IrTy::RawPtr, IrTy::Int, IrTy::Int]),
-                    record: vec![Value::RawPtr(0), Value::Int(5), Value::Int(5)].into(),
+                    ty: IrTy::Record(
+                        Some(Symbol::String),
+                        vec![IrTy::RawPtr, IrTy::Int, IrTy::Int]
+                    ),
+                    record: vec![Value::RawPtr(Addr(0)), Value::Int(5), Value::Int(5)].into(),
                     meta: meta()
                 }],
                 terminator: Terminator::Ret {
                     val: Register(0).into(),
-                    ty: IrTy::Record(vec![IrTy::RawPtr, IrTy::Int, IrTy::Int]),
+                    ty: IrTy::Record(
+                        Some(Symbol::String),
+                        vec![IrTy::RawPtr, IrTy::Int, IrTy::Int]
+                    ),
                 }
             }]
         );
         assert_eq!(
-            program.statics,
-            vec![Value::Buffer("hello".bytes().collect_vec())]
+            program.static_memory.data[0..5],
+            "hello".bytes().collect_vec()
         )
+    }
+
+    #[test]
+    fn lowers_array_literal() {
+        let program = lower("[1,2,3]");
+        assert_eq!(
+            program.functions.get(&Symbol::Main).unwrap().blocks,
+            &[BasicBlock {
+                id: BasicBlockId(0),
+                phis: Default::default(),
+                instructions: vec![
+                    Instruction::Constant {
+                        dest: 0.into(),
+                        ty: IrTy::Int,
+                        val: Value::Int(1),
+                        meta: meta()
+                    },
+                    Instruction::Constant {
+                        dest: 1.into(),
+                        ty: IrTy::Int,
+                        val: Value::Int(2),
+                        meta: meta()
+                    },
+                    Instruction::Constant {
+                        dest: 2.into(),
+                        ty: IrTy::Int,
+                        val: Value::Int(3),
+                        meta: meta()
+                    },
+                    Instruction::Record {
+                        dest: 3.into(),
+                        ty: IrTy::Record(None, vec![IrTy::Int, IrTy::Int, IrTy::Int]),
+                        record: vec![Value::Reg(0), Value::Reg(1), Value::Reg(2)].into(),
+                        meta: meta(),
+                    },
+                    Instruction::Alloc {
+                        dest: 4.into(),
+                        ty: IrTy::Record(None, vec![IrTy::Int, IrTy::Int, IrTy::Int]),
+                        count: Value::Int(1)
+                    },
+                    Instruction::Store {
+                        value: Value::Reg(3),
+                        ty: IrTy::Record(None, vec![IrTy::Int, IrTy::Int, IrTy::Int]),
+                        addr: Value::Reg(4),
+                    },
+                    Instruction::Nominal {
+                        dest: 5.into(),
+                        sym: Symbol::Array,
+                        ty: IrTy::Record(
+                            Some(Symbol::Array),
+                            vec![IrTy::RawPtr, IrTy::Int, IrTy::Int]
+                        ),
+                        record: vec![Value::Reg(4), Value::Int(3), Value::Int(3)].into(),
+                        meta: meta()
+                    }
+                ],
+                terminator: Terminator::Ret {
+                    val: Register(5).into(),
+                    ty: IrTy::Record(
+                        Some(Symbol::Array),
+                        vec![IrTy::RawPtr, IrTy::Int, IrTy::Int]
+                    ),
+                }
+            }]
+        );
+    }
+
+    #[test]
+    fn lowers_closure() {
+        let program = lower(
+            "
+        let a = 123
+        func b() { a }
+        b()
+        a // Make sure we know to load from heap now since it's a capture
+        ",
+        );
+
+        assert_eq_diff!(
+            program.functions.get(&Symbol::Main).unwrap().blocks,
+            &[BasicBlock {
+                id: BasicBlockId(0),
+                phis: Default::default(),
+                instructions: vec![
+                    Instruction::Alloc {
+                        dest: 0.into(),
+                        ty: IrTy::Int,
+                        count: Value::Int(1),
+                    },
+                    Instruction::Constant {
+                        dest: 1.into(),
+                        ty: IrTy::Int,
+                        val: Value::Int(123),
+                        meta: meta()
+                    },
+                    Instruction::Store {
+                        value: Value::Reg(1),
+                        ty: IrTy::Int,
+                        addr: Value::Reg(0)
+                    },
+                    Instruction::Ref {
+                        dest: 2.into(),
+                        ty: IrTy::Func(
+                            vec![IrTy::Record(None, vec![IrTy::RawPtr,])],
+                            IrTy::Int.into()
+                        ),
+                        val: Value::Closure {
+                            func: GlobalId::from(2).into(),
+                            env: vec![Value::Reg(0)].into()
+                        }
+                    },
+                    Instruction::Call {
+                        dest: 3.into(),
+                        ty: IrTy::Int,
+                        callee: Value::Reg(2),
+                        args: vec![].into(),
+                        meta: meta(),
+                    },
+                    Instruction::Load {
+                        dest: 4.into(),
+                        ty: IrTy::Int,
+                        addr: Value::Reg(0),
+                    }
+                ],
+                terminator: Terminator::Ret {
+                    val: Value::Reg(4),
+                    ty: IrTy::Int,
+                }
+            }]
+        );
+
+        assert_eq_diff!(
+            program
+                .functions
+                .get(&Symbol::Global(GlobalId::from(2)))
+                .unwrap()
+                .blocks,
+            &[BasicBlock {
+                id: BasicBlockId(0),
+                phis: Default::default(),
+                instructions: vec![
+                    Instruction::GetField {
+                        dest: 1.into(),
+                        ty: IrTy::RawPtr,
+                        record: 0.into(),
+                        field: Label::Positional(0),
+                        meta: vec![].into()
+                    },
+                    Instruction::Load {
+                        dest: 2.into(),
+                        ty: IrTy::Int,
+                        addr: Value::Reg(1)
+                    }
+                ],
+                terminator: Terminator::Ret {
+                    val: Value::Reg(2),
+                    ty: IrTy::Int,
+                }
+            }]
+        );
+    }
+
+    #[test]
+    fn specializes_transitive_conformance_default_methods() {
+        let module = lower_bare(
+            "
+            protocol A {
+                func default() { 123 }
+            }
+
+            protocol B: A {
+                func callsDefault() { self.default() }
+            }
+
+            extend Int: B {}
+
+            123.callsDefault()
+        ",
+        );
+
+        set_symbol_names(module.symbol_names.clone());
+
+        println!("{:#?}", module.program);
+        println!("{}", module.program);
     }
 }

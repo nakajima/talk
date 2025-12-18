@@ -1,25 +1,28 @@
-use crate::compiling::driver::DriverConfig;
+use std::fmt::Display;
+
+use crate::compiling::driver::{CompilationMode, DriverConfig};
 use crate::compiling::module::ModuleId;
-use crate::formatter;
 use crate::ir::basic_block::{Phi, PhiSource};
+use crate::ir::function::Function;
 use crate::ir::instruction::CmpOperator;
 use crate::ir::ir_ty::IrTy;
 use crate::ir::monomorphizer::uncurry_function;
-use crate::ir::parse_instruction;
+use crate::ir::value::{Addr, Reference};
 use crate::label::Label;
-use crate::name_resolution::symbol::{InstanceMethodId, Symbols};
-use crate::node_kinds::match_arm::MatchArm;
-use crate::node_kinds::parameter::Parameter;
-use crate::node_kinds::record_field::RecordField;
-use crate::token_kind::TokenKind;
+use crate::name_resolution::name_resolver::ResolvedNames;
+use crate::name_resolution::symbol::Symbols;
+use crate::node_kinds::inline_ir_instruction::{InlineIRInstructionKind, TypedInlineIRInstruction};
+use crate::node_kinds::type_annotation::TypeAnnotation;
 use crate::types::infer_row::RowParamId;
 use crate::types::infer_ty::TypeParamId;
+use crate::types::predicate::Predicate;
 use crate::types::row::Row;
-use crate::types::type_catalog::MemberWitness;
 use crate::types::type_session::TypeDefKind;
+use crate::types::typed_ast::{
+    TypedAST, TypedBlock, TypedDecl, TypedDeclKind, TypedExpr, TypedExprKind, TypedFunc,
+    TypedMatchArm, TypedNode, TypedPattern, TypedRecordField, TypedStmt, TypedStmtKind,
+};
 use crate::{
-    ast::AST,
-    compiling::driver::Source,
     ir::{
         basic_block::{BasicBlock, BasicBlockId},
         instruction::{Instruction, InstructionMeta},
@@ -31,22 +34,9 @@ use crate::{
         value::Value,
     },
     name::Name,
-    name_resolution::{
-        name_resolver::NameResolved,
-        symbol::{Symbol, SynthesizedId},
-    },
-    node::Node,
+    name_resolution::symbol::{Symbol, SynthesizedId},
     node_id::{FileID, NodeID},
-    node_kinds::{
-        block::Block,
-        call_arg::CallArg,
-        decl::{Decl, DeclKind},
-        expr::{Expr, ExprKind},
-        func::Func,
-        pattern::{Pattern, PatternKind},
-        stmt::{Stmt, StmtKind},
-    },
-    span::Span,
+    node_kinds::pattern::PatternKind,
     types::{
         scheme::ForAll,
         ty::Ty,
@@ -58,13 +48,20 @@ use itertools::Itertools;
 use rustc_hash::FxHashMap;
 use tracing::instrument;
 
-enum LValue<F> {
+#[derive(Debug)]
+enum LValue {
     Field {
-        base: Box<LValue<F>>,
-        field: F,
+        base: Box<LValue>,
+        field: Label,
         ty: Ty,
     },
     Variable(Symbol),
+}
+
+impl Display for LValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{self:?}")
+    }
 }
 
 #[derive(Debug)]
@@ -72,11 +69,14 @@ pub(super) struct CurrentFunction {
     current_block_idx: Vec<usize>,
     blocks: Vec<BasicBlock<Ty>>,
     pub registers: RegisterAllocator,
+    bindings: FxHashMap<Symbol, Binding<Ty>>,
+    symbol: Symbol,
 }
 
-impl Default for CurrentFunction {
-    fn default() -> Self {
+impl CurrentFunction {
+    fn new(symbol: Symbol) -> Self {
         CurrentFunction {
+            symbol,
             current_block_idx: vec![0],
             blocks: vec![BasicBlock::<Ty> {
                 phis: Default::default(),
@@ -85,6 +85,37 @@ impl Default for CurrentFunction {
                 terminator: Terminator::Unreachable,
             }],
             registers: Default::default(),
+            bindings: Default::default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct StaticMemory {
+    pub data: Vec<u8>,
+}
+
+impl StaticMemory {
+    pub fn write(&mut self, value: Value) -> usize {
+        let addr = self.data.len();
+        self.data.extend(value.as_bytes());
+        addr
+    }
+
+    #[allow(clippy::unwrap_used)]
+    #[warn(clippy::todo)]
+    pub fn load(&self, at: usize, len: usize, ty: IrTy) -> Value {
+        let bytes = &self.data[at..len];
+        match ty {
+            IrTy::Int => Value::Int(i64::from_le_bytes(bytes.try_into().unwrap())),
+            IrTy::Float => Value::Float(f64::from_le_bytes(bytes.try_into().unwrap())),
+            IrTy::Bool => Value::Bool(bytes[0] == 1),
+            IrTy::Func(..) => Value::Func(Symbol::from_bytes(bytes.try_into().unwrap())),
+            IrTy::Record(..) => unreachable!("can only load primitives"),
+            IrTy::RawPtr => Value::RawPtr(Addr(usize::from_le_bytes(bytes.try_into().unwrap()))),
+            IrTy::Byte => Value::RawBuffer(bytes.to_vec()),
+            IrTy::Void => unreachable!("cannot load the void"),
+            IrTy::Buffer(..) => Value::RawBuffer(bytes.to_vec()),
         }
     }
 }
@@ -92,6 +123,7 @@ impl Default for CurrentFunction {
 #[derive(Debug, PartialEq, Eq)]
 enum Bind {
     Assigned(Register),
+    Indirect(Register, Symbol),
     Fresh,
     Discard,
 }
@@ -111,7 +143,7 @@ impl RegisterAllocator {
 
 #[derive(Default, Clone, Debug)]
 pub(super) struct Substitutions {
-    pub ty: FxHashMap<TypeParamId, Ty>,
+    pub ty: FxHashMap<Ty, Ty>,
     pub row: FxHashMap<RowParamId, Row>,
     /// Maps MethodRequirement symbols to their concrete implementations for witness specialization
     pub witnesses: FxHashMap<Symbol, Symbol>,
@@ -127,7 +159,7 @@ impl Substitutions {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct PolyFunction {
-    pub name: Name,
+    pub name: Symbol,
     pub params: Vec<Value>,
     pub blocks: Vec<BasicBlock<Ty>>,
     pub ty: Ty,
@@ -136,152 +168,227 @@ pub struct PolyFunction {
 
 #[derive(Debug, Clone)]
 pub struct Specialization {
-    pub name: Name,
+    pub name: Symbol,
     pub(super) substitutions: Substitutions,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct SpecializationKey {
+    ty: Vec<(TypeParamId, Ty)>,
+    row: Vec<(RowParamId, Row)>,
+    witnesses: Vec<(Symbol, Symbol)>,
+}
+
+impl SpecializationKey {
+    fn new(substitutions: &Substitutions) -> Self {
+        let mut ty: Vec<(TypeParamId, Ty)> = substitutions
+            .ty
+            .iter()
+            .filter_map(|(k, v)| match k {
+                Ty::Param(param) => Some((*param, v.clone())),
+                other => {
+                    tracing::warn!("unexpected type substitution key: {other:?} -> {v:?}");
+                    None
+                }
+            })
+            .collect();
+        ty.sort_by_key(|(param, _)| *param);
+
+        let mut row: Vec<(RowParamId, Row)> = substitutions
+            .row
+            .iter()
+            .filter_map(|(param, row)| {
+                if *row == Row::Param(*param) {
+                    None
+                } else {
+                    Some((*param, row.clone()))
+                }
+            })
+            .collect();
+        row.sort_by_key(|(param, _)| *param);
+
+        let mut witnesses: Vec<(Symbol, Symbol)> = substitutions
+            .witnesses
+            .iter()
+            .map(|(req, imp)| (*req, *imp))
+            .collect();
+        witnesses.sort_by_key(|(req, _)| *req);
+
+        Self { ty, row, witnesses }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.ty.is_empty() && self.row.is_empty() && self.witnesses.is_empty()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum Binding<T> {
+    Register(u32),
+    Pointer(Value),
+    Capture { index: usize, ty: T },
+}
+
+impl<T> From<Register> for Binding<T> {
+    fn from(value: Register) -> Self {
+        Binding::Register(value.0)
+    }
+}
+
+impl<T> From<Value> for Binding<T> {
+    fn from(value: Value) -> Self {
+        Binding::Pointer(value)
+    }
 }
 
 // Lowers an AST with Types to a monomorphized IR
 pub struct Lowerer<'a> {
-    pub(super) asts: &'a mut IndexMap<Source, AST<NameResolved>>,
+    pub(super) ast: &'a mut TypedAST<Ty>,
     pub(super) types: &'a mut Types,
     pub(super) functions: IndexMap<Symbol, PolyFunction>,
     pub(super) current_function_stack: Vec<CurrentFunction>,
     pub(super) config: &'a DriverConfig,
 
     symbols: &'a mut Symbols,
-    bindings: FxHashMap<Symbol, Register>,
+    resolved_names: &'a mut ResolvedNames,
     pub(super) specializations: IndexMap<Symbol, Vec<Specialization>>,
-    statics: Vec<Value>,
+    specialization_intern: FxHashMap<Symbol, FxHashMap<SpecializationKey, Symbol>>,
+    static_memory: StaticMemory,
 }
 
 #[allow(clippy::panic)]
 #[allow(clippy::expect_used)]
 impl<'a> Lowerer<'a> {
     pub fn new(
-        asts: &'a mut IndexMap<Source, AST<NameResolved>>,
+        ast: &'a mut TypedAST<Ty>,
         types: &'a mut Types,
         symbols: &'a mut Symbols,
+        resolved_names: &'a mut ResolvedNames,
         config: &'a DriverConfig,
     ) -> Self {
         Self {
-            asts,
+            ast,
             types,
             functions: Default::default(),
             current_function_stack: Default::default(),
-            bindings: Default::default(),
             symbols,
             specializations: Default::default(),
-            statics: Default::default(),
+            specialization_intern: Default::default(),
+            static_memory: Default::default(),
             config,
+            resolved_names,
         }
     }
 
     pub fn lower(mut self) -> Result<Program, IRError> {
-        if self.asts.is_empty() {
-            return Ok(Program::default());
-        }
-
-        // Do we have a main func?
-        let has_main_func = self.asts.iter().flat_map(|a| &a.1.roots).any(is_main_func);
-        if !has_main_func {
-            let main_symbol = Symbol::Synthesized(self.symbols.next_synthesized(ModuleId::Current));
-            let mut ret_ty = Ty::Void;
-            let func = Func {
-                id: NodeID(FileID::SYNTHESIZED, 0),
-                name: Name::Resolved(main_symbol, "main".into()),
-                name_span: Span {
-                    start: 0,
-                    end: 0,
-                    file_id: FileID(0),
+        if self.ast.roots().is_empty() {
+            let mut program = Program::default();
+            program.functions.insert(
+                Symbol::Main,
+                Function {
+                    name: Symbol::Main,
+                    params: Default::default(),
+                    blocks: Default::default(),
+                    ty: IrTy::Void,
+                    register_count: 0,
                 },
-                generics: vec![],
-                params: vec![],
-                body: Block {
-                    id: NodeID(FileID(0), 0),
-                    args: vec![],
-                    span: Span {
-                        start: 0,
-                        end: 0,
-                        file_id: FileID(0),
-                    },
-                    body: {
-                        let roots: Vec<Node> = self
-                            .asts
-                            .values_mut()
-                            .flat_map(|a| std::mem::take(&mut a.roots))
-                            .collect();
-
-                        if let Some(last) = roots.last() {
-                            ret_ty = match self
-                                .types
-                                .get(&last.node_id())
-                                .unwrap_or(&TypeEntry::Mono(Ty::Void))
-                            {
-                                TypeEntry::Mono(ty) => ty.clone(),
-                                TypeEntry::Poly(scheme) => scheme.ty.clone(),
-                            };
-                        }
-
-                        roots
-                    },
-                },
-                ret: None,
-                attributes: vec![],
-            };
-
-            #[allow(clippy::unwrap_used)]
-            let ast = self.asts.iter_mut().next().unwrap();
-            ast.1.roots.push(Node::Decl(Decl {
-                id: NodeID(FileID::SYNTHESIZED, 0),
-                span: Span::SYNTHESIZED,
-                kind: DeclKind::Let {
-                    lhs: Pattern {
-                        id: NodeID(FileID::SYNTHESIZED, 0),
-                        span: Span::SYNTHESIZED,
-                        kind: PatternKind::Bind(Name::Resolved(
-                            SynthesizedId::from(0).into(),
-                            "main".into(),
-                        )),
-                    },
-                    type_annotation: None,
-                    rhs: Some(Expr {
-                        id: NodeID(FileID::SYNTHESIZED, 0),
-                        span: Span::SYNTHESIZED,
-                        kind: ExprKind::Func(func),
-                    }),
-                },
-            }));
-
-            self.types.define(
-                main_symbol,
-                TypeEntry::Mono(Ty::Func(Ty::Void.into(), ret_ty.into())),
             );
+            return Ok(program);
         }
 
-        self.current_function_stack.push(CurrentFunction::default());
-
-        for i in 0..self.asts.len() {
-            let roots = std::mem::take(&mut self.asts[i].roots);
-            for root in roots.iter() {
-                self.lower_node(root, &Default::default())?;
-            }
-
-            _ = std::mem::replace(&mut self.asts[i].roots, roots);
+        if self.config.mode == CompilationMode::Executable {
+            self.lower_main();
+            self.current_function_stack
+                .push(CurrentFunction::new(Symbol::Main));
+        } else {
+            self.current_function_stack
+                .push(CurrentFunction::new(Symbol::Library));
         }
 
-        let statics = std::mem::take(&mut self.statics);
+        for root in self.ast.roots() {
+            self.lower_node(&root, &Default::default())?;
+        }
+
+        // Check for required imports
+        let funcs = self.functions.keys().cloned().collect_vec();
+        for sym in funcs {
+            _ = self.check_import(&sym, &Default::default());
+        }
+
+        let static_memory = std::mem::take(&mut self.static_memory);
         let mut monomorphizer = Monomorphizer::new(self);
 
         Ok(Program {
             functions: monomorphizer.monomorphize(),
             polyfunctions: monomorphizer.functions,
-            statics,
+            static_memory,
         })
+    }
+
+    fn lower_main(&mut self) {
+        // Do we have a main func?
+        let has_main_func = self
+            .ast
+            .decls
+            .iter()
+            .any(|d| is_main_func(d, &self.resolved_names.symbol_names));
+        if !has_main_func {
+            let main_symbol = Symbol::Main;
+            let mut ret_ty = Ty::Void;
+
+            let func = TypedFunc::<Ty> {
+                name: main_symbol,
+                foralls: Default::default(),
+                params: Default::default(),
+                body: TypedBlock {
+                    body: {
+                        let nodes: Vec<TypedNode<Ty>> = self.ast.roots();
+
+                        if let Some(last) = nodes.last() {
+                            ret_ty = last.ty();
+                        }
+
+                        nodes
+                    },
+                    id: NodeID(FileID(0), 0),
+                    ret: Ty::Void,
+                },
+                ret: Ty::Void,
+            };
+
+            #[allow(clippy::unwrap_used)]
+            self.ast.decls.push(TypedDecl {
+                id: NodeID(FileID(0), 0),
+                ty: Ty::Func(Ty::Void.into(), Ty::Void.into()),
+                kind: TypedDeclKind::Let {
+                    pattern: TypedPattern {
+                        id: NodeID(FileID(0), 0),
+                        ty: Ty::Func(Ty::Void.into(), Ty::Void.into()),
+                        kind: PatternKind::Bind(Name::Resolved(Symbol::Main, "main".into())),
+                    },
+                    ty: Ty::Func(Ty::Void.into(), Ty::Void.into()),
+                    initializer: Some(TypedExpr {
+                        id: NodeID(FileID(0), 0),
+                        ty: Ty::Func(Ty::Void.into(), Ty::Void.into()),
+                        kind: TypedExprKind::Func(func),
+                    }),
+                },
+            });
+
+            self.types.define(
+                main_symbol,
+                TypeEntry::Mono(Ty::Func(Ty::Void.into(), ret_ty.into())),
+            );
+
+            self.resolved_names
+                .symbol_names
+                .insert(main_symbol, "main(synthesized)".to_string());
+        }
     }
 
     fn lower_node(
         &mut self,
-        node: &Node,
+        node: &TypedNode<Ty>,
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
         self.lower_node_with_bind(node, instantiations, Bind::Fresh)
@@ -290,123 +397,143 @@ impl<'a> Lowerer<'a> {
     #[instrument(level = tracing::Level::TRACE, skip(self, node), fields(node.id = %node.node_id()))]
     fn lower_node_with_bind(
         &mut self,
-        node: &Node,
+        node: &TypedNode<Ty>,
         instantiations: &Substitutions,
         bind: Bind,
     ) -> Result<(Value, Ty), IRError> {
+        tracing::info!("{node:?}");
         match node {
-            Node::Decl(decl) => self.lower_decl(decl, instantiations),
-            Node::Stmt(stmt) => self.lower_stmt(stmt, instantiations, bind),
-            _ => unreachable!("node not handled: {node:?}"),
+            TypedNode::Decl(decl) => self.lower_decl(decl, instantiations),
+            TypedNode::Stmt(stmt) => self.lower_stmt(stmt, instantiations, bind),
+            TypedNode::Expr(expr) => self.lower_expr(expr, bind, instantiations),
         }
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self, decl), fields(decl.id = %decl.id))]
     fn lower_decl(
         &mut self,
-        decl: &Decl,
+        decl: &TypedDecl<Ty>,
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
         match &decl.kind {
-            DeclKind::Let {
-                lhs,
-                rhs: Some(value),
+            TypedDeclKind::Let {
+                pattern,
+                initializer,
                 ..
             } => {
-                let bind = self.lower_pattern(lhs)?;
-                self.lower_expr(value, bind, instantiations)?;
-            }
-            DeclKind::Struct { body, .. } | DeclKind::Protocol { body, .. } => {
-                for decl in &body.decls {
-                    self.lower_decl(decl, instantiations)?;
+                let bind = self.lower_pattern(pattern)?;
+                if let Some(initializer) = initializer {
+                    match bind {
+                        Bind::Assigned(reg) => {
+                            self.lower_expr(initializer, Bind::Assigned(reg), instantiations)?;
+                        }
+                        Bind::Fresh => {
+                            self.lower_expr(initializer, Bind::Fresh, instantiations)?;
+                        }
+                        Bind::Discard => {
+                            self.lower_expr(initializer, Bind::Discard, instantiations)?;
+                        }
+                        Bind::Indirect(reg, ..) => {
+                            let (val, ty) =
+                                self.lower_expr(initializer, Bind::Fresh, instantiations)?;
+                            self.push_instr(Instruction::Store {
+                                value: val,
+                                ty,
+                                addr: reg.into(),
+                            });
+                        }
+                    }
                 }
             }
-            DeclKind::Init { name, params, body } => {
-                self.lower_init(decl, name, params, body, instantiations)?;
-            }
-            DeclKind::Property { .. } => (),
-            DeclKind::Method { func, .. } => {
-                self.lower_method(func)?;
-            }
-            DeclKind::Associated { .. } => (),
-            DeclKind::Func(..) => (), // Handled by DeclKind::Let
-            DeclKind::Extend { body, .. } => {
-                for decl in &body.decls {
-                    self.lower_decl(decl, instantiations)?;
+            TypedDeclKind::StructDef {
+                symbol,
+                initializers,
+                instance_methods,
+                ..
+            } => {
+                for initializer in initializers.values() {
+                    self.lower_init(decl, symbol, initializer, instantiations)?;
+                }
+
+                for method in instance_methods.values() {
+                    self.lower_method(method, instantiations)?;
                 }
             }
-            DeclKind::Enum { body, .. } => {
-                for decl in &body.decls {
-                    self.lower_decl(decl, instantiations)?;
+            TypedDeclKind::Extend {
+                instance_methods, ..
+            } => {
+                for method in instance_methods.values() {
+                    self.lower_method(method, instantiations)?;
                 }
             }
-            DeclKind::EnumVariant(..) => (),
-            DeclKind::FuncSignature(..) => (),
-            DeclKind::MethodRequirement(..) => (),
-            DeclKind::TypeAlias(..) => (),
-            _ => (), // Nothing to do
+            TypedDeclKind::EnumDef {
+                instance_methods, ..
+            } => {
+                for method in instance_methods.values() {
+                    self.lower_method(method, instantiations)?;
+                }
+            }
+            TypedDeclKind::ProtocolDef {
+                instance_methods, ..
+            } => {
+                for method in instance_methods.values() {
+                    self.lower_method(method, instantiations)?;
+                }
+            }
         }
 
         Ok((Value::Void, Ty::Void))
     }
 
-    fn lower_method(&mut self, func: &Func) -> Result<(Value, Ty), IRError> {
-        self.lower_func(func, Bind::Discard, &Default::default())
-    }
-
-    #[instrument(level = tracing::Level::TRACE, skip(self, decl, body))]
-    fn lower_init(
+    fn lower_method(
         &mut self,
-        decl: &Decl,
-        name: &Name,
-        params: &[Parameter],
-        body: &Block,
+        func: &TypedFunc<Ty>,
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
-        let func_ty = match self
-            .types
-            .get_symbol(&name.symbol().expect("name not resolved"))
-            .unwrap_or_else(|| panic!("did not get func ty for {name:?}"))
-        {
-            TypeEntry::Mono(ty) => ty.clone(),
-            TypeEntry::Poly(scheme) => scheme.ty.clone(),
-        };
+        self.lower_func(func, Bind::Discard, instantiations)
+    }
+
+    #[instrument(level = tracing::Level::TRACE, skip(self, decl, initializer))]
+    fn lower_init(
+        &mut self,
+        decl: &TypedDecl<Ty>,
+        name: &Symbol,
+        initializer: &TypedFunc<Ty>,
+        instantiations: &Substitutions,
+    ) -> Result<(Value, Ty), IRError> {
+        let param_tys = initializer.params.iter().map(|p| &p.ty).collect_vec();
+        let func_ty = curry_ty(param_tys.iter().cloned(), decl.ty.clone());
 
         let Ty::Func(..) = func_ty else {
             unreachable!();
         };
 
-        let (param_tys, mut ret_ty) = uncurry_function(func_ty.clone());
-
         // Build param_ty from all params (for now, just use the first one for compatibility)
         let param_ty = if !param_tys.is_empty() {
             param_tys[0].clone()
         } else {
-            let meta = Default::default();
-            let formatter = formatter::Formatter::new(&meta);
             unreachable!(
                 "init has no params - param_tys: {param_tys:?} name: {name:?}, sym: {:?}, ty: {:?}, {:?}",
                 #[allow(clippy::unwrap_used)]
-                self.types
-                    .get_symbol(&name.symbol().expect("name not resolved"))
-                    .unwrap(),
+                self.types.get_symbol(name).unwrap(),
                 func_ty,
-                formatter.format(&[Node::Decl(decl.clone())], 80)
+                decl
             );
         };
 
-        self.current_function_stack.push(CurrentFunction::default());
+        self.current_function_stack
+            .push(CurrentFunction::new(*name));
 
         let mut param_values = vec![];
-        for param in params.iter() {
+        for param in initializer.params.iter() {
             let register = self.next_register();
             param_values.push(Value::Reg(register.0));
-            self.bindings
-                .insert(param.name.symbol().expect("name not resolved"), register);
+            self.insert_binding(param.name, register.into());
         }
 
+        let mut ret_ty = initializer.ret.clone();
         let mut ret = Value::Void;
-        for node in body.body.iter() {
+        for node in initializer.body.body.iter() {
             (ret, ret_ty) = self.lower_node(node, instantiations)?;
         }
 
@@ -426,9 +553,9 @@ impl<'a> Lowerer<'a> {
             .expect("did not get current function");
 
         self.functions.insert(
-            name.symbol().expect("name not resolved"),
+            initializer.name,
             PolyFunction {
-                name: name.clone(),
+                name: initializer.name,
                 params: param_values,
                 blocks: current_function.blocks,
                 ty: Ty::Func(Box::new(param_ty.clone()), Box::new(ret_ty.clone())),
@@ -442,27 +569,28 @@ impl<'a> Lowerer<'a> {
     #[instrument(level = tracing::Level::TRACE, skip(self, stmt), fields(stmt.id = %stmt.id))]
     fn lower_stmt(
         &mut self,
-        stmt: &Stmt,
+        stmt: &TypedStmt<Ty>,
         instantiations: &Substitutions,
         bind: Bind,
     ) -> Result<(Value, Ty), IRError> {
         match &stmt.kind {
-            StmtKind::Expr(expr) => self.lower_expr(expr, bind, instantiations),
-            StmtKind::If(cond, conseq, alt) => {
-                self.lower_if_stmt(cond, conseq, alt, instantiations)
+            TypedStmtKind::Expr(typed_expr) => self.lower_expr(typed_expr, bind, instantiations),
+            TypedStmtKind::Assignment(lhs, rhs) => self.lower_assignment(lhs, rhs, instantiations),
+            TypedStmtKind::Return(typed_expr) => {
+                self.lower_return(typed_expr, bind, instantiations)
             }
-            StmtKind::Return(expr) => self.lower_return(expr, bind, instantiations),
+            TypedStmtKind::Loop(cond, typed_block) => {
+                self.lower_loop(&Some(cond.clone()), typed_block, instantiations)
+            }
             #[allow(clippy::todo)]
-            StmtKind::Break => todo!(),
-            StmtKind::Assignment(lhs, rhs) => self.lower_assignment(lhs, rhs, instantiations),
-            StmtKind::Loop(cond, block) => self.lower_loop(cond, block, instantiations),
+            TypedStmtKind::Break => todo!(),
         }
     }
 
     fn lower_loop(
         &mut self,
-        cond: &Option<Expr>,
-        block: &Block,
+        cond: &Option<TypedExpr<Ty>>,
+        block: &TypedBlock<Ty>,
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
         let top_block_id = self.new_basic_block();
@@ -500,7 +628,7 @@ impl<'a> Lowerer<'a> {
 
     fn lower_return(
         &mut self,
-        expr: &Option<Expr>,
+        expr: &Option<TypedExpr<Ty>>,
         bind: Bind,
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
@@ -521,9 +649,9 @@ impl<'a> Lowerer<'a> {
     #[instrument(level = tracing::Level::TRACE, skip(self, cond, conseq, alt))]
     fn lower_if_expr(
         &mut self,
-        cond: &Expr,
-        conseq: &Block,
-        alt: &Block,
+        cond: &TypedExpr<Ty>,
+        conseq: &TypedBlock<Ty>,
+        alt: &TypedBlock<Ty>,
         bind: Bind,
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
@@ -552,12 +680,11 @@ impl<'a> Lowerer<'a> {
         });
 
         let ret = self.ret(bind);
-        let ty = self.ty_from_id(&conseq.id)?;
 
         self.set_current_block(join_block_id);
         self.push_phi(Phi {
             dest: ret,
-            ty: ty.clone(),
+            ty: conseq.ret.clone(),
             sources: vec![
                 PhiSource {
                     from_id: conseq_block_id,
@@ -571,173 +698,13 @@ impl<'a> Lowerer<'a> {
             .into(),
         });
 
-        Ok((ret.into(), ty))
-    }
-
-    #[instrument(level = tracing::Level::TRACE, skip(self, cond, conseq, alt))]
-    fn lower_if_stmt(
-        &mut self,
-        cond: &Expr,
-        conseq: &Block,
-        alt: &Option<Block>,
-        instantiations: &Substitutions,
-    ) -> Result<(Value, Ty), IRError> {
-        let cond_ir = self.lower_expr(cond, Bind::Fresh, instantiations)?;
-
-        let conseq_block_id = self.new_basic_block();
-        let join_block_id = self.new_basic_block();
-
-        self.in_basic_block(conseq_block_id, |lowerer| {
-            lowerer.lower_block(conseq, Bind::Discard, instantiations)?;
-            lowerer.push_terminator(Terminator::Jump { to: join_block_id });
-            Ok(())
-        })?;
-
-        let else_id = if let Some(alt) = alt {
-            let alt_block_id = self.new_basic_block();
-            self.in_basic_block(alt_block_id, |lowerer| {
-                lowerer.lower_block(alt, Bind::Discard, instantiations)?;
-                lowerer.push_terminator(Terminator::Jump { to: join_block_id });
-                Ok(())
-            })?;
-            alt_block_id
-        } else {
-            join_block_id
-        };
-
-        self.push_terminator(Terminator::Branch {
-            cond: cond_ir.0,
-            conseq: conseq_block_id,
-            alt: else_id,
-        });
-
-        self.set_current_block(join_block_id);
-
-        Ok((Value::Void, Ty::Void))
-    }
-
-    /// Lower binary operators. Most binary operators are converted to method calls
-    /// earlier in the pipeline, but `||` and `&&` need short-circuit evaluation.
-    fn lower_binary(
-        &mut self,
-        expr: &Expr,
-        lhs: &Expr,
-        op: TokenKind,
-        rhs: &Expr,
-        bind: Bind,
-        instantiations: &Substitutions,
-    ) -> Result<(Value, Ty), IRError> {
-        match op {
-            TokenKind::PipePipe => self.lower_or(expr, lhs, rhs, bind, instantiations),
-            TokenKind::AmpAmp => self.lower_and(expr, lhs, rhs, bind, instantiations),
-            _ => Ok((Value::Void, Ty::Void)), // Other operators converted to calls earlier
-        }
-    }
-
-    #[instrument(level = tracing::Level::TRACE, skip(self, lhs, rhs, instantiations))]
-    fn lower_or(
-        &mut self,
-        expr: &Expr,
-        lhs: &Expr,
-        rhs: &Expr,
-        bind: Bind,
-        instantiations: &Substitutions,
-    ) -> Result<(Value, Ty), IRError> {
-        let lhs_block_id = self.get_current_block();
-        let rhs_block_id = self.new_basic_block();
-        let rhs_register = self.next_register();
-        let join_block_id = self.new_basic_block();
-
-        let (lhs_val, lhs_ty) = self.lower_expr(lhs, Bind::Fresh, instantiations)?;
-        assert_eq!(lhs_ty, Ty::Bool);
-
-        self.push_terminator(Terminator::Branch {
-            cond: lhs_val,
-            conseq: join_block_id,
-            alt: rhs_block_id,
-        });
-
-        self.in_basic_block(rhs_block_id, |lowerer| {
-            lowerer.lower_expr(rhs, Bind::Assigned(rhs_register), instantiations)?;
-            lowerer.push_terminator(Terminator::Jump { to: join_block_id });
-            Ok(())
-        })?;
-
-        let ret = self.ret(bind);
-        self.set_current_block(join_block_id);
-        self.push_phi(Phi {
-            dest: ret,
-            ty: Ty::Bool,
-            sources: vec![
-                PhiSource {
-                    from_id: lhs_block_id,
-                    value: Value::Bool(true),
-                },
-                PhiSource {
-                    from_id: rhs_block_id,
-                    value: rhs_register.into(),
-                },
-            ]
-            .into(),
-        });
-
-        Ok((ret.into(), Ty::Bool))
-    }
-
-    #[instrument(level = tracing::Level::TRACE, skip(self, lhs, rhs, instantiations))]
-    fn lower_and(
-        &mut self,
-        expr: &Expr,
-        lhs: &Expr,
-        rhs: &Expr,
-        bind: Bind,
-        instantiations: &Substitutions,
-    ) -> Result<(Value, Ty), IRError> {
-        let lhs_block_id = self.get_current_block();
-        let rhs_block_id = self.new_basic_block();
-        let rhs_register = self.next_register();
-        let join_block_id = self.new_basic_block();
-
-        let (lhs_val, lhs_ty) = self.lower_expr(lhs, Bind::Fresh, instantiations)?;
-        assert_eq!(lhs_ty, Ty::Bool);
-
-        self.push_terminator(Terminator::Branch {
-            cond: lhs_val,
-            conseq: rhs_block_id,
-            alt: join_block_id,
-        });
-
-        self.in_basic_block(rhs_block_id, |lowerer| {
-            lowerer.lower_expr(rhs, Bind::Assigned(rhs_register), instantiations)?;
-            lowerer.push_terminator(Terminator::Jump { to: join_block_id });
-            Ok(())
-        })?;
-
-        let ret = self.ret(bind);
-        self.set_current_block(join_block_id);
-        self.push_phi(Phi {
-            dest: ret,
-            ty: Ty::Bool,
-            sources: vec![
-                PhiSource {
-                    from_id: lhs_block_id,
-                    value: Value::Bool(false),
-                },
-                PhiSource {
-                    from_id: rhs_block_id,
-                    value: rhs_register.into(),
-                },
-            ]
-            .into(),
-        });
-
-        Ok((ret.into(), Ty::Bool))
+        Ok((ret.into(), conseq.ret.clone()))
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self, block), fields(block.id = %block.id))]
     fn lower_block(
         &mut self,
-        block: &Block,
+        block: &TypedBlock<Ty>,
         bind: Bind,
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
@@ -760,11 +727,11 @@ impl<'a> Lowerer<'a> {
     #[instrument(level = tracing::Level::TRACE, skip(self, lhs, rhs), fields(lhs.id = %lhs.id, rhs.id = %rhs.id))]
     fn lower_assignment(
         &mut self,
-        lhs: &Expr,
-        rhs: &Expr,
+        lhs: &TypedExpr<Ty>,
+        rhs: &TypedExpr<Ty>,
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
-        let lvalue = self.lower_lvalue(lhs)?;
+        let lvalue = self.lower_lvalue(lhs, instantiations)?;
         let (value, ty) = self.lower_expr(rhs, Bind::Fresh, instantiations)?;
 
         self.emit_lvalue_store(lvalue, value)?;
@@ -772,16 +739,12 @@ impl<'a> Lowerer<'a> {
         Ok((Value::Void, ty))
     }
 
-    fn emit_load_lvalue(
-        &mut self,
-        receiver_ty: &Ty,
-        lvalue: &LValue<Label>,
-    ) -> Result<Register, IRError> {
+    #[instrument(level = tracing::Level::TRACE, skip(self, receiver_ty))]
+    fn emit_load_lvalue(&mut self, receiver_ty: &Ty, lvalue: &LValue) -> Result<Register, IRError> {
         match lvalue {
             LValue::Variable(sym) => {
                 // Variable is already in a register
-                #[allow(clippy::unwrap_used)]
-                Ok(*self.bindings.get(sym).unwrap())
+                Ok(self.get_binding(sym))
             }
             LValue::Field { base, field, ty } => {
                 // Recursively load base, then extract field
@@ -801,12 +764,10 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    fn emit_lvalue_store(&mut self, lvalue: LValue<Label>, value: Value) -> Result<(), IRError> {
+    fn emit_lvalue_store(&mut self, lvalue: LValue, value: Value) -> Result<(), IRError> {
         match lvalue {
             LValue::Variable(sym) => {
-                // Simple rebind
-                let reg = value.as_register()?;
-                self.bindings.insert(sym, reg);
+                self.set_binding(&sym, value.as_register()?);
                 Ok(())
             }
             LValue::Field {
@@ -832,14 +793,23 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    fn lower_lvalue(&mut self, expr: &Expr) -> Result<LValue<Label>, IRError> {
+    fn lower_lvalue(
+        &mut self,
+        expr: &TypedExpr<Ty>,
+        instantiations: &Substitutions,
+    ) -> Result<LValue, IRError> {
         match &expr.kind {
-            ExprKind::Variable(name) => {
-                Ok(LValue::Variable(name.symbol().expect("name not resolved")))
-            }
-            ExprKind::Member(Some(box receiver), label, _span) => {
-                let receiver_lvalue = self.lower_lvalue(receiver)?;
-                let (receiver_ty, ..) = self.specialized_ty(receiver).expect("didn't get base ty");
+            TypedExprKind::Variable(name) => Ok(LValue::Variable(*name)),
+            TypedExprKind::Member {
+                receiver: box receiver,
+                label,
+            } => {
+                let (receiver_ty, instantiations) = self
+                    .specialized_ty(receiver, instantiations)
+                    .expect("didn't get base ty");
+                let receiver_lvalue = self.lower_lvalue(receiver, &instantiations)?;
+
+                let receiver_ty = substitute(receiver_ty, &instantiations);
 
                 Ok(LValue::Field {
                     base: receiver_lvalue.into(),
@@ -852,13 +822,30 @@ impl<'a> Lowerer<'a> {
     }
 
     // #[instrument(level = tracing::Level::TRACE, skip(self, pattern), fields(pattern.id = %pattern.id))]
-    fn lower_pattern(&mut self, pattern: &Pattern) -> Result<Bind, IRError> {
+    fn lower_pattern(&mut self, pattern: &TypedPattern<Ty>) -> Result<Bind, IRError> {
         match &pattern.kind {
             PatternKind::Bind(name) => {
-                let value = self.next_register();
                 let symbol = name.symbol().expect("name not resolved");
-                self.bindings.insert(symbol, value);
-                Ok(Bind::Assigned(value))
+                let value = if self.resolved_names.is_captured.contains(&symbol) {
+                    let ty = self
+                        .ty_from_symbol(&symbol)
+                        .expect("did not get ty for sym");
+                    let heap_addr = self.next_register();
+                    self.push_instr(Instruction::Alloc {
+                        dest: heap_addr,
+                        ty,
+                        count: 1.into(),
+                    });
+                    self.insert_binding(symbol, Binding::Pointer(heap_addr.into()));
+                    Bind::Indirect(heap_addr, symbol)
+                } else {
+                    let val = self.next_register();
+
+                    self.insert_binding(symbol, val.into());
+                    Bind::Assigned(val)
+                };
+
+                Ok(value)
             }
             #[allow(clippy::todo)]
             PatternKind::LiteralInt(_) => todo!(),
@@ -883,15 +870,19 @@ impl<'a> Lowerer<'a> {
     #[instrument(level = tracing::Level::TRACE, skip(self, expr), fields(expr.id = %expr.id))]
     fn lower_expr(
         &mut self,
-        expr: &Expr,
+        expr: &TypedExpr<Ty>,
         bind: Bind,
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
         let (value, ty) = match &expr.kind {
-            ExprKind::Func(func) => self.lower_func(func, bind, instantiations),
-            #[allow(clippy::todo)]
-            ExprKind::LiteralArray(_exprs) => todo!(),
-            ExprKind::LiteralInt(val) => {
+            TypedExprKind::Hole => Err(IRError::TypeNotFound("nope".into())),
+            TypedExprKind::InlineIR(inline_irinstruction) => {
+                self.lower_inline_ir(inline_irinstruction, bind, instantiations)
+            }
+            TypedExprKind::LiteralArray(typed_exprs) => {
+                self.lower_array(expr, typed_exprs, bind, instantiations)
+            }
+            TypedExprKind::LiteralInt(val) => {
                 let ret = self.ret(bind);
                 self.push_instr(Instruction::Constant {
                     dest: ret,
@@ -903,7 +894,7 @@ impl<'a> Lowerer<'a> {
                 });
                 Ok((ret.into(), Ty::Int))
             }
-            ExprKind::LiteralFloat(val) => {
+            TypedExprKind::LiteralFloat(val) => {
                 let ret = self.ret(bind);
                 self.push_instr(Instruction::Constant {
                     dest: ret,
@@ -915,7 +906,7 @@ impl<'a> Lowerer<'a> {
                 });
                 Ok((ret.into(), Ty::Float))
             }
-            ExprKind::LiteralTrue => {
+            TypedExprKind::LiteralTrue => {
                 if let Bind::Assigned(reg) = bind {
                     self.push_instr(Instruction::Constant {
                         dest: reg,
@@ -928,7 +919,7 @@ impl<'a> Lowerer<'a> {
                     Ok((Value::Bool(true), Ty::Bool))
                 }
             }
-            ExprKind::LiteralFalse => {
+            TypedExprKind::LiteralFalse => {
                 if let Bind::Assigned(reg) = bind {
                     self.push_instr(Instruction::Constant {
                         dest: reg,
@@ -941,70 +932,50 @@ impl<'a> Lowerer<'a> {
                     Ok((Value::Bool(false), Ty::Bool))
                 }
             }
-            ExprKind::LiteralString(string) => {
-                self.lower_string(expr, string, bind, instantiations)
+            TypedExprKind::LiteralString(val) => self.lower_string(expr, val, bind, instantiations),
+            TypedExprKind::Tuple(typed_exprs) => {
+                self.lower_tuple(expr.id, typed_exprs, bind, instantiations)
             }
-            ExprKind::Unary(..) => Ok((Value::Void, Ty::Void)), // Converted to calls earlier
-            ExprKind::Binary(box lhs, op, box rhs) => {
-                self.lower_binary(expr, lhs, op.clone(), rhs, bind, instantiations)
+            TypedExprKind::Block(typed_block) => {
+                self.lower_block(typed_block, bind, instantiations)
             }
-            #[allow(clippy::todo)]
-            ExprKind::Tuple(..) => todo!(),
-            #[allow(clippy::todo)]
-            ExprKind::Block(..) => todo!(),
-
-            ExprKind::Call {
-                callee:
-                    box Expr {
-                        kind:
-                            ExprKind::Member(
-                                Some(box Expr {
-                                    kind:
-                                        ExprKind::Constructor(
-                                            name @ Name::Resolved(Symbol::Enum(..), ..),
-                                        ),
-                                    ..
-                                }),
-                                label,
-                                ..,
-                            ),
-                        ..
-                    },
-                args,
-                ..
-            } => self.lower_enum_constructor(expr.id, name, label, args, bind, instantiations),
-
-            ExprKind::Call {
-                box callee, args, ..
-            } => self.lower_call(expr, callee, args, bind, instantiations),
-
-            ExprKind::Member(
-                Some(box Expr {
-                    kind: ExprKind::Constructor(name @ Name::Resolved(Symbol::Enum(..), ..)),
-                    ..
-                }),
+            TypedExprKind::Call { callee, args, .. } => {
+                self.lower_call(expr, callee, args, bind, instantiations)
+            }
+            TypedExprKind::Member { receiver, label } => self.lower_member(
+                expr,
+                &Some(receiver.clone()),
                 label,
-                ..,
-            ) => self.lower_enum_constructor(expr.id, name, label, &[], bind, instantiations),
-            ExprKind::Member(member, label, ..) => {
-                self.lower_member(expr.id, member, label, bind, instantiations)
+                None,
+                bind,
+                instantiations,
+            ),
+            TypedExprKind::ProtocolMember {
+                receiver,
+                label,
+                witness,
+            } => self.lower_member(
+                expr,
+                &Some(receiver.clone()),
+                label,
+                Some(*witness),
+                bind,
+                instantiations,
+            ),
+            TypedExprKind::Func(typed_func) => self.lower_func(typed_func, bind, instantiations),
+            TypedExprKind::Variable(symbol) => self.lower_variable(symbol, expr, instantiations),
+            TypedExprKind::Constructor(symbol, _items) => {
+                self.lower_constructor(symbol, expr, bind, instantiations)
             }
-
-            ExprKind::Variable(name) => self.lower_variable(name, expr, instantiations),
-            ExprKind::Constructor(name) => self.lower_constructor(name, expr, bind, instantiations),
-            ExprKind::If(cond, conseq, alt) => {
+            TypedExprKind::If(cond, conseq, alt) => {
                 self.lower_if_expr(cond, conseq, alt, bind, instantiations)
             }
-            ExprKind::Match(box scrutinee, arms) => {
+            TypedExprKind::Match(scrutinee, arms) => {
                 self.lower_match(scrutinee, arms, bind, instantiations)
             }
-            ExprKind::RecordLiteral { fields, .. } => {
+            TypedExprKind::RecordLiteral { fields } => {
                 self.lower_record_literal(expr, fields, bind, instantiations)
             }
-            #[allow(clippy::todo)]
-            ExprKind::RowVariable(..) => todo!(),
-            ExprKind::As(lhs, ..) => self.lower_expr(lhs, bind, instantiations),
-            _ => unreachable!("cannot lower expr: {expr:?}"),
         }?;
 
         // Quick check to make sure types are right
@@ -1021,10 +992,386 @@ impl<'a> Lowerer<'a> {
         Ok((value, ty))
     }
 
+    #[allow(clippy::todo)]
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
+    fn lower_inline_ir(
+        &mut self,
+        instr: &TypedInlineIRInstruction<Ty>,
+        bind: Bind,
+        instantiations: &Substitutions,
+    ) -> Result<(Value, Ty), IRError> {
+        let binds: Vec<_> = instr
+            .binds
+            .iter()
+            .map(|b| self.lower_expr(b, Bind::Fresh, instantiations).map(|b| b.0))
+            .try_collect()?;
+        match &instr.kind {
+            InlineIRInstructionKind::Constant { dest, ty, val } => {
+                let ret = self.ret(bind);
+                let dest = self.parsed_register(dest, ret);
+                let ty = self.parsed_ty(ty, instr.id);
+                let val = self.parsed_value(val, &binds);
+                self.push_instr(Instruction::Constant {
+                    dest,
+                    ty: ty.clone(),
+                    val,
+                    meta: vec![InstructionMeta::Source(instr.id)].into(),
+                });
+                Ok((dest.into(), ty))
+            }
+            InlineIRInstructionKind::Cmp {
+                dest,
+                lhs,
+                rhs,
+                ty,
+                op,
+            } => {
+                let ret = self.ret(bind);
+                let dest = self.parsed_register(dest, ret);
+                let ty = self.parsed_ty(ty, instr.id);
+                let lhs = self.parsed_value(lhs, &binds);
+                let rhs = self.parsed_value(rhs, &binds);
+                self.push_instr(Instruction::Cmp {
+                    dest,
+                    ty: ty.clone(),
+                    lhs,
+                    rhs,
+                    op: op.clone().into(),
+                    meta: vec![InstructionMeta::Source(instr.id)].into(),
+                });
+                Ok((dest.into(), ty))
+            }
+            InlineIRInstructionKind::Add { dest, ty, a, b }
+            | InlineIRInstructionKind::Sub { dest, ty, a, b }
+            | InlineIRInstructionKind::Mul { dest, ty, a, b }
+            | InlineIRInstructionKind::Div { dest, ty, a, b } => {
+                let ty = self.parsed_ty(ty, instr.id);
+                let ret = self.ret(bind);
+                let dest = self.parsed_register(dest, ret);
+                let a = self.parsed_value(a, &binds);
+                let b = self.parsed_value(b, &binds);
+
+                match &instr.kind {
+                    InlineIRInstructionKind::Add { .. } => self.push_instr(Instruction::Add {
+                        dest,
+                        ty: ty.clone(),
+                        a,
+                        b,
+                        meta: vec![InstructionMeta::Source(instr.id)].into(),
+                    }),
+                    InlineIRInstructionKind::Sub { .. } => self.push_instr(Instruction::Sub {
+                        dest,
+                        ty: ty.clone(),
+                        a,
+                        b,
+                        meta: vec![InstructionMeta::Source(instr.id)].into(),
+                    }),
+                    InlineIRInstructionKind::Mul { .. } => self.push_instr(Instruction::Mul {
+                        dest,
+                        ty: ty.clone(),
+                        a,
+                        b,
+                        meta: vec![InstructionMeta::Source(instr.id)].into(),
+                    }),
+                    InlineIRInstructionKind::Div { .. } => self.push_instr(Instruction::Div {
+                        dest,
+                        ty: ty.clone(),
+                        a,
+                        b,
+                        meta: vec![InstructionMeta::Source(instr.id)].into(),
+                    }),
+                    _ => unreachable!(),
+                }
+
+                Ok((dest.into(), ty))
+            }
+
+            InlineIRInstructionKind::Ref { dest, ty, val } => {
+                let ret = self.ret(bind);
+                let dest = self.parsed_register(dest, ret);
+                let ty = self.parsed_ty(ty, instr.id);
+                let val = self.parsed_value(val, &binds);
+                self.push_instr(Instruction::Ref {
+                    dest,
+                    ty: ty.clone(),
+                    val,
+                });
+                Ok((dest.into(), ty))
+            }
+            InlineIRInstructionKind::Call {
+                dest,
+                ty,
+                callee,
+                args,
+            } => {
+                let ret = self.ret(bind);
+                let dest = self.parsed_register(dest, ret);
+                let ty = self.parsed_ty(ty, instr.id);
+                let callee = self.parsed_value(callee, &binds);
+                let args = args
+                    .iter()
+                    .map(|a| self.parsed_value(a, &binds))
+                    .collect_vec()
+                    .into();
+                self.push_instr(Instruction::Call {
+                    dest,
+                    ty: ty.clone(),
+                    callee,
+                    args,
+                    meta: vec![InstructionMeta::Source(instr.id)].into(),
+                });
+                Ok((dest.into(), ty))
+            }
+            InlineIRInstructionKind::Record { dest, ty, record } => {
+                let ret = self.ret(bind);
+                let dest = self.parsed_register(dest, ret);
+                let ty = self.parsed_ty(ty, instr.id);
+                let record = record
+                    .iter()
+                    .map(|a| self.parsed_value(a, &binds))
+                    .collect_vec()
+                    .into();
+                self.push_instr(Instruction::Record {
+                    dest,
+                    ty: ty.clone(),
+                    record,
+                    meta: vec![InstructionMeta::Source(instr.id)].into(),
+                });
+                Ok((dest.into(), ty))
+            }
+            InlineIRInstructionKind::GetField {
+                dest,
+                ty,
+                record,
+                field,
+            } => {
+                let ty = self.parsed_ty(ty, instr.id);
+                let record = self.parsed_register(record, Register::DROP);
+                let Value::Int(pos) = self.parsed_value(field, &binds) else {
+                    unreachable!("field must be an int");
+                };
+                let field = Label::Positional(pos as usize);
+                let ret = self.ret(bind);
+                let dest = self.parsed_register(dest, ret);
+                self.push_instr(Instruction::GetField {
+                    dest,
+                    ty: ty.clone(),
+                    record,
+                    field,
+                    meta: vec![InstructionMeta::Source(instr.id)].into(),
+                });
+                Ok((dest.into(), ty))
+            }
+            InlineIRInstructionKind::SetField {
+                dest,
+                val,
+                ty,
+                record,
+                field,
+            } => {
+                let ty = self.parsed_ty(ty, instr.id);
+                let val = self.parsed_value(val, &binds);
+                let record = self.parsed_register(record, Register::DROP);
+                let Value::Int(pos) = self.parsed_value(field, &binds) else {
+                    unreachable!("field must be an int");
+                };
+                let field = Label::Positional(pos as usize);
+                let ret = self.ret(bind);
+                let dest = self.parsed_register(dest, ret);
+                self.push_instr(Instruction::SetField {
+                    dest,
+                    val,
+                    ty: ty.clone(),
+                    record,
+                    field: field.clone(),
+                    meta: vec![InstructionMeta::Source(instr.id)].into(),
+                });
+                Ok((Value::Void, Ty::Void))
+            }
+            InlineIRInstructionKind::_Print { val } => {
+                let val = self.parsed_value(val, &binds);
+                self.push_instr(Instruction::_Print { val });
+                Ok((Value::Void, Ty::Void))
+            }
+            InlineIRInstructionKind::Alloc { dest, ty, count } => {
+                let ty = self.parsed_ty(ty, instr.id);
+                let ret = self.ret(bind);
+                let dest = self.parsed_register(dest, ret);
+                let count = self.parsed_value(count, &binds);
+                self.push_instr(Instruction::Alloc {
+                    dest,
+                    ty: ty.clone(),
+                    count,
+                });
+                Ok((dest.into(), Ty::RawPtr))
+            }
+            InlineIRInstructionKind::Free { addr } => {
+                let addr = self.parsed_value(addr, &binds);
+                self.push_instr(Instruction::Free { addr });
+                Ok((Value::Void, Ty::Void))
+            }
+            InlineIRInstructionKind::Load { dest, ty, addr } => {
+                let ty = self.parsed_ty(ty, instr.id);
+                let addr = self.parsed_value(addr, &binds);
+                let ret = self.ret(bind);
+                let dest = self.parsed_register(dest, ret);
+                self.push_instr(Instruction::Load {
+                    dest,
+                    ty: ty.clone(),
+                    addr,
+                });
+                Ok((dest.into(), ty))
+            }
+            InlineIRInstructionKind::Store { value, ty, addr } => {
+                let ty = self.parsed_ty(ty, instr.id);
+                let value = self.parsed_value(value, &binds);
+                let addr = self.parsed_value(addr, &binds);
+                self.push_instr(Instruction::Store {
+                    value,
+                    ty: ty.clone(),
+                    addr,
+                });
+                Ok((Value::Void, Ty::Void))
+            }
+            InlineIRInstructionKind::Move { from, ty, to } => {
+                let ty = self.parsed_ty(ty, instr.id);
+                let from = self.parsed_value(from, &binds);
+                let to = self.parsed_value(to, &binds);
+                self.push_instr(Instruction::Move {
+                    ty: ty.clone(),
+                    from,
+                    to,
+                });
+                Ok((Value::Void, Ty::Void))
+            }
+            InlineIRInstructionKind::Copy {
+                ty,
+                from,
+                to,
+                length,
+            } => {
+                let ty = self.parsed_ty(ty, instr.id);
+                let from = self.parsed_value(from, &binds);
+                let to = self.parsed_value(to, &binds);
+                let length = self.parsed_value(length, &binds);
+                self.push_instr(Instruction::Copy {
+                    ty: ty.clone(),
+                    from,
+                    to,
+                    length,
+                });
+                Ok((Value::Void, Ty::Void))
+            }
+            InlineIRInstructionKind::Gep {
+                dest,
+                ty,
+                addr,
+                offset_index,
+            } => {
+                let ty = self.parsed_ty(ty, instr.id);
+                let addr = self.parsed_value(addr, &binds);
+                let offset_index = self.parsed_value(offset_index, &binds);
+                let ret = self.ret(bind);
+                let dest = self.parsed_register(dest, ret);
+                self.push_instr(Instruction::Gep {
+                    dest,
+                    ty: ty.clone(),
+                    addr,
+                    offset_index,
+                });
+                Ok((dest.into(), Ty::RawPtr))
+            }
+        }
+    }
+
+    #[instrument(level = tracing::Level::TRACE, skip(self, expr, items))]
+    fn lower_array(
+        &mut self,
+        expr: &TypedExpr<Ty>,
+        items: &[TypedExpr<Ty>],
+        bind: Bind,
+        instantiations: &Substitutions,
+    ) -> Result<(Value, Ty), IRError> {
+        let item_irs: Vec<(Value, Ty)> = items
+            .iter()
+            .map(|item| self.lower_expr(item, Bind::Fresh, instantiations))
+            .try_collect()?;
+
+        let (item_irs, item_tys): (Vec<Value>, Vec<Ty>) = item_irs.into_iter().unzip();
+        let item_ty = if let Some(item) = items.first() {
+            item.ty.clone()
+        } else {
+            Ty::Void
+        };
+
+        let record_reg = self.next_register();
+        self.push_instr(Instruction::Record {
+            dest: record_reg,
+            ty: Ty::Tuple(item_tys.clone()), // This is sort of a hack, it's really a record but it's a pain to wrap a row and this still lowers to IrTy::Record
+            record: item_irs.into(),
+            meta: vec![InstructionMeta::Source(expr.id)].into(),
+        });
+
+        let alloc_reg = self.next_register();
+        self.push_instr(Instruction::Alloc {
+            dest: alloc_reg,
+            ty: Ty::Tuple(item_tys.clone()),
+            count: Value::Int(1),
+        });
+
+        self.push_instr(Instruction::Store {
+            value: record_reg.into(),
+            ty: Ty::Tuple(item_tys),
+            addr: alloc_reg.into(),
+        });
+
+        let dest = self.ret(bind);
+        self.push_instr(Instruction::Nominal {
+            dest,
+            sym: Symbol::Array,
+            ty: Ty::Array(item_ty.clone()),
+            record: vec![
+                alloc_reg.into(),
+                Value::Int(items.len() as i64),
+                Value::Int(items.len() as i64),
+            ]
+            .into(),
+            meta: vec![InstructionMeta::Source(expr.id)].into(),
+        });
+
+        Ok((dest.into(), Ty::Array(item_ty)))
+    }
+
+    #[instrument(level = tracing::Level::TRACE, skip(self, items))]
+    fn lower_tuple(
+        &mut self,
+        id: NodeID,
+        items: &[TypedExpr<Ty>],
+        bind: Bind,
+        instantiations: &Substitutions,
+    ) -> Result<(Value, Ty), IRError> {
+        let item_irs: Vec<(Value, Ty)> = items
+            .iter()
+            .map(|expr| self.lower_expr(expr, Bind::Fresh, instantiations))
+            .try_collect()?;
+
+        let (item_irs, item_tys): (Vec<Value>, Vec<Ty>) = item_irs.into_iter().unzip();
+        let ty = Ty::Tuple(item_tys);
+        let dest = self.ret(bind);
+        self.push_instr(Instruction::Record {
+            dest,
+            ty: ty.clone(),
+            record: item_irs.into(),
+            meta: vec![InstructionMeta::Source(id)].into(),
+        });
+
+        Ok((dest.into(), ty))
+    }
+
     #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn lower_string(
         &mut self,
-        expr: &Expr,
+        expr: &TypedExpr<Ty>,
         string: &String,
         bind: Bind,
         instantiations: &Substitutions,
@@ -1032,16 +1379,14 @@ impl<'a> Lowerer<'a> {
         let ret = self.ret(bind);
         let bytes = string.bytes().collect_vec();
         let bytes_len = bytes.len() as i64;
-        let ptr = self.statics.len();
+        let ptr = self.static_memory.write(Value::RawBuffer(bytes));
 
-        self.statics.push(Value::Buffer(bytes));
-
-        self.push_instr(Instruction::Struct {
+        self.push_instr(Instruction::Nominal {
             dest: ret,
             sym: Symbol::String,
             ty: Ty::String(),
             record: vec![
-                Value::RawPtr(ptr),
+                Value::RawPtr(Addr(ptr)),
                 Value::Int(bytes_len),
                 Value::Int(bytes_len),
             ]
@@ -1055,16 +1400,12 @@ impl<'a> Lowerer<'a> {
     #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn lower_match(
         &mut self,
-        scrutinee: &Expr,
-        arms: &[MatchArm],
+        scrutinee: &TypedExpr<Ty>,
+        arms: &[TypedMatchArm<Ty>],
         bind: Bind,
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
-        let result_type = {
-            let first_arm_expr_id = arms[0].body.id;
-            self.ty_from_id(&first_arm_expr_id)?
-        };
-
+        let result_type = arms.first().map(|a| a.body.ret.clone()).unwrap_or(Ty::Void);
         let result_register = self.ret(bind);
 
         let (scrutinee_value, _scrutinee_type) =
@@ -1113,9 +1454,9 @@ impl<'a> Lowerer<'a> {
 
     fn build_match_dispatch(
         &mut self,
-        scrutinee_expr: &Expr,
+        scrutinee_expr: &TypedExpr<Ty>,
         scrutinee_value: Value,
-        arms: &[MatchArm],
+        arms: &[TypedMatchArm<Ty>],
         arm_block_ids: &[BasicBlockId],
     ) -> Result<(), IRError> {
         assert_eq!(
@@ -1125,7 +1466,7 @@ impl<'a> Lowerer<'a> {
         );
 
         // Type of scrutinee; used for the Cmp instruction.
-        let scrutinee_type = self.ty_from_id(&scrutinee_expr.id)?;
+        let scrutinee_type = scrutinee_expr.ty.clone();
 
         // Start dispatch from the block where the scrutinee was just computed.
         let current_function = self
@@ -1190,7 +1531,10 @@ impl<'a> Lowerer<'a> {
         Ok(())
     }
 
-    fn lower_pattern_literal_value(&mut self, pattern: &Pattern) -> Result<(Value, Ty), IRError> {
+    fn lower_pattern_literal_value(
+        &mut self,
+        pattern: &TypedPattern<Ty>,
+    ) -> Result<(Value, Ty), IRError> {
         match &pattern.kind {
             PatternKind::LiteralInt(text) => {
                 let parsed = text.parse::<i64>().map_err(|error| {
@@ -1230,29 +1574,83 @@ impl<'a> Lowerer<'a> {
 
     fn lower_record_literal(
         &mut self,
-        expr: &Expr,
-        fields: &[RecordField],
+        expr: &TypedExpr<Ty>,
+        fields: &[TypedRecordField<Ty>],
         bind: Bind,
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
-        let mut field_vals = vec![];
-        let mut field_row = Row::Empty(TypeDefKind::Struct);
+        let mut field_vals_by_label: FxHashMap<Label, (Value, Ty)> = FxHashMap::default();
         for field in fields.iter() {
             let (val, ty) = self.lower_expr(&field.value, Bind::Fresh, instantiations)?;
-            field_vals.push(val);
-            field_row = Row::Extend {
-                row: field_row.into(),
-                label: field.label.name_str().into(),
-                ty,
-            };
+            field_vals_by_label.insert(field.name.clone(), (val, ty));
         }
 
-        let ty = Ty::Record(field_row.into());
         let dest = self.ret(bind);
+
+        let ty = substitute(expr.ty.clone(), instantiations);
+
+        // Check if this record literal is typed as a nominal struct
+        if let Ty::Nominal { symbol, type_args } = &ty {
+            let nominal = if let Some(module_id) = symbol.module_id()
+                && module_id != self.config.module_id
+            {
+                self.config
+                    .modules
+                    .lookup_nominal(symbol)
+                    .cloned()
+                    .expect("didn't get external nominal")
+            } else {
+                self.types
+                    .catalog
+                    .nominals
+                    .get(symbol)
+                    .cloned()
+                    .unwrap_or_else(|| unreachable!("didn't get nominal: {symbol:?}"))
+            };
+            let properties = nominal.substitute_properties(type_args);
+            let record_vals = properties
+                .keys()
+                .map(|label| {
+                    field_vals_by_label
+                        .get(label)
+                        .unwrap_or_else(|| unreachable!("missing record literal field {label:?}"))
+                        .0
+                        .clone()
+                })
+                .collect::<Vec<_>>();
+
+            self.push_instr(Instruction::Nominal {
+                dest,
+                sym: *symbol,
+                ty: ty.clone(),
+                record: record_vals.into(),
+                meta: vec![InstructionMeta::Source(expr.id)].into(),
+            });
+            return Ok((dest.into(), ty));
+        }
+
+        let Ty::Record(_, row) = &ty else {
+            return Err(IRError::TypeNotFound(format!(
+                "expected record type for record literal, got: {ty:?}"
+            )));
+        };
+
+        let record_vals = row
+            .close()
+            .keys()
+            .map(|label| {
+                field_vals_by_label
+                    .get(label)
+                    .unwrap_or_else(|| unreachable!("missing record literal field {label:?}"))
+                    .0
+                    .clone()
+            })
+            .collect::<Vec<_>>();
+
         self.push_instr(Instruction::Record {
             dest,
             ty: ty.clone(),
-            record: field_vals.into(),
+            record: record_vals.into(),
             meta: vec![InstructionMeta::Source(expr.id)].into(),
         });
 
@@ -1262,8 +1660,8 @@ impl<'a> Lowerer<'a> {
     #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn lower_constructor(
         &mut self,
-        name: &Name,
-        expr: &Expr,
+        name: &Symbol,
+        expr: &TypedExpr<Ty>,
         bind: Bind,
         old_instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
@@ -1271,10 +1669,10 @@ impl<'a> Lowerer<'a> {
             .types
             .catalog
             .initializers
-            .get(&name.symbol().expect("name not resolved"))
-            .expect("did not get init")
+            .get(name)
+            .unwrap_or_else(|| unreachable!("did not get inits for {name:?}"))
             .get(&Label::Named("init".into()))
-            .expect("did not get init");
+            .unwrap_or_else(|| unreachable!("did not get init for {name:?}"));
 
         let init_entry = self
             .types
@@ -1289,44 +1687,45 @@ impl<'a> Lowerer<'a> {
         self.push_instr(Instruction::Ref {
             dest,
             ty: ty.clone(),
-            val: Value::Func(Name::Resolved(constructor_sym, format!("{}_init", name))),
+            val: Value::Func(constructor_sym),
         });
 
         Ok((dest.into(), ty))
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
+    #[allow(clippy::too_many_arguments)]
     fn lower_enum_constructor(
         &mut self,
         id: NodeID,
-        name: &Name,
+        enum_symbol: &Symbol,
         variant_name: &Label,
-        values: &[CallArg],
+        arg_exprs: &[TypedExpr<Ty>],
+        mut args: Vec<Value>,
         bind: Bind,
         old_instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
-        let enum_symbol = name.symbol().expect("name not resolved");
         let constructor_sym = *self
             .types
             .catalog
             .variants
-            .get(&enum_symbol)
+            .get(enum_symbol)
             .unwrap_or_else(|| panic!("did not get variants for {enum_symbol:?}"))
             .get(variant_name)
-            .unwrap_or_else(|| panic!("didn't get {:?}", name));
+            .unwrap_or_else(|| panic!("didn't get {:?}", enum_symbol));
 
         let tag = self
             .types
             .catalog
             .variants
-            .get(&enum_symbol)
+            .get(enum_symbol)
             .unwrap_or_else(|| panic!("did not get variants for {enum_symbol:?}"))
             .get_index_of(variant_name)
             .unwrap_or_else(|| panic!("did not get tag for {enum_symbol:?} {variant_name:?}"));
 
         let enum_entry = self
             .types
-            .get_symbol(&enum_symbol)
+            .get_symbol(enum_symbol)
             .unwrap_or_else(|| panic!("did not get enum entry {enum_symbol:?}"))
             .clone();
         let (_, _ty_instantiations) = self.specialize(&enum_entry, id)?;
@@ -1338,12 +1737,9 @@ impl<'a> Lowerer<'a> {
         let (_, mut instantiations) = self.specialize(&init_entry, id)?;
         instantiations.extend(old_instantiations.clone());
 
-        let mut args: Vec<Value> = Default::default();
         let mut args_tys: Vec<Ty> = vec![Ty::Int];
-        for value in values.iter() {
-            let (val, ty) = self.lower_expr(&value.value, Bind::Fresh, &instantiations)?;
-            args.push(val);
-            args_tys.push(ty);
+        for value in arg_exprs.iter() {
+            args_tys.push(value.ty.clone());
         }
 
         // Set the tag as the first entry
@@ -1359,9 +1755,10 @@ impl<'a> Lowerer<'a> {
                     ty: ty.clone(),
                 });
 
-        let ty = Ty::Record(row.into());
+        let ty = Ty::Record(Some(*enum_symbol), row.into());
         let dest = self.ret(bind);
-        self.push_instr(Instruction::Record {
+        self.push_instr(Instruction::Nominal {
+            sym: *enum_symbol,
             dest,
             ty: ty.clone(),
             record: args.into(),
@@ -1375,20 +1772,33 @@ impl<'a> Lowerer<'a> {
     #[allow(clippy::todo)]
     fn lower_member(
         &mut self,
-        id: NodeID,
-        receiver: &Option<Box<Expr>>,
+        expr: &TypedExpr<Ty>,
+        receiver: &Option<Box<TypedExpr<Ty>>>,
         label: &Label,
+        witness: Option<Symbol>,
         bind: Bind,
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
         if let Some(box receiver) = &receiver {
+            if let TypedExprKind::Constructor(name, ..) = &receiver.kind {
+                return self.lower_enum_constructor(
+                    receiver.id,
+                    name,
+                    label,
+                    Default::default(),
+                    Default::default(),
+                    bind,
+                    instantiations,
+                );
+            }
+
             let reg = self.next_register();
             let member_bind = Bind::Assigned(reg);
             let (receiver_val, _) = self.lower_expr(receiver, member_bind, instantiations)?;
-            let ty = self.ty_from_id(&id)?;
+            let ty = expr.ty.clone();
             let dest = self.ret(bind);
 
-            let (receiver_ty, _) = self.specialized_ty(receiver)?;
+            let (receiver_ty, _) = self.specialized_ty(receiver, instantiations)?;
 
             if let Ty::Nominal { symbol, .. } = &receiver_ty
                 && let Some(methods) = self.types.catalog.instance_methods.get(symbol)
@@ -1396,30 +1806,30 @@ impl<'a> Lowerer<'a> {
             {
                 tracing::debug!("lowering method: {label} {method:?}");
 
-                self.check_import(&method);
                 self.push_instr(Instruction::Ref {
                     dest,
                     ty: ty.clone(),
-                    val: Value::Func(Name::Resolved(method, label.to_string())),
+                    val: Value::Func(method),
                 });
-            } else if let Some(witness) = self.witness_for(&id, label).copied()
+            } else if let Some(witness) =
+                witness.or_else(|| self.witness_for(receiver, label, instantiations))
                 && matches!(witness, Symbol::InstanceMethod(..))
             {
                 tracing::debug!("lowering req {label} {witness:?}");
-                self.check_import(&witness);
                 self.push_instr(Instruction::Ref {
                     dest,
                     ty: ty.clone(),
-                    val: Value::Func(Name::Resolved(witness, label.to_string())),
+                    val: Value::Func(witness),
                 });
             } else {
                 let label = self.field_index(&receiver_ty, label);
+                tracing::debug!("lowering field {label}");
                 self.push_instr(Instruction::GetField {
                     dest,
                     ty: ty.clone(),
                     record: receiver_val.as_register()?,
                     field: label,
-                    meta: vec![InstructionMeta::Source(id)].into(),
+                    meta: vec![InstructionMeta::Source(expr.id)].into(),
                 });
             };
 
@@ -1432,22 +1842,67 @@ impl<'a> Lowerer<'a> {
     #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn lower_variable(
         &mut self,
-        name: &Name,
-        expr: &Expr,
+        name: &Symbol,
+        expr: &TypedExpr<Ty>,
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
-        let (ty, instantiations) = self.specialized_ty(expr)?;
+        let (ty, instantiations) = self.specialized_ty(expr, instantiations)?;
         let monomorphized_ty = substitute(ty.clone(), &instantiations);
 
+        let original_name_sym = name;
+
+        // If we currently have a binding for this symbol, prefer that over just passing names around
+        if self
+            .current_func_mut()
+            .bindings
+            .contains_key(original_name_sym)
+        {
+            return Ok((self.get_binding(original_name_sym).into(), ty));
+        }
+
+        // If it's a func we've registered, lower it with instantiations
+        let (_, instantiations) = self.specialized_ty(expr, &instantiations)?;
+
         let ret = if matches!(monomorphized_ty, Ty::Func(..)) {
-            // It's a func reference so we pass the name
-            let monomorphized_name = self.monomorphize_name(name.clone(), &instantiations);
-            Value::Func(monomorphized_name)
+            let monomorphized_name = self
+                .monomorphize_name(*name, &instantiations)
+                .symbol()
+                .expect("did not get symbol");
+
+            // Check if this function has captures
+            if let Some(captures) = self.resolved_names.captures.get(name).cloned()
+                && !captures.is_empty()
+            {
+                let env: Vec<Value> = captures
+                    .iter()
+                    .map(
+                        |cap| match self.current_func_mut().bindings.get(&cap.symbol).cloned() {
+                            Some(Binding::Pointer(addr)) => addr,
+                            Some(Binding::Register(reg)) => Value::Reg(reg),
+                            Some(Binding::Capture { index, ty }) => {
+                                let dest = self.next_register();
+                                self.push_instr(Instruction::GetField {
+                                    dest,
+                                    ty,
+                                    record: Register(0),
+                                    field: Label::Positional(index),
+                                    meta: vec![].into(),
+                                });
+                                dest.into()
+                            }
+                            other => panic!("unexpected binding for capture: {other:?}"),
+                        },
+                    )
+                    .collect();
+                Value::Closure {
+                    func: monomorphized_name,
+                    env: env.into(),
+                }
+            } else {
+                Value::Func(monomorphized_name)
+            }
         } else {
-            self.bindings
-                .get(&name.symbol().expect("name not resolved"))
-                .expect("did not get binding for variable")
-                .into()
+            Value::Reg(self.get_binding(name).0)
         };
 
         Ok((ret, ty))
@@ -1458,8 +1913,8 @@ impl<'a> Lowerer<'a> {
     fn lower_constructor_call(
         &mut self,
         id: NodeID,
-        name: &Name,
-        callee: &Expr,
+        name: &Symbol,
+        callee: &TypedExpr<Ty>,
         mut args: Vec<Value>,
         dest: Register,
         instantiations: &Substitutions,
@@ -1467,14 +1922,25 @@ impl<'a> Lowerer<'a> {
         let record_dest = self.next_register();
 
         // Look up the initializer and specialize it using the already-computed instantiations
-        let init_sym = *self
+        let init_sym = self
             .types
             .catalog
             .initializers
-            .get(&name.symbol().expect("name not resolved"))
-            .unwrap_or_else(|| panic!("did not get initializers for {name:?}"))
+            .get(name)
+            .unwrap_or_else(|| panic!("didn't get initializers for {name:?}"))
             .get(&Label::Named("init".into()))
-            .expect("did not get init");
+            .copied()
+            .unwrap_or_else(|| {
+                self.config
+                    .modules
+                    .lookup_initializers(name)
+                    .unwrap_or_else(|| panic!("did not get initializers for {name:?}"))
+                    .get(&Label::Named("init".into()))
+                    .copied()
+                    .expect("did not get init")
+            });
+
+        _ = self.check_import(&init_sym, instantiations);
 
         let init_entry = self
             .types
@@ -1487,14 +1953,15 @@ impl<'a> Lowerer<'a> {
             .types
             .catalog
             .properties
-            .get(&name.symbol().expect("name not resolved"))
+            .get(name)
             .expect("did not get properties");
 
         // Extract return type from the initializer function
         let mut params = init_ty.clone().uncurry_params();
         let ret = params.pop().expect("did not get init ret");
 
-        self.push_instr(Instruction::Record {
+        self.push_instr(Instruction::Nominal {
+            sym: *name,
             dest: record_dest,
             ty: ret.clone(),
             record: properties
@@ -1506,15 +1973,12 @@ impl<'a> Lowerer<'a> {
         });
         args.insert(0, record_dest.into());
 
-        let init = self.monomorphize_name(
-            Name::Resolved(init_sym, format!("{}_init", name)),
-            &concrete_tys,
-        );
+        let init = self.monomorphize_name(init_sym, &concrete_tys);
 
         self.push_instr(Instruction::Call {
             dest,
             ty: ret.clone(),
-            callee: Value::Func(init),
+            callee: Value::Func(init.symbol().expect("did not get symbol")),
             args: args.into(),
             meta: vec![InstructionMeta::Source(id)].into(),
         });
@@ -1525,45 +1989,59 @@ impl<'a> Lowerer<'a> {
     #[instrument(level = tracing::Level::TRACE, skip(self, call_expr, callee, args, parent_instantiations))]
     fn lower_call(
         &mut self,
-        call_expr: &Expr,
-        callee: &Expr,
-        args: &[CallArg],
+        call_expr: &TypedExpr<Ty>,
+        callee: &TypedExpr<Ty>,
+        args: &[TypedExpr<Ty>],
         bind: Bind,
         parent_instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
         let dest = self.ret(bind);
 
-        // Handle embedded IR call
-        if let ExprKind::Variable(name) = &callee.kind
-            && name.symbol().expect("name not resolved") == Symbol::IR
+        if let TypedExprKind::Variable(name) = &callee.kind
+            && name == &Symbol::PRINT
         {
-            return self.lower_embedded_ir_call(call_expr.id, args, dest);
-        }
-
-        if let ExprKind::Variable(name) = &callee.kind
-            && name.symbol().expect("name not resolved") == Symbol::PRINT
-        {
-            let arg =
-                self.lower_expr(&args[0].value, Bind::Assigned(dest), parent_instantiations)?;
+            let arg = self.lower_expr(&args[0], Bind::Assigned(dest), parent_instantiations)?;
             self.push_instr(Instruction::_Print { val: arg.0 });
             return Ok((Value::Void, Ty::Void));
         }
 
-        let (_callee_ty, mut instantiations) = self
-            .specialized_ty(callee)
-            .expect("did not get specialized ty for callee");
-        instantiations.extend(parent_instantiations.clone());
+        let instantiations = parent_instantiations.clone();
 
-        let ty = self.ty_from_id(&call_expr.id)?;
+        let ty = call_expr.ty.clone();
         let mut arg_vals = vec![];
         let mut arg_tys = vec![];
         for arg in args {
-            let (arg, arg_ty) = self.lower_expr(&arg.value, Bind::Fresh, &instantiations)?;
+            let (arg, arg_ty) = self.lower_expr(arg, Bind::Fresh, &instantiations)?;
             arg_vals.push(arg);
             arg_tys.push(arg_ty)
         }
 
-        if let ExprKind::Constructor(name) = &callee.kind {
+        if let TypedExprKind::Call {
+            resolved: Some(target),
+            ..
+        } = &call_expr.kind
+        {
+            let (_, mut call_instantiations) = self.specialized_ty(callee, parent_instantiations)?;
+            call_instantiations
+                .witnesses
+                .extend(target.witness_subs.iter().map(|(k, v)| (*k, *v)));
+
+            let name = self
+                .check_import(&target.symbol, &call_instantiations)
+                .unwrap_or_else(|| self.monomorphize_name(target.symbol, &call_instantiations));
+
+            self.push_instr(Instruction::Call {
+                dest,
+                ty: ty.clone(),
+                callee: Value::Func(name.symbol().expect("did not get resolved call symbol")),
+                args: arg_vals.into(),
+                meta: vec![InstructionMeta::Source(call_expr.id)].into(),
+            });
+
+            return Ok((dest.into(), ty));
+        }
+
+        if let TypedExprKind::Constructor(name, ..) = &callee.kind {
             return self.lower_constructor_call(
                 call_expr.id,
                 name,
@@ -1574,12 +2052,36 @@ impl<'a> Lowerer<'a> {
             );
         }
 
-        if let ExprKind::Member(Some(box receiver), member, ..) = &callee.kind {
+        if let TypedExprKind::Member {
+            receiver: box receiver,
+            label: member,
+        } = &callee.kind
+        {
             return self.lower_method_call(
                 call_expr,
                 callee,
                 receiver.clone(),
                 member,
+                None,
+                args,
+                arg_vals,
+                dest,
+                &instantiations,
+            );
+        }
+
+        if let TypedExprKind::ProtocolMember {
+            receiver: box receiver,
+            label: member,
+            witness,
+        } = &callee.kind
+        {
+            return self.lower_method_call(
+                call_expr,
+                callee,
+                receiver.clone(),
+                member,
+                Some(*witness),
                 args,
                 arg_vals,
                 dest,
@@ -1604,174 +2106,212 @@ impl<'a> Lowerer<'a> {
     #[instrument(level = tracing::Level::TRACE, skip(self, call_expr, callee_expr, receiver, arg_exprs, args, instantiations ))]
     fn lower_method_call(
         &mut self,
-        call_expr: &Expr,
-        callee_expr: &Expr,
-        mut receiver: Expr,
+        call_expr: &TypedExpr<Ty>,
+        callee_expr: &TypedExpr<Ty>,
+        mut receiver: TypedExpr<Ty>,
         label: &Label,
-        arg_exprs: &[CallArg],
+        witness: Option<Symbol>,
+        arg_exprs: &[TypedExpr<Ty>],
         mut args: Vec<Value>,
         dest: Register,
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
-        let ty = self.ty_from_id(&call_expr.id)?;
+        let (_, instantiations) = self.specialized_ty(callee_expr, instantiations)?;
+        let (ty, mut instantiations) = self.specialized_ty(call_expr, &instantiations)?;
 
-        // Capture protocol ID before we replace receiver (for witness specialization)
-        let protocol_id = match &receiver.kind {
-            ExprKind::Constructor(Name::Resolved(Symbol::Protocol(id), _)) => Some(*id),
-            _ => None,
-        };
+        if let Ty::Constructor {
+            name: Name::Resolved(enum_symbol @ Symbol::Enum(..), ..),
+            ..
+        } = &receiver.ty
+        {
+            return self.lower_enum_constructor(
+                callee_expr.id,
+                enum_symbol,
+                label,
+                arg_exprs,
+                args,
+                Bind::Assigned(dest),
+                &instantiations,
+            );
+        }
 
         // Is this an instance method call on a constructor? If so we don't need
         // to prepend a self arg because it's passed explicitly (like Foo.bar(fizz) where
         // fizz == self)
-        if let ExprKind::Constructor(_name) = &receiver.kind {
-            receiver = arg_exprs[0].value.clone();
+        if let TypedExprKind::Constructor(_name, ..) = &receiver.kind {
+            receiver = arg_exprs[0].clone();
         } else {
-            let (receiver_ir, _) = self.lower_expr(&receiver, Bind::Fresh, instantiations)?;
+            let (receiver_ir, _) = self.lower_expr(&receiver, Bind::Fresh, &instantiations)?;
             args.insert(0, receiver_ir);
         }
 
-        if let Some(method_sym) = self.lookup_instance_method(&receiver, label)? {
-            self.check_import(&method_sym);
-            self.push_instr(Instruction::Call {
-                dest,
-                ty: ty.clone(),
-                callee: Value::Func(Name::Resolved(method_sym, label.to_string())),
-                args: args.into(),
-                meta: vec![InstructionMeta::Source(call_expr.id)].into(),
-            });
-            return Ok((dest.into(), ty));
-        };
-
-        if let Some(witness) = self.witness_for(&callee_expr.id, label).copied() {
-            self.check_import(&witness);
-
-            // Try to specialize for conformance if this is a protocol method call
-            let specialized = 'specialize: {
-                let Some(..) = protocol_id else {
-                    tracing::trace!("no protocol_id");
-                    break 'specialize None;
-                };
-                let Ok(receiver_ty) = self.ty_from_id(&receiver.id) else {
-                    tracing::trace!("couldn't get receiver ty");
-                    break 'specialize None;
-                };
-
-                let conforming_id = match &receiver_ty {
-                    Ty::Primitive(sym) => *sym,
-                    Ty::Nominal { symbol, .. } => *symbol,
-                    _ => {
-                        tracing::trace!("receiver ty not primitive/nominal: {receiver_ty:?}");
-                        break 'specialize None;
-                    }
-                };
-
-                // Build witness substitutions from ALL conformances for this type
-                // (needed because protocols can extend other protocols, e.g. Comparable: Equatable)
-                let mut subs = Substitutions::default();
-
-                // Collect all conformances for this type from local and modules
-                let all_conformances: Vec<_> = self
-                    .types
-                    .catalog
-                    .conformances
-                    .values()
-                    .filter(|c| c.conforming_id == conforming_id)
+        // If the receiver is a nominal type with type arguments (e.g. `Array<Int>`), extend the
+        // current substitutions with the nominal’s own type-parameter substitutions so generic
+        // method bodies (e.g. inline-IR `load Element`) monomorphize correctly.
+        let receiver_ty = substitute(receiver.ty.clone(), &instantiations);
+        if let Ty::Nominal { symbol, type_args } = &receiver_ty {
+            let nominal = if let Some(module_id) = symbol.module_id()
+                && module_id != self.config.module_id
+            {
+                self.config
+                    .modules
+                    .lookup_nominal(symbol)
                     .cloned()
-                    .chain(
-                        self.config
-                            .modules
-                            .modules
-                            .values()
-                            .flat_map(|m| m.types.catalog.conformances.values())
-                            .filter(|c| c.conforming_id == conforming_id)
-                            .cloned(),
-                    )
-                    .collect();
-
-                for conformance in &all_conformances {
-                    for (method_label, impl_symbol) in &conformance.witnesses {
-                        let conf_protocol = conformance.protocol_id;
-                        // Check local method requirements
-                        if let Some(req_methods) = self
-                            .types
-                            .catalog
-                            .method_requirements
-                            .get(&Symbol::Protocol(conf_protocol))
-                            && let Some(req_symbol) = req_methods.get(method_label)
-                        {
-                            subs.witnesses.insert(*req_symbol, *impl_symbol);
-                            self.check_import(impl_symbol);
-                        }
-                        // Check module method requirements
-                        for module in self.config.modules.modules.values() {
-                            if let Some(req_methods) = module
-                                .types
-                                .catalog
-                                .method_requirements
-                                .get(&Symbol::Protocol(conf_protocol))
-                                && let Some(req_symbol) = req_methods.get(method_label)
-                            {
-                                subs.witnesses.insert(*req_symbol, *impl_symbol);
-                                self.check_import(impl_symbol);
-                            }
-                        }
-                    }
-                }
-
-                tracing::trace!("witness subs: {:?}", subs.witnesses);
-                if subs.witnesses.is_empty() {
-                    break 'specialize None;
-                }
-
-                let name = Name::Resolved(witness, label.to_string());
-                let specialized_name = self.monomorphize_name(name, &subs);
-                tracing::trace!("specialized to: {specialized_name:?}");
-                Some(specialized_name)
+                    .expect("didn't get external nominal")
+            } else {
+                self.types
+                    .catalog
+                    .nominals
+                    .get(symbol)
+                    .cloned()
+                    .unwrap_or_else(|| unreachable!("didn't get nominal: {symbol:?}"))
             };
-
-            let callee = specialized.unwrap_or_else(|| Name::Resolved(witness, label.to_string()));
-
-            self.push_instr(Instruction::Call {
-                dest,
-                ty: ty.clone(),
-                callee: Value::Func(callee),
-                args: args.into(),
-                meta: vec![InstructionMeta::Source(call_expr.id)].into(),
-            });
-            return Ok((dest.into(), ty));
+            instantiations.ty.extend(nominal.substitutions(type_args));
         }
 
-        Err(IRError::TypeNotFound(format!(
-            "No witness found for {:?} in {:?} ({:?}).",
-            label,
-            receiver,
-            self.ty_from_id(&receiver.id)
-        )))
+        let (_method_sym, val, ty) = if let Some(method_sym) =
+            self.lookup_instance_method(&receiver, label, &instantiations)?
+        {
+            let method = self
+                .check_import(&method_sym, &instantiations)
+                .unwrap_or_else(|| self.monomorphize_name(method_sym, &instantiations));
+            self.push_instr(Instruction::Call {
+                dest,
+                ty: ty.clone(),
+                callee: Value::Func(method.symbol().expect("didn't get method sym")),
+                args: args.into(),
+                meta: vec![InstructionMeta::Source(call_expr.id)].into(),
+            });
+
+            (method_sym, dest.into(), ty)
+        } else if let Some(witness) =
+            witness.or_else(|| self.witness_for(&receiver, label, &instantiations))
+        {
+            let method = self
+                .check_import(&witness, &instantiations)
+                .unwrap_or_else(|| self.monomorphize_name(witness, &instantiations));
+            self.push_instr(Instruction::Call {
+                dest,
+                ty: ty.clone(),
+                callee: Value::Func(method.symbol().expect("did not get witness sym")),
+                args: args.into(),
+                meta: vec![InstructionMeta::Source(call_expr.id)].into(),
+            });
+
+            (witness, dest.into(), ty)
+        } else {
+            tracing::warn!(
+                "No witness found for {:?} in {:?} ({:?}).",
+                label,
+                receiver,
+                receiver.ty.clone()
+            );
+
+            return Err(IRError::WitnessNotFound(format!(
+                "No witness found for {label:?} in {receiver:?} ({:?}). Instantiations: {instantiations:?}",
+                receiver.ty
+            )));
+        };
+
+        // Go through the method and make sure all witnesses are resolved inside it
+
+        Ok((val, ty))
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self, func), fields(func.name = %func.name))]
     fn lower_func(
         &mut self,
-        func: &Func,
+        func: &TypedFunc<Ty>,
         bind: Bind,
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
-        let ty = self.ty_from_symbol(&func.name.symbol().expect("name not resolved"))?;
+        let ty = self.ty_from_symbol(&func.name)?;
 
-        let Ty::Func(param_tys, box mut ret_ty) = ty else {
-            panic!("didn't get func ty for {:?}: {ty:?}", func.name);
+        let (mut param_tys, mut ret_ty) = uncurry_function(ty);
+
+        // Do we have captures? If so this is a closure
+        let capture_env = if let Some(captures) =
+            self.resolved_names.captures.get(&func.name).cloned()
+            && !captures.is_empty()
+        {
+            let mut env_fields = vec![];
+            for capture in captures.clone() {
+                let ty = self
+                    .ty_from_symbol(&capture.symbol)
+                    .expect("didn't get capture ty")
+                    .clone();
+
+                let val = match self
+                    .current_func_mut()
+                    .bindings
+                    .get(&capture.symbol)
+                    .cloned()
+                {
+                    Some(Binding::Pointer(val)) => val,
+                    Some(Binding::Capture { index, .. }) => {
+                        // Captured from outer closure's env - emit getfield
+                        let dest = self.next_register();
+                        self.push_instr(Instruction::GetField {
+                            dest,
+                            ty: Ty::RawPtr,
+                            record: 0.into(), // env is always %0
+                            field: Label::Positional(index),
+                            meta: vec![].into(),
+                        });
+                        Value::Reg(dest.0)
+                    }
+                    other => unreachable!("unexpected binding for capture: {other:?}"),
+                };
+
+                env_fields.push((capture.symbol, ty.clone(), val));
+            }
+
+            Some(env_fields)
+        } else {
+            None
         };
 
         let _s = tracing::trace_span!("pushing new current function");
-        self.current_function_stack.push(CurrentFunction::default());
+        self.current_function_stack
+            .push(CurrentFunction::new(func.name));
 
         let mut params = vec![];
+
+        if let Some(env_fields) = capture_env.clone() {
+            for (i, (binding, ty, ..)) in env_fields.iter().enumerate() {
+                self.insert_binding(
+                    *binding,
+                    Binding::Capture {
+                        index: i,
+                        ty: ty.clone(),
+                    },
+                );
+            }
+
+            // Allocate env as %0
+            let env_reg = self.next_register();
+            params.push(Value::Reg(env_reg.0));
+            param_tys.insert(
+                0,
+                Ty::Record(
+                    None,
+                    env_fields
+                        .iter()
+                        .enumerate()
+                        .fold(Row::Empty(TypeDefKind::Struct), |row, (i, _)| Row::Extend {
+                            row: row.into(),
+                            label: Label::Positional(i),
+                            ty: Ty::RawPtr,
+                        })
+                        .into(),
+                ),
+            );
+        }
+
         for param in func.params.iter() {
             let register = self.next_register();
             params.push(Value::Reg(register.0));
-            self.bindings
-                .insert(param.name.symbol().expect("name not resolved"), register);
+            self.insert_binding(param.name, register.into());
         }
 
         let mut ret = Value::Void;
@@ -1793,50 +2333,39 @@ impl<'a> Lowerer<'a> {
             .pop()
             .expect("did not get current function");
         drop(_s);
+
+        let func_ty = curry_ty(param_tys.iter(), ret_ty);
         self.functions.insert(
-            func.name.symbol().expect("name not resolved"),
+            func.name,
             PolyFunction {
-                name: func.name.clone(),
+                name: func.name,
                 params,
                 blocks: current_function.blocks,
-                ty: Ty::Func(param_tys.clone(), ret_ty.clone().into()),
+                ty: func_ty.clone(),
                 register_count: (current_function.registers.next) as usize,
             },
         );
 
-        let func = Value::Func(func.name.clone());
+        let func_sym = func.name;
+        let func_val = if let Some(env) = capture_env {
+            Value::Closure {
+                func: func_sym,
+                env: env.into_iter().map(|e| e.2.clone()).collect_vec().into(),
+            }
+        } else {
+            Value::Func(func_sym)
+        };
+
         if bind != Bind::Discard {
             let dest = self.ret(bind);
             self.push_instr(Instruction::Ref {
                 dest,
-                ty: Ty::Func(param_tys.clone(), ret_ty.clone().into()),
-                val: func.clone(),
+                ty: func_ty.clone(),
+                val: func_val.clone(),
             });
         }
-        Ok((func, Ty::Func(param_tys, ret_ty.into())))
-    }
 
-    fn lower_embedded_ir_call(
-        &mut self,
-        id: NodeID,
-        args: &[CallArg],
-        dest: Register,
-    ) -> Result<(Value, Ty), IRError> {
-        let ExprKind::LiteralString(string) = &args[0].value.kind else {
-            unreachable!()
-        };
-
-        let mut string = string.clone();
-
-        if string.contains("$?") {
-            string = string.replace("$?", &format!("%{}", dest.0));
-        }
-
-        self.push_instr(parse_instruction::<IrTy>(&string).into());
-
-        let ty = self.ty_from_id(&id)?;
-
-        Ok((dest.into(), ty))
+        Ok((func_val, func_ty))
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
@@ -1882,19 +2411,6 @@ impl<'a> Lowerer<'a> {
         };
         current_function.blocks.push(new_block);
         id
-    }
-
-    #[instrument(level = tracing::Level::TRACE, skip(self))]
-    fn get_current_block(&mut self) -> BasicBlockId {
-        BasicBlockId(
-            self.current_function_stack
-                .last_mut()
-                .expect("didn't get current func")
-                .current_block_idx
-                .last()
-                .copied()
-                .expect("didnt get current block id") as u32,
-        )
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
@@ -1945,12 +2461,106 @@ impl<'a> Lowerer<'a> {
         block.terminator = terminator;
     }
 
-    fn next_register(&mut self) -> Register {
-        let current_function = self
-            .current_function_stack
+    fn insert_binding(&mut self, symbol: Symbol, binding: Binding<Ty>) {
+        self.current_func_mut().bindings.insert(symbol, binding);
+    }
+
+    fn get_binding(&mut self, symbol: &Symbol) -> Register {
+        let binding = self
+            .current_func_mut()
+            .bindings
+            .get(symbol)
+            .cloned()
+            .unwrap_or_else(|| panic!("did not get binding for {symbol:?}"));
+        let ty = self
+            .types
+            .get_symbol(symbol)
+            .unwrap_or_else(|| panic!("did not get ty for {symbol:?}"))
+            .as_mono_ty()
+            .clone();
+
+        match binding {
+            Binding::Register(reg) => Register(reg),
+            Binding::Capture { index, ty } => {
+                let ptr = self.next_register();
+                self.push_instr(Instruction::GetField {
+                    dest: ptr,
+                    ty: Ty::RawPtr,
+                    record: 0.into(),
+                    field: Label::Positional(index),
+                    meta: vec![].into(),
+                });
+                let dest = self.next_register();
+                self.push_instr(Instruction::Load {
+                    dest,
+                    ty,
+                    addr: ptr.into(),
+                });
+                dest
+            }
+            Binding::Pointer(addr) => {
+                let dest = self.next_register();
+                self.push_instr(Instruction::Load { dest, ty, addr });
+                dest
+            }
+        }
+    }
+
+    fn set_binding(&mut self, symbol: &Symbol, value_register: Register) {
+        let ty = self
+            .types
+            .get_symbol(symbol)
+            .expect("did not get ty for {symbol:?}")
+            .as_mono_ty()
+            .clone();
+
+        let binding = self
+            .current_func_mut()
+            .bindings
+            .get(symbol)
+            .cloned()
+            .expect("did not get binding");
+
+        match binding {
+            Binding::Register(..) => {
+                self.current_func_mut()
+                    .bindings
+                    .insert(*symbol, value_register.into());
+            }
+            Binding::Capture { index, ty } => {
+                let dest = self.next_register();
+                self.push_instr(Instruction::GetField {
+                    dest,
+                    ty: Ty::RawPtr,
+                    record: Register(0),
+                    field: Label::Positional(index),
+                    meta: vec![].into(),
+                });
+
+                self.push_instr(Instruction::Store {
+                    value: value_register.into(),
+                    ty,
+                    addr: dest.into(),
+                });
+            }
+            Binding::Pointer(addr) => {
+                self.push_instr(Instruction::Store {
+                    value: value_register.into(),
+                    ty,
+                    addr: addr.clone(),
+                });
+            }
+        }
+    }
+
+    fn current_func_mut(&mut self) -> &mut CurrentFunction {
+        self.current_function_stack
             .last_mut()
-            .expect("didn't get current function");
-        let register = current_function.registers.next();
+            .expect("didn't get current function")
+    }
+
+    fn next_register(&mut self) -> Register {
+        let register = self.current_func_mut().registers.next();
         tracing::trace!("allocated register: {register}");
         register
     }
@@ -1960,104 +2570,217 @@ impl<'a> Lowerer<'a> {
             Bind::Assigned(value) => value,
             Bind::Fresh => self.next_register(),
             Bind::Discard => Register::DROP,
+            Bind::Indirect(..) => self.next_register(),
         }
     }
 
-    /// Check to see if this symbol comes from an external module, if so we need to import the code into our program.
-    fn check_import(&mut self, symbol: &Symbol) {
-        if self.config.module_id == ModuleId::Core {
-            // No imports can happen from core.
-            return;
+    fn find_function(&self, symbol: &Symbol) -> Option<&PolyFunction> {
+        let module_id = symbol.module_id().unwrap_or(ModuleId::Current);
+        if module_id == self.config.module_id || (module_id == ModuleId::Current) {
+            self.functions.get(symbol)
+        } else {
+            let program = self.config.modules.program_for(module_id)?;
+            program.polyfunctions.get(symbol)
         }
+    }
 
-        // Already imported, avoid infinite recursion
-        if self.functions.contains_key(symbol) {
-            return;
-        }
+    /// Check to see if this symbol calls any symbols we don't have.
+    ///
+    /// Returns the monomorphized `Name` for `symbol` under `instantiations` when the symbol’s body
+    /// can be found (either in the current module or an imported module).
+    fn check_import(&mut self, symbol: &Symbol, instantiations: &Substitutions) -> Option<Name> {
+        let Some(func) = self.find_function(symbol).cloned() else {
+            return None;
+        };
 
-        if let Symbol::InstanceMethod(InstanceMethodId {
-            module_id: module_id @ (ModuleId::Core | ModuleId::Builtin | ModuleId::External(..)),
-            ..
-        }) = symbol
-        {
-            let module = self
-                .config
-                .modules
-                .modules
-                .get(module_id)
-                .expect("didn't get module for import");
-            tracing::debug!("importing {symbol:?} from {module_id}");
-            // TODO: This won't work with external methods yet, only core works.
-            let method_func = module
-                .program
-                .polyfunctions
-                .get(symbol)
-                .unwrap_or_else(|| panic!("didn't get method for import: {symbol:?}"));
-            self.functions.insert(*symbol, method_func.clone());
+        let name = self.monomorphize_name(*symbol, instantiations);
+        self.functions.insert(*symbol, func.clone());
 
-            // Recursively import any functions this function calls
-            let callees: Vec<Symbol> = method_func
-                .blocks
-                .iter()
-                .flat_map(|block| &block.instructions)
-                .filter_map(|instr| {
-                    if let Instruction::Call {
-                        callee: Value::Func(Name::Resolved(sym, _)),
-                        ..
-                    } = instr
-                    {
-                        Some(*sym)
-                    } else {
-                        None
-                    }
-                })
-                .collect();
+        // Recursively import any functions this function calls
+        let callees: Vec<Symbol> = func
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instructions)
+            .filter_map(|instr| {
+                if let Instruction::Call {
+                    callee:
+                        Value::Func(sym)
+                        | Value::Ref(Reference::Func(sym))
+                        | Value::Ref(Reference::Closure(sym, ..)),
+                    ..
+                } = instr
+                {
+                    Some(*sym)
+                } else {
+                    None
+                }
+            })
+            .collect();
 
-            for callee_sym in callees {
-                self.check_import(&callee_sym);
+        for callee_sym in callees {
+            // Already imported, avoid infinite recursion
+            if self.functions.contains_key(&callee_sym) {
+                continue;
             }
+            _ = self.check_import(&callee_sym, instantiations);
         }
+
+        Some(name)
     }
 
-    fn monomorphize_name(&mut self, name: Name, instantiations: &Substitutions) -> Name {
-        if instantiations.ty.is_empty() && instantiations.witnesses.is_empty() {
+    fn resolve_name(&self, sym: &Symbol) -> Option<&str> {
+        if matches!(sym, Symbol::Main) {
+            return Some("main");
+        }
+
+        if matches!(sym, Symbol::Library) {
+            return Some("lib");
+        }
+
+        if let Some(string) = self.resolved_names.symbol_names.get(sym) {
+            return Some(string);
+        }
+
+        if let Some(string) = self.config.modules.resolve_name(sym) {
+            return Some(string);
+        }
+
+        None
+    }
+
+    fn monomorphize_name(&mut self, symbol: Symbol, instantiations: &Substitutions) -> Name {
+        let name = Name::Resolved(
+            symbol,
+            self.resolve_name(&symbol)
+                .unwrap_or_else(|| {
+                    unreachable!(
+                        "did not get symbol name: {symbol:?} in {:?}",
+                        self.resolved_names.symbol_names
+                    )
+                })
+                .to_string(),
+        );
+
+        let key = SpecializationKey::new(instantiations);
+        if key.is_empty() {
             return name;
         }
 
-        let new_symbol = self.symbols.next_synthesized(ModuleId::Current);
-        let ty_parts: Vec<String> = instantiations.ty.values().map(|v| format!("{v}")).collect();
-        let witness_parts: Vec<String> = instantiations
-            .witnesses
-            .values()
-            .map(|v| format!("{v}"))
-            .collect();
-        let all_parts: Vec<String> = ty_parts.into_iter().chain(witness_parts).collect();
-        let new_name_str = format!("{}[{}]", name, all_parts.join(", "));
+        if let Some(existing) = self
+            .specialization_intern
+            .get(&symbol)
+            .and_then(|m| m.get(&key))
+            .copied()
+        {
+            let parts = self.specialization_parts(&key);
+            let new_name_str = format!("{}[{}]", name.name_str(), parts.join(", "));
+            return Name::Resolved(existing, new_name_str);
+        }
 
-        let new_name = Name::Resolved(new_symbol.into(), new_name_str);
+        let new_symbol: Symbol = self.symbols.next_synthesized(self.config.module_id).into();
+        self.resolved_names
+            .symbol_names
+            .insert(new_symbol.into(), name.name_str());
+        let parts = self.specialization_parts(&key);
+        let new_name_str = format!("{}[{}]", name.name_str(), parts.join(", "));
+        let new_name = Name::Resolved(new_symbol, new_name_str);
+
+        tracing::trace!("monomorphized {name:?} -> {new_name:?}");
+
+        self.specialization_intern
+            .entry(symbol)
+            .or_default()
+            .insert(key, new_symbol);
 
         self.specializations
             .entry(name.symbol().expect("name not resolved"))
             .or_default()
             .push(Specialization {
-                name: new_name.clone(),
+                name: new_symbol,
                 substitutions: instantiations.clone(),
             });
 
         new_name
     }
 
+    fn specialization_parts(&self, key: &SpecializationKey) -> Vec<String> {
+        let mut parts: Vec<String> = key.ty.iter().map(|(_p, ty)| format!("{ty}")).collect();
+        parts.extend(key.row.iter().map(|(p, row)| format!("{p:?}={row:?}")));
+        parts.extend(
+            key.witnesses
+                .iter()
+                .map(|(req, imp)| format!("{req}->{imp}")),
+        );
+        parts
+    }
+
+    fn parsed_ty(&mut self, ty: &TypeAnnotation, id: NodeID) -> Ty {
+        let sym = ty.symbol().expect("did not get ty symbol");
+        let entry = self
+            .types
+            .types_by_symbol
+            .get(&sym)
+            .cloned()
+            .expect("did not get entry");
+        let (ty, _) = self
+            .specialize(&entry, id)
+            .expect("unable to specialize ty");
+        ty
+    }
+
+    fn parsed_register(
+        &self,
+        reg: &crate::node_kinds::inline_ir_instruction::Register,
+        dest: Register,
+    ) -> Register {
+        if reg.0 == "?" {
+            dest
+        } else {
+            Register(reg.0.parse().expect("did not get register"))
+        }
+    }
+
+    fn parsed_value(
+        &self,
+        value: &crate::node_kinds::inline_ir_instruction::Value,
+        binds: &[Value],
+    ) -> Value {
+        match value {
+            crate::node_kinds::inline_ir_instruction::Value::Reg(v) => Value::Reg(*v),
+            crate::node_kinds::inline_ir_instruction::Value::Int(v) => Value::Int(*v),
+            crate::node_kinds::inline_ir_instruction::Value::Float(v) => Value::Float(*v),
+            crate::node_kinds::inline_ir_instruction::Value::Bool(v) => Value::Bool(*v),
+            crate::node_kinds::inline_ir_instruction::Value::Void => Value::Void,
+            crate::node_kinds::inline_ir_instruction::Value::Uninit => Value::Uninit,
+            crate::node_kinds::inline_ir_instruction::Value::Poison => Value::Poison,
+            crate::node_kinds::inline_ir_instruction::Value::Record(symbol, values) => {
+                Value::Record(
+                    *symbol,
+                    values.iter().map(|v| self.parsed_value(v, binds)).collect(),
+                )
+            }
+            crate::node_kinds::inline_ir_instruction::Value::RawPtr(v) => Value::RawPtr(Addr(*v)),
+            crate::node_kinds::inline_ir_instruction::Value::RawBuffer(items) => {
+                Value::RawBuffer(items.to_vec())
+            }
+            crate::node_kinds::inline_ir_instruction::Value::Bind(i) => binds[*i].clone(),
+        }
+    }
+
     fn lookup_instance_method(
         &mut self,
-        expr: &Expr,
+        expr: &TypedExpr<Ty>,
         label: &Label,
+        instantiations: &Substitutions,
     ) -> Result<Option<Symbol>, IRError> {
-        let symbol = match &expr.kind {
-            ExprKind::LiteralInt(_) => Symbol::Int,
-            ExprKind::LiteralFloat(_) => Symbol::Float,
-            ExprKind::LiteralTrue | ExprKind::LiteralFalse => Symbol::Bool,
+        let ty = expr.ty.clone();
+
+        let symbol = match ty {
+            Ty::Primitive(primitive) => primitive,
+            Ty::Nominal { symbol, .. } => symbol,
             _ => {
-                let Ty::Nominal { symbol, .. } = self.specialized_ty(expr)?.0 else {
+                let specialized = self.specialized_ty(expr, instantiations)?.0;
+                let Ty::Nominal { symbol, .. } = specialized else {
                     return Ok(None);
                 };
 
@@ -2065,27 +2788,59 @@ impl<'a> Lowerer<'a> {
             }
         };
 
-        if let Some(methods) = self.types.catalog.instance_methods.get(&symbol)
+        if let Some(sym) = self.config.modules.lookup_concrete_member(&symbol, label)
+        // && matches!(sym, Symbol::InstanceMethod(..))
+        {
+            Ok(Some(sym))
+        } else if let Some(methods) = self.types.catalog.instance_methods.get(&symbol)
             && let Some(method) = methods.get(label)
         {
-            return Ok(Some(*method));
+            Ok(Some(*method))
+        } else {
+            Ok(None)
         }
-
-        Ok(None)
     }
 
-    fn specialized_ty(&mut self, expr: &Expr) -> Result<(Ty, Substitutions), IRError> {
-        let name = match &expr.kind {
-            ExprKind::Variable(name) => name,
-            ExprKind::Func(func) => &func.name,
-            ExprKind::Constructor(name) => name,
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
+    fn specialized_ty(
+        &mut self,
+        expr: &TypedExpr<Ty>,
+        instantiations: &Substitutions,
+    ) -> Result<(Ty, Substitutions), IRError> {
+        let symbol = match &expr.kind {
+            TypedExprKind::Variable(name) => *name,
+            TypedExprKind::Func(func) => func.name,
+            TypedExprKind::Constructor(name, ..) => *name,
+            TypedExprKind::Member { receiver, label } => {
+                let receiver_ty = substitute(receiver.ty.clone(), instantiations);
+                let receiver_sym = match &receiver_ty {
+                    Ty::Constructor { name, .. } => name.symbol().expect("didn't get sym"),
+                    _ => {
+                        let Some(sym) = self.symbol_for_ty(&receiver_ty) else {
+                            return Ok((expr.ty.clone(), Default::default()));
+                        };
+                        sym
+                    }
+                };
+
+                let member = if let Some((member, _)) =
+                    self.types.catalog.lookup_member(&receiver_sym, label)
+                {
+                    member
+                } else if let Some(member) = self.config.modules.lookup_member(&receiver_sym, label)
+                {
+                    member
+                } else {
+                    return Ok((expr.ty.clone(), Default::default()));
+                };
+
+                member
+            }
             _ => {
                 tracing::trace!("expr has no substitutions: {expr:?}");
-                return Ok((self.ty_from_id(&expr.id)?, Default::default()));
+                return Ok((expr.ty.clone(), Default::default()));
             }
         };
-
-        let symbol = name.symbol().expect("name not resolved");
 
         let entry = self
             .types
@@ -2096,9 +2851,12 @@ impl<'a> Lowerer<'a> {
             )))?;
 
         let (ty, substitutions) = self.specialize(&entry, expr.id)?;
-        _ = self.monomorphize_name(name.clone(), &substitutions);
+        _ = self.monomorphize_name(symbol, &substitutions);
 
-        Ok((ty, substitutions))
+        let mut instantiations = instantiations.clone();
+        instantiations.extend(substitutions);
+
+        Ok((ty, instantiations))
     }
 
     #[instrument(skip(self, entry))]
@@ -2124,7 +2882,7 @@ impl<'a> Lowerer<'a> {
                                 .unwrap_or(Ty::Param(*param));
 
                             if Ty::Param(*param) != ty {
-                                substitutions.ty.insert(*param, ty);
+                                substitutions.ty.insert(Ty::Param(*param), ty);
                             }
                         }
 
@@ -2151,51 +2909,123 @@ impl<'a> Lowerer<'a> {
     }
 
     #[instrument(skip(self), ret)]
-    fn witness_for(&self, node_id: &NodeID, label: &Label) -> Option<&Symbol> {
-        if let Some(MemberWitness::Concrete(witness)) =
-            self.types.catalog.member_witnesses.get(node_id)
+    fn witness_for(
+        &mut self,
+        receiver: &TypedExpr<Ty>,
+        label: &Label,
+        instantiations: &Substitutions,
+    ) -> Option<Symbol> {
+        // First try with any known type substitutions (important for `Self`-like params).
+        let receiver_ty = substitute(receiver.ty.clone(), instantiations);
+
+        // Concrete receiver: proceed as before.
+        if let Some(sym) = self.symbol_for_ty(&receiver_ty)
+            && let Some(methods) = self.types.catalog.instance_methods.get(&sym)
+            && let Some(witness) = methods.get(label)
         {
-            return Some(witness);
+            return Some(*witness);
+        } else if let Ty::Param(param_id) = receiver_ty {
+            // Abstract receiver (e.g. protocol `Self`): use the current function’s Scheme
+            // predicates to find a constraining protocol, then resolve the member against
+            // that protocol (including transitive superprotocol lookup).
+            let current_func_sym = self.current_func_mut().symbol;
+            if let Some(TypeEntry::Poly(scheme)) = self.types.get_symbol(&current_func_sym) {
+                for pred in &scheme.predicates {
+                    if let Predicate::Conforms { param, protocol_id } = pred
+                        && *param == param_id
+                    {
+                        let proto = Symbol::Protocol(*protocol_id);
+                        if let Some((member, _src)) =
+                            self.types.catalog.lookup_member(&proto, label)
+                        {
+                            return Some(member);
+                        }
+                    }
+                }
+            }
+            return None;
         }
 
-        if let Some(MemberWitness::Requirement(witness, _ty)) =
-            self.types.catalog.member_witnesses.get(node_id)
+        let sym = self.symbol_for_ty(&receiver.ty)?;
+
+        // See if there's a witness
+        if let Some(methods) = self.types.catalog.instance_methods.get(&sym)
+            && let Some(witness) = methods.get(label)
         {
-            return Some(witness);
+            return Some(*witness);
         }
 
-        for module in self.config.modules.modules.values() {
-            if let Some(MemberWitness::Concrete(witness)) =
-                module.types.catalog.member_witnesses.get(node_id)
-            {
+        let conformances = self
+            .types
+            .catalog
+            .conformances
+            .values()
+            .filter(|c| c.conforming_id == sym)
+            .collect_vec();
+
+        if conformances.is_empty() {
+            return None;
+        }
+
+        for conformance in conformances {
+            if let Some(witness) = conformance.witnesses.methods.get(label).copied() {
+                _ = self.check_import(&witness, instantiations);
                 return Some(witness);
             }
 
-            if let Some(MemberWitness::Requirement(witness, _ty)) =
-                module.types.catalog.member_witnesses.get(node_id)
-            {
-                return Some(witness);
-            }
+            // See if there's a default method
+            let Some(member) = self
+                .types
+                .catalog
+                .instance_methods
+                .entry(Symbol::Protocol(conformance.protocol_id))
+                .or_default()
+                .get(label)
+                .copied()
+                .or_else(|| {
+                    self.config
+                        .modules
+                        .lookup_concrete_member(&Symbol::Protocol(conformance.protocol_id), label)
+                })
+            else {
+                continue;
+            };
+
+            _ = self.check_import(&member, instantiations);
+            let _m = self.monomorphize_name(member, instantiations);
+
+            return Some(member);
         }
 
         None
     }
 
-    fn field_index(&self, receiver_ty: &Ty, label: &Label) -> Label {
-        if let Ty::Record(row) | Ty::Nominal { row, .. } = receiver_ty
-            && let Some(idx) = row.close().get_index_of(label)
-        {
-            Label::Positional(idx)
-        } else {
-            label.clone()
+    fn symbol_for_ty(&self, ty: &Ty) -> Option<Symbol> {
+        match ty {
+            Ty::Primitive(symbol) => Some(*symbol),
+            Ty::Nominal { symbol, .. } => Some(*symbol),
+            _ => None,
         }
     }
 
-    fn ty_from_id(&self, id: &NodeID) -> Result<Ty, IRError> {
-        match self.types.get(id) {
-            Some(TypeEntry::Mono(ty)) => Ok(ty.clone()),
-            Some(TypeEntry::Poly(scheme)) => Ok(scheme.ty.clone()),
-            None => Err(IRError::TypeNotFound(format!("{id:?}"))),
+    fn field_index(&self, receiver_ty: &Ty, label: &Label) -> Label {
+        match receiver_ty {
+            Ty::Record(_, row) if let Some(idx) = row.close().get_index_of(label) => {
+                Label::Positional(idx)
+            }
+            Ty::Nominal { symbol, .. }
+                if let Some(idx) = self
+                    .types
+                    .catalog
+                    .nominals
+                    .get(symbol)
+                    .expect("didn't find nominal")
+                    .properties
+                    .get_index_of(label) =>
+            {
+                Label::Positional(idx)
+            }
+            _ => panic!("unable to determine field index of {receiver_ty}.{label}"),
         }
     }
 
@@ -2213,7 +3043,9 @@ impl<'a> Lowerer<'a> {
                 ) {
                     Ok(Ty::Func(Ty::Void.into(), Ty::Void.into()))
                 } else {
-                    Err(IRError::TypeNotFound(format!("{symbol}")))
+                    Err(IRError::TypeNotFound(format!(
+                        "Type not found for symbol: {symbol}"
+                    )))
                 }
             }
         }
@@ -2225,7 +3057,7 @@ fn substitute(ty: Ty, substitutions: &Substitutions) -> Ty {
         Ty::Primitive(..) => ty,
         Ty::Param(type_param_id) => substitutions
             .ty
-            .get(&type_param_id)
+            .get(&ty)
             .unwrap_or_else(|| {
                 tracing::trace!("didn't find id {type_param_id:?} in {substitutions:?}");
                 &ty
@@ -2253,10 +3085,13 @@ fn substitute(ty: Ty, substitutions: &Substitutions) -> Ty {
                 .map(|i| substitute(i, substitutions))
                 .collect(),
         ),
-        Ty::Record(box row) => Ty::Record(substitute_row(row, substitutions).into()),
-        Ty::Nominal { symbol, box row } => Ty::Nominal {
+        Ty::Record(sym, box row) => Ty::Record(sym, substitute_row(row, substitutions).into()),
+        Ty::Nominal { symbol, type_args } => Ty::Nominal {
             symbol,
-            row: substitute_row(row, substitutions).into(),
+            type_args: type_args
+                .into_iter()
+                .map(|a| substitute(a, substitutions))
+                .collect(),
         },
     }
 }
@@ -2273,24 +3108,16 @@ fn substitute_row(row: Row, substitutions: &Substitutions) -> Row {
     }
 }
 
-fn is_main_func(node: &Node) -> bool {
-    if let Node::Decl(Decl {
-        kind:
-            DeclKind::Let {
-                rhs:
-                    Some(Expr {
-                        kind:
-                            ExprKind::Func(Func {
-                                name: Name::Resolved(Symbol::Global(..), name),
-                                ..
-                            }),
-                        ..
-                    }),
+fn is_main_func(node: &TypedDecl<Ty>, symbol_names: &FxHashMap<Symbol, String>) -> bool {
+    if let TypedDeclKind::Let {
+        initializer:
+            Some(TypedExpr {
+                kind: TypedExprKind::Func(TypedFunc { name: func_sym, .. }),
                 ..
-            },
+            }),
         ..
-    }) = node
-        && name == "main"
+    } = &node.kind
+        && symbol_names.get(func_sym).map(|s| s.as_str()) == Some("main")
     {
         return true;
     }
@@ -2299,9 +3126,11 @@ fn is_main_func(node: &Node) -> bool {
 }
 
 pub fn curry_ty<'a, I: IntoIterator<Item = &'a Ty>>(params: I, ret: Ty) -> Ty {
+    let mut params = params.into_iter().collect::<Vec<_>>();
+    if params.is_empty() {
+        params.push(&Ty::Void);
+    }
     params
-        .into_iter()
-        .collect::<Vec<_>>()
         .into_iter()
         .rfold(ret, |acc, p| Ty::Func(Box::new(p.clone()), Box::new(acc)))
 }

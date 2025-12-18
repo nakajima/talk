@@ -1,20 +1,43 @@
 use std::str::FromStr;
 
+use itertools::Itertools;
+
 use crate::{
-    ir::{ir_error::IRError, register::Register},
-    name::Name,
+    ir::{ir_error::IRError, list::List, register::Register},
+    name_resolution::symbol::Symbol,
 };
 
 #[derive(Debug, Clone, PartialEq)]
+pub enum Reference {
+    Func(Symbol),
+    Closure(Symbol, List<Value>),
+    Register { frame: usize, register: Register },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Addr(pub(super) usize);
+
+#[derive(Default, Debug, Clone, PartialEq)]
 pub enum Value {
     Reg(u32),
     Int(i64),
     Float(f64),
-    Func(Name),
+    Func(Symbol),
+    Closure {
+        func: Symbol,
+        env: List<Value>,
+    },
     Bool(bool),
-    RawPtr(usize),
-    Buffer(Vec<u8>),
+    Ref(Reference),
+    Capture {
+        depth: usize,
+        reg: Register,
+    },
+    Record(Option<Symbol>, Vec<Value>),
+    RawPtr(Addr),
+    RawBuffer(Vec<u8>),
     Void,
+    #[default]
     Uninit,
     Poison,
 }
@@ -28,6 +51,26 @@ impl Value {
         Err(IRError::InvalidValueConversion(format!(
             "Cannot convert {self:?} to register"
         )))
+    }
+
+    #[allow(clippy::unwrap_used)]
+    pub fn as_bytes(&self) -> Vec<u8> {
+        match self {
+            Value::Int(v) => v.to_le_bytes().to_vec(),
+            Value::Float(v) => v.to_le_bytes().to_vec(),
+            Value::Func(v) => v.as_bytes().to_vec(),
+            Value::Bool(v) => {
+                if *v {
+                    vec![1u8]
+                } else {
+                    vec![0u8]
+                }
+            }
+            Value::Record(.., values) => values.iter().flat_map(|v| v.as_bytes()).collect_vec(),
+            Value::RawPtr(v) => v.0.to_le_bytes().to_vec(),
+            Value::RawBuffer(bytes) => bytes.to_vec(),
+            other => unreachable!("Cannot serialize {other:?}"),
+        }
     }
 }
 
@@ -80,16 +123,29 @@ impl From<f64> for Value {
 impl std::fmt::Display for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Value::Capture { depth, reg } => write!(f, "%{reg}^{depth}"),
+            Value::Ref(reference) => write!(f, "&{reference:?}"),
             Value::Reg(reg) => write!(f, "%{reg}"),
-            Value::Buffer(v) => write!(f, "[{v:?}]"),
+            Value::RawBuffer(v) => write!(f, "[{v:?}]"),
+            Value::Record(sym, fields) => write!(
+                f,
+                "{}{{ {:?} }}",
+                if let Some(sym) = sym {
+                    format!("{sym} ")
+                } else {
+                    "".to_string()
+                },
+                fields
+            ),
             Value::Int(i) => write!(f, "{i}"),
             Value::Float(i) => write!(f, "{i}"),
-            Value::Func(name) => write!(f, "@{}", name.name_str()),
+            Value::Func(name) => write!(f, "{}()", name),
             Value::Bool(b) => write!(f, "{}", if *b { "true" } else { "false" }),
+            Value::Closure { func, env } => write!(f, "{func}[{env}]()"),
             Value::Void => write!(f, "void"),
             Value::Uninit => write!(f, "uninit"),
             Value::Poison => write!(f, "poison"),
-            Value::RawPtr(val) => write!(f, "rawptr({val})"),
+            Value::RawPtr(val) => write!(f, "rawptr({})", val.0),
         }
     }
 }

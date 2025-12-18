@@ -25,6 +25,14 @@ pub fn resolve_builtin_type(id: &Symbol) -> (InferTy, Vec<Predicate<InferTy>>, I
         Symbol::Void => InferTy::Primitive(Symbol::Void),
         Symbol::RawPtr => InferTy::Primitive(Symbol::RawPtr),
         Symbol::Byte => InferTy::Primitive(Symbol::Byte),
+        Symbol::IR => InferTy::Func(
+            InferTy::String().into(),
+            InferTy::Param(TypeParamId::IR_TYPE_PARAM).into(),
+        ),
+        Symbol::PRINT => InferTy::Func(
+            InferTy::String().into(),
+            InferTy::Param(TypeParamId::IR_TYPE_PARAM).into(),
+        ),
         _ => unreachable!("no builtin named {id:?}"),
     };
 

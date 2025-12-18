@@ -13,12 +13,13 @@ use crate::{
         scheme::{ForAll, Scheme},
         solve_context::Solve,
         ty::SomeType,
-        type_operations::{InstantiationSubstitutions, UnificationSubstitutions},
+        type_operations::{InstantiationSubstitutions, UnificationSubstitutions, substitute},
         type_session::{TypeEntry, TypeSession},
+        typed_ast::TyMappable,
     },
 };
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum EnvEntry<T: SomeType> {
     Mono(T),
     Scheme(Scheme<T>),
@@ -92,6 +93,42 @@ impl<T: SomeType> EnvEntry<T> {
 }
 
 impl EnvEntry<InferTy> {
+    pub fn substitute(self, substitutions: &FxHashMap<InferTy, InferTy>) -> EnvEntry<InferTy> {
+        match self {
+            EnvEntry::Mono(ty) => {
+                let ty = substitute(ty, substitutions);
+                let foralls = ty.collect_foralls();
+                if foralls.is_empty() {
+                    EnvEntry::Mono(ty)
+                } else {
+                    EnvEntry::Scheme(Scheme {
+                        ty,
+                        foralls,
+                        predicates: Default::default(),
+                    })
+                }
+            }
+            EnvEntry::Scheme(scheme) => {
+                let ty = substitute(scheme.ty, substitutions);
+                let foralls: IndexSet<ForAll> = ty.collect_foralls();
+                let predicates: Vec<Predicate<InferTy>> = scheme
+                    .predicates
+                    .into_iter()
+                    .map(|p| p.map_ty(&mut |t| substitute(t.clone(), substitutions)))
+                    .collect();
+                if foralls.is_empty() {
+                    EnvEntry::Mono(ty)
+                } else {
+                    EnvEntry::Scheme(Scheme {
+                        ty,
+                        foralls,
+                        predicates,
+                    })
+                }
+            }
+        }
+    }
+
     pub fn apply(
         &self,
         substitutions: &mut UnificationSubstitutions,
@@ -149,7 +186,7 @@ impl EnvEntry<InferTy> {
         context: &mut impl Solve,
         constraints: &mut ConstraintStore,
     ) -> (InferTy, InstantiationSubstitutions) {
-        tracing::debug!("inference instantiate (id: {id:?}): {self:?}");
+        tracing::debug!("inference instantiate (id: {id:?})");
         match self {
             EnvEntry::Mono(ty) => (ty.clone(), Default::default()),
             EnvEntry::Scheme(scheme) => {
@@ -165,7 +202,7 @@ impl EnvEntry<InferTy> {
         context: &mut impl Solve,
         session: &mut TypeSession,
     ) -> InferTy {
-        tracing::debug!("inference instantiate (id: {id:?}): {self:?}");
+        tracing::debug!("inference instantiate (id: {id:?})");
         match self {
             EnvEntry::Mono(ty) => ty.clone(),
             EnvEntry::Scheme(scheme) => scheme.instantiate(id, constraints, context, session),

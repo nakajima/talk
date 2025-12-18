@@ -16,6 +16,7 @@ pub struct BindingGroup {
     pub id: GroupId,
     pub level: Level,
     pub binders: Vec<Symbol>,
+    pub is_top_level: bool,
 }
 
 #[derive(Default, Debug, Clone)]
@@ -35,28 +36,50 @@ impl SCCGraph {
         kosaraju_scc(&self.graph)
             .iter()
             .enumerate()
-            .map(|(i, ids)| {
+            .filter_map(|(i, ids)| {
                 let mut level = Level::default();
-                BindingGroup {
-                    id: GroupId(i as u32),
-                    binders: ids
-                        .iter()
-                        .map(|id| {
+                let mut is_top_level = false;
+                // Only include binders that have an rhs_id (i.e., are actually defined
+                // in this AST, not just referenced from another AST)
+                let binders: Vec<_> = ids
+                    .iter()
+                    .filter_map(|id| {
+                        let symbol = self.graph[*id];
+                        is_top_level |= matches!(symbol, Symbol::Global(..))
+                            || (matches!(
+                                symbol,
+                                Symbol::Struct(..) | Symbol::Enum(..) | Symbol::Protocol(..)
+                            ) && level == Level(0));
+                        // Only include if this symbol is defined in this graph
+                        if self.rhs_ids.contains_key(&symbol) {
                             if self.level_map[id] > level {
                                 level = self.level_map[id];
                             }
-                            self.graph[*id]
-                        })
-                        .collect(),
-                    level,
+                            Some(symbol)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+
+                // Skip empty groups (all binders were references, not definitions)
+                if binders.is_empty() {
+                    return None;
                 }
+
+                Some(BindingGroup {
+                    id: GroupId(i as u32),
+                    binders,
+                    level,
+                    is_top_level,
+                })
             })
             .collect()
     }
 
     pub fn add_definition(&mut self, node: Symbol, rhs_id: NodeID, level: Level) -> NodeIndex {
         #[cfg(debug_assertions)]
-        if matches!(node, Symbol::Builtin(..)) {
+        if matches!(node, Symbol::Builtin(..) | Symbol::InstanceMethod(..)) {
             unreachable!()
         }
 
@@ -81,10 +104,10 @@ impl SCCGraph {
         idx
     }
 
-    fn ensure_node(&mut self, node: Symbol) -> NodeIndex {
+    pub fn ensure_node(&mut self, node: Symbol) -> NodeIndex {
         #[cfg(debug_assertions)]
-        if matches!(node, Symbol::Builtin(..)) {
-            unreachable!("should not have builtin in graph");
+        if matches!(node, Symbol::Builtin(..) | Symbol::InstanceMethod(..)) {
+            unreachable!("should not have builtin in graph: {node:?}");
         }
 
         if let Some(idx) = self.idx_map.get(&node) {

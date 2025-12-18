@@ -1,4 +1,7 @@
+use std::str::FromStr;
+
 use crate::ast::{AST, NewAST, Parsed};
+use crate::diagnostic::AnyDiagnostic;
 use crate::label::Label;
 use crate::lexer::Lexer;
 use crate::name::Name;
@@ -13,6 +16,9 @@ use crate::node_kinds::func::Func;
 use crate::node_kinds::func_signature::FuncSignature;
 use crate::node_kinds::generic_decl::GenericDecl;
 use crate::node_kinds::incomplete_expr::IncompleteExpr;
+use crate::node_kinds::inline_ir_instruction::{
+    InlineIRInstruction, InlineIRInstructionKind, Register, Value,
+};
 use crate::node_kinds::match_arm::MatchArm;
 use crate::node_kinds::parameter::Parameter;
 use crate::node_kinds::pattern::{
@@ -40,7 +46,7 @@ enum FuncOrFuncSignature {
     FuncSignature(FuncSignature),
 }
 
-#[derive(PartialEq, Clone, Copy, Debug, Eq, PartialOrd, Ord)]
+#[derive(PartialEq, Clone, Copy, Debug, Eq, PartialOrd, Ord, Hash)]
 pub enum BlockContext {
     Struct,
     Protocol,
@@ -51,6 +57,12 @@ pub enum BlockContext {
     MatchArmBody,
     Extend,
     None,
+}
+
+impl BlockContext {
+    pub fn allows_conformances(&self) -> bool {
+        matches!(self, BlockContext::Extend | BlockContext::Protocol)
+    }
 }
 
 // for tracking begin/end tokens
@@ -69,6 +81,7 @@ pub struct Parser<'a> {
     previous_before_newline: Option<Token>,
     ast: AST,
     file_id: FileID,
+    diagnostics: Vec<AnyDiagnostic>,
 }
 
 #[allow(clippy::expect_used)]
@@ -82,10 +95,10 @@ impl<'a> Parser<'a> {
             previous_before_newline: None,
             source_location_stack: Default::default(),
             file_id,
+            diagnostics: Default::default(),
             ast: AST::<NewAST> {
                 path: path.into(),
                 roots: Default::default(),
-                diagnostics: Default::default(),
                 meta: Default::default(),
                 phase: (),
                 node_ids: Default::default(),
@@ -95,7 +108,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    pub fn parse(mut self) -> Result<AST<Parsed>, ParserError> {
+    pub fn parse(mut self) -> Result<(AST<Parsed>, Vec<AnyDiagnostic>), ParserError> {
         self.advance();
         self.advance();
         self.skip_semicolons_and_newlines();
@@ -124,7 +137,6 @@ impl<'a> Parser<'a> {
         let ast = AST::<Parsed> {
             path: self.ast.path,
             roots: self.ast.roots,
-            diagnostics: self.ast.diagnostics,
             meta: self.ast.meta,
             phase: Parsed,
             node_ids: self.ast.node_ids,
@@ -132,7 +144,7 @@ impl<'a> Parser<'a> {
             synthsized_ids: self.ast.synthsized_ids,
         };
 
-        Ok(ast)
+        Ok((ast, self.diagnostics))
     }
 
     fn next_root(&mut self, kind: &TokenKind) -> Result<Node, ParserError> {
@@ -319,7 +331,7 @@ impl<'a> Parser<'a> {
         let (name, name_span) = self.identifier()?;
         let generics = self.generics()?;
 
-        let conformances = if self.did_match(TokenKind::Colon)? {
+        let conformances = if context.allows_conformances() && self.did_match(TokenKind::Colon)? {
             self.conformances()?
         } else {
             vec![]
@@ -331,14 +343,12 @@ impl<'a> Parser<'a> {
             BlockContext::Enum => DeclKind::Enum {
                 name: name.into(),
                 name_span,
-                conformances,
                 generics,
                 body,
             },
             BlockContext::Struct => DeclKind::Struct {
                 name: name.into(),
                 name_span,
-                conformances,
                 generics,
                 body,
             },
@@ -356,7 +366,12 @@ impl<'a> Parser<'a> {
                 generics,
                 body,
             },
-            _ => unreachable!("tried to call nominal_decl with wrong context: {context:?}"),
+            _ => {
+                return Err(ParserError::UnexpectedToken {
+                    expected: "Wrong context".into(),
+                    actual: format!("{context:?}"),
+                });
+            }
         };
 
         self.save_meta(tok, |id, span| Decl { id, span, kind })
@@ -500,6 +515,15 @@ impl<'a> Parser<'a> {
                     kind: StmtKind::Expr(expr),
                 }),
                 Node::Stmt(stmt) => Ok(stmt),
+                Node::InlineIRInstruction(ir) => Ok(Stmt {
+                    id: ir.id,
+                    span: ir.span,
+                    kind: StmtKind::Expr(Expr {
+                        id: ir.id,
+                        span: ir.span,
+                        kind: ExprKind::InlineIR(ir),
+                    }),
+                }),
                 e => unreachable!("{e:?}"),
             },
         }
@@ -604,6 +628,385 @@ impl<'a> Parser<'a> {
             span,
             kind: StmtKind::Return(Some(rhs.as_expr())),
         })
+    }
+
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
+    pub(crate) fn attribute(&mut self, _can_assign: bool) -> Result<Node, ParserError> {
+        let tok = self.push_source_location();
+        let Some(Token {
+            kind: TokenKind::Attribute(attr),
+            ..
+        }) = self.advance()
+        else {
+            unreachable!()
+        };
+
+        if attr == "_ir" {
+            return self.inline_ir(tok);
+        }
+
+        Err(ParserError::CannotAssign) //TODO
+    }
+
+    fn consume_register(&mut self) -> Result<Register, ParserError> {
+        let Some(current) = self.current.clone() else {
+            return Err(ParserError::UnexpectedEndOfInput(Some(
+                "IR Register".into(),
+            )));
+        };
+
+        let TokenKind::IRRegister(reg) = &current.kind else {
+            return Err(ParserError::UnexpectedToken {
+                expected: "IR Register".into(),
+                actual: current.kind.as_str().to_string(),
+            });
+        };
+
+        self.advance();
+
+        Ok(Register(reg.to_string()))
+    }
+
+    fn inline_ir(&mut self, tok: LocToken) -> Result<Node, ParserError> {
+        let mut binds = vec![];
+
+        if self.did_match(TokenKind::LeftParen)? {
+            while !(self.did_match(TokenKind::RightParen)? || self.did_match(TokenKind::EOF)?) {
+                binds.push(self.expr()?.as_expr());
+                self.consume(TokenKind::Comma).ok();
+            }
+        }
+
+        self.consume(TokenKind::LeftBrace)?;
+
+        let Some(current) = self.current.clone() else {
+            return Err(ParserError::UnexpectedEndOfInput(None));
+        };
+
+        let ir_instr = if let TokenKind::IRRegister(dest) = &current.kind {
+            let dest = Register(dest.into());
+            self.advance();
+            self.consume(TokenKind::Equals)?;
+            let (instr, instr_span) = self.identifier()?;
+            match instr.as_str() {
+                "const" => {
+                    let ty = self.type_annotation()?;
+                    let val = self.ir_value()?;
+                    self.save_meta(tok, |id, span| InlineIRInstruction {
+                        id,
+                        span,
+                        binds,
+                        instr_name_span: instr_span,
+                        kind: InlineIRInstructionKind::Constant { dest, ty, val },
+                    })
+                }
+                "cmp" => {
+                    let ty = self.type_annotation()?;
+                    let lhs = self.ir_value()?;
+                    let op = self
+                        .consume_any(vec![
+                            TokenKind::Plus,
+                            TokenKind::Minus,
+                            TokenKind::Star,
+                            TokenKind::Slash,
+                            TokenKind::Less,
+                            TokenKind::BangEquals,
+                            TokenKind::EqualsEquals,
+                            TokenKind::LessEquals,
+                            TokenKind::Greater,
+                            TokenKind::GreaterEquals,
+                            TokenKind::Caret,
+                            TokenKind::Pipe,
+                            TokenKind::PipePipe,
+                            TokenKind::AmpAmp,
+                        ])?
+                        .kind;
+                    let rhs = self.ir_value()?;
+                    self.save_meta(tok, |id, span| InlineIRInstruction {
+                        id,
+                        span,
+                        binds,
+                        instr_name_span: instr_span,
+                        kind: InlineIRInstructionKind::Cmp {
+                            dest,
+                            lhs,
+                            op,
+                            rhs,
+                            ty,
+                        },
+                    })
+                }
+                op @ ("add" | "sub" | "mul" | "div") => {
+                    let ty = self.type_annotation()?;
+                    let a = self.ir_value()?;
+                    let b = self.ir_value()?;
+                    let kind = match op {
+                        "add" => InlineIRInstructionKind::Add { dest, ty, a, b },
+                        "sub" => InlineIRInstructionKind::Sub { dest, ty, a, b },
+                        "mul" => InlineIRInstructionKind::Mul { dest, ty, a, b },
+                        "div" => InlineIRInstructionKind::Div { dest, ty, a, b },
+                        _ => unreachable!(),
+                    };
+                    self.save_meta(tok, |id, span| InlineIRInstruction {
+                        id,
+                        span,
+                        binds,
+                        instr_name_span: instr_span,
+                        kind,
+                    })
+                }
+                "ref" => {
+                    let ty = self.type_annotation()?;
+                    let val = self.ir_value()?;
+                    self.save_meta(tok, |id, span| InlineIRInstruction {
+                        id,
+                        span,
+                        binds,
+                        instr_name_span: instr_span,
+                        kind: InlineIRInstructionKind::Ref { dest, ty, val },
+                    })
+                }
+                "call" => {
+                    let ty = self.type_annotation()?;
+                    let callee = self.ir_value()?;
+                    let args = self.ir_values()?;
+                    self.save_meta(tok, |id, span| InlineIRInstruction {
+                        id,
+                        span,
+                        binds,
+                        instr_name_span: instr_span,
+                        kind: InlineIRInstructionKind::Call {
+                            dest,
+                            ty,
+                            callee,
+                            args,
+                        },
+                    })
+                }
+                "record" => {
+                    let ty = self.type_annotation()?;
+                    let record = self.ir_values()?;
+                    self.save_meta(tok, |id, span| InlineIRInstruction {
+                        id,
+                        span,
+                        binds,
+                        instr_name_span: instr_span,
+                        kind: InlineIRInstructionKind::Record { dest, ty, record },
+                    })
+                }
+                "getfield" => {
+                    let ty = self.type_annotation()?;
+                    let record = self.consume_register()?;
+                    let field = self.ir_value()?;
+                    self.save_meta(tok, |id, span| InlineIRInstruction {
+                        id,
+                        span,
+                        binds,
+                        instr_name_span: instr_span,
+                        kind: InlineIRInstructionKind::GetField {
+                            dest,
+                            ty,
+                            record,
+                            field,
+                        },
+                    })
+                }
+                "setfield" => {
+                    let ty = self.type_annotation()?;
+                    let record = self.consume_register()?;
+                    let field = self.ir_value()?;
+                    let val = self.ir_value()?;
+                    self.save_meta(tok, |id, span| InlineIRInstruction {
+                        id,
+                        span,
+                        binds,
+                        instr_name_span: instr_span,
+                        kind: InlineIRInstructionKind::SetField {
+                            dest,
+                            ty,
+                            record,
+                            field,
+                            val,
+                        },
+                    })
+                }
+                "alloc" => {
+                    let ty = self.type_annotation()?;
+                    let count = self.ir_value()?;
+                    self.save_meta(tok, |id, span| InlineIRInstruction {
+                        id,
+                        span,
+                        binds,
+                        instr_name_span: instr_span,
+                        kind: InlineIRInstructionKind::Alloc { dest, ty, count },
+                    })
+                }
+                "load" => {
+                    let ty = self.type_annotation()?;
+                    let addr = self.ir_value()?;
+                    self.save_meta(tok, |id, span| InlineIRInstruction {
+                        id,
+                        span,
+                        binds,
+                        instr_name_span: instr_span,
+                        kind: InlineIRInstructionKind::Load { dest, ty, addr },
+                    })
+                }
+                "gep" => {
+                    let ty = self.type_annotation()?;
+                    let addr = self.ir_value()?;
+                    let offset_index = self.ir_value()?;
+                    self.save_meta(tok, |id, span| InlineIRInstruction {
+                        id,
+                        span,
+                        binds,
+                        instr_name_span: instr_span,
+                        kind: InlineIRInstructionKind::Gep {
+                            dest,
+                            ty,
+                            addr,
+                            offset_index,
+                        },
+                    })
+                }
+                _ => {
+                    return Err(ParserError::UnexpectedToken {
+                        expected: "ir instr".into(),
+                        actual: instr,
+                    });
+                }
+            }
+        } else {
+            let (instr, instr_span) = self.identifier()?;
+            match instr.as_str() {
+                "_print" => {
+                    let val = self.ir_value()?;
+                    self.save_meta(tok, |id, span| InlineIRInstruction {
+                        id,
+                        span,
+                        binds,
+                        instr_name_span: instr_span,
+                        kind: InlineIRInstructionKind::_Print { val },
+                    })
+                }
+                "store" => {
+                    let ty = self.type_annotation()?;
+                    let value = self.ir_value()?;
+                    let addr = self.ir_value()?;
+                    self.save_meta(tok, |id, span| InlineIRInstruction {
+                        id,
+                        span,
+                        binds,
+                        instr_name_span: instr_span,
+                        kind: InlineIRInstructionKind::Store { value, ty, addr },
+                    })
+                }
+                "move" => {
+                    let ty = self.type_annotation()?;
+                    let from = self.ir_value()?;
+                    let to = self.ir_value()?;
+                    self.save_meta(tok, |id, span| InlineIRInstruction {
+                        id,
+                        span,
+                        binds,
+                        instr_name_span: instr_span,
+                        kind: InlineIRInstructionKind::Move { ty, from, to },
+                    })
+                }
+                "copy" => {
+                    let ty = self.type_annotation()?;
+                    let from = self.ir_value()?;
+                    let to = self.ir_value()?;
+                    let length = self.ir_value()?;
+                    self.save_meta(tok, |id, span| InlineIRInstruction {
+                        id,
+                        span,
+                        binds,
+                        instr_name_span: instr_span,
+                        kind: InlineIRInstructionKind::Copy {
+                            ty,
+                            from,
+                            to,
+                            length,
+                        },
+                    })
+                }
+
+                "free" => {
+                    let addr = self.ir_value()?;
+                    self.save_meta(tok, |id, span| InlineIRInstruction {
+                        id,
+                        span,
+                        binds,
+                        instr_name_span: instr_span,
+                        kind: InlineIRInstructionKind::Free { addr },
+                    })
+                }
+                _ => {
+                    return Err(ParserError::UnexpectedToken {
+                        expected: "ir instr".into(),
+                        actual: instr,
+                    });
+                }
+            }
+            // It's one of the instructions that doesn't start with a register
+        }?;
+
+        self.consume(TokenKind::RightBrace)?;
+
+        Ok(Node::Expr(Expr {
+            id: ir_instr.id,
+            span: ir_instr.span,
+            kind: ExprKind::InlineIR(ir_instr),
+        }))
+    }
+
+    fn ir_values(&mut self) -> Result<Vec<Value>, ParserError> {
+        self.consume(TokenKind::LeftParen)?;
+        let mut args = vec![];
+        while !(self.did_match(TokenKind::RightParen)? || self.did_match(TokenKind::EOF)?) {
+            args.push(self.ir_value()?);
+            self.consume(TokenKind::Comma).ok();
+        }
+        Ok(args)
+    }
+
+    fn ir_value(&mut self) -> Result<Value, ParserError> {
+        let Some(current) = &self.current else {
+            return Err(ParserError::UnexpectedEndOfInput(Some("IR value".into())));
+        };
+
+        let val = match &current.kind {
+            TokenKind::IRRegister(reg) => Value::Reg(parse_lexed(reg)),
+            TokenKind::Int(int) => Value::Int(parse_lexed(int)),
+            TokenKind::Float(int) => Value::Float(parse_lexed(int)),
+            TokenKind::True => Value::Bool(true),
+            TokenKind::False => Value::Bool(false),
+            TokenKind::BoundVar(v) => {
+                if !v.chars().all(|c| c.is_numeric()) {
+                    return Err(ParserError::UnexpectedToken {
+                        expected: "Numeric bound var".into(),
+                        actual: v.into(),
+                    });
+                }
+
+                let i = v
+                    .parse()
+                    .map_err(|e| ParserError::BadLabel(format!("{e}")))?;
+                Value::Bind(i)
+            }
+            TokenKind::Identifier(v) if v == "void" => Value::Void,
+            _ => {
+                return Err(ParserError::UnexpectedToken {
+                    expected: "IR".to_string(),
+                    actual: format!("{current:?}"),
+                });
+            }
+        };
+
+        self.advance();
+
+        Ok(val)
     }
 
     // MARK: Exprs
@@ -735,7 +1138,12 @@ impl<'a> Parser<'a> {
                 self.parse_record_pattern()?
             }
 
-            _ => unimplemented!("{:?}", current.kind),
+            _ => {
+                return Err(ParserError::UnexpectedToken {
+                    expected: "Pattern".into(),
+                    actual: format!("{:?}", current.kind),
+                });
+            }
         };
 
         self.save_meta(tok, |id, span| Pattern { id, span, kind })
@@ -796,7 +1204,11 @@ impl<'a> Parser<'a> {
                         self.save_meta(tok, |id, span| RecordFieldPattern { id, span, kind })?;
                     fields.push(field);
                 }
-                _ => unimplemented!("{current:?} field pattern not implemented yet"),
+                pat => {
+                    return Err(ParserError::BadLabel(format!(
+                        "Patter not handled: {pat:?}"
+                    )));
+                }
             }
             self.consume(TokenKind::Comma).ok();
         }
@@ -1182,7 +1594,7 @@ impl<'a> Parser<'a> {
     #[instrument(level = tracing::Level::TRACE, skip(self))]
     pub(crate) fn call(
         &mut self,
-        _can_assign: bool,
+        can_assign: bool,
         type_args: Vec<TypeAnnotation>,
         callee: Expr,
     ) -> Result<Expr, ParserError> {
@@ -1197,14 +1609,22 @@ impl<'a> Parser<'a> {
             args
         };
 
-        self.add_expr(
+        let call = self.add_expr(
             ExprKind::Call {
                 callee: Box::new(callee),
                 type_args,
                 args,
             },
             tok,
-        )
+        )?;
+
+        if self.peek_is(TokenKind::LeftParen)
+            && let Some(next_call) = self.check_call(&call, can_assign)?
+        {
+            Ok(next_call)
+        } else {
+            Ok(call)
+        }
     }
 
     // MARK: Helpers
@@ -1858,4 +2278,10 @@ impl<'a> Parser<'a> {
             loc.identifiers.push(identifier);
         }
     }
+}
+
+fn parse_lexed<T: FromStr>(string: &str) -> T {
+    string
+        .parse::<T>()
+        .unwrap_or_else(|_| unreachable!("lexer guarantees this is a number"))
 }

@@ -1,4 +1,5 @@
 pub mod builtins;
+pub mod conformance;
 pub mod constraint_solver;
 pub mod constraints;
 pub mod infer_row;
@@ -16,6 +17,7 @@ pub mod type_error;
 pub mod type_operations;
 pub mod type_session;
 pub mod type_snapshot;
+pub mod typed_ast;
 pub mod types_decorator;
 pub mod vars;
 // pub mod wants;

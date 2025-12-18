@@ -3,7 +3,7 @@ mod tests {
     use async_lsp::lsp_types::{CompletionItem, Position};
     use indoc::formatdoc;
 
-    use crate::compiling::driver::{Driver, Source};
+    use crate::compiling::driver::{Driver, DriverConfig, Source};
 
     fn complete(
         files: Vec<&str>,
@@ -12,7 +12,7 @@ mod tests {
     ) -> Vec<CompletionItem> {
         let mut _driver = Driver::new(
             files.into_iter().map(Source::from).collect(),
-            Default::default(),
+            DriverConfig::new("TestDriver"),
         );
         vec![]
 

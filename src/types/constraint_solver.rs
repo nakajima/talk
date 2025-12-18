@@ -1,9 +1,9 @@
 use crate::{
-    ast::AST,
     diagnostic::{AnyDiagnostic, Diagnostic},
-    name_resolution::{name_resolver::NameResolved, symbol::Symbol},
+    name_resolution::symbol::Symbol,
     node_id::NodeID,
     types::{
+        conformance::ConformanceKey,
         constraints::{constraint::Constraint, store::ConstraintStore},
         infer_ty::{Level, Meta},
         solve_context::SolveContext,
@@ -17,6 +17,9 @@ use crate::{
 pub enum DeferralReason {
     WaitingOnMeta(Meta),
     WaitingOnSymbol(Symbol),
+    WaitingOnSymbols(Vec<Symbol>),
+    WaitingOnConformance(ConformanceKey),
+    Multi(Vec<DeferralReason>),
     Unknown,
 }
 
@@ -30,12 +33,11 @@ pub enum SolveResult {
 #[derive(Debug)]
 pub struct ConstraintSolver<'a> {
     context: &'a mut SolveContext,
-    asts: &'a mut [AST<NameResolved>],
 }
 
 impl<'a> ConstraintSolver<'a> {
-    pub fn new(context: &'a mut SolveContext, asts: &'a mut [AST<NameResolved>]) -> Self {
-        Self { context, asts }
+    pub fn new(context: &'a mut SolveContext) -> Self {
+        Self { context }
     }
 
     pub fn solve(
@@ -44,7 +46,8 @@ impl<'a> ConstraintSolver<'a> {
         constraints: &mut ConstraintStore,
         session: &mut TypeSession,
         mut substitutions: UnificationSubstitutions,
-    ) {
+    ) -> Vec<AnyDiagnostic> {
+        let mut diagnostics = Vec::default();
         substitutions.extend(&self.context.substitutions);
         while !constraints.is_stalled() {
             let mut solved_metas = vec![];
@@ -64,12 +67,12 @@ impl<'a> ConstraintSolver<'a> {
                     Constraint::Member(ref member) => {
                         member.solve(constraints, self.context, session)
                     }
-                    Constraint::Conforms(ref conforms) => conforms.solve(session),
+                    Constraint::Conforms(ref conforms) => conforms.solve(self.context, session),
                     Constraint::TypeMember(ref type_member) => {
-                        type_member.solve(constraints, self.context, session, self.asts)
+                        type_member.solve(constraints, self.context, session)
                     }
                     Constraint::Projection(ref projection) => {
-                        projection.solve(level, constraints, self.context, session, self.asts)
+                        projection.solve(level, constraints, self.context, session)
                     }
                 };
 
@@ -82,20 +85,21 @@ impl<'a> ConstraintSolver<'a> {
                         constraints.defer(want_id, reason);
                     }
                     SolveResult::Err(e) => {
-                        tracing::error!("Error solving constraint: {e:?}");
+                        tracing::error!("Error solving constraint: {constraint:?} {e:?}");
+                        //unimplemented!("Error solving constraint: {constraint:?} {e:?}");
                         let diagnostic = AnyDiagnostic::Typing(Diagnostic {
                             id: NodeID::SYNTHESIZED,
                             kind: e,
                         });
-                        if !self.asts[0].diagnostics.contains(&diagnostic) {
-                            tracing::error!("Just adding it to the first constraint. Fixme.");
-                            self.asts[0].diagnostics.push(diagnostic);
-                        }
+
+                        diagnostics.push(diagnostic);
                     }
                 }
             }
 
             constraints.wake_metas(&solved_metas);
         }
+
+        diagnostics
     }
 }

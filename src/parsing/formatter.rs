@@ -1,3 +1,5 @@
+use std::ops::Add;
+
 use crate::{
     ast::{AST, ASTPhase},
     label::Label,
@@ -15,6 +17,7 @@ use crate::{
         func::Func,
         func_signature::FuncSignature,
         generic_decl::GenericDecl,
+        inline_ir_instruction::InlineIRInstruction,
         match_arm::MatchArm,
         parameter::Parameter,
         pattern::{Pattern, PatternKind, RecordFieldPatternKind},
@@ -39,6 +42,13 @@ pub enum Doc {
     Concat(Box<Doc>, Box<Doc>),
     Group(Box<Doc>),
     Annotation(String),
+}
+
+impl Add for Doc {
+    type Output = Doc;
+    fn add(self, rhs: Self) -> Self::Output {
+        concat(self, rhs)
+    }
 }
 
 impl Doc {
@@ -244,7 +254,12 @@ impl<'a> Formatter<'a> {
             Node::IncompleteExpr(_) => Doc::Empty,
             Node::CallArg(arg) => self.format_call_arg(arg),
             Node::FuncSignature(sig) => self.format_func_signature(sig),
+            Node::InlineIRInstruction(ir) => self.format_inline_ir_instruction(ir),
         }
+    }
+
+    fn format_inline_ir_instruction(&self, ir: &InlineIRInstruction) -> Doc {
+        text(format!("{ir}"))
     }
 
     fn format_attribute(&self, attr: &Attribute) -> Doc {
@@ -254,10 +269,14 @@ impl<'a> Formatter<'a> {
     fn format_expr(&self, expr: &Expr) -> Doc {
         let doc = match &expr.kind {
             ExprKind::Incomplete(_) => Doc::Empty,
-            ExprKind::As(lhs, rhs) => join(
-                vec![self.format_expr(lhs), self.format_type_annotation(rhs)],
-                text(" as "),
-            ),
+            ExprKind::As(lhs, rhs) => {
+                text("(")
+                    + join(
+                        vec![self.format_expr(lhs), self.format_type_annotation(rhs)],
+                        text(" as "),
+                    )
+                    + text(")")
+            }
             ExprKind::LiteralArray(items) => self.format_array_literal(items),
             ExprKind::LiteralString(string) => self.format_string_literal(string),
             ExprKind::LiteralInt(val) => text(val),
@@ -284,6 +303,10 @@ impl<'a> Formatter<'a> {
                 self.format_record_literal(fields, spread)
             }
             ExprKind::RowVariable(name) => join(vec![text(".."), text(name.name_str())], text("")),
+            ExprKind::InlineIR(instruction) => concat(
+                concat(text("@_ir {"), text(format!("{instruction}"))),
+                text("}"),
+            ),
         };
 
         self.decorators
@@ -297,10 +320,9 @@ impl<'a> Formatter<'a> {
             DeclKind::Struct {
                 name,
                 generics,
-                conformances,
                 body,
                 ..
-            } => self.format_struct(name, generics, conformances, body),
+            } => self.format_struct(name, generics, body),
             DeclKind::Let {
                 lhs,
                 type_annotation,
@@ -338,11 +360,10 @@ impl<'a> Formatter<'a> {
             } => self.format_extend(name, generics, conformances, body),
             DeclKind::Enum {
                 name,
-                conformances,
                 generics,
                 body,
                 ..
-            } => self.format_enum_decl(name, generics, conformances, body),
+            } => self.format_enum_decl(name, generics, body),
             DeclKind::EnumVariant(name, .., types) => self.format_enum_variant(name, types),
             DeclKind::FuncSignature(sig) => self.format_func_signature(sig),
             DeclKind::MethodRequirement(sig) => self.format_func_signature(sig),
@@ -742,13 +763,7 @@ impl<'a> Formatter<'a> {
         }
     }
 
-    fn format_struct(
-        &self,
-        name: &Name,
-        generics: &[GenericDecl],
-        conformances: &[TypeAnnotation],
-        body: &Body,
-    ) -> Doc {
+    fn format_struct(&self, name: &Name, generics: &[GenericDecl], body: &Body) -> Doc {
         let mut result = concat_space(text("struct"), self.format_name(name));
 
         if !generics.is_empty() {
@@ -763,17 +778,6 @@ impl<'a> Formatter<'a> {
                     text("<"),
                     concat(join(generic_docs, concat(text(","), text(" "))), text(">")),
                 ),
-            );
-        }
-
-        if !conformances.is_empty() {
-            let conformances_docs = conformances
-                .iter()
-                .map(|ty| self.format_type_annotation(ty))
-                .collect();
-            result = concat(
-                result,
-                concat(text(": "), join(conformances_docs, text(", "))),
             );
         }
 
@@ -1089,13 +1093,7 @@ impl<'a> Formatter<'a> {
         result
     }
 
-    fn format_enum_decl(
-        &self,
-        name: &Name,
-        generics: &[GenericDecl],
-        conformances: &[TypeAnnotation],
-        body: &Body,
-    ) -> Doc {
+    fn format_enum_decl(&self, name: &Name, generics: &[GenericDecl], body: &Body) -> Doc {
         let mut result = concat_space(text("enum"), self.format_name(name));
 
         if !generics.is_empty() {
@@ -1110,17 +1108,6 @@ impl<'a> Formatter<'a> {
                     text("<"),
                     concat(join(generic_docs, concat(text(","), text(" "))), text(">")),
                 ),
-            );
-        }
-
-        if !conformances.is_empty() {
-            let conformances_docs = conformances
-                .iter()
-                .map(|ty| self.format_type_annotation(ty))
-                .collect();
-            result = concat(
-                result,
-                concat(text(": "), join(conformances_docs, text(", "))),
             );
         }
 
@@ -1457,7 +1444,7 @@ impl<'a> Formatter<'a> {
 pub fn format_string(string: &str) -> String {
     let lexer = Lexer::new(string);
     let ast = Parser::new("", FileID(0), lexer).parse().unwrap();
-    format(&ast, 80)
+    format(&ast.0, 80)
 }
 
 #[allow(clippy::unwrap_used)]
@@ -1483,7 +1470,7 @@ mod formatter_tests {
     fn parse(code: &str) -> AST<Parsed> {
         let lexer = Lexer::new(code);
         let parser = Parser::new("-", FileID(0), lexer);
-        parser.parse().unwrap()
+        parser.parse().unwrap().0
     }
 
     fn format_code(input: &str, width: usize) -> String {

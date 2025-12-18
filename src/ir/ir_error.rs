@@ -7,6 +7,7 @@ pub enum IRError {
     InvalidAssignmentTarget(String),
     InvalidFieldAccess(String),
     TypeNotFound(String),
+    WitnessNotFound(String),
 }
 
 impl Error for IRError {}

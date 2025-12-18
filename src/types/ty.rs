@@ -1,20 +1,28 @@
+use std::hash::Hash;
+
 use crate::{
+    compiling::module::ModuleId,
     name::Name,
     name_resolution::symbol::Symbol,
     types::{
         infer_ty::{InferTy, TypeParamId},
         row::Row,
-        type_session::TypeDefKind,
     },
 };
 
-pub trait SomeType: std::fmt::Debug + PartialEq + Clone {
+pub trait SomeType: std::fmt::Debug + PartialEq + Clone + Eq + Hash {
     type RowType: PartialEq + Clone + std::fmt::Debug;
+    fn void() -> Self;
     fn contains_var(&self) -> bool;
 }
 
 impl SomeType for Ty {
     type RowType = Row;
+
+    fn void() -> Self {
+        Ty::Void
+    }
+
     fn contains_var(&self) -> bool {
         false
     }
@@ -32,12 +40,12 @@ pub enum Ty {
 
     Func(Box<Ty>, Box<Ty>),
     Tuple(Vec<Ty>),
-    Record(Box<Row>),
+    Record(Option<Symbol>, Box<Row>),
 
     // Nominal types (we look up their information from the TypeCatalog)
     Nominal {
         symbol: Symbol,
-        row: Box<Row>,
+        type_args: Vec<Ty>,
     },
 }
 
@@ -80,7 +88,7 @@ impl std::fmt::Display for Ty {
                         .join(", ")
                 )
             }
-            Ty::Record(row) => write!(
+            Ty::Record(.., row) => write!(
                 f,
                 "{{ {} }}",
                 row.close()
@@ -108,25 +116,40 @@ impl Ty {
     pub fn String() -> Ty {
         Ty::Nominal {
             symbol: Symbol::String,
-            row: Box::new(Row::Extend {
-                row: Row::Extend {
-                    row: Row::Extend {
-                        row: Row::Empty(TypeDefKind::Struct).into(),
-                        label: "length".into(),
-                        ty: Ty::Int,
-                    }
-                    .into(),
-                    label: "capacity".into(),
-                    ty: Ty::Int,
-                }
-                .into(),
-                label: "base".into(),
-                ty: Ty::RawPtr,
-            }),
+            type_args: Default::default(),
         }
     }
-    pub fn Array(t: InferTy) -> Ty {
-        InferTy::Array(t).into()
+    pub fn Array(t: Ty) -> Ty {
+        InferTy::Array(t.into()).into()
+    }
+
+    pub fn import(self, module_id: ModuleId) -> Self {
+        match self {
+            Ty::Primitive(symbol) => Ty::Primitive(symbol),
+            Ty::Param(type_param_id) => Ty::Param(type_param_id),
+            Ty::Constructor {
+                name: Name::Resolved(sym, name),
+                params,
+                ret,
+            } => Ty::Constructor {
+                name: Name::Resolved(sym.import(module_id), name),
+                params: params.into_iter().map(|p| p.import(module_id)).collect(),
+                ret: ret.import(module_id).into(),
+            },
+            Ty::Func(param, ret) => {
+                Ty::Func(param.import(module_id).into(), ret.import(module_id).into())
+            }
+            Ty::Tuple(items) => Ty::Tuple(items.into_iter().map(|t| t.import(module_id)).collect()),
+            Ty::Record(symbol, box row) => Ty::Record(
+                symbol.map(|s| s.import(module_id)),
+                row.import(module_id).into(),
+            ),
+            Ty::Nominal { symbol, type_args } => Ty::Nominal {
+                symbol: symbol.import(module_id),
+                type_args: type_args.into_iter().map(|t| t.import(module_id)).collect(),
+            },
+            other => other,
+        }
     }
 
     pub(crate) fn uncurry_params(self) -> Vec<Ty> {

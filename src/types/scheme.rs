@@ -3,6 +3,7 @@ use itertools::Itertools;
 use tracing::instrument;
 
 use crate::{
+    compiling::module::ModuleId,
     node_id::NodeID,
     types::{
         constraints::store::ConstraintStore,
@@ -23,15 +24,42 @@ pub enum ForAll {
     Row(RowParamId),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Scheme<T: SomeType> {
     pub(crate) foralls: IndexSet<ForAll>,
-    pub(super) predicates: Vec<Predicate<T>>,
+    pub(crate) predicates: Vec<Predicate<T>>,
     pub(crate) ty: T,
+}
+
+impl Scheme<Ty> {
+    pub fn import(self, module_id: ModuleId) -> Self {
+        Self {
+            foralls: self.foralls,
+            predicates: self
+                .predicates
+                .into_iter()
+                .map(|p| p.import(module_id))
+                .collect(),
+            ty: self.ty.import(module_id),
+        }
+    }
+}
+
+impl<T: SomeType> std::hash::Hash for Scheme<T> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.ty.hash(state);
+        for forall in self.foralls.iter() {
+            forall.hash(state);
+        }
+    }
 }
 
 impl<T: SomeType> SomeType for EnvEntry<T> {
     type RowType = InferRow;
+
+    fn void() -> Self {
+        EnvEntry::Mono(T::void())
+    }
 
     fn contains_var(&self) -> bool {
         match self {

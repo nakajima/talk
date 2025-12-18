@@ -21,8 +21,7 @@ pub enum DeclKind {
         #[drive(skip)]
         name_span: Span,
         generics: Vec<GenericDecl>, /* generics */
-        conformances: Vec<TypeAnnotation>,
-        body: Body, /* body */
+        body: Body,                 /* body */
     },
 
     Let {
@@ -88,7 +87,6 @@ pub enum DeclKind {
         name: Name, // TypeRepr name: Option
         #[drive(skip)]
         name_span: Span,
-        conformances: Vec<TypeAnnotation>,
         generics: Vec<GenericDecl>, // Generics TypeParams <T>
         body: Body,
     },

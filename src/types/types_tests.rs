@@ -1,45 +1,40 @@
 #[cfg(test)]
 pub mod tests {
     use crate::{
-        ast::AST,
+        ast::{AST, NameResolved},
         compiling::{
             driver::{Driver, DriverConfig, Source},
             module::ModuleId,
         },
-        diagnostic::Diagnostic,
+        diagnostic::{AnyDiagnostic, Diagnostic},
         ir::monomorphizer::uncurry_function,
-        make_row,
-        name_resolution::{
-            name_resolver::NameResolved,
-            symbol::{EnumId, GlobalId, ProtocolId, StructId, Symbol, SynthesizedId},
-        },
-        node_kinds::{
-            expr::{Expr, ExprKind},
-            stmt::{Stmt, StmtKind},
-        },
+        label::Label,
+        name_resolution::symbol::{EnumId, GlobalId, ProtocolId, StructId, Symbol, SynthesizedId},
         types::{
-            infer_ty::InferTy,
-            row::Row,
+            conformance::ConformanceKey,
             scheme::{ForAll, Scheme},
             ty::Ty,
-            type_catalog::ConformanceKey,
             type_error::TypeError,
-            type_session::{TypeDefKind, TypeEntry, Types},
+            type_session::{TypeEntry, Types},
+            typed_ast::{
+                TypedAST, TypedDeclKind, TypedExpr, TypedExprKind, TypedNode, TypedStmt,
+                TypedStmtKind,
+            },
         },
     };
 
-    fn typecheck(code: &'static str) -> (AST<NameResolved>, Types) {
-        let (ast, types) = typecheck_err(code);
+    fn typecheck(code: &'static str) -> (TypedAST<Ty>, Types) {
+        let (ast, types, diagnostics) = typecheck_err(code);
         assert!(
-            ast.diagnostics.is_empty(),
+            diagnostics.is_empty(),
             "diagnostics not empty: {:?}",
-            ast.diagnostics
+            diagnostics
         );
         (ast, types)
     }
 
-    fn typecheck_core(code: &'static str) -> (AST<NameResolved>, Types) {
-        let driver = Driver::new(vec![Source::from(code)], DriverConfig::default());
+    fn typecheck_core(code: &'static str) -> (TypedAST<Ty>, Types) {
+        let driver = Driver::new(vec![Source::from(code)], DriverConfig::new("TestDriver"));
         let typed = driver
             .parse()
             .unwrap()
@@ -49,13 +44,18 @@ pub mod tests {
             .unwrap();
 
         let types = typed.phase.types;
-        let ast = typed.phase.asts.into_iter().next().unwrap().1;
+        let ast = typed.phase.ast;
+        assert!(
+            typed.phase.diagnostics.is_empty(),
+            "diagnostics not empty: {:?}",
+            typed.phase.diagnostics
+        );
 
         (ast, types)
     }
 
-    fn typecheck_err(code: &'static str) -> (AST<NameResolved>, Types) {
-        let driver = Driver::new_bare(vec![Source::from(code)], DriverConfig::default());
+    fn typecheck_err(code: &'static str) -> (TypedAST<Ty>, Types, Vec<AnyDiagnostic>) {
+        let driver = Driver::new_bare(vec![Source::from(code)], DriverConfig::new("TestDriver"));
         let typed = driver
             .parse()
             .unwrap()
@@ -64,10 +64,7 @@ pub mod tests {
             .typecheck()
             .unwrap();
 
-        let types = typed.phase.types;
-        let ast = typed.phase.asts.into_iter().next().unwrap().1;
-
-        (ast, types)
+        (typed.phase.ast, typed.phase.types, typed.phase.diagnostics)
     }
 
     pub fn decl_ty(i: usize, ast: &AST<NameResolved>, session: &Types) -> Ty {
@@ -79,15 +76,8 @@ pub mod tests {
         }
     }
 
-    pub fn ty(i: usize, ast: &AST<NameResolved>, session: &Types) -> Ty {
-        let entry = session
-            .get(&ast.roots[i].as_stmt().clone().as_expr().id)
-            .unwrap();
-
-        match entry {
-            TypeEntry::Mono(ty) => ty.clone(),
-            TypeEntry::Poly(scheme) => scheme.ty.clone(),
-        }
+    pub fn ty(i: usize, ast: &TypedAST<Ty>, _session: &Types) -> Ty {
+        ast.stmts[i].ty.clone()
     }
 
     #[test]
@@ -99,20 +89,20 @@ pub mod tests {
     #[test]
     fn types_int() {
         let (ast, types) = typecheck("let a = 123; a");
-        assert_eq!(ty(1, &ast, &types), Ty::Int);
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
     }
 
     #[test]
     fn types_float() {
         let (ast, types) = typecheck("let a = 1.23; a");
-        assert_eq!(ty(1, &ast, &types), Ty::Float);
+        assert_eq!(ty(0, &ast, &types), Ty::Float);
     }
 
     #[test]
     fn types_bool() {
         let (ast, types) = typecheck("let a = true; a ; let b = false ; b");
+        assert_eq!(ty(0, &ast, &types), Ty::Bool);
         assert_eq!(ty(1, &ast, &types), Ty::Bool);
-        assert_eq!(ty(3, &ast, &types), Ty::Bool);
     }
 
     #[test]
@@ -151,8 +141,8 @@ pub mod tests {
     #[test]
     fn types_array_literal() {
         let (ast, types) = typecheck_core("[1,2,3]; [1.2, 3.4, 5.6]");
-        assert_eq!(ty(0, &ast, &types), Ty::Array(InferTy::Int));
-        assert_eq!(ty(1, &ast, &types), Ty::Array(InferTy::Float));
+        assert_eq!(ty(0, &ast, &types), Ty::Array(Ty::Int));
+        assert_eq!(ty(1, &ast, &types), Ty::Array(Ty::Float));
     }
 
     #[test]
@@ -165,7 +155,7 @@ pub mod tests {
     #[test]
     fn types_alloc() {
         let (ast, types) = typecheck("let x: RawPtr = __IR(\"$? = alloc int 1\"); x");
-        assert_eq!(ty(1, &ast, &types), Ty::RawPtr);
+        assert_eq!(ty(0, &ast, &types), Ty::RawPtr);
     }
 
     #[test]
@@ -177,7 +167,7 @@ pub mod tests {
     #[test]
     fn types_basic_binary() {
         let (ast, types) = typecheck_core("func a(x) { x + 1 } ; a(123)");
-        assert_eq!(ty(1, &ast, &types), Ty::Int);
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
     }
 
     #[test]
@@ -188,18 +178,18 @@ pub mod tests {
         a
     "#,
         );
-        assert_eq!(ty(1, &ast, &types), Ty::Int);
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
     }
 
     #[test]
     fn monomorphic_let_annotation_mismatch() {
-        let (ast, _types) = typecheck_err(
+        let (_ast, _types, diagnostics) = typecheck_err(
             r#"
         let a: Bool = 123
         a
     "#,
         );
-        assert_eq!(ast.diagnostics.len(), 1);
+        assert_eq!(diagnostics.len(), 1);
     }
 
     #[test]
@@ -211,8 +201,8 @@ pub mod tests {
         identity(true)
         ",
         );
-        assert_eq!(ty(1, &ast, &types), Ty::Int);
-        assert_eq!(ty(2, &ast, &types), Ty::Bool);
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
+        assert_eq!(ty(1, &ast, &types), Ty::Bool);
     }
 
     #[test]
@@ -225,31 +215,32 @@ pub mod tests {
         ",
         );
 
-        let Stmt {
+        let TypedStmt {
             kind:
-                StmtKind::Expr(Expr {
+                TypedStmtKind::Expr(TypedExpr {
                     kind:
-                        ExprKind::Call {
+                        TypedExprKind::Call {
                             callee: box root_1, ..
                         },
                     ..
                 }),
             ..
-        } = ast.roots[1].as_stmt()
+        } = &ast.stmts[0]
         else {
             panic!("didn't get expr");
         };
-        let Stmt {
+
+        let TypedStmt {
             kind:
-                StmtKind::Expr(Expr {
+                TypedStmtKind::Expr(TypedExpr {
                     kind:
-                        ExprKind::Call {
+                        TypedExprKind::Call {
                             callee: box root_2, ..
                         },
                     ..
                 }),
             ..
-        } = ast.roots[2].as_stmt()
+        } = &ast.stmts[1]
         else {
             panic!("didn't get expr");
         };
@@ -297,14 +288,14 @@ pub mod tests {
         );
 
         // Extract the constructor calls
-        let Stmt {
+        let TypedStmt {
             kind:
-                StmtKind::Expr(Expr {
+                TypedStmtKind::Expr(TypedExpr {
                     kind:
-                        ExprKind::Call {
+                        TypedExprKind::Call {
                             callee:
-                                box Expr {
-                                    kind: ExprKind::Constructor(_),
+                                box TypedExpr {
+                                    kind: TypedExprKind::Constructor(..),
                                     id: constructor_1_id,
                                     ..
                                 },
@@ -313,19 +304,19 @@ pub mod tests {
                     ..
                 }),
             ..
-        } = ast.roots[1].as_stmt()
+        } = &ast.stmts[0]
         else {
             panic!("didn't get first constructor call");
         };
 
-        let Stmt {
+        let TypedStmt {
             kind:
-                StmtKind::Expr(Expr {
+                TypedStmtKind::Expr(TypedExpr {
                     kind:
-                        ExprKind::Call {
+                        TypedExprKind::Call {
                             callee:
-                                box Expr {
-                                    kind: ExprKind::Constructor(_),
+                                box TypedExpr {
+                                    kind: TypedExprKind::Constructor(..),
                                     id: constructor_2_id,
                                     ..
                                 },
@@ -334,7 +325,7 @@ pub mod tests {
                     ..
                 }),
             ..
-        } = ast.roots[2].as_stmt()
+        } = &ast.stmts[1]
         else {
             panic!("didn't get second constructor call");
         };
@@ -389,14 +380,14 @@ pub mod tests {
         );
 
         // Extract the variant access calls
-        let Stmt {
+        let TypedStmt {
             kind:
-                StmtKind::Expr(Expr {
+                TypedStmtKind::Expr(TypedExpr {
                     kind:
-                        ExprKind::Call {
+                        TypedExprKind::Call {
                             callee:
-                                box Expr {
-                                    kind: ExprKind::Member(..),
+                                box TypedExpr {
+                                    kind: TypedExprKind::Member { .. },
                                     id: member_1_id,
                                     ..
                                 },
@@ -405,19 +396,19 @@ pub mod tests {
                     ..
                 }),
             ..
-        } = ast.roots[1].as_stmt()
+        } = &ast.stmts[0]
         else {
             panic!("didn't get first enum variant call");
         };
 
-        let Stmt {
+        let TypedStmt {
             kind:
-                StmtKind::Expr(Expr {
+                TypedStmtKind::Expr(TypedExpr {
                     kind:
-                        ExprKind::Call {
+                        TypedExprKind::Call {
                             callee:
-                                box Expr {
-                                    kind: ExprKind::Member(..),
+                                box TypedExpr {
+                                    kind: TypedExprKind::Member { .. },
                                     id: member_2_id,
                                     ..
                                 },
@@ -426,7 +417,7 @@ pub mod tests {
                     ..
                 }),
             ..
-        } = ast.roots[2].as_stmt()
+        } = &ast.stmts[1]
         else {
             panic!("didn't get second enum variant call");
         };
@@ -480,7 +471,7 @@ pub mod tests {
             ",
         );
 
-        assert_eq!(ty(1, &ast, &types), Ty::Tuple(vec![Ty::Int, Ty::Float]));
+        assert_eq!(ty(0, &ast, &types), Ty::Tuple(vec![Ty::Int, Ty::Float]));
     }
 
     #[test]
@@ -496,7 +487,7 @@ pub mod tests {
         "#,
         );
 
-        assert_eq!(ty(1, &ast, &types), Ty::Int);
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
     }
 
     #[test]
@@ -527,29 +518,29 @@ pub mod tests {
     "#,
         );
 
-        assert_eq!(ty(1, &ast, &types), Ty::Int);
-        assert_eq!(ty(2, &ast, &types), Ty::Bool);
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
+        assert_eq!(ty(1, &ast, &types), Ty::Bool);
     }
 
     #[test]
     fn generic_function_body_must_respect_its_own_type_vars() {
-        let (ast, _types) = typecheck_err(
+        let (_ast, _types, diagnostics) = typecheck_err(
             r#"
         func bad<T>(x: T) -> T { 0 } // 0 == Int != T
         bad(true)
     "#,
         );
         assert_eq!(
-            ast.diagnostics.len(),
+            diagnostics.len(),
             1,
             "didn't get correct diagnostic: {:?}",
-            ast.diagnostics
+            diagnostics
         );
     }
 
     #[test]
     fn generalizes_locals() {
-        let (ast, types) = typecheck(
+        let (ast, _types) = typecheck(
             "
         func outer() {
             func id(x) { x }
@@ -560,7 +551,7 @@ pub mod tests {
         ",
         );
 
-        assert_eq!(ty(1, &ast, &types), Ty::Tuple(vec![Ty::Int, Ty::Bool]));
+        assert_eq!(ast.stmts[0].ty, Ty::Tuple(vec![Ty::Int, Ty::Bool]));
     }
 
     #[test]
@@ -574,8 +565,8 @@ pub mod tests {
         b
         ",
         );
-        assert_eq!(ty(3, &ast, &types), Ty::Int);
-        assert_eq!(ty(4, &ast, &types), Ty::Float);
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
+        assert_eq!(ty(1, &ast, &types), Ty::Float);
     }
 
     #[test]
@@ -587,8 +578,8 @@ pub mod tests {
         identity(identity(true))
         ",
         );
-        assert_eq!(ty(1, &ast, &types), Ty::Int);
-        assert_eq!(ty(2, &ast, &types), Ty::Bool);
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
+        assert_eq!(ty(1, &ast, &types), Ty::Bool);
     }
 
     #[test]
@@ -603,12 +594,12 @@ pub mod tests {
             ",
         );
 
-        assert_eq!(ty(1, &ast, &types), Ty::Tuple(vec![Ty::Int, Ty::Bool]));
+        assert_eq!(ty(0, &ast, &types), Ty::Tuple(vec![Ty::Int, Ty::Bool]));
     }
 
     #[test]
     fn checks_returns_agree() {
-        let (ast, _types) = typecheck_err(
+        let (_ast, _types, diagnostics) = typecheck_err(
             "
             func fizz() {
                 return 123
@@ -618,10 +609,10 @@ pub mod tests {
         );
 
         assert_eq!(
-            ast.diagnostics.len(),
+            diagnostics.len(),
             1,
             "did not get diagnostic: {:?}",
-            ast.diagnostics
+            diagnostics
         );
     }
 
@@ -633,7 +624,7 @@ pub mod tests {
         z
         ",
         );
-        assert_eq!(ty(1, &ast, &types), Ty::Int);
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
     }
 
     #[test]
@@ -644,7 +635,7 @@ pub mod tests {
         z
         ",
         );
-        assert_eq!(ty(1, &ast, &types), Ty::Tuple(vec![Ty::Int, Ty::Bool]));
+        assert_eq!(ty(0, &ast, &types), Ty::Tuple(vec![Ty::Int, Ty::Bool]));
     }
 
     #[test]
@@ -657,8 +648,8 @@ pub mod tests {
         y
         ",
         );
-        assert_eq!(ty(2, &ast, &types), Ty::Int);
-        assert_eq!(ty(3, &ast, &types), Ty::Float);
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
+        assert_eq!(ty(1, &ast, &types), Ty::Float);
     }
 
     #[test]
@@ -671,8 +662,8 @@ pub mod tests {
         y
         ",
         );
-        assert_eq!(ty(2, &ast, &types), Ty::Int);
-        assert_eq!(ty(3, &ast, &types), Ty::Float);
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
+        assert_eq!(ty(1, &ast, &types), Ty::Float);
     }
 
     #[test]
@@ -683,42 +674,42 @@ pub mod tests {
         z
         ",
         );
-        assert_eq!(ty(1, &ast, &types), Ty::Int);
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
     }
 
     #[test]
     fn requires_if_expr_cond_to_be_bool() {
-        let (ast, _types) = typecheck_err(
+        let (_ast, _types, diagnostics) = typecheck_err(
             "
         let z = if 123 { 123 } else { 456 }
         z
         ",
         );
 
-        assert_eq!(ast.diagnostics.len(), 1);
+        assert_eq!(diagnostics.len(), 1);
     }
 
     #[test]
     fn requires_if_expr_arms_to_match() {
-        let (ast, _types) = typecheck_err(
+        let (_ast, _types, diagnostics) = typecheck_err(
             "
         let z = if true { 123 } else { false }
         z
         ",
         );
 
-        assert_eq!(ast.diagnostics.len(), 1);
+        assert_eq!(diagnostics.len(), 1);
     }
 
     #[test]
     fn requires_if_stmt_cond_to_be_bool() {
-        let (ast, _types) = typecheck_err(
+        let (_ast, _types, diagnostics) = typecheck_err(
             "
         if 123 { 123 }
         ",
         );
 
-        assert_eq!(ast.diagnostics.len(), 1);
+        assert_eq!(diagnostics.len(), 1);
     }
 
     #[test]
@@ -758,8 +749,7 @@ pub mod tests {
         }
         ",
             )
-            .0
-            .diagnostics
+            .2
             .len(),
             1
         );
@@ -771,8 +761,7 @@ pub mod tests {
         }
         ",
             )
-            .0
-            .diagnostics
+            .2
             .len(),
             1
         );
@@ -799,8 +788,7 @@ pub mod tests {
         loop 123 {}
         ",
             )
-            .0
-            .diagnostics
+            .2
             .len(),
             1
         );
@@ -815,8 +803,7 @@ pub mod tests {
         bool = 123
         ",
             )
-            .0
-            .diagnostics
+            .2
             .len(),
             1
         );
@@ -825,19 +812,19 @@ pub mod tests {
     #[test]
     fn call_time_type_args_are_checked() {
         // Should be a type error because <Bool> contradicts the actual arg 123.
-        let (ast, _types) = typecheck_err(
+        let (_ast, _types, diagnostics) = typecheck_err(
             r#"
         func id<T>(x: T) -> T { x }
         id<Bool>(123)
     "#,
         );
-        assert_eq!(ast.diagnostics.len(), 1, "expected 1 diagnostic");
+        assert_eq!(diagnostics.len(), 1, "expected 1 diagnostic");
     }
 
     #[test]
     fn match_arms_must_agree_on_result_type() {
         // Arms return Int vs Bool → should be an error.
-        let (ast, _types) = typecheck_err(
+        let (_ast, _types, diagnostics) = typecheck_err(
             r#"
         match 123 {
             123 -> 1,
@@ -846,7 +833,7 @@ pub mod tests {
     "#,
         );
         assert_eq!(
-            ast.diagnostics.len(),
+            diagnostics.len(),
             1,
             "match arms not constrained to same type"
         );
@@ -854,24 +841,24 @@ pub mod tests {
 
     #[test]
     fn param_annotation_is_enforced_at_call() {
-        let (ast, _types) = typecheck_err(
+        let (_ast, _types, diagnostics) = typecheck_err(
             r#"
         func f(x: Int) -> Int { x }
         f(true)
     "#,
         );
-        assert_eq!(ast.diagnostics.len(), 1);
+        assert_eq!(diagnostics.len(), 1);
     }
 
     #[test]
     fn return_annotation_is_enforced_in_body() {
-        let (ast, _types) = typecheck_err(
+        let (_ast, _types, diagnostics) = typecheck_err(
             r#"
         func f(x: Int) -> Int { true }
         f(1)
     "#,
         );
-        assert_eq!(ast.diagnostics.len(), 1);
+        assert_eq!(diagnostics.len(), 1);
     }
 
     #[test]
@@ -890,13 +877,13 @@ pub mod tests {
         ",
         );
 
-        assert_eq!(ty(1, &ast, &types), Ty::Int);
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
     }
 
     #[test]
     fn recursion_is_monomorphic_within_binding_group() {
         // Polymorphic recursion should NOT be inferred.
-        let (ast, _types) = typecheck_err(
+        let (_ast, _types, diagnostics) = typecheck_err(
             r#"
         func g(x) {
             // Force a shape change on the recursive call to try to “polymorphically” recurse.
@@ -909,12 +896,12 @@ pub mod tests {
         // We expect either an occurs check error or an invalid unification error
         // Both indicate that polymorphic recursion is not allowed
         assert!(
-            !ast.diagnostics.is_empty(),
+            !diagnostics.is_empty(),
             "expected errors for polymorphic recursion"
         );
 
         // Check that we have the expected error types
-        let has_occurs_check = ast.diagnostics.iter().any(|d| {
+        let has_occurs_check = diagnostics.iter().any(|d| {
             matches!(
                 d,
                 crate::diagnostic::AnyDiagnostic::Typing(Diagnostic {
@@ -924,7 +911,7 @@ pub mod tests {
             )
         });
 
-        let has_invalid_unification = ast.diagnostics.iter().any(|d| {
+        let has_invalid_unification = diagnostics.iter().any(|d| {
             matches!(
                 d,
                 crate::diagnostic::AnyDiagnostic::Typing(Diagnostic {
@@ -937,7 +924,7 @@ pub mod tests {
         assert!(
             has_occurs_check || has_invalid_unification,
             "expected OccursCheck or InvalidUnification error for polymorphic recursion, got {:?}",
-            ast.diagnostics
+            diagnostics
         );
     }
 
@@ -974,7 +961,7 @@ pub mod tests {
         (id(123), id(true))
     "#,
         );
-        assert_eq!(ty(1, &ast, &types), Ty::Tuple(vec![Ty::Int, Ty::Bool]));
+        assert_eq!(ty(0, &ast, &types), Ty::Tuple(vec![Ty::Int, Ty::Bool]));
     }
 
     #[test]
@@ -986,7 +973,7 @@ pub mod tests {
         "#,
         );
 
-        let Ty::Record(row) = ty(1, &ast, &types) else {
+        let Ty::Record(None, row) = ty(0, &ast, &types) else {
             panic!("did not get record");
         };
 
@@ -1011,7 +998,7 @@ pub mod tests {
         ",
         );
 
-        let Ty::Record(row) = ty(1, &ast, &types) else {
+        let Ty::Record(None, row) = ty(0, &ast, &types) else {
             panic!("Didn't get row");
         };
 
@@ -1032,9 +1019,9 @@ pub mod tests {
         "#,
         );
 
-        assert_eq!(ty(1, &ast, &types), Ty::Bool);
-        assert_eq!(ty(2, &ast, &types), Ty::Int);
-        assert_eq!(ty(3, &ast, &types), Ty::Float);
+        assert_eq!(ty(0, &ast, &types), Ty::Bool);
+        assert_eq!(ty(1, &ast, &types), Ty::Int);
+        assert_eq!(ty(2, &ast, &types), Ty::Float);
     }
 
     #[test]
@@ -1046,7 +1033,7 @@ pub mod tests {
         "#,
         );
 
-        assert_eq!(ty(1, &ast, &types), Ty::Float);
+        assert_eq!(ty(0, &ast, &types), Ty::Float);
     }
 
     #[test]
@@ -1060,7 +1047,7 @@ pub mod tests {
         "#,
         );
 
-        assert_eq!(ty(1, &ast, &types), Ty::Tuple(vec![Ty::Int, Ty::Bool]));
+        assert_eq!(ty(0, &ast, &types), Ty::Tuple(vec![Ty::Int, Ty::Bool]));
     }
 
     #[test]
@@ -1074,7 +1061,7 @@ pub mod tests {
         "#,
         );
 
-        assert_eq!(ty(1, &ast, &types), Ty::Bool);
+        assert_eq!(ty(0, &ast, &types), Ty::Bool);
     }
 
     #[test]
@@ -1088,12 +1075,12 @@ pub mod tests {
         "#,
         );
 
-        assert_eq!(ty(1, &ast, &types), Ty::Bool);
+        assert_eq!(ty(0, &ast, &types), Ty::Bool);
     }
 
     #[test]
     fn checks_fields_exist() {
-        let (ast, _types) = typecheck_err(
+        let (_ast, _types, diagnostics) = typecheck_err(
             r#"
         let rec = { a: 123, b: true }
         match rec {
@@ -1103,16 +1090,16 @@ pub mod tests {
         );
 
         assert_eq!(
-            ast.diagnostics.len(),
+            diagnostics.len(),
             1,
             "did not get diagnostic: {:?}",
-            ast.diagnostics
+            diagnostics
         );
     }
 
     #[test]
     fn checks_field_types() {
-        let (ast, _types) = typecheck_err(
+        let (_ast, _types, diagnostics) = typecheck_err(
             r#"
         let rec = { a: 123 }
         match rec {
@@ -1122,10 +1109,10 @@ pub mod tests {
         );
 
         assert_eq!(
-            ast.diagnostics.len(),
+            diagnostics.len(),
             1,
             "did not get diagnostic: {:?}",
-            ast.diagnostics
+            diagnostics
         );
     }
 
@@ -1140,7 +1127,7 @@ pub mod tests {
     "#,
         );
 
-        assert_eq!(ty(1, &ast, &types), Ty::Tuple(vec![Ty::Int, Ty::Bool]));
+        assert_eq!(ty(0, &ast, &types), Ty::Tuple(vec![Ty::Int, Ty::Bool]));
     }
 
     /// Simple polymorphic projection: fstA extracts `a` from any record that has it.
@@ -1153,14 +1140,14 @@ pub mod tests {
     "#,
         );
 
-        assert_eq!(ty(1, &ast, &types), Ty::Tuple(vec![Ty::Int, Ty::Int]));
+        assert_eq!(ty(0, &ast, &types), Ty::Tuple(vec![Ty::Int, Ty::Int]));
     }
 
     /// Local `let` that returns an *env row* must NOT generalize its tail.
     /// Matching on a field that isn't known in the env row should fail inside `outer`.
     #[test]
     fn row_env_tail_not_generalized_in_local_let() {
-        let (ast, _types) = typecheck_err(
+        let (_ast, _types, diagnostics) = typecheck_err(
             r#"
         func outer(r) {
             let _x = r.a;               // forces r to have field `a`
@@ -1174,11 +1161,9 @@ pub mod tests {
         );
 
         // exactly one "missing field" diagnostic
-        assert_eq!(ast.diagnostics.len(), 1, "{:?}", ast.diagnostics);
+        assert_eq!(diagnostics.len(), 1, "{:?}", diagnostics);
     }
 
-    /// Local `let` with a fresh row in RHS should generalize its row tail.
-    /// Using it twice with different shapes must type independently.
     #[test]
     fn row_generalizes_in_local_let_when_fresh() {
         let (ast, types) = typecheck(
@@ -1191,7 +1176,7 @@ pub mod tests {
     "#,
         );
 
-        assert_eq!(ty(1, &ast, &types), Ty::Tuple(vec![Ty::Int, Ty::Bool]));
+        assert_eq!(ty(0, &ast, &types), Ty::Tuple(vec![Ty::Int, Ty::Bool]));
     }
 
     /// Instantiation stability: once a row param is instantiated at a call site,
@@ -1206,7 +1191,7 @@ pub mod tests {
     "#,
         );
 
-        assert_eq!(ty(2, &ast, &types), Ty::Tuple(vec![Ty::Int, Ty::Bool]));
+        assert_eq!(ty(0, &ast, &types), Ty::Tuple(vec![Ty::Int, Ty::Bool]));
     }
 
     /// Polymorphic consumer: a function requiring presence of `a` should accept any record
@@ -1220,14 +1205,14 @@ pub mod tests {
     "#,
         );
 
-        assert_eq!(ty(1, &ast, &types), Ty::Tuple(vec![Ty::Int, Ty::Int]));
+        assert_eq!(ty(0, &ast, &types), Ty::Tuple(vec![Ty::Int, Ty::Int]));
     }
 
     #[test]
     fn row_meta_levels_prevent_leak() {
         // Outer forces r to be an open record { a: Int | row_var } by projecting r.a.
         // Then local let k = func(){ r } must NOT generalize row_var; match should fail on { c }.
-        let (ast, _types) = typecheck_err(
+        let (_ast, _types, diagnostics) = typecheck_err(
             r#"
         func outer(r) {
             let x = r.a; // creates an internal Row::Var tail for r's row (your ensure_row/projection does this)
@@ -1239,7 +1224,7 @@ pub mod tests {
         outer({ a: 1 })
     "#,
         );
-        assert_eq!(ast.diagnostics.len(), 1);
+        assert_eq!(diagnostics.len(), 1);
     }
 
     #[test]
@@ -1254,12 +1239,12 @@ pub mod tests {
         ",
         );
 
-        assert_eq!(ty(1, &ast, &types), Ty::Tuple(vec![Ty::Int, Ty::Bool]));
+        assert_eq!(ty(0, &ast, &types), Ty::Tuple(vec![Ty::Int, Ty::Bool]));
     }
 
     #[test]
     fn enforces_non_annotated_record() {
-        let (ast, _types) = typecheck_err(
+        let (_ast, _types, diagnostics) = typecheck_err(
             "
         func foo(point) {
             (point.x, point.y)
@@ -1269,12 +1254,7 @@ pub mod tests {
         ",
         );
 
-        assert_eq!(
-            ast.diagnostics.len(),
-            1,
-            "diagnostics: {:?}",
-            ast.diagnostics
-        );
+        assert_eq!(diagnostics.len(), 1, "diagnostics: {:?}", diagnostics);
     }
 
     #[test]
@@ -1290,13 +1270,13 @@ pub mod tests {
         ",
         );
 
-        assert_eq!(ty(1, &ast, &types), Ty::Tuple(vec![Ty::Int, Ty::Float]));
-        assert_eq!(ty(2, &ast, &types), Ty::Tuple(vec![Ty::Int, Ty::Int]));
+        assert_eq!(ty(0, &ast, &types), Ty::Tuple(vec![Ty::Int, Ty::Float]));
+        assert_eq!(ty(1, &ast, &types), Ty::Tuple(vec![Ty::Int, Ty::Int]));
     }
 
     #[test]
     fn enforces_row_type_as_params() {
-        let (ast, _types) = typecheck_err(
+        let (_ast, _types, diagnostics) = typecheck_err(
             "
         func foo(x: { y: Int, z: Bool }) {
             (x.y, x.z)
@@ -1306,12 +1286,7 @@ pub mod tests {
         ",
         );
 
-        assert_eq!(
-            ast.diagnostics.len(),
-            1,
-            "diagnostics: {:?}",
-            ast.diagnostics
-        );
+        assert_eq!(diagnostics.len(), 1, "diagnostics: {:?}", diagnostics);
     }
 
     #[test]
@@ -1329,7 +1304,7 @@ pub mod tests {
 
         let nominal = Ty::Nominal {
             symbol: StructId::from(1).into(),
-            row: Box::new(make_row!(Struct, "height" => Ty::Float, "age" => Ty::Int)),
+            type_args: Default::default(),
         };
 
         let (params, _ret) = uncurry_function(
@@ -1342,7 +1317,7 @@ pub mod tests {
         );
 
         assert_eq!(params.len(), 3);
-        assert_eq!(ty(1, &ast, &types), nominal);
+        assert_eq!(ty(0, &ast, &types), nominal);
     }
 
     #[test]
@@ -1361,7 +1336,7 @@ pub mod tests {
         ",
         );
 
-        assert_eq!(ty(2, &ast, &types), Ty::Int);
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
     }
 
     #[test]
@@ -1377,7 +1352,7 @@ pub mod tests {
         ",
         );
 
-        assert_eq!(ty(1, &ast, &types), Ty::Int);
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
     }
 
     #[test]
@@ -1392,12 +1367,12 @@ pub mod tests {
         ",
         );
 
-        assert_eq!(ty(1, &ast, &types), Ty::Int);
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
     }
 
     #[test]
     fn checks_struct_init_args() {
-        let (ast, _types) = typecheck_err(
+        let (_ast, _types, diagnostics) = typecheck_err(
             "
         struct Person {
             let age: Int
@@ -1411,7 +1386,7 @@ pub mod tests {
         ",
         );
 
-        assert_eq!(ast.diagnostics.len(), 1, "{:?}", ast.diagnostics);
+        assert_eq!(diagnostics.len(), 1, "{:?}", diagnostics);
     }
 
     #[test]
@@ -1430,7 +1405,7 @@ pub mod tests {
         ",
         );
 
-        assert_eq!(ty(1, &ast, &types), Ty::Int);
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
     }
 
     #[test]
@@ -1445,7 +1420,7 @@ pub mod tests {
         ",
         );
 
-        assert_eq!(ty(1, &ast, &types), Ty::Int);
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
     }
 
     #[test]
@@ -1464,7 +1439,7 @@ pub mod tests {
         ",
         );
 
-        assert_eq!(ty(1, &ast, &types), Ty::Int);
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
     }
 
     #[test]
@@ -1488,7 +1463,7 @@ pub mod tests {
         ",
         );
 
-        assert_eq!(ty(2, &ast, &types), Ty::Int);
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
     }
 
     #[test]
@@ -1506,17 +1481,17 @@ pub mod tests {
         );
 
         assert_eq!(
-            ty(3, &ast, &types),
+            ty(0, &ast, &types),
             Ty::Nominal {
                 symbol: StructId::from(1).into(),
-                row: make_row!(Struct, "value" => Ty::Int).into()
+                type_args: vec![Ty::Int],
             }
         );
     }
 
     #[test]
     fn checks_struct_method_on_arg() {
-        let (ast, _types) = typecheck_err(
+        let (_ast, _types, diagnostics) = typecheck_err(
             "
         struct Person {
             let age: Int
@@ -1533,9 +1508,9 @@ pub mod tests {
 
         assert_eq!(
             1,
-            ast.diagnostics.len(),
+            diagnostics.len(),
             "should have no method error: {:?}",
-            ast.diagnostics
+            diagnostics
         );
     }
 
@@ -1552,8 +1527,8 @@ pub mod tests {
         ",
         );
 
-        assert_eq!(ty(1, &ast, &types), Ty::Int);
-        assert_eq!(ty(2, &ast, &types), Ty::Float);
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
+        assert_eq!(ty(1, &ast, &types), Ty::Float);
     }
 
     #[test]
@@ -1573,8 +1548,8 @@ pub mod tests {
         ",
         );
 
-        assert_eq!(ty(1, &ast, &types), Ty::Int);
-        assert_eq!(ty(2, &ast, &types), Ty::Float);
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
+        assert_eq!(ty(1, &ast, &types), Ty::Float);
     }
 
     #[test]
@@ -1601,8 +1576,8 @@ pub mod tests {
         ",
         );
 
-        assert_eq!(ty(6, &ast, &types), Ty::Bool);
-        assert_eq!(ty(7, &ast, &types), Ty::Bool);
+        assert_eq!(ty(0, &ast, &types), Ty::Bool);
+        assert_eq!(ty(1, &ast, &types), Ty::Bool);
     }
 
     #[test]
@@ -1619,17 +1594,17 @@ pub mod tests {
         );
 
         assert_eq!(
-            ty(1, &ast, &types),
+            ty(0, &ast, &types),
             Ty::Nominal {
                 symbol: EnumId::from(1).into(),
-                row: Box::new(make_row!(Enum, "foo" => Ty::Void, "bar" => Ty::Void)),
+                type_args: Default::default(),
             }
         );
         assert_eq!(
-            ty(2, &ast, &types),
+            ty(1, &ast, &types),
             Ty::Nominal {
                 symbol: EnumId::from(1).into(),
-                row: Box::new(make_row!(Enum, "foo" => Ty::Void, "bar" => Ty::Void)),
+                type_args: Default::default(),
             }
         );
     }
@@ -1648,21 +1623,17 @@ pub mod tests {
         );
 
         assert_eq!(
-            ty(1, &ast, &types),
+            ty(0, &ast, &types),
             Ty::Nominal {
                 symbol: EnumId::from(1).into(),
-                row: Box::new(
-                    make_row!(Enum, "foo" => Ty::Tuple(vec![Ty::Int, Ty::Bool]), "bar" => Ty::Float)
-                ),
+                type_args: Default::default(),
             }
         );
         assert_eq!(
-            ty(2, &ast, &types),
+            ty(1, &ast, &types),
             Ty::Nominal {
                 symbol: EnumId::from(1).into(),
-                row: Box::new(
-                    make_row!(Enum, "foo" => Ty::Tuple(vec![Ty::Int, Ty::Bool]), "bar" => Ty::Float)
-                ),
+                type_args: Default::default(),
             }
         );
     }
@@ -1682,24 +1653,24 @@ pub mod tests {
         );
 
         assert_eq!(
+            ty(0, &ast, &types),
+            Ty::Nominal {
+                symbol: EnumId::from(1).into(),
+                type_args: vec![Ty::Int],
+            }
+        );
+        assert_eq!(
             ty(1, &ast, &types),
             Ty::Nominal {
                 symbol: EnumId::from(1).into(),
-                row: Box::new(make_row!(Enum, "some" => Ty::Int, "none" => Ty::Void)),
+                type_args: vec![Ty::Float],
             }
         );
         assert_eq!(
             ty(2, &ast, &types),
             Ty::Nominal {
                 symbol: EnumId::from(1).into(),
-                row: Box::new(make_row!(Enum, "some" => Ty::Float, "none" => Ty::Void)),
-            }
-        );
-        assert_eq!(
-            ty(3, &ast, &types),
-            Ty::Nominal {
-                symbol: EnumId::from(1).into(),
-                row: Box::new(make_row!(Enum, "some" => Ty::Param(1.into()), "none" => Ty::Void)),
+                type_args: vec![Ty::Param(1.into())],
             }
         );
     }
@@ -1719,7 +1690,7 @@ pub mod tests {
             ",
         );
 
-        assert_eq!(ty(1, &ast, &types), Ty::Int);
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
     }
 
     #[test]
@@ -1736,7 +1707,7 @@ pub mod tests {
             ",
         );
 
-        assert_eq!(ty(1, &ast, &types), Ty::Int);
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
     }
 
     #[test]
@@ -1758,7 +1729,7 @@ pub mod tests {
             ",
         );
 
-        assert_eq!(ty(1, &ast, &types), Ty::Int);
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
     }
 
     #[test]
@@ -1776,7 +1747,7 @@ pub mod tests {
             ",
         );
 
-        assert_eq!(ty(1, &ast, &types), Ty::Int);
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
     }
 
     #[test]
@@ -1798,7 +1769,7 @@ pub mod tests {
             ",
         );
 
-        assert_eq!(ty(2, &ast, &types), Ty::Int);
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
     }
 
     #[test]
@@ -1827,7 +1798,7 @@ pub mod tests {
 
     #[test]
     fn checks_method_protocol_conformance() {
-        let (ast, _types) = typecheck_err(
+        let (_ast, _types, diagnostics) = typecheck_err(
             "
             protocol Countable {
                 func getCount() -> Int
@@ -1845,9 +1816,9 @@ pub mod tests {
 
         assert_eq!(
             1,
-            ast.diagnostics.len(),
+            diagnostics.len(),
             "didn't get diagnostic: {:?}",
-            ast.diagnostics
+            diagnostics
         );
     }
 
@@ -1872,7 +1843,7 @@ pub mod tests {
         ",
         );
 
-        assert_eq!(ty(3, &ast, &types), Ty::Int)
+        assert_eq!(ty(0, &ast, &types), Ty::Int)
     }
 
     #[test]
@@ -1896,7 +1867,7 @@ pub mod tests {
             ",
         );
 
-        assert_eq!(ty(5, &ast, &types), Ty::Int)
+        assert_eq!(ty(0, &ast, &types), Ty::Int)
     }
 
     #[test]
@@ -1909,13 +1880,15 @@ pub mod tests {
             func getAge() -> T
         }
 
-        struct Inty: Aged {
+        struct Inty {}
+        extend Inty: Aged {
             func getAge() {
                 123
             }
         }
 
-        struct Floaty: Aged {
+        struct Floaty {}
+        extend Floaty: Aged {
             func getAge() {
                 1.23
             }
@@ -1930,8 +1903,8 @@ pub mod tests {
         ",
         );
 
-        assert_eq!(ty(4, &ast, &types), Ty::Int);
-        assert_eq!(ty(5, &ast, &types), Ty::Float);
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
+        assert_eq!(ty(1, &ast, &types), Ty::Float);
     }
 
     #[test]
@@ -1944,11 +1917,13 @@ pub mod tests {
             func getAge() -> T
         }
 
-        struct Person<A>: Aged {
+        struct Person<A> {
             typealias T = A
             let age: A
+        }
 
-            func getAge() -> A {
+        extend Person: Aged {
+            func getAge() -> Person.A {
                 self.age
             }
         }
@@ -1967,8 +1942,8 @@ pub mod tests {
         ",
         );
 
-        assert_eq!(ty(4, &ast, &types), Ty::Float);
-        assert_eq!(ty(5, &ast, &types), Ty::Int);
+        assert_eq!(ty(0, &ast, &types), Ty::Float);
+        assert_eq!(ty(1, &ast, &types), Ty::Int);
     }
 
     #[test]
@@ -1985,14 +1960,18 @@ pub mod tests {
         ",
         );
 
-        assert_eq!(ty(2, &ast, &types), Ty::Int);
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
     }
 
     #[test]
     fn add_protocol_prototype() {
         let (ast, session) = typecheck(
             "
-        protocol Addy { func addy<Ret, RHS>(rhs: RHS) -> Ret }
+        protocol Addy {
+            associated RHS
+            associated Ret
+            func addy(rhs: RHS) -> Ret
+        }
 
         extend Int: Addy {
             func addy(rhs: Int) -> Int {
@@ -2004,7 +1983,7 @@ pub mod tests {
         ",
         );
 
-        assert_eq!(ty(2, &ast, &session), Ty::Int);
+        assert_eq!(ty(0, &ast, &session), Ty::Int);
     }
 
     #[test]
@@ -2021,25 +2000,25 @@ pub mod tests {
         );
 
         assert_eq!(
-            ty(1, &ast, &session),
+            ty(0, &ast, &session),
             Ty::Nominal {
                 symbol: Symbol::Enum(EnumId {
                     module_id: ModuleId::Core,
                     local_id: 1
                 }),
-                row: make_row!(Enum, "some" => Ty::Int, "none" => Ty::Void).into()
+                type_args: vec![Ty::Int],
             }
         );
 
         // Make sure it doesn't clash
         assert_eq!(
-            ty(2, &ast, &session),
+            ty(1, &ast, &session),
             Ty::Nominal {
                 symbol: Symbol::Enum(EnumId {
                     module_id: ModuleId::Current,
                     local_id: 1
                 }),
-                row: make_row!(Enum, "some" => Ty::Float, "none" => Ty::Void).into()
+                type_args: vec![Ty::Float],
             }
         );
     }
@@ -2138,10 +2117,10 @@ pub mod tests {
         );
 
         assert_eq!(
-            ty(4, &ast, &types),
+            ty(0, &ast, &types),
             Ty::Nominal {
                 symbol: StructId::from(3).into(),
-                row: Row::Empty(TypeDefKind::Struct).into()
+                type_args: vec![],
             }
         );
     }
@@ -2157,7 +2136,8 @@ pub mod tests {
             }
         }
 
-        struct A: Fizz {
+        struct A {}
+        extend A: Fizz {
             func fizz() { 123 }
         }
 
@@ -2165,7 +2145,7 @@ pub mod tests {
         ",
         );
 
-        assert_eq!(ty(2, &ast, &types), Ty::Int);
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
     }
 
     #[test]
@@ -2176,12 +2156,12 @@ pub mod tests {
             add(2)
             ",
         );
-        assert_eq!(ty(1, &ast, &types), Ty::Int);
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
     }
 
     #[test]
-    fn checks_as() {
-        let (ast, _types) = typecheck_err(
+    fn check_as() {
+        let (_ast, _types, diagnostics) = typecheck_err(
             "
         protocol Fizz {
             func fizz() -> Int
@@ -2198,35 +2178,36 @@ pub mod tests {
 
         assert_eq!(
             1,
-            ast.diagnostics.len(),
+            diagnostics.len(),
             "didn't get diagnostic: {:?}",
-            ast.diagnostics
+            diagnostics
         );
     }
 
     #[test]
     fn checks_basic_conformance() {
-        let (ast, _types) = typecheck_err(
+        let (_ast, _types, diagnostics) = typecheck_err(
             "
         protocol A {
             func fizz() -> Int
         }
 
-        struct B: A {}
+        struct B {}
+        extend B: A {} 
         ",
         );
 
         assert_eq!(
             1,
-            ast.diagnostics.len(),
+            diagnostics.len(),
             "didn't get diagnostic: {:?}",
-            ast.diagnostics
+            diagnostics
         );
     }
 
     #[test]
     fn protocols_on_protocols() {
-        let (ast, types) = typecheck(
+        let (_ast, types) = typecheck(
             "
         protocol A {
             func fizz() -> Int
@@ -2243,14 +2224,17 @@ pub mod tests {
         );
 
         assert_eq!(
-            decl_ty(2, &ast, &types),
+            *types
+                .get_symbol(&GlobalId::from(1).into())
+                .unwrap()
+                .as_mono_ty(),
             Ty::Func(Ty::Param(3.into()).into(), Ty::Int.into())
         );
     }
 
     #[test]
     fn checks_protocol_protocol_conformance() {
-        let (ast, _types) = typecheck_err(
+        let (_ast, _types, diagnostics) = typecheck_err(
             "
         protocol A {
             func fizz() -> Int
@@ -2260,7 +2244,8 @@ pub mod tests {
             func buzz() -> Int
         }
 
-        struct C: B {
+        struct C {}
+        extend C: B {
             func buzz() { 123 }
         }
         ",
@@ -2268,15 +2253,15 @@ pub mod tests {
 
         assert_eq!(
             1,
-            ast.diagnostics.len(),
+            diagnostics.len(),
             "didn't get diagnostic: {:?}",
-            ast.diagnostics
+            diagnostics
         );
     }
 
     #[test]
     fn types_fib() {
-        let (ast, types) = typecheck_core(
+        let (_ast, types) = typecheck_core(
             "
         func fib(n) {
             if n <= 1 { return n }
@@ -2289,9 +2274,125 @@ pub mod tests {
         );
 
         assert_eq!(
-            decl_ty(0, &ast, &types),
+            *types
+                .get_symbol(&GlobalId::from(1).into())
+                .unwrap()
+                .as_mono_ty(),
             // We should be able to infer the n is int because there's only one Comparable with RHS int
             Ty::Func(Ty::Int.into(), Ty::Int.into())
         )
+    }
+
+    #[test]
+    fn witness_for_type_param_method_call() {
+        let (ast, types) = typecheck(
+            "
+          protocol Countable { func getCount() -> Int }
+
+          struct Person { let count: Int }
+          extend Person: Countable {
+              func getCount() { self.count }
+          }
+
+          func getCount<T: Countable>(countable: T) {
+              countable.getCount()
+          }
+
+          let person = Person(count: 1)
+          getCount(person)
+          ",
+        );
+
+        // Grab the generic `getCount` function (first global func in this snippet)
+        let func = ast
+            .decls
+            .iter()
+            .find_map(|d| match &d.kind {
+                TypedDeclKind::Let {
+                    initializer:
+                        Some(TypedExpr {
+                            kind: TypedExprKind::Func(f),
+                            ..
+                        }),
+                    ..
+                } if f.name == Symbol::Global(GlobalId::from(1)) => Some(f),
+                _ => None,
+            })
+            .unwrap();
+
+        // First node in body should be `countable.getCount()`
+        let expr = match &func.body.body[0] {
+            TypedNode::Expr(e) => e,
+            TypedNode::Stmt(TypedStmt {
+                kind: TypedStmtKind::Expr(e),
+                ..
+            }) => e,
+            other => panic!("expected expr, got {other:?}"),
+        };
+
+        let TypedExprKind::Call { callee, .. } = &expr.kind else {
+            panic!("expected call, got {expr:?}");
+        };
+
+        let TypedExprKind::ProtocolMember { label, witness, .. } = &callee.kind else {
+            panic!("expected ProtocolMember callee, got {callee:?}");
+        };
+
+        assert_eq!(label.to_string(), "getCount");
+        assert!(matches!(witness, Symbol::MethodRequirement(_)));
+
+        let req = *types
+            .catalog
+            .method_requirements
+            .get(&Symbol::Protocol(ProtocolId::from(1)))
+            .unwrap()
+            .get(&Label::Named("getCount".into()))
+            .unwrap();
+
+        assert_eq!(*witness, req);
+    }
+
+    #[test]
+    fn tracks_transitive_witnesses() {
+        let (_ast, types) = typecheck(
+            "
+            protocol A {
+                func default() { 123 }
+            }
+
+            protocol B: A {
+                func callsDefault() { self.default() }
+            }
+
+            extend Int: B {}
+
+            123.callsDefault()
+        ",
+        );
+
+        assert!(
+            types
+                .catalog
+                .conformances
+                .get(&ConformanceKey {
+                    protocol_id: ProtocolId::from(1),
+                    conforming_id: Symbol::Int,
+                })
+                .is_some()
+        );
+
+        let member_sym = types
+            .catalog
+            .instance_methods
+            .get(&Symbol::Int)
+            .unwrap()
+            .get(&Label::Named("default".into()))
+            .unwrap();
+
+        let member_entry = types.get_symbol(member_sym).unwrap();
+        assert_eq!(
+            *member_entry,
+            TypeEntry::Mono(Ty::Func(Ty::Int.into(), Ty::Int.into()))
+        );
     }
 }

@@ -1,4 +1,5 @@
 use derive_visitor::VisitorMut;
+use itertools::Itertools;
 use rustc_hash::FxHashMap;
 use tracing::instrument;
 
@@ -27,7 +28,6 @@ use crate::{
     },
     on,
     span::Span,
-    types::type_session::TypeDefKind,
 };
 
 // Dummy values for symbol type discrimination - actual values created by declare()
@@ -235,6 +235,29 @@ impl<'a> DeclDeclarer<'a> {
         self.resolver.current_scope_id = current.parent_id;
     }
 
+    pub(super) fn predeclare_nominals(&mut self, decls: &[&Decl]) {
+        for decl in decls.iter() {
+            if let Decl {
+                id,
+                kind:
+                    kind @ (DeclKind::Struct { name, .. }
+                    | DeclKind::Enum { name, .. }
+                    | DeclKind::Protocol { name, .. }),
+                ..
+            } = decl
+            {
+                let kind = match kind {
+                    DeclKind::Struct { .. } => some!(Struct),
+                    DeclKind::Enum { .. } => some!(Enum),
+                    DeclKind::Protocol { .. } => some!(Protocol),
+                    _ => unreachable!(),
+                };
+
+                self.resolver.declare(name, kind, *id);
+            }
+        }
+    }
+
     ///////////////////////////////////////////////////////////////////////////
     // Local decls
     ///////////////////////////////////////////////////////////////////////////
@@ -302,14 +325,10 @@ impl<'a> DeclDeclarer<'a> {
         id: NodeID,
         name: &mut Name,
         generics: &mut [GenericDecl],
-        kind: TypeDefKind,
+        decls: &[Decl],
     ) {
-        *name = match kind {
-            TypeDefKind::Protocol => self.resolver.declare(name, some!(Protocol), id),
-            TypeDefKind::Struct => self.resolver.declare(name, some!(Struct), id),
-            TypeDefKind::Enum => self.resolver.declare(name, some!(Enum), id),
-            TypeDefKind::Extension => self.resolver.lookup(name, Some(id)).unwrap_or(name.clone()),
-        };
+        // Should be set by predeclare_nominals
+        *name = self.resolver.lookup(name, Some(id)).unwrap_or(name.clone());
 
         let Ok(sym) = name.symbol() else {
             self.resolver
@@ -321,12 +340,12 @@ impl<'a> DeclDeclarer<'a> {
             self.resolver
                 .phase
                 .child_types
-                .entry(*parent)
+                .entry(parent.0)
                 .or_default()
                 .insert(name.name_str().into(), sym);
         }
 
-        self.resolver.nominal_stack.push(sym);
+        self.resolver.nominal_stack.push((sym, id));
         self.type_members.insert(id, TypeMembers::default());
 
         self.start_scope(Some(sym), id, false);
@@ -341,12 +360,14 @@ impl<'a> DeclDeclarer<'a> {
                 .resolver
                 .declare(&generic.name, some!(TypeParameter), generic.id);
         }
+
+        self.predeclare_nominals(decls.iter().collect_vec().as_slice());
     }
 
     ///////////////////////////////////////////////////////////////////////////
     // Block expr decls
     ///////////////////////////////////////////////////////////////////////////
-    #[instrument(level = tracing::Level::TRACE, skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self, stmt))]
     fn enter_stmt(&mut self, stmt: &mut Stmt) {
         if let StmtKind::Expr(Expr {
             kind: ExprKind::Block(block),
@@ -370,7 +391,7 @@ impl<'a> DeclDeclarer<'a> {
     ///////////////////////////////////////////////////////////////////////////
     // Block scoping
     ///////////////////////////////////////////////////////////////////////////
-    #[instrument(level = tracing::Level::TRACE, skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self, arm))]
     fn enter_match_arm(&mut self, arm: &mut MatchArm) {
         self.start_scope(None, arm.id, false);
         self.declare_pattern(&mut arm.pattern, some!(PatternBindLocal));
@@ -383,7 +404,7 @@ impl<'a> DeclDeclarer<'a> {
     ///////////////////////////////////////////////////////////////////////////
     // Funcs
     ///////////////////////////////////////////////////////////////////////////
-    #[instrument(level = tracing::Level::TRACE, skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self, func), fields(func.name = ?func.name))]
     fn enter_func(&mut self, func: &mut Func) {
         let func_id = func.id;
         on!(
@@ -404,18 +425,7 @@ impl<'a> DeclDeclarer<'a> {
                     .lookup(name, Some(*id))
                     .unwrap_or_else(|| self.resolver.declare(name, some!(Global), func_id));
 
-                if matches!(
-                    name.symbol(),
-                    Ok(Symbol::InstanceMethod(..)
-                        | Symbol::StaticMethod(..)
-                        | Symbol::Initializer(..))
-                ) {
-                    self.start_scope(
-                        Some(func.name.symbol().unwrap_or_else(|_| unreachable!())),
-                        *id,
-                        false,
-                    );
-                }
+                self.start_scope(None, *id, false);
 
                 for generic in generics {
                     generic.name =
@@ -432,16 +442,11 @@ impl<'a> DeclDeclarer<'a> {
         )
     }
 
-    fn exit_func(&mut self, func: &mut Func) {
-        if matches!(
-            func.name.symbol(),
-            Ok(Symbol::InstanceMethod(..) | Symbol::StaticMethod(..) | Symbol::Initializer(..))
-        ) {
-            self.end_scope();
-        }
+    fn exit_func(&mut self, _func: &mut Func) {
+        self.end_scope();
     }
 
-    #[instrument(level = tracing::Level::TRACE, skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self, func))]
     fn enter_func_signature(&mut self, func: &mut FuncSignature) {
         on!(
             func,
@@ -484,19 +489,59 @@ impl<'a> DeclDeclarer<'a> {
     ///////////////////////////////////////////////////////////////////////////
     // Struct decls
     ///////////////////////////////////////////////////////////////////////////
-    #[instrument(level = tracing::Level::TRACE, skip(self))]
+    #[instrument(level = tracing::Level::TRACE, skip(self, decl))]
     fn enter_decl(&mut self, decl: &mut Decl) {
-        on!(&mut decl.kind, DeclKind::Struct { name, generics, .. }, {
-            self.enter_nominal(decl.id, name, generics, TypeDefKind::Struct);
-        });
+        on!(
+            &mut decl.kind,
+            DeclKind::Struct {
+                name,
+                generics,
+                body,
+                ..
+            },
+            {
+                self.enter_nominal(decl.id, name, generics, &body.decls);
+            }
+        );
 
-        on!(&mut decl.kind, DeclKind::Enum { name, generics, .. }, {
-            self.enter_nominal(decl.id, name, generics, TypeDefKind::Enum);
-        });
+        on!(
+            &mut decl.kind,
+            DeclKind::Enum {
+                name,
+                generics,
+                body,
+                ..
+            },
+            {
+                self.enter_nominal(decl.id, name, generics, &body.decls);
+            }
+        );
 
-        on!(&mut decl.kind, DeclKind::Protocol { name, generics, .. }, {
-            self.enter_nominal(decl.id, name, generics, TypeDefKind::Protocol);
-        });
+        on!(
+            &mut decl.kind,
+            DeclKind::Protocol {
+                name,
+                generics,
+                body,
+                ..
+            },
+            {
+                self.enter_nominal(decl.id, name, generics, &body.decls);
+            }
+        );
+
+        on!(
+            &mut decl.kind,
+            DeclKind::Extend {
+                name,
+                generics,
+                body,
+                ..
+            },
+            {
+                self.enter_nominal(decl.id, name, generics, &body.decls);
+            }
+        );
 
         on!(&mut decl.kind, DeclKind::TypeAlias(lhs_name, ..), {
             *lhs_name = self.resolver.declare(lhs_name, some!(TypeAlias), decl.id);
@@ -505,22 +550,12 @@ impl<'a> DeclDeclarer<'a> {
                 self.resolver
                     .phase
                     .child_types
-                    .entry(*parent)
+                    .entry(parent.0)
                     .or_default()
                     .insert(
                         lhs_name.name_str().into(),
                         lhs_name.symbol().unwrap_or_else(|_| unreachable!()),
                     );
-            }
-        });
-
-        on!(&mut decl.kind, DeclKind::Extend { generics, .. }, {
-            self.start_scope(None, decl.id, false);
-
-            for generic in generics {
-                generic.name =
-                    self.resolver
-                        .declare(&generic.name, some!(TypeParameter), generic.id);
             }
         });
 
@@ -531,7 +566,7 @@ impl<'a> DeclDeclarer<'a> {
         on!(
             &mut decl.kind,
             DeclKind::Method {
-                func: box Func { name, generics, .. },
+                func: box Func { id, name, generics, .. },
                 is_static
             },
             {
@@ -541,6 +576,12 @@ impl<'a> DeclDeclarer<'a> {
                     self.resolver.declare(name, some!(InstanceMethod), decl.id)
                 };
 
+                let (nominal_sym, nominal_id) = self.resolver.nominal_stack.last().cloned().unwrap_or_else(|| unreachable!("no nominal stack entry found for {name:?}"));
+                let method_sym = name.symbol().unwrap_or_else(|_|unreachable!());
+                self.resolver.track_dependency_from_to(method_sym, *id, nominal_sym, nominal_id);
+                self.resolver.track_dependency_from_to(nominal_sym, nominal_id, method_sym, *id);
+
+                // self.start_scope(name.symbol().ok(), *id, true);
                 for generic in generics {
                     generic.name = self.resolver.declare(&generic.name, some!(TypeParameter), decl.id);
                 }
@@ -559,7 +600,7 @@ impl<'a> DeclDeclarer<'a> {
             self.resolver
                 .phase
                 .child_types
-                .entry(*parent)
+                .entry(parent.0)
                 .or_default()
                 .insert(
                     generic.name.name_str().into(),
@@ -569,9 +610,26 @@ impl<'a> DeclDeclarer<'a> {
 
         on!(
             &mut decl.kind,
-            DeclKind::FuncSignature(FuncSignature { name, generics, .. }),
+            DeclKind::FuncSignature(FuncSignature {
+                id,
+                name,
+                generics,
+                ..
+            }),
             {
                 *name = self.resolver.declare(name, some!(Global), decl.id);
+
+                let (nominal_sym, nominal_id) = self
+                    .resolver
+                    .nominal_stack
+                    .last()
+                    .cloned()
+                    .unwrap_or_else(|| unreachable!());
+                let method_sym = name.symbol().unwrap_or_else(|_| unreachable!());
+                self.resolver
+                    .track_dependency_from_to(method_sym, *id, nominal_sym, nominal_id);
+                self.resolver
+                    .track_dependency_from_to(nominal_sym, nominal_id, method_sym, *id);
 
                 for generic in generics {
                     generic.name =
@@ -659,6 +717,10 @@ impl<'a> DeclDeclarer<'a> {
             }
         });
 
+        // on!(&mut decl.kind, DeclKind::Method { .. }, {
+        //     self.end_scope();
+        // });
+
         on!(
             &mut decl.kind,
             DeclKind::Protocol { .. }
@@ -674,6 +736,7 @@ impl<'a> DeclDeclarer<'a> {
     fn synthesize_init(&mut self, body: &mut Body, type_members: &TypeMembers, type_id: StructId) {
         let init_id = NodeID(FileID::SYNTHESIZED, self.node_ids.next_id());
         tracing::debug!("synthesizing init for type {type_id:?} as: {init_id:?}");
+
         let init_name = self
             .resolver
             .declare(&"init".into(), some!(Synthesized), init_id);

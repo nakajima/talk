@@ -82,8 +82,8 @@ impl<'a> Higlighter<'a> {
             return result;
         };
 
-        for root in ast.roots.iter() {
-            result.extend(self.tokens_from_expr(&root, &ast));
+        for root in ast.0.roots.iter() {
+            result.extend(self.tokens_from_expr(&root, &ast.0));
         }
 
         result
@@ -94,6 +94,11 @@ impl<'a> Higlighter<'a> {
 
         while let Ok(tok) = &lexer.next() {
             match tok.kind {
+                TokenKind::Dollar => self.make(tok, Kind::OPERATOR, &mut tokens),
+                TokenKind::BoundVar(..) => self.make(tok, Kind::VARIABLE, &mut tokens),
+                TokenKind::Percent => self.make(tok, Kind::OPERATOR, &mut tokens),
+                TokenKind::IRRegister(..) => self.make(tok, Kind::PARAMETER, &mut tokens),
+                TokenKind::Attribute(..) => self.make(tok, Kind::DECORATOR, &mut tokens),
                 TokenKind::As => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::At => self.make(tok, Kind::DECORATOR, &mut tokens),
                 TokenKind::LineComment(_) => self.make(tok, Kind::COMMENT, &mut tokens),
@@ -193,6 +198,7 @@ impl<'a> Higlighter<'a> {
         let end = meta.end.end;
 
         match &node {
+            Node::InlineIRInstruction(_ir) => {}
             Node::Attribute(..) => {
                 result.push(HighlightToken {
                     kind: Kind::DECORATOR,
@@ -204,14 +210,12 @@ impl<'a> Higlighter<'a> {
                 DeclKind::Import(_) => (),
                 DeclKind::Struct {
                     generics,
-                    conformances,
                     body,
                     name_span,
                     ..
                 } => {
                     result.push(self.make_span(Kind::TYPE, *name_span));
                     result.extend(self.tokens_from_exprs(generics, ast));
-                    result.extend(self.tokens_from_exprs(conformances, ast));
                     result.extend(self.tokens_from_expr(body, ast));
                 }
                 DeclKind::Let {
@@ -280,7 +284,6 @@ impl<'a> Higlighter<'a> {
                     result.extend(self.tokens_from_expr(body, ast));
                 }
                 DeclKind::Enum {
-                    conformances,
                     generics,
                     body,
                     name_span,
@@ -288,7 +291,6 @@ impl<'a> Higlighter<'a> {
                 } => {
                     result.push(self.make_span(Kind::TYPE, *name_span));
                     result.extend(self.tokens_from_exprs(generics, ast));
-                    result.extend(self.tokens_from_exprs(conformances, ast));
                     result.extend(self.tokens_from_expr(body, ast));
                 }
                 DeclKind::EnumVariant(.., type_annotations) => {
@@ -430,6 +432,9 @@ impl<'a> Higlighter<'a> {
                 ExprKind::Match(..) => (),
                 ExprKind::RecordLiteral { .. } => (),
                 ExprKind::RowVariable(..) => (),
+                ExprKind::InlineIR(instr) => {
+                    result.push(self.make_span(Kind::KEYWORD, instr.instr_name_span))
+                }
             },
             Node::Body(..) => (),
             Node::Pattern(..) => (),

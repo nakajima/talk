@@ -14,6 +14,7 @@ use crate::{
     },
     node_id::NodeID,
     types::{
+        conformance::ConformanceKey,
         constraint_solver::DeferralReason,
         constraints::{
             call::Call, conforms::Conforms, constraint::Constraint, equals::Equals,
@@ -58,6 +59,7 @@ pub struct ConstraintMeta {
     pub id: ConstraintId,
     pub group_id: GroupId,
     pub level: Level,
+    pub is_top_level: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -69,23 +71,43 @@ impl From<u32> for ConstraintId {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-enum ConstraintStoreNode {
+pub(crate) enum ConstraintStoreNode {
     Constraint(ConstraintId),
     Meta(Meta),
     Symbol(Symbol),
+    ConformanceKey(ConformanceKey),
+}
+
+impl std::fmt::Display for ConstraintStoreNode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Constraint(id) => write!(f, "constraint({id:?})"),
+            Self::Meta(meta) => write!(f, "meta({meta:?})"),
+            Self::Symbol(sym) => write!(f, "symbol({sym:?})"),
+            Self::ConformanceKey(key) => write!(f, "conformancekey({key:?})"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
-enum ConstraintStoreEdge {
+#[allow(clippy::enum_variant_names)]
+pub(crate) enum ConstraintStoreEdge {
     MetaDependency,
     SymbolDependency,
+    ConformanceDependency,
+}
+
+impl std::fmt::Display for ConstraintStoreEdge {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{self:?}")
+    }
 }
 
 #[derive(Default, Debug)]
 pub struct ConstraintStore {
     ids: IDGenerator,
     constraints: FxHashMap<ConstraintId, Constraint>,
-    storage: DiGraphMap<ConstraintStoreNode, ConstraintStoreEdge>,
+    pub(crate) storage: DiGraphMap<ConstraintStoreNode, ConstraintStoreEdge>,
     pub(crate) meta: FxHashMap<ConstraintId, ConstraintMeta>,
 
     wants: PriorityQueue<ConstraintId, ConstraintPriority>,
@@ -101,6 +123,10 @@ impl ConstraintStore {
             .collect()
     }
 
+    pub fn unsolved(&self) -> Vec<&Constraint> {
+        self.deferred.iter().map(|d| self.get(d)).collect()
+    }
+
     pub fn get(&self, id: &ConstraintId) -> &Constraint {
         self.constraints
             .get(id)
@@ -108,14 +134,12 @@ impl ConstraintStore {
     }
 
     pub fn copy_group(&self, id: ConstraintId) -> BindingGroup {
+        let existing = self.meta.get(&id).unwrap_or_else(|| unreachable!());
         BindingGroup {
-            id: self
-                .meta
-                .get(&id)
-                .unwrap_or_else(|| unreachable!())
-                .group_id,
-            level: self.meta.get(&id).unwrap_or_else(|| unreachable!()).level,
+            id: existing.group_id,
+            level: existing.level,
             binders: Default::default(),
+            is_top_level: existing.is_top_level,
         }
     }
 
@@ -128,6 +152,15 @@ impl ConstraintStore {
         self.deferred.insert(id);
         let constraint_node = ConstraintStoreNode::Constraint(id);
         match reason {
+            DeferralReason::WaitingOnConformance(key) => {
+                let meta_node = ConstraintStoreNode::ConformanceKey(key);
+                self.storage.add_node(meta_node);
+                self.storage.add_edge(
+                    meta_node,
+                    constraint_node,
+                    ConstraintStoreEdge::ConformanceDependency,
+                );
+            }
             DeferralReason::WaitingOnMeta(meta) => {
                 let meta_node = ConstraintStoreNode::Meta(meta);
                 self.storage.add_node(meta_node);
@@ -145,6 +178,22 @@ impl ConstraintStore {
                     constraint_node,
                     ConstraintStoreEdge::SymbolDependency,
                 );
+            }
+            DeferralReason::WaitingOnSymbols(symbols) => {
+                for symbol in symbols {
+                    let sym_node = ConstraintStoreNode::Symbol(symbol);
+                    self.storage.add_node(sym_node);
+                    self.storage.add_edge(
+                        sym_node,
+                        constraint_node,
+                        ConstraintStoreEdge::SymbolDependency,
+                    );
+                }
+            }
+            DeferralReason::Multi(reasons) => {
+                for reason in reasons {
+                    self.defer(id, reason);
+                }
             }
             DeferralReason::Unknown => {}
         }
@@ -172,10 +221,6 @@ impl ConstraintStore {
         for (id, constraint) in self.constraints.iter() {
             let group = self.meta.get(id).unwrap_or_else(|| unreachable!()).group_id;
             if group != context.group {
-                tracing::trace!(
-                    "wrong group: {group:?} (context group is {:?}, skipping",
-                    context.group
-                );
                 continue;
             }
 
@@ -205,7 +250,7 @@ impl ConstraintStore {
         }
     }
 
-    #[instrument(skip(self), ret)]
+    #[instrument(skip(self))]
     pub fn wake_symbols(&mut self, symbols: &[Symbol]) {
         let mut awakened = IndexSet::<ConstraintId>::default();
         for symbol in symbols {
@@ -213,6 +258,22 @@ impl ConstraintStore {
                 continue;
             }
             awakened.extend(self.symbol_dependents_for(*symbol));
+        }
+
+        for constraint_id in awakened {
+            if self.solved.contains(&constraint_id) {
+                continue;
+            }
+            self.deferred.swap_remove(&constraint_id);
+            self.wants.push(constraint_id, ConstraintPriority::Equals);
+        }
+    }
+
+    #[instrument(skip(self))]
+    pub fn wake_conformances(&mut self, keys: &[ConformanceKey]) {
+        let mut awakened = IndexSet::<ConstraintId>::default();
+        for key in keys {
+            awakened.extend(self.conformance_dependents_for(*key));
         }
 
         for constraint_id in awakened {
@@ -241,6 +302,7 @@ impl ConstraintStore {
                 id: constraint_id,
                 group_id: group.id,
                 level: group.level,
+                is_top_level: group.is_top_level,
             },
         );
 
@@ -287,6 +349,32 @@ impl ConstraintStore {
             })
             .collect()
     }
+
+    pub fn conformance_dependents_for(&self, key: ConformanceKey) -> Vec<ConstraintId> {
+        self.storage
+            .neighbors(ConstraintStoreNode::ConformanceKey(key))
+            .filter_map(|n| {
+                if let ConstraintStoreNode::Constraint(c) = n {
+                    Some(c)
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    pub fn constraint_symbol_dependents_for(&self, constraint_id: ConstraintId) -> Vec<Symbol> {
+        self.storage
+            .neighbors(ConstraintStoreNode::Constraint(constraint_id))
+            .filter_map(|n| {
+                if let ConstraintStoreNode::Symbol(symbol) = n {
+                    Some(symbol)
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
 }
 
 // Helpers
@@ -300,6 +388,7 @@ impl ConstraintStore {
                 id: Default::default(),
                 level: Default::default(),
                 binders: Default::default(),
+                is_top_level: Default::default(),
             },
         )
     }
@@ -329,16 +418,23 @@ impl ConstraintStore {
         )
     }
 
-    pub fn wants_conforms(&mut self, ty: InferTy, protocol_id: ProtocolId) -> &Constraint {
+    pub fn wants_conforms(
+        &mut self,
+        conformance_node_id: NodeID,
+        ty: InferTy,
+        protocol_id: ProtocolId,
+        group: &BindingGroup,
+    ) -> &Constraint {
         let id = self.ids.next_id();
         self.wants(
             id,
             Constraint::Conforms(Conforms {
                 id,
+                conformance_node_id,
                 ty,
                 protocol_id,
             }),
-            &Default::default(),
+            group,
         )
     }
 

@@ -1,4 +1,5 @@
 use crate::{
+    compiling::module::ModuleId,
     label::Label,
     name_resolution::symbol::ProtocolId,
     node_id::NodeID,
@@ -10,6 +11,7 @@ use crate::{
         ty::{SomeType, Ty},
         type_operations::{UnificationSubstitutions, instantiate_row, instantiate_ty},
         type_session::TypeSession,
+        typed_ast::TyMappable,
     },
 };
 
@@ -23,9 +25,9 @@ pub enum Predicate<T: SomeType> {
         ty: T,
     },
     Projection {
-        base: InferTy,
+        base: T,
         label: Label,
-        returns: InferTy,
+        returns: T,
         protocol_id: Option<ProtocolId>,
     },
     Conforms {
@@ -64,20 +66,20 @@ impl From<Predicate<InferTy>> for Predicate<Ty> {
                 base,
                 label,
                 returns,
-            } => Self::Projection {
-                base,
+            } => Predicate::Projection {
+                base: base.into(),
                 label,
-                returns,
+                returns: returns.into(),
                 protocol_id,
             },
             Predicate::<InferTy>::Conforms { param, protocol_id } => {
-                Self::Conforms { param, protocol_id }
+                Predicate::Conforms { param, protocol_id }
             }
-            Predicate::<InferTy>::Equals { lhs, rhs } => Self::Equals {
+            Predicate::<InferTy>::Equals { lhs, rhs } => Predicate::Equals {
                 lhs: lhs.into(),
                 rhs: rhs.into(),
             },
-            Predicate::<InferTy>::HasField { row, label, ty } => Self::HasField {
+            Predicate::<InferTy>::HasField { row, label, ty } => Predicate::HasField {
                 row,
                 label,
                 ty: ty.into(),
@@ -87,7 +89,7 @@ impl From<Predicate<InferTy>> for Predicate<Ty> {
                 label,
                 ty,
                 node_id,
-            } => Self::Member {
+            } => Predicate::Member {
                 receiver: receiver.into(),
                 label,
                 ty: ty.into(),
@@ -98,7 +100,7 @@ impl From<Predicate<InferTy>> for Predicate<Ty> {
                 member,
                 returns,
                 generics,
-            } => Self::TypeMember {
+            } => Predicate::TypeMember {
                 base: owner.into(),
                 member: member.clone(),
                 returns: returns.into(),
@@ -109,7 +111,7 @@ impl From<Predicate<InferTy>> for Predicate<Ty> {
                 args,
                 returns,
                 receiver,
-            } => Self::Call {
+            } => Predicate::Call {
                 callee: callee.into(),
                 args: args.into_iter().map(|arg| arg.into()).collect(),
                 returns: returns.into(),
@@ -127,14 +129,14 @@ impl From<Predicate<Ty>> for Predicate<InferTy> {
                 base,
                 label,
                 returns,
-            } => Self::Projection {
+            } => Predicate::Projection {
                 protocol_id,
-                base,
+                base: base.into(),
                 label,
-                returns,
+                returns: returns.into(),
             },
             Predicate::<Ty>::Conforms { param, protocol_id } => {
-                Self::Conforms { param, protocol_id }
+                Predicate::Conforms { param, protocol_id }
             }
             Predicate::<Ty>::Equals { lhs, rhs } => Self::Equals {
                 lhs: lhs.into(),
@@ -179,6 +181,76 @@ impl From<Predicate<Ty>> for Predicate<InferTy> {
                 receiver: receiver.map(|r| r.into()),
             },
         }
+    }
+}
+
+impl<T: SomeType, U: SomeType> TyMappable<T, U> for Predicate<T> {
+    type Output = Predicate<U>;
+    fn map_ty(self, m: &mut impl FnMut(&T) -> U) -> Self::Output {
+        match self {
+            Predicate::Projection {
+                protocol_id,
+                base,
+                label,
+                returns,
+            } => Predicate::Projection {
+                protocol_id,
+                base: m(&base),
+                returns: m(&returns),
+                label,
+            },
+            Predicate::Conforms { param, protocol_id } => {
+                Predicate::Conforms { param, protocol_id }
+            }
+            Predicate::HasField { row, label, ty } => Predicate::HasField {
+                row,
+                label,
+                ty: m(&ty),
+            },
+            Predicate::Member {
+                receiver,
+                label,
+                ty,
+                node_id,
+            } => Predicate::Member {
+                receiver: m(&receiver),
+                label,
+                ty: m(&ty),
+                node_id,
+            },
+            Predicate::TypeMember {
+                base: owner,
+                member,
+                returns,
+                generics,
+            } => Predicate::TypeMember {
+                base: m(&owner),
+                member,
+                returns: m(&returns),
+                generics: generics.iter().map(m).collect(),
+            },
+            Predicate::Call {
+                callee,
+                args,
+                returns,
+                receiver,
+            } => Predicate::Call {
+                callee: m(&callee),
+                args: args.iter().map(&mut *m).collect(),
+                returns: m(&returns),
+                receiver: receiver.as_ref().map(m),
+            },
+            Predicate::Equals { lhs, rhs } => Predicate::Equals {
+                lhs: m(&lhs),
+                rhs: m(&rhs),
+            },
+        }
+    }
+}
+
+impl Predicate<Ty> {
+    pub fn import(self, module_id: ModuleId) -> Self {
+        self.map_ty(&mut |t| t.clone().import(module_id))
     }
 }
 
@@ -276,6 +348,7 @@ impl Predicate<InferTy> {
                 &context.group_info(),
             ),
             Self::Conforms { param, protocol_id } => constraints.wants_conforms(
+                id,
                 instantiate_ty(
                     id,
                     InferTy::Param(param),
@@ -283,6 +356,7 @@ impl Predicate<InferTy> {
                     level,
                 ),
                 protocol_id,
+                &context.group_info(),
             ),
             Self::Equals { lhs, rhs } => constraints.wants_equals(
                 instantiate_ty(id, lhs, context.instantiations_mut(), level),

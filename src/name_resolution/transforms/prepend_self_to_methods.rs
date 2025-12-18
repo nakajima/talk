@@ -125,7 +125,6 @@ pub mod tests {
                 name: "Person".into(),
                 name_span: Span::ANY,
                 generics: vec![],
-                conformances: vec![],
                 body: any_body!(vec![any_decl!(DeclKind::Method {
                     func: Box::new(Func {
                         id: NodeID::ANY,
@@ -178,7 +177,6 @@ pub mod tests {
                 name: "Person".into(),
                 name_span: Span::ANY,
                 generics: vec![],
-                conformances: vec![],
                 body: any_body!(vec![any_decl!(DeclKind::Init {
                     name: "init".into(),
                     params: vec![Parameter {

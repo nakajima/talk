@@ -2,13 +2,18 @@ use std::{error::Error, fmt::Display, rc::Rc};
 
 use derive_visitor::{DriveMut, VisitorMut};
 use generational_arena::Index;
+use indexmap::IndexMap;
+use itertools::Itertools;
 use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::instrument;
 
 use crate::{
-    ast::{AST, ASTPhase, Parsed},
-    compiling::module::{ModuleEnvironment, ModuleId},
-    diagnostic::Diagnostic,
+    ast::{AST, NameResolved, Parsed},
+    compiling::{
+        driver::Exports,
+        module::{ModuleEnvironment, ModuleId},
+    },
+    diagnostic::{AnyDiagnostic, Diagnostic},
     label::Label,
     name::Name,
     name_resolution::{
@@ -28,6 +33,7 @@ use crate::{
         expr::{Expr, ExprKind},
         func::Func,
         func_signature::FuncSignature,
+        inline_ir_instruction::InlineIRInstructionKind,
         match_arm::MatchArm,
         pattern::{Pattern, PatternKind, RecordFieldPatternKind},
         stmt::{Stmt, StmtKind},
@@ -37,10 +43,11 @@ use crate::{
     types::infer_ty::Level,
 };
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum NameResolverError {
     UndefinedName(String),
     Unresolved(Name),
+    AmbiguousName(Name, Vec<Symbol>),
 }
 
 impl Error for NameResolverError {}
@@ -49,6 +56,9 @@ impl Display for NameResolverError {
         match self {
             Self::UndefinedName(name) => write!(f, "Undefined name: {name}"),
             Self::Unresolved(name) => write!(f, "Unresolved symbol: {name:?}"),
+            Self::AmbiguousName(name, candidates) => {
+                write!(f, "Ambiguous: {name:?}, candidates: {candidates:?}")
+            }
         }
     }
 }
@@ -92,14 +102,30 @@ impl Scope {
 }
 
 #[derive(Clone, Debug, Default)]
-pub struct NameResolved {
+pub struct ResolvedNames {
     pub captures: FxHashMap<Symbol, FxHashSet<Capture>>,
     pub is_captured: FxHashSet<Symbol>,
     pub scopes: FxHashMap<NodeID, Scope>,
+    pub symbol_names: FxHashMap<Symbol, String>,
     pub symbols_to_node: FxHashMap<Symbol, NodeID>,
     pub scc_graph: SCCGraph,
     pub unbound_nodes: Vec<NodeID>,
-    pub child_types: FxHashMap<Symbol, FxHashMap<Label, Symbol>>,
+    pub child_types: IndexMap<Symbol, IndexMap<Label, Symbol>>,
+    pub diagnostics: Vec<AnyDiagnostic>,
+}
+
+impl ResolvedNames {
+    pub fn exports(&self) -> Exports {
+        let mut res = Exports::default();
+        if let Some(scope) = self.scopes.get(&NodeID(FileID(0), 0)) {
+            res.extend(scope.types.clone());
+            res.extend(scope.values.clone());
+        }
+
+        res.into_iter()
+            .filter(|e| !matches!(e.1, Symbol::Builtin(..)))
+            .collect()
+    }
 }
 
 pub type ScopeId = Index;
@@ -119,7 +145,7 @@ pub struct NameResolver {
     pub symbols: Symbols,
     diagnostics: Vec<Diagnostic<NameResolverError>>,
 
-    pub(super) phase: NameResolved,
+    pub phase: ResolvedNames,
 
     pub(super) current_module_id: crate::compiling::module::ModuleId,
     pub(super) modules: Rc<ModuleEnvironment>,
@@ -131,10 +157,8 @@ pub struct NameResolver {
     pub(super) current_level: Level,
 
     // For figuring out child types
-    pub(super) nominal_stack: Vec<Symbol>,
+    pub(super) nominal_stack: Vec<(Symbol, NodeID)>,
 }
-
-impl ASTPhase for NameResolved {}
 
 #[allow(clippy::expect_used)]
 impl NameResolver {
@@ -142,7 +166,7 @@ impl NameResolver {
         let mut resolver = Self {
             symbols: Default::default(),
             diagnostics: Default::default(),
-            phase: NameResolved::default(),
+            phase: ResolvedNames::default(),
             current_module_id,
             scopes: Default::default(),
             current_scope_id: None,
@@ -162,15 +186,19 @@ impl NameResolver {
         self.current_scope_id = Some(NodeID(FileID(0), 0));
     }
 
-    pub fn resolve(&mut self, mut asts: Vec<AST<Parsed>>) -> Vec<AST<NameResolved>> {
+    pub fn resolve(
+        &mut self,
+        mut asts: Vec<AST<Parsed>>,
+    ) -> (Vec<AST<NameResolved>>, ResolvedNames) {
         let scope = self
             .scopes
             .get_mut(&NodeID(FileID(0), 0))
             .expect("root scope");
+
         builtins::import_builtins(scope);
 
         // First pass: run transforms and declare all types
-        for ast in &mut asts {
+        for ast in asts.iter_mut() {
             LowerFuncsToLets::run(ast);
             LowerOperators::run(ast);
             PrependSelfToMethods::run(ast);
@@ -178,13 +206,36 @@ impl NameResolver {
 
         {
             // One declarer per AST so the single &mut self borrow ends after each AST.
-            for ast in &mut asts {
+            for ast in asts.iter_mut() {
                 let mut declarer = DeclDeclarer::new(self, &mut ast.node_ids);
+                declarer.predeclare_nominals(
+                    ast.roots
+                        .iter()
+                        .filter_map(|r| {
+                            if let Node::Decl(decl) = r {
+                                Some(decl)
+                            } else {
+                                None
+                            }
+                        })
+                        .collect_vec()
+                        .as_slice(),
+                );
                 for root in &mut ast.roots {
-                    if let Node::Stmt(Stmt { id, .. }) = root {
-                        // If it's just a top level expr, it's not bound to anything so we stash
-                        // it away so we can still type check it.
-                        declarer.resolver.phase.unbound_nodes.push(*id);
+                    match root {
+                        Node::Stmt(Stmt { id, .. }) => {
+                            // If it's just a top level expr, it's not bound to anything so we stash
+                            // it away so we can still type check it.
+                            declarer.resolver.phase.unbound_nodes.push(*id);
+                        }
+                        Node::Decl(Decl {
+                            id,
+                            kind: DeclKind::Extend { .. },
+                            ..
+                        }) => {
+                            declarer.resolver.phase.unbound_nodes.push(*id);
+                        }
+                        _ => {}
                     }
 
                     root.drive_mut(&mut declarer);
@@ -193,47 +244,26 @@ impl NameResolver {
         }
 
         // Second pass: resolve all names
-        self.current_scope_id = Some(NodeID(FileID(0), 0));
 
-        let mut out: Vec<AST<NameResolved>> = Vec::with_capacity(asts.len());
-
-        for ast in asts.into_iter() {
-            let AST {
-                path,
-                mut roots,
-                mut diagnostics,
-                meta,
-                file_id,
-                node_ids,
-                synthsized_ids,
-                ..
-            } = ast;
-
+        for ast in asts.iter_mut() {
             // Borrow &mut self only while walking each root, then drop immediately.
-            for root in &mut roots {
+            for root in &mut ast.roots {
+                self.current_scope_id = Some(NodeID(FileID(0), 0));
                 root.drive_mut(self);
             }
 
             // Move any diagnostics accumulated on self into this AST.
             for diagnostic in std::mem::take(&mut self.diagnostics) {
-                diagnostics.push(diagnostic.into());
+                self.phase.diagnostics.push(diagnostic.into());
             }
-
-            self.phase.scopes = self.scopes.clone();
-
-            out.push(AST {
-                path,
-                roots,
-                diagnostics,
-                meta,
-                phase: std::mem::take(&mut self.phase),
-                node_ids,
-                file_id,
-                synthsized_ids,
-            });
         }
 
-        out
+        self.phase.scopes = self.scopes.clone();
+
+        (
+            asts.into_iter().map(|a| a.into()).collect_vec(),
+            self.phase.clone(),
+        )
     }
 
     pub(super) fn current_scope(&self) -> Option<&Scope> {
@@ -270,7 +300,6 @@ impl NameResolver {
             && let Some(captured) = self.lookup_in_scope(name, parent)
             && parent != scope_id
         {
-            let parent_scope = self.scopes.get(&parent).expect("did not find parent scope");
             let scope = self.scopes.get(&scope_id).expect("did not find scope");
 
             if scope.binder == Some(captured) {
@@ -283,14 +312,17 @@ impl NameResolver {
 
             if !matches!(
                 captured,
-                Symbol::Global(..) | Symbol::DeclaredLocal(..) | Symbol::ParamLocal(..)
+                Symbol::DeclaredLocal(..) | Symbol::ParamLocal(..) | Symbol::Global(..)
             ) {
                 return Some(captured);
             }
 
+            let parent_binder =
+                self.nearest_enclosing_binder_from(Some(parent), current_scope_binder);
+
             let capture = Capture {
                 symbol: captured,
-                parent_binder: parent_scope.binder,
+                parent_binder,
                 level: scope.level,
             };
 
@@ -304,9 +336,23 @@ impl NameResolver {
             return Some(captured);
         }
 
-        for (id, module) in self.modules.modules.iter() {
-            if let Some(sym) = module.exports.get(&name.name_str()) {
-                return Some(sym.import(*id));
+        let matching_imported_names = self.modules.lookup_name(&name.name_str());
+        match matching_imported_names.len() {
+            0 => {
+                println!("No external import named: {name:?}");
+            }
+            1 => {
+                println!(
+                    "Found external import named: {:?}",
+                    matching_imported_names[0]
+                );
+                return Some(matching_imported_names[0]);
+            }
+            _ => {
+                self.diagnostic(
+                    scope_id,
+                    NameResolverError::AmbiguousName(name.clone(), matching_imported_names),
+                );
             }
         }
 
@@ -314,8 +360,11 @@ impl NameResolver {
     }
 
     pub(super) fn lookup(&mut self, name: &Name, node_id: Option<NodeID>) -> Option<Name> {
-        let symbol =
-            self.lookup_in_scope(name, self.current_scope_id.expect("no scope to declare in"))?;
+        let symbol = self.lookup_in_scope(
+            name,
+            self.current_scope_id
+                .unwrap_or_else(|| unreachable!("no scope to declare in. name: {name:?}")),
+        )?;
 
         if let Some(node_id) = node_id {
             self.track_dependency(symbol, node_id);
@@ -325,17 +374,6 @@ impl NameResolver {
     }
 
     pub(super) fn track_dependency(&mut self, to: Symbol, id: NodeID) {
-        if !matches!(
-            to,
-            Symbol::Global(..)
-                | Symbol::StaticMethod(..)
-                | Symbol::DeclaredLocal(..)
-                | Symbol::Enum(..)
-                | Symbol::Variant(..)
-        ) {
-            return;
-        }
-
         if let Some(symbols) = self
             .current_symbol_scope
             .iter()
@@ -343,10 +381,7 @@ impl NameResolver {
             .find_map(|f| f.clone())
         {
             for (from_sym, from_id) in symbols {
-                tracing::debug!("track_dependency from {from_sym:?} to {to:?}");
-                self.phase
-                    .scc_graph
-                    .add_edge((from_sym, from_id), (to, id), id);
+                self.track_dependency_from_to(from_sym, from_id, to, id);
             }
         }
     }
@@ -358,13 +393,25 @@ impl NameResolver {
         to_sym: Symbol,
         to_id: NodeID,
     ) {
-        if !matches!(
-            to_sym,
-            Symbol::Global(..)
+        if matches!(
+            from_sym,
+            Symbol::Builtin(..)
+                | Symbol::InstanceMethod(..)
                 | Symbol::StaticMethod(..)
-                | Symbol::DeclaredLocal(..)
-                | Symbol::PatternBindLocal(..)
+                | Symbol::ParamLocal(..)
+                | Symbol::MethodRequirement(..)
+        ) || matches!(
+            to_sym,
+            Symbol::Builtin(..)
+                | Symbol::InstanceMethod(..)
+                | Symbol::StaticMethod(..)
+                | Symbol::ParamLocal(..)
+                | Symbol::MethodRequirement(..)
         ) {
+            return;
+        }
+
+        if to_sym.external_module_id().is_some() {
             return;
         }
 
@@ -392,6 +439,7 @@ impl NameResolver {
             if !matches!(
                 symbol.0,
                 Symbol::InstanceMethod(..)
+                    | Symbol::StaticMethod(..)
                     | Symbol::Synthesized(..)
                     | Symbol::Initializer(..)
                     | Symbol::Builtin(..)
@@ -416,20 +464,6 @@ impl NameResolver {
 
         self.current_scope_id = current_scope.parent_id;
         self.current_symbol_scope.pop();
-        // Pop from symbol scope stack if this scope matches
-        // match self.current_symbol_scope.last() {
-        //     Some(None) => {
-        //         // Always pop None entries when exiting any scope
-        //         self.current_symbol_scope.pop();
-        //     }
-        //     Some(Some(scope)) if scope.1 == node_id => {
-        //         // Pop symbol entries that match this scope
-        //         self.current_symbol_scope.pop();
-        //     }
-        //     _ => {
-        //         // Don't pop if it doesn't match
-        //     }
-        // }
     }
 
     pub(super) fn declare(&mut self, name: &Name, kind: Symbol, node_id: NodeID) -> Name {
@@ -440,6 +474,8 @@ impl NameResolver {
 
         let module_id = self.current_module_id;
         let symbol = match kind {
+            Symbol::Main => Symbol::Main,
+            Symbol::Library => Symbol::Library,
             Symbol::Struct(..) => Symbol::Struct(self.symbols.next_struct(module_id)),
             Symbol::Enum(..) => Symbol::Enum(self.symbols.next_enum(module_id)),
             Symbol::TypeAlias(..) => Symbol::TypeAlias(self.symbols.next_type_alias(module_id)),
@@ -450,7 +486,7 @@ impl NameResolver {
                 Symbol::PatternBindLocal(self.symbols.next_pattern_bind())
             }
             Symbol::ParamLocal(..) => Symbol::ParamLocal(self.symbols.next_param()),
-            Symbol::Builtin(..) => Symbol::Builtin(self.symbols.next_builtin(module_id)),
+            Symbol::Builtin(..) => unreachable!("should not be generating symbols for builtins"),
             Symbol::Property(..) => Symbol::Property(self.symbols.next_property(module_id)),
             Symbol::Synthesized(..) => {
                 Symbol::Synthesized(self.symbols.next_synthesized(module_id))
@@ -475,9 +511,10 @@ impl NameResolver {
         };
 
         self.phase.symbols_to_node.insert(symbol, node_id);
+        self.phase.symbol_names.insert(symbol, name.name_str());
 
         tracing::debug!(
-            "declare type {} -> {symbol:?} {:?}",
+            "declare type {name} {} -> {symbol:?} {:?}",
             name.name_str(),
             self.current_scope_id
         );
@@ -485,6 +522,28 @@ impl NameResolver {
         scope.types.insert(name.name_str(), symbol);
 
         Name::Resolved(symbol, name.name_str())
+    }
+
+    fn nearest_enclosing_binder_from(
+        &self,
+        mut scope_id: Option<NodeID>,
+        skip: Symbol,
+    ) -> Option<Symbol> {
+        while let Some(id) = scope_id {
+            let scope = self
+                .scopes
+                .get(&id)
+                .unwrap_or_else(|| unreachable!("scope not found: {id:?}"));
+
+            if let Some(binder) = scope.binder
+                && binder != skip
+            {
+                return Some(binder);
+            }
+
+            scope_id = scope.parent_id;
+        }
+        None
     }
 
     fn enter_pattern(&mut self, pattern: &mut Pattern) {
@@ -612,7 +671,36 @@ impl NameResolver {
         self.exit_scope(arm.id);
     }
 
+    #[instrument(skip(self, expr))]
     fn enter_expr(&mut self, expr: &mut Expr) {
+        on!(&mut expr.kind, ExprKind::InlineIR(instr), {
+            for bind in &mut instr.binds {
+                self.enter_expr(bind);
+            }
+
+            match &mut instr.kind {
+                InlineIRInstructionKind::Constant { ty, .. } => self.enter_type_annotation(ty),
+                InlineIRInstructionKind::Cmp { ty, .. } => self.enter_type_annotation(ty),
+                InlineIRInstructionKind::Add { ty, .. } => self.enter_type_annotation(ty),
+                InlineIRInstructionKind::Sub { ty, .. } => self.enter_type_annotation(ty),
+                InlineIRInstructionKind::Mul { ty, .. } => self.enter_type_annotation(ty),
+                InlineIRInstructionKind::Div { ty, .. } => self.enter_type_annotation(ty),
+                InlineIRInstructionKind::Ref { ty, .. } => self.enter_type_annotation(ty),
+                InlineIRInstructionKind::Call { ty, .. } => self.enter_type_annotation(ty),
+                InlineIRInstructionKind::Record { ty, .. } => self.enter_type_annotation(ty),
+                InlineIRInstructionKind::GetField { ty, .. } => self.enter_type_annotation(ty),
+                InlineIRInstructionKind::SetField { ty, .. } => self.enter_type_annotation(ty),
+                InlineIRInstructionKind::_Print { .. } => (),
+                InlineIRInstructionKind::Alloc { ty, .. } => self.enter_type_annotation(ty),
+                InlineIRInstructionKind::Free { .. } => (),
+                InlineIRInstructionKind::Load { ty, .. } => self.enter_type_annotation(ty),
+                InlineIRInstructionKind::Store { ty, .. } => self.enter_type_annotation(ty),
+                InlineIRInstructionKind::Move { ty, .. } => self.enter_type_annotation(ty),
+                InlineIRInstructionKind::Copy { ty, .. } => self.enter_type_annotation(ty),
+                InlineIRInstructionKind::Gep { ty, .. } => self.enter_type_annotation(ty),
+            }
+        });
+
         on!(&mut expr.kind, ExprKind::Variable(name), {
             let Some(resolved_name) = self.lookup(name, Some(expr.id)) else {
                 self.diagnostic(expr.id, NameResolverError::UndefinedName(name.name_str()));
@@ -640,12 +728,20 @@ impl NameResolver {
     // Func scoping
     ///////////////////////////////////////////////////////////////////////////
 
-    fn enter_func(&mut self, _func: &mut Func) {
-        // self.enter_scope(func.id, None);
+    fn enter_func(&mut self, func: &mut Func) {
+        self.enter_scope(
+            func.id,
+            Some(vec![(
+                func.name
+                    .symbol()
+                    .unwrap_or_else(|_| unreachable!("did not resolve func")),
+                func.id,
+            )]),
+        );
     }
 
-    fn exit_func(&mut self, _func: &mut Func) {
-        // self.exit_scope(func.id);
+    fn exit_func(&mut self, func: &mut Func) {
+        self.exit_scope(func.id);
     }
 
     fn enter_func_signature(&mut self, func: &mut FuncSignature) {
@@ -664,7 +760,8 @@ impl NameResolver {
             &decl.kind,
             DeclKind::Enum { name, .. }
                 | DeclKind::Struct { name, .. }
-                | DeclKind::Protocol { name, .. },
+                | DeclKind::Protocol { name, .. }
+                | DeclKind::Extend { name, .. },
             {
                 let Ok(sym) = name.symbol() else {
                     self.diagnostic(decl.id, NameResolverError::Unresolved(name.clone()));
@@ -675,29 +772,6 @@ impl NameResolver {
             }
         );
 
-        on!(&mut decl.kind, DeclKind::Extend { name, .. }, {
-            let Some(type_name) = self.lookup(name, None) else {
-                self.diagnostic(decl.id, NameResolverError::UndefinedName(name.name_str()));
-                return;
-            };
-
-            *name = type_name;
-
-            let Ok(sym) = name.symbol() else {
-                self.diagnostic(decl.id, NameResolverError::Unresolved(name.clone()));
-                return;
-            };
-
-            self.current_scope_mut()
-                .expect("did not get current scope")
-                .types
-                .insert("Self".into(), sym);
-
-            self.phase.unbound_nodes.push(decl.id);
-
-            self.enter_scope(decl.id, Some(vec![(sym, decl.id)]));
-        });
-
         on!(&mut decl.kind, DeclKind::Init { params, .. }, {
             self.enter_scope(decl.id, None);
 
@@ -706,8 +780,13 @@ impl NameResolver {
             }
         });
 
-        on!(&mut decl.kind, DeclKind::Method { .. }, {
-            self.enter_scope(decl.id, None);
+        on!(&mut decl.kind, DeclKind::Method { func, .. }, {
+            let sym = func
+                .name
+                .symbol()
+                .unwrap_or_else(|_| unreachable!("did not resolve name"));
+
+            self.enter_scope(func.id, Some(vec![(sym, func.id)]));
         });
 
         on!(&decl.kind, DeclKind::Let { lhs, .. }, {

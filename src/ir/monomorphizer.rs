@@ -1,9 +1,8 @@
-use indexmap::IndexMap;
+use indexmap::{IndexMap, IndexSet};
 use tracing::instrument;
 
 use crate::{
-    ast::AST,
-    compiling::driver::Source,
+    compiling::driver::DriverConfig,
     ir::{
         basic_block::{BasicBlock, Phi},
         function::Function,
@@ -11,17 +10,18 @@ use crate::{
         ir_ty::IrTy,
         lowerer::{Lowerer, PolyFunction, Specialization, Substitutions},
         terminator::Terminator,
-        value::Value,
+        value::{Reference, Value},
     },
     name::Name,
-    name_resolution::{name_resolver::NameResolved, symbol::Symbol},
-    types::{ty::Ty, type_session::Types},
+    name_resolution::symbol::Symbol,
+    types::{ty::Ty, type_session::Types, typed_ast::TypedAST},
 };
 
 #[allow(dead_code)]
 pub struct Monomorphizer<'a> {
-    asts: &'a mut IndexMap<Source, AST<NameResolved>>,
+    ast: &'a mut TypedAST<Ty>,
     types: &'a mut Types,
+    config: &'a DriverConfig,
     pub(super) functions: IndexMap<Symbol, PolyFunction>,
     specializations: IndexMap<Symbol, Vec<Specialization>>,
 }
@@ -30,10 +30,11 @@ pub struct Monomorphizer<'a> {
 impl<'a> Monomorphizer<'a> {
     pub fn new(lowerer: Lowerer<'a>) -> Self {
         Monomorphizer {
-            asts: lowerer.asts,
+            ast: lowerer.ast,
             types: lowerer.types,
             functions: lowerer.functions,
             specializations: lowerer.specializations,
+            config: lowerer.config,
         }
     }
 
@@ -44,7 +45,60 @@ impl<'a> Monomorphizer<'a> {
         for func in functions.into_values() {
             self.monomorphize_func(func, &mut result);
         }
+
+        // Ensure all external callees referenced by monomorphized functions are imported.
+        let mut checked = IndexSet::default();
+        let syms: Vec<Symbol> = result.keys().copied().collect();
+        for sym in syms {
+            self.check_imports(&sym, &mut result, &mut checked);
+        }
+
         result
+    }
+
+    fn check_imports(
+        &mut self,
+        sym: &Symbol,
+        result: &mut IndexMap<Symbol, Function<IrTy>>,
+        checked: &mut IndexSet<Symbol>,
+    ) {
+        if !checked.insert(*sym) {
+            return; // Already checked
+        }
+        let mut callees: IndexSet<&Symbol> = IndexSet::default();
+        let Some(func) = result.get(sym).cloned() else {
+            return;
+        };
+        for block in func.blocks.iter() {
+            for instruction in block.instructions.iter() {
+                if let Instruction::Call {
+                    callee:
+                        Value::Func(sym)
+                        | Value::Ref(Reference::Func(sym))
+                        | Value::Ref(Reference::Closure(sym, ..)),
+                    ..
+                } = instruction
+                {
+                    callees.insert(sym);
+                }
+            }
+        }
+
+        for callee in callees {
+            let Some(module_id) = callee.module_id() else {
+                tracing::warn!("Trying to import {callee:?}, no module ID found");
+                continue;
+            };
+
+            if module_id != self.config.module_id
+                && let Some(program) = self.config.modules.program_for(module_id)
+                && let Some(imported) = program.functions.get(callee).cloned()
+            {
+                result.insert(*callee, imported);
+            };
+
+            self.check_imports(callee, result, checked);
+        }
     }
 
     #[instrument(skip(self, result))]
@@ -55,7 +109,7 @@ impl<'a> Monomorphizer<'a> {
     ) {
         for specialization in self
             .specializations
-            .get(&func.name.symbol().expect("name not resolved"))
+            .get(&func.name)
             .cloned()
             .unwrap_or_default()
         {
@@ -74,7 +128,7 @@ impl<'a> Monomorphizer<'a> {
             register_count: func.register_count,
         };
 
-        result.insert(func.name.symbol().expect("name not resolved"), func);
+        result.insert(func.name, func);
     }
 
     #[instrument(skip(self, block), fields(block = %block))]
@@ -136,10 +190,11 @@ impl<'a> Monomorphizer<'a> {
         } = instruction
         {
             let new_callee = match &callee {
-                Value::Func(Name::Resolved(sym @ Symbol::MethodRequirement(_), name)) => {
+                Value::Func(sym @ Symbol::MethodRequirement(_)) => {
                     if let Some(impl_sym) = substitutions.witnesses.get(sym) {
-                        Value::Func(Name::Resolved(*impl_sym, name.clone()))
+                        Value::Func(*impl_sym)
                     } else {
+                        tracing::error!("did not get witness for {sym:?}, {substitutions:?}");
                         callee
                     }
                 }
@@ -171,15 +226,18 @@ impl<'a> Monomorphizer<'a> {
                 Symbol::Byte => IrTy::Byte,
                 _ => unreachable!(),
             },
-            Ty::Param(param) => {
-                if let Some(replaced) = substitutions.ty.get(&param).cloned() {
+            Ty::Param(_param) => {
+                if let Some(replaced) = substitutions.ty.get(&ty).cloned() {
                     self.monomorphize_ty(replaced, substitutions)
                 } else {
+                    //unreachable!("did not specialize {ty:?}");
+
+                    #[allow(unreachable_code)]
                     IrTy::Void
                 }
             }
             Ty::Constructor {
-                name: Name::Resolved(Symbol::Variant(..), ..),
+                name: Name::Resolved(sym @ Symbol::Variant(..), ..),
                 params,
                 ..
             } => {
@@ -193,7 +251,7 @@ impl<'a> Monomorphizer<'a> {
                 };
                 values.insert(0, IrTy::Int);
 
-                IrTy::Record(values)
+                IrTy::Record(Some(sym), values)
             }
             Ty::Constructor {
                 name: Name::Resolved(Symbol::Struct(..), _),
@@ -218,32 +276,50 @@ impl<'a> Monomorphizer<'a> {
                 )
             }
             Ty::Tuple(items) => IrTy::Record(
+                None,
                 items
                     .into_iter()
                     .map(|i| self.monomorphize_ty(i, substitutions))
                     .collect(),
             ),
-            Ty::Record(row) => {
+            Ty::Record(sym, row) => {
                 let closed = row.close();
                 IrTy::Record(
+                    sym,
                     closed
                         .values()
                         .map(|v| self.monomorphize_ty(v.clone(), substitutions))
                         .collect(),
                 )
             }
-            Ty::Nominal { symbol, row, .. } => {
-                if matches!(symbol, Symbol::Enum(..)) {
-                    // TODO: Handle variants
-                    IrTy::Record(vec![IrTy::Int])
+            Ty::Nominal { symbol, type_args } => {
+                let nominal = if let Some(module_id) = symbol.module_id()
+                    && module_id != self.config.module_id
+                {
+                    self.config
+                        .modules
+                        .lookup_nominal(&symbol)
+                        .cloned()
+                        .expect("didn't get external nominal")
                 } else {
-                    let closed = row.close();
-                    IrTy::Record(
-                        closed
-                            .values()
-                            .map(|v| self.monomorphize_ty(v.clone(), substitutions))
-                            .collect(),
-                    )
+                    self.types
+                        .catalog
+                        .nominals
+                        .get(&symbol)
+                        .cloned()
+                        .unwrap_or_else(|| unreachable!("didn't get nominal: {symbol:?}"))
+                };
+
+                let properties = nominal.substitute_properties(&type_args);
+
+                if matches!(symbol, Symbol::Enum(..)) {
+                    IrTy::Record(Some(symbol), vec![IrTy::Int])
+                } else {
+                    let values = properties
+                        .values()
+                        .map(|v| self.monomorphize_ty(v.clone(), substitutions))
+                        .collect();
+                    IrTy::Record(Some(symbol), values)
                 }
             }
             other => unreachable!("{other:?}"),
@@ -258,7 +334,7 @@ impl<'a> Monomorphizer<'a> {
         result: &mut IndexMap<Symbol, Function<IrTy>>,
     ) {
         let specialized_func = Function {
-            name: specialization.name.clone(),
+            name: specialization.name,
             ty: self.monomorphize_ty(func.ty.clone(), &specialization.substitutions),
             params: func.params.clone().into(),
             register_count: func.register_count,
@@ -270,10 +346,10 @@ impl<'a> Monomorphizer<'a> {
                 .collect(),
         };
 
-        result.insert(
-            specialization.name.symbol().expect("name not resolved"),
-            specialized_func,
-        );
+        result.insert(specialization.name, specialized_func);
+
+        let mut checked = IndexSet::default();
+        self.check_imports(&specialization.name, result, &mut checked);
     }
 }
 

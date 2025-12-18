@@ -1,3 +1,5 @@
+use talk::compiling::driver::DriverConfig;
+
 #[cfg(feature = "cli")]
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
@@ -48,7 +50,7 @@ async fn main() {
                 .iter()
                 .map(|filename| Source::from(PathBuf::from(filename)))
                 .collect();
-            let driver = Driver::new(sources, Default::default());
+            let driver = Driver::new(sources, DriverConfig::new("talk").executable());
             let module = driver
                 .parse()
                 .unwrap()
@@ -59,7 +61,8 @@ async fn main() {
                 .lower()
                 .unwrap()
                 .module("talkin");
-            let interpreter = Interpreter::new(module.program);
+
+            let mut interpreter = Interpreter::new(module.program, Some(module.symbol_names));
             let result = interpreter.run();
             println!("{result:?}");
         }
@@ -74,11 +77,10 @@ async fn main() {
 
             let driver = Driver::new(
                 vec![Source::from(PathBuf::from(filename))],
-                Default::default(),
+                DriverConfig::new(filename),
             );
             let resolved = driver.parse().unwrap().resolve_names().unwrap();
             let meta = resolved.phase.asts[0].meta.clone();
-            let typed = resolved.typecheck().unwrap();
 
             let formatter = Formatter::new_with_decorators(
                 &meta,
@@ -92,7 +94,7 @@ async fn main() {
 
             println!(
                 "{}",
-                formatter.format(&typed.phase.asts[0].roots.clone(), 80)
+                formatter.format(&resolved.phase.asts[0].roots.clone(), 80)
             );
         }
     }

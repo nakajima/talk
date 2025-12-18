@@ -330,6 +330,7 @@ pub mod trace {
     }
 
     pub fn init() {
+        color_eyre::install().unwrap();
         use tracing_subscriber::{EnvFilter, prelude::*, registry};
 
         if std::env::var("LOG_PRELUDE") == Ok("1".into()) {

@@ -79,6 +79,12 @@ impl Precedence {
                 precedence: Precedence::Primary,
             },
 
+            TokenKind::Attribute(..) => ParseHandler {
+                prefix: Some(Parser::attribute),
+                infix: None,
+                precedence: Precedence::Primary,
+            },
+
             TokenKind::At => ParseHandler {
                 prefix: None,
                 infix: None,

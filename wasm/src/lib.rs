@@ -11,7 +11,7 @@ pub fn run_program(source: &str) -> Result<String, JsValue> {
 
     let lowered = compile_source(source)?;
     let module = lowered.module("talk");
-    let interpreter = Interpreter::new(module.program);
+    let interpreter = Interpreter::new(module.program, Some(module.symbol_names));
     let result = interpreter.run();
 
     Ok(format!("{result:?}"))

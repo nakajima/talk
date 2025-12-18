@@ -8,8 +8,6 @@ use crate::{
         constraints::store::GroupId,
         infer_ty::{InferTy, Level, TypeParamId},
         predicate::Predicate,
-        type_catalog::ConformanceKey,
-        type_error::TypeError,
         type_operations::{InstantiationSubstitutions, UnificationSubstitutions},
         type_session::TypeSession,
     },
@@ -62,6 +60,7 @@ where
             id: self.group(),
             level: self.level(),
             binders: Default::default(),
+            is_top_level: Default::default(),
         }
     }
 }
@@ -181,34 +180,39 @@ impl SolveContext {
     ) -> InferTy {
         let ty = session.apply(ty, &mut self.substitutions);
         match &ty {
-            InferTy::Projection {
-                base: box InferTy::Nominal { symbol, .. },
-                protocol_id,
-                associated,
-            } => {
-                let Some(conformance) = session.type_catalog.conformances.get(&ConformanceKey {
-                    protocol_id: *protocol_id,
-                    conforming_id: *symbol,
-                }) else {
-                    return InferTy::Error(
-                        TypeError::TypesDoesNotConform {
-                            symbol: *symbol,
-                            protocol_id: *protocol_id,
-                        }
-                        .into(),
-                    );
-                };
-                let Some(ty) = conformance.associated_types.get(associated).cloned() else {
-                    return InferTy::Error(
-                        TypeError::MissingConformanceRequirement(format!(
-                            "Associated type: {associated:?}"
-                        ))
-                        .into(),
-                    );
-                };
+            // InferTy::Projection {
+            //     base: box InferTy::Nominal { symbol, .. },
+            //     protocol_id,
+            //     associated,
+            // } => {
+            //     let Some(conformance) = session.type_catalog.conformances.get(&ConformanceKey {
+            //         protocol_id: *protocol_id,
+            //         conforming_id: *symbol,
+            //     }) else {
+            //         return InferTy::Error(
+            //             TypeError::TypesDoesNotConform {
+            //                 symbol: *symbol,
+            //                 protocol_id: *protocol_id,
+            //             }
+            //             .into(),
+            //         );
+            //     };
+            //     let Some(ty) = conformance
+            //         .witnesses
+            //         .associated_types
+            //         .get(associated)
+            //         .cloned()
+            //     else {
+            //         return InferTy::Error(
+            //             TypeError::MissingConformanceRequirement(format!(
+            //                 "Associated type: {associated:?}"
+            //             ))
+            //             .into(),
+            //         );
+            //     };
 
-                ty
-            }
+            //     ty
+            // }
             InferTy::Projection {
                 base: box InferTy::Var { .. },
                 ..
@@ -238,65 +242,24 @@ pub mod tests {
 
     use crate::{
         compiling::module::ModuleId,
-        fxhashmap,
         label::Label,
-        name_resolution::symbol::{ProtocolId, StructId, Symbol},
-        node_id::NodeID,
-        span::Span,
+        name_resolution::symbol::ProtocolId,
         types::{
-            infer_row::InferRow,
             infer_ty::{InferTy, Level},
             solve_context::{Solve, SolveContext, SolveContextKind},
-            type_catalog::{Conformance, ConformanceKey},
             type_operations::UnificationSubstitutions,
-            type_session::{TypeDefKind, TypeSession},
+            type_session::TypeSession,
         },
     };
 
     #[test]
-    fn normalizes_projection_on_nominal() {
-        let mut session = TypeSession::new(ModuleId::Current, Default::default());
-        let var = session.new_ty_meta_var(Level::default());
-        session.type_catalog.conformances.insert(
-            ConformanceKey {
-                protocol_id: ProtocolId::from(1),
-                conforming_id: Symbol::Struct(StructId::from(1)),
-            },
-            Conformance {
-                node_id: NodeID::SYNTHESIZED,
-                conforming_id: Symbol::Struct(1.into()),
-                protocol_id: ProtocolId::from(1),
-                witnesses: Default::default(),
-                associated_types: fxhashmap!(
-                    Label::Named("foo".into()) => var.clone()
-                ),
-                span: Span::SYNTHESIZED,
-            },
-        );
-
-        let ty = InferTy::Projection {
-            protocol_id: ProtocolId::from(1),
-            base: InferTy::Nominal {
-                symbol: Symbol::Struct(1.into()),
-                row: InferRow::Empty(TypeDefKind::Struct).into(),
-            }
-            .into(),
-            associated: Label::Named("foo".into()),
-        };
-
-        let mut context = SolveContext::new(
-            UnificationSubstitutions::new(session.meta_levels.clone()),
-            Level::default(),
-            Default::default(),
-            SolveContextKind::Nominal,
-        );
-
-        assert_eq!(context.normalize(ty, &mut session), var);
-    }
-
-    #[test]
     fn normalizes_projection_on_meta() {
-        let mut session = TypeSession::new(ModuleId::Current, Default::default());
+        let mut session = TypeSession::new(
+            ModuleId::Current,
+            Default::default(),
+            Default::default(),
+            Default::default(),
+        );
         let var = session.new_ty_meta_var(Level::default());
         let ty = InferTy::Projection {
             protocol_id: ProtocolId::from(1),

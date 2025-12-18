@@ -1,12 +1,12 @@
 use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
 use indexmap::IndexMap;
+use itertools::Itertools;
 use rustc_hash::FxHashMap;
 use tracing::instrument;
 
 use crate::{
     label::Label,
-    name_resolution::symbol::Symbol,
     node_id::NodeID,
     types::{
         infer_row::{InferRow, RowMetaId, RowParamId, RowTail, normalize_row},
@@ -116,7 +116,7 @@ fn occurs_in(id: MetaVarId, ty: &InferTy) -> bool {
         InferTy::Func(a, b) => occurs_in(id, a) || occurs_in(id, b),
         InferTy::Tuple(items) => items.iter().any(|t| occurs_in(id, t)),
         InferTy::Record(row) => occurs_in_row(id, row),
-        InferTy::Nominal { row, .. } => occurs_in_row(id, row),
+        InferTy::Nominal { type_args, .. } => type_args.iter().any(|t| occurs_in(id, t)),
         InferTy::Projection { base, .. } => occurs_in(id, base),
         InferTy::Param(..) => false,
         InferTy::Rigid(..) => false,
@@ -148,9 +148,7 @@ fn ty_occurs_structural_row(
     subs: &mut UnificationSubstitutions,
 ) -> bool {
     match ty {
-        InferTy::Record(row) | InferTy::Nominal { row, .. } => {
-            row_occurs_structural(target, row, subs)
-        }
+        InferTy::Record(row) => row_occurs_structural(target, row, subs),
         InferTy::Func(a, b) => {
             ty_occurs_structural_row(target, a, subs) || ty_occurs_structural_row(target, b, subs)
         }
@@ -354,6 +352,17 @@ pub(super) fn unify(
                 ))
             }
         }
+        (InferTy::Primitive(lhs), InferTy::Nominal { symbol: rhs, .. })
+        | (InferTy::Nominal { symbol: rhs, .. }, InferTy::Primitive(lhs)) => {
+            if lhs == rhs {
+                Ok(Default::default())
+            } else {
+                Err(TypeError::InvalidUnification(
+                    InferTy::Primitive(*lhs).into(),
+                    InferTy::Primitive(*rhs).into(),
+                ))
+            }
+        }
         (InferTy::Tuple(lhs), InferTy::Tuple(rhs)) => {
             for (lhs, rhs) in lhs.iter().zip(rhs) {
                 result.extend(unify(lhs, rhs, context, session)?);
@@ -382,25 +391,26 @@ pub(super) fn unify(
         (
             InferTy::Nominal {
                 symbol: lhs_id,
-                row: box lhs_row,
+                type_args: lhs_type_args,
             },
             InferTy::Nominal {
                 symbol: rhs_id,
-                row: box rhs_row,
+                type_args: rhs_type_args,
             },
         ) => {
             if lhs_id != rhs_id {
                 return Err(TypeError::InvalidUnification(lhs.into(), rhs.into()));
             }
 
-            let kind = match lhs_id {
-                Symbol::Struct(..) => TypeDefKind::Struct,
-                Symbol::Enum(..) => TypeDefKind::Enum,
-                _ => TypeDefKind::Struct,
-            };
+            if lhs_type_args.len() != rhs_type_args.len() {
+                return Err(TypeError::InvalidUnification(lhs.into(), rhs.into()));
+            }
 
-            let changed = unify_rows(kind, lhs_row, rhs_row, context, session)?;
-            Ok(changed)
+            for (lhs, rhs) in lhs_type_args.iter().zip(rhs_type_args) {
+                result.extend(unify(lhs, rhs, context, session)?);
+            }
+
+            Ok(result)
         }
         // (Ty::TypeConstructor(lhs), Ty::TypeConstructor(rhs)) if lhs == rhs => Ok(false),
         (InferTy::Func(lhs_param, lhs_ret), InferTy::Func(rhs_param, rhs_ret)) => {
@@ -449,6 +459,41 @@ pub(super) fn unify(
         (InferTy::Record(lhs_row), InferTy::Record(rhs_row)) => {
             unify_rows(TypeDefKind::Struct, lhs_row, rhs_row, context, session)
         }
+        // Handle Projection vs concrete type                                                                         13:48:55 [35/2876]
+        (
+            InferTy::Projection {
+                base: box base_ty,
+                associated,
+                protocol_id,
+            },
+            other,
+        )
+        | (
+            other,
+            InferTy::Projection {
+                base: box base_ty,
+                associated,
+                protocol_id,
+            },
+        ) => {
+            let projection = InferTy::Projection {
+                base: Box::new(base_ty.clone()),
+                associated: associated.clone(),
+                protocol_id: *protocol_id,
+            };
+            let normalized = context.normalize(projection.clone(), session);
+
+            // If normalization resolved it (not still a Projection), unify recursively
+            if !matches!(&normalized, InferTy::Projection { .. }) {
+                unify(&normalized, other, context, session)
+            } else {
+                // Base is still unknown - error (the constraint solver will defer)
+                Err(TypeError::InvalidUnification(
+                    projection.into(),
+                    other.clone().into(),
+                ))
+            }
+        }
 
         (_, InferTy::Rigid(_)) | (InferTy::Rigid(_), _) => {
             Err(TypeError::InvalidUnification(lhs.into(), rhs.into()))
@@ -465,6 +510,10 @@ pub(super) fn unify(
 }
 
 pub fn curry<I: IntoIterator<Item = InferTy>>(params: I, ret: InferTy) -> InferTy {
+    let mut params = params.into_iter().collect_vec();
+    if params.is_empty() {
+        params.push(InferTy::Void);
+    }
     params
         .into_iter()
         .collect::<Vec<_>>()
@@ -535,9 +584,12 @@ pub(super) fn substitute(ty: InferTy, substitutions: &FxHashMap<InferTy, InferTy
                 .collect(),
         ),
         InferTy::Record(row) => InferTy::Record(Box::new(substitute_row(*row, substitutions))),
-        InferTy::Nominal { symbol, box row } => InferTy::Nominal {
+        InferTy::Nominal { symbol, type_args } => InferTy::Nominal {
             symbol,
-            row: Box::new(substitute_row(row, substitutions)),
+            type_args: type_args
+                .into_iter()
+                .map(|t| substitute(t, substitutions))
+                .collect(),
         },
     }
 }
@@ -625,9 +677,12 @@ pub(super) fn instantiate_ty(
             substitutions,
             level,
         ))),
-        InferTy::Nominal { symbol, box row } => InferTy::Nominal {
+        InferTy::Nominal { symbol, type_args } => InferTy::Nominal {
             symbol,
-            row: Box::new(instantiate_row(node_id, row, substitutions, level)),
+            type_args: type_args
+                .into_iter()
+                .map(|t| instantiate_ty(node_id, t, substitutions, level))
+                .collect(),
         },
     }
 }

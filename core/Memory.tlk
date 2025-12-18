@@ -1,0 +1,11 @@
+func _alloc(count: Int) -> RawPtr {
+	@_ir(count) { %? = alloc Byte $0 }
+}
+
+func _copy(from: RawPtr, to: RawPtr, length: Int) -> Void {
+	@_ir(from, to, length) { copy Byte $0 $1 $2 }
+}
+
+func _ptr_add(ptr: RawPtr, offset: Int) -> RawPtr {
+	@_ir(ptr, offset) { %? = add RawPtr $0 $1 }
+}

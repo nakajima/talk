@@ -1,6 +1,8 @@
 use std::fmt::Display;
 
 use itertools::Itertools;
+use rustc_hash::FxHashMap;
+use tracing::span::EnteredSpan;
 
 use crate::{
     ir::{
@@ -8,33 +10,29 @@ use crate::{
         function::Function,
         instruction::{CmpOperator, Instruction},
         ir_ty::IrTy,
+        list::List,
         program::Program,
         register::Register,
         terminator::Terminator,
+        value::{Addr, Reference, Value},
     },
     label::Label,
-    name_resolution::symbol::Symbol,
+    name_resolution::symbol::{Symbol, set_symbol_names},
 };
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum Reference {
-    Func(Symbol),
-    Register { frame: usize, register: Register },
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum Value {
-    Int(i64),
-    Float(f64),
-    Bool(bool),
-    Record(Option<Symbol>, Vec<Value>),
-    Func(Symbol),
-    Void,
-    Ref(Reference),
-    RawPtr(usize),
-    Buffer(Vec<u8>),
-    Uninit,
-}
+// #[derive(Debug, Clone, PartialEq)]
+// pub enum Value {
+//     Int(i64),
+//     Float(f64),
+//     Bool(bool),
+//     Record(Option<Symbol>, Vec<Value>),
+//     Func(Symbol),
+//     Void,
+//     Ref(Reference),
+//     RawPtr(usize),
+//     Buffer(Vec<u8>),
+//     Uninit,
+// }
 
 #[allow(clippy::panic)]
 #[allow(clippy::should_implement_trait)]
@@ -43,6 +41,8 @@ impl Value {
         match (&self, &other) {
             (Self::Int(lhs), Self::Int(rhs)) => Self::Int(lhs + rhs),
             (Self::Float(lhs), Self::Float(rhs)) => Self::Float(lhs + rhs),
+            // Pointer arithmetic: RawPtr + Int -> RawPtr
+            (Self::RawPtr(ptr), Self::Int(offset)) => Self::RawPtr(Addr(ptr.0 + *offset as usize)),
             _ => panic!("can't add {self:?} and {other:?}"),
         }
     }
@@ -135,11 +135,13 @@ pub struct Frame {
     pc: usize,
     current_block: usize,
     prev_block: Option<usize>,
+    _span: EnteredSpan,
 }
 
 impl Frame {
-    pub fn new(dest: Register, ret: Option<Symbol>) -> Self {
+    pub fn new(span: EnteredSpan, dest: Register, ret: Option<Symbol>) -> Self {
         Self {
+            _span: span,
             ret,
             dest,
             registers: Default::default(),
@@ -167,59 +169,66 @@ impl Display for IR {
 }
 
 #[derive(Default)]
-pub struct Heap {
-    mem: Vec<Value>,
-    next_addr: usize,
+pub struct Memory {
+    pub mem: Vec<u8>,
 }
 
 pub struct Interpreter {
     program: Program,
+    symbol_names: Option<FxHashMap<Symbol, String>>,
     frames: Vec<Frame>,
     current_func: Option<Function<IrTy>>,
     main_result: Option<Value>,
-    heap: Heap,
+    memory: Memory,
+    heap_start: usize,
 }
 
 #[allow(clippy::unwrap_used)]
 #[allow(clippy::expect_used)]
 #[allow(clippy::panic)]
 impl Interpreter {
-    pub fn new(program: Program) -> Self {
-        if std::env::var("SHOW_IR").is_ok() {
-            println!("{program}");
-        }
+    pub fn new(program: Program, symbol_names: Option<FxHashMap<Symbol, String>>) -> Self {
+        let heap_start = program.static_memory.data.len();
 
         Self {
             program,
             frames: Default::default(),
             current_func: None,
             main_result: None,
-            heap: Default::default(),
+            memory: Default::default(),
+            heap_start,
+            symbol_names,
         }
     }
 
-    pub fn run(mut self) -> Value {
+    pub fn run(&mut self) -> Value {
+        if std::env::var("SHOW_IR").is_ok() {
+            let _guard = self
+                .symbol_names
+                .as_ref()
+                .map(|names| set_symbol_names(names.clone()));
+            println!("{}", self.program);
+        }
+
         #[allow(clippy::expect_used)]
         let entrypoint = self
             .program
             .entrypoint()
             .expect("No entrypoint found for program.");
 
-        self.call(entrypoint.name.symbol().unwrap(), vec![], Register::MAIN);
+        self.call(entrypoint.name, vec![], Register::MAIN);
 
         while !self.frames.is_empty() {
             self.next();
         }
 
-        self.main_result.unwrap_or(Value::Void)
+        self.main_result.clone().unwrap_or(Value::Void)
     }
 
     pub fn call(&mut self, function: Symbol, args: Vec<Value>, dest: Register) {
-        let caller_name = self.current_func.as_ref().map(|f| f.name.symbol().unwrap());
+        let caller_name = self.current_func.as_ref().map(|f| f.name);
         if let Some(callee_func) = self.current_func.take() {
-            self.program
-                .functions
-                .insert(callee_func.name.symbol().unwrap(), callee_func);
+            self.program.functions.insert(callee_func.name, callee_func);
         }
 
         let func = self
@@ -227,6 +236,11 @@ impl Interpreter {
             .functions
             .shift_remove(&function)
             .unwrap_or_else(|| {
+                let _guard = self
+                    .symbol_names
+                    .as_ref()
+                    .map(|names| set_symbol_names(names.clone()));
+
                 panic!(
                     "did not find function: {:?} {:?}",
                     function,
@@ -237,7 +251,17 @@ impl Interpreter {
                         .collect_vec()
                 )
             });
-        let mut frame = Frame::new(dest, caller_name);
+
+        if func.blocks.is_empty() {
+            return;
+        }
+
+        let _guard = self
+            .symbol_names
+            .as_ref()
+            .map(|names| set_symbol_names(names.clone()));
+        let span = tracing::trace_span!("call", func = format!("{function}")).entered();
+        let mut frame = Frame::new(span, dest, caller_name);
         frame.registers.resize(func.register_count, Value::Uninit);
         for (i, arg) in args.into_iter().enumerate() {
             frame.registers[i] = arg;
@@ -251,7 +275,7 @@ impl Interpreter {
     pub fn next(&mut self) {
         let next_instruction = self.next_instr();
 
-        tracing::trace!("{next_instruction}");
+        tracing::trace!("{}", self.display_ir(&next_instruction));
 
         match next_instruction {
             IR::Phi(phi) => {
@@ -275,9 +299,7 @@ impl Interpreter {
                     unreachable!("but where did the frame come from");
                 };
 
-                self.program
-                    .functions
-                    .insert(func.name.symbol().unwrap(), func);
+                self.program.functions.insert(func.name, func);
 
                 if let Some(ret) = frame.ret {
                     let ret_func = self.program.functions.shift_remove(&ret).unwrap();
@@ -289,8 +311,10 @@ impl Interpreter {
                 let cond_val = self.val(cond);
                 let next_block = if cond_val == Value::Bool(true) {
                     conseq
-                } else {
+                } else if cond_val == Value::Bool(false) {
                     alt
+                } else {
+                    panic!("Branch condition not a bool: {cond_val:?}");
                 };
 
                 self.jump(next_block);
@@ -319,11 +343,20 @@ impl Interpreter {
             IR::Instr(Instruction::Call {
                 dest, callee, args, ..
             }) => {
-                let func = self.func(callee);
-                let args = args.items.iter().map(|v| self.val(v.clone())).collect();
-                self.call(func, args, dest);
+                let mut arg_vals: Vec<Value> =
+                    args.items.iter().map(|v| self.val(v.clone())).collect();
+
+                let val = self.val(callee);
+                let (func, env) = self.func(val);
+                if !env.items.is_empty() {
+                    let env_vals: Vec<Value> =
+                        env.items.iter().map(|v| self.val(v.clone())).collect();
+                    arg_vals.insert(0, Value::Record(None, env_vals));
+                }
+
+                self.call(func, arg_vals, dest);
             }
-            IR::Instr(Instruction::Struct {
+            IR::Instr(Instruction::Nominal {
                 dest, record, sym, ..
             }) => {
                 let fields = record.items.iter().map(|v| self.val(v.clone())).collect();
@@ -339,12 +372,18 @@ impl Interpreter {
                 field,
                 ..
             }) => {
-                let Label::Positional(idx) = field else {
-                    panic!("did not get positional index for record field: {field:?}");
+                let Value::Record(sym, fields) = self.read_register(&record) else {
+                    panic!(
+                        "did not get record from {record:?}: {:?}",
+                        self.read_register(&record)
+                    );
                 };
 
-                let Value::Record(_, fields) = self.read_register(&record) else {
-                    panic!("did not get record from {record:?}");
+                let idx = match field {
+                    Label::Positional(idx) => idx,
+                    Label::Named(name) => {
+                        panic!("named field access not supported for {sym:?}.{name}");
+                    }
                 };
 
                 self.write_register(&dest, fields[idx].clone());
@@ -369,11 +408,19 @@ impl Interpreter {
             }
             IR::Instr(Instruction::Ref { dest, val, .. }) => {
                 let val = match val {
-                    super::value::Value::Func(name) => Reference::Func(name.symbol().unwrap()),
+                    super::value::Value::Func(name) => Reference::Func(name),
                     super::value::Value::Reg(reg) => Reference::Register {
                         frame: self.frames.len(),
                         register: reg.into(),
                     },
+                    Value::Closure { func, env } => Reference::Closure(
+                        func,
+                        env.items
+                            .into_iter()
+                            .map(|f| self.val(f))
+                            .collect_vec()
+                            .into(),
+                    ),
                     _ => unimplemented!("don't know how to take ref of {val:?}"),
                 };
 
@@ -393,24 +440,215 @@ impl Interpreter {
 
                 self.write_register(&dest, val);
             }
-            IR::Instr(Instruction::_Print { val }) => match self.val(val) {
-                Value::Int(val) => println!("{val}"),
-                Value::Float(val) => println!("{val}"),
-                Value::Bool(val) => println!("{val}"),
-                Value::Record(sym, values) => {
-                    if sym == Some(Symbol::String) {}
+            IR::Instr(Instruction::_Print { val }) => {
+                let val = self.val(val.clone());
+                println!("{}", self.display(val));
+            }
+            IR::Instr(Instruction::Alloc { dest, ty, count }) => {
+                let count = match self.val(count) {
+                    Value::Int(n) => n as usize,
+                    v => panic!("alloc count must be int, got {v:?}"),
+                };
 
-                    println!("{sym:?}{values:?}")
+                // Address in unified space = heap_start + current heap size
+                let addr = self.heap_start + self.memory.mem.len();
+
+                // Extend heap with zeroed bytes
+                self.memory
+                    .mem
+                    .resize(self.memory.mem.len() + ty.bytes_len() * count, 0);
+
+                self.write_register(&dest, Value::RawPtr(Addr(addr)));
+            }
+            IR::Instr(Instruction::Copy {
+                ty: _,
+                from,
+                to,
+                length,
+            }) => {
+                let from_addr = match self.val(from) {
+                    Value::RawPtr(a) => a,
+                    Value::Int(a) => Addr(a as usize),
+                    v => panic!("copy from must be RawPtr or Int, got {v:?}"),
+                };
+                let to_addr = match self.val(to) {
+                    Value::RawPtr(a) => a,
+                    Value::Int(a) => Addr(a as usize),
+                    v => panic!("copy to must be RawPtr or Int, got {v:?}"),
+                };
+                let len = match self.val(length) {
+                    Value::Int(n) => n as usize,
+                    v => panic!("copy length must be Int, got {v:?}"),
+                };
+
+                for i in 0..len {
+                    // Read byte from source
+                    let byte = if from_addr.0 < self.heap_start {
+                        // Source is in static memory
+                        self.program.static_memory.data[from_addr.0 + i]
+                    } else {
+                        // Source is in heap
+                        self.memory.mem[from_addr.0 - self.heap_start + i]
+                    };
+
+                    // Write byte to destination (must be heap, since static is read-only)
+                    let heap_idx = to_addr.0 - self.heap_start + i;
+                    self.memory.mem[heap_idx] = byte;
                 }
-                Value::Func(symbol) => println!("fn({symbol:?})"),
-                Value::Void => println!("void"),
-                Value::RawPtr(val) => println!("rawptr({val})"),
-                Value::Ref(reference) => println!("{reference:?}"),
-                Value::Uninit => println!("UNINIT"),
-                Value::Buffer(bytes) => println!("buf({bytes:?})"),
+            }
+            IR::Instr(Instruction::Load { dest, ty, addr }) => {
+                let addr_val = self.val(addr);
+                let Value::RawPtr(ptr) = addr_val else {
+                    panic!("Load expects RawPtr, got {addr_val:?}");
+                };
+
+                let size = ty.bytes_len();
+                let bytes = if ptr.0 < self.heap_start {
+                    // Static memory
+                    &self.program.static_memory.data[ptr.0..ptr.0 + size]
+                } else {
+                    // Heap memory
+                    let heap_idx = ptr.0 - self.heap_start;
+                    &self.memory.mem[heap_idx..heap_idx + size]
+                };
+
+                let value = match ty {
+                    IrTy::Int => Value::Int(i64::from_le_bytes(bytes.try_into().unwrap())),
+                    IrTy::Float => Value::Float(f64::from_le_bytes(bytes.try_into().unwrap())),
+                    IrTy::Bool => Value::Bool(bytes[0] != 0),
+                    IrTy::RawPtr => {
+                        Value::RawPtr(Addr(usize::from_le_bytes(bytes.try_into().unwrap())))
+                    }
+                    IrTy::Func(..) => Value::Func(Symbol::from_bytes(bytes.try_into().unwrap())),
+                    _ => panic!("Load not implemented for {ty:?}"),
+                };
+                self.write_register(&dest, value);
+            }
+
+            IR::Instr(Instruction::Store { value, addr, .. }) => {
+                let val = self.val(value);
+                let addr_val = self.val(addr);
+                let Value::RawPtr(ptr) = addr_val else {
+                    panic!("Store expects RawPtr, got {addr_val:?}");
+                };
+
+                let bytes = val.as_bytes();
+                let heap_idx = ptr.0 - self.heap_start;
+
+                for (i, byte) in bytes.iter().enumerate() {
+                    self.memory.mem[heap_idx + i] = *byte;
+                }
+            }
+
+            IR::Instr(Instruction::Move { from, to, .. }) => {
+                // Move is like Store but maybe with different semantics?
+                // If it's the same as Store:
+                let val = self.val(from);
+                let addr_val = self.val(to);
+                let Value::RawPtr(ptr) = addr_val else {
+                    panic!("Move expects RawPtr destination, got {addr_val:?}");
+                };
+
+                let bytes = val.as_bytes();
+                let heap_idx = ptr.0 - self.heap_start;
+
+                for (i, byte) in bytes.iter().enumerate() {
+                    self.memory.mem[heap_idx + i] = *byte;
+                }
+            }
+            IR::Instr(Instruction::Gep {
+                dest,
+                ty,
+                addr,
+                offset_index,
+            }) => {
+                let Value::RawPtr(ptr) = self.val(addr) else {
+                    panic!("Addr must be pointer")
+                };
+
+                let Value::Int(offset) = self.val(offset_index) else {
+                    panic!("offset_index must be int")
+                };
+
+                let offset = ty.bytes_len() * offset as usize;
+                let new_ptr = Value::RawPtr(Addr(ptr.0 + offset));
+                self.write_register(&dest, new_ptr);
+            }
+            IR::Instr(Instruction::Free { .. }) => unimplemented!(),
+        }
+    }
+
+    fn display_ir(&self, ir: &IR) -> String {
+        if let Some(names) = &self.symbol_names {
+            let _guard = set_symbol_names(names.clone());
+            format!("{ir}")
+        } else {
+            format!("{ir}")
+        }
+    }
+
+    fn display(&mut self, val: Value) -> String {
+        match val {
+            Value::Int(val) => format!("{val}"),
+            Value::Reg(reg) => format!("%{reg}"),
+            Value::Capture { .. } => format!("{val}"),
+            Value::Poison => "<POISON>".to_string(),
+            Value::Float(val) => format!("{val}"),
+            Value::Bool(val) => format!("{val}"),
+            Value::Record(sym, values) => {
+                if sym == Some(Symbol::String) {
+                    let Value::RawPtr(addr) = &values[0] else {
+                        unreachable!()
+                    };
+
+                    let Value::Int(len) = &values[1] else {
+                        unreachable!()
+                    };
+                    let len = *len as usize;
+
+                    let bytes: Vec<u8> = if addr.0 < self.heap_start {
+                        // String is in static memory
+                        self.program.static_memory.data[addr.0..addr.0 + len].to_vec()
+                    } else {
+                        // String is in heap memory
+                        let heap_idx = addr.0 - self.heap_start;
+                        self.memory.mem[heap_idx..heap_idx + len].to_vec()
+                    };
+
+                    let s = str::from_utf8(&bytes).unwrap();
+                    return s.to_string();
+                }
+
+                let values = values.into_iter().map(|v| self.display(v)).collect_vec();
+                let name = if let Some(sym) = sym {
+                    self.sym_to_str(&sym)
+                } else {
+                    "".to_string()
+                };
+
+                format!("{name:?}({values:?})")
+            }
+            Value::Func(symbol) => format!("func {}()", self.sym_to_str(&symbol)),
+            Value::Closure { func, env } => format!("func {}[{env}]()", self.sym_to_str(&func)),
+            Value::Void => "void".into(),
+            Value::RawPtr(val) => format!("rawptr({})", val.0),
+            Value::Ref(reference) => match reference {
+                Reference::Func(sym) => format!("func {}()", self.sym_to_str(&sym)),
+                _ => format!("{reference:?}"),
             },
-            IR::Instr(Instruction::Alloc { dest, ty, count }) => {}
-            IR::Instr(Instruction::Free { .. } | Instruction::Load { .. }) => unimplemented!(),
+            Value::Uninit => "UNINIT".into(),
+            Value::RawBuffer(bytes) => format!("buf({bytes:?})"),
+        }
+    }
+
+    fn sym_to_str(&self, sym: &Symbol) -> String {
+        if let Some(symbol_names) = &self.symbol_names {
+            symbol_names
+                .get(sym)
+                .expect("did not get symbol name")
+                .clone()
+        } else {
+            format!("{sym:?}")
         }
     }
 
@@ -452,48 +690,58 @@ impl Interpreter {
             .clone()
     }
 
-    fn func(&self, val: super::value::Value) -> Symbol {
+    fn func(&self, val: Value) -> (Symbol, List<Value>) {
         match val {
-            super::value::Value::Reg(reg) => {
-                let Value::Func(symbol) = self.read_register(&Register(reg)) else {
-                    panic!(
-                        "didn't get func symbol from {val:?}: {:?}",
-                        self.read_register(&Register(reg))
-                    );
-                };
-
-                symbol
-            }
-            super::value::Value::Func(name) => name.symbol().unwrap(),
+            Value::Reg(reg) => match self.read_register(&Register(reg)) {
+                Value::Func(symbol) => (symbol, Default::default()),
+                Value::Closure { func, env } => (func, env),
+                _ => panic!(
+                    "didn't get func symbol from {val:?}: {:?}",
+                    self.read_register(&Register(reg))
+                ),
+            },
+            Value::Func(name) => (name, Default::default()),
+            Value::Ref(Reference::Func(sym)) => (sym, Default::default()),
+            Value::Ref(Reference::Closure(sym, env)) => (sym, env),
             _ => panic!("cannot get func from {val:?}"),
         }
     }
 
-    fn val(&mut self, val: super::value::Value) -> Value {
+    fn val(&mut self, val: Value) -> Value {
         match val {
             super::value::Value::Reg(reg) => self.read_register(&Register(reg)),
-            super::value::Value::Int(v) => Value::Int(v),
-            super::value::Value::Float(v) => Value::Float(v),
-            super::value::Value::Func(v) => Value::Func(v.symbol().unwrap()),
-            super::value::Value::Void => Value::Void,
-            super::value::Value::Bool(v) => Value::Bool(v),
-            super::value::Value::Uninit => Value::Uninit,
-            super::value::Value::RawPtr(v) => Value::RawPtr(v),
+            super::value::Value::Closure { func, env } => {
+                // Resolve env values now, while we're in the right frame
+                let resolved_env: Vec<Value> =
+                    env.items.iter().map(|v| self.val(v.clone())).collect();
+                Value::Closure {
+                    func,
+                    env: resolved_env.into(),
+                }
+            }
             super::value::Value::Poison => panic!("unreachable reached"),
-            super::value::Value::Buffer(v) => Value::Buffer(v),
+            _ => val,
         }
     }
 }
 
 #[cfg(test)]
 pub mod tests {
-    use crate::ir::lowerer_tests::tests::lower;
+    use crate::ir::lowerer_tests::tests::lower_module;
 
     use super::*;
 
+    pub fn interpret_with(input: &str) -> (Value, Interpreter) {
+        let module = lower_module(input);
+        let mut interpreter = Interpreter::new(module.program, Some(module.symbol_names));
+
+        (interpreter.run(), interpreter)
+    }
+
     pub fn interpret(input: &str) -> Value {
-        let program = lower(input);
-        let interpreter = Interpreter::new(program);
+        let module = lower_module(input);
+        let mut interpreter = Interpreter::new(module.program, Some(module.symbol_names));
+
         interpreter.run()
     }
 
@@ -665,5 +913,108 @@ pub mod tests {
             ),
             Value::Int(7)
         );
+    }
+
+    #[test]
+    fn interprets_string_plus() {
+        let (value, mut interpreter) = interpret_with("let a = \"hello \" + \"world\"; a");
+        let val = interpreter.display(value);
+        assert_eq!(val, format!("hello world"));
+    }
+
+    #[test]
+    fn interprets_closure() {
+        assert_eq!(
+            interpret(
+                "
+            let a = 123
+            func b() { a }
+            b()
+            "
+            ),
+            Value::Int(123)
+        );
+    }
+
+    #[test]
+    fn interprets_mut_closure() {
+        assert_eq!(
+            interpret(
+                "
+            let a = 123
+            func b() { a = a + 1; a }
+            b()
+            a
+            "
+            ),
+            Value::Int(124)
+        );
+    }
+
+    #[test]
+    fn interprets_nested_closure() {
+        assert_eq!(
+            interpret(
+                "
+            let a = 123
+            func b() {
+                func c() {
+                    a
+                }
+                c
+            }
+            b()()
+            "
+            ),
+            Value::Int(123)
+        );
+    }
+
+    #[test]
+    fn interprets_counter() {
+        assert_eq!(
+            interpret(
+                "
+            func makeCounter() {
+                let a = 0
+                func count() {
+                    a = a + 1
+                    a
+                }
+                count
+            }
+
+            let a = makeCounter()
+            let b = makeCounter()
+            a() ; a()
+            (a(), b())
+            "
+            ),
+            Value::Record(None, vec![Value::Int(3), Value::Int(1)])
+        )
+    }
+
+    #[test]
+    fn interprets_array_literal_properties() {
+        assert_eq!(
+            interpret(
+                "
+            [10,20,30].count
+            "
+            ),
+            Value::Int(3)
+        )
+    }
+
+    #[test]
+    fn interprets_array_get() {
+        assert_eq!(
+            interpret(
+                "
+            [10,20,30,40].get(1)
+            "
+            ),
+            Value::Int(20)
+        )
     }
 }

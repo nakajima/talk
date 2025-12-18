@@ -205,7 +205,10 @@ impl Constraint {
             Self::Conforms(conforms) => {
                 let InferTy::Param(param) = session.apply(conforms.ty.clone(), substitutions)
                 else {
-                    unreachable!("didn't get param for conforms predicate: {:?}", conforms.ty);
+                    // If the type resolved to a concrete type (not a type parameter),
+                    // we can't generalize this constraint - it should have already been
+                    // checked during constraint solving.
+                    return None;
                 };
 
                 Predicate::Conforms {

@@ -3,7 +3,7 @@ use std::{error::Error, fmt::Display};
 use crate::{
     name::Name,
     name_resolution::symbol::{ProtocolId, Symbol},
-    types::infer_ty::InferTy,
+    types::{conformance::ConformanceKey, infer_ty::InferTy},
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -14,6 +14,10 @@ pub enum TypeError {
         expected: u8,
         actual: u8,
     },
+    AmbiguousWitness {
+        conformance_key: ConformanceKey,
+        label: String,
+    },
     InvalidUnification(Box<InferTy>, Box<InferTy>),
     OccursCheck(InferTy),
     CalleeNotCallable(InferTy),
@@ -21,11 +25,11 @@ pub enum TypeError {
     NameNotResolved(Name),
     MissingConformanceRequirement(String),
     TypeNotFound(String),
-    TypesDoesNotConform {
+    TypeDoesNotConform {
         symbol: Symbol,
         protocol_id: ProtocolId,
     },
-    TypesCannotConform {
+    TypeCannotConform {
         ty: InferTy,
         protocol_id: ProtocolId,
     },
@@ -35,6 +39,10 @@ impl Error for TypeError {}
 impl Display for TypeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::AmbiguousWitness {
+                conformance_key,
+                label,
+            } => write!(f, "Ambiguous witness for {conformance_key:?}.{label}"),
             Self::TypeConstructorNotFound(id) => write!(f, "Type constructor not found: {id:?}"),
             Self::GenericArgCount { expected, actual } => {
                 write!(f, "Expected {expected} type arguments, got {actual}")
@@ -56,10 +64,10 @@ impl Display for TypeError {
             Self::MissingConformanceRequirement(string) => {
                 write!(f, "Missing conformance requirement: {string:?}")
             }
-            Self::TypesDoesNotConform { .. } => {
+            Self::TypeDoesNotConform { .. } => {
                 write!(f, "Type does not conform wip")
             }
-            Self::TypesCannotConform { ty, .. } => {
+            Self::TypeCannotConform { ty, .. } => {
                 write!(f, "Type cannot conform: {ty:?}")
             }
             Self::NameNotResolved(name) => {

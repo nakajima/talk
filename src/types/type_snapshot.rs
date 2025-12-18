@@ -1,9 +1,8 @@
 use rustc_hash::FxHashMap;
 
 use crate::{
-    ast::AST,
+    ast::{AST, NameResolved},
     formatter::{Formatter, FormatterDecorator, annotate, concat},
-    name_resolution::name_resolver::NameResolved,
     node_id::NodeID,
     types::{infer_ty::InferTy, type_operations::UnificationSubstitutions},
 };

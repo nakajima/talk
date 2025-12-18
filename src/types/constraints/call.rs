@@ -6,7 +6,7 @@ use crate::{
         constraint_solver::{DeferralReason, SolveResult},
         constraints::store::{ConstraintId, ConstraintStore},
         infer_ty::{InferTy, Meta},
-        solve_context::SolveContext,
+        solve_context::{Solve, SolveContext},
         term_environment::EnvEntry,
         type_error::TypeError,
         type_operations::{curry, unify},
@@ -54,12 +54,31 @@ impl Call {
                     return SolveResult::Err(TypeError::NameNotResolved(name.clone()));
                 };
 
-                let Some(returns_type_entry) = session.lookup(&sym) else {
+                let Some(nominal) = session.lookup_nominal(&sym) else {
                     return SolveResult::Defer(DeferralReason::WaitingOnSymbol(sym));
                 };
 
-                let returns_type =
-                    returns_type_entry.instantiate(self.callee_id, constraints, context, session);
+                let type_args = if nominal.type_params.is_empty() {
+                    vec![]
+                } else if self.type_args.is_empty() {
+                    nominal
+                        .type_params
+                        .iter()
+                        .map(|_| session.new_ty_meta_var(context.level().next()))
+                        .collect()
+                } else if self.type_args.len() != nominal.type_params.len() {
+                    return SolveResult::Err(TypeError::GenericArgCount {
+                        expected: nominal.type_params.len() as u8,
+                        actual: self.type_args.len() as u8,
+                    });
+                } else {
+                    self.type_args.clone()
+                };
+
+                let returns_type = InferTy::Nominal {
+                    symbol: sym,
+                    type_args,
+                };
 
                 // TODO: Figure out if we're dealing with a struct vs an enum here and be more explicit.
                 // This is ok for now since enums can't have initializers and structs always have them.
@@ -72,7 +91,12 @@ impl Call {
                     if let Some(entry) = session.lookup(&initializer) {
                         entry.instantiate(self.callee_id, constraints, context, session)
                     } else {
-                        InferTy::Error(TypeError::TypeNotFound(format!("{initializer:?}")).into())
+                        InferTy::Error(
+                            TypeError::TypeNotFound(format!(
+                                "Initializer not found {initializer:?}"
+                            ))
+                            .into(),
+                        )
                     }
                 } else {
                     match session.lookup(&sym) {

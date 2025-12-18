@@ -1,5 +1,4 @@
 use std::assert_matches::assert_matches;
-
 use tracing::instrument;
 
 use crate::{
@@ -9,15 +8,13 @@ use crate::{
     types::{
         constraint_solver::{DeferralReason, SolveResult},
         constraints::store::{ConstraintId, ConstraintStore},
-        infer_row::InferRow,
         infer_ty::{InferTy, Meta, TypeParamId},
         passes::uncurry_function,
         predicate::Predicate,
         solve_context::SolveContext,
-        type_catalog::MemberWitness,
         type_error::TypeError,
-        type_operations::{curry, unify},
-        type_session::{MemberSource, TypeSession},
+        type_operations::{curry, instantiate_ty, unify},
+        type_session::TypeSession,
     },
 };
 
@@ -90,15 +87,21 @@ impl Member {
                 return SolveResult::Solved(Default::default());
             }
             InferTy::Primitive(symbol) => {
-                return self.lookup_nominal_member(constraints, context, session, symbol, None);
-            }
-            InferTy::Nominal { symbol, box row } => {
                 return self.lookup_nominal_member(
                     constraints,
                     context,
                     session,
                     symbol,
-                    Some(row),
+                    Default::default(),
+                );
+            }
+            InferTy::Nominal { symbol, type_args } => {
+                return self.lookup_nominal_member(
+                    constraints,
+                    context,
+                    session,
+                    symbol,
+                    type_args,
                 );
             }
             _ => {}
@@ -137,6 +140,7 @@ impl Member {
                         self.label.to_string(),
                     ));
                 };
+
                 let req_ty = entry.instantiate(self.node_id, constraints, context, session);
                 let (req_self, req_func) = consume_self(&req_ty);
 
@@ -147,17 +151,13 @@ impl Member {
                     Err(e) => return SolveResult::Err(e),
                 }
 
-                // Store the method requirement symbol directly as a concrete witness
-                // since it represents the protocol method that will be called
-                session.type_catalog.member_witnesses.insert(
-                    self.node_id,
-                    MemberWitness::Requirement(req, req_self.clone()),
-                );
-
                 match unify(ty, &req_func, context, session) {
                     Ok(metas) => solved_metas.extend(metas),
                     Err(e) => return SolveResult::Err(e),
                 };
+
+                // Record the witness for protocol member access
+                session.protocol_member_witnesses.insert(self.node_id, req);
 
                 return SolveResult::Solved(solved_metas);
             }
@@ -178,30 +178,62 @@ impl Member {
         nominal_symbol: &Symbol,
     ) -> SolveResult {
         let Some(member_sym) = session.lookup_static_member(nominal_symbol, &self.label) else {
-            return SolveResult::Err(TypeError::MemberNotFound(
-                self.receiver.clone(),
-                self.label.to_string(),
-            ));
+            return SolveResult::Defer(DeferralReason::WaitingOnSymbol(*nominal_symbol));
         };
 
         let mut member_ty = if let Some(entry) = session.lookup(&member_sym) {
             entry.instantiate(self.node_id, constraints, context, session)
         } else {
-            InferTy::Error(
-                TypeError::MemberNotFound(self.receiver.clone(), self.label.to_string()).into(),
-            )
+            return SolveResult::Defer(DeferralReason::WaitingOnSymbol(member_sym));
+            // InferTy::Error(
+            //     TypeError::MemberNotFound(self.receiver.clone(), self.label.to_string()).into(),
+            // )
         };
 
         if let Symbol::Variant(..) = member_sym {
+            let Some(nominal) = session.lookup_nominal(nominal_symbol) else {
+                return SolveResult::Defer(DeferralReason::WaitingOnSymbol(*nominal_symbol));
+            };
+
+            let Some(variant) = nominal.variants.get(&self.label) else {
+                return SolveResult::Defer(DeferralReason::WaitingOnSymbol(member_sym));
+            };
+
             member_ty = if let Some(enum_entry) = session.lookup(nominal_symbol) {
-                let enum_ty = enum_entry.instantiate(self.node_id, constraints, context, session);
-                match member_ty {
-                    InferTy::Void => enum_ty,
-                    InferTy::Tuple(values) => curry(values, enum_ty),
-                    other => curry(vec![other], enum_ty),
+                let enum_ty = instantiate_ty(
+                    self.node_id,
+                    enum_entry._as_ty(),
+                    &context.instantiations,
+                    context.level,
+                );
+
+                match variant.len() {
+                    0 => enum_ty,
+                    _ => curry(
+                        variant.iter().map(|v| {
+                            instantiate_ty(
+                                self.node_id,
+                                v.clone(),
+                                &context.instantiations,
+                                context.level,
+                            )
+                        }),
+                        instantiate_ty(
+                            self.node_id,
+                            enum_ty,
+                            &context.instantiations,
+                            context.level,
+                        ),
+                    ),
                 }
             } else {
-                InferTy::Error(TypeError::TypeNotFound(format!("{nominal_symbol:?}")).into())
+                InferTy::Error(
+                    TypeError::TypeNotFound(format!(
+                        "{nominal_symbol:?} while looking up static member {:?}",
+                        self.label
+                    ))
+                    .into(),
+                )
             };
         }
 
@@ -211,106 +243,92 @@ impl Member {
         }
     }
 
-    #[instrument(skip(self, context, session, constraints))]
+    #[instrument(skip(self, context, session, constraints), fields(label = self.label.to_string()))]
     fn lookup_nominal_member(
         &self,
         constraints: &mut ConstraintStore,
         context: &mut SolveContext,
         session: &mut TypeSession,
         symbol: &Symbol,
-        row: Option<&InferRow>,
+        type_args: &[InferTy],
     ) -> SolveResult {
         let mut solved_metas: Vec<Meta> = Default::default();
-        let Some((member_sym, source)) = session.lookup_member(symbol, &self.label) else {
-            return SolveResult::Err(TypeError::MemberNotFound(
-                self.receiver.clone(),
-                self.label.to_string(),
-            ));
+
+        // First get the nominal - if it doesn't exist yet, defer
+        let Some(nominal) = session.lookup_nominal(symbol) else {
+            return SolveResult::Defer(DeferralReason::WaitingOnSymbol(*symbol));
         };
 
-        session
-            .type_catalog
-            .member_witnesses
-            .insert(self.node_id, MemberWitness::Concrete(member_sym));
+        // Try to find a method/variant via lookup_member
+        if let Some((member_sym, _source)) = session.lookup_member(symbol, &self.label) {
+            match member_sym {
+                Symbol::InstanceMethod(..) | Symbol::MethodRequirement(..) => {
+                    let Some(entry) = session.lookup(&member_sym) else {
+                        return SolveResult::Err(TypeError::MemberNotFound(
+                            self.receiver.clone(),
+                            self.label.to_string(),
+                        ));
+                    };
 
-        match member_sym {
-            Symbol::InstanceMethod(..) => {
-                let Some(entry) = session.lookup(&member_sym) else {
-                    return SolveResult::Err(TypeError::MemberNotFound(
-                        self.receiver.clone(),
-                        self.label.to_string(),
-                    ));
-                };
-                let method = entry.instantiate(self.node_id, constraints, context, session);
-                let method = session.apply(method, &mut context.substitutions);
-                let (method_receiver, method_fn) = consume_self(&method);
+                    let method = entry.instantiate(self.node_id, constraints, context, session);
+                    let method = session.apply(method, &mut context.substitutions);
+                    let (method_receiver, method_fn) = consume_self(&method);
 
-                if let MemberSource::Protocol(protocol_id) = source {
-                    tracing::trace!("member found in protocol: {protocol_id:?}");
+                    match unify(&method_receiver, &self.receiver, context, session) {
+                        Ok(metas) => solved_metas.extend(metas),
+                        Err(e) => return SolveResult::Err(e),
+                    };
+
+                    match unify(&method_fn, &self.ty, context, session) {
+                        Ok(metas) => solved_metas.extend(metas),
+                        Err(e) => return SolveResult::Err(e),
+                    };
+
+                    return SolveResult::Solved(solved_metas);
                 }
+                Symbol::Variant(..) => {
+                    let Some(values) = nominal
+                        .substituted_variant_values(type_args)
+                        .get(&self.label)
+                        .cloned()
+                    else {
+                        return SolveResult::Err(TypeError::MemberNotFound(
+                            self.receiver.clone(),
+                            self.label.to_string(),
+                        ));
+                    };
 
-                match unify(&method_receiver, &self.receiver, context, session) {
-                    Ok(metas) => solved_metas.extend(metas),
-                    Err(e) => return SolveResult::Err(e),
-                };
+                    let constructor_ty = match values.len() {
+                        0 => self.receiver.clone(),
+                        _ => curry(values, self.receiver.clone()),
+                    };
 
-                match unify(&method_fn, &self.ty, context, session) {
-                    Ok(metas) => solved_metas.extend(metas),
-                    Err(e) => return SolveResult::Err(e),
-                };
-
-                return SolveResult::Solved(solved_metas);
+                    constraints.wants_equals(constructor_ty, self.ty.clone());
+                    return SolveResult::Solved(Default::default());
+                }
+                Symbol::StaticMethod(..) => {
+                    return self.lookup_static_member(constraints, context, session, symbol);
+                }
+                _ => (),
             }
-            Symbol::Variant(..) => {
-                let Some(row) = row else {
-                    return SolveResult::Err(TypeError::ExpectedRow(self.receiver.clone()));
-                };
-
-                let Some(variant) = self.lookup_variant(row) else {
-                    return SolveResult::Err(TypeError::MemberNotFound(
-                        self.receiver.clone(),
-                        self.label.to_string(),
-                    ));
-                };
-
-                let constructor_ty = match variant {
-                    InferTy::Void => self.receiver.clone(),
-                    InferTy::Tuple(values) => curry(values, self.receiver.clone()),
-                    other => curry(vec![other], self.receiver.clone()),
-                };
-
-                constraints.wants_equals(constructor_ty, self.ty.clone());
-                return SolveResult::Solved(Default::default());
-            }
-            Symbol::StaticMethod(..) => {
-                return self.lookup_static_member(constraints, context, session, symbol);
-            }
-            _ => (),
         }
 
         // If all else fails, see if it's a property
-        let Some(row) = row else {
-            return SolveResult::Err(TypeError::ExpectedRow(self.receiver.clone()));
-        };
-        constraints._has_field(
-            row.clone(),
-            self.label.clone(),
-            self.ty.clone(),
-            &constraints.copy_group(self.id),
-        );
-        SolveResult::Solved(Default::default())
-    }
-
-    fn lookup_variant(&self, row: &InferRow) -> Option<InferTy> {
-        if let InferRow::Extend { row, label, ty } = row {
-            if *label == self.label {
-                return Some(ty.clone());
+        if let Some(ty) = nominal
+            .substitute_properties(type_args)
+            .get(&self.label)
+            .cloned()
+        {
+            match unify(&self.ty, &ty, context, session) {
+                Ok(vars) => SolveResult::Solved(vars),
+                Err(e) => SolveResult::Err(e),
             }
-
-            return self.lookup_variant(row);
+        } else {
+            SolveResult::Err(TypeError::MemberNotFound(
+                self.receiver.clone(),
+                self.label.to_string(),
+            ))
         }
-
-        None
     }
 }
 
