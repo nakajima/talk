@@ -61,6 +61,8 @@ impl Doc {
     }
 }
 
+const SINGLE_LINE_FUNC_MAX_WIDTH: usize = 40;
+
 pub fn wrap(before: Doc, inner: Doc, after: Doc) -> Doc {
     concat(before, concat(inner, after))
 }
@@ -526,12 +528,26 @@ impl<'a> Formatter<'a> {
     }
 
     fn format_block(&self, block: &Block) -> Doc {
+        self.format_block_inner(block, true)
+    }
+
+    fn format_block_multiline(&self, block: &Block) -> Doc {
+        self.format_block_inner(block, false)
+    }
+
+    fn format_block_inner(&self, block: &Block, allow_single_line: bool) -> Doc {
         if block.body.is_empty() {
-            return concat(text("{"), text("}"));
+            if allow_single_line {
+                return concat(text("{"), text("}"));
+            }
+            return concat(text("{"), concat(hardline(), text("}")));
         }
 
         // Handle the special case for single-line blocks
-        if block.body.len() == 1 && !Self::contains_control_flow(&block.body[0]) {
+        if allow_single_line
+            && block.body.len() == 1
+            && !Self::contains_control_flow(&block.body[0])
+        {
             return group(concat(
                 text("{"),
                 concat(
@@ -1037,9 +1053,16 @@ impl<'a> Formatter<'a> {
             );
         }
 
-        // Check if the body is a single-statement block that could be formatted inline
-        if func.body.body.len() == 1 && !Self::contains_control_flow(&func.body.body[0]) {
-            return group(concat_space(result, self.format_block(&func.body)));
+        // Check if the body could be formatted inline
+        if func.body.body.is_empty()
+            || (func.body.body.len() == 1 && !Self::contains_control_flow(&func.body.body[0]))
+        {
+            let inline = concat_space(result.clone(), self.format_block(&func.body));
+            if Self::flat_width(&inline).is_some_and(|width| width <= SINGLE_LINE_FUNC_MAX_WIDTH) {
+                return group(inline);
+            }
+
+            return concat_space(result, self.format_block_multiline(&func.body));
         }
 
         concat_space(result, self.format_block(&func.body))
@@ -1058,9 +1081,16 @@ impl<'a> Formatter<'a> {
             ),
         );
 
-        // Check if the body is a single-statement block that could be formatted inline
-        if body.body.len() == 1 && !Self::contains_control_flow(&body.body[0]) {
-            return group(concat_space(result, self.format_block(body)));
+        // Check if the body could be formatted inline
+        if body.body.is_empty()
+            || (body.body.len() == 1 && !Self::contains_control_flow(&body.body[0]))
+        {
+            let inline = concat_space(result.clone(), self.format_block(body));
+            if Self::flat_width(&inline).is_some_and(|width| width <= SINGLE_LINE_FUNC_MAX_WIDTH) {
+                return group(inline);
+            }
+
+            return concat_space(result, self.format_block_multiline(body));
         }
 
         concat_space(result, self.format_block(body))
@@ -1279,7 +1309,7 @@ impl<'a> Formatter<'a> {
     }
 
     fn format_associated(&self, generic: &GenericDecl) -> Doc {
-        concat_space(text("type"), self.format_generic_decl(generic))
+        concat_space(text("associated"), self.format_generic_decl(generic))
     }
 
     fn format_func_signature(&self, sig: &FuncSignature) -> Doc {
@@ -1444,6 +1474,30 @@ impl<'a> Formatter<'a> {
         }
     }
 
+    fn flat_width(doc: &Doc) -> Option<usize> {
+        let mut width = 0usize;
+        let mut queue = vec![doc];
+
+        while let Some(current_doc) = queue.pop() {
+            match current_doc {
+                Doc::Empty => continue,
+                Doc::Annotation(_) => continue,
+                Doc::Text(s) => width += s.len(),
+                Doc::Line => width += 1,
+                Doc::Softline => continue,
+                Doc::Hardline => return None,
+                Doc::Concat(left, right) => {
+                    queue.push(right);
+                    queue.push(left);
+                }
+                Doc::Nest(_, nested_doc) => queue.push(nested_doc),
+                Doc::Group(grouped_doc) => queue.push(grouped_doc),
+            }
+        }
+
+        Some(width)
+    }
+
     fn fits(remaining_width: isize, doc: &Doc) -> bool {
         let mut width = remaining_width;
         let mut queue = vec![doc];
@@ -1468,11 +1522,33 @@ impl<'a> Formatter<'a> {
     }
 }
 
+fn adjust_trailing_newlines(input: &str, mut output: String) -> String {
+    let input_trailing = input
+        .as_bytes()
+        .iter()
+        .rev()
+        .take_while(|&&b| b == b'\n')
+        .count();
+    let trimmed = output.trim_end_matches('\n');
+    output.truncate(trimmed.len());
+    for _ in 0..input_trailing {
+        output.push('\n');
+    }
+    output
+}
+
 #[allow(clippy::unwrap_used)]
 pub fn format_string(string: &str) -> String {
     let lexer = Lexer::new(string);
     match Parser::new("", FileID(0), lexer).parse() {
-        Ok((ast, _diagnostics)) => format(&ast, 80),
+        Ok((ast, _diagnostics)) => {
+            let formatted = if ast.roots.is_empty() {
+                string.to_string()
+            } else {
+                format(&ast, 80)
+            };
+            adjust_trailing_newlines(string, formatted)
+        }
         Err(_err) => string.to_string(),
     }
 }
@@ -1498,14 +1574,19 @@ mod formatter_tests {
     use crate::parser::Parser;
 
     fn parse(code: &str) -> AST<Parsed> {
-        let lexer = Lexer::new(code);
+        let lexer = Lexer::preserving_comments(code);
         let parser = Parser::new("-", FileID(0), lexer);
         parser.parse().unwrap().0
     }
 
     fn format_code(input: &str, width: usize) -> String {
         let ast = parse(input);
-        format(&ast, width)
+        let formatted = if ast.roots.is_empty() {
+            input.to_string()
+        } else {
+            format(&ast, width)
+        };
+        adjust_trailing_newlines(input, formatted)
     }
 
     #[test]
@@ -1844,5 +1925,25 @@ mod formatter_tests {
             format_code("func outer() { func inner() {} }", 80),
             "func outer() {\n\tfunc inner() {}\n}"
         );
+    }
+
+    #[test]
+    fn test_single_line_function_threshold() {
+        assert_eq!(
+            format_code(
+                "func very_long_function_name(param_one: Int, param_two: Int) { 1 }",
+                80
+            ),
+            "func very_long_function_name(param_one: Int, param_two: Int) {\n\t1\n}"
+        );
+    }
+
+    #[test]
+    fn core_smoke_test() {
+        // Make sure core is the same before and after formatting
+        for path in std::fs::read_dir("./core").unwrap() {
+            let code = std::fs::read_to_string(path.unwrap().path()).unwrap();
+            assert_eq!(code, format_code(&code, 80));
+        }
     }
 }

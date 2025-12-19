@@ -1,164 +1,156 @@
 protocol Add {
-  associated RHS
-  associated Ret
-  func add(rhs: RHS) -> Ret
+	associated RHS
+	associated Ret
+	func add(rhs: RHS) -> Ret
 }
 
 protocol Subtract {
-  associated RHS
-  associated Ret
+	associated RHS
+	associated Ret
 
-  func minus(rhs: RHS) -> Ret
+	func minus(rhs: RHS) -> Ret
 }
 
 protocol Multiply {
-  associated RHS
-  associated Ret
+	associated RHS
+	associated Ret
 
-  func times(rhs: RHS) -> Ret
+	func times(rhs: RHS) -> Ret
 }
 
 protocol Divide {
-  associated RHS
-  associated Ret
+	associated RHS
+	associated Ret
 
-  func divide(rhs: RHS) -> Ret
+	func divide(rhs: RHS) -> Ret
 }
 
 protocol Equatable {
-  associated RHS
+	associated RHS
 
-  func equals(rhs: RHS) -> Bool
+	func equals(rhs: RHS) -> Bool
 
-  func notEquals(rhs: RHS) -> Bool {
-    if self.equals(rhs: rhs) {
-			false
-		} else {
-			true
-		}
-  }
+	func notEquals(rhs: RHS) -> Bool {
+		if self.equals(rhs: rhs) { false } else { true }
+	}
 }
 
 protocol Negatable {
-  associated Ret
+	associated Ret
 
-  func negated() -> Ret
+	func negated() -> Ret
 }
 
 protocol Not {
-  associated Ret
+	associated Ret
 
-  func not() -> Ret
+	func not() -> Ret
 }
 
 extend Bool: Not {
 	func not() -> Bool {
-    @_ir { %? = cmp Bool %0 == false }
+		@_ir { %? = cmp Bool %0 == false }
 	}
 }
 
 extend Int: Add {
-  func add(rhs: Int) -> Int {
-    @_ir { %? = add Int %0 %1 }
-  }
+	func add(rhs: Int) -> Int {
+		@_ir { %? = add Int %0 %1 }
+	}
 }
 
 extend Float: Add {
-  func add(rhs: Float) -> Float {
-    @_ir { %? = add Float %0 %1 }
-  }
+	func add(rhs: Float) -> Float {
+		@_ir { %? = add Float %0 %1 }
+	}
 }
 
 extend Int: Subtract {
-  func minus(rhs: Int) -> Int {
-    @_ir { %? = sub Int %0 %1 }
-  }
+	func minus(rhs: Int) -> Int {
+		@_ir { %? = sub Int %0 %1 }
+	}
 }
 
 extend Float: Subtract {
-  func minus(rhs: Float) -> Float {
-    @_ir { %? = sub Float %0 %1 }
-  }
+	func minus(rhs: Float) -> Float {
+		@_ir { %? = sub Float %0 %1 }
+	}
 }
 
 extend Int: Multiply {
-  func times(rhs: Int) -> Int {
-    @_ir { %? = mul Int %0 %1 }
-  }
+	func times(rhs: Int) -> Int {
+		@_ir { %? = mul Int %0 %1 }
+	}
 }
 
 extend Float: Multiply {
-  func times(rhs: Float) -> Float {
-    @_ir { %? = mul Float %0 %1 }
-  }
+	func times(rhs: Float) -> Float {
+		@_ir { %? = mul Float %0 %1 }
+	}
 }
 
 extend Int: Divide {
-  func divide(rhs: Int) -> Int {
-    @_ir { %? = div Int %0 %1 }
-  }
+	func divide(rhs: Int) -> Int {
+		@_ir { %? = div Int %0 %1 }
+	}
 }
 
 extend Float: Divide {
-  func divide(rhs: Float) -> Float {
-    @_ir { %? = div Float %0 %1 }
-  }
+	func divide(rhs: Float) -> Float {
+		@_ir { %? = div Float %0 %1 }
+	}
 }
 
-// Equatable Conformances (x == y)
-
 extend Int: Equatable {
-  func equals(rhs: Int) -> Bool {
-    @_ir { %? = cmp Int %0 == %1 }
-  }
+	func equals(rhs: Int) -> Bool {
+		@_ir { %? = cmp Int %0 == %1 }
+	}
 }
 
 extend Float: Equatable {
-  func equals(rhs: Float) -> Bool {
-    @_ir { %? = cmp Float %0 == %1 }
-  }
+	func equals(rhs: Float) -> Bool {
+		@_ir { %? = cmp Float %0 == %1 }
+	}
 }
 
 extend Bool: Equatable {
-  func equals(rhs: Bool) -> Bool {
-    @_ir { %? = cmp Bool %0 == %1 }
-  }
+	func equals(rhs: Bool) -> Bool {
+		@_ir { %? = cmp Bool %0 == %1 }
+	}
 }
 
-// Negatable Conformances (-x)
-
 extend Int: Negatable {
-  func negated() -> Int {
-    @_ir { %? = sub Int 0 %0 }
-  }
+	func negated() -> Int {
+		@_ir { %? = sub Int 0 %0 }
+	}
 }
 
 extend Float: Negatable {
-  func negated() -> Float {
-    @_ir { %? = sub Float 0 %0 }
-  }
+	func negated() -> Float {
+		@_ir { %? = sub Float 0 %0 }
+	}
 }
 
 protocol Comparable: Equatable {
-  associated RHS
+	associated RHS
 
-  func gt(rhs: RHS) -> Bool
+	func gt(rhs: RHS) -> Bool
 
-  func gte(rhs: RHS) -> Bool {
-    self.gt(rhs) || self.equals(rhs)
-  }
+	func gte(rhs: RHS) -> Bool {
+		self.gt(rhs) || self.equals(rhs)
+	}
 
-  func lt(rhs: RHS) -> Bool {
-    !self.gt(rhs) && !self.equals(rhs)
-  }
-	
-  func lte(rhs: RHS) -> Bool {
+	func lt(rhs: RHS) -> Bool {
+		!self.gt(rhs) && !self.equals(rhs)
+	}
+
+	func lte(rhs: RHS) -> Bool {
 		self.equals(rhs) || !self.gt(rhs)
-  }
+	}
 }
 
 extend Int: Comparable {
-  func gt(rhs: Int) -> Bool {
-    @_ir { %? = cmp Int %0 > %1 }
-  }
+	func gt(rhs: Int) -> Bool {
+		@_ir { %? = cmp Int %0 > %1 }
+	}
 }
