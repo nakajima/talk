@@ -615,10 +615,10 @@ impl NameResolver {
             | PatternKind::LiteralFalse => (),
             PatternKind::Wildcard => (),
             PatternKind::Struct {
-                struct_name,
-                fields,
-                field_names,
-                rest,
+                struct_name: _,
+                fields: _,
+                field_names: _,
+                rest: _,
             } => (),
         }
     }

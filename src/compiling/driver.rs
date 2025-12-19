@@ -9,7 +9,6 @@ use crate::{
         symbol::{Symbol, Symbols},
     },
     node_id::FileID,
-    node_meta_storage::NodeMetaStorage,
     parser::Parser,
     parser_error::ParserError,
     types::{

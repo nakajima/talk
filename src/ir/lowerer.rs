@@ -2822,7 +2822,9 @@ impl<'a> Lowerer<'a> {
                     }
                 };
 
-                let member = if let Some((member, _)) =
+                
+
+                if let Some((member, _)) =
                     self.types.catalog.lookup_member(&receiver_sym, label)
                 {
                     member
@@ -2831,9 +2833,7 @@ impl<'a> Lowerer<'a> {
                     member
                 } else {
                     return Ok((expr.ty.clone(), Default::default()));
-                };
-
-                member
+                }
             }
             _ => {
                 tracing::trace!("expr has no substitutions: {expr:?}");
