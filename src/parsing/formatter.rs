@@ -1713,7 +1713,7 @@ mod formatter_tests {
             .none() -> 0
         }"#;
 
-        let expected = "match x {\n\t.some(val) -> val\n\t.none -> 0\n}";
+        let expected = "match x {\n\t.some(val) -> val,\n\t.none -> 0\n}";
         assert_eq!(format_code(match_expr, 80), expected);
 
         // With enum prefix
@@ -1722,7 +1722,7 @@ mod formatter_tests {
             Option.none -> 0
         }"#;
 
-        let expected_enum = "match x {\n\tOption.some(val) -> val\n\tOption.none -> 0\n}";
+        let expected_enum = "match x {\n\tOption.some(val) -> val,\n\tOption.none -> 0\n}";
         assert_eq!(format_code(match_with_enum, 80), expected_enum);
     }
 
@@ -1821,7 +1821,7 @@ mod formatter_tests {
 
         assert_eq!(
             format_code("match x { true -> 1\nfalse -> 0 }", 80),
-            "match x {\n\ttrue -> 1\n\tfalse -> 0\n}"
+            "match x {\n\ttrue -> 1,\n\tfalse -> 0\n}"
         );
     }
 

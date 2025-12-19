@@ -3,9 +3,8 @@ struct TickEvent;
 use async_lsp::LanguageClient;
 use async_lsp::lsp_types::{
     CompletionOptions, Diagnostic, DiagnosticSeverity, Position, Range, SemanticTokens,
-    SemanticTokensResult,
-    TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions,
-    TextDocumentSyncSaveOptions, TextEdit,
+    SemanticTokensResult, TextDocumentSyncCapability, TextDocumentSyncKind,
+    TextDocumentSyncOptions, TextDocumentSyncSaveOptions, TextEdit,
 };
 use async_lsp::{
     ClientSocket,
@@ -25,6 +24,7 @@ use async_lsp::{
     tracing::TracingLayer,
 };
 use derive_visitor::{Drive, Visitor};
+use ignore::WalkBuilder;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::fs::File;
 use std::rc::Rc;
@@ -34,21 +34,15 @@ use tokio::spawn;
 use tower::ServiceBuilder;
 use tracing::Level;
 
-use crate::diagnostic::AnyDiagnostic;
 use crate::compiling::driver::{Driver, DriverConfig, Source};
 use crate::compiling::module::ModuleId;
+use crate::diagnostic::AnyDiagnostic;
 use crate::formatter;
 use crate::lexer::Lexer;
 use crate::lsp::semantic_tokens::collect;
-use crate::lsp::{
-    completion,
-    document::{Document, DocumentAnalysis},
-    semantic_tokens::TOKEN_TYPES,
-};
+use crate::lsp::{completion, document::Document, semantic_tokens::TOKEN_TYPES};
 use crate::name_resolution::symbol::Symbol;
 use crate::node_id::FileID;
-use crate::parser::Parser;
-use crate::parser_error::ParserError;
 use crate::node_kinds::{
     decl::Decl,
     expr::Expr,
@@ -59,6 +53,8 @@ use crate::node_kinds::{
     pattern::{Pattern, RecordFieldPattern},
     type_annotation::TypeAnnotation,
 };
+use crate::parser::Parser;
+use crate::parser_error::ParserError;
 
 #[allow(deprecated)]
 fn workspace_roots_from_initialize(params: &InitializeParams) -> Vec<PathBuf> {
@@ -96,80 +92,80 @@ struct ServerState {
 }
 
 pub async fn start() {
-	    let (server, _) = async_lsp::MainLoop::new_server(|client| {
-	        tokio::spawn({
-	            let client = client.clone();
-	            async move {
-	                let mut interval = tokio::time::interval(Duration::from_millis(200));
-	                loop {
-	                    interval.tick().await;
-	                    if client.emit(TickEvent).is_err() {
-	                        break;
-	                    }
-	                }
-	            }
-	        });
-	
-	        let mut router = Router::new(ServerState {
-	            client: client.clone(),
-	            counter: 0,
-	            documents: Default::default(),
-	            dirty_documents: Default::default(),
-	            workspaces: Default::default(),
-	            core: None,
-	            workspace_roots: Default::default(),
-	        });
-	
-	        router
-	            .request::<request::Initialize, _>(|st, params| {
-	                tracing::trace!("Initialize with {params:?}");
-	
-	                let roots = workspace_roots_from_initialize(&params);
-	                if !roots.is_empty() {
-	                    tracing::info!("workspace roots: {roots:?}");
-	                }
-	                st.workspace_roots = roots;
-	                st.workspaces.clear();
-	
-	                async move {
-	                    Ok(InitializeResult {
-	                        capabilities: ServerCapabilities {
-	                            hover_provider: Some(HoverProviderCapability::Simple(true)),
-	                            definition_provider: Some(OneOf::Left(true)),
-	                            rename_provider: Some(OneOf::Left(true)),
-	                            completion_provider: Some(CompletionOptions {
-	                                trigger_characters: Some(vec![".".to_string()]),
-	                                ..Default::default()
-	                            }),
-	                            document_formatting_provider: Some(OneOf::Left(true)),
-	                            semantic_tokens_provider: Some(
-	                                SemanticTokensServerCapabilities::SemanticTokensOptions(
-	                                    SemanticTokensOptions {
-	                                        legend: SemanticTokensLegend {
-	                                            token_types: TOKEN_TYPES.to_vec(),
-	                                            token_modifiers: vec![],
-	                                        },
-	                                        full: Some(SemanticTokensFullOptions::Bool(true)),
-	                                        range: Some(false),
-	                                        ..Default::default()
-	                                    },
-	                                ),
-	                            ),
-	                            text_document_sync: Some(TextDocumentSyncCapability::Options(
-	                                TextDocumentSyncOptions {
-	                                    open_close: Some(true),
-	                                    change: Some(TextDocumentSyncKind::INCREMENTAL),
-	                                    will_save: None,
-	                                    will_save_wait_until: None,
-	                                    save: Some(TextDocumentSyncSaveOptions::Supported(true)),
-	                                },
-	                            )),
-	                            ..ServerCapabilities::default()
-	                        },
-	                        server_info: None,
-	                    })
-	                }
-	            })
+    let (server, _) = async_lsp::MainLoop::new_server(|client| {
+        tokio::spawn({
+            let client = client.clone();
+            async move {
+                let mut interval = tokio::time::interval(Duration::from_millis(200));
+                loop {
+                    interval.tick().await;
+                    if client.emit(TickEvent).is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+
+        let mut router = Router::new(ServerState {
+            client: client.clone(),
+            counter: 0,
+            documents: Default::default(),
+            dirty_documents: Default::default(),
+            workspaces: Default::default(),
+            core: None,
+            workspace_roots: Default::default(),
+        });
+
+        router
+            .request::<request::Initialize, _>(|st, params| {
+                tracing::trace!("Initialize with {params:?}");
+
+                let roots = workspace_roots_from_initialize(&params);
+                if !roots.is_empty() {
+                    tracing::info!("workspace roots: {roots:?}");
+                }
+                st.workspace_roots = roots;
+                st.workspaces.clear();
+
+                async move {
+                    Ok(InitializeResult {
+                        capabilities: ServerCapabilities {
+                            hover_provider: Some(HoverProviderCapability::Simple(true)),
+                            definition_provider: Some(OneOf::Left(true)),
+                            rename_provider: Some(OneOf::Left(true)),
+                            completion_provider: Some(CompletionOptions {
+                                trigger_characters: Some(vec![".".to_string()]),
+                                ..Default::default()
+                            }),
+                            document_formatting_provider: Some(OneOf::Left(true)),
+                            semantic_tokens_provider: Some(
+                                SemanticTokensServerCapabilities::SemanticTokensOptions(
+                                    SemanticTokensOptions {
+                                        legend: SemanticTokensLegend {
+                                            token_types: TOKEN_TYPES.to_vec(),
+                                            token_modifiers: vec![],
+                                        },
+                                        full: Some(SemanticTokensFullOptions::Bool(true)),
+                                        range: Some(false),
+                                        ..Default::default()
+                                    },
+                                ),
+                            ),
+                            text_document_sync: Some(TextDocumentSyncCapability::Options(
+                                TextDocumentSyncOptions {
+                                    open_close: Some(true),
+                                    change: Some(TextDocumentSyncKind::INCREMENTAL),
+                                    will_save: None,
+                                    will_save_wait_until: None,
+                                    save: Some(TextDocumentSyncSaveOptions::Supported(true)),
+                                },
+                            )),
+                            ..ServerCapabilities::default()
+                        },
+                        server_info: None,
+                    })
+                }
+            })
             .notification::<notification::DidOpenTextDocument>(|state, params| {
                 let TextDocumentItem {
                     uri: document_url,
@@ -189,11 +185,11 @@ pub async fn start() {
                         semantic_tokens: None,
                         analysis: None,
                     },
-	                );
-	                state.dirty_documents.insert(document_url);
-	                state.workspaces.clear();
-	                std::ops::ControlFlow::Continue(())
-	            })
+                );
+                state.dirty_documents.insert(document_url);
+                state.workspaces.clear();
+                std::ops::ControlFlow::Continue(())
+            })
             .notification::<notification::DidChangeTextDocument>(|state, params| {
                 let uri = params.text_document.uri.clone();
                 let version = params.text_document.version;
@@ -204,10 +200,10 @@ pub async fn start() {
                     document.apply_changes(&params.content_changes);
                     document.version = version;
                     document.last_edited_tick = state.counter;
-	                    state.dirty_documents.insert(uri);
-	                    document.analysis = None;
-	                    state.workspaces.clear();
-	                }
+                    state.dirty_documents.insert(uri);
+                    document.analysis = None;
+                    state.workspaces.clear();
+                }
 
                 std::ops::ControlFlow::Continue(())
             })
@@ -232,7 +228,7 @@ pub async fn start() {
                 }
 
                 std::ops::ControlFlow::Continue(())
-	            })
+            })
             .request::<request::Formatting, _>(|st, params| {
                 let uri = params.text_document.uri;
                 let result = if let Some(result) = st.documents.get(&uri) {
@@ -285,8 +281,8 @@ pub async fn start() {
                     .get(&uri)
                     .and_then(|document| document.byte_offset(position).map(|o| o as u32));
 
-	                let workspace = workspace_analysis(st, &uri);
-	                let core = core_analysis(st);
+                let workspace = workspace_analysis(st, &uri);
+                let core = core_analysis(st);
 
                 async move {
                     let Some(byte_offset) = byte_offset else {
@@ -310,7 +306,7 @@ pub async fn start() {
                     .get(&uri)
                     .and_then(|document| document.byte_offset(position).map(|o| o as u32));
 
-	                let workspace = workspace_analysis(st, &uri);
+                let workspace = workspace_analysis(st, &uri);
 
                 async move {
                     let Some(byte_offset) = byte_offset else {
@@ -341,8 +337,8 @@ pub async fn start() {
                     .get(&uri)
                     .and_then(|document| document.byte_offset(position).map(|o| o as u32));
 
-	                let workspace = workspace_analysis(st, &uri);
-	                let core = core_analysis(st);
+                let workspace = workspace_analysis(st, &uri);
+                let core = core_analysis(st);
 
                 async move {
                     let Some(byte_offset) = byte_offset else {
@@ -547,23 +543,6 @@ struct ModuleAnalysis {
     diagnostics_by_uri: FxHashMap<Url, Vec<Diagnostic>>,
 }
 
-fn analyze_document(text: &str, version: i32) -> Option<Arc<DocumentAnalysis>> {
-    let driver = Driver::new(vec![Source::from(text)], DriverConfig::new("TalkLsp"));
-    let resolved = driver.parse().ok()?.resolve_names().ok()?;
-
-    let ast = resolved.phase.asts.values().next()?.clone();
-    let resolved_names = resolved.phase.resolved_names.clone();
-
-    let types = resolved.typecheck().ok().map(|typed| typed.phase.types);
-
-    Some(Arc::new(DocumentAnalysis {
-        version,
-        ast,
-        resolved_names,
-        types,
-    }))
-}
-
 fn is_tlk_uri(uri: &Url) -> bool {
     uri.path().ends_with(".tlk")
 }
@@ -653,47 +632,20 @@ fn analysis_root_for_uri(state: &ServerState, uri: &Url) -> Option<PathBuf> {
 }
 
 fn tlk_files_under_root(root: &PathBuf) -> Vec<PathBuf> {
-    fn should_skip_dir(name: &str) -> bool {
-        matches!(
-            name,
-            ".git"
-                | ".hg"
-                | ".svn"
-                | ".idea"
-                | ".vscode"
-                | "target"
-                | "node_modules"
-                | "dist"
-                | "build"
-                | "out"
-        )
-    }
+    let mut result = Vec::new();
 
-    let mut result: Vec<PathBuf> = vec![];
-    let mut stack: Vec<PathBuf> = vec![root.clone()];
-
-    while let Some(dir) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
+    for entry in WalkBuilder::new(root).build() {
+        let Ok(entry) = entry else {
             continue;
         };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let Ok(file_type) = entry.file_type() else {
-                continue;
-            };
 
-            if file_type.is_dir() {
-                let name = path.file_name().and_then(|n| n.to_str());
-                if name.is_some_and(should_skip_dir) {
-                    continue;
-                }
-                stack.push(path);
-                continue;
-            }
+        if !entry.file_type().is_some_and(|t| t.is_file()) {
+            continue;
+        }
 
-            if file_type.is_file() && path.extension().and_then(|e| e.to_str()) == Some("tlk") {
-                result.push(path);
-            }
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) == Some("tlk") {
+            result.push(path.to_path_buf());
         }
     }
 
@@ -778,8 +730,7 @@ fn parser_error_range(text: &str, err: &ParserError) -> Range {
 
     match err {
         ParserError::UnexpectedToken {
-            token: Some(token),
-            ..
+            token: Some(token), ..
         } => byte_span_to_range_utf16(text, token.start, token.end).unwrap_or(default_range),
         ParserError::InfiniteLoop(Some(token)) | ParserError::ExpectedIdentifier(Some(token)) => {
             byte_span_to_range_utf16(text, token.start, token.end).unwrap_or(default_range)
@@ -807,11 +758,14 @@ fn lsp_diagnostic_for_any(
         AnyDiagnostic::Typing(diagnostic) => (diagnostic.id, diagnostic.kind.to_string()),
     };
 
-    let file_idx = id.0 .0 as usize;
+    let file_idx = id.0.0 as usize;
     let uri = file_id_to_uri.get(file_idx)?.clone();
 
     let default_range = Range::new(Position::new(0, 0), Position::new(0, 0));
-    let range = match (texts.get(file_idx), asts.get(file_idx).and_then(|a| a.as_ref())) {
+    let range = match (
+        texts.get(file_idx),
+        asts.get(file_idx).and_then(|a| a.as_ref()),
+    ) {
         (Some(text), Some(ast)) => match ast.meta.get(&id) {
             Some(meta) => {
                 let (start, end) = meta
@@ -901,8 +855,10 @@ fn analyze_open_documents(
     modules.import_core(crate::compiling::core::compile());
     let modules = Rc::new(modules);
 
-    let mut resolver =
-        crate::name_resolution::name_resolver::NameResolver::new(modules.clone(), ModuleId::Current);
+    let mut resolver = crate::name_resolution::name_resolver::NameResolver::new(
+        modules.clone(),
+        ModuleId::Current,
+    );
     let (mut resolved_asts, resolved_names) = resolver.resolve(parsed_asts);
     let symbols = std::mem::take(&mut resolver.symbols);
 
@@ -1082,14 +1038,10 @@ fn hover_at(
             crate::node::Node::Expr(expr) => hover_for_expr(&ctx, &expr),
             crate::node::Node::Stmt(stmt) => hover_for_stmt(&ctx, &stmt),
             crate::node::Node::Pattern(pattern) => hover_for_pattern(&ctx, &pattern),
-            crate::node::Node::TypeAnnotation(ty) => {
-                hover_for_type_annotation(&ctx, &ty)
-            }
+            crate::node::Node::TypeAnnotation(ty) => hover_for_type_annotation(&ctx, &ty),
             crate::node::Node::Parameter(param) => hover_for_parameter(&ctx, &param),
             crate::node::Node::Func(func) => hover_for_func(&ctx, &func),
-            crate::node::Node::FuncSignature(sig) => {
-                hover_for_func_signature(&ctx, &sig)
-            }
+            crate::node::Node::FuncSignature(sig) => hover_for_func_signature(&ctx, &sig),
             crate::node::Node::Decl(decl) => hover_for_decl(&ctx, &decl),
             _ => None,
         };
@@ -1111,19 +1063,14 @@ struct HoverCtx<'a> {
     byte_offset: u32,
 }
 
-fn hover_for_stmt(
-    ctx: &HoverCtx<'_>,
-    stmt: &crate::node_kinds::stmt::Stmt,
-) -> Option<Hover> {
+fn hover_for_stmt(ctx: &HoverCtx<'_>, stmt: &crate::node_kinds::stmt::Stmt) -> Option<Hover> {
     use crate::node_kinds::stmt::StmtKind;
 
     match &stmt.kind {
         StmtKind::Expr(expr) => hover_for_expr(ctx, expr),
         StmtKind::Return(Some(expr)) => hover_for_expr(ctx, expr),
         StmtKind::If(cond, ..) => hover_for_expr(ctx, cond),
-        StmtKind::Loop(Some(cond), ..) => {
-            hover_for_expr(ctx, cond)
-        }
+        StmtKind::Loop(Some(cond), ..) => hover_for_expr(ctx, cond),
         StmtKind::Assignment(lhs, rhs) => {
             hover_for_expr(ctx, lhs).or_else(|| hover_for_expr(ctx, rhs))
         }
@@ -1300,10 +1247,7 @@ fn hover_for_parameter(
     })
 }
 
-fn hover_for_func(
-    ctx: &HoverCtx<'_>,
-    func: &crate::node_kinds::func::Func,
-) -> Option<Hover> {
+fn hover_for_func(ctx: &HoverCtx<'_>, func: &crate::node_kinds::func::Func) -> Option<Hover> {
     if !span_contains(func.name_span, ctx.byte_offset) {
         return None;
     }
@@ -1357,10 +1301,7 @@ fn hover_for_func_signature(
     })
 }
 
-fn hover_for_decl(
-    ctx: &HoverCtx<'_>,
-    decl: &crate::node_kinds::decl::Decl,
-) -> Option<Hover> {
+fn hover_for_decl(ctx: &HoverCtx<'_>, decl: &crate::node_kinds::decl::Decl) -> Option<Hover> {
     use crate::node_kinds::decl::DeclKind;
 
     match &decl.kind {
@@ -1581,7 +1522,8 @@ impl TyFormatContext {
         };
 
         for (idx, id) in type_params.into_iter().enumerate() {
-            ctx.type_param_names.insert(id, type_param_display_name(idx));
+            ctx.type_param_names
+                .insert(id, type_param_display_name(idx));
         }
         for (idx, id) in row_params.into_iter().enumerate() {
             ctx.row_param_names.insert(id, row_param_display_name(idx));
@@ -1608,7 +1550,8 @@ impl TyFormatContext {
         };
 
         for (idx, id) in type_param_order.into_iter().enumerate() {
-            ctx.type_param_names.insert(id, type_param_display_name(idx));
+            ctx.type_param_names
+                .insert(id, type_param_display_name(idx));
         }
         for (idx, id) in row_param_order.into_iter().enumerate() {
             ctx.row_param_names.insert(id, row_param_display_name(idx));
@@ -1643,7 +1586,11 @@ fn type_param_display_name(idx: usize) -> String {
 }
 
 fn row_param_display_name(idx: usize) -> String {
-    if idx == 0 { "R".to_string() } else { format!("R{idx}") }
+    if idx == 0 {
+        "R".to_string()
+    } else {
+        format!("R{idx}")
+    }
 }
 
 fn collect_params_in_ty(
@@ -1818,15 +1765,6 @@ fn format_ty_in_context(
     }
 }
 
-fn format_row(
-    module: &ModuleAnalysis,
-    core: Option<&ModuleAnalysis>,
-    row: &crate::types::row::Row,
-) -> String {
-    let ctx = TyFormatContext::default();
-    format_row_in_context(module, core, row, &ctx)
-}
-
 fn format_row_in_context(
     module: &ModuleAnalysis,
     core: Option<&ModuleAnalysis>,
@@ -1975,7 +1913,9 @@ fn rename_symbol_at_offset(module: &ModuleAnalysis, uri: &Url, byte_offset: u32)
             crate::node::Node::Stmt(stmt) => {
                 goto_definition_symbol_from_stmt(module.types.as_ref(), &stmt, byte_offset)
             }
-            crate::node::Node::TypeAnnotation(ty) => goto_definition_symbol_from_type_annotation(&ty, byte_offset),
+            crate::node::Node::TypeAnnotation(ty) => {
+                goto_definition_symbol_from_type_annotation(&ty, byte_offset)
+            }
             crate::node::Node::Decl(decl) => goto_definition_symbol_from_decl(&decl, byte_offset),
             crate::node::Node::Parameter(param) => {
                 if span_contains(param.name_span, byte_offset) {
@@ -2083,16 +2023,27 @@ impl RenameCollector<'_> {
         use crate::node_kinds::decl::DeclKind;
 
         match &decl.kind {
-            DeclKind::Struct { name, name_span, .. }
-            | DeclKind::Protocol { name, name_span, .. }
-            | DeclKind::Extend { name, name_span, .. }
-            | DeclKind::Enum { name, name_span, .. }
-            | DeclKind::Property { name, name_span, .. } => {
+            DeclKind::Struct {
+                name, name_span, ..
+            }
+            | DeclKind::Protocol {
+                name, name_span, ..
+            }
+            | DeclKind::Extend {
+                name, name_span, ..
+            }
+            | DeclKind::Enum {
+                name, name_span, ..
+            }
+            | DeclKind::Property {
+                name, name_span, ..
+            } => {
                 if name.symbol().ok() == Some(self.target) {
                     self.push_span(*name_span);
                 }
             }
-            DeclKind::TypeAlias(name, name_span, ..) | DeclKind::EnumVariant(name, name_span, ..) => {
+            DeclKind::TypeAlias(name, name_span, ..)
+            | DeclKind::EnumVariant(name, name_span, ..) => {
                 if name.symbol().ok() == Some(self.target) {
                     self.push_span(*name_span);
                 }
@@ -2145,7 +2096,10 @@ impl RenameCollector<'_> {
         }
     }
 
-    fn enter_record_field_pattern(&mut self, field: &crate::node_kinds::pattern::RecordFieldPattern) {
+    fn enter_record_field_pattern(
+        &mut self,
+        field: &crate::node_kinds::pattern::RecordFieldPattern,
+    ) {
         use crate::node_kinds::pattern::RecordFieldPatternKind;
 
         match &field.kind {
@@ -2154,7 +2108,9 @@ impl RenameCollector<'_> {
                     self.push_span(field.span);
                 }
             }
-            RecordFieldPatternKind::Equals { name, name_span, .. } => {
+            RecordFieldPatternKind::Equals {
+                name, name_span, ..
+            } => {
                 if name.symbol().ok() == Some(self.target) {
                     self.push_span(*name_span);
                 }
@@ -2166,7 +2122,10 @@ impl RenameCollector<'_> {
     fn enter_type_annotation(&mut self, ty: &crate::node_kinds::type_annotation::TypeAnnotation) {
         use crate::node_kinds::type_annotation::TypeAnnotationKind;
 
-        let TypeAnnotationKind::Nominal { name, name_span, .. } = &ty.kind else {
+        let TypeAnnotationKind::Nominal {
+            name, name_span, ..
+        } = &ty.kind
+        else {
             return;
         };
 
@@ -2459,6 +2418,7 @@ fn byte_offset_to_utf16_position(text: &str, byte_offset: u32) -> Option<Positio
 
 #[cfg(test)]
 mod tests {
+    use crate::lsp::document::Document;
     use async_lsp::ClientSocket;
     use async_lsp::lsp_types::HoverContents;
     use async_lsp::lsp_types::Range;
@@ -2466,7 +2426,6 @@ mod tests {
     use async_lsp::lsp_types::WorkspaceEdit;
     use rustc_hash::FxHashMap;
     use std::path::PathBuf;
-    use crate::lsp::document::Document;
 
     fn edit_ranges_for_uri(edit: &WorkspaceEdit, uri: &Url) -> Vec<Range> {
         let mut ranges: Vec<Range> = edit
@@ -2555,10 +2514,9 @@ foo.bar
     #[test]
     fn hover_shows_generic_function_type_not_instantiation() {
         let code = "func id(x) { x }\nid(123)\nid(1.23)\n";
-        let uri = Url::from_file_path(
-            std::env::temp_dir().join("hover_shows_generic_function_type.tlk"),
-        )
-        .expect("file uri");
+        let uri =
+            Url::from_file_path(std::env::temp_dir().join("hover_shows_generic_function_type.tlk"))
+                .expect("file uri");
 
         let mut versions: FxHashMap<Url, i32> = FxHashMap::default();
         versions.insert(uri.clone(), 0);
@@ -2576,10 +2534,7 @@ foo.bar
                 panic!("unexpected hover: {hover:?}");
             };
 
-            assert!(
-                markup.value.contains("id: <T>(T) -> T"),
-                "{markup:?}"
-            );
+            assert!(markup.value.contains("id: <T>(T) -> T"), "{markup:?}");
             assert!(!markup.value.contains("TypeParamId"), "{markup:?}");
             assert!(!markup.value.contains("Int"), "{markup:?}");
             assert!(!markup.value.contains("Float"), "{markup:?}");
@@ -2593,8 +2548,9 @@ foo.bar
   foo
 }
 "#;
-        let uri = Url::from_file_path(std::env::temp_dir().join("rename_renames_local_binding.tlk"))
-            .expect("file uri");
+        let uri =
+            Url::from_file_path(std::env::temp_dir().join("rename_renames_local_binding.tlk"))
+                .expect("file uri");
 
         let mut versions: FxHashMap<Url, i32> = FxHashMap::default();
         versions.insert(uri.clone(), 0);
@@ -2607,8 +2563,7 @@ foo.bar
         assert_eq!(foo_offsets.len(), 2, "expected 2 foo occurrences");
 
         let byte_offset = foo_offsets[1] as u32;
-        let edit =
-            super::rename_at(&module, &uri, byte_offset, "bar").expect("workspace edit");
+        let edit = super::rename_at(&module, &uri, byte_offset, "bar").expect("workspace edit");
 
         let expected_ranges: Vec<Range> = foo_offsets
             .into_iter()
@@ -2644,8 +2599,7 @@ foo.bar
         .expect("module analysis");
 
         let byte_offset = code_b.find("foo").expect("foo") as u32;
-        let edit =
-            super::rename_at(&module, &uri_b, byte_offset, "bar").expect("workspace edit");
+        let edit = super::rename_at(&module, &uri_b, byte_offset, "bar").expect("workspace edit");
 
         let range_a = super::byte_span_to_range_utf16(
             code_a,
@@ -2713,9 +2667,8 @@ foo.bar
     #[test]
     fn diagnostics_report_undefined_name() {
         let code = "x\n";
-        let uri =
-            Url::from_file_path(std::env::temp_dir().join("diagnostics_undefined_name.tlk"))
-                .expect("file uri");
+        let uri = Url::from_file_path(std::env::temp_dir().join("diagnostics_undefined_name.tlk"))
+            .expect("file uri");
 
         let mut versions: FxHashMap<Url, i32> = FxHashMap::default();
         versions.insert(uri.clone(), 0);
@@ -2756,19 +2709,19 @@ foo.bar
             .cloned()
             .unwrap_or_default();
         assert!(
-            diagnostics.iter().any(|d| d.message.contains("Unexpected token")),
+            diagnostics
+                .iter()
+                .any(|d| d.message.contains("Unexpected token")),
             "expected parse diagnostic, got: {diagnostics:?}"
         );
     }
 
     #[test]
     fn workspace_analysis_handles_extend_before_struct_across_files() {
-        let uri_a =
-            Url::from_file_path(std::env::temp_dir().join("extend_before_struct_a.tlk"))
-                .expect("file uri");
-        let uri_b =
-            Url::from_file_path(std::env::temp_dir().join("extend_before_struct_b.tlk"))
-                .expect("file uri");
+        let uri_a = Url::from_file_path(std::env::temp_dir().join("extend_before_struct_a.tlk"))
+            .expect("file uri");
+        let uri_b = Url::from_file_path(std::env::temp_dir().join("extend_before_struct_b.tlk"))
+            .expect("file uri");
 
         let code_a = r#"
 extend Person {
