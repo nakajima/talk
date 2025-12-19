@@ -9,6 +9,7 @@ use crate::{
         symbol::{Symbol, Symbols},
     },
     node_id::FileID,
+    node_meta_storage::NodeMetaStorage,
     parser::Parser,
     parser_error::ParserError,
     types::{
@@ -21,6 +22,7 @@ use crate::{
 };
 use indexmap::IndexMap;
 use rustc_hash::FxHashMap;
+use std::{hash::Hash, hash::Hasher};
 use std::{io, path::PathBuf, rc::Rc};
 
 pub trait DriverPhase {}
@@ -104,15 +106,54 @@ impl DriverConfig {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+#[derive(Debug, Clone)]
 pub enum SourceKind {
     File(PathBuf),
+    // Just a string
     String(String),
+    // Used for core, since they're not necessarily going to be on the fs
+    InMemory { path: PathBuf, text: String },
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+#[derive(Debug, Clone)]
 pub struct Source {
     kind: SourceKind,
+}
+
+impl PartialEq for Source {
+    fn eq(&self, other: &Self) -> bool {
+        use SourceKind::*;
+
+        match (&self.kind, &other.kind) {
+            (File(a), File(b)) => a == b,
+            (File(a), InMemory { path: b, .. }) => a == b,
+            (InMemory { path: a, .. }, File(b)) => a == b,
+            (InMemory { path: a, .. }, InMemory { path: b, .. }) => a == b,
+
+            (String(a), String(b)) => a == b,
+
+            _ => false,
+        }
+    }
+}
+
+impl Eq for Source {}
+
+impl Hash for Source {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        use SourceKind::*;
+
+        match &self.kind {
+            File(path) | InMemory { path, .. } => {
+                0u8.hash(state);
+                path.hash(state);
+            }
+            String(s) => {
+                1u8.hash(state);
+                s.hash(state);
+            }
+        }
+    }
 }
 
 impl From<PathBuf> for Source {
@@ -132,11 +173,21 @@ impl From<&str> for Source {
 }
 
 impl Source {
+    pub fn in_memory(path: PathBuf, text: impl Into<String>) -> Self {
+        Self {
+            kind: SourceKind::InMemory {
+                path,
+                text: text.into(),
+            },
+        }
+    }
+
     pub fn path(&self) -> &str {
         #[allow(clippy::unwrap_used)]
         match &self.kind {
             SourceKind::File(path) => path.to_str().unwrap(),
             SourceKind::String(..) => ":memory:",
+            SourceKind::InMemory { path, .. } => path.to_str().unwrap(),
         }
     }
 
@@ -144,6 +195,7 @@ impl Source {
         match &self.kind {
             SourceKind::File(path) => std::fs::read_to_string(path).map_err(CompileError::IO),
             SourceKind::String(string) => Ok(string.to_string()),
+            SourceKind::InMemory { text, .. } => Ok(text.clone()),
         }
     }
 }

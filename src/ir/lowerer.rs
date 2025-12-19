@@ -2021,7 +2021,8 @@ impl<'a> Lowerer<'a> {
             ..
         } = &call_expr.kind
         {
-            let (_, mut call_instantiations) = self.specialized_ty(callee, parent_instantiations)?;
+            let (_, mut call_instantiations) =
+                self.specialized_ty(callee, parent_instantiations)?;
             call_instantiations
                 .witnesses
                 .extend(target.witness_subs.iter().map(|(k, v)| (*k, *v)));
@@ -2589,9 +2590,7 @@ impl<'a> Lowerer<'a> {
     /// Returns the monomorphized `Name` for `symbol` under `instantiations` when the symbol’s body
     /// can be found (either in the current module or an imported module).
     fn check_import(&mut self, symbol: &Symbol, instantiations: &Substitutions) -> Option<Name> {
-        let Some(func) = self.find_function(symbol).cloned() else {
-            return None;
-        };
+        let func = self.find_function(symbol).cloned()?;
 
         let name = self.monomorphize_name(*symbol, instantiations);
         self.functions.insert(*symbol, func.clone());
@@ -2680,7 +2679,7 @@ impl<'a> Lowerer<'a> {
         let new_symbol: Symbol = self.symbols.next_synthesized(self.config.module_id).into();
         self.resolved_names
             .symbol_names
-            .insert(new_symbol.into(), name.name_str());
+            .insert(new_symbol, name.name_str());
         let parts = self.specialization_parts(&key);
         let new_name_str = format!("{}[{}]", name.name_str(), parts.join(", "));
         let new_name = Name::Resolved(new_symbol, new_name_str);

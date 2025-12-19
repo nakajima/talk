@@ -370,6 +370,7 @@ impl<'a> Parser<'a> {
                 return Err(ParserError::UnexpectedToken {
                     expected: "Wrong context".into(),
                     actual: format!("{context:?}"),
+                    token: self.current.clone(),
                 });
             }
         };
@@ -659,6 +660,7 @@ impl<'a> Parser<'a> {
             return Err(ParserError::UnexpectedToken {
                 expected: "IR Register".into(),
                 actual: current.kind.as_str().to_string(),
+                token: Some(current),
             });
         };
 
@@ -873,6 +875,7 @@ impl<'a> Parser<'a> {
                     return Err(ParserError::UnexpectedToken {
                         expected: "ir instr".into(),
                         actual: instr,
+                        token: self.previous.clone(),
                     });
                 }
             }
@@ -946,6 +949,7 @@ impl<'a> Parser<'a> {
                     return Err(ParserError::UnexpectedToken {
                         expected: "ir instr".into(),
                         actual: instr,
+                        token: self.previous.clone(),
                     });
                 }
             }
@@ -987,6 +991,7 @@ impl<'a> Parser<'a> {
                     return Err(ParserError::UnexpectedToken {
                         expected: "Numeric bound var".into(),
                         actual: v.into(),
+                        token: self.current.clone(),
                     });
                 }
 
@@ -1000,6 +1005,7 @@ impl<'a> Parser<'a> {
                 return Err(ParserError::UnexpectedToken {
                     expected: "IR".to_string(),
                     actual: format!("{current:?}"),
+                    token: self.current.clone(),
                 });
             }
         };
@@ -1142,6 +1148,7 @@ impl<'a> Parser<'a> {
                 return Err(ParserError::UnexpectedToken {
                     expected: "Pattern".into(),
                     actual: format!("{:?}", current.kind),
+                    token: Some(current),
                 });
             }
         };
@@ -1172,6 +1179,7 @@ impl<'a> Parser<'a> {
                                 "got {:?}. Rest pattern must be at the end of record pattern",
                                 self.current
                             ),
+                            token: self.current.clone(),
                         });
                     }
 
@@ -1251,7 +1259,8 @@ impl<'a> Parser<'a> {
                 )
             }
             Some(_) | None => {
-                return Err(ParserError::ExpectedIdentifier(self.current.clone()));
+                let incomplete_member = ExprKind::Incomplete(IncompleteExpr::Member(None));
+                return Ok(Node::Expr(self.add_expr(incomplete_member, tok)?));
             }
         };
 
@@ -1314,7 +1323,9 @@ impl<'a> Parser<'a> {
                 )
             }
             Some(_) | None => {
-                return Err(ParserError::ExpectedIdentifier(self.current.clone()));
+                let incomplete_member =
+                    ExprKind::Incomplete(IncompleteExpr::Member(Some(Box::new(lhs))));
+                return Ok(Node::Expr(self.add_expr(incomplete_member, tok)?));
             }
         };
 
@@ -2239,6 +2250,7 @@ impl<'a> Parser<'a> {
         Err(ParserError::UnexpectedToken {
             expected: format!("{expected:?}"),
             actual: format!("{:?}", self.current),
+            token: self.current.clone(),
         })
     }
 
@@ -2259,6 +2271,7 @@ impl<'a> Parser<'a> {
                     Err(ParserError::UnexpectedToken {
                         expected: format!("{possible_tokens:?}"),
                         actual: format!("{current:?}"),
+                        token: Some(current),
                     })
                 }
             }

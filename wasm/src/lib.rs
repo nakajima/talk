@@ -1,6 +1,5 @@
 use talk::{
     compiling::driver::{Driver, DriverConfig, Lowered, Source},
-    formatter::{DebugHTMLFormatter, Formatter},
     ir::interpreter::Interpreter,
 };
 use wasm_bindgen::prelude::*;
@@ -11,25 +10,10 @@ pub fn run_program(source: &str) -> Result<String, JsValue> {
 
     let lowered = compile_source(source)?;
     let module = lowered.module("talk");
-    let interpreter = Interpreter::new(module.program, Some(module.symbol_names));
+    let mut interpreter = Interpreter::new(module.program, Some(module.symbol_names));
     let result = interpreter.run();
 
     Ok(format!("{result:?}"))
-}
-
-#[wasm_bindgen]
-pub fn debug_html(source: &str) -> Result<String, JsValue> {
-    install_panic_hook();
-
-    let lowered = compile_source(source)?;
-    let Some(ast) = lowered.phase.asts.values().next() else {
-        return Err(JsValue::from_str("no source was provided"));
-    };
-
-    let formatter =
-        Formatter::new_with_decorators(&ast.meta, vec![Box::new(DebugHTMLFormatter {})]);
-
-    Ok(formatter.format(&ast.roots, 80))
 }
 
 #[wasm_bindgen]
@@ -40,7 +24,7 @@ pub fn version() -> String {
 type LoweredDriver = Driver<Lowered>;
 
 fn compile_source(source: &str) -> Result<LoweredDriver, JsValue> {
-    let driver = Driver::new(vec![Source::from(source)], DriverConfig::default());
+    let driver = Driver::new(vec![Source::from(source)], DriverConfig::new("_"));
 
     driver
         .parse()

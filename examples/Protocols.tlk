@@ -4,7 +4,8 @@ protocol Foo {
 }
 
 // Person doesn't implement Foo
-struct Person: Foo {
+struct Person {}
+extend Person: Foo {
 	func foo() {
 		123
 	}

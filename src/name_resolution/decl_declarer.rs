@@ -327,13 +327,22 @@ impl<'a> DeclDeclarer<'a> {
         generics: &mut [GenericDecl],
         decls: &[Decl],
     ) {
-        // Should be set by predeclare_nominals
+        // Should be set by predeclare_nominals for Struct/Enum/Protocol, but `extend` can target
+        // a nominal declared in another file. If we still can't resolve it, keep the resolver
+        // state consistent so we don't crash while walking the body.
         *name = self.resolver.lookup(name, Some(id)).unwrap_or(name.clone());
 
-        let Ok(sym) = name.symbol() else {
-            self.resolver
-                .diagnostic(id, NameResolverError::Unresolved(name.clone()));
-            return;
+        let sym = match name.symbol() {
+            Ok(sym) => sym,
+            Err(_) => {
+                self.resolver
+                    .diagnostic(id, NameResolverError::Unresolved(name.clone()));
+                Symbol::Synthesized(
+                    self.resolver
+                        .symbols
+                        .next_synthesized(self.resolver.current_module_id),
+                )
+            }
         };
 
         if let Some(parent) = self.resolver.nominal_stack.last() {
@@ -576,10 +585,14 @@ impl<'a> DeclDeclarer<'a> {
                     self.resolver.declare(name, some!(InstanceMethod), decl.id)
                 };
 
-                let (nominal_sym, nominal_id) = self.resolver.nominal_stack.last().cloned().unwrap_or_else(|| unreachable!("no nominal stack entry found for {name:?}"));
-                let method_sym = name.symbol().unwrap_or_else(|_|unreachable!());
-                self.resolver.track_dependency_from_to(method_sym, *id, nominal_sym, nominal_id);
-                self.resolver.track_dependency_from_to(nominal_sym, nominal_id, method_sym, *id);
+                if let Some((nominal_sym, nominal_id)) = self.resolver.nominal_stack.last().cloned()
+                {
+                    let method_sym = name.symbol().unwrap_or_else(|_| unreachable!());
+                    self.resolver
+                        .track_dependency_from_to(method_sym, *id, nominal_sym, nominal_id);
+                    self.resolver
+                        .track_dependency_from_to(nominal_sym, nominal_id, method_sym, *id);
+                }
 
                 // self.start_scope(name.symbol().ok(), *id, true);
                 for generic in generics {
@@ -699,6 +712,15 @@ impl<'a> DeclDeclarer<'a> {
                 self.end_scope();
             }
         );
+
+        on!(&mut decl.kind, DeclKind::Struct { name, .. }, {
+            // If this struct failed to resolve (e.g. due to earlier errors), still unwind scopes so
+            // we don't poison the resolver state.
+            if !matches!(name, Name::Resolved(Symbol::Struct(..), _)) {
+                self.type_members.remove(&decl.id);
+                self.end_scope();
+            }
+        });
 
         on!(
             &mut decl.kind,

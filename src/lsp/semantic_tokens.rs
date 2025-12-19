@@ -98,24 +98,6 @@ impl<'a> SemanticTokenCollector<'a> {
         Some((Range::new(start_pos, end_pos), length))
     }
 
-    // fn range_for(&self, expr_id: &ExprID) -> Option<(Range, u32)> {
-    //     let meta = self.source_file.meta.get(expr_id)?;
-    //     let range = meta.source_range();
-
-    //     if let Some(start) = self.line_col_for(range.start)
-    //         && let Some(end) = self.line_col_for(range.end)
-    //     {
-    //         Some((
-    //             Range::new(start, end),
-    //             meta.end.end.saturating_sub(meta.start.start),
-    //         ))
-    //     } else {
-    //         Some((
-    //             Range::new(Position::new(0, 0), Position::new(0, 0)),
-    //             meta.end.end.saturating_sub(meta.start.start),
-    //         ))
-    //     }
-    // }
     fn encode_tokens(mut self) -> Vec<SemanticToken> {
         let mut tokens = self.highlighter.highlight();
 

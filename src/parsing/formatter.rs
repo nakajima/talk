@@ -303,10 +303,35 @@ impl<'a> Formatter<'a> {
                 self.format_record_literal(fields, spread)
             }
             ExprKind::RowVariable(name) => join(vec![text(".."), text(name.name_str())], text("")),
-            ExprKind::InlineIR(instruction) => concat(
-                concat(text("@_ir {"), text(format!("{instruction}"))),
-                text("}"),
-            ),
+            ExprKind::InlineIR(instruction) => {
+                if instruction.binds.is_empty() {
+                    concat(
+                        concat(text("@_ir { "), text(format!("{instruction}"))),
+                        text(" }"),
+                    )
+                } else {
+                    concat(
+                        concat(
+                            concat(
+                                concat(
+                                    text("@_ir("),
+                                    join(
+                                        instruction
+                                            .binds
+                                            .iter()
+                                            .map(|b| self.format_expr(b))
+                                            .collect(),
+                                        text(", "),
+                                    ),
+                                ),
+                                text(") { "),
+                            ),
+                            text(format!("{instruction}")),
+                        ),
+                        text(" }"),
+                    )
+                }
+            }
         };
 
         self.decorators
@@ -1164,7 +1189,10 @@ impl<'a> Formatter<'a> {
                 concat(
                     text("{"),
                     concat(
-                        nest(1, concat(line(), join(arms_docs, line()))),
+                        nest(
+                            1,
+                            concat(line(), join(arms_docs, concat(text(","), line()))),
+                        ),
                         concat(line(), text("}")),
                     ),
                 ),

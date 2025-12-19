@@ -695,9 +695,13 @@ impl<'a> InferencePass<'a> {
                 return (decls, stmts);
             };
 
-            let node = self
-                .visit_node(&rhs, &mut context)
-                .unwrap_or_else(|e| unimplemented!("{e:?}"));
+            let node = match self.visit_node(&rhs, &mut context) {
+                Ok(node) => node,
+                Err(e) => {
+                    tracing::error!("{e:?}");
+                    continue;
+                }
+            };
 
             match &node {
                 TypedNode::Decl(decl) => decls.push(decl.clone()),
@@ -894,11 +898,22 @@ impl<'a> InferencePass<'a> {
         context: &mut impl Solve,
     ) -> TypedRet<TypedExpr<InferTy>> {
         let expr = match &expr.kind {
-            ExprKind::Incomplete(..) => TypedExpr {
-                id: expr.id,
-                ty: self.session.new_ty_meta_var(context.level()),
-                kind: TypedExprKind::Hole,
-            },
+            ExprKind::Incomplete(incomplete) => {
+                use crate::node_kinds::incomplete_expr::IncompleteExpr;
+                match incomplete {
+                    IncompleteExpr::Member(Some(receiver)) => {
+                        let _ = self.visit_expr(receiver, context)?;
+                    }
+                    IncompleteExpr::Member(None) => {}
+                    IncompleteExpr::Func { .. } => {}
+                }
+
+                TypedExpr {
+                    id: expr.id,
+                    ty: InferTy::Void,
+                    kind: TypedExprKind::Hole,
+                }
+            }
             ExprKind::LiteralArray(items) => self.visit_array(expr, items, context)?,
             ExprKind::LiteralInt(v) => TypedExpr {
                 id: expr.id,
@@ -1249,10 +1264,6 @@ impl<'a> InferencePass<'a> {
                 .name
                 .symbol()
                 .map_err(|_| TypeError::NameNotResolved(generic.name.clone()))?;
-            println!(
-                "INSERTING GENERIC: {nominal_symbol:?}.{:?}",
-                generic.name.name_str()
-            );
             self.session
                 .type_catalog
                 .child_types
