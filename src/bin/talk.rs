@@ -1,6 +1,9 @@
 use talk::compiling::driver::DriverConfig;
 
 #[cfg(feature = "cli")]
+use talk::common::text::{clamp_to_char_boundary, line_info_for_offset};
+
+#[cfg(feature = "cli")]
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     use clap::{Args, Parser, Subcommand};
@@ -16,15 +19,23 @@ async fn main() {
     #[derive(Subcommand, Debug)]
     enum Commands {
         // IR { filename: PathBuf },
-        Parse { filename: Option<String> },
-        Debug { filename: Option<String> },
-        Html { filename: Option<String> },
+        Parse {
+            filename: Option<String>,
+        },
+        Debug {
+            filename: Option<String>,
+        },
+        Html {
+            filename: Option<String>,
+        },
         Check {
             filenames: Vec<String>,
             #[arg(long)]
             json: bool,
         },
-        Run { filenames: Vec<String> },
+        Run {
+            filenames: Vec<String>,
+        },
         // Run { filename: PathBuf },
         Lsp(LspArgs),
     }
@@ -112,10 +123,7 @@ async fn main() {
             }
 
             if *json {
-                println!(
-                    "{{\"diagnostics\":[{}]}}",
-                    json_entries.join(",")
-                );
+                println!("{{\"diagnostics\":[{}]}}", json_entries.join(","));
             }
 
             if has_diagnostics {
@@ -226,11 +234,8 @@ fn input_text(filename: Option<&str>) -> String {
 }
 
 #[cfg(feature = "cli")]
-fn print_diagnostic(
-    doc_id: &str,
-    text: &str,
-    diagnostic: &talk::analysis::Diagnostic,
-) {
+fn print_diagnostic(doc_id: &str, text: &str, diagnostic: &talk::analysis::Diagnostic) {
+    // Might be chill to just use a library like miete or something to handle this formatting.
     let use_color = use_color();
     let (line, col, line_start, line_end) = line_info_for_offset(text, diagnostic.range.start);
     let line_text = text.get(line_start..line_end).unwrap_or("");
@@ -238,14 +243,11 @@ fn print_diagnostic(
 
     let highlight_start =
         clamp_to_char_boundary(text, diagnostic.range.start as usize).clamp(line_start, line_end);
-    let highlight_end =
-        clamp_to_char_boundary(text, diagnostic.range.end as usize).clamp(highlight_start, line_end);
+    let highlight_end = clamp_to_char_boundary(text, diagnostic.range.end as usize)
+        .clamp(highlight_start, line_end);
 
     let prefix = caret_prefix(&text[line_start..highlight_start]);
-    let underline_len = text[highlight_start..highlight_end]
-        .chars()
-        .count()
-        .max(1);
+    let underline_len = text[highlight_start..highlight_end].chars().count().max(1);
     let underline = "^".repeat(underline_len);
 
     let severity = severity_label(&diagnostic.severity);
@@ -269,27 +271,21 @@ fn print_diagnostic(
 }
 
 #[cfg(feature = "cli")]
-fn json_diagnostic(
-    doc_id: &str,
-    text: &str,
-    diagnostic: &talk::analysis::Diagnostic,
-) -> String {
+fn json_diagnostic(doc_id: &str, text: &str, diagnostic: &talk::analysis::Diagnostic) -> String {
     let (line, col, line_start, line_end) = line_info_for_offset(text, diagnostic.range.start);
     let line_text = text.get(line_start..line_end).unwrap_or("");
     let line_text = line_text.strip_suffix('\r').unwrap_or(line_text);
 
     let highlight_start =
         clamp_to_char_boundary(text, diagnostic.range.start as usize).clamp(line_start, line_end);
-    let highlight_end =
-        clamp_to_char_boundary(text, diagnostic.range.end as usize).clamp(highlight_start, line_end);
+    let highlight_end = clamp_to_char_boundary(text, diagnostic.range.end as usize)
+        .clamp(highlight_start, line_end);
 
     let underline_start = text[line_start..highlight_start].chars().count() as u32 + 1;
-    let underline_len = text[highlight_start..highlight_end]
-        .chars()
-        .count()
-        .max(1) as u32;
+    let underline_len = text[highlight_start..highlight_end].chars().count().max(1) as u32;
     let multiline = diagnostic.range.end as usize > line_end;
 
+    // Pro: No serde dep. Con: This mess.
     format!(
         "{{\"path\":{},\"line\":{},\"column\":{},\"severity\":{},\"message\":{},\"range\":{{\"start\":{},\"end\":{}}},\"line_text\":{},\"underline_start\":{},\"underline_len\":{},\"multiline\":{}}}",
         json_string(doc_id),
@@ -307,30 +303,6 @@ fn json_diagnostic(
 }
 
 #[cfg(feature = "cli")]
-fn line_info_for_offset(text: &str, byte_offset: u32) -> (u32, u32, usize, usize) {
-    let offset = clamp_to_char_boundary(text, byte_offset as usize);
-    let mut line: u32 = 1;
-    let mut last_line_start = 0usize;
-
-    for (idx, ch) in text.char_indices() {
-        if idx >= offset {
-            break;
-        }
-        if ch == '\n' {
-            line += 1;
-            last_line_start = idx + ch.len_utf8();
-        }
-    }
-
-    let line_end = text[offset..]
-        .find('\n')
-        .map(|idx| offset + idx)
-        .unwrap_or(text.len());
-    let col = text[last_line_start..offset].chars().count() as u32 + 1;
-    (line, col, last_line_start, line_end)
-}
-
-#[cfg(feature = "cli")]
 fn caret_prefix(text: &str) -> String {
     let mut prefix = String::new();
     for ch in text.chars() {
@@ -341,17 +313,6 @@ fn caret_prefix(text: &str) -> String {
         }
     }
     prefix
-}
-
-#[cfg(feature = "cli")]
-fn clamp_to_char_boundary(text: &str, mut idx: usize) -> usize {
-    if idx > text.len() {
-        idx = text.len();
-    }
-    while idx > 0 && !text.is_char_boundary(idx) {
-        idx -= 1;
-    }
-    idx
 }
 
 #[cfg(feature = "cli")]
