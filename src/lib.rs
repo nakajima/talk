@@ -19,6 +19,7 @@
 
 pub mod parsing;
 pub use parsing::*;
+pub mod analysis;
 pub mod common;
 pub mod compiling;
 pub use common::*;

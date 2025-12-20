@@ -2236,11 +2236,15 @@ impl<'a> Lowerer<'a> {
             && !captures.is_empty()
         {
             let mut env_fields = vec![];
-            for capture in captures.clone() {
+            for capture in captures {
                 let ty = self
                     .ty_from_symbol(&capture.symbol)
                     .expect("didn't get capture ty")
                     .clone();
+                // Global functions are resolved by symbol; don't treat them as captured env fields.
+                if matches!(capture.symbol, Symbol::Global(_)) && matches!(ty, Ty::Func(..)) {
+                    continue;
+                }
 
                 let val = match self
                     .current_func_mut()
@@ -2267,7 +2271,11 @@ impl<'a> Lowerer<'a> {
                 env_fields.push((capture.symbol, ty.clone(), val));
             }
 
-            Some(env_fields)
+            if env_fields.is_empty() {
+                None
+            } else {
+                Some(env_fields)
+            }
         } else {
             None
         };

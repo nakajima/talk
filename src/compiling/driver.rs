@@ -1,14 +1,14 @@
 use crate::{
     ast::{self, AST},
     compiling::module::{Module, ModuleEnvironment, ModuleId, StableModuleId},
-    diagnostic::AnyDiagnostic,
+    diagnostic::{AnyDiagnostic, Diagnostic},
     ir::{ir_error::IRError, lowerer::Lowerer, program::Program},
     lexer::Lexer,
     name_resolution::{
         name_resolver::{NameResolver, ResolvedNames},
         symbol::{Symbol, Symbols},
     },
-    node_id::FileID,
+    node_id::{FileID, NodeID},
     parser::Parser,
     parser_error::ParserError,
     types::{
@@ -81,12 +81,21 @@ pub enum CompilationMode {
     Library,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ParseMode {
+    #[default]
+    Strict,
+    Lenient,
+}
+
 #[derive(Debug)]
 pub struct DriverConfig {
     pub module_id: ModuleId,
     pub modules: Rc<ModuleEnvironment>,
     pub mode: CompilationMode,
     pub module_name: String,
+    pub parse_mode: ParseMode,
+    pub preserve_comments: bool,
 }
 
 impl DriverConfig {
@@ -96,11 +105,23 @@ impl DriverConfig {
             modules: Default::default(),
             mode: CompilationMode::default(),
             module_name: module_name.into(),
+            parse_mode: ParseMode::default(),
+            preserve_comments: false,
         }
+    }
+
+    pub fn preserve_comments(mut self, should_preserve: bool) -> Self {
+        self.preserve_comments = should_preserve;
+        self
     }
 
     pub fn executable(mut self) -> Self {
         self.mode = CompilationMode::Executable;
+        self
+    }
+
+    pub fn lenient_parsing(mut self) -> Self {
+        self.parse_mode = ParseMode::Lenient;
         self
     }
 }
@@ -233,12 +254,45 @@ impl Driver {
 
         for (i, file) in self.files.iter().enumerate() {
             let input = file.read()?;
-            let lexer = Lexer::new(&input);
+            let lexer = if self.config.preserve_comments {
+                Lexer::preserving_comments(&input)
+            } else {
+                Lexer::new(&input)
+            };
             tracing::info!("parsing {file:?}");
-            let parser = Parser::new(file.path(), FileID(i as u32), lexer);
-            let (parsed, ast_diagnostics) = parser.parse().map_err(CompileError::Parsing)?;
-            diagnostics.extend(ast_diagnostics);
-            asts.insert(file.clone(), parsed);
+            let file_id = FileID(i as u32);
+            let parser = Parser::new(file.path(), file_id, lexer);
+            match parser.parse() {
+                Ok((parsed, ast_diagnostics)) => {
+                    diagnostics.extend(ast_diagnostics);
+                    asts.insert(file.clone(), parsed);
+                }
+                Err(err) => {
+                    if self.config.parse_mode == ParseMode::Strict {
+                        return Err(CompileError::Parsing(err));
+                    }
+
+                    diagnostics.push(
+                        Diagnostic {
+                            id: NodeID(file_id, 0),
+                            kind: err,
+                        }
+                        .into(),
+                    );
+                    asts.insert(
+                        file.clone(),
+                        AST::<ast::Parsed> {
+                            path: file.path().to_string(),
+                            roots: vec![],
+                            meta: Default::default(),
+                            phase: ast::Parsed,
+                            node_ids: Default::default(),
+                            synthsized_ids: Default::default(),
+                            file_id,
+                        },
+                    );
+                }
+            }
         }
 
         Ok(Driver {
@@ -427,6 +481,8 @@ pub mod tests {
             modules: Rc::new(module_environment),
             mode: CompilationMode::Library,
             module_name: "Test".to_string(),
+            parse_mode: ParseMode::Strict,
+            preserve_comments: false,
         };
 
         let driver_b = Driver::new(
@@ -472,6 +528,8 @@ pub mod tests {
             modules: Rc::new(module_environment),
             mode: CompilationMode::Library,
             module_name: "Test".to_string(),
+            parse_mode: ParseMode::Strict,
+            preserve_comments: false,
         };
 
         let driver_b = Driver::new(
@@ -522,6 +580,8 @@ pub mod tests {
             modules: Rc::new(module_environment),
             mode: CompilationMode::Library,
             module_name: "Test".to_string(),
+            parse_mode: ParseMode::Strict,
+            preserve_comments: false,
         };
 
         let driver_b = Driver::new(vec![Source::from("Hello(x: 123).x")], config);

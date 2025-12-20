@@ -108,7 +108,14 @@ impl<'a> Parser<'a> {
         }
     }
 
-    pub fn parse(mut self) -> Result<(AST<Parsed>, Vec<AnyDiagnostic>), ParserError> {
+    pub fn parse(self) -> Result<(AST<Parsed>, Vec<AnyDiagnostic>), ParserError> {
+        let (ast, diagnostics, _comments) = self.parse_with_comments()?;
+        Ok((ast, diagnostics))
+    }
+
+    pub fn parse_with_comments(
+        mut self,
+    ) -> Result<(AST<Parsed>, Vec<AnyDiagnostic>, Vec<Token>), ParserError> {
         self.advance();
         self.advance();
         self.skip_semicolons_and_newlines();
@@ -144,7 +151,7 @@ impl<'a> Parser<'a> {
             synthsized_ids: self.ast.synthsized_ids,
         };
 
-        Ok((ast, self.diagnostics))
+        Ok((ast, self.diagnostics, self.lexer.comments))
     }
 
     fn next_root(&mut self, kind: &TokenKind) -> Result<Node, ParserError> {

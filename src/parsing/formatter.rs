@@ -1,4 +1,4 @@
-use std::ops::Add;
+use std::{cell::RefCell, collections::VecDeque, ops::Add};
 
 use crate::{
     ast::{AST, ASTPhase},
@@ -28,6 +28,7 @@ use crate::{
     node_meta::NodeMeta,
     node_meta_storage::NodeMetaStorage,
     parser::Parser,
+    token::Token,
     token_kind::TokenKind,
 };
 
@@ -58,6 +59,56 @@ impl Doc {
 
     pub fn is_line_break(&self) -> bool {
         matches!(self, Doc::Line | Doc::Softline | Doc::Hardline)
+    }
+}
+
+#[derive(Clone, Debug)]
+struct Comment {
+    start: u32,
+    line: u32,
+    text: String,
+}
+
+struct CommentStore {
+    comments: VecDeque<Comment>,
+}
+
+impl CommentStore {
+    fn new(mut comments: Vec<Comment>) -> Self {
+        comments.sort_by_key(|comment| comment.start);
+        Self {
+            comments: VecDeque::from(comments),
+        }
+    }
+
+    fn peek(&self) -> Option<&Comment> {
+        self.comments.front()
+    }
+
+    fn pop(&mut self) -> Option<Comment> {
+        self.comments.pop_front()
+    }
+
+    fn take_before(&mut self, pos: u32) -> Vec<Comment> {
+        let mut collected = Vec::new();
+        while let Some(comment) = self.comments.front() {
+            if comment.start < pos {
+                collected.push(
+                    self.comments
+                        .pop_front()
+                        .unwrap_or_else(|| unreachable!()),
+                );
+            } else {
+                break;
+            }
+        }
+        collected
+    }
+
+    fn has_between(&self, start: u32, end: u32) -> bool {
+        self.comments
+            .iter()
+            .any(|comment| comment.start >= start && comment.start < end)
     }
 }
 
@@ -176,6 +227,7 @@ pub struct Formatter<'a> {
     // Track expression metadata for source location info
     meta_storage: &'a NodeMetaStorage,
     decorators: Vec<Box<dyn FormatterDecorator>>,
+    comments: Option<RefCell<CommentStore>>,
 }
 
 impl<'a> Formatter<'a> {
@@ -183,6 +235,7 @@ impl<'a> Formatter<'a> {
         Self {
             meta_storage,
             decorators: vec![],
+            comments: None,
         }
     }
 }
@@ -195,6 +248,18 @@ impl<'a> Formatter<'a> {
         Formatter {
             meta_storage,
             decorators,
+            comments: None,
+        }
+    }
+
+    fn new_with_comments(
+        meta_storage: &'a NodeMetaStorage,
+        comments: Vec<Comment>,
+    ) -> Formatter<'a> {
+        Formatter {
+            meta_storage,
+            decorators: vec![],
+            comments: Some(RefCell::new(CommentStore::new(comments))),
         }
     }
 
@@ -202,37 +267,111 @@ impl<'a> Formatter<'a> {
         self.meta_storage.get(&node.node_id())
     }
 
-    pub fn format(&self, roots: &[Node], width: usize) -> String {
-        let mut output = String::new();
-        let mut last_meta: Option<&NodeMeta> = None;
+    fn has_comments_between(&self, start: u32, end: u32) -> bool {
+        let Some(comments) = &self.comments else {
+            return false;
+        };
+        comments.borrow().has_between(start, end)
+    }
 
-        for (i, root) in roots.iter().enumerate() {
-            if i > 0 {
-                // Check if the previous root and current root are on the same line
-                let same_line = if let (Some(last), Some(current)) =
-                    (last_meta, self.get_meta_for_node(root))
-                {
-                    last.end.line == current.start.line
-                } else {
-                    false
-                };
+    fn take_comments_before(&self, pos: u32) -> Vec<Comment> {
+        let Some(comments) = &self.comments else {
+            return Vec::new();
+        };
+        comments.borrow_mut().take_before(pos)
+    }
 
-                if !same_line {
+    fn take_inline_comment(&self, meta: &NodeMeta) -> Option<Comment> {
+        let Some(comments) = &self.comments else {
+            return None;
+        };
+        let mut store = comments.borrow_mut();
+        let comment = store.peek()?;
+        if comment.line == meta.end.line && comment.start >= meta.end.end {
+            return store.pop();
+        }
+        None
+    }
+
+    fn comment_doc(comment: Comment) -> Doc {
+        text(comment.text)
+    }
+
+    fn append_doc_with_spacing(
+        mut acc: Doc,
+        last_line: &mut Option<u32>,
+        item_doc: Doc,
+        item_start_line: u32,
+        item_end_line: u32,
+    ) -> Doc {
+        if let Some(last) = *last_line {
+            acc = concat(acc, hardline());
+            if item_start_line > last + 1 {
+                acc = concat(acc, hardline());
+            }
+        }
+
+        acc = concat(acc, item_doc);
+        *last_line = Some(item_end_line);
+        acc
+    }
+
+    fn push_doc_output(
+        output: &mut String,
+        last_line: &mut Option<u32>,
+        doc: Doc,
+        item_start_line: u32,
+        item_end_line: u32,
+        width: usize,
+    ) {
+        if let Some(last) = *last_line {
+            if item_start_line != last {
+                output.push('\n');
+                if item_start_line > last + 1 {
                     output.push('\n');
-
-                    if let (Some(last), Some(current)) = (last_meta, self.get_meta_for_node(root)) {
-                        // If there's more than 1 line between expressions, add blank line
-                        if current.start.line - last.end.line > 1 {
-                            output.push('\n');
-                        }
-                    }
                 }
             }
+        }
+        output.push_str(&Self::render_doc(doc, width));
+        *last_line = Some(item_end_line);
+    }
 
-            let doc = self.format_node(root);
-            output.push_str(&Self::render_doc(doc, width));
+    pub fn format(&self, roots: &[Node], width: usize) -> String {
+        let mut output = String::new();
+        let mut last_line: Option<u32> = None;
 
-            last_meta = self.get_meta_for_node(root);
+        for root in roots {
+            let meta = self.get_meta_for_node(root);
+            let start_pos = meta
+                .map(|node_meta| node_meta.start.start)
+                .unwrap_or_else(|| root.span().start);
+            let start_line = meta
+                .map(|node_meta| node_meta.start.line)
+                .unwrap_or_else(|| last_line.map(|line| line + 1).unwrap_or(0));
+            let end_line = meta
+                .map(|node_meta| node_meta.end.line)
+                .unwrap_or(start_line);
+
+            for comment in self.take_comments_before(start_pos) {
+                let line = comment.line;
+                let doc = Self::comment_doc(comment);
+                Self::push_doc_output(&mut output, &mut last_line, doc, line, line, width);
+            }
+
+            let mut doc = self.format_node(root);
+            if let Some(meta) = meta
+                && let Some(comment) = self.take_inline_comment(meta)
+            {
+                doc = concat(doc, concat(text(" "), text(comment.text)));
+            }
+
+            Self::push_doc_output(&mut output, &mut last_line, doc, start_line, end_line, width);
+        }
+
+        for comment in self.take_comments_before(u32::MAX) {
+            let line = comment.line;
+            let doc = Self::comment_doc(comment);
+            Self::push_doc_output(&mut output, &mut last_line, doc, line, line, width);
         }
 
         output
@@ -536,17 +675,44 @@ impl<'a> Formatter<'a> {
     }
 
     fn format_block_inner(&self, block: &Block, allow_single_line: bool) -> Doc {
+        let has_comments = self.has_comments_between(block.span.start, block.span.end);
         if block.body.is_empty() {
-            if allow_single_line {
-                return concat(text("{"), text("}"));
+            if !has_comments {
+                if allow_single_line {
+                    return concat(text("{"), text("}"));
+                }
+                return concat(text("{"), concat(hardline(), text("}")));
             }
-            return concat(text("{"), concat(hardline(), text("}")));
+
+            let mut final_doc = empty();
+            let mut last_line: Option<u32> = None;
+
+            for comment in self.take_comments_before(block.span.end) {
+                let line = comment.line;
+                let comment_doc = Self::comment_doc(comment);
+                final_doc = Self::append_doc_with_spacing(
+                    final_doc,
+                    &mut last_line,
+                    comment_doc,
+                    line,
+                    line,
+                );
+            }
+
+            return concat(
+                text("{"),
+                concat(
+                    nest(1, concat(hardline(), final_doc)),
+                    concat(hardline(), text("}")),
+                ),
+            );
         }
 
         // Handle the special case for single-line blocks
         if allow_single_line
             && block.body.len() == 1
             && !Self::contains_control_flow(&block.body[0])
+            && !has_comments
         {
             return group(concat(
                 text("{"),
@@ -558,27 +724,58 @@ impl<'a> Formatter<'a> {
         }
 
         let mut final_doc = empty();
-        let mut last_meta: Option<&NodeMeta> = None;
+        let mut last_line: Option<u32> = None;
 
-        for (i, stmt) in block.body.iter().enumerate() {
+        for stmt in &block.body {
             let meta = self.get_meta_for_node(stmt);
+            let start_pos = meta
+                .map(|node_meta| node_meta.start.start)
+                .unwrap_or_else(|| stmt.span().start);
+            let start_line = meta
+                .map(|node_meta| node_meta.start.line)
+                .unwrap_or_else(|| last_line.map(|line| line + 1).unwrap_or(0));
+            let end_line = meta
+                .map(|node_meta| node_meta.end.line)
+                .unwrap_or(start_line);
 
-            // Add separators *before* each statement, except the first one.
-            if i > 0 {
-                // Always add at least one newline.
-                final_doc = concat(final_doc, hardline());
-
-                // If preserving a blank line, add a second newline.
-                if let (Some(last), Some(current)) = (last_meta, meta)
-                    && current.start.line - last.end.line > 1
-                {
-                    final_doc = concat(final_doc, hardline());
-                }
+            for comment in self.take_comments_before(start_pos) {
+                let line = comment.line;
+                let comment_doc = Self::comment_doc(comment);
+                final_doc = Self::append_doc_with_spacing(
+                    final_doc,
+                    &mut last_line,
+                    comment_doc,
+                    line,
+                    line,
+                );
             }
 
-            // Add the formatted statement itself.
-            final_doc = concat(final_doc, self.format_node(stmt));
-            last_meta = meta;
+            let mut stmt_doc = self.format_node(stmt);
+            if let Some(meta) = meta
+                && let Some(comment) = self.take_inline_comment(meta)
+            {
+                stmt_doc = concat(stmt_doc, concat(text(" "), text(comment.text)));
+            }
+
+            final_doc = Self::append_doc_with_spacing(
+                final_doc,
+                &mut last_line,
+                stmt_doc,
+                start_line,
+                end_line,
+            );
+        }
+
+        for comment in self.take_comments_before(block.span.end) {
+            let line = comment.line;
+            let comment_doc = Self::comment_doc(comment);
+            final_doc = Self::append_doc_with_spacing(
+                final_doc,
+                &mut last_line,
+                comment_doc,
+                line,
+                line,
+            );
         }
 
         concat(
@@ -591,32 +788,90 @@ impl<'a> Formatter<'a> {
     }
 
     fn format_body(&self, body: &Body) -> Doc {
+        let has_comments = self.has_comments_between(body.span.start, body.span.end);
         if body.decls.is_empty() {
-            return concat(text("{"), text("}"));
+            if !has_comments {
+                return concat(text("{"), text("}"));
+            }
+
+            let mut final_doc = empty();
+            let mut last_line: Option<u32> = None;
+
+            for comment in self.take_comments_before(body.span.end) {
+                let line = comment.line;
+                let comment_doc = Self::comment_doc(comment);
+                final_doc = Self::append_doc_with_spacing(
+                    final_doc,
+                    &mut last_line,
+                    comment_doc,
+                    line,
+                    line,
+                );
+            }
+
+            return concat(
+                text("{"),
+                concat(
+                    nest(1, concat(hardline(), final_doc)),
+                    concat(hardline(), text("}")),
+                ),
+            );
         }
 
         let mut final_doc = empty();
-        let mut last_meta: Option<&NodeMeta> = None;
+        let mut last_line: Option<u32> = None;
 
-        for (i, decl) in body.decls.iter().enumerate() {
-            let meta = self.get_meta_for_node(&decl.into());
+        for decl in &body.decls {
+            let node: Node = decl.into();
+            let meta = self.get_meta_for_node(&node);
+            let start_pos = meta
+                .map(|node_meta| node_meta.start.start)
+                .unwrap_or_else(|| node.span().start);
+            let start_line = meta
+                .map(|node_meta| node_meta.start.line)
+                .unwrap_or_else(|| last_line.map(|line| line + 1).unwrap_or(0));
+            let end_line = meta
+                .map(|node_meta| node_meta.end.line)
+                .unwrap_or(start_line);
 
-            // Add separators *before* each statement, except the first one.
-            if i > 0 {
-                // Always add at least one newline.
-                final_doc = concat(final_doc, hardline());
-
-                // If preserving a blank line, add a second newline.
-                if let (Some(last), Some(current)) = (last_meta, meta)
-                    && current.start.line - last.end.line > 1
-                {
-                    final_doc = concat(final_doc, hardline());
-                }
+            for comment in self.take_comments_before(start_pos) {
+                let line = comment.line;
+                let comment_doc = Self::comment_doc(comment);
+                final_doc = Self::append_doc_with_spacing(
+                    final_doc,
+                    &mut last_line,
+                    comment_doc,
+                    line,
+                    line,
+                );
             }
 
-            // Add the formatted statement itself.
-            final_doc = concat(final_doc, self.format_decl(decl));
-            last_meta = meta;
+            let mut decl_doc = self.format_decl(decl);
+            if let Some(meta) = meta
+                && let Some(comment) = self.take_inline_comment(meta)
+            {
+                decl_doc = concat(decl_doc, concat(text(" "), text(comment.text)));
+            }
+
+            final_doc = Self::append_doc_with_spacing(
+                final_doc,
+                &mut last_line,
+                decl_doc,
+                start_line,
+                end_line,
+            );
+        }
+
+        for comment in self.take_comments_before(body.span.end) {
+            let line = comment.line;
+            let comment_doc = Self::comment_doc(comment);
+            final_doc = Self::append_doc_with_spacing(
+                final_doc,
+                &mut last_line,
+                comment_doc,
+                line,
+                line,
+            );
         }
 
         concat(
@@ -1053,10 +1308,15 @@ impl<'a> Formatter<'a> {
             );
         }
 
+        let has_comments = self.has_comments_between(func.body.span.start, func.body.span.end);
+
         // Check if the body could be formatted inline
         if func.body.body.is_empty()
             || (func.body.body.len() == 1 && !Self::contains_control_flow(&func.body.body[0]))
         {
+            if has_comments {
+                return concat_space(result, self.format_block_multiline(&func.body));
+            }
             let inline = concat_space(result.clone(), self.format_block(&func.body));
             if Self::flat_width(&inline).is_some_and(|width| width <= SINGLE_LINE_FUNC_MAX_WIDTH) {
                 return group(inline);
@@ -1081,10 +1341,15 @@ impl<'a> Formatter<'a> {
             ),
         );
 
+        let has_comments = self.has_comments_between(body.span.start, body.span.end);
+
         // Check if the body could be formatted inline
         if body.body.is_empty()
             || (body.body.len() == 1 && !Self::contains_control_flow(&body.body[0]))
         {
+            if has_comments {
+                return concat_space(result, self.format_block_multiline(body));
+            }
             let inline = concat_space(result.clone(), self.format_block(body));
             if Self::flat_width(&inline).is_some_and(|width| width <= SINGLE_LINE_FUNC_MAX_WIDTH) {
                 return group(inline);
@@ -1537,15 +1802,44 @@ fn adjust_trailing_newlines(input: &str, mut output: String) -> String {
     output
 }
 
+fn comments_from_tokens(tokens: Vec<Token>, source: &str) -> Vec<Comment> {
+    let mut comments = Vec::new();
+    for token in tokens {
+        if !matches!(token.kind, TokenKind::LineComment(_)) {
+            continue;
+        }
+
+        let start = token.start as usize;
+        let end = token.end as usize;
+        if let Some(text) = source.get(start..end) {
+            comments.push(Comment {
+                start: token.start,
+                line: token.line,
+                text: text.trim_end().to_string(),
+            });
+        }
+    }
+    comments
+}
+
+fn format_with_comments<Phase: ASTPhase>(
+    ast: &AST<Phase>,
+    width: usize,
+    comments: Vec<Comment>,
+) -> String {
+    let formatter = Formatter::new_with_comments(&ast.meta, comments);
+    formatter.format(&ast.roots, width)
+}
+
 #[allow(clippy::unwrap_used)]
 pub fn format_string(string: &str) -> String {
-    let lexer = Lexer::new(string);
-    match Parser::new("", FileID(0), lexer).parse() {
-        Ok((ast, _diagnostics)) => {
+    let lexer = Lexer::preserving_comments(string);
+    match Parser::new("", FileID(0), lexer).parse_with_comments() {
+        Ok((ast, _diagnostics, comments)) => {
             let formatted = if ast.roots.is_empty() {
                 string.to_string()
             } else {
-                format(&ast, 80)
+                format_with_comments(&ast, 80, comments_from_tokens(comments, string))
             };
             adjust_trailing_newlines(string, formatted)
         }
@@ -1936,6 +2230,25 @@ mod formatter_tests {
             ),
             "func very_long_function_name(param_one: Int, param_two: Int) {\n\t1\n}"
         );
+    }
+
+    #[test]
+    fn test_preserves_line_comments_inline() {
+        assert_eq!(format_string("let x=1 // note"), "let x = 1 // note");
+    }
+
+    #[test]
+    fn test_preserves_line_comments_between_roots() {
+        let input = "let x = 1\n// note\nlet y = 2";
+        let expected = "let x = 1\n// note\nlet y = 2";
+        assert_eq!(format_string(input), expected);
+    }
+
+    #[test]
+    fn test_preserves_line_comments_in_block() {
+        let input = "func foo() {\n// note\n}";
+        let expected = "func foo() {\n\t// note\n}";
+        assert_eq!(format_string(input), expected);
     }
 
     #[test]

@@ -444,7 +444,11 @@ impl<'a> DeclDeclarer<'a> {
                 let func_sym = name
                     .symbol()
                     .unwrap_or_else(|_| unreachable!("did not resolve func name"));
-                self.start_scope(Some(func_sym), *id, false);
+                let binder = match self.resolver.current_scope().and_then(|scope| scope.binder) {
+                    Some(parent) if parent == func_sym => None,
+                    _ => Some(func_sym),
+                };
+                self.start_scope(binder, *id, false);
 
                 for generic in generics {
                     generic.name =
