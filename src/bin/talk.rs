@@ -1,8 +1,6 @@
 use talk::compiling::driver::DriverConfig;
 
 #[cfg(feature = "cli")]
-use talk::common::text::{clamp_to_char_boundary, line_info_for_offset};
-
 #[cfg(feature = "cli")]
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
@@ -82,7 +80,10 @@ async fn main() {
             println!("{result:?}");
         }
         Commands::Check { filenames, json } => {
-            use talk::analysis::{DocumentInput, Workspace};
+            use talk::{
+                analysis::{DocumentInput, Workspace},
+                cli::diagnostics::{ColorMode, render_json_entry, render_json_output, render_text},
+            };
 
             let sources = sources_for_filenames(filenames);
             let mut docs = Vec::with_capacity(sources.len());
@@ -113,9 +114,12 @@ async fn main() {
                 if let Some(diagnostics) = workspace.diagnostics.get(&doc_id) {
                     for diagnostic in diagnostics {
                         if *json {
-                            json_entries.push(json_diagnostic(&doc_id, text, diagnostic));
+                            json_entries.push(render_json_entry(&doc_id, text, diagnostic));
                         } else {
-                            print_diagnostic(&doc_id, text, diagnostic);
+                            print!(
+                                "{}",
+                                render_text(&doc_id, text, diagnostic, ColorMode::Auto)
+                            );
                         }
                         has_diagnostics = true;
                     }
@@ -123,7 +127,7 @@ async fn main() {
             }
 
             if *json {
-                println!("{{\"diagnostics\":[{}]}}", json_entries.join(","));
+                println!("{}", render_json_output(&json_entries));
             }
 
             if has_diagnostics {
@@ -231,141 +235,6 @@ fn input_text(filename: Option<&str>) -> String {
             .unwrap_or_else(|err| panic!("failed to read {name}: {err}")),
         _ => read_stdin(),
     }
-}
-
-#[cfg(feature = "cli")]
-fn print_diagnostic(doc_id: &str, text: &str, diagnostic: &talk::analysis::Diagnostic) {
-    // Might be chill to just use a library like miete or something to handle this formatting.
-    let use_color = use_color();
-    let (line, col, line_start, line_end) = line_info_for_offset(text, diagnostic.range.start);
-    let line_text = text.get(line_start..line_end).unwrap_or("");
-    let line_text = line_text.strip_suffix('\r').unwrap_or(line_text);
-
-    let highlight_start =
-        clamp_to_char_boundary(text, diagnostic.range.start as usize).clamp(line_start, line_end);
-    let highlight_end = clamp_to_char_boundary(text, diagnostic.range.end as usize)
-        .clamp(highlight_start, line_end);
-
-    let prefix = caret_prefix(&text[line_start..highlight_start]);
-    let underline_len = text[highlight_start..highlight_end].chars().count().max(1);
-    let underline = "^".repeat(underline_len);
-
-    let severity = severity_label(&diagnostic.severity);
-    let severity_style = severity_style(&diagnostic.severity);
-    let severity = style(severity, severity_style, use_color);
-
-    let gutter = style("|", "2", use_color);
-    let line_no = style(&format!("{line:>4}"), "2", use_color);
-    let underline = style(&underline, severity_style, use_color);
-
-    println!("{doc_id}:{line}:{col}: {severity}: {}", diagnostic.message);
-    println!("  {gutter}");
-    println!("{line_no} {gutter} {line_text}");
-    println!("  {gutter} {prefix}{underline}");
-
-    if diagnostic.range.end as usize > line_end {
-        println!("  = note: spans multiple lines");
-    }
-
-    println!();
-}
-
-#[cfg(feature = "cli")]
-fn json_diagnostic(doc_id: &str, text: &str, diagnostic: &talk::analysis::Diagnostic) -> String {
-    let (line, col, line_start, line_end) = line_info_for_offset(text, diagnostic.range.start);
-    let line_text = text.get(line_start..line_end).unwrap_or("");
-    let line_text = line_text.strip_suffix('\r').unwrap_or(line_text);
-
-    let highlight_start =
-        clamp_to_char_boundary(text, diagnostic.range.start as usize).clamp(line_start, line_end);
-    let highlight_end = clamp_to_char_boundary(text, diagnostic.range.end as usize)
-        .clamp(highlight_start, line_end);
-
-    let underline_start = text[line_start..highlight_start].chars().count() as u32 + 1;
-    let underline_len = text[highlight_start..highlight_end].chars().count().max(1) as u32;
-    let multiline = diagnostic.range.end as usize > line_end;
-
-    // Pro: No serde dep. Con: This mess.
-    format!(
-        "{{\"path\":{},\"line\":{},\"column\":{},\"severity\":{},\"message\":{},\"range\":{{\"start\":{},\"end\":{}}},\"line_text\":{},\"underline_start\":{},\"underline_len\":{},\"multiline\":{}}}",
-        json_string(doc_id),
-        line,
-        col,
-        json_string(severity_label(&diagnostic.severity)),
-        json_string(&diagnostic.message),
-        diagnostic.range.start,
-        diagnostic.range.end,
-        json_string(line_text),
-        underline_start,
-        underline_len,
-        if multiline { "true" } else { "false" }
-    )
-}
-
-#[cfg(feature = "cli")]
-fn caret_prefix(text: &str) -> String {
-    let mut prefix = String::new();
-    for ch in text.chars() {
-        if ch == '\t' {
-            prefix.push('\t');
-        } else {
-            prefix.push(' ');
-        }
-    }
-    prefix
-}
-
-#[cfg(feature = "cli")]
-fn use_color() -> bool {
-    use std::io::IsTerminal;
-    std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none()
-}
-
-#[cfg(feature = "cli")]
-fn severity_style(severity: &talk::analysis::DiagnosticSeverity) -> &'static str {
-    match severity {
-        talk::analysis::DiagnosticSeverity::Error => "1;31",
-        talk::analysis::DiagnosticSeverity::Warning => "1;33",
-        talk::analysis::DiagnosticSeverity::Info => "1;34",
-    }
-}
-
-#[cfg(feature = "cli")]
-fn severity_label(severity: &talk::analysis::DiagnosticSeverity) -> &'static str {
-    match severity {
-        talk::analysis::DiagnosticSeverity::Error => "error",
-        talk::analysis::DiagnosticSeverity::Warning => "warning",
-        talk::analysis::DiagnosticSeverity::Info => "info",
-    }
-}
-
-#[cfg(feature = "cli")]
-fn style(text: &str, code: &str, enabled: bool) -> String {
-    if enabled {
-        format!("\x1b[{code}m{text}\x1b[0m")
-    } else {
-        text.to_string()
-    }
-}
-
-#[cfg(feature = "cli")]
-fn json_string(value: &str) -> String {
-    let mut out = String::from("\"");
-    for ch in value.chars() {
-        match ch {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            ch if (ch as u32) < 0x20 => {
-                out.push_str(&format!("\\u{:04x}", ch as u32));
-            }
-            _ => out.push(ch),
-        }
-    }
-    out.push('"');
-    out
 }
 
 #[cfg(not(feature = "cli"))]

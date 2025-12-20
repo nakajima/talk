@@ -28,6 +28,9 @@ pub mod name_resolution;
 pub mod types;
 
 #[cfg(feature = "cli")]
+pub mod cli;
+
+#[cfg(feature = "cli")]
 pub mod lsp;
 
 #[cfg(test)]
