@@ -12,7 +12,12 @@ use crate::{
     },
     node_id::{FileID, NodeID},
     node_kinds::expr::ExprKind,
-    types::{row::Row, type_session::Types, ty::Ty},
+    types::{
+        format::{SymbolNames, TypeFormatter},
+        row::Row,
+        type_session::Types,
+        ty::Ty,
+    },
 };
 
 pub struct CompletionAnalysis<'a> {
@@ -57,6 +62,10 @@ pub fn complete(
     scope_completions(analysis, byte_offset)
 }
 
+fn type_formatter<'a>(analysis: &'a CompletionAnalysis<'a>) -> TypeFormatter<'a> {
+    TypeFormatter::new(SymbolNames::single(&analysis.resolved_names.symbol_names))
+}
+
 fn member_completion_dot(text: &str, byte_offset: u32) -> Option<u32> {
     let bytes = text.as_bytes();
     let mut i = (byte_offset as usize).min(bytes.len());
@@ -88,6 +97,7 @@ fn member_completions(
     let Some(types) = analysis.types else {
         return vec![];
     };
+    let formatter = type_formatter(analysis);
 
     let bytes = text.as_bytes();
     let mut receiver_end = (dot_pos as usize).min(bytes.len());
@@ -122,8 +132,7 @@ fn member_completions(
                 .nominals
                 .get(&receiver_sym)
                 .map(|_| {
-                    format_ty(
-                        analysis,
+                    formatter.format_ty(
                         &Ty::Nominal {
                             symbol: receiver_sym,
                             type_args: vec![],
@@ -138,7 +147,7 @@ fn member_completions(
                 .map(|nominal| nominal.substituted_variant_values(&[]));
 
             symbol_member_items(
-                analysis,
+                &formatter,
                 types,
                 members.into_iter(),
                 None,
@@ -168,17 +177,14 @@ fn member_completions(
                         .nominals
                         .get(symbol)
                         .map(|nominal| nominal.substituted_variant_values(type_args));
-                    let receiver_type = format_ty(
-                        analysis,
-                        &Ty::Nominal {
-                            symbol: *symbol,
-                            type_args: type_args.clone(),
-                        },
-                    );
+                    let receiver_type = formatter.format_ty(&Ty::Nominal {
+                        symbol: *symbol,
+                        type_args: type_args.clone(),
+                    });
 
                     let members = instance_member_symbols(types, *symbol);
                     symbol_member_items(
-                        analysis,
+                        &formatter,
                         types,
                         members.into_iter(),
                         subs.as_ref(),
@@ -187,7 +193,7 @@ fn member_completions(
                         Some(&receiver_type),
                     )
                 }
-                Ty::Record(.., row) => record_member_items(analysis, row),
+                Ty::Record(.., row) => record_member_items(&formatter, row),
                 _ => vec![],
             }
         }
@@ -247,12 +253,13 @@ fn instance_member_symbols(
 fn scope_completions(analysis: &CompletionAnalysis<'_>, byte_offset: u32) -> Vec<CompletionItem> {
     let symbols = visible_symbols(analysis, byte_offset);
     let types = analysis.types;
+    let formatter = type_formatter(analysis);
     let mut items: Vec<CompletionItem> = symbols
         .into_iter()
         .map(|(name, sym)| {
             let detail = types
                 .and_then(|types| types.get_symbol(&sym))
-                .map(|entry| format_type_entry(analysis, entry.as_mono_ty(), None));
+                .map(|entry| format_type_entry(&formatter, entry.as_mono_ty(), None));
             CompletionItem {
                 label: name,
                 kind: completion_kind(sym),
@@ -332,7 +339,7 @@ fn completion_kind(symbol: Symbol) -> Option<CompletionItemKind> {
 }
 
 fn symbol_member_items(
-    analysis: &CompletionAnalysis<'_>,
+    formatter: &TypeFormatter<'_>,
     types: &crate::types::type_session::Types,
     members: impl Iterator<Item = (Label, Symbol)>,
     receiver_substitutions: Option<&FxHashMap<Ty, Ty>>,
@@ -345,20 +352,20 @@ fn symbol_member_items(
             let detail = match sym {
                 Symbol::Property(..) => property_types
                     .and_then(|props| props.get(&label))
-                    .map(|ty| format_ty(analysis, ty)),
+                    .map(|ty| formatter.format_ty(ty)),
                 Symbol::Variant(..) => variant_values
                     .and_then(|variants| variants.get(&label))
                     .and_then(|payload| {
                         let receiver = variant_receiver?;
                         let payload = payload
                             .iter()
-                            .map(|t| format_ty(analysis, t))
+                            .map(|t| formatter.format_ty(t))
                             .collect::<Vec<_>>()
                             .join(", ");
                         Some(format!("({payload}) -> {receiver}"))
                     }),
                 _ => types.get_symbol(&sym).map(|entry| {
-                    format_type_entry(analysis, entry.as_mono_ty(), receiver_substitutions)
+                    format_type_entry(formatter, entry.as_mono_ty(), receiver_substitutions)
                 }),
             };
             CompletionItem {
@@ -373,14 +380,14 @@ fn symbol_member_items(
     items
 }
 
-fn record_member_items(analysis: &CompletionAnalysis<'_>, row: &Row) -> Vec<CompletionItem> {
+fn record_member_items(formatter: &TypeFormatter<'_>, row: &Row) -> Vec<CompletionItem> {
     let fields = record_fields(row);
     let mut items: Vec<CompletionItem> = fields
         .into_iter()
         .map(|(label, ty)| CompletionItem {
             label: label.to_string(),
             kind: Some(CompletionItemKind::Field),
-            detail: Some(format_ty(analysis, &ty)),
+            detail: Some(formatter.format_ty(&ty)),
         })
         .collect();
     items.sort_by(|a, b| a.label.cmp(&b.label));
@@ -406,14 +413,14 @@ fn record_fields(row: &Row) -> Vec<(Label, Ty)> {
 }
 
 fn format_type_entry(
-    analysis: &CompletionAnalysis<'_>,
+    formatter: &TypeFormatter<'_>,
     ty: &Ty,
     substitutions: Option<&FxHashMap<Ty, Ty>>,
 ) -> String {
     let ty = substitutions
         .map(|subs| substitute_ty(ty, subs))
         .unwrap_or_else(|| ty.clone());
-    format_ty(analysis, &ty)
+    formatter.format_ty(&ty)
 }
 
 fn substitute_ty(ty: &Ty, substitutions: &FxHashMap<Ty, Ty>) -> Ty {
@@ -464,106 +471,6 @@ fn substitute_row(row: &Row, substitutions: &FxHashMap<Ty, Ty>) -> Row {
             ty: substitute_ty(ty, substitutions),
         },
     }
-}
-
-fn format_ty(analysis: &CompletionAnalysis<'_>, ty: &Ty) -> String {
-    match ty {
-        Ty::Primitive(symbol) => match *symbol {
-            Symbol::Int => "Int".to_string(),
-            Symbol::Float => "Float".to_string(),
-            Symbol::Bool => "Bool".to_string(),
-            Symbol::Void => "Void".to_string(),
-            Symbol::RawPtr => "RawPtr".to_string(),
-            Symbol::Byte => "Byte".to_string(),
-            _ => symbol.to_string(),
-        },
-        Ty::Param(id) => format!("{id:?}"),
-        Ty::Constructor { name, params, ret } => {
-            if params.is_empty() {
-                name.name_str()
-            } else {
-                let params = params
-                    .iter()
-                    .map(|p| format_ty(analysis, p))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("({params}) -> {}", format_ty(analysis, ret))
-            }
-        }
-        Ty::Func(param, ret) => {
-            let params = param
-                .clone()
-                .uncurry_params()
-                .iter()
-                .map(|p| format_ty(analysis, p))
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!("({params}) -> {}", format_ty(analysis, ret))
-        }
-        Ty::Tuple(items) => format!(
-            "({})",
-            items
-                .iter()
-                .map(|t| format_ty(analysis, t))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
-        Ty::Record(.., row) => format!("{{ {} }}", format_row(analysis, row)),
-        Ty::Nominal { symbol, type_args } => {
-            let base = analysis
-                .resolved_names
-                .symbol_names
-                .get(symbol)
-                .cloned()
-                .or_else(|| {
-                    if *symbol == Symbol::String {
-                        Some("String".to_string())
-                    } else if *symbol == Symbol::Array {
-                        Some("Array".to_string())
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or_else(|| symbol.to_string());
-
-            if type_args.is_empty() {
-                base
-            } else {
-                let args = type_args
-                    .iter()
-                    .map(|t| format_ty(analysis, t))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("{base}<{args}>")
-            }
-        }
-    }
-}
-
-fn format_row(analysis: &CompletionAnalysis<'_>, row: &Row) -> String {
-    let mut fields = vec![];
-    let mut cursor = row;
-    loop {
-        match cursor {
-            Row::Empty(..) | Row::Param(..) => break,
-            Row::Extend { row, label, ty } => {
-                fields.push((label.clone(), ty.clone()));
-                cursor = row;
-            }
-        }
-    }
-    fields.reverse();
-
-    let mut rendered = fields
-        .into_iter()
-        .map(|(label, ty)| format!("{label}: {}", format_ty(analysis, &ty)))
-        .collect::<Vec<_>>();
-
-    if let Row::Param(param) = cursor {
-        rendered.push(format!("..{param:?}"));
-    }
-
-    rendered.join(", ")
 }
 
 fn smallest_node_at_offset(
