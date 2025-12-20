@@ -703,6 +703,7 @@ impl Interpreter {
             Value::Func(name) => (name, Default::default()),
             Value::Ref(Reference::Func(sym)) => (sym, Default::default()),
             Value::Ref(Reference::Closure(sym, env)) => (sym, env),
+            Value::Closure { func, env } => (func, env),
             _ => panic!("cannot get func from {val:?}"),
         }
     }
@@ -977,11 +978,10 @@ pub mod tests {
                 "
             func makeCounter() {
                 let a = 0
-                func count() {
+                return func() {
                     a = a + 1
                     a
                 }
-                count
             }
 
             let a = makeCounter()

@@ -429,12 +429,22 @@ impl<'a> DeclDeclarer<'a> {
                 ..
             },
             {
+                let is_synth = matches!(name, Name::Raw(raw) if raw.starts_with("#fn_"))
+                    || matches!(name, Name::Resolved(_, raw) if raw.starts_with("#fn_"));
+                let fallback = if is_synth {
+                    some!(Synthesized)
+                } else {
+                    some!(Global)
+                };
                 *name = self
                     .resolver
                     .lookup(name, Some(*id))
-                    .unwrap_or_else(|| self.resolver.declare(name, some!(Global), func_id));
+                    .unwrap_or_else(|| self.resolver.declare(name, fallback, func_id));
 
-                self.start_scope(None, *id, false);
+                let func_sym = name
+                    .symbol()
+                    .unwrap_or_else(|_| unreachable!("did not resolve func name"));
+                self.start_scope(Some(func_sym), *id, false);
 
                 for generic in generics {
                     generic.name =

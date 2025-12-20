@@ -1,7 +1,7 @@
 func makeCounter() {
 	let i = 0
 
-	return func count() {
+	return func() {
 		i = i + 1
 		i
 	}
