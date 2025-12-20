@@ -20,20 +20,6 @@ use crate::{
     name_resolution::symbol::{Symbol, set_symbol_names},
 };
 
-// #[derive(Debug, Clone, PartialEq)]
-// pub enum Value {
-//     Int(i64),
-//     Float(f64),
-//     Bool(bool),
-//     Record(Option<Symbol>, Vec<Value>),
-//     Func(Symbol),
-//     Void,
-//     Ref(Reference),
-//     RawPtr(usize),
-//     Buffer(Vec<u8>),
-//     Uninit,
-// }
-
 #[allow(clippy::panic)]
 #[allow(clippy::should_implement_trait)]
 impl Value {
