@@ -40,6 +40,7 @@ use crate::analysis::{
 use crate::compiling::module::ModuleId;
 use crate::lsp::semantic_tokens::collect;
 use crate::lsp::{completion, document::Document, semantic_tokens::TOKEN_TYPES};
+use crate::lexer::Lexer;
 use crate::name_resolution::symbol::Symbol;
 use crate::node_kinds::{
     decl::Decl,
@@ -51,6 +52,7 @@ use crate::node_kinds::{
     pattern::{Pattern, RecordFieldPattern},
     type_annotation::TypeAnnotation,
 };
+use crate::token_kind::TokenKind;
 
 #[allow(deprecated)]
 fn workspace_roots_from_initialize(params: &InitializeParams) -> Vec<PathBuf> {
@@ -552,11 +554,13 @@ fn file_stamp_version(path: &PathBuf) -> i32 {
 fn analysis_root_for_uri(state: &ServerState, uri: &Url) -> Option<PathBuf> {
     let path = uri.to_file_path().ok();
 
-    if let (Some(path), false) = (path.as_ref(), state.workspace_roots.is_empty()) {
-        return path
-            .parent()
-            .map(|p| p.to_path_buf())
-            .or_else(|| Some(path.clone()));
+    if state.workspace_roots.is_empty() {
+        if let Some(path) = path.as_ref() {
+            return path
+                .parent()
+                .map(|p| p.to_path_buf())
+                .or_else(|| Some(path.clone()));
+        }
     }
 
     if let Some(path) = path.as_ref() {
@@ -658,13 +662,21 @@ fn workspace_analysis(state: &mut ServerState, focus_uri: &Url) -> Option<Arc<An
 
     let mut docs: Vec<DocumentInput> = vec![];
     for uri in uris {
-        let version = docs_by_uri.get(&uri)?;
+        let Some(version) = docs_by_uri.get(&uri) else {
+            continue;
+        };
         let text = if let Some(doc) = state.documents.get(&uri)
             && (uri == *focus_uri || uri_is_under_root(&uri, &root))
         {
             doc.text.clone()
         } else if let Ok(path) = uri.to_file_path() {
-            std::fs::read_to_string(path).ok()?
+            match std::fs::read_to_string(&path) {
+                Ok(text) => text,
+                Err(err) => {
+                    tracing::warn!("skipping unreadable file {path:?}: {err}");
+                    continue;
+                }
+            }
         } else {
             continue;
         };
@@ -789,16 +801,14 @@ fn identifier_span_at_offset(
 }
 
 fn is_valid_identifier(name: &str) -> bool {
-    let mut chars = name.chars();
-    let Some(first) = chars.next() else {
+    let mut lexer = Lexer::new(name);
+    let Ok(token) = lexer.next() else {
         return false;
     };
-
-    if !(first.is_ascii_alphabetic() || first == '_') {
+    if !matches!(token.kind, TokenKind::Identifier(..)) {
         return false;
     }
-
-    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+    matches!(lexer.next().ok().map(|t| t.kind), Some(TokenKind::EOF))
 }
 
 fn is_symbol_renamable(symbol: Symbol) -> bool {

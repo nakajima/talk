@@ -1,7 +1,7 @@
 use js_sys::{Array, Object, Reflect};
 use talk::{
     analysis::{Diagnostic, DocumentInput, Workspace},
-    common::text::{clamp_to_char_boundary, line_info_for_offset},
+    common::text::{clamp_to_char_boundary, line_info_for_offset_utf16},
     compiling::driver::{Driver, DriverConfig, Lowered, Source},
     highlighter::highlight_html,
     ir::interpreter::Interpreter,
@@ -88,7 +88,8 @@ fn diagnostics_to_js(
 ) -> Result<JsValue, JsValue> {
     let entries = Array::new();
     for diagnostic in diagnostics {
-        let (line, col, line_start, line_end) = line_info_for_offset(text, diagnostic.range.start);
+        let (line, col, line_start, line_end) =
+            line_info_for_offset_utf16(text, diagnostic.range.start);
         let line_text = text.get(line_start..line_end).unwrap_or("");
         let line_text = line_text.strip_suffix('\r').unwrap_or(line_text);
 
@@ -97,9 +98,10 @@ fn diagnostics_to_js(
         let highlight_end =
             clamp_to_char_boundary(text, diagnostic.range.end as usize).clamp(highlight_start, line_end);
 
-        let underline_start = text[line_start..highlight_start].chars().count() as u32 + 1;
+        let underline_start =
+            text[line_start..highlight_start].encode_utf16().count() as u32 + 1;
         let underline_len = text[highlight_start..highlight_end]
-            .chars()
+            .encode_utf16()
             .count()
             .max(1) as u32;
         let multiline = diagnostic.range.end as usize > line_end;

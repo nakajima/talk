@@ -1,7 +1,7 @@
 use std::str::FromStr;
 
 use crate::ast::{AST, NewAST, Parsed};
-use crate::diagnostic::AnyDiagnostic;
+use crate::diagnostic::{AnyDiagnostic, Diagnostic};
 use crate::label::Label;
 use crate::lexer::Lexer;
 use crate::name::Name;
@@ -152,6 +152,11 @@ impl<'a> Parser<'a> {
         };
 
         Ok((ast, self.diagnostics, self.lexer.comments))
+    }
+
+    fn record_diagnostic(&mut self, kind: ParserError) {
+        self.diagnostics
+            .push(Diagnostic { id: NodeID(self.file_id, 0), kind }.into());
     }
 
     fn next_root(&mut self, kind: &TokenKind) -> Result<Node, ParserError> {
@@ -1250,7 +1255,8 @@ impl<'a> Parser<'a> {
         let (name, name_span) = match self.current.clone().map(|c| c.kind) {
             Some(TokenKind::Identifier(_)) => match self.identifier() {
                 Ok((name, span)) => (Label::Named(name), span),
-                Err(_) => {
+                Err(err) => {
+                    self.record_diagnostic(err);
                     let incomplete_member = ExprKind::Incomplete(IncompleteExpr::Member(None));
                     return Ok(Node::Expr(self.add_expr(incomplete_member, tok)?));
                 }
@@ -1266,6 +1272,7 @@ impl<'a> Parser<'a> {
                 )
             }
             Some(_) | None => {
+                self.record_diagnostic(ParserError::ExpectedIdentifier(self.current.clone()));
                 let incomplete_member = ExprKind::Incomplete(IncompleteExpr::Member(None));
                 return Ok(Node::Expr(self.add_expr(incomplete_member, tok)?));
             }
@@ -1313,7 +1320,8 @@ impl<'a> Parser<'a> {
         let (name, name_span) = match self.current.clone().map(|c| c.kind) {
             Some(TokenKind::Identifier(_)) => match self.identifier() {
                 Ok((name, span)) => (Label::Named(name), span),
-                Err(_) => {
+                Err(err) => {
+                    self.record_diagnostic(err);
                     let incomplete_member =
                         ExprKind::Incomplete(IncompleteExpr::Member(Some(Box::new(lhs))));
                     return Ok(Node::Expr(self.add_expr(incomplete_member, tok)?));
@@ -1330,6 +1338,7 @@ impl<'a> Parser<'a> {
                 )
             }
             Some(_) | None => {
+                self.record_diagnostic(ParserError::ExpectedIdentifier(self.current.clone()));
                 let incomplete_member =
                     ExprKind::Incomplete(IncompleteExpr::Member(Some(Box::new(lhs))));
                 return Ok(Node::Expr(self.add_expr(incomplete_member, tok)?));

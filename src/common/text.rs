@@ -30,3 +30,10 @@ pub fn line_info_for_offset(text: &str, byte_offset: u32) -> (u32, u32, usize, u
     let col = text[last_line_start..offset].chars().count() as u32 + 1;
     (line, col, last_line_start, line_end)
 }
+
+pub fn line_info_for_offset_utf16(text: &str, byte_offset: u32) -> (u32, u32, usize, usize) {
+    let (line, _col, line_start, line_end) = line_info_for_offset(text, byte_offset);
+    let offset = clamp_to_char_boundary(text, byte_offset as usize);
+    let col = text[line_start..offset].encode_utf16().count() as u32 + 1;
+    (line, col, line_start, line_end)
+}
