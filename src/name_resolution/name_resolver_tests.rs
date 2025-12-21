@@ -79,6 +79,7 @@ pub mod tests {
         };
     }
 
+    #[macro_export]
     macro_rules! any_pattern {
         ($kind: expr) => {
             $crate::parsing::node_kinds::pattern::Pattern {
@@ -425,43 +426,6 @@ pub mod tests {
                 })))
             })
         );
-
-        // assert_eq!(
-        //     *resolved.0.roots[0].as_decl(),
-        //     any_decl!(DeclKind::Let {
-        //         lhs: any_pattern!(PatternKind::Bind(Name::Resolved(
-        //             Symbol::Global(GlobalId::from(1)),
-        //             "count".into()
-        //         ))),
-        //         type_annotation: None,
-        //         rhs: Some(any_expr!(ExprKind::LiteralInt("0".into())))
-        //     })
-        // );
-
-        // assert_eq_diff!(
-        //     *resolved.0.roots[1].as_decl(),
-        //     any_decl!(DeclKind::Let {
-        //         lhs: any_pattern!(PatternKind::Bind(Name::Resolved(
-        //             Symbol::Global(GlobalId::from(2)),
-        //             "counter".into()
-        //         ))),
-        //         type_annotation: None,
-        //         rhs: Some(any_expr!(ExprKind::Func(Func {
-        //             id: NodeID::ANY,
-        //             name: Name::Resolved(Symbol::Global(GlobalId::from(2)), "counter".into()),
-        //             name_span: Span::ANY,
-        //             generics: vec![],
-        //             params: vec![param!(ParamLocalId(1), "x")],
-        //             body: any_block!(vec![
-        //                 any_stmt!(StmtKind::Expr(variable!(ParamLocalId(1), "x"))).into(),
-        //                 any_stmt!(StmtKind::Expr(variable!(GlobalId::from(1), "count"))).into(),
-        //                 any_stmt!(StmtKind::Expr(variable!(GlobalId::from(1), "count"))).into(),
-        //             ]),
-        //             ret: None,
-        //             attributes: vec![]
-        //         })))
-        //     })
-        // );
 
         let mut expected = FxHashSet::default();
         expected.insert(Capture {
@@ -1386,6 +1350,59 @@ pub mod tests {
         }
 
         b
+        ",
+        );
+
+        assert_eq!(
+            resolved.1.diagnostics.len(),
+            1,
+            "{:?}",
+            resolved.1.diagnostics
+        );
+    }
+
+    #[test]
+    fn or_patterns_resolve_binds() {
+        let resolved = resolve(
+            "
+        let .a(x) | .b(x)
+        ",
+        );
+
+        assert_eq_diff!(
+            *resolved.0.roots[0].as_decl(),
+            any_decl!(DeclKind::Let {
+                lhs: any_pattern!(PatternKind::Or(vec![
+                    any_pattern!(PatternKind::Variant {
+                        enum_name: None,
+                        variant_name: "a".into(),
+                        variant_name_span: Span::ANY,
+                        fields: vec![any_pattern!(PatternKind::Bind(Name::Resolved(
+                            Symbol::Global(1u32.into()),
+                            "x".into()
+                        )))]
+                    }),
+                    any_pattern!(PatternKind::Variant {
+                        enum_name: None,
+                        variant_name: "b".into(),
+                        variant_name_span: Span::ANY,
+                        fields: vec![any_pattern!(PatternKind::Bind(Name::Resolved(
+                            Symbol::Global(1u32.into()), // This should be the same symbol as above.
+                            "x".into()
+                        )))]
+                    })
+                ])),
+                type_annotation: None,
+                rhs: None
+            })
+        );
+    }
+
+    #[test]
+    fn or_patterns_require_matching_binds() {
+        let resolved = resolve_err(
+            "
+        let .a(x) | .b(y)
         ",
         );
 

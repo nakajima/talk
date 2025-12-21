@@ -775,6 +775,20 @@ pub mod tests {
     }
 
     #[test]
+    fn checks_or_pattern() {
+        let (.., diagnostics) = typecheck_err(
+            "
+        match 123 {
+            123 | true -> true,
+            _ -> false
+        }
+        ",
+        );
+
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+    }
+
+    #[test]
     fn checks_tuple_match() {
         let (ast, types) = typecheck(
             "

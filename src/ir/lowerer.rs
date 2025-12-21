@@ -826,6 +826,7 @@ impl<'a> Lowerer<'a> {
     // #[instrument(level = tracing::Level::TRACE, skip(self, pattern), fields(pattern.id = %pattern.id))]
     fn lower_pattern(&mut self, pattern: &TypedPattern<Ty>) -> Result<Bind, IRError> {
         match &pattern.kind {
+            PatternKind::Or(..) => unimplemented!(),
             PatternKind::Bind(name) => {
                 let symbol = name.symbol().expect("name not resolved");
                 let value = if self.resolved_names.is_captured.contains(&symbol) {
@@ -2832,11 +2833,7 @@ impl<'a> Lowerer<'a> {
                     }
                 };
 
-                
-
-                if let Some((member, _)) =
-                    self.types.catalog.lookup_member(&receiver_sym, label)
-                {
+                if let Some((member, _)) = self.types.catalog.lookup_member(&receiver_sym, label) {
                     member
                 } else if let Some(member) = self.config.modules.lookup_member(&receiver_sym, label)
                 {

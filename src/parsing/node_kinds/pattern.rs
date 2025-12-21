@@ -39,6 +39,8 @@ pub enum PatternKind {
 
     Tuple(Vec<Pattern>),
 
+    Or(Vec<Pattern>),
+
     // Wildcard (always succeeds, ignores value)
     Wildcard,
 
@@ -86,6 +88,11 @@ impl Pattern {
             PatternKind::LiteralFloat(_) => (),
             PatternKind::LiteralTrue => (),
             PatternKind::LiteralFalse => (),
+            PatternKind::Or(patterns) => {
+                for pattern in patterns {
+                    result.extend(pattern.collect_binders());
+                }
+            }
             PatternKind::Bind(name) => {
                 if let Ok(sym) = name.symbol() {
                     result.push((self.id, sym))

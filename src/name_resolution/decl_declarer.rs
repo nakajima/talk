@@ -273,6 +273,10 @@ impl<'a> DeclDeclarer<'a> {
                     self.resolver.declare(name, bind_type, pattern.id)
                 }
             }
+            PatternKind::Or(patterns) => {
+                // Declare the binds in the first pattern, the following patterns will get resolved from those
+                self.declare_pattern(&mut patterns[0], bind_type);
+            }
             PatternKind::Bind(..) => {}
             PatternKind::Variant {
                 enum_name, fields, ..

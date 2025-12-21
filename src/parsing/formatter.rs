@@ -93,11 +93,7 @@ impl CommentStore {
         let mut collected = Vec::new();
         while let Some(comment) = self.comments.front() {
             if comment.start < pos {
-                collected.push(
-                    self.comments
-                        .pop_front()
-                        .unwrap_or_else(|| unreachable!()),
-                );
+                collected.push(self.comments.pop_front().unwrap_or_else(|| unreachable!()));
             } else {
                 break;
             }
@@ -324,12 +320,12 @@ impl<'a> Formatter<'a> {
         item_end_line: u32,
         width: usize,
     ) {
-        if let Some(last) = *last_line {
-            if item_start_line != last {
+        if let Some(last) = *last_line
+            && item_start_line != last
+        {
+            output.push('\n');
+            if item_start_line > last + 1 {
                 output.push('\n');
-                if item_start_line > last + 1 {
-                    output.push('\n');
-                }
             }
         }
         output.push_str(&Self::render_doc(doc, width));
@@ -365,7 +361,14 @@ impl<'a> Formatter<'a> {
                 doc = concat(doc, concat(text(" "), text(comment.text)));
             }
 
-            Self::push_doc_output(&mut output, &mut last_line, doc, start_line, end_line, width);
+            Self::push_doc_output(
+                &mut output,
+                &mut last_line,
+                doc,
+                start_line,
+                end_line,
+                width,
+            );
         }
 
         for comment in self.take_comments_before(u32::MAX) {
@@ -769,13 +772,8 @@ impl<'a> Formatter<'a> {
         for comment in self.take_comments_before(block.span.end) {
             let line = comment.line;
             let comment_doc = Self::comment_doc(comment);
-            final_doc = Self::append_doc_with_spacing(
-                final_doc,
-                &mut last_line,
-                comment_doc,
-                line,
-                line,
-            );
+            final_doc =
+                Self::append_doc_with_spacing(final_doc, &mut last_line, comment_doc, line, line);
         }
 
         concat(
@@ -865,13 +863,8 @@ impl<'a> Formatter<'a> {
         for comment in self.take_comments_before(body.span.end) {
             let line = comment.line;
             let comment_doc = Self::comment_doc(comment);
-            final_doc = Self::append_doc_with_spacing(
-                final_doc,
-                &mut last_line,
-                comment_doc,
-                line,
-                line,
-            );
+            final_doc =
+                Self::append_doc_with_spacing(final_doc, &mut last_line, comment_doc, line, line);
         }
 
         concat(
@@ -936,6 +929,10 @@ impl<'a> Formatter<'a> {
             PatternKind::LiteralFalse => text("false"),
             PatternKind::Bind(name) => self.format_name(name),
             PatternKind::Wildcard => text("_"),
+            PatternKind::Or(patterns) => join(
+                patterns.iter().map(|p| self.format_pattern(p)).collect(),
+                text("|"),
+            ),
             PatternKind::Tuple(items) => concat(
                 concat(
                     text("("),

@@ -113,6 +113,7 @@ impl<'a> Parser<'a> {
         Ok((ast, diagnostics))
     }
 
+    #[allow(clippy::type_complexity)]
     pub fn parse_with_comments(
         mut self,
     ) -> Result<(AST<Parsed>, Vec<AnyDiagnostic>, Vec<Token>), ParserError> {
@@ -155,8 +156,13 @@ impl<'a> Parser<'a> {
     }
 
     fn record_diagnostic(&mut self, kind: ParserError) {
-        self.diagnostics
-            .push(Diagnostic { id: NodeID(self.file_id, 0), kind }.into());
+        self.diagnostics.push(
+            Diagnostic {
+                id: NodeID(self.file_id, 0),
+                kind,
+            }
+            .into(),
+        );
     }
 
     fn next_root(&mut self, kind: &TokenKind) -> Result<Node, ParserError> {
@@ -1164,6 +1170,35 @@ impl<'a> Parser<'a> {
                 });
             }
         };
+
+        if self.peek_is(TokenKind::Pipe) {
+            let first_pattern = self.save_meta(tok, |id, span| Pattern { id, span, kind })?;
+            let mut patterns = vec![];
+
+            while self.did_match(TokenKind::Pipe)? {
+                patterns.push(self.parse_pattern()?);
+            }
+
+            let id = self.next_id();
+            let span = Span {
+                file_id: self.file_id,
+                start: first_pattern.span.start,
+                end: self
+                    .current
+                    .as_ref()
+                    .map(|c| c.end)
+                    .unwrap_or(first_pattern.span.end),
+            };
+
+            // We insert this after the fact so we can first grab the span.end (NOTE: Maybe we should err instead?)
+            patterns.insert(0, first_pattern);
+
+            return Ok(Pattern {
+                id,
+                span,
+                kind: PatternKind::Or(patterns),
+            });
+        }
 
         self.save_meta(tok, |id, span| Pattern { id, span, kind })
     }
