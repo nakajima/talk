@@ -200,8 +200,13 @@ impl Scheme<InferTy> {
 
             session.reverse_instantiations.ty.insert(meta_var, *param);
 
-            if let Some((arg_ty, _id)) = args.pop() {
-                constraints.wants_equals(ty.clone(), arg_ty.clone());
+            if let Some((arg_ty, arg_id)) = args.pop() {
+                constraints.wants_equals_at(
+                    *arg_id,
+                    ty.clone(),
+                    arg_ty.clone(),
+                    &context.group_info(),
+                );
             };
 
             substitutions.insert_ty(id, *param, meta_var);

@@ -2,6 +2,7 @@ use tracing::instrument;
 
 use crate::{
     label::Label,
+    node_id::NodeID,
     types::{
         constraint_solver::{DeferralReason, SolveResult},
         constraints::store::{ConstraintId, ConstraintStore},
@@ -14,6 +15,7 @@ use crate::{
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct HasField {
     pub id: ConstraintId,
+    pub node_id: Option<NodeID>,
     pub row: InferRow,
     pub label: Label,
     pub ty: InferTy,
@@ -37,7 +39,12 @@ impl HasField {
             }
             InferRow::Extend { box row, label, ty } => {
                 if self.label == *label {
-                    constraints.wants_equals(self.ty.clone(), ty.clone());
+                    let group = constraints.copy_group(self.id);
+                    if let Some(node_id) = self.node_id {
+                        constraints.wants_equals_at(node_id, self.ty.clone(), ty.clone(), &group);
+                    } else {
+                        constraints.wants_equals(self.ty.clone(), ty.clone());
+                    }
                     tracing::trace!("found match for {label:?}");
                     SolveResult::Solved(Default::default())
                 } else {
@@ -45,6 +52,7 @@ impl HasField {
                         row.clone(),
                         self.label.clone(),
                         self.ty.clone(),
+                        self.node_id,
                         &constraints.copy_group(self.id),
                     );
                     SolveResult::Solved(Default::default())

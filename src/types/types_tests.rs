@@ -33,27 +33,6 @@ pub mod tests {
         (ast, types)
     }
 
-    fn typecheck_core(code: &'static str) -> (TypedAST<Ty>, Types) {
-        let driver = Driver::new(vec![Source::from(code)], DriverConfig::new("TestDriver"));
-        let typed = driver
-            .parse()
-            .unwrap()
-            .resolve_names()
-            .unwrap()
-            .typecheck()
-            .unwrap();
-
-        let types = typed.phase.types;
-        let ast = typed.phase.ast;
-        assert!(
-            typed.phase.diagnostics.is_empty(),
-            "diagnostics not empty: {:?}",
-            typed.phase.diagnostics
-        );
-
-        (ast, types)
-    }
-
     fn typecheck_err(code: &'static str) -> (TypedAST<Ty>, Types, Vec<AnyDiagnostic>) {
         let driver = Driver::new_bare(vec![Source::from(code)], DriverConfig::new("TestDriver"));
         let typed = driver
@@ -65,6 +44,34 @@ pub mod tests {
             .unwrap();
 
         (typed.phase.ast, typed.phase.types, typed.phase.diagnostics)
+    }
+
+    fn typecheck_core(code: &'static str) -> (TypedAST<Ty>, Types) {
+        let (ast, types, diagnostics) = typecheck_core_err(code);
+
+        assert!(
+            diagnostics.is_empty(),
+            "diagnostics not empty: {:?}",
+            diagnostics
+        );
+
+        (ast, types)
+    }
+
+    fn typecheck_core_err(code: &'static str) -> (TypedAST<Ty>, Types, Vec<AnyDiagnostic>) {
+        let driver = Driver::new(vec![Source::from(code)], DriverConfig::new("TestDriver"));
+        let typed = driver
+            .parse()
+            .unwrap()
+            .resolve_names()
+            .unwrap()
+            .typecheck()
+            .unwrap();
+
+        let types = typed.phase.types;
+        let ast = typed.phase.ast;
+
+        (ast, types, typed.phase.diagnostics)
     }
 
     pub fn decl_ty(i: usize, ast: &AST<NameResolved>, session: &Types) -> Ty {
@@ -2034,6 +2041,18 @@ pub mod tests {
 
         assert_eq!(ty(0, &ast, &types), Ty::Int);
         // assert_eq!(ty(1, &ast, &types), Ty::Float);
+    }
+
+    #[test]
+    fn checks_plus() {
+        let (_ast, _types, diagnostics) = typecheck_core_err(
+            "
+        let a: Int = 123
+        let b: Float = 1.23
+        let c = a + b
+        ",
+        );
+        assert_eq!(1, diagnostics.len(), "{diagnostics:?}");
     }
 
     #[test]

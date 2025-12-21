@@ -212,16 +212,17 @@ fn diagnostic_for_any(
     asts: &[Option<AST<NameResolved>>],
     diagnostic: &AnyDiagnostic,
 ) -> Option<(DocumentId, Diagnostic)> {
-    let (id, message, parse_error) = match diagnostic {
+    let (id, message, parse_error, prefer_identifier) = match diagnostic {
         AnyDiagnostic::Parsing(diagnostic) => (
             diagnostic.id,
             diagnostic.kind.to_string(),
             Some(&diagnostic.kind),
+            false,
         ),
         AnyDiagnostic::NameResolution(diagnostic) => {
-            (diagnostic.id, diagnostic.kind.to_string(), None)
+            (diagnostic.id, diagnostic.kind.to_string(), None, true)
         }
-        AnyDiagnostic::Typing(diagnostic) => (diagnostic.id, diagnostic.kind.to_string(), None),
+        AnyDiagnostic::Typing(diagnostic) => (diagnostic.id, diagnostic.kind.to_string(), None, false),
     };
 
     let file_idx = id.0.0 as usize;
@@ -237,17 +238,7 @@ fn diagnostic_for_any(
             texts.get(file_idx),
             asts.get(file_idx).and_then(|a| a.as_ref()),
         ) {
-            (Some(_text), Some(ast)) => match ast.meta.get(&id) {
-                Some(meta) => {
-                    let (start, end) = meta
-                        .identifiers
-                        .last()
-                        .map(|t| (t.start, t.end))
-                        .unwrap_or((meta.start.start, meta.end.end));
-                    TextRange::new(start, end)
-                }
-                None => TextRange::new(0, 0),
-            },
+            (Some(_text), Some(ast)) => range_for_node(ast, id, prefer_identifier),
             _ => TextRange::new(0, 0),
         }
     };
@@ -260,4 +251,34 @@ fn diagnostic_for_any(
             message,
         },
     ))
+}
+
+fn range_for_node(
+    ast: &AST<NameResolved>,
+    id: crate::node_id::NodeID,
+    prefer_identifier: bool,
+) -> TextRange {
+    if let Some(meta) = ast.meta.get(&id) {
+        let (start, end) = if prefer_identifier {
+            meta.identifiers
+                .last()
+                .map(|t| (t.start, t.end))
+                .unwrap_or((meta.start.start, meta.end.end))
+        } else {
+            (meta.start.start, meta.end.end)
+        };
+
+        if start != 0 || end != 0 {
+            return TextRange::new(start, end);
+        }
+    }
+
+    if let Some(node) = ast.find(id) {
+        let span = node.span();
+        if span.file_id != FileID::SYNTHESIZED {
+            return TextRange::new(span.start, span.end);
+        }
+    }
+
+    TextRange::new(0, 0)
 }

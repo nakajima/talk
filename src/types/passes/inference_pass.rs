@@ -76,7 +76,7 @@ pub struct InferencePass<'a> {
     constraints: ConstraintStore,
     instantiations: FxHashMap<NodeID, InstantiationSubstitutions>,
     substitutions: UnificationSubstitutions,
-    tracked_returns: Vec<IndexSet<(Span, InferTy)>>,
+    tracked_returns: Vec<IndexSet<(NodeID, InferTy)>>,
     nominal_placeholders: FxHashMap<Symbol, (MetaVarId, Level)>,
     diagnostics: IndexSet<AnyDiagnostic>,
     root_decls: Vec<TypedDecl<InferTy>>,
@@ -685,12 +685,18 @@ impl<'a> InferencePass<'a> {
             }
             // Search all ASTs for the rhs_id - cross-file dependencies within a module
             // may have the definition in a different file's SCC graph
-            let Some(rhs_id) = self.session.resolved_names.scc_graph.rhs_id_for(binder) else {
+            let Some(rhs_id) = self
+                .session
+                .resolved_names
+                .scc_graph
+                .rhs_id_for(binder)
+                .copied()
+            else {
                 tracing::error!("did not find rhs_id for binder: {binder:?}");
                 return (decls, stmts);
             };
 
-            let Some(rhs) = self.asts.iter().find_map(|ast| ast.find(*rhs_id)) else {
+            let Some(rhs) = self.asts.iter().find_map(|ast| ast.find(rhs_id)) else {
                 tracing::error!("did not find rhs for id: {rhs_id:?}, binder: {binder:?}");
                 return (decls, stmts);
             };
@@ -712,10 +718,10 @@ impl<'a> InferencePass<'a> {
             if let Some(existing) = self.session.lookup(binder) {
                 if existing == EnvEntry::Mono(placeholders[i].clone()) {
                     self.constraints
-                        .wants_equals(node.ty(), placeholders[i].clone());
+                        .wants_equals_at(rhs_id, node.ty(), placeholders[i].clone(), &context.group_info());
                 } else {
                     self.constraints
-                        .wants_equals(placeholders[i].clone(), existing._as_ty());
+                        .wants_equals_at(rhs_id, placeholders[i].clone(), existing._as_ty(), &context.group_info());
                 }
             }
         }
@@ -851,7 +857,7 @@ impl<'a> InferencePass<'a> {
                 let lhs_ty = self.visit_expr(lhs, context)?;
                 let rhs_ty = self.visit_expr(rhs, context)?;
                 self.constraints
-                    .wants_equals(lhs_ty.ty.clone(), rhs_ty.ty.clone());
+                    .wants_equals_at(stmt.id, lhs_ty.ty.clone(), rhs_ty.ty.clone(), &context.group_info());
                 TypedStmt {
                     id: stmt.id,
                     ty: lhs_ty.ty.clone(),
@@ -868,7 +874,7 @@ impl<'a> InferencePass<'a> {
                 let cond_ty = if let Some(cond) = cond {
                     let cond_ty = self.visit_expr(cond, context)?;
                     self.constraints
-                        .wants_equals(cond_ty.ty.clone(), InferTy::Bool);
+                        .wants_equals_at(cond.id, cond_ty.ty.clone(), InferTy::Bool, &context.group_info());
                     cond_ty
                 } else {
                     TypedExpr {
@@ -1054,7 +1060,7 @@ impl<'a> InferencePass<'a> {
         if let Some(returns) = self.tracked_returns.last_mut()
             && let Some(ty_expr) = &ty_expr
         {
-            returns.insert((stmt.span, ty_expr.ty.clone()));
+            returns.insert((stmt.id, ty_expr.ty.clone()));
         }
 
         Ok(TypedStmt {
@@ -1111,7 +1117,7 @@ impl<'a> InferencePass<'a> {
         for expr in items[1..].iter() {
             let ty = self.visit_expr(expr, context)?;
             self.constraints
-                .wants_equals(item_ty.ty.clone(), ty.ty.clone());
+                .wants_equals_at(expr.id, item_ty.ty.clone(), ty.ty.clone(), &context.group_info());
             typed_items.push(ty);
         }
 
@@ -1483,7 +1489,7 @@ impl<'a> InferencePass<'a> {
 
             if let Some((id, level)) = self.nominal_placeholders.remove(&nominal_symbol) {
                 self.constraints
-                    .wants_equals(ty.clone(), InferTy::Var { id, level });
+                    .wants_equals_at(decl.id, ty.clone(), InferTy::Var { id, level }, &context.group_info());
             }
         }
 
@@ -1723,7 +1729,7 @@ impl<'a> InferencePass<'a> {
         if let Some(default_value) = default_value {
             let default_ty = self.visit_expr(default_value, context)?;
             self.constraints
-                .wants_equals(default_ty.ty.clone(), ty.clone());
+                .wants_equals_at(default_value.id, default_ty.ty.clone(), ty.clone(), &context.group_info());
         }
 
         if is_static {
@@ -1809,7 +1815,7 @@ impl<'a> InferencePass<'a> {
 
             if let Some(last_arm_ty) = &last_arm_ty {
                 self.constraints
-                    .wants_equals(arm_ty.ret.clone(), last_arm_ty.clone());
+                    .wants_equals_at(arm.id, arm_ty.ret.clone(), last_arm_ty.clone(), &context.group_info());
             }
 
             last_arm_ty = Some(arm_ty.ret.clone());
@@ -1839,7 +1845,7 @@ impl<'a> InferencePass<'a> {
             PatternKind::Bind(Name::Resolved(sym, _)) => {
                 if let Some(EnvEntry::Mono(existing)) = self.session.lookup(sym) {
                     self.constraints
-                        .wants_equals(expected.clone(), existing.clone());
+                        .wants_equals_at(pattern.id, expected.clone(), existing.clone(), &context.group_info());
                 };
 
                 self.session
@@ -1865,7 +1871,7 @@ impl<'a> InferencePass<'a> {
                         .collect_vec(),
                 );
 
-                self.constraints.wants_equals(ty.clone(), expected.clone());
+                self.constraints.wants_equals_at(pattern.id, ty.clone(), expected.clone(), &context.group_info());
 
                 ty
             }
@@ -1930,7 +1936,7 @@ impl<'a> InferencePass<'a> {
                 }
 
                 let ty = InferTy::Record(row.into());
-                self.constraints.wants_equals(ty.clone(), expected.clone());
+                self.constraints.wants_equals_at(pattern.id, ty.clone(), expected.clone(), &context.group_info());
 
                 ty
             }
@@ -1950,9 +1956,11 @@ impl<'a> InferencePass<'a> {
 
         match kind {
             PatternKind::Bind(Name::Raw(name)) => {
-                self.constraints.wants_equals(
+                self.constraints.wants_equals_at(
+                    pattern.id,
                     expected.clone(),
                     InferTy::Error(TypeError::NameNotResolved(name.clone().into()).into()),
+                    &context.group_info(),
                 );
             }
             PatternKind::Bind(Name::Resolved(sym, _)) => {
@@ -1962,15 +1970,15 @@ impl<'a> InferencePass<'a> {
             PatternKind::Bind(Name::SelfType(..)) => (),
             PatternKind::LiteralInt(_) => {
                 self.constraints
-                    .wants_equals(expected.clone(), InferTy::Int);
+                    .wants_equals_at(pattern.id, expected.clone(), InferTy::Int, &context.group_info());
             }
             PatternKind::LiteralFloat(_) => {
                 self.constraints
-                    .wants_equals(expected.clone(), InferTy::Float);
+                    .wants_equals_at(pattern.id, expected.clone(), InferTy::Float, &context.group_info());
             }
             PatternKind::LiteralFalse | PatternKind::LiteralTrue => {
                 self.constraints
-                    .wants_equals(expected.clone(), InferTy::Bool);
+                    .wants_equals_at(pattern.id, expected.clone(), InferTy::Bool, &context.group_info());
             }
             PatternKind::Tuple(patterns) => {
                 let metas: Vec<InferTy> = (0..patterns.len())
@@ -1978,14 +1986,19 @@ impl<'a> InferencePass<'a> {
                     .collect();
 
                 self.constraints
-                    .wants_equals(expected.clone(), InferTy::Tuple(metas.clone()));
+                    .wants_equals_at(
+                        pattern.id,
+                        expected.clone(),
+                        InferTy::Tuple(metas.clone()),
+                        &context.group_info(),
+                    );
 
                 for (pi, bi) in patterns.iter().zip(metas) {
                     self.check_pattern(pi, &bi, context);
                 }
             }
             PatternKind::Record { fields } => {
-                let expected_row = self.ensure_row_record(expected, context);
+                let expected_row = self.ensure_row_record(expected, pattern.id, context);
                 for field in fields {
                     match &field.kind {
                         RecordFieldPatternKind::Bind(name) => {
@@ -2009,6 +2022,7 @@ impl<'a> InferencePass<'a> {
                                 expected_row.clone(),
                                 name.name_str().into(),
                                 field_ty,
+                                Some(field.id),
                                 &context.group_info(),
                             );
                         }
@@ -2019,6 +2033,7 @@ impl<'a> InferencePass<'a> {
                                 expected_row.clone(),
                                 name.name_str().into(),
                                 field_ty.clone(),
+                                Some(field.id),
                                 &context.group_info(),
                             );
                             self.check_pattern(value, &field_ty, context);
@@ -2087,12 +2102,12 @@ impl<'a> InferencePass<'a> {
     ) -> TypedRet<TypedExpr<InferTy>> {
         let cond_ty = self.visit_expr(cond, context)?;
         self.constraints
-            .wants_equals(cond_ty.ty.clone(), InferTy::Bool);
+            .wants_equals_at(cond.id, cond_ty.ty.clone(), InferTy::Bool, &context.group_info());
 
         let conseq_ty = self.infer_block(conseq, context)?;
         let alt_ty = self.infer_block(alt, context)?;
         self.constraints
-            .wants_equals(conseq_ty.ret.clone(), alt_ty.ret.clone());
+            .wants_equals_at(id, conseq_ty.ret.clone(), alt_ty.ret.clone(), &context.group_info());
 
         Ok(TypedExpr {
             id,
@@ -2113,14 +2128,14 @@ impl<'a> InferencePass<'a> {
     ) -> TypedRet<TypedStmt<InferTy>> {
         let cond_ty = self.visit_expr(cond, context)?;
         self.constraints
-            .wants_equals(cond_ty.ty.clone(), InferTy::Bool);
+            .wants_equals_at(cond.id, cond_ty.ty.clone(), InferTy::Bool, &context.group_info());
 
         let conseq_ty = self.infer_block(conseq, context)?;
 
         let (alt_ty, result_ty) = if let Some(alt) = alt {
             let alt_ty = self.infer_block(alt, context)?;
             self.constraints
-                .wants_equals(conseq_ty.ret.clone(), alt_ty.ret.clone());
+                .wants_equals_at(id, conseq_ty.ret.clone(), alt_ty.ret.clone(), &context.group_info());
             (alt_ty, conseq_ty.ret.clone())
         } else {
             (
@@ -2174,7 +2189,7 @@ impl<'a> InferencePass<'a> {
     ) -> TypedRet<TypedBlock<InferTy>> {
         let tok = self.tracking_returns();
         let block = self.infer_block(block, context)?;
-        self.verify_returns(tok, block.ret.clone());
+        self.verify_returns(tok, block.ret.clone(), context);
         Ok(block)
     }
 
@@ -2223,7 +2238,7 @@ impl<'a> InferencePass<'a> {
             .iter()
             .map(|a| self.visit_expr(&a.value, context))
             .try_collect()?;
-        let type_args: Vec<_> = type_args
+        let type_arg_tys: Vec<_> = type_args
             .iter()
             .map(|a| self.visit_type_annotation(a, context))
             .try_collect()?;
@@ -2258,12 +2273,14 @@ impl<'a> InferencePass<'a> {
             .get(&callee.id)
             .cloned()
             .unwrap_or_default();
-        for (type_arg, instantiated) in type_args
+        for ((type_arg, type_arg_ty), instantiated) in type_args
             .iter()
+            .zip(type_arg_tys.iter())
             .zip(instantiations.ty_mappings(&callee.id).values())
         {
-            self.constraints.wants_equals(
-                type_arg.clone(),
+            self.constraints.wants_equals_at(
+                type_arg.id,
+                type_arg_ty.clone(),
                 InferTy::Var {
                     id: *instantiated,
                     level: self
@@ -2274,6 +2291,7 @@ impl<'a> InferencePass<'a> {
                         .copied()
                         .unwrap_or_default(),
                 },
+                &context.group_info(),
             );
         }
 
@@ -2282,10 +2300,11 @@ impl<'a> InferencePass<'a> {
         // }
 
         self.constraints.wants_call(
+            id,
             callee.id,
             callee_ty.ty.clone(),
             arg_tys.iter().map(|a| a.ty.clone()).collect_vec(),
-            type_args.clone(),
+            type_arg_tys.clone(),
             ret.clone(),
             receiver.map(|r| r.ty.clone()),
             &context.group_info(),
@@ -2296,7 +2315,7 @@ impl<'a> InferencePass<'a> {
             ty: ret,
             kind: TypedExprKind::Call {
                 callee: callee_ty.into(),
-                type_args,
+                type_args: type_arg_tys,
                 args: arg_tys,
                 resolved: None,
             },
@@ -2386,7 +2405,7 @@ impl<'a> InferencePass<'a> {
             // If there was a placeholder, unify it with the annotated type
             if let Some(existing) = existing_ty {
                 self.constraints
-                    .wants_equals(existing, annotation_ty.clone());
+                    .wants_equals_at(type_annotation.id, existing, annotation_ty.clone(), &context.group_info());
             }
             annotation_ty
         } else if let Some(existing) = existing_ty {
@@ -2420,8 +2439,9 @@ impl<'a> InferencePass<'a> {
     ) -> TypedRet<TypedBlock<InferTy>> {
         let tok = self.tracking_returns();
         let ret = self.infer_block(block, context)?;
-        self.verify_returns(tok, ret.ret.clone());
-        self.constraints.wants_equals(ret.ret.clone(), expected);
+        self.verify_returns(tok, ret.ret.clone(), context);
+        self.constraints
+            .wants_equals_at(block.id, ret.ret.clone(), expected, &context.group_info());
         Ok(ret)
     }
 
@@ -2453,7 +2473,8 @@ impl<'a> InferencePass<'a> {
 
         if let Some(ret) = ret {
             let ret_ty = self.visit_type_annotation(ret, context)?;
-            self.constraints.wants_equals(ret_ty, expected_ret.clone());
+            self.constraints
+                .wants_equals_at(ret.id, ret_ty, expected_ret.clone(), &context.group_info());
         }
 
         self.check_block(body, expected_ret.clone(), context)?;
@@ -2640,7 +2661,7 @@ impl<'a> InferencePass<'a> {
                 let annotated_ty = self.visit_type_annotation(annotation, context)?;
                 let rhs_ty = self.visit_expr(rhs, context)?;
                 self.constraints
-                    .wants_equals(annotated_ty.clone(), rhs_ty.ty.clone());
+                    .wants_equals_at(rhs.id, annotated_ty.clone(), rhs_ty.ty.clone(), &context.group_info());
                 (annotated_ty, Some(rhs_ty))
             }
             (None, None) => (self.session.new_ty_meta_var(context.level().next()), None),
@@ -2664,19 +2685,30 @@ impl<'a> InferencePass<'a> {
         ReturnToken {}
     }
 
-    fn verify_returns(&mut self, _tok: ReturnToken, ret: InferTy) {
+    fn verify_returns(&mut self, _tok: ReturnToken, ret: InferTy, context: &mut impl Solve) {
         for tracked_ret in self.tracked_returns.pop().unwrap_or_else(|| unreachable!()) {
-            self.constraints.wants_equals(tracked_ret.1, ret.clone());
+            self.constraints
+                .wants_equals_at(tracked_ret.0, tracked_ret.1, ret.clone(), &context.group_info());
         }
     }
 
-    fn ensure_row_record(&mut self, expected: &InferTy, context: &mut impl Solve) -> InferRow {
+    fn ensure_row_record(
+        &mut self,
+        expected: &InferTy,
+        node_id: NodeID,
+        context: &mut impl Solve,
+    ) -> InferRow {
         match expected {
             InferTy::Record(box row) => row.clone(),
             _ => {
                 let row = self.session.new_row_meta_var(context.level());
                 self.constraints
-                    .wants_equals(expected.clone(), InferTy::Record(Box::new(row.clone())));
+                    .wants_equals_at(
+                        node_id,
+                        expected.clone(),
+                        InferTy::Record(Box::new(row.clone())),
+                        &context.group_info(),
+                    );
                 row
             }
         }

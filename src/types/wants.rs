@@ -173,7 +173,12 @@ impl Wants {
     #[instrument(skip(self))]
     pub fn _has_field(&mut self, row: InferRow, label: Label, ty: InferTy) {
         self.simple
-            .push_back(Constraint::HasField(HasField { row, label, ty }))
+            .push_back(Constraint::HasField(HasField {
+                node_id: None,
+                row,
+                label,
+                ty,
+            }))
     }
 
     #[instrument(skip(self))]

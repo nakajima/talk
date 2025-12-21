@@ -84,7 +84,8 @@ impl Projection {
 
                     // Force the base we're projecting from to be "this" instantiation,
                     // so the metas_for_A unify with the actual arguments (Float/Int).
-                    constraints.wants_equals(base.clone(), nominal_inst);
+                    let group = constraints.copy_group(self.id);
+                    constraints.wants_equals_at(self.node_id, base.clone(), nominal_inst, &group);
 
                     let Some(alias_entry) = session.lookup(&alias_sym) else {
                         return SolveResult::Err(TypeError::TypeNotFound(format!(
@@ -97,7 +98,8 @@ impl Projection {
                         alias_entry.instantiate(self.node_id, constraints, context, session);
 
                     // Self.T must equal the instantiated alias.
-                    constraints.wants_equals(result.clone(), alias_inst);
+                    let group = constraints.copy_group(self.id);
+                    constraints.wants_equals_at(self.node_id, result.clone(), alias_inst, &group);
 
                     return SolveResult::Solved(Default::default());
                 }
@@ -107,7 +109,8 @@ impl Projection {
                 if let Some(witness) = conf.witnesses.associated_types.get(&self.label) {
                     let witness = session.apply(witness.clone(), &mut context.substitutions);
                     if !matches!(witness, InferTy::Param(_)) {
-                        constraints.wants_equals(result, witness);
+                        let group = constraints.copy_group(self.id);
+                        constraints.wants_equals_at(self.node_id, result, witness, &group);
                         return SolveResult::Solved(Default::default());
                     }
                 }
@@ -173,7 +176,8 @@ impl Projection {
                                     type_args: Default::default(),
                                 }
                             };
-                            constraints.wants_equals(base.clone(), conforming_ty);
+                            let group = constraints.copy_group(self.id);
+                            constraints.wants_equals_at(self.node_id, base.clone(), conforming_ty, &group);
                             return SolveResult::Solved(vec![Meta::Ty(*id)]);
                         }
                         _ => {

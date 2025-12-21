@@ -112,7 +112,9 @@ impl StaticMemory {
             IrTy::Bool => Value::Bool(bytes[0] == 1),
             IrTy::Func(..) => Value::Func(Symbol::from_bytes(bytes.try_into().unwrap())),
             IrTy::Record(..) => unreachable!("can only load primitives"),
-            IrTy::RawPtr => Value::RawPtr(Addr(usize::from_le_bytes(bytes.try_into().unwrap()))),
+            IrTy::RawPtr => {
+                Value::RawPtr(Addr(u64::from_le_bytes(bytes.try_into().unwrap()) as usize))
+            }
             IrTy::Byte => Value::RawBuffer(bytes.to_vec()),
             IrTy::Void => unreachable!("cannot load the void"),
             IrTy::Buffer(..) => Value::RawBuffer(bytes.to_vec()),

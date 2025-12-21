@@ -503,7 +503,7 @@ impl Interpreter {
                     IrTy::Float => Value::Float(f64::from_le_bytes(bytes.try_into().unwrap())),
                     IrTy::Bool => Value::Bool(bytes[0] != 0),
                     IrTy::RawPtr => {
-                        Value::RawPtr(Addr(usize::from_le_bytes(bytes.try_into().unwrap())))
+                        Value::RawPtr(Addr(u64::from_le_bytes(bytes.try_into().unwrap()) as usize))
                     }
                     IrTy::Func(..) => Value::Func(Symbol::from_bytes(bytes.try_into().unwrap())),
                     _ => panic!("Load not implemented for {ty:?}"),
@@ -748,7 +748,7 @@ pub mod tests {
     }
 
     #[test]
-    pub fn add() {
+    pub fn add_int() {
         assert_eq!(interpret("1 + 2"), Value::Int(3));
         assert_eq!(interpret("1.0 + 2.0"), Value::Float(3.0));
     }
@@ -910,6 +910,25 @@ pub mod tests {
     }
 
     #[test]
+    fn interprets_greet_regression() {
+        let (value, mut interpreter) = interpret_with(
+            "
+            struct Person {
+                let name: String
+
+                func greet(name) {
+                    \"hey, i'm \" + self.name
+                }
+            }
+
+            Person(name: \"pat\").greet()
+            ",
+        );
+
+        assert_eq!(interpreter.display(value), "hey, i'm pat");
+    }
+
+    #[test]
     fn interprets_closure() {
         assert_eq!(
             interpret(
@@ -1002,5 +1021,24 @@ pub mod tests {
             ),
             Value::Int(20)
         )
+    }
+
+    #[test]
+    fn interprets_simple_match() {
+        let (val, mut interpreter) = interpret_with(
+            "
+        enum Response {
+                case ok(String), redirect(String), other(Int)
+            }
+
+            match Response.ok(\"It's cool\") {
+                .ok(data) -> print(data),
+                .redirect(location) -> print(\"redirect \" + location),
+                .other(code) -> print(code)
+            }
+        ",
+        );
+
+        assert_eq!("It's cool", interpreter.display(val));
     }
 }

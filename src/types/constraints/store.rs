@@ -383,13 +383,38 @@ impl ConstraintStore {
         let id = self.ids.next_id();
         self.wants(
             id,
-            Constraint::Equals(Equals { id, lhs, rhs }),
+            Constraint::Equals(Equals {
+                id,
+                node_id: None,
+                lhs,
+                rhs,
+            }),
             &BindingGroup {
                 id: Default::default(),
                 level: Default::default(),
                 binders: Default::default(),
                 is_top_level: Default::default(),
             },
+        )
+    }
+
+    pub fn wants_equals_at(
+        &mut self,
+        node_id: NodeID,
+        lhs: InferTy,
+        rhs: InferTy,
+        group: &BindingGroup,
+    ) -> &Constraint {
+        let id = self.ids.next_id();
+        self.wants(
+            id,
+            Constraint::Equals(Equals {
+                id,
+                node_id: Some(node_id),
+                lhs,
+                rhs,
+            }),
+            group,
         )
     }
 
@@ -443,12 +468,19 @@ impl ConstraintStore {
         row: InferRow,
         label: Label,
         ty: InferTy,
+        node_id: Option<NodeID>,
         group: &BindingGroup,
     ) -> &Constraint {
         let id = self.ids.next_id();
         self.wants(
             id,
-            Constraint::HasField(HasField { id, row, label, ty }),
+            Constraint::HasField(HasField {
+                id,
+                node_id,
+                row,
+                label,
+                ty,
+            }),
             group,
         )
     }
@@ -502,6 +534,7 @@ impl ConstraintStore {
     #[allow(clippy::too_many_arguments)]
     pub fn wants_call(
         &mut self,
+        call_node_id: NodeID,
         callee_id: NodeID,
         callee: InferTy,
         args: Vec<InferTy>,
@@ -515,6 +548,7 @@ impl ConstraintStore {
             id,
             Constraint::Call(Call {
                 id,
+                call_node_id,
                 callee_id,
                 callee,
                 args,
@@ -547,6 +581,7 @@ pub mod tests {
         let meta: MetaVarId = 1.into();
         let constraint = Constraint::Equals(Equals {
             id: 1.into(),
+            node_id: None,
             lhs: InferTy::Var {
                 id: meta,
                 level: Level(1),
@@ -572,6 +607,7 @@ pub mod tests {
         let meta: MetaVarId = 1.into();
         let constraint = Constraint::Equals(Equals {
             id: 1.into(),
+            node_id: None,
             lhs: InferTy::Var {
                 id: meta,
                 level: Level(1),
@@ -590,6 +626,7 @@ pub mod tests {
         let meta: MetaVarId = 1.into();
         let equals = Constraint::Equals(Equals {
             id: 1.into(),
+            node_id: None,
             lhs: InferTy::Var {
                 id: meta,
                 level: Level(1),

@@ -82,6 +82,7 @@ impl Member {
                     row.clone(),
                     self.label.clone(),
                     ty,
+                    Some(self.node_id),
                     &constraints.copy_group(self.id),
                 );
                 return SolveResult::Solved(Default::default());
@@ -303,7 +304,8 @@ impl Member {
                         _ => curry(values, self.receiver.clone()),
                     };
 
-                    constraints.wants_equals(constructor_ty, self.ty.clone());
+                    let group = constraints.copy_group(self.id);
+                    constraints.wants_equals_at(self.node_id, constructor_ty, self.ty.clone(), &group);
                     return SolveResult::Solved(Default::default());
                 }
                 Symbol::StaticMethod(..) => {
