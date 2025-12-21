@@ -1,5 +1,7 @@
 use std::hash::Hash;
 
+use indexmap::IndexSet;
+
 use crate::{
     compiling::module::ModuleId,
     name::Name,
@@ -7,6 +9,7 @@ use crate::{
     types::{
         infer_ty::{InferTy, TypeParamId},
         row::Row,
+        scheme::ForAll,
     },
 };
 
@@ -121,6 +124,40 @@ impl Ty {
     }
     pub fn Array(t: Ty) -> Ty {
         InferTy::Array(t.into()).into()
+    }
+
+    pub fn collect_foralls(&self) -> IndexSet<ForAll> {
+        let mut result: IndexSet<ForAll> = Default::default();
+        match self {
+            Ty::Primitive(..) => (),
+            Ty::Param(id) => {
+                result.insert(ForAll::Ty(*id));
+            }
+            Ty::Constructor { params, ret, .. } => {
+                for param in params {
+                    result.extend(param.collect_foralls());
+                }
+                result.extend(ret.collect_foralls());
+            }
+            Ty::Func(param, ret) => {
+                result.extend(param.collect_foralls());
+                result.extend(ret.collect_foralls());
+            }
+            Ty::Tuple(items) => {
+                for item in items {
+                    result.extend(item.collect_foralls());
+                }
+            }
+            Ty::Record(.., row) => {
+                result.extend(row.collect_foralls());
+            }
+            Ty::Nominal { type_args, .. } => {
+                for arg in type_args {
+                    result.extend(arg.collect_foralls());
+                }
+            }
+        }
+        result
     }
 
     pub fn import(self, module_id: ModuleId) -> Self {

@@ -18,8 +18,11 @@ pub fn render_text(
     diagnostic: &Diagnostic,
     color_mode: ColorMode,
 ) -> String {
+    // Could be chill to use miette or something for this
     let use_color = match color_mode {
-        ColorMode::Auto => std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none(),
+        ColorMode::Auto => {
+            std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none()
+        }
         ColorMode::Always => true,
         ColorMode::Never => false,
     };
@@ -29,14 +32,11 @@ pub fn render_text(
 
     let highlight_start =
         clamp_to_char_boundary(text, diagnostic.range.start as usize).clamp(line_start, line_end);
-    let highlight_end =
-        clamp_to_char_boundary(text, diagnostic.range.end as usize).clamp(highlight_start, line_end);
+    let highlight_end = clamp_to_char_boundary(text, diagnostic.range.end as usize)
+        .clamp(highlight_start, line_end);
 
     let prefix = caret_prefix(&text[line_start..highlight_start]);
-    let underline_len = text[highlight_start..highlight_end]
-        .chars()
-        .count()
-        .max(1);
+    let underline_len = text[highlight_start..highlight_end].chars().count().max(1);
     let underline = "^".repeat(underline_len);
 
     let severity = severity_label(&diagnostic.severity);
@@ -71,16 +71,14 @@ pub fn render_json_entry(doc_id: &str, text: &str, diagnostic: &Diagnostic) -> S
 
     let highlight_start =
         clamp_to_char_boundary(text, diagnostic.range.start as usize).clamp(line_start, line_end);
-    let highlight_end =
-        clamp_to_char_boundary(text, diagnostic.range.end as usize).clamp(highlight_start, line_end);
+    let highlight_end = clamp_to_char_boundary(text, diagnostic.range.end as usize)
+        .clamp(highlight_start, line_end);
 
     let underline_start = text[line_start..highlight_start].chars().count() as u32 + 1;
-    let underline_len = text[highlight_start..highlight_end]
-        .chars()
-        .count()
-        .max(1) as u32;
+    let underline_len = text[highlight_start..highlight_end].chars().count().max(1) as u32;
     let multiline = diagnostic.range.end as usize > line_end;
 
+    // Pro: Don't need to pull in a dep like serde. Con: Look at this nonsense.
     format!(
         "{{\"path\":{},\"line\":{},\"column\":{},\"severity\":{},\"message\":{},\"range\":{{\"start\":{},\"end\":{}}},\"line_text\":{},\"underline_start\":{},\"underline_len\":{},\"multiline\":{}}}",
         json_string(doc_id),

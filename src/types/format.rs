@@ -1,4 +1,4 @@
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 
 use crate::name_resolution::symbol::Symbol;
 use crate::types::infer_row::RowParamId;
@@ -232,13 +232,22 @@ impl TyFormatContext {
     }
 
     fn from_ty(ty: &Ty) -> Self {
-        let mut ty_params: FxHashSet<TypeParamId> = FxHashSet::default();
-        let mut row_params: FxHashSet<RowParamId> = FxHashSet::default();
-        collect_params_in_ty(ty, &mut ty_params, &mut row_params);
-
-        let mut type_param_order: Vec<_> = ty_params.into_iter().collect();
+        let foralls = ty.collect_foralls();
+        let mut type_param_order: Vec<_> = foralls
+            .iter()
+            .filter_map(|forall| match forall {
+                ForAll::Ty(id) => Some(*id),
+                ForAll::Row(..) => None,
+            })
+            .collect();
         type_param_order.sort();
-        let mut row_param_order: Vec<_> = row_params.into_iter().collect();
+        let mut row_param_order: Vec<_> = foralls
+            .iter()
+            .filter_map(|forall| match forall {
+                ForAll::Row(id) => Some(*id),
+                ForAll::Ty(..) => None,
+            })
+            .collect();
         row_param_order.sort();
 
         let mut ctx = Self {
@@ -290,56 +299,5 @@ fn row_param_display_name(idx: usize) -> String {
         "R".to_string()
     } else {
         format!("R{idx}")
-    }
-}
-
-fn collect_params_in_ty(
-    ty: &Ty,
-    type_params: &mut FxHashSet<TypeParamId>,
-    row_params: &mut FxHashSet<RowParamId>,
-) {
-    match ty {
-        Ty::Primitive(..) => {}
-        Ty::Param(id) => {
-            type_params.insert(*id);
-        }
-        Ty::Constructor { params, ret, .. } => {
-            for param in params {
-                collect_params_in_ty(param, type_params, row_params);
-            }
-            collect_params_in_ty(ret, type_params, row_params);
-        }
-        Ty::Func(param, ret) => {
-            collect_params_in_ty(param, type_params, row_params);
-            collect_params_in_ty(ret, type_params, row_params);
-        }
-        Ty::Tuple(items) => {
-            for item in items {
-                collect_params_in_ty(item, type_params, row_params);
-            }
-        }
-        Ty::Record(.., row) => collect_params_in_row(row, type_params, row_params),
-        Ty::Nominal { type_args, .. } => {
-            for arg in type_args {
-                collect_params_in_ty(arg, type_params, row_params);
-            }
-        }
-    }
-}
-
-fn collect_params_in_row(
-    row: &Row,
-    type_params: &mut FxHashSet<TypeParamId>,
-    row_params: &mut FxHashSet<RowParamId>,
-) {
-    match row {
-        Row::Empty(..) => {}
-        Row::Param(id) => {
-            row_params.insert(*id);
-        }
-        Row::Extend { row, ty, .. } => {
-            collect_params_in_row(row, type_params, row_params);
-            collect_params_in_ty(ty, type_params, row_params);
-        }
     }
 }
