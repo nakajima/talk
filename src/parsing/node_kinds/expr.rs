@@ -17,7 +17,6 @@ use crate::{
 #[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
 pub enum ExprKind {
     // These first expressions only exist to assist with LSP operations
-    #[drive(skip)]
     Incomplete(IncompleteExpr),
 
     InlineIR(InlineIRInstruction),

@@ -88,13 +88,8 @@ impl TypeMember {
                             Err(e) => return SolveResult::Err(e),
                         }
                     }
-                    println!("CHILD TYPE: {ty:?}");
                     self.solve_for(&ty._as_ty(), constraints, context, session)
                 } else {
-                    println!(
-                        "CHILDREN: {:?}",
-                        session.type_catalog.child_types.get(symbol)
-                    );
                     SolveResult::Err(TypeError::TypeNotFound(format!(
                         "Did not find child type {symbol:?}.{}",
                         self.name

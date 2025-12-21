@@ -67,7 +67,7 @@ impl Value {
                 }
             }
             Value::Record(.., values) => values.iter().flat_map(|v| v.as_bytes()).collect_vec(),
-            Value::RawPtr(v) => v.0.to_le_bytes().to_vec(),
+            Value::RawPtr(v) => (v.0 as u64).to_le_bytes().to_vec(),
             Value::RawBuffer(bytes) => bytes.to_vec(),
             other => unreachable!("Cannot serialize {other:?}"),
         }

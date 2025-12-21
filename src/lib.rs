@@ -19,12 +19,16 @@
 
 pub mod parsing;
 pub use parsing::*;
+pub mod analysis;
 pub mod common;
 pub mod compiling;
 pub use common::*;
 pub mod ir;
 pub mod name_resolution;
 pub mod types;
+
+#[cfg(feature = "cli")]
+pub mod cli;
 
 #[cfg(feature = "cli")]
 pub mod lsp;

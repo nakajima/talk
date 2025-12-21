@@ -6,7 +6,7 @@ struct Array<Element> {
 	init(capacity: Int) {
 		self.capacity = capacity
 		self.count = 0
-		self.storage = @_ir {%? = alloc Element %0}
+		self.storage = @_ir { %? = alloc Element %0 }
 	}
 
 	func get(index: Int) -> Element {

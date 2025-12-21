@@ -3,7 +3,11 @@ use std::{error::Error, fmt::Display};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ParserError {
-    UnexpectedToken { expected: String, actual: String },
+    UnexpectedToken {
+        expected: String,
+        actual: String,
+        token: Option<Token>,
+    },
     UnexpectedEndOfInput(Option<String>),
     InfiniteLoop(Option<Token>),
     ExpectedIdentifier(Option<Token>),
@@ -27,7 +31,7 @@ impl Display for ParserError {
                     write!(f, "Unexpected end of input.")
                 }
             }
-            Self::UnexpectedToken { expected, actual } => {
+            Self::UnexpectedToken { expected, actual, .. } => {
                 write!(f, "Unexpected token. Expected {expected:?}, got {actual:?}")
             }
             Self::InfiniteLoop(current) => {

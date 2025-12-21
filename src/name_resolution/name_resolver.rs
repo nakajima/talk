@@ -205,8 +205,10 @@ impl NameResolver {
         }
 
         {
-            // One declarer per AST so the single &mut self borrow ends after each AST.
+            // Predeclare module-scope nominals across all ASTs first, so `extend` resolution
+            // doesn't depend on file order.
             for ast in asts.iter_mut() {
+                self.current_scope_id = Some(NodeID(FileID(0), 0));
                 let mut declarer = DeclDeclarer::new(self, &mut ast.node_ids);
                 declarer.predeclare_nominals(
                     ast.roots
@@ -221,6 +223,12 @@ impl NameResolver {
                         .collect_vec()
                         .as_slice(),
                 );
+            }
+
+            // One declarer per AST so the single &mut self borrow ends after each AST.
+            for ast in asts.iter_mut() {
+                self.current_scope_id = Some(NodeID(FileID(0), 0));
+                let mut declarer = DeclDeclarer::new(self, &mut ast.node_ids);
                 for root in &mut ast.roots {
                     match root {
                         Node::Stmt(Stmt { id, .. }) => {
@@ -338,14 +346,8 @@ impl NameResolver {
 
         let matching_imported_names = self.modules.lookup_name(&name.name_str());
         match matching_imported_names.len() {
-            0 => {
-                println!("No external import named: {name:?}");
-            }
+            0 => {}
             1 => {
-                println!(
-                    "Found external import named: {:?}",
-                    matching_imported_names[0]
-                );
                 return Some(matching_imported_names[0]);
             }
             _ => {
@@ -611,7 +613,13 @@ impl NameResolver {
             | PatternKind::LiteralFloat(..)
             | PatternKind::LiteralTrue
             | PatternKind::LiteralFalse => (),
-            _ => unimplemented!("{pattern:?}"),
+            PatternKind::Wildcard => (),
+            PatternKind::Struct {
+                struct_name: _,
+                fields: _,
+                field_names: _,
+                rest: _,
+            } => (),
         }
     }
 

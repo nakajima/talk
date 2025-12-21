@@ -56,6 +56,18 @@ impl Constraint {
         }
     }
 
+    pub fn diagnostic_node_id(&self) -> Option<NodeID> {
+        match self {
+            Constraint::Call(call) => Some(call.call_node_id),
+            Constraint::Equals(equals) => equals.node_id,
+            Constraint::Member(member) => Some(member.node_id),
+            Constraint::Conforms(conforms) => Some(conforms.conformance_node_id),
+            Constraint::TypeMember(type_member) => Some(type_member.node_id),
+            Constraint::Projection(projection) => Some(projection.node_id),
+            Constraint::HasField(has_field) => has_field.node_id,
+        }
+    }
+
     pub fn is_generalizable(&self) -> bool {
         match self {
             Constraint::Call(..) => false,

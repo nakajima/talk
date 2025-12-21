@@ -3,6 +3,7 @@ use crate::{
     label::Label,
     types::{
         infer_row::{ClosedRow, RowParamId},
+        scheme::ForAll,
         ty::Ty,
         type_session::TypeDefKind,
     },
@@ -18,6 +19,21 @@ pub enum Row {
 impl Row {
     pub fn close(&self) -> ClosedRow<Ty> {
         close(self, ClosedRow::default())
+    }
+
+    pub fn collect_foralls(&self) -> Vec<ForAll> {
+        let mut result = vec![];
+        match self {
+            Row::Empty(..) => (),
+            Row::Param(id) => {
+                result.push(ForAll::Row(*id));
+            }
+            Row::Extend { row, ty, .. } => {
+                result.extend(ty.collect_foralls());
+                result.extend(row.collect_foralls());
+            }
+        }
+        result
     }
 
     pub fn import(self, module_id: ModuleId) -> Self {

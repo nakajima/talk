@@ -480,3 +480,56 @@ impl<'a> Higlighter<'a> {
         ));
     }
 }
+
+pub fn highlight_html(source: &str) -> String {
+    let mut highlighter = Higlighter::new(source);
+    let mut tokens = highlighter.highlight();
+    tokens.sort_by(|a, b| a.start.cmp(&b.start).then_with(|| b.end.cmp(&a.end)));
+    render_html(source, &tokens)
+}
+
+fn render_html(source: &str, tokens: &[HighlightToken]) -> String {
+    let mut output = String::with_capacity(source.len() + tokens.len() * 32);
+    let mut cursor = 0usize;
+
+    for token in tokens {
+        let start = token.start as usize;
+        let end = token.end as usize;
+        if start >= end || start < cursor || end > source.len() {
+            continue;
+        }
+
+        if let Some(prefix) = source.get(cursor..start) {
+            push_escaped(&mut output, prefix);
+            cursor = start;
+        } else {
+            continue;
+        }
+
+        if let Some(slice) = source.get(start..end) {
+            output.push_str("<span class=\"");
+            output.push_str(&token.kind.to_string());
+            output.push_str("\">");
+            push_escaped(&mut output, slice);
+            output.push_str("</span>");
+            cursor = end;
+        }
+    }
+
+    if let Some(tail) = source.get(cursor..) {
+        push_escaped(&mut output, tail);
+    }
+
+    output
+}
+
+fn push_escaped(output: &mut String, text: &str) {
+    for ch in text.chars() {
+        match ch {
+            '&' => output.push_str("&amp;"),
+            '<' => output.push_str("&lt;"),
+            '>' => output.push_str("&gt;"),
+            _ => output.push(ch),
+        }
+    }
+}

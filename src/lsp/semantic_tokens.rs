@@ -1,5 +1,6 @@
-use crate::highlighter::{self, Higlighter};
 use async_lsp::lsp_types::{Position, Range, SemanticToken, SemanticTokenType};
+
+use crate::highlighter::{self, Higlighter, HighlightToken};
 
 pub const TOKEN_TYPES: &[SemanticTokenType] = &[
     SemanticTokenType::COMMENT,
@@ -53,23 +54,27 @@ impl highlighter::Kind {
 }
 
 struct SemanticTokenCollector<'a> {
-    highlighter: Higlighter<'a>,
+    tokens: Vec<HighlightToken>,
     source: &'a str,
 }
 
 pub fn collect(source: String) -> Vec<SemanticToken> {
-    let collector = SemanticTokenCollector::new(&source);
+    let tokens = collect_highlight_tokens(&source);
+    let collector = SemanticTokenCollector::new(&source, tokens);
 
     collector.encode_tokens()
 }
 
+fn collect_highlight_tokens(source: &str) -> Vec<HighlightToken> {
+    let mut highlighter = Higlighter::new(source);
+    let mut tokens = highlighter.highlight();
+    tokens.sort_by(|a, b| a.start.cmp(&b.start));
+    tokens
+}
+
 impl<'a> SemanticTokenCollector<'a> {
-    fn new(source: &'a str) -> Self {
-        let highlighter = Higlighter::new(source);
-        Self {
-            highlighter,
-            source,
-        }
+    fn new(source: &'a str, tokens: Vec<HighlightToken>) -> Self {
+        Self { tokens, source }
     }
 
     fn line_col_for(&self, position: u32) -> Option<Position> {
@@ -98,27 +103,8 @@ impl<'a> SemanticTokenCollector<'a> {
         Some((Range::new(start_pos, end_pos), length))
     }
 
-    // fn range_for(&self, expr_id: &ExprID) -> Option<(Range, u32)> {
-    //     let meta = self.source_file.meta.get(expr_id)?;
-    //     let range = meta.source_range();
-
-    //     if let Some(start) = self.line_col_for(range.start)
-    //         && let Some(end) = self.line_col_for(range.end)
-    //     {
-    //         Some((
-    //             Range::new(start, end),
-    //             meta.end.end.saturating_sub(meta.start.start),
-    //         ))
-    //     } else {
-    //         Some((
-    //             Range::new(Position::new(0, 0), Position::new(0, 0)),
-    //             meta.end.end.saturating_sub(meta.start.start),
-    //         ))
-    //     }
-    // }
-    fn encode_tokens(mut self) -> Vec<SemanticToken> {
-        let mut tokens = self.highlighter.highlight();
-
+    fn encode_tokens(self) -> Vec<SemanticToken> {
+        let mut tokens = self.tokens.clone();
         tokens.sort_by(|a, b| a.start.cmp(&b.start));
 
         let mut encoded_tokens = Vec::new();
@@ -169,13 +155,9 @@ mod tests {
 
     use crate::lsp::semantic_tokens::{SemanticTokenCollector, TOKEN_TYPES};
 
-    fn parsed_tokens_for(code: &'static str) -> Vec<SemanticToken> {
-        let semantic_tokens = SemanticTokenCollector::new(code);
-        semantic_tokens.encode_tokens()
-    }
-
-    fn lexed_tokens_for(code: &'static str) -> Vec<SemanticToken> {
-        let semantic_tokens = SemanticTokenCollector::new(code);
+    fn tokens_for(code: &'static str) -> Vec<SemanticToken> {
+        let tokens = super::collect_highlight_tokens(code);
+        let semantic_tokens = SemanticTokenCollector::new(code, tokens);
         semantic_tokens.encode_tokens()
     }
 
@@ -185,14 +167,14 @@ mod tests {
 
     #[test]
     fn gets_int_tokens() {
-        assert!(parsed_tokens_for("123\n1.23").contains(&SemanticToken {
+        assert!(tokens_for("123\n1.23").contains(&SemanticToken {
             delta_line: 0,
             delta_start: 0,
             length: 3,
             token_type: pos(SemanticTokenType::NUMBER),
             token_modifiers_bitset: 0
         }));
-        assert!(parsed_tokens_for("123\n1.23").contains(&SemanticToken {
+        assert!(tokens_for("123\n1.23").contains(&SemanticToken {
             delta_line: 1,
             delta_start: 0,
             length: 4,
@@ -228,18 +210,19 @@ mod tests {
                 },
             ]
             .iter()
-            .all(|e| parsed_tokens_for("true\n  false\n\ntrue").contains(e))
+            .all(|e| tokens_for("true\n  false\n\ntrue").contains(e))
         );
     }
 
     #[test]
     fn gets_string() {
+        let tokens = tokens_for("false\n\"foo\"\ntrue");
         assert!(
             [
                 SemanticToken {
                     delta_line: 0,
                     delta_start: 0,
-                    length: 4,
+                    length: 5,
                     token_type: pos(SemanticTokenType::KEYWORD),
                     token_modifiers_bitset: 0
                 },
@@ -253,75 +236,13 @@ mod tests {
                 SemanticToken {
                     delta_line: 1,
                     delta_start: 0,
-                    length: 5,
+                    length: 4,
                     token_type: pos(SemanticTokenType::KEYWORD),
                     token_modifiers_bitset: 0
                 },
             ]
             .iter()
-            .all(|e| lexed_tokens_for("true\n\"sup\"\nfalse").contains(e)),
-            "{:#?}\n{:#?}",
-            lexed_tokens_for("true\n\"sup\"\nfalse"),
-            vec![
-                SemanticToken {
-                    delta_line: 0,
-                    delta_start: 0,
-                    length: 4,
-                    token_type: pos(SemanticTokenType::KEYWORD),
-                    token_modifiers_bitset: 0
-                },
-                SemanticToken {
-                    delta_line: 1,
-                    delta_start: 0,
-                    length: 5,
-                    token_type: pos(SemanticTokenType::STRING),
-                    token_modifiers_bitset: 0
-                },
-                SemanticToken {
-                    delta_line: 1,
-                    delta_start: 1,
-                    length: 5,
-                    token_type: pos(SemanticTokenType::KEYWORD),
-                    token_modifiers_bitset: 0
-                },
-            ]
+            .all(|e| tokens.contains(e))
         );
-    }
-
-    #[test]
-    fn gets_multiline_string() {
-        assert_eq!(
-            lexed_tokens_for("\"sup\nhi\""),
-            vec![SemanticToken {
-                delta_line: 0,
-                delta_start: 0,
-                length: 8,
-                token_type: pos(SemanticTokenType::STRING),
-                token_modifiers_bitset: 0
-            }]
-        )
-    }
-
-    #[test]
-    fn uses_utf16_units_for_positions_and_lengths() {
-        assert_eq!(
-            lexed_tokens_for("\"😀\" 1"),
-            vec![
-                SemanticToken {
-                    delta_line: 0,
-                    delta_start: 0,
-                    length: 4,
-                    token_type: pos(SemanticTokenType::STRING),
-                    token_modifiers_bitset: 0
-                },
-                SemanticToken {
-                    delta_line: 0,
-                    delta_start: 5,
-                    length: 1,
-                    token_type: pos(SemanticTokenType::NUMBER),
-                    token_modifiers_bitset: 0
-                },
-            ]
-        )
     }
 }

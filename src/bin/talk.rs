@@ -1,6 +1,7 @@
 use talk::compiling::driver::DriverConfig;
 
 #[cfg(feature = "cli")]
+#[cfg(feature = "cli")]
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     use clap::{Args, Parser, Subcommand};
@@ -16,9 +17,23 @@ async fn main() {
     #[derive(Subcommand, Debug)]
     enum Commands {
         // IR { filename: PathBuf },
-        Parse { filename: String },
-        Debug { filename: String },
-        Run { filenames: Vec<String> },
+        Parse {
+            filename: Option<String>,
+        },
+        Debug {
+            filename: Option<String>,
+        },
+        Html {
+            filename: Option<String>,
+        },
+        Check {
+            filenames: Vec<String>,
+            #[arg(long)]
+            json: bool,
+        },
+        Run {
+            filenames: Vec<String>,
+        },
         // Run { filename: PathBuf },
         Lsp(LspArgs),
     }
@@ -34,22 +49,20 @@ async fn main() {
     // You can check for the existence of subcommands, and if found use their
     // matches just as you would the top level cmd
     match &cli.command {
-        Commands::Parse { .. } => {}
+        Commands::Parse { filename } => {
+            use talk::compiling::driver::Driver;
+
+            let (module_name, source) = single_source_for(filename.as_deref());
+            let driver = Driver::new(vec![source], DriverConfig::new(module_name));
+            let _ = driver.parse().unwrap();
+        }
         Commands::Lsp(_) => {
             talk::lsp::server::start().await;
         }
         Commands::Run { filenames } => {
-            use std::path::PathBuf;
+            use talk::{compiling::driver::Driver, ir::interpreter::Interpreter};
 
-            use talk::{
-                compiling::driver::{Driver, Source},
-                ir::interpreter::Interpreter,
-            };
-
-            let sources: Vec<_> = filenames
-                .iter()
-                .map(|filename| Source::from(PathBuf::from(filename)))
-                .collect();
+            let sources = sources_for_filenames(filenames);
             let driver = Driver::new(sources, DriverConfig::new("talk").executable());
             let module = driver
                 .parse()
@@ -66,19 +79,79 @@ async fn main() {
             let result = interpreter.run();
             println!("{result:?}");
         }
+        Commands::Check { filenames, json } => {
+            use talk::{
+                analysis::{DocumentInput, Workspace},
+                cli::diagnostics::{ColorMode, render_json_entry, render_json_output, render_text},
+            };
+
+            let sources = sources_for_filenames(filenames);
+            let mut docs = Vec::with_capacity(sources.len());
+            for source in sources {
+                let path = source.path().to_string();
+                let text = source
+                    .read()
+                    .unwrap_or_else(|err| panic!("failed to read {path}: {err:?}"));
+                docs.push(DocumentInput {
+                    id: path.clone(),
+                    path,
+                    version: 0,
+                    text,
+                });
+            }
+
+            let Some(workspace) = Workspace::new(docs) else {
+                return;
+            };
+
+            let mut doc_ids: Vec<_> = workspace.diagnostics.keys().cloned().collect();
+            doc_ids.sort();
+
+            let mut has_diagnostics = false;
+            let mut json_entries = Vec::new();
+            for doc_id in doc_ids {
+                let text = workspace.text_for(&doc_id).unwrap_or("");
+                if let Some(diagnostics) = workspace.diagnostics.get(&doc_id) {
+                    for diagnostic in diagnostics {
+                        if *json {
+                            json_entries.push(render_json_entry(&doc_id, text, diagnostic));
+                        } else {
+                            print!(
+                                "{}",
+                                render_text(&doc_id, text, diagnostic, ColorMode::Auto)
+                            );
+                        }
+                        has_diagnostics = true;
+                    }
+                }
+            }
+
+            if *json {
+                println!("{}", render_json_output(&json_entries));
+            }
+
+            if has_diagnostics {
+                std::process::exit(1);
+            }
+        }
+        Commands::Html { filename } => {
+            init();
+            use talk::highlighter::highlight_html;
+
+            let source = input_text(filename.as_deref());
+            let html = highlight_html(&source);
+            println!("{html}");
+        }
         Commands::Debug { filename } => {
-            use std::path::PathBuf;
             init();
 
             use talk::{
-                compiling::driver::{Driver, Source},
+                compiling::driver::Driver,
                 formatter::{DebugHTMLFormatter, Formatter},
             };
 
-            let driver = Driver::new(
-                vec![Source::from(PathBuf::from(filename))],
-                DriverConfig::new(filename),
-            );
+            let (module_name, source) = single_source_for(filename.as_deref());
+            let driver = Driver::new(vec![source], DriverConfig::new(module_name));
             let resolved = driver.parse().unwrap().resolve_names().unwrap();
             let meta = resolved.phase.asts[0].meta.clone();
 
@@ -97,6 +170,70 @@ async fn main() {
                 formatter.format(&resolved.phase.asts[0].roots.clone(), 80)
             );
         }
+    }
+}
+
+#[cfg(feature = "cli")]
+const STDIN_NAME: &str = "<stdin>";
+
+#[cfg(feature = "cli")]
+fn read_stdin() -> String {
+    use std::io::Read;
+
+    let mut buffer = String::new();
+    std::io::stdin()
+        .read_to_string(&mut buffer)
+        .unwrap_or_else(|err| panic!("failed to read stdin: {err}"));
+    buffer
+}
+
+#[cfg(feature = "cli")]
+fn single_source_for(filename: Option<&str>) -> (String, talk::compiling::driver::Source) {
+    use std::path::PathBuf;
+    use talk::compiling::driver::Source;
+
+    let module_name = match filename {
+        Some(name) if name != "-" => name.to_string(),
+        _ => STDIN_NAME.to_string(),
+    };
+
+    let source = match filename {
+        Some(name) if name != "-" => Source::from(PathBuf::from(name)),
+        _ => Source::in_memory(PathBuf::from(STDIN_NAME), read_stdin()),
+    };
+
+    (module_name, source)
+}
+
+#[cfg(feature = "cli")]
+fn sources_for_filenames(filenames: &[String]) -> Vec<talk::compiling::driver::Source> {
+    use std::path::PathBuf;
+    use talk::compiling::driver::Source;
+
+    if filenames.is_empty() {
+        return vec![Source::in_memory(PathBuf::from(STDIN_NAME), read_stdin())];
+    }
+
+    let mut stdin_text = None;
+    let mut sources = Vec::with_capacity(filenames.len());
+    for filename in filenames {
+        if filename == "-" {
+            let text = stdin_text.get_or_insert_with(read_stdin);
+            sources.push(Source::in_memory(PathBuf::from(STDIN_NAME), text.clone()));
+        } else {
+            sources.push(Source::from(PathBuf::from(filename)));
+        }
+    }
+
+    sources
+}
+
+#[cfg(feature = "cli")]
+fn input_text(filename: Option<&str>) -> String {
+    match filename {
+        Some(name) if name != "-" => std::fs::read_to_string(name)
+            .unwrap_or_else(|err| panic!("failed to read {name}: {err}")),
+        _ => read_stdin(),
     }
 }
 

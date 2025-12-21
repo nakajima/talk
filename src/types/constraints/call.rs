@@ -17,6 +17,7 @@ use crate::{
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Call {
     pub id: ConstraintId,
+    pub call_node_id: NodeID,
     pub callee_id: NodeID,
     pub callee: InferTy,
     pub args: Vec<InferTy>,
@@ -108,7 +109,13 @@ impl Call {
                     }
                 };
 
-                constraints.wants_equals(self.returns.clone(), returns_type.clone());
+                let group = constraints.copy_group(self.id);
+                constraints.wants_equals_at(
+                    self.call_node_id,
+                    self.returns.clone(),
+                    returns_type.clone(),
+                    &group,
+                );
 
                 match unify(&init_ty, &curry(args, returns_type), context, session) {
                     Ok(metas) => SolveResult::Solved(metas),

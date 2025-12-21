@@ -1,7 +1,7 @@
 use std::str::FromStr;
 
 use crate::ast::{AST, NewAST, Parsed};
-use crate::diagnostic::AnyDiagnostic;
+use crate::diagnostic::{AnyDiagnostic, Diagnostic};
 use crate::label::Label;
 use crate::lexer::Lexer;
 use crate::name::Name;
@@ -108,7 +108,14 @@ impl<'a> Parser<'a> {
         }
     }
 
-    pub fn parse(mut self) -> Result<(AST<Parsed>, Vec<AnyDiagnostic>), ParserError> {
+    pub fn parse(self) -> Result<(AST<Parsed>, Vec<AnyDiagnostic>), ParserError> {
+        let (ast, diagnostics, _comments) = self.parse_with_comments()?;
+        Ok((ast, diagnostics))
+    }
+
+    pub fn parse_with_comments(
+        mut self,
+    ) -> Result<(AST<Parsed>, Vec<AnyDiagnostic>, Vec<Token>), ParserError> {
         self.advance();
         self.advance();
         self.skip_semicolons_and_newlines();
@@ -144,7 +151,12 @@ impl<'a> Parser<'a> {
             synthsized_ids: self.ast.synthsized_ids,
         };
 
-        Ok((ast, self.diagnostics))
+        Ok((ast, self.diagnostics, self.lexer.comments))
+    }
+
+    fn record_diagnostic(&mut self, kind: ParserError) {
+        self.diagnostics
+            .push(Diagnostic { id: NodeID(self.file_id, 0), kind }.into());
     }
 
     fn next_root(&mut self, kind: &TokenKind) -> Result<Node, ParserError> {
@@ -370,6 +382,7 @@ impl<'a> Parser<'a> {
                 return Err(ParserError::UnexpectedToken {
                     expected: "Wrong context".into(),
                     actual: format!("{context:?}"),
+                    token: self.current.clone(),
                 });
             }
         };
@@ -659,6 +672,7 @@ impl<'a> Parser<'a> {
             return Err(ParserError::UnexpectedToken {
                 expected: "IR Register".into(),
                 actual: current.kind.as_str().to_string(),
+                token: Some(current),
             });
         };
 
@@ -873,6 +887,7 @@ impl<'a> Parser<'a> {
                     return Err(ParserError::UnexpectedToken {
                         expected: "ir instr".into(),
                         actual: instr,
+                        token: self.previous.clone(),
                     });
                 }
             }
@@ -946,6 +961,7 @@ impl<'a> Parser<'a> {
                     return Err(ParserError::UnexpectedToken {
                         expected: "ir instr".into(),
                         actual: instr,
+                        token: self.previous.clone(),
                     });
                 }
             }
@@ -987,6 +1003,7 @@ impl<'a> Parser<'a> {
                     return Err(ParserError::UnexpectedToken {
                         expected: "Numeric bound var".into(),
                         actual: v.into(),
+                        token: self.current.clone(),
                     });
                 }
 
@@ -1000,6 +1017,7 @@ impl<'a> Parser<'a> {
                 return Err(ParserError::UnexpectedToken {
                     expected: "IR".to_string(),
                     actual: format!("{current:?}"),
+                    token: self.current.clone(),
                 });
             }
         };
@@ -1142,6 +1160,7 @@ impl<'a> Parser<'a> {
                 return Err(ParserError::UnexpectedToken {
                     expected: "Pattern".into(),
                     actual: format!("{:?}", current.kind),
+                    token: Some(current),
                 });
             }
         };
@@ -1172,6 +1191,7 @@ impl<'a> Parser<'a> {
                                 "got {:?}. Rest pattern must be at the end of record pattern",
                                 self.current
                             ),
+                            token: self.current.clone(),
                         });
                     }
 
@@ -1235,7 +1255,8 @@ impl<'a> Parser<'a> {
         let (name, name_span) = match self.current.clone().map(|c| c.kind) {
             Some(TokenKind::Identifier(_)) => match self.identifier() {
                 Ok((name, span)) => (Label::Named(name), span),
-                Err(_) => {
+                Err(err) => {
+                    self.record_diagnostic(err);
                     let incomplete_member = ExprKind::Incomplete(IncompleteExpr::Member(None));
                     return Ok(Node::Expr(self.add_expr(incomplete_member, tok)?));
                 }
@@ -1251,7 +1272,9 @@ impl<'a> Parser<'a> {
                 )
             }
             Some(_) | None => {
-                return Err(ParserError::ExpectedIdentifier(self.current.clone()));
+                self.record_diagnostic(ParserError::ExpectedIdentifier(self.current.clone()));
+                let incomplete_member = ExprKind::Incomplete(IncompleteExpr::Member(None));
+                return Ok(Node::Expr(self.add_expr(incomplete_member, tok)?));
             }
         };
 
@@ -1297,7 +1320,8 @@ impl<'a> Parser<'a> {
         let (name, name_span) = match self.current.clone().map(|c| c.kind) {
             Some(TokenKind::Identifier(_)) => match self.identifier() {
                 Ok((name, span)) => (Label::Named(name), span),
-                Err(_) => {
+                Err(err) => {
+                    self.record_diagnostic(err);
                     let incomplete_member =
                         ExprKind::Incomplete(IncompleteExpr::Member(Some(Box::new(lhs))));
                     return Ok(Node::Expr(self.add_expr(incomplete_member, tok)?));
@@ -1314,7 +1338,10 @@ impl<'a> Parser<'a> {
                 )
             }
             Some(_) | None => {
-                return Err(ParserError::ExpectedIdentifier(self.current.clone()));
+                self.record_diagnostic(ParserError::ExpectedIdentifier(self.current.clone()));
+                let incomplete_member =
+                    ExprKind::Incomplete(IncompleteExpr::Member(Some(Box::new(lhs))));
+                return Ok(Node::Expr(self.add_expr(incomplete_member, tok)?));
             }
         };
 
@@ -2239,6 +2266,7 @@ impl<'a> Parser<'a> {
         Err(ParserError::UnexpectedToken {
             expected: format!("{expected:?}"),
             actual: format!("{:?}", self.current),
+            token: self.current.clone(),
         })
     }
 
@@ -2259,6 +2287,7 @@ impl<'a> Parser<'a> {
                     Err(ParserError::UnexpectedToken {
                         expected: format!("{possible_tokens:?}"),
                         actual: format!("{current:?}"),
+                        token: Some(current),
                     })
                 }
             }

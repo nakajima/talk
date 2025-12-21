@@ -57,10 +57,11 @@ priority-queue = "2.7.0"
 ena = "0.14.3"
 petgraph-graphml = "5.0.0"
 sha2 = "0.10.9"
+ignore = { version = "0.4", optional = true }
 
 [features]
 default = ["cli"]
-cli = ["dep:clap", "dep:async-lsp", "dep:futures", "dep:tower", "dep:tokio"]
+cli = ["dep:clap", "dep:async-lsp", "dep:futures", "dep:tower", "dep:tokio", "dep:ignore"]
 wasm = []
 verify_ir = []
 

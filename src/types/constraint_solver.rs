@@ -88,7 +88,9 @@ impl<'a> ConstraintSolver<'a> {
                         tracing::error!("Error solving constraint: {constraint:?} {e:?}");
                         //unimplemented!("Error solving constraint: {constraint:?} {e:?}");
                         let diagnostic = AnyDiagnostic::Typing(Diagnostic {
-                            id: NodeID::SYNTHESIZED,
+                            id: constraint
+                                .diagnostic_node_id()
+                                .unwrap_or(NodeID::SYNTHESIZED),
                             kind: e,
                         });
 

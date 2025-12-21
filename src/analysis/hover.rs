@@ -1,0 +1,454 @@
+use crate::analysis::{node_ids_at_offset, resolve_member_symbol, span_contains, Hover, TextRange};
+use crate::name_resolution::symbol::Symbol;
+use crate::node_kinds::{
+    decl::Decl,
+    func::Func,
+    func_signature::FuncSignature,
+    parameter::Parameter,
+    pattern::Pattern,
+    type_annotation::TypeAnnotation,
+};
+
+use crate::analysis::workspace::Workspace;
+use crate::types::format::{SymbolNames, TypeFormatter};
+
+pub fn hover_at(
+    module: &Workspace,
+    core: Option<&Workspace>,
+    document_id: &crate::analysis::DocumentId,
+    byte_offset: u32,
+) -> Option<Hover> {
+    let idx = module.document_index(document_id)?;
+    let ast = module.asts.get(idx).and_then(|a| a.as_ref())?;
+    let types = module.types.as_ref();
+    let formatter = TypeFormatter::new(SymbolNames::new(
+        Some(&module.resolved_names.symbol_names),
+        core.map(|core| &core.resolved_names.symbol_names),
+    ));
+
+    let ctx = HoverCtx {
+        ast,
+        types,
+        byte_offset,
+        formatter,
+    };
+
+    let candidate_ids = node_ids_at_offset(ctx.ast, ctx.byte_offset);
+
+    for node_id in candidate_ids {
+        let Some(node) = ctx.ast.find(node_id) else {
+            continue;
+        };
+
+        let hover = match node {
+            crate::node::Node::Expr(expr) => hover_for_expr(&ctx, &expr),
+            crate::node::Node::Stmt(stmt) => hover_for_stmt(&ctx, &stmt),
+            crate::node::Node::Pattern(pattern) => hover_for_pattern(&ctx, &pattern),
+            crate::node::Node::TypeAnnotation(ty) => hover_for_type_annotation(&ctx, &ty),
+            crate::node::Node::Parameter(param) => hover_for_parameter(&ctx, &param),
+            crate::node::Node::Func(func) => hover_for_func(&ctx, &func),
+            crate::node::Node::FuncSignature(sig) => hover_for_func_signature(&ctx, &sig),
+            crate::node::Node::Decl(decl) => hover_for_decl(&ctx, &decl),
+            _ => None,
+        };
+
+        if hover.is_some() {
+            return hover;
+        }
+    }
+
+    None
+}
+
+struct HoverCtx<'a> {
+    ast: &'a crate::ast::AST<crate::ast::NameResolved>,
+    types: Option<&'a crate::types::type_session::Types>,
+    byte_offset: u32,
+    formatter: TypeFormatter<'a>,
+}
+
+fn hover_for_stmt(ctx: &HoverCtx<'_>, stmt: &crate::node_kinds::stmt::Stmt) -> Option<Hover> {
+    use crate::node_kinds::stmt::StmtKind;
+
+    match &stmt.kind {
+        StmtKind::Expr(expr) => hover_for_expr(ctx, expr),
+        StmtKind::Return(Some(expr)) => hover_for_expr(ctx, expr),
+        StmtKind::If(cond, ..) => hover_for_expr(ctx, cond),
+        StmtKind::Loop(Some(cond), ..) => hover_for_expr(ctx, cond),
+        StmtKind::Assignment(lhs, rhs) => {
+            hover_for_expr(ctx, lhs).or_else(|| hover_for_expr(ctx, rhs))
+        }
+        _ => None,
+    }
+}
+
+fn hover_for_expr(ctx: &HoverCtx<'_>, expr: &crate::node_kinds::expr::Expr) -> Option<Hover> {
+    use crate::node_kinds::expr::ExprKind;
+
+    match &expr.kind {
+        ExprKind::Member(receiver, label, name_span) => {
+            if !span_contains(*name_span, ctx.byte_offset) {
+                return None;
+            }
+
+            let receiver = receiver.as_ref()?;
+            let member_symbol = resolve_member_symbol(ctx.types, receiver, label);
+            let node_ty = ctx
+                .types
+                .and_then(|types| types.get(&expr.id))
+                .map(|entry| entry.as_mono_ty());
+
+            let line = hover_line_for_name_and_type(
+                &ctx.formatter,
+                label.to_string(),
+                member_symbol,
+                ctx.types,
+                node_ty,
+            )?;
+            let range = TextRange::new(name_span.start, name_span.end);
+
+            Some(Hover {
+                contents: line,
+                range: Some(range),
+            })
+        }
+        ExprKind::Variable(name) | ExprKind::Constructor(name) => {
+            let meta = ctx.ast.meta.get(&expr.id)?;
+            let (start, end) = identifier_span_at_offset(meta, ctx.byte_offset)?;
+            let range = TextRange::new(start, end);
+
+            let symbol = name.symbol().ok();
+            let node_ty = ctx
+                .types
+                .and_then(|types| types.get(&expr.id))
+                .map(|entry| entry.as_mono_ty());
+
+            let line = hover_line_for_name_and_type(
+                &ctx.formatter,
+                name.name_str(),
+                symbol,
+                ctx.types,
+                node_ty,
+            )?;
+
+            Some(Hover {
+                contents: line,
+                range: Some(range),
+            })
+        }
+        _ => {
+            let types = ctx.types?;
+            let entry = types.get(&expr.id)?;
+            let meta = ctx.ast.meta.get(&expr.id)?;
+            let range = range_from_meta_at_offset(meta, ctx.byte_offset)?;
+
+            Some(Hover {
+                contents: ctx.formatter.format_ty(entry.as_mono_ty()),
+                range: Some(range),
+            })
+        }
+    }
+}
+
+fn hover_for_pattern(ctx: &HoverCtx<'_>, pattern: &Pattern) -> Option<Hover> {
+    use crate::node_kinds::pattern::PatternKind;
+
+    let PatternKind::Bind(name) = &pattern.kind else {
+        return None;
+    };
+
+    let meta = ctx.ast.meta.get(&pattern.id)?;
+    let (start, end) = identifier_span_at_offset(meta, ctx.byte_offset)?;
+    let range = TextRange::new(start, end);
+
+    let symbol = name.symbol().ok();
+    let node_ty = ctx
+        .types
+        .and_then(|types| types.get(&pattern.id))
+        .map(|entry| entry.as_mono_ty());
+    let line = hover_line_for_name_and_type(
+        &ctx.formatter,
+        name.name_str(),
+        symbol,
+        ctx.types,
+        node_ty,
+    )?;
+
+    Some(Hover {
+        contents: line,
+        range: Some(range),
+    })
+}
+
+fn hover_for_type_annotation(ctx: &HoverCtx<'_>, ty: &TypeAnnotation) -> Option<Hover> {
+    use crate::node_kinds::type_annotation::TypeAnnotationKind;
+
+    let types = ctx.types?;
+    let entry = types.get(&ty.id)?;
+    let (start, end) = match &ty.kind {
+        TypeAnnotationKind::Nominal { name_span, .. } => {
+            if !span_contains(*name_span, ctx.byte_offset) {
+                return None;
+            }
+            (name_span.start, name_span.end)
+        }
+        TypeAnnotationKind::NominalPath { member_span, .. } => {
+            if !span_contains(*member_span, ctx.byte_offset) {
+                return None;
+            }
+            (member_span.start, member_span.end)
+        }
+        TypeAnnotationKind::SelfType(..) => {
+            let meta = ctx.ast.meta.get(&ty.id)?;
+            identifier_span_at_offset(meta, ctx.byte_offset)?
+        }
+        _ => return None,
+    };
+
+    let range = TextRange::new(start, end);
+
+    Some(Hover {
+        contents: ctx.formatter.format_ty(entry.as_mono_ty()),
+        range: Some(range),
+    })
+}
+
+fn hover_for_parameter(ctx: &HoverCtx<'_>, param: &Parameter) -> Option<Hover> {
+    if !span_contains(param.name_span, ctx.byte_offset) {
+        return None;
+    }
+
+    let range = TextRange::new(param.name_span.start, param.name_span.end);
+    let symbol = param.name.symbol().ok();
+    let node_ty = ctx
+        .types
+        .and_then(|types| types.get(&param.id))
+        .map(|entry| entry.as_mono_ty());
+    let line = hover_line_for_name_and_type(
+        &ctx.formatter,
+        param.name.name_str(),
+        symbol,
+        ctx.types,
+        node_ty,
+    )?;
+
+    Some(Hover {
+        contents: line,
+        range: Some(range),
+    })
+}
+
+fn hover_for_func(ctx: &HoverCtx<'_>, func: &Func) -> Option<Hover> {
+    if !span_contains(func.name_span, ctx.byte_offset) {
+        return None;
+    }
+
+    let range = TextRange::new(func.name_span.start, func.name_span.end);
+    let symbol = func.name.symbol().ok();
+    let node_ty = ctx
+        .types
+        .and_then(|types| types.get(&func.id))
+        .map(|entry| entry.as_mono_ty());
+    let line = hover_line_for_name_and_type(
+        &ctx.formatter,
+        func.name.name_str(),
+        symbol,
+        ctx.types,
+        node_ty,
+    )?;
+
+    Some(Hover {
+        contents: line,
+        range: Some(range),
+    })
+}
+
+fn hover_for_func_signature(ctx: &HoverCtx<'_>, sig: &FuncSignature) -> Option<Hover> {
+    let meta = ctx.ast.meta.get(&sig.id)?;
+    let (start, end) = identifier_span_at_offset(meta, ctx.byte_offset)?;
+    let range = TextRange::new(start, end);
+
+    let symbol = sig.name.symbol().ok();
+    let node_ty = ctx
+        .types
+        .and_then(|types| types.get(&sig.id))
+        .map(|entry| entry.as_mono_ty());
+    let line = hover_line_for_name_and_type(
+        &ctx.formatter,
+        sig.name.name_str(),
+        symbol,
+        ctx.types,
+        node_ty,
+    )?;
+
+    Some(Hover {
+        contents: line,
+        range: Some(range),
+    })
+}
+
+fn hover_for_decl(ctx: &HoverCtx<'_>, decl: &Decl) -> Option<Hover> {
+    use crate::node_kinds::decl::DeclKind;
+
+    match &decl.kind {
+        DeclKind::Struct {
+            name, name_span, ..
+        }
+        | DeclKind::Protocol {
+            name, name_span, ..
+        }
+        | DeclKind::Extend {
+            name, name_span, ..
+        }
+        | DeclKind::Enum {
+            name, name_span, ..
+        }
+        | DeclKind::Property {
+            name, name_span, ..
+        } => {
+            if !span_contains(*name_span, ctx.byte_offset) {
+                return None;
+            }
+
+            let symbol = name.symbol().ok();
+            let node_ty = ctx
+                .types
+                .and_then(|types| types.get(&decl.id))
+                .map(|entry| entry.as_mono_ty());
+            let line = hover_line_for_name_and_type(
+                &ctx.formatter,
+                name.name_str(),
+                symbol,
+                ctx.types,
+                node_ty,
+            )?;
+            let range = TextRange::new(name_span.start, name_span.end);
+
+            Some(Hover {
+                contents: line,
+                range: Some(range),
+            })
+        }
+        DeclKind::TypeAlias(name, name_span, ..) | DeclKind::EnumVariant(name, name_span, ..) => {
+            if !span_contains(*name_span, ctx.byte_offset) {
+                return None;
+            }
+
+            let symbol = name.symbol().ok();
+            let node_ty = ctx
+                .types
+                .and_then(|types| types.get(&decl.id))
+                .map(|entry| entry.as_mono_ty());
+            let line = hover_line_for_name_and_type(
+                &ctx.formatter,
+                name.name_str(),
+                symbol,
+                ctx.types,
+                node_ty,
+            )?;
+            let range = TextRange::new(name_span.start, name_span.end);
+
+            Some(Hover {
+                contents: line,
+                range: Some(range),
+            })
+        }
+        DeclKind::Init { name, .. } => {
+            let meta = ctx.ast.meta.get(&decl.id)?;
+            let (start, end) = identifier_span_at_offset(meta, ctx.byte_offset)?;
+            let range = TextRange::new(start, end);
+
+            let symbol = name.symbol().ok();
+            let node_ty = ctx
+                .types
+                .and_then(|types| types.get(&decl.id))
+                .map(|entry| entry.as_mono_ty());
+            let line = hover_line_for_name_and_type(
+                &ctx.formatter,
+                name.name_str(),
+                symbol,
+                ctx.types,
+                node_ty,
+            )?;
+
+            Some(Hover {
+                contents: line,
+                range: Some(range),
+            })
+        }
+        _ => None,
+    }
+}
+
+fn identifier_span_at_offset(
+    meta: &crate::node_meta::NodeMeta,
+    byte_offset: u32,
+) -> Option<(u32, u32)> {
+    meta.identifiers
+        .iter()
+        .find(|tok| tok.start <= byte_offset && byte_offset <= tok.end)
+        .map(|tok| (tok.start, tok.end))
+}
+
+fn range_from_meta_at_offset(
+    meta: &crate::node_meta::NodeMeta,
+    byte_offset: u32,
+) -> Option<TextRange> {
+    if let Some((start, end)) = identifier_span_at_offset(meta, byte_offset) {
+        return Some(TextRange::new(start, end));
+    }
+    Some(TextRange::new(meta.start.start, meta.end.end))
+}
+
+fn hover_line_for_name_and_type(
+    formatter: &TypeFormatter,
+    name: String,
+    symbol: Option<Symbol>,
+    types: Option<&crate::types::type_session::Types>,
+    node_ty: Option<&crate::types::ty::Ty>,
+) -> Option<String> {
+    let symbol_entry = symbol.and_then(|sym| types.and_then(|types| types.get_symbol(&sym)));
+    let type_str = match symbol_entry {
+        Some(entry @ crate::types::type_session::TypeEntry::Poly(..)) => {
+            Some(formatter.format_type_entry(entry))
+        }
+        Some(entry) => node_ty
+            .map(|ty| formatter.format_ty(ty))
+            .or_else(|| Some(formatter.format_type_entry(entry))),
+        None => node_ty.map(|ty| formatter.format_ty(ty)),
+    };
+
+    let Some(symbol) = symbol else {
+        return type_str.map(|t| format!("{name}: {t}"));
+    };
+
+    let is_builtin_type = matches!(
+        symbol,
+        Symbol::Int | Symbol::Float | Symbol::Bool | Symbol::Void | Symbol::RawPtr | Symbol::Byte
+    );
+
+    Some(match symbol {
+        Symbol::Struct(..) => format!("struct {name}"),
+        Symbol::Enum(..) => format!("enum {name}"),
+        Symbol::Protocol(..) => format!("protocol {name}"),
+        Symbol::TypeAlias(..) => format!("typealias {name}"),
+        Symbol::TypeParameter(..) => format!("type {name}"),
+        Symbol::AssociatedType(..) => format!("associated {name}"),
+        Symbol::Property(..) => type_str
+            .map(|t| format!("let {name}: {t}"))
+            .unwrap_or_else(|| format!("let {name}")),
+        Symbol::InstanceMethod(..) | Symbol::StaticMethod(..) | Symbol::MethodRequirement(..) => {
+            type_str
+                .map(|t| format!("func {name}: {t}"))
+                .unwrap_or_else(|| format!("func {name}"))
+        }
+        Symbol::Initializer(..) => type_str
+            .map(|t| format!("init {name}: {t}"))
+            .unwrap_or_else(|| format!("init {name}")),
+        Symbol::Variant(..) => type_str
+            .map(|t| format!("case {name}: {t}"))
+            .unwrap_or_else(|| format!("case {name}")),
+        Symbol::Builtin(..) if is_builtin_type => name,
+        _ => type_str.map(|t| format!("{name}: {t}"))?,
+    })
+}

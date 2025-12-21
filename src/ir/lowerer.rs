@@ -112,7 +112,9 @@ impl StaticMemory {
             IrTy::Bool => Value::Bool(bytes[0] == 1),
             IrTy::Func(..) => Value::Func(Symbol::from_bytes(bytes.try_into().unwrap())),
             IrTy::Record(..) => unreachable!("can only load primitives"),
-            IrTy::RawPtr => Value::RawPtr(Addr(usize::from_le_bytes(bytes.try_into().unwrap()))),
+            IrTy::RawPtr => {
+                Value::RawPtr(Addr(u64::from_le_bytes(bytes.try_into().unwrap()) as usize))
+            }
             IrTy::Byte => Value::RawBuffer(bytes.to_vec()),
             IrTy::Void => unreachable!("cannot load the void"),
             IrTy::Buffer(..) => Value::RawBuffer(bytes.to_vec()),
@@ -2021,7 +2023,8 @@ impl<'a> Lowerer<'a> {
             ..
         } = &call_expr.kind
         {
-            let (_, mut call_instantiations) = self.specialized_ty(callee, parent_instantiations)?;
+            let (_, mut call_instantiations) =
+                self.specialized_ty(callee, parent_instantiations)?;
             call_instantiations
                 .witnesses
                 .extend(target.witness_subs.iter().map(|(k, v)| (*k, *v)));
@@ -2235,11 +2238,15 @@ impl<'a> Lowerer<'a> {
             && !captures.is_empty()
         {
             let mut env_fields = vec![];
-            for capture in captures.clone() {
+            for capture in captures {
                 let ty = self
                     .ty_from_symbol(&capture.symbol)
                     .expect("didn't get capture ty")
                     .clone();
+                // Global functions are resolved by symbol; don't treat them as captured env fields.
+                if matches!(capture.symbol, Symbol::Global(_)) && matches!(ty, Ty::Func(..)) {
+                    continue;
+                }
 
                 let val = match self
                     .current_func_mut()
@@ -2266,7 +2273,11 @@ impl<'a> Lowerer<'a> {
                 env_fields.push((capture.symbol, ty.clone(), val));
             }
 
-            Some(env_fields)
+            if env_fields.is_empty() {
+                None
+            } else {
+                Some(env_fields)
+            }
         } else {
             None
         };
@@ -2589,9 +2600,7 @@ impl<'a> Lowerer<'a> {
     /// Returns the monomorphized `Name` for `symbol` under `instantiations` when the symbol’s body
     /// can be found (either in the current module or an imported module).
     fn check_import(&mut self, symbol: &Symbol, instantiations: &Substitutions) -> Option<Name> {
-        let Some(func) = self.find_function(symbol).cloned() else {
-            return None;
-        };
+        let func = self.find_function(symbol).cloned()?;
 
         let name = self.monomorphize_name(*symbol, instantiations);
         self.functions.insert(*symbol, func.clone());
@@ -2680,7 +2689,7 @@ impl<'a> Lowerer<'a> {
         let new_symbol: Symbol = self.symbols.next_synthesized(self.config.module_id).into();
         self.resolved_names
             .symbol_names
-            .insert(new_symbol.into(), name.name_str());
+            .insert(new_symbol, name.name_str());
         let parts = self.specialization_parts(&key);
         let new_name_str = format!("{}[{}]", name.name_str(), parts.join(", "));
         let new_name = Name::Resolved(new_symbol, new_name_str);
@@ -2823,7 +2832,9 @@ impl<'a> Lowerer<'a> {
                     }
                 };
 
-                let member = if let Some((member, _)) =
+                
+
+                if let Some((member, _)) =
                     self.types.catalog.lookup_member(&receiver_sym, label)
                 {
                     member
@@ -2832,9 +2843,7 @@ impl<'a> Lowerer<'a> {
                     member
                 } else {
                     return Ok((expr.ty.clone(), Default::default()));
-                };
-
-                member
+                }
             }
             _ => {
                 tracing::trace!("expr has no substitutions: {expr:?}");

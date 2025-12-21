@@ -371,6 +371,7 @@ impl Predicate<InferTy> {
                 ),
                 label,
                 instantiate_ty(id, ty, context.instantiations_mut(), level),
+                None,
                 &context.group_info(),
             ),
             Self::Member {
@@ -401,17 +402,18 @@ impl Predicate<InferTy> {
                 id,
                 &context.group_info(),
             ),
-            Self::Call {
-                callee,
-                args,
-                returns,
-                receiver,
-            } => constraints.wants_call(
-                id,
-                instantiate_ty(id, callee, context.instantiations_mut(), level),
-                args.iter()
-                    .map(|f| instantiate_ty(id, f.clone(), context.instantiations_mut(), level))
-                    .collect(),
+        Self::Call {
+            callee,
+            args,
+            returns,
+            receiver,
+        } => constraints.wants_call(
+            id,
+            id,
+            instantiate_ty(id, callee, context.instantiations_mut(), level),
+            args.iter()
+                .map(|f| instantiate_ty(id, f.clone(), context.instantiations_mut(), level))
+                .collect(),
                 Default::default(),
                 instantiate_ty(id, returns, context.instantiations_mut(), level),
                 receiver.map(|r| instantiate_ty(id, r, context.instantiations_mut(), level)),

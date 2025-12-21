@@ -1,14 +1,14 @@
 use crate::{
     ast::{self, AST},
     compiling::module::{Module, ModuleEnvironment, ModuleId, StableModuleId},
-    diagnostic::AnyDiagnostic,
+    diagnostic::{AnyDiagnostic, Diagnostic},
     ir::{ir_error::IRError, lowerer::Lowerer, program::Program},
     lexer::Lexer,
     name_resolution::{
         name_resolver::{NameResolver, ResolvedNames},
         symbol::{Symbol, Symbols},
     },
-    node_id::FileID,
+    node_id::{FileID, NodeID},
     parser::Parser,
     parser_error::ParserError,
     types::{
@@ -21,6 +21,7 @@ use crate::{
 };
 use indexmap::IndexMap;
 use rustc_hash::FxHashMap;
+use std::{hash::Hash, hash::Hasher};
 use std::{io, path::PathBuf, rc::Rc};
 
 pub trait DriverPhase {}
@@ -80,12 +81,21 @@ pub enum CompilationMode {
     Library,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ParseMode {
+    #[default]
+    Strict,
+    Lenient,
+}
+
 #[derive(Debug)]
 pub struct DriverConfig {
     pub module_id: ModuleId,
     pub modules: Rc<ModuleEnvironment>,
     pub mode: CompilationMode,
     pub module_name: String,
+    pub parse_mode: ParseMode,
+    pub preserve_comments: bool,
 }
 
 impl DriverConfig {
@@ -95,24 +105,75 @@ impl DriverConfig {
             modules: Default::default(),
             mode: CompilationMode::default(),
             module_name: module_name.into(),
+            parse_mode: ParseMode::default(),
+            preserve_comments: false,
         }
+    }
+
+    pub fn preserve_comments(mut self, should_preserve: bool) -> Self {
+        self.preserve_comments = should_preserve;
+        self
     }
 
     pub fn executable(mut self) -> Self {
         self.mode = CompilationMode::Executable;
         self
     }
+
+    pub fn lenient_parsing(mut self) -> Self {
+        self.parse_mode = ParseMode::Lenient;
+        self
+    }
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+#[derive(Debug, Clone)]
 pub enum SourceKind {
     File(PathBuf),
+    // Just a string
     String(String),
+    // Used for core, since they're not necessarily going to be on the fs
+    InMemory { path: PathBuf, text: String },
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+#[derive(Debug, Clone)]
 pub struct Source {
     kind: SourceKind,
+}
+
+impl PartialEq for Source {
+    fn eq(&self, other: &Self) -> bool {
+        use SourceKind::*;
+
+        match (&self.kind, &other.kind) {
+            (File(a), File(b)) => a == b,
+            (File(a), InMemory { path: b, .. }) => a == b,
+            (InMemory { path: a, .. }, File(b)) => a == b,
+            (InMemory { path: a, .. }, InMemory { path: b, .. }) => a == b,
+
+            (String(a), String(b)) => a == b,
+
+            _ => false,
+        }
+    }
+}
+
+impl Eq for Source {}
+
+impl Hash for Source {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        use SourceKind::*;
+
+        match &self.kind {
+            File(path) | InMemory { path, .. } => {
+                0u8.hash(state);
+                path.hash(state);
+            }
+            String(s) => {
+                1u8.hash(state);
+                s.hash(state);
+            }
+        }
+    }
 }
 
 impl From<PathBuf> for Source {
@@ -132,11 +193,21 @@ impl From<&str> for Source {
 }
 
 impl Source {
+    pub fn in_memory(path: PathBuf, text: impl Into<String>) -> Self {
+        Self {
+            kind: SourceKind::InMemory {
+                path,
+                text: text.into(),
+            },
+        }
+    }
+
     pub fn path(&self) -> &str {
         #[allow(clippy::unwrap_used)]
         match &self.kind {
             SourceKind::File(path) => path.to_str().unwrap(),
             SourceKind::String(..) => ":memory:",
+            SourceKind::InMemory { path, .. } => path.to_str().unwrap(),
         }
     }
 
@@ -144,6 +215,7 @@ impl Source {
         match &self.kind {
             SourceKind::File(path) => std::fs::read_to_string(path).map_err(CompileError::IO),
             SourceKind::String(string) => Ok(string.to_string()),
+            SourceKind::InMemory { text, .. } => Ok(text.clone()),
         }
     }
 }
@@ -182,12 +254,45 @@ impl Driver {
 
         for (i, file) in self.files.iter().enumerate() {
             let input = file.read()?;
-            let lexer = Lexer::new(&input);
+            let lexer = if self.config.preserve_comments {
+                Lexer::preserving_comments(&input)
+            } else {
+                Lexer::new(&input)
+            };
             tracing::info!("parsing {file:?}");
-            let parser = Parser::new(file.path(), FileID(i as u32), lexer);
-            let (parsed, ast_diagnostics) = parser.parse().map_err(CompileError::Parsing)?;
-            diagnostics.extend(ast_diagnostics);
-            asts.insert(file.clone(), parsed);
+            let file_id = FileID(i as u32);
+            let parser = Parser::new(file.path(), file_id, lexer);
+            match parser.parse() {
+                Ok((parsed, ast_diagnostics)) => {
+                    diagnostics.extend(ast_diagnostics);
+                    asts.insert(file.clone(), parsed);
+                }
+                Err(err) => {
+                    if self.config.parse_mode == ParseMode::Strict {
+                        return Err(CompileError::Parsing(err));
+                    }
+
+                    diagnostics.push(
+                        Diagnostic {
+                            id: NodeID(file_id, 0),
+                            kind: err,
+                        }
+                        .into(),
+                    );
+                    asts.insert(
+                        file.clone(),
+                        AST::<ast::Parsed> {
+                            path: file.path().to_string(),
+                            roots: vec![],
+                            meta: Default::default(),
+                            phase: ast::Parsed,
+                            node_ids: Default::default(),
+                            synthsized_ids: Default::default(),
+                            file_id,
+                        },
+                    );
+                }
+            }
         }
 
         Ok(Driver {
@@ -376,6 +481,8 @@ pub mod tests {
             modules: Rc::new(module_environment),
             mode: CompilationMode::Library,
             module_name: "Test".to_string(),
+            parse_mode: ParseMode::Strict,
+            preserve_comments: false,
         };
 
         let driver_b = Driver::new(
@@ -421,6 +528,8 @@ pub mod tests {
             modules: Rc::new(module_environment),
             mode: CompilationMode::Library,
             module_name: "Test".to_string(),
+            parse_mode: ParseMode::Strict,
+            preserve_comments: false,
         };
 
         let driver_b = Driver::new(
@@ -471,6 +580,8 @@ pub mod tests {
             modules: Rc::new(module_environment),
             mode: CompilationMode::Library,
             module_name: "Test".to_string(),
+            parse_mode: ParseMode::Strict,
+            preserve_comments: false,
         };
 
         let driver_b = Driver::new(vec![Source::from("Hello(x: 123).x")], config);
