@@ -9,7 +9,7 @@ pub mod tests {
         assert_eq_diff,
         ast::{AST, NameResolved},
         compiling::module::{ModuleEnvironment, ModuleId},
-        diagnostic::{AnyDiagnostic, Diagnostic},
+        diagnostic::{AnyDiagnostic, Diagnostic, Severity},
         label::Label,
         name::Name,
         name_resolution::{
@@ -175,6 +175,7 @@ pub mod tests {
             resolved.1.diagnostics[0],
             AnyDiagnostic::NameResolution(Diagnostic::<NameResolverError> {
                 id: NodeID::ANY,
+                severity: Severity::Error,
                 kind: NameResolverError::UndefinedName("x".into())
             })
         )

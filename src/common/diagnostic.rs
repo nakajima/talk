@@ -6,8 +6,15 @@ use crate::{
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum Severity {
+    Warn,
+    Error,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Diagnostic<E: Error + std::hash::Hash> {
     pub id: NodeID,
+    pub severity: Severity,
     pub kind: E,
 }
 

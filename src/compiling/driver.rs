@@ -1,7 +1,7 @@
 use crate::{
     ast::{self, AST},
     compiling::module::{Module, ModuleEnvironment, ModuleId, StableModuleId},
-    diagnostic::{AnyDiagnostic, Diagnostic},
+    diagnostic::{AnyDiagnostic, Diagnostic, Severity},
     ir::{ir_error::IRError, lowerer::Lowerer, program::Program},
     lexer::Lexer,
     name_resolution::{
@@ -275,6 +275,7 @@ impl Driver {
                     diagnostics.push(
                         Diagnostic {
                             id: NodeID(file_id, 0),
+                            severity: Severity::Error,
                             kind: err,
                         }
                         .into(),

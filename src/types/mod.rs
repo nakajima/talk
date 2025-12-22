@@ -6,6 +6,7 @@ pub mod format;
 pub mod infer_row;
 pub mod infer_ty;
 pub mod kind;
+pub mod matcher;
 pub mod passes;
 pub mod predicate;
 pub mod row;

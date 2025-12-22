@@ -13,7 +13,7 @@ use crate::{
         driver::Exports,
         module::{ModuleEnvironment, ModuleId},
     },
-    diagnostic::{AnyDiagnostic, Diagnostic},
+    diagnostic::{AnyDiagnostic, Diagnostic, Severity},
     label::Label,
     name::Name,
     name_resolution::{
@@ -424,8 +424,11 @@ impl NameResolver {
     }
 
     pub(super) fn diagnostic(&mut self, id: NodeID, err: NameResolverError) {
-        self.diagnostics
-            .insert(Diagnostic::<NameResolverError> { kind: err, id });
+        self.diagnostics.insert(Diagnostic::<NameResolverError> {
+            kind: err,
+            severity: Severity::Error,
+            id,
+        });
     }
 
     #[instrument(skip(self))]

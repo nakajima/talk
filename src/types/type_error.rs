@@ -3,7 +3,7 @@ use std::{error::Error, fmt::Display};
 use crate::{
     name::Name,
     name_resolution::symbol::{ProtocolId, Symbol},
-    types::{conformance::ConformanceKey, infer_ty::InferTy},
+    types::{conformance::ConformanceKey, infer_ty::InferTy, matcher::RequiredConstructor},
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -33,6 +33,8 @@ pub enum TypeError {
         ty: InferTy,
         protocol_id: ProtocolId,
     },
+    NonExhaustiveMatch(Vec<RequiredConstructor>),
+    UselessMatchArm,
 }
 
 impl Error for TypeError {}
@@ -72,6 +74,12 @@ impl Display for TypeError {
             }
             Self::NameNotResolved(name) => {
                 write!(f, "Name not resolved: {name:?}")
+            }
+            Self::NonExhaustiveMatch(cases) => {
+                write!(f, "Match not exhaustive: {cases:?}")
+            }
+            Self::UselessMatchArm => {
+                write!(f, "Useless match arm")
             }
         }
     }

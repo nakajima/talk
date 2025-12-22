@@ -5,7 +5,7 @@ use crate::{
     label::Label,
     name_resolution::symbol::Symbol,
     node_id::NodeID,
-    node_kinds::{inline_ir_instruction::TypedInlineIRInstruction, pattern::PatternKind},
+    node_kinds::inline_ir_instruction::TypedInlineIRInstruction,
     types::{
         conformance::ConformanceKey,
         infer_ty::InferTy,
@@ -176,7 +176,9 @@ impl TypedPattern<InferTy> {
         TypedPattern {
             id: self.id,
             ty: session.finalize_ty(self.ty).as_mono_ty().clone(),
-            kind: self.kind,
+            kind: self
+                .kind
+                .map_ty(&mut |ty| session.finalize_ty(ty.clone()).as_mono_ty().clone()),
         }
     }
 }
@@ -384,8 +386,9 @@ impl TypedExprKind<InferTy> {
                     .map(|e| e.finalize(session, witnesses))
                     .collect();
 
-                let resolved = resolved
-                    .or_else(|| try_resolve_protocol_constructor_default_call(&callee, &args, session));
+                let resolved = resolved.or_else(|| {
+                    try_resolve_protocol_constructor_default_call(&callee, &args, session)
+                });
 
                 Call {
                     callee: callee.into(),
@@ -459,10 +462,124 @@ impl<T: SomeType, U: SomeType> TyMappable<T, U> for TypedAST<T> {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TypedRecordFieldPatternKind<T: SomeType> {
+    Bind(Symbol),
+    Equals {
+        name: Symbol,
+        value: TypedPattern<T>,
+    },
+    Rest,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TypedRecordFieldPattern<T: SomeType> {
+    pub id: NodeID,
+    pub kind: TypedRecordFieldPatternKind<T>,
+}
+
+impl<T: SomeType, U: SomeType> TyMappable<T, U> for TypedRecordFieldPattern<T> {
+    type Output = TypedRecordFieldPattern<U>;
+    fn map_ty(self, m: &mut impl FnMut(&T) -> U) -> Self::Output {
+        TypedRecordFieldPattern {
+            id: self.id,
+            kind: match self.kind {
+                TypedRecordFieldPatternKind::Bind(sym) => TypedRecordFieldPatternKind::Bind(sym),
+                TypedRecordFieldPatternKind::Equals { name, value } => {
+                    TypedRecordFieldPatternKind::Equals {
+                        name,
+                        value: value.map_ty(m),
+                    }
+                }
+                TypedRecordFieldPatternKind::Rest => TypedRecordFieldPatternKind::Rest,
+            },
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TypedPatternKind<T: SomeType> {
+    // Literals that must match exactly
+    LiteralInt(String),
+    LiteralFloat(String),
+    LiteralTrue,
+    LiteralFalse,
+
+    // Variable binding (always succeeds, binds value)
+    Bind(Symbol),
+
+    Tuple(Vec<TypedPattern<T>>),
+
+    Or(Vec<TypedPattern<T>>),
+
+    // Wildcard (always succeeds, ignores value)
+    Wildcard,
+
+    // Enum variant destructuring
+    Variant {
+        enum_name: Option<Symbol>, // None for .some, Some for Option.some
+        variant_name: String,
+        fields: Vec<TypedPattern<T>>, // Recursive patterns for fields
+    },
+
+    Record {
+        fields: Vec<TypedRecordFieldPattern<T>>,
+    },
+
+    // Struct/Record destructuring
+    Struct {
+        struct_name: Symbol,          // The struct type name
+        fields: Vec<TypedPattern<T>>, // Field patterns (we'll store field names separately)
+        field_names: Vec<Symbol>,     // Field names corresponding to patterns
+        rest: bool,                   // Whether there's a .. pattern to ignore remaining fields
+    },
+}
+
+impl<T: SomeType, U: SomeType> TyMappable<T, U> for TypedPatternKind<T> {
+    type Output = TypedPatternKind<U>;
+    fn map_ty(self, m: &mut impl FnMut(&T) -> U) -> Self::Output {
+        use TypedPatternKind::*;
+        match self {
+            LiteralInt(val) => LiteralInt(val),
+            LiteralFloat(val) => LiteralFloat(val),
+            LiteralTrue => LiteralTrue,
+            LiteralFalse => LiteralFalse,
+            Bind(symbol) => Bind(symbol),
+            Tuple(typed_patterns) => {
+                Tuple(typed_patterns.into_iter().map(|p| p.map_ty(m)).collect())
+            }
+            Or(typed_patterns) => Or(typed_patterns.into_iter().map(|p| p.map_ty(m)).collect()),
+            Wildcard => Wildcard,
+            Variant {
+                enum_name,
+                variant_name,
+                fields,
+            } => Variant {
+                enum_name,
+                variant_name,
+                fields: fields.into_iter().map(|f| f.map_ty(m)).collect(),
+            },
+            Record { fields } => Record {
+                fields: fields.into_iter().map(|f| f.map_ty(m)).collect(),
+            },
+            Struct {
+                struct_name,
+                fields,
+                field_names,
+                rest,
+            } => Struct {
+                struct_name,
+                fields: fields.into_iter().map(|f| f.map_ty(m)).collect(),
+                field_names,
+                rest,
+            },
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TypedPattern<T: SomeType> {
     pub id: NodeID,
     pub ty: T,
-    pub kind: PatternKind,
+    pub kind: TypedPatternKind<T>,
 }
 
 impl<T: SomeType, U: SomeType> TyMappable<T, U> for TypedPattern<T> {
@@ -471,7 +588,7 @@ impl<T: SomeType, U: SomeType> TyMappable<T, U> for TypedPattern<T> {
         TypedPattern::<U> {
             id: self.id,
             ty: m(&self.ty),
-            kind: self.kind,
+            kind: self.kind.map_ty(m),
         }
     }
 }

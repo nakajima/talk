@@ -1,0 +1,9 @@
+struct Person {
+	let name: String
+
+	func greet() {
+		print("hey, i'm " + self.name)
+	}
+}
+
+Person(name: "Pat").greet()

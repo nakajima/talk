@@ -1,7 +1,7 @@
 use std::str::FromStr;
 
 use crate::ast::{AST, NewAST, Parsed};
-use crate::diagnostic::{AnyDiagnostic, Diagnostic};
+use crate::diagnostic::{AnyDiagnostic, Diagnostic, Severity};
 use crate::label::Label;
 use crate::lexer::Lexer;
 use crate::name::Name;
@@ -159,6 +159,7 @@ impl<'a> Parser<'a> {
         self.diagnostics.push(
             Diagnostic {
                 id: NodeID(self.file_id, 0),
+                severity: Severity::Error,
                 kind,
             }
             .into(),

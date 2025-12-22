@@ -20,7 +20,8 @@ use crate::types::row::Row;
 use crate::types::type_session::TypeDefKind;
 use crate::types::typed_ast::{
     TypedAST, TypedBlock, TypedDecl, TypedDeclKind, TypedExpr, TypedExprKind, TypedFunc,
-    TypedMatchArm, TypedNode, TypedPattern, TypedRecordField, TypedStmt, TypedStmtKind,
+    TypedMatchArm, TypedNode, TypedPattern, TypedPatternKind, TypedRecordField, TypedStmt,
+    TypedStmtKind,
 };
 use crate::{
     ir::{
@@ -36,7 +37,6 @@ use crate::{
     name::Name,
     name_resolution::symbol::{Symbol, SynthesizedId},
     node_id::{FileID, NodeID},
-    node_kinds::pattern::PatternKind,
     types::{
         scheme::ForAll,
         ty::Ty,
@@ -366,7 +366,7 @@ impl<'a> Lowerer<'a> {
                     pattern: TypedPattern {
                         id: NodeID(FileID(0), 0),
                         ty: Ty::Func(Ty::Void.into(), Ty::Void.into()),
-                        kind: PatternKind::Bind(Name::Resolved(Symbol::Main, "main".into())),
+                        kind: TypedPatternKind::Bind(Symbol::Main),
                     },
                     ty: Ty::Func(Ty::Void.into(), Ty::Void.into()),
                     initializer: Some(TypedExpr {
@@ -826,47 +826,44 @@ impl<'a> Lowerer<'a> {
     // #[instrument(level = tracing::Level::TRACE, skip(self, pattern), fields(pattern.id = %pattern.id))]
     fn lower_pattern(&mut self, pattern: &TypedPattern<Ty>) -> Result<Bind, IRError> {
         match &pattern.kind {
-            PatternKind::Or(..) => unimplemented!(),
-            PatternKind::Bind(name) => {
-                let symbol = name.symbol().expect("name not resolved");
-                let value = if self.resolved_names.is_captured.contains(&symbol) {
-                    let ty = self
-                        .ty_from_symbol(&symbol)
-                        .expect("did not get ty for sym");
+            TypedPatternKind::Or(..) => unimplemented!(),
+            TypedPatternKind::Bind(symbol) => {
+                let value = if self.resolved_names.is_captured.contains(symbol) {
+                    let ty = self.ty_from_symbol(symbol).expect("did not get ty for sym");
                     let heap_addr = self.next_register();
                     self.push_instr(Instruction::Alloc {
                         dest: heap_addr,
                         ty,
                         count: 1.into(),
                     });
-                    self.insert_binding(symbol, Binding::Pointer(heap_addr.into()));
-                    Bind::Indirect(heap_addr, symbol)
+                    self.insert_binding(*symbol, Binding::Pointer(heap_addr.into()));
+                    Bind::Indirect(heap_addr, *symbol)
                 } else {
                     let val = self.next_register();
 
-                    self.insert_binding(symbol, val.into());
+                    self.insert_binding(*symbol, val.into());
                     Bind::Assigned(val)
                 };
 
                 Ok(value)
             }
             #[allow(clippy::todo)]
-            PatternKind::LiteralInt(_) => todo!(),
+            TypedPatternKind::LiteralInt(_) => todo!(),
             #[allow(clippy::todo)]
-            PatternKind::LiteralFloat(_) => todo!(),
+            TypedPatternKind::LiteralFloat(_) => todo!(),
             #[allow(clippy::todo)]
-            PatternKind::LiteralTrue => todo!(),
+            TypedPatternKind::LiteralTrue => todo!(),
             #[allow(clippy::todo)]
-            PatternKind::LiteralFalse => todo!(),
+            TypedPatternKind::LiteralFalse => todo!(),
             #[allow(clippy::todo)]
-            PatternKind::Tuple(..) => todo!(),
-            PatternKind::Wildcard => Ok(Bind::Discard),
+            TypedPatternKind::Tuple(..) => todo!(),
+            TypedPatternKind::Wildcard => Ok(Bind::Discard),
             #[allow(clippy::todo)]
-            PatternKind::Variant { .. } => todo!(),
+            TypedPatternKind::Variant { .. } => todo!(),
             #[allow(clippy::todo)]
-            PatternKind::Record { .. } => todo!(),
+            TypedPatternKind::Record { .. } => todo!(),
             #[allow(clippy::todo)]
-            PatternKind::Struct { .. } => todo!(),
+            TypedPatternKind::Struct { .. } => todo!(),
         }
     }
 
@@ -1488,7 +1485,7 @@ impl<'a> Lowerer<'a> {
 
             // If the pattern is Bind or Wildcard, this is a catch-all from here on.
             match &arm.pattern.kind {
-                PatternKind::Bind(..) | PatternKind::Wildcard => {
+                TypedPatternKind::Bind(..) | TypedPatternKind::Wildcard => {
                     self.set_current_block(current_test_block_id);
                     self.push_terminator(Terminator::Jump { to: arm_block_id });
                     return Ok(());
@@ -1539,7 +1536,7 @@ impl<'a> Lowerer<'a> {
         pattern: &TypedPattern<Ty>,
     ) -> Result<(Value, Ty), IRError> {
         match &pattern.kind {
-            PatternKind::LiteralInt(text) => {
+            TypedPatternKind::LiteralInt(text) => {
                 let parsed = text.parse::<i64>().map_err(|error| {
                     IRError::InvalidAssignmentTarget(format!(
                         "invalid integer literal in match pattern: {text} ({error})"
@@ -1548,7 +1545,7 @@ impl<'a> Lowerer<'a> {
                 Ok((Value::Int(parsed), Ty::Int))
             }
 
-            PatternKind::LiteralFloat(text) => {
+            TypedPatternKind::LiteralFloat(text) => {
                 let parsed = text.parse::<f64>().map_err(|error| {
                     IRError::InvalidAssignmentTarget(format!(
                         "invalid float literal in match pattern: {text} ({error})"
@@ -1557,10 +1554,10 @@ impl<'a> Lowerer<'a> {
                 Ok((Value::Float(parsed), Ty::Float))
             }
 
-            PatternKind::LiteralTrue => Ok((Value::Bool(true), Ty::Bool)),
-            PatternKind::LiteralFalse => Ok((Value::Bool(false), Ty::Bool)),
+            TypedPatternKind::LiteralTrue => Ok((Value::Bool(true), Ty::Bool)),
+            TypedPatternKind::LiteralFalse => Ok((Value::Bool(false), Ty::Bool)),
 
-            PatternKind::Bind(..) | PatternKind::Wildcard => {
+            TypedPatternKind::Bind(..) | TypedPatternKind::Wildcard => {
                 // These are handled earlier in build_match_dispatch as defaults.
                 unreachable!("Bind and Wildcard should not reach lower_pattern_literal_value")
             }
