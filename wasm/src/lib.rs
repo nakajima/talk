@@ -17,7 +17,7 @@ pub fn run_program(source: &str) -> Result<String, JsValue> {
     let mut interpreter = Interpreter::new(module.program, Some(module.symbol_names));
     let result = interpreter.run();
 
-    Ok(format!("{result:?}"))
+    Ok(interpreter.display(result))
 }
 
 #[wasm_bindgen]
@@ -38,8 +38,8 @@ pub fn check(source: &str) -> Result<JsValue, JsValue> {
         text: source.to_string(),
     }];
 
-    let workspace = Workspace::new(docs)
-        .ok_or_else(|| JsValue::from_str("failed to build workspace"))?;
+    let workspace =
+        Workspace::new(docs).ok_or_else(|| JsValue::from_str("failed to build workspace"))?;
     let diagnostics = workspace
         .diagnostics
         .get(&doc_id)
@@ -93,13 +93,12 @@ fn diagnostics_to_js(
         let line_text = text.get(line_start..line_end).unwrap_or("");
         let line_text = line_text.strip_suffix('\r').unwrap_or(line_text);
 
-        let highlight_start =
-            clamp_to_char_boundary(text, diagnostic.range.start as usize).clamp(line_start, line_end);
-        let highlight_end =
-            clamp_to_char_boundary(text, diagnostic.range.end as usize).clamp(highlight_start, line_end);
+        let highlight_start = clamp_to_char_boundary(text, diagnostic.range.start as usize)
+            .clamp(line_start, line_end);
+        let highlight_end = clamp_to_char_boundary(text, diagnostic.range.end as usize)
+            .clamp(highlight_start, line_end);
 
-        let underline_start =
-            text[line_start..highlight_start].encode_utf16().count() as u32 + 1;
+        let underline_start = text[line_start..highlight_start].encode_utf16().count() as u32 + 1;
         let underline_len = text[highlight_start..highlight_end]
             .encode_utf16()
             .count()
@@ -153,10 +152,6 @@ fn set_num(obj: &Object, key: &str, value: u32) -> Result<(), JsValue> {
 }
 
 fn set_bool(obj: &Object, key: &str, value: bool) -> Result<(), JsValue> {
-    Reflect::set(
-        obj,
-        &JsValue::from_str(key),
-        &JsValue::from_bool(value),
-    )?;
+    Reflect::set(obj, &JsValue::from_str(key), &JsValue::from_bool(value))?;
     Ok(())
 }

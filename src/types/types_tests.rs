@@ -2430,4 +2430,25 @@ pub mod tests {
             TypeEntry::Mono(Ty::Func(Ty::Int.into(), Ty::Int.into()))
         );
     }
+
+    #[test]
+    fn types_struct_call_regression() {
+        let (ast, types) = typecheck_core(
+            "
+            struct Person {
+                let firstName: String
+                let lastName: String
+
+                func greet() {
+                    // Strings can be concat'd
+                    print(\"hi i'm \" + self.firstName + \" \" + self.lastName)
+                }
+            }
+
+            Person(firstName: \"Pat\", lastName: \"N\").greet()
+            ",
+        );
+
+        assert_eq!(ty(0, &ast, &types), Ty::Void);
+    }
 }

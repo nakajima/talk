@@ -1,5 +1,6 @@
 use crate::{
     ast::{AST, Parsed},
+    label::Label,
     lexer::Lexer,
     node::Node,
     node_id::FileID,
@@ -115,7 +116,7 @@ impl<'a> Higlighter<'a> {
                 TokenKind::Import => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::StringLiteral(_) => self.make_string(tok, Kind::STRING, &mut tokens),
                 TokenKind::Underscore => (),
-                TokenKind::QuestionMark => (),
+                TokenKind::QuestionMark => self.make(tok, Kind::OPERATOR, &mut tokens),
                 TokenKind::Semicolon => (),
                 TokenKind::Arrow => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::Colon => (),
@@ -140,8 +141,8 @@ impl<'a> Higlighter<'a> {
                 TokenKind::BangEquals => self.make(tok, Kind::OPERATOR, &mut tokens),
                 TokenKind::TildeEquals => self.make(tok, Kind::OPERATOR, &mut tokens),
                 TokenKind::AmpAmp => self.make(tok, Kind::OPERATOR, &mut tokens),
-                TokenKind::Caret => (),
-                TokenKind::CaretEquals => (),
+                TokenKind::Caret => self.make(tok, Kind::OPERATOR, &mut tokens),
+                TokenKind::CaretEquals => self.make(tok, Kind::OPERATOR, &mut tokens),
                 TokenKind::Pipe => self.make(tok, Kind::OPERATOR, &mut tokens),
                 TokenKind::PipePipe => self.make(tok, Kind::OPERATOR, &mut tokens),
                 TokenKind::Amp => self.make(tok, Kind::OPERATOR, &mut tokens),
@@ -293,7 +294,8 @@ impl<'a> Higlighter<'a> {
                     result.extend(self.tokens_from_exprs(generics, ast));
                     result.extend(self.tokens_from_expr(body, ast));
                 }
-                DeclKind::EnumVariant(.., type_annotations) => {
+                DeclKind::EnumVariant(.., name_span, type_annotations) => {
+                    result.push(self.make_span(Kind::ENUM_MEMBER, *name_span));
                     result.extend(self.tokens_from_exprs(type_annotations, ast));
                 }
                 DeclKind::FuncSignature(func_signature) => {
@@ -413,12 +415,27 @@ impl<'a> Higlighter<'a> {
                 ExprKind::LiteralTrue => (),
                 ExprKind::LiteralFalse => (),
                 ExprKind::LiteralString(_) => (),
-                ExprKind::Unary(..) => (),
+                ExprKind::Unary(.., box expr) => result.extend(self.tokens_from_expr(expr, ast)),
                 ExprKind::Binary(..) => (),
-                ExprKind::Tuple(..) => (),
-                ExprKind::Block(..) => (),
-                ExprKind::Call { .. } => (),
-                ExprKind::Member(.., span) => {
+                ExprKind::Tuple(items) => {
+                    result.extend(self.tokens_from_exprs(items, ast));
+                }
+                ExprKind::Block(block) => {
+                    result.extend(self.tokens_from_exprs(&block.body, ast));
+                }
+                ExprKind::Call {
+                    box callee,
+                    type_args,
+                    args,
+                } => {
+                    result.extend(self.tokens_from_expr(callee, ast));
+                    result.extend(self.tokens_from_exprs(type_args, ast));
+                    result.extend(self.tokens_from_exprs(args, ast));
+                }
+                ExprKind::Member(receiver, .., span) => {
+                    if let Some(box receiver) = receiver {
+                        result.extend(self.tokens_from_expr(receiver, ast));
+                    }
                     result.push(self.make_span(Kind::METHOD, *span));
                 }
                 ExprKind::Func(..) => (),
@@ -428,21 +445,43 @@ impl<'a> Higlighter<'a> {
                 ExprKind::Constructor(..) => {
                     result.push(self.make_span(Kind::TYPE, expr.span));
                 }
-                ExprKind::If(..) => (),
-                ExprKind::Match(..) => (),
+                ExprKind::If(box cond, conseq, alt) => {
+                    result.extend(self.tokens_from_expr(cond, ast));
+                    result.extend(self.tokens_from_expr(conseq, ast));
+                    result.extend(self.tokens_from_expr(alt, ast));
+                }
+                ExprKind::Match(box scrutinee, arms) => {
+                    result.extend(self.tokens_from_expr(scrutinee, ast));
+                    result.extend(self.tokens_from_exprs(arms, ast));
+                }
                 ExprKind::RecordLiteral { .. } => (),
                 ExprKind::RowVariable(..) => (),
                 ExprKind::InlineIR(instr) => {
                     result.push(self.make_span(Kind::KEYWORD, instr.instr_name_span))
                 }
             },
-            Node::Body(..) => (),
+            Node::Body(body) => {
+                result.extend(self.tokens_from_exprs(&body.decls, ast));
+            }
             Node::Pattern(..) => (),
-            Node::MatchArm(..) => (),
-            Node::Block(..) => (),
-            Node::RecordField(..) => (),
+            Node::MatchArm(arm) => {
+                result.extend(self.tokens_from_expr(&arm.pattern, ast));
+                result.extend(self.tokens_from_expr(&arm.body, ast));
+            }
+            Node::Block(block) => {
+                result.extend(self.tokens_from_exprs(&block.body, ast));
+            }
+            Node::RecordField(field) => {
+                result.push(self.make_span(Kind::PROPERTY, field.label_span));
+                result.extend(self.tokens_from_expr(&field.value, ast));
+            }
             Node::IncompleteExpr(..) => (),
-            Node::CallArg(..) => (),
+            Node::CallArg(arg) => {
+                if matches!(arg.label, Label::Named(..)) {
+                    result.push(self.make_span(Kind::PARAMETER, arg.label_span));
+                }
+                result.extend(self.tokens_from_expr(&arg.value, ast));
+            }
             Node::FuncSignature(..) => (),
         };
 

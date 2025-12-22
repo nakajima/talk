@@ -4,15 +4,11 @@ protocol Foo {
 }
 
 // Person doesn't implement Foo
-struct Person {}
-extend Person: Foo {
-	func foo() {
-		123
-	}
+struct Thing {}
+extend Thing: Foo {
+	func foo() { 123 }
 }
 
-func fizz<T: Foo>(t: T) {
-	t.foo()
-}
+func fizz<T: Foo>(t: T) { t.foo() }
 
-fizz(Person())
+fizz(Thing())

@@ -1,9 +1,12 @@
-let a = {x: 123, y: 456}
+let record = { x: 123, y: 456 }
 
-let result = match a {
-	{ x, y: 123 } -> false,
-	{ x, y: 456 } -> true,
-	{ x, y: _ } -> true
+let result = match record {
+	{
+		x,y: 123} -> false,
+	{
+		x,y: 456} -> true,
+	{
+		x,y: _} -> true
 }
 
 result

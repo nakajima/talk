@@ -564,7 +564,7 @@ impl Interpreter {
         }
     }
 
-    fn display_ir(&self, ir: &IR) -> String {
+    pub fn display_ir(&self, ir: &IR) -> String {
         if let Some(names) = &self.symbol_names {
             let _guard = set_symbol_names(names.clone());
             format!("{ir}")
@@ -573,7 +573,7 @@ impl Interpreter {
         }
     }
 
-    fn display(&mut self, val: Value) -> String {
+    pub fn display(&mut self, val: Value) -> String {
         match val {
             Value::Int(val) => format!("{val}"),
             Value::Reg(reg) => format!("%{reg}"),
