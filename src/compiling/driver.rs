@@ -12,6 +12,7 @@ use crate::{
     parser::Parser,
     parser_error::ParserError,
     types::{
+        matcher,
         passes::inference_pass::InferencePass,
         ty::Ty,
         type_error::TypeError,
@@ -342,6 +343,19 @@ impl Driver<NameResolved> {
         let symbols = std::mem::take(&mut session.symbols);
         let resolved_names = std::mem::take(&mut session.resolved_names);
         let types = session.finalize().map_err(CompileError::Typing)?;
+
+        if self.phase.diagnostics.is_empty() {
+            // Don't bother with matcher diagnostics if we're not well typed already
+            let matcher_diagnostics =
+                matcher::check_ast(&ast, &types, &resolved_names.symbol_names);
+
+            self.phase.diagnostics.extend(
+                matcher_diagnostics
+                    .diagnostics
+                    .into_iter()
+                    .map(AnyDiagnostic::Typing),
+            );
+        }
 
         Ok(Driver {
             files: self.files,

@@ -278,13 +278,7 @@ impl<'a> DeclDeclarer<'a> {
                 self.declare_pattern(&mut patterns[0], bind_type);
             }
             PatternKind::Bind(..) => {}
-            PatternKind::Variant {
-                enum_name, fields, ..
-            } => {
-                if let Some(enum_name) = enum_name {
-                    *enum_name = self.resolver.declare(enum_name, some!(Variant), pattern.id);
-                }
-
+            PatternKind::Variant { fields, .. } => {
                 for field in fields.iter_mut() {
                     self.declare_pattern(field, some!(PatternBindLocal));
                 }

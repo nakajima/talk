@@ -1,7 +1,6 @@
 use crate::types::infer_ty::InferTy;
 
 pub mod inference_pass;
-pub mod pattern_pass;
 
 // Helpers
 pub fn uncurry_function(ty: InferTy) -> (Vec<InferTy>, InferTy) {

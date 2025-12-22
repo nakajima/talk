@@ -35,6 +35,9 @@ pub enum TypeError {
     },
     NonExhaustiveMatch(Vec<RequiredConstructor>),
     UselessMatchArm,
+    OrPatternBinderMismatch,
+    RecordPatternMissingFields(Vec<String>),
+    RecordPatternNeedsRest,
 }
 
 impl Error for TypeError {}
@@ -80,6 +83,15 @@ impl Display for TypeError {
             }
             Self::UselessMatchArm => {
                 write!(f, "Useless match arm")
+            }
+            Self::OrPatternBinderMismatch => {
+                write!(f, "Or-patterns must bind the same names in each alternative")
+            }
+            Self::RecordPatternMissingFields(fields) => {
+                write!(f, "Record pattern missing fields: {fields:?}")
+            }
+            Self::RecordPatternNeedsRest => {
+                write!(f, "Record pattern on an open row must include `..`")
             }
         }
     }

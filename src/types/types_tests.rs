@@ -725,7 +725,8 @@ pub mod tests {
             "
         match 123 {
             123 -> true,
-            456 -> false
+            456 -> false,
+            _ -> true
         }
         ",
         );
@@ -1077,7 +1078,8 @@ pub mod tests {
             r#"
         let rec = { a: 123, b: true }
         match rec {
-            { a: 123, b } -> b
+            { a: 123, b } -> b,
+            _ -> false,
         }
         "#,
         );

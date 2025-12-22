@@ -1174,27 +1174,14 @@ impl<'a> Parser<'a> {
 
         if self.peek_is(TokenKind::Pipe) {
             let first_pattern = self.save_meta(tok, |id, span| Pattern { id, span, kind })?;
-            let mut patterns = vec![];
+            let mut patterns = vec![first_pattern];
 
             while self.did_match(TokenKind::Pipe)? {
                 patterns.push(self.parse_pattern()?);
             }
 
-            let id = self.next_id();
-            let span = Span {
-                file_id: self.file_id,
-                start: first_pattern.span.start,
-                end: self
-                    .current
-                    .as_ref()
-                    .map(|c| c.end)
-                    .unwrap_or(first_pattern.span.end),
-            };
-
-            // We insert this after the fact so we can first grab the span.end (NOTE: Maybe we should err instead?)
-            patterns.insert(0, first_pattern);
-
-            return Ok(Pattern {
+            let loc = self.push_lhs_location(patterns[0].id);
+            return self.save_meta(loc, |id, span| Pattern {
                 id,
                 span,
                 kind: PatternKind::Or(patterns),
