@@ -1,6 +1,6 @@
 use indexmap::{IndexMap, IndexSet, indexset};
 use itertools::Itertools;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::instrument;
 
 use crate::{
@@ -80,6 +80,7 @@ pub struct InferencePass<'a> {
     substitutions: UnificationSubstitutions,
     tracked_returns: Vec<IndexSet<(NodeID, InferTy)>>,
     nominal_placeholders: FxHashMap<Symbol, (MetaVarId, Level)>,
+    or_binders: Vec<FxHashMap<Symbol, InferTy>>,
     diagnostics: IndexSet<AnyDiagnostic>,
     root_decls: Vec<TypedDecl<InferTy>>,
     root_stmts: Vec<TypedStmt<InferTy>>,
@@ -100,6 +101,7 @@ impl<'a> InferencePass<'a> {
             tracked_returns: Default::default(),
             diagnostics: Default::default(),
             nominal_placeholders: Default::default(),
+            or_binders: Default::default(),
             root_decls: Default::default(),
             root_stmts: Default::default(),
         };
@@ -2002,6 +2004,59 @@ impl<'a> InferencePass<'a> {
         }
     }
 
+    fn lookup_or_binder(&self, sym: Symbol) -> Option<InferTy> {
+        for binders in self.or_binders.iter().rev() {
+            if let Some(ty) = binders.get(&sym) {
+                return Some(ty.clone());
+            }
+        }
+        None
+    }
+
+    fn prepare_or_binders(
+        &mut self,
+        pattern_id: NodeID,
+        patterns: &[Pattern],
+        context: &mut impl Solve,
+    ) -> FxHashMap<Symbol, InferTy> {
+        let mut sets = vec![];
+        for pattern in patterns {
+            let mut set = FxHashSet::default();
+            for (_, sym) in pattern.collect_binders() {
+                set.insert(sym);
+            }
+            sets.push(set);
+        }
+
+        let baseline = sets.first().cloned().unwrap_or_default();
+        if sets.iter().skip(1).any(|set| *set != baseline) {
+            self.diagnostics.insert(AnyDiagnostic::Typing(Diagnostic {
+                id: pattern_id,
+                severity: Severity::Error,
+                kind: TypeError::OrPatternBinderMismatch,
+            }));
+        }
+
+        let mut binders = FxHashMap::default();
+        for sym in baseline {
+            let canonical = self.session.new_ty_meta_var(context.level());
+            if let Some(existing) = self.session.lookup(&sym) {
+                self.constraints.wants_equals_at(
+                    pattern_id,
+                    existing._as_ty(),
+                    canonical.clone(),
+                    &context.group_info(),
+                );
+            }
+
+            self.session
+                .insert_mono(sym, canonical.clone(), &mut self.constraints);
+            binders.insert(sym, canonical);
+        }
+
+        binders
+    }
+
     #[instrument(level = tracing::Level::TRACE, skip(self, context))]
     fn check_pattern(
         &mut self,
@@ -2012,12 +2067,16 @@ impl<'a> InferencePass<'a> {
         let Pattern { kind, .. } = &pattern;
 
         let typed_kind = match kind {
-            PatternKind::Or(patterns) => TypedPatternKind::Or(
-                patterns
+            PatternKind::Or(patterns) => {
+                let binders = self.prepare_or_binders(pattern.id, patterns, context);
+                self.or_binders.push(binders);
+                let typed_patterns = patterns
                     .iter()
                     .map(|pattern| self.check_pattern(pattern, expected, context))
-                    .try_collect()?,
-            ),
+                    .try_collect();
+                self.or_binders.pop();
+                TypedPatternKind::Or(typed_patterns?)
+            }
             PatternKind::Bind(Name::Raw(name)) => {
                 self.constraints.wants_equals_at(
                     pattern.id,
@@ -2030,8 +2089,17 @@ impl<'a> InferencePass<'a> {
                 ))
             }
             PatternKind::Bind(Name::Resolved(sym, _)) => {
-                self.session
-                    .insert_mono(*sym, expected.clone(), &mut self.constraints);
+                if let Some(ty) = self.lookup_or_binder(*sym) {
+                    self.constraints.wants_equals_at(
+                        pattern.id,
+                        expected.clone(),
+                        ty,
+                        &context.group_info(),
+                    );
+                } else {
+                    self.session
+                        .insert_mono(*sym, expected.clone(), &mut self.constraints);
+                }
                 TypedPatternKind::Bind(*sym)
             }
             PatternKind::Bind(Name::SelfType(..)) => TypedPatternKind::Bind(Symbol::Synthesized(

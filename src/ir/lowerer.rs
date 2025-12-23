@@ -38,6 +38,10 @@ use crate::{
     name_resolution::symbol::{Symbol, SynthesizedId},
     node_id::{FileID, NodeID},
     types::{
+        matcher::{
+            plan_for_pattern, Constructor, MatchPlan, PlanNode, PlanNodeId, Projection, ValueId,
+            ValueRef,
+        },
         scheme::ForAll,
         ty::Ty,
         type_session::{TypeEntry, Types},
@@ -423,28 +427,35 @@ impl<'a> Lowerer<'a> {
                 initializer,
                 ..
             } => {
-                let bind = self.lower_pattern(pattern)?;
-                if let Some(initializer) = initializer {
-                    match bind {
-                        Bind::Assigned(reg) => {
-                            self.lower_expr(initializer, Bind::Assigned(reg), instantiations)?;
-                        }
-                        Bind::Fresh => {
-                            self.lower_expr(initializer, Bind::Fresh, instantiations)?;
-                        }
-                        Bind::Discard => {
-                            self.lower_expr(initializer, Bind::Discard, instantiations)?;
-                        }
-                        Bind::Indirect(reg, ..) => {
-                            let (val, ty) =
+                if matches!(
+                    pattern.kind,
+                    TypedPatternKind::Bind(_) | TypedPatternKind::Wildcard
+                ) {
+                    let bind = self.lower_pattern(pattern)?;
+                    if let Some(initializer) = initializer {
+                        match bind {
+                            Bind::Assigned(reg) => {
+                                self.lower_expr(initializer, Bind::Assigned(reg), instantiations)?;
+                            }
+                            Bind::Fresh => {
                                 self.lower_expr(initializer, Bind::Fresh, instantiations)?;
-                            self.push_instr(Instruction::Store {
-                                value: val,
-                                ty,
-                                addr: reg.into(),
-                            });
+                            }
+                            Bind::Discard => {
+                                self.lower_expr(initializer, Bind::Discard, instantiations)?;
+                            }
+                            Bind::Indirect(reg, ..) => {
+                                let (val, ty) =
+                                    self.lower_expr(initializer, Bind::Fresh, instantiations)?;
+                                self.push_instr(Instruction::Store {
+                                    value: val,
+                                    ty,
+                                    addr: reg.into(),
+                                });
+                            }
                         }
                     }
+                } else if let Some(initializer) = initializer {
+                    self.lower_let_pattern(pattern, initializer, instantiations)?;
                 }
             }
             TypedDeclKind::StructDef {
@@ -867,6 +878,48 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    fn lower_let_pattern(
+        &mut self,
+        pattern: &TypedPattern<Ty>,
+        initializer: &TypedExpr<Ty>,
+        instantiations: &Substitutions,
+    ) -> Result<(), IRError> {
+        let scrutinee_register = self.next_register();
+        self.lower_expr(initializer, Bind::Assigned(scrutinee_register), instantiations)?;
+
+        let plan = plan_for_pattern(&self.types, pattern.ty.clone(), pattern);
+        let value_regs = self.plan_value_registers(&plan, scrutinee_register);
+
+        let mut symbol_binds: FxHashMap<Symbol, (ValueId, Ty)> = FxHashMap::default();
+        for node in &plan.nodes {
+            if let PlanNode::Arm { binds, .. } = node {
+                for (symbol, value_id) in binds {
+                    symbol_binds.entry(*symbol).or_insert_with(|| {
+                        (*value_id, self.plan_value_ty(&plan, *value_id).clone())
+                    });
+                }
+            }
+        }
+
+        for (symbol, (value_id, ty)) in &symbol_binds {
+            if self.resolved_names.is_captured.contains(symbol) {
+                let addr = self.next_register();
+                self.insert_binding(*symbol, Binding::Pointer(addr.into()));
+            } else if let Some(reg) = value_regs.get(value_id).copied() {
+                self.insert_binding(*symbol, reg.into());
+            } else {
+                self.ensure_match_binding(*symbol, ty.clone());
+            }
+        }
+
+        let join_block_id = self.new_basic_block();
+        let arm_block_ids = vec![join_block_id];
+        self.lower_match_plan(&plan, scrutinee_register, &arm_block_ids, &value_regs)?;
+        self.set_current_block(join_block_id);
+
+        Ok(())
+    }
+
     #[instrument(level = tracing::Level::TRACE, skip(self, expr), fields(expr.id = %expr.id))]
     fn lower_expr(
         &mut self,
@@ -963,7 +1016,22 @@ impl<'a> Lowerer<'a> {
                 instantiations,
             ),
             TypedExprKind::Func(typed_func) => self.lower_func(typed_func, bind, instantiations),
-            TypedExprKind::Variable(symbol) => self.lower_variable(symbol, expr, instantiations),
+            TypedExprKind::Variable(symbol) => {
+                let (value, ty) = self.lower_variable(symbol, expr, instantiations)?;
+                if let Bind::Assigned(reg) = bind {
+                    if !matches!(value, Value::Reg(src) if src == reg.0) {
+                        self.push_instr(Instruction::Constant {
+                            dest: reg,
+                            val: value,
+                            ty: ty.clone(),
+                            meta: vec![InstructionMeta::Source(expr.id)].into(),
+                        });
+                    }
+                    Ok((Value::Reg(reg.0), ty))
+                } else {
+                    Ok((value, ty))
+                }
+            }
             TypedExprKind::Constructor(symbol, _items) => {
                 self.lower_constructor(symbol, expr, bind, instantiations)
             }
@@ -971,7 +1039,7 @@ impl<'a> Lowerer<'a> {
                 self.lower_if_expr(cond, conseq, alt, bind, instantiations)
             }
             TypedExprKind::Match(scrutinee, arms) => {
-                self.lower_match(scrutinee, arms, bind, instantiations)
+                self.lower_match(expr, scrutinee, arms, bind, instantiations)
             }
             TypedExprKind::RecordLiteral { fields } => {
                 self.lower_record_literal(expr, fields, bind, instantiations)
@@ -1400,176 +1468,487 @@ impl<'a> Lowerer<'a> {
     #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn lower_match(
         &mut self,
+        expr: &TypedExpr<Ty>,
         scrutinee: &TypedExpr<Ty>,
         arms: &[TypedMatchArm<Ty>],
         bind: Bind,
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
         let result_type = arms.first().map(|a| a.body.ret.clone()).unwrap_or(Ty::Void);
-        let result_register = self.ret(bind);
+        let Some(plan) = self.types.match_plans.get(&expr.id).cloned() else {
+            self.lower_expr(scrutinee, Bind::Discard, instantiations)?;
+            return Ok((Value::Void, result_type));
+        };
+        let produce_value = !matches!(bind, Bind::Discard);
+        let result_register = if produce_value {
+            self.ret(bind)
+        } else {
+            Register::DROP
+        };
 
-        let (scrutinee_value, _scrutinee_type) =
-            self.lower_expr(scrutinee, Bind::Fresh, instantiations)?;
-        let scrutinee_register = scrutinee_value.as_register()?;
+        let scrutinee_register = self.next_register();
+        self.lower_expr(scrutinee, Bind::Assigned(scrutinee_register), instantiations)?;
+
+        let (symbol_binds, value_regs) = {
+            let value_regs = self.plan_value_registers(&plan, scrutinee_register);
+
+            let mut symbol_binds: FxHashMap<Symbol, (ValueId, Ty)> = FxHashMap::default();
+            for node in &plan.nodes {
+                if let PlanNode::Arm { binds, .. } = node {
+                    for (symbol, value_id) in binds {
+                        symbol_binds.entry(*symbol).or_insert_with(|| {
+                            (*value_id, self.plan_value_ty(&plan, *value_id).clone())
+                        });
+                    }
+                }
+            }
+
+            (symbol_binds, value_regs)
+        };
+
+        for (symbol, (value_id, ty)) in &symbol_binds {
+            if self.resolved_names.is_captured.contains(symbol) {
+                let addr = self.next_register();
+                self.insert_binding(*symbol, Binding::Pointer(addr.into()));
+            } else if let Some(reg) = value_regs.get(value_id).copied() {
+                self.insert_binding(*symbol, reg.into());
+            } else {
+                self.ensure_match_binding(*symbol, ty.clone());
+            }
+        }
 
         let join_block_id = self.new_basic_block();
 
         let mut arm_block_ids = Vec::with_capacity(arms.len());
-        let mut arm_result_registers = Vec::with_capacity(arms.len());
+        let mut arm_result_values = Vec::with_capacity(arms.len());
 
         for arm in arms {
             let arm_block_id = self.new_basic_block();
             arm_block_ids.push(arm_block_id);
 
             self.in_basic_block(arm_block_id, |lowerer| {
+                let arm_bind = if produce_value {
+                    Bind::Fresh
+                } else {
+                    Bind::Discard
+                };
                 let (arm_value, _arm_type) =
-                    lowerer.lower_block(&arm.body, Bind::Fresh, instantiations)?;
-                let arm_register = arm_value.as_register()?;
-                arm_result_registers.push(arm_register);
+                    lowerer.lower_block(&arm.body, arm_bind, instantiations)?;
+                if produce_value {
+                    arm_result_values.push(arm_value);
+                }
 
                 lowerer.push_terminator(Terminator::Jump { to: join_block_id });
                 Ok(())
             })?;
         }
 
-        // 3. Build the dispatch chain from the block that computed the scrutinee.
-        self.build_match_dispatch(scrutinee, scrutinee_register.into(), arms, &arm_block_ids)?;
+        self.lower_match_plan(&plan, scrutinee_register, &arm_block_ids, &value_regs)?;
 
-        // 4. Join block φ (if match produces a value).
         self.set_current_block(join_block_id);
 
-        self.push_phi(Phi {
-            dest: result_register,
-            ty: result_type.clone(),
-            sources: arm_block_ids
-                .into_iter()
-                .zip(arm_result_registers.into_iter())
-                .map(|a| a.into())
-                .collect::<Vec<PhiSource>>()
-                .into(),
-        });
+        if produce_value {
+            self.push_phi(Phi {
+                dest: result_register,
+                ty: result_type.clone(),
+                sources: arm_block_ids
+                    .into_iter()
+                    .zip(arm_result_values.into_iter())
+                    .map(|(from_id, value)| PhiSource { from_id, value })
+                    .collect::<Vec<PhiSource>>()
+                    .into(),
+            });
 
-        Ok((Value::Reg(result_register.0), result_type))
+            Ok((Value::Reg(result_register.0), result_type))
+        } else {
+            Ok((Value::Void, result_type))
+        }
     }
 
-    fn build_match_dispatch(
+    fn lower_match_plan(
         &mut self,
-        scrutinee_expr: &TypedExpr<Ty>,
-        scrutinee_value: Value,
-        arms: &[TypedMatchArm<Ty>],
+        plan: &MatchPlan,
+        scrutinee_register: Register,
         arm_block_ids: &[BasicBlockId],
+        value_regs: &FxHashMap<ValueId, Register>,
     ) -> Result<(), IRError> {
-        assert_eq!(
-            arms.len(),
-            arm_block_ids.len(),
-            "arms and arm blocks must match"
-        );
-
-        // Type of scrutinee; used for the Cmp instruction.
-        let scrutinee_type = scrutinee_expr.ty.clone();
-
-        // Start dispatch from the block where the scrutinee was just computed.
-        let current_function = self
-            .current_function_stack
-            .last()
-            .expect("did not get current function");
-        let current_block_index = *current_function
-            .current_block_idx
-            .last()
-            .expect("did not get current block index");
-        let mut current_test_block_id = current_function.blocks[current_block_index].id;
-
-        for arm_index in 0..arms.len() {
-            let arm = &arms[arm_index];
-            let arm_block_id = arm_block_ids[arm_index];
-
-            // If the pattern is Bind or Wildcard, this is a catch-all from here on.
-            match &arm.pattern.kind {
-                TypedPatternKind::Bind(..) | TypedPatternKind::Wildcard => {
-                    self.set_current_block(current_test_block_id);
-                    self.push_terminator(Terminator::Jump { to: arm_block_id });
-                    return Ok(());
-                }
-                _ => {}
+        let root_block_id = self.current_block_id();
+        let mut node_blocks = Vec::with_capacity(plan.nodes.len());
+        for idx in 0..plan.nodes.len() {
+            if idx == plan.root.0 {
+                node_blocks.push(root_block_id);
+            } else {
+                node_blocks.push(self.new_basic_block());
             }
+        }
 
-            // Last arm: treat it as default (type checker should have enforced
-            // exhaustiveness or complained earlier).
-            if arm_index == arms.len() - 1 {
-                self.set_current_block(current_test_block_id);
-                self.push_terminator(Terminator::Jump { to: arm_block_id });
-                break;
-            }
-
-            // For non-last arms, we emit: Cmp then Branch.
-            self.set_current_block(current_test_block_id);
-
-            let (pattern_value, _pattern_type) = self.lower_pattern_literal_value(&arm.pattern)?;
-
-            let condition_register = self.next_register();
-            self.push_instr(Instruction::Cmp {
-                dest: condition_register,
-                lhs: scrutinee_value.clone(),
-                rhs: pattern_value,
-                ty: scrutinee_type.clone(),
-                op: CmpOperator::Equals,
-                meta: vec![InstructionMeta::Source(arm.pattern.id)].into(),
-            });
-
-            let next_test_block_id = self.new_basic_block();
-
-            self.push_terminator(Terminator::Branch {
-                cond: Value::Reg(condition_register.0),
-                conseq: arm_block_id,
-                alt: next_test_block_id,
-            });
-
-            // Next iteration will emit into the fallthrough test block.
-            current_test_block_id = next_test_block_id;
+        for (idx, node) in plan.nodes.iter().enumerate() {
+            let block_id = node_blocks[idx];
+            self.in_basic_block(block_id, |lowerer| {
+                lowerer.emit_match_plan_node(
+                    plan,
+                    scrutinee_register,
+                    node,
+                    &node_blocks,
+                    arm_block_ids,
+                    value_regs,
+                )
+            })?;
         }
 
         Ok(())
     }
 
-    fn lower_pattern_literal_value(
+    fn emit_match_plan_node(
         &mut self,
-        pattern: &TypedPattern<Ty>,
-    ) -> Result<(Value, Ty), IRError> {
-        match &pattern.kind {
-            TypedPatternKind::LiteralInt(text) => {
+        plan: &MatchPlan,
+        scrutinee_register: Register,
+        node: &PlanNode,
+        node_blocks: &[BasicBlockId],
+        arm_block_ids: &[BasicBlockId],
+        value_regs: &FxHashMap<ValueId, Register>,
+    ) -> Result<(), IRError> {
+        match node {
+            PlanNode::Fail => {
+                self.push_terminator(Terminator::Unreachable);
+            }
+            PlanNode::Arm { arm_index, binds } => {
+                for (symbol, value_id) in binds {
+                    let (value, ty) = self.plan_value(
+                        plan,
+                        *value_id,
+                        scrutinee_register,
+                        value_regs,
+                    )?;
+                    self.store_match_binding(*symbol, value, &ty)?;
+                }
+                let target = arm_block_ids[*arm_index];
+                self.push_terminator(Terminator::Jump { to: target });
+            }
+            PlanNode::Switch {
+                value,
+                cases,
+                default,
+            } => {
+                self.emit_match_switch(
+                    plan,
+                    scrutinee_register,
+                    *value,
+                    cases,
+                    *default,
+                    node_blocks,
+                    value_regs,
+                )?;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn emit_match_switch(
+        &mut self,
+        plan: &MatchPlan,
+        scrutinee_register: Register,
+        value_id: ValueId,
+        cases: &[crate::types::matcher::PlanCase],
+        default: Option<PlanNodeId>,
+        node_blocks: &[BasicBlockId],
+        value_regs: &FxHashMap<ValueId, Register>,
+    ) -> Result<(), IRError> {
+        if cases.is_empty() {
+            if let Some(default_id) = default {
+                self.push_terminator(Terminator::Jump {
+                    to: node_blocks[default_id.0],
+                });
+            } else {
+                self.push_terminator(Terminator::Unreachable);
+            }
+            return Ok(());
+        }
+
+        let mut current_block_id = self.current_block_id();
+        for (idx, case) in cases.iter().enumerate() {
+            let is_last = idx + 1 == cases.len();
+            let next_block_id = if is_last {
+                if let Some(default_id) = default {
+                    node_blocks[default_id.0]
+                } else {
+                    self.new_basic_block()
+                }
+            } else {
+                self.new_basic_block()
+            };
+            let target_block_id = node_blocks[case.target.0];
+            let ctor = &case.ctor;
+
+            self.in_basic_block(current_block_id, |lowerer| {
+                if matches!(ctor, Constructor::Tuple | Constructor::Record) {
+                    lowerer.push_terminator(Terminator::Jump { to: target_block_id });
+                    return Ok(());
+                }
+
+                let cond_reg = lowerer.emit_match_condition(
+                    plan,
+                    scrutinee_register,
+                    value_id,
+                    ctor,
+                    value_regs,
+                )?;
+                lowerer.push_terminator(Terminator::Branch {
+                    cond: Value::Reg(cond_reg.0),
+                    conseq: target_block_id,
+                    alt: next_block_id,
+                });
+                Ok(())
+            })?;
+
+            if matches!(ctor, Constructor::Tuple | Constructor::Record) {
+                return Ok(());
+            }
+
+            if is_last {
+                if default.is_none() {
+                    self.in_basic_block(next_block_id, |lowerer| {
+                        lowerer.push_terminator(Terminator::Unreachable);
+                        Ok(())
+                    })?;
+                }
+                break;
+            }
+
+            current_block_id = next_block_id;
+        }
+
+        Ok(())
+    }
+
+    fn emit_match_condition(
+        &mut self,
+        plan: &MatchPlan,
+        scrutinee_register: Register,
+        value_id: ValueId,
+        ctor: &Constructor,
+        value_regs: &FxHashMap<ValueId, Register>,
+    ) -> Result<Register, IRError> {
+        let (value, value_ty) =
+            self.plan_value(plan, value_id, scrutinee_register, value_regs)?;
+        match ctor {
+            Constructor::LiteralTrue => self.emit_eq_cmp(value, Value::Bool(true), Ty::Bool),
+            Constructor::LiteralFalse => self.emit_eq_cmp(value, Value::Bool(false), Ty::Bool),
+            Constructor::LiteralInt(text) => {
                 let parsed = text.parse::<i64>().map_err(|error| {
                     IRError::InvalidAssignmentTarget(format!(
                         "invalid integer literal in match pattern: {text} ({error})"
                     ))
                 })?;
-                Ok((Value::Int(parsed), Ty::Int))
+                self.emit_eq_cmp(value, Value::Int(parsed), value_ty)
             }
-
-            TypedPatternKind::LiteralFloat(text) => {
+            Constructor::LiteralFloat(text) => {
                 let parsed = text.parse::<f64>().map_err(|error| {
                     IRError::InvalidAssignmentTarget(format!(
                         "invalid float literal in match pattern: {text} ({error})"
                     ))
                 })?;
-                Ok((Value::Float(parsed), Ty::Float))
+                self.emit_eq_cmp(value, Value::Float(parsed), value_ty)
             }
+            Constructor::Variant(name) => {
+                let Ty::Nominal { symbol, .. } = value_ty else {
+                    return Err(IRError::TypeNotFound(format!(
+                        "expected nominal type for variant match, got {value_ty:?}"
+                    )));
+                };
+                let variants = self
+                    .types
+                    .catalog
+                    .variants
+                    .get(&symbol)
+                    .ok_or_else(|| {
+                        IRError::TypeNotFound(format!(
+                            "missing enum variants for {symbol:?}"
+                        ))
+                    })?;
+                let label = self.label_from_name(name);
+                let tag = variants
+                    .get_index_of(&label)
+                    .ok_or_else(|| {
+                        IRError::TypeNotFound(format!(
+                            "missing enum variant {label:?} on {symbol:?}"
+                        ))
+                    })? as i64;
 
-            TypedPatternKind::LiteralTrue => Ok((Value::Bool(true), Ty::Bool)),
-            TypedPatternKind::LiteralFalse => Ok((Value::Bool(false), Ty::Bool)),
-
-            TypedPatternKind::Bind(..) | TypedPatternKind::Wildcard => {
-                // These are handled earlier in build_match_dispatch as defaults.
-                unreachable!("Bind and Wildcard should not reach lower_pattern_literal_value")
+                let record = value.as_register()?;
+                let tag_reg = self.next_register();
+                self.push_instr(Instruction::GetField {
+                    dest: tag_reg,
+                    ty: Ty::Int,
+                    record,
+                    field: Label::Positional(0),
+                    meta: vec![InstructionMeta::Source(NodeID::SYNTHESIZED)].into(),
+                });
+                self.emit_eq_cmp(Value::Reg(tag_reg.0), Value::Int(tag), Ty::Int)
             }
-
-            // Everything else will need a more sophisticated scheme:
-            // - Variant: compare enum tag, then destructure fields in the arm
-            // - Tuple / Record / Struct: recursive structural matching
-            // For now, make it explicit that these are not lowered here.
-            other => Err(IRError::InvalidAssignmentTarget(format!(
-                "pattern kind not yet supported in match dispatch lowering: {other:?}"
-            ))),
+            Constructor::Tuple | Constructor::Record => Err(IRError::InvalidAssignmentTarget(
+                "no condition for tuple/record constructor".into(),
+            )),
         }
+    }
+
+    fn emit_eq_cmp(
+        &mut self,
+        lhs: Value,
+        rhs: Value,
+        ty: Ty,
+    ) -> Result<Register, IRError> {
+        let dest = self.next_register();
+        self.push_instr(Instruction::Cmp {
+            dest,
+            lhs,
+            rhs,
+            ty,
+            op: CmpOperator::Equals,
+            meta: vec![InstructionMeta::Source(NodeID::SYNTHESIZED)].into(),
+        });
+        Ok(dest)
+    }
+
+    fn plan_value_ty<'b>(&self, plan: &'b MatchPlan, value_id: ValueId) -> &'b Ty {
+        match &plan.values[value_id.0] {
+            ValueRef::Scrutinee { ty } => ty,
+            ValueRef::Field { ty, .. } => ty,
+        }
+    }
+
+    fn plan_value(
+        &mut self,
+        plan: &MatchPlan,
+        value_id: ValueId,
+        scrutinee_register: Register,
+        value_regs: &FxHashMap<ValueId, Register>,
+    ) -> Result<(Value, Ty), IRError> {
+        match &plan.values[value_id.0] {
+            ValueRef::Scrutinee { ty } => {
+                let reg = value_regs
+                    .get(&value_id)
+                    .copied()
+                    .unwrap_or(scrutinee_register);
+                Ok((Value::Reg(reg.0), ty.clone()))
+            }
+            ValueRef::Field { base, proj, ty } => {
+                let (base_value, base_ty) =
+                    self.plan_value(plan, *base, scrutinee_register, value_regs)?;
+                let record = base_value.as_register()?;
+                let field = match proj {
+                    Projection::Tuple(index) => Label::Positional(*index),
+                    Projection::Record(label) => self.field_index(&base_ty, label),
+                    Projection::VariantPayload(index) => Label::Positional(index + 1),
+                };
+                let dest = *value_regs
+                    .get(&value_id)
+                    .ok_or_else(|| {
+                        IRError::TypeNotFound(format!("missing register for {value_id:?}"))
+                    })?;
+                self.push_instr(Instruction::GetField {
+                    dest,
+                    ty: ty.clone(),
+                    record,
+                    field,
+                    meta: vec![InstructionMeta::Source(NodeID::SYNTHESIZED)].into(),
+                });
+                Ok((dest.into(), ty.clone()))
+            }
+        }
+    }
+
+    fn ensure_match_binding(&mut self, symbol: Symbol, _ty: Ty) {
+        if self.current_func_mut().bindings.contains_key(&symbol) {
+            return;
+        }
+
+        if self.resolved_names.is_captured.contains(&symbol) {
+            let addr = self.next_register();
+            self.insert_binding(symbol, Binding::Pointer(addr.into()));
+        } else {
+            let reg = self.next_register();
+            self.insert_binding(symbol, reg.into());
+        }
+
+    }
+
+    fn store_match_binding(
+        &mut self,
+        symbol: Symbol,
+        value: Value,
+        ty: &Ty,
+    ) -> Result<(), IRError> {
+        let binding = self
+            .current_func_mut()
+            .bindings
+            .get(&symbol)
+            .cloned()
+            .ok_or_else(|| IRError::TypeNotFound(format!("missing binding for {symbol:?}")))?;
+
+        match binding {
+            Binding::Register(reg) => {
+                if matches!(value, Value::Reg(src) if src == reg) {
+                    return Ok(());
+                }
+
+                self.push_instr(Instruction::Constant {
+                    dest: Register(reg),
+                    val: value,
+                    ty: ty.clone(),
+                    meta: vec![InstructionMeta::Source(NodeID::SYNTHESIZED)].into(),
+                });
+            }
+            Binding::Pointer(addr) => {
+                if let Value::Reg(reg) = addr {
+                    self.push_instr(Instruction::Alloc {
+                        dest: Register(reg),
+                        ty: ty.clone(),
+                        count: Value::Int(1),
+                    });
+                }
+                self.push_instr(Instruction::Store {
+                    value,
+                    ty: ty.clone(),
+                    addr,
+                });
+            }
+            Binding::Capture { index, ty } => {
+                let dest = self.next_register();
+                self.push_instr(Instruction::GetField {
+                    dest,
+                    ty: Ty::RawPtr,
+                    record: Register(0),
+                    field: Label::Positional(index),
+                    meta: vec![InstructionMeta::Source(NodeID::SYNTHESIZED)].into(),
+                });
+                self.push_instr(Instruction::Store {
+                    value,
+                    ty,
+                    addr: dest.into(),
+                });
+            }
+        }
+
+        Ok(())
+    }
+
+    fn plan_value_registers(
+        &mut self,
+        plan: &MatchPlan,
+        scrutinee_register: Register,
+    ) -> FxHashMap<ValueId, Register> {
+        let mut value_regs = FxHashMap::default();
+        for (idx, value) in plan.values.iter().enumerate() {
+            let id = ValueId(idx);
+            let reg = match value {
+                ValueRef::Scrutinee { .. } => scrutinee_register,
+                ValueRef::Field { .. } => self.next_register(),
+            };
+            value_regs.insert(id, reg);
+        }
+        value_regs
     }
 
     fn lower_record_literal(
@@ -1780,6 +2159,28 @@ impl<'a> Lowerer<'a> {
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
         if let Some(box receiver) = &receiver {
+            if matches!(receiver.kind, TypedExprKind::Hole) {
+                if let Ty::Nominal { symbol, .. } = &expr.ty {
+                    if self
+                        .types
+                        .catalog
+                        .variants
+                        .get(symbol)
+                        .map_or(false, |variants| variants.contains_key(label))
+                    {
+                        return self.lower_enum_constructor(
+                            expr.id,
+                            symbol,
+                            label,
+                            Default::default(),
+                            Default::default(),
+                            bind,
+                            instantiations,
+                        );
+                    }
+                }
+            }
+
             if let TypedExprKind::Constructor(name, ..) = &receiver.kind {
                 return self.lower_enum_constructor(
                     receiver.id,
@@ -2000,7 +2401,7 @@ impl<'a> Lowerer<'a> {
         if let TypedExprKind::Variable(name) = &callee.kind
             && name == &Symbol::PRINT
         {
-            let arg = self.lower_expr(&args[0], Bind::Assigned(dest), parent_instantiations)?;
+            let arg = self.lower_expr(&args[0], Bind::Fresh, parent_instantiations)?;
             self.push_instr(Instruction::_Print { val: arg.0 });
             return Ok((Value::Void, Ty::Void));
         }
@@ -2119,6 +2520,28 @@ impl<'a> Lowerer<'a> {
     ) -> Result<(Value, Ty), IRError> {
         let (_, instantiations) = self.specialized_ty(callee_expr, instantiations)?;
         let (ty, mut instantiations) = self.specialized_ty(call_expr, &instantiations)?;
+
+        if matches!(receiver.kind, TypedExprKind::Hole) {
+            if let Ty::Nominal { symbol, .. } = &call_expr.ty {
+                if self
+                    .types
+                    .catalog
+                    .variants
+                    .get(symbol)
+                    .map_or(false, |variants| variants.contains_key(label))
+                {
+                    return self.lower_enum_constructor(
+                        callee_expr.id,
+                        symbol,
+                        label,
+                        arg_exprs,
+                        args,
+                        Bind::Assigned(dest),
+                        &instantiations,
+                    );
+                }
+            }
+        }
 
         if let Ty::Constructor {
             name: Name::Resolved(enum_symbol @ Symbol::Enum(..), ..),
@@ -2429,6 +2852,18 @@ impl<'a> Lowerer<'a> {
             .expect("didn't get current func")
             .current_block_idx
             .push(id.0 as usize);
+    }
+
+    fn current_block_id(&self) -> BasicBlockId {
+        let current_function = self
+            .current_function_stack
+            .last()
+            .expect("didn't get current func");
+        let current_block_idx = *current_function
+            .current_block_idx
+            .last()
+            .expect("didn't get current block idx");
+        current_function.blocks[current_block_idx].id
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self, f))]
@@ -3030,6 +3465,11 @@ impl<'a> Lowerer<'a> {
             }
             _ => panic!("unable to determine field index of {receiver_ty}.{label}"),
         }
+    }
+
+    fn label_from_name(&self, name: &str) -> Label {
+        name.parse()
+            .unwrap_or_else(|_| Label::Named(name.to_string()))
     }
 
     fn ty_from_symbol(&self, symbol: &Symbol) -> Result<Ty, IRError> {

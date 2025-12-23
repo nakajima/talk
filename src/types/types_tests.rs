@@ -1796,6 +1796,50 @@ pub mod tests {
     }
 
     #[test]
+    fn checks_or_pattern_in_let() {
+        let (ast, types) = typecheck(
+            "
+          enum Result<T, E> {
+              case ok(T)
+              case err(E)
+          }
+
+          let .ok(x) | .err(x) = Result.ok(42)
+          x
+          ",
+        );
+
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
+    }
+
+    #[test]
+    fn checks_nested_or_patterns() {
+        let (ast, types) = typecheck(
+            "
+          enum Outer {
+              case a(Inner)
+              case b(Inner)
+          }
+
+          enum Inner {
+              case x(Int)
+              case y(Int)
+          }
+
+          func extract(o: Outer) -> Int {
+              match o {
+                  .a(.x(n) | .y(n)) | .b(.x(n) | .y(n)) -> n
+              }
+          }
+
+          extract(Outer.a(Inner.x(99)))
+          ",
+        );
+
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
+    }
+
+    #[test]
     fn types_simple_conformance() {
         let (_ast, types) = typecheck(
             "

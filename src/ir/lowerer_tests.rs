@@ -925,8 +925,7 @@ pub mod tests {
                 name: Symbol::Main,
                 params: vec![].into(),
                 ty: IrTy::Func(vec![], IrTy::Int.into()),
-                // allocator got up to Register(9), so next is 10
-                register_count: 7,
+                register_count: 8,
                 blocks: vec![
                     BasicBlock {
                         id: BasicBlockId(0),
@@ -949,8 +948,8 @@ pub mod tests {
                         ],
                         terminator: Terminator::Branch {
                             cond: Value::Reg(5),
-                            conseq: BasicBlockId(2),
-                            alt: BasicBlockId(5),
+                            conseq: BasicBlockId(5),
+                            alt: BasicBlockId(8),
                         },
                     },
                     BasicBlock {
@@ -1022,6 +1021,30 @@ pub mod tests {
                     BasicBlock {
                         id: BasicBlockId(5),
                         phis: vec![],
+                        instructions: vec![],
+                        terminator: Terminator::Jump {
+                            to: BasicBlockId(2),
+                        },
+                    },
+                    BasicBlock {
+                        id: BasicBlockId(6),
+                        phis: vec![],
+                        instructions: vec![],
+                        terminator: Terminator::Jump {
+                            to: BasicBlockId(3),
+                        },
+                    },
+                    BasicBlock {
+                        id: BasicBlockId(7),
+                        phis: vec![],
+                        instructions: vec![],
+                        terminator: Terminator::Jump {
+                            to: BasicBlockId(4),
+                        },
+                    },
+                    BasicBlock {
+                        id: BasicBlockId(8),
+                        phis: vec![],
                         instructions: vec![Instruction::Cmp {
                             dest: Register(6),
                             lhs: Value::Reg(1),
@@ -1032,17 +1055,32 @@ pub mod tests {
                         },],
                         terminator: Terminator::Branch {
                             cond: Value::Reg(6),
-                            conseq: BasicBlockId(3),
-                            alt: BasicBlockId(6),
+                            conseq: BasicBlockId(6),
+                            alt: BasicBlockId(9),
                         },
                     },
                     BasicBlock {
-                        id: BasicBlockId(6),
+                        id: BasicBlockId(9),
+                        phis: vec![],
+                        instructions: vec![Instruction::Cmp {
+                            dest: Register(7),
+                            lhs: Value::Reg(1),
+                            rhs: Value::Int(789),
+                            ty: IrTy::Int,
+                            op: CmpOperator::Equals,
+                            meta: meta(),
+                        },],
+                        terminator: Terminator::Branch {
+                            cond: Value::Reg(7),
+                            conseq: BasicBlockId(7),
+                            alt: BasicBlockId(10),
+                        },
+                    },
+                    BasicBlock {
+                        id: BasicBlockId(10),
                         phis: vec![],
                         instructions: vec![],
-                        terminator: Terminator::Jump {
-                            to: BasicBlockId(4),
-                        },
+                        terminator: Terminator::Unreachable,
                     },
                 ]
             }

@@ -22,6 +22,7 @@ use crate::{
 
 pub struct MatcherCheckResult {
     pub diagnostics: IndexSet<Diagnostic<TypeError>>,
+    pub(crate) plans: FxHashMap<NodeID, MatchPlan>,
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
@@ -37,7 +38,7 @@ pub enum RequiredConstructor {
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
-enum Constructor {
+pub(crate) enum Constructor {
     LiteralTrue,
     LiteralFalse,
     LiteralInt(String),
@@ -53,6 +54,83 @@ enum ConstructorSet {
 }
 
 type PatternMatrix = Vec<Vec<TypedPattern<Ty>>>;
+
+#[derive(Clone, Debug)]
+pub(crate) struct MatchPlan {
+    pub root: PlanNodeId,
+    pub nodes: Vec<PlanNode>,
+    pub values: Vec<ValueRef>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct PlanNodeId(pub usize);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct ValueId(pub usize);
+
+#[derive(Clone, Debug)]
+pub(crate) enum PlanNode {
+    Switch {
+        value: ValueId,
+        cases: Vec<PlanCase>,
+        default: Option<PlanNodeId>,
+    },
+    Arm {
+        arm_index: usize,
+        binds: FxHashMap<Symbol, ValueId>,
+    },
+    Fail,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct PlanCase {
+    pub ctor: Constructor,
+    pub target: PlanNodeId,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum ValueRef {
+    Scrutinee { ty: Ty },
+    Field {
+        base: ValueId,
+        proj: Projection,
+        ty: Ty,
+    },
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum Projection {
+    Tuple(usize),
+    Record(Label),
+    VariantPayload(usize),
+}
+
+#[derive(Clone, Debug)]
+struct PlanRow {
+    patterns: Vec<TypedPattern<Ty>>,
+    binds: FxHashMap<Symbol, ValueId>,
+    arm_index: usize,
+}
+
+#[derive(Default)]
+struct MatchPlanBuilder {
+    nodes: Vec<PlanNode>,
+    values: Vec<ValueRef>,
+}
+
+impl MatchPlanBuilder {
+    fn value(&mut self, value: ValueRef) -> ValueId {
+        let id = ValueId(self.values.len());
+        self.values.push(value);
+        id
+    }
+
+    fn node(&mut self, node: PlanNode) -> PlanNodeId {
+        let id = PlanNodeId(self.nodes.len());
+        self.nodes.push(node);
+        id
+    }
+}
 
 impl From<Constructor> for RequiredConstructor {
     fn from(value: Constructor) -> Self {
@@ -80,6 +158,37 @@ pub fn check_ast(
 
     MatcherCheckResult {
         diagnostics: checker.diagnostics,
+        plans: checker.plans,
+    }
+}
+
+pub(crate) fn plan_for_pattern(
+    types: &Types,
+    scrutinee_ty: Ty,
+    pattern: &TypedPattern<Ty>,
+) -> MatchPlan {
+    let symbol_names = FxHashMap::default();
+    let checker = PatternChecker::new(types, &symbol_names);
+    let mut builder = MatchPlanBuilder::default();
+    let scrutinee_value = builder.value(ValueRef::Scrutinee {
+        ty: scrutinee_ty.clone(),
+    });
+    let rows = vec![PlanRow {
+        patterns: vec![pattern.clone()],
+        binds: Default::default(),
+        arm_index: 0,
+    }];
+    let root = checker.plan_compile(
+        &mut builder,
+        vec![scrutinee_value],
+        vec![scrutinee_ty],
+        rows,
+    );
+
+    MatchPlan {
+        root,
+        nodes: builder.nodes,
+        values: builder.values,
     }
 }
 
@@ -91,6 +200,7 @@ struct PatternChecker<'a> {
     types: &'a Types,
     symbol_names: &'a FxHashMap<Symbol, String>,
     diagnostics: IndexSet<Diagnostic<TypeError>>,
+    plans: FxHashMap<NodeID, MatchPlan>,
 }
 
 impl<'a> PatternChecker<'a> {
@@ -99,6 +209,7 @@ impl<'a> PatternChecker<'a> {
             types,
             symbol_names,
             diagnostics: Default::default(),
+            plans: Default::default(),
         }
     }
 
@@ -108,6 +219,8 @@ impl<'a> PatternChecker<'a> {
                 self.check_pattern(&arm.pattern);
             }
             self.check_match(scrutinee, arms);
+            let plan = self.build_match_plan(scrutinee, arms);
+            self.plans.insert(expr.id, plan);
         }
     }
 
@@ -195,6 +308,267 @@ impl<'a> PatternChecker<'a> {
                 severity: Severity::Error,
                 kind: TypeError::NonExhaustiveMatch(missing),
             });
+        }
+    }
+
+    fn build_match_plan(
+        &self,
+        scrutinee: &TypedExpr<Ty>,
+        arms: &[TypedMatchArm<Ty>],
+    ) -> MatchPlan {
+        let mut builder = MatchPlanBuilder::default();
+        let scrutinee_value = builder.value(ValueRef::Scrutinee {
+            ty: scrutinee.ty.clone(),
+        });
+        let rows = arms
+            .iter()
+            .enumerate()
+            .map(|(arm_index, arm)| PlanRow {
+                patterns: vec![arm.pattern.clone()],
+                binds: Default::default(),
+                arm_index,
+            })
+            .collect::<Vec<_>>();
+        let root = self.plan_compile(
+            &mut builder,
+            vec![scrutinee_value],
+            vec![scrutinee.ty.clone()],
+            rows,
+        );
+
+        MatchPlan {
+            root,
+            nodes: builder.nodes,
+            values: builder.values,
+        }
+    }
+
+    fn plan_compile(
+        &self,
+        builder: &mut MatchPlanBuilder,
+        values: Vec<ValueId>,
+        tys: Vec<Ty>,
+        rows: Vec<PlanRow>,
+    ) -> PlanNodeId {
+        if rows.is_empty() {
+            return builder.node(PlanNode::Fail);
+        }
+
+        if rows[0].patterns.is_empty() {
+            return builder.node(PlanNode::Arm {
+                arm_index: rows[0].arm_index,
+                binds: rows[0].binds.clone(),
+            });
+        }
+
+        let Some(&head_value) = values.first() else {
+            return builder.node(PlanNode::Fail);
+        };
+        let head_ty = tys.first().unwrap_or(&Ty::Void);
+
+        let constructors = self.plan_constructors_in_rows(&rows);
+        let tail_values = values[1..].to_vec();
+        let tail_tys = tys[1..].to_vec();
+
+        if constructors.is_empty() {
+            let rows = self.plan_default_rows(&rows, head_value);
+            return self.plan_compile(builder, tail_values, tail_tys, rows);
+        }
+
+        let mut cases = Vec::with_capacity(constructors.len());
+        for ctor in constructors {
+            let (mut sub_values, mut sub_tys) =
+                self.plan_subvalues(builder, head_value, head_ty, &ctor);
+            sub_values.extend_from_slice(&tail_values);
+            sub_tys.extend_from_slice(&tail_tys);
+
+            let rows = self.plan_specialize_rows(&rows, &ctor, head_value, head_ty);
+            let target = self.plan_compile(builder, sub_values, sub_tys, rows);
+            cases.push(PlanCase { ctor, target });
+        }
+
+        let default_rows = self.plan_default_rows(&rows, head_value);
+        let default = if default_rows.is_empty() {
+            None
+        } else {
+            Some(self.plan_compile(builder, tail_values, tail_tys, default_rows))
+        };
+
+        builder.node(PlanNode::Switch {
+            value: head_value,
+            cases,
+            default,
+        })
+    }
+
+    fn plan_constructors_in_rows(&self, rows: &[PlanRow]) -> IndexSet<Constructor> {
+        let mut constructors = IndexSet::new();
+        for row in rows {
+            for expanded in self.plan_expand_or_row_head(row) {
+                let Some(head) = expanded.patterns.first() else {
+                    continue;
+                };
+                if let Some(constructor) = self.pattern_constructor(head) {
+                    constructors.insert(constructor);
+                }
+            }
+        }
+        constructors
+    }
+
+    fn plan_expand_or_row_head(&self, row: &PlanRow) -> Vec<PlanRow> {
+        let Some(head) = row.patterns.first() else {
+            return vec![row.clone()];
+        };
+
+        if let TypedPatternKind::Or(patterns) = &head.kind {
+            let mut expanded = Vec::with_capacity(patterns.len());
+            let tail = row.patterns[1..].to_vec();
+            for pattern in patterns {
+                let mut patterns = Vec::with_capacity(row.patterns.len());
+                patterns.push(pattern.clone());
+                patterns.extend_from_slice(&tail);
+                expanded.push(PlanRow {
+                    patterns,
+                    binds: row.binds.clone(),
+                    arm_index: row.arm_index,
+                });
+            }
+            return expanded;
+        }
+
+        vec![row.clone()]
+    }
+
+    fn plan_default_rows(&self, rows: &[PlanRow], head_value: ValueId) -> Vec<PlanRow> {
+        let mut result = vec![];
+        for row in rows {
+            for expanded in self.plan_expand_or_row_head(row) {
+                if expanded.patterns.is_empty() {
+                    continue;
+                }
+                let head = &expanded.patterns[0];
+                if self.is_wildcard(head) {
+                    let mut binds = expanded.binds.clone();
+                    if let TypedPatternKind::Bind(symbol) = head.kind {
+                        binds.insert(symbol, head_value);
+                    }
+                    result.push(PlanRow {
+                        patterns: expanded.patterns[1..].to_vec(),
+                        binds,
+                        arm_index: expanded.arm_index,
+                    });
+                }
+            }
+        }
+        result
+    }
+
+    fn plan_specialize_rows(
+        &self,
+        rows: &[PlanRow],
+        ctor: &Constructor,
+        head_value: ValueId,
+        head_ty: &Ty,
+    ) -> Vec<PlanRow> {
+        let mut result = vec![];
+        for row in rows {
+            for expanded in self.plan_expand_or_row_head(row) {
+                if expanded.patterns.is_empty() {
+                    continue;
+                }
+                let head = &expanded.patterns[0];
+                if !self.row_head_matches_constructor(head, ctor) {
+                    continue;
+                }
+                let mut binds = expanded.binds.clone();
+                if let TypedPatternKind::Bind(symbol) = head.kind {
+                    binds.insert(symbol, head_value);
+                }
+                let mut patterns = self.specialize_row(head, ctor, head_ty);
+                patterns.extend_from_slice(&expanded.patterns[1..]);
+                result.push(PlanRow {
+                    patterns,
+                    binds,
+                    arm_index: expanded.arm_index,
+                });
+            }
+        }
+        result
+    }
+
+    fn plan_subvalues(
+        &self,
+        builder: &mut MatchPlanBuilder,
+        head_value: ValueId,
+        head_ty: &Ty,
+        ctor: &Constructor,
+    ) -> (Vec<ValueId>, Vec<Ty>) {
+        match ctor {
+            Constructor::Tuple => {
+                let Ty::Tuple(items) = head_ty else {
+                    return (vec![], vec![]);
+                };
+                let mut values = Vec::with_capacity(items.len());
+                let mut tys = Vec::with_capacity(items.len());
+                for (idx, ty) in items.iter().cloned().enumerate() {
+                    let value = builder.value(ValueRef::Field {
+                        base: head_value,
+                        proj: Projection::Tuple(idx),
+                        ty: ty.clone(),
+                    });
+                    values.push(value);
+                    tys.push(ty);
+                }
+                (values, tys)
+            }
+            Constructor::Record => {
+                let Ty::Record(_, row) = head_ty else {
+                    return (vec![], vec![]);
+                };
+                let (fields, _) = self.collect_row_fields(row);
+                let mut values = Vec::with_capacity(fields.len());
+                let mut tys = Vec::with_capacity(fields.len());
+                for (label, ty) in fields {
+                    let value = builder.value(ValueRef::Field {
+                        base: head_value,
+                        proj: Projection::Record(label),
+                        ty: ty.clone(),
+                    });
+                    values.push(value);
+                    tys.push(ty);
+                }
+                (values, tys)
+            }
+            Constructor::Variant(name) => {
+                let Ty::Nominal { symbol, type_args } = head_ty else {
+                    return (vec![], vec![]);
+                };
+                let Some(nominal) = self.types.catalog.nominals.get(symbol) else {
+                    return (vec![], vec![]);
+                };
+                let variants = nominal.substituted_variant_values(type_args);
+                let label = self.label_from_name(name);
+                let Some(values) = variants.get(&label) else {
+                    return (vec![], vec![]);
+                };
+                let mut subvalues = Vec::with_capacity(values.len());
+                let mut tys = Vec::with_capacity(values.len());
+                for (idx, ty) in values.iter().cloned().enumerate() {
+                    let value = builder.value(ValueRef::Field {
+                        base: head_value,
+                        proj: Projection::VariantPayload(idx),
+                        ty: ty.clone(),
+                    });
+                    subvalues.push(value);
+                    tys.push(ty);
+                }
+                (subvalues, tys)
+            }
+            Constructor::LiteralTrue
+            | Constructor::LiteralFalse
+            | Constructor::LiteralInt(_)
+            | Constructor::LiteralFloat(_) => (vec![], vec![]),
         }
     }
 
@@ -690,6 +1064,7 @@ impl<'a> Matcher<'a> {
         checker.check_match_patterns(&self.scrutinee, &self.patterns);
         MatcherCheckResult {
             diagnostics: checker.diagnostics,
+            plans: Default::default(),
         }
     }
 }

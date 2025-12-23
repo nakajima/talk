@@ -196,6 +196,30 @@ impl Member {
                 return SolveResult::Defer(DeferralReason::WaitingOnSymbol(*nominal_symbol));
             };
 
+            for param in nominal.type_params.iter() {
+                let InferTy::Param(param_id) = param else {
+                    continue;
+                };
+
+                if context.instantiations.get_ty(&self.node_id, param_id).is_some() {
+                    continue;
+                }
+
+                let InferTy::Var { id: meta, .. } = session.new_ty_meta_var(context.level) else {
+                    unreachable!();
+                };
+
+                session.reverse_instantiations.ty.insert(meta, *param_id);
+                context.instantiations.insert_ty(self.node_id, *param_id, meta);
+                session.type_catalog.instantiations.ty.insert(
+                    (self.node_id, *param_id),
+                    InferTy::Var {
+                        id: meta,
+                        level: context.level,
+                    },
+                );
+            }
+
             let Some(variant) = nominal.variants.get(&self.label) else {
                 return SolveResult::Defer(DeferralReason::WaitingOnSymbol(member_sym));
             };
