@@ -2248,10 +2248,10 @@ impl<'a> Parser<'a> {
     }
 
     #[must_use]
-    #[allow(clippy::unwrap_used)]
     fn push_lhs_location(&mut self, lhs: NodeID) -> LocToken {
-        #[allow(clippy::unwrap_used)]
-        let meta = self.ast.meta.get(&lhs).unwrap();
+        let Some(meta) = self.ast.meta.get(&lhs) else {
+            return LocToken;
+        };
         let start = SourceLocationStart {
             token: meta.start.clone(),
             identifiers: vec![],
@@ -2262,9 +2262,12 @@ impl<'a> Parser<'a> {
 
     #[must_use]
     fn push_source_location(&mut self) -> LocToken {
-        #[allow(clippy::unwrap_used)]
+        let Some(current) = &self.current else {
+            return LocToken;
+        };
+
         let start = SourceLocationStart {
-            token: self.current.clone().unwrap(),
+            token: current.clone(),
             identifiers: vec![],
         };
         self.source_location_stack.push(start);

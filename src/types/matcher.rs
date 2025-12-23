@@ -1,7 +1,7 @@
 use derive_visitor::Drive;
 use derive_visitor::Visitor;
 use indexmap::{IndexSet, indexset};
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 
 use crate::{
     diagnostic::{Diagnostic, Severity},
@@ -29,7 +29,6 @@ pub struct MatcherCheckResult {
 pub enum RequiredConstructor {
     LiteralTrue,
     LiteralFalse,
-    Int,
     Variant { name: String },
     Tuple,
     Record,
@@ -90,7 +89,9 @@ pub(crate) struct PlanCase {
 
 #[derive(Clone, Debug)]
 pub(crate) enum ValueRef {
-    Scrutinee { ty: Ty },
+    Scrutinee {
+        ty: Ty,
+    },
     Field {
         base: ValueId,
         proj: Projection,
@@ -227,21 +228,6 @@ impl<'a> PatternChecker<'a> {
     fn check_pattern(&mut self, pattern: &TypedPattern<Ty>) {
         match &pattern.kind {
             TypedPatternKind::Or(patterns) => {
-                if let Some(first) = patterns.first() {
-                    let expected = self.binder_set(first);
-                    for alt in patterns.iter().skip(1) {
-                        let actual = self.binder_set(alt);
-                        if actual != expected {
-                            self.diagnostics.insert(Diagnostic {
-                                id: pattern.id,
-                                severity: Severity::Error,
-                                kind: TypeError::OrPatternBinderMismatch,
-                            });
-                            break;
-                        }
-                    }
-                }
-
                 for pattern in patterns {
                     self.check_pattern(pattern);
                 }
@@ -311,11 +297,7 @@ impl<'a> PatternChecker<'a> {
         }
     }
 
-    fn build_match_plan(
-        &self,
-        scrutinee: &TypedExpr<Ty>,
-        arms: &[TypedMatchArm<Ty>],
-    ) -> MatchPlan {
+    fn build_match_plan(&self, scrutinee: &TypedExpr<Ty>, arms: &[TypedMatchArm<Ty>]) -> MatchPlan {
         let mut builder = MatchPlanBuilder::default();
         let scrutinee_value = builder.value(ValueRef::Scrutinee {
             ty: scrutinee.ty.clone(),
@@ -837,7 +819,6 @@ impl<'a> PatternChecker<'a> {
         let (row_fields, _) = self.collect_row_fields(row);
 
         let mut field_map: FxHashMap<Label, RecordFieldValue> = FxHashMap::default();
-        let mut has_rest = false;
         for field in fields {
             match &field.kind {
                 TypedRecordFieldPatternKind::Bind(symbol) => {
@@ -856,9 +837,7 @@ impl<'a> PatternChecker<'a> {
                         field_map.insert(label, RecordFieldValue::Value(value.clone()));
                     }
                 }
-                TypedRecordFieldPatternKind::Rest => {
-                    has_rest = true;
-                }
+                TypedRecordFieldPatternKind::Rest => {}
             }
         }
 
@@ -871,7 +850,6 @@ impl<'a> PatternChecker<'a> {
                     kind: TypedPatternKind::Bind(*symbol),
                 },
                 Some(RecordFieldValue::Value(value)) => value.clone(),
-                None if has_rest => self.wildcard_pattern(ty),
                 None => self.wildcard_pattern(ty),
             })
             .collect()
@@ -991,82 +969,11 @@ impl<'a> PatternChecker<'a> {
         }
         labels
     }
-
-    fn binder_set(&self, pattern: &TypedPattern<Ty>) -> FxHashSet<Symbol> {
-        let mut binders = FxHashSet::default();
-        self.collect_binders(pattern, &mut binders);
-        binders
-    }
-
-    fn collect_binders(&self, pattern: &TypedPattern<Ty>, binders: &mut FxHashSet<Symbol>) {
-        match &pattern.kind {
-            TypedPatternKind::Bind(symbol) => {
-                binders.insert(*symbol);
-            }
-            TypedPatternKind::Or(patterns) => {
-                for pattern in patterns {
-                    self.collect_binders(pattern, binders);
-                }
-            }
-            TypedPatternKind::Tuple(patterns) => {
-                for pattern in patterns {
-                    self.collect_binders(pattern, binders);
-                }
-            }
-            TypedPatternKind::Variant { fields, .. } => {
-                for pattern in fields {
-                    self.collect_binders(pattern, binders);
-                }
-            }
-            TypedPatternKind::Record { fields } => {
-                for field in fields {
-                    match &field.kind {
-                        TypedRecordFieldPatternKind::Bind(symbol) => {
-                            binders.insert(*symbol);
-                        }
-                        TypedRecordFieldPatternKind::Equals { name, value } => {
-                            binders.insert(*name);
-                            self.collect_binders(value, binders);
-                        }
-                        TypedRecordFieldPatternKind::Rest => {}
-                    }
-                }
-            }
-            TypedPatternKind::Struct { fields, .. } => {
-                for field in fields {
-                    self.collect_binders(field, binders);
-                }
-            }
-            TypedPatternKind::Wildcard
-            | TypedPatternKind::LiteralInt(_)
-            | TypedPatternKind::LiteralFloat(_)
-            | TypedPatternKind::LiteralTrue
-            | TypedPatternKind::LiteralFalse => {}
-        }
-    }
 }
 
 enum RecordFieldValue {
     Bind { id: NodeID, symbol: Symbol },
     Value(TypedPattern<Ty>),
-}
-
-pub struct Matcher<'a> {
-    pub scrutinee: TypedExpr<Ty>,
-    pub patterns: Vec<TypedPattern<Ty>>,
-    types: &'a Types,
-    symbol_names: &'a FxHashMap<Symbol, String>,
-}
-
-impl<'a> Matcher<'a> {
-    pub fn check(&self) -> MatcherCheckResult {
-        let mut checker = PatternChecker::new(self.types, self.symbol_names);
-        checker.check_match_patterns(&self.scrutinee, &self.patterns);
-        MatcherCheckResult {
-            diagnostics: checker.diagnostics,
-            plans: Default::default(),
-        }
-    }
 }
 
 #[cfg(test)]
@@ -1080,6 +987,24 @@ pub mod tests {
         node_id::NodeID,
         types::typed_ast::{TypedExpr, TypedExprKind, TypedStmt, TypedStmtKind},
     };
+
+    pub struct Matcher<'a> {
+        pub scrutinee: TypedExpr<Ty>,
+        pub patterns: Vec<TypedPattern<Ty>>,
+        types: &'a Types,
+        symbol_names: &'a FxHashMap<Symbol, String>,
+    }
+
+    impl<'a> Matcher<'a> {
+        pub fn check(&self) -> MatcherCheckResult {
+            let mut checker = PatternChecker::new(self.types, self.symbol_names);
+            checker.check_match_patterns(&self.scrutinee, &self.patterns);
+            MatcherCheckResult {
+                diagnostics: checker.diagnostics,
+                plans: Default::default(),
+            }
+        }
+    }
 
     fn matcher_for<'a>(code: &str) -> Matcher<'a> {
         let typed = Driver::new(vec![Source::from(code)], DriverConfig::new("MatcherTests"))
@@ -1305,16 +1230,6 @@ pub mod tests {
             .diagnostics,
             indexset! {
                 Diagnostic { id: NodeID::ANY, severity: Severity::Warn, kind: TypeError::UselessMatchArm }
-            }
-        );
-    }
-
-    #[test]
-    fn or_pattern_binder_mismatch() {
-        assert_eq!(
-            diagnostics_for("match true { x | _ -> 1 }"),
-            indexset! {
-                Diagnostic { id: NodeID::ANY, severity: Severity::Error, kind: TypeError::OrPatternBinderMismatch }
             }
         );
     }

@@ -39,8 +39,8 @@ use crate::{
     node_id::{FileID, NodeID},
     types::{
         matcher::{
-            plan_for_pattern, Constructor, MatchPlan, PlanNode, PlanNodeId, Projection, ValueId,
-            ValueRef,
+            Constructor, MatchPlan, PlanNode, PlanNodeId, Projection, ValueId, ValueRef,
+            plan_for_pattern,
         },
         scheme::ForAll,
         ty::Ty,
@@ -885,9 +885,13 @@ impl<'a> Lowerer<'a> {
         instantiations: &Substitutions,
     ) -> Result<(), IRError> {
         let scrutinee_register = self.next_register();
-        self.lower_expr(initializer, Bind::Assigned(scrutinee_register), instantiations)?;
+        self.lower_expr(
+            initializer,
+            Bind::Assigned(scrutinee_register),
+            instantiations,
+        )?;
 
-        let plan = plan_for_pattern(&self.types, pattern.ty.clone(), pattern);
+        let plan = plan_for_pattern(self.types, pattern.ty.clone(), pattern);
         let value_regs = self.plan_value_registers(&plan, scrutinee_register);
 
         let mut symbol_binds: FxHashMap<Symbol, (ValueId, Ty)> = FxHashMap::default();
@@ -1487,7 +1491,11 @@ impl<'a> Lowerer<'a> {
         };
 
         let scrutinee_register = self.next_register();
-        self.lower_expr(scrutinee, Bind::Assigned(scrutinee_register), instantiations)?;
+        self.lower_expr(
+            scrutinee,
+            Bind::Assigned(scrutinee_register),
+            instantiations,
+        )?;
 
         let (symbol_binds, value_regs) = {
             let value_regs = self.plan_value_registers(&plan, scrutinee_register);
@@ -1614,12 +1622,8 @@ impl<'a> Lowerer<'a> {
             }
             PlanNode::Arm { arm_index, binds } => {
                 for (symbol, value_id) in binds {
-                    let (value, ty) = self.plan_value(
-                        plan,
-                        *value_id,
-                        scrutinee_register,
-                        value_regs,
-                    )?;
+                    let (value, ty) =
+                        self.plan_value(plan, *value_id, scrutinee_register, value_regs)?;
                     self.store_match_binding(*symbol, value, &ty)?;
                 }
                 let target = arm_block_ids[*arm_index];
@@ -1645,6 +1649,7 @@ impl<'a> Lowerer<'a> {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn emit_match_switch(
         &mut self,
         plan: &MatchPlan,
@@ -1683,7 +1688,9 @@ impl<'a> Lowerer<'a> {
 
             self.in_basic_block(current_block_id, |lowerer| {
                 if matches!(ctor, Constructor::Tuple | Constructor::Record) {
-                    lowerer.push_terminator(Terminator::Jump { to: target_block_id });
+                    lowerer.push_terminator(Terminator::Jump {
+                        to: target_block_id,
+                    });
                     return Ok(());
                 }
 
@@ -1730,8 +1737,7 @@ impl<'a> Lowerer<'a> {
         ctor: &Constructor,
         value_regs: &FxHashMap<ValueId, Register>,
     ) -> Result<Register, IRError> {
-        let (value, value_ty) =
-            self.plan_value(plan, value_id, scrutinee_register, value_regs)?;
+        let (value, value_ty) = self.plan_value(plan, value_id, scrutinee_register, value_regs)?;
         match ctor {
             Constructor::LiteralTrue => self.emit_eq_cmp(value, Value::Bool(true), Ty::Bool),
             Constructor::LiteralFalse => self.emit_eq_cmp(value, Value::Bool(false), Ty::Bool),
@@ -1757,24 +1763,13 @@ impl<'a> Lowerer<'a> {
                         "expected nominal type for variant match, got {value_ty:?}"
                     )));
                 };
-                let variants = self
-                    .types
-                    .catalog
-                    .variants
-                    .get(&symbol)
-                    .ok_or_else(|| {
-                        IRError::TypeNotFound(format!(
-                            "missing enum variants for {symbol:?}"
-                        ))
-                    })?;
+                let variants = self.types.catalog.variants.get(&symbol).ok_or_else(|| {
+                    IRError::TypeNotFound(format!("missing enum variants for {symbol:?}"))
+                })?;
                 let label = self.label_from_name(name);
-                let tag = variants
-                    .get_index_of(&label)
-                    .ok_or_else(|| {
-                        IRError::TypeNotFound(format!(
-                            "missing enum variant {label:?} on {symbol:?}"
-                        ))
-                    })? as i64;
+                let tag = variants.get_index_of(&label).ok_or_else(|| {
+                    IRError::TypeNotFound(format!("missing enum variant {label:?} on {symbol:?}"))
+                })? as i64;
 
                 let record = value.as_register()?;
                 let tag_reg = self.next_register();
@@ -1793,12 +1788,7 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    fn emit_eq_cmp(
-        &mut self,
-        lhs: Value,
-        rhs: Value,
-        ty: Ty,
-    ) -> Result<Register, IRError> {
+    fn emit_eq_cmp(&mut self, lhs: Value, rhs: Value, ty: Ty) -> Result<Register, IRError> {
         let dest = self.next_register();
         self.push_instr(Instruction::Cmp {
             dest,
@@ -1842,11 +1832,9 @@ impl<'a> Lowerer<'a> {
                     Projection::Record(label) => self.field_index(&base_ty, label),
                     Projection::VariantPayload(index) => Label::Positional(index + 1),
                 };
-                let dest = *value_regs
-                    .get(&value_id)
-                    .ok_or_else(|| {
-                        IRError::TypeNotFound(format!("missing register for {value_id:?}"))
-                    })?;
+                let dest = *value_regs.get(&value_id).ok_or_else(|| {
+                    IRError::TypeNotFound(format!("missing register for {value_id:?}"))
+                })?;
                 self.push_instr(Instruction::GetField {
                     dest,
                     ty: ty.clone(),
@@ -1871,7 +1859,6 @@ impl<'a> Lowerer<'a> {
             let reg = self.next_register();
             self.insert_binding(symbol, reg.into());
         }
-
     }
 
     fn store_match_binding(
@@ -2159,26 +2146,24 @@ impl<'a> Lowerer<'a> {
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
         if let Some(box receiver) = &receiver {
-            if matches!(receiver.kind, TypedExprKind::Hole) {
-                if let Ty::Nominal { symbol, .. } = &expr.ty {
-                    if self
-                        .types
-                        .catalog
-                        .variants
-                        .get(symbol)
-                        .map_or(false, |variants| variants.contains_key(label))
-                    {
-                        return self.lower_enum_constructor(
-                            expr.id,
-                            symbol,
-                            label,
-                            Default::default(),
-                            Default::default(),
-                            bind,
-                            instantiations,
-                        );
-                    }
-                }
+            if matches!(receiver.kind, TypedExprKind::Hole)
+                && let Ty::Nominal { symbol, .. } = &expr.ty
+                && self
+                    .types
+                    .catalog
+                    .variants
+                    .get(symbol)
+                    .is_some_and(|variants| variants.contains_key(label))
+            {
+                return self.lower_enum_constructor(
+                    expr.id,
+                    symbol,
+                    label,
+                    Default::default(),
+                    Default::default(),
+                    bind,
+                    instantiations,
+                );
             }
 
             if let TypedExprKind::Constructor(name, ..) = &receiver.kind {
@@ -2521,26 +2506,24 @@ impl<'a> Lowerer<'a> {
         let (_, instantiations) = self.specialized_ty(callee_expr, instantiations)?;
         let (ty, mut instantiations) = self.specialized_ty(call_expr, &instantiations)?;
 
-        if matches!(receiver.kind, TypedExprKind::Hole) {
-            if let Ty::Nominal { symbol, .. } = &call_expr.ty {
-                if self
-                    .types
-                    .catalog
-                    .variants
-                    .get(symbol)
-                    .map_or(false, |variants| variants.contains_key(label))
-                {
-                    return self.lower_enum_constructor(
-                        callee_expr.id,
-                        symbol,
-                        label,
-                        arg_exprs,
-                        args,
-                        Bind::Assigned(dest),
-                        &instantiations,
-                    );
-                }
-            }
+        if matches!(receiver.kind, TypedExprKind::Hole)
+            && let Ty::Nominal { symbol, .. } = &call_expr.ty
+            && self
+                .types
+                .catalog
+                .variants
+                .get(symbol)
+                .is_some_and(|variants| variants.contains_key(label))
+        {
+            return self.lower_enum_constructor(
+                callee_expr.id,
+                symbol,
+                label,
+                arg_exprs,
+                args,
+                Bind::Assigned(dest),
+                &instantiations,
+            );
         }
 
         if let Ty::Constructor {
