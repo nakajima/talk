@@ -10,3 +10,4 @@ talk-ex/index.wit
 /documents
 server.log
 *.log
+.tmp
