@@ -1043,6 +1043,28 @@ pub mod tests {
     }
 
     #[test]
+    fn interprets_unqualified_variant_arg() {
+        let val = interpret(
+            "
+            enum AB {
+                case a(Int), b(Int)
+            }
+
+            func callMe(param: AB) {
+                match param {
+                    .a(x) -> x,
+                    .b(x) -> x,
+                }
+            }
+
+            callMe(.a(123))
+        ",
+        );
+
+        assert_eq!(val, Value::Int(123));
+    }
+
+    #[test]
     fn interprets_or_pattern_in_let() {
         let result = interpret(
             "
