@@ -1,3 +1,4 @@
+use derive_visitor::{Drive, DriveMut};
 use indexmap::IndexSet;
 use rustc_hash::FxHashMap;
 
@@ -19,7 +20,7 @@ use crate::{
     },
 };
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Drive, DriveMut)]
 pub enum EnvEntry<T: SomeType> {
     Mono(T),
     Scheme(Scheme<T>),

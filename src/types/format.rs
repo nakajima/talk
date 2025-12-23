@@ -5,8 +5,8 @@ use crate::types::infer_row::RowParamId;
 use crate::types::infer_ty::TypeParamId;
 use crate::types::row::Row;
 use crate::types::scheme::{ForAll, Scheme};
-use crate::types::type_session::TypeEntry;
 use crate::types::ty::Ty;
+use crate::types::type_session::TypeEntry;
 
 #[derive(Clone, Copy, Default)]
 pub struct SymbolNames<'a> {
@@ -30,16 +30,16 @@ impl<'a> SymbolNames<'a> {
     }
 
     fn resolve(&self, symbol: &Symbol) -> Option<&'a str> {
-        if let Some(primary) = self.primary {
-            if let Some(name) = primary.get(symbol) {
-                return Some(name.as_str());
-            }
+        if let Some(primary) = self.primary
+            && let Some(name) = primary.get(symbol)
+        {
+            return Some(name.as_str());
         }
 
-        if let Some(fallback) = self.fallback {
-            if let Some(name) = fallback.get(symbol) {
-                return Some(name.as_str());
-            }
+        if let Some(fallback) = self.fallback
+            && let Some(name) = fallback.get(symbol)
+        {
+            return Some(name.as_str());
         }
 
         None

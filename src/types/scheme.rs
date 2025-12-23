@@ -1,3 +1,4 @@
+use derive_visitor::{Drive, DriveMut};
 use indexmap::IndexSet;
 use itertools::Itertools;
 use tracing::instrument;
@@ -24,9 +25,11 @@ pub enum ForAll {
     Row(RowParamId),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
 pub struct Scheme<T: SomeType> {
+    #[drive(skip)]
     pub(crate) foralls: IndexSet<ForAll>,
+    #[drive(skip)]
     pub(crate) predicates: Vec<Predicate<T>>,
     pub(crate) ty: T,
 }

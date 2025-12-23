@@ -38,9 +38,9 @@ use crate::analysis::{
     completion as analysis_completion, hover as analysis_hover,
 };
 use crate::compiling::module::ModuleId;
+use crate::lexer::Lexer;
 use crate::lsp::semantic_tokens::collect;
 use crate::lsp::{completion, document::Document, semantic_tokens::TOKEN_TYPES};
-use crate::lexer::Lexer;
 use crate::name_resolution::symbol::Symbol;
 use crate::node_kinds::{
     decl::Decl,
@@ -554,13 +554,13 @@ fn file_stamp_version(path: &PathBuf) -> i32 {
 fn analysis_root_for_uri(state: &ServerState, uri: &Url) -> Option<PathBuf> {
     let path = uri.to_file_path().ok();
 
-    if state.workspace_roots.is_empty() {
-        if let Some(path) = path.as_ref() {
-            return path
-                .parent()
-                .map(|p| p.to_path_buf())
-                .or_else(|| Some(path.clone()));
-        }
+    if state.workspace_roots.is_empty()
+        && let Some(path) = path.as_ref()
+    {
+        return path
+            .parent()
+            .map(|p| p.to_path_buf())
+            .or_else(|| Some(path.clone()));
     }
 
     if let Some(path) = path.as_ref() {
@@ -1423,13 +1423,13 @@ fn byte_offset_to_utf16_position(text: &str, byte_offset: u32) -> Option<Positio
 
 #[cfg(test)]
 mod tests {
+    use super::{AnalysisWorkspace, DocumentInput};
     use crate::lsp::document::Document;
     use async_lsp::ClientSocket;
     use async_lsp::lsp_types::HoverContents;
     use async_lsp::lsp_types::Range;
     use async_lsp::lsp_types::Url;
     use async_lsp::lsp_types::WorkspaceEdit;
-    use super::{AnalysisWorkspace, DocumentInput};
     use std::path::PathBuf;
 
     fn workspace_for_docs(docs: Vec<(Url, &str)>) -> AnalysisWorkspace {

@@ -1,7 +1,7 @@
 use std::str::FromStr;
 
 use crate::ast::{AST, NewAST, Parsed};
-use crate::diagnostic::{AnyDiagnostic, Diagnostic};
+use crate::diagnostic::{AnyDiagnostic, Diagnostic, Severity};
 use crate::label::Label;
 use crate::lexer::Lexer;
 use crate::name::Name;
@@ -113,6 +113,7 @@ impl<'a> Parser<'a> {
         Ok((ast, diagnostics))
     }
 
+    #[allow(clippy::type_complexity)]
     pub fn parse_with_comments(
         mut self,
     ) -> Result<(AST<Parsed>, Vec<AnyDiagnostic>, Vec<Token>), ParserError> {
@@ -155,8 +156,14 @@ impl<'a> Parser<'a> {
     }
 
     fn record_diagnostic(&mut self, kind: ParserError) {
-        self.diagnostics
-            .push(Diagnostic { id: NodeID(self.file_id, 0), kind }.into());
+        self.diagnostics.push(
+            Diagnostic {
+                id: NodeID(self.file_id, 0),
+                severity: Severity::Error,
+                kind,
+            }
+            .into(),
+        );
     }
 
     fn next_root(&mut self, kind: &TokenKind) -> Result<Node, ParserError> {
@@ -1164,6 +1171,22 @@ impl<'a> Parser<'a> {
                 });
             }
         };
+
+        if self.peek_is(TokenKind::Pipe) {
+            let first_pattern = self.save_meta(tok, |id, span| Pattern { id, span, kind })?;
+            let mut patterns = vec![first_pattern];
+
+            while self.did_match(TokenKind::Pipe)? {
+                patterns.push(self.parse_pattern()?);
+            }
+
+            let loc = self.push_lhs_location(patterns[0].id);
+            return self.save_meta(loc, |id, span| Pattern {
+                id,
+                span,
+                kind: PatternKind::Or(patterns),
+            });
+        }
 
         self.save_meta(tok, |id, span| Pattern { id, span, kind })
     }
@@ -2225,10 +2248,10 @@ impl<'a> Parser<'a> {
     }
 
     #[must_use]
-    #[allow(clippy::unwrap_used)]
     fn push_lhs_location(&mut self, lhs: NodeID) -> LocToken {
-        #[allow(clippy::unwrap_used)]
-        let meta = self.ast.meta.get(&lhs).unwrap();
+        let Some(meta) = self.ast.meta.get(&lhs) else {
+            return LocToken;
+        };
         let start = SourceLocationStart {
             token: meta.start.clone(),
             identifiers: vec![],
@@ -2239,9 +2262,12 @@ impl<'a> Parser<'a> {
 
     #[must_use]
     fn push_source_location(&mut self) -> LocToken {
-        #[allow(clippy::unwrap_used)]
+        let Some(current) = &self.current else {
+            return LocToken;
+        };
+
         let start = SourceLocationStart {
-            token: self.current.clone().unwrap(),
+            token: current.clone(),
             identifiers: vec![],
         };
         self.source_location_stack.push(start);

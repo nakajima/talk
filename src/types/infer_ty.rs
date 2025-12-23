@@ -1,3 +1,4 @@
+use derive_visitor::{Drive, DriveMut};
 use ena::unify::{UnifyKey, UnifyValue};
 use indexmap::IndexSet;
 use itertools::Itertools;
@@ -92,24 +93,29 @@ impl UnifyValue for Level {
     }
 }
 
-#[derive(PartialEq, Eq, Clone, Hash)]
+#[derive(PartialEq, Eq, Clone, Hash, Drive, DriveMut)]
 pub enum InferTy {
-    Primitive(Symbol),
+    Primitive(#[drive(skip)] Symbol),
 
-    Param(TypeParamId),
-    Rigid(SkolemId),
+    Param(#[drive(skip)] TypeParamId),
+    Rigid(#[drive(skip)] SkolemId),
     Var {
+        #[drive(skip)]
         id: MetaVarId,
+        #[drive(skip)]
         level: Level,
     },
 
     Projection {
         base: Box<InferTy>,
+        #[drive(skip)]
         protocol_id: ProtocolId,
+        #[drive(skip)]
         associated: Label,
     },
 
     Constructor {
+        #[drive(skip)]
         name: Name,
         params: Vec<InferTy>,
         ret: Box<InferTy>,
@@ -121,11 +127,12 @@ pub enum InferTy {
 
     // Nominal types (we look up their information from the TypeCatalog)
     Nominal {
+        #[drive(skip)]
         symbol: Symbol,
         type_args: Vec<InferTy>,
     },
 
-    Error(Box<TypeError>),
+    Error(#[drive(skip)] Box<TypeError>),
 }
 
 impl From<InferTy> for Ty {

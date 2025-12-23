@@ -1,10 +1,11 @@
-print("hello 🌎")
-print(123)
-
-// Print a person????
 struct Person {
-  let name: String
-  let age: Int
+	let firstName: String
+	let lastName: String
+
+	func greet() {
+		// Strings can be concat'd
+		print("hi i'm " + self.firstName + " " + self.lastName)
+	}
 }
 
-print(Person(name: "Pat", age: 100))
+Person(firstName: "Pat", lastName: "N").greet()

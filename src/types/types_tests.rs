@@ -725,7 +725,8 @@ pub mod tests {
             "
         match 123 {
             123 -> true,
-            456 -> false
+            456 -> false,
+            _ -> true
         }
         ",
         );
@@ -772,6 +773,20 @@ pub mod tests {
             .len(),
             1
         );
+    }
+
+    #[test]
+    fn checks_or_pattern() {
+        let (.., diagnostics) = typecheck_err(
+            "
+        match 123 {
+            123 | true -> true,
+            _ -> false
+        }
+        ",
+        );
+
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
     }
 
     #[test]
@@ -1063,7 +1078,8 @@ pub mod tests {
             r#"
         let rec = { a: 123, b: true }
         match rec {
-            { a: 123, b } -> b
+            { a: 123, b } -> b,
+            _ -> false,
         }
         "#,
         );
@@ -1780,6 +1796,50 @@ pub mod tests {
     }
 
     #[test]
+    fn checks_or_pattern_in_let() {
+        let (ast, types) = typecheck(
+            "
+          enum Result<T, E> {
+              case ok(T)
+              case err(E)
+          }
+
+          let .ok(x) | .err(x) = Result.ok(42)
+          x
+          ",
+        );
+
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
+    }
+
+    #[test]
+    fn checks_nested_or_patterns() {
+        let (ast, types) = typecheck(
+            "
+          enum Outer {
+              case a(Inner)
+              case b(Inner)
+          }
+
+          enum Inner {
+              case x(Int)
+              case y(Int)
+          }
+
+          func extract(o: Outer) -> Int {
+              match o {
+                  .a(.x(n) | .y(n)) | .b(.x(n) | .y(n)) -> n
+              }
+          }
+
+          extract(Outer.a(Inner.x(99)))
+          ",
+        );
+
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
+    }
+
+    #[test]
     fn types_simple_conformance() {
         let (_ast, types) = typecheck(
             "
@@ -2413,5 +2473,26 @@ pub mod tests {
             *member_entry,
             TypeEntry::Mono(Ty::Func(Ty::Int.into(), Ty::Int.into()))
         );
+    }
+
+    #[test]
+    fn types_struct_call_regression() {
+        let (ast, types) = typecheck_core(
+            "
+            struct Person {
+                let firstName: String
+                let lastName: String
+
+                func greet() {
+                    // Strings can be concat'd
+                    print(\"hi i'm \" + self.firstName + \" \" + self.lastName)
+                }
+            }
+
+            Person(firstName: \"Pat\", lastName: \"N\").greet()
+            ",
+        );
+
+        assert_eq!(ty(0, &ast, &types), Ty::Void);
     }
 }

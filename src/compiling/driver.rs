@@ -1,7 +1,7 @@
 use crate::{
     ast::{self, AST},
     compiling::module::{Module, ModuleEnvironment, ModuleId, StableModuleId},
-    diagnostic::{AnyDiagnostic, Diagnostic},
+    diagnostic::{AnyDiagnostic, Diagnostic, Severity},
     ir::{ir_error::IRError, lowerer::Lowerer, program::Program},
     lexer::Lexer,
     name_resolution::{
@@ -12,6 +12,7 @@ use crate::{
     parser::Parser,
     parser_error::ParserError,
     types::{
+        matcher,
         passes::inference_pass::InferencePass,
         ty::Ty,
         type_error::TypeError,
@@ -275,6 +276,7 @@ impl Driver {
                     diagnostics.push(
                         Diagnostic {
                             id: NodeID(file_id, 0),
+                            severity: Severity::Error,
                             kind: err,
                         }
                         .into(),
@@ -325,6 +327,14 @@ impl Driver<Parsed> {
     }
 }
 
+fn has_error_diagnostics(diagnostics: &[AnyDiagnostic]) -> bool {
+    diagnostics.iter().any(|diag| match diag {
+        AnyDiagnostic::Parsing(diagnostic) => diagnostic.severity == Severity::Error,
+        AnyDiagnostic::NameResolution(diagnostic) => diagnostic.severity == Severity::Error,
+        AnyDiagnostic::Typing(diagnostic) => diagnostic.severity == Severity::Error,
+    })
+}
+
 impl Driver<NameResolved> {
     pub fn typecheck(mut self) -> Result<Driver<Typed>, CompileError> {
         let mut session = TypeSession::new(
@@ -340,7 +350,19 @@ impl Driver<NameResolved> {
         self.phase.diagnostics.extend(diagnostics);
         let symbols = std::mem::take(&mut session.symbols);
         let resolved_names = std::mem::take(&mut session.resolved_names);
-        let types = session.finalize().map_err(CompileError::Typing)?;
+        let mut types = session.finalize().map_err(CompileError::Typing)?;
+
+        // Don't bother with matcher diagnostics if we're not well typed already.
+        if !has_error_diagnostics(&self.phase.diagnostics) {
+            let matcher_result = matcher::check_ast(&ast, &types, &resolved_names.symbol_names);
+            self.phase.diagnostics.extend(
+                matcher_result
+                    .diagnostics
+                    .into_iter()
+                    .map(AnyDiagnostic::Typing),
+            );
+            types.match_plans = matcher_result.plans;
+        }
 
         Ok(Driver {
             files: self.files,

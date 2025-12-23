@@ -2,7 +2,7 @@ use std::{error::Error, fmt::Display, rc::Rc};
 
 use derive_visitor::{DriveMut, VisitorMut};
 use generational_arena::Index;
-use indexmap::IndexMap;
+use indexmap::{IndexMap, IndexSet};
 use itertools::Itertools;
 use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::instrument;
@@ -13,7 +13,7 @@ use crate::{
         driver::Exports,
         module::{ModuleEnvironment, ModuleId},
     },
-    diagnostic::{AnyDiagnostic, Diagnostic},
+    diagnostic::{AnyDiagnostic, Diagnostic, Severity},
     label::Label,
     name::Name,
     name_resolution::{
@@ -143,7 +143,7 @@ pub type ScopeId = Index;
 )]
 pub struct NameResolver {
     pub symbols: Symbols,
-    diagnostics: Vec<Diagnostic<NameResolverError>>,
+    diagnostics: IndexSet<Diagnostic<NameResolverError>>,
 
     pub phase: ResolvedNames,
 
@@ -424,8 +424,11 @@ impl NameResolver {
     }
 
     pub(super) fn diagnostic(&mut self, id: NodeID, err: NameResolverError) {
-        self.diagnostics
-            .push(Diagnostic::<NameResolverError> { kind: err, id });
+        self.diagnostics.insert(Diagnostic::<NameResolverError> {
+            kind: err,
+            severity: Severity::Error,
+            id,
+        });
     }
 
     #[instrument(skip(self))]
@@ -552,9 +555,14 @@ impl NameResolver {
         match &mut pattern.kind {
             PatternKind::Bind(name) => {
                 *name = self.lookup(name, None).unwrap_or_else(|| {
-                    tracing::error!("Lookup failed for {name:?}");
+                    self.diagnostic(pattern.id, NameResolverError::Unresolved(name.clone()));
                     name.clone()
                 })
+            }
+            PatternKind::Or(subpatterns) => {
+                for pattern in subpatterns {
+                    self.enter_pattern(pattern);
+                }
             }
             PatternKind::Variant {
                 enum_name: Some(enum_name),

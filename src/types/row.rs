@@ -1,3 +1,5 @@
+use derive_visitor::{Drive, DriveMut};
+
 use crate::{
     compiling::module::ModuleId,
     label::Label,
@@ -9,11 +11,16 @@ use crate::{
     },
 };
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Drive, DriveMut)]
 pub enum Row {
-    Empty(TypeDefKind),
-    Param(RowParamId),
-    Extend { row: Box<Row>, label: Label, ty: Ty },
+    Empty(#[drive(skip)] TypeDefKind),
+    Param(#[drive(skip)] RowParamId),
+    Extend {
+        row: Box<Row>,
+        #[drive(skip)]
+        label: Label,
+        ty: Ty,
+    },
 }
 
 impl Row {

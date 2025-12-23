@@ -1,6 +1,6 @@
 use async_lsp::lsp_types::{Position, Range, SemanticToken, SemanticTokenType};
 
-use crate::highlighter::{self, Higlighter, HighlightToken};
+use crate::highlighter::{self, HighlightToken, Higlighter};
 
 pub const TOKEN_TYPES: &[SemanticTokenType] = &[
     SemanticTokenType::COMMENT,
@@ -24,8 +24,8 @@ pub const TOKEN_TYPES: &[SemanticTokenType] = &[
 ];
 
 impl highlighter::Kind {
-    fn encode(&self) -> SemanticTokenType {
-        match self {
+    fn encode(&self) -> Option<SemanticTokenType> {
+        let kind = match self {
             highlighter::Kind::NAMESPACE => SemanticTokenType::NAMESPACE,
             highlighter::Kind::TYPE => SemanticTokenType::TYPE,
             highlighter::Kind::CLASS => SemanticTokenType::CLASS,
@@ -49,7 +49,9 @@ impl highlighter::Kind {
             highlighter::Kind::REGEXP => SemanticTokenType::REGEXP,
             highlighter::Kind::OPERATOR => SemanticTokenType::OPERATOR,
             highlighter::Kind::DECORATOR => SemanticTokenType::DECORATOR,
-        }
+        };
+
+        Some(kind)
     }
 }
 
@@ -131,7 +133,7 @@ impl<'a> SemanticTokenCollector<'a> {
 
             let token_type_index = TOKEN_TYPES
                 .iter()
-                .position(|tt| tt == &token_type)
+                .position(|tt| Some(tt.clone()) == token_type)
                 .unwrap_or(0) as u32;
 
             encoded_tokens.push(SemanticToken {

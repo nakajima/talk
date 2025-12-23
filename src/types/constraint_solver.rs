@@ -1,5 +1,5 @@
 use crate::{
-    diagnostic::{AnyDiagnostic, Diagnostic},
+    diagnostic::{AnyDiagnostic, Diagnostic, Severity},
     name_resolution::symbol::Symbol,
     node_id::NodeID,
     types::{
@@ -91,6 +91,7 @@ impl<'a> ConstraintSolver<'a> {
                             id: constraint
                                 .diagnostic_node_id()
                                 .unwrap_or(NodeID::SYNTHESIZED),
+                            severity: Severity::Error,
                             kind: e,
                         });
 

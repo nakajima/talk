@@ -273,14 +273,12 @@ impl<'a> DeclDeclarer<'a> {
                     self.resolver.declare(name, bind_type, pattern.id)
                 }
             }
+            PatternKind::Or(patterns) => {
+                // Declare the binds in the first pattern, the following patterns will get resolved from those
+                self.declare_pattern(&mut patterns[0], bind_type);
+            }
             PatternKind::Bind(..) => {}
-            PatternKind::Variant {
-                enum_name, fields, ..
-            } => {
-                if let Some(enum_name) = enum_name {
-                    *enum_name = self.resolver.declare(enum_name, some!(Variant), pattern.id);
-                }
-
+            PatternKind::Variant { fields, .. } => {
                 for field in fields.iter_mut() {
                     self.declare_pattern(field, some!(PatternBindLocal));
                 }

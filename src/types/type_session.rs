@@ -20,6 +20,7 @@ use crate::{
         constraints::{constraint::Constraint, store::ConstraintStore},
         infer_row::{InferRow, RowMetaId, RowParamId},
         infer_ty::{InferTy, Level, Meta, MetaVarId, SkolemId, TypeParamId},
+        matcher::MatchPlan,
         predicate::Predicate,
         row::Row,
         scheme::{ForAll, Scheme},
@@ -101,6 +102,7 @@ pub struct Types {
     pub types_by_node: FxHashMap<NodeID, TypeEntry>,
     pub types_by_symbol: FxHashMap<Symbol, TypeEntry>,
     pub catalog: TypeCatalog<Ty>,
+    pub(crate) match_plans: FxHashMap<NodeID, MatchPlan>,
 }
 
 #[derive(Debug, Default)]
@@ -135,6 +137,7 @@ impl Types {
                 .map(|(k, v)| (k.import(module_id), v.import(module_id)))
                 .collect(),
             catalog: self.catalog.import_as(module_id),
+            match_plans: self.match_plans,
         }
     }
 }
@@ -319,6 +322,7 @@ impl TypeSession {
             catalog,
             types_by_node: entries,
             types_by_symbol,
+            match_plans: Default::default(),
         };
 
         Ok(types)

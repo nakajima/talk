@@ -3,7 +3,7 @@ pub mod tests {
     use std::assert_matches::assert_matches;
 
     use crate::{
-        any, any_block, any_body, any_expr, assert_eq_diff,
+        any, any_block, any_body, any_expr, any_pattern, assert_eq_diff,
         ast::{AST, Parsed},
         label::Label,
         lexer::Lexer,
@@ -1678,12 +1678,12 @@ pub mod tests {
     }
 
     #[test]
-    fn parses_wildcard() {
+    fn parses_wildcard_pattern() {
         assert_eq!(parse_pattern("_ ").kind, PatternKind::Wildcard);
     }
 
     #[test]
-    fn parses_literal_int() {
+    fn parses_literal_int_pattern() {
         assert_eq!(
             parse_pattern("123").kind,
             PatternKind::LiteralInt("123".into())
@@ -1691,7 +1691,7 @@ pub mod tests {
     }
 
     #[test]
-    fn parses_literal_float() {
+    fn parses_literal_float_pattern() {
         assert_eq!(
             parse_pattern("123.0").kind,
             PatternKind::LiteralFloat("123.0".into())
@@ -1699,7 +1699,7 @@ pub mod tests {
     }
 
     #[test]
-    fn parses_literal_bools() {
+    fn parses_literal_bool_patterns() {
         assert_eq!(parse_pattern("true").kind, PatternKind::LiteralTrue);
         assert_eq!(parse_pattern("false").kind, PatternKind::LiteralFalse);
     }
@@ -1724,6 +1724,17 @@ pub mod tests {
                 variant_name_span: Span::ANY,
                 fields: vec![]
             }
+        );
+    }
+
+    #[test]
+    fn parses_or_pattern() {
+        assert_eq!(
+            parse_pattern("true | false").kind,
+            PatternKind::Or(vec![
+                any_pattern!(PatternKind::LiteralTrue),
+                any_pattern!(PatternKind::LiteralFalse)
+            ])
         );
     }
 

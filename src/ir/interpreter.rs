@@ -573,7 +573,7 @@ impl Interpreter {
         }
     }
 
-    fn display(&mut self, val: Value) -> String {
+    pub fn display(&mut self, val: Value) -> String {
         match val {
             Value::Int(val) => format!("{val}"),
             Value::Reg(reg) => format!("%{reg}"),
@@ -1032,13 +1032,76 @@ pub mod tests {
             }
 
             match Response.ok(\"It's cool\") {
-                .ok(data) -> print(data),
-                .redirect(location) -> print(\"redirect \" + location),
-                .other(code) -> print(code)
+                .ok(data) -> data,
+                .redirect(location) -> \"redirect \" + location,
+                .other(_) -> \"other\"
             }
         ",
         );
 
         assert_eq!("It's cool", interpreter.display(val));
+    }
+
+    #[test]
+    fn interprets_unqualified_variant_arg() {
+        let val = interpret(
+            "
+            enum AB {
+                case a(Int), b(Int)
+            }
+
+            func callMe(param: AB) {
+                match param {
+                    .a(x) -> x,
+                    .b(x) -> x,
+                }
+            }
+
+            callMe(.a(123))
+        ",
+        );
+
+        assert_eq!(val, Value::Int(123));
+    }
+
+    #[test]
+    fn interprets_or_pattern_in_let() {
+        let result = interpret(
+            "
+          enum Wrapper {
+              case box(Int)
+              case bag(Int)
+          }
+
+          let .box(x) | .bag(x) = Wrapper.bag(123)
+          x
+          ",
+        );
+
+        assert_eq!(result, Value::Int(123));
+    }
+
+    #[test]
+    fn interprets_or_pattern_falls_through_to_next_arm() {
+        let result = interpret(
+            "
+          enum ABC {
+              case a
+              case b
+              case c
+          }
+
+          func toInt(x: ABC) -> Int {
+              match x {
+                  .a | .b -> 1,
+                  .c -> 2
+              }
+          }
+
+          toInt(.c)
+          ",
+        );
+
+        assert_eq!(result, Value::Int(2));
     }
 }

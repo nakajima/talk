@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use derive_visitor::{Drive, DriveMut};
 use ena::unify::UnifyKey;
 use indexmap::IndexMap;
 
@@ -56,16 +57,17 @@ impl From<u32> for RowParamId {
 pub type ClosedRow<T> = IndexMap<Label, T>;
 
 // TODO: Add Level to Var once we support open rows
-#[derive(PartialEq, Eq, Hash, Clone)]
+#[derive(PartialEq, Eq, Hash, Clone, Drive, DriveMut)]
 pub enum InferRow {
-    Empty(TypeDefKind),
+    Empty(#[drive(skip)] TypeDefKind),
     Extend {
         row: Box<InferRow>,
+        #[drive(skip)]
         label: Label,
         ty: InferTy,
     },
-    Param(RowParamId),
-    Var(RowMetaId),
+    Param(#[drive(skip)] RowParamId),
+    Var(#[drive(skip)] RowMetaId),
 }
 
 impl From<InferRow> for Row {

@@ -6,6 +6,6 @@ enum Maybe<T> {
 let maybe = Maybe.definitely(1234)
 
 match maybe {
-	.definitely(_) -> 22
+	.definitely(_) -> 22,
 	.nope -> 0
 }

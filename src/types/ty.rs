@@ -1,5 +1,6 @@
 use std::hash::Hash;
 
+use derive_visitor::{Drive, DriveMut};
 use indexmap::IndexSet;
 
 use crate::{
@@ -13,7 +14,7 @@ use crate::{
     },
 };
 
-pub trait SomeType: std::fmt::Debug + PartialEq + Clone + Eq + Hash {
+pub trait SomeType: std::fmt::Debug + PartialEq + Clone + Eq + Hash + Drive + DriveMut {
     type RowType: PartialEq + Clone + std::fmt::Debug;
     fn void() -> Self;
     fn contains_var(&self) -> bool;
@@ -31,11 +32,12 @@ impl SomeType for Ty {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Drive, DriveMut)]
 pub enum Ty {
-    Primitive(Symbol),
-    Param(TypeParamId),
+    Primitive(#[drive(skip)] Symbol),
+    Param(#[drive(skip)] TypeParamId),
     Constructor {
+        #[drive(skip)]
         name: Name,
         params: Vec<Ty>,
         ret: Box<Ty>,
@@ -43,10 +45,11 @@ pub enum Ty {
 
     Func(Box<Ty>, Box<Ty>),
     Tuple(Vec<Ty>),
-    Record(Option<Symbol>, Box<Row>),
+    Record(#[drive(skip)] Option<Symbol>, Box<Row>),
 
     // Nominal types (we look up their information from the TypeCatalog)
     Nominal {
+        #[drive(skip)]
         symbol: Symbol,
         type_args: Vec<Ty>,
     },
