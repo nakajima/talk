@@ -4,7 +4,8 @@ use talk::compiling::driver::DriverConfig;
 #[cfg(feature = "cli")]
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    use clap::{Args, Parser, Subcommand};
+    use clap::{Args, CommandFactory, Parser, Subcommand, ValueHint};
+    use clap_complete::{generate, Shell};
 
     /// Simple program to greet a person
     #[derive(Parser, Debug)]
@@ -18,23 +19,32 @@ async fn main() {
     enum Commands {
         // IR { filename: PathBuf },
         Parse {
+            #[arg(value_hint = ValueHint::FilePath)]
             filename: Option<String>,
         },
         Debug {
+            #[arg(value_hint = ValueHint::FilePath)]
             filename: Option<String>,
         },
         Html {
+            #[arg(value_hint = ValueHint::FilePath)]
             filename: Option<String>,
         },
         Check {
+            #[arg(value_hint = ValueHint::FilePath)]
             filenames: Vec<String>,
             #[arg(long)]
             json: bool,
         },
         Run {
+            #[arg(value_hint = ValueHint::FilePath)]
             filenames: Vec<String>,
         },
         // Run { filename: PathBuf },
+        Completions {
+            #[arg(value_enum)]
+            shell: Shell,
+        },
         Lsp(LspArgs),
     }
 
@@ -59,6 +69,11 @@ async fn main() {
         Commands::Lsp(_) => {
             talk::lsp::server::start().await;
         }
+        Commands::Completions { shell } => {
+            let mut cmd = Cli::command();
+            let bin_name = cmd.get_name().to_string();
+            generate(*shell, &mut cmd, bin_name, &mut std::io::stdout());
+        }
         Commands::Run { filenames } => {
             use talk::{
                 compiling::driver::Driver,
@@ -80,8 +95,7 @@ async fn main() {
 
             let mut interpreter =
                 Interpreter::new(module.program, Some(module.symbol_names), StdioIO {});
-            let result = interpreter.run();
-            println!("{result:?}");
+            _ = interpreter.run();
         }
         Commands::Check { filenames, json } => {
             use talk::{

@@ -24,6 +24,7 @@ color-eyre = "0.6"
 
 [dependencies]
 clap = { version = "4.5.39", features = ["derive"], optional = true }
+clap_complete = { version = "4.5.39", optional = true }
 lazy_static = "1.5.0"
 env_logger = "0.11.8"
 regex = "1"
@@ -61,7 +62,7 @@ ignore = { version = "0.4", optional = true }
 
 [features]
 default = ["cli"]
-cli = ["dep:clap", "dep:async-lsp", "dep:futures", "dep:tower", "dep:tokio", "dep:ignore"]
+cli = ["dep:clap", "dep:clap_complete", "dep:async-lsp", "dep:futures", "dep:tower", "dep:tokio", "dep:ignore"]
 wasm = []
 verify_ir = []
 

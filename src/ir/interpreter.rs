@@ -457,6 +457,7 @@ impl<IO: super::io::IO> Interpreter<IO> {
             IR::Instr(Instruction::_Print { val }) => {
                 let val = self.val(val.clone());
                 let val = self.display(val, false);
+                let val = format!("{val}\n");
                 let bytes = val.as_bytes();
                 self.io
                     .write_stdout(bytes)
