@@ -870,7 +870,7 @@ pub mod tests {
         print(\"sup\")
         ",
         );
-        assert_eq!("sup".as_bytes(), interpreter.io.stdout);
+        assert_eq!("sup\n".as_bytes(), interpreter.io.stdout);
     }
 
     #[test]
@@ -1299,5 +1299,45 @@ pub mod tests {
         );
 
         assert_eq!("[1, 2, 3]", &interpreter.display(value, false))
+    }
+
+    #[test]
+    fn interprets_protocol_example() {
+        let (_, interpreter) = interpret_with(
+            "
+        protocol Named {
+            func name() -> String
+        }
+        protocol Animal {
+            associated Food: Named
+
+            func feed(food: Food) {
+                print(\"mmm, i love to eat\" + food.name())
+            }
+        }
+
+        struct Cat {}
+        struct CatFood {
+            func name() { \"tasty cat food\" }
+        }
+        extend Cat: Animal {
+            typealias Food = CatFood
+        }
+
+        struct Dog {}
+        struct DogFood {
+            typealias Food = DogFood
+        }
+        extend Dog: Animal {}
+
+        Cat().feed(CatFood())
+        Dog().feed(DogFood())
+        ",
+        );
+
+        assert_eq!(
+            "mmm, i love to eat tasty cat food\nmmm,i love to eat tasty dog food",
+            String::from_utf8(interpreter.io.stdout).unwrap()
+        );
     }
 }
