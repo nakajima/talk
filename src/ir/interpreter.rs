@@ -345,10 +345,24 @@ impl<IO: super::io::IO> Interpreter<IO> {
                 self.call(func, arg_vals, dest);
             }
             IR::Instr(Instruction::Nominal {
-                dest, record, sym, ..
+                dest,
+                record,
+                sym,
+                meta,
+                ..
             }) => {
+                let record_id = if let Some(InstructionMeta::RecordId(id)) = meta
+                    .items
+                    .iter()
+                    .find(|meta| matches!(meta, InstructionMeta::RecordId(..)))
+                {
+                    *id
+                } else {
+                    RecordId::Nominal(sym)
+                };
+
                 let fields = record.items.iter().map(|v| self.val(v.clone())).collect();
-                self.write_register(&dest, Value::Record(RecordId::Nominal(sym), fields));
+                self.write_register(&dest, Value::Record(record_id, fields));
             }
             IR::Instr(Instruction::Record {
                 dest, record, meta, ..
@@ -442,7 +456,7 @@ impl<IO: super::io::IO> Interpreter<IO> {
             }
             IR::Instr(Instruction::_Print { val }) => {
                 let val = self.val(val.clone());
-                let val = self.display(val);
+                let val = self.display(val, false);
                 let bytes = val.as_bytes();
                 self.io
                     .write_stdout(bytes)
@@ -591,7 +605,7 @@ impl<IO: super::io::IO> Interpreter<IO> {
         }
     }
 
-    pub fn display(&self, val: Value) -> String {
+    pub fn display(&self, val: Value, quoted: bool) -> String {
         match val {
             Value::Int(val) => format!("{val}"),
             Value::Reg(reg) => format!("%{reg}"),
@@ -620,10 +634,42 @@ impl<IO: super::io::IO> Interpreter<IO> {
                     };
 
                     let s = str::from_utf8(&bytes).unwrap();
-                    return s.to_string();
+
+                    return if quoted {
+                        format!("\"{s}\"")
+                    } else {
+                        s.to_string()
+                    };
                 }
 
-                let values = values.into_iter().map(|v| self.display(v)).collect_vec();
+                if record_id == RecordId::Nominal(Symbol::Array) {
+                    return "Array(..) // formatting arrays is tricky for now. Need to add proper Show protocol.".to_string();
+                }
+
+                if let RecordId::Nominal(sym) = record_id {
+                    if matches!(sym, Symbol::Enum(..))
+                        && let Some(labels) = self.program.record_labels.get(&record_id)
+                        && let Some(formatted) = self.format_enum_variant(sym, labels, &values)
+                    {
+                        return formatted;
+                    }
+
+                    if let Some(labels) = self.program.record_labels.get(&record_id)
+                        && let Some(fields) = self.format_labeled_fields(labels, &values)
+                    {
+                        let name = self.sym_to_str(&sym);
+                        return self.wrap_record(Some(&name), &fields);
+                    }
+                } else if let Some(labels) = self.program.record_labels.get(&record_id)
+                    && let Some(fields) = self.format_labeled_fields(labels, &values)
+                {
+                    return self.wrap_record(None, &fields);
+                }
+
+                let values = values
+                    .into_iter()
+                    .map(|v| self.display(v, quoted))
+                    .collect_vec();
                 let name = if let RecordId::Nominal(sym) = record_id {
                     self.sym_to_str(&sym)
                 } else {
@@ -634,7 +680,7 @@ impl<IO: super::io::IO> Interpreter<IO> {
             }
             Value::Func(symbol) => format!("func {}()", self.sym_to_str(&symbol)),
             Value::Closure { func, env } => format!("func {}[{env}]()", self.sym_to_str(&func)),
-            Value::Void => "void".into(),
+            Value::Void => "()".into(),
             Value::RawPtr(val) => format!("rawptr({})", val.0),
             Value::Ref(reference) => match reference {
                 Reference::Func(sym) => format!("func {}()", self.sym_to_str(&sym)),
@@ -642,6 +688,59 @@ impl<IO: super::io::IO> Interpreter<IO> {
             },
             Value::Uninit => "UNINIT".into(),
             Value::RawBuffer(bytes) => format!("buf({bytes:?})"),
+        }
+    }
+
+    fn format_labeled_fields(&self, labels: &[String], values: &[Value]) -> Option<String> {
+        if labels.len() != values.len() {
+            return None;
+        }
+
+        let fields = labels
+            .iter()
+            .zip(values.iter())
+            .map(|(label, value)| format!("{label}: {}", self.display(value.clone(), true)))
+            .collect_vec();
+        Some(fields.join(", "))
+    }
+
+    fn wrap_record(&self, name: Option<&str>, fields: &str) -> String {
+        if fields.is_empty() {
+            return match name {
+                Some(name) => format!("{name} {{}}"),
+                None => "{}".to_string(),
+            };
+        }
+
+        match name {
+            Some(name) => format!("{name} {{ {fields} }}"),
+            None => format!("{{ {fields} }}"),
+        }
+    }
+
+    fn format_enum_variant(
+        &self,
+        sym: Symbol,
+        labels: &[String],
+        values: &[Value],
+    ) -> Option<String> {
+        let tag = match values.first()? {
+            Value::Int(tag) => *tag,
+            _ => return None,
+        };
+        let idx = usize::try_from(tag).ok()?;
+        let variant = labels.get(idx)?;
+        let args = values
+            .iter()
+            .skip(1)
+            .map(|value| self.display(value.clone(), true))
+            .collect_vec();
+        let name = self.sym_to_str(&sym);
+
+        if args.is_empty() {
+            Some(format!("{name}.{variant}"))
+        } else {
+            Some(format!("{name}.{variant}({})", args.join(", ")))
         }
     }
 
@@ -941,7 +1040,7 @@ pub mod tests {
     #[test]
     fn interprets_string_plus() {
         let (value, interpreter) = interpret_with("let a = \"hello \" + \"world\"; a");
-        let val = interpreter.display(value);
+        let val = interpreter.display(value, false);
         assert_eq!(val, format!("hello world"));
     }
 
@@ -961,7 +1060,7 @@ pub mod tests {
             ",
         );
 
-        assert_eq!(interpreter.display(value), "hey, i'm pat");
+        assert_eq!(interpreter.display(value, false), "hey, i'm pat");
     }
 
     #[test]
@@ -1075,7 +1174,7 @@ pub mod tests {
         ",
         );
 
-        assert_eq!("It's cool", interpreter.display(val));
+        assert_eq!("It's cool", interpreter.display(val, false));
     }
 
     #[test]
@@ -1149,7 +1248,10 @@ pub mod tests {
             ",
         );
 
-        assert_eq!("{ fizz: 123, buzz: true }", &interpreter.display(value))
+        assert_eq!(
+            "{ fizz: 123, buzz: true }",
+            &interpreter.display(value, false)
+        )
     }
 
     #[test]
@@ -1167,7 +1269,7 @@ pub mod tests {
 
         assert_eq!(
             "Person { fizz: 123, buzz: true }",
-            &interpreter.display(value)
+            &interpreter.display(value, false)
         )
     }
 
@@ -1183,6 +1285,18 @@ pub mod tests {
             ",
         );
 
-        assert_eq!("Foo.fizz(123)", &interpreter.display(value))
+        assert_eq!("Foo.fizz(123)", &interpreter.display(value, false))
+    }
+
+    #[test]
+    #[ignore = "formatting arrays is tricky, need to introduce a proper Show protocol"]
+    fn formats_array() {
+        let (value, interpreter) = interpret_with(
+            "
+            [1,2,3]
+            ",
+        );
+
+        assert_eq!("[1, 2, 3]", &interpreter.display(value, false))
     }
 }

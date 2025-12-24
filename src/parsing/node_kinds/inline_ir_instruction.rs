@@ -226,7 +226,7 @@ impl Display for Value {
             Value::Int(int) => write!(f, "{int}"),
             Value::Float(float) => write!(f, "{float}"),
             Value::Bool(bool) => write!(f, "{bool}"),
-            Value::Void => write!(f, "void"),
+            Value::Void => write!(f, "()"),
             Value::Uninit => write!(f, "uninit"),
             Value::Poison => write!(f, "poison"),
             Value::Record(sym, fields) => write!(f, "{sym:?} {{ {:?} }}", fields),

@@ -49,7 +49,7 @@ pub fn run_program(source: &str) -> Result<Object, JsValue> {
     let result = interpreter.run();
 
     let obj = Object::new();
-    let value = interpreter.display(result);
+    let value = interpreter.display(result, true);
     let highlighted_value = highlight_html(&value);
     set_str(&obj, "value", &value)?;
     set_str(&obj, "highlightedValue", &highlighted_value)?;

@@ -1429,7 +1429,11 @@ impl<'a> Lowerer<'a> {
                 Value::Int(items.len() as i64),
             ]
             .into(),
-            meta: vec![InstructionMeta::Source(expr.id)].into(),
+            meta: vec![
+                InstructionMeta::Source(expr.id),
+                InstructionMeta::RecordId(RecordId::Nominal(Symbol::Array)),
+            ]
+            .into(),
         });
 
         Ok((dest.into(), Ty::Array(item_ty)))

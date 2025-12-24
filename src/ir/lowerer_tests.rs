@@ -1227,7 +1227,11 @@ pub mod tests {
                             vec![IrTy::RawPtr, IrTy::Int, IrTy::Int]
                         ),
                         record: vec![Value::Reg(4), Value::Int(3), Value::Int(3)].into(),
-                        meta: meta(),
+                        meta: vec![
+                            InstructionMeta::Source(NodeID::ANY),
+                            InstructionMeta::RecordId(RecordId::Nominal(Symbol::Array)),
+                        ]
+                        .into(),
                     }
                 ],
                 terminator: Terminator::Ret {

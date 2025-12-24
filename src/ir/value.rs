@@ -17,7 +17,7 @@ pub enum Reference {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Addr(pub(super) usize);
 
-#[derive(Copy, Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum RecordId {
     Nominal(Symbol),
     Record(u32),
@@ -105,7 +105,7 @@ impl FromStr for Value {
             return Ok(Self::Bool(false));
         }
 
-        if s == "void" {
+        if s == "void" || s == "()" {
             return Ok(Self::Void);
         }
 
@@ -140,7 +140,7 @@ impl std::fmt::Display for Value {
             Value::Func(name) => write!(f, "{}()", name),
             Value::Bool(b) => write!(f, "{}", if *b { "true" } else { "false" }),
             Value::Closure { func, env } => write!(f, "{func}[{env}]()"),
-            Value::Void => write!(f, "void"),
+            Value::Void => write!(f, "()"),
             Value::Uninit => write!(f, "uninit"),
             Value::Poison => write!(f, "poison"),
             Value::RawPtr(val) => write!(f, "rawptr({})", val.0),

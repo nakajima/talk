@@ -7,7 +7,7 @@ use crate::{
     types::{row::Row, ty::Ty, type_session::TypeDefKind},
 };
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone, Hash)]
 pub enum IrTy {
     Int,
     Float,
@@ -56,7 +56,7 @@ impl FromStr for IrTy {
             return Ok(IrTy::Bool);
         }
 
-        if s == "void" {
+        if s == "void" || s == "()" {
             return Ok(IrTy::Void);
         }
 

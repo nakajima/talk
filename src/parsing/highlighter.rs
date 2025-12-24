@@ -416,7 +416,10 @@ impl<'a> Higlighter<'a> {
                 ExprKind::LiteralFalse => (),
                 ExprKind::LiteralString(_) => (),
                 ExprKind::Unary(.., box expr) => result.extend(self.tokens_from_expr(expr, ast)),
-                ExprKind::Binary(..) => (),
+                ExprKind::Binary(box lhs, _, box rhs) => {
+                    result.extend(self.tokens_from_expr(lhs, ast));
+                    result.extend(self.tokens_from_expr(rhs, ast));
+                }
                 ExprKind::Tuple(items) => {
                     result.extend(self.tokens_from_exprs(items, ast));
                 }
@@ -438,9 +441,16 @@ impl<'a> Higlighter<'a> {
                     }
                     result.push(self.make_span(Kind::METHOD, *span));
                 }
-                ExprKind::Func(..) => (),
-                ExprKind::Variable(..) => {
-                    result.push(self.make_span(Kind::VARIABLE, expr.span));
+                ExprKind::Func(func) => {
+                    result.extend(self.tokens_from_expr(&func.body, ast));
+                    result.extend(self.tokens_from_exprs(&func.params, ast));
+                }
+                ExprKind::Variable(name) => {
+                    if name.name_str() == "self" {
+                        result.push(self.make_span(Kind::TYPE, expr.span));
+                    } else {
+                        result.push(self.make_span(Kind::VARIABLE, expr.span));
+                    }
                 }
                 ExprKind::Constructor(..) => {
                     result.push(self.make_span(Kind::TYPE, expr.span));
@@ -482,7 +492,12 @@ impl<'a> Higlighter<'a> {
                 }
                 result.extend(self.tokens_from_expr(&arg.value, ast));
             }
-            Node::FuncSignature(..) => (),
+            Node::FuncSignature(signature) => {
+                result.extend(self.tokens_from_exprs(&signature.params, ast));
+                if let Some(box ret) = &signature.ret {
+                    result.extend(self.tokens_from_expr(ret, ast));
+                }
+            }
         };
 
         result
