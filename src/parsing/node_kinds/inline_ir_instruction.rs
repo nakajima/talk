@@ -2,7 +2,7 @@ use derive_visitor::{Drive, DriveMut};
 
 use crate::{
     impl_into_node,
-    name_resolution::symbol::Symbol,
+    ir::value::RecordId,
     node_id::NodeID,
     node_kinds::{
         expr::Expr,
@@ -29,7 +29,7 @@ pub enum Value {
     Void,
     Uninit,
     Poison,
-    Record(Option<Symbol>, Vec<Value>),
+    Record(RecordId, Vec<Value>),
     RawPtr(usize),
     RawBuffer(Vec<u8>),
     Bind(usize),

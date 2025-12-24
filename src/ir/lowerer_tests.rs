@@ -20,7 +20,7 @@ pub mod tests {
             program::Program,
             register::Register,
             terminator::Terminator,
-            value::{Addr, Value},
+            value::{Addr, RecordId, Value},
         },
         label::Label,
         name_resolution::symbol::{
@@ -270,6 +270,14 @@ pub mod tests {
         struct Foo { let bar: Int }
         Foo(bar: 123).bar
         ",
+        );
+
+        assert_eq!(
+            program
+                .record_labels
+                .get(&RecordId::Nominal(Symbol::Struct(StructId::from(1))))
+                .unwrap(),
+            &["bar".to_string()]
         );
 
         assert_eq_diff!(
@@ -1171,7 +1179,7 @@ pub mod tests {
     #[test]
     fn lowers_array_literal() {
         let program = lower("[1,2,3]");
-        assert_eq!(
+        assert_eq_diff!(
             program.functions.get(&Symbol::Main).unwrap().blocks,
             &[BasicBlock {
                 id: BasicBlockId(0),
@@ -1219,7 +1227,7 @@ pub mod tests {
                             vec![IrTy::RawPtr, IrTy::Int, IrTy::Int]
                         ),
                         record: vec![Value::Reg(4), Value::Int(3), Value::Int(3)].into(),
-                        meta: meta()
+                        meta: meta(),
                     }
                 ],
                 terminator: Terminator::Ret {

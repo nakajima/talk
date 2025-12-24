@@ -8,13 +8,13 @@ use crate::{
     ir::{
         basic_block::{BasicBlock, BasicBlockId, Phi},
         function::Function,
-        instruction::{CmpOperator, Instruction},
+        instruction::{CmpOperator, Instruction, InstructionMeta},
         ir_ty::IrTy,
         list::List,
         program::Program,
         register::Register,
         terminator::Terminator,
-        value::{Addr, Reference, Value},
+        value::{Addr, RecordId, Reference, Value},
     },
     label::Label,
     name_resolution::symbol::{Symbol, set_symbol_names},
@@ -339,7 +339,7 @@ impl<IO: super::io::IO> Interpreter<IO> {
                 if !env.items.is_empty() {
                     let env_vals: Vec<Value> =
                         env.items.iter().map(|v| self.val(v.clone())).collect();
-                    arg_vals.insert(0, Value::Record(None, env_vals));
+                    arg_vals.insert(0, Value::Record(RecordId::Anon, env_vals));
                 }
 
                 self.call(func, arg_vals, dest);
@@ -348,11 +348,23 @@ impl<IO: super::io::IO> Interpreter<IO> {
                 dest, record, sym, ..
             }) => {
                 let fields = record.items.iter().map(|v| self.val(v.clone())).collect();
-                self.write_register(&dest, Value::Record(Some(sym), fields));
+                self.write_register(&dest, Value::Record(RecordId::Nominal(sym), fields));
             }
-            IR::Instr(Instruction::Record { dest, record, .. }) => {
+            IR::Instr(Instruction::Record {
+                dest, record, meta, ..
+            }) => {
+                let record_id = if let Some(InstructionMeta::RecordId(id)) = meta
+                    .items
+                    .iter()
+                    .find(|meta| matches!(meta, InstructionMeta::RecordId(..)))
+                {
+                    *id
+                } else {
+                    RecordId::Anon
+                };
+
                 let fields = record.items.iter().map(|v| self.val(v.clone())).collect();
-                self.write_register(&dest, Value::Record(None, fields));
+                self.write_register(&dest, Value::Record(record_id, fields));
             }
             IR::Instr(Instruction::GetField {
                 dest,
@@ -587,8 +599,8 @@ impl<IO: super::io::IO> Interpreter<IO> {
             Value::Poison => "<POISON>".to_string(),
             Value::Float(val) => format!("{val}"),
             Value::Bool(val) => format!("{val}"),
-            Value::Record(sym, values) => {
-                if sym == Some(Symbol::String) {
+            Value::Record(record_id, values) => {
+                if record_id == RecordId::Nominal(Symbol::String) {
                     let Value::RawPtr(addr) = &values[0] else {
                         unreachable!()
                     };
@@ -612,7 +624,7 @@ impl<IO: super::io::IO> Interpreter<IO> {
                 }
 
                 let values = values.into_iter().map(|v| self.display(v)).collect_vec();
-                let name = if let Some(sym) = sym {
+                let name = if let RecordId::Nominal(sym) = record_id {
                     self.sym_to_str(&sym)
                 } else {
                     "".to_string()
@@ -1019,7 +1031,7 @@ pub mod tests {
             (a(), b())
             "
             ),
-            Value::Record(None, vec![Value::Int(3), Value::Int(1)])
+            Value::Record(RecordId::Anon, vec![Value::Int(3), Value::Int(1)])
         )
     }
 

@@ -134,7 +134,7 @@ impl std::fmt::Display for IrTy {
                 )
             }
             IrTy::Buffer(len) => write!(f, "buf({len})"),
-            IrTy::Void => write!(f, "void"),
+            IrTy::Void => write!(f, "()"),
         }
     }
 }

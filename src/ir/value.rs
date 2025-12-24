@@ -17,6 +17,13 @@ pub enum Reference {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Addr(pub(super) usize);
 
+#[derive(Copy, Debug, Clone, PartialEq, Eq, Hash)]
+pub enum RecordId {
+    Nominal(Symbol),
+    Record(u32),
+    Anon,
+}
+
 #[derive(Default, Debug, Clone, PartialEq)]
 pub enum Value {
     Reg(u32),
@@ -33,7 +40,7 @@ pub enum Value {
         depth: usize,
         reg: Register,
     },
-    Record(Option<Symbol>, Vec<Value>),
+    Record(RecordId, Vec<Value>),
     RawPtr(Addr),
     RawBuffer(Vec<u8>),
     Void,
@@ -127,16 +134,7 @@ impl std::fmt::Display for Value {
             Value::Ref(reference) => write!(f, "&{reference:?}"),
             Value::Reg(reg) => write!(f, "%{reg}"),
             Value::RawBuffer(v) => write!(f, "[{v:?}]"),
-            Value::Record(sym, fields) => write!(
-                f,
-                "{}{{ {:?} }}",
-                if let Some(sym) = sym {
-                    format!("{sym} ")
-                } else {
-                    "".to_string()
-                },
-                fields
-            ),
+            Value::Record(sym, fields) => write!(f, "{sym:?}{{ {:?} }}", fields),
             Value::Int(i) => write!(f, "{i}"),
             Value::Float(i) => write!(f, "{i}"),
             Value::Func(name) => write!(f, "{}()", name),

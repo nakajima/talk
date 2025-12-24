@@ -7,7 +7,7 @@ use crate::ir::function::Function;
 use crate::ir::instruction::CmpOperator;
 use crate::ir::ir_ty::IrTy;
 use crate::ir::monomorphizer::uncurry_function;
-use crate::ir::value::{Addr, Reference};
+use crate::ir::value::{Addr, RecordId, Reference};
 use crate::label::Label;
 use crate::name_resolution::name_resolver::ResolvedNames;
 use crate::name_resolution::symbol::Symbols;
@@ -260,6 +260,8 @@ pub struct Lowerer<'a> {
     pub(super) specializations: IndexMap<Symbol, Vec<Specialization>>,
     specialization_intern: FxHashMap<Symbol, FxHashMap<SpecializationKey, Symbol>>,
     static_memory: StaticMemory,
+    record_labels: FxHashMap<RecordId, Vec<String>>,
+    next_record_id: u32,
 }
 
 #[allow(clippy::panic)]
@@ -283,6 +285,8 @@ impl<'a> Lowerer<'a> {
             static_memory: Default::default(),
             config,
             resolved_names,
+            next_record_id: 0,
+            record_labels: Default::default(),
         }
     }
 
@@ -322,12 +326,14 @@ impl<'a> Lowerer<'a> {
         }
 
         let static_memory = std::mem::take(&mut self.static_memory);
+        let record_labels = std::mem::take(&mut self.record_labels);
         let mut monomorphizer = Monomorphizer::new(self);
 
         Ok(Program {
             functions: monomorphizer.monomorphize(),
             polyfunctions: monomorphizer.functions,
             static_memory,
+            record_labels,
         })
     }
 
@@ -462,6 +468,7 @@ impl<'a> Lowerer<'a> {
                 symbol,
                 initializers,
                 instance_methods,
+                properties,
                 ..
             } => {
                 for initializer in initializers.values() {
@@ -471,6 +478,11 @@ impl<'a> Lowerer<'a> {
                 for method in instance_methods.values() {
                     self.lower_method(method, instantiations)?;
                 }
+
+                self.record_labels.insert(
+                    RecordId::Nominal(*symbol),
+                    properties.keys().map(|key| key.to_string()).collect(),
+                );
             }
             TypedDeclKind::Extend {
                 instance_methods, ..
@@ -480,11 +492,19 @@ impl<'a> Lowerer<'a> {
                 }
             }
             TypedDeclKind::EnumDef {
-                instance_methods, ..
+                symbol,
+                instance_methods,
+                variants,
+                ..
             } => {
                 for method in instance_methods.values() {
                     self.lower_method(method, instantiations)?;
                 }
+
+                self.record_labels.insert(
+                    RecordId::Nominal(*symbol),
+                    variants.keys().map(|key| key.to_string()).collect(),
+                );
             }
             TypedDeclKind::ProtocolDef {
                 instance_methods, ..
@@ -1203,6 +1223,7 @@ impl<'a> Lowerer<'a> {
                     .map(|a| self.parsed_value(a, &binds))
                     .collect_vec()
                     .into();
+
                 self.push_instr(Instruction::Record {
                     dest,
                     ty: ty.clone(),
@@ -1946,10 +1967,16 @@ impl<'a> Lowerer<'a> {
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
         let mut field_vals_by_label: FxHashMap<Label, (Value, Ty)> = FxHashMap::default();
+        let mut field_labels = vec![];
         for field in fields.iter() {
             let (val, ty) = self.lower_expr(&field.value, Bind::Fresh, instantiations)?;
             field_vals_by_label.insert(field.name.clone(), (val, ty));
+            field_labels.push(field.name.to_string());
         }
+
+        let record_id = RecordId::Record(self.next_record_id);
+        self.next_record_id += 1;
+        self.record_labels.insert(record_id, field_labels);
 
         let dest = self.ret(bind);
 
@@ -2017,7 +2044,11 @@ impl<'a> Lowerer<'a> {
             dest,
             ty: ty.clone(),
             record: record_vals.into(),
-            meta: vec![InstructionMeta::Source(expr.id)].into(),
+            meta: vec![
+                InstructionMeta::Source(expr.id),
+                InstructionMeta::RecordId(record_id),
+            ]
+            .into(),
         });
 
         Ok((dest.into(), ty))
@@ -3178,12 +3209,10 @@ impl<'a> Lowerer<'a> {
             crate::node_kinds::inline_ir_instruction::Value::Void => Value::Void,
             crate::node_kinds::inline_ir_instruction::Value::Uninit => Value::Uninit,
             crate::node_kinds::inline_ir_instruction::Value::Poison => Value::Poison,
-            crate::node_kinds::inline_ir_instruction::Value::Record(symbol, values) => {
-                Value::Record(
-                    *symbol,
-                    values.iter().map(|v| self.parsed_value(v, binds)).collect(),
-                )
-            }
+            crate::node_kinds::inline_ir_instruction::Value::Record(id, values) => Value::Record(
+                *id,
+                values.iter().map(|v| self.parsed_value(v, binds)).collect(),
+            ),
             crate::node_kinds::inline_ir_instruction::Value::RawPtr(v) => Value::RawPtr(Addr(*v)),
             crate::node_kinds::inline_ir_instruction::Value::RawBuffer(items) => {
                 Value::RawBuffer(items.to_vec())
