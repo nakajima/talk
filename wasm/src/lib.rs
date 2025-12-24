@@ -63,6 +63,12 @@ pub fn run_program(source: &str) -> Result<Object, JsValue> {
 }
 
 #[wasm_bindgen]
+pub fn show_ir(source: &str) -> Result<String, JsValue> {
+    let driver = compile_source(source)?;
+    Ok(format!("{}", driver.module("WASM").program))
+}
+
+#[wasm_bindgen]
 pub fn highlight(source: &str) -> Result<String, JsValue> {
     init();
     Ok(highlight_html(source))
