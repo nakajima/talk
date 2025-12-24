@@ -159,7 +159,7 @@ pub struct Memory {
     pub mem: Vec<u8>,
 }
 
-pub struct Interpreter {
+pub struct Interpreter<IO: super::io::IO> {
     program: Program,
     symbol_names: Option<FxHashMap<Symbol, String>>,
     frames: Vec<Frame>,
@@ -167,13 +167,14 @@ pub struct Interpreter {
     main_result: Option<Value>,
     memory: Memory,
     heap_start: usize,
+    pub io: IO,
 }
 
 #[allow(clippy::unwrap_used)]
 #[allow(clippy::expect_used)]
 #[allow(clippy::panic)]
-impl Interpreter {
-    pub fn new(program: Program, symbol_names: Option<FxHashMap<Symbol, String>>) -> Self {
+impl<IO: super::io::IO> Interpreter<IO> {
+    pub fn new(program: Program, symbol_names: Option<FxHashMap<Symbol, String>>, io: IO) -> Self {
         let heap_start = program.static_memory.data.len();
 
         Self {
@@ -184,6 +185,7 @@ impl Interpreter {
             memory: Default::default(),
             heap_start,
             symbol_names,
+            io,
         }
     }
 
@@ -428,7 +430,11 @@ impl Interpreter {
             }
             IR::Instr(Instruction::_Print { val }) => {
                 let val = self.val(val.clone());
-                println!("{}", self.display(val));
+                let val = self.display(val);
+                let bytes = val.as_bytes();
+                self.io
+                    .write_stdout(bytes)
+                    .expect("unable to write to stdout");
             }
             IR::Instr(Instruction::Alloc { dest, ty, count }) => {
                 let count = match self.val(count) {
@@ -573,7 +579,7 @@ impl Interpreter {
         }
     }
 
-    pub fn display(&mut self, val: Value) -> String {
+    pub fn display(&self, val: Value) -> String {
         match val {
             Value::Int(val) => format!("{val}"),
             Value::Reg(reg) => format!("%{reg}"),
@@ -714,20 +720,28 @@ impl Interpreter {
 
 #[cfg(test)]
 pub mod tests {
-    use crate::ir::lowerer_tests::tests::lower_module;
+    use crate::ir::{io::CaptureIO, lowerer_tests::tests::lower_module};
 
     use super::*;
 
-    pub fn interpret_with(input: &str) -> (Value, Interpreter) {
+    pub fn interpret_with(input: &str) -> (Value, Interpreter<CaptureIO>) {
         let module = lower_module(input);
-        let mut interpreter = Interpreter::new(module.program, Some(module.symbol_names));
+        let mut interpreter = Interpreter::new(
+            module.program,
+            Some(module.symbol_names),
+            CaptureIO::default(),
+        );
 
         (interpreter.run(), interpreter)
     }
 
     pub fn interpret(input: &str) -> Value {
         let module = lower_module(input);
-        let mut interpreter = Interpreter::new(module.program, Some(module.symbol_names));
+        let mut interpreter = Interpreter::new(
+            module.program,
+            Some(module.symbol_names),
+            CaptureIO::default(),
+        );
 
         interpreter.run()
     }
@@ -735,6 +749,16 @@ pub mod tests {
     #[test]
     pub fn empty_is_void() {
         assert_eq!(interpret(""), Value::Void);
+    }
+
+    #[test]
+    pub fn prints() {
+        let (_, interpreter) = interpret_with(
+            "
+        print(\"sup\")
+        ",
+        );
+        assert_eq!("sup".as_bytes(), interpreter.io.stdout);
     }
 
     #[test]
@@ -904,14 +928,14 @@ pub mod tests {
 
     #[test]
     fn interprets_string_plus() {
-        let (value, mut interpreter) = interpret_with("let a = \"hello \" + \"world\"; a");
+        let (value, interpreter) = interpret_with("let a = \"hello \" + \"world\"; a");
         let val = interpreter.display(value);
         assert_eq!(val, format!("hello world"));
     }
 
     #[test]
     fn interprets_greet_regression() {
-        let (value, mut interpreter) = interpret_with(
+        let (value, interpreter) = interpret_with(
             "
             struct Person {
                 let name: String
@@ -1025,7 +1049,7 @@ pub mod tests {
 
     #[test]
     fn interprets_simple_match() {
-        let (val, mut interpreter) = interpret_with(
+        let (val, interpreter) = interpret_with(
             "
         enum Response {
                 case ok(String), redirect(String), other(Int)
@@ -1103,5 +1127,50 @@ pub mod tests {
         );
 
         assert_eq!(result, Value::Int(2));
+    }
+
+    #[test]
+    fn formats_record() {
+        let (value, interpreter) = interpret_with(
+            "
+            { fizz: 123, buzz: true }
+            ",
+        );
+
+        assert_eq!("{ fizz: 123, buzz: true }", &interpreter.display(value))
+    }
+
+    #[test]
+    fn formats_struct_instance() {
+        let (value, interpreter) = interpret_with(
+            "
+            struct Person {
+                let fizz: Int
+                let buzz: Bool
+            }
+
+            Person(fizz: 123, buzz: true)
+            ",
+        );
+
+        assert_eq!(
+            "Person { fizz: 123, buzz: true }",
+            &interpreter.display(value)
+        )
+    }
+
+    #[test]
+    fn formats_enum_variant() {
+        let (value, interpreter) = interpret_with(
+            "
+            enum Foo {
+                case fizz(Int), buzz(Bool)
+            }
+
+            Foo.fizz(123)
+            ",
+        );
+
+        assert_eq!("Foo.fizz(123)", &interpreter.display(value))
     }
 }

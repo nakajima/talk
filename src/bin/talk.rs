@@ -60,7 +60,10 @@ async fn main() {
             talk::lsp::server::start().await;
         }
         Commands::Run { filenames } => {
-            use talk::{compiling::driver::Driver, ir::interpreter::Interpreter};
+            use talk::{
+                compiling::driver::Driver,
+                ir::{interpreter::Interpreter, io::StdioIO},
+            };
 
             let sources = sources_for_filenames(filenames);
             let driver = Driver::new(sources, DriverConfig::new("talk").executable());
@@ -75,7 +78,8 @@ async fn main() {
                 .unwrap()
                 .module("talkin");
 
-            let mut interpreter = Interpreter::new(module.program, Some(module.symbol_names));
+            let mut interpreter =
+                Interpreter::new(module.program, Some(module.symbol_names), StdioIO {});
             let result = interpreter.run();
             println!("{result:?}");
         }
