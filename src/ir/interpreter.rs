@@ -1305,42 +1305,60 @@ pub mod tests {
     fn interprets_protocol_example() {
         let (_, interpreter) = interpret_with(
             "
-        protocol Named {
-            func name() -> String
-        }
-        protocol Animal {
-            associated Food: Named
+// Ok so we've got some different pet foods here
+struct CatFood {}
+struct DogFood {}
 
-            func feed(food: Food) {
-                print(\"mmm, i love to eat \" + food.name())
-            }
-        }
+// And we've got a protocol `Named` that just knows how
+// to get names of things.
+protocol Named {
+    func name() -> String
+}
 
-        struct Cat {}
-        struct CatFood {}
-        extend CatFood: Named {
-            func name() { \"tasty cat food\" }
-        }
-        extend Cat: Animal {
-            typealias Food = CatFood
-        }
+// Let's make the pet foods conform to Named
+extend CatFood: Named {
+    func name() { \"tasty cat food\" }
+}
 
-        struct Dog {}
-        struct DogFood {}
-        extend DogFood: Named {
-            func name() { \"tasty dog food\" }
-        }
-        extend Dog: Animal {
-            typealias Food = DogFood
-        }
+extend DogFood: Named {
+    func name() { \"tasty dog food\" }
+}
 
-        Cat().feed(CatFood())
-        Dog().feed(DogFood())
+// So far so good, right? Ok now let's add a Pet protocol.
+
+protocol Pet {
+    // Pets eat different foods, who knew??
+    associated Food: Named
+
+    func favoriteFood() -> Food
+
+    // See what the pet does when daylight saves time changes
+    func handleDSTChange() {
+        print(\"what the heck where is my \" + self.favoriteFood().name())
+    }
+ }
+
+struct Cat {}
+extend Cat: Pet {
+    func favoriteFood() {
+        CatFood()
+    }
+}
+
+struct Dog {}
+extend Dog: Pet {
+    func favoriteFood() {
+        DogFood()
+    }
+}
+
+Cat().handleDSTChange()
+Dog().handleDSTChange()
         ",
         );
 
         assert_eq!(
-            "mmm, i love to eat tasty cat food\nmmm, i love to eat tasty dog food\n",
+            "what the heck where is my tasty cat food\nwhat the heck where is my tasty dog food\n",
             String::from_utf8(interpreter.io.stdout).unwrap()
         );
     }
