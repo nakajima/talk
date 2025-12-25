@@ -1312,12 +1312,13 @@ pub mod tests {
             associated Food: Named
 
             func feed(food: Food) {
-                print(\"mmm, i love to eat\" + food.name())
+                print(\"mmm, i love to eat \" + food.name())
             }
         }
 
         struct Cat {}
-        struct CatFood {
+        struct CatFood {}
+        extend CatFood: Named {
             func name() { \"tasty cat food\" }
         }
         extend Cat: Animal {
@@ -1325,10 +1326,13 @@ pub mod tests {
         }
 
         struct Dog {}
-        struct DogFood {
+        struct DogFood {}
+        extend DogFood: Named {
+            func name() { \"tasty dog food\" }
+        }
+        extend Dog: Animal {
             typealias Food = DogFood
         }
-        extend Dog: Animal {}
 
         Cat().feed(CatFood())
         Dog().feed(DogFood())
@@ -1336,7 +1340,7 @@ pub mod tests {
         );
 
         assert_eq!(
-            "mmm, i love to eat tasty cat food\nmmm,i love to eat tasty dog food",
+            "mmm, i love to eat tasty cat food\nmmm, i love to eat tasty dog food\n",
             String::from_utf8(interpreter.io.stdout).unwrap()
         );
     }

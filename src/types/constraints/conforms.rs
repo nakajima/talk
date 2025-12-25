@@ -312,6 +312,17 @@ impl Conforms {
                 continue;
             };
 
+            // For default methods (InstanceMethod), use the original symbol directly.
+            if matches!(sym, Symbol::InstanceMethod(..)) {
+                session
+                    .type_catalog
+                    .instance_methods
+                    .entry(*conforming_ty_sym)
+                    .or_default()
+                    .insert(label, sym);
+                continue;
+            }
+
             let specialized_entry = entry.substitute(&substitutions);
             let specialized_symbol = session
                 .symbols
