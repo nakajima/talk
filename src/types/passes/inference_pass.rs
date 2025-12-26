@@ -69,6 +69,18 @@ type TypedRet<T> = Result<T, TypeError>;
 #[must_use]
 struct ReturnToken {}
 
+#[derive(Clone, Debug, Default)]
+struct ProtocolMethodSchemeAdditions {
+    assoc_params: IndexSet<TypeParamId>,
+    predicates: IndexSet<Predicate<InferTy>>,
+}
+
+impl ProtocolMethodSchemeAdditions {
+    fn is_empty(&self) -> bool {
+        self.assoc_params.is_empty() && self.predicates.is_empty()
+    }
+}
+
 pub type PendingTypeInstances =
     FxHashMap<MetaVarId, (NodeID, Span, Level, Symbol, Vec<(InferTy, NodeID)>)>;
 
@@ -82,6 +94,7 @@ pub struct InferencePass<'a> {
     nominal_placeholders: FxHashMap<Symbol, (MetaVarId, Level)>,
     or_binders: Vec<FxHashMap<Symbol, InferTy>>,
     diagnostics: IndexSet<AnyDiagnostic>,
+    protocol_method_scheme_additions: FxHashMap<Symbol, ProtocolMethodSchemeAdditions>,
     root_decls: Vec<TypedDecl<InferTy>>,
     root_stmts: Vec<TypedStmt<InferTy>>,
 }
@@ -102,6 +115,7 @@ impl<'a> InferencePass<'a> {
             diagnostics: Default::default(),
             nominal_placeholders: Default::default(),
             or_binders: Default::default(),
+            protocol_method_scheme_additions: Default::default(),
             root_decls: Default::default(),
             root_stmts: Default::default(),
         };
@@ -524,26 +538,62 @@ impl<'a> InferencePass<'a> {
         // First pass: collect associated type conformance predicates
         // These need to be available when processing default method implementations
         let mut assoc_type_conformances: Vec<Predicate<InferTy>> = vec![];
+        let mut assoc_type_params: IndexSet<TypeParamId> = IndexSet::default();
+        let mut assoc_type_predicates: IndexSet<Predicate<InferTy>> = IndexSet::default();
         for decl in &body.decls {
             if let DeclKind::Associated { generic } = &decl.kind {
                 if let Ok(ty) =
                     self.visit_associated_type(generic, protocol_self_id, protocol_symbol, context)
                 {
-                    associated_types.insert(generic.name.name_str().into(), ty);
+                    let label: Label = generic.name.name_str().into();
+                    let assoc_param_id = match &ty {
+                        InferTy::Param(param_id) => {
+                            assoc_type_params.insert(*param_id);
+                            Some(*param_id)
+                        }
+                        _ => None,
+                    };
+
+                    associated_types.insert(label.clone(), ty.clone());
+
+                    if let Some(assoc_param) = assoc_param_id {
+                        assoc_type_predicates.insert(Predicate::Projection {
+                            base: InferTy::Param(protocol_self_id),
+                            label: label.clone(),
+                            returns: InferTy::Param(assoc_param),
+                            protocol_id: Some(protocol_id),
+                        });
+                    }
 
                     // Collect any conformance predicates for this associated type
                     for conformance in generic.conformances.iter() {
                         if let Ok(Symbol::Protocol(conforms_to_id)) = conformance.symbol() {
+                            let assoc_param = assoc_param_id.or_else(|| {
+                                let Ok(generic_sym) = generic.name.symbol() else {
+                                    return None;
+                                };
+                                let Some(entry) = self.session.lookup(&generic_sym) else {
+                                    return None;
+                                };
+                                entry.foralls().iter().find_map(|fa| {
+                                    if let ForAll::Ty(param_id) = fa
+                                        && *param_id != protocol_self_id
+                                    {
+                                        Some(*param_id)
+                                    } else {
+                                        None
+                                    }
+                                })
+                            });
+
                             // Get the type param ID for this associated type
-                            if let Ok(generic_sym) = generic.name.symbol()
-                                && let Some(entry) = self.session.lookup(&generic_sym)
-                                && let Some(ForAll::Ty(assoc_param)) = entry
-                                    .foralls()
-                                    .iter()
-                                    .find(|fa| matches!(fa, ForAll::Ty(p) if *p != protocol_self_id))
-                            {
+                            if let Some(assoc_param) = assoc_param {
                                 assoc_type_conformances.push(Predicate::Conforms {
-                                    param: *assoc_param,
+                                    param: assoc_param,
+                                    protocol_id: conforms_to_id,
+                                });
+                                assoc_type_predicates.insert(Predicate::Conforms {
+                                    param: assoc_param,
                                     protocol_id: conforms_to_id,
                                 });
                             }
@@ -552,6 +602,11 @@ impl<'a> InferencePass<'a> {
                 }
             }
         }
+
+        let protocol_method_scheme_additions = ProtocolMethodSchemeAdditions {
+            assoc_params: assoc_type_params.clone(),
+            predicates: assoc_type_predicates.clone(),
+        };
 
         // Second pass: process methods and method requirements
         for decl in &body.decls {
@@ -596,11 +651,19 @@ impl<'a> InferencePass<'a> {
                         predicates,
                         ty: func_ty.clone(),
                     });
+                    let entry = self.apply_protocol_method_scheme_additions(
+                        entry,
+                        &protocol_method_scheme_additions,
+                    );
 
                     self.session.promote(func_sym, entry, &mut self.constraints);
 
                     instance_methods.insert(func.name.name_str().into(), typed_func.clone());
 
+                    self.register_protocol_method_scheme_additions(
+                        func_sym,
+                        &protocol_method_scheme_additions,
+                    );
                     binders.insert(func_sym, func_ty);
                 }
                 DeclKind::MethodRequirement(func_signature)
@@ -611,12 +674,21 @@ impl<'a> InferencePass<'a> {
                         func_signature,
                         context,
                     )?;
-                    binders.insert(
-                        func_signature
-                            .name
-                            .symbol()
-                            .map_err(|_| TypeError::NameNotResolved(func_signature.name.clone()))?,
-                        ty.clone(),
+                    let func_sym = func_signature
+                        .name
+                        .symbol()
+                        .map_err(|_| TypeError::NameNotResolved(func_signature.name.clone()))?;
+                    if let Some(entry) = self.session.lookup(&func_sym) {
+                        let entry = self.apply_protocol_method_scheme_additions(
+                            entry,
+                            &protocol_method_scheme_additions,
+                        );
+                        self.session.promote(func_sym, entry, &mut self.constraints);
+                    }
+                    binders.insert(func_sym, ty.clone());
+                    self.register_protocol_method_scheme_additions(
+                        func_sym,
+                        &protocol_method_scheme_additions,
                     );
                     instance_method_requirements.insert(func_signature.name.name_str().into(), ty);
                 }
@@ -828,6 +900,55 @@ impl<'a> InferencePass<'a> {
         (decls, stmts)
     }
 
+    fn register_protocol_method_scheme_additions(
+        &mut self,
+        sym: Symbol,
+        extras: &ProtocolMethodSchemeAdditions,
+    ) {
+        if extras.is_empty() {
+            return;
+        }
+
+        self.protocol_method_scheme_additions.insert(sym, extras.clone());
+    }
+
+    fn apply_protocol_method_scheme_additions(
+        &self,
+        entry: EnvEntry<InferTy>,
+        extras: &ProtocolMethodSchemeAdditions,
+    ) -> EnvEntry<InferTy> {
+        if extras.is_empty() {
+            return entry;
+        }
+
+        match entry {
+            EnvEntry::Mono(ty) => {
+                let mut foralls: IndexSet<ForAll> = ty.collect_foralls().into_iter().collect();
+                for param in &extras.assoc_params {
+                    foralls.insert(ForAll::Ty(*param));
+                }
+
+                EnvEntry::Scheme(Scheme {
+                    foralls,
+                    predicates: extras.predicates.iter().cloned().collect(),
+                    ty,
+                })
+            }
+            EnvEntry::Scheme(mut scheme) => {
+                for param in &extras.assoc_params {
+                    scheme.foralls.insert(ForAll::Ty(*param));
+                }
+
+                let mut predicates: IndexSet<Predicate<InferTy>> =
+                    scheme.predicates.into_iter().collect();
+                predicates.extend(extras.predicates.iter().cloned());
+                scheme.predicates = predicates.into_iter().collect();
+
+                EnvEntry::Scheme(scheme)
+            }
+        }
+    }
+
     fn solve(
         &mut self,
         context: &mut SolveContext,
@@ -856,6 +977,11 @@ impl<'a> InferencePass<'a> {
             let entry = self
                 .session
                 .generalize(ty, context, &generalizable, &mut self.constraints);
+            let entry = if let Some(extras) = self.protocol_method_scheme_additions.get(binder) {
+                self.apply_protocol_method_scheme_additions(entry, extras)
+            } else {
+                entry
+            };
             self.session.promote(*binder, entry, &mut self.constraints);
         }
 
@@ -2824,22 +2950,16 @@ impl<'a> InferencePass<'a> {
                     Symbol::AssociatedType(..),
                 ) = (context.kind(), sym)
                 {
-                    // Fresh variable for the associated type's value in this position.
-                    let result = self.session.new_ty_meta_var(context.level());
-
-                    // Link the meta var to the associated type's param for member resolution
-                    if let Some(entry) = self.session.lookup(&sym) {
-                        if let Some(ForAll::Ty(assoc_param)) = entry.foralls().iter().find(|fa| {
+                    if let Some(entry) = self.session.lookup(&sym)
+                        && let Some(ForAll::Ty(assoc_param)) = entry.foralls().iter().find(|fa| {
                             matches!(fa, ForAll::Ty(p) if *p != protocol_self)
-                        }) {
-                            if let InferTy::Var { id: meta_id, .. } = &result {
-                                self.session
-                                    .reverse_instantiations
-                                    .ty
-                                    .insert(*meta_id, *assoc_param);
-                            }
-                        }
+                        })
+                    {
+                        return Ok(InferTy::Param(*assoc_param));
                     }
+
+                    // Fallback: fresh variable for the associated type's value in this position.
+                    let result = self.session.new_ty_meta_var(context.level());
 
                     // Base is the protocol "Self" variable in this requirement.
                     let base = InferTy::Param(protocol_self);
