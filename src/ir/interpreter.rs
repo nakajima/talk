@@ -837,10 +837,10 @@ pub mod tests {
     use super::*;
 
     pub fn interpret_with(input: &str) -> (Value, Interpreter<CaptureIO>) {
-        let module = lower_module(input);
+        let (module, display_names) = lower_module(input);
         let mut interpreter = Interpreter::new(
             module.program,
-            Some(module.symbol_names),
+            Some(display_names),
             CaptureIO::default(),
         );
 
@@ -848,10 +848,10 @@ pub mod tests {
     }
 
     pub fn interpret(input: &str) -> Value {
-        let module = lower_module(input);
+        let (module, display_names) = lower_module(input);
         let mut interpreter = Interpreter::new(
             module.program,
-            Some(module.symbol_names),
+            Some(display_names),
             CaptureIO::default(),
         );
 

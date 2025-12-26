@@ -3,6 +3,7 @@ pub mod tests {
     use std::str::FromStr;
 
     use itertools::Itertools;
+    use rustc_hash::FxHashMap;
 
     use crate::{
         assert_eq_diff,
@@ -72,12 +73,12 @@ pub mod tests {
         lowerer.lower().unwrap()
     }
 
-    pub fn lower_module(input: &str) -> Module {
+    pub fn lower_module(input: &str) -> (Module, FxHashMap<Symbol, String>) {
         let driver = Driver::new(
             vec![Source::from(input)],
             DriverConfig::new("TestDriver").executable(),
         );
-        driver
+        let lowered = driver
             .parse()
             .unwrap()
             .resolve_names()
@@ -85,8 +86,10 @@ pub mod tests {
             .typecheck()
             .unwrap()
             .lower()
-            .unwrap()
-            .module("TestModule")
+            .unwrap();
+        let display_names = lowered.display_symbol_names();
+        let module = lowered.module("TestModule");
+        (module, display_names)
     }
 
     #[test]
@@ -546,8 +549,8 @@ pub mod tests {
 
     #[test]
     fn lowers_default_implementations() {
-        let module = lower_module("1 <= 2");
-        let _s = set_symbol_names(module.symbol_names.clone());
+        let (module, display_names) = lower_module("1 <= 2");
+        let _s = set_symbol_names(display_names.clone());
         let program = module.program;
 
         // The original lte method should still be imported
@@ -568,7 +571,7 @@ pub mod tests {
         );
 
         // There should be a specialized function for lte with witnesses
-        let _s = set_symbol_names(module.symbol_names.clone());
+        let _s = set_symbol_names(display_names.clone());
         let has_specialization = program
             .functions
             .values()

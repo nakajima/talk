@@ -8,6 +8,7 @@ use talk::{
         interpreter::Interpreter,
         io::{CaptureIO, IO, IOError, MultiWriteIO},
     },
+    name_resolution::symbol::set_symbol_names,
 };
 use wasm_bindgen::prelude::*;
 
@@ -39,13 +40,14 @@ fn init() {
 pub fn run_program(source: &str) -> Result<Object, JsValue> {
     init();
     let lowered = compile_source(source)?;
+    let display_names = lowered.display_symbol_names();
     let module = lowered.module("talk");
     let mut capture = CaptureIO::default();
     let mut console = ConsoleIO::default();
     let io = MultiWriteIO {
         adapters: vec![Box::new(&mut capture), Box::new(&mut console)],
     };
-    let mut interpreter = Interpreter::new(module.program, Some(module.symbol_names), io);
+    let mut interpreter = Interpreter::new(module.program, Some(display_names), io);
     let result = interpreter.run();
 
     let obj = Object::new();
@@ -64,8 +66,10 @@ pub fn run_program(source: &str) -> Result<Object, JsValue> {
 
 #[wasm_bindgen]
 pub fn show_ir(source: &str) -> Result<String, JsValue> {
-    let driver = compile_source(source)?;
-    Ok(format!("{}", driver.module("WASM").program))
+    let lowered = compile_source(source)?;
+    let display_names = lowered.display_symbol_names();
+    let _guard = set_symbol_names(display_names);
+    Ok(format!("{}", lowered.module("WASM").program))
 }
 
 #[wasm_bindgen]

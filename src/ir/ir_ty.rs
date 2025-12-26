@@ -28,9 +28,8 @@ impl IrTy {
             IrTy::Int => 8,
             IrTy::Float => 8,
             IrTy::Bool => 1,
-            IrTy::Func(args, ret) => {
-                ret.bytes_len() + args.iter().map(|a| a.bytes_len()).sum::<usize>()
-            }
+            // Function values are stored as Symbols (8 bytes).
+            IrTy::Func(..) => 8,
             IrTy::Record(_sym, fields) => fields.iter().map(|a| a.bytes_len()).sum::<usize>(),
             IrTy::RawPtr => 8,
             IrTy::Byte => 1,

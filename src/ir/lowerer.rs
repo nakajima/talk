@@ -3179,9 +3179,12 @@ impl<'a> Lowerer<'a> {
             .insert(new_symbol, name.name_str());
         let parts = self.specialization_parts(&key);
         let new_name_str = format!("{}[{}]", name.name_str(), parts.join(", "));
-        let new_name = Name::Resolved(new_symbol, new_name_str);
+        let new_name = Name::Resolved(new_symbol, new_name_str.clone());
 
         tracing::trace!("monomorphized {name:?} -> {new_name:?}");
+        self.resolved_names
+            .symbol_names
+            .insert(new_symbol, new_name_str);
 
         self.specialization_intern
             .entry(symbol)

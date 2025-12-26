@@ -82,7 +82,7 @@ async fn main() {
 
             let sources = sources_for_filenames(filenames);
             let driver = Driver::new(sources, DriverConfig::new("talk").executable());
-            let module = driver
+            let lowered = driver
                 .parse()
                 .unwrap()
                 .resolve_names()
@@ -90,11 +90,12 @@ async fn main() {
                 .typecheck()
                 .unwrap()
                 .lower()
-                .unwrap()
-                .module("talkin");
+                .unwrap();
+            let display_names = lowered.display_symbol_names();
+            let module = lowered.module("talkin");
 
             let mut interpreter =
-                Interpreter::new(module.program, Some(module.symbol_names), StdioIO {});
+                Interpreter::new(module.program, Some(display_names), StdioIO {});
             _ = interpreter.run();
         }
         Commands::Check { filenames, json } => {
