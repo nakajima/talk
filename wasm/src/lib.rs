@@ -3,11 +3,12 @@ use talk::{
     analysis::{Diagnostic, DocumentInput, Workspace},
     common::text::{clamp_to_char_boundary, line_info_for_offset_utf16},
     compiling::driver::{Driver, DriverConfig, Lowered, Source},
-    highlighter::highlight_html,
     ir::{
+        highlighter::highlight_html as highlight_ir_html,
         interpreter::Interpreter,
         io::{CaptureIO, IO, IOError, MultiWriteIO},
     },
+    highlighter::highlight_html as highlight_source_html,
     name_resolution::symbol::set_symbol_names,
 };
 use wasm_bindgen::prelude::*;
@@ -52,7 +53,7 @@ pub fn run_program(source: &str) -> Result<Object, JsValue> {
 
     let obj = Object::new();
     let value = interpreter.display(result, true);
-    let highlighted_value = highlight_html(&value);
+    let highlighted_value = highlight_source_html(&value);
     set_str(&obj, "value", &value)?;
     set_str(&obj, "highlightedValue", &highlighted_value)?;
     set_str(
@@ -65,17 +66,24 @@ pub fn run_program(source: &str) -> Result<Object, JsValue> {
 }
 
 #[wasm_bindgen]
-pub fn show_ir(source: &str) -> Result<String, JsValue> {
+pub fn show_ir(source: &str) -> Result<Object, JsValue> {
+    init();
     let lowered = compile_source(source)?;
     let display_names = lowered.display_symbol_names();
     let _guard = set_symbol_names(display_names);
-    Ok(format!("{}", lowered.module("WASM").program))
+    let ir = format!("{}", lowered.module("WASM").program);
+    let highlighted_ir = highlight_ir_html(&ir);
+
+    let obj = Object::new();
+    set_str(&obj, "ir", &ir)?;
+    set_str(&obj, "highlightedIr", &highlighted_ir)?;
+    Ok(obj)
 }
 
 #[wasm_bindgen]
 pub fn highlight(source: &str) -> Result<String, JsValue> {
     init();
-    Ok(highlight_html(source))
+    Ok(highlight_source_html(source))
 }
 
 #[wasm_bindgen]

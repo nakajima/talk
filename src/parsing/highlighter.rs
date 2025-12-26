@@ -584,10 +584,10 @@ pub fn highlight_html(source: &str) -> String {
     let mut highlighter = Higlighter::new(source);
     let mut tokens = highlighter.highlight();
     tokens.sort_by(|a, b| a.start.cmp(&b.start).then_with(|| b.end.cmp(&a.end)));
-    render_html(source, &tokens)
+    render_html_with_tokens(source, &tokens)
 }
 
-fn render_html(source: &str, tokens: &[HighlightToken]) -> String {
+pub fn render_html_with_tokens(source: &str, tokens: &[HighlightToken]) -> String {
     let mut output = String::with_capacity(source.len() + tokens.len() * 32);
     let mut cursor = 0usize;
 
