@@ -95,7 +95,8 @@ pub struct InferencePass<'a> {
     nominal_placeholders: FxHashMap<Symbol, (MetaVarId, Level)>,
     or_binders: Vec<FxHashMap<Symbol, InferTy>>,
     diagnostics: IndexSet<AnyDiagnostic>,
-    protocol_associated_type_requirements: FxHashMap<ProtocolId, ProtocolAssociatedTypeRequirements>,
+    protocol_associated_type_requirements:
+        FxHashMap<ProtocolId, ProtocolAssociatedTypeRequirements>,
     root_decls: Vec<TypedDecl<InferTy>>,
     root_stmts: Vec<TypedStmt<InferTy>>,
 }
@@ -2937,9 +2938,10 @@ impl<'a> InferencePass<'a> {
                 ) = (context.kind(), sym)
                 {
                     if let Some(entry) = self.session.lookup(&sym)
-                        && let Some(ForAll::Ty(assoc_param)) = entry.foralls().iter().find(|fa| {
-                            matches!(fa, ForAll::Ty(p) if *p != protocol_self)
-                        })
+                        && let Some(ForAll::Ty(assoc_param)) = entry
+                            .foralls()
+                            .iter()
+                            .find(|fa| matches!(fa, ForAll::Ty(p) if *p != protocol_self))
                     {
                         return Ok(InferTy::Param(*assoc_param));
                     }
