@@ -1,7 +1,13 @@
 use std::str::FromStr;
 
 use crate::{
-    ir::{ir_error::IRError, ir_ty::IrTy, list::List, register::Register, value::Value},
+    ir::{
+        ir_error::IRError,
+        ir_ty::IrTy,
+        list::List,
+        register::Register,
+        value::{RecordId, Value},
+    },
     label::Label,
     name_resolution::symbol::Symbol,
     node_id::{FileID, NodeID},
@@ -13,12 +19,23 @@ use crate::{
 pub enum InstructionMeta {
     #[doc = "id:$file_id:$id"]
     Source(NodeID),
+    #[doc = "recordid:$id"]
+    RecordId(RecordId),
 }
 
 impl std::fmt::Display for InstructionMeta {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Source(id) => write!(f, "id:{}:{}", id.0.0, id.1),
+            Self::RecordId(id) => write!(
+                f,
+                "recordid:{}",
+                match id {
+                    RecordId::Anon => "anon".to_string(),
+                    RecordId::Nominal(sym) => format!("{sym}"),
+                    RecordId::Record(id) => format!("{id}"),
+                }
+            ),
         }
     }
 }

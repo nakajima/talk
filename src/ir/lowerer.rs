@@ -7,7 +7,7 @@ use crate::ir::function::Function;
 use crate::ir::instruction::CmpOperator;
 use crate::ir::ir_ty::IrTy;
 use crate::ir::monomorphizer::uncurry_function;
-use crate::ir::value::{Addr, Reference};
+use crate::ir::value::{Addr, RecordId, Reference};
 use crate::label::Label;
 use crate::name_resolution::name_resolver::ResolvedNames;
 use crate::name_resolution::symbol::Symbols;
@@ -260,6 +260,8 @@ pub struct Lowerer<'a> {
     pub(super) specializations: IndexMap<Symbol, Vec<Specialization>>,
     specialization_intern: FxHashMap<Symbol, FxHashMap<SpecializationKey, Symbol>>,
     static_memory: StaticMemory,
+    record_labels: FxHashMap<RecordId, Vec<String>>,
+    next_record_id: u32,
 }
 
 #[allow(clippy::panic)]
@@ -283,6 +285,8 @@ impl<'a> Lowerer<'a> {
             static_memory: Default::default(),
             config,
             resolved_names,
+            next_record_id: 0,
+            record_labels: Default::default(),
         }
     }
 
@@ -322,12 +326,14 @@ impl<'a> Lowerer<'a> {
         }
 
         let static_memory = std::mem::take(&mut self.static_memory);
+        let record_labels = std::mem::take(&mut self.record_labels);
         let mut monomorphizer = Monomorphizer::new(self);
 
         Ok(Program {
             functions: monomorphizer.monomorphize(),
             polyfunctions: monomorphizer.functions,
             static_memory,
+            record_labels,
         })
     }
 
@@ -462,6 +468,7 @@ impl<'a> Lowerer<'a> {
                 symbol,
                 initializers,
                 instance_methods,
+                properties,
                 ..
             } => {
                 for initializer in initializers.values() {
@@ -471,6 +478,11 @@ impl<'a> Lowerer<'a> {
                 for method in instance_methods.values() {
                     self.lower_method(method, instantiations)?;
                 }
+
+                self.record_labels.insert(
+                    RecordId::Nominal(*symbol),
+                    properties.keys().map(|key| key.to_string()).collect(),
+                );
             }
             TypedDeclKind::Extend {
                 instance_methods, ..
@@ -480,11 +492,19 @@ impl<'a> Lowerer<'a> {
                 }
             }
             TypedDeclKind::EnumDef {
-                instance_methods, ..
+                symbol,
+                instance_methods,
+                variants,
+                ..
             } => {
                 for method in instance_methods.values() {
                     self.lower_method(method, instantiations)?;
                 }
+
+                self.record_labels.insert(
+                    RecordId::Nominal(*symbol),
+                    variants.keys().map(|key| key.to_string()).collect(),
+                );
             }
             TypedDeclKind::ProtocolDef {
                 instance_methods, ..
@@ -1203,6 +1223,7 @@ impl<'a> Lowerer<'a> {
                     .map(|a| self.parsed_value(a, &binds))
                     .collect_vec()
                     .into();
+
                 self.push_instr(Instruction::Record {
                     dest,
                     ty: ty.clone(),
@@ -1408,7 +1429,11 @@ impl<'a> Lowerer<'a> {
                 Value::Int(items.len() as i64),
             ]
             .into(),
-            meta: vec![InstructionMeta::Source(expr.id)].into(),
+            meta: vec![
+                InstructionMeta::Source(expr.id),
+                InstructionMeta::RecordId(RecordId::Nominal(Symbol::Array)),
+            ]
+            .into(),
         });
 
         Ok((dest.into(), Ty::Array(item_ty)))
@@ -1946,10 +1971,16 @@ impl<'a> Lowerer<'a> {
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
         let mut field_vals_by_label: FxHashMap<Label, (Value, Ty)> = FxHashMap::default();
+        let mut field_labels = vec![];
         for field in fields.iter() {
             let (val, ty) = self.lower_expr(&field.value, Bind::Fresh, instantiations)?;
             field_vals_by_label.insert(field.name.clone(), (val, ty));
+            field_labels.push(field.name.to_string());
         }
+
+        let record_id = RecordId::Record(self.next_record_id);
+        self.next_record_id += 1;
+        self.record_labels.insert(record_id, field_labels);
 
         let dest = self.ret(bind);
 
@@ -2017,7 +2048,11 @@ impl<'a> Lowerer<'a> {
             dest,
             ty: ty.clone(),
             record: record_vals.into(),
-            meta: vec![InstructionMeta::Source(expr.id)].into(),
+            meta: vec![
+                InstructionMeta::Source(expr.id),
+                InstructionMeta::RecordId(record_id),
+            ]
+            .into(),
         });
 
         Ok((dest.into(), ty))
@@ -2340,7 +2375,8 @@ impl<'a> Lowerer<'a> {
             .catalog
             .properties
             .get(name)
-            .expect("did not get properties");
+            .cloned()
+            .unwrap_or_default();
 
         // Extract return type from the initializer function
         let mut params = init_ty.clone().uncurry_params();
@@ -2574,6 +2610,39 @@ impl<'a> Lowerer<'a> {
                     .unwrap_or_else(|| unreachable!("didn't get nominal: {symbol:?}"))
             };
             instantiations.ty.extend(nominal.substitutions(type_args));
+            for conformance in self
+                .types
+                .catalog
+                .conformances
+                .values()
+                .filter(|c| &c.conforming_id == symbol)
+                .cloned()
+                .collect::<Vec<_>>()
+            {
+                instantiations
+                    .witnesses
+                    .extend(conformance.witnesses.requirements.clone());
+
+                // Also add witnesses from associated types' conformances.
+                for assoc_ty in conformance.witnesses.associated_types.values() {
+                    if let Ty::Nominal {
+                        symbol: assoc_sym, ..
+                    } = assoc_ty
+                    {
+                        for assoc_conformance in self
+                            .types
+                            .catalog
+                            .conformances
+                            .values()
+                            .filter(|c| &c.conforming_id == assoc_sym)
+                        {
+                            instantiations
+                                .witnesses
+                                .extend(assoc_conformance.witnesses.requirements.clone());
+                        }
+                    }
+                }
+            }
         }
 
         let (_method_sym, val, ty) = if let Some(method_sym) =
@@ -2582,10 +2651,11 @@ impl<'a> Lowerer<'a> {
             let method = self
                 .check_import(&method_sym, &instantiations)
                 .unwrap_or_else(|| self.monomorphize_name(method_sym, &instantiations));
+            let callee_sym = method.symbol().expect("didn't get method sym");
             self.push_instr(Instruction::Call {
                 dest,
                 ty: ty.clone(),
-                callee: Value::Func(method.symbol().expect("didn't get method sym")),
+                callee: Value::Func(callee_sym),
                 args: args.into(),
                 meta: vec![InstructionMeta::Source(call_expr.id)].into(),
             });
@@ -2597,10 +2667,11 @@ impl<'a> Lowerer<'a> {
             let method = self
                 .check_import(&witness, &instantiations)
                 .unwrap_or_else(|| self.monomorphize_name(witness, &instantiations));
+            let callee_sym = method.symbol().expect("did not get witness sym");
             self.push_instr(Instruction::Call {
                 dest,
                 ty: ty.clone(),
-                callee: Value::Func(method.symbol().expect("did not get witness sym")),
+                callee: Value::Func(callee_sym),
                 args: args.into(),
                 meta: vec![InstructionMeta::Source(call_expr.id)].into(),
             });
@@ -3108,9 +3179,12 @@ impl<'a> Lowerer<'a> {
             .insert(new_symbol, name.name_str());
         let parts = self.specialization_parts(&key);
         let new_name_str = format!("{}[{}]", name.name_str(), parts.join(", "));
-        let new_name = Name::Resolved(new_symbol, new_name_str);
+        let new_name = Name::Resolved(new_symbol, new_name_str.clone());
 
         tracing::trace!("monomorphized {name:?} -> {new_name:?}");
+        self.resolved_names
+            .symbol_names
+            .insert(new_symbol, new_name_str);
 
         self.specialization_intern
             .entry(symbol)
@@ -3178,12 +3252,10 @@ impl<'a> Lowerer<'a> {
             crate::node_kinds::inline_ir_instruction::Value::Void => Value::Void,
             crate::node_kinds::inline_ir_instruction::Value::Uninit => Value::Uninit,
             crate::node_kinds::inline_ir_instruction::Value::Poison => Value::Poison,
-            crate::node_kinds::inline_ir_instruction::Value::Record(symbol, values) => {
-                Value::Record(
-                    *symbol,
-                    values.iter().map(|v| self.parsed_value(v, binds)).collect(),
-                )
-            }
+            crate::node_kinds::inline_ir_instruction::Value::Record(id, values) => Value::Record(
+                *id,
+                values.iter().map(|v| self.parsed_value(v, binds)).collect(),
+            ),
             crate::node_kinds::inline_ir_instruction::Value::RawPtr(v) => Value::RawPtr(Addr(*v)),
             crate::node_kinds::inline_ir_instruction::Value::RawBuffer(items) => {
                 Value::RawBuffer(items.to_vec())

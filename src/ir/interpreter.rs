@@ -8,13 +8,13 @@ use crate::{
     ir::{
         basic_block::{BasicBlock, BasicBlockId, Phi},
         function::Function,
-        instruction::{CmpOperator, Instruction},
+        instruction::{CmpOperator, Instruction, InstructionMeta},
         ir_ty::IrTy,
         list::List,
         program::Program,
         register::Register,
         terminator::Terminator,
-        value::{Addr, Reference, Value},
+        value::{Addr, RecordId, Reference, Value},
     },
     label::Label,
     name_resolution::symbol::{Symbol, set_symbol_names},
@@ -159,7 +159,7 @@ pub struct Memory {
     pub mem: Vec<u8>,
 }
 
-pub struct Interpreter {
+pub struct Interpreter<IO: super::io::IO> {
     program: Program,
     symbol_names: Option<FxHashMap<Symbol, String>>,
     frames: Vec<Frame>,
@@ -167,13 +167,14 @@ pub struct Interpreter {
     main_result: Option<Value>,
     memory: Memory,
     heap_start: usize,
+    pub io: IO,
 }
 
 #[allow(clippy::unwrap_used)]
 #[allow(clippy::expect_used)]
 #[allow(clippy::panic)]
-impl Interpreter {
-    pub fn new(program: Program, symbol_names: Option<FxHashMap<Symbol, String>>) -> Self {
+impl<IO: super::io::IO> Interpreter<IO> {
+    pub fn new(program: Program, symbol_names: Option<FxHashMap<Symbol, String>>, io: IO) -> Self {
         let heap_start = program.static_memory.data.len();
 
         Self {
@@ -184,6 +185,7 @@ impl Interpreter {
             memory: Default::default(),
             heap_start,
             symbol_names,
+            io,
         }
     }
 
@@ -337,20 +339,46 @@ impl Interpreter {
                 if !env.items.is_empty() {
                     let env_vals: Vec<Value> =
                         env.items.iter().map(|v| self.val(v.clone())).collect();
-                    arg_vals.insert(0, Value::Record(None, env_vals));
+                    arg_vals.insert(0, Value::Record(RecordId::Anon, env_vals));
                 }
 
                 self.call(func, arg_vals, dest);
             }
             IR::Instr(Instruction::Nominal {
-                dest, record, sym, ..
+                dest,
+                record,
+                sym,
+                meta,
+                ..
             }) => {
+                let record_id = if let Some(InstructionMeta::RecordId(id)) = meta
+                    .items
+                    .iter()
+                    .find(|meta| matches!(meta, InstructionMeta::RecordId(..)))
+                {
+                    *id
+                } else {
+                    RecordId::Nominal(sym)
+                };
+
                 let fields = record.items.iter().map(|v| self.val(v.clone())).collect();
-                self.write_register(&dest, Value::Record(Some(sym), fields));
+                self.write_register(&dest, Value::Record(record_id, fields));
             }
-            IR::Instr(Instruction::Record { dest, record, .. }) => {
+            IR::Instr(Instruction::Record {
+                dest, record, meta, ..
+            }) => {
+                let record_id = if let Some(InstructionMeta::RecordId(id)) = meta
+                    .items
+                    .iter()
+                    .find(|meta| matches!(meta, InstructionMeta::RecordId(..)))
+                {
+                    *id
+                } else {
+                    RecordId::Anon
+                };
+
                 let fields = record.items.iter().map(|v| self.val(v.clone())).collect();
-                self.write_register(&dest, Value::Record(None, fields));
+                self.write_register(&dest, Value::Record(record_id, fields));
             }
             IR::Instr(Instruction::GetField {
                 dest,
@@ -428,7 +456,12 @@ impl Interpreter {
             }
             IR::Instr(Instruction::_Print { val }) => {
                 let val = self.val(val.clone());
-                println!("{}", self.display(val));
+                let val = self.display(val, false);
+                let val = format!("{val}\n");
+                let bytes = val.as_bytes();
+                self.io
+                    .write_stdout(bytes)
+                    .expect("unable to write to stdout");
             }
             IR::Instr(Instruction::Alloc { dest, ty, count }) => {
                 let count = match self.val(count) {
@@ -573,7 +606,7 @@ impl Interpreter {
         }
     }
 
-    pub fn display(&mut self, val: Value) -> String {
+    pub fn display(&self, val: Value, quoted: bool) -> String {
         match val {
             Value::Int(val) => format!("{val}"),
             Value::Reg(reg) => format!("%{reg}"),
@@ -581,8 +614,8 @@ impl Interpreter {
             Value::Poison => "<POISON>".to_string(),
             Value::Float(val) => format!("{val}"),
             Value::Bool(val) => format!("{val}"),
-            Value::Record(sym, values) => {
-                if sym == Some(Symbol::String) {
+            Value::Record(record_id, values) => {
+                if record_id == RecordId::Nominal(Symbol::String) {
                     let Value::RawPtr(addr) = &values[0] else {
                         unreachable!()
                     };
@@ -602,11 +635,43 @@ impl Interpreter {
                     };
 
                     let s = str::from_utf8(&bytes).unwrap();
-                    return s.to_string();
+
+                    return if quoted {
+                        format!("\"{s}\"")
+                    } else {
+                        s.to_string()
+                    };
                 }
 
-                let values = values.into_iter().map(|v| self.display(v)).collect_vec();
-                let name = if let Some(sym) = sym {
+                if record_id == RecordId::Nominal(Symbol::Array) {
+                    return "Array(..) // formatting arrays is tricky for now. Need to add proper Show protocol.".to_string();
+                }
+
+                if let RecordId::Nominal(sym) = record_id {
+                    if matches!(sym, Symbol::Enum(..))
+                        && let Some(labels) = self.program.record_labels.get(&record_id)
+                        && let Some(formatted) = self.format_enum_variant(sym, labels, &values)
+                    {
+                        return formatted;
+                    }
+
+                    if let Some(labels) = self.program.record_labels.get(&record_id)
+                        && let Some(fields) = self.format_labeled_fields(labels, &values)
+                    {
+                        let name = self.sym_to_str(&sym);
+                        return self.wrap_record(Some(&name), &fields);
+                    }
+                } else if let Some(labels) = self.program.record_labels.get(&record_id)
+                    && let Some(fields) = self.format_labeled_fields(labels, &values)
+                {
+                    return self.wrap_record(None, &fields);
+                }
+
+                let values = values
+                    .into_iter()
+                    .map(|v| self.display(v, quoted))
+                    .collect_vec();
+                let name = if let RecordId::Nominal(sym) = record_id {
                     self.sym_to_str(&sym)
                 } else {
                     "".to_string()
@@ -616,7 +681,7 @@ impl Interpreter {
             }
             Value::Func(symbol) => format!("func {}()", self.sym_to_str(&symbol)),
             Value::Closure { func, env } => format!("func {}[{env}]()", self.sym_to_str(&func)),
-            Value::Void => "void".into(),
+            Value::Void => "()".into(),
             Value::RawPtr(val) => format!("rawptr({})", val.0),
             Value::Ref(reference) => match reference {
                 Reference::Func(sym) => format!("func {}()", self.sym_to_str(&sym)),
@@ -624,6 +689,59 @@ impl Interpreter {
             },
             Value::Uninit => "UNINIT".into(),
             Value::RawBuffer(bytes) => format!("buf({bytes:?})"),
+        }
+    }
+
+    fn format_labeled_fields(&self, labels: &[String], values: &[Value]) -> Option<String> {
+        if labels.len() != values.len() {
+            return None;
+        }
+
+        let fields = labels
+            .iter()
+            .zip(values.iter())
+            .map(|(label, value)| format!("{label}: {}", self.display(value.clone(), true)))
+            .collect_vec();
+        Some(fields.join(", "))
+    }
+
+    fn wrap_record(&self, name: Option<&str>, fields: &str) -> String {
+        if fields.is_empty() {
+            return match name {
+                Some(name) => format!("{name} {{}}"),
+                None => "{}".to_string(),
+            };
+        }
+
+        match name {
+            Some(name) => format!("{name} {{ {fields} }}"),
+            None => format!("{{ {fields} }}"),
+        }
+    }
+
+    fn format_enum_variant(
+        &self,
+        sym: Symbol,
+        labels: &[String],
+        values: &[Value],
+    ) -> Option<String> {
+        let tag = match values.first()? {
+            Value::Int(tag) => *tag,
+            _ => return None,
+        };
+        let idx = usize::try_from(tag).ok()?;
+        let variant = labels.get(idx)?;
+        let args = values
+            .iter()
+            .skip(1)
+            .map(|value| self.display(value.clone(), true))
+            .collect_vec();
+        let name = self.sym_to_str(&sym);
+
+        if args.is_empty() {
+            Some(format!("{name}.{variant}"))
+        } else {
+            Some(format!("{name}.{variant}({})", args.join(", ")))
         }
     }
 
@@ -714,20 +832,28 @@ impl Interpreter {
 
 #[cfg(test)]
 pub mod tests {
-    use crate::ir::lowerer_tests::tests::lower_module;
+    use crate::ir::{io::CaptureIO, lowerer_tests::tests::lower_module};
 
     use super::*;
 
-    pub fn interpret_with(input: &str) -> (Value, Interpreter) {
-        let module = lower_module(input);
-        let mut interpreter = Interpreter::new(module.program, Some(module.symbol_names));
+    pub fn interpret_with(input: &str) -> (Value, Interpreter<CaptureIO>) {
+        let (module, display_names) = lower_module(input);
+        let mut interpreter = Interpreter::new(
+            module.program,
+            Some(display_names),
+            CaptureIO::default(),
+        );
 
         (interpreter.run(), interpreter)
     }
 
     pub fn interpret(input: &str) -> Value {
-        let module = lower_module(input);
-        let mut interpreter = Interpreter::new(module.program, Some(module.symbol_names));
+        let (module, display_names) = lower_module(input);
+        let mut interpreter = Interpreter::new(
+            module.program,
+            Some(display_names),
+            CaptureIO::default(),
+        );
 
         interpreter.run()
     }
@@ -735,6 +861,16 @@ pub mod tests {
     #[test]
     pub fn empty_is_void() {
         assert_eq!(interpret(""), Value::Void);
+    }
+
+    #[test]
+    pub fn prints() {
+        let (_, interpreter) = interpret_with(
+            "
+        print(\"sup\")
+        ",
+        );
+        assert_eq!("sup\n".as_bytes(), interpreter.io.stdout);
     }
 
     #[test]
@@ -904,14 +1040,14 @@ pub mod tests {
 
     #[test]
     fn interprets_string_plus() {
-        let (value, mut interpreter) = interpret_with("let a = \"hello \" + \"world\"; a");
-        let val = interpreter.display(value);
+        let (value, interpreter) = interpret_with("let a = \"hello \" + \"world\"; a");
+        let val = interpreter.display(value, false);
         assert_eq!(val, format!("hello world"));
     }
 
     #[test]
     fn interprets_greet_regression() {
-        let (value, mut interpreter) = interpret_with(
+        let (value, interpreter) = interpret_with(
             "
             struct Person {
                 let name: String
@@ -925,7 +1061,7 @@ pub mod tests {
             ",
         );
 
-        assert_eq!(interpreter.display(value), "hey, i'm pat");
+        assert_eq!(interpreter.display(value, false), "hey, i'm pat");
     }
 
     #[test]
@@ -995,7 +1131,7 @@ pub mod tests {
             (a(), b())
             "
             ),
-            Value::Record(None, vec![Value::Int(3), Value::Int(1)])
+            Value::Record(RecordId::Anon, vec![Value::Int(3), Value::Int(1)])
         )
     }
 
@@ -1025,7 +1161,7 @@ pub mod tests {
 
     #[test]
     fn interprets_simple_match() {
-        let (val, mut interpreter) = interpret_with(
+        let (val, interpreter) = interpret_with(
             "
         enum Response {
                 case ok(String), redirect(String), other(Int)
@@ -1039,7 +1175,7 @@ pub mod tests {
         ",
         );
 
-        assert_eq!("It's cool", interpreter.display(val));
+        assert_eq!("It's cool", interpreter.display(val, false));
     }
 
     #[test]
@@ -1103,5 +1239,127 @@ pub mod tests {
         );
 
         assert_eq!(result, Value::Int(2));
+    }
+
+    #[test]
+    fn formats_record() {
+        let (value, interpreter) = interpret_with(
+            "
+            { fizz: 123, buzz: true }
+            ",
+        );
+
+        assert_eq!(
+            "{ fizz: 123, buzz: true }",
+            &interpreter.display(value, false)
+        )
+    }
+
+    #[test]
+    fn formats_struct_instance() {
+        let (value, interpreter) = interpret_with(
+            "
+            struct Person {
+                let fizz: Int
+                let buzz: Bool
+            }
+
+            Person(fizz: 123, buzz: true)
+            ",
+        );
+
+        assert_eq!(
+            "Person { fizz: 123, buzz: true }",
+            &interpreter.display(value, false)
+        )
+    }
+
+    #[test]
+    fn formats_enum_variant() {
+        let (value, interpreter) = interpret_with(
+            "
+            enum Foo {
+                case fizz(Int), buzz(Bool)
+            }
+
+            Foo.fizz(123)
+            ",
+        );
+
+        assert_eq!("Foo.fizz(123)", &interpreter.display(value, false))
+    }
+
+    #[test]
+    #[ignore = "formatting arrays is tricky, need to introduce a proper Show protocol"]
+    fn formats_array() {
+        let (value, interpreter) = interpret_with(
+            "
+            [1,2,3]
+            ",
+        );
+
+        assert_eq!("[1, 2, 3]", &interpreter.display(value, false))
+    }
+
+    #[test]
+    fn interprets_protocol_example() {
+        let (_, interpreter) = interpret_with(
+            "
+// Ok so we've got some different pet foods here
+struct CatFood {}
+struct DogFood {}
+
+// And we've got a protocol `Named` that just knows how
+// to get names of things.
+protocol Named {
+    func name() -> String
+}
+
+// Let's make the pet foods conform to Named
+extend CatFood: Named {
+    func name() { \"tasty cat food\" }
+}
+
+extend DogFood: Named {
+    func name() { \"tasty dog food\" }
+}
+
+// So far so good, right? Ok now let's add a Pet protocol.
+
+protocol Pet {
+    // Pets eat different foods, who knew??
+    associated Food: Named
+
+    func favoriteFood() -> Food
+
+    // See what the pet does when daylight saves time changes
+    func handleDSTChange() {
+        print(\"what the heck where is my \" + self.favoriteFood().name())
+    }
+ }
+
+struct Cat {}
+extend Cat: Pet {
+    func favoriteFood() {
+        CatFood()
+    }
+}
+
+struct Dog {}
+extend Dog: Pet {
+    func favoriteFood() {
+        DogFood()
+    }
+}
+
+Cat().handleDSTChange()
+Dog().handleDSTChange()
+        ",
+        );
+
+        assert_eq!(
+            "what the heck where is my tasty cat food\nwhat the heck where is my tasty dog food\n",
+            String::from_utf8(interpreter.io.stdout).unwrap()
+        );
     }
 }

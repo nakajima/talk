@@ -1,10 +1,12 @@
 use indexmap::IndexMap;
+use rustc_hash::FxHashMap;
 
 use crate::{
     ir::{
         function::Function,
         ir_ty::IrTy,
         lowerer::{PolyFunction, StaticMemory},
+        value::RecordId,
     },
     name_resolution::symbol::Symbol,
 };
@@ -14,6 +16,7 @@ pub struct Program {
     pub functions: IndexMap<Symbol, Function<IrTy>>,
     pub polyfunctions: IndexMap<Symbol, PolyFunction>,
     pub static_memory: StaticMemory,
+    pub record_labels: FxHashMap<RecordId, Vec<String>>,
 }
 
 impl Program {

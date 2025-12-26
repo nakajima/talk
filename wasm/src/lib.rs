@@ -3,33 +3,92 @@ use talk::{
     analysis::{Diagnostic, DocumentInput, Workspace},
     common::text::{clamp_to_char_boundary, line_info_for_offset_utf16},
     compiling::driver::{Driver, DriverConfig, Lowered, Source},
-    highlighter::highlight_html,
-    ir::interpreter::Interpreter,
+    ir::{
+        highlighter::highlight_html as highlight_ir_html,
+        interpreter::Interpreter,
+        io::{CaptureIO, IO, IOError, MultiWriteIO},
+    },
+    highlighter::highlight_html as highlight_source_html,
+    name_resolution::symbol::set_symbol_names,
 };
 use wasm_bindgen::prelude::*;
 
-#[wasm_bindgen]
-pub fn run_program(source: &str) -> Result<String, JsValue> {
-    install_panic_hook();
+#[derive(Default)]
+pub struct ConsoleIO {}
+impl IO for ConsoleIO {
+    fn write_stdout(&mut self, bytes: &[u8]) -> Result<(), talk::ir::io::IOError> {
+        let string = str::from_utf8(bytes).map_err(|e| IOError::WriteError(format!("{e:?}")))?;
+        web_sys::console::log_1(&JsValue::from_str(string));
+        Ok(())
+    }
 
+    fn write_stderr(&mut self, bytes: &[u8]) -> Result<(), talk::ir::io::IOError> {
+        let string = str::from_utf8(bytes).map_err(|e| IOError::WriteError(format!("{e:?}")))?;
+        web_sys::console::error_1(&JsValue::from_str(string));
+        Ok(())
+    }
+
+    fn read_stdio(&mut self, _bytes: &mut [u8]) -> Result<usize, talk::ir::io::IOError> {
+        Err(IOError::Unsupported)
+    }
+}
+
+fn init() {
+    install_panic_hook();
+}
+
+#[wasm_bindgen]
+pub fn run_program(source: &str) -> Result<Object, JsValue> {
+    init();
     let lowered = compile_source(source)?;
+    let display_names = lowered.display_symbol_names();
     let module = lowered.module("talk");
-    let mut interpreter = Interpreter::new(module.program, Some(module.symbol_names));
+    let mut capture = CaptureIO::default();
+    let mut console = ConsoleIO::default();
+    let io = MultiWriteIO {
+        adapters: vec![Box::new(&mut capture), Box::new(&mut console)],
+    };
+    let mut interpreter = Interpreter::new(module.program, Some(display_names), io);
     let result = interpreter.run();
 
-    Ok(interpreter.display(result))
+    let obj = Object::new();
+    let value = interpreter.display(result, true);
+    let highlighted_value = highlight_source_html(&value);
+    set_str(&obj, "value", &value)?;
+    set_str(&obj, "highlightedValue", &highlighted_value)?;
+    set_str(
+        &obj,
+        "output",
+        str::from_utf8(&capture.stdout).map_err(|e| JsValue::from_str(&format!("{e:?}")))?,
+    )?;
+
+    Ok(obj)
+}
+
+#[wasm_bindgen]
+pub fn show_ir(source: &str) -> Result<Object, JsValue> {
+    init();
+    let lowered = compile_source(source)?;
+    let display_names = lowered.display_symbol_names();
+    let _guard = set_symbol_names(display_names);
+    let ir = format!("{}", lowered.module("WASM").program);
+    let highlighted_ir = highlight_ir_html(&ir);
+
+    let obj = Object::new();
+    set_str(&obj, "ir", &ir)?;
+    set_str(&obj, "highlightedIr", &highlighted_ir)?;
+    Ok(obj)
 }
 
 #[wasm_bindgen]
 pub fn highlight(source: &str) -> Result<String, JsValue> {
-    install_panic_hook();
-    Ok(highlight_html(source))
+    init();
+    Ok(highlight_source_html(source))
 }
 
 #[wasm_bindgen]
 pub fn check(source: &str) -> Result<JsValue, JsValue> {
-    install_panic_hook();
-
+    init();
     let doc_id = "<stdin>".to_string();
     let docs = vec![DocumentInput {
         id: doc_id.clone(),
@@ -51,6 +110,7 @@ pub fn check(source: &str) -> Result<JsValue, JsValue> {
 
 #[wasm_bindgen]
 pub fn version() -> String {
+    init();
     env!("CARGO_PKG_VERSION").to_string()
 }
 

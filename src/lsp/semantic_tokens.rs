@@ -193,21 +193,21 @@ mod tests {
                     delta_line: 0,
                     delta_start: 0,
                     length: 4,
-                    token_type: pos(SemanticTokenType::KEYWORD),
+                    token_type: pos(SemanticTokenType::NUMBER),
                     token_modifiers_bitset: 0
                 },
                 SemanticToken {
                     delta_line: 1,
                     delta_start: 2,
                     length: 5,
-                    token_type: pos(SemanticTokenType::KEYWORD),
+                    token_type: pos(SemanticTokenType::NUMBER),
                     token_modifiers_bitset: 0
                 },
                 SemanticToken {
                     delta_line: 2,
                     delta_start: 0,
                     length: 4,
-                    token_type: pos(SemanticTokenType::KEYWORD),
+                    token_type: pos(SemanticTokenType::NUMBER),
                     token_modifiers_bitset: 0
                 },
             ]
@@ -225,7 +225,7 @@ mod tests {
                     delta_line: 0,
                     delta_start: 0,
                     length: 5,
-                    token_type: pos(SemanticTokenType::KEYWORD),
+                    token_type: pos(SemanticTokenType::NUMBER),
                     token_modifiers_bitset: 0
                 },
                 SemanticToken {
@@ -239,7 +239,7 @@ mod tests {
                     delta_line: 1,
                     delta_start: 0,
                     length: 4,
-                    token_type: pos(SemanticTokenType::KEYWORD),
+                    token_type: pos(SemanticTokenType::NUMBER),
                     token_modifiers_bitset: 0
                 },
             ]

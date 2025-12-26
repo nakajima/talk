@@ -1,8 +1,10 @@
 include!(concat!(env!("OUT_DIR"), "/instr_impls.rs"));
 pub mod basic_block;
 pub mod function;
+pub mod highlighter;
 pub mod instruction;
 pub mod interpreter;
+pub mod io;
 pub mod ir_error;
 pub mod ir_parser;
 pub mod ir_ty;

@@ -5,7 +5,11 @@ use crate::{
     node::Node,
     node_id::FileID,
     node_kinds::{
-        decl::DeclKind, expr::ExprKind, record_field::RecordFieldTypeAnnotation, stmt::StmtKind,
+        decl::DeclKind,
+        expr::ExprKind,
+        pattern::{PatternKind, RecordFieldPatternKind},
+        record_field::RecordFieldTypeAnnotation,
+        stmt::StmtKind,
         type_annotation::TypeAnnotationKind,
     },
     parser::Parser,
@@ -108,8 +112,8 @@ impl<'a> Higlighter<'a> {
                 TokenKind::Else => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::Loop => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::Return => self.make(tok, Kind::KEYWORD, &mut tokens),
-                TokenKind::True => self.make(tok, Kind::KEYWORD, &mut tokens),
-                TokenKind::False => self.make(tok, Kind::KEYWORD, &mut tokens),
+                TokenKind::True => self.make(tok, Kind::NUMBER, &mut tokens),
+                TokenKind::False => self.make(tok, Kind::NUMBER, &mut tokens),
                 TokenKind::Enum => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::Case => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::Match => self.make(tok, Kind::KEYWORD, &mut tokens),
@@ -169,7 +173,7 @@ impl<'a> Higlighter<'a> {
                 TokenKind::DotDot | TokenKind::DotDotDot => {
                     self.make(tok, Kind::OPERATOR, &mut tokens)
                 }
-                TokenKind::Associated => self.make(tok, Kind::TYPE, &mut tokens),
+                TokenKind::Associated => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::Typealias => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::Static => self.make(tok, Kind::KEYWORD, &mut tokens),
             }
@@ -387,7 +391,9 @@ impl<'a> Higlighter<'a> {
                         result.extend(self.tokens_from_expr(expr, ast));
                     }
                 }
-                StmtKind::Break => (),
+                StmtKind::Break => {
+                    result.push(self.make_span(Kind::KEYWORD, stmt.span));
+                }
                 StmtKind::Assignment(lhs, rhs) => {
                     result.extend(self.tokens_from_expr(lhs, ast));
                     result.extend(self.tokens_from_expr(rhs, ast));
@@ -416,7 +422,10 @@ impl<'a> Higlighter<'a> {
                 ExprKind::LiteralFalse => (),
                 ExprKind::LiteralString(_) => (),
                 ExprKind::Unary(.., box expr) => result.extend(self.tokens_from_expr(expr, ast)),
-                ExprKind::Binary(..) => (),
+                ExprKind::Binary(box lhs, _, box rhs) => {
+                    result.extend(self.tokens_from_expr(lhs, ast));
+                    result.extend(self.tokens_from_expr(rhs, ast));
+                }
                 ExprKind::Tuple(items) => {
                     result.extend(self.tokens_from_exprs(items, ast));
                 }
@@ -432,15 +441,23 @@ impl<'a> Higlighter<'a> {
                     result.extend(self.tokens_from_exprs(type_args, ast));
                     result.extend(self.tokens_from_exprs(args, ast));
                 }
-                ExprKind::Member(receiver, .., span) => {
+                ExprKind::Member(receiver, ..) => {
                     if let Some(box receiver) = receiver {
                         result.extend(self.tokens_from_expr(receiver, ast));
                     }
-                    result.push(self.make_span(Kind::METHOD, *span));
                 }
-                ExprKind::Func(..) => (),
-                ExprKind::Variable(..) => {
-                    result.push(self.make_span(Kind::VARIABLE, expr.span));
+                ExprKind::Func(func) => {
+                    result.extend(self.tokens_from_expr(&func.body, ast));
+                    result.extend(self.tokens_from_exprs(&func.params, ast));
+                }
+                ExprKind::Variable(name) => {
+                    if name.name_str() == "self"
+                        || name.name_str().chars().next().map(|c| c.is_uppercase()) == Some(true)
+                    {
+                        result.push(self.make_span(Kind::TYPE, expr.span));
+                    } else {
+                        result.push(self.make_span(Kind::VARIABLE, expr.span));
+                    }
                 }
                 ExprKind::Constructor(..) => {
                     result.push(self.make_span(Kind::TYPE, expr.span));
@@ -454,7 +471,12 @@ impl<'a> Higlighter<'a> {
                     result.extend(self.tokens_from_expr(scrutinee, ast));
                     result.extend(self.tokens_from_exprs(arms, ast));
                 }
-                ExprKind::RecordLiteral { .. } => (),
+                ExprKind::RecordLiteral { fields, .. } => {
+                    for field in fields {
+                        result.push(self.make_span(Kind::PARAMETER, field.label_span));
+                        result.extend(self.tokens_from_expr(&field.value, ast));
+                    }
+                }
                 ExprKind::RowVariable(..) => (),
                 ExprKind::InlineIR(instr) => {
                     result.push(self.make_span(Kind::KEYWORD, instr.instr_name_span))
@@ -463,7 +485,40 @@ impl<'a> Higlighter<'a> {
             Node::Body(body) => {
                 result.extend(self.tokens_from_exprs(&body.decls, ast));
             }
-            Node::Pattern(..) => (),
+            Node::Pattern(pattern) => match &pattern.kind {
+                PatternKind::Tuple(patterns) => {
+                    result.extend(self.tokens_from_exprs(patterns, ast));
+                }
+                PatternKind::Or(patterns) => {
+                    result.extend(self.tokens_from_exprs(patterns, ast));
+                }
+                PatternKind::Variant {
+                    variant_name_span,
+                    fields,
+                    ..
+                } => {
+                    result.push(self.make_span(Kind::ENUM_MEMBER, *variant_name_span));
+                    result.extend(self.tokens_from_exprs(fields, ast));
+                }
+                PatternKind::Record { fields } => {
+                    for field in fields {
+                        match &field.kind {
+                            RecordFieldPatternKind::Bind(..) => {
+                                result.push(self.make_span(Kind::PARAMETER, field.span));
+                            }
+                            RecordFieldPatternKind::Equals {
+                                name_span, value, ..
+                            } => {
+                                result.push(self.make_span(Kind::PARAMETER, *name_span));
+                                result.extend(self.tokens_from_expr(value, ast));
+                            }
+                            _ => (),
+                        }
+                    }
+                }
+                PatternKind::Struct { .. } => (),
+                _ => (),
+            },
             Node::MatchArm(arm) => {
                 result.extend(self.tokens_from_expr(&arm.pattern, ast));
                 result.extend(self.tokens_from_expr(&arm.body, ast));
@@ -482,7 +537,12 @@ impl<'a> Higlighter<'a> {
                 }
                 result.extend(self.tokens_from_expr(&arg.value, ast));
             }
-            Node::FuncSignature(..) => (),
+            Node::FuncSignature(signature) => {
+                result.extend(self.tokens_from_exprs(&signature.params, ast));
+                if let Some(box ret) = &signature.ret {
+                    result.extend(self.tokens_from_expr(ret, ast));
+                }
+            }
         };
 
         result
@@ -524,10 +584,10 @@ pub fn highlight_html(source: &str) -> String {
     let mut highlighter = Higlighter::new(source);
     let mut tokens = highlighter.highlight();
     tokens.sort_by(|a, b| a.start.cmp(&b.start).then_with(|| b.end.cmp(&a.end)));
-    render_html(source, &tokens)
+    render_html_with_tokens(source, &tokens)
 }
 
-fn render_html(source: &str, tokens: &[HighlightToken]) -> String {
+pub fn render_html_with_tokens(source: &str, tokens: &[HighlightToken]) -> String {
     let mut output = String::with_capacity(source.len() + tokens.len() * 32);
     let mut cursor = 0usize;
 

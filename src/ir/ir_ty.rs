@@ -7,7 +7,7 @@ use crate::{
     types::{row::Row, ty::Ty, type_session::TypeDefKind},
 };
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone, Hash)]
 pub enum IrTy {
     Int,
     Float,
@@ -28,9 +28,8 @@ impl IrTy {
             IrTy::Int => 8,
             IrTy::Float => 8,
             IrTy::Bool => 1,
-            IrTy::Func(args, ret) => {
-                ret.bytes_len() + args.iter().map(|a| a.bytes_len()).sum::<usize>()
-            }
+            // Function values are stored as Symbols (8 bytes).
+            IrTy::Func(..) => 8,
             IrTy::Record(_sym, fields) => fields.iter().map(|a| a.bytes_len()).sum::<usize>(),
             IrTy::RawPtr => 8,
             IrTy::Byte => 1,
@@ -56,7 +55,7 @@ impl FromStr for IrTy {
             return Ok(IrTy::Bool);
         }
 
-        if s == "void" {
+        if s == "void" || s == "()" {
             return Ok(IrTy::Void);
         }
 
@@ -134,7 +133,7 @@ impl std::fmt::Display for IrTy {
                 )
             }
             IrTy::Buffer(len) => write!(f, "buf({len})"),
-            IrTy::Void => write!(f, "void"),
+            IrTy::Void => write!(f, "()"),
         }
     }
 }

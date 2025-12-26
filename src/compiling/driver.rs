@@ -408,6 +408,14 @@ impl Driver<Typed> {
 }
 
 impl Driver<Lowered> {
+    pub fn display_symbol_names(&self) -> FxHashMap<Symbol, String> {
+        let mut names = self.phase.symbol_names.clone();
+        for (sym, name) in self.config.modules.imported_symbol_names() {
+            names.entry(sym).or_insert(name);
+        }
+        names
+    }
+
     pub fn module<T: Into<String>>(self, name: T) -> Module {
         Module {
             id: StableModuleId::generate(&self.phase.exports),

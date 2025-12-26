@@ -17,6 +17,13 @@ pub enum Reference {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Addr(pub(super) usize);
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+pub enum RecordId {
+    Nominal(Symbol),
+    Record(u32),
+    Anon,
+}
+
 #[derive(Default, Debug, Clone, PartialEq)]
 pub enum Value {
     Reg(u32),
@@ -33,7 +40,7 @@ pub enum Value {
         depth: usize,
         reg: Register,
     },
-    Record(Option<Symbol>, Vec<Value>),
+    Record(RecordId, Vec<Value>),
     RawPtr(Addr),
     RawBuffer(Vec<u8>),
     Void,
@@ -98,7 +105,7 @@ impl FromStr for Value {
             return Ok(Self::Bool(false));
         }
 
-        if s == "void" {
+        if s == "void" || s == "()" {
             return Ok(Self::Void);
         }
 
@@ -127,22 +134,13 @@ impl std::fmt::Display for Value {
             Value::Ref(reference) => write!(f, "&{reference:?}"),
             Value::Reg(reg) => write!(f, "%{reg}"),
             Value::RawBuffer(v) => write!(f, "[{v:?}]"),
-            Value::Record(sym, fields) => write!(
-                f,
-                "{}{{ {:?} }}",
-                if let Some(sym) = sym {
-                    format!("{sym} ")
-                } else {
-                    "".to_string()
-                },
-                fields
-            ),
+            Value::Record(sym, fields) => write!(f, "{sym:?}{{ {:?} }}", fields),
             Value::Int(i) => write!(f, "{i}"),
             Value::Float(i) => write!(f, "{i}"),
             Value::Func(name) => write!(f, "{}()", name),
             Value::Bool(b) => write!(f, "{}", if *b { "true" } else { "false" }),
             Value::Closure { func, env } => write!(f, "{func}[{env}]()"),
-            Value::Void => write!(f, "void"),
+            Value::Void => write!(f, "()"),
             Value::Uninit => write!(f, "uninit"),
             Value::Poison => write!(f, "poison"),
             Value::RawPtr(val) => write!(f, "rawptr({})", val.0),

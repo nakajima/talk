@@ -1,5 +1,5 @@
 func identity(x) { x }
 let int = identity(123)
 let float = identity(1.23)
-int
-float
+print(int)
+print(float)
