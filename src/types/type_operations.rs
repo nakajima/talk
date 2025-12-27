@@ -263,15 +263,15 @@ fn unify_rows(
                 result.extend(extend_var_tail(id, lhs_fields)?);
             }
             RowTail::Empty => {
-                return Err(TypeError::InvalidUnification(
-                    InferTy::Record(Box::new(lhs.clone())).into(),
-                    InferTy::Record(Box::new(rhs.clone())).into(),
+                return Err(TypeError::invalid_unification(
+                    InferTy::Record(Box::new(lhs.clone())),
+                    InferTy::Record(Box::new(rhs.clone())),
                 ));
             }
             RowTail::Param(_) => {
-                return Err(TypeError::InvalidUnification(
-                    InferTy::Record(Box::new(lhs.clone())).into(),
-                    InferTy::Record(Box::new(rhs.clone())).into(),
+                return Err(TypeError::invalid_unification(
+                    InferTy::Record(Box::new(lhs.clone())),
+                    InferTy::Record(Box::new(rhs.clone())),
                 ));
             }
         }
@@ -284,15 +284,15 @@ fn unify_rows(
                 result.extend(extend_var_tail(id, rhs_fields)?);
             }
             RowTail::Empty => {
-                return Err(TypeError::InvalidUnification(
-                    InferTy::Record(Box::new(lhs.clone())).into(),
-                    InferTy::Record(Box::new(rhs.clone())).into(),
+                return Err(TypeError::invalid_unification(
+                    InferTy::Record(Box::new(lhs.clone())),
+                    InferTy::Record(Box::new(rhs.clone())),
                 ));
             }
             RowTail::Param(_) => {
-                return Err(TypeError::InvalidUnification(
-                    InferTy::Record(Box::new(lhs.clone())).into(),
-                    InferTy::Record(Box::new(rhs.clone())).into(),
+                return Err(TypeError::invalid_unification(
+                    InferTy::Record(Box::new(lhs.clone())),
+                    InferTy::Record(Box::new(rhs.clone())),
                 ));
             }
         }
@@ -309,9 +309,9 @@ fn unify_rows(
         }
         (RowTail::Param(a), RowTail::Param(b)) if a == b => {}
         (RowTail::Param(_), RowTail::Param(_)) => {
-            return Err(TypeError::InvalidUnification(
-                InferTy::Record(Box::new(lhs.clone())).into(),
-                InferTy::Record(Box::new(rhs.clone())).into(),
+            return Err(TypeError::invalid_unification(
+                InferTy::Record(Box::new(lhs.clone())),
+                InferTy::Record(Box::new(rhs.clone())),
             ));
         }
         _ => {}
@@ -346,9 +346,9 @@ pub(super) fn unify(
             if lhs == rhs {
                 Ok(Default::default())
             } else {
-                Err(TypeError::InvalidUnification(
-                    InferTy::Primitive(*lhs).into(),
-                    InferTy::Primitive(*rhs).into(),
+                Err(TypeError::invalid_unification(
+                    InferTy::Primitive(*lhs),
+                    InferTy::Primitive(*rhs),
                 ))
             }
         }
@@ -357,9 +357,9 @@ pub(super) fn unify(
             if lhs == rhs {
                 Ok(Default::default())
             } else {
-                Err(TypeError::InvalidUnification(
-                    InferTy::Primitive(*lhs).into(),
-                    InferTy::Primitive(*rhs).into(),
+                Err(TypeError::invalid_unification(
+                    InferTy::Primitive(*lhs),
+                    InferTy::Primitive(*rhs),
                 ))
             }
         }
@@ -399,11 +399,11 @@ pub(super) fn unify(
             },
         ) => {
             if lhs_id != rhs_id {
-                return Err(TypeError::InvalidUnification(lhs.into(), rhs.into()));
+                return Err(TypeError::invalid_unification(lhs.clone(), rhs.clone()));
             }
 
             if lhs_type_args.len() != rhs_type_args.len() {
-                return Err(TypeError::InvalidUnification(lhs.into(), rhs.into()));
+                return Err(TypeError::invalid_unification(lhs.clone(), rhs.clone()));
             }
 
             for (lhs, rhs) in lhs_type_args.iter().zip(rhs_type_args) {
@@ -488,15 +488,15 @@ pub(super) fn unify(
                 unify(&normalized, other, context, session)
             } else {
                 // Base is still unknown - error (the constraint solver will defer)
-                Err(TypeError::InvalidUnification(
-                    projection.into(),
-                    other.clone().into(),
+                Err(TypeError::invalid_unification(
+                    projection,
+                    other.clone(),
                 ))
             }
         }
 
         (_, InferTy::Rigid(_)) | (InferTy::Rigid(_), _) => {
-            Err(TypeError::InvalidUnification(lhs.into(), rhs.into()))
+            Err(TypeError::invalid_unification(lhs.clone(), rhs.clone()))
         }
         _ => {
             tracing::error!(
@@ -504,7 +504,7 @@ pub(super) fn unify(
                 session.apply(lhs.clone(), context.substitutions_mut(),),
                 session.apply(rhs.clone(), context.substitutions_mut(),)
             );
-            Err(TypeError::InvalidUnification(lhs.into(), rhs.into()))
+            Err(TypeError::invalid_unification(lhs.clone(), rhs.clone()))
         }
     }
 }

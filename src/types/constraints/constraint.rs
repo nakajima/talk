@@ -32,6 +32,25 @@ pub enum ConstraintCause {
     Internal,
 }
 
+impl ConstraintCause {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Annotation(..) => "type annotation",
+            Self::Member(..) => "member access",
+            Self::Literal(..) => "literal",
+            Self::Assignment(..) => "assignment",
+            Self::Call(..) => "call",
+            Self::Condition(..) => "condition",
+            Self::Pattern(..) => "pattern",
+            Self::MatchArm(..) => "match arm",
+            Self::CallTypeArg(..) => "call type argument",
+            Self::Conformance { .. } => "conformance",
+            Self::TypeMember(..) => "type member",
+            Self::Internal => "internal",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Constraint {
     Call(Call),

@@ -17,8 +17,14 @@ use crate::{
         conformance::ConformanceKey,
         constraint_solver::DeferralReason,
         constraints::{
-            call::Call, conforms::Conforms, constraint::Constraint, equals::Equals,
-            has_field::HasField, member::Member, projection::Projection, type_member::TypeMember,
+            call::Call,
+            conforms::Conforms,
+            constraint::{Constraint, ConstraintCause},
+            equals::Equals,
+            has_field::HasField,
+            member::Member,
+            projection::Projection,
+            type_member::TypeMember,
         },
         infer_row::InferRow,
         infer_ty::{InferTy, Level, Meta},
@@ -388,6 +394,7 @@ impl ConstraintStore {
                 node_id: None,
                 lhs,
                 rhs,
+                cause: None,
             }),
             &BindingGroup {
                 id: Default::default(),
@@ -405,6 +412,17 @@ impl ConstraintStore {
         rhs: InferTy,
         group: &BindingGroup,
     ) -> &Constraint {
+        self.wants_equals_at_with_cause(node_id, lhs, rhs, group, None)
+    }
+
+    pub fn wants_equals_at_with_cause(
+        &mut self,
+        node_id: NodeID,
+        lhs: InferTy,
+        rhs: InferTy,
+        group: &BindingGroup,
+        cause: Option<ConstraintCause>,
+    ) -> &Constraint {
         let id = self.ids.next_id();
         self.wants(
             id,
@@ -413,6 +431,7 @@ impl ConstraintStore {
                 node_id: Some(node_id),
                 lhs,
                 rhs,
+                cause,
             }),
             group,
         )
@@ -515,6 +534,7 @@ impl ConstraintStore {
         result: InferTy,
         node_id: NodeID,
         group: &BindingGroup,
+        cause: ConstraintCause,
     ) -> &Constraint {
         let id = self.ids.next_id();
         self.wants(
@@ -526,6 +546,7 @@ impl ConstraintStore {
                 name,
                 generics,
                 result,
+                cause,
             }),
             group,
         )
@@ -587,6 +608,7 @@ pub mod tests {
                 level: Level(1),
             },
             rhs: InferTy::Int,
+            cause: None,
         });
 
         store.wants(1.into(), constraint.clone(), &Default::default());
@@ -613,6 +635,7 @@ pub mod tests {
                 level: Level(1),
             },
             rhs: InferTy::Int,
+            cause: None,
         });
 
         store.wants(1.into(), constraint.clone(), &Default::default());
@@ -632,6 +655,7 @@ pub mod tests {
                 level: Level(1),
             },
             rhs: InferTy::Int,
+            cause: None,
         });
 
         let member = Constraint::Member(Member {

@@ -59,7 +59,7 @@ impl<'a> ConstraintSolver<'a> {
                     Constraint::Equals(ref equals) => {
                         match unify(&equals.lhs, &equals.rhs, self.context, session) {
                             Ok(metas) => SolveResult::Solved(metas),
-                            Err(e) => SolveResult::Err(e),
+                            Err(e) => SolveResult::Err(e.with_optional_cause(equals.cause)),
                         }
                     }
                     Constraint::Call(ref call) => call.solve(constraints, self.context, session),

@@ -7,7 +7,10 @@ use crate::{
     node_id::NodeID,
     types::{
         constraint_solver::{DeferralReason, SolveResult},
-        constraints::store::{ConstraintId, ConstraintStore},
+        constraints::{
+            constraint::ConstraintCause,
+            store::{ConstraintId, ConstraintStore},
+        },
         infer_ty::{InferTy, Meta, TypeParamId},
         predicate::Predicate,
         solve_context::SolveContext,
@@ -25,6 +28,7 @@ pub struct TypeMember {
     pub node_id: NodeID,
     pub generics: Vec<InferTy>,
     pub result: InferTy,
+    pub cause: ConstraintCause,
 }
 
 impl TypeMember {
@@ -45,6 +49,7 @@ impl TypeMember {
         context: &mut SolveContext,
         session: &mut TypeSession,
     ) -> SolveResult {
+        let cause = ConstraintCause::TypeMember(self.node_id);
         match ty {
             InferTy::Var { id, .. } => {
                 SolveResult::Defer(DeferralReason::WaitingOnMeta(Meta::Ty(*id)))
@@ -83,7 +88,9 @@ impl TypeMember {
                                 constraints,
                             )
                             .0;
-                        match unify(&ty, &self.result, context, session) {
+                        match unify(&ty, &self.result, context, session)
+                            .map_err(|e| e.with_cause(cause))
+                        {
                             Ok(vars) => return SolveResult::Solved(vars),
                             Err(e) => return SolveResult::Err(e),
                         }
@@ -137,7 +144,9 @@ impl TypeMember {
                 };
 
                 let child_ty = child_entry.instantiate(self.node_id, constraints, context, session);
-                return match unify(&child_ty, &self.result, context, session) {
+                return match unify(&child_ty, &self.result, context, session)
+                    .map_err(|e| e.with_cause(self.cause))
+                {
                     Ok(metas) => SolveResult::Solved(metas),
                     Err(e) => SolveResult::Err(e),
                 };

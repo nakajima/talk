@@ -39,7 +39,7 @@ use crate::{
         conformance::{Conformance, ConformanceKey, Witnesses},
         constraint_solver::ConstraintSolver,
         constraints::{
-            constraint::Constraint,
+            constraint::{Constraint, ConstraintCause},
             store::{ConstraintStore, GroupId},
         },
         infer_row::InferRow,
@@ -1066,11 +1066,12 @@ impl<'a> InferencePass<'a> {
             StmtKind::Assignment(lhs, rhs) => {
                 let lhs_ty = self.visit_expr(lhs, context)?;
                 let rhs_ty = self.visit_expr(rhs, context)?;
-                self.constraints.wants_equals_at(
+                self.constraints.wants_equals_at_with_cause(
                     stmt.id,
                     lhs_ty.ty.clone(),
                     rhs_ty.ty.clone(),
                     &context.group_info(),
+                    Some(ConstraintCause::Assignment(stmt.id)),
                 );
                 TypedStmt {
                     id: stmt.id,
@@ -1087,11 +1088,12 @@ impl<'a> InferencePass<'a> {
             StmtKind::Loop(cond, block) => {
                 let cond_ty = if let Some(cond) = cond {
                     let cond_ty = self.visit_expr(cond, context)?;
-                    self.constraints.wants_equals_at(
+                    self.constraints.wants_equals_at_with_cause(
                         cond.id,
                         cond_ty.ty.clone(),
                         InferTy::Bool,
                         &context.group_info(),
+                        Some(ConstraintCause::Condition(cond.id)),
                     );
                     cond_ty
                 } else {
@@ -1334,11 +1336,12 @@ impl<'a> InferencePass<'a> {
         let mut typed_items = vec![item_ty.clone()];
         for expr in items[1..].iter() {
             let ty = self.visit_expr(expr, context)?;
-            self.constraints.wants_equals_at(
+            self.constraints.wants_equals_at_with_cause(
                 expr.id,
                 item_ty.ty.clone(),
                 ty.ty.clone(),
                 &context.group_info(),
+                Some(ConstraintCause::Literal(expr.id)),
             );
             typed_items.push(ty);
         }
@@ -1954,11 +1957,12 @@ impl<'a> InferencePass<'a> {
 
         if let Some(default_value) = default_value {
             let default_ty = self.visit_expr(default_value, context)?;
-            self.constraints.wants_equals_at(
+            self.constraints.wants_equals_at_with_cause(
                 default_value.id,
                 default_ty.ty.clone(),
                 ty.clone(),
                 &context.group_info(),
+                Some(ConstraintCause::Annotation(default_value.id)),
             );
         }
 
@@ -2044,11 +2048,12 @@ impl<'a> InferencePass<'a> {
             let arm_ty = self.infer_block(&arm.body, context)?;
 
             if let Some(last_arm_ty) = &last_arm_ty {
-                self.constraints.wants_equals_at(
+                self.constraints.wants_equals_at_with_cause(
                     arm.id,
                     arm_ty.ret.clone(),
                     last_arm_ty.clone(),
                     &context.group_info(),
+                    Some(ConstraintCause::MatchArm(arm.id)),
                 );
             }
 
@@ -2078,11 +2083,12 @@ impl<'a> InferencePass<'a> {
         match &pattern.kind {
             PatternKind::Bind(Name::Resolved(sym, _)) => {
                 if let Some(EnvEntry::Mono(existing)) = self.session.lookup(sym) {
-                    self.constraints.wants_equals_at(
+                    self.constraints.wants_equals_at_with_cause(
                         pattern.id,
                         expected.clone(),
                         existing.clone(),
                         &context.group_info(),
+                        Some(ConstraintCause::Pattern(pattern.id)),
                     );
                 };
 
@@ -2109,11 +2115,12 @@ impl<'a> InferencePass<'a> {
                         .collect_vec(),
                 );
 
-                self.constraints.wants_equals_at(
+                self.constraints.wants_equals_at_with_cause(
                     pattern.id,
                     ty.clone(),
                     expected.clone(),
                     &context.group_info(),
+                    Some(ConstraintCause::Pattern(pattern.id)),
                 );
 
                 ty
@@ -2181,11 +2188,12 @@ impl<'a> InferencePass<'a> {
                 }
 
                 let ty = InferTy::Record(row.into());
-                self.constraints.wants_equals_at(
+                self.constraints.wants_equals_at_with_cause(
                     pattern.id,
                     ty.clone(),
                     expected.clone(),
                     &context.group_info(),
+                    Some(ConstraintCause::Pattern(pattern.id)),
                 );
 
                 ty
@@ -2232,11 +2240,12 @@ impl<'a> InferencePass<'a> {
         for sym in baseline {
             let canonical = self.session.new_ty_meta_var(context.level());
             if let Some(existing) = self.session.lookup(&sym) {
-                self.constraints.wants_equals_at(
+                self.constraints.wants_equals_at_with_cause(
                     pattern_id,
                     existing._as_ty(),
                     canonical.clone(),
                     &context.group_info(),
+                    Some(ConstraintCause::Pattern(pattern_id)),
                 );
             }
 
@@ -2269,11 +2278,12 @@ impl<'a> InferencePass<'a> {
                 TypedPatternKind::Or(typed_patterns?)
             }
             PatternKind::Bind(Name::Raw(name)) => {
-                self.constraints.wants_equals_at(
+                self.constraints.wants_equals_at_with_cause(
                     pattern.id,
                     expected.clone(),
                     InferTy::Error(TypeError::NameNotResolved(name.clone().into()).into()),
                     &context.group_info(),
+                    Some(ConstraintCause::Pattern(pattern.id)),
                 );
                 TypedPatternKind::Bind(Symbol::Synthesized(
                     self.session.symbols.next_synthesized(ModuleId::Current),
@@ -2281,11 +2291,12 @@ impl<'a> InferencePass<'a> {
             }
             PatternKind::Bind(Name::Resolved(sym, _)) => {
                 if let Some(ty) = self.lookup_or_binder(*sym) {
-                    self.constraints.wants_equals_at(
+                    self.constraints.wants_equals_at_with_cause(
                         pattern.id,
                         expected.clone(),
                         ty,
                         &context.group_info(),
+                        Some(ConstraintCause::Pattern(pattern.id)),
                     );
                 } else {
                     self.session
@@ -2297,41 +2308,45 @@ impl<'a> InferencePass<'a> {
                 self.session.symbols.next_synthesized(ModuleId::Current),
             )),
             PatternKind::LiteralInt(val) => {
-                self.constraints.wants_equals_at(
+                self.constraints.wants_equals_at_with_cause(
                     pattern.id,
                     expected.clone(),
                     InferTy::Int,
                     &context.group_info(),
+                    Some(ConstraintCause::Literal(pattern.id)),
                 );
 
                 TypedPatternKind::LiteralInt(val.clone())
             }
             PatternKind::LiteralFloat(val) => {
-                self.constraints.wants_equals_at(
+                self.constraints.wants_equals_at_with_cause(
                     pattern.id,
                     expected.clone(),
                     InferTy::Float,
                     &context.group_info(),
+                    Some(ConstraintCause::Literal(pattern.id)),
                 );
 
                 TypedPatternKind::LiteralFloat(val.clone())
             }
             PatternKind::LiteralFalse => {
-                self.constraints.wants_equals_at(
+                self.constraints.wants_equals_at_with_cause(
                     pattern.id,
                     expected.clone(),
                     InferTy::Bool,
                     &context.group_info(),
+                    Some(ConstraintCause::Literal(pattern.id)),
                 );
 
                 TypedPatternKind::LiteralFalse
             }
             PatternKind::LiteralTrue => {
-                self.constraints.wants_equals_at(
+                self.constraints.wants_equals_at_with_cause(
                     pattern.id,
                     expected.clone(),
                     InferTy::Bool,
                     &context.group_info(),
+                    Some(ConstraintCause::Literal(pattern.id)),
                 );
 
                 TypedPatternKind::LiteralTrue
@@ -2341,11 +2356,12 @@ impl<'a> InferencePass<'a> {
                     .map(|_| self.session.new_ty_meta_var(context.level()))
                     .collect();
 
-                self.constraints.wants_equals_at(
+                self.constraints.wants_equals_at_with_cause(
                     pattern.id,
                     expected.clone(),
                     InferTy::Tuple(metas.clone()),
                     &context.group_info(),
+                    Some(ConstraintCause::Pattern(pattern.id)),
                 );
 
                 TypedPatternKind::Tuple(
@@ -2499,11 +2515,12 @@ impl<'a> InferencePass<'a> {
         context: &mut impl Solve,
     ) -> TypedRet<TypedExpr<InferTy>> {
         let cond_ty = self.visit_expr(cond, context)?;
-        self.constraints.wants_equals_at(
+        self.constraints.wants_equals_at_with_cause(
             cond.id,
             cond_ty.ty.clone(),
             InferTy::Bool,
             &context.group_info(),
+            Some(ConstraintCause::Condition(cond.id)),
         );
 
         let conseq_ty = self.infer_block(conseq, context)?;
@@ -2533,11 +2550,12 @@ impl<'a> InferencePass<'a> {
         context: &mut impl Solve,
     ) -> TypedRet<TypedStmt<InferTy>> {
         let cond_ty = self.visit_expr(cond, context)?;
-        self.constraints.wants_equals_at(
+        self.constraints.wants_equals_at_with_cause(
             cond.id,
             cond_ty.ty.clone(),
             InferTy::Bool,
             &context.group_info(),
+            Some(ConstraintCause::Condition(cond.id)),
         );
 
         let conseq_ty = self.infer_block(conseq, context)?;
@@ -2692,7 +2710,7 @@ impl<'a> InferencePass<'a> {
             .zip(type_arg_tys.iter())
             .zip(instantiations.ty_mappings(&callee.id).values())
         {
-            self.constraints.wants_equals_at(
+            self.constraints.wants_equals_at_with_cause(
                 type_arg.id,
                 type_arg_ty.clone(),
                 InferTy::Var {
@@ -2706,6 +2724,7 @@ impl<'a> InferencePass<'a> {
                         .unwrap_or_default(),
                 },
                 &context.group_info(),
+                Some(ConstraintCause::CallTypeArg(type_arg.id)),
             );
         }
 
@@ -2818,11 +2837,12 @@ impl<'a> InferencePass<'a> {
             let annotation_ty = self.visit_type_annotation(type_annotation, context)?;
             // If there was a placeholder, unify it with the annotated type
             if let Some(existing) = existing_ty {
-                self.constraints.wants_equals_at(
+                self.constraints.wants_equals_at_with_cause(
                     type_annotation.id,
                     existing,
                     annotation_ty.clone(),
                     &context.group_info(),
+                    Some(ConstraintCause::Annotation(type_annotation.id)),
                 );
             }
             annotation_ty
@@ -2858,11 +2878,12 @@ impl<'a> InferencePass<'a> {
         let tok = self.tracking_returns();
         let ret = self.infer_block(block, context)?;
         self.verify_returns(tok, ret.ret.clone(), context);
-        self.constraints.wants_equals_at(
+        self.constraints.wants_equals_at_with_cause(
             block.id,
             ret.ret.clone(),
             expected,
             &context.group_info(),
+            Some(ConstraintCause::Annotation(block.id)),
         );
         Ok(ret)
     }
@@ -2896,11 +2917,12 @@ impl<'a> InferencePass<'a> {
 
         if let Some(ret) = ret {
             let ret_ty = self.visit_type_annotation(ret, context)?;
-            self.constraints.wants_equals_at(
+            self.constraints.wants_equals_at_with_cause(
                 ret.id,
                 ret_ty,
                 expected_ret.clone(),
                 &context.group_info(),
+                Some(ConstraintCause::Annotation(ret.id)),
             );
         }
 
@@ -3068,6 +3090,7 @@ impl<'a> InferencePass<'a> {
                         ret.clone(),
                         type_annotation.id,
                         &context.group_info(),
+                        ConstraintCause::Annotation(type_annotation.id),
                     );
                 }
 
@@ -3097,11 +3120,12 @@ impl<'a> InferencePass<'a> {
             (Some(annotation), Some(rhs)) => {
                 let annotated_ty = self.visit_type_annotation(annotation, context)?;
                 let rhs_ty = self.visit_expr(rhs, context)?;
-                self.constraints.wants_equals_at(
+                self.constraints.wants_equals_at_with_cause(
                     rhs.id,
                     annotated_ty.clone(),
                     rhs_ty.ty.clone(),
                     &context.group_info(),
+                    Some(ConstraintCause::Annotation(rhs.id)),
                 );
                 (annotated_ty, Some(rhs_ty))
             }
@@ -3147,11 +3171,12 @@ impl<'a> InferencePass<'a> {
             InferTy::Record(box row) => row.clone(),
             _ => {
                 let row = self.session.new_row_meta_var(context.level());
-                self.constraints.wants_equals_at(
+                self.constraints.wants_equals_at_with_cause(
                     node_id,
                     expected.clone(),
                     InferTy::Record(Box::new(row.clone())),
                     &context.group_info(),
+                    Some(ConstraintCause::Pattern(node_id)),
                 );
                 row
             }

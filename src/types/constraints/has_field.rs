@@ -5,7 +5,7 @@ use crate::{
     node_id::NodeID,
     types::{
         constraint_solver::{DeferralReason, SolveResult},
-        constraints::store::{ConstraintId, ConstraintStore},
+        constraints::{constraint::ConstraintCause, store::{ConstraintId, ConstraintStore}},
         infer_row::InferRow,
         infer_ty::{InferTy, Level, Meta},
         type_error::TypeError,
@@ -41,7 +41,13 @@ impl HasField {
                 if self.label == *label {
                     let group = constraints.copy_group(self.id);
                     if let Some(node_id) = self.node_id {
-                        constraints.wants_equals_at(node_id, self.ty.clone(), ty.clone(), &group);
+                        constraints.wants_equals_at_with_cause(
+                            node_id,
+                            self.ty.clone(),
+                            ty.clone(),
+                            &group,
+                            Some(ConstraintCause::Member(node_id)),
+                        );
                     } else {
                         constraints.wants_equals(self.ty.clone(), ty.clone());
                     }

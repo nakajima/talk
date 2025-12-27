@@ -937,7 +937,7 @@ pub mod tests {
             matches!(
                 d,
                 crate::diagnostic::AnyDiagnostic::Typing(Diagnostic {
-                    kind: TypeError::InvalidUnification(_, _),
+                    kind: TypeError::InvalidUnification(_, _, _),
                     ..
                 })
             )

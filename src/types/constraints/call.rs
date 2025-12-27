@@ -4,7 +4,7 @@ use crate::{
     node_id::NodeID,
     types::{
         constraint_solver::{DeferralReason, SolveResult},
-        constraints::store::{ConstraintId, ConstraintStore},
+        constraints::{constraint::ConstraintCause, store::{ConstraintId, ConstraintStore}},
         infer_ty::{InferTy, Meta},
         solve_context::{Solve, SolveContext},
         term_environment::EnvEntry,
@@ -34,6 +34,7 @@ impl Call {
         context: &mut SolveContext,
         session: &mut TypeSession,
     ) -> SolveResult {
+        let cause = ConstraintCause::Call(self.call_node_id);
         let callee = session.apply(self.callee.clone(), &mut context.substitutions);
         let returns = session.apply(self.returns.clone(), &mut context.substitutions);
 
@@ -119,7 +120,7 @@ impl Call {
 
                 match unify(&init_ty, &curry(args, returns_type), context, session) {
                     Ok(metas) => SolveResult::Solved(metas),
-                    Err(e) => SolveResult::Err(e),
+                    Err(e) => SolveResult::Err(e.with_cause(cause)),
                 }
             }
             InferTy::Func(..) => {
@@ -141,7 +142,7 @@ impl Call {
 
                 match res {
                     Ok(metas) => SolveResult::Solved(metas),
-                    Err(e) => SolveResult::Err(e),
+                    Err(e) => SolveResult::Err(e.with_cause(cause)),
                 }
             }
             ty => SolveResult::Err(TypeError::CalleeNotCallable(ty.clone())),

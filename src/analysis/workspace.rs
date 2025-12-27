@@ -6,6 +6,7 @@ use crate::ast::{AST, NameResolved};
 use crate::compiling::driver::{Driver, DriverConfig, Source};
 use crate::compiling::module::ModuleId;
 use crate::diagnostic::AnyDiagnostic;
+use crate::name_resolution::symbol::set_symbol_names;
 use crate::node_id::FileID;
 use crate::parser_error::ParserError;
 use crate::types::type_session::Types;
@@ -66,6 +67,7 @@ impl Workspace {
         let types = Some(phase.types);
         let diagnostics_any = phase.diagnostics;
 
+        let _symbol_guard = set_symbol_names(resolved_names.symbol_names.clone());
         let mut asts: Vec<Option<AST<NameResolved>>> = vec![None; file_id_to_document.len()];
         for ast in asts_by_source.values() {
             let idx = ast.file_id.0 as usize;

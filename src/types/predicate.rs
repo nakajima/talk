@@ -4,7 +4,7 @@ use crate::{
     name_resolution::symbol::ProtocolId,
     node_id::NodeID,
     types::{
-        constraints::{constraint::Constraint, store::ConstraintStore},
+        constraints::{constraint::{Constraint, ConstraintCause}, store::ConstraintStore},
         infer_row::{InferRow, RowParamId},
         infer_ty::{InferTy, TypeParamId},
         solve_context::Solve,
@@ -401,6 +401,7 @@ impl Predicate<InferTy> {
                 instantiate_ty(id, returns, context.instantiations_mut(), level),
                 id,
                 &context.group_info(),
+                ConstraintCause::Internal,
             ),
         Self::Call {
             callee,

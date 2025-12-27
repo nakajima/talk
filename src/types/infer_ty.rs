@@ -10,7 +10,7 @@ use crate::{
     name::Name,
     name_resolution::symbol::{ProtocolId, StructId, Symbol},
     types::{
-        infer_row::{InferRow, RowMetaId},
+        infer_row::{InferRow, RowMetaId, RowParamId},
         scheme::{ForAll, Scheme},
         term_environment::EnvEntry,
         ty::{SomeType, Ty},
@@ -432,6 +432,142 @@ impl std::fmt::Debug for InferTy {
 
                 write!(f, "{{{row_debug}}}",)
             }
+        }
+    }
+}
+
+impl std::fmt::Display for InferTy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            InferTy::Error(..) => write!(f, "error"),
+            InferTy::Param(id) => write!(f, "T{}", id.0),
+            InferTy::Rigid(id) => write!(f, "^T{}", id.0),
+            InferTy::Var { id, .. } => write!(f, "?T{}", id.0),
+            InferTy::Primitive(primitive) => write!(f, "{}", format_symbol_name(*primitive)),
+            InferTy::Projection {
+                base, associated, ..
+            } => write!(f, "{}.{}", base.as_ref(), associated),
+            InferTy::Constructor { name, params, ret } => {
+                if params.is_empty() {
+                    write!(f, "{}", name.name_str())
+                } else {
+                    let params = params
+                        .iter()
+                        .map(|p| p.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    write!(f, "({}) -> {}", params, ret.as_ref())
+                }
+            }
+            InferTy::Func(..) => {
+                let mut params = Vec::new();
+                let ret = collect_func_params(self, &mut params);
+                let params = params
+                    .into_iter()
+                    .map(|p| p.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                write!(f, "({}) -> {}", params, ret)
+            }
+            InferTy::Tuple(items) => write!(
+                f,
+                "({})",
+                items
+                    .iter()
+                    .map(|p| p.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            InferTy::Record(row) => write!(f, "{{ {} }}", format_row(row)),
+            InferTy::Nominal { symbol, type_args } => {
+                let base = format_symbol_name(*symbol);
+                if type_args.is_empty() {
+                    write!(f, "{base}")
+                } else {
+                    let args = type_args
+                        .iter()
+                        .map(|t| t.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    write!(f, "{base}<{args}>")
+                }
+            }
+        }
+    }
+}
+
+fn collect_func_params<'a>(ty: &'a InferTy, params: &mut Vec<&'a InferTy>) -> &'a InferTy {
+    match ty {
+        InferTy::Func(param, ret) => {
+            if **param != InferTy::Void {
+                params.push(param);
+            }
+            collect_func_params(ret, params)
+        }
+        _ => ty,
+    }
+}
+
+fn format_symbol_name(symbol: Symbol) -> String {
+    match symbol {
+        Symbol::Int => "Int".to_string(),
+        Symbol::Float => "Float".to_string(),
+        Symbol::Bool => "Bool".to_string(),
+        Symbol::Void => "Void".to_string(),
+        Symbol::RawPtr => "RawPtr".to_string(),
+        Symbol::Byte => "Byte".to_string(),
+        Symbol::String => "String".to_string(),
+        Symbol::Array => "Array".to_string(),
+        _ => symbol.to_string(),
+    }
+}
+
+fn format_row(row: &InferRow) -> String {
+    let mut fields: Vec<(Label, InferTy)> = Vec::new();
+    let mut tail: Option<RowTailDisplay> = None;
+    let mut cursor = row;
+
+    loop {
+        match cursor {
+            InferRow::Empty(..) => break,
+            InferRow::Param(id) => {
+                tail = Some(RowTailDisplay::Param(*id));
+                break;
+            }
+            InferRow::Var(id) => {
+                tail = Some(RowTailDisplay::Var(*id));
+                break;
+            }
+            InferRow::Extend { row, label, ty } => {
+                fields.push((label.clone(), ty.clone()));
+                cursor = row.as_ref();
+            }
+        }
+    }
+
+    fields.reverse();
+    let mut rendered = fields
+        .into_iter()
+        .map(|(label, ty)| format!("{label}: {ty}"))
+        .collect::<Vec<_>>();
+
+    if let Some(tail) = tail {
+        rendered.push(tail.to_string());
+    }
+
+    rendered.join(", ")
+}
+
+enum RowTailDisplay {
+    Param(RowParamId),
+    Var(RowMetaId),
+}
+
+impl std::fmt::Display for RowTailDisplay {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RowTailDisplay::Param(id) => write!(f, "..R{}", id.0),
+            RowTailDisplay::Var(id) => write!(f, ".._R{}", id.0),
         }
     }
 }

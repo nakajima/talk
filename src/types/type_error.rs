@@ -3,7 +3,12 @@ use std::{error::Error, fmt::Display};
 use crate::{
     name::Name,
     name_resolution::symbol::{ProtocolId, Symbol},
-    types::{conformance::ConformanceKey, infer_ty::InferTy, matcher::RequiredConstructor},
+    types::{
+        conformance::ConformanceKey,
+        constraints::constraint::ConstraintCause,
+        infer_ty::InferTy,
+        matcher::RequiredConstructor,
+    },
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -18,7 +23,7 @@ pub enum TypeError {
         conformance_key: ConformanceKey,
         label: String,
     },
-    InvalidUnification(Box<InferTy>, Box<InferTy>),
+    InvalidUnification(Box<InferTy>, Box<InferTy>, Option<ConstraintCause>),
     OccursCheck(InferTy),
     CalleeNotCallable(InferTy),
     MemberNotFound(InferTy, String),
@@ -52,8 +57,23 @@ impl Display for TypeError {
             Self::GenericArgCount { expected, actual } => {
                 write!(f, "Expected {expected} type arguments, got {actual}")
             }
-            Self::InvalidUnification(lhs, rhs) => {
-                write!(f, "Invalid unification: {lhs:?} <> {rhs:?}")
+            Self::InvalidUnification(lhs, rhs, cause) => {
+                if let Some(cause) = cause {
+                    write!(
+                        f,
+                        "Type mismatch in {}: {} vs {}",
+                        cause.label(),
+                        lhs.as_ref(),
+                        rhs.as_ref()
+                    )
+                } else {
+                    write!(
+                        f,
+                        "Type mismatch: {} vs {}",
+                        lhs.as_ref(),
+                        rhs.as_ref()
+                    )
+                }
             }
             Self::OccursCheck(ty) => {
                 write!(f, "Recursive type not supported..... yet? {ty:?}")
@@ -93,6 +113,31 @@ impl Display for TypeError {
             Self::RecordPatternNeedsRest => {
                 write!(f, "Record pattern on an open row must include `..`")
             }
+        }
+    }
+}
+
+impl TypeError {
+    pub fn invalid_unification(lhs: InferTy, rhs: InferTy) -> Self {
+        Self::InvalidUnification(lhs.into(), rhs.into(), None)
+    }
+
+    pub fn with_cause(self, cause: ConstraintCause) -> Self {
+        match self {
+            Self::InvalidUnification(lhs, rhs, None) => {
+                Self::InvalidUnification(lhs, rhs, Some(cause))
+            }
+            Self::InvalidUnification(lhs, rhs, Some(existing)) => {
+                Self::InvalidUnification(lhs, rhs, Some(existing))
+            }
+            other => other,
+        }
+    }
+
+    pub fn with_optional_cause(self, cause: Option<ConstraintCause>) -> Self {
+        match cause {
+            Some(cause) => self.with_cause(cause),
+            None => self,
         }
     }
 }

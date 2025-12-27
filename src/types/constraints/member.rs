@@ -7,7 +7,7 @@ use crate::{
     node_id::NodeID,
     types::{
         constraint_solver::{DeferralReason, SolveResult},
-        constraints::store::{ConstraintId, ConstraintStore},
+        constraints::{constraint::ConstraintCause, store::{ConstraintId, ConstraintStore}},
         infer_ty::{InferTy, Meta, TypeParamId},
         passes::uncurry_function,
         predicate::Predicate,
@@ -122,6 +122,7 @@ impl Member {
         type_param_id: TypeParamId,
     ) -> SolveResult {
         let mut solved_metas: Vec<Meta> = Default::default();
+        let cause = ConstraintCause::Member(self.node_id);
         let mut candidates = vec![];
         for given in &context.givens {
             if let Predicate::Conforms {
@@ -145,14 +146,16 @@ impl Member {
                 let req_ty = entry.instantiate(self.node_id, constraints, context, session);
                 let (req_self, req_func) = consume_self(&req_ty);
 
-                match unify(&req_self, &self.receiver, context, session) {
+                match unify(&req_self, &self.receiver, context, session)
+                    .map_err(|e| e.with_cause(cause))
+                {
                     Ok(metas) => {
                         solved_metas.extend(metas);
                     }
                     Err(e) => return SolveResult::Err(e),
                 }
 
-                match unify(ty, &req_func, context, session) {
+                match unify(ty, &req_func, context, session).map_err(|e| e.with_cause(cause)) {
                     Ok(metas) => solved_metas.extend(metas),
                     Err(e) => return SolveResult::Err(e),
                 };
@@ -178,6 +181,7 @@ impl Member {
         session: &mut TypeSession,
         nominal_symbol: &Symbol,
     ) -> SolveResult {
+        let cause = ConstraintCause::Member(self.node_id);
         let Some(member_sym) = session.lookup_static_member(nominal_symbol, &self.label) else {
             return SolveResult::Defer(DeferralReason::WaitingOnSymbol(*nominal_symbol));
         };
@@ -262,7 +266,7 @@ impl Member {
             };
         }
 
-        match unify(&member_ty, &self.ty, context, session) {
+        match unify(&member_ty, &self.ty, context, session).map_err(|e| e.with_cause(cause)) {
             Ok(vars) => SolveResult::Solved(vars),
             Err(e) => SolveResult::Err(e),
         }
@@ -278,6 +282,7 @@ impl Member {
         type_args: &[InferTy],
     ) -> SolveResult {
         let mut solved_metas: Vec<Meta> = Default::default();
+        let cause = ConstraintCause::Member(self.node_id);
 
         // First get the nominal - if it doesn't exist yet, defer
         let Some(nominal) = session.lookup_nominal(symbol) else {
@@ -299,12 +304,16 @@ impl Member {
                     let method = session.apply(method, &mut context.substitutions);
                     let (method_receiver, method_fn) = consume_self(&method);
 
-                    match unify(&method_receiver, &self.receiver, context, session) {
+                    match unify(&method_receiver, &self.receiver, context, session)
+                        .map_err(|e| e.with_cause(cause))
+                    {
                         Ok(metas) => solved_metas.extend(metas),
                         Err(e) => return SolveResult::Err(e),
                     };
 
-                    match unify(&method_fn, &self.ty, context, session) {
+                    match unify(&method_fn, &self.ty, context, session)
+                        .map_err(|e| e.with_cause(cause))
+                    {
                         Ok(metas) => solved_metas.extend(metas),
                         Err(e) => return SolveResult::Err(e),
                     };
@@ -329,7 +338,13 @@ impl Member {
                     };
 
                     let group = constraints.copy_group(self.id);
-                    constraints.wants_equals_at(self.node_id, constructor_ty, self.ty.clone(), &group);
+                    constraints.wants_equals_at_with_cause(
+                        self.node_id,
+                        constructor_ty,
+                        self.ty.clone(),
+                        &group,
+                        Some(cause),
+                    );
                     return SolveResult::Solved(Default::default());
                 }
                 Symbol::StaticMethod(..) => {
@@ -345,7 +360,7 @@ impl Member {
             .get(&self.label)
             .cloned()
         {
-            match unify(&self.ty, &ty, context, session) {
+            match unify(&self.ty, &ty, context, session).map_err(|e| e.with_cause(cause)) {
                 Ok(vars) => SolveResult::Solved(vars),
                 Err(e) => SolveResult::Err(e),
             }

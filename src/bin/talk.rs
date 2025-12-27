@@ -5,7 +5,7 @@ use talk::compiling::driver::DriverConfig;
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     use clap::{Args, CommandFactory, Parser, Subcommand, ValueHint};
-    use clap_complete::{generate, Shell};
+    use clap_complete::{Shell, generate};
 
     /// Simple program to greet a person
     #[derive(Parser, Debug)]
@@ -19,6 +19,10 @@ async fn main() {
     enum Commands {
         // IR { filename: PathBuf },
         Parse {
+            #[arg(value_hint = ValueHint::FilePath)]
+            filename: Option<String>,
+        },
+        Format {
             #[arg(value_hint = ValueHint::FilePath)]
             filename: Option<String>,
         },
@@ -94,8 +98,7 @@ async fn main() {
             let display_names = lowered.display_symbol_names();
             let module = lowered.module("talkin");
 
-            let mut interpreter =
-                Interpreter::new(module.program, Some(display_names), StdioIO {});
+            let mut interpreter = Interpreter::new(module.program, Some(display_names), StdioIO {});
             _ = interpreter.run();
         }
         Commands::Check { filenames, json } => {
@@ -160,6 +163,13 @@ async fn main() {
             let source = input_text(filename.as_deref());
             let html = highlight_html(&source);
             println!("{html}");
+        }
+        Commands::Format { filename } => {
+            use talk::formatter;
+
+            init();
+            let source = input_text(filename.as_deref());
+            println!("{}", formatter::format_string(&source));
         }
         Commands::Debug { filename } => {
             init();

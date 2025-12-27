@@ -3,12 +3,13 @@ use talk::{
     analysis::{Diagnostic, DocumentInput, Workspace},
     common::text::{clamp_to_char_boundary, line_info_for_offset_utf16},
     compiling::driver::{Driver, DriverConfig, Lowered, Source},
+    formatter,
+    highlighter::highlight_html as highlight_source_html,
     ir::{
         highlighter::highlight_html as highlight_ir_html,
         interpreter::Interpreter,
         io::{CaptureIO, IO, IOError, MultiWriteIO},
     },
-    highlighter::highlight_html as highlight_source_html,
     name_resolution::symbol::set_symbol_names,
 };
 use wasm_bindgen::prelude::*;
@@ -35,6 +36,12 @@ impl IO for ConsoleIO {
 
 fn init() {
     install_panic_hook();
+}
+
+#[wasm_bindgen]
+pub fn format(source: &str) -> String {
+    init();
+    formatter::format_string(source)
 }
 
 #[wasm_bindgen]
