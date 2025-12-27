@@ -526,6 +526,7 @@ impl ConstraintStore {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn wants_type_member(
         &mut self,
         base: InferTy,

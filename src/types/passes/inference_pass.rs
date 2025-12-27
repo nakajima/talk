@@ -541,58 +541,55 @@ impl<'a> InferencePass<'a> {
         let mut assoc_type_params: IndexSet<TypeParamId> = IndexSet::default();
         let mut assoc_type_predicates: IndexSet<Predicate<InferTy>> = IndexSet::default();
         for decl in &body.decls {
-            if let DeclKind::Associated { generic } = &decl.kind {
-                if let Ok(ty) =
+            if let DeclKind::Associated { generic } = &decl.kind
+                && let Ok(ty) =
                     self.visit_associated_type(generic, protocol_self_id, protocol_symbol, context)
-                {
-                    let label: Label = generic.name.name_str().into();
-                    let assoc_param_id = match &ty {
-                        InferTy::Param(param_id) => {
-                            assoc_type_params.insert(*param_id);
-                            Some(*param_id)
-                        }
-                        _ => None,
-                    };
-
-                    associated_types.insert(label.clone(), ty.clone());
-
-                    if let Some(assoc_param) = assoc_param_id {
-                        assoc_type_predicates.insert(Predicate::Projection {
-                            base: InferTy::Param(protocol_self_id),
-                            label: label.clone(),
-                            returns: InferTy::Param(assoc_param),
-                            protocol_id: Some(protocol_id),
-                        });
+            {
+                let label: Label = generic.name.name_str().into();
+                let assoc_param_id = match &ty {
+                    InferTy::Param(param_id) => {
+                        assoc_type_params.insert(*param_id);
+                        Some(*param_id)
                     }
+                    _ => None,
+                };
 
-                    // Collect any conformance predicates for this associated type
-                    for conformance in generic.conformances.iter() {
-                        if let Ok(Symbol::Protocol(conforms_to_id)) = conformance.symbol() {
-                            let assoc_param = assoc_param_id.or_else(|| {
-                                let Ok(generic_sym) = generic.name.symbol() else {
-                                    return None;
-                                };
-                                let Some(entry) = self.session.lookup(&generic_sym) else {
-                                    return None;
-                                };
-                                entry.foralls().iter().find_map(|fa| {
-                                    if let ForAll::Ty(param_id) = fa
-                                        && *param_id != protocol_self_id
-                                    {
-                                        Some(*param_id)
-                                    } else {
-                                        None
-                                    }
-                                })
+                associated_types.insert(label.clone(), ty.clone());
+
+                if let Some(assoc_param) = assoc_param_id {
+                    assoc_type_predicates.insert(Predicate::Projection {
+                        base: InferTy::Param(protocol_self_id),
+                        label: label.clone(),
+                        returns: InferTy::Param(assoc_param),
+                        protocol_id: Some(protocol_id),
+                    });
+                }
+
+                // Collect any conformance predicates for this associated type
+                for conformance in generic.conformances.iter() {
+                    if let Ok(Symbol::Protocol(conforms_to_id)) = conformance.symbol() {
+                        let assoc_param = assoc_param_id.or_else(|| {
+                            let Ok(generic_sym) = generic.name.symbol() else {
+                                return None;
+                            };
+                            let entry = self.session.lookup(&generic_sym)?;
+                            entry.foralls().iter().find_map(|fa| {
+                                if let ForAll::Ty(param_id) = fa
+                                    && *param_id != protocol_self_id
+                                {
+                                    Some(*param_id)
+                                } else {
+                                    None
+                                }
+                            })
+                        });
+
+                        // Get the type param ID for this associated type
+                        if let Some(assoc_param) = assoc_param {
+                            assoc_type_predicates.insert(Predicate::Conforms {
+                                param: assoc_param,
+                                protocol_id: conforms_to_id,
                             });
-
-                            // Get the type param ID for this associated type
-                            if let Some(assoc_param) = assoc_param {
-                                assoc_type_predicates.insert(Predicate::Conforms {
-                                    param: assoc_param,
-                                    protocol_id: conforms_to_id,
-                                });
-                            }
                         }
                     }
                 }
