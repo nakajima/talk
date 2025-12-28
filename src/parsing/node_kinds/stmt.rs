@@ -19,6 +19,7 @@ pub enum StmtKind {
     Break,
     Assignment(Expr /* LHS */, Expr /* RHS */),
     Loop(Option<Expr> /* condition */, Block /* body */),
+    Continue(Option<Expr>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Drive, DriveMut)]

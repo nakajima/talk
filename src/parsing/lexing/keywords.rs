@@ -27,6 +27,7 @@ pub(super) fn handle(string: String) -> TokenKind {
         "effect" => Effect,
         "handling" => Handling,
         "in" => In,
+        "continue" => Continue,
         _ => Identifier(string),
     }
 }

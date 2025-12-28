@@ -157,6 +157,7 @@ pub enum Symbol {
     Protocol(ProtocolId),
     AssociatedType(AssociatedTypeId),
     MethodRequirement(MethodRequirementId),
+    Effect(EffectId),
     Main,
     Library,
 }
@@ -178,6 +179,7 @@ impl std::fmt::Debug for Symbol {
             Symbol::RawPtr => write!(f, "RawPtr"),
             Symbol::Byte => write!(f, "Byte"),
             Symbol::Struct(type_id) => write!(f, "@Struct({type_id:?}){name}"),
+            Symbol::Effect(id) => write!(f, "@Effect({id:?}){name}"),
             Symbol::Enum(type_id) => write!(f, "@Enum({type_id:?}{name})"),
             Symbol::TypeAlias(type_id) => write!(f, "@TypeAlias({type_id:?}{name})"),
             Symbol::TypeParameter(id) => write!(f, "@TypeParameter({id}{name})"),
@@ -343,6 +345,7 @@ impl Symbol {
             Symbol::Main => 0u32.to_le_bytes(),
             Symbol::Library => u32::MAX.to_le_bytes(),
             Symbol::Struct(v) => v.local_id.to_le_bytes(),
+            Symbol::Effect(v) => v.local_id.to_le_bytes(),
             Symbol::Enum(v) => v.local_id.to_le_bytes(),
             Symbol::TypeAlias(v) => v.local_id.to_le_bytes(),
             Symbol::TypeParameter(v) => v.0.to_le_bytes(),
@@ -500,6 +503,7 @@ impl_module_symbol_id!(StaticMethod, StaticMethodId);
 impl_module_symbol_id!(AssociatedType, AssociatedTypeId);
 impl_module_symbol_id!(Builtin, BuiltinId);
 impl_module_symbol_id!(Synthesized, SynthesizedId);
+impl_module_symbol_id!(Effect, EffectId);
 
 // Local-only IDs (simple u32)
 impl_local_symbol_id!(TypeParameter, TypeParameterId);
@@ -536,6 +540,7 @@ impl Display for Symbol {
             Symbol::Protocol(protocol_id) => write!(f, "{}", protocol_id),
             Symbol::AssociatedType(associated_type_id) => write!(f, "{}", associated_type_id),
             Symbol::MethodRequirement(id) => write!(f, "{}", id),
+            Symbol::Effect(id) => write!(f, "{}", id),
         }
     }
 }
@@ -571,6 +576,10 @@ impl Symbols {
     // Cross-module IDs (need ModuleId)
     pub fn next_struct(&mut self, module_id: ModuleId) -> StructId {
         StructId::new(module_id, self.decls.next_id())
+    }
+
+    pub fn next_effect(&mut self, module_id: ModuleId) -> EffectId {
+        EffectId::new(module_id, self.decls.next_id())
     }
 
     pub fn next_type_alias(&mut self, module_id: ModuleId) -> TypeAliasId {

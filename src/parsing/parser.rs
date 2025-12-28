@@ -570,6 +570,23 @@ impl<'a> Parser<'a> {
             TokenKind::If => self.if_stmt(),
             TokenKind::Loop => self.loop_stmt(),
             TokenKind::Return => self.return_stmt(),
+            TokenKind::Continue => {
+                let tok = self.push_source_location();
+                self.consume(TokenKind::Continue)?;
+                let expr = if self.peek_is(TokenKind::Newline)
+                    || self.peek_is(TokenKind::Semicolon)
+                    || self.peek_is(TokenKind::EOF)
+                {
+                    None
+                } else {
+                    Some(self.expr()?.as_expr())
+                };
+                self.save_meta(tok, |id, span| Stmt {
+                    id,
+                    span,
+                    kind: StmtKind::Continue(expr),
+                })
+            }
             TokenKind::Break => {
                 let tok = self.push_source_location();
                 self.consume(TokenKind::Break)?;

@@ -95,6 +95,7 @@ impl TypedStmtKind<InferTy> {
                 rhs.finalize(session, witnesses),
             ),
             Return(typed_expr) => Return(typed_expr.map(|e| e.finalize(session, witnesses))),
+            Continue(typed_expr) => Continue(typed_expr.map(|e| e.finalize(session, witnesses))),
             Loop(cond, block) => Loop(
                 cond.finalize(session, witnesses),
                 block.finalize(session, witnesses),
@@ -952,6 +953,7 @@ pub enum TypedStmtKind<T: SomeType> {
     Expr(TypedExpr<T>),
     Assignment(TypedExpr<T>, TypedExpr<T>),
     Return(Option<TypedExpr<T>>),
+    Continue(Option<TypedExpr<T>>),
     Loop(TypedExpr<T>, TypedBlock<T>),
     Break,
 }
@@ -965,6 +967,7 @@ impl<T: SomeType, U: SomeType> TyMappable<T, U> for TypedStmtKind<T> {
             Assignment(lhs, rhs) => Assignment(lhs.map_ty(m), rhs.map_ty(m)),
             Return(typed_expr) => Return(typed_expr.map(|e| e.map_ty(m))),
             Loop(cond, block) => Loop(cond.map_ty(m), block.map_ty(m)),
+            Continue(expr) => Continue(expr.map(|e| e.map_ty(m))),
             Break => Break,
         }
     }

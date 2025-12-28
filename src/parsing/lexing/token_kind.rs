@@ -17,6 +17,7 @@ pub enum TokenKind {
     Else,
     Loop,
     Return,
+    Continue,
 
     True,
     False,
@@ -105,6 +106,7 @@ impl Display for TokenKind {
 impl TokenKind {
     pub fn as_str(&self) -> String {
         let text = match &self {
+            TokenKind::Continue => "continue",
             TokenKind::EffectName(v) => &format!("'{v}"),
             TokenKind::Dollar => "$",
             TokenKind::BoundVar(v) => &format!("${v}"),

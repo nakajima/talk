@@ -612,6 +612,8 @@ impl<'a> Lowerer<'a> {
             TypedStmtKind::Return(typed_expr) => {
                 self.lower_return(typed_expr, bind, instantiations)
             }
+            #[warn(clippy::todo)]
+            TypedStmtKind::Continue(..) => todo!(),
             TypedStmtKind::Loop(cond, typed_block) => {
                 self.lower_loop(&Some(cond.clone()), typed_block, instantiations)
             }

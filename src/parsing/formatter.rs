@@ -415,11 +415,11 @@ impl<'a> Formatter<'a> {
             ExprKind::Incomplete(_) => Doc::Empty,
             ExprKind::Handling {
                 effect_name, body, ..
-            } => text("@handling") + text(effect_name.to_string()) + self.format_block(body),
+            } => text(format!("@handle '{} ", effect_name.name_str())) + self.format_block(body),
             ExprKind::CallEffect {
                 effect_name, args, ..
             } => {
-                text(effect_name.to_string())
+                text(format!("'{}", effect_name.name_str()))
                     + text("(")
                     + softline()
                     + join(
@@ -505,15 +505,15 @@ impl<'a> Formatter<'a> {
             DeclKind::Effect {
                 name, params, ret, ..
             } => {
-                text("'")
-                    + text(name.to_string())
+                text("effect '")
+                    + self.format_name(name)
                     + text("(")
                     + join(
                         params.iter().map(|p| self.format_parameter(p)).collect(),
                         text(","),
                     )
                     + text(")")
-                    + text("->")
+                    + text(" -> ")
                     + self.format_type_annotation(ret)
             }
             DeclKind::Import(name) => join(vec![text("import"), text(name)], text(" ")),
@@ -588,6 +588,13 @@ impl<'a> Formatter<'a> {
     fn format_stmt(&self, stmt: &Stmt) -> Doc {
         let doc = match &stmt.kind {
             StmtKind::Expr(expr) => self.format_expr(expr),
+            StmtKind::Continue(expr) => {
+                if let Some(expr) = expr {
+                    concat_space(text("continue"), self.format_expr(expr))
+                } else {
+                    text("continue")
+                }
+            }
             StmtKind::If(cond, then_block, else_block) => {
                 let mut result = concat_space(
                     text("if"),
@@ -708,57 +715,85 @@ impl<'a> Formatter<'a> {
         self.format_block_inner(block, false)
     }
 
-    fn format_block_inner(&self, block: &Block, allow_single_line: bool) -> Doc {
-        let has_comments = self.has_comments_between(block.span.start, block.span.end);
-        if block.body.is_empty() {
+    fn wrap_block_single_line(inner: Doc) -> Doc {
+        group(concat(
+            text("{"),
+            concat(concat(text(" "), inner), text(" }")),
+        ))
+    }
+
+    fn wrap_block_multiline(inner: Doc) -> Doc {
+        concat(
+            text("{"),
+            concat(
+                nest(1, concat(hardline(), inner)),
+                concat(hardline(), text("}")),
+            ),
+        )
+    }
+
+    fn format_block_args(&self, args: &[Parameter]) -> Option<Doc> {
+        if args.is_empty() {
+            return None;
+        }
+
+        let arg_docs: Vec<_> = args.iter().map(|arg| self.format_parameter(arg)).collect();
+        Some(concat(
+            join(arg_docs, concat(text(","), text(" "))),
+            text(" in"),
+        ))
+    }
+
+    fn append_comments_until(&self, end: u32, mut acc: Doc, last_line: &mut Option<u32>) -> Doc {
+        for comment in self.take_comments_before(end) {
+            let line = comment.line;
+            let comment_doc = Self::comment_doc(comment);
+            acc = Self::append_doc_with_spacing(acc, last_line, comment_doc, line, line);
+        }
+        acc
+    }
+
+    fn format_empty_block(
+        &self,
+        args_doc: Option<Doc>,
+        allow_single_line: bool,
+        has_comments: bool,
+        end: u32,
+    ) -> Doc {
+        if let Some(args_doc) = args_doc {
             if !has_comments {
                 if allow_single_line {
-                    return concat(text("{"), text("}"));
+                    return Self::wrap_block_single_line(args_doc);
                 }
-                return concat(text("{"), concat(hardline(), text("}")));
+                return Self::wrap_block_multiline(args_doc);
             }
 
-            let mut final_doc = empty();
             let mut last_line: Option<u32> = None;
+            let content =
+                self.append_comments_until(end, concat(args_doc, hardline()), &mut last_line);
+            return Self::wrap_block_multiline(content);
+        }
 
-            for comment in self.take_comments_before(block.span.end) {
-                let line = comment.line;
-                let comment_doc = Self::comment_doc(comment);
-                final_doc = Self::append_doc_with_spacing(
-                    final_doc,
-                    &mut last_line,
-                    comment_doc,
-                    line,
-                    line,
-                );
+        if !has_comments {
+            if allow_single_line {
+                return concat(text("{"), text("}"));
             }
-
-            return concat(
-                text("{"),
-                concat(
-                    nest(1, concat(hardline(), final_doc)),
-                    concat(hardline(), text("}")),
-                ),
-            );
+            return concat(text("{"), concat(hardline(), text("}")));
         }
 
-        // Handle the special case for single-line blocks
-        if allow_single_line
-            && block.body.len() == 1
-            && !Self::contains_control_flow(&block.body[0])
-            && !has_comments
-        {
-            return group(concat(
-                text("{"),
-                concat(
-                    concat(text(" "), self.format_node(&block.body[0])),
-                    text(" }"),
-                ),
-            ));
-        }
+        let mut last_line: Option<u32> = None;
+        let content = self.append_comments_until(end, empty(), &mut last_line);
+        Self::wrap_block_multiline(content)
+    }
 
+    fn format_block_body(&self, block: &Block, args_doc: Option<Doc>) -> Doc {
         let mut final_doc = empty();
         let mut last_line: Option<u32> = None;
+
+        if let Some(args_doc) = args_doc {
+            final_doc = concat(final_doc, args_doc);
+            final_doc = concat(final_doc, hardline());
+        }
 
         for stmt in &block.body {
             let meta = self.get_meta_for_node(stmt);
@@ -800,20 +835,34 @@ impl<'a> Formatter<'a> {
             );
         }
 
-        for comment in self.take_comments_before(block.span.end) {
-            let line = comment.line;
-            let comment_doc = Self::comment_doc(comment);
-            final_doc =
-                Self::append_doc_with_spacing(final_doc, &mut last_line, comment_doc, line, line);
+        self.append_comments_until(block.span.end, final_doc, &mut last_line)
+    }
+
+    fn format_block_inner(&self, block: &Block, allow_single_line: bool) -> Doc {
+        let has_comments = self.has_comments_between(block.span.start, block.span.end);
+        let args_doc = self.format_block_args(&block.args);
+        if block.body.is_empty() {
+            return self.format_empty_block(
+                args_doc,
+                allow_single_line,
+                has_comments,
+                block.span.end,
+            );
         }
 
-        concat(
-            text("{"),
-            concat(
-                nest(1, concat(hardline(), final_doc)),
-                concat(hardline(), text("}")),
-            ),
-        )
+        // Handle the special case for single-line blocks
+        if allow_single_line
+            && block.body.len() == 1
+            && !Self::contains_control_flow(&block.body[0])
+            && !has_comments
+        {
+            let mut inner_doc = self.format_node(&block.body[0]);
+            if let Some(args_doc) = args_doc.as_ref() {
+                inner_doc = concat(args_doc.clone(), concat(text(" "), inner_doc));
+            }
+            return Self::wrap_block_single_line(inner_doc);
+        }
+        Self::wrap_block_multiline(self.format_block_body(block, args_doc))
     }
 
     fn format_body(&self, body: &Body) -> Doc {
@@ -1329,6 +1378,22 @@ impl<'a> Formatter<'a> {
             ),
         );
 
+        match func.effects.len() {
+            0 => (),
+            1 => result = concat_space(result, text(format!("'{}", func.effects[0].name_str()))),
+            _ => {
+                result = concat_space(
+                    result,
+                    text("[")
+                        + join(
+                            func.effects.iter().map(|e| text(e.name_str())).collect(),
+                            text(","),
+                        )
+                        + text("]"),
+                )
+            }
+        }
+
         if let Some(ref ret) = func.ret {
             result = concat_space(
                 result,
@@ -1341,6 +1406,7 @@ impl<'a> Formatter<'a> {
         // Check if the body could be formatted inline
         if func.body.body.is_empty()
             || (func.body.body.len() == 1 && !Self::contains_control_flow(&func.body.body[0]))
+            || func.effects.is_empty()
         {
             if has_comments {
                 return concat_space(result, self.format_block_multiline(&func.body));
@@ -2247,6 +2313,18 @@ mod formatter_tests {
             format_code("func outer() { func inner() {} }", 80),
             "func outer() {\n\tfunc inner() {}\n}"
         );
+    }
+
+    #[test]
+    fn test_block_args_formatting() {
+        assert_eq!(
+            format_code("let handler = @handle 'fizz { x in x }", 80),
+            "let handler = @handle 'fizz { x in x }"
+        );
+
+        let input = "let handler = @handle 'fizz { x: Int, y: Bool in\nx\n}";
+        let expected = "let handler = @handle 'fizz { x: Int, y: Bool in x }";
+        assert_eq!(format_code(input, 80), expected);
     }
 
     #[test]

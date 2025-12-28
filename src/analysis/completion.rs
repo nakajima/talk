@@ -1,8 +1,8 @@
 use indexmap::IndexMap;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::analysis::{CompletionItem, CompletionItemKind, DocumentId};
 use crate::analysis::workspace::Workspace;
+use crate::analysis::{CompletionItem, CompletionItemKind, DocumentId};
 use crate::{
     ast::{AST, NameResolved},
     label::Label,
@@ -15,8 +15,8 @@ use crate::{
     types::{
         format::{SymbolNames, TypeFormatter},
         row::Row,
-        type_session::Types,
         ty::Ty,
+        type_session::Types,
     },
 };
 
@@ -132,12 +132,10 @@ fn member_completions(
                 .nominals
                 .get(&receiver_sym)
                 .map(|_| {
-                    formatter.format_ty(
-                        &Ty::Nominal {
-                            symbol: receiver_sym,
-                            type_args: vec![],
-                        },
-                    )
+                    formatter.format_ty(&Ty::Nominal {
+                        symbol: receiver_sym,
+                        type_args: vec![],
+                    })
                 })
                 .unwrap_or_else(|| receiver_sym.to_string());
             let variant_values = types
@@ -319,7 +317,7 @@ fn completion_kind(symbol: Symbol) -> Option<CompletionItemKind> {
         Symbol::Protocol(..) => CompletionItemKind::Interface,
         Symbol::TypeAlias(..) => CompletionItemKind::Class,
         Symbol::TypeParameter(..) | Symbol::AssociatedType(..) => CompletionItemKind::TypeParameter,
-
+        Symbol::Effect(..) => CompletionItemKind::Effect,
         Symbol::Global(..)
         | Symbol::DeclaredLocal(..)
         | Symbol::PatternBindLocal(..)
@@ -448,9 +446,7 @@ fn substitute_ty(ty: &Ty, substitutions: &FxHashMap<Ty, Ty>) -> Ty {
                 .map(|t| substitute_ty(t, substitutions))
                 .collect(),
         ),
-        Ty::Record(symbol, row) => {
-            Ty::Record(*symbol, substitute_row(row, substitutions).into())
-        }
+        Ty::Record(symbol, row) => Ty::Record(*symbol, substitute_row(row, substitutions).into()),
         Ty::Nominal { symbol, type_args } => Ty::Nominal {
             symbol: *symbol,
             type_args: type_args
@@ -473,10 +469,7 @@ fn substitute_row(row: &Row, substitutions: &FxHashMap<Ty, Ty>) -> Row {
     }
 }
 
-fn smallest_node_at_offset(
-    analysis: &CompletionAnalysis<'_>,
-    byte_offset: u32,
-) -> Option<NodeID> {
+fn smallest_node_at_offset(analysis: &CompletionAnalysis<'_>, byte_offset: u32) -> Option<NodeID> {
     analysis
         .ast
         .meta
@@ -496,7 +489,7 @@ fn smallest_node_at_offset(
 
 #[cfg(test)]
 mod tests {
-    use crate::analysis::{completion::CompletionAnalysis, DocumentInput, Workspace};
+    use crate::analysis::{DocumentInput, Workspace, completion::CompletionAnalysis};
 
     fn analyze(code: &str) -> Workspace {
         let doc = DocumentInput {

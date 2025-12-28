@@ -100,6 +100,7 @@ impl<'a> Higlighter<'a> {
 
         while let Ok(tok) = &lexer.next() {
             match tok.kind {
+                TokenKind::Continue => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::SingleQuote => (),
                 TokenKind::In => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::EffectName(..) => {
@@ -398,6 +399,11 @@ impl<'a> Higlighter<'a> {
             Node::Stmt(stmt) => match &stmt.kind {
                 StmtKind::Expr(expr) => {
                     result.extend(self.tokens_from_expr(expr, ast));
+                }
+                StmtKind::Continue(expr) => {
+                    if let Some(expr) = expr {
+                        result.extend(self.tokens_from_expr(expr, ast))
+                    }
                 }
                 StmtKind::If(cond, conseq, alt) => {
                     result.extend(self.tokens_from_expr(cond, ast));

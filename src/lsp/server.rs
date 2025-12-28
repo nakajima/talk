@@ -41,7 +41,7 @@ use crate::compiling::module::ModuleId;
 use crate::lexer::Lexer;
 use crate::lsp::semantic_tokens::collect;
 use crate::lsp::{completion, document::Document, semantic_tokens::TOKEN_TYPES};
-use crate::name_resolution::symbol::Symbol;
+use crate::name_resolution::symbol::{EffectId, Symbol};
 use crate::node_kinds::{
     decl::Decl,
     expr::Expr,
@@ -831,6 +831,7 @@ fn is_symbol_renamable(symbol: Symbol) -> bool {
         | Symbol::Variant(VariantId { module_id, .. })
         | Symbol::Protocol(ProtocolId { module_id, .. })
         | Symbol::AssociatedType(AssociatedTypeId { module_id, .. })
+        | Symbol::Effect(EffectId { module_id, .. })
         | Symbol::MethodRequirement(MethodRequirementId { module_id, .. }) => {
             module_id == ModuleId::Current
         }

@@ -1,6 +1,6 @@
 #[cfg(test)]
 pub mod tests {
-    use std::rc::Rc;
+    use std::{assert_matches::assert_matches, rc::Rc};
 
     use rustc_hash::FxHashSet;
 
@@ -15,16 +15,17 @@ pub mod tests {
         name_resolution::{
             name_resolver::{Capture, NameResolver, NameResolverError, ResolvedNames},
             symbol::{
-                AssociatedTypeId, BuiltinId, DeclaredLocalId, EnumId, GlobalId, InitializerId,
-                InstanceMethodId, MethodRequirementId, ParamLocalId, PatternBindLocalId,
-                PropertyId, ProtocolId, StaticMethodId, StructId, Symbol, SynthesizedId,
-                TypeAliasId, TypeParameterId, VariantId,
+                AssociatedTypeId, BuiltinId, DeclaredLocalId, EffectId, EnumId, GlobalId,
+                InitializerId, InstanceMethodId, MethodRequirementId, ParamLocalId,
+                PatternBindLocalId, PropertyId, ProtocolId, StaticMethodId, StructId, Symbol,
+                SynthesizedId, TypeAliasId, TypeParameterId, VariantId,
             },
         },
         node_id::{FileID, NodeID},
         node_kinds::{
+            block::Block,
             call_arg::CallArg,
-            decl::DeclKind,
+            decl::{Decl, DeclKind},
             expr::{Expr, ExprKind},
             func::Func,
             func_signature::FuncSignature,
@@ -1424,6 +1425,106 @@ pub mod tests {
             1,
             "{:?}",
             resolved.1.diagnostics
+        );
+    }
+
+    #[test]
+    fn resolves_effect_decl() {
+        let resolved = resolve(
+            "
+        effect 'fizz() -> ()
+        ",
+        );
+
+        assert_matches!(
+            *resolved.0.roots[0].as_decl(),
+            Decl {
+                kind: DeclKind::Effect {
+                    name: Name::Resolved(Symbol::Effect(..), ..),
+                    ..
+                },
+                ..
+            }
+        );
+    }
+
+    #[test]
+    fn resolves_handle_expr() {
+        let resolved = resolve(
+            "
+        effect 'fizz(x: Int) -> ()
+        let _ = @handle 'fizz { x in
+            continue x
+        }
+        ",
+        );
+
+        let Decl {
+            kind:
+                DeclKind::Let {
+                    lhs:
+                        Pattern {
+                            kind: PatternKind::Wildcard,
+                            ..
+                        },
+                    type_annotation: None,
+                    rhs:
+                        Some(Expr {
+                            kind:
+                                ExprKind::Handling {
+                                    effect_name: Name::Resolved(Symbol::Effect(..), ..),
+                                    body: Block { args, body, .. },
+                                    ..
+                                },
+                            ..
+                        }),
+                },
+            ..
+        } = resolved.0.roots[1].as_decl()
+        else {
+            panic!("didn't get decl: {:?}", resolved.0.roots[1])
+        };
+
+        assert_eq!(
+            *args,
+            vec![any!(Parameter, {
+                name: Name::Resolved(Symbol::ParamLocal(ParamLocalId(1)), "x".into()),
+                name_span: Span::ANY,
+                type_annotation: None
+            })]
+        );
+
+        assert_eq!(
+            *body,
+            vec![
+                any_stmt!(StmtKind::Continue(Some(any_expr!(ExprKind::Variable(
+                    Name::Resolved(Symbol::ParamLocal(ParamLocalId(1)), "x".into())
+                )))))
+                .into()
+            ]
+        )
+    }
+
+    #[test]
+    fn resolves_effect_call() {
+        let resolved = resolve(
+            "
+        effect 'fizz(x: Int) -> ()
+        'fizz(123)
+        ",
+        );
+
+        assert_eq!(
+            resolved.0.roots[1],
+            any_expr_stmt!(ExprKind::CallEffect {
+                effect_name: Name::Resolved(Symbol::Effect(EffectId::from(1)), "fizz".into()),
+                effect_name_span: Span::ANY,
+                args: vec![any!(CallArg, {
+                    label: Label::Positional(0),
+                    label_span: Span::ANY,
+                    value: any_expr!(ExprKind::LiteralInt("123".into()))
+                })]
+            })
         );
     }
 }

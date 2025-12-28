@@ -1084,6 +1084,15 @@ impl<'a> InferencePass<'a> {
                 ty: InferTy::Void,
                 kind: TypedStmtKind::Break,
             },
+            StmtKind::Continue(expr) => TypedStmt {
+                id: stmt.id,
+                ty: InferTy::Void,
+                kind: TypedStmtKind::Continue(
+                    expr.as_ref()
+                        .map(|e| self.visit_expr(e, context))
+                        .transpose()?,
+                ),
+            },
             StmtKind::Loop(cond, block) => {
                 let cond_ty = if let Some(cond) = cond {
                     let cond_ty = self.visit_expr(cond, context)?;

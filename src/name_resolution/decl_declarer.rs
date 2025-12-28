@@ -41,6 +41,14 @@ macro_rules! some {
             ),
         )
     };
+    (Effect) => {
+        $crate::name_resolution::symbol::Symbol::Effect(
+            $crate::name_resolution::symbol::EffectId::new(
+                $crate::compiling::module::ModuleId::Current,
+                0,
+            ),
+        )
+    };
     (Enum) => {
         $crate::name_resolution::symbol::Symbol::Enum($crate::name_resolution::symbol::EnumId::new(
             $crate::compiling::module::ModuleId::Current,
@@ -172,7 +180,8 @@ macro_rules! some {
     FuncSignature,
     MatchArm(enter, exit),
     Func,
-    Decl(enter, exit)
+    Decl(enter, exit),
+    Block(enter)
 )]
 pub struct DeclDeclarer<'a> {
     pub(super) resolver: &'a mut NameResolver,
@@ -406,6 +415,12 @@ impl<'a> DeclDeclarer<'a> {
 
     fn exit_match_arm(&mut self, _arm: &mut MatchArm) {
         self.end_scope();
+    }
+
+    fn enter_block(&mut self, block: &mut Block) {
+        for arg in &mut block.args {
+            arg.name = self.resolver.declare(&arg.name, some!(ParamLocal), arg.id);
+        }
     }
 
     ///////////////////////////////////////////////////////////////////////////
@@ -700,6 +715,10 @@ impl<'a> DeclDeclarer<'a> {
             for (id, binder) in lhs.collect_binders() {
                 self.start_scope(Some(binder), id, true);
             }
+        });
+
+        on!(&mut decl.kind, DeclKind::Effect { name, .. }, {
+            *name = self.resolver.declare(name, some!(Effect), decl.id);
         });
     }
 

@@ -481,6 +481,7 @@ impl NameResolver {
         let symbol = match kind {
             Symbol::Main => Symbol::Main,
             Symbol::Library => Symbol::Library,
+            Symbol::Effect(..) => Symbol::Effect(self.symbols.next_effect(module_id)),
             Symbol::Struct(..) => Symbol::Struct(self.symbols.next_struct(module_id)),
             Symbol::Enum(..) => Symbol::Enum(self.symbols.next_enum(module_id)),
             Symbol::TypeAlias(..) => Symbol::TypeAlias(self.symbols.next_type_alias(module_id)),
@@ -737,6 +738,29 @@ impl NameResolver {
             ) {
                 expr.kind = ExprKind::Constructor(name.clone());
             }
+        });
+
+        on!(&mut expr.kind, ExprKind::Handling { effect_name, .. }, {
+            let Some(resolved_name) = self.lookup(effect_name, Some(expr.id)) else {
+                self.diagnostic(
+                    expr.id,
+                    NameResolverError::UndefinedName(effect_name.name_str()),
+                );
+                return;
+            };
+            *effect_name = resolved_name;
+        });
+
+        on!(&mut expr.kind, ExprKind::CallEffect { effect_name, .. }, {
+            let Some(resolved_name) = self.lookup(effect_name, Some(expr.id)) else {
+                self.diagnostic(
+                    expr.id,
+                    NameResolverError::UndefinedName(effect_name.name_str()),
+                );
+                return;
+            };
+
+            *effect_name = resolved_name;
         });
     }
 
