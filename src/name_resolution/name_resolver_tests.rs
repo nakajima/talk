@@ -1527,4 +1527,35 @@ pub mod tests {
             })
         );
     }
+
+    #[test]
+    fn resolves_effect_annotation() {
+        let resolved = resolve(
+            "
+        effect 'fizz(x: Int) -> ()
+        func fizzes() 'fizz {}
+        ",
+        );
+
+        assert_eq!(
+            *resolved.0.roots[1].as_decl(),
+            any_decl!(DeclKind::Let {
+                lhs: any!(Pattern, {
+                    kind: PatternKind::Bind(Name::Resolved(Symbol::Global(1.into()), "fizzes".into()))
+                }),
+                type_annotation: None,
+                rhs: Some(any_expr!(ExprKind::Func(Func {
+                    id: NodeID::ANY,
+                    name: Name::Resolved(Symbol::Global(1.into()), "fizzes".into()),
+                    name_span: Span::ANY,
+                    effects: vec![Name::Resolved(Symbol::Effect(1.into()), "fizz".into())],
+                    generics: vec![],
+                    params: vec![],
+                    body: any_block!(vec![]),
+                    ret: None,
+                    attributes: vec![]
+                })))
+            })
+        );
+    }
 }

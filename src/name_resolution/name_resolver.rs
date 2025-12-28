@@ -778,6 +778,14 @@ impl NameResolver {
                 func.id,
             )]),
         );
+
+        for name in &mut func.effects {
+            let Some(resolved_name) = self.lookup(name, None) else {
+                self.diagnostic(func.id, NameResolverError::Unresolved(name.clone()));
+                continue;
+            };
+            *name = resolved_name;
+        }
     }
 
     fn exit_func(&mut self, func: &mut Func) {
