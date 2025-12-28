@@ -19,6 +19,8 @@ pub struct Func {
     pub name: Name,
     #[drive(skip)]
     pub name_span: Span,
+    #[drive(skip)]
+    pub effects: Vec<Name>,
     pub generics: Vec<GenericDecl>,
     pub params: Vec<Parameter>, /* params tuple */
     pub body: Block,

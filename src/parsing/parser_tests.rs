@@ -18,6 +18,7 @@ pub mod tests {
             func::Func,
             func_signature::FuncSignature,
             generic_decl::GenericDecl,
+            incomplete_expr::IncompleteExpr,
             inline_ir_instruction::{
                 InlineIRInstruction, InlineIRInstructionKind, Register, Value,
             },
@@ -577,6 +578,7 @@ pub mod tests {
                         args: vec![],
                         body: vec![],
                     },
+                    effects: Default::default(),
                     ret: None,
                     attributes: vec![]
                 })
@@ -639,6 +641,7 @@ pub mod tests {
                     args: vec![],
                     body: vec![any_expr_stmt!(ExprKind::Variable("a".into()))],
                 },
+                effects: Default::default(),
                 ret: None,
                 attributes: vec![],
             }))
@@ -680,6 +683,7 @@ pub mod tests {
                     args: vec![],
                     body: vec![any_expr_stmt!(ExprKind::Variable("t".into()))],
                 },
+                effects: Default::default(),
                 ret: Some(TypeAnnotation {
                     id: NodeID::ANY,
                     span: Span::ANY,
@@ -733,6 +737,7 @@ pub mod tests {
                     args: vec![],
                     body: vec![],
                 },
+                effects: Default::default(),
                 ret: None,
                 attributes: vec![],
             }))
@@ -752,6 +757,7 @@ pub mod tests {
                     args: vec![],
                     body: vec![],
                 },
+                effects: Default::default(),
                 ret: None,
                 attributes: vec![],
             }))
@@ -791,6 +797,7 @@ pub mod tests {
                     args: vec![],
                     body: vec![],
                 },
+                effects: Default::default(),
                 ret: None,
                 attributes: vec![],
             }))
@@ -828,6 +835,7 @@ pub mod tests {
                     args: vec![],
                     body: vec![],
                 },
+                effects: Default::default(),
                 ret: None,
                 attributes: vec![],
             }))
@@ -1002,6 +1010,7 @@ pub mod tests {
                     args: vec![],
                     body: vec![any_expr_stmt!(ExprKind::LiteralInt("123".into()))]
                 },
+                effects: Default::default(),
                 ret: Some(TypeAnnotation {
                     id: NodeID::ANY,
                     span: Span::ANY,
@@ -1573,6 +1582,7 @@ pub mod tests {
                     })
                 }],
                 body: any_block!(vec![]),
+                effects: Default::default(),
                 ret: None,
                 attributes: vec![],
             }))
@@ -1626,6 +1636,7 @@ pub mod tests {
                             name_span: Span::ANY,
                             generics: vec![],
                             params: vec![],
+                            effects: Default::default(),
                             body: any_block!(vec![any_expr_stmt!(ExprKind::LiteralInt(
                                 "123".into()
                             ))]),
@@ -1810,6 +1821,7 @@ pub mod tests {
                         name_span: Span::ANY,
                         generics: vec![],
                         params: vec![],
+                        effects: Default::default(),
                         body: any_block!(vec![]),
                         ret: None,
                         attributes: vec![],
@@ -1971,6 +1983,7 @@ pub mod tests {
                         name_span: Span::ANY,
                         generics: vec![],
                         params: vec![],
+                        effects: Default::default(),
                         body: any_block!(vec![any_expr_stmt!(ExprKind::LiteralInt("123".into()))]),
                         ret: None,
                         attributes: vec![]
@@ -2007,6 +2020,7 @@ pub mod tests {
                         name_span: Span::ANY,
                         generics: vec![],
                         params: vec![],
+                        effects: Default::default(),
                         body: any_block!(vec![any_expr_stmt!(ExprKind::LiteralInt("123".into()))]),
                         ret: None,
                         attributes: vec![]
@@ -2410,11 +2424,98 @@ pub mod tests {
         );
     }
 
-    // #[test]
-    // fn handles_unclosed_paren() {
-    //     let parsed = parse("func foo(");
-    //     assert_eq!(parsed.diagnostics.len(), 1);
-    // }
+    #[test]
+    fn parses_effect_definition_handler_decls() {
+        let parsed = parse(
+            r#"
+            effect 'fizz(x: Int) -> Int
+
+            // Handles 'fizz for as long as handler is in scope
+            let handler = @handle 'fizz { x in
+                x
+            }
+
+            func fizzes(x) '[fizz, buzz, ..] {
+                'fizz(x)
+            }
+            "#,
+        );
+
+        assert_eq!(
+            *parsed.roots[0].as_decl(),
+            any_decl!(DeclKind::Effect {
+                name: "fizz".into(),
+                name_span: Span::ANY,
+                params: vec![any!(Parameter, {
+                    name: "x".into(),
+                    name_span: Span::ANY,
+                    type_annotation: Some(nominal_annotation!("Int"))
+                })],
+                ret: nominal_annotation!("Int")
+            })
+        );
+
+        assert_eq!(
+            *parsed.roots[1].as_decl(),
+            any_decl!(DeclKind::Let {
+                lhs: any_pattern!(PatternKind::Bind("handler".into())),
+                type_annotation: None,
+                rhs: any_expr!(ExprKind::Handling {
+                    effect_name: Name::Raw("fizz".to_string()),
+                    effect_name_span: Span::ANY,
+                    body: any!(Block, {
+                        args: vec![any!(Parameter, {
+                            name: "x".into(),
+                            name_span: Span::ANY,
+                            type_annotation: None,
+                        })],
+                        body: vec![
+                            any_expr_stmt!(ExprKind::Variable("x".into()))
+                        ]
+                    })
+                })
+                .into()
+            })
+        );
+
+        assert_eq!(
+            *parsed.roots[2].as_decl(),
+            any_decl!(DeclKind::Func(Func {
+                id: NodeID::ANY,
+                name: "fizzes".into(),
+                name_span: Span::ANY,
+                generics: Default::default(),
+                params: vec![any!(Parameter, {
+                    name: "x".into(),
+                    name_span: Span::ANY,
+                    type_annotation: None,
+                })],
+                effects: vec![Name::Raw("fizz".into()), Name::Raw("buzz".into()),],
+                body: any!(Block, {
+                    args: Default::default(),
+                    body: vec![
+                        any_expr_stmt!(ExprKind::CallEffect { effect_name: "fizz".into(), effect_name_span: Span::ANY, args: vec![any!(CallArg, {
+                            label: Label::Positional(0),
+                            label_span: Span::ANY,
+                            value: any_expr!(ExprKind::Variable("x".into()))
+                        })]})
+                    ]
+                }),
+                ret: None,
+                attributes: Default::default(),
+            }))
+        )
+    }
+
+    #[test]
+    #[ignore = "todo"]
+    fn handles_unclosed_paren() {
+        let parsed = parse("func foo(");
+        assert_matches!(
+            parsed.roots[0],
+            Node::IncompleteExpr(IncompleteExpr::Func { .. })
+        );
+    }
 
     // #[test]
     // fn handles_unclosed_brace() {

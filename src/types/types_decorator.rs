@@ -70,5 +70,7 @@ fn expr_class(kind: &ExprKind) -> &'static str {
         ExprKind::RecordLiteral { .. } => "record",
         ExprKind::RowVariable(..) => "row",
         ExprKind::InlineIR(..) => "inline-ir",
+        ExprKind::Handling { .. } => "handler",
+        ExprKind::CallEffect { .. } => "call-effect",
     }
 }

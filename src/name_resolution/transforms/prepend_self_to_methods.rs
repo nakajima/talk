@@ -131,6 +131,7 @@ pub mod tests {
                         name: "fizz".into(),
                         name_span: Span::ANY,
                         generics: vec![],
+                        effects: Default::default(),
                         params: vec![
                             Parameter {
                                 id: NodeID::ANY,

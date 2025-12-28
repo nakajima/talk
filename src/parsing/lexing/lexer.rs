@@ -129,6 +129,7 @@ impl<'a> Lexer<'a> {
             '@' => self.at(),
             '$' => self.dollar(),
             '"' => self.string(),
+            '\'' => self.effect_name(),
             '\n' => self.newline(),
             '_' => {
                 if let Some(next) = self.peek()
@@ -234,6 +235,29 @@ impl<'a> Lexer<'a> {
         }
 
         self.make(not_found)
+    }
+
+    fn effect_name(&mut self) -> Result<Token, LexerError> {
+        self.started = self.current;
+
+        if !self
+            .peek()
+            .map(|t| t.is_alphanumeric() || t == '_')
+            .unwrap_or(false)
+        {
+            return self.make(TokenKind::SingleQuote);
+        }
+
+        while let Some(ch) = self.peek() {
+            if ch.is_alphanumeric() || ch == '_' {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+
+        let string = self.string_from(self.started, self.current);
+        self.make(TokenKind::EffectName(string))
     }
 
     fn string(&mut self) -> Result<Token, LexerError> {
@@ -745,6 +769,14 @@ mod tests {
         assert_eq!(lexer.next().unwrap().kind, BoundVar("sup".into()));
         assert_eq!(lexer.next().unwrap().kind, Dollar);
         assert_eq!(lexer.next().unwrap().kind, Identifier("sup".into()));
+        assert_eq!(lexer.next().unwrap().kind, EOF);
+    }
+
+    #[test]
+    fn effect() {
+        let mut lexer = Lexer::new("123 'sup");
+        assert_eq!(lexer.next().unwrap().kind, Int("123".into()));
+        assert_eq!(lexer.next().unwrap().kind, EffectName("sup".into()));
         assert_eq!(lexer.next().unwrap().kind, EOF);
     }
 }

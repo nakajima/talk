@@ -170,7 +170,7 @@ impl<'a> Parser<'a> {
         use TokenKind::*;
         if matches!(
             kind,
-            Protocol | Struct | Enum | Let | Func | Case | Extend | Typealias
+            Protocol | Struct | Enum | Let | Func | Case | Extend | Typealias | Effect
         ) {
             self.decl(BlockContext::None, false)
         } else {
@@ -195,6 +195,7 @@ impl<'a> Parser<'a> {
                 self.consume(TokenKind::Static)?;
                 self.decl(context, true)?
             }
+            Effect => self.effect()?.into(),
             Typealias => self.typealias()?.into(),
             Protocol => self
                 .nominal_decl(TokenKind::Protocol, BlockContext::Protocol)?
@@ -233,6 +234,33 @@ impl<'a> Parser<'a> {
         };
 
         Ok(node)
+    }
+
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
+    fn effect(&mut self) -> Result<Decl, ParserError> {
+        let tok = self.push_source_location();
+        self.consume(TokenKind::Effect)?;
+
+        let (effect_name, name_span) = self.effect_name()?;
+
+        self.consume(TokenKind::LeftParen)?;
+        let params = self.parameters()?;
+        self.consume(TokenKind::RightParen)?;
+
+        self.consume(TokenKind::Arrow)?;
+        let ret = self.type_annotation()?;
+
+        self.save_meta(tok, |id, span| Decl {
+            id,
+            span,
+            kind: DeclKind::Effect {
+                name: effect_name.clone().into(),
+                name_span,
+                params,
+                ret,
+            },
+        })
+        // let (lhs, lhs_span) = self.
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
@@ -469,6 +497,28 @@ impl<'a> Parser<'a> {
         let params = self.parameters()?;
         self.consume(TokenKind::RightParen)?;
 
+        let mut effects = vec![];
+        if self.peek_is(TokenKind::SingleQuote) {
+            self.advance();
+            // It's an effect list
+            self.consume(TokenKind::LeftBracket)?;
+            while !self.did_match(TokenKind::RightBracket)? && !self.did_match(TokenKind::EOF)? {
+                if let Ok((name, _)) = self.identifier() {
+                    effects.push(Name::Raw(name));
+                    self.consume(TokenKind::Comma).ok();
+                } else if self.did_match(TokenKind::DotDot)? {
+                    tracing::error!("todo: handle wildcard");
+                }
+            }
+        } else if let Some(Token {
+            kind: TokenKind::EffectName(name),
+            ..
+        }) = self.current.clone()
+        {
+            self.advance();
+            effects.push(Name::Raw(name))
+        }
+
         let ret = if self.consume(TokenKind::Arrow).is_ok() {
             Some(self.type_annotation()?)
         } else {
@@ -496,6 +546,7 @@ impl<'a> Parser<'a> {
                 id,
                 name: name.into(),
                 name_span,
+                effects,
                 generics,
                 params,
                 body,
@@ -1612,6 +1663,52 @@ impl<'a> Parser<'a> {
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
+    pub(super) fn effect_callee(&mut self, _can_assign: bool) -> Result<Node, ParserError> {
+        let tok = self.push_source_location();
+        let (effect_name, effect_name_span) = self.effect_name()?;
+        self.consume(TokenKind::LeftParen)?;
+        let args = if self.did_match(TokenKind::RightParen)? {
+            vec![]
+        } else {
+            let args = self.arguments()?;
+            self.consume(TokenKind::RightParen)?;
+            args
+        };
+        self.save_meta(tok, |id, span| {
+            Expr {
+                id,
+                span,
+                kind: ExprKind::CallEffect {
+                    effect_name: effect_name.into(),
+                    effect_name_span,
+                    args,
+                },
+            }
+            .into()
+        })
+    }
+
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
+    pub(super) fn effect_handler(&mut self, can_assign: bool) -> Result<Node, ParserError> {
+        let tok = self.push_source_location();
+        self.advance(); // Eat the @handle
+        let (effect_name, effect_name_span) = self.effect_name()?;
+        let body = self.block(BlockContext::None, true)?;
+        self.save_meta(tok, |id, span| {
+            Expr {
+                id,
+                span,
+                kind: ExprKind::Handling {
+                    effect_name: effect_name.into(),
+                    effect_name_span,
+                    body,
+                },
+            }
+            .into()
+        })
+    }
+
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
     pub(super) fn check_call(
         &mut self,
         callee: &Expr,
@@ -1894,6 +1991,8 @@ impl<'a> Parser<'a> {
             self.consume(TokenKind::LeftBrace)?;
         }
 
+        let args = self.block_args()?;
+
         self.skip_semicolons_and_newlines();
         let mut body = vec![];
         while !self.did_match(TokenKind::RightBrace)? {
@@ -1923,9 +2022,74 @@ impl<'a> Parser<'a> {
         self.save_meta(tok, |id, span| Block {
             id,
             span,
-            args: vec![],
+            args,
             body,
         })
+    }
+
+    fn block_args(&mut self) -> Result<Vec<Parameter>, ParserError> {
+        if self.peek_is(TokenKind::In) {
+            self.consume(TokenKind::In)?;
+            return Ok(vec![]);
+        }
+
+        // So we can rollback if we're not actually parsing block args
+        let lexer = self.lexer.clone();
+        let next = self.next.clone();
+        let checkpoint = self.current.clone();
+        let checkpoint_prev = self.previous.clone();
+        let checkpoint_prev_before_newline = self.previous_before_newline.clone();
+        let loc_stack_len = self.source_location_stack.len();
+        let rollback = |parser: &mut Parser<'a>| {
+            parser.lexer = lexer;
+            parser.next = next;
+            parser.current = checkpoint;
+            parser.previous = checkpoint_prev;
+            parser.previous_before_newline = checkpoint_prev_before_newline;
+            parser.source_location_stack.truncate(loc_stack_len);
+        };
+
+        let mut params = vec![];
+
+        loop {
+            // Must be identifier
+            let Ok((name, name_span)) = self.identifier() else {
+                rollback(self);
+                return Ok(vec![]);
+            };
+
+            let tok = self.push_source_location();
+
+            let type_annotation = if self.did_match(TokenKind::Colon)? {
+                Some(self.type_annotation()?)
+            } else {
+                None
+            };
+
+            let param = self.save_meta(tok, |id, span| Parameter {
+                id,
+                span,
+                name: name.into(),
+                name_span,
+                type_annotation,
+            })?;
+
+            params.push(param);
+
+            // Either `,` or `in`
+            if self.did_match(TokenKind::Comma)? {
+                continue;
+            }
+
+            if self.did_match(TokenKind::In)? {
+                return Ok(params);
+            }
+
+            // Anything else → not a block-arg list
+
+            rollback(self);
+            return Ok(vec![]);
+        }
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
@@ -2127,6 +2291,30 @@ impl<'a> Parser<'a> {
         Ok(params)
     }
 
+    fn effect_name(&mut self) -> Result<(String, Span), ParserError> {
+        let Some(Token {
+            kind: TokenKind::EffectName(effect_name),
+            start: name_start,
+            end: name_end,
+            ..
+        }) = self.advance()
+        else {
+            return Err(ParserError::UnexpectedToken {
+                expected: "effect name (must start with ')".into(),
+                actual: format!("{:?}", self.current),
+                token: self.current.clone(),
+            });
+        };
+
+        let name_span = Span {
+            file_id: self.file_id,
+            start: name_start,
+            end: name_end,
+        };
+
+        Ok((effect_name, name_span))
+    }
+
     #[instrument(level = tracing::Level::TRACE, skip(self))]
     pub(super) fn identifier(&mut self) -> Result<(String, Span), ParserError> {
         self.skip_semicolons_and_newlines();
@@ -2192,6 +2380,7 @@ impl<'a> Parser<'a> {
             self.previous_before_newline = Some(prev.clone());
         }
 
+        tracing::trace!("advance {:?}", self.next);
         self.current = self.next.take();
         self.next = self.lexer.next().ok();
         self.previous.clone()

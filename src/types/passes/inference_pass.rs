@@ -996,6 +996,8 @@ impl<'a> InferencePass<'a> {
         context: &mut impl Solve,
     ) -> TypedRet<TypedDecl<InferTy>> {
         match &decl.kind {
+            #[warn(clippy::todo)]
+            DeclKind::Effect { .. } => todo!(),
             DeclKind::Let {
                 lhs,
                 type_annotation,
@@ -1137,6 +1139,10 @@ impl<'a> InferencePass<'a> {
                     kind: TypedExprKind::Hole,
                 }
             }
+            #[warn(clippy::todo)]
+            ExprKind::Handling { .. } => todo!(),
+            #[warn(clippy::todo)]
+            ExprKind::CallEffect { .. } => todo!(),
             ExprKind::LiteralArray(items) => self.visit_array(expr, items, context)?,
             ExprKind::LiteralInt(v) => TypedExpr {
                 id: expr.id,

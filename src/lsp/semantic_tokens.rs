@@ -1,6 +1,5 @@
-use async_lsp::lsp_types::{Position, Range, SemanticToken, SemanticTokenType};
-
 use crate::highlighter::{self, HighlightToken, Higlighter};
+use async_lsp::lsp_types::{Position, Range, SemanticToken, SemanticTokenType};
 
 pub const TOKEN_TYPES: &[SemanticTokenType] = &[
     SemanticTokenType::COMMENT,
@@ -49,6 +48,7 @@ impl highlighter::Kind {
             highlighter::Kind::REGEXP => SemanticTokenType::REGEXP,
             highlighter::Kind::OPERATOR => SemanticTokenType::OPERATOR,
             highlighter::Kind::DECORATOR => SemanticTokenType::DECORATOR,
+            highlighter::Kind::EFFECT => SemanticTokenType::EVENT, // ?
         };
 
         Some(kind)

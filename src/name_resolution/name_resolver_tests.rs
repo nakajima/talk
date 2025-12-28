@@ -202,6 +202,7 @@ pub mod tests {
                     name: Name::Resolved(Symbol::Global(GlobalId::from(1)), "foo".into()),
                     name_span: Span::ANY,
                     generics: vec![],
+                    effects: Default::default(),
                     params: vec![param!(ParamLocalId(1), "x"), param!(ParamLocalId(2), "y"),],
                     body: any_block!(vec![
                         any_stmt!(StmtKind::Expr(variable!(ParamLocalId(1), "x")))
@@ -245,6 +246,7 @@ pub mod tests {
                     name_span: Span::ANY,
                     generics: vec![],
                     params: vec![],
+                    effects: Default::default(),
                     body: any_block!(vec![any_expr_stmt!(ExprKind::Call {
                         callee: Box::new(variable!(Symbol::Global(GlobalId::from(2)), "even")),
                         type_args: vec![],
@@ -274,6 +276,7 @@ pub mod tests {
                     name_span: Span::ANY,
                     generics: vec![],
                     params: vec![],
+                    effects: Default::default(),
                     body: any_block!(vec![any_expr_stmt!(ExprKind::Call {
                         callee: Box::new(variable!(Symbol::Global(GlobalId::from(1)), "odd")),
                         type_args: vec![],
@@ -307,6 +310,7 @@ pub mod tests {
                     name: Name::Resolved(Symbol::Global(GlobalId::from(1)), "foo".into()),
                     name_span: Span::ANY,
                     generics: vec![],
+                    effects: Default::default(),
                     params: vec![param!(ParamLocalId(1), "x"), param!(ParamLocalId(2), "y")],
                     body: any_block!(vec![
                         any_decl!(DeclKind::Let {
@@ -327,6 +331,7 @@ pub mod tests {
                                 ),
                                 name_span: Span::ANY,
                                 generics: vec![],
+                                effects: Default::default(),
                                 params: vec![param!(ParamLocalId(3), "x")],
                                 body: any_block!(vec![
                                     any_stmt!(StmtKind::Expr(variable!(ParamLocalId(3), "x")))
@@ -377,6 +382,7 @@ pub mod tests {
                     name_span: Span::ANY,
                     generics: Default::default(),
                     params: Default::default(),
+                    effects: Default::default(),
                     body: any_block!(vec![
                         any_decl!(DeclKind::Let {
                             lhs: any_pattern!(PatternKind::Bind(Name::Resolved(
@@ -401,6 +407,7 @@ pub mod tests {
                                 ),
                                 name_span: Span::ANY,
                                 generics: vec![],
+                                effects: Default::default(),
                                 params: vec![param!(ParamLocalId(1), "x")],
                                 body: any_block!(vec![
                                     any_stmt!(StmtKind::Expr(variable!(ParamLocalId(1), "x")))
@@ -523,6 +530,7 @@ pub mod tests {
                         generics: vec![],
                         conformances: vec![],
                     }],
+                    effects: Default::default(),
                     params: vec![param!(
                         ParamLocalId(1),
                         "t",
@@ -876,6 +884,7 @@ pub mod tests {
                                 "fizz".into()
                             ),
                             name_span: Span::ANY,
+                            effects: Default::default(),
                             generics: vec![],
                             params: vec![],
                             body: any_block!(vec![]),
@@ -933,6 +942,7 @@ pub mod tests {
                             ),
                             name_span: Span::ANY,
                             generics: vec![],
+                            effects: Default::default(),
                             params: vec![param!(
                                 Symbol::ParamLocal(ParamLocalId(1)),
                                 "self",
@@ -970,6 +980,7 @@ pub mod tests {
                                 "buzz".into()
                             ),
                             name_span: Span::ANY,
+                            effects: Default::default(),
                             generics: vec![],
                             params: vec![param!(
                                 Symbol::ParamLocal(ParamLocalId(2)),
@@ -1070,6 +1081,7 @@ pub mod tests {
                         ),
                         name_span: Span::ANY,
                         generics: vec![],
+                        effects: Default::default(),
                         params: vec![Parameter {
                             id: NodeID::ANY,
                             name: Name::Resolved(

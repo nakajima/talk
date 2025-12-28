@@ -64,6 +64,7 @@ impl LowerFuncsToLets {
             generics,
             params,
             body,
+            effects,
             ret,
             attributes,
         }) = decl.kind.clone()
@@ -77,6 +78,7 @@ impl LowerFuncsToLets {
                     name: name.clone(),
                     name_span,
                     generics,
+                    effects,
                     params,
                     body,
                     ret,
@@ -141,6 +143,7 @@ pub mod tests {
                     generics: vec![],
                     params: vec![],
                     body: any_block!(vec![]),
+                    effects: Default::default(),
                     ret: None,
                     attributes: vec![]
                 })))
@@ -172,6 +175,7 @@ pub mod tests {
                         generics: vec![],
                         params: vec![],
                         body: any_block!(vec![]),
+                        effects: Default::default(),
                         ret: None,
                         attributes: vec![]
                     }),

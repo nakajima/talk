@@ -413,6 +413,22 @@ impl<'a> Formatter<'a> {
     fn format_expr(&self, expr: &Expr) -> Doc {
         let doc = match &expr.kind {
             ExprKind::Incomplete(_) => Doc::Empty,
+            ExprKind::Handling {
+                effect_name, body, ..
+            } => text("@handling") + text(effect_name.to_string()) + self.format_block(body),
+            ExprKind::CallEffect {
+                effect_name, args, ..
+            } => {
+                text(effect_name.to_string())
+                    + text("(")
+                    + softline()
+                    + join(
+                        args.iter().map(|a| self.format_call_arg(a)).collect(),
+                        text(","),
+                    )
+                    + softline()
+                    + text(")")
+            }
             ExprKind::As(lhs, rhs) => {
                 text("(")
                     + join(
@@ -485,6 +501,21 @@ impl<'a> Formatter<'a> {
 
     fn format_decl(&self, decl: &Decl) -> Doc {
         let doc = match &decl.kind {
+            #[warn(clippy::todo)]
+            DeclKind::Effect {
+                name, params, ret, ..
+            } => {
+                text("'")
+                    + text(name.to_string())
+                    + text("(")
+                    + join(
+                        params.iter().map(|p| self.format_parameter(p)).collect(),
+                        text(","),
+                    )
+                    + text(")")
+                    + text("->")
+                    + self.format_type_annotation(ret)
+            }
             DeclKind::Import(name) => join(vec![text("import"), text(name)], text(" ")),
             DeclKind::Struct {
                 name,
