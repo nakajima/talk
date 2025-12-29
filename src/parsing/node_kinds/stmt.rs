@@ -17,7 +17,7 @@ pub enum StmtKind {
     ),
     Return(Option<Expr>),
     Break,
-    Assignment(Expr /* LHS */, Expr /* RHS */),
+    Assignment(Box<Expr> /* LHS */, Box<Expr> /* RHS */),
     Loop(Option<Expr> /* condition */, Block /* body */),
     Continue(Option<Expr>),
 }

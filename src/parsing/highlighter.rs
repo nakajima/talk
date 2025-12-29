@@ -420,7 +420,7 @@ impl<'a> Higlighter<'a> {
                 StmtKind::Break => {
                     result.push(self.make_span(Kind::KEYWORD, stmt.span));
                 }
-                StmtKind::Assignment(lhs, rhs) => {
+                StmtKind::Assignment(box lhs, box rhs) => {
                     result.extend(self.tokens_from_expr(lhs, ast));
                     result.extend(self.tokens_from_expr(rhs, ast));
                 }

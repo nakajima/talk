@@ -862,12 +862,14 @@ impl<'a> DeclDeclarer<'a> {
                             Span::SYNTHESIZED,
                         ),
                         span: Span::SYNTHESIZED,
-                    },
+                    }
+                    .into(),
                     Expr {
                         id: NodeID(FileID::SYNTHESIZED, self.node_ids.next_id()),
                         kind: ExprKind::Variable(name),
                         span: Span::SYNTHESIZED,
-                    },
+                    }
+                    .into(),
                 ),
             });
 

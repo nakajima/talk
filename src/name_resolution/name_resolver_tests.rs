@@ -709,8 +709,9 @@ pub mod tests {
                                     Some(variable!(ParamLocalId(3), "self").into()),
                                     Label::Named("me".into()),
                                     Span::ANY
-                                )),
-                                variable!(ParamLocalId(4), "me")
+                                ))
+                                .into(),
+                                variable!(ParamLocalId(4), "me").into()
                             ))
                             .into(),
                             any_expr_stmt!(ExprKind::Variable(Name::Resolved(
@@ -819,8 +820,9 @@ pub mod tests {
                                     Some(variable!(ParamLocalId(3), "self").into()),
                                     Label::Named("me".into()),
                                     Span::ANY
-                                )),
-                                variable!(ParamLocalId(4), "me")
+                                ))
+                                .into(),
+                                variable!(ParamLocalId(4), "me").into()
                             ))
                             .into(),
                             any_expr_stmt!(ExprKind::Variable(Name::Resolved(

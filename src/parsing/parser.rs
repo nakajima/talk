@@ -41,6 +41,7 @@ use tracing::instrument;
 pub struct LocToken;
 
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 enum FuncOrFuncSignature {
     Func(Func),
     FuncSignature(FuncSignature),
@@ -1387,7 +1388,7 @@ impl<'a> Parser<'a> {
                     Stmt {
                         id,
                         span,
-                        kind: StmtKind::Assignment(expr, rhs.as_expr()),
+                        kind: StmtKind::Assignment(expr.into(), rhs.as_expr().into()),
                     }
                     .into()
                 });
@@ -1454,7 +1455,7 @@ impl<'a> Parser<'a> {
                     Node::Stmt(Stmt {
                         id,
                         span,
-                        kind: StmtKind::Assignment(expr, rhs.as_expr()),
+                        kind: StmtKind::Assignment(expr.into(), rhs.as_expr().into()),
                     })
                 });
             } else {
@@ -1558,7 +1559,7 @@ impl<'a> Parser<'a> {
                 Stmt {
                     id,
                     span,
-                    kind: StmtKind::Assignment(variable, rhs.as_expr()),
+                    kind: StmtKind::Assignment(variable.into(), rhs.as_expr().into()),
                 }
                 .into()
             })

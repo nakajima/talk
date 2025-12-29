@@ -1682,8 +1682,8 @@ pub mod tests {
         assert_eq!(
             *parsed.roots[0].as_stmt(),
             any_stmt!(StmtKind::Assignment(
-                any_expr!(ExprKind::Variable("foo".into())),
-                any_expr!(ExprKind::LiteralInt("123".into()))
+                any_expr!(ExprKind::Variable("foo".into())).into(),
+                any_expr!(ExprKind::LiteralInt("123".into())).into()
             ))
         );
     }
@@ -2068,8 +2068,9 @@ pub mod tests {
                                 Some(any_expr!(ExprKind::Variable("self".into())).into()),
                                 "age".into(),
                                 Span::ANY,
-                            )),
-                            any_expr!(ExprKind::Variable("age".into()))
+                            ))
+                            .into(),
+                            any_expr!(ExprKind::Variable("age".into())).into()
                         ))
                         .into()
                     ]),
