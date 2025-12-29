@@ -732,6 +732,19 @@ impl<'a> Formatter<'a> {
         )
     }
 
+    fn wrap_block_multiline_with_header(header: Doc, inner: Doc) -> Doc {
+        concat(
+            text("{"),
+            concat(
+                concat(text(" "), header),
+                concat(
+                    nest(1, concat(hardline(), inner)),
+                    concat(hardline(), text("}")),
+                ),
+            ),
+        )
+    }
+
     fn format_block_args(&self, args: &[Parameter]) -> Option<Doc> {
         if args.is_empty() {
             return None;
@@ -765,13 +778,18 @@ impl<'a> Formatter<'a> {
                 if allow_single_line {
                     return Self::wrap_block_single_line(args_doc);
                 }
-                return Self::wrap_block_multiline(args_doc);
+                return concat(
+                    text("{"),
+                    concat(
+                        concat(text(" "), args_doc),
+                        concat(hardline(), text("}")),
+                    ),
+                );
             }
 
             let mut last_line: Option<u32> = None;
-            let content =
-                self.append_comments_until(end, concat(args_doc, hardline()), &mut last_line);
-            return Self::wrap_block_multiline(content);
+            let content = self.append_comments_until(end, empty(), &mut last_line);
+            return Self::wrap_block_multiline_with_header(args_doc, content);
         }
 
         if !has_comments {
@@ -786,14 +804,9 @@ impl<'a> Formatter<'a> {
         Self::wrap_block_multiline(content)
     }
 
-    fn format_block_body(&self, block: &Block, args_doc: Option<Doc>) -> Doc {
+    fn format_block_body(&self, block: &Block) -> Doc {
         let mut final_doc = empty();
         let mut last_line: Option<u32> = None;
-
-        if let Some(args_doc) = args_doc {
-            final_doc = concat(final_doc, args_doc);
-            final_doc = concat(final_doc, hardline());
-        }
 
         for stmt in &block.body {
             let meta = self.get_meta_for_node(stmt);
@@ -862,7 +875,11 @@ impl<'a> Formatter<'a> {
             }
             return Self::wrap_block_single_line(inner_doc);
         }
-        Self::wrap_block_multiline(self.format_block_body(block, args_doc))
+        let body_doc = self.format_block_body(block);
+        if let Some(args_doc) = args_doc {
+            return Self::wrap_block_multiline_with_header(args_doc, body_doc);
+        }
+        Self::wrap_block_multiline(body_doc)
     }
 
     fn format_body(&self, body: &Body) -> Doc {
@@ -2324,6 +2341,10 @@ mod formatter_tests {
 
         let input = "let handler = @handle 'fizz { x: Int, y: Bool in\nx\n}";
         let expected = "let handler = @handle 'fizz { x: Int, y: Bool in x }";
+        assert_eq!(format_code(input, 80), expected);
+
+        let input = "let handler = @handle 'fizz { x in\nx\nx\n}";
+        let expected = "let handler = @handle 'fizz { x in\n\tx\n\tx\n}";
         assert_eq!(format_code(input, 80), expected);
     }
 
