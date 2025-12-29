@@ -23,7 +23,7 @@ pub mod tests {
         },
     };
 
-    fn typecheck(code: &'static str) -> (TypedAST<Ty>, Types) {
+    pub fn typecheck(code: &'static str) -> (TypedAST<Ty>, Types) {
         let (ast, types, diagnostics) = typecheck_err(code);
         assert!(
             diagnostics.is_empty(),
@@ -33,7 +33,7 @@ pub mod tests {
         (ast, types)
     }
 
-    fn typecheck_err(code: &'static str) -> (TypedAST<Ty>, Types, Vec<AnyDiagnostic>) {
+    pub fn typecheck_err(code: &'static str) -> (TypedAST<Ty>, Types, Vec<AnyDiagnostic>) {
         let driver = Driver::new_bare(vec![Source::from(code)], DriverConfig::new("TestDriver"));
         let typed = driver
             .parse()
@@ -46,7 +46,7 @@ pub mod tests {
         (typed.phase.ast, typed.phase.types, typed.phase.diagnostics)
     }
 
-    fn typecheck_core(code: &'static str) -> (TypedAST<Ty>, Types) {
+    pub fn typecheck_core(code: &'static str) -> (TypedAST<Ty>, Types) {
         let (ast, types, diagnostics) = typecheck_core_err(code);
 
         assert!(
@@ -58,7 +58,7 @@ pub mod tests {
         (ast, types)
     }
 
-    fn typecheck_core_err(code: &'static str) -> (TypedAST<Ty>, Types, Vec<AnyDiagnostic>) {
+    pub fn typecheck_core_err(code: &'static str) -> (TypedAST<Ty>, Types, Vec<AnyDiagnostic>) {
         let driver = Driver::new(vec![Source::from(code)], DriverConfig::new("TestDriver"));
         let typed = driver
             .parse()

@@ -3,6 +3,7 @@ use indexmap::{IndexMap, IndexSet};
 use rustc_hash::FxHashMap;
 
 use crate::{
+    compiling::module::ModuleId,
     label::Label,
     name_resolution::symbol::Symbol,
     node_id::NodeID,
@@ -372,6 +373,13 @@ impl TypedExprKind<InferTy> {
                     .collect(),
             ),
             Block(block) => Block(block.finalize(session, witnesses)),
+            CallEffect { effect, args } => CallEffect {
+                effect,
+                args: args
+                    .into_iter()
+                    .map(|a| a.finalize(session, witnesses))
+                    .collect(),
+            },
             Call {
                 callee,
                 type_args,
@@ -1018,6 +1026,33 @@ pub struct TypedParameter<T: SomeType> {
     pub ty: T,
 }
 
+impl From<TypedParameter<InferTy>> for TypedParameter<Ty> {
+    fn from(value: TypedParameter<InferTy>) -> Self {
+        TypedParameter {
+            name: value.name,
+            ty: value.ty.into(),
+        }
+    }
+}
+
+impl From<TypedParameter<Ty>> for TypedParameter<InferTy> {
+    fn from(value: TypedParameter<Ty>) -> Self {
+        TypedParameter {
+            name: value.name,
+            ty: value.ty.into(),
+        }
+    }
+}
+
+impl<T: SomeType> TypedParameter<T> {
+    pub fn import(self, module_id: ModuleId) -> Self {
+        TypedParameter {
+            name: self.name.import(module_id),
+            ty: self.ty.import(module_id),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Drive, DriveMut)]
 pub struct TypedFunc<T: SomeType> {
     #[drive(skip)]
@@ -1091,6 +1126,11 @@ pub enum TypedExprKind<T: SomeType> {
     LiteralString(#[drive(skip)] String),
     Tuple(Vec<TypedExpr<T>>),
     Block(TypedBlock<T>),
+    CallEffect {
+        #[drive(skip)]
+        effect: Symbol,
+        args: Vec<TypedExpr<T>>,
+    },
     Call {
         callee: Box<TypedExpr<T>>,
         type_args: Vec<T>,
@@ -1140,6 +1180,10 @@ impl<T: SomeType, U: SomeType> TyMappable<T, U> for TypedExprKind<T> {
         use TypedExprKind::*;
         match self {
             Hole => Hole,
+            CallEffect { effect, args } => CallEffect {
+                effect,
+                args: args.into_iter().map(|a| a.map_ty(m)).collect(),
+            },
             InlineIR(inline_irinstruction) => InlineIR(inline_irinstruction.map_ty(m).into()),
             LiteralArray(typed_exprs) => {
                 LiteralArray(typed_exprs.into_iter().map(|e| e.map_ty(m)).collect())

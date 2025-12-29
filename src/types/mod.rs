@@ -2,6 +2,7 @@ pub mod builtins;
 pub mod conformance;
 pub mod constraint_solver;
 pub mod constraints;
+pub mod effect_row;
 pub mod format;
 pub mod infer_row;
 pub mod infer_ty;
@@ -10,6 +11,7 @@ pub mod matcher;
 pub mod passes;
 pub mod predicate;
 pub mod row;
+pub mod row_operations;
 pub mod scheme;
 pub mod solve_context;
 pub mod term_environment;
@@ -24,5 +26,7 @@ pub mod types_decorator;
 pub mod vars;
 // pub mod wants;
 
+#[cfg(test)]
+pub mod effects_tests;
 #[cfg(test)]
 pub mod types_tests;

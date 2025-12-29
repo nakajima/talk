@@ -220,6 +220,51 @@ impl SomeType for InferTy {
             InferTy::Nominal { type_args, .. } => type_args.contains(self),
         }
     }
+
+    fn import(self, module_id: ModuleId) -> InferTy {
+        match self {
+            InferTy::Error(..) => self,
+            InferTy::Primitive(..) => self,
+            InferTy::Param(..) => self,
+            InferTy::Rigid(..) => self,
+            InferTy::Var { .. } => self,
+            InferTy::Projection {
+                base,
+                associated,
+                protocol_id,
+            } => InferTy::Projection {
+                base: base.import(module_id).into(),
+                associated,
+                protocol_id,
+            },
+            InferTy::Constructor {
+                name: name @ Name::Resolved(..),
+                params,
+                ret,
+            } => InferTy::Constructor {
+                name: Name::Resolved(
+                    name.symbol()
+                        .unwrap_or_else(|_| unreachable!())
+                        .import(module_id),
+                    name.name_str(),
+                ),
+                params,
+                ret,
+            },
+            InferTy::Func(ty, ty1) => {
+                InferTy::Func(ty.import(module_id).into(), ty1.import(module_id).into())
+            }
+            InferTy::Tuple(items) => {
+                InferTy::Tuple(items.into_iter().map(|i| i.import(module_id)).collect())
+            }
+            InferTy::Record(row) => InferTy::Record(row.import(module_id).into()),
+            InferTy::Nominal { symbol, type_args } => InferTy::Nominal {
+                symbol: symbol.import(module_id),
+                type_args: type_args.into_iter().map(|f| f.import(module_id)).collect(),
+            },
+            _ => self,
+        }
+    }
 }
 
 #[allow(non_upper_case_globals)]
@@ -344,51 +389,6 @@ impl InferTy {
             }
         }
         result
-    }
-
-    pub fn import(self, module_id: ModuleId) -> InferTy {
-        match self {
-            InferTy::Error(..) => self,
-            InferTy::Primitive(..) => self,
-            InferTy::Param(..) => self,
-            InferTy::Rigid(..) => self,
-            InferTy::Var { .. } => self,
-            InferTy::Projection {
-                base,
-                associated,
-                protocol_id,
-            } => InferTy::Projection {
-                base: base.import(module_id).into(),
-                associated,
-                protocol_id,
-            },
-            InferTy::Constructor {
-                name: name @ Name::Resolved(..),
-                params,
-                ret,
-            } => InferTy::Constructor {
-                name: Name::Resolved(
-                    name.symbol()
-                        .unwrap_or_else(|_| unreachable!())
-                        .import(module_id),
-                    name.name_str(),
-                ),
-                params,
-                ret,
-            },
-            InferTy::Func(ty, ty1) => {
-                InferTy::Func(ty.import(module_id).into(), ty1.import(module_id).into())
-            }
-            InferTy::Tuple(items) => {
-                InferTy::Tuple(items.into_iter().map(|i| i.import(module_id)).collect())
-            }
-            InferTy::Record(row) => InferTy::Record(row.import(module_id).into()),
-            InferTy::Nominal { symbol, type_args } => InferTy::Nominal {
-                symbol: symbol.import(module_id),
-                type_args: type_args.into_iter().map(|f| f.import(module_id)).collect(),
-            },
-            _ => self,
-        }
     }
 }
 

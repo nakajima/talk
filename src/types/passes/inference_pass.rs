@@ -42,6 +42,7 @@ use crate::{
             constraint::{Constraint, ConstraintCause},
             store::{ConstraintStore, GroupId},
         },
+        effect_row::EffectSignature,
         infer_row::InferRow,
         infer_ty::{InferTy, Level, Meta, MetaVarId, TypeParamId},
         predicate::Predicate,
@@ -135,6 +136,11 @@ impl<'a> InferencePass<'a> {
 
         for i in 0..self.asts.len() {
             self.discover_protocols(i, Level::default());
+            self.session.apply_all(&mut self.substitutions);
+        }
+
+        for i in 0..self.asts.len() {
+            self.discover_effects(i, Level::default());
             self.session.apply_all(&mut self.substitutions);
         }
 
@@ -298,6 +304,62 @@ impl<'a> InferencePass<'a> {
                         span: conformance.span,
                     });
             }
+        }
+        _ = std::mem::replace(&mut self.asts[idx].roots, roots);
+    }
+
+    fn discover_effects(&mut self, idx: usize, level: Level) {
+        let mut context = SolveContext::new(
+            self.substitutions.clone(),
+            level,
+            Default::default(),
+            SolveContextKind::Normal,
+        );
+        let roots = std::mem::take(&mut self.asts[idx].roots);
+        for root in roots.iter() {
+            let Node::Decl(Decl {
+                kind:
+                    DeclKind::Effect {
+                        name: Name::Resolved(symbol, ..),
+                        params,
+                        ret,
+                        ..
+                    },
+                ..
+            }) = &root
+            else {
+                continue;
+            };
+
+            let params = match self.visit_params(params, &mut context) {
+                Ok(params) => params,
+                Err(e) => {
+                    self.diagnostics.insert(AnyDiagnostic::Typing(Diagnostic {
+                        id: root.node_id(),
+                        severity: Severity::Error,
+                        kind: e,
+                    }));
+                    continue;
+                }
+            };
+
+            let ret = match self.visit_type_annotation(ret, &mut context) {
+                Ok(ret) => ret,
+                Err(e) => {
+                    self.diagnostics.insert(AnyDiagnostic::Typing(Diagnostic {
+                        id: root.node_id(),
+                        severity: Severity::Error,
+                        kind: e,
+                    }));
+                    continue;
+                }
+            };
+
+            let effect_signature = EffectSignature { params, ret };
+            self.session
+                .type_catalog
+                .effects
+                .insert(*symbol, effect_signature);
         }
         _ = std::mem::replace(&mut self.asts[idx].roots, roots);
     }
@@ -1150,8 +1212,9 @@ impl<'a> InferencePass<'a> {
             }
             #[warn(clippy::todo)]
             ExprKind::Handling { .. } => todo!(),
-            #[warn(clippy::todo)]
-            ExprKind::CallEffect { .. } => todo!(),
+            ExprKind::CallEffect {
+                effect_name, args, ..
+            } => self.visit_call_effect(expr, effect_name, args, context)?,
             ExprKind::LiteralArray(items) => self.visit_array(expr, items, context)?,
             ExprKind::LiteralInt(v) => TypedExpr {
                 id: expr.id,
@@ -1244,6 +1307,45 @@ impl<'a> InferencePass<'a> {
         self.session.types_by_node.insert(expr.id, expr.ty.clone());
 
         Ok(expr)
+    }
+
+    fn visit_call_effect(
+        &mut self,
+        expr: &Expr,
+        effect_name: &Name,
+        args: &[CallArg],
+        context: &mut impl Solve,
+    ) -> TypedRet<TypedExpr<InferTy>> {
+        let Ok(effect_sym) = effect_name.symbol() else {
+            return Err(TypeError::NameNotResolved(effect_name.clone()));
+        };
+
+        let Some(effect) = self.session.type_catalog.lookup_effect(&effect_sym) else {
+            return Err(TypeError::EffectNotFound(effect_name.name_str()));
+        };
+
+        let mut typed_args = vec![];
+
+        for (effect_ty, arg) in effect.params.iter().zip(args) {
+            let typed_arg = self.visit_expr(&arg.value, context)?;
+            self.constraints.wants_equals_at_with_cause(
+                arg.id,
+                effect_ty.ty.clone(),
+                typed_arg.ty.clone(),
+                &context.group_info(),
+                Some(ConstraintCause::Call(expr.id)),
+            );
+            typed_args.push(typed_arg);
+        }
+
+        Ok(TypedExpr {
+            id: expr.id,
+            ty: effect.ret.clone(),
+            kind: TypedExprKind::CallEffect {
+                effect: effect_sym,
+                args: typed_args,
+            },
+        })
     }
 
     fn visit_inline_ir(

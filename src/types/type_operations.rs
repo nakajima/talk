@@ -488,10 +488,7 @@ pub(super) fn unify(
                 unify(&normalized, other, context, session)
             } else {
                 // Base is still unknown - error (the constraint solver will defer)
-                Err(TypeError::invalid_unification(
-                    projection,
-                    other.clone(),
-                ))
+                Err(TypeError::invalid_unification(projection, other.clone()))
             }
         }
 

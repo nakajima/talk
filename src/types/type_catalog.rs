@@ -8,6 +8,7 @@ use crate::{
     node_id::NodeID,
     types::{
         conformance::{Conformance, ConformanceKey, Witnesses},
+        effect_row::EffectSignature,
         infer_row::RowParamId,
         infer_ty::{InferTy, TypeParamId},
         ty::{SomeType, Ty},
@@ -146,6 +147,7 @@ pub struct TypeCatalog<T: SomeType> {
     pub variants: IndexMap<Symbol, IndexMap<Label, Symbol>>,
     pub method_requirements: IndexMap<Symbol, IndexMap<Label, Symbol>>,
     pub instantiations: TrackedInstantiations<T>,
+    pub effects: IndexMap<Symbol, EffectSignature<T>>,
 }
 
 impl<T: SomeType> Default for TypeCatalog<T> {
@@ -165,6 +167,7 @@ impl<T: SomeType> Default for TypeCatalog<T> {
             method_requirements: Default::default(),
 
             instantiations: Default::default(),
+            effects: Default::default(),
         }
     }
 }
@@ -205,6 +208,19 @@ impl TypeCatalog<InferTy> {
             variants: self.variants,
             method_requirements: self.method_requirements,
             instantiations,
+            effects: self
+                .effects
+                .into_iter()
+                .map(|(k, v)| {
+                    (
+                        k,
+                        EffectSignature::<Ty> {
+                            params: v.params.into_iter().map(|p| p.into()).collect(),
+                            ret: v.ret.into(),
+                        },
+                    )
+                })
+                .collect(),
         }
     }
 }
@@ -286,6 +302,10 @@ impl<T: SomeType> TypeCatalog<T> {
         }
 
         None
+    }
+
+    pub fn lookup_effect(&self, id: &Symbol) -> Option<EffectSignature<T>> {
+        self.effects.get(id).cloned()
     }
 
     pub fn lookup_concrete_member(
@@ -402,6 +422,19 @@ impl TypeCatalog<Ty> {
                     .map(|(k, v)| (k, v.import(module_id)))
                     .collect(),
             },
+            effects: self
+                .effects
+                .into_iter()
+                .map(|(k, v)| {
+                    (
+                        k.import(module_id),
+                        EffectSignature {
+                            params: v.params.into_iter().map(|p| p.import(module_id)).collect(),
+                            ret: v.ret.import(module_id),
+                        },
+                    )
+                })
+                .collect(),
         }
     }
 }

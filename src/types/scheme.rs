@@ -34,20 +34,6 @@ pub struct Scheme<T: SomeType> {
     pub(crate) ty: T,
 }
 
-impl Scheme<Ty> {
-    pub fn import(self, module_id: ModuleId) -> Self {
-        Self {
-            foralls: self.foralls,
-            predicates: self
-                .predicates
-                .into_iter()
-                .map(|p| p.import(module_id))
-                .collect(),
-            ty: self.ty.import(module_id),
-        }
-    }
-}
-
 impl<T: SomeType> std::hash::Hash for Scheme<T> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.ty.hash(state);
@@ -68,6 +54,27 @@ impl<T: SomeType> SomeType for EnvEntry<T> {
         match self {
             Self::Mono(ty) => ty.contains_var(),
             Self::Scheme(scheme) => scheme.ty.contains_var(),
+        }
+    }
+
+    fn import(self, module_id: ModuleId) -> Self {
+        match self {
+            EnvEntry::Mono(ty) => EnvEntry::Mono(ty.import(module_id)),
+            EnvEntry::Scheme(scheme) => EnvEntry::Scheme(scheme.import(module_id)),
+        }
+    }
+}
+
+impl<T: SomeType> Scheme<T> {
+    pub fn import(self, module_id: ModuleId) -> Self {
+        Self {
+            foralls: self.foralls,
+            predicates: self
+                .predicates
+                .into_iter()
+                .map(|p| p.import(module_id))
+                .collect(),
+            ty: self.ty.import(module_id),
         }
     }
 }

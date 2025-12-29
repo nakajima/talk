@@ -955,6 +955,8 @@ impl<'a> Lowerer<'a> {
     ) -> Result<(Value, Ty), IRError> {
         let (value, ty) = match &expr.kind {
             TypedExprKind::Hole => Err(IRError::TypeNotFound("nope".into())),
+            #[warn(clippy::todo)]
+            TypedExprKind::CallEffect { .. } => todo!(),
             TypedExprKind::InlineIR(inline_irinstruction) => {
                 self.lower_inline_ir(inline_irinstruction, bind, instantiations)
             }
