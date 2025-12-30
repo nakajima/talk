@@ -1393,17 +1393,39 @@ impl<'a> Formatter<'a> {
             ),
         );
 
-        match func.effects.len() {
+        match func.effects.names.len() {
             0 => (),
-            1 => result = concat_space(result, text(format!("'{}", func.effects[0].name_str()))),
+            1 => {
+                result = if func.effects.is_open {
+                    text("[")
+                        + text(func.effects.names[0].name_str())
+                        + text(",")
+                        + text("..")
+                        + text("]")
+                } else {
+                    concat_space(
+                        result,
+                        text(format!("'{}", func.effects.names[0].name_str())),
+                    )
+                };
+            }
             _ => {
+                let names = join(
+                    func.effects
+                        .names
+                        .iter()
+                        .map(|e| text(e.name_str()))
+                        .collect(),
+                    text(","),
+                );
                 result = concat_space(
                     result,
                     text("[")
-                        + join(
-                            func.effects.iter().map(|e| text(e.name_str())).collect(),
-                            text(","),
-                        )
+                        + if func.effects.is_open {
+                            join(vec![names, text("..")], text(","))
+                        } else {
+                            names
+                        }
                         + text("]"),
                 )
             }
@@ -1421,7 +1443,7 @@ impl<'a> Formatter<'a> {
         // Check if the body could be formatted inline
         if func.body.body.is_empty()
             || (func.body.body.len() == 1 && !Self::contains_control_flow(&func.body.body[0]))
-            || func.effects.is_empty()
+            || func.effects.names.is_empty()
         {
             if has_comments {
                 return concat_space(result, self.format_block_multiline(&func.body));

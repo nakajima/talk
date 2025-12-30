@@ -12,7 +12,7 @@ use crate::node_kinds::body::Body;
 use crate::node_kinds::call_arg::CallArg;
 use crate::node_kinds::decl::{Decl, DeclKind};
 use crate::node_kinds::expr::{Expr, ExprKind};
-use crate::node_kinds::func::Func;
+use crate::node_kinds::func::{EffectSet, Func};
 use crate::node_kinds::func_signature::FuncSignature;
 use crate::node_kinds::generic_decl::GenericDecl;
 use crate::node_kinds::incomplete_expr::IncompleteExpr;
@@ -498,17 +498,18 @@ impl<'a> Parser<'a> {
         let params = self.parameters()?;
         self.consume(TokenKind::RightParen)?;
 
-        let mut effects = vec![];
+        let mut names = vec![];
+        let mut is_open = false;
         if self.peek_is(TokenKind::SingleQuote) {
             self.advance();
             // It's an effect list
             self.consume(TokenKind::LeftBracket)?;
             while !self.did_match(TokenKind::RightBracket)? && !self.did_match(TokenKind::EOF)? {
                 if let Ok((name, _)) = self.identifier() {
-                    effects.push(Name::Raw(name));
+                    names.push(Name::Raw(name));
                     self.consume(TokenKind::Comma).ok();
                 } else if self.did_match(TokenKind::DotDot)? {
-                    tracing::error!("todo: handle wildcard");
+                    is_open = true;
                 }
             }
         } else if let Some(Token {
@@ -517,7 +518,9 @@ impl<'a> Parser<'a> {
         }) = self.current.clone()
         {
             self.advance();
-            effects.push(Name::Raw(name))
+            names.push(Name::Raw(name))
+        } else {
+            is_open = true;
         }
 
         let ret = if self.consume(TokenKind::Arrow).is_ok() {
@@ -547,7 +550,7 @@ impl<'a> Parser<'a> {
                 id,
                 name: name.into(),
                 name_span,
-                effects,
+                effects: EffectSet { names, is_open },
                 generics,
                 params,
                 body,

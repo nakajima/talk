@@ -27,7 +27,7 @@ pub mod tests {
             call_arg::CallArg,
             decl::{Decl, DeclKind},
             expr::{Expr, ExprKind},
-            func::Func,
+            func::{EffectSet, Func},
             func_signature::FuncSignature,
             generic_decl::GenericDecl,
             match_arm::MatchArm,
@@ -1550,7 +1550,10 @@ pub mod tests {
                     id: NodeID::ANY,
                     name: Name::Resolved(Symbol::Global(1.into()), "fizzes".into()),
                     name_span: Span::ANY,
-                    effects: vec![Name::Resolved(Symbol::Effect(1.into()), "fizz".into())],
+                    effects: EffectSet {
+                        names: vec![Name::Resolved(Symbol::Effect(1.into()), "fizz".into())],
+                        is_open: false
+                    },
                     generics: vec![],
                     params: vec![],
                     body: any_block!(vec![]),

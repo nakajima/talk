@@ -2311,7 +2311,7 @@ pub mod tests {
             Ty::Func(
                 Ty::Param(3.into()).into(),
                 Ty::Int.into(),
-                Row::Empty.into()
+                Row::Param(1.into()).into()
             )
         );
     }

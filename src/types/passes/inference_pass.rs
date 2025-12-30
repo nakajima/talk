@@ -42,7 +42,7 @@ use crate::{
             constraint::{Constraint, ConstraintCause},
             store::{ConstraintStore, GroupId},
         },
-        infer_row::InferRow,
+        infer_row::{InferRow, RowMetaId},
         infer_ty::{InferTy, Level, Meta, MetaVarId, TypeParamId},
         passes::uncurry_function,
         predicate::Predicate,
@@ -93,11 +93,14 @@ pub struct InferencePass<'a> {
     instantiations: FxHashMap<NodeID, InstantiationSubstitutions>,
     substitutions: UnificationSubstitutions,
     tracked_returns: Vec<IndexSet<(NodeID, InferTy)>>,
+    tracked_effect_rows: Vec<InferRow>,
     nominal_placeholders: FxHashMap<Symbol, (MetaVarId, Level)>,
     or_binders: Vec<FxHashMap<Symbol, InferTy>>,
     diagnostics: IndexSet<AnyDiagnostic>,
     protocol_associated_type_requirements:
         FxHashMap<ProtocolId, ProtocolAssociatedTypeRequirements>,
+
+    // These are what we eventually produce
     root_decls: Vec<TypedDecl<InferTy>>,
     root_stmts: Vec<TypedStmt<InferTy>>,
 }
@@ -117,6 +120,7 @@ impl<'a> InferencePass<'a> {
             tracked_returns: Default::default(),
             diagnostics: Default::default(),
             nominal_placeholders: Default::default(),
+            tracked_effect_rows: Default::default(),
             or_binders: Default::default(),
             protocol_associated_type_requirements: Default::default(),
             root_decls: Default::default(),
@@ -2914,7 +2918,7 @@ impl<'a> InferencePass<'a> {
         let params = self.visit_params(&func.params, context)?;
 
         let mut effects = vec![];
-        for effect in func.effects.iter() {
+        for effect in func.effects.names.iter() {
             let Ok(symbol) = effect.symbol() else {
                 return Err(TypeError::NameNotResolved(effect.clone()));
             };
@@ -2929,6 +2933,21 @@ impl<'a> InferencePass<'a> {
             });
         }
 
+        let mut effects_row = if func.effects.is_open {
+            self.session.new_row_meta_var(context.level())
+        } else {
+            InferRow::Empty
+        };
+        for effect in effects.iter() {
+            effects_row = InferRow::Extend {
+                row: effects_row.into(),
+                label: Label::_Symbol(effect.name),
+                ty: effect.ty.clone(),
+            };
+        }
+
+        self.tracked_effect_rows.push(effects_row);
+
         let mut foralls = IndexSet::default();
 
         let body = if let Some(ret) = &func.ret {
@@ -2937,6 +2956,11 @@ impl<'a> InferencePass<'a> {
         } else {
             self.infer_block_with_returns(&func.body, &mut context.next())?
         };
+
+        let effects_row = self
+            .tracked_effect_rows
+            .pop()
+            .unwrap_or_else(|| unreachable!("we just pushed it pal"));
 
         foralls.extend(body.ret.collect_foralls());
 
@@ -2950,14 +2974,6 @@ impl<'a> InferencePass<'a> {
             .collect_vec();
 
         let ret = substitute(body.ret.clone(), &self.session.skolem_map);
-
-        let effects_row = effects
-            .iter()
-            .fold(InferRow::Empty, |row, effect| InferRow::Extend {
-                row: row.into(),
-                label: Label::_Symbol(effect.name),
-                ty: effect.ty.clone(),
-            });
 
         self.session.insert(
             func_sym,

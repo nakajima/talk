@@ -15,7 +15,7 @@ pub mod tests {
             call_arg::CallArg,
             decl::{Decl, DeclKind},
             expr::{Expr, ExprKind},
-            func::Func,
+            func::{EffectSet, Func},
             func_signature::FuncSignature,
             generic_decl::GenericDecl,
             incomplete_expr::IncompleteExpr,
@@ -2491,7 +2491,10 @@ pub mod tests {
                     name_span: Span::ANY,
                     type_annotation: None,
                 })],
-                effects: vec![Name::Raw("fizz".into()), Name::Raw("buzz".into()),],
+                effects: EffectSet {
+                    names: vec![Name::Raw("fizz".into()), Name::Raw("buzz".into()),],
+                    is_open: true
+                },
                 body: any!(Block, {
                     args: Default::default(),
                     body: vec![
