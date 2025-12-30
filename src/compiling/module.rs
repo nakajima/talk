@@ -12,7 +12,6 @@ use crate::{
     name_resolution::symbol::{ProtocolId, Symbol},
     types::{
         conformance::{Conformance, ConformanceKey},
-        effect_row::EffectSignature,
         ty::Ty,
         type_catalog::Nominal,
         type_session::{TypeEntry, Types},
@@ -144,7 +143,7 @@ impl ModuleEnvironment {
         module.types.catalog.lookup_initializers(receiver)
     }
 
-    pub fn lookup_effect(&self, id: &Symbol) -> Option<EffectSignature<Ty>> {
+    pub fn lookup_effect(&self, id: &Symbol) -> Option<Ty> {
         let module_id = id.external_module_id()?;
         let stable_id = self.modules_by_local.get(&module_id)?;
         let module = self.modules.get(stable_id)?;

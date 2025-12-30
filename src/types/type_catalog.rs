@@ -8,7 +8,6 @@ use crate::{
     node_id::NodeID,
     types::{
         conformance::{Conformance, ConformanceKey, Witnesses},
-        effect_row::EffectSignature,
         infer_row::RowParamId,
         infer_ty::{InferTy, TypeParamId},
         ty::{SomeType, Ty},
@@ -147,7 +146,7 @@ pub struct TypeCatalog<T: SomeType> {
     pub variants: IndexMap<Symbol, IndexMap<Label, Symbol>>,
     pub method_requirements: IndexMap<Symbol, IndexMap<Label, Symbol>>,
     pub instantiations: TrackedInstantiations<T>,
-    pub effects: IndexMap<Symbol, EffectSignature<T>>,
+    pub effects: IndexMap<Symbol, T>, // Effects are represented as T::Func since they have params, ret, and possibly effects
 }
 
 impl<T: SomeType> Default for TypeCatalog<T> {
@@ -211,15 +210,7 @@ impl TypeCatalog<InferTy> {
             effects: self
                 .effects
                 .into_iter()
-                .map(|(k, v)| {
-                    (
-                        k,
-                        EffectSignature::<Ty> {
-                            params: v.params.into_iter().map(|p| p.into()).collect(),
-                            ret: v.ret.into(),
-                        },
-                    )
-                })
+                .map(|(k, v)| (k, session.finalize_ty(v).as_mono_ty().clone()))
                 .collect(),
         }
     }
@@ -304,7 +295,7 @@ impl<T: SomeType> TypeCatalog<T> {
         None
     }
 
-    pub fn lookup_effect(&self, id: &Symbol) -> Option<EffectSignature<T>> {
+    pub fn lookup_effect(&self, id: &Symbol) -> Option<T> {
         self.effects.get(id).cloned()
     }
 
@@ -425,15 +416,7 @@ impl TypeCatalog<Ty> {
             effects: self
                 .effects
                 .into_iter()
-                .map(|(k, v)| {
-                    (
-                        k.import(module_id),
-                        EffectSignature {
-                            params: v.params.into_iter().map(|p| p.import(module_id)).collect(),
-                            ret: v.ret.import(module_id),
-                        },
-                    )
-                })
+                .map(|(k, v)| (k.import(module_id), v.import(module_id)))
                 .collect(),
         }
     }

@@ -42,9 +42,9 @@ use crate::{
             constraint::{Constraint, ConstraintCause},
             store::{ConstraintStore, GroupId},
         },
-        effect_row::EffectSignature,
         infer_row::InferRow,
         infer_ty::{InferTy, Level, Meta, MetaVarId, TypeParamId},
+        passes::uncurry_function,
         predicate::Predicate,
         scheme::{ForAll, Scheme},
         solve_context::{Solve, SolveContext, SolveContextKind},
@@ -355,7 +355,7 @@ impl<'a> InferencePass<'a> {
                 }
             };
 
-            let effect_signature = EffectSignature { params, ret };
+            let effect_signature = curry(params.iter().map(|p| p.ty.clone()), ret);
             self.session
                 .type_catalog
                 .effects
@@ -1325,12 +1325,12 @@ impl<'a> InferencePass<'a> {
         };
 
         let mut typed_args = vec![];
-
-        for (effect_ty, arg) in effect.params.iter().zip(args) {
+        let (params, ret) = uncurry_function(effect);
+        for (effect_ty, arg) in params.iter().zip(args) {
             let typed_arg = self.visit_expr(&arg.value, context)?;
             self.constraints.wants_equals_at_with_cause(
                 arg.id,
-                effect_ty.ty.clone(),
+                effect_ty.clone(),
                 typed_arg.ty.clone(),
                 &context.group_info(),
                 Some(ConstraintCause::Call(expr.id)),
@@ -1340,7 +1340,7 @@ impl<'a> InferencePass<'a> {
 
         Ok(TypedExpr {
             id: expr.id,
-            ty: effect.ret.clone(),
+            ty: ret.clone(),
             kind: TypedExprKind::CallEffect {
                 effect: effect_sym,
                 args: typed_args,

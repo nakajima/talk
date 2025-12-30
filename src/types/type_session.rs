@@ -18,7 +18,6 @@ use crate::{
         builtins::builtin_scope,
         conformance::{Conformance, ConformanceKey},
         constraints::{constraint::Constraint, store::ConstraintStore},
-        effect_row::EffectSignature,
         infer_row::{InferRow, RowMetaId, RowParamId},
         infer_ty::{InferTy, Level, Meta, MetaVarId, SkolemId, TypeParamId},
         matcher::MatchPlan,
@@ -31,7 +30,6 @@ use crate::{
         type_catalog::{Nominal, TypeCatalog},
         type_error::TypeError,
         type_operations::{UnificationSubstitutions, substitute},
-        typed_ast::TypedParameter,
         vars::Vars,
     },
 };
@@ -921,24 +919,12 @@ impl TypeSession {
         None
     }
 
-    pub fn lookup_effect(&self, id: &Symbol) -> Option<EffectSignature<InferTy>> {
+    pub fn lookup_effect(&self, id: &Symbol) -> Option<InferTy> {
         if let Some(effect) = self.type_catalog.lookup_effect(id) {
             return Some(effect.clone());
         }
 
-        self.modules
-            .lookup_effect(id)
-            .map(|e| EffectSignature::<InferTy> {
-                params: e
-                    .params
-                    .into_iter()
-                    .map(|e| TypedParameter {
-                        name: e.name,
-                        ty: e.ty.into(),
-                    })
-                    .collect(),
-                ret: e.ret.into(),
-            })
+        self.modules.lookup_effect(id).map(|t| t.into())
     }
 
     pub fn lookup_method_requirements(

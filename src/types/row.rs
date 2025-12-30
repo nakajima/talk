@@ -6,7 +6,7 @@ use crate::{
     types::{
         infer_row::{ClosedRow, RowParamId},
         scheme::ForAll,
-        ty::Ty,
+        ty::{SomeType, Ty},
         type_session::TypeDefKind,
     },
 };

@@ -11,6 +11,7 @@ use crate::{
         infer_ty::{InferTy, Level},
         row::Row,
         scheme::ForAll,
+        ty::SomeType,
         type_operations::UnificationSubstitutions,
         type_session::{TypeDefKind, TypeSession},
     },
