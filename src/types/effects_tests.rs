@@ -1,12 +1,16 @@
 #[cfg(test)]
 pub mod tests {
     use crate::{
-        name_resolution::symbol::{GlobalId, Symbol},
-        types::{row::Row, ty::Ty, type_session::TypeEntry, types_tests::tests::typecheck},
+        label::Label,
+        name_resolution::symbol::{EffectId, GlobalId, Symbol},
+        types::{
+            infer_ty::InferTy, row::Row, ty::Ty, type_session::TypeEntry,
+            types_tests::tests::typecheck,
+        },
     };
 
     #[test]
-    fn types_func_with_effect() {
+    fn infers_func_with_effect() {
         let (_ast, types) = typecheck(
             "
           effect 'fizz() -> Int
@@ -24,7 +28,12 @@ pub mod tests {
             Some(TypeEntry::Mono(Ty::Func(
                 Ty::Void.into(),
                 Ty::Int.into(),
-                Row::Empty.into()
+                Row::Extend {
+                    row: Row::Empty.into(),
+                    label: Label::_Symbol(EffectId::from(1).into()),
+                    ty: Ty::Func(Ty::Void.into(), Ty::Int.into(), Row::Empty.into())
+                }
+                .into()
             )))
         )
     }
