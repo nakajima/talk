@@ -5,7 +5,10 @@ use crate::{
     node_id::NodeID,
     types::{
         constraint_solver::{DeferralReason, SolveResult},
-        constraints::{constraint::ConstraintCause, store::{ConstraintId, ConstraintStore}},
+        constraints::{
+            constraint::ConstraintCause,
+            store::{ConstraintId, ConstraintStore},
+        },
         infer_row::InferRow,
         infer_ty::{InferTy, Level, Meta},
         type_error::TypeError,
@@ -25,7 +28,7 @@ impl HasField {
     #[instrument(skip(constraints))]
     pub fn solve(&self, level: Level, constraints: &mut ConstraintStore) -> SolveResult {
         match &self.row {
-            InferRow::Empty(..) => SolveResult::Err(TypeError::MemberNotFound(
+            InferRow::Empty => SolveResult::Err(TypeError::MemberNotFound(
                 self.ty.clone(),
                 self.label.to_string(),
             )),

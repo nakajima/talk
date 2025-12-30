@@ -17,7 +17,6 @@ use crate::types::infer_row::RowParamId;
 use crate::types::infer_ty::TypeParamId;
 use crate::types::predicate::Predicate;
 use crate::types::row::Row;
-use crate::types::type_session::TypeDefKind;
 use crate::types::typed_ast::{
     TypedAST, TypedBlock, TypedDecl, TypedDeclKind, TypedExpr, TypedExprKind, TypedFunc,
     TypedMatchArm, TypedNode, TypedPattern, TypedPatternKind, TypedRecordField, TypedStmt,
@@ -352,6 +351,7 @@ impl<'a> Lowerer<'a> {
                 name: main_symbol,
                 foralls: Default::default(),
                 params: Default::default(),
+                effects: Default::default(),
                 body: TypedBlock {
                     body: {
                         let nodes: Vec<TypedNode<Ty>> = self.ast.roots();
@@ -371,17 +371,17 @@ impl<'a> Lowerer<'a> {
             #[allow(clippy::unwrap_used)]
             self.ast.decls.push(TypedDecl {
                 id: NodeID(FileID(0), 0),
-                ty: Ty::Func(Ty::Void.into(), Ty::Void.into()),
+                ty: Ty::Func(Ty::Void.into(), Ty::Void.into(), Row::Empty.into()),
                 kind: TypedDeclKind::Let {
                     pattern: TypedPattern {
                         id: NodeID(FileID(0), 0),
-                        ty: Ty::Func(Ty::Void.into(), Ty::Void.into()),
+                        ty: Ty::Func(Ty::Void.into(), Ty::Void.into(), Row::Empty.into()),
                         kind: TypedPatternKind::Bind(Symbol::Main),
                     },
-                    ty: Ty::Func(Ty::Void.into(), Ty::Void.into()),
+                    ty: Ty::Func(Ty::Void.into(), Ty::Void.into(), Row::Empty.into()),
                     initializer: Some(TypedExpr {
                         id: NodeID(FileID(0), 0),
-                        ty: Ty::Func(Ty::Void.into(), Ty::Void.into()),
+                        ty: Ty::Func(Ty::Void.into(), Ty::Void.into(), Row::Empty.into()),
                         kind: TypedExprKind::Func(func),
                     }),
                 },
@@ -389,7 +389,7 @@ impl<'a> Lowerer<'a> {
 
             self.types.define(
                 main_symbol,
-                TypeEntry::Mono(Ty::Func(Ty::Void.into(), ret_ty.into())),
+                TypeEntry::Mono(Ty::Func(Ty::Void.into(), ret_ty.into(), Row::Empty.into())),
             );
 
             self.resolved_names
@@ -591,7 +591,11 @@ impl<'a> Lowerer<'a> {
                 name: initializer.name,
                 params: param_values,
                 blocks: current_function.blocks,
-                ty: Ty::Func(Box::new(param_ty.clone()), Box::new(ret_ty.clone())),
+                ty: Ty::Func(
+                    Box::new(param_ty.clone()),
+                    Box::new(ret_ty.clone()),
+                    Row::Empty.into(),
+                ),
                 register_count: (current_function.registers.next) as usize,
             },
         );
@@ -2150,15 +2154,14 @@ impl<'a> Lowerer<'a> {
         // Set the tag as the first entry
         args.insert(0, Value::Int(tag as i64));
 
-        let row =
-            args_tys
-                .iter()
-                .enumerate()
-                .fold(Row::Empty(TypeDefKind::Enum), |acc, (i, ty)| Row::Extend {
-                    row: acc.into(),
-                    label: Label::Positional(i),
-                    ty: ty.clone(),
-                });
+        let row = args_tys
+            .iter()
+            .enumerate()
+            .fold(Row::Empty, |acc, (i, ty)| Row::Extend {
+                row: acc.into(),
+                label: Label::Positional(i),
+                ty: ty.clone(),
+            });
 
         let ty = Ty::Record(Some(*enum_symbol), row.into());
         let dest = self.ret(bind);
@@ -2788,7 +2791,7 @@ impl<'a> Lowerer<'a> {
                     env_fields
                         .iter()
                         .enumerate()
-                        .fold(Row::Empty(TypeDefKind::Struct), |row, (i, _)| Row::Extend {
+                        .fold(Row::Empty, |row, (i, _)| Row::Extend {
                             row: row.into(),
                             label: Label::Positional(i),
                             ty: Ty::RawPtr,
@@ -3543,7 +3546,11 @@ impl<'a> Lowerer<'a> {
                         local_id: 0
                     })
                 ) {
-                    Ok(Ty::Func(Ty::Void.into(), Ty::Void.into()))
+                    Ok(Ty::Func(
+                        Ty::Void.into(),
+                        Ty::Void.into(),
+                        Row::Empty.into(),
+                    ))
                 } else {
                     Err(IRError::TypeNotFound(format!(
                         "Type not found for symbol: {symbol}"
@@ -3577,9 +3584,10 @@ fn substitute(ty: Ty, substitutions: &Substitutions) -> Ty {
                 .collect(),
             ret: substitute(ret, substitutions).into(),
         },
-        Ty::Func(box param, box ret) => Ty::Func(
+        Ty::Func(box param, box ret, box effects) => Ty::Func(
             substitute(param, substitutions).into(),
             substitute(ret, substitutions).into(),
+            substitute_row(effects, substitutions).into(),
         ),
         Ty::Tuple(items) => Ty::Tuple(
             items
@@ -3600,7 +3608,7 @@ fn substitute(ty: Ty, substitutions: &Substitutions) -> Ty {
 
 fn substitute_row(row: Row, substitutions: &Substitutions) -> Row {
     match row {
-        Row::Empty(..) => row,
+        Row::Empty => row,
         Row::Param(id) => substitutions.row.get(&id).unwrap_or(&row).clone(),
         Row::Extend { box row, label, ty } => Row::Extend {
             row: substitute_row(row, substitutions).into(),
@@ -3632,7 +3640,7 @@ pub fn curry_ty<'a, I: IntoIterator<Item = &'a Ty>>(params: I, ret: Ty) -> Ty {
     if params.is_empty() {
         params.push(&Ty::Void);
     }
-    params
-        .into_iter()
-        .rfold(ret, |acc, p| Ty::Func(Box::new(p.clone()), Box::new(acc)))
+    params.into_iter().rfold(ret, |acc, p| {
+        Ty::Func(Box::new(p.clone()), Box::new(acc), Row::Empty.into())
+    })
 }

@@ -901,7 +901,7 @@ impl<'a> PatternChecker<'a> {
 
     fn collect_row_fields_inner(&self, row: &Row, fields: &mut Vec<(Label, Ty)>) -> bool {
         match row {
-            Row::Empty(_) => false,
+            Row::Empty => false,
             Row::Param(_) => true,
             Row::Extend { row, label, ty } => {
                 fields.push((label.clone(), ty.clone()));

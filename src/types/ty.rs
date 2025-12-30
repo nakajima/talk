@@ -45,9 +45,11 @@ impl SomeType for Ty {
                 params: params.into_iter().map(|p| p.import(module_id)).collect(),
                 ret: ret.import(module_id).into(),
             },
-            Ty::Func(param, ret) => {
-                Ty::Func(param.import(module_id).into(), ret.import(module_id).into())
-            }
+            Ty::Func(param, ret, effects) => Ty::Func(
+                param.import(module_id).into(),
+                ret.import(module_id).into(),
+                effects.import(module_id).into(),
+            ),
             Ty::Tuple(items) => Ty::Tuple(items.into_iter().map(|t| t.import(module_id)).collect()),
             Ty::Record(symbol, box row) => Ty::Record(
                 symbol.map(|s| s.import(module_id)),
@@ -73,7 +75,7 @@ pub enum Ty {
         ret: Box<Ty>,
     },
 
-    Func(Box<Ty>, Box<Ty>),
+    Func(Box<Ty>, Box<Ty>, Box<Row>),
     Tuple(Vec<Ty>),
     Record(#[drive(skip)] Option<Symbol>, Box<Row>),
 
@@ -100,10 +102,10 @@ impl std::fmt::Display for Ty {
             Ty::Constructor { name, .. } => {
                 write!(f, "{}", name.name_str())
             }
-            Ty::Func(param, ret) => {
+            Ty::Func(param, ret, effects) => {
                 write!(
                     f,
-                    "({}) -> {ret}",
+                    "({}) {effects:?} -> {ret}",
                     param
                         .clone()
                         .uncurry_params()
@@ -172,9 +174,10 @@ impl Ty {
                 }
                 result.extend(ret.collect_foralls());
             }
-            Ty::Func(param, ret) => {
+            Ty::Func(param, ret, effects) => {
                 result.extend(param.collect_foralls());
                 result.extend(ret.collect_foralls());
+                result.extend(effects.collect_foralls());
             }
             Ty::Tuple(items) => {
                 for item in items {

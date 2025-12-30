@@ -1,9 +1,12 @@
 use std::{convert::Infallible, fmt::Display, str::FromStr};
 
+use crate::name_resolution::symbol::Symbol;
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Label {
     Named(String),
     Positional(usize),
+    _Symbol(Symbol),
 }
 
 impl<T: Into<String>> From<T> for Label {
@@ -17,6 +20,7 @@ impl Display for Label {
         match self {
             Self::Named(name) => write!(f, "{name}"),
             Self::Positional(i) => write!(f, "{i}"),
+            Self::_Symbol(s) => write!(f, "{s}"),
         }
     }
 }

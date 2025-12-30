@@ -7,7 +7,11 @@ use crate::{
     node_id::NodeID,
     types::{
         constraint_solver::{DeferralReason, SolveResult},
-        constraints::{constraint::ConstraintCause, store::{ConstraintId, ConstraintStore}},
+        constraints::{
+            constraint::ConstraintCause,
+            store::{ConstraintId, ConstraintStore},
+        },
+        infer_row::InferRow,
         infer_ty::{InferTy, Meta, TypeParamId},
         passes::uncurry_function,
         predicate::Predicate,
@@ -205,7 +209,11 @@ impl Member {
                     continue;
                 };
 
-                if context.instantiations.get_ty(&self.node_id, param_id).is_some() {
+                if context
+                    .instantiations
+                    .get_ty(&self.node_id, param_id)
+                    .is_some()
+                {
                     continue;
                 }
 
@@ -214,7 +222,9 @@ impl Member {
                 };
 
                 session.reverse_instantiations.ty.insert(meta, *param_id);
-                context.instantiations.insert_ty(self.node_id, *param_id, meta);
+                context
+                    .instantiations
+                    .insert_ty(self.node_id, *param_id, meta);
                 session.type_catalog.instantiations.ty.insert(
                     (self.node_id, *param_id),
                     InferTy::Var {
@@ -253,6 +263,7 @@ impl Member {
                             &context.instantiations,
                             context.level,
                         ),
+                        InferRow::Empty.into(),
                     ),
                 }
             } else {
@@ -334,7 +345,7 @@ impl Member {
 
                     let constructor_ty = match values.len() {
                         0 => self.receiver.clone(),
-                        _ => curry(values, self.receiver.clone()),
+                        _ => curry(values, self.receiver.clone(), InferRow::Empty.into()),
                     };
 
                     let group = constraints.copy_group(self.id);
@@ -376,11 +387,11 @@ impl Member {
 #[instrument(level = tracing::Level::TRACE, ret)]
 pub fn consume_self(method: &InferTy) -> (InferTy, InferTy) {
     assert_matches!(method, InferTy::Func(..), "didn't get func to consume self");
-    let (mut params, ret) = uncurry_function(method.clone());
+    let (mut params, ret, effects) = uncurry_function(method.clone());
     let method_receiver = params.remove(0);
     if params.is_empty() {
         // We need to make sure there's at least one param or else curry doesn't return a func.
         params.insert(0, InferTy::Void);
     }
-    (method_receiver, curry(params, ret))
+    (method_receiver, curry(params, ret, effects.into()))
 }

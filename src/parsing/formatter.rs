@@ -780,10 +780,7 @@ impl<'a> Formatter<'a> {
                 }
                 return concat(
                     text("{"),
-                    concat(
-                        concat(text(" "), args_doc),
-                        concat(hardline(), text("}")),
-                    ),
+                    concat(concat(text(" "), args_doc), concat(hardline(), text("}"))),
                 );
             }
 
@@ -1015,6 +1012,7 @@ impl<'a> Formatter<'a> {
                 self.format_expr(&arg.value),
             )),
             Label::Positional(_) => self.format_expr(&arg.value),
+            Label::_Symbol(s) => text(format!("{s}")),
         }
     }
 

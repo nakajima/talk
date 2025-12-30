@@ -55,10 +55,10 @@ use crate::{
         type_operations::{
             InstantiationSubstitutions, UnificationSubstitutions, curry, substitute,
         },
-        type_session::{TypeDefKind, TypeSession},
+        type_session::TypeSession,
         typed_ast::{
-            TypedAST, TypedBlock, TypedDecl, TypedDeclKind, TypedExpr, TypedExprKind, TypedFunc,
-            TypedMatchArm, TypedNode, TypedParameter, TypedPattern, TypedPatternKind,
+            TypedAST, TypedBlock, TypedDecl, TypedDeclKind, TypedEffect, TypedExpr, TypedExprKind,
+            TypedFunc, TypedMatchArm, TypedNode, TypedParameter, TypedPattern, TypedPatternKind,
             TypedRecordField, TypedRecordFieldPattern, TypedRecordFieldPatternKind, TypedStmt,
             TypedStmtKind,
         },
@@ -355,7 +355,11 @@ impl<'a> InferencePass<'a> {
                 }
             };
 
-            let effect_signature = curry(params.iter().map(|p| p.ty.clone()), ret);
+            let effect_signature = curry(
+                params.iter().map(|p| p.ty.clone()),
+                ret,
+                InferRow::Empty.into(),
+            );
             self.session
                 .type_catalog
                 .effects
@@ -695,6 +699,7 @@ impl<'a> InferencePass<'a> {
                     let func_ty = curry(
                         typed_func.params.iter().map(|p| p.ty.clone()),
                         typed_func.ret.clone(),
+                        typed_func.effects_row().into(),
                     );
 
                     // Include self predicate for protocol self.
@@ -1283,7 +1288,11 @@ impl<'a> InferencePass<'a> {
                 let func = self.visit_func(func, context)?;
                 TypedExpr {
                     id: expr.id,
-                    ty: curry(func.params.iter().map(|p| p.ty.clone()), func.ret.clone()),
+                    ty: curry(
+                        func.params.iter().map(|p| p.ty.clone()),
+                        func.ret.clone(),
+                        func.effects_row().into(),
+                    ),
                     kind: TypedExprKind::Func(func),
                 }
             }
@@ -1325,7 +1334,7 @@ impl<'a> InferencePass<'a> {
         };
 
         let mut typed_args = vec![];
-        let (params, ret) = uncurry_function(effect);
+        let (params, ret, _effects) = uncurry_function(effect);
         for (effect_ty, arg) in params.iter().zip(args) {
             let typed_arg = self.visit_expr(&arg.value, context)?;
             self.constraints.wants_equals_at_with_cause(
@@ -1491,7 +1500,11 @@ impl<'a> InferencePass<'a> {
             InferTy::Void
         };
 
-        let ty = curry(params.iter().map(|p| p.ty.clone()), ret);
+        let ty = curry(
+            params.iter().map(|p| p.ty.clone()),
+            ret,
+            InferRow::Empty.into(),
+        );
         let mut foralls: IndexSet<_> = ty.collect_foralls().into_iter().collect();
         foralls.insert(ForAll::Ty(protocol_self_id));
         let predicates = vec![Predicate::<InferTy>::Conforms {
@@ -1971,7 +1984,7 @@ impl<'a> InferencePass<'a> {
         spread: &Option<Box<Expr>>,
         context: &mut impl Solve,
     ) -> TypedRet<TypedExpr<InferTy>> {
-        let mut row = InferRow::Empty(TypeDefKind::Struct);
+        let mut row = InferRow::Empty;
         let mut typed_fields = vec![];
         for field in fields.iter().rev() {
             let typed_field = self.visit_expr(&field.value, context)?;
@@ -2033,6 +2046,7 @@ impl<'a> InferencePass<'a> {
             curry(
                 func_ty.params.iter().map(|p| p.ty.clone()),
                 func_ty.ret.clone(),
+                func_ty.effects_row().into(),
             ),
             &mut self.constraints,
         );
@@ -2119,7 +2133,11 @@ impl<'a> InferencePass<'a> {
         // Init blocks always return self
         let block = self.infer_block(body, context)?;
 
-        let ty = curry(params.iter().map(|p| p.ty.clone()), struct_ty.clone());
+        let ty = curry(
+            params.iter().map(|p| p.ty.clone()),
+            struct_ty.clone(),
+            InferRow::Empty.into(),
+        );
 
         let InferTy::Nominal { symbol, .. } = &struct_ty else {
             unreachable!()
@@ -2141,6 +2159,7 @@ impl<'a> InferencePass<'a> {
             params,
             body: block,
             foralls,
+            effects: Default::default(),
             ret: struct_ty,
         })
     }
@@ -2240,7 +2259,7 @@ impl<'a> InferencePass<'a> {
                 ty
             }
             PatternKind::Record { fields } => {
-                let mut row = InferRow::Empty(TypeDefKind::Struct);
+                let mut row = InferRow::Empty;
                 for field in fields {
                     match &field.kind {
                         RecordFieldPatternKind::Bind(name) => {
@@ -2575,9 +2594,17 @@ impl<'a> InferencePass<'a> {
                 let payload = if fields.is_empty() {
                     expected.clone()
                 } else if fields.len() == 1 {
-                    InferTy::Func(field_metas[0].clone().into(), expected.clone().into())
+                    InferTy::Func(
+                        field_metas[0].clone().into(),
+                        expected.clone().into(),
+                        InferRow::Empty.into(),
+                    )
                 } else {
-                    curry(field_metas.clone(), expected.clone())
+                    curry(
+                        field_metas.clone(),
+                        expected.clone(),
+                        InferRow::Empty.into(),
+                    )
                 };
 
                 self.constraints.wants_member(
@@ -2886,6 +2913,22 @@ impl<'a> InferencePass<'a> {
 
         let params = self.visit_params(&func.params, context)?;
 
+        let mut effects = vec![];
+        for effect in func.effects.iter() {
+            let Ok(symbol) = effect.symbol() else {
+                return Err(TypeError::NameNotResolved(effect.clone()));
+            };
+
+            let Some(effect) = self.session.lookup(&symbol) else {
+                return Err(TypeError::EffectNotFound(effect.name_str()));
+            };
+
+            effects.push(TypedEffect {
+                name: symbol,
+                ty: effect._as_ty(),
+            });
+        }
+
         let mut foralls = IndexSet::default();
 
         let body = if let Some(ret) = &func.ret {
@@ -2908,15 +2951,28 @@ impl<'a> InferencePass<'a> {
 
         let ret = substitute(body.ret.clone(), &self.session.skolem_map);
 
+        let effects_row = effects
+            .iter()
+            .fold(InferRow::Empty, |row, effect| InferRow::Extend {
+                row: row.into(),
+                label: Label::_Symbol(effect.name),
+                ty: effect.ty.clone(),
+            });
+
         self.session.insert(
             func_sym,
-            curry(params.iter().map(|t| t.ty.clone()), ret.clone()),
+            curry(
+                params.iter().map(|t| t.ty.clone()),
+                ret.clone(),
+                effects_row.into(),
+            ),
             &mut Default::default(),
         );
 
         Ok(TypedFunc {
             name: func_sym,
             params,
+            effects,
             foralls,
             body,
             ret,
@@ -3163,7 +3219,7 @@ impl<'a> InferencePass<'a> {
                 Ok(entry._as_ty())
             }
             TypeAnnotationKind::Record { fields } => {
-                let mut row = InferRow::Empty(TypeDefKind::Struct);
+                let mut row = InferRow::Empty;
                 for field in fields.iter().rev() {
                     row = InferRow::Extend {
                         row: Box::new(row),

@@ -4,7 +4,7 @@ use crate::{
     ir::ir_error::IRError,
     label::Label,
     name_resolution::symbol::Symbol,
-    types::{row::Row, ty::Ty, type_session::TypeDefKind},
+    types::{row::Row, ty::Ty},
 };
 
 #[derive(Debug, PartialEq, Eq, Clone, Hash)]
@@ -159,10 +159,10 @@ impl From<IrTy> for Ty {
                 .collect::<Vec<_>>()
                 .into_iter()
                 .rfold(ret.into(), |acc, p| {
-                    Ty::Func(Box::new(p.into()), Box::new(acc))
+                    Ty::Func(Box::new(p.into()), Box::new(acc), Row::Empty.into())
                 }),
             IrTy::Record(sym, tys) => {
-                let mut row = Row::Empty(TypeDefKind::Struct);
+                let mut row = Row::Empty;
                 for (i, ty) in tys.iter().enumerate() {
                     row = Row::Extend {
                         row: row.into(),

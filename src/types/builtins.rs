@@ -1,6 +1,7 @@
 use indexmap::IndexSet;
 use rustc_hash::FxHashMap;
 
+use crate::types::infer_row::InferRow;
 use crate::types::infer_ty::{InferTy, TypeParamId};
 use crate::types::predicate::Predicate;
 use crate::types::scheme::{ForAll, Scheme};
@@ -28,10 +29,12 @@ pub fn resolve_builtin_type(id: &Symbol) -> (InferTy, Vec<Predicate<InferTy>>, I
         Symbol::IR => InferTy::Func(
             InferTy::String().into(),
             InferTy::Param(TypeParamId::IR_TYPE_PARAM).into(),
+            InferRow::Empty.into(),
         ),
         Symbol::PRINT => InferTy::Func(
             InferTy::String().into(),
             InferTy::Param(TypeParamId::IR_TYPE_PARAM).into(),
+            InferRow::Empty.into(),
         ),
         _ => unreachable!("no builtin named {id:?}"),
     };
@@ -59,6 +62,7 @@ pub fn builtin_scope() -> FxHashMap<Symbol, EnvEntry<InferTy>> {
             InferTy::Func(
                 InferTy::String().into(),
                 InferTy::Param(TypeParamId::IR_TYPE_PARAM).into(),
+                InferRow::Empty.into(),
             ),
         )),
     );
@@ -70,6 +74,7 @@ pub fn builtin_scope() -> FxHashMap<Symbol, EnvEntry<InferTy>> {
             InferTy::Func(
                 InferTy::Param(TypeParamId::IR_TYPE_PARAM).into(),
                 InferTy::Void.into(),
+                InferRow::Empty.into(),
             ),
         )),
     );

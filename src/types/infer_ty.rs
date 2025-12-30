@@ -96,7 +96,6 @@ impl UnifyValue for Level {
 #[derive(PartialEq, Eq, Clone, Hash, Drive, DriveMut)]
 pub enum InferTy {
     Primitive(#[drive(skip)] Symbol),
-
     Param(#[drive(skip)] TypeParamId),
     Rigid(#[drive(skip)] SkolemId),
     Var {
@@ -105,7 +104,6 @@ pub enum InferTy {
         #[drive(skip)]
         level: Level,
     },
-
     Projection {
         base: Box<InferTy>,
         #[drive(skip)]
@@ -113,25 +111,20 @@ pub enum InferTy {
         #[drive(skip)]
         associated: Label,
     },
-
     Constructor {
         #[drive(skip)]
         name: Name,
         params: Vec<InferTy>,
         ret: Box<InferTy>,
     },
-
-    Func(Box<InferTy>, Box<InferTy>),
+    Func(Box<InferTy>, Box<InferTy>, Box<InferRow>),
     Tuple(Vec<InferTy>),
     Record(Box<InferRow>),
-
-    // Nominal types (we look up their information from the TypeCatalog)
     Nominal {
         #[drive(skip)]
         symbol: Symbol,
         type_args: Vec<InferTy>,
     },
-
     Error(#[drive(skip)] Box<TypeError>),
 }
 
@@ -150,9 +143,11 @@ impl From<InferTy> for Ty {
                 params: params.into_iter().map(|p| p.into()).collect(),
                 ret: Box::new(ret.into()),
             },
-            InferTy::Func(box param, box ret) => {
-                Ty::Func(Box::new(param.into()), Box::new(ret.into()))
-            }
+            InferTy::Func(box param, box ret, box effects) => Ty::Func(
+                Box::new(param.into()),
+                Box::new(ret.into()),
+                Box::new(effects.into()),
+            ),
             InferTy::Tuple(items) => Ty::Tuple(items.into_iter().map(|t| t.into()).collect()),
             InferTy::Record(box infer_row) => Ty::Record(None, Box::new(infer_row.into())),
             InferTy::Nominal { symbol, type_args } => Ty::Nominal {
@@ -179,9 +174,11 @@ impl From<Ty> for InferTy {
                 params: params.into_iter().map(|p| p.into()).collect(),
                 ret: Box::new(ret.into()),
             },
-            Ty::Func(box param, box ret) => {
-                InferTy::Func(Box::new(param.into()), Box::new(ret.into()))
-            }
+            Ty::Func(box param, box ret, box effects) => InferTy::Func(
+                Box::new(param.into()),
+                Box::new(ret.into()),
+                Box::new(effects.into()),
+            ),
             Ty::Tuple(items) => InferTy::Tuple(items.into_iter().map(|t| t.into()).collect()),
             Ty::Record(.., box infer_row) => InferTy::Record(Box::new(infer_row.into())),
             Ty::Nominal { symbol, type_args } => InferTy::Nominal {
@@ -208,7 +205,9 @@ impl SomeType for InferTy {
             InferTy::Error(..) => false,
             InferTy::Projection { base, .. } => base.contains_var(),
             InferTy::Constructor { params, .. } => params.iter().any(|p| p.contains_var()),
-            InferTy::Func(ty, ty1) => ty.contains_var() || ty1.contains_var(),
+            InferTy::Func(ty, ty1, effects) => {
+                ty.contains_var() || ty1.contains_var() || effects.contains_var()
+            }
             InferTy::Tuple(items) => items.iter().any(|i| i.contains_var()),
             InferTy::Record(box row) => match row {
                 InferRow::Extend { row, ty, .. } => {
@@ -251,9 +250,11 @@ impl SomeType for InferTy {
                 params,
                 ret,
             },
-            InferTy::Func(ty, ty1) => {
-                InferTy::Func(ty.import(module_id).into(), ty1.import(module_id).into())
-            }
+            InferTy::Func(ty, ty1, effects) => InferTy::Func(
+                ty.import(module_id).into(),
+                ty1.import(module_id).into(),
+                effects.import(module_id).into(),
+            ),
             InferTy::Tuple(items) => {
                 InferTy::Tuple(items.into_iter().map(|i| i.import(module_id)).collect())
             }
@@ -303,9 +304,10 @@ impl InferTy {
             InferTy::Projection { base, .. } => {
                 out.extend(base.collect_metas());
             }
-            InferTy::Func(dom, codom) => {
-                out.extend(dom.collect_metas());
-                out.extend(codom.collect_metas());
+            InferTy::Func(param, ret, effects) => {
+                out.extend(param.collect_metas());
+                out.extend(ret.collect_metas());
+                out.extend(effects.collect_metas());
             }
             InferTy::Tuple(items) => {
                 for item in items {
@@ -313,7 +315,7 @@ impl InferTy {
                 }
             }
             InferTy::Record(box row) => match row {
-                InferRow::Empty(..) => (),
+                InferRow::Empty => (),
                 InferRow::Var(..) => {
                     out.insert(self.clone());
                 }
@@ -375,9 +377,10 @@ impl InferTy {
                     result.extend(item.collect_foralls());
                 }
             }
-            InferTy::Func(ty, ty1) => {
+            InferTy::Func(ty, ty1, effects) => {
                 result.extend(ty.collect_foralls());
                 result.extend(ty1.collect_foralls());
+                result.extend(effects.collect_foralls());
             }
             InferTy::Tuple(items) => {
                 for item in items {
@@ -408,7 +411,9 @@ impl std::fmt::Debug for InferTy {
                 associated,
                 protocol_id,
             } => write!(f, "{base:?}.{associated:?}[{protocol_id:?}"),
-            InferTy::Func(param, ret) => write!(f, "func({param:?}) -> {ret:?}"),
+            InferTy::Func(param, ret, effects) => {
+                write!(f, "func({param:?}) {effects:?} -> {ret:?}")
+            }
             InferTy::Tuple(items) => {
                 write!(f, "({})", items.iter().map(|i| format!("{i:?}")).join(", "))
             }
@@ -417,7 +422,7 @@ impl std::fmt::Debug for InferTy {
             }
             InferTy::Record(box row) => {
                 let row_debug = match row {
-                    InferRow::Empty(kind) => format!("emptyrow({kind:?})"),
+                    InferRow::Empty => "emptyrow()".to_string(),
                     InferRow::Param(id) => format!("rowparam(π{})", id.0),
                     InferRow::Extend { .. } => {
                         let closed = row.close();
@@ -498,7 +503,7 @@ impl std::fmt::Display for InferTy {
 
 fn collect_func_params<'a>(ty: &'a InferTy, params: &mut Vec<&'a InferTy>) -> &'a InferTy {
     match ty {
-        InferTy::Func(param, ret) => {
+        InferTy::Func(param, ret, ..) => {
             if **param != InferTy::Void {
                 params.push(param);
             }
@@ -529,7 +534,7 @@ fn format_row(row: &InferRow) -> String {
 
     loop {
         match cursor {
-            InferRow::Empty(..) => break,
+            InferRow::Empty => break,
             InferRow::Param(id) => {
                 tail = Some(RowTailDisplay::Param(*id));
                 break;

@@ -394,6 +394,9 @@ impl<IO: super::io::IO> Interpreter<IO> {
                 };
 
                 let idx = match field {
+                    Label::_Symbol(..) => {
+                        panic!("symbol field access not supported for {sym:?}");
+                    }
                     Label::Positional(idx) => idx,
                     Label::Named(name) => {
                         panic!("named field access not supported for {sym:?}.{name}");
@@ -838,22 +841,16 @@ pub mod tests {
 
     pub fn interpret_with(input: &str) -> (Value, Interpreter<CaptureIO>) {
         let (module, display_names) = lower_module(input);
-        let mut interpreter = Interpreter::new(
-            module.program,
-            Some(display_names),
-            CaptureIO::default(),
-        );
+        let mut interpreter =
+            Interpreter::new(module.program, Some(display_names), CaptureIO::default());
 
         (interpreter.run(), interpreter)
     }
 
     pub fn interpret(input: &str) -> Value {
         let (module, display_names) = lower_module(input);
-        let mut interpreter = Interpreter::new(
-            module.program,
-            Some(display_names),
-            CaptureIO::default(),
-        );
+        let mut interpreter =
+            Interpreter::new(module.program, Some(display_names), CaptureIO::default());
 
         interpreter.run()
     }

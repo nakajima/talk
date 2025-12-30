@@ -2,7 +2,7 @@
 pub mod tests {
     use crate::{
         name_resolution::symbol::{GlobalId, Symbol},
-        types::{ty::Ty, type_session::TypeEntry, types_tests::tests::typecheck},
+        types::{row::Row, ty::Ty, type_session::TypeEntry, types_tests::tests::typecheck},
     };
 
     #[test]
@@ -21,7 +21,11 @@ pub mod tests {
             types
                 .get_symbol(&Symbol::Global(GlobalId::from(1)))
                 .cloned(),
-            Some(TypeEntry::Mono(Ty::Func(Ty::Void.into(), Ty::Int.into())))
+            Some(TypeEntry::Mono(Ty::Func(
+                Ty::Void.into(),
+                Ty::Int.into(),
+                Row::Empty.into()
+            )))
         )
     }
 }

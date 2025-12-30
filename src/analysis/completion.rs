@@ -398,7 +398,7 @@ fn record_fields(row: &Row) -> Vec<(Label, Ty)> {
     let mut cursor = row;
     loop {
         match cursor {
-            Row::Empty(..) | Row::Param(..) => break,
+            Row::Empty | Row::Param(..) => break,
             Row::Extend { row, label, ty } => {
                 if seen.insert(label.clone()) {
                     result.push((label.clone(), ty.clone()));
@@ -436,9 +436,10 @@ fn substitute_ty(ty: &Ty, substitutions: &FxHashMap<Ty, Ty>) -> Ty {
                 .collect(),
             ret: substitute_ty(ret, substitutions).into(),
         },
-        Ty::Func(param, ret) => Ty::Func(
+        Ty::Func(param, ret, effects) => Ty::Func(
             substitute_ty(param, substitutions).into(),
             substitute_ty(ret, substitutions).into(),
+            substitute_row(effects, substitutions).into(),
         ),
         Ty::Tuple(items) => Ty::Tuple(
             items
@@ -459,7 +460,7 @@ fn substitute_ty(ty: &Ty, substitutions: &FxHashMap<Ty, Ty>) -> Ty {
 
 fn substitute_row(row: &Row, substitutions: &FxHashMap<Ty, Ty>) -> Row {
     match row {
-        Row::Empty(kind) => Row::Empty(*kind),
+        Row::Empty => Row::Empty,
         Row::Param(param) => Row::Param(*param),
         Row::Extend { row, label, ty } => Row::Extend {
             row: substitute_row(row, substitutions).into(),

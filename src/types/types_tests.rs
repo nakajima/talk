@@ -12,6 +12,7 @@ pub mod tests {
         name_resolution::symbol::{EnumId, GlobalId, ProtocolId, StructId, Symbol, SynthesizedId},
         types::{
             conformance::ConformanceKey,
+            row::Row,
             scheme::{ForAll, Scheme},
             ty::Ty,
             type_error::TypeError,
@@ -2307,7 +2308,11 @@ pub mod tests {
                 .get_symbol(&GlobalId::from(1).into())
                 .unwrap()
                 .as_mono_ty(),
-            Ty::Func(Ty::Param(3.into()).into(), Ty::Int.into())
+            Ty::Func(
+                Ty::Param(3.into()).into(),
+                Ty::Int.into(),
+                Row::Empty.into()
+            )
         );
     }
 
@@ -2358,7 +2363,7 @@ pub mod tests {
                 .unwrap()
                 .as_mono_ty(),
             // We should be able to infer the n is int because there's only one Comparable with RHS int
-            Ty::Func(Ty::Int.into(), Ty::Int.into())
+            Ty::Func(Ty::Int.into(), Ty::Int.into(), Row::Empty.into())
         )
     }
 

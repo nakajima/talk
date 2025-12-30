@@ -7,13 +7,12 @@ use crate::{
         infer_row::{ClosedRow, RowParamId},
         scheme::ForAll,
         ty::{SomeType, Ty},
-        type_session::TypeDefKind,
     },
 };
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Drive, DriveMut)]
 pub enum Row {
-    Empty(#[drive(skip)] TypeDefKind),
+    Empty,
     Param(#[drive(skip)] RowParamId),
     Extend {
         row: Box<Row>,
@@ -31,7 +30,7 @@ impl Row {
     pub fn collect_foralls(&self) -> Vec<ForAll> {
         let mut result = vec![];
         match self {
-            Row::Empty(..) => (),
+            Row::Empty => (),
             Row::Param(id) => {
                 result.push(ForAll::Row(*id));
             }
@@ -45,7 +44,7 @@ impl Row {
 
     pub fn import(self, module_id: ModuleId) -> Self {
         match self {
-            Row::Empty(v) => Row::Empty(v),
+            Row::Empty => Row::Empty,
             Row::Param(v) => Row::Param(v),
             Row::Extend { box row, label, ty } => Row::Extend {
                 row: row.import(module_id).into(),
@@ -59,7 +58,7 @@ impl Row {
 fn close(row: &Row, mut closed_row: ClosedRow<Ty>) -> ClosedRow<Ty> {
     #[allow(clippy::panic)]
     match row {
-        Row::Empty(..) => closed_row,
+        Row::Empty => closed_row,
         Row::Param(_) => panic!("Cannot close param: {row:?}"),
         Row::Extend { row, label, ty } => {
             closed_row.insert(label.clone(), ty.clone());

@@ -5,11 +5,13 @@ use rustc_hash::FxHashMap;
 use crate::{
     compiling::module::ModuleId,
     label::Label,
+    map_into,
     name_resolution::symbol::Symbol,
     node_id::NodeID,
     node_kinds::inline_ir_instruction::TypedInlineIRInstruction,
     types::{
         conformance::ConformanceKey,
+        infer_row::InferRow,
         infer_ty::InferTy,
         scheme::ForAll,
         ty::{SomeType, Ty},
@@ -147,14 +149,16 @@ impl TypedFunc<InferTy> {
         TypedFunc {
             name: self.name,
             foralls: self.foralls,
-            params: self
-                .params
-                .into_iter()
-                .map(|p| TypedParameter {
-                    name: p.name,
-                    ty: session.finalize_ty(p.ty).as_mono_ty().clone(),
-                })
-                .collect(),
+            params: map_into!(self.params, |p| TypedParameter {
+                name: p.name,
+                ty: session.finalize_ty(p.ty).as_mono_ty().clone(),
+            }),
+            effects: map_into!(self.effects, |e| {
+                TypedEffect {
+                    name: e.name,
+                    ty: session.finalize_ty(e.ty).as_mono_ty().clone(),
+                }
+            }),
             body: self.body.finalize(session, witnesses),
             ret: session.finalize_ty(self.ret).as_mono_ty().clone(),
         }
@@ -1054,14 +1058,34 @@ impl<T: SomeType> TypedParameter<T> {
 }
 
 #[derive(Debug, Clone, PartialEq, Drive, DriveMut)]
+pub struct TypedEffect<T: SomeType> {
+    #[drive(skip)]
+    pub name: Symbol,
+    pub ty: T,
+}
+
+#[derive(Debug, Clone, PartialEq, Drive, DriveMut)]
 pub struct TypedFunc<T: SomeType> {
     #[drive(skip)]
     pub name: Symbol,
     #[drive(skip)]
     pub foralls: IndexSet<ForAll>,
     pub params: Vec<TypedParameter<T>>,
+    pub effects: Vec<TypedEffect<T>>,
     pub body: TypedBlock<T>,
     pub ret: T,
+}
+
+impl TypedFunc<InferTy> {
+    pub fn effects_row(&self) -> InferRow {
+        self.effects
+            .iter()
+            .fold(InferRow::Empty, |row, effect| InferRow::Extend {
+                row: row.into(),
+                label: Label::_Symbol(effect.name),
+                ty: effect.ty.clone(),
+            })
+    }
 }
 
 impl<T: SomeType, U: SomeType> TyMappable<T, U> for TypedFunc<T> {
@@ -1070,14 +1094,14 @@ impl<T: SomeType, U: SomeType> TyMappable<T, U> for TypedFunc<T> {
         TypedFunc {
             name: self.name,
             foralls: self.foralls,
-            params: self
-                .params
-                .into_iter()
-                .map(|p| TypedParameter {
-                    name: p.name,
-                    ty: m(&p.ty),
-                })
-                .collect(),
+            params: map_into!(self.params, |p| TypedParameter {
+                name: p.name,
+                ty: m(&p.ty),
+            }),
+            effects: map_into!(self.effects, |e| TypedEffect {
+                name: e.name,
+                ty: m(&e.ty)
+            }),
             body: self.body.map_ty(m),
             ret: m(&self.ret),
         }

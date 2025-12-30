@@ -4,7 +4,11 @@ use crate::{
     node_id::NodeID,
     types::{
         constraint_solver::{DeferralReason, SolveResult},
-        constraints::{constraint::ConstraintCause, store::{ConstraintId, ConstraintStore}},
+        constraints::{
+            constraint::ConstraintCause,
+            store::{ConstraintId, ConstraintStore},
+        },
+        infer_row::InferRow,
         infer_ty::{InferTy, Meta},
         solve_context::{Solve, SolveContext},
         term_environment::EnvEntry,
@@ -118,23 +122,32 @@ impl Call {
                     &group,
                 );
 
-                match unify(&init_ty, &curry(args, returns_type), context, session) {
+                match unify(
+                    &init_ty,
+                    &curry(args, returns_type, InferRow::Empty.into()),
+                    context,
+                    session,
+                ) {
                     Ok(metas) => SolveResult::Solved(metas),
                     Err(e) => SolveResult::Err(e.with_cause(cause)),
                 }
             }
-            InferTy::Func(..) => {
+            InferTy::Func(.., effects) => {
                 let res = if args.is_empty() {
                     unify(
                         &self.callee,
-                        &InferTy::Func(InferTy::Void.into(), self.returns.clone().into()),
+                        &InferTy::Func(
+                            InferTy::Void.into(),
+                            self.returns.clone().into(),
+                            effects.clone(),
+                        ),
                         context,
                         session,
                     )
                 } else {
                     unify(
                         &self.callee,
-                        &curry(args, self.returns.clone()),
+                        &curry(args, self.returns.clone(), effects.clone()),
                         context,
                         session,
                     )
