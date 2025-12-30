@@ -22,7 +22,7 @@ use crate::{
         call_arg::CallArg,
         decl::{Decl, DeclKind},
         expr::{Expr, ExprKind},
-        func::Func,
+        func::{EffectSet, Func},
         func_signature::FuncSignature,
         generic_decl::GenericDecl,
         inline_ir_instruction::{InlineIRInstruction, TypedInlineIRInstruction},
@@ -42,7 +42,7 @@ use crate::{
             constraint::{Constraint, ConstraintCause},
             store::{ConstraintStore, GroupId},
         },
-        infer_row::{InferRow, RowMetaId},
+        infer_row::InferRow,
         infer_ty::{InferTy, Level, Meta, MetaVarId, TypeParamId},
         passes::uncurry_function,
         predicate::Predicate,
@@ -703,7 +703,7 @@ impl<'a> InferencePass<'a> {
                     let func_ty = curry(
                         typed_func.params.iter().map(|p| p.ty.clone()),
                         typed_func.ret.clone(),
-                        typed_func.effects_row().into(),
+                        typed_func.effects_row.clone().into(),
                     );
 
                     // Include self predicate for protocol self.
@@ -1295,7 +1295,7 @@ impl<'a> InferencePass<'a> {
                     ty: curry(
                         func.params.iter().map(|p| p.ty.clone()),
                         func.ret.clone(),
-                        func.effects_row().into(),
+                        func.effects_row.clone().into(),
                     ),
                     kind: TypedExprKind::Func(func),
                 }
@@ -1338,7 +1338,7 @@ impl<'a> InferencePass<'a> {
         };
 
         let mut typed_args = vec![];
-        let (params, ret, _effects) = uncurry_function(effect);
+        let (params, ret, _effects) = uncurry_function(effect.clone());
         for (effect_ty, arg) in params.iter().zip(args) {
             let typed_arg = self.visit_expr(&arg.value, context)?;
             self.constraints.wants_equals_at_with_cause(
@@ -1349,6 +1349,16 @@ impl<'a> InferencePass<'a> {
                 Some(ConstraintCause::Call(expr.id)),
             );
             typed_args.push(typed_arg);
+        }
+
+        if let Some(current_effect_row) = self.tracked_effect_rows.last() {
+            self.constraints._has_field(
+                current_effect_row.clone(),
+                Label::_Symbol(effect_sym),
+                effect,
+                Some(expr.id),
+                &context.group_info(),
+            );
         }
 
         Ok(TypedExpr {
@@ -2050,7 +2060,7 @@ impl<'a> InferencePass<'a> {
             curry(
                 func_ty.params.iter().map(|p| p.ty.clone()),
                 func_ty.ret.clone(),
-                func_ty.effects_row().into(),
+                func_ty.effects_row.clone().into(),
             ),
             &mut self.constraints,
         );
@@ -2134,6 +2144,8 @@ impl<'a> InferencePass<'a> {
         // Handle self param directly with struct_ty - don't instantiate!
         let params = self.visit_params(params, context)?;
 
+        let (_effects_guard, effects) = self.tracking_effects(&EffectSet::default(), context)?;
+
         // Init blocks always return self
         let block = self.infer_block(body, context)?;
 
@@ -2146,6 +2158,11 @@ impl<'a> InferencePass<'a> {
         let InferTy::Nominal { symbol, .. } = &struct_ty else {
             unreachable!()
         };
+
+        let effects_row = self
+            .tracked_effect_rows
+            .pop()
+            .unwrap_or_else(|| unreachable!("we just pushed it pal"));
 
         self.session
             .type_catalog
@@ -2162,8 +2179,9 @@ impl<'a> InferencePass<'a> {
             name: sym,
             params,
             body: block,
+            effects_row,
             foralls,
-            effects: Default::default(),
+            effects,
             ret: struct_ty,
         })
     }
@@ -2917,36 +2935,7 @@ impl<'a> InferencePass<'a> {
 
         let params = self.visit_params(&func.params, context)?;
 
-        let mut effects = vec![];
-        for effect in func.effects.names.iter() {
-            let Ok(symbol) = effect.symbol() else {
-                return Err(TypeError::NameNotResolved(effect.clone()));
-            };
-
-            let Some(effect) = self.session.lookup(&symbol) else {
-                return Err(TypeError::EffectNotFound(effect.name_str()));
-            };
-
-            effects.push(TypedEffect {
-                name: symbol,
-                ty: effect._as_ty(),
-            });
-        }
-
-        let mut effects_row = if func.effects.is_open {
-            self.session.new_row_meta_var(context.level())
-        } else {
-            InferRow::Empty
-        };
-        for effect in effects.iter() {
-            effects_row = InferRow::Extend {
-                row: effects_row.into(),
-                label: Label::_Symbol(effect.name),
-                ty: effect.ty.clone(),
-            };
-        }
-
-        self.tracked_effect_rows.push(effects_row);
+        let (_effects_guard, effects) = self.tracking_effects(&func.effects, context)?;
 
         let mut foralls = IndexSet::default();
 
@@ -2980,7 +2969,7 @@ impl<'a> InferencePass<'a> {
             curry(
                 params.iter().map(|t| t.ty.clone()),
                 ret.clone(),
-                effects_row.into(),
+                effects_row.clone().into(),
             ),
             &mut Default::default(),
         );
@@ -2989,6 +2978,7 @@ impl<'a> InferencePass<'a> {
             name: func_sym,
             params,
             effects,
+            effects_row,
             foralls,
             body,
             ret,
@@ -3334,6 +3324,45 @@ impl<'a> InferencePass<'a> {
     fn tracking_returns(&mut self) -> ReturnToken {
         self.tracked_returns.push(Default::default());
         ReturnToken {}
+    }
+
+    fn tracking_effects(
+        &mut self,
+        effect_set: &EffectSet,
+        context: &mut impl Solve,
+    ) -> Result<(ReturnToken, Vec<TypedEffect<InferTy>>), TypeError> {
+        let mut effects = vec![];
+        for effect in effect_set.names.iter() {
+            let Ok(symbol) = effect.symbol() else {
+                return Err(TypeError::NameNotResolved(effect.clone()));
+            };
+
+            let Some(effect) = self.session.lookup(&symbol) else {
+                return Err(TypeError::EffectNotFound(effect.name_str()));
+            };
+
+            effects.push(TypedEffect {
+                name: symbol,
+                ty: effect._as_ty(),
+            });
+        }
+
+        let mut effects_row = if effect_set.is_open {
+            self.session.new_row_meta_var(context.level())
+        } else {
+            InferRow::Empty
+        };
+        for effect in effects.iter() {
+            effects_row = InferRow::Extend {
+                row: effects_row.into(),
+                label: Label::_Symbol(effect.name),
+                ty: effect.ty.clone(),
+            };
+        }
+
+        self.tracked_effect_rows.push(effects_row);
+
+        Ok((ReturnToken {}, effects))
     }
 
     fn verify_returns(&mut self, _tok: ReturnToken, ret: InferTy, context: &mut impl Solve) {

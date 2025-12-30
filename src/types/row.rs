@@ -4,9 +4,9 @@ use crate::{
     compiling::module::ModuleId,
     label::Label,
     types::{
-        infer_row::{ClosedRow, RowParamId},
+        infer_row::{ClosedRow, RowMetaId, RowParamId},
         scheme::ForAll,
-        ty::{SomeType, Ty},
+        ty::{BaseRow, RowType, SomeType, Ty},
     },
 };
 
@@ -20,6 +20,42 @@ pub enum Row {
         label: Label,
         ty: Ty,
     },
+}
+
+impl RowType for Row {
+    type T = Ty;
+
+    fn base(&self) -> BaseRow<Ty> {
+        match self.clone() {
+            Self::Empty => BaseRow::Empty,
+            Self::Param(id) => BaseRow::Param(id),
+            Self::Extend { row, label, ty } => BaseRow::Extend {
+                row: row.base().into(),
+                label,
+                ty,
+            },
+        }
+    }
+
+    fn empty() -> Self {
+        Self::Empty
+    }
+
+    fn param(id: RowParamId) -> Self {
+        Self::Param(id)
+    }
+
+    fn var(_id: RowMetaId) -> Self {
+        unreachable!()
+    }
+
+    fn extend(row: Self, label: Label, ty: Ty) -> Self {
+        Self::Extend {
+            row: row.into(),
+            label,
+            ty,
+        }
+    }
 }
 
 impl Row {

@@ -12,7 +12,6 @@ use crate::{
         infer_ty::{InferTy, Level, TypeParamId},
         predicate::Predicate,
         solve_context::Solve,
-        term_environment::EnvEntry,
         ty::{SomeType, Ty},
         type_operations::{InstantiationSubstitutions, instantiate_ty},
         type_session::TypeSession,
@@ -43,27 +42,27 @@ impl<T: SomeType> std::hash::Hash for Scheme<T> {
     }
 }
 
-impl<T: SomeType> SomeType for EnvEntry<T> {
-    type RowType = InferRow;
+// impl<T: SomeType> SomeType for EnvEntry<T> {
+//     type RowType = InferRow;
 
-    fn void() -> Self {
-        EnvEntry::Mono(T::void())
-    }
+//     fn void() -> Self {
+//         EnvEntry::Mono(T::void())
+//     }
 
-    fn contains_var(&self) -> bool {
-        match self {
-            Self::Mono(ty) => ty.contains_var(),
-            Self::Scheme(scheme) => scheme.ty.contains_var(),
-        }
-    }
+//     fn contains_var(&self) -> bool {
+//         match self {
+//             Self::Mono(ty) => ty.contains_var(),
+//             Self::Scheme(scheme) => scheme.ty.contains_var(),
+//         }
+//     }
 
-    fn import(self, module_id: ModuleId) -> Self {
-        match self {
-            EnvEntry::Mono(ty) => EnvEntry::Mono(ty.import(module_id)),
-            EnvEntry::Scheme(scheme) => EnvEntry::Scheme(scheme.import(module_id)),
-        }
-    }
-}
+//     fn import(self, module_id: ModuleId) -> Self {
+//         match self {
+//             EnvEntry::Mono(ty) => EnvEntry::Mono(ty.import(module_id)),
+//             EnvEntry::Scheme(scheme) => EnvEntry::Scheme(scheme.import(module_id)),
+//         }
+//     }
+// }
 
 impl<T: SomeType> Scheme<T> {
     pub fn import(self, module_id: ModuleId) -> Self {

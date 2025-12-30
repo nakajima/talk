@@ -188,8 +188,8 @@ impl From<Predicate<Ty>> for Predicate<InferTy> {
 }
 
 impl<T: SomeType, U: SomeType> TyMappable<T, U> for Predicate<T> {
-    type Output = Predicate<U>;
-    fn map_ty(self, m: &mut impl FnMut(&T) -> U) -> Self::Output {
+    type OutputTy = Predicate<U>;
+    fn map_ty(self, m: &mut impl FnMut(&T) -> U) -> Self::OutputTy {
         match self {
             Predicate::Projection {
                 protocol_id,

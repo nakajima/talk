@@ -5,17 +5,58 @@ use indexmap::IndexSet;
 
 use crate::{
     compiling::module::ModuleId,
+    label::Label,
     name::Name,
     name_resolution::symbol::Symbol,
     types::{
+        infer_row::{RowMetaId, RowParamId},
         infer_ty::{InferTy, TypeParamId},
         row::Row,
         scheme::ForAll,
+        typed_ast::TyMappable,
     },
 };
 
+pub enum BaseRow<T: SomeType> {
+    Empty,
+    Param(RowParamId),
+    Var(RowMetaId),
+    Extend { row: Box<Self>, label: Label, ty: T },
+}
+
+impl<T: SomeType, U: SomeType> TyMappable<T, U> for BaseRow<T> {
+    type OutputTy = U::RowType;
+    fn map_ty(self, m: &mut impl FnMut(&T) -> U) -> Self::OutputTy {
+        match self {
+            BaseRow::Empty => U::RowType::empty(),
+            BaseRow::Param(id) => U::RowType::param(id),
+            BaseRow::Var(id) => U::RowType::var(id),
+            BaseRow::Extend { row, label, ty } => {
+                U::RowType::extend(row.map_ty(m).into(), label, m(&ty))
+            }
+        }
+    }
+}
+
+pub trait RowType: PartialEq + Clone + std::fmt::Debug + Drive + DriveMut {
+    type T: SomeType<RowType = Self>;
+    fn base(&self) -> BaseRow<Self::T>;
+    fn empty() -> Self;
+    fn param(id: RowParamId) -> Self;
+    fn var(id: RowMetaId) -> Self;
+    fn extend(row: Self, label: Label, ty: Self::T) -> Self;
+}
+
+impl<T: SomeType, U: SomeType, V: RowType<T = T>> TyMappable<T, U> for V {
+    type OutputTy = U::RowType;
+    fn map_ty(self, m: &mut impl FnMut(&T) -> U) -> Self::OutputTy {
+        self.base().map_ty(m)
+    }
+}
+
 pub trait SomeType: std::fmt::Debug + PartialEq + Clone + Eq + Hash + Drive + DriveMut {
-    type RowType: PartialEq + Clone + std::fmt::Debug;
+    type RowType: RowType<T = Self>;
+
     fn void() -> Self;
     fn contains_var(&self) -> bool;
     fn import(self, module_id: ModuleId) -> Self;

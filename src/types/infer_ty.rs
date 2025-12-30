@@ -13,7 +13,7 @@ use crate::{
         infer_row::{InferRow, RowMetaId, RowParamId},
         scheme::{ForAll, Scheme},
         term_environment::EnvEntry,
-        ty::{SomeType, Ty},
+        ty::{BaseRow, RowType, SomeType, Ty},
         type_error::TypeError,
     },
 };
@@ -185,6 +185,43 @@ impl From<Ty> for InferTy {
                 symbol,
                 type_args: type_args.into_iter().map(|t| t.into()).collect(),
             },
+        }
+    }
+}
+
+impl RowType for InferRow {
+    type T = InferTy;
+
+    fn base(&self) -> BaseRow<InferTy> {
+        match self.clone() {
+            Self::Empty => BaseRow::Empty,
+            Self::Param(id) => BaseRow::Param(id),
+            Self::Var(id) => BaseRow::Var(id),
+            Self::Extend { row, label, ty } => BaseRow::Extend {
+                row: row.base().into(),
+                label,
+                ty,
+            },
+        }
+    }
+
+    fn empty() -> Self {
+        Self::Empty
+    }
+
+    fn param(id: RowParamId) -> Self {
+        Self::Param(id)
+    }
+
+    fn var(id: RowMetaId) -> Self {
+        Self::Var(id)
+    }
+
+    fn extend(row: Self, label: Label, ty: Self::T) -> Self {
+        Self::Extend {
+            row: row.into(),
+            label,
+            ty,
         }
     }
 }

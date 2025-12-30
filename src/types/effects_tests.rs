@@ -1,10 +1,16 @@
 #[cfg(test)]
 pub mod tests {
+    use indexmap::indexset;
+
     use crate::{
         label::Label,
         name_resolution::symbol::{EffectId, GlobalId, Symbol},
         types::{
-            infer_ty::InferTy, row::Row, ty::Ty, type_session::TypeEntry,
+            infer_row::RowParamId,
+            row::Row,
+            scheme::{ForAll, Scheme},
+            ty::Ty,
+            type_session::TypeEntry,
             types_tests::tests::typecheck,
         },
     };
@@ -25,16 +31,20 @@ pub mod tests {
             types
                 .get_symbol(&Symbol::Global(GlobalId::from(1)))
                 .cloned(),
-            Some(TypeEntry::Mono(Ty::Func(
-                Ty::Void.into(),
-                Ty::Int.into(),
-                Row::Extend {
-                    row: Row::Empty.into(),
-                    label: Label::_Symbol(EffectId::from(1).into()),
-                    ty: Ty::Func(Ty::Void.into(), Ty::Int.into(), Row::Empty.into())
-                }
-                .into()
-            )))
+            Some(TypeEntry::Poly(Scheme {
+                foralls: indexset! {ForAll::Row(1.into())},
+                predicates: vec![],
+                ty: Ty::Func(
+                    Ty::Void.into(),
+                    Ty::Int.into(),
+                    Row::Extend {
+                        row: Row::Param(RowParamId(1)).into(),
+                        label: Label::_Symbol(EffectId::from(1).into()),
+                        ty: Ty::Func(Ty::Void.into(), Ty::Int.into(), Row::Empty.into())
+                    }
+                    .into()
+                )
+            }))
         )
     }
 }

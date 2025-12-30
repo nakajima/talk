@@ -11,7 +11,6 @@ use crate::{
     node_kinds::inline_ir_instruction::TypedInlineIRInstruction,
     types::{
         conformance::ConformanceKey,
-        infer_row::InferRow,
         infer_ty::InferTy,
         scheme::ForAll,
         ty::{SomeType, Ty},
@@ -21,8 +20,8 @@ use crate::{
 };
 
 pub trait TyMappable<T: SomeType, U: SomeType> {
-    type Output;
-    fn map_ty(self, m: &mut impl FnMut(&T) -> U) -> Self::Output;
+    type OutputTy;
+    fn map_ty(self, m: &mut impl FnMut(&T) -> U) -> Self::OutputTy;
 }
 
 #[derive(Debug, Clone, Drive, DriveMut)]
@@ -159,6 +158,7 @@ impl TypedFunc<InferTy> {
                     ty: session.finalize_ty(e.ty).as_mono_ty().clone(),
                 }
             }),
+            effects_row: session.finalize_row(self.effects_row),
             body: self.body.finalize(session, witnesses),
             ret: session.finalize_ty(self.ret).as_mono_ty().clone(),
         }
@@ -466,8 +466,8 @@ impl TypedExprKind<InferTy> {
 }
 
 impl<T: SomeType, U: SomeType> TyMappable<T, U> for TypedAST<T> {
-    type Output = TypedAST<U>;
-    fn map_ty(self, m: &mut impl FnMut(&T) -> U) -> Self::Output {
+    type OutputTy = TypedAST<U>;
+    fn map_ty(self, m: &mut impl FnMut(&T) -> U) -> Self::OutputTy {
         TypedAST::<U> {
             decls: self.decls.into_iter().map(|d| d.map_ty(m)).collect(),
             stmts: self.stmts.into_iter().map(|d| d.map_ty(m)).collect(),
@@ -493,8 +493,8 @@ pub struct TypedRecordFieldPattern<T: SomeType> {
 }
 
 impl<T: SomeType, U: SomeType> TyMappable<T, U> for TypedRecordFieldPattern<T> {
-    type Output = TypedRecordFieldPattern<U>;
-    fn map_ty(self, m: &mut impl FnMut(&T) -> U) -> Self::Output {
+    type OutputTy = TypedRecordFieldPattern<U>;
+    fn map_ty(self, m: &mut impl FnMut(&T) -> U) -> Self::OutputTy {
         TypedRecordFieldPattern {
             id: self.id,
             kind: match self.kind {
@@ -555,8 +555,8 @@ pub enum TypedPatternKind<T: SomeType> {
 }
 
 impl<T: SomeType, U: SomeType> TyMappable<T, U> for TypedPatternKind<T> {
-    type Output = TypedPatternKind<U>;
-    fn map_ty(self, m: &mut impl FnMut(&T) -> U) -> Self::Output {
+    type OutputTy = TypedPatternKind<U>;
+    fn map_ty(self, m: &mut impl FnMut(&T) -> U) -> Self::OutputTy {
         use TypedPatternKind::*;
         match self {
             LiteralInt(val) => LiteralInt(val),
@@ -605,8 +605,8 @@ pub struct TypedPattern<T: SomeType> {
 }
 
 impl<T: SomeType, U: SomeType> TyMappable<T, U> for TypedPattern<T> {
-    type Output = TypedPattern<U>;
-    fn map_ty(self, m: &mut impl FnMut(&T) -> U) -> Self::Output {
+    type OutputTy = TypedPattern<U>;
+    fn map_ty(self, m: &mut impl FnMut(&T) -> U) -> Self::OutputTy {
         TypedPattern::<U> {
             id: self.id,
             ty: m(&self.ty),
@@ -818,8 +818,8 @@ impl<T: SomeType> DriveMut for TypedDeclKind<T> {
 }
 
 impl<T: SomeType, U: SomeType> TyMappable<T, U> for TypedDeclKind<T> {
-    type Output = TypedDeclKind<U>;
-    fn map_ty(self, m: &mut impl FnMut(&T) -> U) -> Self::Output {
+    type OutputTy = TypedDeclKind<U>;
+    fn map_ty(self, m: &mut impl FnMut(&T) -> U) -> Self::OutputTy {
         use TypedDeclKind::*;
         match self {
             Let {
@@ -931,8 +931,8 @@ impl<T: SomeType> TypedNode<T> {
 }
 
 impl<T: SomeType, U: SomeType> TyMappable<T, U> for TypedNode<T> {
-    type Output = TypedNode<U>;
-    fn map_ty(self, m: &mut impl FnMut(&T) -> U) -> Self::Output {
+    type OutputTy = TypedNode<U>;
+    fn map_ty(self, m: &mut impl FnMut(&T) -> U) -> Self::OutputTy {
         match self {
             TypedNode::Decl(typed_decl) => TypedNode::Decl(typed_decl.map_ty(m)),
             TypedNode::Expr(typed_expr) => TypedNode::Expr(typed_expr.map_ty(m)),
@@ -950,8 +950,8 @@ pub struct TypedStmt<T: SomeType> {
 }
 
 impl<T: SomeType, U: SomeType> TyMappable<T, U> for TypedStmt<T> {
-    type Output = TypedStmt<U>;
-    fn map_ty(self, m: &mut impl FnMut(&T) -> U) -> Self::Output {
+    type OutputTy = TypedStmt<U>;
+    fn map_ty(self, m: &mut impl FnMut(&T) -> U) -> Self::OutputTy {
         TypedStmt {
             id: self.id,
             ty: m(&self.ty),
@@ -971,8 +971,8 @@ pub enum TypedStmtKind<T: SomeType> {
 }
 
 impl<T: SomeType, U: SomeType> TyMappable<T, U> for TypedStmtKind<T> {
-    type Output = TypedStmtKind<U>;
-    fn map_ty(self, m: &mut impl FnMut(&T) -> U) -> Self::Output {
+    type OutputTy = TypedStmtKind<U>;
+    fn map_ty(self, m: &mut impl FnMut(&T) -> U) -> Self::OutputTy {
         use TypedStmtKind::*;
         match self {
             Expr(typed_expr) => Expr(typed_expr.map_ty(m)),
@@ -994,8 +994,8 @@ pub struct TypedDecl<T: SomeType> {
 }
 
 impl<T: SomeType, U: SomeType> TyMappable<T, U> for TypedDecl<T> {
-    type Output = TypedDecl<U>;
-    fn map_ty(self, m: &mut impl FnMut(&T) -> U) -> Self::Output {
+    type OutputTy = TypedDecl<U>;
+    fn map_ty(self, m: &mut impl FnMut(&T) -> U) -> Self::OutputTy {
         TypedDecl {
             id: self.id,
             ty: m(&self.ty),
@@ -1013,8 +1013,8 @@ pub struct TypedBlock<T: SomeType> {
 }
 
 impl<T: SomeType, U: SomeType> TyMappable<T, U> for TypedBlock<T> {
-    type Output = TypedBlock<U>;
-    fn map_ty(self, m: &mut impl FnMut(&T) -> U) -> Self::Output {
+    type OutputTy = TypedBlock<U>;
+    fn map_ty(self, m: &mut impl FnMut(&T) -> U) -> Self::OutputTy {
         TypedBlock {
             id: self.id,
             body: self.body.into_iter().map(|e| e.map_ty(m)).collect(),
@@ -1072,25 +1072,14 @@ pub struct TypedFunc<T: SomeType> {
     pub foralls: IndexSet<ForAll>,
     pub params: Vec<TypedParameter<T>>,
     pub effects: Vec<TypedEffect<T>>,
+    pub effects_row: T::RowType,
     pub body: TypedBlock<T>,
     pub ret: T,
 }
 
-impl TypedFunc<InferTy> {
-    pub fn effects_row(&self) -> InferRow {
-        self.effects
-            .iter()
-            .fold(InferRow::Empty, |row, effect| InferRow::Extend {
-                row: row.into(),
-                label: Label::_Symbol(effect.name),
-                ty: effect.ty.clone(),
-            })
-    }
-}
-
 impl<T: SomeType, U: SomeType> TyMappable<T, U> for TypedFunc<T> {
-    type Output = TypedFunc<U>;
-    fn map_ty(self, m: &mut impl FnMut(&T) -> U) -> Self::Output {
+    type OutputTy = TypedFunc<U>;
+    fn map_ty(self, m: &mut impl FnMut(&T) -> U) -> Self::OutputTy {
         TypedFunc {
             name: self.name,
             foralls: self.foralls,
@@ -1102,6 +1091,7 @@ impl<T: SomeType, U: SomeType> TyMappable<T, U> for TypedFunc<T> {
                 name: e.name,
                 ty: m(&e.ty)
             }),
+            effects_row: self.effects_row.map_ty(m),
             body: self.body.map_ty(m),
             ret: m(&self.ret),
         }
@@ -1115,8 +1105,8 @@ pub struct TypedMatchArm<T: SomeType> {
 }
 
 impl<T: SomeType, U: SomeType> TyMappable<T, U> for TypedMatchArm<T> {
-    type Output = TypedMatchArm<U>;
-    fn map_ty(self, m: &mut impl FnMut(&T) -> U) -> Self::Output {
+    type OutputTy = TypedMatchArm<U>;
+    fn map_ty(self, m: &mut impl FnMut(&T) -> U) -> Self::OutputTy {
         TypedMatchArm {
             pattern: self.pattern.map_ty(m),
             body: self.body.map_ty(m),
@@ -1199,8 +1189,8 @@ pub enum TypedExprKind<T: SomeType> {
 }
 
 impl<T: SomeType, U: SomeType> TyMappable<T, U> for TypedExprKind<T> {
-    type Output = TypedExprKind<U>;
-    fn map_ty(self, m: &mut impl FnMut(&T) -> U) -> Self::Output {
+    type OutputTy = TypedExprKind<U>;
+    fn map_ty(self, m: &mut impl FnMut(&T) -> U) -> Self::OutputTy {
         use TypedExprKind::*;
         match self {
             Hole => Hole,
@@ -1273,8 +1263,8 @@ pub struct TypedExpr<T: SomeType> {
 }
 
 impl<T: SomeType, U: SomeType> TyMappable<T, U> for TypedExpr<T> {
-    type Output = TypedExpr<U>;
-    fn map_ty(self, m: &mut impl FnMut(&T) -> U) -> Self::Output {
+    type OutputTy = TypedExpr<U>;
+    fn map_ty(self, m: &mut impl FnMut(&T) -> U) -> Self::OutputTy {
         TypedExpr {
             id: self.id,
             ty: m(&self.ty),

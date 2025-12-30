@@ -352,6 +352,7 @@ impl<'a> Lowerer<'a> {
                 foralls: Default::default(),
                 params: Default::default(),
                 effects: Default::default(),
+                effects_row: Row::Empty,
                 body: TypedBlock {
                     body: {
                         let nodes: Vec<TypedNode<Ty>> = self.ast.roots();
