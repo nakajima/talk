@@ -8,7 +8,6 @@ use crate::{
     compiling::module::ModuleId,
     label::Label,
     types::{
-        format,
         infer_ty::{InferTy, Level, format_row},
         row::Row,
         scheme::ForAll,
