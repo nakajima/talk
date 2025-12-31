@@ -37,3 +37,46 @@ pub fn line_info_for_offset_utf16(text: &str, byte_offset: u32) -> (u32, u32, us
     let col = text[line_start..offset].encode_utf16().count() as u32 + 1;
     (line, col, line_start, line_end)
 }
+
+pub fn byte_offset_for_line_column_utf8(
+    text: &str,
+    line: u32,
+    column: u32,
+) -> Option<u32> {
+    if line == 0 || column == 0 {
+        return None;
+    }
+
+    let mut current_line = 1u32;
+    let mut line_start = 0usize;
+    for (idx, ch) in text.char_indices() {
+        if current_line == line {
+            break;
+        }
+        if ch == '\n' {
+            current_line += 1;
+            line_start = idx + ch.len_utf8();
+        }
+    }
+
+    if current_line != line {
+        return None;
+    }
+
+    let line_end = text[line_start..]
+        .find('\n')
+        .map(|idx| line_start + idx)
+        .unwrap_or(text.len());
+
+    let mut col = 1u32;
+    let mut offset = line_start;
+    for ch in text[line_start..line_end].chars() {
+        if col == column {
+            return Some(offset as u32);
+        }
+        offset += ch.len_utf8();
+        col += 1;
+    }
+
+    Some(offset as u32)
+}

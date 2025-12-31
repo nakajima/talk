@@ -1,5 +1,6 @@
 use crate::analysis::{node_ids_at_offset, resolve_member_symbol, span_contains, Hover, TextRange};
 use crate::name_resolution::symbol::Symbol;
+use crate::node::Node;
 use crate::node_kinds::{
     decl::Decl,
     func::Func,
@@ -60,11 +61,102 @@ pub fn hover_at(
     None
 }
 
+pub fn hover_for_node_id(
+    module: &Workspace,
+    core: Option<&Workspace>,
+    document_id: &crate::analysis::DocumentId,
+    node_id: crate::node_id::NodeID,
+) -> Option<Hover> {
+    let idx = module.document_index(document_id)?;
+    let ast = module.asts.get(idx).and_then(|a| a.as_ref())?;
+    let types = module.types.as_ref();
+    let formatter = TypeFormatter::new(SymbolNames::new(
+        Some(&module.resolved_names.symbol_names),
+        core.map(|core| &core.resolved_names.symbol_names),
+    ));
+
+    let node = ast.find(node_id)?;
+    let byte_offset = preferred_offset_for_node(ast, &node)?;
+    let ctx = HoverCtx {
+        ast,
+        types,
+        byte_offset,
+        formatter,
+    };
+
+    hover_for_node(&ctx, &node)
+}
+
 struct HoverCtx<'a> {
     ast: &'a crate::ast::AST<crate::ast::NameResolved>,
     types: Option<&'a crate::types::type_session::Types>,
     byte_offset: u32,
     formatter: TypeFormatter<'a>,
+}
+
+fn hover_for_node(ctx: &HoverCtx<'_>, node: &Node) -> Option<Hover> {
+    match node {
+        Node::Expr(expr) => hover_for_expr(ctx, expr),
+        Node::Stmt(stmt) => hover_for_stmt(ctx, stmt),
+        Node::Pattern(pattern) => hover_for_pattern(ctx, pattern),
+        Node::TypeAnnotation(ty) => hover_for_type_annotation(ctx, ty),
+        Node::Parameter(param) => hover_for_parameter(ctx, param),
+        Node::Func(func) => hover_for_func(ctx, func),
+        Node::FuncSignature(sig) => hover_for_func_signature(ctx, sig),
+        Node::Decl(decl) => hover_for_decl(ctx, decl),
+        _ => None,
+    }
+}
+
+fn preferred_offset_for_node(
+    ast: &crate::ast::AST<crate::ast::NameResolved>,
+    node: &Node,
+) -> Option<u32> {
+    use crate::node_kinds::decl::DeclKind;
+    use crate::node_kinds::expr::ExprKind;
+    use crate::node_kinds::pattern::PatternKind;
+    use crate::node_kinds::type_annotation::TypeAnnotationKind;
+
+    let meta = ast.meta.get(&node.node_id());
+    let meta_start = meta.map(|meta| meta.start.start);
+    let identifier_start = meta
+        .and_then(|meta| meta.identifiers.first().map(|tok| tok.start))
+        .or(meta_start);
+
+    match node {
+        Node::Expr(expr) => match &expr.kind {
+            ExprKind::Member(_, _, name_span) => Some(name_span.start),
+            ExprKind::Variable(..) | ExprKind::Constructor(..) => {
+                identifier_start.or(Some(expr.span.start))
+            }
+            _ => meta_start.or(Some(expr.span.start)),
+        },
+        Node::Pattern(pattern) => match &pattern.kind {
+            PatternKind::Bind(..) => identifier_start.or(Some(pattern.span.start)),
+            _ => meta_start.or(Some(pattern.span.start)),
+        },
+        Node::TypeAnnotation(ty) => match &ty.kind {
+            TypeAnnotationKind::Nominal { name_span, .. } => Some(name_span.start),
+            TypeAnnotationKind::NominalPath { member_span, .. } => Some(member_span.start),
+            TypeAnnotationKind::SelfType(..) => identifier_start.or(Some(ty.span.start)),
+            _ => meta_start.or(Some(ty.span.start)),
+        },
+        Node::Parameter(param) => Some(param.name_span.start),
+        Node::Func(func) => Some(func.name_span.start),
+        Node::FuncSignature(sig) => identifier_start.or(Some(sig.span.start)),
+        Node::Decl(decl) => match &decl.kind {
+            DeclKind::Struct { name_span, .. }
+            | DeclKind::Protocol { name_span, .. }
+            | DeclKind::Extend { name_span, .. }
+            | DeclKind::Enum { name_span, .. }
+            | DeclKind::Property { name_span, .. }
+            | DeclKind::TypeAlias(_, name_span, ..)
+            | DeclKind::EnumVariant(_, name_span, ..) => Some(name_span.start),
+            DeclKind::Init { .. } => identifier_start.or(Some(decl.span.start)),
+            _ => meta_start.or(Some(decl.span.start)),
+        },
+        _ => meta_start.or(Some(node.span().start)),
+    }
 }
 
 fn hover_for_stmt(ctx: &HoverCtx<'_>, stmt: &crate::node_kinds::stmt::Stmt) -> Option<Hover> {
