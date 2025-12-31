@@ -28,6 +28,7 @@ pub struct Call {
     pub type_args: Vec<InferTy>,
     pub returns: InferTy,
     pub receiver: Option<InferTy>, // If it's a method
+    pub effect_context_row: InferRow,
 }
 
 impl Call {
@@ -152,6 +153,13 @@ impl Call {
                         session,
                     )
                 };
+
+                constraints.wants_row_subset(
+                    Some(self.call_node_id),
+                    *effects.clone(),
+                    self.effect_context_row.clone(),
+                    &context.group_info(),
+                );
 
                 match res {
                     Ok(metas) => SolveResult::Solved(metas),

@@ -2513,6 +2513,29 @@ pub mod tests {
 
     #[test]
     #[ignore = "todo"]
+    fn parses_incomplete_effect_definition_handler_decls() {
+        let parsed = parse(
+            r#"
+            func fizzes(x) '[.] {
+                'fizz(x)
+            }
+            "#,
+        );
+
+        assert_eq!(
+            parsed.roots[0],
+            Node::IncompleteExpr(IncompleteExpr::Func {
+                name: Some("fizzes".into()),
+                params: None,
+                generics: None,
+                ret: None,
+                body: None
+            })
+        );
+    }
+
+    #[test]
+    #[ignore = "todo"]
     fn handles_unclosed_paren() {
         let parsed = parse("func foo(");
         assert_matches!(

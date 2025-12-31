@@ -2,6 +2,7 @@ use tracing::instrument;
 
 use crate::{
     label::Label,
+    name_resolution::symbol::Symbol,
     node_id::NodeID,
     types::{
         constraint_solver::{DeferralReason, SolveResult},
@@ -10,8 +11,10 @@ use crate::{
             store::{ConstraintId, ConstraintStore},
         },
         infer_row::InferRow,
-        infer_ty::{InferTy, Level, Meta},
+        infer_ty::{InferTy, Meta},
+        solve_context::Solve,
         type_error::TypeError,
+        type_session::TypeSession,
     },
 };
 
@@ -25,8 +28,13 @@ pub struct HasField {
 }
 
 impl HasField {
-    #[instrument(skip(constraints))]
-    pub fn solve(&self, level: Level, constraints: &mut ConstraintStore) -> SolveResult {
+    #[instrument(skip(constraints, context, session))]
+    pub fn solve(
+        &self,
+        constraints: &mut ConstraintStore,
+        context: &mut impl Solve,
+        session: &mut TypeSession,
+    ) -> SolveResult {
         match &self.row {
             InferRow::Empty => SolveResult::Err(TypeError::MemberNotFound(
                 self.ty.clone(),
@@ -37,8 +45,28 @@ impl HasField {
                 self.label.to_string(),
             )),
             InferRow::Var(id) => {
-                // Keep the constraint for the next iteration with the applied row
-                SolveResult::Defer(DeferralReason::WaitingOnMeta(Meta::Row(*id)))
+                // For effect constraints, extend the row immediately.
+                // For other constraints (records), defer until more info is available.
+                if let Label::_Symbol(Symbol::Effect(_)) = &self.label {
+                    // Extend the row with this effect by creating a fresh tail
+                    let tail = session.new_row_meta_var(context.level());
+
+                    // Build the extended row: Extend { row: tail, label, ty }
+                    let extended = InferRow::Extend {
+                        row: Box::new(tail),
+                        label: self.label.clone(),
+                        ty: self.ty.clone(),
+                    };
+
+                    // Unify the original var with the extended row
+                    let canon_id = session.canon_row(*id);
+                    context.substitutions_mut().row.insert(canon_id, extended);
+
+                    SolveResult::Solved(vec![Meta::Row(canon_id)])
+                } else {
+                    // For non-effect HasField, defer until row is resolved
+                    SolveResult::Defer(DeferralReason::WaitingOnMeta(Meta::Row(*id)))
+                }
             }
             InferRow::Extend { box row, label, ty } => {
                 if self.label == *label {

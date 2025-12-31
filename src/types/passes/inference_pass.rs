@@ -168,6 +168,7 @@ impl<'a> InferencePass<'a> {
                 Constraint::Equals(..) => (),
                 Constraint::HasField(..) => (),
                 Constraint::Member(..) => (),
+                Constraint::RowSubset(..) => (),
                 Constraint::Conforms(conforms) => {
                     match &conforms.ty {
                         InferTy::Nominal { symbol, .. } | InferTy::Primitive(symbol) => {
@@ -2904,6 +2905,10 @@ impl<'a> InferencePass<'a> {
             ret.clone(),
             receiver.map(|r| r.ty.clone()),
             &context.group_info(),
+            self.tracked_effect_rows
+                .last()
+                .cloned()
+                .unwrap_or(self.session.new_row_meta_var(context.level())),
         );
 
         Ok(TypedExpr {

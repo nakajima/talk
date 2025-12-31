@@ -261,7 +261,6 @@ impl<'a> Parser<'a> {
                 ret,
             },
         })
-        // let (lhs, lhs_span) = self.
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
@@ -510,6 +509,12 @@ impl<'a> Parser<'a> {
                     self.consume(TokenKind::Comma).ok();
                 } else if self.did_match(TokenKind::DotDot)? {
                     is_open = true;
+                } else {
+                    return Err(ParserError::UnexpectedToken {
+                        expected: "effect name".to_string(),
+                        actual: format!("{:?}", self.current),
+                        token: None,
+                    });
                 }
             }
         } else if let Some(Token {

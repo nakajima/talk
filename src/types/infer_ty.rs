@@ -564,7 +564,7 @@ fn format_symbol_name(symbol: Symbol) -> String {
     }
 }
 
-fn format_row(row: &InferRow) -> String {
+pub(super) fn format_row(row: &InferRow) -> String {
     let mut fields: Vec<(Label, InferTy)> = Vec::new();
     let mut tail: Option<RowTailDisplay> = None;
     let mut cursor = row;

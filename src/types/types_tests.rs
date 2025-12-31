@@ -12,6 +12,7 @@ pub mod tests {
         name_resolution::symbol::{EnumId, GlobalId, ProtocolId, StructId, Symbol, SynthesizedId},
         types::{
             conformance::ConformanceKey,
+            infer_row::RowParamId,
             row::Row,
             scheme::{ForAll, Scheme},
             ty::Ty,
@@ -2363,7 +2364,8 @@ pub mod tests {
                 .unwrap()
                 .as_mono_ty(),
             // We should be able to infer the n is int because there's only one Comparable with RHS int
-            Ty::Func(Ty::Int.into(), Ty::Int.into(), Row::Empty.into())
+            // Effect row is polymorphic since no effects are declared (open effect set)
+            Ty::Func(Ty::Int.into(), Ty::Int.into(), Row::Param(RowParamId(1)).into())
         )
     }
 

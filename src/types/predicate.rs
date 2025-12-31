@@ -422,6 +422,7 @@ impl Predicate<InferTy> {
                 instantiate_ty(id, returns, context.instantiations_mut(), level),
                 receiver.map(|r| instantiate_ty(id, r, context.instantiations_mut(), level)),
                 &context.group_info(),
+                InferRow::Var(0.into()),
             ),
         }
     }

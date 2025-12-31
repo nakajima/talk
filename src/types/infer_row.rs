@@ -8,7 +8,8 @@ use crate::{
     compiling::module::ModuleId,
     label::Label,
     types::{
-        infer_ty::{InferTy, Level},
+        format,
+        infer_ty::{InferTy, Level, format_row},
         row::Row,
         scheme::ForAll,
         ty::SomeType,
@@ -72,7 +73,6 @@ pub enum InferRow {
 }
 
 impl From<InferRow> for Row {
-    #[allow(clippy::panic)]
     fn from(value: InferRow) -> Self {
         match value {
             InferRow::Empty => Row::Empty,
@@ -82,7 +82,8 @@ impl From<InferRow> for Row {
                 label,
                 ty: ty.into(),
             },
-            row => panic!("Row cannot contain vars: {row:?}"),
+            // In error cases, row Vars may not be resolved. Default to Empty.
+            InferRow::Var(_) => Row::Empty,
         }
     }
 }
@@ -218,7 +219,7 @@ impl std::fmt::Debug for InferRow {
         match self {
             InferRow::Empty => write!(f, "{{}}"),
             InferRow::Extend { .. } => {
-                write!(f, "{:?}", self.close())
+                write!(f, "{:?}", format_row(self))
             }
             InferRow::Param(id) => write!(f, "rowparam{id:?}"),
             InferRow::Var(id) => write!(f, "rowvar{id:?}"),

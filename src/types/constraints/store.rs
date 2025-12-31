@@ -24,6 +24,7 @@ use crate::{
             has_field::HasField,
             member::Member,
             projection::Projection,
+            row_subset::RowSubset,
             type_member::TypeMember,
         },
         infer_row::InferRow,
@@ -34,6 +35,7 @@ use crate::{
 
 #[derive(Debug, PartialEq, PartialOrd, Eq, Ord)]
 pub enum ConstraintPriority {
+    RowSubset,
     Conforms,
     Call,
     Member,
@@ -56,6 +58,7 @@ impl Constraint {
             Constraint::Conforms(..) => ConstraintPriority::Conforms,
             Constraint::TypeMember(..) => ConstraintPriority::TypeMember,
             Constraint::Projection(..) => ConstraintPriority::Projection,
+            Constraint::RowSubset(..) => ConstraintPriority::RowSubset,
         }
     }
 }
@@ -564,6 +567,7 @@ impl ConstraintStore {
         returns: InferTy,
         receiver: Option<InferTy>,
         group: &BindingGroup,
+        effect_context_row: InferRow,
     ) -> &Constraint {
         let id = self.ids.next_id();
         self.wants(
@@ -577,6 +581,27 @@ impl ConstraintStore {
                 type_args,
                 returns,
                 receiver,
+                effect_context_row,
+            }),
+            group,
+        )
+    }
+
+    pub fn wants_row_subset(
+        &mut self,
+        node_id: Option<NodeID>,
+        left: InferRow,
+        right: InferRow,
+        group: &BindingGroup,
+    ) -> &Constraint {
+        let id = self.ids.next_id();
+        self.wants(
+            id,
+            Constraint::RowSubset(RowSubset {
+                id,
+                node_id,
+                left,
+                right,
             }),
             group,
         )
