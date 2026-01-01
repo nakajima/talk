@@ -717,8 +717,13 @@ impl<'a> DeclDeclarer<'a> {
             }
         });
 
-        on!(&mut decl.kind, DeclKind::Effect { name, .. }, {
+        on!(&mut decl.kind, DeclKind::Effect { name, params, .. }, {
             *name = self.resolver.declare(name, some!(Effect), decl.id);
+            for param in params {
+                param.name = self
+                    .resolver
+                    .declare(&param.name, some!(ParamLocal), param.id);
+            }
         });
     }
 

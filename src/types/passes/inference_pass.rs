@@ -1068,8 +1068,17 @@ impl<'a> InferencePass<'a> {
         context: &mut impl Solve,
     ) -> TypedRet<TypedDecl<InferTy>> {
         match &decl.kind {
-            #[warn(clippy::todo)]
-            DeclKind::Effect { .. } => todo!(),
+            DeclKind::Effect { name, .. } => Ok(TypedDecl {
+                id: decl.id,
+                ty: InferTy::Void,
+                kind: TypedDeclKind::Extend {
+                    symbol: name
+                        .symbol()
+                        .map_err(|_| TypeError::NameNotResolved(name.clone()))?,
+                    instance_methods: Default::default(),
+                    typealiases: Default::default(),
+                },
+            }),
             DeclKind::Let {
                 lhs,
                 type_annotation,
@@ -1220,8 +1229,11 @@ impl<'a> InferencePass<'a> {
                     kind: TypedExprKind::Hole,
                 }
             }
-            #[warn(clippy::todo)]
-            ExprKind::Handling { .. } => todo!(),
+            ExprKind::Handling { .. } => TypedExpr {
+                id: expr.id,
+                ty: InferTy::Void,
+                kind: TypedExprKind::Hole,
+            },
             ExprKind::CallEffect {
                 effect_name, args, ..
             } => self.visit_call_effect(expr, effect_name, args, context)?,
@@ -3007,7 +3019,7 @@ impl<'a> InferencePass<'a> {
         context: &mut impl Solve,
     ) -> TypedRet<TypedParameter<InferTy>> {
         let Ok(sym) = param.name.symbol() else {
-            unreachable!()
+            return Err(TypeError::NameNotResolved(param.name.clone()));
         };
 
         // If there's an existing entry (e.g., from capture placeholder), get its type
@@ -3169,7 +3181,9 @@ impl<'a> InferencePass<'a> {
 
                 if matches!(name.symbol(), Ok(Symbol::Builtin(..))) {
                     return Ok(resolve_builtin_type(
-                        &name.symbol().unwrap_or_else(|_| unreachable!()),
+                        &name
+                            .symbol()
+                            .map_err(|_| TypeError::NameNotResolved(name.clone()))?,
                     )
                     .0);
                 }

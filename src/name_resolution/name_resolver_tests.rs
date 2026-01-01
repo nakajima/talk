@@ -1,6 +1,6 @@
 #[cfg(test)]
 pub mod tests {
-    use std::{assert_matches::assert_matches, rc::Rc};
+    use std::rc::Rc;
 
     use rustc_hash::FxHashSet;
 
@@ -34,7 +34,7 @@ pub mod tests {
             parameter::Parameter,
             pattern::{Pattern, PatternKind},
             stmt::StmtKind,
-            type_annotation::TypeAnnotationKind,
+            type_annotation::{TypeAnnotation, TypeAnnotationKind},
         },
         parsing::parser_tests::tests::parse,
         span::Span,
@@ -1434,19 +1434,32 @@ pub mod tests {
     fn resolves_effect_decl() {
         let resolved = resolve(
             "
-        effect 'fizz() -> ()
+        effect 'fizz(x: Int) -> ()
         ",
         );
 
-        assert_matches!(
-            *resolved.0.roots[0].as_decl(),
-            Decl {
-                kind: DeclKind::Effect {
+        let Decl {
+            kind:
+                DeclKind::Effect {
                     name: Name::Resolved(Symbol::Effect(..), ..),
+                    params,
                     ..
                 },
-                ..
-            }
+            ..
+        } = &resolved.0.roots[0].as_decl()
+        else {
+            panic!("didn't get decl");
+        };
+
+        assert_eq!(
+            *params,
+            vec![any!(Parameter ,{
+                name: Name::Resolved(ParamLocalId(1).into(), "x".into()),
+                name_span: Span::ANY,
+                type_annotation: Some(any!(TypeAnnotation, {
+                    kind: TypeAnnotationKind::Nominal { name: Name::Resolved(Symbol::Int, "Int".into()), name_span: Span::ANY, generics: vec![] }
+                })),
+            })],
         );
     }
 
@@ -1490,7 +1503,7 @@ pub mod tests {
         assert_eq!(
             *args,
             vec![any!(Parameter, {
-                name: Name::Resolved(Symbol::ParamLocal(ParamLocalId(1)), "x".into()),
+                name: Name::Resolved(Symbol::ParamLocal(ParamLocalId(2)), "x".into()),
                 name_span: Span::ANY,
                 type_annotation: None
             })]
@@ -1500,7 +1513,7 @@ pub mod tests {
             *body,
             vec![
                 any_stmt!(StmtKind::Continue(Some(any_expr!(ExprKind::Variable(
-                    Name::Resolved(Symbol::ParamLocal(ParamLocalId(1)), "x".into())
+                    Name::Resolved(Symbol::ParamLocal(ParamLocalId(2)), "x".into())
                 )))))
                 .into()
             ]

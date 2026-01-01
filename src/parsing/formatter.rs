@@ -1069,25 +1069,28 @@ impl<'a> Formatter<'a> {
                 result
             }
             PatternKind::Record { fields } => {
+                if fields.is_empty() {
+                    return text("{}");
+                }
+
                 let field_docs = fields
                     .iter()
                     .map(|field| match &field.kind {
                         RecordFieldPatternKind::Rest => text(".."),
                         RecordFieldPatternKind::Bind(name) => self.format_name(name),
-                        RecordFieldPatternKind::Equals { name, value, .. } => concat_space(
-                            concat(self.format_name(name), text(":")),
+                        RecordFieldPatternKind::Equals { name, value, .. } => group(concat(
+                            concat(self.format_name(name), text(": ")),
                             self.format_pattern(value),
-                        ),
+                        )),
                     })
-                    .collect();
+                    .collect::<Vec<_>>();
 
-                concat(
-                    concat(
-                        text("{"),
-                        nest(1, concat(softline(), join(field_docs, text(",")))),
-                    ),
-                    text("}"),
-                )
+                let fields = concat(line(), join(field_docs, concat(text(","), line())));
+
+                group(concat(
+                    text("{"),
+                    concat(nest(1, fields), concat(line(), text("}"))),
+                ))
             }
             PatternKind::Struct {
                 struct_name,
@@ -2328,6 +2331,16 @@ mod formatter_tests {
         assert_eq!(
             format_code("match x { true -> 1\nfalse -> 0 }", 80),
             "match x {\n\ttrue -> 1,\n\tfalse -> 0\n}"
+        );
+
+        assert_eq!(
+            format_code("match x { { x, y } -> x }", 80),
+            "match x {\n\t{ x, y } -> x\n}"
+        );
+
+        assert_eq!(
+            format_code("match x { { x: 123, .. } -> 0 }", 80),
+            "match x {\n\t{ x: 123, .. } -> 0\n}"
         );
     }
 
