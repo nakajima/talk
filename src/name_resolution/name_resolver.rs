@@ -666,54 +666,8 @@ impl NameResolver {
             self.enter_scope(block.id, None);
         }
 
-        if let StmtKind::Assignment(
-            box Expr {
-                id,
-                kind: ExprKind::Variable(name),
-                ..
-            },
-            ..,
-        ) = &mut stmt.kind
-        {
-            let Some(resolved) = self.lookup(name, Some(*id)) else {
-                self.diagnostic(*id, NameResolverError::UndefinedName(name.name_str()));
-                return;
-            };
-
-            self.phase
-                .mutated_symbols
-                .insert(resolved.symbol().unwrap_or_else(|_| unreachable!("")));
-
-            *name = resolved;
-        }
-
-        if let StmtKind::Assignment(
-            box Expr {
-                id,
-                kind: ExprKind::Member(Some(box mut base), ..),
-                ..
-            },
-            ..,
-        ) = stmt.kind.clone()
-        {
-            while let ExprKind::Member(Some(box prev_base), ..) = base.kind.clone() {
-                base = prev_base
-            }
-
-            self.enter_expr(&mut base);
-
-            if let ExprKind::Variable(name) = &mut base.kind {
-                let Some(resolved) = self.lookup(name, Some(id)) else {
-                    self.diagnostic(id, NameResolverError::UndefinedName(name.name_str()));
-                    return;
-                };
-
-                self.phase
-                    .mutated_symbols
-                    .insert(name.symbol().unwrap_or_else(|_| unreachable!("")));
-
-                *name = resolved;
-            }
+        if let StmtKind::Assignment(box lhs, ..) = &mut stmt.kind {
+            self.track_assignment_mutation(lhs);
         }
     }
 
@@ -724,6 +678,30 @@ impl NameResolver {
         }) = &mut stmt.kind
         {
             self.exit_scope(stmt.id);
+        }
+    }
+
+    fn track_assignment_mutation(&mut self, expr: &mut Expr) {
+        let Some((name, id)) = Self::assignment_base_name(expr) else {
+            return;
+        };
+        let Some(resolved) = self.lookup(name, Some(id)) else {
+            self.diagnostic(id, NameResolverError::UndefinedName(name.name_str()));
+            return;
+        };
+
+        self.phase
+            .mutated_symbols
+            .insert(resolved.symbol().unwrap_or_else(|_| unreachable!("")));
+
+        *name = resolved;
+    }
+
+    fn assignment_base_name<'a>(expr: &'a mut Expr) -> Option<(&'a mut Name, NodeID)> {
+        match &mut expr.kind {
+            ExprKind::Variable(name) => Some((name, expr.id)),
+            ExprKind::Member(Some(inner), ..) => Self::assignment_base_name(inner),
+            _ => None,
         }
     }
 

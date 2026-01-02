@@ -19,8 +19,8 @@ use crate::types::predicate::Predicate;
 use crate::types::row::Row;
 use crate::types::typed_ast::{
     TypedAST, TypedBlock, TypedDecl, TypedDeclKind, TypedExpr, TypedExprKind, TypedFunc,
-    TypedMatchArm, TypedNode, TypedPattern, TypedPatternKind, TypedRecordField, TypedStmt,
-    TypedStmtKind,
+    TypedMatchArm, TypedNode, TypedParameter, TypedPattern, TypedPatternKind, TypedRecordField,
+    TypedStmt, TypedStmtKind,
 };
 use crate::{
     ir::{
@@ -571,7 +571,7 @@ impl<'a> Lowerer<'a> {
         for param in initializer.params.iter() {
             let register = self.next_register();
             param_values.push(Value::Reg(register.0));
-            self.insert_binding(param.name, register.into());
+            self.lower_param_binding(param, register);
         }
 
         let mut ret_ty = initializer.ret.clone();
@@ -891,12 +891,38 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    // #[instrument(level = tracing::Level::TRACE, skip(self, pattern), fields(pattern.id = %pattern.id))]
+    fn lower_param_binding(&mut self, param: &TypedParameter<Ty>, register: Register) {
+        if self.resolved_names.is_captured.contains(&param.name)
+            || self.resolved_names.mutated_symbols.contains(&param.name)
+        {
+            let ty = self
+                .ty_from_symbol(&param.name)
+                .expect("did not get ty for param");
+            let addr = self.next_register();
+            self.push_instr(Instruction::Alloc {
+                dest: addr,
+                ty: ty.clone(),
+                count: 1.into(),
+            });
+            self.push_instr(Instruction::Store {
+                value: register.into(),
+                ty,
+                addr: addr.into(),
+            });
+            self.insert_binding(param.name, Binding::Pointer(addr.into()));
+        } else {
+            self.insert_binding(param.name, register.into());
+        }
+    }
+
+    #[instrument(level = tracing::Level::TRACE, skip(self, pattern), fields(pattern.id = %pattern.id))]
     fn lower_pattern(&mut self, pattern: &TypedPattern<Ty>) -> Result<Bind, IRError> {
         match &pattern.kind {
             TypedPatternKind::Or(..) => unimplemented!(),
             TypedPatternKind::Bind(symbol) => {
-                let value = if self.resolved_names.is_captured.contains(symbol) {
+                let value = if self.resolved_names.is_captured.contains(symbol)
+                    || self.resolved_names.mutated_symbols.contains(symbol)
+                {
                     let ty = self.ty_from_symbol(symbol).expect("did not get ty for sym");
                     let heap_addr = self.next_register();
                     self.push_instr(Instruction::Alloc {
@@ -2838,7 +2864,7 @@ impl<'a> Lowerer<'a> {
         for param in func.params.iter() {
             let register = self.next_register();
             params.push(Value::Reg(register.0));
-            self.insert_binding(param.name, register.into());
+            self.lower_param_binding(param, register);
         }
 
         let mut ret = Value::Void;
