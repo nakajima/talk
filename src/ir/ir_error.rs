@@ -8,6 +8,7 @@ pub enum IRError {
     InvalidFieldAccess(String),
     TypeNotFound(String),
     WitnessNotFound(String),
+    NoFlowContext,
 }
 
 impl Error for IRError {}

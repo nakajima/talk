@@ -12,7 +12,7 @@ pub mod tests {
             scheme::{ForAll, Scheme},
             ty::Ty,
             type_session::TypeEntry,
-            types_tests::tests::typecheck,
+            types_tests::tests::{typecheck, typecheck_err},
         },
     };
 
@@ -84,5 +84,39 @@ pub mod tests {
                 )
             }))
         )
+    }
+
+    #[test]
+    fn checks_pure_func_has_no_effects() {
+        let (_ast, _types, diagnostics) = typecheck_err(
+            "
+          effect 'fizz() -> Int
+
+          func fizzes() '[] {
+            'fizz()
+          }
+        ",
+        );
+
+        assert_eq!(1, diagnostics.len(), "{diagnostics:?}");
+    }
+
+    #[test]
+    fn checks_pure_func_has_no_indirect_effects() {
+        let (_ast, _types, diagnostics) = typecheck_err(
+            "
+          effect 'fizz() -> Int
+
+          func callsFizzes() {
+              'fizz()
+          }
+
+          func fizzes() '[] {
+              callsFizzes()
+          }
+        ",
+        );
+
+        assert_eq!(1, diagnostics.len(), "{diagnostics:?}");
     }
 }

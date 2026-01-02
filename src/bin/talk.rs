@@ -34,6 +34,11 @@ async fn main() {
             #[arg(value_hint = ValueHint::FilePath)]
             filename: Option<String>,
         },
+        Ir {
+            #[arg(value_hint = ValueHint::FilePath)]
+            filename: Option<String>,
+        },
+
         Check {
             #[arg(value_hint = ValueHint::FilePath)]
             filenames: Vec<String>,
@@ -89,6 +94,22 @@ async fn main() {
             let mut cmd = Cli::command();
             let bin_name = cmd.get_name().to_string();
             generate(*shell, &mut cmd, bin_name, &mut std::io::stdout());
+        }
+        Commands::Ir { filename } => {
+            use talk::compiling::driver::Driver;
+
+            let (module_name, source) = single_source_for(filename.as_deref());
+            let driver = Driver::new(vec![source], DriverConfig::new(module_name).executable());
+            let lowered = driver
+                .parse()
+                .unwrap()
+                .resolve_names()
+                .unwrap()
+                .typecheck()
+                .unwrap()
+                .lower()
+                .unwrap();
+            println!("{}", lowered.phase.program)
         }
         Commands::Run { filenames } => {
             use talk::{
@@ -175,11 +196,9 @@ async fn main() {
             column,
             node_id,
         } => {
-            use talk::analysis::{DocumentInput, Workspace};
             use talk::analysis::hover::{hover_at, hover_for_node_id};
-            use talk::common::text::{
-                byte_offset_for_line_column_utf8, clamp_to_char_boundary,
-            };
+            use talk::analysis::{DocumentInput, Workspace};
+            use talk::common::text::{byte_offset_for_line_column_utf8, clamp_to_char_boundary};
             use talk::node_id::FileID;
 
             let (_module_name, source) = single_source_for(filename.as_deref());
@@ -199,16 +218,19 @@ async fn main() {
                 std::process::exit(1);
             };
 
-            let query =
-                parse_hover_query(*byte_offset, *line, *column, node_id.clone())
-            .unwrap_or_else(|err| {
-                println!("{}", hover_error_json(&err));
-                std::process::exit(1);
-            });
+            let query = parse_hover_query(*byte_offset, *line, *column, node_id.clone())
+                .unwrap_or_else(|err| {
+                    println!("{}", hover_error_json(&err));
+                    std::process::exit(1);
+                });
 
             let core = Workspace::core();
             let core = core.as_ref();
-            let doc_id = workspace.file_id_to_document.get(0).cloned().unwrap_or(path);
+            let doc_id = workspace
+                .file_id_to_document
+                .get(0)
+                .cloned()
+                .unwrap_or(path);
 
             let hover = match query {
                 HoverQuery::ByteOffset(offset) => {
@@ -409,15 +431,14 @@ fn parse_node_id(input: &str) -> Result<talk::node_id::NodeID, String> {
     let node_id = node_id
         .parse::<u32>()
         .map_err(|_| "node id must be a u32".to_string())?;
-    Ok(talk::node_id::NodeID(talk::node_id::FileID(file_id), node_id))
+    Ok(talk::node_id::NodeID(
+        talk::node_id::FileID(file_id),
+        node_id,
+    ))
 }
 
 #[cfg(feature = "cli")]
-fn render_hover_json(
-    doc_id: &str,
-    text: &str,
-    hover: Option<talk::analysis::Hover>,
-) -> String {
+fn render_hover_json(doc_id: &str, text: &str, hover: Option<talk::analysis::Hover>) -> String {
     use talk::common::text::line_info_for_offset;
 
     let mut out = String::new();

@@ -112,6 +112,7 @@ pub struct ResolvedNames {
     pub unbound_nodes: Vec<NodeID>,
     pub child_types: IndexMap<Symbol, IndexMap<Label, Symbol>>,
     pub diagnostics: Vec<AnyDiagnostic>,
+    pub mutated_symbols: IndexSet<Symbol>,
 }
 
 impl ResolvedNames {
@@ -663,6 +664,56 @@ impl NameResolver {
         }) = &mut stmt.kind
         {
             self.enter_scope(block.id, None);
+        }
+
+        if let StmtKind::Assignment(
+            box Expr {
+                id,
+                kind: ExprKind::Variable(name),
+                ..
+            },
+            ..,
+        ) = &mut stmt.kind
+        {
+            let Some(resolved) = self.lookup(name, Some(*id)) else {
+                self.diagnostic(*id, NameResolverError::UndefinedName(name.name_str()));
+                return;
+            };
+
+            self.phase
+                .mutated_symbols
+                .insert(resolved.symbol().unwrap_or_else(|_| unreachable!("")));
+
+            *name = resolved;
+        }
+
+        if let StmtKind::Assignment(
+            box Expr {
+                id,
+                kind: ExprKind::Member(Some(box mut base), ..),
+                ..
+            },
+            ..,
+        ) = stmt.kind.clone()
+        {
+            while let ExprKind::Member(Some(box prev_base), ..) = base.kind.clone() {
+                base = prev_base
+            }
+
+            self.enter_expr(&mut base);
+
+            if let ExprKind::Variable(name) = &mut base.kind {
+                let Some(resolved) = self.lookup(name, Some(id)) else {
+                    self.diagnostic(id, NameResolverError::UndefinedName(name.name_str()));
+                    return;
+                };
+
+                self.phase
+                    .mutated_symbols
+                    .insert(name.symbol().unwrap_or_else(|_| unreachable!("")));
+
+                *name = resolved;
+            }
         }
     }
 

@@ -227,6 +227,13 @@ impl SpecializationKey {
     }
 }
 
+pub enum FlowContext {
+    Loop {
+        top_block_id: BasicBlockId,
+        join_block_id: BasicBlockId,
+    },
+}
+
 #[derive(Debug, Clone)]
 pub enum Binding<T> {
     Register(u32),
@@ -261,6 +268,7 @@ pub struct Lowerer<'a> {
     static_memory: StaticMemory,
     record_labels: FxHashMap<RecordId, Vec<String>>,
     next_record_id: u32,
+    flow_context_stack: Vec<FlowContext>,
 }
 
 #[allow(clippy::panic)]
@@ -286,6 +294,7 @@ impl<'a> Lowerer<'a> {
             resolved_names,
             next_record_id: 0,
             record_labels: Default::default(),
+            flow_context_stack: Default::default(),
         }
     }
 
@@ -617,14 +626,30 @@ impl<'a> Lowerer<'a> {
             TypedStmtKind::Return(typed_expr) => {
                 self.lower_return(typed_expr, bind, instantiations)
             }
-            #[warn(clippy::todo)]
-            TypedStmtKind::Continue(..) => todo!(),
+            TypedStmtKind::Continue(..) => self.lower_continue(),
             TypedStmtKind::Loop(cond, typed_block) => {
                 self.lower_loop(&Some(cond.clone()), typed_block, instantiations)
             }
-            #[allow(clippy::todo)]
-            TypedStmtKind::Break => todo!(),
+            TypedStmtKind::Break => self.lower_break(),
         }
+    }
+
+    fn lower_continue(&mut self) -> Result<(Value, Ty), IRError> {
+        let Some(FlowContext::Loop { top_block_id, .. }) = self.flow_context_stack.last() else {
+            return Err(IRError::NoFlowContext);
+        };
+
+        self.push_terminator(Terminator::Jump { to: *top_block_id });
+        Ok((Value::Void, Ty::Void))
+    }
+
+    fn lower_break(&mut self) -> Result<(Value, Ty), IRError> {
+        let Some(FlowContext::Loop { join_block_id, .. }) = self.flow_context_stack.last() else {
+            return Err(IRError::NoFlowContext);
+        };
+
+        self.push_terminator(Terminator::Jump { to: *join_block_id });
+        Ok((Value::Void, Ty::Void))
     }
 
     fn lower_loop(
@@ -636,8 +661,11 @@ impl<'a> Lowerer<'a> {
         let top_block_id = self.new_basic_block();
         let body_block_id = self.new_basic_block();
         let join_block_id = self.new_basic_block();
-
         self.push_terminator(Terminator::Jump { to: top_block_id });
+        self.flow_context_stack.push(FlowContext::Loop {
+            top_block_id,
+            join_block_id,
+        });
 
         self.in_basic_block(top_block_id, |lowerer| {
             if let Some(cond) = cond {
@@ -662,6 +690,8 @@ impl<'a> Lowerer<'a> {
         })?;
 
         self.set_current_block(join_block_id);
+
+        self.flow_context_stack.pop();
 
         Ok((Value::Void, Ty::Void))
     }
@@ -960,8 +990,7 @@ impl<'a> Lowerer<'a> {
     ) -> Result<(Value, Ty), IRError> {
         let (value, ty) = match &expr.kind {
             TypedExprKind::Hole => Err(IRError::TypeNotFound("nope".into())),
-            #[warn(clippy::todo)]
-            TypedExprKind::CallEffect { .. } => todo!(),
+            TypedExprKind::CallEffect { .. } => self.lower_effect_call(),
             TypedExprKind::InlineIR(inline_irinstruction) => {
                 self.lower_inline_ir(inline_irinstruction, bind, instantiations)
             }
@@ -1091,6 +1120,10 @@ impl<'a> Lowerer<'a> {
         }
 
         Ok((value, ty))
+    }
+
+    fn lower_effect_call(&mut self) -> Result<(Value, Ty), IRError> {
+        Ok((Value::Void, Ty::Void))
     }
 
     #[allow(clippy::todo)]
@@ -2962,6 +2995,7 @@ impl<'a> Lowerer<'a> {
         let block = &mut current_function.blocks[*current_block_idx];
         // Don't override an existing terminator (e.g., from an early return)
         if block.terminator != Terminator::Unreachable {
+            tracing::error!("trying to overwrite terminator");
             return;
         }
         block.terminator = terminator;

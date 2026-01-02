@@ -2,6 +2,7 @@
 pub mod tests {
     use std::rc::Rc;
 
+    use indexmap::indexset;
     use rustc_hash::FxHashSet;
 
     use crate::{
@@ -1574,6 +1575,52 @@ pub mod tests {
                     attributes: vec![]
                 })))
             })
+        );
+    }
+
+    #[test]
+    fn tracks_mutated_globals() {
+        let resolved = resolve(
+            "
+            let foo = 123
+            let bar = 456
+            foo = 789
+        ",
+        );
+
+        assert_eq!(
+            resolved.1.mutated_symbols,
+            indexset! { Symbol::Global(1.into()) }
+        );
+    }
+
+    #[test]
+    fn tracks_mutated_members() {
+        let resolved = resolve(
+            "
+            let a = { b: 123 }
+            a.b = 123
+        ",
+        );
+
+        assert_eq!(
+            resolved.1.mutated_symbols,
+            indexset! { Symbol::Global(1.into()) }
+        );
+    }
+
+    #[test]
+    fn tracks_nested_mutated_members() {
+        let resolved = resolve(
+            "
+            let a = { b: { c: 123 }}
+            a.b.c = 456
+        ",
+        );
+
+        assert_eq!(
+            resolved.1.mutated_symbols,
+            indexset! { Symbol::Global(1.into()) }
         );
     }
 }
