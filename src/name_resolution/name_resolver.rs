@@ -1023,7 +1023,10 @@ impl NameResolver {
                 }
 
                 if shadowed {
-                    self.warning(decl.id, NameResolverError::ShadowedEffectHandler(effect_name));
+                    self.warning(
+                        decl.id,
+                        NameResolverError::ShadowedEffectHandler(effect_name),
+                    );
                 }
                 let scope = self
                     .scopes

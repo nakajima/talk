@@ -1281,9 +1281,8 @@ impl<'a> InferencePass<'a> {
                     kind: TypeError::HandlerMustBeBound,
                 }));
 
-                let handler_sym = Symbol::Synthesized(
-                    self.session.symbols.next_synthesized(ModuleId::Current),
-                );
+                let handler_sym =
+                    Symbol::Synthesized(self.session.symbols.next_synthesized(ModuleId::Current));
                 self.visit_handler_expr(expr, effect_name, body, handler_sym, context)?
             }
             ExprKind::CallEffect {
@@ -1411,7 +1410,8 @@ impl<'a> InferencePass<'a> {
         let typed_params = self.visit_params(&body.args, context)?;
         let (_, effect_ret, _effects_row) = uncurry_function(effect.clone());
 
-        self.handler_contexts.push(HandlerContext { ret: effect_ret });
+        self.handler_contexts
+            .push(HandlerContext { ret: effect_ret });
         let typed_body = self.infer_block_with_returns(body, context);
         self.handler_contexts.pop();
         let typed_body = typed_body?;
@@ -3442,7 +3442,10 @@ impl<'a> InferencePass<'a> {
         context: &mut impl Solve,
     ) -> TypedRet<TypedDecl<InferTy>> {
         let typed_rhs = if let Some(rhs) = rhs {
-            if let ExprKind::Handling { effect_name, body, .. } = &rhs.kind {
+            if let ExprKind::Handling {
+                effect_name, body, ..
+            } = &rhs.kind
+            {
                 let handler_symbol = match &lhs.kind {
                     PatternKind::Bind(Name::Resolved(sym, _)) => Some(*sym),
                     _ => None,

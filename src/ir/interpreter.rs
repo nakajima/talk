@@ -544,10 +544,7 @@ impl<IO: super::io::IO> Interpreter<IO> {
             }
 
             IR::Instr(Instruction::Store {
-                value,
-                addr,
-                ty,
-                ..
+                value, addr, ty, ..
             }) => {
                 let val = self.val(value);
                 let addr_val = self.val(addr);
@@ -675,11 +672,7 @@ impl<IO: super::io::IO> Interpreter<IO> {
             IrTy::Buffer(len) => match value {
                 Value::RawBuffer(bytes) => {
                     if bytes.len() != *len as usize {
-                        panic!(
-                            "expected buffer of length {}, got {}",
-                            len,
-                            bytes.len()
-                        );
+                        panic!("expected buffer of length {}, got {}", len, bytes.len());
                     }
                     bytes
                 }
@@ -694,9 +687,9 @@ impl<IO: super::io::IO> Interpreter<IO> {
             IrTy::Int => Value::Int(i64::from_le_bytes(bytes.try_into().unwrap())),
             IrTy::Float => Value::Float(f64::from_le_bytes(bytes.try_into().unwrap())),
             IrTy::Bool => Value::Bool(bytes[0] != 0),
-            IrTy::RawPtr => Value::RawPtr(Addr(
-                u64::from_le_bytes(bytes.try_into().unwrap()) as usize,
-            )),
+            IrTy::RawPtr => {
+                Value::RawPtr(Addr(u64::from_le_bytes(bytes.try_into().unwrap()) as usize))
+            }
             IrTy::Func(..) => Value::Func(Symbol::from_bytes(bytes.try_into().unwrap())),
             IrTy::Byte | IrTy::Buffer(..) => Value::RawBuffer(bytes.to_vec()),
             IrTy::Record(sym, field_tys) => {
@@ -1477,5 +1470,25 @@ Dog().handleDSTChange()
             "what the heck where is my tasty cat food\nwhat the heck where is my tasty dog food\n",
             String::from_utf8(interpreter.io.stdout).unwrap()
         );
+    }
+
+    #[test]
+    fn interprets_effect_call() {
+        let (val, interpreter) = interpret_with(
+            "
+            effect 'fizz(x: Int) -> Int
+
+            let handler = @handle 'fizz { x in
+                continue x
+            }
+
+            func fizzes(x) '[fizz] {
+                'fizz(x)
+            }
+
+            print(fizzes(123))",
+        );
+
+        assert_eq!(interpreter.display(val, false), "123");
     }
 }
