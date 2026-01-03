@@ -42,6 +42,8 @@ pub enum TypeError {
     RecordPatternMissingFields(Vec<String>),
     RecordPatternNeedsRest,
     EffectNotFound(String),
+    HandlerMustBeBound,
+    ContinueOutsideHandler,
 }
 
 impl Error for TypeError {}
@@ -112,6 +114,12 @@ impl Display for TypeError {
             }
             Self::EffectNotFound(name) => {
                 write!(f, "Effect not found: {name}")
+            }
+            Self::HandlerMustBeBound => {
+                write!(f, "Effect handlers must be bound to a name")
+            }
+            Self::ContinueOutsideHandler => {
+                write!(f, "continue with a value is only valid inside a handler")
             }
         }
     }

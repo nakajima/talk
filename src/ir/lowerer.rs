@@ -1019,7 +1019,9 @@ impl<'a> Lowerer<'a> {
             TypedExprKind::Handler { func, .. } => {
                 self.lower_effect_handler(func, bind, instantiations)
             }
-            TypedExprKind::CallEffect { .. } => self.lower_effect_call(),
+            TypedExprKind::CallEffect { effect, args } => {
+                self.lower_effect_call(expr, effect, args, bind, instantiations)
+            }
             TypedExprKind::InlineIR(inline_irinstruction) => {
                 self.lower_inline_ir(inline_irinstruction, bind, instantiations)
             }
@@ -1160,8 +1162,52 @@ impl<'a> Lowerer<'a> {
         self.lower_func(func, bind, instantiations)
     }
 
-    fn lower_effect_call(&mut self) -> Result<(Value, Ty), IRError> {
-        Ok((Value::Void, Ty::Void))
+    fn lower_effect_call(
+        &mut self,
+        expr: &TypedExpr<Ty>,
+        effect: &Symbol,
+        args: &[TypedExpr<Ty>],
+        bind: Bind,
+        instantiations: &Substitutions,
+    ) -> Result<(Value, Ty), IRError> {
+        let handler_sym = self
+            .resolved_names
+            .effect_handlers
+            .get(&expr.id)
+            .copied()
+            .ok_or_else(|| {
+                IRError::TypeNotFound(format!(
+                    "No handler bound for effect {effect:?}"
+                ))
+            })?;
+
+        let mut arg_vals = Vec::with_capacity(args.len());
+        for arg in args {
+            let (val, _) = self.lower_expr(arg, Bind::Fresh, instantiations)?;
+            arg_vals.push(val);
+        }
+
+        let dest = self.ret(bind);
+        let has_binding = self
+            .current_function_stack
+            .last()
+            .is_some_and(|func| func.bindings.contains_key(&handler_sym));
+
+        let callee = if has_binding {
+            Value::Reg(self.get_binding(&handler_sym).0)
+        } else {
+            Value::Func(handler_sym)
+        };
+
+        self.push_instr(Instruction::Call {
+            dest,
+            ty: expr.ty.clone(),
+            callee,
+            args: arg_vals.into(),
+            meta: vec![InstructionMeta::Source(expr.id)].into(),
+        });
+
+        Ok((dest.into(), expr.ty.clone()))
     }
 
     #[allow(clippy::todo)]
@@ -2797,8 +2843,12 @@ impl<'a> Lowerer<'a> {
                     .ty_from_symbol(&capture.symbol)
                     .expect("didn't get capture ty")
                     .clone();
+                let is_handler = self.resolved_names.handler_symbols.contains(&capture.symbol);
                 // Global functions are resolved by symbol; don't treat them as captured env fields.
-                if matches!(capture.symbol, Symbol::Global(_)) && matches!(ty, Ty::Func(..)) {
+                if matches!(capture.symbol, Symbol::Global(_))
+                    && matches!(ty, Ty::Func(..))
+                    && !is_handler
+                {
                     continue;
                 }
 

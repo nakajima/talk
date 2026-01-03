@@ -70,6 +70,11 @@ type TypedRet<T> = Result<T, TypeError>;
 #[must_use]
 struct ReturnToken {}
 
+#[derive(Clone, Debug)]
+struct HandlerContext {
+    ret: InferTy,
+}
+
 // Protocol-level obligations derived from associated type declarations.
 #[derive(Clone, Debug, Default)]
 struct ProtocolAssociatedTypeRequirements {
@@ -94,6 +99,7 @@ pub struct InferencePass<'a> {
     substitutions: UnificationSubstitutions,
     tracked_returns: Vec<IndexSet<(NodeID, InferTy)>>,
     tracked_effect_rows: Vec<InferRow>,
+    handler_contexts: Vec<HandlerContext>,
     nominal_placeholders: FxHashMap<Symbol, (MetaVarId, Level)>,
     or_binders: Vec<FxHashMap<Symbol, InferTy>>,
     diagnostics: IndexSet<AnyDiagnostic>,
@@ -121,6 +127,7 @@ impl<'a> InferencePass<'a> {
             diagnostics: Default::default(),
             nominal_placeholders: Default::default(),
             tracked_effect_rows: Default::default(),
+            handler_contexts: Default::default(),
             or_binders: Default::default(),
             protocol_associated_type_requirements: Default::default(),
             root_decls: Default::default(),
@@ -1165,15 +1172,51 @@ impl<'a> InferencePass<'a> {
                 ty: InferTy::Void,
                 kind: TypedStmtKind::Break,
             },
-            StmtKind::Continue(expr) => TypedStmt {
-                id: stmt.id,
-                ty: InferTy::Void,
-                kind: TypedStmtKind::Continue(
-                    expr.as_ref()
-                        .map(|e| self.visit_expr(e, context))
-                        .transpose()?,
-                ),
-            },
+            StmtKind::Continue(expr) => {
+                let typed_expr = expr
+                    .as_ref()
+                    .map(|e| self.visit_expr(e, context))
+                    .transpose()?;
+
+                if let Some(typed_expr) = typed_expr {
+                    let Some(handler_ctx) = self.handler_contexts.last() else {
+                        self.diagnostics.insert(AnyDiagnostic::Typing(Diagnostic {
+                            id: stmt.id,
+                            severity: Severity::Error,
+                            kind: TypeError::ContinueOutsideHandler,
+                        }));
+                        return Ok(TypedStmt {
+                            id: stmt.id,
+                            ty: InferTy::Void,
+                            kind: TypedStmtKind::Continue(Some(typed_expr)),
+                        });
+                    };
+
+                    self.constraints.wants_equals_at_with_cause(
+                        stmt.id,
+                        handler_ctx.ret.clone(),
+                        typed_expr.ty.clone(),
+                        &context.group_info(),
+                        Some(ConstraintCause::Internal),
+                    );
+
+                    if let Some(returns) = self.tracked_returns.last_mut() {
+                        returns.insert((stmt.id, typed_expr.ty.clone()));
+                    }
+
+                    TypedStmt {
+                        id: stmt.id,
+                        ty: typed_expr.ty.clone(),
+                        kind: TypedStmtKind::Return(Some(typed_expr)),
+                    }
+                } else {
+                    TypedStmt {
+                        id: stmt.id,
+                        ty: InferTy::Void,
+                        kind: TypedStmtKind::Continue(None),
+                    }
+                }
+            }
             StmtKind::Loop(cond, block) => {
                 let cond_ty = if let Some(cond) = cond {
                     let cond_ty = self.visit_expr(cond, context)?;
@@ -1232,52 +1275,16 @@ impl<'a> InferencePass<'a> {
             ExprKind::Handling {
                 effect_name, body, ..
             } => {
-                let effect_symbol = effect_name
-                    .symbol()
-                    .map_err(|_| TypeError::NameNotResolved(effect_name.clone()))?;
-                let Some(effect) = self
-                    .session
-                    .type_catalog
-                    .effects
-                    .get(&effect_symbol)
-                    .cloned()
-                else {
-                    return Err(TypeError::EffectNotFound(effect_name.name_str()));
-                };
-
-                let typed_params = self.visit_params(&body.args, context)?;
-                let typed_body = self.infer_block(body, context)?;
-
-                let body_func = curry(
-                    typed_params.iter().map(|p| p.ty.clone()),
-                    typed_body.ret.clone(),
-                    self.session.new_row_meta_var(context.level()).into(),
-                );
-
-                self.constraints.wants_equals_at_with_cause(
-                    expr.id,
-                    effect.clone(),
-                    body_func,
-                    &context.group_info(),
-                    Some(ConstraintCause::Internal),
-                );
-
-                TypedExpr {
+                self.diagnostics.insert(AnyDiagnostic::Typing(Diagnostic {
                     id: expr.id,
-                    ty: InferTy::Void,
-                    kind: TypedExprKind::Handler {
-                        effect: effect_symbol,
-                        func: TypedFunc {
-                            name: effect_symbol,
-                            foralls: Default::default(),
-                            params: typed_params,
-                            effects: Default::default(),
-                            effects_row: InferRow::Empty,
-                            ret: typed_body.ret.clone(),
-                            body: typed_body,
-                        },
-                    },
-                }
+                    severity: Severity::Error,
+                    kind: TypeError::HandlerMustBeBound,
+                }));
+
+                let handler_sym = Symbol::Synthesized(
+                    self.session.symbols.next_synthesized(ModuleId::Current),
+                );
+                self.visit_handler_expr(expr, effect_name, body, handler_sym, context)?
             }
             ExprKind::CallEffect {
                 effect_name, args, ..
@@ -1378,6 +1385,77 @@ impl<'a> InferencePass<'a> {
         self.session.types_by_node.insert(expr.id, expr.ty.clone());
 
         Ok(expr)
+    }
+
+    fn visit_handler_expr(
+        &mut self,
+        expr: &Expr,
+        effect_name: &Name,
+        body: &Block,
+        handler_symbol: Symbol,
+        context: &mut impl Solve,
+    ) -> TypedRet<TypedExpr<InferTy>> {
+        let effect_symbol = effect_name
+            .symbol()
+            .map_err(|_| TypeError::NameNotResolved(effect_name.clone()))?;
+        let Some(effect) = self
+            .session
+            .type_catalog
+            .effects
+            .get(&effect_symbol)
+            .cloned()
+        else {
+            return Err(TypeError::EffectNotFound(effect_name.name_str()));
+        };
+
+        let typed_params = self.visit_params(&body.args, context)?;
+        let (_, effect_ret, _effects_row) = uncurry_function(effect.clone());
+
+        self.handler_contexts.push(HandlerContext { ret: effect_ret });
+        let typed_body = self.infer_block_with_returns(body, context);
+        self.handler_contexts.pop();
+        let typed_body = typed_body?;
+
+        let body_func = curry(
+            typed_params.iter().map(|p| p.ty.clone()),
+            typed_body.ret.clone(),
+            self.session.new_row_meta_var(context.level()).into(),
+        );
+
+        self.constraints.wants_equals_at_with_cause(
+            expr.id,
+            effect.clone(),
+            body_func,
+            &context.group_info(),
+            Some(ConstraintCause::Internal),
+        );
+
+        self.session.insert(
+            handler_symbol,
+            curry(
+                typed_params.iter().map(|p| p.ty.clone()),
+                typed_body.ret.clone(),
+                InferRow::Empty.into(),
+            ),
+            &mut Default::default(),
+        );
+
+        Ok(TypedExpr {
+            id: expr.id,
+            ty: effect.clone(),
+            kind: TypedExprKind::Handler {
+                effect: effect_symbol,
+                func: TypedFunc {
+                    name: handler_symbol,
+                    foralls: Default::default(),
+                    params: typed_params,
+                    effects: Default::default(),
+                    effects_row: InferRow::Empty,
+                    ret: typed_body.ret.clone(),
+                    body: typed_body,
+                },
+            },
+        })
     }
 
     fn visit_call_effect(
@@ -3363,21 +3441,39 @@ impl<'a> InferencePass<'a> {
         rhs: &Option<Expr>,
         context: &mut impl Solve,
     ) -> TypedRet<TypedDecl<InferTy>> {
-        let (ty, initializer) = match (&type_annotation, &rhs) {
-            (None, Some(expr)) => {
-                let expr = self.visit_expr(expr, context)?;
-                (expr.ty.clone(), Some(expr))
+        let typed_rhs = if let Some(rhs) = rhs {
+            if let ExprKind::Handling { effect_name, body, .. } = &rhs.kind {
+                let handler_symbol = match &lhs.kind {
+                    PatternKind::Bind(Name::Resolved(sym, _)) => Some(*sym),
+                    _ => None,
+                }
+                .unwrap_or_else(|| {
+                    self.diagnostics.insert(AnyDiagnostic::Typing(Diagnostic {
+                        id: rhs.id,
+                        severity: Severity::Error,
+                        kind: TypeError::HandlerMustBeBound,
+                    }));
+                    Symbol::Synthesized(self.session.symbols.next_synthesized(ModuleId::Current))
+                });
+                Some(self.visit_handler_expr(rhs, effect_name, body, handler_symbol, context)?)
+            } else {
+                Some(self.visit_expr(rhs, context)?)
             }
+        } else {
+            None
+        };
+
+        let (ty, initializer) = match (&type_annotation, typed_rhs) {
+            (None, Some(expr)) => (expr.ty.clone(), Some(expr)),
             (Some(annotation), None) => (self.visit_type_annotation(annotation, context)?, None),
-            (Some(annotation), Some(rhs)) => {
+            (Some(annotation), Some(rhs_ty)) => {
                 let annotated_ty = self.visit_type_annotation(annotation, context)?;
-                let rhs_ty = self.visit_expr(rhs, context)?;
                 self.constraints.wants_equals_at_with_cause(
-                    rhs.id,
+                    rhs_ty.id,
                     annotated_ty.clone(),
                     rhs_ty.ty.clone(),
                     &context.group_info(),
-                    Some(ConstraintCause::Annotation(rhs.id)),
+                    Some(ConstraintCause::Annotation(rhs_ty.id)),
                 );
                 (annotated_ty, Some(rhs_ty))
             }
