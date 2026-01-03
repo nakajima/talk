@@ -31,9 +31,7 @@ impl<T: SomeType, U: SomeType> TyMappable<T, U> for BaseRow<T> {
             BaseRow::Empty => U::RowType::empty(),
             BaseRow::Param(id) => U::RowType::param(id),
             BaseRow::Var(id) => U::RowType::var(id),
-            BaseRow::Extend { row, label, ty } => {
-                U::RowType::extend(row.map_ty(m).into(), label, m(&ty))
-            }
+            BaseRow::Extend { row, label, ty } => U::RowType::extend(row.map_ty(m), label, m(&ty)),
         }
     }
 }
