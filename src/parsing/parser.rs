@@ -498,14 +498,16 @@ impl<'a> Parser<'a> {
         self.consume(TokenKind::RightParen)?;
 
         let mut names = vec![];
+        let mut spans = vec![];
         let mut is_open = false;
         if self.peek_is(TokenKind::SingleQuote) {
             self.advance();
             // It's an effect list
             self.consume(TokenKind::LeftBracket)?;
             while !self.did_match(TokenKind::RightBracket)? && !self.did_match(TokenKind::EOF)? {
-                if let Ok((name, _)) = self.identifier() {
+                if let Ok((name, span)) = self.identifier() {
                     names.push(Name::Raw(name));
+                    spans.push(span);
                     self.consume(TokenKind::Comma).ok();
                 } else if self.did_match(TokenKind::DotDot)? {
                     is_open = true;
@@ -519,11 +521,18 @@ impl<'a> Parser<'a> {
             }
         } else if let Some(Token {
             kind: TokenKind::EffectName(name),
+            start,
+            end,
             ..
         }) = self.current.clone()
         {
             self.advance();
-            names.push(Name::Raw(name))
+            names.push(Name::Raw(name));
+            spans.push(Span {
+                file_id: self.file_id,
+                start,
+                end,
+            });
         } else {
             is_open = true;
         }
@@ -555,7 +564,11 @@ impl<'a> Parser<'a> {
                 id,
                 name: name.into(),
                 name_span,
-                effects: EffectSet { names, is_open },
+                effects: EffectSet {
+                    names,
+                    spans,
+                    is_open,
+                },
                 generics,
                 params,
                 body,

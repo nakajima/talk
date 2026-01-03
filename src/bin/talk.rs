@@ -228,7 +228,7 @@ async fn main() {
             let core = core.as_ref();
             let doc_id = workspace
                 .file_id_to_document
-                .get(0)
+                .first()
                 .cloned()
                 .unwrap_or(path);
 

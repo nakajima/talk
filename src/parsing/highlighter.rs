@@ -339,6 +339,11 @@ impl<'a> Higlighter<'a> {
                 result.extend(self.tokens_from_exprs(&func.params, ast));
                 result.extend(self.tokens_from_expr(&func.body, ast));
                 result.extend(self.tokens_from_exprs(&func.attributes, ast));
+
+                for span in &func.effects.spans {
+                    result.push(self.make_span(Kind::EFFECT, *span));
+                }
+
                 if let Some(ret) = &func.ret {
                     result.extend(self.tokens_from_expr(ret, ast));
                 }

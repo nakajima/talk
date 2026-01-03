@@ -2493,6 +2493,7 @@ pub mod tests {
                 })],
                 effects: EffectSet {
                     names: vec![Name::Raw("fizz".into()), Name::Raw("buzz".into()),],
+                    spans: vec![Span::ANY, Span::ANY],
                     is_open: true
                 },
                 body: any!(Block, {

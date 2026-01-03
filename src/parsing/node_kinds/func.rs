@@ -14,6 +14,7 @@ use crate::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EffectSet {
     pub names: Vec<Name>,
+    pub spans: Vec<Span>,
     pub is_open: bool,
 }
 
@@ -21,6 +22,7 @@ impl Default for EffectSet {
     fn default() -> Self {
         Self {
             names: Default::default(),
+            spans: Default::default(),
             is_open: true,
         }
     }

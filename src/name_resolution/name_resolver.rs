@@ -697,7 +697,7 @@ impl NameResolver {
         *name = resolved;
     }
 
-    fn assignment_base_name<'a>(expr: &'a mut Expr) -> Option<(&'a mut Name, NodeID)> {
+    fn assignment_base_name(expr: &mut Expr) -> Option<(&mut Name, NodeID)> {
         match &mut expr.kind {
             ExprKind::Variable(name) => Some((name, expr.id)),
             ExprKind::Member(Some(inner), ..) => Self::assignment_base_name(inner),

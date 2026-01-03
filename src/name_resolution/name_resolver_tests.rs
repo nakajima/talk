@@ -1553,7 +1553,7 @@ pub mod tests {
         ",
         );
 
-        assert_eq!(
+        assert_eq_diff!(
             *resolved.0.roots[1].as_decl(),
             any_decl!(DeclKind::Let {
                 lhs: any!(Pattern, {
@@ -1566,6 +1566,7 @@ pub mod tests {
                     name_span: Span::ANY,
                     effects: EffectSet {
                         names: vec![Name::Resolved(Symbol::Effect(1.into()), "fizz".into())],
+                        spans: vec![Span::ANY],
                         is_open: false
                     },
                     generics: vec![],
