@@ -1016,6 +1016,9 @@ impl<'a> Lowerer<'a> {
     ) -> Result<(Value, Ty), IRError> {
         let (value, ty) = match &expr.kind {
             TypedExprKind::Hole => Err(IRError::TypeNotFound("nope".into())),
+            TypedExprKind::Handler { func, .. } => {
+                self.lower_effect_handler(func, bind, instantiations)
+            }
             TypedExprKind::CallEffect { .. } => self.lower_effect_call(),
             TypedExprKind::InlineIR(inline_irinstruction) => {
                 self.lower_inline_ir(inline_irinstruction, bind, instantiations)
@@ -1146,6 +1149,15 @@ impl<'a> Lowerer<'a> {
         }
 
         Ok((value, ty))
+    }
+
+    fn lower_effect_handler(
+        &mut self,
+        func: &TypedFunc<Ty>,
+        bind: Bind,
+        instantiations: &Substitutions,
+    ) -> Result<(Value, Ty), IRError> {
+        self.lower_func(func, bind, instantiations)
     }
 
     fn lower_effect_call(&mut self) -> Result<(Value, Ty), IRError> {

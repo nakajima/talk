@@ -354,6 +354,10 @@ impl TypedExprKind<InferTy> {
         use TypedExprKind::*;
         match self {
             Hole => Hole,
+            Handler { effect, func } => Handler {
+                effect,
+                func: func.map_ty(&mut |t| session.finalize_ty(t.clone()).as_mono_ty().clone()),
+            },
             InlineIR(inline_ir) => InlineIR(
                 inline_ir
                     .map_ty(&mut |t| session.finalize_ty(t.clone()).as_mono_ty().clone())
@@ -1145,6 +1149,11 @@ pub enum TypedExprKind<T: SomeType> {
         effect: Symbol,
         args: Vec<TypedExpr<T>>,
     },
+    Handler {
+        #[drive(skip)]
+        effect: Symbol,
+        func: TypedFunc<T>,
+    },
     Call {
         callee: Box<TypedExpr<T>>,
         type_args: Vec<T>,
@@ -1194,6 +1203,10 @@ impl<T: SomeType, U: SomeType> TyMappable<T, U> for TypedExprKind<T> {
         use TypedExprKind::*;
         match self {
             Hole => Hole,
+            Handler { effect, func } => Handler {
+                effect,
+                func: func.map_ty(m),
+            },
             CallEffect { effect, args } => CallEffect {
                 effect,
                 args: args.into_iter().map(|a| a.map_ty(m)).collect(),

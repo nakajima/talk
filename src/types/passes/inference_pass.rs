@@ -1229,11 +1229,56 @@ impl<'a> InferencePass<'a> {
                     kind: TypedExprKind::Hole,
                 }
             }
-            ExprKind::Handling { .. } => TypedExpr {
-                id: expr.id,
-                ty: InferTy::Void,
-                kind: TypedExprKind::Hole,
-            },
+            ExprKind::Handling {
+                effect_name, body, ..
+            } => {
+                let effect_symbol = effect_name
+                    .symbol()
+                    .map_err(|_| TypeError::NameNotResolved(effect_name.clone()))?;
+                let Some(effect) = self
+                    .session
+                    .type_catalog
+                    .effects
+                    .get(&effect_symbol)
+                    .cloned()
+                else {
+                    return Err(TypeError::EffectNotFound(effect_name.name_str()));
+                };
+
+                let typed_params = self.visit_params(&body.args, context)?;
+                let typed_body = self.infer_block(body, context)?;
+
+                let body_func = curry(
+                    typed_params.iter().map(|p| p.ty.clone()),
+                    typed_body.ret.clone(),
+                    self.session.new_row_meta_var(context.level()).into(),
+                );
+
+                self.constraints.wants_equals_at_with_cause(
+                    expr.id,
+                    effect.clone(),
+                    body_func,
+                    &context.group_info(),
+                    Some(ConstraintCause::Internal),
+                );
+
+                TypedExpr {
+                    id: expr.id,
+                    ty: InferTy::Void,
+                    kind: TypedExprKind::Handler {
+                        effect: effect_symbol,
+                        func: TypedFunc {
+                            name: effect_symbol,
+                            foralls: Default::default(),
+                            params: typed_params,
+                            effects: Default::default(),
+                            effects_row: InferRow::Empty,
+                            ret: typed_body.ret.clone(),
+                            body: typed_body,
+                        },
+                    },
+                }
+            }
             ExprKind::CallEffect {
                 effect_name, args, ..
             } => self.visit_call_effect(expr, effect_name, args, context)?,
@@ -3290,6 +3335,18 @@ impl<'a> InferencePass<'a> {
                 }
 
                 Ok(ret)
+            }
+            TypeAnnotationKind::Tuple(items) => {
+                if items.is_empty() {
+                    return Ok(InferTy::Void);
+                }
+
+                Ok(InferTy::Tuple(
+                    items
+                        .iter()
+                        .map(|t| self.visit_type_annotation(t, context))
+                        .try_collect()?,
+                ))
             }
             _ => Err(TypeError::TypeNotFound(format!(
                 "Type annotation unable to be determined {type_annotation:?}"

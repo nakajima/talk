@@ -5,7 +5,7 @@ pub mod tests {
     use crate::{
         assert_eq_diff,
         label::Label,
-        name_resolution::symbol::{EffectId, GlobalId, Symbol},
+        name_resolution::symbol::{EffectId, GlobalId, ParamLocalId, Symbol},
         types::{
             infer_row::RowParamId,
             row::Row,
@@ -118,5 +118,64 @@ pub mod tests {
         );
 
         assert_eq!(1, diagnostics.len(), "{diagnostics:?}");
+    }
+
+    #[test]
+    fn types_handlers() {
+        let (_ast, types) = typecheck(
+            "
+            effect 'fizz(x: Int, y: Bool) -> Int
+
+            let handler = @handle 'fizz { a, b in
+                0
+            }
+            ",
+        );
+
+        assert_eq!(
+            Ty::Int,
+            *types
+                .get_symbol(&ParamLocalId(3).into())
+                .unwrap()
+                .as_mono_ty()
+        );
+
+        assert_eq!(
+            Ty::Bool,
+            *types
+                .get_symbol(&ParamLocalId(4).into())
+                .unwrap()
+                .as_mono_ty()
+        );
+    }
+
+    #[test]
+    fn checks_handler_return() {
+        let (.., diagnostics) = typecheck_err(
+            "
+            effect 'fizz(x: Int, y: Bool) -> Bool
+
+            let handler = @handle 'fizz { a, b in
+                0
+            }
+            ",
+        );
+
+        assert_eq!(diagnostics.len(), 1);
+    }
+
+    #[test]
+    fn checks_handler_args() {
+        let (.., diagnostics) = typecheck_err(
+            "
+            effect 'fizz(x: Int, y: Bool) -> Bool
+
+            let handler = @handle 'fizz { a in
+                true
+            }
+            ",
+        );
+
+        assert_eq!(diagnostics.len(), 1);
     }
 }
