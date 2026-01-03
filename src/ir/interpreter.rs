@@ -251,8 +251,13 @@ impl<IO: super::io::IO> Interpreter<IO> {
         let span = tracing::trace_span!("call", func = format!("{function}")).entered();
         let mut frame = Frame::new(span, dest, caller_name);
         frame.registers.resize(func.register_count, Value::Uninit);
-        for (i, arg) in args.into_iter().enumerate() {
-            frame.registers[i] = arg;
+        for (param, arg) in func.params.items.iter().zip(args.into_iter()) {
+            match param {
+                Value::Reg(reg) => {
+                    frame.registers[*reg as usize] = arg;
+                }
+                other => panic!("unsupported param binding {other:?}"),
+            }
         }
         self.frames.push(frame);
         self.current_func = Some(func);
@@ -534,27 +539,30 @@ impl<IO: super::io::IO> Interpreter<IO> {
                     &self.memory.mem[heap_idx..heap_idx + size]
                 };
 
-                let value = match ty {
-                    IrTy::Int => Value::Int(i64::from_le_bytes(bytes.try_into().unwrap())),
-                    IrTy::Float => Value::Float(f64::from_le_bytes(bytes.try_into().unwrap())),
-                    IrTy::Bool => Value::Bool(bytes[0] != 0),
-                    IrTy::RawPtr => {
-                        Value::RawPtr(Addr(u64::from_le_bytes(bytes.try_into().unwrap()) as usize))
-                    }
-                    IrTy::Func(..) => Value::Func(Symbol::from_bytes(bytes.try_into().unwrap())),
-                    _ => panic!("Load not implemented for {ty:?}"),
-                };
+                let value = self.bytes_to_value(&ty, bytes);
                 self.write_register(&dest, value);
             }
 
-            IR::Instr(Instruction::Store { value, addr, .. }) => {
+            IR::Instr(Instruction::Store {
+                value,
+                addr,
+                ty,
+                ..
+            }) => {
                 let val = self.val(value);
                 let addr_val = self.val(addr);
                 let Value::RawPtr(ptr) = addr_val else {
                     panic!("Store expects RawPtr, got {addr_val:?}");
                 };
 
-                let bytes = val.as_bytes();
+                let bytes = self.value_to_bytes(&ty, val);
+                if bytes.len() != ty.bytes_len() {
+                    panic!(
+                        "Store size mismatch: expected {} bytes, got {}",
+                        ty.bytes_len(),
+                        bytes.len()
+                    );
+                }
                 let heap_idx = ptr.0 - self.heap_start;
 
                 for (i, byte) in bytes.iter().enumerate() {
@@ -562,7 +570,7 @@ impl<IO: super::io::IO> Interpreter<IO> {
                 }
             }
 
-            IR::Instr(Instruction::Move { from, to, .. }) => {
+            IR::Instr(Instruction::Move { from, to, ty, .. }) => {
                 // Move is like Store but maybe with different semantics?
                 // If it's the same as Store:
                 let val = self.val(from);
@@ -571,7 +579,14 @@ impl<IO: super::io::IO> Interpreter<IO> {
                     panic!("Move expects RawPtr destination, got {addr_val:?}");
                 };
 
-                let bytes = val.as_bytes();
+                let bytes = self.value_to_bytes(&ty, val);
+                if bytes.len() != ty.bytes_len() {
+                    panic!(
+                        "Move size mismatch: expected {} bytes, got {}",
+                        ty.bytes_len(),
+                        bytes.len()
+                    );
+                }
                 let heap_idx = ptr.0 - self.heap_start;
 
                 for (i, byte) in bytes.iter().enumerate() {
@@ -597,6 +612,110 @@ impl<IO: super::io::IO> Interpreter<IO> {
                 self.write_register(&dest, new_ptr);
             }
             IR::Instr(Instruction::Free { .. }) => unimplemented!(),
+        }
+    }
+
+    fn value_to_bytes(&mut self, ty: &IrTy, value: Value) -> Vec<u8> {
+        if matches!(value, Value::Uninit) {
+            return vec![0; ty.bytes_len()];
+        }
+
+        match ty {
+            IrTy::Int => match value {
+                Value::Int(v) => v.to_le_bytes().to_vec(),
+                other => panic!("expected int for {ty:?}, got {other:?}"),
+            },
+            IrTy::Float => match value {
+                Value::Float(v) => v.to_le_bytes().to_vec(),
+                other => panic!("expected float for {ty:?}, got {other:?}"),
+            },
+            IrTy::Bool => match value {
+                Value::Bool(v) => vec![if v { 1 } else { 0 }],
+                Value::Int(v) => vec![if v != 0 { 1 } else { 0 }],
+                other => panic!("expected bool for {ty:?}, got {other:?}"),
+            },
+            IrTy::Func(..) => match value {
+                Value::Func(sym) => sym.as_bytes().to_vec(),
+                Value::Ref(Reference::Func(sym)) => sym.as_bytes().to_vec(),
+                other => panic!("expected func for {ty:?}, got {other:?}"),
+            },
+            IrTy::Record(_sym, field_tys) => match value {
+                Value::Record(_record_id, fields) => {
+                    if fields.len() != field_tys.len() {
+                        panic!(
+                            "record field count mismatch: expected {}, got {}",
+                            field_tys.len(),
+                            fields.len()
+                        );
+                    }
+
+                    let mut bytes = Vec::with_capacity(ty.bytes_len());
+                    for (field_val, field_ty) in fields.into_iter().zip(field_tys.iter()) {
+                        bytes.extend(self.value_to_bytes(field_ty, field_val));
+                    }
+                    bytes
+                }
+                other => panic!("expected record for {ty:?}, got {other:?}"),
+            },
+            IrTy::RawPtr => match value {
+                Value::RawPtr(addr) => (addr.0 as u64).to_le_bytes().to_vec(),
+                Value::Int(v) => (v as u64).to_le_bytes().to_vec(),
+                other => panic!("expected rawptr for {ty:?}, got {other:?}"),
+            },
+            IrTy::Byte => match value {
+                Value::RawBuffer(bytes) => {
+                    if bytes.len() != 1 {
+                        panic!("expected 1 byte, got {}", bytes.len());
+                    }
+                    bytes
+                }
+                Value::Int(v) => vec![v as u8],
+                other => panic!("expected byte for {ty:?}, got {other:?}"),
+            },
+            IrTy::Buffer(len) => match value {
+                Value::RawBuffer(bytes) => {
+                    if bytes.len() != *len as usize {
+                        panic!(
+                            "expected buffer of length {}, got {}",
+                            len,
+                            bytes.len()
+                        );
+                    }
+                    bytes
+                }
+                other => panic!("expected buffer for {ty:?}, got {other:?}"),
+            },
+            IrTy::Void => Vec::new(),
+        }
+    }
+
+    fn bytes_to_value(&self, ty: &IrTy, bytes: &[u8]) -> Value {
+        match ty {
+            IrTy::Int => Value::Int(i64::from_le_bytes(bytes.try_into().unwrap())),
+            IrTy::Float => Value::Float(f64::from_le_bytes(bytes.try_into().unwrap())),
+            IrTy::Bool => Value::Bool(bytes[0] != 0),
+            IrTy::RawPtr => Value::RawPtr(Addr(
+                u64::from_le_bytes(bytes.try_into().unwrap()) as usize,
+            )),
+            IrTy::Func(..) => Value::Func(Symbol::from_bytes(bytes.try_into().unwrap())),
+            IrTy::Byte | IrTy::Buffer(..) => Value::RawBuffer(bytes.to_vec()),
+            IrTy::Record(sym, field_tys) => {
+                let mut offset = 0;
+                let mut fields = Vec::with_capacity(field_tys.len());
+                for field_ty in field_tys {
+                    let field_len = field_ty.bytes_len();
+                    let field_bytes = &bytes[offset..offset + field_len];
+                    fields.push(self.bytes_to_value(field_ty, field_bytes));
+                    offset += field_len;
+                }
+
+                let record_id = match sym {
+                    Some(sym) => RecordId::Nominal(*sym),
+                    None => RecordId::Anon,
+                };
+                Value::Record(record_id, fields)
+            }
+            IrTy::Void => panic!("Load not implemented for {ty:?}"),
         }
     }
 

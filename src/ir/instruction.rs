@@ -182,7 +182,7 @@ pub enum Instruction<T> {
         args: List<Value>,
         meta: List<InstructionMeta>,
     },
-    #[doc = "$dest = struct $sym $ty $record $meta"]
+    #[doc = "$dest = nominal $sym $ty $record $meta"]
     Nominal {
         dest: Register,
         sym: Symbol,

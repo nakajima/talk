@@ -1,9 +1,5 @@
-effect 'throw -> ()
+effect 'throw() -> ()
 
-let handler = @handle 'throw {
-  print("sup")
-}
+let handler = @handle 'throw { print("sup") }
 
-func fizz() 'throw -> Int {
-  'throw()
-}
+func fizz() 'throw -> Int { 'throw() }

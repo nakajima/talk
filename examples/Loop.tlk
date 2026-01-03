@@ -4,3 +4,8 @@ loop {
 	if i > 5 { break }
 	print(i)
 }
+
+loop i > 0 {
+	i = i - 1
+	print(i)
+}
