@@ -7,6 +7,7 @@ use tracing::instrument;
 
 use crate::{
     label::Label,
+    name_resolution::symbol::Symbol,
     node_id::NodeID,
     types::{
         infer_row::{InferRow, RowMetaId, RowParamId, RowTail, normalize_row},
@@ -337,6 +338,12 @@ pub(super) fn unify(
     let rhs = session.apply(rhs, context.substitutions_mut());
 
     if lhs == rhs {
+        return Ok(Default::default());
+    }
+
+    if matches!(lhs, InferTy::Primitive(Symbol::Never))
+        || matches!(rhs, InferTy::Primitive(Symbol::Never))
+    {
         return Ok(Default::default());
     }
 

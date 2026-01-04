@@ -73,7 +73,7 @@ pub struct Scope {
     pub parent_id: Option<NodeID>,
     pub values: FxHashMap<String, Symbol>,
     pub types: FxHashMap<String, Symbol>,
-    pub handlers: FxHashMap<Symbol, Symbol>,
+    pub handlers: FxHashMap<Symbol, (Symbol, NodeID)>,
     pub depth: u32,
     pub binder: Option<Symbol>,
     pub level: Level,
@@ -375,7 +375,8 @@ impl NameResolver {
             .scopes
             .get(&scope_id)
             .and_then(|scope| scope.handlers.get(&effect).copied());
-        if let Some(handler) = handler {
+
+        if let Some((handler, _)) = handler {
             return Some(handler);
         }
 
@@ -738,6 +739,36 @@ impl NameResolver {
             self.enter_scope(block.id, None);
         }
 
+        on!(&mut stmt.kind, StmtKind::Handling { effect_name, .. }, {
+            let Some(Name::Resolved(effect_sym, _)) = self.lookup(effect_name, Some(stmt.id))
+            else {
+                self.diagnostic(stmt.id, NameResolverError::Unresolved(effect_name.clone()));
+                return;
+            };
+
+            *effect_name = Name::Resolved(effect_sym, effect_name.name_str());
+
+            if let Some(scope) = self.current_scope()
+                && let Some((_, id)) = scope.handlers.get(&effect_sym)
+            {
+                self.warning(
+                    *id,
+                    NameResolverError::ShadowedEffectHandler(effect_name.name_str()),
+                );
+            }
+
+            let Some(scope) = self.current_scope_mut() else {
+                self.diagnostic(
+                    stmt.id,
+                    NameResolverError::UndefinedName("no scope".to_string()),
+                );
+
+                return;
+            };
+
+            scope.handlers.insert(effect_sym, (effect_sym, stmt.id));
+        });
+
         if let StmtKind::Assignment(box lhs, ..) = &mut stmt.kind {
             self.track_assignment_mutation(lhs);
         }
@@ -839,17 +870,6 @@ impl NameResolver {
             ) {
                 expr.kind = ExprKind::Constructor(name.clone());
             }
-        });
-
-        on!(&mut expr.kind, ExprKind::Handling { effect_name, .. }, {
-            let Some(resolved_name) = self.lookup(effect_name, Some(expr.id)) else {
-                self.diagnostic(
-                    expr.id,
-                    NameResolverError::UndefinedName(effect_name.name_str()),
-                );
-                return;
-            };
-            *effect_name = resolved_name;
         });
 
         on!(&mut expr.kind, ExprKind::CallEffect { effect_name, .. }, {
@@ -965,28 +985,6 @@ impl NameResolver {
     }
 
     fn exit_decl(&mut self, decl: &mut Decl) {
-        let handler_binding = match &decl.kind {
-            DeclKind::Let {
-                lhs,
-                rhs: Some(expr),
-                ..
-            } => {
-                if let ExprKind::Handling { effect_name, .. } = &expr.kind {
-                    let effect_sym = effect_name.symbol().ok();
-                    let handler_sym = match &lhs.kind {
-                        PatternKind::Bind(name) => name.symbol().ok(),
-                        _ => None,
-                    };
-                    effect_sym.zip(handler_sym).map(|(effect, handler)| {
-                        (effect, handler, effect_name.name_str().to_string())
-                    })
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        };
-
         on!(
             decl.kind,
             DeclKind::Enum { .. }
@@ -1005,36 +1003,6 @@ impl NameResolver {
                 self.exit_scope(id);
             }
         });
-
-        if let Some((effect_sym, handler_sym, effect_name)) = handler_binding {
-            self.phase.handler_symbols.insert(handler_sym);
-            if let Some(scope_id) = self.current_scope_id {
-                let mut cursor = Some(scope_id);
-                let mut shadowed = false;
-                while let Some(id) = cursor {
-                    let Some(scope) = self.scopes.get(&id) else {
-                        break;
-                    };
-                    if scope.handlers.contains_key(&effect_sym) {
-                        shadowed = true;
-                        break;
-                    }
-                    cursor = scope.parent_id;
-                }
-
-                if shadowed {
-                    self.warning(
-                        decl.id,
-                        NameResolverError::ShadowedEffectHandler(effect_name),
-                    );
-                }
-                let scope = self
-                    .scopes
-                    .get_mut(&scope_id)
-                    .expect("scope not found for handler binding");
-                scope.handlers.insert(effect_sym, handler_sym);
-            }
-        }
 
         on!(decl.kind, DeclKind::Let { .. }, {
             self.current_level = self.current_level.prev();

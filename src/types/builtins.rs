@@ -24,6 +24,7 @@ pub fn resolve_builtin_type(id: &Symbol) -> (InferTy, Vec<Predicate<InferTy>>, I
         Symbol::Float => InferTy::Primitive(Symbol::Float),
         Symbol::Bool => InferTy::Primitive(Symbol::Bool),
         Symbol::Void => InferTy::Primitive(Symbol::Void),
+        Symbol::Never => InferTy::Primitive(Symbol::Never),
         Symbol::RawPtr => InferTy::Primitive(Symbol::RawPtr),
         Symbol::Byte => InferTy::Primitive(Symbol::Byte),
         Symbol::IR => InferTy::Func(
@@ -49,6 +50,7 @@ pub fn builtin_scope() -> FxHashMap<Symbol, EnvEntry<InferTy>> {
     res.insert(Symbol::Float, EnvEntry::Mono(InferTy::Float));
     res.insert(Symbol::Bool, EnvEntry::Mono(InferTy::Bool));
     res.insert(Symbol::Void, EnvEntry::Mono(InferTy::Void));
+    res.insert(Symbol::Never, EnvEntry::Mono(InferTy::Never));
     res.insert(Symbol::Byte, EnvEntry::Mono(InferTy::Byte));
     res.insert(
         Symbol::RawPtr,

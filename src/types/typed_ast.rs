@@ -96,6 +96,10 @@ impl TypedStmtKind<InferTy> {
                 lhs.finalize(session, witnesses),
                 rhs.finalize(session, witnesses),
             ),
+            Handler { effect, func } => Handler {
+                effect,
+                func: func.finalize(session, witnesses),
+            },
             Return(typed_expr) => Return(typed_expr.map(|e| e.finalize(session, witnesses))),
             Continue(typed_expr) => Continue(typed_expr.map(|e| e.finalize(session, witnesses))),
             Loop(cond, block) => Loop(
@@ -354,10 +358,6 @@ impl TypedExprKind<InferTy> {
         use TypedExprKind::*;
         match self {
             Hole => Hole,
-            Handler { effect, func } => Handler {
-                effect,
-                func: func.map_ty(&mut |t| session.finalize_ty(t.clone()).as_mono_ty().clone()),
-            },
             InlineIR(inline_ir) => InlineIR(
                 inline_ir
                     .map_ty(&mut |t| session.finalize_ty(t.clone()).as_mono_ty().clone())
@@ -971,6 +971,11 @@ pub enum TypedStmtKind<T: SomeType> {
     Return(Option<TypedExpr<T>>),
     Continue(Option<TypedExpr<T>>),
     Loop(TypedExpr<T>, TypedBlock<T>),
+    Handler {
+        #[drive(skip)]
+        effect: Symbol,
+        func: TypedFunc<T>,
+    },
     Break,
 }
 
@@ -979,6 +984,10 @@ impl<T: SomeType, U: SomeType> TyMappable<T, U> for TypedStmtKind<T> {
     fn map_ty(self, m: &mut impl FnMut(&T) -> U) -> Self::OutputTy {
         use TypedStmtKind::*;
         match self {
+            Handler { effect, func } => Handler {
+                effect,
+                func: func.map_ty(m),
+            },
             Expr(typed_expr) => Expr(typed_expr.map_ty(m)),
             Assignment(lhs, rhs) => Assignment(lhs.map_ty(m), rhs.map_ty(m)),
             Return(typed_expr) => Return(typed_expr.map(|e| e.map_ty(m))),
@@ -1149,11 +1158,6 @@ pub enum TypedExprKind<T: SomeType> {
         effect: Symbol,
         args: Vec<TypedExpr<T>>,
     },
-    Handler {
-        #[drive(skip)]
-        effect: Symbol,
-        func: TypedFunc<T>,
-    },
     Call {
         callee: Box<TypedExpr<T>>,
         type_args: Vec<T>,
@@ -1203,10 +1207,6 @@ impl<T: SomeType, U: SomeType> TyMappable<T, U> for TypedExprKind<T> {
         use TypedExprKind::*;
         match self {
             Hole => Hole,
-            Handler { effect, func } => Handler {
-                effect,
-                func: func.map_ty(m),
-            },
             CallEffect { effect, args } => CallEffect {
                 effect,
                 args: args.into_iter().map(|a| a.map_ty(m)).collect(),

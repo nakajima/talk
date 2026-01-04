@@ -2,6 +2,7 @@ use derive_visitor::{Drive, DriveMut};
 
 use crate::{
     impl_into_node,
+    name::Name,
     node_id::NodeID,
     node_kinds::{block::Block, expr::Expr},
     parsing::span::Span,
@@ -20,6 +21,13 @@ pub enum StmtKind {
     Assignment(Box<Expr> /* LHS */, Box<Expr> /* RHS */),
     Loop(Option<Expr> /* condition */, Block /* body */),
     Continue(Option<Expr>),
+    Handling {
+        #[drive(skip)]
+        effect_name: Name,
+        #[drive(skip)]
+        effect_name_span: Span,
+        body: Block,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Drive, DriveMut)]

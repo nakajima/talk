@@ -413,9 +413,6 @@ impl<'a> Formatter<'a> {
     fn format_expr(&self, expr: &Expr) -> Doc {
         let doc = match &expr.kind {
             ExprKind::Incomplete(_) => Doc::Empty,
-            ExprKind::Handling {
-                effect_name, body, ..
-            } => text(format!("@handle '{} ", effect_name.name_str())) + self.format_block(body),
             ExprKind::CallEffect {
                 effect_name, args, ..
             } => {
@@ -587,6 +584,9 @@ impl<'a> Formatter<'a> {
 
     fn format_stmt(&self, stmt: &Stmt) -> Doc {
         let doc = match &stmt.kind {
+            StmtKind::Handling {
+                effect_name, body, ..
+            } => text(format!("@handle '{} ", effect_name.name_str())) + self.format_block(body),
             StmtKind::Expr(expr) => self.format_expr(expr),
             StmtKind::Continue(expr) => {
                 if let Some(expr) = expr {
@@ -2368,16 +2368,16 @@ mod formatter_tests {
     #[test]
     fn test_block_args_formatting() {
         assert_eq!(
-            format_code("let handler = @handle 'fizz { x in x }", 80),
-            "let handler = @handle 'fizz { x in x }"
+            format_code("@handle 'fizz { x in x }", 80),
+            "@handle 'fizz { x in x }"
         );
 
-        let input = "let handler = @handle 'fizz { x: Int, y: Bool in\nx\n}";
-        let expected = "let handler = @handle 'fizz { x: Int, y: Bool in x }";
+        let input = "@handle 'fizz { x: Int, y: Bool in\nx\n}";
+        let expected = "@handle 'fizz { x: Int, y: Bool in x }";
         assert_eq!(format_code(input, 80), expected);
 
-        let input = "let handler = @handle 'fizz { x in\nx\nx\n}";
-        let expected = "let handler = @handle 'fizz { x in\n\tx\n\tx\n}";
+        let input = "@handle 'fizz { x in\nx\nx\n}";
+        let expected = "@handle 'fizz { x in\n\tx\n\tx\n}";
         assert_eq!(format_code(input, 80), expected);
     }
 

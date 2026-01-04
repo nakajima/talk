@@ -34,7 +34,7 @@ pub mod tests {
             match_arm::MatchArm,
             parameter::Parameter,
             pattern::{Pattern, PatternKind},
-            stmt::StmtKind,
+            stmt::{Stmt, StmtKind},
             type_annotation::{TypeAnnotation, TypeAnnotationKind},
         },
         parsing::parser_tests::tests::parse,
@@ -1465,38 +1465,25 @@ pub mod tests {
     }
 
     #[test]
-    fn resolves_handle_expr() {
+    fn resolves_handle_stmt() {
         let resolved = resolve(
             "
         effect 'fizz(x: Int) -> ()
-        let _ = @handle 'fizz { x in
+        @handle 'fizz { x in
             continue x
         }
         ",
         );
 
-        let Decl {
+        let Stmt {
             kind:
-                DeclKind::Let {
-                    lhs:
-                        Pattern {
-                            kind: PatternKind::Wildcard,
-                            ..
-                        },
-                    type_annotation: None,
-                    rhs:
-                        Some(Expr {
-                            kind:
-                                ExprKind::Handling {
-                                    effect_name: Name::Resolved(Symbol::Effect(..), ..),
-                                    body: Block { args, body, .. },
-                                    ..
-                                },
-                            ..
-                        }),
+                StmtKind::Handling {
+                    effect_name: Name::Resolved(Symbol::Effect(..), ..),
+                    body: Block { args, body, .. },
+                    ..
                 },
             ..
-        } = resolved.0.roots[1].as_decl()
+        } = resolved.0.roots[1].as_stmt()
         else {
             panic!("didn't get decl: {:?}", resolved.0.roots[1])
         };

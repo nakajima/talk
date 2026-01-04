@@ -134,6 +134,7 @@ impl std::fmt::Display for Ty {
                 Symbol::Float => write!(f, "Float"),
                 Symbol::Bool => write!(f, "Bool"),
                 Symbol::Void => write!(f, "Void"),
+                Symbol::Never => write!(f, "Never"),
                 Symbol::RawPtr => write!(f, "RawPtr"),
                 _ => write!(f, "{symbol}"),
             },
@@ -188,6 +189,7 @@ impl Ty {
     pub const Float: Ty = Ty::Primitive(Symbol::Float);
     pub const Bool: Ty = Ty::Primitive(Symbol::Bool);
     pub const Void: Ty = Ty::Primitive(Symbol::Void);
+    pub const Never: Ty = Ty::Primitive(Symbol::Never);
     pub const Byte: Ty = Ty::Primitive(Symbol::Byte);
     pub const RawPtr: Ty = Ty::Primitive(Symbol::RawPtr);
     pub fn String() -> Ty {

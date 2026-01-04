@@ -87,6 +87,7 @@ impl<'a> TypeFormatter<'a> {
                 Symbol::Float => "Float".to_string(),
                 Symbol::Bool => "Bool".to_string(),
                 Symbol::Void => "Void".to_string(),
+                Symbol::Never => "Never".to_string(),
                 Symbol::RawPtr => "RawPtr".to_string(),
                 Symbol::Byte => "Byte".to_string(),
                 _ => symbol.to_string(),

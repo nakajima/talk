@@ -2432,7 +2432,7 @@ pub mod tests {
             effect 'fizz(x: Int) -> Int
 
             // Handles 'fizz for as long as handler is in scope
-            let handler = @handle 'fizz { x in
+            @handle 'fizz { x in
                 x
             }
 
@@ -2457,25 +2457,20 @@ pub mod tests {
         );
 
         assert_eq!(
-            *parsed.roots[1].as_decl(),
-            any_decl!(DeclKind::Let {
-                lhs: any_pattern!(PatternKind::Bind("handler".into())),
-                type_annotation: None,
-                rhs: any_expr!(ExprKind::Handling {
-                    effect_name: Name::Raw("fizz".to_string()),
-                    effect_name_span: Span::ANY,
-                    body: any!(Block, {
-                        args: vec![any!(Parameter, {
-                            name: "x".into(),
-                            name_span: Span::ANY,
-                            type_annotation: None,
-                        })],
-                        body: vec![
-                            any_expr_stmt!(ExprKind::Variable("x".into()))
-                        ]
-                    })
+            *parsed.roots[1].as_stmt(),
+            any_stmt!(StmtKind::Handling {
+                effect_name: Name::Raw("fizz".to_string()),
+                effect_name_span: Span::ANY,
+                body: any!(Block, {
+                    args: vec![any!(Parameter, {
+                        name: "x".into(),
+                        name_span: Span::ANY,
+                        type_annotation: None,
+                    })],
+                    body: vec![
+                        any_expr_stmt!(ExprKind::Variable("x".into()))
+                    ]
                 })
-                .into()
             })
         );
 

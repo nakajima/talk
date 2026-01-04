@@ -436,10 +436,7 @@ impl<'a> Higlighter<'a> {
 
                     result.extend(self.tokens_from_expr(block, ast));
                 }
-            },
-            Node::Expr(expr) => match &expr.kind {
-                ExprKind::Incomplete(..) => (),
-                ExprKind::Handling {
+                StmtKind::Handling {
                     effect_name_span,
                     body,
                     ..
@@ -447,6 +444,9 @@ impl<'a> Higlighter<'a> {
                     result.push(self.make_span(Kind::EFFECT, *effect_name_span));
                     result.extend(self.tokens_from_expr(body, ast));
                 }
+            },
+            Node::Expr(expr) => match &expr.kind {
+                ExprKind::Incomplete(..) => (),
                 ExprKind::CallEffect {
                     effect_name_span,
                     args,

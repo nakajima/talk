@@ -224,6 +224,7 @@ impl<'a> Monomorphizer<'a> {
                 Symbol::Float => IrTy::Float,
                 Symbol::Bool => IrTy::Bool,
                 Symbol::Void => IrTy::Void,
+                Symbol::Never => IrTy::Void,
                 Symbol::RawPtr => IrTy::RawPtr,
                 Symbol::Byte => IrTy::Byte,
                 _ => unreachable!(),

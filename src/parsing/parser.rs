@@ -592,6 +592,7 @@ impl<'a> Parser<'a> {
             TokenKind::If => self.if_stmt(),
             TokenKind::Loop => self.loop_stmt(),
             TokenKind::Return => self.return_stmt(),
+            TokenKind::Attribute(name) if name == "handle" => self.effect_handler(),
             TokenKind::Continue => {
                 let tok = self.push_source_location();
                 self.consume(TokenKind::Continue)?;
@@ -1728,22 +1729,19 @@ impl<'a> Parser<'a> {
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
-    pub(super) fn effect_handler(&mut self, can_assign: bool) -> Result<Node, ParserError> {
+    pub(super) fn effect_handler(&mut self) -> Result<Stmt, ParserError> {
         let tok = self.push_source_location();
         self.advance(); // Eat the @handle
         let (effect_name, effect_name_span) = self.effect_name()?;
         let body = self.block(BlockContext::None, true)?;
-        self.save_meta(tok, |id, span| {
-            Expr {
-                id,
-                span,
-                kind: ExprKind::Handling {
-                    effect_name: effect_name.into(),
-                    effect_name_span,
-                    body,
-                },
-            }
-            .into()
+        self.save_meta(tok, |id, span| Stmt {
+            id,
+            span,
+            kind: StmtKind::Handling {
+                effect_name: effect_name.into(),
+                effect_name_span,
+                body,
+            },
         })
     }
 

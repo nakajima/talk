@@ -313,6 +313,7 @@ impl InferTy {
     pub const Bool: InferTy = InferTy::Primitive(Symbol::Bool);
     pub const RawPtr: InferTy = InferTy::Primitive(Symbol::RawPtr);
     pub const Void: InferTy = InferTy::Primitive(Symbol::Void);
+    pub const Never: InferTy = InferTy::Primitive(Symbol::Never);
     pub const Byte: InferTy = InferTy::Primitive(Symbol::Byte);
     pub fn String() -> InferTy {
         InferTy::Nominal {
@@ -556,6 +557,7 @@ fn format_symbol_name(symbol: Symbol) -> String {
         Symbol::Float => "Float".to_string(),
         Symbol::Bool => "Bool".to_string(),
         Symbol::Void => "Void".to_string(),
+        Symbol::Never => "Never".to_string(),
         Symbol::RawPtr => "RawPtr".to_string(),
         Symbol::Byte => "Byte".to_string(),
         Symbol::String => "String".to_string(),

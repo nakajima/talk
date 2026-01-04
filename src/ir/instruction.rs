@@ -182,6 +182,27 @@ pub enum Instruction<T> {
         args: List<Value>,
         meta: List<InstructionMeta>,
     },
+    #[doc = "$dest = perform $ty $effect $args $meta"]
+    Perform {
+        dest: Register,
+        ty: T,
+        effect: Symbol,
+        args: List<Value>,
+        meta: List<InstructionMeta>,
+    },
+    #[doc = "push_handler $effect $handler $meta"]
+    PushHandler {
+        effect: Symbol,
+        handler: Value,
+        meta: List<InstructionMeta>,
+    },
+    #[doc = "pop_handler $effect $meta"]
+    PopHandler {
+        effect: Symbol,
+        meta: List<InstructionMeta>,
+    },
+    #[doc = "resume $val $meta"]
+    Resume { val: Value, meta: List<InstructionMeta> },
     #[doc = "$dest = nominal $sym $ty $record $meta"]
     Nominal {
         dest: Register,
@@ -426,6 +447,19 @@ impl<T> Instruction<T> {
                 args,
                 meta,
             },
+            Instruction::Perform {
+                dest,
+                ty,
+                effect,
+                args,
+                meta,
+            } => Instruction::Perform {
+                dest,
+                ty: map(ty),
+                effect,
+                args,
+                meta,
+            },
             Instruction::Cmp {
                 dest,
                 lhs,
@@ -441,6 +475,17 @@ impl<T> Instruction<T> {
                 meta,
                 ty: map(ty),
             },
+            Instruction::PushHandler {
+                effect,
+                handler,
+                meta,
+            } => Instruction::PushHandler {
+                effect,
+                handler,
+                meta,
+            },
+            Instruction::PopHandler { effect, meta } => Instruction::PopHandler { effect, meta },
+            Instruction::Resume { val, meta } => Instruction::Resume { val, meta },
             Instruction::_Print { val } => Instruction::_Print { val },
         }
     }

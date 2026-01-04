@@ -1187,7 +1187,7 @@ impl<'a> InferencePass<'a> {
                         }));
                         return Ok(TypedStmt {
                             id: stmt.id,
-                            ty: InferTy::Void,
+                            ty: InferTy::Never,
                             kind: TypedStmtKind::Continue(Some(typed_expr)),
                         });
                     };
@@ -1200,14 +1200,10 @@ impl<'a> InferencePass<'a> {
                         Some(ConstraintCause::Internal),
                     );
 
-                    if let Some(returns) = self.tracked_returns.last_mut() {
-                        returns.insert((stmt.id, typed_expr.ty.clone()));
-                    }
-
                     TypedStmt {
                         id: stmt.id,
-                        ty: typed_expr.ty.clone(),
-                        kind: TypedStmtKind::Return(Some(typed_expr)),
+                        ty: InferTy::Never,
+                        kind: TypedStmtKind::Continue(Some(typed_expr)),
                     }
                 } else {
                     TypedStmt {
@@ -1244,6 +1240,15 @@ impl<'a> InferencePass<'a> {
                     kind: TypedStmtKind::Loop(cond_ty, block),
                 }
             }
+            StmtKind::Handling {
+                effect_name, body, ..
+            } => {
+                let Ok(handler_symbol) = &effect_name.symbol() else {
+                    return Err(TypeError::NameNotResolved(effect_name.clone()));
+                };
+
+                self.visit_handler_stmt(stmt, effect_name, body, handler_symbol, context)?
+            }
         };
 
         Ok(ty)
@@ -1271,19 +1276,6 @@ impl<'a> InferencePass<'a> {
                     ty: InferTy::Void,
                     kind: TypedExprKind::Hole,
                 }
-            }
-            ExprKind::Handling {
-                effect_name, body, ..
-            } => {
-                self.diagnostics.insert(AnyDiagnostic::Typing(Diagnostic {
-                    id: expr.id,
-                    severity: Severity::Error,
-                    kind: TypeError::HandlerMustBeBound,
-                }));
-
-                let handler_sym =
-                    Symbol::Synthesized(self.session.symbols.next_synthesized(ModuleId::Current));
-                self.visit_handler_expr(expr, effect_name, body, handler_sym, context)?
             }
             ExprKind::CallEffect {
                 effect_name, args, ..
@@ -1386,24 +1378,19 @@ impl<'a> InferencePass<'a> {
         Ok(expr)
     }
 
-    fn visit_handler_expr(
+    fn visit_handler_stmt(
         &mut self,
-        expr: &Expr,
+        expr: &Stmt,
         effect_name: &Name,
         body: &Block,
-        handler_symbol: Symbol,
+        handler_symbol: &Symbol,
         context: &mut impl Solve,
-    ) -> TypedRet<TypedExpr<InferTy>> {
+    ) -> TypedRet<TypedStmt<InferTy>> {
         let effect_symbol = effect_name
             .symbol()
             .map_err(|_| TypeError::NameNotResolved(effect_name.clone()))?;
-        let Some(effect) = self
-            .session
-            .type_catalog
-            .effects
-            .get(&effect_symbol)
-            .cloned()
-        else {
+
+        let Some(effect) = self.session.lookup_effect(handler_symbol) else {
             return Err(TypeError::EffectNotFound(effect_name.name_str()));
         };
 
@@ -1431,7 +1418,7 @@ impl<'a> InferencePass<'a> {
         );
 
         self.session.insert(
-            handler_symbol,
+            *handler_symbol,
             curry(
                 typed_params.iter().map(|p| p.ty.clone()),
                 typed_body.ret.clone(),
@@ -1440,13 +1427,13 @@ impl<'a> InferencePass<'a> {
             &mut Default::default(),
         );
 
-        Ok(TypedExpr {
+        Ok(TypedStmt {
             id: expr.id,
             ty: effect.clone(),
-            kind: TypedExprKind::Handler {
+            kind: TypedStmtKind::Handler {
                 effect: effect_symbol,
                 func: TypedFunc {
-                    name: handler_symbol,
+                    name: *handler_symbol,
                     foralls: Default::default(),
                     params: typed_params,
                     effects: Default::default(),
@@ -3442,26 +3429,7 @@ impl<'a> InferencePass<'a> {
         context: &mut impl Solve,
     ) -> TypedRet<TypedDecl<InferTy>> {
         let typed_rhs = if let Some(rhs) = rhs {
-            if let ExprKind::Handling {
-                effect_name, body, ..
-            } = &rhs.kind
-            {
-                let handler_symbol = match &lhs.kind {
-                    PatternKind::Bind(Name::Resolved(sym, _)) => Some(*sym),
-                    _ => None,
-                }
-                .unwrap_or_else(|| {
-                    self.diagnostics.insert(AnyDiagnostic::Typing(Diagnostic {
-                        id: rhs.id,
-                        severity: Severity::Error,
-                        kind: TypeError::HandlerMustBeBound,
-                    }));
-                    Symbol::Synthesized(self.session.symbols.next_synthesized(ModuleId::Current))
-                });
-                Some(self.visit_handler_expr(rhs, effect_name, body, handler_symbol, context)?)
-            } else {
-                Some(self.visit_expr(rhs, context)?)
-            }
+            Some(self.visit_expr(rhs, context)?)
         } else {
             None
         };
@@ -3512,13 +3480,13 @@ impl<'a> InferencePass<'a> {
                 return Err(TypeError::NameNotResolved(effect.clone()));
             };
 
-            let Some(effect) = self.session.lookup(&symbol) else {
+            let Some(effect) = self.session.lookup_effect(&symbol) else {
                 return Err(TypeError::EffectNotFound(effect.name_str()));
             };
 
             effects.push(TypedEffect {
                 name: symbol,
-                ty: effect._as_ty(),
+                ty: effect,
             });
         }
 

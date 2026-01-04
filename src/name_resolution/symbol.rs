@@ -176,6 +176,7 @@ impl std::fmt::Debug for Symbol {
             Symbol::Float => write!(f, "Float"),
             Symbol::Bool => write!(f, "Bool"),
             Symbol::Void => write!(f, "Void"),
+            Symbol::Never => write!(f, "Never"),
             Symbol::RawPtr => write!(f, "RawPtr"),
             Symbol::Byte => write!(f, "Byte"),
             Symbol::Struct(type_id) => write!(f, "@Struct({type_id:?}){name}"),
@@ -218,6 +219,10 @@ impl Symbol {
     pub const Void: Symbol = Symbol::Builtin(BuiltinId {
         module_id: ModuleId::Core,
         local_id: 4,
+    });
+    pub const Never: Symbol = Symbol::Builtin(BuiltinId {
+        module_id: ModuleId::Core,
+        local_id: 9,
     });
     pub const IR: Symbol = Symbol::Builtin(BuiltinId {
         module_id: ModuleId::Core,
@@ -800,6 +805,7 @@ mod tests {
             Symbol::Float,
             Symbol::Bool,
             Symbol::Void,
+            Symbol::Never,
             Symbol::IR,
             Symbol::PRINT,
             Symbol::RawPtr,

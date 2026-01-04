@@ -231,6 +231,7 @@ pub enum FlowContext {
     Loop {
         top_block_id: BasicBlockId,
         join_block_id: BasicBlockId,
+        handler_depth: usize,
     },
 }
 
@@ -269,6 +270,7 @@ pub struct Lowerer<'a> {
     record_labels: FxHashMap<RecordId, Vec<String>>,
     next_record_id: u32,
     flow_context_stack: Vec<FlowContext>,
+    handler_stack: Vec<Symbol>,
 }
 
 #[allow(clippy::panic)]
@@ -295,6 +297,7 @@ impl<'a> Lowerer<'a> {
             next_record_id: 0,
             record_labels: Default::default(),
             flow_context_stack: Default::default(),
+            handler_stack: Default::default(),
         }
     }
 
@@ -624,32 +627,62 @@ impl<'a> Lowerer<'a> {
             TypedStmtKind::Expr(typed_expr) => self.lower_expr(typed_expr, bind, instantiations),
             TypedStmtKind::Assignment(lhs, rhs) => self.lower_assignment(lhs, rhs, instantiations),
             TypedStmtKind::Return(typed_expr) => {
-                self.lower_return(typed_expr, bind, instantiations)
+                self.lower_return(stmt.id, typed_expr, bind, instantiations)
             }
-            TypedStmtKind::Continue(..) => self.lower_continue(),
+            TypedStmtKind::Continue(Some(expr)) => self.lower_resume(stmt.id, expr, instantiations),
+            TypedStmtKind::Continue(None) => self.lower_continue(stmt.id),
             TypedStmtKind::Loop(cond, typed_block) => {
                 self.lower_loop(&Some(cond.clone()), typed_block, instantiations)
             }
-            TypedStmtKind::Break => self.lower_break(),
+            TypedStmtKind::Break => self.lower_break(stmt.id),
+            TypedStmtKind::Handler { func, .. } => {
+                self.lower_effect_handler(stmt.id, func, bind, instantiations)
+            }
         }
     }
 
-    fn lower_continue(&mut self) -> Result<(Value, Ty), IRError> {
-        let Some(FlowContext::Loop { top_block_id, .. }) = self.flow_context_stack.last() else {
-            return Err(IRError::NoFlowContext);
+    fn lower_continue(&mut self, source_id: NodeID) -> Result<(Value, Ty), IRError> {
+        let (top_block_id, handler_depth) = match self.flow_context_stack.last() {
+            Some(FlowContext::Loop {
+                top_block_id,
+                handler_depth,
+                ..
+            }) => (*top_block_id, *handler_depth),
+            None => return Err(IRError::NoFlowContext),
         };
 
-        self.push_terminator(Terminator::Jump { to: *top_block_id });
+        self.pop_handlers_to(handler_depth, source_id);
+        self.push_terminator(Terminator::Jump { to: top_block_id });
         Ok((Value::Void, Ty::Void))
     }
 
-    fn lower_break(&mut self) -> Result<(Value, Ty), IRError> {
-        let Some(FlowContext::Loop { join_block_id, .. }) = self.flow_context_stack.last() else {
-            return Err(IRError::NoFlowContext);
+    fn lower_break(&mut self, source_id: NodeID) -> Result<(Value, Ty), IRError> {
+        let (join_block_id, handler_depth) = match self.flow_context_stack.last() {
+            Some(FlowContext::Loop {
+                join_block_id,
+                handler_depth,
+                ..
+            }) => (*join_block_id, *handler_depth),
+            None => return Err(IRError::NoFlowContext),
         };
 
-        self.push_terminator(Terminator::Jump { to: *join_block_id });
+        self.pop_handlers_to(handler_depth, source_id);
+        self.push_terminator(Terminator::Jump { to: join_block_id });
         Ok((Value::Void, Ty::Void))
+    }
+
+    fn lower_resume(
+        &mut self,
+        source_id: NodeID,
+        expr: &TypedExpr<Ty>,
+        instantiations: &Substitutions,
+    ) -> Result<(Value, Ty), IRError> {
+        let (val, _ty) = self.lower_expr(expr, Bind::Fresh, instantiations)?;
+        self.push_instr(Instruction::Resume {
+            val,
+            meta: vec![InstructionMeta::Source(source_id)].into(),
+        });
+        Ok((Value::Void, Ty::Never))
     }
 
     fn lower_loop(
@@ -665,6 +698,7 @@ impl<'a> Lowerer<'a> {
         self.flow_context_stack.push(FlowContext::Loop {
             top_block_id,
             join_block_id,
+            handler_depth: self.handler_stack.len(),
         });
 
         self.in_basic_block(top_block_id, |lowerer| {
@@ -698,6 +732,7 @@ impl<'a> Lowerer<'a> {
 
     fn lower_return(
         &mut self,
+        source_id: NodeID,
         expr: &Option<TypedExpr<Ty>>,
         bind: Bind,
         instantiations: &Substitutions,
@@ -708,6 +743,7 @@ impl<'a> Lowerer<'a> {
             (Value::Void, Ty::Void)
         };
 
+        self.pop_handlers_to(0, source_id);
         self.push_terminator(Terminator::Ret {
             val: val.clone(),
             ty: ty.clone(),
@@ -778,6 +814,8 @@ impl<'a> Lowerer<'a> {
         bind: Bind,
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
+        let handler_depth = self.handler_stack.len();
+
         for (i, node) in block.body.iter().enumerate() {
             // We want to skip the last one in the loop so we can handle it outside the loop and use our Bind
             if i < block.body.len() - 1 {
@@ -790,6 +828,10 @@ impl<'a> Lowerer<'a> {
         } else {
             (Value::Void, Ty::Void)
         };
+
+        if !self.current_block_has_terminator() {
+            self.pop_handlers_to(handler_depth, block.id);
+        }
 
         Ok((val, ty))
     }
@@ -1016,9 +1058,6 @@ impl<'a> Lowerer<'a> {
     ) -> Result<(Value, Ty), IRError> {
         let (value, ty) = match &expr.kind {
             TypedExprKind::Hole => Err(IRError::TypeNotFound("nope".into())),
-            TypedExprKind::Handler { func, .. } => {
-                self.lower_effect_handler(func, bind, instantiations)
-            }
             TypedExprKind::CallEffect { effect, args } => {
                 self.lower_effect_call(expr, effect, args, bind, instantiations)
             }
@@ -1155,11 +1194,14 @@ impl<'a> Lowerer<'a> {
 
     fn lower_effect_handler(
         &mut self,
+        id: NodeID,
         func: &TypedFunc<Ty>,
         bind: Bind,
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
-        self.lower_func(func, bind, instantiations)
+        let (val, _) = self.lower_func(func, bind, instantiations)?;
+        self.push_handler(func.name, val, id);
+        Ok((Value::Void, Ty::Void))
     }
 
     fn lower_effect_call(
@@ -1170,17 +1212,6 @@ impl<'a> Lowerer<'a> {
         bind: Bind,
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
-        let handler_sym = self
-            .resolved_names
-            .effect_handlers
-            .get(&expr.id)
-            .copied()
-            .ok_or_else(|| {
-                IRError::TypeNotFound(format!(
-                    "No handler bound for effect {effect:?}"
-                ))
-            })?;
-
         let mut arg_vals = Vec::with_capacity(args.len());
         for arg in args {
             let (val, _) = self.lower_expr(arg, Bind::Fresh, instantiations)?;
@@ -1188,21 +1219,10 @@ impl<'a> Lowerer<'a> {
         }
 
         let dest = self.ret(bind);
-        let has_binding = self
-            .current_function_stack
-            .last()
-            .is_some_and(|func| func.bindings.contains_key(&handler_sym));
-
-        let callee = if has_binding {
-            Value::Reg(self.get_binding(&handler_sym).0)
-        } else {
-            Value::Func(handler_sym)
-        };
-
-        self.push_instr(Instruction::Call {
+        self.push_instr(Instruction::Perform {
             dest,
             ty: expr.ty.clone(),
-            callee,
+            effect: *effect,
             args: arg_vals.into(),
             meta: vec![InstructionMeta::Source(expr.id)].into(),
         });
@@ -2828,6 +2848,7 @@ impl<'a> Lowerer<'a> {
         bind: Bind,
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
+        let saved_handlers = std::mem::take(&mut self.handler_stack);
         let ty = self.ty_from_symbol(&func.name)?;
 
         let (mut param_tys, mut ret_ty) = uncurry_function(ty);
@@ -2843,7 +2864,10 @@ impl<'a> Lowerer<'a> {
                     .ty_from_symbol(&capture.symbol)
                     .expect("didn't get capture ty")
                     .clone();
-                let is_handler = self.resolved_names.handler_symbols.contains(&capture.symbol);
+                let is_handler = self
+                    .resolved_names
+                    .handler_symbols
+                    .contains(&capture.symbol);
                 // Global functions are resolved by symbol; don't treat them as captured env fields.
                 if matches!(capture.symbol, Symbol::Global(_))
                     && matches!(ty, Ty::Func(..))
@@ -2937,6 +2961,9 @@ impl<'a> Lowerer<'a> {
         if ret == Value::Poison {
             self.push_terminator(Terminator::Unreachable);
         } else {
+            if !self.current_block_has_terminator() {
+                self.pop_handlers_to(0, func.body.id);
+            }
             self.push_terminator(Terminator::Ret {
                 val: ret,
                 ty: ret_ty.clone(),
@@ -2970,6 +2997,8 @@ impl<'a> Lowerer<'a> {
         } else {
             Value::Func(func_sym)
         };
+
+        self.handler_stack = saved_handlers;
 
         if bind != Bind::Discard {
             let dest = self.ret(bind);
@@ -3087,6 +3116,37 @@ impl<'a> Lowerer<'a> {
             return;
         }
         block.terminator = terminator;
+    }
+
+    fn current_block_has_terminator(&self) -> bool {
+        let current_function = self
+            .current_function_stack
+            .last()
+            .expect("didn't get current function");
+        let current_block_idx = current_function
+            .current_block_idx
+            .last()
+            .expect("didn't get current block idx");
+        current_function.blocks[*current_block_idx].terminator != Terminator::Unreachable
+    }
+
+    fn push_handler(&mut self, effect: Symbol, handler: Value, source_id: NodeID) {
+        self.push_instr(Instruction::PushHandler {
+            effect,
+            handler,
+            meta: vec![InstructionMeta::Source(source_id)].into(),
+        });
+        self.handler_stack.push(effect);
+    }
+
+    fn pop_handlers_to(&mut self, depth: usize, source_id: NodeID) {
+        while self.handler_stack.len() > depth {
+            let effect = self.handler_stack.pop().expect("handler stack underflow");
+            self.push_instr(Instruction::PopHandler {
+                effect,
+                meta: vec![InstructionMeta::Source(source_id)].into(),
+            });
+        }
     }
 
     fn insert_binding(&mut self, symbol: Symbol, binding: Binding<Ty>) {

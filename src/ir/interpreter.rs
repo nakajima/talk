@@ -115,6 +115,7 @@ impl BasicBlock<IrTy> {
 
 #[derive(Debug)]
 pub struct Frame {
+    func: Symbol,
     dest: Register,
     ret: Option<Symbol>,
     registers: Vec<Value>,
@@ -125,8 +126,9 @@ pub struct Frame {
 }
 
 impl Frame {
-    pub fn new(span: EnteredSpan, dest: Register, ret: Option<Symbol>) -> Self {
+    pub fn new(span: EnteredSpan, func: Symbol, dest: Register, ret: Option<Symbol>) -> Self {
         Self {
+            func,
             _span: span,
             ret,
             dest,
@@ -136,6 +138,38 @@ impl Frame {
             prev_block: None,
         }
     }
+}
+
+impl Clone for Frame {
+    fn clone(&self) -> Self {
+        let span = tracing::trace_span!("call", func = format!("{:?}", self.func)).entered();
+        Self {
+            func: self.func,
+            dest: self.dest,
+            ret: self.ret,
+            registers: self.registers.clone(),
+            pc: self.pc,
+            current_block: self.current_block,
+            prev_block: self.prev_block,
+            _span: span,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct HandlerEntry {
+    effect: Symbol,
+    handler: Value,
+    frame_depth: usize,
+}
+
+#[derive(Debug, Clone)]
+struct Continuation {
+    frames: Vec<Frame>,
+    current_func: Function<IrTy>,
+    handler_stack: Vec<HandlerEntry>,
+    perform_dest: Register,
+    handler_frame_depth: usize,
 }
 
 enum IR {
@@ -167,6 +201,8 @@ pub struct Interpreter<IO: super::io::IO> {
     main_result: Option<Value>,
     memory: Memory,
     heap_start: usize,
+    handler_stack: Vec<HandlerEntry>,
+    continuations: Vec<Continuation>,
     pub io: IO,
 }
 
@@ -185,6 +221,8 @@ impl<IO: super::io::IO> Interpreter<IO> {
             memory: Default::default(),
             heap_start,
             symbol_names,
+            handler_stack: Default::default(),
+            continuations: Default::default(),
             io,
         }
     }
@@ -249,7 +287,7 @@ impl<IO: super::io::IO> Interpreter<IO> {
             .as_ref()
             .map(|names| set_symbol_names(names.clone()));
         let span = tracing::trace_span!("call", func = format!("{function}")).entered();
-        let mut frame = Frame::new(span, dest, caller_name);
+        let mut frame = Frame::new(span, function, dest, caller_name);
         frame.registers.resize(func.register_count, Value::Uninit);
         for (param, arg) in func.params.items.iter().zip(args.into_iter()) {
             match param {
@@ -297,6 +335,13 @@ impl<IO: super::io::IO> Interpreter<IO> {
                 if let Some(ret) = frame.ret {
                     let ret_func = self.program.functions.shift_remove(&ret).unwrap();
                     self.current_func = Some(ret_func);
+                }
+
+                if let Some(pending) = self.continuations.last() {
+                    let depth = self.frames.len().saturating_sub(1);
+                    if depth == pending.handler_frame_depth {
+                        self.continuations.pop();
+                    }
                 }
             }
             IR::Term(Terminator::Unreachable) => panic!("Reached unreachable"),
@@ -348,6 +393,123 @@ impl<IO: super::io::IO> Interpreter<IO> {
                 }
 
                 self.call(func, arg_vals, dest);
+            }
+            IR::Instr(Instruction::Perform {
+                dest, effect, args, ..
+            }) => {
+                let arg_vals: Vec<Value> = args.items.iter().map(|v| self.val(v.clone())).collect();
+
+                let Some(handler_idx) = self
+                    .handler_stack
+                    .iter()
+                    .rposition(|entry| entry.effect == effect)
+                else {
+                    let _guard = self
+                        .symbol_names
+                        .as_ref()
+                        .map(|names| set_symbol_names(names.clone()));
+                    panic!("Unhandled effect: {effect:?}");
+                };
+
+                let handler_entry = self.handler_stack[handler_idx].clone();
+                let handler_frame_depth = handler_entry.frame_depth;
+
+                if handler_frame_depth >= self.frames.len() {
+                    panic!("handler frame depth out of range");
+                }
+
+                let handler_return_dest = if handler_frame_depth + 1 < self.frames.len() {
+                    self.frames[handler_frame_depth + 1].dest
+                } else {
+                    dest
+                };
+
+                let current_func = self
+                    .current_func
+                    .clone()
+                    .expect("no current function to capture");
+                self.continuations.push(Continuation {
+                    frames: self.frames.clone(),
+                    current_func,
+                    handler_stack: self.handler_stack.clone(),
+                    perform_dest: dest,
+                    handler_frame_depth,
+                });
+
+                if let Some(func) = self.current_func.take() {
+                    self.program.functions.insert(func.name, func);
+                }
+
+                self.frames.truncate(handler_frame_depth + 1);
+                self.handler_stack.truncate(handler_idx + 1);
+
+                let handler_frame_func = self.frames.last().unwrap().func;
+                let handler_func = self
+                    .program
+                    .functions
+                    .shift_remove(&handler_frame_func)
+                    .unwrap_or_else(|| {
+                        panic!("did not find function for handler frame {handler_frame_func:?}")
+                    });
+                self.current_func = Some(handler_func);
+
+                let handler_val = self.val_at(handler_entry.handler, handler_frame_depth);
+                let (func, env) = self.func(handler_val);
+                let mut handler_args = arg_vals;
+                if !env.items.is_empty() {
+                    let env_vals: Vec<Value> =
+                        env.items.iter().map(|v| self.val(v.clone())).collect();
+                    handler_args.insert(0, Value::Record(RecordId::Anon, env_vals));
+                }
+
+                self.call(func, handler_args, handler_return_dest);
+            }
+            IR::Instr(Instruction::PushHandler {
+                effect, handler, ..
+            }) => {
+                let frame_depth = self.frames.len().saturating_sub(1);
+                self.handler_stack.push(HandlerEntry {
+                    effect,
+                    handler,
+                    frame_depth,
+                });
+            }
+            IR::Instr(Instruction::PopHandler { effect, .. }) => {
+                let Some(entry) = self.handler_stack.pop() else {
+                    panic!("pop handler with empty stack");
+                };
+                if entry.effect != effect {
+                    panic!(
+                        "handler stack mismatch: expected {effect:?}, got {:?}",
+                        entry.effect
+                    );
+                }
+            }
+            IR::Instr(Instruction::Resume { val, .. }) => {
+                let val = self.val(val);
+                let Some(cont) = self.continuations.pop() else {
+                    panic!("resume without continuation");
+                };
+
+                if let Some(func) = self.current_func.take() {
+                    self.program.functions.insert(func.name, func);
+                }
+
+                let perform_dest = cont.perform_dest;
+                let handler_stack = cont.handler_stack;
+                let resumed_name = cont.current_func.name;
+
+                self.frames = cont.frames;
+                self.handler_stack = handler_stack;
+
+                let resumed_func = self
+                    .program
+                    .functions
+                    .shift_remove(&resumed_name)
+                    .unwrap_or(cont.current_func);
+                self.current_func = Some(resumed_func);
+
+                self.write_register(&perform_dest, val);
             }
             IR::Instr(Instruction::Nominal {
                 dest,
@@ -914,6 +1076,8 @@ impl<IO: super::io::IO> Interpreter<IO> {
             Value::Reg(reg) => match self.read_register(&Register(reg)) {
                 Value::Func(symbol) => (symbol, Default::default()),
                 Value::Closure { func, env } => (func, env),
+                Value::Ref(Reference::Func(sym)) => (sym, Default::default()),
+                Value::Ref(Reference::Closure(sym, env)) => (sym, env),
                 _ => panic!(
                     "didn't get func symbol from {val:?}: {:?}",
                     self.read_register(&Register(reg))
@@ -940,6 +1104,29 @@ impl<IO: super::io::IO> Interpreter<IO> {
                 }
             }
             super::value::Value::Poison => panic!("unreachable reached"),
+            _ => val,
+        }
+    }
+
+    fn val_at(&self, val: Value, frame_index: usize) -> Value {
+        match val {
+            Value::Reg(reg) => self
+                .frames
+                .get(frame_index)
+                .and_then(|frame| frame.registers.get(reg as usize))
+                .cloned()
+                .unwrap_or(Value::Uninit),
+            Value::Closure { func, env } => {
+                let resolved_env: Vec<Value> = env
+                    .items
+                    .iter()
+                    .map(|v| self.val_at(v.clone(), frame_index))
+                    .collect();
+                Value::Closure {
+                    func,
+                    env: resolved_env.into(),
+                }
+            }
             _ => val,
         }
     }
@@ -1474,11 +1661,11 @@ Dog().handleDSTChange()
 
     #[test]
     fn interprets_effect_call() {
-        let (val, interpreter) = interpret_with(
+        let (_val, interpreter) = interpret_with(
             "
             effect 'fizz(x: Int) -> Int
 
-            let handler = @handle 'fizz { x in
+            @handle 'fizz { x in
                 continue x
             }
 
@@ -1489,6 +1676,36 @@ Dog().handleDSTChange()
             print(fizzes(123))",
         );
 
-        assert_eq!(interpreter.display(val, false), "123");
+        assert_eq!(interpreter.io.stdout, "123\n".as_bytes());
+    }
+
+    #[test]
+    fn interprets_throw_with_effect_handler() {
+        let (val, interpreter) = interpret_with(
+            "
+          effect 'throw(msg: String) -> Never
+
+          @handle 'throw { msg in
+              print(\"caught: \" + msg)
+              99
+          }
+
+          func boom(x) '[throw] {
+              if x == 0 {
+                  'throw(\"boom\")
+              }
+              print(\"after\") // should not run
+              x + 1
+          }
+
+          boom(0)
+          ",
+        );
+
+        assert_eq!(val, Value::Int(99));
+        assert_eq!(
+            String::from_utf8(interpreter.io.stdout).unwrap(),
+            "caught: boom\n"
+        );
     }
 }
