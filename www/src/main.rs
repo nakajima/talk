@@ -94,8 +94,8 @@ fn highlight(code: &str) -> String {
     output.trim_end_matches(&['\n', '\r'][..]).to_string()
 }
 
-fn format(code: &str) -> String {
-    let mut child = std::process::Command::new("/home/nakajima/apps/talk/target/release/talk")
+fn _format(code: &str) -> String {
+    let mut child = std::process::Command::new("../target/debug/talk")
         .arg("format")
         .arg("-")
         .stdin(Stdio::piped())
