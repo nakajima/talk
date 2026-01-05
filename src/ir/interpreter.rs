@@ -156,22 +156,6 @@ impl Clone for Frame {
     }
 }
 
-#[derive(Debug, Clone)]
-struct HandlerEntry {
-    effect: Symbol,
-    handler: Value,
-    frame_depth: usize,
-}
-
-#[derive(Debug, Clone)]
-struct Continuation {
-    frames: Vec<Frame>,
-    current_func: Function<IrTy>,
-    handler_stack: Vec<HandlerEntry>,
-    perform_dest: Register,
-    handler_frame_depth: usize,
-}
-
 enum IR {
     Phi(Phi<IrTy>),
     Instr(Instruction<IrTy>),
@@ -201,8 +185,6 @@ pub struct Interpreter<IO: super::io::IO> {
     main_result: Option<Value>,
     memory: Memory,
     heap_start: usize,
-    handler_stack: Vec<HandlerEntry>,
-    continuations: Vec<Continuation>,
     pub io: IO,
 }
 
@@ -221,8 +203,6 @@ impl<IO: super::io::IO> Interpreter<IO> {
             memory: Default::default(),
             heap_start,
             symbol_names,
-            handler_stack: Default::default(),
-            continuations: Default::default(),
             io,
         }
     }
@@ -336,13 +316,6 @@ impl<IO: super::io::IO> Interpreter<IO> {
                     let ret_func = self.program.functions.shift_remove(&ret).unwrap();
                     self.current_func = Some(ret_func);
                 }
-
-                if let Some(pending) = self.continuations.last() {
-                    let depth = self.frames.len().saturating_sub(1);
-                    if depth == pending.handler_frame_depth {
-                        self.continuations.pop();
-                    }
-                }
             }
             IR::Term(Terminator::Unreachable) => panic!("Reached unreachable"),
             IR::Term(Terminator::Branch { cond, conseq, alt }) => {
@@ -393,123 +366,6 @@ impl<IO: super::io::IO> Interpreter<IO> {
                 }
 
                 self.call(func, arg_vals, dest);
-            }
-            IR::Instr(Instruction::Perform {
-                dest, effect, args, ..
-            }) => {
-                let arg_vals: Vec<Value> = args.items.iter().map(|v| self.val(v.clone())).collect();
-
-                let Some(handler_idx) = self
-                    .handler_stack
-                    .iter()
-                    .rposition(|entry| entry.effect == effect)
-                else {
-                    let _guard = self
-                        .symbol_names
-                        .as_ref()
-                        .map(|names| set_symbol_names(names.clone()));
-                    panic!("Unhandled effect: {effect:?}");
-                };
-
-                let handler_entry = self.handler_stack[handler_idx].clone();
-                let handler_frame_depth = handler_entry.frame_depth;
-
-                if handler_frame_depth >= self.frames.len() {
-                    panic!("handler frame depth out of range");
-                }
-
-                let handler_return_dest = if handler_frame_depth + 1 < self.frames.len() {
-                    self.frames[handler_frame_depth + 1].dest
-                } else {
-                    dest
-                };
-
-                let current_func = self
-                    .current_func
-                    .clone()
-                    .expect("no current function to capture");
-                self.continuations.push(Continuation {
-                    frames: self.frames.clone(),
-                    current_func,
-                    handler_stack: self.handler_stack.clone(),
-                    perform_dest: dest,
-                    handler_frame_depth,
-                });
-
-                if let Some(func) = self.current_func.take() {
-                    self.program.functions.insert(func.name, func);
-                }
-
-                self.frames.truncate(handler_frame_depth + 1);
-                self.handler_stack.truncate(handler_idx + 1);
-
-                let handler_frame_func = self.frames.last().unwrap().func;
-                let handler_func = self
-                    .program
-                    .functions
-                    .shift_remove(&handler_frame_func)
-                    .unwrap_or_else(|| {
-                        panic!("did not find function for handler frame {handler_frame_func:?}")
-                    });
-                self.current_func = Some(handler_func);
-
-                let handler_val = self.val_at(handler_entry.handler, handler_frame_depth);
-                let (func, env) = self.func(handler_val);
-                let mut handler_args = arg_vals;
-                if !env.items.is_empty() {
-                    let env_vals: Vec<Value> =
-                        env.items.iter().map(|v| self.val(v.clone())).collect();
-                    handler_args.insert(0, Value::Record(RecordId::Anon, env_vals));
-                }
-
-                self.call(func, handler_args, handler_return_dest);
-            }
-            IR::Instr(Instruction::PushHandler {
-                effect, handler, ..
-            }) => {
-                let frame_depth = self.frames.len().saturating_sub(1);
-                self.handler_stack.push(HandlerEntry {
-                    effect,
-                    handler,
-                    frame_depth,
-                });
-            }
-            IR::Instr(Instruction::PopHandler { effect, .. }) => {
-                let Some(entry) = self.handler_stack.pop() else {
-                    panic!("pop handler with empty stack");
-                };
-                if entry.effect != effect {
-                    panic!(
-                        "handler stack mismatch: expected {effect:?}, got {:?}",
-                        entry.effect
-                    );
-                }
-            }
-            IR::Instr(Instruction::Resume { val, .. }) => {
-                let val = self.val(val);
-                let Some(cont) = self.continuations.pop() else {
-                    panic!("resume without continuation");
-                };
-
-                if let Some(func) = self.current_func.take() {
-                    self.program.functions.insert(func.name, func);
-                }
-
-                let perform_dest = cont.perform_dest;
-                let handler_stack = cont.handler_stack;
-                let resumed_name = cont.current_func.name;
-
-                self.frames = cont.frames;
-                self.handler_stack = handler_stack;
-
-                let resumed_func = self
-                    .program
-                    .functions
-                    .shift_remove(&resumed_name)
-                    .unwrap_or(cont.current_func);
-                self.current_func = Some(resumed_func);
-
-                self.write_register(&perform_dest, val);
             }
             IR::Instr(Instruction::Nominal {
                 dest,
@@ -1104,29 +960,6 @@ impl<IO: super::io::IO> Interpreter<IO> {
                 }
             }
             super::value::Value::Poison => panic!("unreachable reached"),
-            _ => val,
-        }
-    }
-
-    fn val_at(&self, val: Value, frame_index: usize) -> Value {
-        match val {
-            Value::Reg(reg) => self
-                .frames
-                .get(frame_index)
-                .and_then(|frame| frame.registers.get(reg as usize))
-                .cloned()
-                .unwrap_or(Value::Uninit),
-            Value::Closure { func, env } => {
-                let resolved_env: Vec<Value> = env
-                    .items
-                    .iter()
-                    .map(|v| self.val_at(v.clone(), frame_index))
-                    .collect();
-                Value::Closure {
-                    func,
-                    env: resolved_env.into(),
-                }
-            }
             _ => val,
         }
     }

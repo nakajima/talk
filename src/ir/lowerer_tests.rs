@@ -25,7 +25,8 @@ pub mod tests {
         },
         label::Label,
         name_resolution::symbol::{
-            EnumId, GlobalId, InstanceMethodId, StructId, Symbol, SynthesizedId, set_symbol_names,
+            EffectId, EnumId, GlobalId, InstanceMethodId, StructId, Symbol, SynthesizedId,
+            set_symbol_names,
         },
         node_id::NodeID,
     };
@@ -1550,5 +1551,77 @@ pub mod tests {
 
         println!("{:#?}", module.program);
         println!("{}", module.program);
+    }
+
+    #[test]
+    fn lowers_simple_effect() {
+        let module = lower_bare(
+            "
+        effect 'fizz(x: Int) -> Int
+
+        @handle 'fizz { x in
+            continue x
+        }
+
+        func fizzes() {
+            let a = 1
+            let b = 'fizz(2)
+            (a, b)
+        }
+        ",
+        );
+
+        println!("{}", module.program);
+
+        assert_eq!(
+            *module
+                .program
+                .functions
+                .get(&Symbol::Global(GlobalId::from(1)))
+                .unwrap(),
+            Function::<IrTy> {
+                name: GlobalId::from(1).into(),
+                params: vec![].into(),
+                blocks: vec![BasicBlock {
+                    id: BasicBlockId(0),
+                    phis: Default::default(),
+                    instructions: vec![
+                        Instruction::Constant {
+                            dest: 0.into(),
+                            ty: IrTy::Int,
+                            val: Value::Int(1),
+                            meta: meta()
+                        },
+                        Instruction::Constant {
+                            dest: 2.into(),
+                            ty: IrTy::Int,
+                            val: Value::Int(2),
+                            meta: meta()
+                        },
+                        Instruction::Ref {
+                            dest: 3.into(),
+                            ty: IrTy::Record(None, vec![IrTy::Int, IrTy::Int]),
+                            val: Value::Closure {
+                                func: Symbol::Synthesized(SynthesizedId::from(2)),
+                                env: vec![Value::Reg(0), Value::Reg(1)].into()
+                            },
+                        },
+                        Instruction::Call {
+                            dest: 1.into(),
+                            ty: IrTy::Func(vec![IrTy::Int], IrTy::Void.into()),
+                            callee: Value::Func(Symbol::Effect(EffectId::from(1))),
+                            args: vec![Value::Reg(3), Value::Reg(2)].into(),
+                            meta: meta()
+                        }
+                    ],
+                    terminator: Terminator::Ret {
+                        val: Value::Reg(1),
+                        ty: IrTy::Record(None, vec![IrTy::Int, IrTy::Int])
+                    }
+                }],
+                ty: IrTy::Func(vec![], IrTy::Record(None, vec![IrTy::Int, IrTy::Int]).into()),
+                register_count: 4
+            }
+        );
     }
 }

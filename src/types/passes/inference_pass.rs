@@ -1243,11 +1243,7 @@ impl<'a> InferencePass<'a> {
             StmtKind::Handling {
                 effect_name, body, ..
             } => {
-                let Ok(handler_symbol) = &effect_name.symbol() else {
-                    return Err(TypeError::NameNotResolved(effect_name.clone()));
-                };
-
-                self.visit_handler_stmt(stmt, effect_name, body, handler_symbol, context)?
+                self.visit_handler_stmt(stmt, effect_name, body, context)?
             }
         };
 
@@ -1383,14 +1379,13 @@ impl<'a> InferencePass<'a> {
         expr: &Stmt,
         effect_name: &Name,
         body: &Block,
-        handler_symbol: &Symbol,
         context: &mut impl Solve,
     ) -> TypedRet<TypedStmt<InferTy>> {
         let effect_symbol = effect_name
             .symbol()
             .map_err(|_| TypeError::NameNotResolved(effect_name.clone()))?;
 
-        let Some(effect) = self.session.lookup_effect(handler_symbol) else {
+        let Some(effect) = self.session.lookup_effect(&effect_symbol) else {
             return Err(TypeError::EffectNotFound(effect_name.name_str()));
         };
 
@@ -1418,7 +1413,7 @@ impl<'a> InferencePass<'a> {
         );
 
         self.session.insert(
-            *handler_symbol,
+            effect_symbol,
             curry(
                 typed_params.iter().map(|p| p.ty.clone()),
                 typed_body.ret.clone(),
@@ -1433,7 +1428,7 @@ impl<'a> InferencePass<'a> {
             kind: TypedStmtKind::Handler {
                 effect: effect_symbol,
                 func: TypedFunc {
-                    name: *handler_symbol,
+                    name: effect_symbol,
                     foralls: Default::default(),
                     params: typed_params,
                     effects: Default::default(),

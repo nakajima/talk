@@ -72,7 +72,7 @@ pub(super) struct CurrentFunction {
     current_block_idx: Vec<usize>,
     blocks: Vec<BasicBlock<Ty>>,
     pub registers: RegisterAllocator,
-    bindings: FxHashMap<Symbol, Binding<Ty>>,
+    bindings: IndexMap<Symbol, Binding<Ty>>,
     symbol: Symbol,
 }
 
@@ -231,7 +231,6 @@ pub enum FlowContext {
     Loop {
         top_block_id: BasicBlockId,
         join_block_id: BasicBlockId,
-        handler_depth: usize,
     },
 }
 
@@ -240,6 +239,7 @@ pub enum Binding<T> {
     Register(u32),
     Pointer(Value),
     Capture { index: usize, ty: T },
+    Continued { index: usize, ty: T },
 }
 
 impl<T> From<Register> for Binding<T> {
@@ -252,6 +252,12 @@ impl<T> From<Value> for Binding<T> {
     fn from(value: Value) -> Self {
         Binding::Pointer(value)
     }
+}
+
+#[derive(Debug)]
+pub enum FuncTermination {
+    Return,
+    Continuation(Symbol),
 }
 
 // Lowers an AST with Types to a monomorphized IR
@@ -270,7 +276,8 @@ pub struct Lowerer<'a> {
     record_labels: FxHashMap<RecordId, Vec<String>>,
     next_record_id: u32,
     flow_context_stack: Vec<FlowContext>,
-    handler_stack: Vec<Symbol>,
+    pending_continuations: Vec<(CurrentFunction, Symbol, Register)>,
+    current_continuation_idx: Option<usize>,
 }
 
 #[allow(clippy::panic)]
@@ -297,7 +304,8 @@ impl<'a> Lowerer<'a> {
             next_record_id: 0,
             record_labels: Default::default(),
             flow_context_stack: Default::default(),
-            handler_stack: Default::default(),
+            pending_continuations: Default::default(),
+            current_continuation_idx: None,
         }
     }
 
@@ -536,7 +544,7 @@ impl<'a> Lowerer<'a> {
         func: &TypedFunc<Ty>,
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
-        self.lower_func(func, Bind::Discard, instantiations)
+        self.lower_func(func, Bind::Discard, instantiations, FuncTermination::Return)
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self, decl, initializer))]
@@ -627,62 +635,68 @@ impl<'a> Lowerer<'a> {
             TypedStmtKind::Expr(typed_expr) => self.lower_expr(typed_expr, bind, instantiations),
             TypedStmtKind::Assignment(lhs, rhs) => self.lower_assignment(lhs, rhs, instantiations),
             TypedStmtKind::Return(typed_expr) => {
-                self.lower_return(stmt.id, typed_expr, bind, instantiations)
+                self.lower_return(typed_expr, bind, instantiations)
             }
-            TypedStmtKind::Continue(Some(expr)) => self.lower_resume(stmt.id, expr, instantiations),
-            TypedStmtKind::Continue(None) => self.lower_continue(stmt.id),
+            TypedStmtKind::Continue(Some(expr)) => {
+                self.lower_resume(stmt.id, expr, bind, instantiations)
+            }
+            TypedStmtKind::Continue(None) => self.lower_continue(),
             TypedStmtKind::Loop(cond, typed_block) => {
                 self.lower_loop(&Some(cond.clone()), typed_block, instantiations)
             }
-            TypedStmtKind::Break => self.lower_break(stmt.id),
+            TypedStmtKind::Break => self.lower_break(),
             TypedStmtKind::Handler { func, .. } => {
                 self.lower_effect_handler(stmt.id, func, bind, instantiations)
             }
         }
     }
 
-    fn lower_continue(&mut self, source_id: NodeID) -> Result<(Value, Ty), IRError> {
-        let (top_block_id, handler_depth) = match self.flow_context_stack.last() {
-            Some(FlowContext::Loop {
-                top_block_id,
-                handler_depth,
-                ..
-            }) => (*top_block_id, *handler_depth),
+    fn lower_resume(
+        &mut self,
+        _id: NodeID,
+        expr: &TypedExpr<Ty>,
+        bind: Bind,
+        instantiations: &Substitutions,
+    ) -> Result<(Value, Ty), IRError> {
+        let (val, val_ty) = self.lower_expr(expr, Bind::Fresh, instantiations)?;
+
+        // Call continuation (register 0) with resumed value
+        let dest = self.ret(bind);
+        self.push_instr(Instruction::Call {
+            dest,
+            ty: val_ty.clone(),
+            callee: Value::Reg(0),
+            args: vec![val].into(),
+            meta: vec![].into(),
+        });
+
+        // Return result of continuation call
+        self.push_terminator(Terminator::Ret {
+            val: dest.into(),
+            ty: val_ty,
+        });
+
+        Ok((Value::Void, Ty::Void))
+    }
+
+    fn lower_continue(&mut self) -> Result<(Value, Ty), IRError> {
+        let top_block_id = match self.flow_context_stack.last() {
+            Some(FlowContext::Loop { top_block_id, .. }) => *top_block_id,
             None => return Err(IRError::NoFlowContext),
         };
 
-        self.pop_handlers_to(handler_depth, source_id);
         self.push_terminator(Terminator::Jump { to: top_block_id });
         Ok((Value::Void, Ty::Void))
     }
 
-    fn lower_break(&mut self, source_id: NodeID) -> Result<(Value, Ty), IRError> {
-        let (join_block_id, handler_depth) = match self.flow_context_stack.last() {
-            Some(FlowContext::Loop {
-                join_block_id,
-                handler_depth,
-                ..
-            }) => (*join_block_id, *handler_depth),
+    fn lower_break(&mut self) -> Result<(Value, Ty), IRError> {
+        let join_block_id = match self.flow_context_stack.last() {
+            Some(FlowContext::Loop { join_block_id, .. }) => *join_block_id,
             None => return Err(IRError::NoFlowContext),
         };
 
-        self.pop_handlers_to(handler_depth, source_id);
         self.push_terminator(Terminator::Jump { to: join_block_id });
         Ok((Value::Void, Ty::Void))
-    }
-
-    fn lower_resume(
-        &mut self,
-        source_id: NodeID,
-        expr: &TypedExpr<Ty>,
-        instantiations: &Substitutions,
-    ) -> Result<(Value, Ty), IRError> {
-        let (val, _ty) = self.lower_expr(expr, Bind::Fresh, instantiations)?;
-        self.push_instr(Instruction::Resume {
-            val,
-            meta: vec![InstructionMeta::Source(source_id)].into(),
-        });
-        Ok((Value::Void, Ty::Never))
     }
 
     fn lower_loop(
@@ -698,7 +712,6 @@ impl<'a> Lowerer<'a> {
         self.flow_context_stack.push(FlowContext::Loop {
             top_block_id,
             join_block_id,
-            handler_depth: self.handler_stack.len(),
         });
 
         self.in_basic_block(top_block_id, |lowerer| {
@@ -732,7 +745,6 @@ impl<'a> Lowerer<'a> {
 
     fn lower_return(
         &mut self,
-        source_id: NodeID,
         expr: &Option<TypedExpr<Ty>>,
         bind: Bind,
         instantiations: &Substitutions,
@@ -743,7 +755,6 @@ impl<'a> Lowerer<'a> {
             (Value::Void, Ty::Void)
         };
 
-        self.pop_handlers_to(0, source_id);
         self.push_terminator(Terminator::Ret {
             val: val.clone(),
             ty: ty.clone(),
@@ -814,8 +825,6 @@ impl<'a> Lowerer<'a> {
         bind: Bind,
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
-        let handler_depth = self.handler_stack.len();
-
         for (i, node) in block.body.iter().enumerate() {
             // We want to skip the last one in the loop so we can handle it outside the loop and use our Bind
             if i < block.body.len() - 1 {
@@ -828,10 +837,6 @@ impl<'a> Lowerer<'a> {
         } else {
             (Value::Void, Ty::Void)
         };
-
-        if !self.current_block_has_terminator() {
-            self.pop_handlers_to(handler_depth, block.id);
-        }
 
         Ok((val, ty))
     }
@@ -1147,7 +1152,9 @@ impl<'a> Lowerer<'a> {
                 bind,
                 instantiations,
             ),
-            TypedExprKind::Func(typed_func) => self.lower_func(typed_func, bind, instantiations),
+            TypedExprKind::Func(typed_func) => {
+                self.lower_func(typed_func, bind, instantiations, FuncTermination::Return)
+            }
             TypedExprKind::Variable(symbol) => {
                 let (value, ty) = self.lower_variable(symbol, expr, instantiations)?;
                 if let Bind::Assigned(reg) = bind {
@@ -1194,40 +1201,102 @@ impl<'a> Lowerer<'a> {
 
     fn lower_effect_handler(
         &mut self,
-        id: NodeID,
+        _id: NodeID,
         func: &TypedFunc<Ty>,
         bind: Bind,
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
-        let (val, _) = self.lower_func(func, bind, instantiations)?;
-        self.push_handler(func.name, val, id);
+        let (_val, _) = self.lower_func(
+            func,
+            bind,
+            instantiations,
+            FuncTermination::Continuation(func.name),
+        )?;
         Ok((Value::Void, Ty::Void))
     }
 
     fn lower_effect_call(
         &mut self,
         expr: &TypedExpr<Ty>,
-        effect: &Symbol,
+        _effect: &Symbol,
         args: &[TypedExpr<Ty>],
         bind: Bind,
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
         let mut arg_vals = Vec::with_capacity(args.len());
         for arg in args {
-            let (val, _) = self.lower_expr(arg, Bind::Fresh, instantiations)?;
+            let (val, _ty) = self.lower_expr(arg, Bind::Fresh, instantiations)?;
             arg_vals.push(val);
         }
 
         let dest = self.ret(bind);
-        self.push_instr(Instruction::Perform {
+
+        let Some(handler_sym) = self.resolved_names.effect_handlers.get(&expr.id).copied() else {
+            return Err(IRError::TypeNotFound(format!(
+                "No handler found for {:?}",
+                expr
+            )));
+        };
+
+        let mut env = vec![];
+        let mut env_ty = vec![];
+        let mut new_bindings = Vec::with_capacity(self.current_func().bindings.len());
+        for binding in self.current_func().bindings.clone() {
+            env.push(self.get_binding(&binding.0).into());
+
+            let ty = self.ty_from_symbol(&binding.0)?;
+            env_ty.push(ty.clone());
+            // Rebind to capture going forward
+            new_bindings.push((
+                binding.0,
+                Binding::Continued {
+                    index: new_bindings.len(),
+                    ty,
+                },
+            ));
+        }
+
+        let continuation_sym =
+            Symbol::Synthesized(self.symbols.next_synthesized(self.config.module_id));
+        let closure = Value::Closure {
+            func: continuation_sym,
+            env: env.into(),
+        };
+
+        let closure_reg = self.next_register();
+        self.push_instr(Instruction::Ref {
+            dest: closure_reg,
+            ty: Ty::Tuple(env_ty),
+            val: closure,
+        });
+
+        // Pass the continutation closure. It doesn't show up in the type signature. It's probably fine.
+        arg_vals.insert(0, closure_reg.into());
+
+        self.push_instr(Instruction::Call {
             dest,
-            ty: expr.ty.clone(),
-            effect: *effect,
+            ty: self.ty_from_symbol(&handler_sym)?,
+            callee: Value::Func(handler_sym),
             args: arg_vals.into(),
             meta: vec![InstructionMeta::Source(expr.id)].into(),
         });
 
-        Ok((dest.into(), expr.ty.clone()))
+        // Get the parent function name for tracking
+        let parent_name = self.current_func().symbol;
+
+        // Create continuation and add to pending list (NOT the stack)
+        let mut continuation = CurrentFunction::new(continuation_sym);
+        // Burn the first register - it will be the env parameter
+        continuation.registers.next();
+        // Burn the second register - it will be the resumed value parameter
+        let resumed_value_reg = continuation.registers.next();
+        continuation.bindings.extend(new_bindings);
+
+        self.pending_continuations.push((continuation, parent_name, dest));
+        self.current_continuation_idx = Some(self.pending_continuations.len() - 1);
+
+        // Return the continuation's resumed value register, not the parent's dest
+        Ok((Value::Reg(resumed_value_reg.0), expr.ty.clone()))
     }
 
     #[allow(clippy::todo)]
@@ -2087,6 +2156,9 @@ impl<'a> Lowerer<'a> {
                     addr: dest.into(),
                 });
             }
+            Binding::Continued { index, ty } => {
+                tracing::warn!("ignoring continued binding {index:?}, {ty:?}");
+            }
         }
 
         Ok(())
@@ -2847,11 +2919,14 @@ impl<'a> Lowerer<'a> {
         func: &TypedFunc<Ty>,
         bind: Bind,
         instantiations: &Substitutions,
+        terminates_with: FuncTermination,
     ) -> Result<(Value, Ty), IRError> {
-        let saved_handlers = std::mem::take(&mut self.handler_stack);
         let ty = self.ty_from_symbol(&func.name)?;
 
         let (mut param_tys, mut ret_ty) = uncurry_function(ty);
+
+        // Track if this is a handler (needs continuation param)
+        let is_handler = matches!(terminates_with, FuncTermination::Continuation(..));
 
         // Do we have captures? If so this is a closure
         let capture_env = if let Some(captures) =
@@ -2916,6 +2991,12 @@ impl<'a> Lowerer<'a> {
 
         let mut params = vec![];
 
+        // For handlers, the continuation closure is the first parameter
+        if is_handler {
+            let cont_reg = self.next_register();
+            params.push(Value::Reg(cont_reg.0));
+        }
+
         if let Some(env_fields) = capture_env.clone() {
             for (i, (binding, ty, ..)) in env_fields.iter().enumerate() {
                 self.insert_binding(
@@ -2958,12 +3039,24 @@ impl<'a> Lowerer<'a> {
             (ret, ret_ty) = self.lower_node(node, instantiations)?;
         }
 
+        // If we were lowering into a continuation, finalize it
+        if let Some(idx) = self.current_continuation_idx.take() {
+            // Set the terminator on the continuation
+            if let Some(last_block) = self.pending_continuations[idx].0.blocks.last_mut() {
+                last_block.terminator = Terminator::Ret {
+                    val: ret.clone(),
+                    ty: ret_ty.clone(),
+                };
+            }
+            // Parent function should return the handler's result (stored in dest)
+            let parent_dest = self.pending_continuations[idx].2;
+            ret = parent_dest.into();
+            // Keep the same ret_ty since handler returns the same type
+        }
+
         if ret == Value::Poison {
             self.push_terminator(Terminator::Unreachable);
         } else {
-            if !self.current_block_has_terminator() {
-                self.pop_handlers_to(0, func.body.id);
-            }
             self.push_terminator(Terminator::Ret {
                 val: ret,
                 ty: ret_ty.clone(),
@@ -2978,15 +3071,69 @@ impl<'a> Lowerer<'a> {
 
         let func_ty = curry_ty(param_tys.iter(), ret_ty);
         self.functions.insert(
-            func.name,
+            current_function.symbol,
             PolyFunction {
-                name: func.name,
+                name: current_function.symbol,
                 params,
                 blocks: current_function.blocks,
                 ty: func_ty.clone(),
                 register_count: (current_function.registers.next) as usize,
             },
         );
+
+        // Finalize any pending continuations
+        for (continuation, parent_name, _parent_dest) in std::mem::take(&mut self.pending_continuations) {
+            // Register the continuation symbol name
+            self.resolved_names.symbol_names.insert(
+                continuation.symbol,
+                format!("continuation({})", parent_name),
+            );
+
+            // Continuation receives captured env as first param, resumed value as second
+            let cont_params = vec![Value::Reg(0), Value::Reg(1)];
+
+            // Get the continuation's return type from its terminator
+            let cont_ret_ty = continuation
+                .blocks
+                .last()
+                .and_then(|b| match &b.terminator {
+                    Terminator::Ret { ty, .. } => Some(ty.clone()),
+                    _ => None,
+                })
+                .unwrap_or(Ty::Void);
+
+            // Build env type from the continued bindings
+            let env_ty = Ty::Record(
+                None,
+                continuation
+                    .bindings
+                    .values()
+                    .filter_map(|b| match b {
+                        Binding::Continued { ty, .. } => Some(ty.clone()),
+                        _ => None,
+                    })
+                    .enumerate()
+                    .fold(Row::Empty, |row, (i, ty)| Row::Extend {
+                        row: row.into(),
+                        label: Label::Positional(i),
+                        ty,
+                    })
+                    .into(),
+            );
+
+            let cont_ty = Ty::Func(env_ty.into(), cont_ret_ty.into(), Row::Empty.into());
+
+            self.functions.insert(
+                continuation.symbol,
+                PolyFunction {
+                    name: continuation.symbol,
+                    params: cont_params,
+                    blocks: continuation.blocks,
+                    ty: cont_ty,
+                    register_count: continuation.registers.next as usize,
+                },
+            );
+        }
 
         let func_sym = func.name;
         let func_val = if let Some(env) = capture_env {
@@ -2997,8 +3144,6 @@ impl<'a> Lowerer<'a> {
         } else {
             Value::Func(func_sym)
         };
-
-        self.handler_stack = saved_handlers;
 
         if bind != Bind::Discard {
             let dest = self.ret(bind);
@@ -3014,10 +3159,7 @@ impl<'a> Lowerer<'a> {
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn push_instr(&mut self, instruction: Instruction<Ty>) {
-        let current_function = self
-            .current_function_stack
-            .last_mut()
-            .expect("didn't get current function");
+        let current_function = self.current_func_mut();
         let current_block_idx = current_function
             .current_block_idx
             .last()
@@ -3029,53 +3171,40 @@ impl<'a> Lowerer<'a> {
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn push_phi(&mut self, phi: Phi<Ty>) {
-        let current_function = self
-            .current_function_stack
-            .last_mut()
-            .expect("didn't get current function");
-        let current_block_idx = current_function
+        let stack_function = self.stack_func_mut();
+        let current_block_idx = stack_function
             .current_block_idx
             .last()
             .expect("didn't get current block idx");
-        current_function.blocks[*current_block_idx].phis.push(phi);
+        stack_function.blocks[*current_block_idx].phis.push(phi);
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn new_basic_block(&mut self) -> BasicBlockId {
-        let current_function = self
-            .current_function_stack
-            .last_mut()
-            .expect("didn't get current function");
-        let id = BasicBlockId(current_function.blocks.len() as u32);
+        let stack_function = self.stack_func_mut();
+        let id = BasicBlockId(stack_function.blocks.len() as u32);
         let new_block = BasicBlock {
             id,
             phis: Default::default(),
             instructions: Default::default(),
             terminator: Terminator::Unreachable,
         };
-        current_function.blocks.push(new_block);
+        stack_function.blocks.push(new_block);
         id
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn set_current_block(&mut self, id: BasicBlockId) {
-        self.current_function_stack
-            .last_mut()
-            .expect("didn't get current func")
-            .current_block_idx
-            .push(id.0 as usize);
+        self.stack_func_mut().current_block_idx.push(id.0 as usize);
     }
 
-    fn current_block_id(&self) -> BasicBlockId {
-        let current_function = self
-            .current_function_stack
-            .last()
-            .expect("didn't get current func");
-        let current_block_idx = *current_function
+    fn current_block_id(&mut self) -> BasicBlockId {
+        let stack_function = self.stack_func_mut();
+        let current_block_idx = *stack_function
             .current_block_idx
             .last()
             .expect("didn't get current block idx");
-        current_function.blocks[current_block_idx].id
+        stack_function.blocks[current_block_idx].id
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self, f))]
@@ -3084,69 +3213,49 @@ impl<'a> Lowerer<'a> {
         id: BasicBlockId,
         f: impl FnOnce(&mut Lowerer<'a>) -> Result<T, IRError>,
     ) -> Result<T, IRError> {
-        self.current_function_stack
-            .last_mut()
-            .expect("didn't get current func")
+        // Block indices always go to the stack function, not continuations.
+        // Continuations are for sequential code after effect calls, not for
+        // control flow block structure.
+        let stack_idx = self.current_function_stack.len() - 1;
+        self.current_function_stack[stack_idx]
             .current_block_idx
             .push(id.0 as usize);
+
+        // Clear continuation state for sibling blocks - an effect call in one
+        // branch shouldn't affect other branches. The continuation state will
+        // be re-established after all branches are processed.
+        let saved_cont_idx = self.current_continuation_idx.take();
+
         let ret = f(self);
-        self.current_function_stack
-            .last_mut()
-            .expect("didn't get current func")
+
+        // Merge continuation state: if a continuation was created in this block,
+        // propagate it. Otherwise restore the saved state.
+        if self.current_continuation_idx.is_none() {
+            self.current_continuation_idx = saved_cont_idx;
+        }
+
+        self.current_function_stack[stack_idx]
             .current_block_idx
             .pop();
+
         ret
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn push_terminator(&mut self, terminator: Terminator<Ty>) {
-        let current_function = self
-            .current_function_stack
-            .last_mut()
-            .expect("didn't get current function");
-        let current_block_idx = current_function
+        let stack_function = self.stack_func_mut();
+        let current_block_idx = stack_function
             .current_block_idx
             .last()
             .expect("didn't get current block idx");
 
-        let block = &mut current_function.blocks[*current_block_idx];
+        let block = &mut stack_function.blocks[*current_block_idx];
         // Don't override an existing terminator (e.g., from an early return)
         if block.terminator != Terminator::Unreachable {
             tracing::error!("trying to overwrite terminator");
             return;
         }
         block.terminator = terminator;
-    }
-
-    fn current_block_has_terminator(&self) -> bool {
-        let current_function = self
-            .current_function_stack
-            .last()
-            .expect("didn't get current function");
-        let current_block_idx = current_function
-            .current_block_idx
-            .last()
-            .expect("didn't get current block idx");
-        current_function.blocks[*current_block_idx].terminator != Terminator::Unreachable
-    }
-
-    fn push_handler(&mut self, effect: Symbol, handler: Value, source_id: NodeID) {
-        self.push_instr(Instruction::PushHandler {
-            effect,
-            handler,
-            meta: vec![InstructionMeta::Source(source_id)].into(),
-        });
-        self.handler_stack.push(effect);
-    }
-
-    fn pop_handlers_to(&mut self, depth: usize, source_id: NodeID) {
-        while self.handler_stack.len() > depth {
-            let effect = self.handler_stack.pop().expect("handler stack underflow");
-            self.push_instr(Instruction::PopHandler {
-                effect,
-                meta: vec![InstructionMeta::Source(source_id)].into(),
-            });
-        }
     }
 
     fn insert_binding(&mut self, symbol: Symbol, binding: Binding<Ty>) {
@@ -3169,6 +3278,17 @@ impl<'a> Lowerer<'a> {
 
         match binding {
             Binding::Register(reg) => Register(reg),
+            Binding::Continued { index, ty } => {
+                let dest = self.next_register();
+                self.push_instr(Instruction::GetField {
+                    dest,
+                    ty: ty.clone(),
+                    record: Register(0),
+                    field: Label::Positional(index),
+                    meta: Default::default(),
+                });
+                dest
+            }
             Binding::Capture { index, ty } => {
                 let ptr = self.next_register();
                 self.push_instr(Instruction::GetField {
@@ -3215,6 +3335,20 @@ impl<'a> Lowerer<'a> {
                     .bindings
                     .insert(*symbol, value_register.into());
             }
+            Binding::Continued { index, ty } => {
+                let dest = self.next_register();
+                self.push_instr(Instruction::SetField {
+                    dest,
+                    val: value_register.into(),
+                    ty: ty.clone(),
+                    record: Register(0),
+                    field: Label::Positional(index),
+                    meta: Default::default(),
+                });
+                self.current_func_mut()
+                    .bindings
+                    .insert(*symbol, Binding::Register(dest.0));
+            }
             Binding::Capture { index, ty } => {
                 let dest = self.next_register();
                 self.push_instr(Instruction::GetField {
@@ -3242,9 +3376,31 @@ impl<'a> Lowerer<'a> {
     }
 
     fn current_func_mut(&mut self) -> &mut CurrentFunction {
+        if let Some(idx) = self.current_continuation_idx {
+            &mut self.pending_continuations[idx].0
+        } else {
+            self.current_function_stack
+                .last_mut()
+                .expect("didn't get current function")
+        }
+    }
+
+    fn current_func(&mut self) -> &CurrentFunction {
+        if let Some(idx) = self.current_continuation_idx {
+            &self.pending_continuations[idx].0
+        } else {
+            self.current_function_stack
+                .last()
+                .expect("didn't get current function")
+        }
+    }
+
+    // Always returns the stack function, ignoring continuations.
+    // Used for block-related operations (blocks belong to the function that created them).
+    fn stack_func_mut(&mut self) -> &mut CurrentFunction {
         self.current_function_stack
             .last_mut()
-            .expect("didn't get current function")
+            .expect("didn't get stack function")
     }
 
     fn next_register(&mut self) -> Register {
