@@ -1539,7 +1539,10 @@ foo.bar
             };
 
             // Effect row is now polymorphic for functions without declared effects
-            assert!(markup.value.contains("id: <T, R>(T) ..R -> T"), "{markup:?}");
+            assert!(
+                markup.value.contains("id: <T, R>(T) ..R -> T"),
+                "{markup:?}"
+            );
             assert!(!markup.value.contains("TypeParamId"), "{markup:?}");
             assert!(!markup.value.contains("Int"), "{markup:?}");
             assert!(!markup.value.contains("Float"), "{markup:?}");

@@ -99,6 +99,7 @@ pub struct InferencePass<'a> {
     substitutions: UnificationSubstitutions,
     tracked_returns: Vec<IndexSet<(NodeID, InferTy)>>,
     tracked_effect_rows: Vec<InferRow>,
+    handled_effects: IndexSet<Symbol>,
     handler_contexts: Vec<HandlerContext>,
     nominal_placeholders: FxHashMap<Symbol, (MetaVarId, Level)>,
     or_binders: Vec<FxHashMap<Symbol, InferTy>>,
@@ -127,6 +128,7 @@ impl<'a> InferencePass<'a> {
             diagnostics: Default::default(),
             nominal_placeholders: Default::default(),
             tracked_effect_rows: Default::default(),
+            handled_effects: Default::default(),
             handler_contexts: Default::default(),
             or_binders: Default::default(),
             protocol_associated_type_requirements: Default::default(),
@@ -375,7 +377,11 @@ impl<'a> InferencePass<'a> {
             self.session
                 .type_catalog
                 .effects
-                .insert(*symbol, effect_signature);
+                .insert(*symbol, effect_signature.clone());
+
+            // Also insert into term_env so effect types are available in types_by_symbol for IR lowerer
+            self.session
+                .insert(*symbol, effect_signature, &mut self.constraints);
         }
         _ = std::mem::replace(&mut self.asts[idx].roots, roots);
     }
@@ -1242,9 +1248,7 @@ impl<'a> InferencePass<'a> {
             }
             StmtKind::Handling {
                 effect_name, body, ..
-            } => {
-                self.visit_handler_stmt(stmt, effect_name, body, context)?
-            }
+            } => self.visit_handler_stmt(stmt, effect_name, body, context)?,
         };
 
         Ok(ty)
@@ -1398,6 +1402,9 @@ impl<'a> InferencePass<'a> {
         self.handler_contexts.pop();
         let typed_body = typed_body?;
 
+        // Track that this effect is now handled for subsequent calls in this scope
+        self.handled_effects.insert(effect_symbol);
+
         let body_func = curry(
             typed_params.iter().map(|p| p.ty.clone()),
             typed_body.ret.clone(),
@@ -1469,14 +1476,17 @@ impl<'a> InferencePass<'a> {
             typed_args.push(typed_arg);
         }
 
-        if let Some(current_effect_row) = self.tracked_effect_rows.last() {
-            self.constraints._has_field(
-                current_effect_row.clone(),
-                Label::_Symbol(effect_sym),
-                effect,
-                Some(expr.id),
-                &context.group_info(),
-            );
+        // Only require effect in row if it's not already handled by a handler
+        if !self.handled_effects.contains(&effect_sym) {
+            if let Some(current_effect_row) = self.tracked_effect_rows.last() {
+                self.constraints._has_field(
+                    current_effect_row.clone(),
+                    Label::_Symbol(effect_sym),
+                    effect,
+                    Some(expr.id),
+                    &context.group_info(),
+                );
+            }
         }
 
         Ok(TypedExpr {

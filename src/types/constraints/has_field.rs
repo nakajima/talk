@@ -36,10 +36,17 @@ impl HasField {
         session: &mut TypeSession,
     ) -> SolveResult {
         match &self.row {
-            InferRow::Empty => SolveResult::Err(TypeError::MemberNotFound(
-                self.ty.clone(),
-                self.label.to_string(),
-            )),
+            InferRow::Empty => {
+                // Check if this is an effect constraint - give a better error message
+                if let Label::_Symbol(Symbol::Effect(_)) = &self.label {
+                    SolveResult::Err(TypeError::UnhandledEffect(self.label.to_string()))
+                } else {
+                    SolveResult::Err(TypeError::MemberNotFound(
+                        self.ty.clone(),
+                        self.label.to_string(),
+                    ))
+                }
+            }
             InferRow::Param(..) => SolveResult::Err(TypeError::MemberNotFound(
                 InferTy::Record(Box::new(self.row.clone())),
                 self.label.to_string(),

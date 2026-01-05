@@ -260,4 +260,21 @@ pub mod tests {
             "{diagnostics:?}",
         );
     }
+
+    #[test]
+    fn handler_removes_effect_from_enclosing_func() {
+        let (_ast, _types, diagnostics) = typecheck_err(
+            "
+          effect 'fizz() -> Int
+
+          func fizzes() '[] {
+            @handle 'fizz { continue 123 }
+
+            'fizz()
+          }
+        ",
+        );
+
+        assert_eq!(0, diagnostics.len(), "{diagnostics:?}");
+    }
 }
