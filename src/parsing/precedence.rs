@@ -79,6 +79,12 @@ impl Precedence {
                 precedence: Precedence::Primary,
             },
 
+            TokenKind::EffectName(..) => ParseHandler {
+                prefix: Some(Parser::effect_callee),
+                infix: None,
+                precedence: Precedence::Primary,
+            },
+
             TokenKind::Attribute(..) => ParseHandler {
                 prefix: Some(Parser::attribute),
                 infix: None,

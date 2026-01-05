@@ -25,7 +25,8 @@ pub mod tests {
         },
         label::Label,
         name_resolution::symbol::{
-            EnumId, GlobalId, InstanceMethodId, StructId, Symbol, SynthesizedId, set_symbol_names,
+            EffectId, EnumId, GlobalId, InstanceMethodId, StructId, Symbol, SynthesizedId,
+            set_symbol_names,
         },
         node_id::NodeID,
     };
@@ -194,6 +195,191 @@ pub mod tests {
                     }
                 }],
             })
+        );
+    }
+
+    #[test]
+    fn lowers_mutated_local_to_pointer() {
+        let program = lower("let i = 0; i = 1; i");
+
+        assert_eq_diff!(
+            program.functions.get(&Symbol::Main).unwrap().blocks,
+            &[BasicBlock {
+                id: BasicBlockId(0),
+                phis: Default::default(),
+                instructions: vec![
+                    Instruction::Alloc {
+                        dest: 0.into(),
+                        ty: IrTy::Int,
+                        count: Value::Int(1),
+                    },
+                    Instruction::Constant {
+                        dest: 1.into(),
+                        ty: IrTy::Int,
+                        val: Value::Int(0),
+                        meta: meta(),
+                    },
+                    Instruction::Store {
+                        value: Value::Reg(1),
+                        ty: IrTy::Int,
+                        addr: Value::Reg(0),
+                    },
+                    Instruction::Constant {
+                        dest: 2.into(),
+                        ty: IrTy::Int,
+                        val: Value::Int(1),
+                        meta: meta(),
+                    },
+                    Instruction::Store {
+                        value: Value::Reg(2),
+                        ty: IrTy::Int,
+                        addr: Value::Reg(0),
+                    },
+                    Instruction::Load {
+                        dest: 3.into(),
+                        ty: IrTy::Int,
+                        addr: Value::Reg(0),
+                    },
+                ],
+                terminator: Terminator::Ret {
+                    val: Value::Reg(3),
+                    ty: IrTy::Int,
+                },
+            }]
+        );
+    }
+
+    #[test]
+    fn lowers_mutated_param_to_pointer() {
+        let program = lower(
+            "
+        func inc(x: Int) { x = 1; x }
+        inc(0)
+        ",
+        );
+
+        assert_eq_diff!(
+            program
+                .functions
+                .get(&Symbol::from(GlobalId::from(1)))
+                .unwrap()
+                .blocks,
+            &[BasicBlock {
+                id: BasicBlockId(0),
+                phis: Default::default(),
+                instructions: vec![
+                    Instruction::Alloc {
+                        dest: 1.into(),
+                        ty: IrTy::Int,
+                        count: Value::Int(1),
+                    },
+                    Instruction::Store {
+                        value: Value::Reg(0),
+                        ty: IrTy::Int,
+                        addr: Value::Reg(1),
+                    },
+                    Instruction::Constant {
+                        dest: 2.into(),
+                        ty: IrTy::Int,
+                        val: Value::Int(1),
+                        meta: meta(),
+                    },
+                    Instruction::Store {
+                        value: Value::Reg(2),
+                        ty: IrTy::Int,
+                        addr: Value::Reg(1),
+                    },
+                    Instruction::Load {
+                        dest: 3.into(),
+                        ty: IrTy::Int,
+                        addr: Value::Reg(1),
+                    },
+                ],
+                terminator: Terminator::Ret {
+                    val: Value::Reg(3),
+                    ty: IrTy::Int,
+                },
+            }]
+        );
+    }
+
+    #[test]
+    fn lowers_mutated_member_base_to_pointer() {
+        let program = lower(
+            "
+        let a = { b: 1 }
+        a.b = 2
+        a
+        ",
+        );
+
+        assert_eq_diff!(
+            program.functions.get(&Symbol::Main).unwrap().blocks,
+            &[BasicBlock {
+                id: BasicBlockId(0),
+                phis: Default::default(),
+                instructions: vec![
+                    Instruction::Alloc {
+                        dest: 0.into(),
+                        ty: IrTy::Record(None, vec![IrTy::Int]),
+                        count: Value::Int(1),
+                    },
+                    Instruction::Constant {
+                        dest: 1.into(),
+                        ty: IrTy::Int,
+                        val: Value::Int(1),
+                        meta: meta(),
+                    },
+                    Instruction::Record {
+                        dest: 2.into(),
+                        ty: IrTy::Record(None, vec![IrTy::Int]),
+                        record: vec![Value::Reg(1)].into(),
+                        meta: vec![
+                            InstructionMeta::Source(NodeID::ANY),
+                            InstructionMeta::RecordId(RecordId::Record(0)),
+                        ]
+                        .into(),
+                    },
+                    Instruction::Store {
+                        value: Value::Reg(2),
+                        ty: IrTy::Record(None, vec![IrTy::Int]),
+                        addr: Value::Reg(0),
+                    },
+                    Instruction::Constant {
+                        dest: 3.into(),
+                        ty: IrTy::Int,
+                        val: Value::Int(2),
+                        meta: meta(),
+                    },
+                    Instruction::Load {
+                        dest: 4.into(),
+                        ty: IrTy::Record(None, vec![IrTy::Int]),
+                        addr: Value::Reg(0),
+                    },
+                    Instruction::SetField {
+                        dest: 5.into(),
+                        val: Value::Reg(3),
+                        ty: IrTy::Record(None, vec![IrTy::Int]),
+                        record: Register(4),
+                        field: Label::Positional(0),
+                        meta: vec![].into(),
+                    },
+                    Instruction::Store {
+                        value: Value::Reg(5),
+                        ty: IrTy::Record(None, vec![IrTy::Int]),
+                        addr: Value::Reg(0),
+                    },
+                    Instruction::Load {
+                        dest: 6.into(),
+                        ty: IrTy::Record(None, vec![IrTy::Int]),
+                        addr: Value::Reg(0),
+                    },
+                ],
+                terminator: Terminator::Ret {
+                    val: Value::Reg(6),
+                    ty: IrTy::Record(None, vec![IrTy::Int]),
+                },
+            }]
         );
     }
 
@@ -1365,5 +1551,77 @@ pub mod tests {
 
         println!("{:#?}", module.program);
         println!("{}", module.program);
+    }
+
+    #[test]
+    fn lowers_simple_effect() {
+        let module = lower_bare(
+            "
+        effect 'fizz(x: Int) -> Int
+
+        @handle 'fizz { x in
+            continue x
+        }
+
+        func fizzes() {
+            let a = 1
+            let b = 'fizz(2)
+            (a, b)
+        }
+        ",
+        );
+
+        println!("{}", module.program);
+
+        assert_eq!(
+            *module
+                .program
+                .functions
+                .get(&Symbol::Global(GlobalId::from(1)))
+                .unwrap(),
+            Function::<IrTy> {
+                name: GlobalId::from(1).into(),
+                params: vec![].into(),
+                blocks: vec![BasicBlock {
+                    id: BasicBlockId(0),
+                    phis: Default::default(),
+                    instructions: vec![
+                        Instruction::Constant {
+                            dest: 0.into(),
+                            ty: IrTy::Int,
+                            val: Value::Int(1),
+                            meta: meta()
+                        },
+                        Instruction::Constant {
+                            dest: 2.into(),
+                            ty: IrTy::Int,
+                            val: Value::Int(2),
+                            meta: meta()
+                        },
+                        Instruction::Ref {
+                            dest: 3.into(),
+                            ty: IrTy::Record(None, vec![IrTy::Int, IrTy::Int]),
+                            val: Value::Closure {
+                                func: Symbol::Synthesized(SynthesizedId::from(2)),
+                                env: vec![Value::Reg(0), Value::Reg(1)].into()
+                            },
+                        },
+                        Instruction::Call {
+                            dest: 1.into(),
+                            ty: IrTy::Func(vec![IrTy::Int], IrTy::Void.into()),
+                            callee: Value::Func(Symbol::Effect(EffectId::from(1))),
+                            args: vec![Value::Reg(3), Value::Reg(2)].into(),
+                            meta: meta()
+                        }
+                    ],
+                    terminator: Terminator::Ret {
+                        val: Value::Reg(1),
+                        ty: IrTy::Record(None, vec![IrTy::Int, IrTy::Int])
+                    }
+                }],
+                ty: IrTy::Func(vec![], IrTy::Record(None, vec![IrTy::Int, IrTy::Int]).into()),
+                register_count: 4
+            }
+        );
     }
 }

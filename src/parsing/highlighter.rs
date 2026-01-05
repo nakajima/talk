@@ -44,6 +44,7 @@ pub enum Kind {
     NUMBER,
     REGEXP,
     OPERATOR,
+    EFFECT,
 }
 
 impl std::fmt::Display for Kind {
@@ -99,6 +100,16 @@ impl<'a> Higlighter<'a> {
 
         while let Ok(tok) = &lexer.next() {
             match tok.kind {
+                TokenKind::Continue => self.make(tok, Kind::KEYWORD, &mut tokens),
+                TokenKind::SingleQuote => (),
+                TokenKind::In => self.make(tok, Kind::KEYWORD, &mut tokens),
+                TokenKind::EffectName(..) => {
+                    let mut tok = tok.clone();
+                    tok.start = tok.start.saturating_sub(1);
+                    self.make(&tok, Kind::EFFECT, &mut tokens)
+                }
+                TokenKind::Handling => self.make(tok, Kind::KEYWORD, &mut tokens),
+                TokenKind::Effect => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::Dollar => self.make(tok, Kind::OPERATOR, &mut tokens),
                 TokenKind::BoundVar(..) => self.make(tok, Kind::VARIABLE, &mut tokens),
                 TokenKind::Percent => self.make(tok, Kind::OPERATOR, &mut tokens),
@@ -212,6 +223,16 @@ impl<'a> Higlighter<'a> {
                 });
             }
             Node::Decl(decl) => match &decl.kind {
+                DeclKind::Effect {
+                    name_span,
+                    params,
+                    ret,
+                    ..
+                } => {
+                    result.push(self.make_span(Kind::EFFECT, *name_span));
+                    result.extend(self.tokens_from_exprs(params, ast));
+                    result.extend(self.tokens_from_expr(ret, ast));
+                }
                 DeclKind::Import(_) => (),
                 DeclKind::Struct {
                     generics,
@@ -318,6 +339,11 @@ impl<'a> Higlighter<'a> {
                 result.extend(self.tokens_from_exprs(&func.params, ast));
                 result.extend(self.tokens_from_expr(&func.body, ast));
                 result.extend(self.tokens_from_exprs(&func.attributes, ast));
+
+                for span in &func.effects.spans {
+                    result.push(self.make_span(Kind::EFFECT, *span));
+                }
+
                 if let Some(ret) = &func.ret {
                     result.extend(self.tokens_from_expr(ret, ast));
                 }
@@ -379,6 +405,11 @@ impl<'a> Higlighter<'a> {
                 StmtKind::Expr(expr) => {
                     result.extend(self.tokens_from_expr(expr, ast));
                 }
+                StmtKind::Continue(expr) => {
+                    if let Some(expr) = expr {
+                        result.extend(self.tokens_from_expr(expr, ast))
+                    }
+                }
                 StmtKind::If(cond, conseq, alt) => {
                     result.extend(self.tokens_from_expr(cond, ast));
                     result.extend(self.tokens_from_expr(conseq, ast));
@@ -394,7 +425,7 @@ impl<'a> Higlighter<'a> {
                 StmtKind::Break => {
                     result.push(self.make_span(Kind::KEYWORD, stmt.span));
                 }
-                StmtKind::Assignment(lhs, rhs) => {
+                StmtKind::Assignment(box lhs, box rhs) => {
                     result.extend(self.tokens_from_expr(lhs, ast));
                     result.extend(self.tokens_from_expr(rhs, ast));
                 }
@@ -405,9 +436,25 @@ impl<'a> Higlighter<'a> {
 
                     result.extend(self.tokens_from_expr(block, ast));
                 }
+                StmtKind::Handling {
+                    effect_name_span,
+                    body,
+                    ..
+                } => {
+                    result.push(self.make_span(Kind::EFFECT, *effect_name_span));
+                    result.extend(self.tokens_from_expr(body, ast));
+                }
             },
             Node::Expr(expr) => match &expr.kind {
                 ExprKind::Incomplete(..) => (),
+                ExprKind::CallEffect {
+                    effect_name_span,
+                    args,
+                    ..
+                } => {
+                    result.push(self.make_span(Kind::EFFECT, *effect_name_span));
+                    result.extend(self.tokens_from_exprs(args, ast));
+                }
                 ExprKind::LiteralArray(exprs) => {
                     result.extend(self.tokens_from_exprs(exprs, ast));
                 }

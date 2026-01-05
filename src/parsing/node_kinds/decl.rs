@@ -15,6 +15,14 @@ use crate::{
 #[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
 pub enum DeclKind {
     Import(#[drive(skip)] String),
+    Effect {
+        #[drive(skip)]
+        name: Name,
+        #[drive(skip)]
+        name_span: Span,
+        params: Vec<Parameter>,
+        ret: TypeAnnotation,
+    },
     Struct {
         #[drive(skip)]
         name: Name, /* name */

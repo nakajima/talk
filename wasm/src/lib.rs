@@ -1,7 +1,11 @@
 use js_sys::{Array, Object, Reflect};
 use talk::{
     analysis::{Diagnostic, DocumentInput, Workspace},
-    common::text::{clamp_to_char_boundary, line_info_for_offset_utf16},
+    analysis::hover::{hover_at, hover_for_node_id},
+    common::text::{
+        byte_offset_for_line_column_utf8, clamp_to_char_boundary, line_info_for_offset,
+        line_info_for_offset_utf16,
+    },
     compiling::driver::{Driver, DriverConfig, Lowered, Source},
     formatter,
     highlighter::highlight_html as highlight_source_html,
@@ -116,6 +120,55 @@ pub fn check(source: &str) -> Result<JsValue, JsValue> {
 }
 
 #[wasm_bindgen]
+pub fn hover(
+    source: &str,
+    byte_offset: Option<u32>,
+    line: Option<u32>,
+    column: Option<u32>,
+    node_id: Option<String>,
+) -> Result<JsValue, JsValue> {
+    init();
+    let doc_id = "<stdin>".to_string();
+    let docs = vec![DocumentInput {
+        id: doc_id.clone(),
+        path: doc_id.clone(),
+        version: 0,
+        text: source.to_string(),
+    }];
+
+    let workspace =
+        Workspace::new(docs).ok_or_else(|| JsValue::from_str("failed to build workspace"))?;
+
+    let query = parse_hover_query(byte_offset, line, column, node_id)?;
+    let core = Workspace::core();
+    let core = core.as_ref();
+    let hover = match query {
+        HoverQuery::ByteOffset(offset) => {
+            if offset as usize > source.len() {
+                return Err(JsValue::from_str("byte offset is past end of document"));
+            }
+            let offset = clamp_to_char_boundary(source, offset as usize);
+            let offset = u32::try_from(offset).unwrap_or(u32::MAX);
+            hover_at(&workspace, core, &doc_id, offset)
+        }
+        HoverQuery::LineColumn { line, column } => {
+            let Some(offset) = byte_offset_for_line_column_utf8(source, line, column) else {
+                return Err(JsValue::from_str("line/column out of range"));
+            };
+            hover_at(&workspace, core, &doc_id, offset)
+        }
+        HoverQuery::NodeId(node_id) => {
+            if node_id.0 != talk::node_id::FileID(0) {
+                return Err(JsValue::from_str("node id file index is out of range"));
+            }
+            hover_for_node_id(&workspace, core, &doc_id, node_id)
+        }
+    };
+
+    hover_to_js(&doc_id, source, hover)
+}
+
+#[wasm_bindgen]
 pub fn version() -> String {
     init();
     env!("CARGO_PKG_VERSION").to_string()
@@ -193,6 +246,110 @@ fn diagnostics_to_js(
 
     let root = Object::new();
     Reflect::set(&root, &JsValue::from_str("diagnostics"), &entries)?;
+    Ok(root.into())
+}
+
+enum HoverQuery {
+    ByteOffset(u32),
+    LineColumn { line: u32, column: u32 },
+    NodeId(talk::node_id::NodeID),
+}
+
+fn parse_hover_query(
+    byte_offset: Option<u32>,
+    line: Option<u32>,
+    column: Option<u32>,
+    node_id: Option<String>,
+) -> Result<HoverQuery, JsValue> {
+    let mut count = 0;
+    if byte_offset.is_some() {
+        count += 1;
+    }
+    if line.is_some() || column.is_some() {
+        count += 1;
+    }
+    if node_id.is_some() {
+        count += 1;
+    }
+
+    if count == 0 {
+        return Err(JsValue::from_str(
+            "provide byte_offset, line/column, or node_id",
+        ));
+    }
+    if count > 1 {
+        return Err(JsValue::from_str(
+            "provide only one of byte_offset, line/column, or node_id",
+        ));
+    }
+
+    if let Some(offset) = byte_offset {
+        return Ok(HoverQuery::ByteOffset(offset));
+    }
+
+    if line.is_some() || column.is_some() {
+        let line = line.ok_or_else(|| JsValue::from_str("line requires column"))?;
+        let column = column.ok_or_else(|| JsValue::from_str("column requires line"))?;
+        return Ok(HoverQuery::LineColumn { line, column });
+    }
+
+    let node_id = node_id.expect("count ensures node id");
+    Ok(HoverQuery::NodeId(parse_node_id(&node_id)?))
+}
+
+fn parse_node_id(input: &str) -> Result<talk::node_id::NodeID, JsValue> {
+    let (file_id, node_id) = match input.split_once(':') {
+        Some((file_id, node_id)) => (file_id, node_id),
+        None => ("0", input),
+    };
+    let file_id = file_id
+        .parse::<u32>()
+        .map_err(|_| JsValue::from_str("node id file index must be a u32"))?;
+    let node_id = node_id
+        .parse::<u32>()
+        .map_err(|_| JsValue::from_str("node id must be a u32"))?;
+    Ok(talk::node_id::NodeID(talk::node_id::FileID(file_id), node_id))
+}
+
+fn hover_to_js(
+    doc_id: &str,
+    text: &str,
+    hover: Option<talk::analysis::Hover>,
+) -> Result<JsValue, JsValue> {
+    let root = Object::new();
+    set_str(&root, "path", doc_id)?;
+
+    let Some(hover) = hover else {
+        Reflect::set(&root, &JsValue::from_str("hover"), &JsValue::NULL)?;
+        return Ok(root.into());
+    };
+
+    let talk::analysis::Hover { contents, range } = hover;
+    let hover_obj = Object::new();
+    set_str(&hover_obj, "contents", &contents)?;
+    let contents_markdown = format!("```talk\n{contents}\n```");
+    set_str(&hover_obj, "contents_markdown", &contents_markdown)?;
+
+    if let Some(range) = range {
+        let (start_line, start_col, _, _) = line_info_for_offset(text, range.start);
+        let (end_line, end_col, _, _) = line_info_for_offset(text, range.end);
+        let range_obj = Object::new();
+        let start_obj = Object::new();
+        set_num(&start_obj, "byte", range.start)?;
+        set_num(&start_obj, "line", start_line)?;
+        set_num(&start_obj, "column", start_col)?;
+        let end_obj = Object::new();
+        set_num(&end_obj, "byte", range.end)?;
+        set_num(&end_obj, "line", end_line)?;
+        set_num(&end_obj, "column", end_col)?;
+        Reflect::set(&range_obj, &JsValue::from_str("start"), &start_obj)?;
+        Reflect::set(&range_obj, &JsValue::from_str("end"), &end_obj)?;
+        Reflect::set(&hover_obj, &JsValue::from_str("range"), &range_obj)?;
+    } else {
+        Reflect::set(&hover_obj, &JsValue::from_str("range"), &JsValue::NULL)?;
+    }
+
+    Reflect::set(&root, &JsValue::from_str("hover"), &hover_obj)?;
     Ok(root.into())
 }
 

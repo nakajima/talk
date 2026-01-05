@@ -1,3 +1,8 @@
 let a = [1, 2, 3]
 print(a.count)
 print(a)
+
+let { c, d, e } = { c: 123, d: 123, e: 123 }
+print(c)
+print(d)
+print(e)

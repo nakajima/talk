@@ -4,9 +4,7 @@ use crate::{
     name::Name,
     name_resolution::symbol::{ProtocolId, Symbol},
     types::{
-        conformance::ConformanceKey,
-        constraints::constraint::ConstraintCause,
-        infer_ty::InferTy,
+        conformance::ConformanceKey, constraints::constraint::ConstraintCause, infer_ty::InferTy,
         matcher::RequiredConstructor,
     },
 };
@@ -43,6 +41,10 @@ pub enum TypeError {
     OrPatternBinderMismatch,
     RecordPatternMissingFields(Vec<String>),
     RecordPatternNeedsRest,
+    EffectNotFound(String),
+    UnhandledEffect(String),
+    HandlerMustBeBound,
+    ContinueOutsideHandler,
 }
 
 impl Error for TypeError {}
@@ -67,12 +69,7 @@ impl Display for TypeError {
                         rhs.as_ref()
                     )
                 } else {
-                    write!(
-                        f,
-                        "Type mismatch: {} vs {}",
-                        lhs.as_ref(),
-                        rhs.as_ref()
-                    )
+                    write!(f, "Type mismatch: {} vs {}", lhs.as_ref(), rhs.as_ref())
                 }
             }
             Self::OccursCheck(ty) => {
@@ -105,13 +102,31 @@ impl Display for TypeError {
                 write!(f, "Useless match arm")
             }
             Self::OrPatternBinderMismatch => {
-                write!(f, "Or-patterns must bind the same names in each alternative")
+                write!(
+                    f,
+                    "Or-patterns must bind the same names in each alternative"
+                )
             }
             Self::RecordPatternMissingFields(fields) => {
                 write!(f, "Record pattern missing fields: {fields:?}")
             }
             Self::RecordPatternNeedsRest => {
                 write!(f, "Record pattern on an open row must include `..`")
+            }
+            Self::EffectNotFound(name) => {
+                write!(f, "Effect not found: {name}")
+            }
+            Self::UnhandledEffect(name) => {
+                write!(
+                    f,
+                    "Effect '{name}' is not handled. Add a handler or declare the effect in the function signature."
+                )
+            }
+            Self::HandlerMustBeBound => {
+                write!(f, "Effect handlers must be bound to a name")
+            }
+            Self::ContinueOutsideHandler => {
+                write!(f, "continue with a value is only valid inside a handler")
             }
         }
     }

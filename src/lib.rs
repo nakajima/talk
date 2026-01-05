@@ -41,3 +41,18 @@ pub mod test_utils;
 pub fn init_tracing() {
     test_utils::trace::init()
 }
+
+// General helpers
+#[macro_export]
+macro_rules! map {
+    ($value:expr, $func:expr) => {
+        $value.iter().map($func).collect()
+    };
+}
+
+#[macro_export]
+macro_rules! map_into {
+    ($value:expr, $func:expr) => {
+        $value.into_iter().map($func).collect()
+    };
+}

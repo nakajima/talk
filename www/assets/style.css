@@ -1,0 +1,311 @@
+:root {
+  --color-tin-1: rgb(9.71% 9.82% 12.9%);
+  --color-tin-1-contrast: #fff;
+  --color-tin-2: rgb(26% 24% 31%);
+  --color-tin-2-contrast: #fff;
+  --color-tin-3: rgb(29.5% 29.8% 40.8%);
+  --color-tin-3-contrast: #fff;
+  --color-tin-4: rgb(19.9% 31.3% 43.2%);
+  --color-tin-4-contrast: #fff;
+  --color-tin-5: rgb(4.77% 35.5% 44%);
+  --color-tin-5-contrast: #fff;
+  --color-tin-6: rgb(2.86% 49% 55.5%);
+  --color-tin-6-contrast: #fff;
+  --color-tin-7: rgb(39.8% 77.1% 83.5%);
+  --color-tin-7-contrast: #000;
+  --color-tin-8: rgb(65.6% 95.7% 100%);
+  --color-tin-8-contrast: #000;
+  --color-tin-9: rgb(74.7% 98.4% 100%);
+  --color-tin-9-contrast: #000;
+  --color-tin-10: rgb(80.6% 96.7% 100%);
+  --color-tin-10-contrast: #000;
+  --color-tin-11: rgb(87.7% 94.4% 100%);
+  --color-tin-11-contrast: #000;
+  --color-tin-12: rgb(82.1% 82.3% 86.7%);
+  --color-tin-12-contrast: #000;
+}
+
+html {
+  background: var(--color-tin-1);
+  color: oklch(96.816% 0.00355 220.931);
+  font-family: "Fira Code", monospace;
+  font-weight: 400;
+}
+
+body {
+  margin: 0;
+}
+
+main {
+  max-width: 80ex;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-weight: 200;
+  margin: 1rem;
+}
+
+main li p {
+  margin: 0;
+}
+
+h1 {
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-decoration-color: oklch(66.7% 0.274 260);
+}
+
+main h4 {
+  font-weight: 100;
+  text-decoration: underline;
+  text-decoration-color: oklch(66.7% 0.274 260);
+}
+
+p {
+  margin: 1rem;
+}
+
+pre,
+code,
+.code-editable {
+  font-family: "Fira Code", monospace;
+  font-weight: 200;
+  font-style: normal;
+  color: oklch(96.816% 0.00355 220.931);
+}
+
+pre,
+.code-editable {
+  padding: 2ex 2ex 0 2ex;
+  margin: 0;
+  tab-size: 2;
+}
+
+pre .keyword {
+  color: oklch(77% 0.156 12.4);
+  /*color: oklch(54.3% 0.217 11);*/
+}
+
+pre .number {
+  color: oklch(95% 0.217 48.1);
+}
+
+pre .comment {
+  color: oklch(61.539% 0.03627 241.494);
+}
+
+pre .string {
+  /* color: oklch(95% 0.38 253); */
+  color: oklch(88.4% 0.31 220);
+}
+
+pre .self,
+pre .type {
+  /* color: oklch(89.421% 0.05474 288.654); */
+  color: oklch(91.1% 0.267 260);
+}
+
+pre .parameter {
+  color: oklch(65.217% 0.17683 257.397);
+}
+
+pre .decorator {
+  color: oklch(90.983% 0.13819 182.575);
+}
+
+pre .effect {
+  color: oklch(78.916% 0.13222 230.749);
+}
+
+pre .enum_member,
+pre .method,
+pre .function {
+  color: oklch(83.491% 0.14808 330.328);
+}
+
+.runnable,
+.no-run {
+  background: rgb(13, 13, 17);
+  position: relative;
+  margin: 1rem;
+  box-shadow: 0.4rex 0.4rex 0.4rex rgba(13, 13, 19, 0.506);
+}
+
+.no-run {
+  padding-bottom: 2rex;
+}
+
+.runnable .code-block {
+  position: relative;
+}
+
+.runnable .code-highlight,
+.runnable .code-editable {
+  box-sizing: border-box;
+  display: block;
+  line-height: 1.5;
+  white-space: pre;
+  width: 100%;
+}
+
+.runnable .code-highlight {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.runnable .code-diagnostics {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.runnable .diag-underline {
+  position: absolute;
+  height: 2px;
+  background: oklch(70% 0.22 20);
+  border-radius: 2px;
+}
+
+.runnable .diag-underline[data-severity="warning"] {
+  background: oklch(82% 0.18 80);
+}
+
+.runnable .diag-underline[data-severity="info"] {
+  background: oklch(78% 0.12 250);
+}
+
+.runnable .code-editable {
+  position: relative;
+  color: transparent;
+  background: transparent;
+  border: none;
+  caret-color: oklch(96.816% 0.00355 220.931);
+  z-index: 1;
+  outline: none;
+  overflow-x: auto;
+  overflow-y: hidden;
+  resize: none;
+}
+
+.runnable .code-editable::selection {
+  background: rgba(255, 255, 255, 0.2);
+  color: transparent;
+}
+
+.runnable .diagnostics-list {
+  padding: 0 2ex 1.5ex 2ex;
+  color: var(--color-tin-4);
+  font-size: small;
+}
+
+.runnable .diagnostic-item {
+  margin: 0.8ex 0;
+}
+
+.runnable .diagnostic-message {
+  color: oklch(85% 0.2 20);
+  font-weight: 400;
+}
+
+.runnable .diagnostic-item[data-severity="warning"] .diagnostic-message {
+  color: oklch(90% 0.18 80);
+}
+
+.runnable .diagnostic-item[data-severity="info"] .diagnostic-message {
+  color: oklch(88% 0.12 250);
+}
+
+.runnable .actions {
+  background: rgb(13, 13, 17);
+  padding: 1ex 2ex 2ex 2ex;
+  color: var(--color-tin-3);
+  font-size: small;
+}
+
+.runnable .actions {
+  display: flex;
+  gap: 2rex;
+}
+
+.runnable button {
+  flex-grow: 1;
+  display: inline-block;
+  border: none;
+  color: white;
+  background: var(--color-tin-2);
+  cursor: pointer;
+}
+
+.runnable button {
+  display: inline-block;
+  border: none;
+  color: white;
+  background: rgb(30, 28, 36);
+  cursor: pointer;
+  font-weight: 100;
+  font-size: x-small;
+  padding: 0.6rex 1rex;
+}
+
+.runnable button:hover {
+  display: inline-block;
+  border: none;
+  color: white;
+  background: rgb(39, 36, 48);
+  cursor: pointer;
+}
+
+.runnable button:active {
+  display: inline-block;
+  border: none;
+  color: white;
+  background: rgb(27, 25, 33);
+  cursor: pointer;
+}
+
+.runnable .output {
+  padding: 0 2rex;
+}
+
+.runnable .ir {
+  font-size: 10px;
+  padding: 0 2rex 2rex;
+  overflow-x: scroll;
+}
+
+.runnable .value {
+  padding: 0 0 2rex 2rex;
+}
+
+.runnable .value .arrow {
+  color: rgb(87, 84, 101);
+}
+
+.token-hud {
+  position: fixed;
+  top: 1rem;
+  right: 1rem;
+  z-index: 50;
+  background: rgb(30, 28, 36);
+  color: white;
+  border: 1px solid var(--color-tin-3);
+  border-radius: 6px;
+  padding: 0.6rem 0.8rem;
+  font-size: 0.75rem;
+  line-height: 1.3;
+  max-width: min(48ch, 90vw);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+}
+
+.token-hud[data-active="false"] {
+  opacity: 0.65;
+}

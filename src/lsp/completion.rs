@@ -1,6 +1,8 @@
 use async_lsp::lsp_types::{CompletionItem, CompletionItemKind};
 
-use crate::analysis::{CompletionItem as AnalysisCompletionItem, CompletionItemKind as AnalysisKind};
+use crate::analysis::{
+    CompletionItem as AnalysisCompletionItem, CompletionItemKind as AnalysisKind,
+};
 
 pub fn to_lsp_items(items: Vec<AnalysisCompletionItem>) -> Vec<CompletionItem> {
     items
@@ -28,5 +30,6 @@ fn kind_to_lsp(kind: AnalysisKind) -> CompletionItemKind {
         AnalysisKind::EnumMember => CompletionItemKind::ENUM_MEMBER,
         AnalysisKind::Keyword => CompletionItemKind::KEYWORD,
         AnalysisKind::Module => CompletionItemKind::MODULE,
+        AnalysisKind::Effect => CompletionItemKind::EVENT,
     }
 }

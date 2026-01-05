@@ -195,9 +195,7 @@ impl<'a> Monomorphizer<'a> {
                         Value::Func(*impl_sym)
                     } else {
                         if !substitutions.witnesses.is_empty() {
-                            tracing::error!(
-                                "did not get witness for {sym:?}, {substitutions:?}"
-                            );
+                            tracing::error!("did not get witness for {sym:?}, {substitutions:?}");
                         }
                         callee
                     }
@@ -226,6 +224,7 @@ impl<'a> Monomorphizer<'a> {
                 Symbol::Float => IrTy::Float,
                 Symbol::Bool => IrTy::Bool,
                 Symbol::Void => IrTy::Void,
+                Symbol::Never => IrTy::Void,
                 Symbol::RawPtr => IrTy::RawPtr,
                 Symbol::Byte => IrTy::Byte,
                 _ => unreachable!(),
@@ -269,8 +268,8 @@ impl<'a> Monomorphizer<'a> {
                     .collect(),
                 self.monomorphize_ty(ret, substitutions).into(),
             ),
-            Ty::Func(param, ret) => {
-                let (params, final_ret) = uncurry_function(Ty::Func(param, ret));
+            Ty::Func(param, ret, effects) => {
+                let (params, final_ret) = uncurry_function(Ty::Func(param, ret, effects));
                 IrTy::Func(
                     params
                         .into_iter()
@@ -359,7 +358,7 @@ impl<'a> Monomorphizer<'a> {
 
 pub fn uncurry_function(ty: Ty) -> (Vec<Ty>, Ty) {
     match ty {
-        Ty::Func(box param, box ret) => {
+        Ty::Func(box param, box ret, _effects) => {
             let (mut params, final_ret) = uncurry_function(ret);
             if param != Ty::Void {
                 params.insert(0, param);

@@ -143,6 +143,14 @@ impl ModuleEnvironment {
         module.types.catalog.lookup_initializers(receiver)
     }
 
+    pub fn lookup_effect(&self, id: &Symbol) -> Option<Ty> {
+        let module_id = id.external_module_id()?;
+        let stable_id = self.modules_by_local.get(&module_id)?;
+        let module = self.modules.get(stable_id)?;
+        tracing::trace!("lookup_effect \"{:?}\" in {}", id, module.name);
+        module.types.catalog.lookup_effect(id)
+    }
+
     pub fn lookup_associated_types(&self, protocol_id: &Symbol) -> Option<IndexMap<Label, Symbol>> {
         let module_id = protocol_id.external_module_id()?;
         let stable_id = self.modules_by_local.get(&module_id)?;

@@ -330,7 +330,7 @@ impl TypeSession {
 
     fn shallow_generalize_row(&mut self, row: InferRow) -> InferRow {
         match row {
-            InferRow::Empty(..) => row,
+            InferRow::Empty => row,
             InferRow::Extend { box row, label, ty } => InferRow::Extend {
                 row: self.shallow_generalize_row(row).into(),
                 label,
@@ -389,9 +389,10 @@ impl TypeSession {
                     .collect(),
                 ret: self.shallow_generalize(ret).into(),
             },
-            InferTy::Func(box param, box ret) => InferTy::Func(
+            InferTy::Func(box param, box ret, box effects) => InferTy::Func(
                 self.shallow_generalize(param).into(),
                 self.shallow_generalize(ret).into(),
+                self.shallow_generalize_row(effects).into(),
             ),
             InferTy::Tuple(items) => InferTy::Tuple(
                 items
@@ -442,7 +443,7 @@ impl TypeSession {
         let row = self.shallow_generalize_row(row);
 
         match row {
-            InferRow::Empty(..) => row.into(),
+            InferRow::Empty => row.into(),
             InferRow::Param(..) => row.into(),
             InferRow::Var(var) => Row::Param(
                 *self
@@ -468,7 +469,7 @@ impl TypeSession {
         substitutions: &mut UnificationSubstitutions,
     ) -> InferRow {
         match row {
-            InferRow::Empty(kind) => InferRow::Empty(kind),
+            InferRow::Empty => InferRow::Empty,
             InferRow::Var(id) => {
                 let rep = self.canon_row(id);
                 if let Some(bound) = substitutions.row.get(&rep).cloned() {
@@ -528,9 +529,10 @@ impl TypeSession {
                 ret: Box::new(self.apply(*ret, substitutions)),
             },
             InferTy::Primitive(..) => ty,
-            InferTy::Func(params, ret) => InferTy::Func(
+            InferTy::Func(params, ret, effects) => InferTy::Func(
                 Box::new(self.apply(*params, substitutions)),
                 Box::new(self.apply(*ret, substitutions)),
+                Box::new(self.apply_row(*effects, substitutions)),
             ),
             InferTy::Tuple(items) => InferTy::Tuple(self.apply_mult(items, substitutions)),
             InferTy::Record(row) => InferTy::Record(Box::new(self.apply_row(*row, substitutions))),
@@ -917,6 +919,14 @@ impl TypeSession {
         }
 
         None
+    }
+
+    pub fn lookup_effect(&self, id: &Symbol) -> Option<InferTy> {
+        if let Some(effect) = self.type_catalog.lookup_effect(id) {
+            return Some(effect.clone());
+        }
+
+        self.modules.lookup_effect(id).map(|t| t.into())
     }
 
     pub fn lookup_method_requirements(

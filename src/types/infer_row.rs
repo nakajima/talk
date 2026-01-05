@@ -8,11 +8,12 @@ use crate::{
     compiling::module::ModuleId,
     label::Label,
     types::{
-        infer_ty::{InferTy, Level},
+        infer_ty::{InferTy, Level, format_row},
         row::Row,
         scheme::ForAll,
+        ty::SomeType,
         type_operations::UnificationSubstitutions,
-        type_session::{TypeDefKind, TypeSession},
+        type_session::TypeSession,
     },
 };
 
@@ -59,7 +60,7 @@ pub type ClosedRow<T> = IndexMap<Label, T>;
 // TODO: Add Level to Var once we support open rows
 #[derive(PartialEq, Eq, Hash, Clone, Drive, DriveMut)]
 pub enum InferRow {
-    Empty(#[drive(skip)] TypeDefKind),
+    Empty,
     Extend {
         row: Box<InferRow>,
         #[drive(skip)]
@@ -71,17 +72,17 @@ pub enum InferRow {
 }
 
 impl From<InferRow> for Row {
-    #[allow(clippy::panic)]
     fn from(value: InferRow) -> Self {
         match value {
-            InferRow::Empty(t) => Row::Empty(t),
+            InferRow::Empty => Row::Empty,
             InferRow::Param(param) => Row::Param(param),
             InferRow::Extend { box row, label, ty } => Row::Extend {
                 row: Box::new(row.into()),
                 label,
                 ty: ty.into(),
             },
-            row => panic!("Row cannot contain vars: {row:?}"),
+            // In error cases, row Vars may not be resolved. Default to Empty.
+            InferRow::Var(_) => Row::Empty,
         }
     }
 }
@@ -89,7 +90,7 @@ impl From<InferRow> for Row {
 impl From<Row> for InferRow {
     fn from(value: Row) -> Self {
         match value {
-            Row::Empty(t) => InferRow::Empty(t),
+            Row::Empty => InferRow::Empty,
             Row::Param(param) => InferRow::Param(param),
             Row::Extend { box row, label, ty } => InferRow::Extend {
                 row: Box::new(row.into()),
@@ -105,10 +106,33 @@ impl InferRow {
         close(self, ClosedRow::default())
     }
 
+    pub fn collect_metas(&self) -> Vec<InferTy> {
+        let mut result = vec![];
+        match self {
+            InferRow::Param(..) | InferRow::Empty => (),
+            InferRow::Extend { row, ty, .. } => {
+                result.extend(row.collect_metas());
+                result.extend(ty.collect_metas());
+            }
+            InferRow::Var(var) => {
+                result.push(InferTy::Record(InferRow::Var(*var).into())); // This is a hack
+            }
+        }
+        result
+    }
+
+    pub fn contains_var(&self) -> bool {
+        match self {
+            Self::Param(..) | Self::Empty => false,
+            Self::Var(..) => true,
+            Self::Extend { row, ty, .. } => row.contains_var() || ty.contains_var(),
+        }
+    }
+
     pub fn collect_foralls(&self) -> Vec<ForAll> {
         let mut result = vec![];
         match self {
-            Self::Empty(..) => (),
+            Self::Empty => (),
             Self::Var(..) => (),
             Self::Param(id) => {
                 result.push(ForAll::Row(*id));
@@ -148,7 +172,7 @@ impl InferRow {
 #[allow(clippy::panic)]
 fn close(row: &InferRow, mut closed_row: ClosedRow<InferTy>) -> ClosedRow<InferTy> {
     match row {
-        InferRow::Empty(..) => closed_row,
+        InferRow::Empty => closed_row,
         InferRow::Var(_) => panic!("Cannot close var"),
         InferRow::Param(_) => panic!("Cannot close param"),
         InferRow::Extend { row, label, ty } => {
@@ -182,7 +206,7 @@ pub fn normalize_row(
                 map.insert(label, session.apply(ty, subs));
                 row = *rest;
             }
-            InferRow::Empty(..) => break (map, RowTail::Empty),
+            InferRow::Empty => break (map, RowTail::Empty),
             InferRow::Var(id) => break (map, RowTail::Var(session.canon_row(id))),
             InferRow::Param(id) => break (map, RowTail::Param(id)),
         }
@@ -192,9 +216,9 @@ pub fn normalize_row(
 impl std::fmt::Debug for InferRow {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            InferRow::Empty(kind) => write!(f, "{{{kind:?}}}"),
+            InferRow::Empty => write!(f, "{{}}"),
             InferRow::Extend { .. } => {
-                write!(f, "{:?}", self.close())
+                write!(f, "{:?}", format_row(self))
             }
             InferRow::Param(id) => write!(f, "rowparam{id:?}"),
             InferRow::Var(id) => write!(f, "rowvar{id:?}"),

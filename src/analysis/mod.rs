@@ -58,6 +58,7 @@ pub enum CompletionItemKind {
     EnumMember,
     Keyword,
     Module,
+    Effect,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

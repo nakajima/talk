@@ -2,6 +2,7 @@
 pub mod tests {
     use std::rc::Rc;
 
+    use indexmap::indexset;
     use rustc_hash::FxHashSet;
 
     use crate::{
@@ -15,25 +16,26 @@ pub mod tests {
         name_resolution::{
             name_resolver::{Capture, NameResolver, NameResolverError, ResolvedNames},
             symbol::{
-                AssociatedTypeId, BuiltinId, DeclaredLocalId, EnumId, GlobalId, InitializerId,
-                InstanceMethodId, MethodRequirementId, ParamLocalId, PatternBindLocalId,
-                PropertyId, ProtocolId, StaticMethodId, StructId, Symbol, SynthesizedId,
-                TypeAliasId, TypeParameterId, VariantId,
+                AssociatedTypeId, BuiltinId, DeclaredLocalId, EffectId, EnumId, GlobalId,
+                InitializerId, InstanceMethodId, MethodRequirementId, ParamLocalId,
+                PatternBindLocalId, PropertyId, ProtocolId, StaticMethodId, StructId, Symbol,
+                SynthesizedId, TypeAliasId, TypeParameterId, VariantId,
             },
         },
         node_id::{FileID, NodeID},
         node_kinds::{
+            block::Block,
             call_arg::CallArg,
-            decl::DeclKind,
+            decl::{Decl, DeclKind},
             expr::{Expr, ExprKind},
-            func::Func,
+            func::{EffectSet, Func},
             func_signature::FuncSignature,
             generic_decl::GenericDecl,
             match_arm::MatchArm,
             parameter::Parameter,
             pattern::{Pattern, PatternKind},
-            stmt::StmtKind,
-            type_annotation::TypeAnnotationKind,
+            stmt::{Stmt, StmtKind},
+            type_annotation::{TypeAnnotation, TypeAnnotationKind},
         },
         parsing::parser_tests::tests::parse,
         span::Span,
@@ -202,6 +204,7 @@ pub mod tests {
                     name: Name::Resolved(Symbol::Global(GlobalId::from(1)), "foo".into()),
                     name_span: Span::ANY,
                     generics: vec![],
+                    effects: Default::default(),
                     params: vec![param!(ParamLocalId(1), "x"), param!(ParamLocalId(2), "y"),],
                     body: any_block!(vec![
                         any_stmt!(StmtKind::Expr(variable!(ParamLocalId(1), "x")))
@@ -245,6 +248,7 @@ pub mod tests {
                     name_span: Span::ANY,
                     generics: vec![],
                     params: vec![],
+                    effects: Default::default(),
                     body: any_block!(vec![any_expr_stmt!(ExprKind::Call {
                         callee: Box::new(variable!(Symbol::Global(GlobalId::from(2)), "even")),
                         type_args: vec![],
@@ -274,6 +278,7 @@ pub mod tests {
                     name_span: Span::ANY,
                     generics: vec![],
                     params: vec![],
+                    effects: Default::default(),
                     body: any_block!(vec![any_expr_stmt!(ExprKind::Call {
                         callee: Box::new(variable!(Symbol::Global(GlobalId::from(1)), "odd")),
                         type_args: vec![],
@@ -307,6 +312,7 @@ pub mod tests {
                     name: Name::Resolved(Symbol::Global(GlobalId::from(1)), "foo".into()),
                     name_span: Span::ANY,
                     generics: vec![],
+                    effects: Default::default(),
                     params: vec![param!(ParamLocalId(1), "x"), param!(ParamLocalId(2), "y")],
                     body: any_block!(vec![
                         any_decl!(DeclKind::Let {
@@ -327,6 +333,7 @@ pub mod tests {
                                 ),
                                 name_span: Span::ANY,
                                 generics: vec![],
+                                effects: Default::default(),
                                 params: vec![param!(ParamLocalId(3), "x")],
                                 body: any_block!(vec![
                                     any_stmt!(StmtKind::Expr(variable!(ParamLocalId(3), "x")))
@@ -377,6 +384,7 @@ pub mod tests {
                     name_span: Span::ANY,
                     generics: Default::default(),
                     params: Default::default(),
+                    effects: Default::default(),
                     body: any_block!(vec![
                         any_decl!(DeclKind::Let {
                             lhs: any_pattern!(PatternKind::Bind(Name::Resolved(
@@ -401,6 +409,7 @@ pub mod tests {
                                 ),
                                 name_span: Span::ANY,
                                 generics: vec![],
+                                effects: Default::default(),
                                 params: vec![param!(ParamLocalId(1), "x")],
                                 body: any_block!(vec![
                                     any_stmt!(StmtKind::Expr(variable!(ParamLocalId(1), "x")))
@@ -523,6 +532,7 @@ pub mod tests {
                         generics: vec![],
                         conformances: vec![],
                     }],
+                    effects: Default::default(),
                     params: vec![param!(
                         ParamLocalId(1),
                         "t",
@@ -700,8 +710,9 @@ pub mod tests {
                                     Some(variable!(ParamLocalId(3), "self").into()),
                                     Label::Named("me".into()),
                                     Span::ANY
-                                )),
-                                variable!(ParamLocalId(4), "me")
+                                ))
+                                .into(),
+                                variable!(ParamLocalId(4), "me").into()
                             ))
                             .into(),
                             any_expr_stmt!(ExprKind::Variable(Name::Resolved(
@@ -810,8 +821,9 @@ pub mod tests {
                                     Some(variable!(ParamLocalId(3), "self").into()),
                                     Label::Named("me".into()),
                                     Span::ANY
-                                )),
-                                variable!(ParamLocalId(4), "me")
+                                ))
+                                .into(),
+                                variable!(ParamLocalId(4), "me").into()
                             ))
                             .into(),
                             any_expr_stmt!(ExprKind::Variable(Name::Resolved(
@@ -876,6 +888,7 @@ pub mod tests {
                                 "fizz".into()
                             ),
                             name_span: Span::ANY,
+                            effects: Default::default(),
                             generics: vec![],
                             params: vec![],
                             body: any_block!(vec![]),
@@ -933,6 +946,7 @@ pub mod tests {
                             ),
                             name_span: Span::ANY,
                             generics: vec![],
+                            effects: Default::default(),
                             params: vec![param!(
                                 Symbol::ParamLocal(ParamLocalId(1)),
                                 "self",
@@ -970,6 +984,7 @@ pub mod tests {
                                 "buzz".into()
                             ),
                             name_span: Span::ANY,
+                            effects: Default::default(),
                             generics: vec![],
                             params: vec![param!(
                                 Symbol::ParamLocal(ParamLocalId(2)),
@@ -1070,6 +1085,7 @@ pub mod tests {
                         ),
                         name_span: Span::ANY,
                         generics: vec![],
+                        effects: Default::default(),
                         params: vec![Parameter {
                             id: NodeID::ANY,
                             name: Name::Resolved(
@@ -1412,6 +1428,187 @@ pub mod tests {
             1,
             "{:?}",
             resolved.1.diagnostics
+        );
+    }
+
+    #[test]
+    fn resolves_effect_decl() {
+        let resolved = resolve(
+            "
+        effect 'fizz(x: Int) -> ()
+        ",
+        );
+
+        let Decl {
+            kind:
+                DeclKind::Effect {
+                    name: Name::Resolved(Symbol::Effect(..), ..),
+                    params,
+                    ..
+                },
+            ..
+        } = &resolved.0.roots[0].as_decl()
+        else {
+            panic!("didn't get decl");
+        };
+
+        assert_eq!(
+            *params,
+            vec![any!(Parameter ,{
+                name: Name::Resolved(ParamLocalId(1).into(), "x".into()),
+                name_span: Span::ANY,
+                type_annotation: Some(any!(TypeAnnotation, {
+                    kind: TypeAnnotationKind::Nominal { name: Name::Resolved(Symbol::Int, "Int".into()), name_span: Span::ANY, generics: vec![] }
+                })),
+            })],
+        );
+    }
+
+    #[test]
+    fn resolves_handle_stmt() {
+        let resolved = resolve(
+            "
+        effect 'fizz(x: Int) -> ()
+        @handle 'fizz { x in
+            continue x
+        }
+        ",
+        );
+
+        let Stmt {
+            kind:
+                StmtKind::Handling {
+                    effect_name: Name::Resolved(Symbol::Effect(..), ..),
+                    body: Block { args, body, .. },
+                    ..
+                },
+            ..
+        } = resolved.0.roots[1].as_stmt()
+        else {
+            panic!("didn't get decl: {:?}", resolved.0.roots[1])
+        };
+
+        assert_eq!(
+            *args,
+            vec![any!(Parameter, {
+                name: Name::Resolved(Symbol::ParamLocal(ParamLocalId(2)), "x".into()),
+                name_span: Span::ANY,
+                type_annotation: None
+            })]
+        );
+
+        assert_eq!(
+            *body,
+            vec![
+                any_stmt!(StmtKind::Continue(Some(any_expr!(ExprKind::Variable(
+                    Name::Resolved(Symbol::ParamLocal(ParamLocalId(2)), "x".into())
+                )))))
+                .into()
+            ]
+        )
+    }
+
+    #[test]
+    fn resolves_effect_call() {
+        let resolved = resolve(
+            "
+        effect 'fizz(x: Int) -> ()
+        'fizz(123)
+        ",
+        );
+
+        assert_eq!(
+            resolved.0.roots[1],
+            any_expr_stmt!(ExprKind::CallEffect {
+                effect_name: Name::Resolved(Symbol::Effect(EffectId::from(1)), "fizz".into()),
+                effect_name_span: Span::ANY,
+                args: vec![any!(CallArg, {
+                    label: Label::Positional(0),
+                    label_span: Span::ANY,
+                    value: any_expr!(ExprKind::LiteralInt("123".into()))
+                })]
+            })
+        );
+    }
+
+    #[test]
+    fn resolves_effect_annotation() {
+        let resolved = resolve(
+            "
+        effect 'fizz(x: Int) -> ()
+        func fizzes() 'fizz {}
+        ",
+        );
+
+        assert_eq_diff!(
+            *resolved.0.roots[1].as_decl(),
+            any_decl!(DeclKind::Let {
+                lhs: any!(Pattern, {
+                    kind: PatternKind::Bind(Name::Resolved(Symbol::Global(1.into()), "fizzes".into()))
+                }),
+                type_annotation: None,
+                rhs: Some(any_expr!(ExprKind::Func(Func {
+                    id: NodeID::ANY,
+                    name: Name::Resolved(Symbol::Global(1.into()), "fizzes".into()),
+                    name_span: Span::ANY,
+                    effects: EffectSet {
+                        names: vec![Name::Resolved(Symbol::Effect(1.into()), "fizz".into())],
+                        spans: vec![Span::ANY],
+                        is_open: false
+                    },
+                    generics: vec![],
+                    params: vec![],
+                    body: any_block!(vec![]),
+                    ret: None,
+                    attributes: vec![]
+                })))
+            })
+        );
+    }
+
+    #[test]
+    fn tracks_mutated_globals() {
+        let resolved = resolve(
+            "
+            let foo = 123
+            let bar = 456
+            foo = 789
+        ",
+        );
+
+        assert_eq!(
+            resolved.1.mutated_symbols,
+            indexset! { Symbol::Global(1.into()) }
+        );
+    }
+
+    #[test]
+    fn tracks_mutated_members() {
+        let resolved = resolve(
+            "
+            let a = { b: 123 }
+            a.b = 123
+        ",
+        );
+
+        assert_eq!(
+            resolved.1.mutated_symbols,
+            indexset! { Symbol::Global(1.into()) }
+        );
+    }
+
+    #[test]
+    fn tracks_nested_mutated_members() {
+        let resolved = resolve(
+            "
+            let a = { b: { c: 123 }}
+            a.b.c = 456
+        ",
+        );
+
+        assert_eq!(
+            resolved.1.mutated_symbols,
+            indexset! { Symbol::Global(1.into()) }
         );
     }
 }

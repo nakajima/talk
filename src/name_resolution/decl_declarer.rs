@@ -41,6 +41,14 @@ macro_rules! some {
             ),
         )
     };
+    (Effect) => {
+        $crate::name_resolution::symbol::Symbol::Effect(
+            $crate::name_resolution::symbol::EffectId::new(
+                $crate::compiling::module::ModuleId::Current,
+                0,
+            ),
+        )
+    };
     (Enum) => {
         $crate::name_resolution::symbol::Symbol::Enum($crate::name_resolution::symbol::EnumId::new(
             $crate::compiling::module::ModuleId::Current,
@@ -172,7 +180,8 @@ macro_rules! some {
     FuncSignature,
     MatchArm(enter, exit),
     Func,
-    Decl(enter, exit)
+    Decl(enter, exit),
+    Block(enter)
 )]
 pub struct DeclDeclarer<'a> {
     pub(super) resolver: &'a mut NameResolver,
@@ -406,6 +415,12 @@ impl<'a> DeclDeclarer<'a> {
 
     fn exit_match_arm(&mut self, _arm: &mut MatchArm) {
         self.end_scope();
+    }
+
+    fn enter_block(&mut self, block: &mut Block) {
+        for arg in &mut block.args {
+            arg.name = self.resolver.declare(&arg.name, some!(ParamLocal), arg.id);
+        }
     }
 
     ///////////////////////////////////////////////////////////////////////////
@@ -701,6 +716,15 @@ impl<'a> DeclDeclarer<'a> {
                 self.start_scope(Some(binder), id, true);
             }
         });
+
+        on!(&mut decl.kind, DeclKind::Effect { name, params, .. }, {
+            *name = self.resolver.declare(name, some!(Effect), decl.id);
+            for param in params {
+                param.name = self
+                    .resolver
+                    .declare(&param.name, some!(ParamLocal), param.id);
+            }
+        });
     }
 
     fn exit_decl(&mut self, decl: &mut Decl) {
@@ -843,12 +867,14 @@ impl<'a> DeclDeclarer<'a> {
                             Span::SYNTHESIZED,
                         ),
                         span: Span::SYNTHESIZED,
-                    },
+                    }
+                    .into(),
                     Expr {
                         id: NodeID(FileID::SYNTHESIZED, self.node_ids.next_id()),
                         kind: ExprKind::Variable(name),
                         span: Span::SYNTHESIZED,
-                    },
+                    }
+                    .into(),
                 ),
             });
 

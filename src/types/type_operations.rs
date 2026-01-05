@@ -7,6 +7,7 @@ use tracing::instrument;
 
 use crate::{
     label::Label,
+    name_resolution::symbol::Symbol,
     node_id::NodeID,
     types::{
         infer_row::{InferRow, RowMetaId, RowParamId, RowTail, normalize_row},
@@ -101,7 +102,7 @@ impl UnificationSubstitutions {
 
 fn occurs_in_row(id: MetaVarId, row: &InferRow) -> bool {
     match row {
-        InferRow::Empty(..) => false,
+        InferRow::Empty => false,
         InferRow::Var(_) => false,
         InferRow::Param(_) => false,
         InferRow::Extend { row, ty, .. } => occurs_in(id, ty) || occurs_in_row(id, row),
@@ -113,7 +114,9 @@ fn occurs_in(id: MetaVarId, ty: &InferTy) -> bool {
     match ty {
         InferTy::Error(..) => false,
         InferTy::Var { id: mid, .. } => *mid == id,
-        InferTy::Func(a, b) => occurs_in(id, a) || occurs_in(id, b),
+        InferTy::Func(a, b, effects) => {
+            occurs_in(id, a) || occurs_in(id, b) || occurs_in_row(id, effects)
+        }
         InferTy::Tuple(items) => items.iter().any(|t| occurs_in(id, t)),
         InferTy::Record(row) => occurs_in_row(id, row),
         InferTy::Nominal { type_args, .. } => type_args.iter().any(|t| occurs_in(id, t)),
@@ -134,7 +137,7 @@ fn row_occurs_structural(
     subs: &mut UnificationSubstitutions,
 ) -> bool {
     match row {
-        InferRow::Empty(..) | InferRow::Param(_) => false,
+        InferRow::Empty | InferRow::Param(_) => false,
         InferRow::Var(id) => *id == target,
         InferRow::Extend { row, ty, .. } => {
             row_occurs_structural(target, row, subs) || ty_occurs_structural_row(target, ty, subs)
@@ -149,8 +152,10 @@ fn ty_occurs_structural_row(
 ) -> bool {
     match ty {
         InferTy::Record(row) => row_occurs_structural(target, row, subs),
-        InferTy::Func(a, b) => {
-            ty_occurs_structural_row(target, a, subs) || ty_occurs_structural_row(target, b, subs)
+        InferTy::Func(a, b, effects) => {
+            ty_occurs_structural_row(target, a, subs)
+                || ty_occurs_structural_row(target, b, subs)
+                || row_occurs_structural(target, effects, subs)
         }
         InferTy::Tuple(items) => items
             .iter()
@@ -172,7 +177,7 @@ fn row_occurs(
     session: &mut TypeSession,
 ) -> bool {
     match session.apply_row(row.clone(), subs) {
-        InferRow::Empty(..) | InferRow::Param(_) => false,
+        InferRow::Empty | InferRow::Param(_) => false,
         InferRow::Var(id) => id == target,
         InferRow::Extend { row, ty, .. } => {
             row_occurs(target, &row, subs, session)
@@ -203,7 +208,7 @@ fn unify_rows(
         (&lhs_fields, &lhs_tail, &rhs_fields, &rhs_tail)
     {
         tracing::debug!("unifying closed row with row var");
-        let mut acc = InferRow::Empty(kind);
+        let mut acc = InferRow::Empty;
         for (label, ty) in closed.iter().rev() {
             acc = InferRow::Extend {
                 row: Box::new(acc),
@@ -336,6 +341,12 @@ pub(super) fn unify(
         return Ok(Default::default());
     }
 
+    if matches!(lhs, InferTy::Primitive(Symbol::Never))
+        || matches!(rhs, InferTy::Primitive(Symbol::Never))
+    {
+        return Ok(Default::default());
+    }
+
     let _s =
         tracing::trace_span!("unify", lhs = format!("{lhs:?}"), rhs = format!("{rhs:?}")).entered();
 
@@ -375,16 +386,16 @@ pub(super) fn unify(
             InferTy::Constructor {
                 params, box ret, ..
             },
-            InferTy::Func(func_param, func_ret),
+            InferTy::Func(func_param, func_ret, effects),
         )
         | (
-            InferTy::Func(func_param, func_ret),
+            InferTy::Func(func_param, func_ret, effects),
             InferTy::Constructor {
                 params, box ret, ..
             },
         ) => unify(
-            &curry(params.clone(), ret.clone()),
-            &InferTy::Func(func_param.clone(), func_ret.clone()),
+            &curry(params.clone(), ret.clone(), effects.clone()),
+            &InferTy::Func(func_param.clone(), func_ret.clone(), effects.clone()),
             context,
             session,
         ),
@@ -413,9 +424,19 @@ pub(super) fn unify(
             Ok(result)
         }
         // (Ty::TypeConstructor(lhs), Ty::TypeConstructor(rhs)) if lhs == rhs => Ok(false),
-        (InferTy::Func(lhs_param, lhs_ret), InferTy::Func(rhs_param, rhs_ret)) => {
+        (
+            InferTy::Func(lhs_param, lhs_ret, lhs_effects),
+            InferTy::Func(rhs_param, rhs_ret, rhs_effects),
+        ) => {
             result.extend(unify(lhs_param, rhs_param, context, session)?);
             result.extend(unify(lhs_ret, rhs_ret, context, session)?);
+            result.extend(unify_rows(
+                TypeDefKind::Struct,
+                lhs_effects,
+                rhs_effects,
+                context,
+                session,
+            )?);
             Ok(result)
         }
         (
@@ -488,10 +509,7 @@ pub(super) fn unify(
                 unify(&normalized, other, context, session)
             } else {
                 // Base is still unknown - error (the constraint solver will defer)
-                Err(TypeError::invalid_unification(
-                    projection,
-                    other.clone(),
-                ))
+                Err(TypeError::invalid_unification(projection, other.clone()))
             }
         }
 
@@ -509,7 +527,11 @@ pub(super) fn unify(
     }
 }
 
-pub fn curry<I: IntoIterator<Item = InferTy>>(params: I, ret: InferTy) -> InferTy {
+pub fn curry<I: IntoIterator<Item = InferTy>>(
+    params: I,
+    ret: InferTy,
+    effects: Box<InferRow>,
+) -> InferTy {
     let mut params = params.into_iter().collect_vec();
     if params.is_empty() {
         params.push(InferTy::Void);
@@ -518,7 +540,9 @@ pub fn curry<I: IntoIterator<Item = InferTy>>(params: I, ret: InferTy) -> InferT
         .into_iter()
         .collect::<Vec<_>>()
         .into_iter()
-        .rfold(ret, |acc, p| InferTy::Func(Box::new(p), Box::new(acc)))
+        .rfold(ret, |acc, p| {
+            InferTy::Func(Box::new(p), Box::new(acc), effects.clone())
+        })
 }
 
 pub(super) fn substitute_row(
@@ -526,7 +550,7 @@ pub(super) fn substitute_row(
     substitutions: &FxHashMap<InferTy, InferTy>,
 ) -> InferRow {
     match row {
-        InferRow::Empty(..) => row,
+        InferRow::Empty => row,
         InferRow::Var(..) => row,
         InferRow::Param(..) => row,
         InferRow::Extend { row, label, ty } => InferRow::Extend {
@@ -573,9 +597,10 @@ pub(super) fn substitute(ty: InferTy, substitutions: &FxHashMap<InferTy, InferTy
                 .collect(),
             ret: Box::new(substitute(*ret, substitutions)),
         },
-        InferTy::Func(params, ret) => InferTy::Func(
+        InferTy::Func(params, ret, effects) => InferTy::Func(
             Box::new(substitute(*params, substitutions)),
             Box::new(substitute(*ret, substitutions)),
+            Box::new(substitute_row(*effects, substitutions)),
         ),
         InferTy::Tuple(items) => InferTy::Tuple(
             items
@@ -601,7 +626,7 @@ pub(super) fn instantiate_row(
     level: Level,
 ) -> InferRow {
     match row {
-        InferRow::Empty(..) => row,
+        InferRow::Empty => row,
         InferRow::Var(..) => row,
         InferRow::Param(id) => {
             if let Some(row_metas) = substitutions.row.get(&node_id)
@@ -661,9 +686,10 @@ pub(super) fn instantiate_ty(
                 .collect(),
             ret: Box::new(instantiate_ty(node_id, *ret, substitutions, level)),
         },
-        InferTy::Func(params, ret) => InferTy::Func(
+        InferTy::Func(params, ret, effects) => InferTy::Func(
             Box::new(instantiate_ty(node_id, *params, substitutions, level)),
             Box::new(instantiate_ty(node_id, *ret, substitutions, level)),
+            Box::new(instantiate_row(node_id, *effects, substitutions, level)),
         ),
         InferTy::Tuple(items) => InferTy::Tuple(
             items

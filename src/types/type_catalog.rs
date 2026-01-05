@@ -146,6 +146,7 @@ pub struct TypeCatalog<T: SomeType> {
     pub variants: IndexMap<Symbol, IndexMap<Label, Symbol>>,
     pub method_requirements: IndexMap<Symbol, IndexMap<Label, Symbol>>,
     pub instantiations: TrackedInstantiations<T>,
+    pub effects: IndexMap<Symbol, T>, // Effects are represented as T::Func since they have params, ret, and possibly effects
 }
 
 impl<T: SomeType> Default for TypeCatalog<T> {
@@ -165,6 +166,7 @@ impl<T: SomeType> Default for TypeCatalog<T> {
             method_requirements: Default::default(),
 
             instantiations: Default::default(),
+            effects: Default::default(),
         }
     }
 }
@@ -205,6 +207,11 @@ impl TypeCatalog<InferTy> {
             variants: self.variants,
             method_requirements: self.method_requirements,
             instantiations,
+            effects: self
+                .effects
+                .into_iter()
+                .map(|(k, v)| (k, session.finalize_ty(v).as_mono_ty().clone()))
+                .collect(),
         }
     }
 }
@@ -286,6 +293,10 @@ impl<T: SomeType> TypeCatalog<T> {
         }
 
         None
+    }
+
+    pub fn lookup_effect(&self, id: &Symbol) -> Option<T> {
+        self.effects.get(id).cloned()
     }
 
     pub fn lookup_concrete_member(
@@ -402,6 +413,11 @@ impl TypeCatalog<Ty> {
                     .map(|(k, v)| (k, v.import(module_id)))
                     .collect(),
             },
+            effects: self
+                .effects
+                .into_iter()
+                .map(|(k, v)| (k.import(module_id), v.import(module_id)))
+                .collect(),
         }
     }
 }

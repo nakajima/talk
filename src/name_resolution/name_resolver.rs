@@ -48,6 +48,7 @@ pub enum NameResolverError {
     UndefinedName(String),
     Unresolved(Name),
     AmbiguousName(Name, Vec<Symbol>),
+    ShadowedEffectHandler(String),
 }
 
 impl Error for NameResolverError {}
@@ -59,6 +60,9 @@ impl Display for NameResolverError {
             Self::AmbiguousName(name, candidates) => {
                 write!(f, "Ambiguous: {name:?}, candidates: {candidates:?}")
             }
+            Self::ShadowedEffectHandler(name) => {
+                write!(f, "Effect handler shadowed: {name}")
+            }
         }
     }
 }
@@ -69,6 +73,7 @@ pub struct Scope {
     pub parent_id: Option<NodeID>,
     pub values: FxHashMap<String, Symbol>,
     pub types: FxHashMap<String, Symbol>,
+    pub handlers: FxHashMap<Symbol, (Symbol, NodeID)>,
     pub depth: u32,
     pub binder: Option<Symbol>,
     pub level: Level,
@@ -96,6 +101,7 @@ impl Scope {
             level,
             values: Default::default(),
             types: Default::default(),
+            handlers: Default::default(),
             binder,
         }
     }
@@ -108,10 +114,13 @@ pub struct ResolvedNames {
     pub scopes: FxHashMap<NodeID, Scope>,
     pub symbol_names: FxHashMap<Symbol, String>,
     pub symbols_to_node: FxHashMap<Symbol, NodeID>,
+    pub effect_handlers: FxHashMap<NodeID, Symbol>,
+    pub handler_symbols: FxHashSet<Symbol>,
     pub scc_graph: SCCGraph,
     pub unbound_nodes: Vec<NodeID>,
     pub child_types: IndexMap<Symbol, IndexMap<Label, Symbol>>,
     pub diagnostics: Vec<AnyDiagnostic>,
+    pub mutated_symbols: IndexSet<Symbol>,
 }
 
 impl ResolvedNames {
@@ -361,6 +370,63 @@ impl NameResolver {
         None
     }
 
+    fn lookup_handler_in_scope(&mut self, effect: Symbol, scope_id: NodeID) -> Option<Symbol> {
+        let handler = self
+            .scopes
+            .get(&scope_id)
+            .and_then(|scope| scope.handlers.get(&effect).copied());
+
+        if let Some((handler, _)) = handler {
+            return Some(handler);
+        }
+
+        let parent = self.scopes.get(&scope_id).and_then(|scope| scope.parent_id);
+        if let Some(parent) = parent
+            && let Some(captured) = self.lookup_handler_in_scope(effect, parent)
+            && parent != scope_id
+        {
+            let scope = self
+                .scopes
+                .get(&scope_id)
+                .unwrap_or_else(|| unreachable!("scope not found: {scope_id:?}"));
+
+            if scope.binder == Some(captured) {
+                return Some(captured);
+            }
+
+            let Some(current_scope_binder) = scope.binder else {
+                return Some(captured);
+            };
+
+            if !matches!(
+                captured,
+                Symbol::DeclaredLocal(..) | Symbol::ParamLocal(..) | Symbol::Global(..)
+            ) {
+                return Some(captured);
+            }
+
+            let parent_binder =
+                self.nearest_enclosing_binder_from(Some(parent), current_scope_binder);
+
+            let capture = Capture {
+                symbol: captured,
+                parent_binder,
+                level: scope.level,
+            };
+
+            self.phase
+                .captures
+                .entry(current_scope_binder)
+                .or_default()
+                .insert(capture);
+            self.phase.is_captured.insert(captured);
+
+            return Some(captured);
+        }
+
+        None
+    }
+
     pub(super) fn lookup(&mut self, name: &Name, node_id: Option<NodeID>) -> Option<Name> {
         let symbol = self.lookup_in_scope(
             name,
@@ -431,6 +497,14 @@ impl NameResolver {
         });
     }
 
+    pub(super) fn warning(&mut self, id: NodeID, err: NameResolverError) {
+        self.diagnostics.insert(Diagnostic::<NameResolverError> {
+            kind: err,
+            severity: Severity::Warn,
+            id,
+        });
+    }
+
     #[instrument(skip(self))]
     fn enter_scope(&mut self, node_id: NodeID, symbols: Option<Vec<(Symbol, NodeID)>>) {
         self.current_scope_id = Some(node_id);
@@ -481,6 +555,7 @@ impl NameResolver {
         let symbol = match kind {
             Symbol::Main => Symbol::Main,
             Symbol::Library => Symbol::Library,
+            Symbol::Effect(..) => Symbol::Effect(self.symbols.next_effect(module_id)),
             Symbol::Struct(..) => Symbol::Struct(self.symbols.next_struct(module_id)),
             Symbol::Enum(..) => Symbol::Enum(self.symbols.next_enum(module_id)),
             Symbol::TypeAlias(..) => Symbol::TypeAlias(self.symbols.next_type_alias(module_id)),
@@ -663,6 +738,40 @@ impl NameResolver {
         {
             self.enter_scope(block.id, None);
         }
+
+        on!(&mut stmt.kind, StmtKind::Handling { effect_name, .. }, {
+            let Some(Name::Resolved(effect_sym, _)) = self.lookup(effect_name, Some(stmt.id))
+            else {
+                self.diagnostic(stmt.id, NameResolverError::Unresolved(effect_name.clone()));
+                return;
+            };
+
+            *effect_name = Name::Resolved(effect_sym, effect_name.name_str());
+
+            if let Some(scope) = self.current_scope()
+                && let Some((_, id)) = scope.handlers.get(&effect_sym)
+            {
+                self.warning(
+                    *id,
+                    NameResolverError::ShadowedEffectHandler(effect_name.name_str()),
+                );
+            }
+
+            let Some(scope) = self.current_scope_mut() else {
+                self.diagnostic(
+                    stmt.id,
+                    NameResolverError::UndefinedName("no scope".to_string()),
+                );
+
+                return;
+            };
+
+            scope.handlers.insert(effect_sym, (effect_sym, stmt.id));
+        });
+
+        if let StmtKind::Assignment(box lhs, ..) = &mut stmt.kind {
+            self.track_assignment_mutation(lhs);
+        }
     }
 
     fn exit_stmt(&mut self, stmt: &mut Stmt) {
@@ -672,6 +781,30 @@ impl NameResolver {
         }) = &mut stmt.kind
         {
             self.exit_scope(stmt.id);
+        }
+    }
+
+    fn track_assignment_mutation(&mut self, expr: &mut Expr) {
+        let Some((name, id)) = Self::assignment_base_name(expr) else {
+            return;
+        };
+        let Some(resolved) = self.lookup(name, Some(id)) else {
+            self.diagnostic(id, NameResolverError::UndefinedName(name.name_str()));
+            return;
+        };
+
+        self.phase
+            .mutated_symbols
+            .insert(resolved.symbol().unwrap_or_else(|_| unreachable!("")));
+
+        *name = resolved;
+    }
+
+    fn assignment_base_name(expr: &mut Expr) -> Option<(&mut Name, NodeID)> {
+        match &mut expr.kind {
+            ExprKind::Variable(name) => Some((name, expr.id)),
+            ExprKind::Member(Some(inner), ..) => Self::assignment_base_name(inner),
+            _ => None,
         }
     }
 
@@ -738,6 +871,26 @@ impl NameResolver {
                 expr.kind = ExprKind::Constructor(name.clone());
             }
         });
+
+        on!(&mut expr.kind, ExprKind::CallEffect { effect_name, .. }, {
+            let Some(resolved_name) = self.lookup(effect_name, Some(expr.id)) else {
+                self.diagnostic(
+                    expr.id,
+                    NameResolverError::UndefinedName(effect_name.name_str()),
+                );
+                return;
+            };
+
+            *effect_name = resolved_name;
+
+            if let Ok(effect_sym) = effect_name.symbol()
+                && let Some(scope_id) = self.current_scope_id
+                && let Some(handler_sym) = self.lookup_handler_in_scope(effect_sym, scope_id)
+            {
+                self.phase.effect_handlers.insert(expr.id, handler_sym);
+                self.track_dependency(handler_sym, expr.id);
+            }
+        });
     }
 
     ///////////////////////////////////////////////////////////////////////////
@@ -754,6 +907,14 @@ impl NameResolver {
                 func.id,
             )]),
         );
+
+        for name in &mut func.effects.names {
+            let Some(resolved_name) = self.lookup(name, None) else {
+                self.diagnostic(func.id, NameResolverError::Unresolved(name.clone()));
+                continue;
+            };
+            *name = resolved_name;
+        }
     }
 
     fn exit_func(&mut self, func: &mut Func) {

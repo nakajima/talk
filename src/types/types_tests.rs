@@ -12,6 +12,8 @@ pub mod tests {
         name_resolution::symbol::{EnumId, GlobalId, ProtocolId, StructId, Symbol, SynthesizedId},
         types::{
             conformance::ConformanceKey,
+            infer_row::RowParamId,
+            row::Row,
             scheme::{ForAll, Scheme},
             ty::Ty,
             type_error::TypeError,
@@ -23,7 +25,7 @@ pub mod tests {
         },
     };
 
-    fn typecheck(code: &'static str) -> (TypedAST<Ty>, Types) {
+    pub fn typecheck(code: &'static str) -> (TypedAST<Ty>, Types) {
         let (ast, types, diagnostics) = typecheck_err(code);
         assert!(
             diagnostics.is_empty(),
@@ -33,7 +35,7 @@ pub mod tests {
         (ast, types)
     }
 
-    fn typecheck_err(code: &'static str) -> (TypedAST<Ty>, Types, Vec<AnyDiagnostic>) {
+    pub fn typecheck_err(code: &'static str) -> (TypedAST<Ty>, Types, Vec<AnyDiagnostic>) {
         let driver = Driver::new_bare(vec![Source::from(code)], DriverConfig::new("TestDriver"));
         let typed = driver
             .parse()
@@ -46,7 +48,7 @@ pub mod tests {
         (typed.phase.ast, typed.phase.types, typed.phase.diagnostics)
     }
 
-    fn typecheck_core(code: &'static str) -> (TypedAST<Ty>, Types) {
+    pub fn typecheck_core(code: &'static str) -> (TypedAST<Ty>, Types) {
         let (ast, types, diagnostics) = typecheck_core_err(code);
 
         assert!(
@@ -58,7 +60,7 @@ pub mod tests {
         (ast, types)
     }
 
-    fn typecheck_core_err(code: &'static str) -> (TypedAST<Ty>, Types, Vec<AnyDiagnostic>) {
+    pub fn typecheck_core_err(code: &'static str) -> (TypedAST<Ty>, Types, Vec<AnyDiagnostic>) {
         let driver = Driver::new(vec![Source::from(code)], DriverConfig::new("TestDriver"));
         let typed = driver
             .parse()
@@ -2307,7 +2309,11 @@ pub mod tests {
                 .get_symbol(&GlobalId::from(1).into())
                 .unwrap()
                 .as_mono_ty(),
-            Ty::Func(Ty::Param(3.into()).into(), Ty::Int.into())
+            Ty::Func(
+                Ty::Param(3.into()).into(),
+                Ty::Int.into(),
+                Row::Param(1.into()).into()
+            )
         );
     }
 
@@ -2358,7 +2364,8 @@ pub mod tests {
                 .unwrap()
                 .as_mono_ty(),
             // We should be able to infer the n is int because there's only one Comparable with RHS int
-            Ty::Func(Ty::Int.into(), Ty::Int.into())
+            // Effect row is polymorphic since no effects are declared (open effect set)
+            Ty::Func(Ty::Int.into(), Ty::Int.into(), Row::Param(RowParamId(1)).into())
         )
     }
 

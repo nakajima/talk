@@ -24,6 +24,10 @@ pub(super) fn handle(string: String) -> TokenKind {
         "static" => Static,
         "associated" => Associated,
         "typealias" => Typealias,
+        "effect" => Effect,
+        "handling" => Handling,
+        "in" => In,
+        "continue" => Continue,
         _ => Identifier(string),
     }
 }

@@ -5,5 +5,6 @@ pub mod equals;
 pub mod has_field;
 pub mod member;
 pub mod projection;
+pub mod row_subset;
 pub mod store;
 pub mod type_member;

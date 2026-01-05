@@ -6,11 +6,18 @@ pub enum TokenKind {
 
     Import,
 
+    // Effects
+    Effect,
+    Handling,
+    EffectName(String),
+    SingleQuote,
+
     // Control flow
     If,
     Else,
     Loop,
     Return,
+    Continue,
 
     True,
     False,
@@ -78,6 +85,7 @@ pub enum TokenKind {
     Attribute(String),
     Func,
     Init,
+    In,
     Let,
     Mut,
     EOF,
@@ -98,6 +106,8 @@ impl Display for TokenKind {
 impl TokenKind {
     pub fn as_str(&self) -> String {
         let text = match &self {
+            TokenKind::Continue => "continue",
+            TokenKind::EffectName(v) => &format!("'{v}"),
             TokenKind::Dollar => "$",
             TokenKind::BoundVar(v) => &format!("${v}"),
             TokenKind::Percent => "%",
@@ -174,6 +184,10 @@ impl TokenKind {
             TokenKind::At => "@",
             TokenKind::DotDot => "..",
             TokenKind::DotDotDot => "...",
+            TokenKind::Effect => "effect",
+            TokenKind::Handling => "handling",
+            TokenKind::In => "in",
+            TokenKind::SingleQuote => "'",
         };
 
         text.to_string()

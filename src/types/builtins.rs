@@ -1,6 +1,7 @@
 use indexmap::IndexSet;
 use rustc_hash::FxHashMap;
 
+use crate::types::infer_row::InferRow;
 use crate::types::infer_ty::{InferTy, TypeParamId};
 use crate::types::predicate::Predicate;
 use crate::types::scheme::{ForAll, Scheme};
@@ -23,15 +24,18 @@ pub fn resolve_builtin_type(id: &Symbol) -> (InferTy, Vec<Predicate<InferTy>>, I
         Symbol::Float => InferTy::Primitive(Symbol::Float),
         Symbol::Bool => InferTy::Primitive(Symbol::Bool),
         Symbol::Void => InferTy::Primitive(Symbol::Void),
+        Symbol::Never => InferTy::Primitive(Symbol::Never),
         Symbol::RawPtr => InferTy::Primitive(Symbol::RawPtr),
         Symbol::Byte => InferTy::Primitive(Symbol::Byte),
         Symbol::IR => InferTy::Func(
             InferTy::String().into(),
             InferTy::Param(TypeParamId::IR_TYPE_PARAM).into(),
+            InferRow::Empty.into(),
         ),
         Symbol::PRINT => InferTy::Func(
             InferTy::String().into(),
             InferTy::Param(TypeParamId::IR_TYPE_PARAM).into(),
+            InferRow::Empty.into(),
         ),
         _ => unreachable!("no builtin named {id:?}"),
     };
@@ -46,6 +50,7 @@ pub fn builtin_scope() -> FxHashMap<Symbol, EnvEntry<InferTy>> {
     res.insert(Symbol::Float, EnvEntry::Mono(InferTy::Float));
     res.insert(Symbol::Bool, EnvEntry::Mono(InferTy::Bool));
     res.insert(Symbol::Void, EnvEntry::Mono(InferTy::Void));
+    res.insert(Symbol::Never, EnvEntry::Mono(InferTy::Never));
     res.insert(Symbol::Byte, EnvEntry::Mono(InferTy::Byte));
     res.insert(
         Symbol::RawPtr,
@@ -59,6 +64,7 @@ pub fn builtin_scope() -> FxHashMap<Symbol, EnvEntry<InferTy>> {
             InferTy::Func(
                 InferTy::String().into(),
                 InferTy::Param(TypeParamId::IR_TYPE_PARAM).into(),
+                InferRow::Empty.into(),
             ),
         )),
     );
@@ -70,6 +76,7 @@ pub fn builtin_scope() -> FxHashMap<Symbol, EnvEntry<InferTy>> {
             InferTy::Func(
                 InferTy::Param(TypeParamId::IR_TYPE_PARAM).into(),
                 InferTy::Void.into(),
+                InferRow::Empty.into(),
             ),
         )),
     );

@@ -25,4 +25,6 @@ pub mod vars;
 // pub mod wants;
 
 #[cfg(test)]
+pub mod effects_tests;
+#[cfg(test)]
 pub mod types_tests;

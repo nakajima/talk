@@ -3,7 +3,8 @@ use crate::{
     types::{
         constraints::{
             call::Call, conforms::Conforms, equals::Equals, has_field::HasField, member::Member,
-            projection::Projection, store::ConstraintId, type_member::TypeMember,
+            projection::Projection, row_subset::RowSubset, store::ConstraintId,
+            type_member::TypeMember,
         },
         infer_row::InferRow,
         infer_ty::InferTy,
@@ -60,6 +61,7 @@ pub enum Constraint {
     Conforms(Conforms),
     TypeMember(TypeMember),
     Projection(Projection),
+    RowSubset(RowSubset),
 }
 
 impl Constraint {
@@ -72,6 +74,7 @@ impl Constraint {
             Constraint::Conforms(c) => c.id,
             Constraint::TypeMember(c) => c.id,
             Constraint::Projection(c) => c.id,
+            Constraint::RowSubset(c) => c.id,
         }
     }
 
@@ -84,6 +87,7 @@ impl Constraint {
             Constraint::TypeMember(type_member) => Some(type_member.node_id),
             Constraint::Projection(projection) => Some(projection.node_id),
             Constraint::HasField(has_field) => has_field.node_id,
+            Constraint::RowSubset(c) => c.node_id,
         }
     }
 
@@ -96,6 +100,7 @@ impl Constraint {
             Constraint::Conforms(..) => true,
             Constraint::TypeMember(..) => true,
             Constraint::Projection(..) => true,
+            Constraint::RowSubset(..) => false,
         }
     }
 
@@ -142,6 +147,10 @@ impl Constraint {
                 c.result = session.apply(c.result.clone(), substitutions);
                 c.generics = session.apply_mult(c.generics.clone(), substitutions);
             }
+            Constraint::RowSubset(c) => {
+                c.left = session.apply_row(c.left.clone(), substitutions);
+                c.right = session.apply_row(c.right.clone(), substitutions);
+            }
         }
         self
     }
@@ -181,6 +190,10 @@ impl Constraint {
                 c.base = substitute(c.base.clone(), substitutions);
                 c.result = substitute(c.result.clone(), substitutions);
                 c.generics = substitute_mult(&c.generics, substitutions);
+            }
+            Constraint::RowSubset(c) => {
+                c.left = substitute_row(c.left.clone(), substitutions);
+                c.right = substitute_row(c.right.clone(), substitutions);
             }
         }
 
@@ -297,6 +310,10 @@ impl Constraint {
                 for ty in &c.generics {
                     out.extend(ty.collect_metas());
                 }
+            }
+            Constraint::RowSubset(c) => {
+                out.extend(c.left.collect_metas());
+                out.extend(c.right.collect_metas());
             }
         }
 

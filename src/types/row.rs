@@ -4,16 +4,15 @@ use crate::{
     compiling::module::ModuleId,
     label::Label,
     types::{
-        infer_row::{ClosedRow, RowParamId},
+        infer_row::{ClosedRow, RowMetaId, RowParamId},
         scheme::ForAll,
-        ty::Ty,
-        type_session::TypeDefKind,
+        ty::{BaseRow, RowType, SomeType, Ty},
     },
 };
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Drive, DriveMut)]
 pub enum Row {
-    Empty(#[drive(skip)] TypeDefKind),
+    Empty,
     Param(#[drive(skip)] RowParamId),
     Extend {
         row: Box<Row>,
@@ -21,6 +20,42 @@ pub enum Row {
         label: Label,
         ty: Ty,
     },
+}
+
+impl RowType for Row {
+    type T = Ty;
+
+    fn base(&self) -> BaseRow<Ty> {
+        match self.clone() {
+            Self::Empty => BaseRow::Empty,
+            Self::Param(id) => BaseRow::Param(id),
+            Self::Extend { row, label, ty } => BaseRow::Extend {
+                row: row.base().into(),
+                label,
+                ty,
+            },
+        }
+    }
+
+    fn empty() -> Self {
+        Self::Empty
+    }
+
+    fn param(id: RowParamId) -> Self {
+        Self::Param(id)
+    }
+
+    fn var(_id: RowMetaId) -> Self {
+        unreachable!()
+    }
+
+    fn extend(row: Self, label: Label, ty: Ty) -> Self {
+        Self::Extend {
+            row: row.into(),
+            label,
+            ty,
+        }
+    }
 }
 
 impl Row {
@@ -31,7 +66,7 @@ impl Row {
     pub fn collect_foralls(&self) -> Vec<ForAll> {
         let mut result = vec![];
         match self {
-            Row::Empty(..) => (),
+            Row::Empty => (),
             Row::Param(id) => {
                 result.push(ForAll::Row(*id));
             }
@@ -45,7 +80,7 @@ impl Row {
 
     pub fn import(self, module_id: ModuleId) -> Self {
         match self {
-            Row::Empty(v) => Row::Empty(v),
+            Row::Empty => Row::Empty,
             Row::Param(v) => Row::Param(v),
             Row::Extend { box row, label, ty } => Row::Extend {
                 row: row.import(module_id).into(),
@@ -59,7 +94,7 @@ impl Row {
 fn close(row: &Row, mut closed_row: ClosedRow<Ty>) -> ClosedRow<Ty> {
     #[allow(clippy::panic)]
     match row {
-        Row::Empty(..) => closed_row,
+        Row::Empty => closed_row,
         Row::Param(_) => panic!("Cannot close param: {row:?}"),
         Row::Extend { row, label, ty } => {
             closed_row.insert(label.clone(), ty.clone());

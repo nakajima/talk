@@ -5,19 +5,59 @@ use indexmap::IndexSet;
 
 use crate::{
     compiling::module::ModuleId,
+    label::Label,
     name::Name,
     name_resolution::symbol::Symbol,
     types::{
+        infer_row::{RowMetaId, RowParamId},
         infer_ty::{InferTy, TypeParamId},
         row::Row,
         scheme::ForAll,
+        typed_ast::TyMappable,
     },
 };
 
+pub enum BaseRow<T: SomeType> {
+    Empty,
+    Param(RowParamId),
+    Var(RowMetaId),
+    Extend { row: Box<Self>, label: Label, ty: T },
+}
+
+impl<T: SomeType, U: SomeType> TyMappable<T, U> for BaseRow<T> {
+    type OutputTy = U::RowType;
+    fn map_ty(self, m: &mut impl FnMut(&T) -> U) -> Self::OutputTy {
+        match self {
+            BaseRow::Empty => U::RowType::empty(),
+            BaseRow::Param(id) => U::RowType::param(id),
+            BaseRow::Var(id) => U::RowType::var(id),
+            BaseRow::Extend { row, label, ty } => U::RowType::extend(row.map_ty(m), label, m(&ty)),
+        }
+    }
+}
+
+pub trait RowType: PartialEq + Clone + std::fmt::Debug + Drive + DriveMut {
+    type T: SomeType<RowType = Self>;
+    fn base(&self) -> BaseRow<Self::T>;
+    fn empty() -> Self;
+    fn param(id: RowParamId) -> Self;
+    fn var(id: RowMetaId) -> Self;
+    fn extend(row: Self, label: Label, ty: Self::T) -> Self;
+}
+
+impl<T: SomeType, U: SomeType, V: RowType<T = T>> TyMappable<T, U> for V {
+    type OutputTy = U::RowType;
+    fn map_ty(self, m: &mut impl FnMut(&T) -> U) -> Self::OutputTy {
+        self.base().map_ty(m)
+    }
+}
+
 pub trait SomeType: std::fmt::Debug + PartialEq + Clone + Eq + Hash + Drive + DriveMut {
-    type RowType: PartialEq + Clone + std::fmt::Debug;
+    type RowType: RowType<T = Self>;
+
     fn void() -> Self;
     fn contains_var(&self) -> bool;
+    fn import(self, module_id: ModuleId) -> Self;
 }
 
 impl SomeType for Ty {
@@ -29,6 +69,37 @@ impl SomeType for Ty {
 
     fn contains_var(&self) -> bool {
         false
+    }
+
+    fn import(self, module_id: ModuleId) -> Self {
+        match self {
+            Ty::Primitive(symbol) => Ty::Primitive(symbol),
+            Ty::Param(type_param_id) => Ty::Param(type_param_id),
+            Ty::Constructor {
+                name: Name::Resolved(sym, name),
+                params,
+                ret,
+            } => Ty::Constructor {
+                name: Name::Resolved(sym.import(module_id), name),
+                params: params.into_iter().map(|p| p.import(module_id)).collect(),
+                ret: ret.import(module_id).into(),
+            },
+            Ty::Func(param, ret, effects) => Ty::Func(
+                param.import(module_id).into(),
+                ret.import(module_id).into(),
+                effects.import(module_id).into(),
+            ),
+            Ty::Tuple(items) => Ty::Tuple(items.into_iter().map(|t| t.import(module_id)).collect()),
+            Ty::Record(symbol, box row) => Ty::Record(
+                symbol.map(|s| s.import(module_id)),
+                row.import(module_id).into(),
+            ),
+            Ty::Nominal { symbol, type_args } => Ty::Nominal {
+                symbol: symbol.import(module_id),
+                type_args: type_args.into_iter().map(|t| t.import(module_id)).collect(),
+            },
+            other => other,
+        }
     }
 }
 
@@ -43,7 +114,7 @@ pub enum Ty {
         ret: Box<Ty>,
     },
 
-    Func(Box<Ty>, Box<Ty>),
+    Func(Box<Ty>, Box<Ty>, Box<Row>),
     Tuple(Vec<Ty>),
     Record(#[drive(skip)] Option<Symbol>, Box<Row>),
 
@@ -63,6 +134,7 @@ impl std::fmt::Display for Ty {
                 Symbol::Float => write!(f, "Float"),
                 Symbol::Bool => write!(f, "Bool"),
                 Symbol::Void => write!(f, "Void"),
+                Symbol::Never => write!(f, "Never"),
                 Symbol::RawPtr => write!(f, "RawPtr"),
                 _ => write!(f, "{symbol}"),
             },
@@ -70,10 +142,10 @@ impl std::fmt::Display for Ty {
             Ty::Constructor { name, .. } => {
                 write!(f, "{}", name.name_str())
             }
-            Ty::Func(param, ret) => {
+            Ty::Func(param, ret, effects) => {
                 write!(
                     f,
-                    "({}) -> {ret}",
+                    "({}) {effects:?} -> {ret}",
                     param
                         .clone()
                         .uncurry_params()
@@ -117,6 +189,7 @@ impl Ty {
     pub const Float: Ty = Ty::Primitive(Symbol::Float);
     pub const Bool: Ty = Ty::Primitive(Symbol::Bool);
     pub const Void: Ty = Ty::Primitive(Symbol::Void);
+    pub const Never: Ty = Ty::Primitive(Symbol::Never);
     pub const Byte: Ty = Ty::Primitive(Symbol::Byte);
     pub const RawPtr: Ty = Ty::Primitive(Symbol::RawPtr);
     pub fn String() -> Ty {
@@ -142,9 +215,10 @@ impl Ty {
                 }
                 result.extend(ret.collect_foralls());
             }
-            Ty::Func(param, ret) => {
+            Ty::Func(param, ret, effects) => {
                 result.extend(param.collect_foralls());
                 result.extend(ret.collect_foralls());
+                result.extend(effects.collect_foralls());
             }
             Ty::Tuple(items) => {
                 for item in items {
@@ -161,35 +235,6 @@ impl Ty {
             }
         }
         result
-    }
-
-    pub fn import(self, module_id: ModuleId) -> Self {
-        match self {
-            Ty::Primitive(symbol) => Ty::Primitive(symbol),
-            Ty::Param(type_param_id) => Ty::Param(type_param_id),
-            Ty::Constructor {
-                name: Name::Resolved(sym, name),
-                params,
-                ret,
-            } => Ty::Constructor {
-                name: Name::Resolved(sym.import(module_id), name),
-                params: params.into_iter().map(|p| p.import(module_id)).collect(),
-                ret: ret.import(module_id).into(),
-            },
-            Ty::Func(param, ret) => {
-                Ty::Func(param.import(module_id).into(), ret.import(module_id).into())
-            }
-            Ty::Tuple(items) => Ty::Tuple(items.into_iter().map(|t| t.import(module_id)).collect()),
-            Ty::Record(symbol, box row) => Ty::Record(
-                symbol.map(|s| s.import(module_id)),
-                row.import(module_id).into(),
-            ),
-            Ty::Nominal { symbol, type_args } => Ty::Nominal {
-                symbol: symbol.import(module_id),
-                type_args: type_args.into_iter().map(|t| t.import(module_id)).collect(),
-            },
-            other => other,
-        }
     }
 
     pub(crate) fn uncurry_params(self) -> Vec<Ty> {

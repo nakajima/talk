@@ -1,8 +1,8 @@
 use indexmap::IndexMap;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::analysis::{CompletionItem, CompletionItemKind, DocumentId};
 use crate::analysis::workspace::Workspace;
+use crate::analysis::{CompletionItem, CompletionItemKind, DocumentId};
 use crate::{
     ast::{AST, NameResolved},
     label::Label,
@@ -15,8 +15,8 @@ use crate::{
     types::{
         format::{SymbolNames, TypeFormatter},
         row::Row,
-        type_session::Types,
         ty::Ty,
+        type_session::Types,
     },
 };
 
@@ -132,12 +132,10 @@ fn member_completions(
                 .nominals
                 .get(&receiver_sym)
                 .map(|_| {
-                    formatter.format_ty(
-                        &Ty::Nominal {
-                            symbol: receiver_sym,
-                            type_args: vec![],
-                        },
-                    )
+                    formatter.format_ty(&Ty::Nominal {
+                        symbol: receiver_sym,
+                        type_args: vec![],
+                    })
                 })
                 .unwrap_or_else(|| receiver_sym.to_string());
             let variant_values = types
@@ -319,7 +317,7 @@ fn completion_kind(symbol: Symbol) -> Option<CompletionItemKind> {
         Symbol::Protocol(..) => CompletionItemKind::Interface,
         Symbol::TypeAlias(..) => CompletionItemKind::Class,
         Symbol::TypeParameter(..) | Symbol::AssociatedType(..) => CompletionItemKind::TypeParameter,
-
+        Symbol::Effect(..) => CompletionItemKind::Effect,
         Symbol::Global(..)
         | Symbol::DeclaredLocal(..)
         | Symbol::PatternBindLocal(..)
@@ -400,7 +398,7 @@ fn record_fields(row: &Row) -> Vec<(Label, Ty)> {
     let mut cursor = row;
     loop {
         match cursor {
-            Row::Empty(..) | Row::Param(..) => break,
+            Row::Empty | Row::Param(..) => break,
             Row::Extend { row, label, ty } => {
                 if seen.insert(label.clone()) {
                     result.push((label.clone(), ty.clone()));
@@ -438,9 +436,10 @@ fn substitute_ty(ty: &Ty, substitutions: &FxHashMap<Ty, Ty>) -> Ty {
                 .collect(),
             ret: substitute_ty(ret, substitutions).into(),
         },
-        Ty::Func(param, ret) => Ty::Func(
+        Ty::Func(param, ret, effects) => Ty::Func(
             substitute_ty(param, substitutions).into(),
             substitute_ty(ret, substitutions).into(),
+            substitute_row(effects, substitutions).into(),
         ),
         Ty::Tuple(items) => Ty::Tuple(
             items
@@ -448,9 +447,7 @@ fn substitute_ty(ty: &Ty, substitutions: &FxHashMap<Ty, Ty>) -> Ty {
                 .map(|t| substitute_ty(t, substitutions))
                 .collect(),
         ),
-        Ty::Record(symbol, row) => {
-            Ty::Record(*symbol, substitute_row(row, substitutions).into())
-        }
+        Ty::Record(symbol, row) => Ty::Record(*symbol, substitute_row(row, substitutions).into()),
         Ty::Nominal { symbol, type_args } => Ty::Nominal {
             symbol: *symbol,
             type_args: type_args
@@ -463,7 +460,7 @@ fn substitute_ty(ty: &Ty, substitutions: &FxHashMap<Ty, Ty>) -> Ty {
 
 fn substitute_row(row: &Row, substitutions: &FxHashMap<Ty, Ty>) -> Row {
     match row {
-        Row::Empty(kind) => Row::Empty(*kind),
+        Row::Empty => Row::Empty,
         Row::Param(param) => Row::Param(*param),
         Row::Extend { row, label, ty } => Row::Extend {
             row: substitute_row(row, substitutions).into(),
@@ -473,10 +470,7 @@ fn substitute_row(row: &Row, substitutions: &FxHashMap<Ty, Ty>) -> Row {
     }
 }
 
-fn smallest_node_at_offset(
-    analysis: &CompletionAnalysis<'_>,
-    byte_offset: u32,
-) -> Option<NodeID> {
+fn smallest_node_at_offset(analysis: &CompletionAnalysis<'_>, byte_offset: u32) -> Option<NodeID> {
     analysis
         .ast
         .meta
@@ -496,7 +490,7 @@ fn smallest_node_at_offset(
 
 #[cfg(test)]
 mod tests {
-    use crate::analysis::{completion::CompletionAnalysis, DocumentInput, Workspace};
+    use crate::analysis::{DocumentInput, Workspace, completion::CompletionAnalysis};
 
     fn analyze(code: &str) -> Workspace {
         let doc = DocumentInput {

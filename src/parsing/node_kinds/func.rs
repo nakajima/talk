@@ -11,6 +11,23 @@ use crate::{
     span::Span,
 };
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EffectSet {
+    pub names: Vec<Name>,
+    pub spans: Vec<Span>,
+    pub is_open: bool,
+}
+
+impl Default for EffectSet {
+    fn default() -> Self {
+        Self {
+            names: Default::default(),
+            spans: Default::default(),
+            is_open: true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
 pub struct Func {
     #[drive(skip)]
@@ -19,6 +36,8 @@ pub struct Func {
     pub name: Name,
     #[drive(skip)]
     pub name_span: Span,
+    #[drive(skip)]
+    pub effects: EffectSet,
     pub generics: Vec<GenericDecl>,
     pub params: Vec<Parameter>, /* params tuple */
     pub body: Block,

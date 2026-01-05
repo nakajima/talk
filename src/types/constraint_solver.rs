@@ -63,7 +63,9 @@ impl<'a> ConstraintSolver<'a> {
                         }
                     }
                     Constraint::Call(ref call) => call.solve(constraints, self.context, session),
-                    Constraint::HasField(ref has_field) => has_field.solve(level, constraints),
+                    Constraint::HasField(ref has_field) => {
+                        has_field.solve(constraints, self.context, session)
+                    }
                     Constraint::Member(ref member) => {
                         member.solve(constraints, self.context, session)
                     }
@@ -74,6 +76,7 @@ impl<'a> ConstraintSolver<'a> {
                     Constraint::Projection(ref projection) => {
                         projection.solve(level, constraints, self.context, session)
                     }
+                    Constraint::RowSubset(ref c) => c.solve(constraints, self.context, session),
                 };
 
                 match solution {

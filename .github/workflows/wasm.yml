@@ -1,0 +1,60 @@
+name: build-and-deploy-wasm
+
+on:
+  # rebuild on every push to main; trigger manually if needed
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Allow only one concurrent deployment, skipping runs queued between the run in-progress and latest queued.
+# However, do NOT cancel in-progress runs as we want to allow these production deployments to complete.
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  build:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./www
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache cargo registry + binary installs
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin      # <- holds the wasm-pack binary
+          key: cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}-wasm-pack-0.12.1
+          restore-keys: |
+            cargo-${{ runner.os }}-
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: nightly
+          profile: minimal
+          override: true
+      - uses: jetli/wasm-pack-action@v0.4.0
+        with:
+          # Optional version of wasm-pack to install(eg. 'v0.9.1', 'latest')
+          version: 'latest'
+      - run: ./build.sh
+      - name: Stamp build with short SHA
+        run: |
+          sha=$(git rev-parse --short HEAD)
+          echo "latest build: $sha" > assets/version.txt
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./www/assets
+      - uses: actions/deploy-pages@v4

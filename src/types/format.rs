@@ -87,6 +87,7 @@ impl<'a> TypeFormatter<'a> {
                 Symbol::Float => "Float".to_string(),
                 Symbol::Bool => "Bool".to_string(),
                 Symbol::Void => "Void".to_string(),
+                Symbol::Never => "Never".to_string(),
                 Symbol::RawPtr => "RawPtr".to_string(),
                 Symbol::Byte => "Byte".to_string(),
                 _ => symbol.to_string(),
@@ -108,7 +109,7 @@ impl<'a> TypeFormatter<'a> {
                     format!("({params}) -> {}", self.format_ty_in_context(ret, ctx))
                 }
             }
-            Ty::Func(param, ret) => {
+            Ty::Func(param, ret, box effects) => {
                 let params = param
                     .clone()
                     .uncurry_params()
@@ -116,7 +117,15 @@ impl<'a> TypeFormatter<'a> {
                     .map(|p| self.format_ty_in_context(p, ctx))
                     .collect::<Vec<_>>()
                     .join(", ");
-                format!("({params}) -> {}", self.format_ty_in_context(ret, ctx))
+                format!(
+                    "({params}) {}-> {}",
+                    if *effects != Row::Empty {
+                        format!("{} ", self.format_row_in_context(effects, ctx))
+                    } else {
+                        "".to_string()
+                    },
+                    self.format_ty_in_context(ret, ctx)
+                )
             }
             Ty::Tuple(items) => format!(
                 "({})",
@@ -148,7 +157,7 @@ impl<'a> TypeFormatter<'a> {
         let mut cursor = row;
         loop {
             match cursor {
-                Row::Empty(..) | Row::Param(..) => break,
+                Row::Empty | Row::Param(..) => break,
                 Row::Extend { row, label, ty } => {
                     fields.push((label.clone(), ty.clone()));
                     cursor = row;

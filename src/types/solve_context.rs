@@ -225,11 +225,12 @@ impl SolveContext {
                 self.projection_placeholders.insert(ty, placeholder.clone());
                 placeholder
             }
-            InferTy::Func(box param, box ret) => InferTy::Func(
+            InferTy::Func(box param, box ret, effects) => InferTy::Func(
                 self.normalize_with_level(param.clone(), session, level)
                     .into(),
                 self.normalize_with_level(ret.clone(), session, level)
                     .into(),
+                effects.clone(),
             ),
             _ => ty,
         }

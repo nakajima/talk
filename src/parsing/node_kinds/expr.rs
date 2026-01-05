@@ -23,6 +23,14 @@ pub enum ExprKind {
 
     As(Box<Expr>, TypeAnnotation),
 
+    CallEffect {
+        #[drive(skip)]
+        effect_name: Name,
+        #[drive(skip)]
+        effect_name_span: Span,
+        args: Vec<CallArg>,
+    },
+
     // Start of the real expressions
     LiteralArray(Vec<Expr>),
 
@@ -94,6 +102,7 @@ impl ExprKind {
             | ExprKind::Member(..)
             | ExprKind::As(..)
             | ExprKind::InlineIR(..)
+            | ExprKind::CallEffect { .. }
             | ExprKind::RowVariable(..) => false,
 
             ExprKind::Func(..) => true,
