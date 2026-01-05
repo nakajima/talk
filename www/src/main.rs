@@ -75,7 +75,7 @@ fn line_count(value: &str) -> usize {
 }
 
 fn highlight(code: &str) -> String {
-    let mut child = std::process::Command::new("/home/nakajima/apps/talk/target/release/talk")
+    let mut child = std::process::Command::new("../target/debug/talk")
         .arg("html")
         .arg("-")
         .stdin(Stdio::piped())
