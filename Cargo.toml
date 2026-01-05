@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "wasm"]
+members = [".", "wasm", "www"]
 default-members = ["."]
 resolver = "2"
 
@@ -62,7 +62,15 @@ ignore = { version = "0.4", optional = true }
 
 [features]
 default = ["cli"]
-cli = ["dep:clap", "dep:clap_complete", "dep:async-lsp", "dep:futures", "dep:tower", "dep:tokio", "dep:ignore"]
+cli = [
+  "dep:clap",
+  "dep:clap_complete",
+  "dep:async-lsp",
+  "dep:futures",
+  "dep:tower",
+  "dep:tokio",
+  "dep:ignore",
+]
 wasm = []
 verify_ir = []
 

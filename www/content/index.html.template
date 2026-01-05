@@ -1,0 +1,21 @@
+<html>
+  <meta charset="utf-8">
+  <meta content="text/html" charset="UTF-8" http-equiv="Content-Type">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <head>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@300..700&display=swap" rel="stylesheet">
+    <link href="/reset.css" rel="stylesheet">
+   	<link href="/style.css" rel="stylesheet">
+		<link href="https://unpkg.com/tippy.js@6.3.7/dist/tippy.css" rel="stylesheet">
+  </head>
+  <body>
+    <main>
+      {CONTENT_GOES_HERE}
+			<script src="https://unpkg.com/@popperjs/core@2"></script>
+			<script src="https://unpkg.com/tippy.js@6"></script>
+      <script type="module" src="/page.js"></script>
+    </main>
+  </body>
+</html>
