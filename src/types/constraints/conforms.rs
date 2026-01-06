@@ -441,7 +441,10 @@ impl Conforms {
                 });
 
             entry.witnesses.methods.insert(label.clone(), witness_sym);
-            entry.witnesses.requirements.insert(required_sym, witness_sym);
+            entry
+                .witnesses
+                .requirements
+                .insert(required_sym, witness_sym);
 
             match unify(&required_ty, &witness._as_ty(), context, session) {
                 Ok(vars) => solved_metas.extend(vars),

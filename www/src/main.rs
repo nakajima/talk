@@ -34,9 +34,15 @@ fn main() {
         ),
     );
 
-    let content = std::fs::read_to_string("./content/index.md").unwrap();
+    let content = [
+        std::fs::read_to_string("./content/intro.md").unwrap(),
+        std::fs::read_to_string("./content/index.md").unwrap(),
+    ]
+    .join("\n\n");
     let arena = Arena::new();
     let mut options = ComrakOptions::default();
+    options.extension.strikethrough = true;
+    options.extension.footnotes = true;
     options.render.unsafe_ = true;
 
     let root = parse_document(&arena, &content, &options);

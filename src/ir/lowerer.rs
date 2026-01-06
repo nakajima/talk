@@ -1292,7 +1292,8 @@ impl<'a> Lowerer<'a> {
         let resumed_value_reg = continuation.registers.next();
         continuation.bindings.extend(new_bindings);
 
-        self.pending_continuations.push((continuation, parent_name, dest));
+        self.pending_continuations
+            .push((continuation, parent_name, dest));
         self.current_continuation_idx = Some(self.pending_continuations.len() - 1);
 
         // Return the continuation's resumed value register, not the parent's dest
@@ -1316,7 +1317,7 @@ impl<'a> Lowerer<'a> {
             InlineIRInstructionKind::Constant { dest, ty, val } => {
                 let ret = self.ret(bind);
                 let dest = self.parsed_register(dest, ret);
-                let ty = self.parsed_ty(ty, instr.id);
+                let ty = self.parsed_ty(ty, instr.id, instantiations);
                 let val = self.parsed_value(val, &binds);
                 self.push_instr(Instruction::Constant {
                     dest,
@@ -1335,7 +1336,7 @@ impl<'a> Lowerer<'a> {
             } => {
                 let ret = self.ret(bind);
                 let dest = self.parsed_register(dest, ret);
-                let ty = self.parsed_ty(ty, instr.id);
+                let ty = self.parsed_ty(ty, instr.id, instantiations);
                 let lhs = self.parsed_value(lhs, &binds);
                 let rhs = self.parsed_value(rhs, &binds);
                 self.push_instr(Instruction::Cmp {
@@ -1352,7 +1353,7 @@ impl<'a> Lowerer<'a> {
             | InlineIRInstructionKind::Sub { dest, ty, a, b }
             | InlineIRInstructionKind::Mul { dest, ty, a, b }
             | InlineIRInstructionKind::Div { dest, ty, a, b } => {
-                let ty = self.parsed_ty(ty, instr.id);
+                let ty = self.parsed_ty(ty, instr.id, instantiations);
                 let ret = self.ret(bind);
                 let dest = self.parsed_register(dest, ret);
                 let a = self.parsed_value(a, &binds);
@@ -1396,7 +1397,7 @@ impl<'a> Lowerer<'a> {
             InlineIRInstructionKind::Ref { dest, ty, val } => {
                 let ret = self.ret(bind);
                 let dest = self.parsed_register(dest, ret);
-                let ty = self.parsed_ty(ty, instr.id);
+                let ty = self.parsed_ty(ty, instr.id, instantiations);
                 let val = self.parsed_value(val, &binds);
                 self.push_instr(Instruction::Ref {
                     dest,
@@ -1413,7 +1414,7 @@ impl<'a> Lowerer<'a> {
             } => {
                 let ret = self.ret(bind);
                 let dest = self.parsed_register(dest, ret);
-                let ty = self.parsed_ty(ty, instr.id);
+                let ty = self.parsed_ty(ty, instr.id, instantiations);
                 let callee = self.parsed_value(callee, &binds);
                 let args = args
                     .iter()
@@ -1432,7 +1433,7 @@ impl<'a> Lowerer<'a> {
             InlineIRInstructionKind::Record { dest, ty, record } => {
                 let ret = self.ret(bind);
                 let dest = self.parsed_register(dest, ret);
-                let ty = self.parsed_ty(ty, instr.id);
+                let ty = self.parsed_ty(ty, instr.id, instantiations);
                 let record = record
                     .iter()
                     .map(|a| self.parsed_value(a, &binds))
@@ -1453,7 +1454,7 @@ impl<'a> Lowerer<'a> {
                 record,
                 field,
             } => {
-                let ty = self.parsed_ty(ty, instr.id);
+                let ty = self.parsed_ty(ty, instr.id, instantiations);
                 let record = self.parsed_register(record, Register::DROP);
                 let Value::Int(pos) = self.parsed_value(field, &binds) else {
                     unreachable!("field must be an int");
@@ -1477,7 +1478,7 @@ impl<'a> Lowerer<'a> {
                 record,
                 field,
             } => {
-                let ty = self.parsed_ty(ty, instr.id);
+                let ty = self.parsed_ty(ty, instr.id, instantiations);
                 let val = self.parsed_value(val, &binds);
                 let record = self.parsed_register(record, Register::DROP);
                 let Value::Int(pos) = self.parsed_value(field, &binds) else {
@@ -1502,7 +1503,7 @@ impl<'a> Lowerer<'a> {
                 Ok((Value::Void, Ty::Void))
             }
             InlineIRInstructionKind::Alloc { dest, ty, count } => {
-                let ty = self.parsed_ty(ty, instr.id);
+                let ty = self.parsed_ty(ty, instr.id, instantiations);
                 let ret = self.ret(bind);
                 let dest = self.parsed_register(dest, ret);
                 let count = self.parsed_value(count, &binds);
@@ -1519,7 +1520,7 @@ impl<'a> Lowerer<'a> {
                 Ok((Value::Void, Ty::Void))
             }
             InlineIRInstructionKind::Load { dest, ty, addr } => {
-                let ty = self.parsed_ty(ty, instr.id);
+                let ty = self.parsed_ty(ty, instr.id, instantiations);
                 let addr = self.parsed_value(addr, &binds);
                 let ret = self.ret(bind);
                 let dest = self.parsed_register(dest, ret);
@@ -1531,7 +1532,7 @@ impl<'a> Lowerer<'a> {
                 Ok((dest.into(), ty))
             }
             InlineIRInstructionKind::Store { value, ty, addr } => {
-                let ty = self.parsed_ty(ty, instr.id);
+                let ty = self.parsed_ty(ty, instr.id, instantiations);
                 let value = self.parsed_value(value, &binds);
                 let addr = self.parsed_value(addr, &binds);
                 self.push_instr(Instruction::Store {
@@ -1542,7 +1543,7 @@ impl<'a> Lowerer<'a> {
                 Ok((Value::Void, Ty::Void))
             }
             InlineIRInstructionKind::Move { from, ty, to } => {
-                let ty = self.parsed_ty(ty, instr.id);
+                let ty = self.parsed_ty(ty, instr.id, instantiations);
                 let from = self.parsed_value(from, &binds);
                 let to = self.parsed_value(to, &binds);
                 self.push_instr(Instruction::Move {
@@ -1558,7 +1559,7 @@ impl<'a> Lowerer<'a> {
                 to,
                 length,
             } => {
-                let ty = self.parsed_ty(ty, instr.id);
+                let ty = self.parsed_ty(ty, instr.id, instantiations);
                 let from = self.parsed_value(from, &binds);
                 let to = self.parsed_value(to, &binds);
                 let length = self.parsed_value(length, &binds);
@@ -1576,7 +1577,7 @@ impl<'a> Lowerer<'a> {
                 addr,
                 offset_index,
             } => {
-                let ty = self.parsed_ty(ty, instr.id);
+                let ty = self.parsed_ty(ty, instr.id, instantiations);
                 let addr = self.parsed_value(addr, &binds);
                 let offset_index = self.parsed_value(offset_index, &binds);
                 let ret = self.ret(bind);
@@ -3082,7 +3083,9 @@ impl<'a> Lowerer<'a> {
         );
 
         // Finalize any pending continuations
-        for (continuation, parent_name, _parent_dest) in std::mem::take(&mut self.pending_continuations) {
+        for (continuation, parent_name, _parent_dest) in
+            std::mem::take(&mut self.pending_continuations)
+        {
             // Register the continuation symbol name
             self.resolved_names.symbol_names.insert(
                 continuation.symbol,
@@ -3559,7 +3562,7 @@ impl<'a> Lowerer<'a> {
         parts
     }
 
-    fn parsed_ty(&mut self, ty: &TypeAnnotation, id: NodeID) -> Ty {
+    fn parsed_ty(&mut self, ty: &TypeAnnotation, id: NodeID, instantiations: &Substitutions) -> Ty {
         let sym = ty.symbol().expect("did not get ty symbol");
         let entry = self
             .types
@@ -3570,7 +3573,7 @@ impl<'a> Lowerer<'a> {
         let (ty, _) = self
             .specialize(&entry, id)
             .expect("unable to specialize ty");
-        ty
+        substitute(ty, instantiations)
     }
 
     fn parsed_register(

@@ -532,6 +532,19 @@ pub mod tests {
     }
 
     #[test]
+    fn explicit_call_args() {
+        let (ast, types) = typecheck(
+            r#"
+        func id<T>(x) { x }
+        id<Byte>(123)
+    "#,
+        );
+
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
+        assert_eq!(ty(1, &ast, &types), Ty::Bool);
+    }
+
+    #[test]
     fn generic_function_body_must_respect_its_own_type_vars() {
         let (_ast, _types, diagnostics) = typecheck_err(
             r#"
@@ -2365,7 +2378,11 @@ pub mod tests {
                 .as_mono_ty(),
             // We should be able to infer the n is int because there's only one Comparable with RHS int
             // Effect row is polymorphic since no effects are declared (open effect set)
-            Ty::Func(Ty::Int.into(), Ty::Int.into(), Row::Param(RowParamId(1)).into())
+            Ty::Func(
+                Ty::Int.into(),
+                Ty::Int.into(),
+                Row::Param(RowParamId(1)).into()
+            )
         )
     }
 

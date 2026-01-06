@@ -1,4 +1,4 @@
-use crate::highlighter::{render_html_with_tokens, HighlightToken, Kind};
+use crate::highlighter::{HighlightToken, Kind, render_html_with_tokens};
 
 pub fn highlight_tokens(source: &str) -> Vec<HighlightToken> {
     let mut tokens = Vec::new();
@@ -165,11 +165,15 @@ fn is_keyword(ident: &str) -> bool {
             | "move"
             | "copy"
             | "gep"
+            | "nominal"
     )
 }
 
 fn is_type(ident: &str) -> bool {
-    matches!(ident, "int" | "float" | "bool" | "byte" | "rawptr" | "void" | "buf")
+    matches!(
+        ident,
+        "int" | "float" | "bool" | "byte" | "rawptr" | "void" | "buf"
+    )
 }
 
 fn is_literal(ident: &str) -> bool {
@@ -214,7 +218,11 @@ fn scan_number(bytes: &[u8], mut i: usize) -> usize {
 fn scan_operator(bytes: &[u8], i: usize) -> Option<usize> {
     let len = bytes.len();
     let b = bytes[i];
-    let next = if i + 1 < len { Some(bytes[i + 1]) } else { None };
+    let next = if i + 1 < len {
+        Some(bytes[i + 1])
+    } else {
+        None
+    };
 
     let op_len = match (b, next) {
         (b'-', Some(b'>')) => 2,

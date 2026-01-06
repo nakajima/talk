@@ -1477,16 +1477,16 @@ impl<'a> InferencePass<'a> {
         }
 
         // Only require effect in row if it's not already handled by a handler
-        if !self.handled_effects.contains(&effect_sym) {
-            if let Some(current_effect_row) = self.tracked_effect_rows.last() {
-                self.constraints._has_field(
-                    current_effect_row.clone(),
-                    Label::_Symbol(effect_sym),
-                    effect,
-                    Some(expr.id),
-                    &context.group_info(),
-                );
-            }
+        if !self.handled_effects.contains(&effect_sym)
+            && let Some(current_effect_row) = self.tracked_effect_rows.last()
+        {
+            self.constraints._has_field(
+                current_effect_row.clone(),
+                Label::_Symbol(effect_sym),
+                effect,
+                Some(expr.id),
+                &context.group_info(),
+            );
         }
 
         Ok(TypedExpr {
@@ -1636,17 +1636,19 @@ impl<'a> InferencePass<'a> {
                 .insert_mono(name_sym, InferTy::Param(param_id), &mut self.constraints);
         }
         let params = self.visit_params(&func_signature.params, context)?;
+        _ = self.tracking_effects(&func_signature.effects, context)?;
+        let effects_row = self
+            .tracked_effect_rows
+            .pop()
+            .unwrap_or_else(|| unreachable!("we just pushed it pal"));
+
         let ret = if let Some(ret) = &func_signature.ret {
             self.visit_type_annotation(ret, context)?
         } else {
             InferTy::Void
         };
 
-        let ty = curry(
-            params.iter().map(|p| p.ty.clone()),
-            ret,
-            InferRow::Empty.into(),
-        );
+        let ty = curry(params.iter().map(|p| p.ty.clone()), ret, effects_row.into());
         let mut foralls: IndexSet<_> = ty.collect_foralls().into_iter().collect();
         foralls.insert(ForAll::Ty(protocol_self_id));
         let predicates = vec![Predicate::<InferTy>::Conforms {

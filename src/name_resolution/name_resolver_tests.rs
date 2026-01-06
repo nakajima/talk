@@ -1242,6 +1242,7 @@ pub mod tests {
                             Symbol::MethodRequirement(MethodRequirementId::from(1)),
                             "buzz".into()
                         ),
+                        effects: Default::default(),
                         params: vec![Parameter {
                             id: NodeID::ANY,
                             name: Name::Resolved(ParamLocalId::from(1u32).into(), "self".into()),
@@ -1308,6 +1309,7 @@ pub mod tests {
                             ))),
                             span: Span::ANY
                         }],
+                        effects: Default::default(),
                         generics: vec![],
                         ret: Some(Box::new(annotation!(TypeAnnotationKind::Nominal {
                             name: Name::Resolved(
