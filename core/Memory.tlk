@@ -2,6 +2,10 @@ func _alloc(count: Int) -> RawPtr {
 	@_ir(count) { %? = alloc Byte $0 }
 }
 
+func _load<Element>(ptr: RawPtr) -> Element {
+	@_ir(ptr) { %? = load Element $0 }
+}
+
 func _copy(from: RawPtr, to: RawPtr, length: Int) -> Void {
 	@_ir(from, to, length) { copy Byte $0 $1 $2 }
 }
