@@ -1283,12 +1283,22 @@ impl<'a> InferencePass<'a> {
             ExprKind::LiteralArray(items) => self.visit_array(expr, items, context)?,
             ExprKind::LiteralInt(v) => TypedExpr {
                 id: expr.id,
-                ty: InferTy::Int,
+                ty: self.meta_with_default(
+                    expr.id,
+                    context.level(),
+                    InferTy::Int,
+                    vec![InferTy::Int, InferTy::Byte],
+                ),
                 kind: TypedExprKind::LiteralInt(v.to_string()),
             },
             ExprKind::LiteralFloat(v) => TypedExpr {
                 id: expr.id,
-                ty: InferTy::Float,
+                ty: self.meta_with_default(
+                    expr.id,
+                    context.level(),
+                    InferTy::Float,
+                    vec![InferTy::Float],
+                ),
                 kind: TypedExprKind::LiteralFloat(v.to_string()),
             },
             ExprKind::LiteralTrue => TypedExpr {
@@ -1303,7 +1313,12 @@ impl<'a> InferencePass<'a> {
             },
             ExprKind::LiteralString(val) => TypedExpr {
                 id: expr.id,
-                ty: InferTy::String(),
+                ty: self.meta_with_default(
+                    expr.id,
+                    context.level(),
+                    InferTy::String(),
+                    vec![InferTy::String()],
+                ),
                 kind: TypedExprKind::LiteralString(val.to_string()),
             },
             ExprKind::Tuple(exprs) => match exprs.len() {
@@ -1376,6 +1391,18 @@ impl<'a> InferencePass<'a> {
         self.session.types_by_node.insert(expr.id, expr.ty.clone());
 
         Ok(expr)
+    }
+
+    fn meta_with_default(
+        &mut self,
+        id: NodeID,
+        level: Level,
+        ty: InferTy,
+        allowed: Vec<InferTy>,
+    ) -> InferTy {
+        let var = self.session.new_ty_meta_var(level);
+        self.constraints.wants_default(id, var.clone(), ty, allowed);
+        var
     }
 
     fn visit_handler_stmt(
