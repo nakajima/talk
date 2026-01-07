@@ -1,6 +1,10 @@
 use crate::node_id::NodeID;
 use crate::span::Span;
 use crate::types::conformance::{Conformance, ConformanceKey, Witnesses};
+use crate::types::constraints::store::ConstraintStore;
+use crate::types::scheme::ForAll;
+use crate::types::solve_context::Solve;
+use crate::types::type_operations::{Substitutions, substitute_with_subs};
 use crate::{
     label::Label,
     name_resolution::symbol::{ProtocolId, Symbol},
@@ -13,7 +17,7 @@ use crate::{
         solve_context::SolveContext,
         term_environment::EnvEntry,
         type_error::TypeError,
-        type_operations::{substitute, unify},
+        type_operations::unify,
         type_session::TypeSession,
     },
 };
@@ -37,7 +41,12 @@ pub struct Conforms {
 
 impl Conforms {
     #[instrument(skip(session))]
-    pub fn solve(&self, context: &mut SolveContext, session: &mut TypeSession) -> SolveResult {
+    pub fn solve(
+        &self,
+        constraints: &mut ConstraintStore,
+        context: &mut SolveContext,
+        session: &mut TypeSession,
+    ) -> SolveResult {
         let conforming_ty_sym = match &self.ty {
             InferTy::Var { id, .. } => {
                 return SolveResult::Defer(DeferralReason::WaitingOnMeta(Meta::Ty(*id)));
@@ -83,7 +92,13 @@ impl Conforms {
             }
         };
 
-        match self.check_conformance(conforming_ty_sym, self.protocol_id, context, session) {
+        match self.check_conformance(
+            conforming_ty_sym,
+            self.protocol_id,
+            constraints,
+            context,
+            session,
+        ) {
             CheckWitnessResult::Ok(conformances, vars) => {
                 if conformances.is_empty() {
                     SolveResult::Solved(vars)
@@ -103,6 +118,7 @@ impl Conforms {
         &self,
         conforming_ty_sym: Symbol,
         protocol_id: ProtocolId,
+        constraints: &mut ConstraintStore,
         context: &mut SolveContext,
         session: &mut TypeSession,
     ) -> CheckWitnessResult {
@@ -130,6 +146,8 @@ impl Conforms {
                 .conformances
                 .entry(key)
                 .or_insert(conformance.clone());
+            // Wake any constraints waiting on this conformance
+            constraints.wake_conformances(&[key]);
             conformance
         };
 
@@ -238,6 +256,7 @@ impl Conforms {
                 match self.check_conformance(
                     conforming_ty_sym,
                     conformance.protocol_id,
+                    constraints,
                     context,
                     session,
                 ) {
@@ -377,7 +396,7 @@ impl Conforms {
         protocol_self_id: &TypeParamId,
         conforming_ty_sym: &Symbol,
         projections: FxHashMap<Label, InferTy>,
-        mut substitutions: FxHashMap<InferTy, InferTy>,
+        ty_substitutions: FxHashMap<InferTy, InferTy>,
     ) -> Result<CheckWitnessResult, TypeError> {
         let mut missing_witnesses = vec![];
         let mut solved_metas = vec![];
@@ -393,6 +412,11 @@ impl Conforms {
                 )));
             };
 
+            // Build unified substitutions for this requirement
+            let mut substitutions = Substitutions::new();
+            substitutions.ty = ty_substitutions.clone();
+
+            // Handle projection predicates
             for predicate in required_entry.predicates() {
                 if let Predicate::Projection {
                     base,
@@ -402,13 +426,11 @@ impl Conforms {
                 } = predicate
                     && base == InferTy::Param(*protocol_self_id)
                     && let Some(projection) = projections.get(&label)
-                    && let Some(substitution) = substitutions.get(projection).cloned()
+                    && let Some(substitution) = substitutions.ty.get(projection).cloned()
                 {
-                    substitutions.insert(returns.clone(), substitution.clone());
+                    substitutions.ty.insert(returns.clone(), substitution);
                 }
             }
-
-            let required_ty = substitute(required_entry._as_ty(), &substitutions);
 
             let Some(witness_sym) = session.lookup_concrete_member(conforming_ty_sym, &label)
             else {
@@ -421,6 +443,17 @@ impl Conforms {
                 missing_witnesses.push((label, witness_sym));
                 continue;
             };
+
+            // Add row param substitutions for the required entry's row params
+            for forall in required_entry.foralls() {
+                if let ForAll::Row(param) = forall {
+                    let fresh_row_meta = session.new_row_meta_var(context.level());
+                    substitutions.insert_row(param, fresh_row_meta);
+                }
+            }
+
+            // Substitute required type with type and row substitutions
+            let required_ty = substitute_with_subs(required_entry._as_ty(), &substitutions);
 
             // Update witnesses
             let key = ConformanceKey {

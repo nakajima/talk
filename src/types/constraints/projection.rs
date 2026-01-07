@@ -60,7 +60,6 @@ impl Projection {
             };
 
             // Find a conformance for the nominal base that mentions this associated label
-            tracing::debug!("Projection: conformance={:?}", conformance);
             if let Some(conf) = conformance {
                 // Prefer the alias symbol (if the nominal actually provided `typealias T = ...`)
                 if let Some(alias_sym) = session
@@ -188,6 +187,21 @@ impl Projection {
             }
 
             return SolveResult::Defer(DeferralReason::WaitingOnMeta(Meta::Ty(*id)));
+        }
+
+        // If we have a concrete base type and a protocol, defer waiting for that conformance
+        if let Some(base_sym) = match &base {
+            InferTy::Nominal { symbol, .. } => Some(*symbol),
+            InferTy::Primitive(symbol) => Some(*symbol),
+            _ => None,
+        } {
+            if let Some(protocol_id) = self.protocol_id {
+                let key = ConformanceKey {
+                    protocol_id,
+                    conforming_id: base_sym,
+                };
+                return SolveResult::Defer(DeferralReason::WaitingOnConformance(key));
+            }
         }
 
         SolveResult::Defer(DeferralReason::Unknown)

@@ -84,6 +84,29 @@ impl InstantiationSubstitutions {
     }
 }
 
+/// Unified substitution for both types and row parameters.
+/// Used when we need to substitute both InferTy->InferTy mappings
+/// AND RowParamId->InferRow mappings in a single operation.
+#[derive(Default, Debug, Clone)]
+pub struct Substitutions {
+    pub ty: FxHashMap<InferTy, InferTy>,
+    pub row: FxHashMap<RowParamId, InferRow>,
+}
+
+impl Substitutions {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn insert_ty(&mut self, from: InferTy, to: InferTy) {
+        self.ty.insert(from, to);
+    }
+
+    pub fn insert_row(&mut self, from: RowParamId, to: InferRow) {
+        self.row.insert(from, to);
+    }
+}
+
 impl std::fmt::Debug for UnificationSubstitutions {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Subs(ty: {:?}, row: {:?}", self.ty, self.row,)
@@ -561,6 +584,26 @@ pub(super) fn substitute_row(
     }
 }
 
+/// Substitute row with unified Substitutions that can handle row param substitution.
+pub(super) fn substitute_row_with_subs(row: InferRow, substitutions: &Substitutions) -> InferRow {
+    match row {
+        InferRow::Empty => row,
+        InferRow::Var(..) => row,
+        InferRow::Param(id) => {
+            if let Some(replacement) = substitutions.row.get(&id) {
+                replacement.clone()
+            } else {
+                row
+            }
+        }
+        InferRow::Extend { row, label, ty } => InferRow::Extend {
+            row: Box::new(substitute_row_with_subs(*row, substitutions)),
+            label,
+            ty: substitute_with_subs(ty, substitutions),
+        },
+    }
+}
+
 pub(super) fn substitute_mult(
     ty: &[InferTy],
     substitutions: &FxHashMap<InferTy, InferTy>,
@@ -614,6 +657,58 @@ pub(super) fn substitute(ty: InferTy, substitutions: &FxHashMap<InferTy, InferTy
             type_args: type_args
                 .into_iter()
                 .map(|t| substitute(t, substitutions))
+                .collect(),
+        },
+    }
+}
+
+/// Substitute type with unified Substitutions that can handle both type and row param substitution.
+pub(super) fn substitute_with_subs(ty: InferTy, substitutions: &Substitutions) -> InferTy {
+    if let Some(subst) = substitutions.ty.get(&ty) {
+        return subst.clone();
+    }
+    match ty {
+        InferTy::Error(..) => ty,
+        InferTy::Param(..) => ty,
+        InferTy::Rigid(..) => ty,
+        InferTy::Var { .. } => ty,
+        InferTy::Primitive(..) => ty,
+        InferTy::Projection {
+            box base,
+            associated,
+            protocol_id,
+        } => InferTy::Projection {
+            base: substitute_with_subs(base, substitutions).into(),
+            associated,
+            protocol_id,
+        },
+        InferTy::Constructor { name, params, ret } => InferTy::Constructor {
+            name,
+            params: params
+                .into_iter()
+                .map(|p| substitute_with_subs(p, substitutions))
+                .collect(),
+            ret: Box::new(substitute_with_subs(*ret, substitutions)),
+        },
+        InferTy::Func(params, ret, effects) => InferTy::Func(
+            Box::new(substitute_with_subs(*params, substitutions)),
+            Box::new(substitute_with_subs(*ret, substitutions)),
+            Box::new(substitute_row_with_subs(*effects, substitutions)),
+        ),
+        InferTy::Tuple(items) => InferTy::Tuple(
+            items
+                .into_iter()
+                .map(|t| substitute_with_subs(t, substitutions))
+                .collect(),
+        ),
+        InferTy::Record(row) => {
+            InferTy::Record(Box::new(substitute_row_with_subs(*row, substitutions)))
+        }
+        InferTy::Nominal { symbol, type_args } => InferTy::Nominal {
+            symbol,
+            type_args: type_args
+                .into_iter()
+                .map(|t| substitute_with_subs(t, substitutions))
                 .collect(),
         },
     }

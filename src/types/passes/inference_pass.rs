@@ -174,6 +174,7 @@ impl<'a> InferencePass<'a> {
         for constraint in self.constraints.unsolved() {
             match constraint {
                 Constraint::Call(..) => (),
+                Constraint::DefaultTy(..) => (),
                 Constraint::Equals(..) => (),
                 Constraint::HasField(..) => (),
                 Constraint::Member(..) => (),
@@ -1662,6 +1663,28 @@ impl<'a> InferencePass<'a> {
             self.session
                 .insert_mono(name_sym, InferTy::Param(param_id), &mut self.constraints);
         }
+
+        let mut effects_row = if func_signature.effects.is_open {
+            self.session.new_row_type_param(None)
+        } else {
+            InferRow::Empty
+        };
+        for effect in func_signature.effects.names.iter() {
+            let Ok(symbol) = effect.symbol() else {
+                return Err(TypeError::NameNotResolved(effect.clone()));
+            };
+
+            let Some(effect) = self.session.lookup_effect(&symbol) else {
+                return Err(TypeError::EffectNotFound(effect.name_str()));
+            };
+
+            effects_row = InferRow::Extend {
+                row: effects_row.into(),
+                label: Label::_Symbol(symbol),
+                ty: effect.clone(),
+            };
+        }
+
         let params = self.visit_params(&func_signature.params, context)?;
         _ = self.tracking_effects(&func_signature.effects, context)?;
         let effects_row = self

@@ -2,9 +2,9 @@ use crate::{
     node_id::NodeID,
     types::{
         constraints::{
-            call::Call, conforms::Conforms, equals::Equals, has_field::HasField, member::Member,
-            projection::Projection, row_subset::RowSubset, store::ConstraintId,
-            type_member::TypeMember,
+            call::Call, conforms::Conforms, default_ty::DefaultTy, equals::Equals,
+            has_field::HasField, member::Member, projection::Projection, row_subset::RowSubset,
+            store::ConstraintId, type_member::TypeMember,
         },
         infer_row::InferRow,
         infer_ty::InferTy,
@@ -62,6 +62,7 @@ pub enum Constraint {
     TypeMember(TypeMember),
     Projection(Projection),
     RowSubset(RowSubset),
+    DefaultTy(DefaultTy),
 }
 
 impl Constraint {
@@ -75,6 +76,7 @@ impl Constraint {
             Constraint::TypeMember(c) => c.id,
             Constraint::Projection(c) => c.id,
             Constraint::RowSubset(c) => c.id,
+            Constraint::DefaultTy(c) => c.id,
         }
     }
 
@@ -88,6 +90,7 @@ impl Constraint {
             Constraint::Projection(projection) => Some(projection.node_id),
             Constraint::HasField(has_field) => has_field.node_id,
             Constraint::RowSubset(c) => c.node_id,
+            Constraint::DefaultTy(c) => Some(c.node_id),
         }
     }
 
@@ -101,6 +104,7 @@ impl Constraint {
             Constraint::TypeMember(..) => true,
             Constraint::Projection(..) => true,
             Constraint::RowSubset(..) => false,
+            Constraint::DefaultTy(..) => false,
         }
     }
 
@@ -133,6 +137,16 @@ impl Constraint {
             Constraint::Equals(e) => {
                 e.lhs = session.apply(e.lhs.clone(), substitutions);
                 e.rhs = session.apply(e.rhs.clone(), substitutions);
+            }
+            Constraint::DefaultTy(e) => {
+                e.var = session.apply(e.var.clone(), substitutions);
+                e.ty = session.apply(e.ty.clone(), substitutions);
+                e.allowed = e
+                    .allowed
+                    .iter()
+                    .cloned()
+                    .map(|ty| session.apply(ty, substitutions))
+                    .collect();
             }
             Constraint::HasField(h) => {
                 h.row = session.apply_row(h.row.clone(), substitutions);
@@ -172,6 +186,16 @@ impl Constraint {
             Constraint::Projection(c) => {
                 c.base = substitute(c.base.clone(), substitutions);
                 c.result = substitute(c.result.clone(), substitutions);
+            }
+            Constraint::DefaultTy(c) => {
+                c.var = substitute(c.var.clone(), substitutions);
+                c.ty = substitute(c.ty.clone(), substitutions);
+                c.allowed = c
+                    .allowed
+                    .iter()
+                    .cloned()
+                    .map(|ty| substitute(ty, substitutions))
+                    .collect();
             }
             Constraint::Conforms(..) => (),
             Constraint::Equals(e) => {
@@ -278,6 +302,11 @@ impl Constraint {
             Constraint::Projection(c) => {
                 out.extend(c.base.collect_metas());
                 out.extend(c.result.collect_metas());
+            }
+            Constraint::DefaultTy(c) => {
+                out.extend(c.var.collect_metas());
+                out.extend(c.ty.collect_metas());
+                out.extend(c.allowed.iter().cloned().flat_map(|ty| ty.collect_metas()));
             }
             Constraint::Equals(equals) => {
                 out.extend(equals.lhs.collect_metas());
