@@ -321,7 +321,13 @@ impl<'a> Monomorphizer<'a> {
         }
         substitutions
             .witnesses
-            .extend(call_instantiations.witnesses.iter().map(|(k, v)| (*k, *v)));
+            .extend(
+                call_instantiations
+                    .instantiations
+                    .witnesses
+                    .iter()
+                    .map(|(k, v)| (*k, *v)),
+            );
         substitutions
     }
 

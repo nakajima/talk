@@ -2720,10 +2720,8 @@ impl<'a> Lowerer<'a> {
             ..
         } = &call_expr.kind
         {
-            let mut witnesses = instantiations.witnesses.clone();
-            witnesses.extend(target.witness_subs.iter().map(|(k, v)| (*k, *v)));
             let call_instantiations =
-                self.call_instantiations_for(call_expr, target.symbol, &witnesses);
+                self.call_instantiations_for(call_expr, target.symbol, &instantiations.witnesses);
             let mut meta_items = vec![InstructionMeta::Source(call_expr.id)];
             if !call_instantiations.is_empty() {
                 meta_items.push(InstructionMeta::CallInstantiations(call_instantiations.clone()));
@@ -2936,39 +2934,6 @@ impl<'a> Lowerer<'a> {
                     .unwrap_or_else(|| unreachable!("didn't get nominal: {symbol:?}"))
             };
             instantiations.ty.extend(nominal.substitutions(type_args));
-            for conformance in self
-                .types
-                .catalog
-                .conformances
-                .values()
-                .filter(|c| &c.conforming_id == symbol)
-                .cloned()
-                .collect::<Vec<_>>()
-            {
-                instantiations
-                    .witnesses
-                    .extend(conformance.witnesses.requirements.clone());
-
-                // Also add witnesses from associated types' conformances.
-                for assoc_ty in conformance.witnesses.associated_types.values() {
-                    if let Ty::Nominal {
-                        symbol: assoc_sym, ..
-                    } = assoc_ty
-                    {
-                        for assoc_conformance in self
-                            .types
-                            .catalog
-                            .conformances
-                            .values()
-                            .filter(|c| &c.conforming_id == assoc_sym)
-                        {
-                            instantiations
-                                .witnesses
-                                .extend(assoc_conformance.witnesses.requirements.clone());
-                        }
-                    }
-                }
-            }
         }
 
         let (_method_sym, val, ty) = if let Some(method_sym) =
@@ -3770,18 +3735,17 @@ impl<'a> Lowerer<'a> {
             self.extend_call_instantiations_with_type_args(callee, type_args, &mut instantiations);
         }
 
-        let witnesses = if self.should_forward_witnesses(callee) {
-            let mut merged = witnesses.clone();
-            merged.extend(instantiations.witnesses.iter().map(|(k, v)| (*k, *v)));
-            merged
+        if self.should_forward_witnesses(callee) {
+            instantiations
+                .witnesses
+                .extend(witnesses.iter().map(|(k, v)| (*k, *v)));
         } else {
-            FxHashMap::default()
+            instantiations.witnesses.clear();
         };
 
         CallInstantiations {
             callee,
             instantiations,
-            witnesses,
         }
     }
 
@@ -3807,18 +3771,17 @@ impl<'a> Lowerer<'a> {
             self.extend_call_instantiations_with_type_args(callee, type_args, &mut instantiations);
         }
 
-        let witnesses = if self.should_forward_witnesses(callee) {
-            let mut merged = witnesses.clone();
-            merged.extend(instantiations.witnesses.iter().map(|(k, v)| (*k, *v)));
-            merged
+        if self.should_forward_witnesses(callee) {
+            instantiations
+                .witnesses
+                .extend(witnesses.iter().map(|(k, v)| (*k, *v)));
         } else {
-            FxHashMap::default()
+            instantiations.witnesses.clear();
         };
 
         CallInstantiations {
             callee,
             instantiations,
-            witnesses,
         }
     }
 
@@ -3901,7 +3864,13 @@ impl<'a> Lowerer<'a> {
         }
         substitutions
             .witnesses
-            .extend(instantiations.witnesses.iter().map(|(k, v)| (*k, *v)));
+            .extend(
+                instantiations
+                    .instantiations
+                    .witnesses
+                    .iter()
+                    .map(|(k, v)| (*k, *v)),
+            );
         substitutions
     }
 

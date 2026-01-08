@@ -1,7 +1,5 @@
 use std::str::FromStr;
 
-use rustc_hash::FxHashMap;
-
 use crate::{
     ir::{
         ir_error::IRError,
@@ -21,14 +19,13 @@ use crate::{
 pub struct CallInstantiations {
     pub callee: Symbol,
     pub instantiations: InstantiationSubstitutions<Ty>,
-    pub witnesses: FxHashMap<Symbol, Symbol>,
 }
 
 impl CallInstantiations {
     pub fn is_empty(&self) -> bool {
         self.instantiations.ty.is_empty()
             && self.instantiations.row.is_empty()
-            && self.witnesses.is_empty()
+            && self.instantiations.witnesses.is_empty()
     }
 }
 

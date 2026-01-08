@@ -1,4 +1,6 @@
 use std::assert_matches::assert_matches;
+
+use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::instrument;
 
 use crate::{
@@ -6,6 +8,7 @@ use crate::{
     name_resolution::symbol::Symbol,
     node_id::NodeID,
     types::{
+        conformance::ConformanceKey,
         constraint_solver::{DeferralReason, SolveResult},
         constraints::{
             call::CallId,
@@ -94,27 +97,119 @@ impl Member {
                 return SolveResult::Solved(Default::default());
             }
             InferTy::Primitive(symbol) => {
-                return self.lookup_nominal_member(
+                let result = self.lookup_nominal_member(
                     constraints,
                     context,
                     session,
                     symbol,
                     Default::default(),
                 );
+                if matches!(result, SolveResult::Solved(_)) {
+                    self.record_witness_substitutions(session, context, *symbol);
+                }
+                return result;
             }
             InferTy::Nominal { symbol, type_args } => {
-                return self.lookup_nominal_member(
+                let result = self.lookup_nominal_member(
                     constraints,
                     context,
                     session,
                     symbol,
                     type_args,
                 );
+                if matches!(result, SolveResult::Solved(_)) {
+                    self.record_witness_substitutions(session, context, *symbol);
+                }
+                return result;
             }
             _ => {}
         }
 
         SolveResult::Defer(DeferralReason::Unknown)
+    }
+
+    fn record_witness_substitutions(
+        &self,
+        session: &mut TypeSession,
+        context: &mut SolveContext,
+        symbol: Symbol,
+    ) {
+        let Some(call_id) = self.call_id else {
+            return;
+        };
+
+        let mut seen_symbols = FxHashSet::default();
+        let mut seen_conformances = FxHashSet::default();
+        let mut witnesses = FxHashMap::default();
+        Self::extend_witnesses_for_symbol(
+            session,
+            context,
+            symbol,
+            &mut witnesses,
+            &mut seen_symbols,
+            &mut seen_conformances,
+        );
+
+        session
+            .instantiations_by_call
+            .entry(call_id)
+            .or_default()
+            .witnesses
+            .extend(witnesses);
+    }
+
+    fn extend_witnesses_for_symbol(
+        session: &mut TypeSession,
+        context: &mut SolveContext,
+        symbol: Symbol,
+        witnesses: &mut FxHashMap<Symbol, Symbol>,
+        seen_symbols: &mut FxHashSet<Symbol>,
+        seen_conformances: &mut FxHashSet<ConformanceKey>,
+    ) {
+        if !seen_symbols.insert(symbol) {
+            return;
+        }
+
+        let mut keys: Vec<ConformanceKey> = session
+            .type_catalog
+            .conformances
+            .keys()
+            .filter(|key| key.conforming_id == symbol)
+            .copied()
+            .collect();
+        keys.extend(
+            session
+                .modules
+                .all_conformances()
+                .into_iter()
+                .map(|(key, _)| key)
+                .filter(|key| key.conforming_id == symbol),
+        );
+
+        for key in keys {
+            if !seen_conformances.insert(key) {
+                continue;
+            }
+
+            let Some(conformance) = session.lookup_conformance(&key) else {
+                continue;
+            };
+
+            witnesses.extend(conformance.witnesses.requirements.clone());
+            for assoc_ty in conformance.witnesses.associated_types.values() {
+                let assoc_ty = session.apply(assoc_ty.clone(), &mut context.substitutions);
+                if let Some(assoc_sym) = symbol_for_infer_ty(&assoc_ty) {
+                    Self::extend_witnesses_for_symbol(
+                        session,
+                        context,
+                        assoc_sym,
+                        witnesses,
+                        seen_symbols,
+                        seen_conformances,
+                    );
+                }
+            }
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -382,6 +477,14 @@ impl Member {
                 self.label.to_string(),
             ))
         }
+    }
+}
+
+fn symbol_for_infer_ty(ty: &InferTy) -> Option<Symbol> {
+    match ty {
+        InferTy::Primitive(sym) => Some(*sym),
+        InferTy::Nominal { symbol, .. } => Some(*symbol),
+        _ => None,
     }
 }
 
