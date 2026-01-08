@@ -3175,8 +3175,6 @@ impl<'a> InferencePass<'a> {
 
         foralls.extend(body.ret.collect_foralls());
 
-        println!("foralls: {foralls:?}");
-
         let ty = curry(
             params.iter().map(|t| t.ty.clone()),
             ret.clone(),

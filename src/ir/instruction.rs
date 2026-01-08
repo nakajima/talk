@@ -1,5 +1,7 @@
 use std::str::FromStr;
 
+use rustc_hash::FxHashMap;
+
 use crate::{
     ir::{
         ir_error::IRError,
@@ -12,8 +14,23 @@ use crate::{
     name_resolution::symbol::Symbol,
     node_id::{FileID, NodeID},
     token_kind::TokenKind,
-    types::ty::Ty,
+    types::{type_operations::InstantiationSubstitutions, ty::Ty},
 };
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CallInstantiations {
+    pub callee: Symbol,
+    pub instantiations: InstantiationSubstitutions<Ty>,
+    pub witnesses: FxHashMap<Symbol, Symbol>,
+}
+
+impl CallInstantiations {
+    pub fn is_empty(&self) -> bool {
+        self.instantiations.ty.is_empty()
+            && self.instantiations.row.is_empty()
+            && self.witnesses.is_empty()
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum InstructionMeta {
@@ -21,6 +38,8 @@ pub enum InstructionMeta {
     Source(NodeID),
     #[doc = "recordid:$id"]
     RecordId(RecordId),
+    #[doc = "callinst:$callee"]
+    CallInstantiations(CallInstantiations),
 }
 
 impl std::fmt::Display for InstructionMeta {
@@ -36,6 +55,7 @@ impl std::fmt::Display for InstructionMeta {
                     RecordId::Record(id) => format!("{id}"),
                 }
             ),
+            Self::CallInstantiations(call) => write!(f, "callinst:{}", call.callee),
         }
     }
 }

@@ -345,25 +345,33 @@ impl TypedExpr<InferTy> {
             self.instantiations.extend(instantiations.clone());
         }
 
+        let ty = session.finalize_ty(self.ty).as_mono_ty().clone();
+        let kind = self.kind.finalize(self.id, session, witnesses);
+        let mut instantiations = InstantiationSubstitutions {
+            row: self
+                .instantiations
+                .row
+                .into_iter()
+                .map(|(k, v)| (k, session.finalize_row(v)))
+                .collect(),
+            ty: self
+                .instantiations
+                .ty
+                .into_iter()
+                .map(|(k, v)| (k, session.finalize_ty(v).as_mono_ty().clone()))
+                .collect(),
+            witnesses: self.instantiations.witnesses.clone(),
+        };
+        instantiations
+            .witnesses
+            .extend(call_witness_substitutions(&kind));
+
         TypedExpr {
             id: self.id,
-            ty: session.finalize_ty(self.ty).as_mono_ty().clone(),
-            kind: self.kind.finalize(self.id, session, witnesses),
-            instantiations: InstantiationSubstitutions {
-                row: self
-                    .instantiations
-                    .row
-                    .into_iter()
-                    .map(|(k, v)| (k, session.finalize_row(v)))
-                    .collect(),
-                ty: self
-                    .instantiations
-                    .ty
-                    .into_iter()
-                    .map(|(k, v)| (k, session.finalize_ty(v).as_mono_ty().clone()))
-                    .collect(),
-            }, // .instantiations
-               // .map_ty(&mut |t| session.finalize_ty(t.clone()).as_mono_ty().clone()),
+            ty,
+            kind,
+            instantiations, // .instantiations
+                             // .map_ty(&mut |t| session.finalize_ty(t.clone()).as_mono_ty().clone()),
         }
     }
 }
@@ -1315,6 +1323,19 @@ fn symbol_for_concrete_ty(ty: &Ty) -> Option<Symbol> {
         Ty::Nominal { symbol, .. } => Some(*symbol),
         _ => None,
     }
+}
+
+fn call_witness_substitutions(kind: &TypedExprKind<Ty>) -> FxHashMap<Symbol, Symbol> {
+    let TypedExprKind::Call { resolved, .. } = kind else {
+        return Default::default();
+    };
+
+    let mut witnesses = FxHashMap::default();
+    if let Some(target) = resolved {
+        witnesses.extend(target.witness_subs.clone());
+    }
+
+    witnesses
 }
 
 fn witness_subs_for_conformance(

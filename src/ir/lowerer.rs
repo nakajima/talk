@@ -25,7 +25,7 @@ use crate::types::typed_ast::{
 use crate::{
     ir::{
         basic_block::{BasicBlock, BasicBlockId},
-        instruction::{Instruction, InstructionMeta},
+        instruction::{CallInstantiations, Instruction, InstructionMeta},
         ir_error::IRError,
         monomorphizer::Monomorphizer,
         program::Program,
@@ -41,7 +41,9 @@ use crate::{
             Constructor, MatchPlan, PlanNode, PlanNodeId, Projection, ValueId, ValueRef,
             plan_for_pattern,
         },
+        scheme::ForAll,
         ty::Ty,
+        type_operations::InstantiationSubstitutions,
         type_session::{TypeEntry, Types},
     },
 };
@@ -146,7 +148,7 @@ impl RegisterAllocator {
 }
 
 #[derive(Default, Clone, Debug)]
-pub(super) struct Substitutions {
+pub(crate) struct Substitutions {
     pub ty: FxHashMap<Ty, Ty>,
     pub row: FxHashMap<RowParamId, Row>,
     /// Maps MethodRequirement symbols to their concrete implementations for witness specialization
@@ -177,14 +179,14 @@ pub struct Specialization {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct SpecializationKey {
+pub(crate) struct SpecializationKey {
     ty: Vec<(TypeParamId, Ty)>,
     row: Vec<(RowParamId, Row)>,
     witnesses: Vec<(Symbol, Symbol)>,
 }
 
 impl SpecializationKey {
-    fn new(substitutions: &Substitutions) -> Self {
+    pub(crate) fn new(substitutions: &Substitutions) -> Self {
         let mut ty: Vec<(TypeParamId, Ty)> = substitutions
             .ty
             .iter()
@@ -221,8 +223,19 @@ impl SpecializationKey {
         Self { ty, row, witnesses }
     }
 
-    fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.ty.is_empty() && self.row.is_empty() && self.witnesses.is_empty()
+    }
+
+    pub(crate) fn parts(&self) -> Vec<String> {
+        let mut parts: Vec<String> = self.ty.iter().map(|(_p, ty)| format!("{ty}")).collect();
+        parts.extend(self.row.iter().map(|(p, row)| format!("{p:?}={row:?}")));
+        parts.extend(
+            self.witnesses
+                .iter()
+                .map(|(req, imp)| format!("{req}->{imp}")),
+        );
+        parts
     }
 }
 
@@ -267,10 +280,11 @@ pub struct Lowerer<'a> {
     pub(super) current_function_stack: Vec<CurrentFunction>,
     pub(super) config: &'a DriverConfig,
 
-    symbols: &'a mut Symbols,
-    resolved_names: &'a mut ResolvedNames,
+    pub(super) symbols: &'a mut Symbols,
+    pub(super) resolved_names: &'a mut ResolvedNames,
     pub(super) specializations: IndexMap<Symbol, Vec<Specialization>>,
-    specialization_intern: FxHashMap<Symbol, FxHashMap<SpecializationKey, Symbol>>,
+    pub(super) specialization_intern: FxHashMap<Symbol, FxHashMap<SpecializationKey, Symbol>>,
+    func_foralls: FxHashMap<Symbol, Vec<TypeParamId>>,
     static_memory: StaticMemory,
     record_labels: FxHashMap<RecordId, Vec<String>>,
     next_record_id: u32,
@@ -289,6 +303,7 @@ impl<'a> Lowerer<'a> {
         resolved_names: &'a mut ResolvedNames,
         config: &'a DriverConfig,
     ) -> Self {
+        let func_foralls = Self::collect_func_foralls(ast);
         Self {
             ast,
             types,
@@ -297,6 +312,7 @@ impl<'a> Lowerer<'a> {
             symbols,
             specializations: Default::default(),
             specialization_intern: Default::default(),
+            func_foralls,
             static_memory: Default::default(),
             config,
             resolved_names,
@@ -1068,6 +1084,9 @@ impl<'a> Lowerer<'a> {
         for (param, row) in expr.instantiations.row.iter() {
             instantiations.row.insert(*param, row.clone());
         }
+        instantiations
+            .witnesses
+            .extend(expr.instantiations.witnesses.iter().map(|(k, v)| (*k, *v)));
 
         let (value, ty) = match &expr.kind {
             TypedExprKind::Hole => Err(IRError::TypeNotFound("nope".into())),
@@ -1324,8 +1343,6 @@ impl<'a> Lowerer<'a> {
             .iter()
             .map(|b| self.lower_expr(b, Bind::Fresh, instantiations).map(|b| b.0))
             .try_collect()?;
-
-        println!("lower_inline_ir: {:?}", expr.instantiations);
 
         match &instr.kind {
             InlineIRInstructionKind::Constant { dest, ty, val } => {
@@ -2314,8 +2331,12 @@ impl<'a> Lowerer<'a> {
             .cloned()
             .expect("did not get init entry");
         let (ty, mut instantiations) = self.specialize(&init_entry, expr.id)?;
-        instantiations.ty.extend(old_instantiations.ty.clone());
-        instantiations.row.extend(old_instantiations.row.clone());
+        instantiations.extend(old_instantiations.clone());
+        let ty = substitute(ty, &instantiations);
+        let constructor_sym = self
+            .monomorphize_name(constructor_sym, &instantiations)
+            .symbol()
+            .expect("did not get constructor sym");
 
         let dest = self.ret(bind);
         self.push_instr(Instruction::Ref {
@@ -2505,11 +2526,18 @@ impl<'a> Lowerer<'a> {
         let original_name_sym = name;
 
         // If we currently have a binding for this symbol, prefer that over just passing names around
+        let needs_specialization =
+            !(instantiations.ty.is_empty()
+                && instantiations.row.is_empty()
+                && instantiations.witnesses.is_empty());
         if self
             .current_func_mut()
             .bindings
             .contains_key(original_name_sym)
         {
+            if matches!(monomorphized_ty, Ty::Func(..)) && needs_specialization {
+                _ = self.monomorphize_name(*name, &instantiations);
+            }
             return Ok((self.get_binding(original_name_sym).into(), ty));
         }
 
@@ -2565,7 +2593,7 @@ impl<'a> Lowerer<'a> {
     #[allow(clippy::too_many_arguments)]
     fn lower_constructor_call(
         &mut self,
-        id: NodeID,
+        call_expr: &TypedExpr<Ty>,
         name: &Symbol,
         callee: &TypedExpr<Ty>,
         mut args: Vec<Value>,
@@ -2593,14 +2621,14 @@ impl<'a> Lowerer<'a> {
                     .expect("did not get init")
             });
 
-        _ = self.check_import(&init_sym, instantiations);
-
         let init_entry = self
             .types
             .get_symbol(&init_sym)
             .cloned()
             .expect("did not get init entry");
-        let (init_ty, concrete_tys) = self.specialize(&init_entry, callee.id)?;
+        let (init_ty, mut concrete_tys) = self.specialize(&init_entry, callee.id)?;
+        concrete_tys.extend(instantiations.clone());
+        let init_ty = substitute(init_ty, &concrete_tys);
 
         let properties = self
             .types
@@ -2623,18 +2651,34 @@ impl<'a> Lowerer<'a> {
                 .map(|_| Value::Uninit)
                 .collect::<Vec<_>>()
                 .into(),
-            meta: vec![InstructionMeta::Source(id)].into(),
+            meta: vec![InstructionMeta::Source(call_expr.id)].into(),
         });
         args.insert(0, record_dest.into());
 
-        let init = self.monomorphize_name(init_sym, &concrete_tys);
+        let call_instantiations =
+            self.call_instantiations_for(call_expr, init_sym, &instantiations.witnesses);
+        let mut meta_items = vec![InstructionMeta::Source(call_expr.id)];
+        if !call_instantiations.is_empty() {
+            meta_items.push(InstructionMeta::CallInstantiations(call_instantiations.clone()));
+        }
+
+        let callee_sym = if self.call_instantiations_are_concrete(&call_instantiations) {
+            let substitutions = self.substitutions_from_call_instantiations(&call_instantiations);
+            let name = self
+                .check_import(&init_sym, &substitutions)
+                .unwrap_or_else(|| self.monomorphize_name(init_sym, &substitutions));
+            name.symbol().expect("did not get symbol")
+        } else {
+            _ = self.check_import(&init_sym, &Default::default());
+            init_sym
+        };
 
         self.push_instr(Instruction::Call {
             dest,
             ty: ret.clone(),
-            callee: Value::Func(init.symbol().expect("did not get symbol")),
+            callee: Value::Func(callee_sym),
             args: args.into(),
-            meta: vec![InstructionMeta::Source(id)].into(),
+            meta: meta_items.into(),
         });
 
         Ok((dest.into(), ret))
@@ -2659,15 +2703,16 @@ impl<'a> Lowerer<'a> {
             return Ok((Value::Void, Ty::Void));
         }
 
-        let instantiations = parent_instantiations.clone();
+        let mut instantiations = parent_instantiations.clone();
+        if let TypedExprKind::Call { type_args, .. } = &call_expr.kind {
+            self.extend_instantiations_with_type_args(callee, type_args, &mut instantiations);
+        }
 
         let ty = call_expr.ty.clone();
         let mut arg_vals = vec![];
-        let mut arg_tys = vec![];
         for arg in args {
-            let (arg, arg_ty) = self.lower_expr(arg, Bind::Fresh, &instantiations)?;
+            let (arg, _arg_ty) = self.lower_expr(arg, Bind::Fresh, &instantiations)?;
             arg_vals.push(arg);
-            arg_tys.push(arg_ty)
         }
 
         if let TypedExprKind::Call {
@@ -2675,22 +2720,32 @@ impl<'a> Lowerer<'a> {
             ..
         } = &call_expr.kind
         {
-            let (_, mut call_instantiations) =
-                self.specialized_ty(callee, parent_instantiations)?;
-            call_instantiations
-                .witnesses
-                .extend(target.witness_subs.iter().map(|(k, v)| (*k, *v)));
+            let mut witnesses = instantiations.witnesses.clone();
+            witnesses.extend(target.witness_subs.iter().map(|(k, v)| (*k, *v)));
+            let call_instantiations =
+                self.call_instantiations_for(call_expr, target.symbol, &witnesses);
+            let mut meta_items = vec![InstructionMeta::Source(call_expr.id)];
+            if !call_instantiations.is_empty() {
+                meta_items.push(InstructionMeta::CallInstantiations(call_instantiations.clone()));
+            }
 
-            let name = self
-                .check_import(&target.symbol, &call_instantiations)
-                .unwrap_or_else(|| self.monomorphize_name(target.symbol, &call_instantiations));
+            let callee_sym = if self.call_instantiations_are_concrete(&call_instantiations) {
+                let substitutions = self.substitutions_from_call_instantiations(&call_instantiations);
+                let name = self
+                    .check_import(&target.symbol, &substitutions)
+                    .unwrap_or_else(|| self.monomorphize_name(target.symbol, &substitutions));
+                name.symbol().expect("did not get resolved call symbol")
+            } else {
+                _ = self.check_import(&target.symbol, &Default::default());
+                target.symbol
+            };
 
             self.push_instr(Instruction::Call {
                 dest,
                 ty: ty.clone(),
-                callee: Value::Func(name.symbol().expect("did not get resolved call symbol")),
+                callee: Value::Func(callee_sym),
                 args: arg_vals.into(),
-                meta: vec![InstructionMeta::Source(call_expr.id)].into(),
+                meta: meta_items.into(),
             });
 
             return Ok((dest.into(), ty));
@@ -2698,7 +2753,7 @@ impl<'a> Lowerer<'a> {
 
         if let TypedExprKind::Constructor(name, ..) = &callee.kind {
             return self.lower_constructor_call(
-                call_expr.id,
+                call_expr,
                 name,
                 callee,
                 arg_vals,
@@ -2742,6 +2797,45 @@ impl<'a> Lowerer<'a> {
                 dest,
                 &instantiations,
             );
+        }
+
+        if let TypedExprKind::Variable(name) = &callee.kind
+            && !self.current_func_mut().bindings.contains_key(name)
+        {
+            let mut call_instantiations =
+                self.call_instantiations_for(call_expr, *name, &instantiations.witnesses);
+            if call_instantiations.instantiations.ty.is_empty()
+                && call_instantiations.instantiations.row.is_empty()
+            {
+                let inferred =
+                    self.infer_call_instantiations(*name, args, &call_expr.ty);
+                call_instantiations.instantiations.extend(inferred);
+            }
+            let mut meta_items = vec![InstructionMeta::Source(call_expr.id)];
+            if !call_instantiations.is_empty() {
+                meta_items.push(InstructionMeta::CallInstantiations(call_instantiations.clone()));
+            }
+
+            let callee_sym = if self.call_instantiations_are_concrete(&call_instantiations) {
+                let substitutions = self.substitutions_from_call_instantiations(&call_instantiations);
+                let name = self
+                    .check_import(name, &substitutions)
+                    .unwrap_or_else(|| self.monomorphize_name(*name, &substitutions));
+                name.symbol().expect("did not get call symbol")
+            } else {
+                _ = self.check_import(name, &Default::default());
+                *name
+            };
+
+            self.push_instr(Instruction::Call {
+                dest,
+                ty: ty.clone(),
+                callee: Value::Func(callee_sym),
+                args: arg_vals.into(),
+                meta: meta_items.into(),
+            });
+
+            return Ok((dest.into(), ty));
         }
 
         let callee_ir = self.lower_expr(callee, Bind::Fresh, &instantiations)?.0;
@@ -2880,32 +2974,76 @@ impl<'a> Lowerer<'a> {
         let (_method_sym, val, ty) = if let Some(method_sym) =
             self.lookup_instance_method(&receiver, label, &instantiations)?
         {
-            let method = self
-                .check_import(&method_sym, &instantiations)
-                .unwrap_or_else(|| self.monomorphize_name(method_sym, &instantiations));
-            let callee_sym = method.symbol().expect("didn't get method sym");
+            let call_instantiations = self.call_instantiations_for_member(
+                call_expr,
+                callee_expr,
+                method_sym,
+                &instantiations.witnesses,
+                &instantiations,
+            );
+            let mut meta_items = vec![InstructionMeta::Source(call_expr.id)];
+            if !call_instantiations.is_empty() {
+                meta_items.push(InstructionMeta::CallInstantiations(
+                    call_instantiations.clone(),
+                ));
+            }
+
+            let callee_sym = if self.call_instantiations_are_concrete(&call_instantiations) {
+                let substitutions =
+                    self.substitutions_from_call_instantiations(&call_instantiations);
+                let name = self
+                    .check_import(&method_sym, &substitutions)
+                    .unwrap_or_else(|| self.monomorphize_name(method_sym, &substitutions));
+                name.symbol().expect("didn't get method sym")
+            } else {
+                _ = self.check_import(&method_sym, &Default::default());
+                method_sym
+            };
+
             self.push_instr(Instruction::Call {
                 dest,
                 ty: ty.clone(),
                 callee: Value::Func(callee_sym),
                 args: args.into(),
-                meta: vec![InstructionMeta::Source(call_expr.id)].into(),
+                meta: meta_items.into(),
             });
 
             (method_sym, dest.into(), ty)
         } else if let Some(witness) =
             witness.or_else(|| self.witness_for(&receiver, label, &instantiations))
         {
-            let method = self
-                .check_import(&witness, &instantiations)
-                .unwrap_or_else(|| self.monomorphize_name(witness, &instantiations));
-            let callee_sym = method.symbol().expect("did not get witness sym");
+            let call_instantiations = self.call_instantiations_for_member(
+                call_expr,
+                callee_expr,
+                witness,
+                &instantiations.witnesses,
+                &instantiations,
+            );
+            let mut meta_items = vec![InstructionMeta::Source(call_expr.id)];
+            if !call_instantiations.is_empty() {
+                meta_items.push(InstructionMeta::CallInstantiations(
+                    call_instantiations.clone(),
+                ));
+            }
+
+            let callee_sym = if self.call_instantiations_are_concrete(&call_instantiations) {
+                let substitutions =
+                    self.substitutions_from_call_instantiations(&call_instantiations);
+                let name = self
+                    .check_import(&witness, &substitutions)
+                    .unwrap_or_else(|| self.monomorphize_name(witness, &substitutions));
+                name.symbol().expect("did not get witness sym")
+            } else {
+                _ = self.check_import(&witness, &Default::default());
+                witness
+            };
+
             self.push_instr(Instruction::Call {
                 dest,
                 ty: ty.clone(),
                 callee: Value::Func(callee_sym),
                 args: args.into(),
-                meta: vec![InstructionMeta::Source(call_expr.id)].into(),
+                meta: meta_items.into(),
             });
 
             (witness, dest.into(), ty)
@@ -3566,14 +3704,405 @@ impl<'a> Lowerer<'a> {
     }
 
     fn specialization_parts(&self, key: &SpecializationKey) -> Vec<String> {
-        let mut parts: Vec<String> = key.ty.iter().map(|(_p, ty)| format!("{ty}")).collect();
-        parts.extend(key.row.iter().map(|(p, row)| format!("{p:?}={row:?}")));
-        parts.extend(
-            key.witnesses
+        key.parts()
+    }
+
+    fn extend_instantiations_with_type_args(
+        &mut self,
+        callee: &TypedExpr<Ty>,
+        type_args: &[Ty],
+        instantiations: &mut Substitutions,
+    ) {
+        if type_args.is_empty() {
+            return;
+        }
+
+        let symbol = match &callee.kind {
+            TypedExprKind::Variable(name) => Some(*name),
+            TypedExprKind::Func(func) => Some(func.name),
+            TypedExprKind::Constructor(name, ..) => Some(*name),
+            _ => None,
+        };
+
+        let Some(symbol) = symbol else {
+            return;
+        };
+
+        let params = self
+            .type_params_for_symbol(symbol)
+            .unwrap_or_default();
+
+        for (param_id, arg_ty) in params.into_iter().zip(type_args.iter().cloned()) {
+            instantiations.ty.insert(Ty::Param(param_id), arg_ty);
+        }
+    }
+
+    fn extend_call_instantiations_with_type_args(
+        &mut self,
+        symbol: Symbol,
+        type_args: &[Ty],
+        instantiations: &mut InstantiationSubstitutions<Ty>,
+    ) {
+        if type_args.is_empty() {
+            return;
+        }
+
+        let params = self.type_params_for_symbol(symbol).unwrap_or_default();
+        for (param_id, arg_ty) in params.into_iter().zip(type_args.iter().cloned()) {
+            instantiations.ty.insert(param_id, arg_ty);
+        }
+    }
+
+    fn should_forward_witnesses(&self, callee: Symbol) -> bool {
+        // Only forward witnesses when the callee can actually be specialized.
+        !matches!(callee, Symbol::MethodRequirement(_))
+            && self.type_params_for_symbol(callee).is_some()
+    }
+
+    fn call_instantiations_for(
+        &mut self,
+        call_expr: &TypedExpr<Ty>,
+        callee: Symbol,
+        witnesses: &FxHashMap<Symbol, Symbol>,
+    ) -> CallInstantiations {
+        let mut instantiations = call_expr.instantiations.clone();
+        if let TypedExprKind::Call { type_args, .. } = &call_expr.kind {
+            self.extend_call_instantiations_with_type_args(callee, type_args, &mut instantiations);
+        }
+
+        let witnesses = if self.should_forward_witnesses(callee) {
+            let mut merged = witnesses.clone();
+            merged.extend(instantiations.witnesses.iter().map(|(k, v)| (*k, *v)));
+            merged
+        } else {
+            FxHashMap::default()
+        };
+
+        CallInstantiations {
+            callee,
+            instantiations,
+            witnesses,
+        }
+    }
+
+    fn call_instantiations_for_member(
+        &mut self,
+        call_expr: &TypedExpr<Ty>,
+        callee_expr: &TypedExpr<Ty>,
+        callee: Symbol,
+        witnesses: &FxHashMap<Symbol, Symbol>,
+        call_substitutions: &Substitutions,
+    ) -> CallInstantiations {
+        let mut instantiations = call_expr.instantiations.clone();
+        if instantiations.ty.is_empty() && instantiations.row.is_empty() {
+            instantiations.extend(callee_expr.instantiations.clone());
+        }
+        if instantiations.ty.is_empty() && instantiations.row.is_empty() {
+            instantiations.extend(self.call_instantiations_from_substitutions(
+                callee,
+                call_substitutions,
+            ));
+        }
+        if let TypedExprKind::Call { type_args, .. } = &call_expr.kind {
+            self.extend_call_instantiations_with_type_args(callee, type_args, &mut instantiations);
+        }
+
+        let witnesses = if self.should_forward_witnesses(callee) {
+            let mut merged = witnesses.clone();
+            merged.extend(instantiations.witnesses.iter().map(|(k, v)| (*k, *v)));
+            merged
+        } else {
+            FxHashMap::default()
+        };
+
+        CallInstantiations {
+            callee,
+            instantiations,
+            witnesses,
+        }
+    }
+
+    fn call_instantiations_from_substitutions(
+        &mut self,
+        callee: Symbol,
+        substitutions: &Substitutions,
+    ) -> InstantiationSubstitutions<Ty> {
+        let mut instantiations = InstantiationSubstitutions::default();
+        if let Some(params) = self.type_params_for_symbol(callee) {
+            for param_id in params {
+                let key = Ty::Param(param_id);
+                if let Some(ty) = substitutions.ty.get(&key) {
+                    instantiations.ty.insert(param_id, ty.clone());
+                }
+            }
+        }
+        for (row_param_id, row) in &substitutions.row {
+            instantiations.row.insert(*row_param_id, row.clone());
+        }
+        instantiations
+            .witnesses
+            .extend(substitutions.witnesses.iter().map(|(k, v)| (*k, *v)));
+        instantiations
+    }
+
+    fn infer_call_instantiations(
+        &mut self,
+        callee: Symbol,
+        args: &[TypedExpr<Ty>],
+        ret_ty: &Ty,
+    ) -> InstantiationSubstitutions<Ty> {
+        let entry = self
+            .types
+            .get_symbol(&callee)
+            .cloned()
+            .or_else(|| self.config.modules.lookup(&callee));
+
+        let Some(entry) = entry else {
+            return InstantiationSubstitutions::default();
+        };
+
+        let signature = match entry {
+            TypeEntry::Mono(ty) => ty,
+            TypeEntry::Poly(scheme) => scheme.ty,
+        };
+
+        let (params, returns) = uncurry_function(signature);
+        let mut instantiations = InstantiationSubstitutions::default();
+        for (expected, arg) in params.iter().zip(args.iter()) {
+            collect_instantiations(expected, &arg.ty, &mut instantiations);
+        }
+        collect_instantiations(&returns, ret_ty, &mut instantiations);
+        instantiations
+    }
+
+    fn call_instantiations_are_concrete(&self, instantiations: &CallInstantiations) -> bool {
+        instantiations
+            .instantiations
+            .ty
+            .values()
+            .all(is_concrete_ty)
+            && instantiations
+                .instantiations
+                .row
                 .iter()
-                .map(|(req, imp)| format!("{req}->{imp}")),
-        );
-        parts
+                .all(|(param, row)| *row == Row::Param(*param) || is_concrete_row(row))
+    }
+
+    fn substitutions_from_call_instantiations(
+        &self,
+        instantiations: &CallInstantiations,
+    ) -> Substitutions {
+        let mut substitutions = Substitutions::default();
+        for (param_id, ty) in &instantiations.instantiations.ty {
+            substitutions.ty.insert(Ty::Param(*param_id), ty.clone());
+        }
+        for (row_param_id, row) in &instantiations.instantiations.row {
+            substitutions.row.insert(*row_param_id, row.clone());
+        }
+        substitutions
+            .witnesses
+            .extend(instantiations.witnesses.iter().map(|(k, v)| (*k, *v)));
+        substitutions
+    }
+
+    fn type_params_for_symbol(&self, symbol: Symbol) -> Option<Vec<TypeParamId>> {
+        let type_params = self
+            .types
+            .get_symbol(&symbol)
+            .and_then(Self::type_params_from_entry)
+            .filter(|params| !params.is_empty())
+            .or_else(|| {
+                self.config
+                    .modules
+                    .lookup(&symbol)
+                    .as_ref()
+                    .and_then(Self::type_params_from_entry)
+                    .filter(|params| !params.is_empty())
+            })
+            .or_else(|| self.func_foralls.get(&symbol).cloned());
+
+        type_params
+    }
+
+    fn type_params_from_entry(entry: &TypeEntry) -> Option<Vec<TypeParamId>> {
+        let TypeEntry::Poly(scheme) = entry else {
+            return None;
+        };
+
+        Some(
+            scheme
+                .foralls
+                .iter()
+                .filter_map(|forall| match forall {
+                    ForAll::Ty(id) => Some(*id),
+                    _ => None,
+                })
+                .collect(),
+        )
+    }
+
+    fn collect_func_foralls(ast: &TypedAST<Ty>) -> FxHashMap<Symbol, Vec<TypeParamId>> {
+        let mut map = FxHashMap::default();
+        for decl in &ast.decls {
+            Self::collect_func_foralls_from_decl(&mut map, decl);
+        }
+        for stmt in &ast.stmts {
+            Self::collect_func_foralls_from_stmt(&mut map, stmt);
+        }
+        map
+    }
+
+    fn collect_func_foralls_from_node(map: &mut FxHashMap<Symbol, Vec<TypeParamId>>, node: &TypedNode<Ty>) {
+        match node {
+            TypedNode::Decl(decl) => Self::collect_func_foralls_from_decl(map, decl),
+            TypedNode::Stmt(stmt) => Self::collect_func_foralls_from_stmt(map, stmt),
+            TypedNode::Expr(expr) => Self::collect_func_foralls_from_expr(map, expr),
+        }
+    }
+
+    fn collect_func_foralls_from_decl(map: &mut FxHashMap<Symbol, Vec<TypeParamId>>, decl: &TypedDecl<Ty>) {
+        match &decl.kind {
+            TypedDeclKind::Let { initializer, .. } => {
+                if let Some(expr) = initializer {
+                    Self::collect_func_foralls_from_expr(map, expr);
+                }
+            }
+            TypedDeclKind::StructDef {
+                initializers,
+                instance_methods,
+                ..
+            } => {
+                for func in initializers.values() {
+                    Self::record_func_foralls(map, func);
+                }
+                for func in instance_methods.values() {
+                    Self::record_func_foralls(map, func);
+                }
+            }
+            TypedDeclKind::Extend {
+                instance_methods, ..
+            } => {
+                for func in instance_methods.values() {
+                    Self::record_func_foralls(map, func);
+                }
+            }
+            TypedDeclKind::EnumDef {
+                instance_methods, ..
+            } => {
+                for func in instance_methods.values() {
+                    Self::record_func_foralls(map, func);
+                }
+            }
+            TypedDeclKind::ProtocolDef {
+                instance_methods, ..
+            } => {
+                for func in instance_methods.values() {
+                    Self::record_func_foralls(map, func);
+                }
+            }
+        }
+    }
+
+    fn collect_func_foralls_from_stmt(map: &mut FxHashMap<Symbol, Vec<TypeParamId>>, stmt: &TypedStmt<Ty>) {
+        match &stmt.kind {
+            TypedStmtKind::Expr(expr) => Self::collect_func_foralls_from_expr(map, expr),
+            TypedStmtKind::Assignment(lhs, rhs) => {
+                Self::collect_func_foralls_from_expr(map, lhs);
+                Self::collect_func_foralls_from_expr(map, rhs);
+            }
+            TypedStmtKind::Return(expr) | TypedStmtKind::Continue(expr) => {
+                if let Some(expr) = expr {
+                    Self::collect_func_foralls_from_expr(map, expr);
+                }
+            }
+            TypedStmtKind::Loop(cond, block) => {
+                Self::collect_func_foralls_from_expr(map, cond);
+                Self::collect_func_foralls_from_block(map, block);
+            }
+            TypedStmtKind::Handler { func, .. } => {
+                Self::record_func_foralls(map, func);
+            }
+            TypedStmtKind::Break => {}
+        }
+    }
+
+    fn collect_func_foralls_from_block(map: &mut FxHashMap<Symbol, Vec<TypeParamId>>, block: &TypedBlock<Ty>) {
+        for node in &block.body {
+            Self::collect_func_foralls_from_node(map, node);
+        }
+    }
+
+    fn collect_func_foralls_from_expr(map: &mut FxHashMap<Symbol, Vec<TypeParamId>>, expr: &TypedExpr<Ty>) {
+        match &expr.kind {
+            TypedExprKind::Func(func) => Self::record_func_foralls(map, func),
+            TypedExprKind::Call { callee, args, .. } => {
+                Self::collect_func_foralls_from_expr(map, callee);
+                for arg in args {
+                    Self::collect_func_foralls_from_expr(map, arg);
+                }
+            }
+            TypedExprKind::CallEffect { args, .. } => {
+                for arg in args {
+                    Self::collect_func_foralls_from_expr(map, arg);
+                }
+            }
+            TypedExprKind::InlineIR(instr) => {
+                for bind in &instr.binds {
+                    Self::collect_func_foralls_from_expr(map, bind);
+                }
+            }
+            TypedExprKind::LiteralArray(items) | TypedExprKind::Tuple(items) => {
+                for item in items {
+                    Self::collect_func_foralls_from_expr(map, item);
+                }
+            }
+            TypedExprKind::Block(block) => Self::collect_func_foralls_from_block(map, block),
+            TypedExprKind::Member { receiver, .. }
+            | TypedExprKind::ProtocolMember { receiver, .. } => {
+                Self::collect_func_foralls_from_expr(map, receiver);
+            }
+            TypedExprKind::If(cond, conseq, alt) => {
+                Self::collect_func_foralls_from_expr(map, cond);
+                Self::collect_func_foralls_from_block(map, conseq);
+                Self::collect_func_foralls_from_block(map, alt);
+            }
+            TypedExprKind::Match(scrutinee, arms) => {
+                Self::collect_func_foralls_from_expr(map, scrutinee);
+                for arm in arms {
+                    Self::collect_func_foralls_from_block(map, &arm.body);
+                }
+            }
+            TypedExprKind::RecordLiteral { fields } => {
+                for field in fields {
+                    Self::collect_func_foralls_from_expr(map, &field.value);
+                }
+            }
+            TypedExprKind::Hole
+            | TypedExprKind::LiteralInt(..)
+            | TypedExprKind::LiteralFloat(..)
+            | TypedExprKind::LiteralTrue
+            | TypedExprKind::LiteralFalse
+            | TypedExprKind::LiteralString(..)
+            | TypedExprKind::Variable(..)
+            | TypedExprKind::Constructor(..) => {}
+        }
+    }
+
+    fn record_func_foralls(map: &mut FxHashMap<Symbol, Vec<TypeParamId>>, func: &TypedFunc<Ty>) {
+        let type_params: Vec<TypeParamId> = func
+            .foralls
+            .iter()
+            .filter_map(|forall| match forall {
+                ForAll::Ty(id) => Some(*id),
+                _ => None,
+            })
+            .collect();
+
+        if !type_params.is_empty() {
+            map.entry(func.name).or_insert(type_params);
+        }
+
+        Self::collect_func_foralls_from_block(map, &func.body);
     }
 
     fn parsed_ty(&mut self, ty: &TypeAnnotation, id: NodeID, instantiations: &Substitutions) -> Ty {
@@ -3694,7 +4223,19 @@ impl<'a> Lowerer<'a> {
             }
             _ => {
                 tracing::trace!("expr has no substitutions: {expr:?}");
-                return Ok((expr.ty.clone(), Default::default()));
+                let mut instantiations = instantiations.clone();
+                for (param_id, concrete_ty) in &expr.instantiations.ty {
+                    instantiations
+                        .ty
+                        .insert(Ty::Param(*param_id), concrete_ty.clone());
+                }
+                for (row_param_id, row) in &expr.instantiations.row {
+                    instantiations.row.insert(*row_param_id, row.clone());
+                }
+                instantiations
+                    .witnesses
+                    .extend(expr.instantiations.witnesses.iter().map(|(k, v)| (*k, *v)));
+                return Ok((expr.ty.clone(), instantiations));
             }
         };
 
@@ -3720,6 +4261,9 @@ impl<'a> Lowerer<'a> {
         for (row_param_id, row) in &expr.instantiations.row {
             instantiations.row.insert(*row_param_id, row.clone());
         }
+        instantiations
+            .witnesses
+            .extend(expr.instantiations.witnesses.iter().map(|(k, v)| (*k, *v)));
 
         Ok((ty, instantiations))
     }
@@ -3893,7 +4437,7 @@ impl<'a> Lowerer<'a> {
     }
 }
 
-fn substitute(ty: Ty, substitutions: &Substitutions) -> Ty {
+pub(crate) fn substitute(ty: Ty, substitutions: &Substitutions) -> Ty {
     match ty {
         Ty::Primitive(..) => ty,
         Ty::Param(type_param_id) => substitutions
@@ -3938,7 +4482,7 @@ fn substitute(ty: Ty, substitutions: &Substitutions) -> Ty {
     }
 }
 
-fn substitute_row(row: Row, substitutions: &Substitutions) -> Row {
+pub(crate) fn substitute_row(row: Row, substitutions: &Substitutions) -> Row {
     match row {
         Row::Empty => row,
         Row::Param(id) => substitutions.row.get(&id).unwrap_or(&row).clone(),
@@ -3947,6 +4491,128 @@ fn substitute_row(row: Row, substitutions: &Substitutions) -> Row {
             label,
             ty: substitute(ty, substitutions),
         },
+    }
+}
+
+fn collect_instantiations(
+    expected: &Ty,
+    actual: &Ty,
+    instantiations: &mut InstantiationSubstitutions<Ty>,
+) {
+    match expected {
+        Ty::Param(param_id) => {
+            instantiations
+                .ty
+                .entry(*param_id)
+                .or_insert_with(|| actual.clone());
+        }
+        Ty::Primitive(..) => {}
+        Ty::Constructor {
+            name,
+            params,
+            ret,
+        } => {
+            if let Ty::Constructor {
+                name: actual_name,
+                params: actual_params,
+                ret: actual_ret,
+            } = actual
+                && name == actual_name
+            {
+                for (expected_param, actual_param) in params.iter().zip(actual_params.iter()) {
+                    collect_instantiations(expected_param, actual_param, instantiations);
+                }
+                collect_instantiations(ret, actual_ret, instantiations);
+            }
+        }
+        Ty::Func(expected_param, expected_ret, expected_effects) => {
+            if let Ty::Func(actual_param, actual_ret, actual_effects) = actual {
+                collect_instantiations(expected_param, actual_param, instantiations);
+                collect_instantiations(expected_ret, actual_ret, instantiations);
+                collect_row_instantiations(expected_effects, actual_effects, instantiations);
+            }
+        }
+        Ty::Tuple(items) => {
+            if let Ty::Tuple(actual_items) = actual {
+                for (expected_item, actual_item) in items.iter().zip(actual_items.iter()) {
+                    collect_instantiations(expected_item, actual_item, instantiations);
+                }
+            }
+        }
+        Ty::Record(expected_sym, expected_row) => {
+            if let Ty::Record(actual_sym, actual_row) = actual
+                && expected_sym == actual_sym
+            {
+                collect_row_instantiations(expected_row, actual_row, instantiations);
+            }
+        }
+        Ty::Nominal {
+            symbol,
+            type_args,
+        } => {
+            if let Ty::Nominal {
+                symbol: actual_symbol,
+                type_args: actual_args,
+            } = actual
+                && symbol == actual_symbol
+            {
+                for (expected_arg, actual_arg) in type_args.iter().zip(actual_args.iter()) {
+                    collect_instantiations(expected_arg, actual_arg, instantiations);
+                }
+            }
+        }
+    }
+}
+
+fn collect_row_instantiations(
+    expected: &Row,
+    actual: &Row,
+    instantiations: &mut InstantiationSubstitutions<Ty>,
+) {
+    match expected {
+        Row::Empty => {}
+        Row::Param(param_id) => {
+            instantiations
+                .row
+                .entry(*param_id)
+                .or_insert_with(|| actual.clone());
+        }
+        Row::Extend { row, label, ty } => {
+            if let Row::Extend {
+                row: actual_row,
+                label: actual_label,
+                ty: actual_ty,
+            } = actual
+                && label == actual_label
+            {
+                collect_instantiations(ty, actual_ty, instantiations);
+                collect_row_instantiations(row, actual_row, instantiations);
+            }
+        }
+    }
+}
+
+pub(crate) fn is_concrete_ty(ty: &Ty) -> bool {
+    match ty {
+        Ty::Primitive(..) => true,
+        Ty::Param(..) => false,
+        Ty::Constructor { params, ret, .. } => {
+            params.iter().all(is_concrete_ty) && is_concrete_ty(ret)
+        }
+        Ty::Func(param, ret, effects) => {
+            is_concrete_ty(param) && is_concrete_ty(ret) && is_concrete_row(effects)
+        }
+        Ty::Tuple(items) => items.iter().all(is_concrete_ty),
+        Ty::Record(_, row) => is_concrete_row(row),
+        Ty::Nominal { type_args, .. } => type_args.iter().all(is_concrete_ty),
+    }
+}
+
+pub(crate) fn is_concrete_row(row: &Row) -> bool {
+    match row {
+        Row::Empty => true,
+        Row::Param(..) => false,
+        Row::Extend { row, ty, .. } => is_concrete_row(row) && is_concrete_ty(ty),
     }
 }
 

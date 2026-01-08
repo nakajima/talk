@@ -1,6 +1,7 @@
 #[macro_export]
 macro_rules! fxhashmap {
     ($($k:expr => $v:expr),* $(,)?) => {{
+        #[allow(unused_mut)]
         let mut m = rustc_hash::FxHashMap::default();
         $( m.insert($k, $v); )*
         m

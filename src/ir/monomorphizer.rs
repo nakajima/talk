@@ -1,20 +1,28 @@
 use indexmap::{IndexMap, IndexSet};
+use rustc_hash::FxHashMap;
 use tracing::instrument;
 
 use crate::{
-    compiling::driver::DriverConfig,
+    compiling::{driver::DriverConfig, module::ModuleId},
     ir::{
         basic_block::{BasicBlock, Phi},
         function::Function,
-        instruction::Instruction,
+        instruction::{CallInstantiations, Instruction, InstructionMeta},
         ir_ty::IrTy,
-        lowerer::{Lowerer, PolyFunction, Specialization, Substitutions},
+        list::List,
+        lowerer::{
+            is_concrete_row, is_concrete_ty, substitute, substitute_row, Lowerer, PolyFunction,
+            Specialization, SpecializationKey, Substitutions,
+        },
         terminator::Terminator,
         value::{Reference, Value},
     },
     name::Name,
-    name_resolution::symbol::Symbol,
-    types::{ty::Ty, type_session::Types, typed_ast::TypedAST},
+    name_resolution::{
+        name_resolver::ResolvedNames,
+        symbol::{Symbol, Symbols},
+    },
+    types::{row::Row, ty::Ty, type_session::Types, typed_ast::TypedAST},
 };
 
 #[allow(dead_code)]
@@ -22,8 +30,12 @@ pub struct Monomorphizer<'a> {
     ast: &'a mut TypedAST<Ty>,
     types: &'a mut Types,
     config: &'a DriverConfig,
+    symbols: &'a mut Symbols,
+    resolved_names: &'a mut ResolvedNames,
     pub(super) functions: IndexMap<Symbol, PolyFunction>,
     specializations: IndexMap<Symbol, Vec<Specialization>>,
+    specialization_intern: FxHashMap<Symbol, FxHashMap<SpecializationKey, Symbol>>,
+    pending_specializations: Vec<(Symbol, Specialization)>,
 }
 
 #[allow(clippy::expect_used)]
@@ -32,8 +44,12 @@ impl<'a> Monomorphizer<'a> {
         Monomorphizer {
             ast: lowerer.ast,
             types: lowerer.types,
+            symbols: lowerer.symbols,
+            resolved_names: lowerer.resolved_names,
             functions: lowerer.functions,
             specializations: lowerer.specializations,
+            specialization_intern: lowerer.specialization_intern,
+            pending_specializations: Vec::new(),
             config: lowerer.config,
         }
     }
@@ -41,9 +57,27 @@ impl<'a> Monomorphizer<'a> {
     #[instrument(skip(self))]
     pub fn monomorphize(&mut self) -> IndexMap<Symbol, Function<IrTy>> {
         let mut result = IndexMap::<Symbol, Function<IrTy>>::default();
+
+        for (base, specs) in self.specializations.clone() {
+            for spec in specs {
+                self.pending_specializations.push((base, spec));
+            }
+        }
+
         let functions = self.functions.clone();
         for func in functions.into_values() {
             self.monomorphize_func(func, &mut result);
+        }
+
+        while let Some((base_sym, specialization)) = self.pending_specializations.pop() {
+            if result.contains_key(&specialization.name) {
+                continue;
+            }
+            self.ensure_polyfunction(base_sym);
+            let Some(base_func) = self.functions.get(&base_sym).cloned() else {
+                continue;
+            };
+            self.generate_specialized_function(&base_func, &specialization, &mut result);
         }
 
         // Ensure all external callees referenced by monomorphized functions are imported.
@@ -91,6 +125,7 @@ impl<'a> Monomorphizer<'a> {
             };
 
             if module_id != self.config.module_id
+                && !result.contains_key(callee)
                 && let Some(program) = self.config.modules.program_for(module_id)
                 && let Some(imported) = program.functions.get(callee).cloned()
             {
@@ -107,15 +142,6 @@ impl<'a> Monomorphizer<'a> {
         func: PolyFunction,
         result: &mut IndexMap<Symbol, Function<IrTy>>,
     ) {
-        for specialization in self
-            .specializations
-            .get(&func.name)
-            .cloned()
-            .unwrap_or_default()
-        {
-            self.generate_specialized_function(&func, &specialization, result);
-        }
-
         let func = Function {
             name: func.name,
             ty: self.monomorphize_ty(func.ty, &Default::default()),
@@ -129,6 +155,25 @@ impl<'a> Monomorphizer<'a> {
         };
 
         result.insert(func.name, func);
+    }
+
+    fn ensure_polyfunction(&mut self, symbol: Symbol) {
+        if self.functions.contains_key(&symbol) {
+            return;
+        }
+
+        let Some(module_id) = symbol.module_id() else {
+            return;
+        };
+        if module_id == ModuleId::Current || module_id == self.config.module_id {
+            return;
+        }
+
+        if let Some(program) = self.config.modules.program_for(module_id)
+            && let Some(func) = program.polyfunctions.get(&symbol).cloned()
+        {
+            self.functions.insert(symbol, func);
+        }
     }
 
     #[instrument(skip(self, block), fields(block = %block))]
@@ -180,7 +225,6 @@ impl<'a> Monomorphizer<'a> {
         instruction: Instruction<Ty>,
         substitutions: &Substitutions,
     ) -> Instruction<IrTy> {
-        // Handle Call instructions specially to substitute MethodRequirement callees
         if let Instruction::Call {
             dest,
             ty,
@@ -189,7 +233,33 @@ impl<'a> Monomorphizer<'a> {
             meta,
         } = instruction
         {
-            let new_callee = match &callee {
+            let (call_instantiations, meta_items) = self.split_call_instantiations(meta);
+            let mut callee = callee;
+
+            if let Some(call_instantiations) = call_instantiations {
+                if !call_instantiations.is_empty()
+                    && !matches!(call_instantiations.callee, Symbol::MethodRequirement(_))
+                {
+                    let callee_substitutions =
+                        self.substitutions_for_call(&call_instantiations, substitutions);
+                    let has_instantiations = !callee_substitutions.ty.is_empty()
+                        || !callee_substitutions.row.is_empty()
+                        || !callee_substitutions.witnesses.is_empty();
+                    if has_instantiations && self.substitutions_are_concrete(&callee_substitutions)
+                    {
+                        let name = self.monomorphize_name(
+                            call_instantiations.callee,
+                            &callee_substitutions,
+                        );
+                        if let Ok(sym) = name.symbol() {
+                            callee = self.replace_callee_symbol(callee, sym);
+                        }
+                    }
+                }
+            }
+
+            // Substitute MethodRequirement callees based on witness instantiations.
+            let callee = match &callee {
                 Value::Func(sym @ Symbol::MethodRequirement(_)) => {
                     if let Some(impl_sym) = substitutions.witnesses.get(sym) {
                         Value::Func(*impl_sym)
@@ -206,13 +276,77 @@ impl<'a> Monomorphizer<'a> {
             return Instruction::Call {
                 dest,
                 ty: self.monomorphize_ty(ty, substitutions),
-                callee: new_callee,
+                callee,
                 args,
-                meta,
+                meta: meta_items.into(),
             };
         }
 
         instruction.map_type(|ty| self.monomorphize_ty(ty, substitutions))
+    }
+
+    fn split_call_instantiations(
+        &self,
+        meta: List<InstructionMeta>,
+    ) -> (Option<CallInstantiations>, Vec<InstructionMeta>) {
+        let mut call_instantiations = None;
+        let mut meta_items = Vec::with_capacity(meta.items.len());
+        for item in meta.items {
+            match item {
+                InstructionMeta::CallInstantiations(call) => {
+                    call_instantiations = Some(call);
+                }
+                other => meta_items.push(other),
+            }
+        }
+        (call_instantiations, meta_items)
+    }
+
+    fn substitutions_for_call(
+        &self,
+        call_instantiations: &CallInstantiations,
+        caller_substitutions: &Substitutions,
+    ) -> Substitutions {
+        let mut substitutions = Substitutions::default();
+        for (param_id, ty) in &call_instantiations.instantiations.ty {
+            substitutions
+                .ty
+                .insert(Ty::Param(*param_id), substitute(ty.clone(), caller_substitutions));
+        }
+        for (row_param_id, row) in &call_instantiations.instantiations.row {
+            substitutions.row.insert(
+                *row_param_id,
+                substitute_row(row.clone(), caller_substitutions),
+            );
+        }
+        substitutions
+            .witnesses
+            .extend(call_instantiations.witnesses.iter().map(|(k, v)| (*k, *v)));
+        substitutions
+    }
+
+    fn substitutions_are_concrete(&self, substitutions: &Substitutions) -> bool {
+        substitutions.ty.values().all(is_concrete_ty)
+            && substitutions
+                .row
+                .iter()
+                .all(|(param, row)| *row == Row::Param(*param) || is_concrete_row(row))
+    }
+
+    fn replace_callee_symbol(&self, callee: Value, symbol: Symbol) -> Value {
+        match callee {
+            Value::Func(_) => Value::Func(symbol),
+            Value::Closure { env, .. } => Value::Closure { func: symbol, env },
+            Value::Ref(reference) => match reference {
+                Reference::Func(_) => Value::Ref(Reference::Func(symbol)),
+                Reference::Closure(_, env) => Value::Ref(Reference::Closure(symbol, env)),
+                Reference::Register { frame, register } => Value::Ref(Reference::Register {
+                    frame,
+                    register,
+                }),
+            },
+            other => other,
+        }
     }
 
     #[allow(clippy::only_used_in_recursion)]
@@ -327,6 +461,83 @@ impl<'a> Monomorphizer<'a> {
             }
             other => unreachable!("{other:?}"),
         }
+    }
+
+    fn resolve_name(&self, sym: &Symbol) -> Option<&str> {
+        if matches!(sym, Symbol::Main) {
+            return Some("main");
+        }
+
+        if matches!(sym, Symbol::Library) {
+            return Some("lib");
+        }
+
+        if let Some(string) = self.resolved_names.symbol_names.get(sym) {
+            return Some(string);
+        }
+
+        if let Some(string) = self.config.modules.resolve_name(sym) {
+            return Some(string);
+        }
+
+        None
+    }
+
+    fn monomorphize_name(&mut self, symbol: Symbol, instantiations: &Substitutions) -> Name {
+        let name = Name::Resolved(
+            symbol,
+            self.resolve_name(&symbol)
+                .unwrap_or_else(|| unreachable!("did not get symbol name: {symbol:?}"))
+                .to_string(),
+        );
+
+        let key = SpecializationKey::new(instantiations);
+        if key.is_empty() {
+            return name;
+        }
+
+        if let Some(existing) = self
+            .specialization_intern
+            .get(&symbol)
+            .and_then(|m| m.get(&key))
+            .copied()
+        {
+            let parts = key.parts();
+            let new_name_str = format!("{}[{}]", name.name_str(), parts.join(", "));
+            return Name::Resolved(existing, new_name_str);
+        }
+
+        let new_symbol: Symbol = self.symbols.next_synthesized(self.config.module_id).into();
+        self.resolved_names
+            .symbol_names
+            .insert(new_symbol, name.name_str());
+        let parts = key.parts();
+        let new_name_str = format!("{}[{}]", name.name_str(), parts.join(", "));
+        let new_name = Name::Resolved(new_symbol, new_name_str.clone());
+
+        tracing::trace!("monomorphized {name:?} -> {new_name:?}");
+        self.resolved_names
+            .symbol_names
+            .insert(new_symbol, new_name_str);
+
+        self.specialization_intern
+            .entry(symbol)
+            .or_default()
+            .insert(key, new_symbol);
+
+        let specialization = Specialization {
+            name: new_symbol,
+            substitutions: instantiations.clone(),
+        };
+
+        self.specializations
+            .entry(symbol)
+            .or_default()
+            .push(specialization.clone());
+        self.pending_specializations
+            .push((symbol, specialization));
+
+        new_name
     }
 
     #[instrument(skip(self, result))]

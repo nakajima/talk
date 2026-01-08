@@ -726,7 +726,7 @@ impl<IO: super::io::IO> Interpreter<IO> {
                 };
                 Value::Record(record_id, fields)
             }
-            IrTy::Void => panic!("Load not implemented for {ty:?}"),
+            IrTy::Void => Value::Void,
         }
     }
 

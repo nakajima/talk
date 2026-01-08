@@ -255,7 +255,8 @@ pub mod tests {
             instantiations_1,
             &InstantiationSubstitutions {
                 row: fxhashmap! { 1.into() => Row::Param(1.into()) },
-                ty: fxhashmap! { 1.into() => Ty::Int }
+                ty: fxhashmap! { 1.into() => Ty::Int },
+                witnesses: fxhashmap! {},
             }
         );
 
@@ -263,7 +264,8 @@ pub mod tests {
             instantiations_2,
             &InstantiationSubstitutions {
                 row: fxhashmap! { 1.into() => Row::Param(1.into()) },
-                ty: fxhashmap! { 1.into() => Ty::Bool }
+                ty: fxhashmap! { 1.into() => Ty::Bool },
+                witnesses: fxhashmap! {},
             }
         );
     }
@@ -311,14 +313,16 @@ pub mod tests {
             instantiations_1,
             &InstantiationSubstitutions {
                 row: Default::default(),
-                ty: fxhashmap! { 1.into() => Ty::Int }
+                ty: fxhashmap! { 1.into() => Ty::Int },
+                witnesses: fxhashmap! {},
             }
         );
         assert_eq!(
             instantiations_2,
             &InstantiationSubstitutions {
                 row: Default::default(),
-                ty: fxhashmap! { 1.into() => Ty::Bool }
+                ty: fxhashmap! { 1.into() => Ty::Bool },
+                witnesses: fxhashmap! {},
             }
         );
     }
@@ -366,14 +370,16 @@ pub mod tests {
             instantiations_1,
             &InstantiationSubstitutions {
                 row: Default::default(),
-                ty: fxhashmap! { 1.into() => Ty::Int }
+                ty: fxhashmap! { 1.into() => Ty::Int },
+                witnesses: fxhashmap! {},
             }
         );
         assert_eq!(
             instantiations_2,
             &InstantiationSubstitutions {
                 row: Default::default(),
-                ty: fxhashmap! { 1.into() => Ty::Bool }
+                ty: fxhashmap! { 1.into() => Ty::Bool },
+                witnesses: fxhashmap! {},
             }
         );
     }

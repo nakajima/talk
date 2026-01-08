@@ -35,6 +35,7 @@ impl UnificationSubstitutions {
 pub struct InstantiationSubstitutions<T: SomeType> {
     pub row: FxHashMap<RowParamId, T::RowType>,
     pub ty: FxHashMap<TypeParamId, T>,
+    pub witnesses: FxHashMap<Symbol, Symbol>,
 }
 impl<T: SomeType, U: SomeType> TyMappable<T, U> for InstantiationSubstitutions<T> {
     type OutputTy = InstantiationSubstitutions<U>;
@@ -46,6 +47,7 @@ impl<T: SomeType, U: SomeType> TyMappable<T, U> for InstantiationSubstitutions<T
                 .map(|(k, v)| (k, v.map_ty(m)))
                 .collect(),
             ty: self.ty.into_iter().map(|(k, v)| (k, m(&v))).collect(),
+            witnesses: self.witnesses,
         }
     }
 }
@@ -54,6 +56,7 @@ impl<T: SomeType> Default for InstantiationSubstitutions<T> {
         Self {
             row: Default::default(),
             ty: Default::default(),
+            witnesses: Default::default(),
         }
     }
 }
@@ -61,6 +64,7 @@ impl<T: SomeType> InstantiationSubstitutions<T> {
     pub fn extend(&mut self, other: InstantiationSubstitutions<T>) {
         self.ty.extend(other.ty);
         self.row.extend(other.row);
+        self.witnesses.extend(other.witnesses);
     }
 }
 
