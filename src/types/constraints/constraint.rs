@@ -7,8 +7,9 @@ use crate::{
             store::ConstraintId, type_member::TypeMember,
         },
         infer_row::InferRow,
-        infer_ty::InferTy,
+        infer_ty::{InferTy, Meta},
         predicate::Predicate,
+        scheme::ForAll,
         type_operations::{UnificationSubstitutions, substitute, substitute_mult, substitute_row},
         type_session::TypeSession,
     },
@@ -224,7 +225,7 @@ impl Constraint {
         copy
     }
 
-    #[instrument(skip(substitutions, session), ret)]
+    #[instrument(skip(substitutions, session))]
     pub fn into_predicate(
         &self,
         substitutions: &mut UnificationSubstitutions,
@@ -296,7 +297,7 @@ impl Constraint {
         Some(pred)
     }
 
-    pub fn collect_metas(&self) -> IndexSet<InferTy> {
+    pub fn collect_metas(&self) -> IndexSet<Meta> {
         let mut out = IndexSet::default();
         match self {
             Constraint::Projection(c) => {
@@ -343,6 +344,64 @@ impl Constraint {
             Constraint::RowSubset(c) => {
                 out.extend(c.left.collect_metas());
                 out.extend(c.right.collect_metas());
+            }
+        }
+
+        out
+    }
+
+    pub fn collect_foralls(&self) -> IndexSet<ForAll> {
+        let mut out = IndexSet::default();
+        match self {
+            Constraint::Projection(c) => {
+                out.extend(c.base.collect_foralls());
+                out.extend(c.result.collect_foralls());
+            }
+            Constraint::DefaultTy(c) => {
+                out.extend(c.var.collect_foralls());
+                out.extend(c.ty.collect_foralls());
+                out.extend(
+                    c.allowed
+                        .iter()
+                        .cloned()
+                        .flat_map(|ty| ty.collect_foralls()),
+                );
+            }
+            Constraint::Equals(equals) => {
+                out.extend(equals.lhs.collect_foralls());
+                out.extend(equals.rhs.collect_foralls());
+            }
+            Constraint::Member(member) => {
+                out.extend(member.receiver.collect_foralls());
+                out.extend(member.ty.collect_foralls());
+            }
+            Constraint::Call(call) => {
+                out.extend(call.callee.collect_foralls());
+                for argument in &call.args {
+                    out.extend(argument.collect_foralls());
+                }
+                if let Some(receiver) = &call.receiver {
+                    out.extend(receiver.collect_foralls());
+                }
+                out.extend(call.returns.collect_foralls());
+            }
+            Constraint::HasField(has_field) => {
+                // The row meta is handled in your existing HasField block later.
+                out.extend(has_field.ty.collect_foralls());
+            }
+            Constraint::Conforms(c) => {
+                out.extend(c.ty.collect_foralls());
+            }
+            Constraint::TypeMember(c) => {
+                out.extend(c.base.collect_foralls());
+                out.extend(c.result.collect_foralls());
+                for ty in &c.generics {
+                    out.extend(ty.collect_foralls());
+                }
+            }
+            Constraint::RowSubset(c) => {
+                out.extend(c.left.collect_foralls());
+                out.extend(c.right.collect_foralls());
             }
         }
 

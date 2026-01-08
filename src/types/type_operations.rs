@@ -1,10 +1,3 @@
-use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
-
-use indexmap::IndexMap;
-use itertools::Itertools;
-use rustc_hash::FxHashMap;
-use tracing::instrument;
-
 use crate::{
     label::Label,
     name_resolution::symbol::Symbol,
@@ -13,10 +6,16 @@ use crate::{
         infer_row::{InferRow, RowMetaId, RowParamId, RowTail, normalize_row},
         infer_ty::{InferTy, Level, Meta, MetaVarId, TypeParamId},
         solve_context::Solve,
+        ty::SomeType,
         type_error::TypeError,
         type_session::{TypeDefKind, TypeSession},
+        typed_ast::TyMappable,
     },
 };
+use itertools::Itertools;
+use rustc_hash::FxHashMap;
+use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
+use tracing::instrument;
 
 #[derive(Clone)]
 pub struct UnificationSubstitutions {
@@ -32,55 +31,36 @@ impl UnificationSubstitutions {
     }
 }
 
-#[derive(Clone, Debug, Default)]
-pub struct InstantiationSubstitutions {
-    pub row: FxHashMap<NodeID, IndexMap<RowParamId, RowMetaId>>,
-    pub ty: FxHashMap<NodeID, IndexMap<TypeParamId, MetaVarId>>,
+#[derive(Clone, Debug, PartialEq)]
+pub struct InstantiationSubstitutions<T: SomeType> {
+    pub row: FxHashMap<RowParamId, T::RowType>,
+    pub ty: FxHashMap<TypeParamId, T>,
 }
-
-impl InstantiationSubstitutions {
-    pub(super) fn ty_mappings(&self, id: &NodeID) -> IndexMap<TypeParamId, MetaVarId> {
-        self.ty.get(id).cloned().unwrap_or_default()
+impl<T: SomeType, U: SomeType> TyMappable<T, U> for InstantiationSubstitutions<T> {
+    type OutputTy = InstantiationSubstitutions<U>;
+    fn map_ty(self, m: &mut impl FnMut(&T) -> U) -> Self::OutputTy {
+        InstantiationSubstitutions {
+            row: self
+                .row
+                .into_iter()
+                .map(|(k, v)| (k, v.map_ty(m)))
+                .collect(),
+            ty: self.ty.into_iter().map(|(k, v)| (k, m(&v))).collect(),
+        }
     }
-
-    pub(super) fn get_ty(
-        &mut self,
-        node_id: &NodeID,
-        type_param_id: &TypeParamId,
-    ) -> Option<&MetaVarId> {
-        self.ty.entry(*node_id).or_default().get(type_param_id)
+}
+impl<T: SomeType> Default for InstantiationSubstitutions<T> {
+    fn default() -> Self {
+        Self {
+            row: Default::default(),
+            ty: Default::default(),
+        }
     }
-
-    pub(super) fn get_row(
-        &mut self,
-        node_id: &NodeID,
-        type_param_id: &RowParamId,
-    ) -> Option<&RowMetaId> {
-        self.row.entry(*node_id).or_default().get(type_param_id)
-    }
-
-    pub(super) fn insert_ty(
-        &mut self,
-        node_id: NodeID,
-        type_param_id: TypeParamId,
-        meta: MetaVarId,
-    ) {
-        self.ty
-            .entry(node_id)
-            .or_default()
-            .insert(type_param_id, meta);
-    }
-
-    pub(super) fn insert_row(
-        &mut self,
-        node_id: NodeID,
-        row_param_id: RowParamId,
-        meta: RowMetaId,
-    ) {
-        self.row
-            .entry(node_id)
-            .or_default()
-            .insert(row_param_id, meta);
+}
+impl<T: SomeType> InstantiationSubstitutions<T> {
+    pub fn extend(&mut self, other: InstantiationSubstitutions<T>) {
+        self.ty.extend(other.ty);
+        self.row.extend(other.row);
     }
 }
 
@@ -717,17 +697,15 @@ pub(super) fn substitute_with_subs(ty: InferTy, substitutions: &Substitutions) -
 pub(super) fn instantiate_row(
     node_id: NodeID,
     row: InferRow,
-    substitutions: &InstantiationSubstitutions,
+    substitutions: &InstantiationSubstitutions<InferTy>,
     level: Level,
 ) -> InferRow {
     match row {
         InferRow::Empty => row,
         InferRow::Var(..) => row,
         InferRow::Param(id) => {
-            if let Some(row_metas) = substitutions.row.get(&node_id)
-                && let Some(row_meta) = row_metas.get(&id)
-            {
-                InferRow::Var(*row_meta)
+            if let Some(row) = substitutions.row.get(&id) {
+                row.clone()
             } else {
                 row
             }
@@ -743,7 +721,7 @@ pub(super) fn instantiate_row(
 pub(super) fn instantiate_ty(
     node_id: NodeID,
     ty: InferTy,
-    substitutions: &InstantiationSubstitutions,
+    substitutions: &InstantiationSubstitutions<InferTy>,
     level: Level,
 ) -> InferTy {
     if substitutions.row.is_empty() && substitutions.ty.is_empty() {
@@ -753,10 +731,8 @@ pub(super) fn instantiate_ty(
     match ty {
         InferTy::Error(..) => ty,
         InferTy::Param(param) => {
-            if let Some(metas) = substitutions.ty.get(&node_id)
-                && let Some(meta) = metas.get(&param)
-            {
-                InferTy::Var { id: *meta, level }
+            if let Some(ty) = substitutions.ty.get(&param) {
+                ty.clone()
             } else {
                 ty
             }

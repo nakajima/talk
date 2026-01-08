@@ -262,6 +262,10 @@ impl RowType for InferRow {
 impl SomeType for InferTy {
     type RowType = InferRow;
 
+    fn param(id: TypeParamId) -> Self {
+        InferTy::Param(id)
+    }
+
     fn void() -> Self {
         InferTy::Void
     }
@@ -364,13 +368,13 @@ impl InferTy {
         }
     }
 
-    pub fn collect_metas(&self) -> IndexSet<InferTy> {
+    pub fn collect_metas(&self) -> IndexSet<Meta> {
         let mut out = IndexSet::default();
         match self {
             InferTy::Error(..) => {}
             InferTy::Param(_) => {}
-            InferTy::Var { .. } => {
-                out.insert(self.clone());
+            InferTy::Var { id, .. } => {
+                out.insert(Meta::Ty(*id));
             }
             InferTy::Projection { base, .. } => {
                 out.extend(base.collect_metas());
@@ -385,17 +389,9 @@ impl InferTy {
                     out.extend(item.collect_metas());
                 }
             }
-            InferTy::Record(box row) => match row {
-                InferRow::Empty => (),
-                InferRow::Var(..) => {
-                    out.insert(self.clone());
-                }
-                InferRow::Param(..) => (),
-                InferRow::Extend { row, ty, .. } => {
-                    out.extend(ty.collect_metas());
-                    out.extend(InferTy::Record(row.clone()).collect_metas());
-                }
-            },
+            InferTy::Record(box row) => {
+                out.extend(row.collect_metas());
+            }
             InferTy::Nominal { type_args, .. } => {
                 for arg in type_args {
                     out.extend(arg.collect_metas());

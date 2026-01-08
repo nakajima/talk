@@ -5,7 +5,7 @@ use std::fmt::Debug;
 use crate::{
     name_resolution::{scc_graph::BindingGroup, symbol::ProtocolId},
     types::{
-        constraints::store::GroupId,
+        constraints::{call::CallId, store::GroupId},
         infer_ty::{InferTy, Level, TypeParamId},
         predicate::Predicate,
         type_operations::{InstantiationSubstitutions, UnificationSubstitutions},
@@ -18,7 +18,7 @@ pub struct SolveContext {
     pub(super) kind: SolveContextKind,
     pub(super) projection_placeholders: FxHashMap<InferTy, InferTy>,
     pub(super) substitutions: UnificationSubstitutions,
-    pub(super) instantiations: InstantiationSubstitutions,
+    pub(super) instantiations: InstantiationSubstitutions<InferTy>,
     pub(super) givens: IndexSet<Predicate<InferTy>>,
     pub(super) level: Level,
     pub(super) group: GroupId,
@@ -28,7 +28,8 @@ pub struct ChildSolveContext<'a> {
     pub(super) kind: SolveContextKind,
     pub(super) parent: &'a mut SolveContext,
     pub(super) level: Level,
-    pub(super) instantiations: InstantiationSubstitutions,
+    pub(super) instantiations: InstantiationSubstitutions<InferTy>,
+    pub(super) instantiation_call_id: Option<CallId>,
     pub(super) expected_return: Option<InferTy>,
 }
 
@@ -54,7 +55,9 @@ where
     fn parent(&mut self) -> &mut SolveContext;
     fn givens_mut(&'_ mut self) -> &mut IndexSet<Predicate<InferTy>>;
     fn substitutions_mut(&'_ mut self) -> &mut UnificationSubstitutions;
-    fn instantiations_mut(&'_ mut self) -> &mut InstantiationSubstitutions;
+    fn instantiations_mut(&'_ mut self) -> &mut InstantiationSubstitutions<InferTy>;
+    fn instantiation_call_id(&'_ self) -> Option<CallId>;
+    fn with_call(&'_ mut self, call_id: CallId) -> ChildSolveContext<'_>;
     fn group_info(&self) -> BindingGroup {
         BindingGroup {
             id: self.group(),
@@ -71,9 +74,25 @@ impl<'a> Solve for ChildSolveContext<'a> {
             kind: self.kind,
             level: self.level().next(),
             parent: self.parent,
+            instantiation_call_id: self.instantiation_call_id,
             instantiations: Default::default(),
             expected_return: self.expected_return.clone(),
         }
+    }
+
+    fn with_call(&'_ mut self, call_id: CallId) -> ChildSolveContext<'_> {
+        ChildSolveContext {
+            kind: self.kind,
+            level: self.level(),
+            parent: self.parent,
+            instantiation_call_id: Some(call_id),
+            instantiations: Default::default(),
+            expected_return: self.expected_return.clone(),
+        }
+    }
+
+    fn instantiation_call_id(&self) -> Option<CallId> {
+        self.instantiation_call_id
     }
 
     fn kind(&self) -> SolveContextKind {
@@ -97,7 +116,7 @@ impl<'a> Solve for ChildSolveContext<'a> {
         self.parent().normalize_with_level(ty, session, level)
     }
 
-    fn instantiations_mut(&'_ mut self) -> &mut InstantiationSubstitutions {
+    fn instantiations_mut(&'_ mut self) -> &mut InstantiationSubstitutions<InferTy> {
         &mut self.instantiations
     }
 
@@ -118,7 +137,23 @@ impl Solve for SolveContext {
             parent: self,
             instantiations: Default::default(),
             expected_return: None,
+            instantiation_call_id: None,
         }
+    }
+
+    fn with_call(&'_ mut self, call_id: CallId) -> ChildSolveContext<'_> {
+        ChildSolveContext {
+            kind: self.kind,
+            level: self.level(),
+            instantiations: self.instantiations.clone(),
+            expected_return: None,
+            instantiation_call_id: Some(call_id),
+            parent: self,
+        }
+    }
+
+    fn instantiation_call_id(&self) -> Option<CallId> {
+        None
     }
 
     fn kind(&self) -> SolveContextKind {
@@ -141,7 +176,7 @@ impl Solve for SolveContext {
         &mut self.givens
     }
 
-    fn instantiations_mut(&'_ mut self) -> &mut InstantiationSubstitutions {
+    fn instantiations_mut(&'_ mut self) -> &mut InstantiationSubstitutions<InferTy> {
         &mut self.instantiations
     }
 

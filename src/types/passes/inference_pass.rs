@@ -39,11 +39,12 @@ use crate::{
         conformance::{Conformance, ConformanceKey, Witnesses},
         constraint_solver::ConstraintSolver,
         constraints::{
+            call::CallId,
             constraint::{Constraint, ConstraintCause},
             store::{ConstraintStore, GroupId},
         },
         infer_row::InferRow,
-        infer_ty::{InferTy, Level, Meta, MetaVarId, TypeParamId},
+        infer_ty::{InferTy, Level, MetaVarId, TypeParamId},
         passes::uncurry_function,
         predicate::Predicate,
         scheme::{ForAll, Scheme},
@@ -95,7 +96,7 @@ pub struct InferencePass<'a> {
     asts: &'a mut [&'a mut AST<NameResolved>],
     session: &'a mut TypeSession,
     constraints: ConstraintStore,
-    instantiations: FxHashMap<NodeID, InstantiationSubstitutions>,
+    instantiations: FxHashMap<NodeID, InstantiationSubstitutions<InferTy>>,
     substitutions: UnificationSubstitutions,
     tracked_returns: Vec<IndexSet<(NodeID, InferTy)>>,
     tracked_effect_rows: Vec<InferRow>,
@@ -1236,6 +1237,7 @@ impl<'a> InferencePass<'a> {
                         id: stmt.id,
                         ty: InferTy::Bool,
                         kind: TypedExprKind::LiteralTrue,
+                        instantiations: context.instantiations_mut().clone(),
                     }
                 };
 
@@ -1276,6 +1278,7 @@ impl<'a> InferencePass<'a> {
                     id: expr.id,
                     ty: InferTy::Void,
                     kind: TypedExprKind::Hole,
+                    instantiations: context.instantiations_mut().clone(),
                 }
             }
             ExprKind::CallEffect {
@@ -1291,6 +1294,7 @@ impl<'a> InferencePass<'a> {
                     vec![InferTy::Int, InferTy::Byte],
                 ),
                 kind: TypedExprKind::LiteralInt(v.to_string()),
+                instantiations: context.instantiations_mut().clone(),
             },
             ExprKind::LiteralFloat(v) => TypedExpr {
                 id: expr.id,
@@ -1301,16 +1305,19 @@ impl<'a> InferencePass<'a> {
                     vec![InferTy::Float],
                 ),
                 kind: TypedExprKind::LiteralFloat(v.to_string()),
+                instantiations: context.instantiations_mut().clone(),
             },
             ExprKind::LiteralTrue => TypedExpr {
                 id: expr.id,
                 ty: InferTy::Bool,
                 kind: TypedExprKind::LiteralTrue,
+                instantiations: context.instantiations_mut().clone(),
             },
             ExprKind::LiteralFalse => TypedExpr {
                 id: expr.id,
                 ty: InferTy::Bool,
                 kind: TypedExprKind::LiteralFalse,
+                instantiations: context.instantiations_mut().clone(),
             },
             ExprKind::LiteralString(val) => TypedExpr {
                 id: expr.id,
@@ -1321,12 +1328,14 @@ impl<'a> InferencePass<'a> {
                     vec![InferTy::String()],
                 ),
                 kind: TypedExprKind::LiteralString(val.to_string()),
+                instantiations: context.instantiations_mut().clone(),
             },
             ExprKind::Tuple(exprs) => match exprs.len() {
                 0 => TypedExpr {
                     id: expr.id,
                     ty: InferTy::Void,
                     kind: TypedExprKind::Tuple(Default::default()),
+                    instantiations: context.instantiations_mut().clone(),
                 },
                 1 => self.visit_expr(&exprs[0], context)?,
                 _ => {
@@ -1338,6 +1347,7 @@ impl<'a> InferencePass<'a> {
                         id: expr.id,
                         ty: InferTy::Tuple(typed_exprs.iter().map(|t| t.ty.clone()).collect_vec()),
                         kind: TypedExprKind::Tuple(typed_exprs),
+                        instantiations: context.instantiations_mut().clone(),
                     }
                 }
             },
@@ -1347,6 +1357,7 @@ impl<'a> InferencePass<'a> {
                     id: expr.id,
                     ty: typed_block.ret.clone(),
                     kind: TypedExprKind::Block(typed_block),
+                    instantiations: context.instantiations_mut().clone(),
                 }
             }
             ExprKind::Unary(..) | ExprKind::Binary(..) => {
@@ -1370,6 +1381,7 @@ impl<'a> InferencePass<'a> {
                         func.effects_row.clone().into(),
                     ),
                     kind: TypedExprKind::Func(func),
+                    instantiations: context.instantiations_mut().clone(),
                 }
             }
             ExprKind::Variable(name) => self.visit_variable(expr, name, &mut context.next())?,
@@ -1524,6 +1536,7 @@ impl<'a> InferencePass<'a> {
                 effect: effect_sym,
                 args: typed_args,
             },
+            instantiations: context.instantiations_mut().clone(),
         })
     }
 
@@ -1555,6 +1568,7 @@ impl<'a> InferencePass<'a> {
                 }
                 .into(),
             ),
+            instantiations: context.instantiations_mut().clone(),
         })
     }
 
@@ -1621,6 +1635,7 @@ impl<'a> InferencePass<'a> {
                     level: context.level(),
                 }),
                 kind: TypedExprKind::LiteralArray(vec![]),
+                instantiations: context.instantiations_mut().clone(),
             });
         };
 
@@ -1643,6 +1658,7 @@ impl<'a> InferencePass<'a> {
             id: expr.id,
             ty: InferTy::Array(item_ty.ty),
             kind: TypedExprKind::LiteralArray(typed_items),
+            instantiations: context.instantiations_mut().clone(),
         })
     }
 
@@ -1738,7 +1754,7 @@ impl<'a> InferencePass<'a> {
         &mut self,
         expr: &Expr,
         name: &Name,
-        _context: &mut impl Solve,
+        context: &mut impl Solve,
     ) -> TypedRet<TypedExpr<InferTy>> {
         let symbol = name
             .symbol()
@@ -1754,6 +1770,7 @@ impl<'a> InferencePass<'a> {
             id: expr.id,
             ty,
             kind: TypedExprKind::Constructor(symbol, vec![]),
+            instantiations: context.instantiations_mut().clone(),
         })
     }
 
@@ -1771,6 +1788,7 @@ impl<'a> InferencePass<'a> {
                 id: expr.id,
                 ty: self.session.new_ty_meta_var(context.level().next()),
                 kind: TypedExprKind::Hole,
+                instantiations: context.instantiations_mut().clone(),
             }
         };
 
@@ -1782,6 +1800,7 @@ impl<'a> InferencePass<'a> {
             label.clone(),
             ret.clone(),
             &context.group_info(),
+            context.instantiation_call_id(),
         );
 
         Ok(TypedExpr {
@@ -1791,6 +1810,7 @@ impl<'a> InferencePass<'a> {
                 receiver: Box::new(receiver_ty),
                 label: label.clone(),
             },
+            instantiations: context.instantiations_mut().clone(),
         })
     }
 
@@ -1808,20 +1828,34 @@ impl<'a> InferencePass<'a> {
             return Err(TypeError::NameNotResolved(name.clone()));
         };
 
+        let is_extension = matches!(decl.kind, DeclKind::Extend { .. });
         let mut type_params = vec![];
-        for generic in generics.iter() {
-            let id = self.register_generic(generic, context);
-            type_params.push(InferTy::Param(id));
-            let name = generic
-                .name
-                .symbol()
-                .map_err(|_| TypeError::NameNotResolved(generic.name.clone()))?;
-            self.session
-                .type_catalog
-                .child_types
-                .entry(nominal_symbol)
-                .or_default()
-                .insert(generic.name.name_str().into(), name);
+
+        if is_extension {
+            // For extensions, use type params from the already-registered nominal
+            if let Some(nominal) = self.session.type_catalog.nominals.get(&nominal_symbol) {
+                type_params = nominal.type_params.clone();
+            }
+            // Also process any explicit generics on the extension (if syntax supports it)
+            for generic in generics.iter() {
+                let id = self.register_generic(generic, context);
+                type_params.push(id);
+            }
+        } else {
+            for generic in generics.iter() {
+                let id = self.register_generic(generic, context);
+                type_params.push(id);
+                let name = generic
+                    .name
+                    .symbol()
+                    .map_err(|_| TypeError::NameNotResolved(generic.name.clone()))?;
+                self.session
+                    .type_catalog
+                    .child_types
+                    .entry(nominal_symbol)
+                    .or_default()
+                    .insert(generic.name.name_str().into(), name);
+            }
         }
 
         let ty = if matches!(nominal_symbol, Symbol::Builtin(..)) {
@@ -1829,7 +1863,7 @@ impl<'a> InferencePass<'a> {
         } else {
             InferTy::Nominal {
                 symbol: nominal_symbol,
-                type_args: type_params.clone(),
+                type_args: type_params.iter().map(|t| InferTy::Param(*t)).collect(),
             }
         };
 
@@ -2203,6 +2237,7 @@ impl<'a> InferencePass<'a> {
             kind: TypedExprKind::RecordLiteral {
                 fields: typed_fields,
             },
+            instantiations: context.instantiations_mut().clone(),
         })
     }
 
@@ -2405,6 +2440,7 @@ impl<'a> InferencePass<'a> {
             id,
             ty,
             kind: TypedExprKind::Match(Box::new(scrutinee_ty), typed_arms),
+            instantiations: context.instantiations_mut().clone(),
         })
     }
 
@@ -2815,6 +2851,7 @@ impl<'a> InferencePass<'a> {
                     variant_name.into(),
                     payload,
                     &context.group_info(),
+                    context.instantiation_call_id(),
                 );
 
                 // Recursively check each field pattern
@@ -2879,6 +2916,7 @@ impl<'a> InferencePass<'a> {
             id,
             ty: conseq_ty.ret.clone(),
             kind: TypedExprKind::If(cond_ty.into(), conseq_ty, alt_ty),
+            instantiations: context.instantiations_mut().clone(),
         })
     }
 
@@ -2930,6 +2968,7 @@ impl<'a> InferencePass<'a> {
                 id,
                 ty: result_ty,
                 kind: TypedExprKind::If(cond_ty.into(), conseq_ty, alt_ty),
+                instantiations: context.instantiations_mut().clone(),
             }),
         })
     }
@@ -2995,10 +3034,11 @@ impl<'a> InferencePass<'a> {
             id: expr.id,
             ty,
             kind: TypedExprKind::Variable(sym),
+            instantiations: context.instantiations_mut().clone(),
         })
     }
 
-    #[instrument(level = tracing::Level::TRACE, skip(self, context, ))]
+    #[instrument(level = tracing::Level::TRACE, skip(self, context))]
     fn visit_call(
         &mut self,
         id: NodeID,
@@ -3007,15 +3047,16 @@ impl<'a> InferencePass<'a> {
         args: &[CallArg],
         context: &mut impl Solve,
     ) -> TypedRet<TypedExpr<InferTy>> {
-        let callee_ty = self.visit_expr(callee, context)?;
+        let mut context = context.with_call(CallId(id));
+        let callee_ty = self.visit_expr(callee, &mut context)?;
 
         let arg_tys: Vec<_> = args
             .iter()
-            .map(|a| self.visit_expr(&a.value, context))
+            .map(|a| self.visit_expr(&a.value, &mut context))
             .try_collect()?;
         let type_arg_tys: Vec<_> = type_args
             .iter()
-            .map(|a| self.visit_type_annotation(a, context))
+            .map(|a| self.visit_type_annotation(a, &mut context))
             .try_collect()?;
 
         let receiver = match &callee.kind {
@@ -3032,50 +3073,38 @@ impl<'a> InferencePass<'a> {
                     );
                 }
 
-                Some(self.visit_expr(rcv, context)?)
+                Some(self.visit_expr(rcv, &mut context)?)
             }
             ExprKind::Member(None, ..) => Some(TypedExpr {
                 id: callee.id,
                 ty: self.session.new_ty_meta_var(context.level()),
                 kind: TypedExprKind::Hole,
+                instantiations: context.instantiations_mut().clone(),
             }),
             _ => None,
         };
 
+        context
+            .instantiations_mut()
+            .extend(callee_ty.instantiations.clone());
         let ret = self.session.new_ty_meta_var(context.level());
-        let instantiations = self
-            .instantiations
-            .get(&callee.id)
-            .cloned()
-            .unwrap_or_default();
+
         for ((type_arg, type_arg_ty), instantiated) in type_args
             .iter()
             .zip(type_arg_tys.iter())
-            .zip(instantiations.ty_mappings(&callee.id).values())
+            .zip(context.instantiations_mut().clone().ty)
         {
             self.constraints.wants_equals_at_with_cause(
                 type_arg.id,
                 type_arg_ty.clone(),
-                InferTy::Var {
-                    id: *instantiated,
-                    level: self
-                        .session
-                        .meta_levels
-                        .borrow()
-                        .get(&Meta::Ty(*instantiated))
-                        .copied()
-                        .unwrap_or_default(),
-                },
+                instantiated.1,
                 &context.group_info(),
                 Some(ConstraintCause::CallTypeArg(type_arg.id)),
             );
         }
 
-        // if matches!(callee_ty, InferTy::Constructor { .. }) {
-        //     arg_tys.insert(0, ret.clone());
-        // }
-
         self.constraints.wants_call(
+            CallId(id),
             id,
             callee.id,
             callee_ty.ty.clone(),
@@ -3084,10 +3113,7 @@ impl<'a> InferencePass<'a> {
             ret.clone(),
             receiver.map(|r| r.ty.clone()),
             &context.group_info(),
-            self.tracked_effect_rows
-                .last()
-                .cloned()
-                .unwrap_or(self.session.new_row_meta_var(context.level())),
+            self.tracked_effect_rows.last().cloned(),
         );
 
         Ok(TypedExpr {
@@ -3099,6 +3125,7 @@ impl<'a> InferencePass<'a> {
                 args: arg_tys,
                 resolved: None,
             },
+            instantiations: context.instantiations_mut().clone(),
         })
     }
 
@@ -3113,15 +3140,15 @@ impl<'a> InferencePass<'a> {
             .symbol()
             .map_err(|_| TypeError::NameNotResolved(func.name.clone()))?;
 
+        let mut foralls = IndexSet::default();
         for generic in func.generics.iter() {
-            self.register_generic(generic, context);
+            let id = self.register_generic(generic, context);
+            foralls.insert(ForAll::Ty(id));
         }
 
         let params = self.visit_params(&func.params, context)?;
 
         let (_effects_guard, effects) = self.tracking_effects(&func.effects, context)?;
-
-        let mut foralls = IndexSet::default();
 
         let body = if let Some(ret) = &func.ret {
             let ret = self.visit_type_annotation(ret, context)?;
@@ -3135,8 +3162,6 @@ impl<'a> InferencePass<'a> {
             .pop()
             .unwrap_or_else(|| unreachable!("we just pushed it pal"));
 
-        foralls.extend(body.ret.collect_foralls());
-
         let params = params
             .iter()
             .map(|t| {
@@ -3148,15 +3173,29 @@ impl<'a> InferencePass<'a> {
 
         let ret = substitute(body.ret.clone(), &self.session.skolem_map);
 
-        self.session.insert(
-            func_sym,
-            curry(
-                params.iter().map(|t| t.ty.clone()),
-                ret.clone(),
-                effects_row.clone().into(),
-            ),
-            &mut Default::default(),
+        foralls.extend(body.ret.collect_foralls());
+
+        println!("foralls: {foralls:?}");
+
+        let ty = curry(
+            params.iter().map(|t| t.ty.clone()),
+            ret.clone(),
+            effects_row.clone().into(),
         );
+
+        foralls.extend(ty.collect_foralls());
+        let entry = if foralls.is_empty() {
+            EnvEntry::Mono(ty)
+        } else {
+            EnvEntry::Scheme(Scheme {
+                ty,
+                foralls: foralls.clone(),
+                predicates: Default::default(),
+            })
+        };
+
+        self.session
+            .insert_term(func_sym, entry, &mut Default::default());
 
         Ok(TypedFunc {
             name: func_sym,
@@ -3395,10 +3434,14 @@ impl<'a> InferencePass<'a> {
                     return Ok(InferTy::Param(protocol_self));
                 }
 
-                if self.session.lookup_nominal(&sym).is_some() {
+                if let Some(nominal) = self.session.lookup_nominal(&sym) {
                     return Ok(InferTy::Nominal {
                         symbol: sym,
-                        type_args: vec![],
+                        type_args: nominal
+                            .type_params
+                            .iter()
+                            .map(|t| InferTy::Param(*t))
+                            .collect(),
                     });
                 }
 

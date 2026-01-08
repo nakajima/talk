@@ -8,6 +8,7 @@ use crate::{
     types::{
         constraint_solver::{DeferralReason, SolveResult},
         constraints::{
+            call::CallId,
             constraint::ConstraintCause,
             store::{ConstraintId, ConstraintStore},
         },
@@ -29,6 +30,7 @@ pub struct Member {
     pub receiver: InferTy,
     pub label: Label,
     pub ty: InferTy,
+    pub call_id: Option<CallId>,
 }
 
 impl Member {
@@ -204,34 +206,33 @@ impl Member {
                 return SolveResult::Defer(DeferralReason::WaitingOnSymbol(*nominal_symbol));
             };
 
-            for param in nominal.type_params.iter() {
-                let InferTy::Param(param_id) = param else {
-                    continue;
-                };
-
-                if context
-                    .instantiations
-                    .get_ty(&self.node_id, param_id)
-                    .is_some()
-                {
-                    continue;
-                }
-
+            for param_id in nominal.type_params.iter() {
                 let InferTy::Var { id: meta, .. } = session.new_ty_meta_var(context.level) else {
                     unreachable!();
                 };
 
                 session.reverse_instantiations.ty.insert(meta, *param_id);
-                context
-                    .instantiations
-                    .insert_ty(self.node_id, *param_id, meta);
-                session.type_catalog.instantiations.ty.insert(
-                    (self.node_id, *param_id),
+                context.instantiations.ty.insert(
+                    *param_id,
                     InferTy::Var {
                         id: meta,
                         level: context.level,
                     },
                 );
+                if let Some(call_id) = self.call_id {
+                    session
+                        .instantiations_by_call
+                        .entry(call_id)
+                        .or_default()
+                        .ty
+                        .insert(
+                            *param_id,
+                            InferTy::Var {
+                                id: meta,
+                                level: context.level,
+                            },
+                        );
+                }
             }
 
             let Some(variant) = nominal.variants.get(&self.label) else {

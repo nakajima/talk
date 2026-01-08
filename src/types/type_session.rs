@@ -17,7 +17,7 @@ use crate::{
     types::{
         builtins::builtin_scope,
         conformance::{Conformance, ConformanceKey},
-        constraints::{constraint::Constraint, store::ConstraintStore},
+        constraints::{call::CallId, constraint::Constraint, store::ConstraintStore},
         infer_row::{InferRow, RowMetaId, RowParamId},
         infer_ty::{InferTy, Level, Meta, MetaVarId, SkolemId, TypeParamId},
         matcher::MatchPlan,
@@ -29,7 +29,8 @@ use crate::{
         ty::{SomeType, Ty},
         type_catalog::{Nominal, TypeCatalog},
         type_error::TypeError,
-        type_operations::{UnificationSubstitutions, substitute},
+        type_operations::{InstantiationSubstitutions, UnificationSubstitutions, substitute},
+        typed_ast::TyMappable,
         vars::Vars,
     },
 };
@@ -62,6 +63,7 @@ pub struct TypeSession {
     pub protocol_member_witnesses: FxHashMap<NodeID, Symbol>,
     pub(crate) symbols: Symbols,
     pub(crate) resolved_names: ResolvedNames,
+    pub(crate) instantiations_by_call: FxHashMap<CallId, InstantiationSubstitutions<InferTy>>,
 
     meta_vars: InPlaceUnificationTable<MetaVarId>,
     row_vars: InPlaceUnificationTable<RowMetaId>,
@@ -224,6 +226,7 @@ impl TypeSession {
             modules,
             aliases: Default::default(),
             protocol_member_witnesses: Default::default(),
+            instantiations_by_call: Default::default(),
 
             meta_vars: Default::default(),
             row_vars: Default::default(),
@@ -261,6 +264,26 @@ impl TypeSession {
                 (id, ty)
             })
             .collect();
+
+        // let instantiations = std::mem::take(&mut self.instantiations_by_call)
+        //     .into_iter()
+        //     .map(|(k, v)| {
+        //         (
+        //             k,
+        //             InstantiationSubstitutions {
+        //                 ty: v
+        //                     .ty
+        //                     .into_iter()
+        //                     .map(|(k, v)| (k, self.finalize_ty(v).as_mono_ty().clone()))
+        //                     .collect(),
+        //                 row: v
+        //                     .row
+        //                     .into_iter()
+        //                     .map(|(k, v)| (k, self.finalize_row(v)))
+        //                     .collect(),
+        //             },
+        //         )
+        //     });
 
         let mut context = SolveContext::new(
             UnificationSubstitutions::new(self.meta_levels.clone()),
@@ -572,6 +595,12 @@ impl TypeSession {
             self.types_by_node.insert(key, ty);
         }
 
+        let instantiations_by_call = std::mem::take(&mut self.instantiations_by_call);
+        self.instantiations_by_call = instantiations_by_call
+            .into_iter()
+            .map(|(k, v)| (k, v.map_ty(&mut |t| self.apply(t.clone(), substitutions))))
+            .collect();
+
         for key in self.term_env.symbols.keys().copied().collect_vec() {
             let entry = self
                 .term_env
@@ -582,20 +611,6 @@ impl TypeSession {
             self.term_env.insert(key, entry);
         }
 
-        #[allow(clippy::unwrap_used)]
-        for key in self
-            .type_catalog
-            .instantiations
-            .ty
-            .keys()
-            .copied()
-            .collect_vec()
-        {
-            let ty = self.type_catalog.instantiations.ty.remove(&key).unwrap();
-            let ty = self.apply(ty.clone(), substitutions);
-            self.type_catalog.instantiations.ty.insert(key, ty);
-        }
-
         let mut conformances = std::mem::take(&mut self.type_catalog.conformances);
         for conformance in conformances.values_mut() {
             for ty in conformance.witnesses.associated_types.values_mut() {
@@ -603,20 +618,6 @@ impl TypeSession {
             }
         }
         _ = std::mem::replace(&mut self.type_catalog.conformances, conformances);
-
-        #[allow(clippy::unwrap_used)]
-        for key in self
-            .type_catalog
-            .instantiations
-            .row
-            .keys()
-            .copied()
-            .collect_vec()
-        {
-            let row = self.type_catalog.instantiations.row.remove(&key).unwrap();
-            let row = self.apply_row(row, substitutions);
-            self.type_catalog.instantiations.row.insert(key, row);
-        }
     }
 
     pub fn get_term_env(&self) -> &TermEnv {
@@ -669,29 +670,33 @@ impl TypeSession {
     ) -> EnvEntry<InferTy> {
         // Make sure we're up to date
         let ty = self.apply(ty, context.substitutions_mut());
+        let mut foralls = ty.collect_foralls();
+        let mut predicates: IndexSet<Predicate<InferTy>> = Default::default();
 
         // collect metas in ty
         let mut metas = FxHashSet::default();
         metas.extend(ty.collect_metas());
 
-        // Also collect metas that appear only in constraints
+        // Also collect metas/foralls that appear only in constraints
         for constraint in unsolved {
             let constraint = constraint.clone().apply(context.substitutions_mut(), self);
             metas.extend(constraint.collect_metas());
+            foralls.extend(constraint.collect_foralls());
         }
 
-        let mut foralls: IndexSet<_> = ty.collect_foralls().into_iter().collect();
-        let mut predicates: IndexSet<Predicate<InferTy>> = Default::default();
+        for forall in &foralls {
+            if let ForAll::Ty(id) = forall {
+                predicates.extend(self.type_param_bounds.get(id).cloned().unwrap_or_default());
+            }
+        }
+
         let mut substitutions = UnificationSubstitutions::new(self.meta_levels.clone());
         for m in &metas {
             match m {
-                InferTy::Param(p) => {
-                    predicates.extend(self.type_param_bounds.get(p).cloned().unwrap_or_default());
-                    foralls.insert(ForAll::Ty(*p));
-                }
-
-                InferTy::Var { level, id } => {
-                    if *level < context.level() {
+                Meta::Ty(id) => {
+                    let levels = self.meta_levels.borrow();
+                    let level = levels.get(m).copied().unwrap_or_default();
+                    if level < context.level() {
                         tracing::warn!(
                             "discarding {m:?} due to level ({level:?} < {:?})",
                             context.level()
@@ -714,9 +719,9 @@ impl TypeSession {
                     foralls.insert(ForAll::Ty(param_id));
                     substitutions.ty.insert(*id, InferTy::Param(param_id));
                 }
-                InferTy::Record(box InferRow::Var(id)) => {
+                Meta::Row(id) => {
                     let levels = self.meta_levels.borrow();
-                    let level = levels.get(&Meta::Row(*id)).copied().unwrap_or_default();
+                    let level = levels.get(m).copied().unwrap_or_default();
                     if level < context.level() {
                         tracing::trace!(
                             "discarding {m:?} due to level ({level:?} < {:?})",
@@ -740,9 +745,6 @@ impl TypeSession {
 
                     foralls.insert(ForAll::Row(param_id));
                     substitutions.row.insert(*id, InferRow::Param(param_id));
-                }
-                _ => {
-                    tracing::warn!("got {m:?} for var while generalizing")
                 }
             }
         }
@@ -781,7 +783,8 @@ impl TypeSession {
             // Predicates should only reference quantified variables (foralls), not
             // ungeneralized metas from outer scopes
             for meta in &metas {
-                if let InferTy::Var { level, .. } = meta && *level < context.level() {
+                let level = self.meta_levels.borrow().get(meta).copied().unwrap_or_default();
+                if level < context.level() {
                         tracing::debug!(
                             "skipping constraint {c:?} with outer-scope meta {meta:?} (level {level:?} < {:?})", context.level()
                         );

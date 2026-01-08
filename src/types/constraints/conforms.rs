@@ -40,7 +40,7 @@ pub struct Conforms {
 }
 
 impl Conforms {
-    #[instrument(skip(session))]
+    #[instrument(skip(session, context, constraints))]
     pub fn solve(
         &self,
         constraints: &mut ConstraintStore,
@@ -164,6 +164,15 @@ impl Conforms {
         // Build up some substitutions so we're not playing with the protocol's type params anymore
         let mut substitutions: FxHashMap<InferTy, InferTy> = FxHashMap::default();
         substitutions.insert(InferTy::Param(protocol_self_id), self.ty.clone());
+
+        // Also substitute the conforming type's type params with concrete args
+        if let InferTy::Nominal { type_args, .. } = &self.ty
+            && let Some(nominal) = session.lookup_nominal(&conforming_ty_sym)
+        {
+            for (param, arg) in nominal.type_params.iter().zip(type_args) {
+                substitutions.insert(InferTy::Param(*param), arg.clone());
+            }
+        }
 
         // If we're registering a conformance for a nominal, copy specialized versions of default methods
         if !matches!(conforming_ty_sym, Symbol::Protocol(..))
@@ -454,6 +463,7 @@ impl Conforms {
 
             // Substitute required type with type and row substitutions
             let required_ty = substitute_with_subs(required_entry._as_ty(), &substitutions);
+            let witness_ty = substitute_with_subs(witness._as_ty(), &substitutions);
 
             // Update witnesses
             let key = ConformanceKey {
@@ -479,7 +489,7 @@ impl Conforms {
                 .requirements
                 .insert(required_sym, witness_sym);
 
-            match unify(&required_ty, &witness._as_ty(), context, session) {
+            match unify(&required_ty, &witness_ty, context, session) {
                 Ok(vars) => solved_metas.extend(vars),
                 Err(e) => {
                     tracing::error!("Error checking witness {label:?}: {e:?}");

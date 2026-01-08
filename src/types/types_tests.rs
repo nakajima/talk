@@ -7,6 +7,7 @@ pub mod tests {
             module::ModuleId,
         },
         diagnostic::{AnyDiagnostic, Diagnostic},
+        fxhashmap,
         ir::monomorphizer::uncurry_function,
         label::Label,
         name_resolution::symbol::{EnumId, GlobalId, ProtocolId, StructId, Symbol, SynthesizedId},
@@ -14,9 +15,9 @@ pub mod tests {
             conformance::ConformanceKey,
             infer_row::RowParamId,
             row::Row,
-            scheme::{ForAll, Scheme},
             ty::Ty,
             type_error::TypeError,
+            type_operations::InstantiationSubstitutions,
             type_session::{TypeEntry, Types},
             typed_ast::{
                 TypedAST, TypedDeclKind, TypedExpr, TypedExprKind, TypedNode, TypedStmt,
@@ -216,7 +217,7 @@ pub mod tests {
 
     #[test]
     fn stores_func_instantiations() {
-        let (ast, types) = typecheck(
+        let (ast, _types) = typecheck(
             "
         func identity(x) { x }
         identity(123)
@@ -227,10 +228,8 @@ pub mod tests {
         let TypedStmt {
             kind:
                 TypedStmtKind::Expr(TypedExpr {
-                    kind:
-                        TypedExprKind::Call {
-                            callee: box root_1, ..
-                        },
+                    instantiations: instantiations_1,
+                    kind: TypedExprKind::Call { .. },
                     ..
                 }),
             ..
@@ -242,10 +241,8 @@ pub mod tests {
         let TypedStmt {
             kind:
                 TypedStmtKind::Expr(TypedExpr {
-                    kind:
-                        TypedExprKind::Call {
-                            callee: box root_2, ..
-                        },
+                    instantiations: instantiations_2,
+                    kind: TypedExprKind::Call { .. },
                     ..
                 }),
             ..
@@ -254,39 +251,26 @@ pub mod tests {
             panic!("didn't get expr");
         };
 
-        let TypeEntry::Poly(Scheme {
-            ty: Ty::Func(box Ty::Param(type_param), ..),
-            ..
-        }) = types
-            .get_symbol(&Symbol::Global(GlobalId::from(1)))
-            .unwrap()
-        else {
-            panic!("didn't get func type param");
-        };
+        assert_eq!(
+            instantiations_1,
+            &InstantiationSubstitutions {
+                row: fxhashmap! { 1.into() => Row::Param(1.into()) },
+                ty: fxhashmap! { 1.into() => Ty::Int }
+            }
+        );
 
         assert_eq!(
-            *types
-                .catalog
-                .instantiations
-                .ty
-                .get(&(root_1.id, *type_param))
-                .unwrap(),
-            Ty::Int
-        );
-        assert_eq!(
-            *types
-                .catalog
-                .instantiations
-                .ty
-                .get(&(root_2.id, *type_param))
-                .unwrap(),
-            Ty::Bool
+            instantiations_2,
+            &InstantiationSubstitutions {
+                row: fxhashmap! { 1.into() => Row::Param(1.into()) },
+                ty: fxhashmap! { 1.into() => Ty::Bool }
+            }
         );
     }
 
     #[test]
     fn stores_struct_instantiations() {
-        let (ast, types) = typecheck(
+        let (ast, _types) = typecheck(
             "
         struct Wrapper<T> {
             let wrapped: T
@@ -300,16 +284,8 @@ pub mod tests {
         let TypedStmt {
             kind:
                 TypedStmtKind::Expr(TypedExpr {
-                    kind:
-                        TypedExprKind::Call {
-                            callee:
-                                box TypedExpr {
-                                    kind: TypedExprKind::Constructor(..),
-                                    id: constructor_1_id,
-                                    ..
-                                },
-                            ..
-                        },
+                    kind: TypedExprKind::Call { .. },
+                    instantiations: instantiations_1,
                     ..
                 }),
             ..
@@ -321,64 +297,35 @@ pub mod tests {
         let TypedStmt {
             kind:
                 TypedStmtKind::Expr(TypedExpr {
-                    kind:
-                        TypedExprKind::Call {
-                            callee:
-                                box TypedExpr {
-                                    kind: TypedExprKind::Constructor(..),
-                                    id: constructor_2_id,
-                                    ..
-                                },
-                            ..
-                        },
+                    kind: TypedExprKind::Call { .. },
+                    instantiations: instantiations_2,
                     ..
                 }),
             ..
         } = &ast.stmts[1]
         else {
-            panic!("didn't get second constructor call");
+            panic!("didn't get first constructor call");
         };
 
-        // Get the struct's type parameter
-        let TypeEntry::Poly(Scheme { foralls, .. }) = types
-            .get_symbol(&Symbol::Struct(StructId::from(1)))
-            .unwrap_or_else(|| panic!("did not find struct {:#?}", types.types_by_symbol))
-        else {
-            panic!("didn't get struct scheme");
-        };
-
-        let ForAll::Ty(type_param) = foralls
-            .iter()
-            .find(|p| matches!(p, ForAll::Ty(..)))
-            .unwrap()
-        else {
-            unreachable!()
-        };
-
-        // Check instantiations are stored
         assert_eq!(
-            *types
-                .catalog
-                .instantiations
-                .ty
-                .get(&(*constructor_1_id, *type_param))
-                .unwrap(),
-            Ty::Int
+            instantiations_1,
+            &InstantiationSubstitutions {
+                row: Default::default(),
+                ty: fxhashmap! { 1.into() => Ty::Int }
+            }
         );
         assert_eq!(
-            *types
-                .catalog
-                .instantiations
-                .ty
-                .get(&(*constructor_2_id, *type_param))
-                .unwrap(),
-            Ty::Bool
+            instantiations_2,
+            &InstantiationSubstitutions {
+                row: Default::default(),
+                ty: fxhashmap! { 1.into() => Ty::Bool }
+            }
         );
     }
 
     #[test]
     fn stores_enum_instantiations() {
-        let (ast, types) = typecheck(
+        let (ast, _types) = typecheck(
             "
         enum Opt<T> {
             case some(T), none
@@ -392,78 +339,42 @@ pub mod tests {
         let TypedStmt {
             kind:
                 TypedStmtKind::Expr(TypedExpr {
-                    kind:
-                        TypedExprKind::Call {
-                            callee:
-                                box TypedExpr {
-                                    kind: TypedExprKind::Member { .. },
-                                    id: member_1_id,
-                                    ..
-                                },
-                            ..
-                        },
+                    kind: TypedExprKind::Call { .. },
+                    instantiations: instantiations_1,
                     ..
                 }),
             ..
         } = &ast.stmts[0]
         else {
-            panic!("didn't get first enum variant call");
+            panic!("didn't get first constructor call");
         };
 
         let TypedStmt {
             kind:
                 TypedStmtKind::Expr(TypedExpr {
-                    kind:
-                        TypedExprKind::Call {
-                            callee:
-                                box TypedExpr {
-                                    kind: TypedExprKind::Member { .. },
-                                    id: member_2_id,
-                                    ..
-                                },
-                            ..
-                        },
+                    kind: TypedExprKind::Call { .. },
+                    instantiations: instantiations_2,
                     ..
                 }),
             ..
         } = &ast.stmts[1]
         else {
-            panic!("didn't get second enum variant call");
+            panic!("didn't get first constructor call");
         };
 
-        // Get the enum's type parameter
-        let TypeEntry::Poly(Scheme { foralls, .. }) =
-            types.get_symbol(&Symbol::Enum(EnumId::from(1))).unwrap()
-        else {
-            panic!("didn't get enum scheme");
-        };
-
-        let ForAll::Ty(type_param) = foralls
-            .iter()
-            .find(|p| matches!(p, ForAll::Ty(..)))
-            .unwrap()
-        else {
-            unreachable!()
-        };
-
-        // Check instantiations are stored
         assert_eq!(
-            *types
-                .catalog
-                .instantiations
-                .ty
-                .get(&(*member_1_id, *type_param))
-                .unwrap(),
-            Ty::Int
+            instantiations_1,
+            &InstantiationSubstitutions {
+                row: Default::default(),
+                ty: fxhashmap! { 1.into() => Ty::Int }
+            }
         );
         assert_eq!(
-            *types
-                .catalog
-                .instantiations
-                .ty
-                .get(&(*member_2_id, *type_param))
-                .unwrap(),
-            Ty::Bool
+            instantiations_2,
+            &InstantiationSubstitutions {
+                row: Default::default(),
+                ty: fxhashmap! { 1.into() => Ty::Bool }
+            }
         );
     }
 
@@ -537,7 +448,7 @@ pub mod tests {
             r#"
         func id<T>(x) { x }
         id<Byte>(123)
-    "#,
+        "#,
         );
 
         assert_eq!(ty(0, &ast, &types), Ty::Byte);

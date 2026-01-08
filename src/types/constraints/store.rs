@@ -17,7 +17,7 @@ use crate::{
         conformance::ConformanceKey,
         constraint_solver::DeferralReason,
         constraints::{
-            call::Call,
+            call::{Call, CallId},
             conforms::Conforms,
             constraint::{Constraint, ConstraintCause},
             default_ty::DefaultTy,
@@ -319,7 +319,7 @@ impl ConstraintStore {
         );
 
         for ty in constraint.collect_metas() {
-            if let InferTy::Var { id, .. } = ty {
+            if let Meta::Ty(id) = ty {
                 let meta_id = ConstraintStoreNode::Meta(Meta::Ty(id));
                 self.storage.add_node(meta_id);
                 self.storage.add_edge(
@@ -539,6 +539,7 @@ impl ConstraintStore {
         label: Label,
         ty: InferTy,
         group: &BindingGroup,
+        call_id: Option<CallId>,
     ) -> &Constraint {
         let id = self.ids.next_id();
         self.wants(
@@ -549,6 +550,7 @@ impl ConstraintStore {
                 receiver,
                 label,
                 ty,
+                call_id,
             }),
             group,
         )
@@ -584,6 +586,7 @@ impl ConstraintStore {
     #[allow(clippy::too_many_arguments)]
     pub fn wants_call(
         &mut self,
+        call_id: CallId,
         call_node_id: NodeID,
         callee_id: NodeID,
         callee: InferTy,
@@ -592,13 +595,14 @@ impl ConstraintStore {
         returns: InferTy,
         receiver: Option<InferTy>,
         group: &BindingGroup,
-        effect_context_row: InferRow,
+        effect_context_row: Option<InferRow>,
     ) -> &Constraint {
         let id = self.ids.next_id();
         self.wants(
             id,
             Constraint::Call(Call {
                 id,
+                call_id,
                 call_node_id,
                 callee_id,
                 callee,
@@ -718,6 +722,7 @@ pub mod tests {
                 id: 1.into(),
                 level: Level(1),
             },
+            call_id: None,
         });
 
         store.wants(1.into(), member, &Default::default());

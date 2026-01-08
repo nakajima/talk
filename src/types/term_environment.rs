@@ -186,8 +186,7 @@ impl EnvEntry<InferTy> {
         session: &mut TypeSession,
         context: &mut impl Solve,
         constraints: &mut ConstraintStore,
-    ) -> (InferTy, InstantiationSubstitutions) {
-        tracing::debug!("inference instantiate (id: {id:?})");
+    ) -> (InferTy, InstantiationSubstitutions<InferTy>) {
         match self {
             EnvEntry::Mono(ty) => (ty.clone(), Default::default()),
             EnvEntry::Scheme(scheme) => {
@@ -203,7 +202,6 @@ impl EnvEntry<InferTy> {
         context: &mut impl Solve,
         session: &mut TypeSession,
     ) -> InferTy {
-        tracing::debug!("inference instantiate (id: {id:?})");
         match self {
             EnvEntry::Mono(ty) => ty.clone(),
             EnvEntry::Scheme(scheme) => scheme.instantiate(id, constraints, context, session),

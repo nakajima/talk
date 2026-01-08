@@ -41,7 +41,6 @@ use crate::{
             Constructor, MatchPlan, PlanNode, PlanNodeId, Projection, ValueId, ValueRef,
             plan_for_pattern,
         },
-        scheme::ForAll,
         ty::Ty,
         type_session::{TypeEntry, Types},
     },
@@ -404,6 +403,7 @@ impl<'a> Lowerer<'a> {
                         id: NodeID(FileID(0), 0),
                         ty: Ty::Func(Ty::Void.into(), Ty::Void.into(), Row::Empty.into()),
                         kind: TypedExprKind::Func(func),
+                        instantiations: Default::default(),
                     }),
                 },
             });
@@ -1061,16 +1061,24 @@ impl<'a> Lowerer<'a> {
         bind: Bind,
         instantiations: &Substitutions,
     ) -> Result<(Value, Ty), IRError> {
+        let mut instantiations = instantiations.clone();
+        for (param, ty) in expr.instantiations.ty.iter() {
+            instantiations.ty.insert(Ty::Param(*param), ty.clone());
+        }
+        for (param, row) in expr.instantiations.row.iter() {
+            instantiations.row.insert(*param, row.clone());
+        }
+
         let (value, ty) = match &expr.kind {
             TypedExprKind::Hole => Err(IRError::TypeNotFound("nope".into())),
             TypedExprKind::CallEffect { effect, args } => {
-                self.lower_effect_call(expr, effect, args, bind, instantiations)
+                self.lower_effect_call(expr, effect, args, bind, &instantiations)
             }
             TypedExprKind::InlineIR(inline_irinstruction) => {
-                self.lower_inline_ir(inline_irinstruction, bind, instantiations)
+                self.lower_inline_ir(expr, inline_irinstruction, bind, &instantiations)
             }
             TypedExprKind::LiteralArray(typed_exprs) => {
-                self.lower_array(expr, typed_exprs, bind, instantiations)
+                self.lower_array(expr, typed_exprs, bind, &instantiations)
             }
             TypedExprKind::LiteralInt(val) => {
                 let ret = self.ret(bind);
@@ -1122,15 +1130,17 @@ impl<'a> Lowerer<'a> {
                     Ok((Value::Bool(false), Ty::Bool))
                 }
             }
-            TypedExprKind::LiteralString(val) => self.lower_string(expr, val, bind, instantiations),
+            TypedExprKind::LiteralString(val) => {
+                self.lower_string(expr, val, bind, &instantiations)
+            }
             TypedExprKind::Tuple(typed_exprs) => {
-                self.lower_tuple(expr.id, typed_exprs, bind, instantiations)
+                self.lower_tuple(expr.id, typed_exprs, bind, &instantiations)
             }
             TypedExprKind::Block(typed_block) => {
-                self.lower_block(typed_block, bind, instantiations)
+                self.lower_block(typed_block, bind, &instantiations)
             }
             TypedExprKind::Call { callee, args, .. } => {
-                self.lower_call(expr, callee, args, bind, instantiations)
+                self.lower_call(expr, callee, args, bind, &instantiations)
             }
             TypedExprKind::Member { receiver, label } => self.lower_member(
                 expr,
@@ -1138,7 +1148,7 @@ impl<'a> Lowerer<'a> {
                 label,
                 None,
                 bind,
-                instantiations,
+                &instantiations,
             ),
             TypedExprKind::ProtocolMember {
                 receiver,
@@ -1150,13 +1160,13 @@ impl<'a> Lowerer<'a> {
                 label,
                 Some(*witness),
                 bind,
-                instantiations,
+                &instantiations,
             ),
             TypedExprKind::Func(typed_func) => {
-                self.lower_func(typed_func, bind, instantiations, FuncTermination::Return)
+                self.lower_func(typed_func, bind, &instantiations, FuncTermination::Return)
             }
             TypedExprKind::Variable(symbol) => {
-                let (value, ty) = self.lower_variable(symbol, expr, instantiations)?;
+                let (value, ty) = self.lower_variable(symbol, expr, &instantiations)?;
                 if let Bind::Assigned(reg) = bind {
                     if !matches!(value, Value::Reg(src) if src == reg.0) {
                         self.push_instr(Instruction::Constant {
@@ -1172,16 +1182,16 @@ impl<'a> Lowerer<'a> {
                 }
             }
             TypedExprKind::Constructor(symbol, _items) => {
-                self.lower_constructor(symbol, expr, bind, instantiations)
+                self.lower_constructor(symbol, expr, bind, &instantiations)
             }
             TypedExprKind::If(cond, conseq, alt) => {
-                self.lower_if_expr(cond, conseq, alt, bind, instantiations)
+                self.lower_if_expr(cond, conseq, alt, bind, &instantiations)
             }
             TypedExprKind::Match(scrutinee, arms) => {
-                self.lower_match(expr, scrutinee, arms, bind, instantiations)
+                self.lower_match(expr, scrutinee, arms, bind, &instantiations)
             }
             TypedExprKind::RecordLiteral { fields } => {
-                self.lower_record_literal(expr, fields, bind, instantiations)
+                self.lower_record_literal(expr, fields, bind, &instantiations)
             }
         }?;
 
@@ -1304,6 +1314,7 @@ impl<'a> Lowerer<'a> {
     #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn lower_inline_ir(
         &mut self,
+        expr: &TypedExpr<Ty>,
         instr: &TypedInlineIRInstruction<Ty>,
         bind: Bind,
         instantiations: &Substitutions,
@@ -1313,6 +1324,9 @@ impl<'a> Lowerer<'a> {
             .iter()
             .map(|b| self.lower_expr(b, Bind::Fresh, instantiations).map(|b| b.0))
             .try_collect()?;
+
+        println!("lower_inline_ir: {:?}", expr.instantiations);
+
         match &instr.kind {
             InlineIRInstructionKind::Constant { dest, ty, val } => {
                 let ret = self.ret(bind);
@@ -3697,6 +3711,15 @@ impl<'a> Lowerer<'a> {
 
         let mut instantiations = instantiations.clone();
         instantiations.extend(substitutions);
+        // ADD: Convert expr.instantiations to Substitutions format
+        for (param_id, concrete_ty) in &expr.instantiations.ty {
+            instantiations
+                .ty
+                .insert(Ty::Param(*param_id), concrete_ty.clone());
+        }
+        for (row_param_id, row) in &expr.instantiations.row {
+            instantiations.row.insert(*row_param_id, row.clone());
+        }
 
         Ok((ty, instantiations))
     }
@@ -3710,41 +3733,8 @@ impl<'a> Lowerer<'a> {
         match entry {
             TypeEntry::Mono(ty) => Ok((ty.clone(), Default::default())),
             TypeEntry::Poly(scheme) => {
-                let mut substitutions = Substitutions::default();
-                for forall in scheme.foralls.iter() {
-                    match forall {
-                        ForAll::Ty(param) => {
-                            let ty = self
-                                .types
-                                .catalog
-                                .instantiations
-                                .ty
-                                .get(&(id, *param))
-                                .cloned()
-                                .unwrap_or(Ty::Param(*param));
-
-                            if Ty::Param(*param) != ty {
-                                substitutions.ty.insert(Ty::Param(*param), ty);
-                            }
-                        }
-
-                        ForAll::Row(param) => {
-                            let row = self
-                                .types
-                                .catalog
-                                .instantiations
-                                .row
-                                .get(&(id, *param))
-                                .cloned()
-                                .unwrap_or(Row::Param(*param));
-
-                            substitutions.row.insert(*param, row);
-                        }
-                    };
-                }
-
+                let substitutions = Substitutions::default();
                 let ty = substitute(scheme.ty.clone(), &substitutions);
-
                 Ok((ty, substitutions))
             }
         }

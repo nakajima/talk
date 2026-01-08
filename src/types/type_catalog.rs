@@ -11,7 +11,7 @@ use crate::{
         infer_row::RowParamId,
         infer_ty::{InferTy, TypeParamId},
         ty::{SomeType, Ty},
-        type_session::{MemberSource, TypeEntry, TypeSession},
+        type_session::{MemberSource, TypeSession},
     },
 };
 
@@ -19,7 +19,7 @@ use crate::{
 pub struct Nominal<T: SomeType> {
     pub properties: IndexMap<Label, T>,
     pub variants: IndexMap<Label, Vec<T>>,
-    pub type_params: Vec<T>,
+    pub type_params: Vec<TypeParamId>,
 }
 
 impl Nominal<Ty> {
@@ -35,11 +35,7 @@ impl Nominal<Ty> {
                 .into_iter()
                 .map(|(k, v)| (k, v.into_iter().map(|v| v.import(module_id)).collect()))
                 .collect(),
-            type_params: self
-                .type_params
-                .into_iter()
-                .map(|v| v.import(module_id))
-                .collect(),
+            type_params: self.type_params,
         }
     }
 }
@@ -49,6 +45,7 @@ impl<T: SomeType> Nominal<T> {
         self.type_params
             .clone()
             .into_iter()
+            .map(|t| T::param(t))
             .zip(type_args.iter().cloned())
             .collect()
     }
@@ -94,7 +91,7 @@ impl From<Nominal<Ty>> for Nominal<InferTy> {
                 .into_iter()
                 .map(|(label, tys)| (label, tys.into_iter().map(|t| t.into()).collect()))
                 .collect(),
-            type_params: value.type_params.into_iter().map(|ty| ty.into()).collect(),
+            type_params: value.type_params,
         }
     }
 }
@@ -112,7 +109,7 @@ impl From<Nominal<InferTy>> for Nominal<Ty> {
                 .into_iter()
                 .map(|(label, tys)| (label, tys.into_iter().map(|t| t.into()).collect()))
                 .collect(),
-            type_params: value.type_params.into_iter().map(|ty| ty.into()).collect(),
+            type_params: value.type_params,
         }
     }
 }
@@ -145,7 +142,6 @@ pub struct TypeCatalog<T: SomeType> {
     pub static_methods: IndexMap<Symbol, IndexMap<Label, Symbol>>,
     pub variants: IndexMap<Symbol, IndexMap<Label, Symbol>>,
     pub method_requirements: IndexMap<Symbol, IndexMap<Label, Symbol>>,
-    pub instantiations: TrackedInstantiations<T>,
     pub effects: IndexMap<Symbol, T>, // Effects are represented as T::Func since they have params, ret, and possibly effects
 }
 
@@ -164,8 +160,6 @@ impl<T: SomeType> Default for TypeCatalog<T> {
             static_methods: Default::default(),
             variants: Default::default(),
             method_requirements: Default::default(),
-
-            instantiations: Default::default(),
             effects: Default::default(),
         }
     }
@@ -173,19 +167,6 @@ impl<T: SomeType> Default for TypeCatalog<T> {
 
 impl TypeCatalog<InferTy> {
     pub fn finalize(self, session: &mut TypeSession) -> TypeCatalog<Ty> {
-        let mut instantiations = TrackedInstantiations::default();
-        for (key, infer_ty) in self.instantiations.ty {
-            let ty = match session.finalize_ty(infer_ty) {
-                TypeEntry::Mono(ty) => ty.clone(),
-                TypeEntry::Poly(scheme) => scheme.ty.clone(),
-            };
-            instantiations.ty.insert(key, ty);
-        }
-        for (key, infer_row) in self.instantiations.row {
-            instantiations
-                .row
-                .insert(key, session.finalize_row(infer_row));
-        }
         TypeCatalog {
             nominals: self
                 .nominals
@@ -206,7 +187,6 @@ impl TypeCatalog<InferTy> {
             static_methods: self.static_methods,
             variants: self.variants,
             method_requirements: self.method_requirements,
-            instantiations,
             effects: self
                 .effects
                 .into_iter()
@@ -399,20 +379,6 @@ impl TypeCatalog<Ty> {
             static_methods: import_nominal_mapped(self.static_methods, module_id),
             variants: import_nominal_mapped(self.variants, module_id),
             method_requirements: import_nominal_mapped(self.method_requirements, module_id),
-            instantiations: TrackedInstantiations {
-                ty: self
-                    .instantiations
-                    .ty
-                    .into_iter()
-                    .map(|(k, v)| (k, v.import(module_id)))
-                    .collect(),
-                row: self
-                    .instantiations
-                    .row
-                    .into_iter()
-                    .map(|(k, v)| (k, v.import(module_id)))
-                    .collect(),
-            },
             effects: self
                 .effects
                 .into_iter()

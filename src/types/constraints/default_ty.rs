@@ -1,3 +1,5 @@
+use tracing::instrument;
+
 use crate::node_id::NodeID;
 use crate::types::constraint_solver::SolveResult;
 use crate::types::solve_context::SolveContext;
@@ -19,6 +21,7 @@ pub struct DefaultTy {
 }
 
 impl DefaultTy {
+    #[instrument(skip(session, context))]
     pub fn solve(&self, context: &mut SolveContext, session: &mut TypeSession) -> SolveResult {
         match &self.var {
             InferTy::Var { .. } => match unify(&self.var, &self.ty, context, session) {

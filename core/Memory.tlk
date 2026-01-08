@@ -1,5 +1,5 @@
-func _alloc(count: Int) -> RawPtr {
-	@_ir(count) { %? = alloc Byte $0 }
+func _alloc<Element>(count: Int) -> RawPtr {
+	@_ir(count) { %? = alloc Element $0 }
 }
 
 func _load<Element>(ptr: RawPtr) -> Element {

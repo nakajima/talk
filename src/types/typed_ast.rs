@@ -11,10 +11,11 @@ use crate::{
     node_kinds::inline_ir_instruction::TypedInlineIRInstruction,
     types::{
         conformance::ConformanceKey,
+        constraints::call::CallId,
         infer_ty::InferTy,
         scheme::ForAll,
         ty::{SomeType, Ty},
-        type_operations::UnificationSubstitutions,
+        type_operations::{InstantiationSubstitutions, UnificationSubstitutions},
         type_session::TypeSession,
     },
 };
@@ -336,14 +337,33 @@ impl TypedDeclKind<InferTy> {
 
 impl TypedExpr<InferTy> {
     fn finalize(
-        self,
+        mut self,
         session: &mut TypeSession,
         witnesses: &FxHashMap<NodeID, Symbol>,
     ) -> TypedExpr<Ty> {
+        if let Some(instantiations) = session.instantiations_by_call.get(&CallId(self.id)) {
+            self.instantiations.extend(instantiations.clone());
+        }
+
         TypedExpr {
             id: self.id,
             ty: session.finalize_ty(self.ty).as_mono_ty().clone(),
             kind: self.kind.finalize(self.id, session, witnesses),
+            instantiations: InstantiationSubstitutions {
+                row: self
+                    .instantiations
+                    .row
+                    .into_iter()
+                    .map(|(k, v)| (k, session.finalize_row(v)))
+                    .collect(),
+                ty: self
+                    .instantiations
+                    .ty
+                    .into_iter()
+                    .map(|(k, v)| (k, session.finalize_ty(v).as_mono_ty().clone()))
+                    .collect(),
+            }, // .instantiations
+               // .map_ty(&mut |t| session.finalize_ty(t.clone()).as_mono_ty().clone()),
         }
     }
 }
@@ -1273,6 +1293,8 @@ pub struct TypedExpr<T: SomeType> {
     pub id: NodeID,
     pub ty: T,
     pub kind: TypedExprKind<T>,
+    #[drive(skip)]
+    pub instantiations: InstantiationSubstitutions<T>,
 }
 
 impl<T: SomeType, U: SomeType> TyMappable<T, U> for TypedExpr<T> {
@@ -1282,6 +1304,7 @@ impl<T: SomeType, U: SomeType> TyMappable<T, U> for TypedExpr<T> {
             id: self.id,
             ty: m(&self.ty),
             kind: self.kind.map_ty(m),
+            instantiations: self.instantiations.map_ty(m),
         }
     }
 }
