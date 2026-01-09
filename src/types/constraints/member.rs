@@ -138,12 +138,21 @@ impl Member {
         let witnesses =
             session.witness_substitutions_for_symbol(symbol, &mut context.substitutions);
 
-        session
-            .instantiations_by_call
-            .entry(call_id)
-            .or_default()
-            .witnesses
-            .extend(witnesses);
+        let call_entry = session.instantiations_by_call.entry(call_id).or_default();
+        for (param_id, ty) in context.instantiations.ty.iter() {
+            call_entry
+                .ty
+                .entry(*param_id)
+                .or_insert_with(|| ty.clone());
+        }
+        for (row_param_id, row) in context.instantiations.row.iter() {
+            call_entry
+                .row
+                .entry(*row_param_id)
+                .or_insert_with(|| row.clone());
+        }
+
+        call_entry.witnesses.extend(witnesses);
     }
 
     #[allow(clippy::too_many_arguments)]

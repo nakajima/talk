@@ -13,7 +13,9 @@ use crate::{
         conformance::ConformanceKey,
         constraints::call::CallId,
         infer_ty::InferTy,
+        predicate::Predicate,
         scheme::ForAll,
+        term_environment::EnvEntry,
         ty::{SomeType, Ty},
         type_operations::{InstantiationSubstitutions, UnificationSubstitutions},
         type_session::TypeSession,
@@ -365,6 +367,11 @@ impl TypedExpr<InferTy> {
         instantiations
             .witnesses
             .extend(call_witness_substitutions(&kind));
+        instantiations.witnesses.extend(call_witness_substitutions_from_predicates(
+            &kind,
+            &instantiations,
+            session,
+        ));
 
         TypedExpr {
             id: self.id,
@@ -1333,6 +1340,68 @@ fn call_witness_substitutions(kind: &TypedExprKind<Ty>) -> FxHashMap<Symbol, Sym
     let mut witnesses = FxHashMap::default();
     if let Some(target) = resolved {
         witnesses.extend(target.witness_subs.clone());
+    }
+
+    witnesses
+}
+
+fn call_witness_substitutions_from_predicates(
+    kind: &TypedExprKind<Ty>,
+    instantiations: &InstantiationSubstitutions<Ty>,
+    session: &mut TypeSession,
+) -> FxHashMap<Symbol, Symbol> {
+    let TypedExprKind::Call { callee, .. } = kind else {
+        return Default::default();
+    };
+
+    let callee_sym = match &callee.kind {
+        TypedExprKind::Variable(sym) => *sym,
+        TypedExprKind::Func(func) => func.name,
+        TypedExprKind::Constructor(sym, ..) => *sym,
+        TypedExprKind::ProtocolMember { witness, .. } => *witness,
+        TypedExprKind::Member { receiver, label } => {
+            let Some(receiver_sym) = symbol_for_concrete_ty(&receiver.ty) else {
+                return Default::default();
+            };
+            let Some((member_sym, _)) = session.lookup_member(&receiver_sym, label) else {
+                return Default::default();
+            };
+            member_sym
+        }
+        _ => return Default::default(),
+    };
+
+    let Some(entry) = session.lookup(&callee_sym) else {
+        return Default::default();
+    };
+    let EnvEntry::Scheme(scheme) = entry else {
+        return Default::default();
+    };
+
+    let mut witnesses = FxHashMap::default();
+    for predicate in &scheme.predicates {
+        let Predicate::Conforms {
+            param,
+            protocol_id,
+        } = predicate
+        else {
+            continue;
+        };
+
+        let Some(concrete_ty) = instantiations.ty.get(param) else {
+            continue;
+        };
+        let Some(conforming_sym) = symbol_for_concrete_ty(concrete_ty) else {
+            continue;
+        };
+
+        let key = ConformanceKey {
+            protocol_id: *protocol_id,
+            conforming_id: conforming_sym,
+        };
+        if let Some(conformance) = session.lookup_conformance(&key) {
+            witnesses.extend(conformance.witnesses.requirements);
+        }
     }
 
     witnesses

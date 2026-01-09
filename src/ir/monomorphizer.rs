@@ -11,8 +11,8 @@ use crate::{
         ir_ty::IrTy,
         list::List,
         lowerer::{
-            is_concrete_row, is_concrete_ty, substitute, substitute_row, Lowerer, PolyFunction,
-            Specialization, SpecializationKey, Substitutions,
+            is_concrete_row, substitute, substitute_row, Lowerer, PolyFunction, Specialization,
+            SpecializationKey, Substitutions,
         },
         terminator::Terminator,
         value::{Reference, Value},
@@ -236,12 +236,12 @@ impl<'a> Monomorphizer<'a> {
             let (call_instantiations, meta_items) = self.split_call_instantiations(meta);
             let mut callee = callee;
 
-            if let Some(call_instantiations) = call_instantiations {
+            if let Some(call_instantiations) = call_instantiations.as_ref() {
                 if !call_instantiations.is_empty()
                     && !matches!(call_instantiations.callee, Symbol::MethodRequirement(_))
                 {
                     let callee_substitutions =
-                        self.substitutions_for_call(&call_instantiations, substitutions);
+                        self.substitutions_for_call(call_instantiations, substitutions);
                     let has_instantiations = !callee_substitutions.ty.is_empty()
                         || !callee_substitutions.row.is_empty()
                         || !callee_substitutions.witnesses.is_empty();
@@ -259,9 +259,16 @@ impl<'a> Monomorphizer<'a> {
             }
 
             // Substitute MethodRequirement callees based on witness instantiations.
+            let call_witnesses = call_instantiations
+                .as_ref()
+                .map(|instantiations| &instantiations.instantiations.witnesses);
             let callee = match &callee {
                 Value::Func(sym @ Symbol::MethodRequirement(_)) => {
-                    if let Some(impl_sym) = substitutions.witnesses.get(sym) {
+                    if let Some(impl_sym) = substitutions
+                        .witnesses
+                        .get(sym)
+                        .or_else(|| call_witnesses.and_then(|witnesses| witnesses.get(sym)))
+                    {
                         Value::Func(*impl_sym)
                     } else {
                         if !substitutions.witnesses.is_empty() {
@@ -332,7 +339,10 @@ impl<'a> Monomorphizer<'a> {
     }
 
     fn substitutions_are_concrete(&self, substitutions: &Substitutions) -> bool {
-        substitutions.ty.values().all(is_concrete_ty)
+        substitutions
+            .ty
+            .values()
+            .all(|ty| is_concrete_ty_for_monomorphize(ty))
             && substitutions
                 .row
                 .iter()
@@ -570,6 +580,35 @@ impl<'a> Monomorphizer<'a> {
 
         let mut checked = IndexSet::default();
         self.check_imports(&specialization.name, result, &mut checked);
+    }
+}
+
+fn is_concrete_ty_for_monomorphize(ty: &Ty) -> bool {
+    match ty {
+        Ty::Primitive(..) => true,
+        Ty::Param(..) => false,
+        Ty::Constructor { params, ret, .. } => {
+            params.iter().all(is_concrete_ty_for_monomorphize)
+                && is_concrete_ty_for_monomorphize(ret)
+        }
+        Ty::Func(param, ret, effects) => {
+            is_concrete_ty_for_monomorphize(param)
+                && is_concrete_ty_for_monomorphize(ret)
+                && is_concrete_effect_row(effects)
+        }
+        Ty::Tuple(items) => items.iter().all(is_concrete_ty_for_monomorphize),
+        Ty::Record(_, row) => is_concrete_row(row),
+        Ty::Nominal { type_args, .. } => type_args.iter().all(is_concrete_ty_for_monomorphize),
+    }
+}
+
+fn is_concrete_effect_row(row: &Row) -> bool {
+    match row {
+        Row::Empty => true,
+        Row::Param(..) => true,
+        Row::Extend { row, ty, .. } => {
+            is_concrete_effect_row(row) && is_concrete_ty_for_monomorphize(ty)
+        }
     }
 }
 

@@ -2656,7 +2656,7 @@ impl<'a> Lowerer<'a> {
         args.insert(0, record_dest.into());
 
         let call_instantiations =
-            self.call_instantiations_for(call_expr, init_sym, &instantiations.witnesses);
+            self.call_instantiations_for(call_expr, init_sym, &instantiations);
         let mut meta_items = vec![InstructionMeta::Source(call_expr.id)];
         if !call_instantiations.is_empty() {
             meta_items.push(InstructionMeta::CallInstantiations(call_instantiations.clone()));
@@ -2703,10 +2703,7 @@ impl<'a> Lowerer<'a> {
             return Ok((Value::Void, Ty::Void));
         }
 
-        let mut instantiations = parent_instantiations.clone();
-        if let TypedExprKind::Call { type_args, .. } = &call_expr.kind {
-            self.extend_instantiations_with_type_args(callee, type_args, &mut instantiations);
-        }
+        let instantiations = parent_instantiations.clone();
 
         let ty = call_expr.ty.clone();
         let mut arg_vals = vec![];
@@ -2721,7 +2718,7 @@ impl<'a> Lowerer<'a> {
         } = &call_expr.kind
         {
             let call_instantiations =
-                self.call_instantiations_for(call_expr, target.symbol, &instantiations.witnesses);
+                self.call_instantiations_for(call_expr, target.symbol, &instantiations);
             let mut meta_items = vec![InstructionMeta::Source(call_expr.id)];
             if !call_instantiations.is_empty() {
                 meta_items.push(InstructionMeta::CallInstantiations(call_instantiations.clone()));
@@ -2801,12 +2798,11 @@ impl<'a> Lowerer<'a> {
             && !self.current_func_mut().bindings.contains_key(name)
         {
             let mut call_instantiations =
-                self.call_instantiations_for(call_expr, *name, &instantiations.witnesses);
+                self.call_instantiations_for(call_expr, *name, &instantiations);
             if call_instantiations.instantiations.ty.is_empty()
                 && call_instantiations.instantiations.row.is_empty()
             {
-                let inferred =
-                    self.infer_call_instantiations(*name, args, &call_expr.ty);
+                let inferred = self.infer_call_instantiations(*name, args, &call_expr.ty);
                 call_instantiations.instantiations.extend(inferred);
             }
             let mut meta_items = vec![InstructionMeta::Source(call_expr.id)];
@@ -2939,13 +2935,8 @@ impl<'a> Lowerer<'a> {
         let (_method_sym, val, ty) = if let Some(method_sym) =
             self.lookup_instance_method(&receiver, label, &instantiations)?
         {
-            let call_instantiations = self.call_instantiations_for_member(
-                call_expr,
-                callee_expr,
-                method_sym,
-                &instantiations.witnesses,
-                &instantiations,
-            );
+            let call_instantiations =
+                self.call_instantiations_for(call_expr, method_sym, &instantiations);
             let mut meta_items = vec![InstructionMeta::Source(call_expr.id)];
             if !call_instantiations.is_empty() {
                 meta_items.push(InstructionMeta::CallInstantiations(
@@ -2977,13 +2968,8 @@ impl<'a> Lowerer<'a> {
         } else if let Some(witness) =
             witness.or_else(|| self.witness_for(&receiver, label, &instantiations))
         {
-            let call_instantiations = self.call_instantiations_for_member(
-                call_expr,
-                callee_expr,
-                witness,
-                &instantiations.witnesses,
-                &instantiations,
-            );
+            let call_instantiations =
+                self.call_instantiations_for(call_expr, witness, &instantiations);
             let mut meta_items = vec![InstructionMeta::Source(call_expr.id)];
             if !call_instantiations.is_empty() {
                 meta_items.push(InstructionMeta::CallInstantiations(
@@ -3672,140 +3658,67 @@ impl<'a> Lowerer<'a> {
         key.parts()
     }
 
-    fn extend_instantiations_with_type_args(
-        &mut self,
-        callee: &TypedExpr<Ty>,
-        type_args: &[Ty],
-        instantiations: &mut Substitutions,
-    ) {
-        if type_args.is_empty() {
-            return;
-        }
-
-        let symbol = match &callee.kind {
-            TypedExprKind::Variable(name) => Some(*name),
-            TypedExprKind::Func(func) => Some(func.name),
-            TypedExprKind::Constructor(name, ..) => Some(*name),
-            _ => None,
-        };
-
-        let Some(symbol) = symbol else {
-            return;
-        };
-
-        let params = self
-            .type_params_for_symbol(symbol)
-            .unwrap_or_default();
-
-        for (param_id, arg_ty) in params.into_iter().zip(type_args.iter().cloned()) {
-            instantiations.ty.insert(Ty::Param(param_id), arg_ty);
-        }
-    }
-
-    fn extend_call_instantiations_with_type_args(
-        &mut self,
-        symbol: Symbol,
-        type_args: &[Ty],
-        instantiations: &mut InstantiationSubstitutions<Ty>,
-    ) {
-        if type_args.is_empty() {
-            return;
-        }
-
-        let params = self.type_params_for_symbol(symbol).unwrap_or_default();
-        for (param_id, arg_ty) in params.into_iter().zip(type_args.iter().cloned()) {
-            instantiations.ty.insert(param_id, arg_ty);
-        }
-    }
-
-    fn should_forward_witnesses(&self, callee: Symbol) -> bool {
-        // Only forward witnesses when the callee can actually be specialized.
-        !matches!(callee, Symbol::MethodRequirement(_))
-            && self.type_params_for_symbol(callee).is_some()
-    }
-
     fn call_instantiations_for(
         &mut self,
         call_expr: &TypedExpr<Ty>,
         callee: Symbol,
-        witnesses: &FxHashMap<Symbol, Symbol>,
-    ) -> CallInstantiations {
-        let mut instantiations = call_expr.instantiations.clone();
-        if let TypedExprKind::Call { type_args, .. } = &call_expr.kind {
-            self.extend_call_instantiations_with_type_args(callee, type_args, &mut instantiations);
-        }
-
-        if self.should_forward_witnesses(callee) {
-            instantiations
-                .witnesses
-                .extend(witnesses.iter().map(|(k, v)| (*k, *v)));
-        } else {
-            instantiations.witnesses.clear();
-        };
-
-        CallInstantiations {
-            callee,
-            instantiations,
-        }
-    }
-
-    fn call_instantiations_for_member(
-        &mut self,
-        call_expr: &TypedExpr<Ty>,
-        callee_expr: &TypedExpr<Ty>,
-        callee: Symbol,
-        witnesses: &FxHashMap<Symbol, Symbol>,
-        call_substitutions: &Substitutions,
-    ) -> CallInstantiations {
-        let mut instantiations = call_expr.instantiations.clone();
-        if instantiations.ty.is_empty() && instantiations.row.is_empty() {
-            instantiations.extend(callee_expr.instantiations.clone());
-        }
-        if instantiations.ty.is_empty() && instantiations.row.is_empty() {
-            instantiations.extend(self.call_instantiations_from_substitutions(
-                callee,
-                call_substitutions,
-            ));
-        }
-        if let TypedExprKind::Call { type_args, .. } = &call_expr.kind {
-            self.extend_call_instantiations_with_type_args(callee, type_args, &mut instantiations);
-        }
-
-        if self.should_forward_witnesses(callee) {
-            instantiations
-                .witnesses
-                .extend(witnesses.iter().map(|(k, v)| (*k, *v)));
-        } else {
-            instantiations.witnesses.clear();
-        };
-
-        CallInstantiations {
-            callee,
-            instantiations,
-        }
-    }
-
-    fn call_instantiations_from_substitutions(
-        &mut self,
-        callee: Symbol,
         substitutions: &Substitutions,
-    ) -> InstantiationSubstitutions<Ty> {
-        let mut instantiations = InstantiationSubstitutions::default();
-        if let Some(params) = self.type_params_for_symbol(callee) {
-            for param_id in params {
-                let key = Ty::Param(param_id);
-                if let Some(ty) = substitutions.ty.get(&key) {
-                    instantiations.ty.insert(param_id, ty.clone());
+    ) -> CallInstantiations {
+        let mut instantiations = call_expr.instantiations.clone();
+        instantiations.ty = instantiations
+            .ty
+            .into_iter()
+            .map(|(param, ty)| (param, substitute(ty, substitutions)))
+            .collect();
+        instantiations.row = instantiations
+            .row
+            .into_iter()
+            .map(|(param, row)| (param, substitute_row(row, substitutions)))
+            .collect();
+        if let TypedExprKind::Call { type_args, .. } = &call_expr.kind {
+            if !type_args.is_empty() {
+                if let Some(params) = self.type_params_for_symbol(callee) {
+                    for (param_id, arg_ty) in params.iter().zip(type_args.iter()) {
+                        let arg_ty = substitute(arg_ty.clone(), substitutions);
+                        instantiations
+                            .ty
+                            .entry(*param_id)
+                            .or_insert_with(|| arg_ty);
+                    }
                 }
             }
         }
-        for (row_param_id, row) in &substitutions.row {
-            instantiations.row.insert(*row_param_id, row.clone());
+        if instantiations.ty.is_empty() && instantiations.row.is_empty() {
+            if let Some(params) = self.type_params_for_symbol(callee) {
+                for param_id in params {
+                    let key = Ty::Param(param_id);
+                    if let Some(ty) = substitutions.ty.get(&key) {
+                        instantiations.ty.insert(param_id, ty.clone());
+                    }
+                }
+            } else {
+                for (key, ty) in substitutions.ty.iter() {
+                    let Ty::Param(param_id) = key else {
+                        continue;
+                    };
+                    instantiations.ty.insert(*param_id, ty.clone());
+                }
+            }
+            for (row_param_id, row) in substitutions.row.iter() {
+                instantiations
+                    .row
+                    .entry(*row_param_id)
+                    .or_insert_with(|| row.clone());
+            }
         }
         instantiations
             .witnesses
             .extend(substitutions.witnesses.iter().map(|(k, v)| (*k, *v)));
-        instantiations
+
+        CallInstantiations {
+            callee,
+            instantiations,
+        }
     }
 
     fn infer_call_instantiations(

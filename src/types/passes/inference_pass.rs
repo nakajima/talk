@@ -3047,8 +3047,10 @@ impl<'a> InferencePass<'a> {
         args: &[CallArg],
         context: &mut impl Solve,
     ) -> TypedRet<TypedExpr<InferTy>> {
-        let mut context = context.with_call(CallId(id));
+        let call_id = CallId(id);
+        let mut context = context.with_call(call_id);
         let callee_ty = self.visit_expr(callee, &mut context)?;
+        let mut call_instantiations = callee_ty.instantiations.clone();
 
         let arg_tys: Vec<_> = args
             .iter()
@@ -3058,6 +3060,31 @@ impl<'a> InferencePass<'a> {
             .iter()
             .map(|a| self.visit_type_annotation(a, &mut context))
             .try_collect()?;
+        let callee_type_params = match &callee_ty.kind {
+            TypedExprKind::Variable(sym) => self.session.lookup(sym).and_then(|entry| {
+                let params = entry
+                    .foralls()
+                    .iter()
+                    .filter_map(|forall| match forall {
+                        ForAll::Ty(id) => Some(*id),
+                        _ => None,
+                    })
+                    .collect_vec();
+                if params.is_empty() { None } else { Some(params) }
+            }),
+            TypedExprKind::Func(func) => self.session.lookup(&func.name).and_then(|entry| {
+                let params = entry
+                    .foralls()
+                    .iter()
+                    .filter_map(|forall| match forall {
+                        ForAll::Ty(id) => Some(*id),
+                        _ => None,
+                    })
+                    .collect_vec();
+                if params.is_empty() { None } else { Some(params) }
+            }),
+            _ => None,
+        };
 
         let receiver = match &callee.kind {
             ExprKind::Member(Some(rcv), ..) => {
@@ -3084,27 +3111,106 @@ impl<'a> InferencePass<'a> {
             _ => None,
         };
 
-        context
-            .instantiations_mut()
-            .extend(callee_ty.instantiations.clone());
-        let ret = self.session.new_ty_meta_var(context.level());
-
-        for ((type_arg, type_arg_ty), instantiated) in type_args
-            .iter()
-            .zip(type_arg_tys.iter())
-            .zip(context.instantiations_mut().clone().ty)
-        {
-            self.constraints.wants_equals_at_with_cause(
-                type_arg.id,
-                type_arg_ty.clone(),
-                instantiated.1,
-                &context.group_info(),
-                Some(ConstraintCause::CallTypeArg(type_arg.id)),
-            );
+        if let Some(receiver_expr) = receiver.as_ref() {
+            let receiver_ty = self
+                .session
+                .apply(receiver_expr.ty.clone(), context.substitutions_mut());
+            if let InferTy::Nominal { symbol, type_args } = receiver_ty
+                && let Some(nominal) = self.session.lookup_nominal(&symbol)
+            {
+                for (param_id, arg_ty) in nominal.type_params.iter().zip(type_args.iter()) {
+                    call_instantiations
+                        .ty
+                        .entry(*param_id)
+                        .or_insert_with(|| arg_ty.clone());
+                }
+            }
         }
 
+        if let TypedExprKind::Constructor(symbol, _) = &callee_ty.kind
+            && let Some(nominal) = self.session.lookup_nominal(symbol)
+            && !nominal.type_params.is_empty()
+        {
+            if !type_arg_tys.is_empty() && type_arg_tys.len() != nominal.type_params.len() {
+                return Err(TypeError::GenericArgCount {
+                    expected: nominal.type_params.len() as u8,
+                    actual: type_arg_tys.len() as u8,
+                });
+            }
+
+            if type_arg_tys.is_empty() {
+                let level = context.level().next();
+                for param_id in nominal.type_params.iter() {
+                    call_instantiations
+                        .ty
+                        .entry(*param_id)
+                        .or_insert_with(|| self.session.new_ty_meta_var(level));
+                }
+            } else {
+                for (param_id, arg_ty) in nominal.type_params.iter().zip(type_arg_tys.iter()) {
+                    call_instantiations
+                        .ty
+                        .entry(*param_id)
+                        .or_insert_with(|| arg_ty.clone());
+                }
+            }
+        }
+
+        if !type_arg_tys.is_empty() {
+            if let Some(type_params) = callee_type_params.as_ref() {
+                for (param_id, arg_ty) in type_params.iter().zip(type_arg_tys.iter()) {
+                    call_instantiations
+                        .ty
+                        .entry(*param_id)
+                        .or_insert_with(|| arg_ty.clone());
+                }
+            }
+        }
+
+        let ret = self.session.new_ty_meta_var(context.level());
+
+        let type_param_ids = callee_type_params.unwrap_or_else(|| {
+            call_instantiations
+                .ty
+                .keys()
+                .copied()
+                .collect_vec()
+        });
+        for ((type_arg, type_arg_ty), param_id) in type_args
+            .iter()
+            .zip(type_arg_tys.iter())
+            .zip(type_param_ids.iter())
+        {
+            if let Some(instantiated) = call_instantiations.ty.get(param_id) {
+                self.constraints.wants_equals_at_with_cause(
+                    type_arg.id,
+                    type_arg_ty.clone(),
+                    instantiated.clone(),
+                    &context.group_info(),
+                    Some(ConstraintCause::CallTypeArg(type_arg.id)),
+                );
+            }
+        }
+
+        let call_entry = self.session.instantiations_by_call.entry(call_id).or_default();
+        for (param_id, ty) in call_instantiations.ty.iter() {
+            call_entry
+                .ty
+                .entry(*param_id)
+                .or_insert_with(|| ty.clone());
+        }
+        for (row_param_id, row) in call_instantiations.row.iter() {
+            call_entry
+                .row
+                .entry(*row_param_id)
+                .or_insert_with(|| row.clone());
+        }
+        call_entry
+            .witnesses
+            .extend(call_instantiations.witnesses.clone());
+
         self.constraints.wants_call(
-            CallId(id),
+            call_id,
             id,
             callee.id,
             callee_ty.ty.clone(),
@@ -3125,7 +3231,7 @@ impl<'a> InferencePass<'a> {
                 args: arg_tys,
                 resolved: None,
             },
-            instantiations: context.instantiations_mut().clone(),
+            instantiations: call_instantiations,
         })
     }
 
