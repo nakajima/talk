@@ -5,8 +5,9 @@ use crate::{
     types::{
         infer_row::{InferRow, RowMetaId, RowParamId, RowTail, normalize_row},
         infer_ty::{InferTy, Level, Meta, MetaVarId, TypeParamId},
+        row::Row,
         solve_context::Solve,
-        ty::SomeType,
+        ty::{SomeType, Ty},
         type_error::TypeError,
         type_session::{TypeDefKind, TypeSession},
         typed_ast::TyMappable,
@@ -785,5 +786,103 @@ pub(super) fn instantiate_ty(
                 .map(|t| instantiate_ty(node_id, t, substitutions, level))
                 .collect(),
         },
+    }
+}
+
+pub(crate) fn collect_instantiations(
+    expected: &Ty,
+    actual: &Ty,
+    instantiations: &mut InstantiationSubstitutions<Ty>,
+) {
+    match expected {
+        Ty::Param(param_id) => {
+            instantiations
+                .ty
+                .entry(*param_id)
+                .or_insert_with(|| actual.clone());
+        }
+        Ty::Primitive(..) => {}
+        Ty::Constructor {
+            name,
+            params,
+            ret,
+        } => {
+            if let Ty::Constructor {
+                name: actual_name,
+                params: actual_params,
+                ret: actual_ret,
+            } = actual
+                && name == actual_name
+            {
+                for (expected_param, actual_param) in params.iter().zip(actual_params.iter()) {
+                    collect_instantiations(expected_param, actual_param, instantiations);
+                }
+                collect_instantiations(ret, actual_ret, instantiations);
+            }
+        }
+        Ty::Func(expected_param, expected_ret, expected_effects) => {
+            if let Ty::Func(actual_param, actual_ret, actual_effects) = actual {
+                collect_instantiations(expected_param, actual_param, instantiations);
+                collect_instantiations(expected_ret, actual_ret, instantiations);
+                collect_row_instantiations(expected_effects, actual_effects, instantiations);
+            }
+        }
+        Ty::Tuple(items) => {
+            if let Ty::Tuple(actual_items) = actual {
+                for (expected_item, actual_item) in items.iter().zip(actual_items.iter()) {
+                    collect_instantiations(expected_item, actual_item, instantiations);
+                }
+            }
+        }
+        Ty::Record(expected_sym, expected_row) => {
+            if let Ty::Record(actual_sym, actual_row) = actual
+                && expected_sym == actual_sym
+            {
+                collect_row_instantiations(expected_row, actual_row, instantiations);
+            }
+        }
+        Ty::Nominal {
+            symbol,
+            type_args,
+        } => {
+            if let Ty::Nominal {
+                symbol: actual_symbol,
+                type_args: actual_args,
+            } = actual
+                && symbol == actual_symbol
+            {
+                for (expected_arg, actual_arg) in type_args.iter().zip(actual_args.iter()) {
+                    collect_instantiations(expected_arg, actual_arg, instantiations);
+                }
+            }
+        }
+    }
+}
+
+pub(crate) fn collect_row_instantiations(
+    expected: &Row,
+    actual: &Row,
+    instantiations: &mut InstantiationSubstitutions<Ty>,
+) {
+    match expected {
+        Row::Empty => {}
+        Row::Param(param_id) => {
+            instantiations
+                .row
+                .entry(*param_id)
+                .or_insert_with(|| actual.clone());
+        }
+        Row::Extend { row, label, ty } => {
+            if let Row::Extend {
+                row: actual_row,
+                label: actual_label,
+                ty: actual_ty,
+            } = actual
+                && label == actual_label
+            {
+                collect_instantiations(ty, actual_ty, instantiations);
+                collect_row_instantiations(row, actual_row, instantiations);
+            }
+        }
     }
 }

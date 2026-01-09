@@ -265,26 +265,6 @@ impl TypeSession {
             })
             .collect();
 
-        // let instantiations = std::mem::take(&mut self.instantiations_by_call)
-        //     .into_iter()
-        //     .map(|(k, v)| {
-        //         (
-        //             k,
-        //             InstantiationSubstitutions {
-        //                 ty: v
-        //                     .ty
-        //                     .into_iter()
-        //                     .map(|(k, v)| (k, self.finalize_ty(v).as_mono_ty().clone()))
-        //                     .collect(),
-        //                 row: v
-        //                     .row
-        //                     .into_iter()
-        //                     .map(|(k, v)| (k, self.finalize_row(v)))
-        //                     .collect(),
-        //             },
-        //         )
-        //     });
-
         let mut context = SolveContext::new(
             UnificationSubstitutions::new(self.meta_levels.clone()),
             Default::default(),
@@ -842,6 +822,23 @@ impl TypeSession {
         }
 
         None
+    }
+
+    pub fn type_params_for_symbol(&mut self, symbol: &Symbol) -> Option<Vec<TypeParamId>> {
+        let entry = self.lookup(symbol)?;
+        let params = entry
+            .foralls()
+            .iter()
+            .filter_map(|forall| match forall {
+                ForAll::Ty(id) => Some(*id),
+                _ => None,
+            })
+            .collect_vec();
+        if params.is_empty() {
+            None
+        } else {
+            Some(params)
+        }
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self, constraints))]

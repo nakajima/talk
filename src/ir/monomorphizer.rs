@@ -11,8 +11,8 @@ use crate::{
         ir_ty::IrTy,
         list::List,
         lowerer::{
-            is_concrete_row, substitute, substitute_row, Lowerer, PolyFunction, Specialization,
-            SpecializationKey, Substitutions,
+            Lowerer, PolyFunction, Specialization, SpecializationKey, Substitutions,
+            is_concrete_row, substitute, substitute_row,
         },
         terminator::Terminator,
         value::{Reference, Value},
@@ -236,24 +236,20 @@ impl<'a> Monomorphizer<'a> {
             let (call_instantiations, meta_items) = self.split_call_instantiations(meta);
             let mut callee = callee;
 
-            if let Some(call_instantiations) = call_instantiations.as_ref() {
-                if !call_instantiations.is_empty()
-                    && !matches!(call_instantiations.callee, Symbol::MethodRequirement(_))
-                {
-                    let callee_substitutions =
-                        self.substitutions_for_call(call_instantiations, substitutions);
-                    let has_instantiations = !callee_substitutions.ty.is_empty()
-                        || !callee_substitutions.row.is_empty()
-                        || !callee_substitutions.witnesses.is_empty();
-                    if has_instantiations && self.substitutions_are_concrete(&callee_substitutions)
-                    {
-                        let name = self.monomorphize_name(
-                            call_instantiations.callee,
-                            &callee_substitutions,
-                        );
-                        if let Ok(sym) = name.symbol() {
-                            callee = self.replace_callee_symbol(callee, sym);
-                        }
+            if let Some(call_instantiations) = call_instantiations.as_ref()
+                && !call_instantiations.is_empty()
+                && !matches!(call_instantiations.callee, Symbol::MethodRequirement(_))
+            {
+                let callee_substitutions =
+                    self.substitutions_for_call(call_instantiations, substitutions);
+                let has_instantiations = !callee_substitutions.ty.is_empty()
+                    || !callee_substitutions.row.is_empty()
+                    || !callee_substitutions.witnesses.is_empty();
+                if has_instantiations && self.substitutions_are_concrete(&callee_substitutions) {
+                    let name =
+                        self.monomorphize_name(call_instantiations.callee, &callee_substitutions);
+                    if let Ok(sym) = name.symbol() {
+                        callee = self.replace_callee_symbol(callee, sym);
                     }
                 }
             }
@@ -316,9 +312,10 @@ impl<'a> Monomorphizer<'a> {
     ) -> Substitutions {
         let mut substitutions = Substitutions::default();
         for (param_id, ty) in &call_instantiations.instantiations.ty {
-            substitutions
-                .ty
-                .insert(Ty::Param(*param_id), substitute(ty.clone(), caller_substitutions));
+            substitutions.ty.insert(
+                Ty::Param(*param_id),
+                substitute(ty.clone(), caller_substitutions),
+            );
         }
         for (row_param_id, row) in &call_instantiations.instantiations.row {
             substitutions.row.insert(
@@ -326,15 +323,13 @@ impl<'a> Monomorphizer<'a> {
                 substitute_row(row.clone(), caller_substitutions),
             );
         }
-        substitutions
-            .witnesses
-            .extend(
-                call_instantiations
-                    .instantiations
-                    .witnesses
-                    .iter()
-                    .map(|(k, v)| (*k, *v)),
-            );
+        substitutions.witnesses.extend(
+            call_instantiations
+                .instantiations
+                .witnesses
+                .iter()
+                .map(|(k, v)| (*k, *v)),
+        );
         substitutions
     }
 
@@ -342,7 +337,7 @@ impl<'a> Monomorphizer<'a> {
         substitutions
             .ty
             .values()
-            .all(|ty| is_concrete_ty_for_monomorphize(ty))
+            .all(is_concrete_ty_for_monomorphize)
             && substitutions
                 .row
                 .iter()
@@ -356,10 +351,9 @@ impl<'a> Monomorphizer<'a> {
             Value::Ref(reference) => match reference {
                 Reference::Func(_) => Value::Ref(Reference::Func(symbol)),
                 Reference::Closure(_, env) => Value::Ref(Reference::Closure(symbol, env)),
-                Reference::Register { frame, register } => Value::Ref(Reference::Register {
-                    frame,
-                    register,
-                }),
+                Reference::Register { frame, register } => {
+                    Value::Ref(Reference::Register { frame, register })
+                }
             },
             other => other,
         }
@@ -550,8 +544,7 @@ impl<'a> Monomorphizer<'a> {
             .entry(symbol)
             .or_default()
             .push(specialization.clone());
-        self.pending_specializations
-            .push((symbol, specialization));
+        self.pending_specializations.push((symbol, specialization));
 
         new_name
     }
