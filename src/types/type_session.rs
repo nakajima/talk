@@ -909,6 +909,60 @@ impl TypeSession {
         None
     }
 
+    pub fn witness_substitutions_for_symbol(
+        &mut self,
+        symbol: Symbol,
+        substitutions: &mut UnificationSubstitutions,
+    ) -> FxHashMap<Symbol, Symbol> {
+        let mut witnesses = FxHashMap::default();
+        let mut seen_symbols = FxHashSet::default();
+        self.extend_witnesses_for_symbol(symbol, substitutions, &mut witnesses, &mut seen_symbols);
+        witnesses
+    }
+
+    fn extend_witnesses_for_symbol(
+        &mut self,
+        symbol: Symbol,
+        substitutions: &mut UnificationSubstitutions,
+        witnesses: &mut FxHashMap<Symbol, Symbol>,
+        seen_symbols: &mut FxHashSet<Symbol>,
+    ) {
+        if !seen_symbols.insert(symbol) {
+            return;
+        }
+
+        let conformances: Vec<Conformance<InferTy>> = self
+            .type_catalog
+            .conformances
+            .values()
+            .filter(|c| c.conforming_id == symbol)
+            .cloned()
+            .collect();
+
+        for conformance in conformances {
+            witnesses.extend(conformance.witnesses.requirements.clone());
+            for assoc_ty in conformance.witnesses.associated_types.values() {
+                let assoc_ty = self.apply(assoc_ty.clone(), substitutions);
+                if let Some(assoc_sym) = Self::symbol_for_infer_ty(&assoc_ty) {
+                    self.extend_witnesses_for_symbol(
+                        assoc_sym,
+                        substitutions,
+                        witnesses,
+                        seen_symbols,
+                    );
+                }
+            }
+        }
+    }
+
+    fn symbol_for_infer_ty(ty: &InferTy) -> Option<Symbol> {
+        match ty {
+            InferTy::Primitive(sym) => Some(*sym),
+            InferTy::Nominal { symbol, .. } => Some(*symbol),
+            _ => None,
+        }
+    }
+
     pub fn lookup_associated_types(
         &mut self,
         protocol_id: Symbol,
