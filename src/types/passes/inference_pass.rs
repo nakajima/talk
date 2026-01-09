@@ -1181,7 +1181,7 @@ impl<'a> InferencePass<'a> {
                 TypedStmt {
                     id: stmt.id,
                     ty: lhs_ty.ty.clone(),
-                    kind: TypedStmtKind::Assignment(lhs_ty, rhs_ty),
+                    kind: TypedStmtKind::Assignment(lhs_ty, rhs_ty.into()),
                 }
             }
             StmtKind::Return(expr) => self.visit_return(stmt, expr, context)?,

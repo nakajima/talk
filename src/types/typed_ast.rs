@@ -97,7 +97,7 @@ impl TypedStmtKind<InferTy> {
             Expr(typed_expr) => Expr(typed_expr.finalize(session, witnesses)),
             Assignment(lhs, rhs) => Assignment(
                 lhs.finalize(session, witnesses),
-                rhs.finalize(session, witnesses),
+                rhs.finalize(session, witnesses).into(),
             ),
             Handler { effect, func } => Handler {
                 effect,
@@ -367,18 +367,20 @@ impl TypedExpr<InferTy> {
         instantiations
             .witnesses
             .extend(call_witness_substitutions(&kind));
-        instantiations.witnesses.extend(call_witness_substitutions_from_predicates(
-            &kind,
-            &instantiations,
-            session,
-        ));
+        instantiations
+            .witnesses
+            .extend(call_witness_substitutions_from_predicates(
+                &kind,
+                &instantiations,
+                session,
+            ));
 
         TypedExpr {
             id: self.id,
             ty,
             kind,
             instantiations, // .instantiations
-                             // .map_ty(&mut |t| session.finalize_ty(t.clone()).as_mono_ty().clone()),
+                            // .map_ty(&mut |t| session.finalize_ty(t.clone()).as_mono_ty().clone()),
         }
     }
 }
@@ -1002,7 +1004,7 @@ impl<T: SomeType, U: SomeType> TyMappable<T, U> for TypedStmt<T> {
 #[derive(Debug, Clone, PartialEq, Drive, DriveMut)]
 pub enum TypedStmtKind<T: SomeType> {
     Expr(TypedExpr<T>),
-    Assignment(TypedExpr<T>, TypedExpr<T>),
+    Assignment(TypedExpr<T>, Box<TypedExpr<T>>),
     Return(Option<TypedExpr<T>>),
     Continue(Option<TypedExpr<T>>),
     Loop(TypedExpr<T>, TypedBlock<T>),
@@ -1024,7 +1026,7 @@ impl<T: SomeType, U: SomeType> TyMappable<T, U> for TypedStmtKind<T> {
                 func: func.map_ty(m),
             },
             Expr(typed_expr) => Expr(typed_expr.map_ty(m)),
-            Assignment(lhs, rhs) => Assignment(lhs.map_ty(m), rhs.map_ty(m)),
+            Assignment(lhs, rhs) => Assignment(lhs.map_ty(m), rhs.map_ty(m).into()),
             Return(typed_expr) => Return(typed_expr.map(|e| e.map_ty(m))),
             Loop(cond, block) => Loop(cond.map_ty(m), block.map_ty(m)),
             Continue(expr) => Continue(expr.map(|e| e.map_ty(m))),
@@ -1380,11 +1382,7 @@ fn call_witness_substitutions_from_predicates(
 
     let mut witnesses = FxHashMap::default();
     for predicate in &scheme.predicates {
-        let Predicate::Conforms {
-            param,
-            protocol_id,
-        } = predicate
-        else {
+        let Predicate::Conforms { param, protocol_id } = predicate else {
             continue;
         };
 
