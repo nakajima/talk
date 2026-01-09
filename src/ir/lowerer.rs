@@ -1,5 +1,6 @@
 use std::fmt::Display;
 
+use derive_visitor::{Drive, Visitor};
 use crate::compiling::driver::{CompilationMode, DriverConfig};
 use crate::compiling::module::ModuleId;
 use crate::ir::basic_block::{Phi, PhiSource};
@@ -244,6 +245,37 @@ pub enum FlowContext {
         top_block_id: BasicBlockId,
         join_block_id: BasicBlockId,
     },
+}
+
+type TypedFuncTy = TypedFunc<Ty>;
+
+#[derive(Visitor)]
+#[visitor(TypedFuncTy(enter))]
+struct FuncForallsCollector {
+    map: FxHashMap<Symbol, Vec<TypeParamId>>,
+}
+
+impl FuncForallsCollector {
+    fn new() -> Self {
+        Self {
+            map: FxHashMap::default(),
+        }
+    }
+
+    fn enter_typed_func_ty(&mut self, func: &TypedFuncTy) {
+        let type_params: Vec<TypeParamId> = func
+            .foralls
+            .iter()
+            .filter_map(|forall| match forall {
+                ForAll::Ty(id) => Some(*id),
+                _ => None,
+            })
+            .collect();
+
+        if !type_params.is_empty() {
+            self.map.entry(func.name).or_insert(type_params);
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -3824,167 +3856,9 @@ impl<'a> Lowerer<'a> {
     }
 
     fn collect_func_foralls(ast: &TypedAST<Ty>) -> FxHashMap<Symbol, Vec<TypeParamId>> {
-        let mut map = FxHashMap::default();
-        for decl in &ast.decls {
-            Self::collect_func_foralls_from_decl(&mut map, decl);
-        }
-        for stmt in &ast.stmts {
-            Self::collect_func_foralls_from_stmt(&mut map, stmt);
-        }
-        map
-    }
-
-    fn collect_func_foralls_from_node(map: &mut FxHashMap<Symbol, Vec<TypeParamId>>, node: &TypedNode<Ty>) {
-        match node {
-            TypedNode::Decl(decl) => Self::collect_func_foralls_from_decl(map, decl),
-            TypedNode::Stmt(stmt) => Self::collect_func_foralls_from_stmt(map, stmt),
-            TypedNode::Expr(expr) => Self::collect_func_foralls_from_expr(map, expr),
-        }
-    }
-
-    fn collect_func_foralls_from_decl(map: &mut FxHashMap<Symbol, Vec<TypeParamId>>, decl: &TypedDecl<Ty>) {
-        match &decl.kind {
-            TypedDeclKind::Let { initializer, .. } => {
-                if let Some(expr) = initializer {
-                    Self::collect_func_foralls_from_expr(map, expr);
-                }
-            }
-            TypedDeclKind::StructDef {
-                initializers,
-                instance_methods,
-                ..
-            } => {
-                for func in initializers.values() {
-                    Self::record_func_foralls(map, func);
-                }
-                for func in instance_methods.values() {
-                    Self::record_func_foralls(map, func);
-                }
-            }
-            TypedDeclKind::Extend {
-                instance_methods, ..
-            } => {
-                for func in instance_methods.values() {
-                    Self::record_func_foralls(map, func);
-                }
-            }
-            TypedDeclKind::EnumDef {
-                instance_methods, ..
-            } => {
-                for func in instance_methods.values() {
-                    Self::record_func_foralls(map, func);
-                }
-            }
-            TypedDeclKind::ProtocolDef {
-                instance_methods, ..
-            } => {
-                for func in instance_methods.values() {
-                    Self::record_func_foralls(map, func);
-                }
-            }
-        }
-    }
-
-    fn collect_func_foralls_from_stmt(map: &mut FxHashMap<Symbol, Vec<TypeParamId>>, stmt: &TypedStmt<Ty>) {
-        match &stmt.kind {
-            TypedStmtKind::Expr(expr) => Self::collect_func_foralls_from_expr(map, expr),
-            TypedStmtKind::Assignment(lhs, rhs) => {
-                Self::collect_func_foralls_from_expr(map, lhs);
-                Self::collect_func_foralls_from_expr(map, rhs);
-            }
-            TypedStmtKind::Return(expr) | TypedStmtKind::Continue(expr) => {
-                if let Some(expr) = expr {
-                    Self::collect_func_foralls_from_expr(map, expr);
-                }
-            }
-            TypedStmtKind::Loop(cond, block) => {
-                Self::collect_func_foralls_from_expr(map, cond);
-                Self::collect_func_foralls_from_block(map, block);
-            }
-            TypedStmtKind::Handler { func, .. } => {
-                Self::record_func_foralls(map, func);
-            }
-            TypedStmtKind::Break => {}
-        }
-    }
-
-    fn collect_func_foralls_from_block(map: &mut FxHashMap<Symbol, Vec<TypeParamId>>, block: &TypedBlock<Ty>) {
-        for node in &block.body {
-            Self::collect_func_foralls_from_node(map, node);
-        }
-    }
-
-    fn collect_func_foralls_from_expr(map: &mut FxHashMap<Symbol, Vec<TypeParamId>>, expr: &TypedExpr<Ty>) {
-        match &expr.kind {
-            TypedExprKind::Func(func) => Self::record_func_foralls(map, func),
-            TypedExprKind::Call { callee, args, .. } => {
-                Self::collect_func_foralls_from_expr(map, callee);
-                for arg in args {
-                    Self::collect_func_foralls_from_expr(map, arg);
-                }
-            }
-            TypedExprKind::CallEffect { args, .. } => {
-                for arg in args {
-                    Self::collect_func_foralls_from_expr(map, arg);
-                }
-            }
-            TypedExprKind::InlineIR(instr) => {
-                for bind in &instr.binds {
-                    Self::collect_func_foralls_from_expr(map, bind);
-                }
-            }
-            TypedExprKind::LiteralArray(items) | TypedExprKind::Tuple(items) => {
-                for item in items {
-                    Self::collect_func_foralls_from_expr(map, item);
-                }
-            }
-            TypedExprKind::Block(block) => Self::collect_func_foralls_from_block(map, block),
-            TypedExprKind::Member { receiver, .. }
-            | TypedExprKind::ProtocolMember { receiver, .. } => {
-                Self::collect_func_foralls_from_expr(map, receiver);
-            }
-            TypedExprKind::If(cond, conseq, alt) => {
-                Self::collect_func_foralls_from_expr(map, cond);
-                Self::collect_func_foralls_from_block(map, conseq);
-                Self::collect_func_foralls_from_block(map, alt);
-            }
-            TypedExprKind::Match(scrutinee, arms) => {
-                Self::collect_func_foralls_from_expr(map, scrutinee);
-                for arm in arms {
-                    Self::collect_func_foralls_from_block(map, &arm.body);
-                }
-            }
-            TypedExprKind::RecordLiteral { fields } => {
-                for field in fields {
-                    Self::collect_func_foralls_from_expr(map, &field.value);
-                }
-            }
-            TypedExprKind::Hole
-            | TypedExprKind::LiteralInt(..)
-            | TypedExprKind::LiteralFloat(..)
-            | TypedExprKind::LiteralTrue
-            | TypedExprKind::LiteralFalse
-            | TypedExprKind::LiteralString(..)
-            | TypedExprKind::Variable(..)
-            | TypedExprKind::Constructor(..) => {}
-        }
-    }
-
-    fn record_func_foralls(map: &mut FxHashMap<Symbol, Vec<TypeParamId>>, func: &TypedFunc<Ty>) {
-        let type_params: Vec<TypeParamId> = func
-            .foralls
-            .iter()
-            .filter_map(|forall| match forall {
-                ForAll::Ty(id) => Some(*id),
-                _ => None,
-            })
-            .collect();
-
-        if !type_params.is_empty() {
-            map.entry(func.name).or_insert(type_params);
-        }
-
-        Self::collect_func_foralls_from_block(map, &func.body);
+        let mut collector = FuncForallsCollector::new();
+        ast.drive(&mut collector);
+        collector.map
     }
 
     fn parsed_ty(&mut self, ty: &TypeAnnotation, id: NodeID, instantiations: &Substitutions) -> Ty {
