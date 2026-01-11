@@ -26,12 +26,12 @@ pub enum BaseRow<T: SomeType> {
 
 impl<T: SomeType, U: SomeType> TyMappable<T, U> for BaseRow<T> {
     type OutputTy = U::RowType;
-    fn map_ty(self, m: &mut impl FnMut(&T) -> U) -> Self::OutputTy {
+    fn map_ty(self, m: &mut impl FnMut(T) -> U) -> Self::OutputTy {
         match self {
             BaseRow::Empty => U::RowType::empty(),
             BaseRow::Param(id) => U::RowType::param(id),
             BaseRow::Var(id) => U::RowType::var(id),
-            BaseRow::Extend { row, label, ty } => U::RowType::extend(row.map_ty(m), label, m(&ty)),
+            BaseRow::Extend { row, label, ty } => U::RowType::extend(row.map_ty(m), label, m(ty)),
         }
     }
 }
@@ -47,7 +47,7 @@ pub trait RowType: PartialEq + Clone + std::fmt::Debug + Drive + DriveMut {
 
 impl<T: SomeType, U: SomeType, V: RowType<T = T>> TyMappable<T, U> for V {
     type OutputTy = U::RowType;
-    fn map_ty(self, m: &mut impl FnMut(&T) -> U) -> Self::OutputTy {
+    fn map_ty(self, m: &mut impl FnMut(T) -> U) -> Self::OutputTy {
         self.base().map_ty(m)
     }
 }

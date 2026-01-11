@@ -202,7 +202,7 @@ pub struct TypedInlineIRInstruction<T: SomeType> {
 
 impl<T: SomeType, U: SomeType> TyMappable<T, U> for TypedInlineIRInstruction<T> {
     type OutputTy = TypedInlineIRInstruction<U>;
-    fn map_ty(self, m: &mut impl FnMut(&T) -> U) -> Self::OutputTy {
+    fn map_ty(self, m: &mut impl FnMut(T) -> U) -> Self::OutputTy {
         TypedInlineIRInstruction {
             id: self.id,
             span: self.span,

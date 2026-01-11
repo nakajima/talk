@@ -131,32 +131,36 @@ pub enum InferTy {
 
 impl TyMappable<InferTy, InferTy> for InferTy {
     type OutputTy = InferTy;
-    fn map_ty(self, m: &mut impl FnMut(&InferTy) -> InferTy) -> Self::OutputTy {
+    fn map_ty(self, m: &mut impl FnMut(InferTy) -> InferTy) -> Self::OutputTy {
         match self {
             InferTy::Projection {
-                base,
+                box base,
                 protocol_id,
                 associated,
             } => InferTy::Projection {
-                base: m(&base).into(),
+                base: m(base).into(),
                 protocol_id,
                 associated,
             },
-            InferTy::Constructor { name, params, ret } => InferTy::Constructor {
+            InferTy::Constructor {
                 name,
-                params: params.iter().map(&mut *m).collect(),
-                ret: m(&ret).into(),
+                params,
+                box ret,
+            } => InferTy::Constructor {
+                name,
+                params: params.into_iter().map(&mut *m).collect(),
+                ret: m(ret).into(),
             },
             InferTy::Func(box param, box ret, box effects) => {
-                InferTy::Func(m(&param).into(), m(&ret).into(), effects.map_ty(m).into())
+                InferTy::Func(m(param).into(), m(ret).into(), effects.map_ty(m).into())
             }
-            InferTy::Tuple(items) => InferTy::Tuple(items.iter().map(m).collect()),
+            InferTy::Tuple(items) => InferTy::Tuple(items.into_iter().map(m).collect()),
             InferTy::Record(infer_row) => InferTy::Record(infer_row.map_ty(m).into()),
             InferTy::Nominal { symbol, type_args } => InferTy::Nominal {
                 symbol,
-                type_args: type_args.iter().map(m).collect(),
+                type_args: type_args.into_iter().map(m).collect(),
             },
-            other => m(&other),
+            other => m(other),
         }
     }
 }

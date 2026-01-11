@@ -11,6 +11,6 @@ struct Array<Element> {
 
 	func get(index: Int) -> Element {
 		let ptr = @_ir(self.storage, index) { %? = gep Element $0 $1 }
-		_load(ptr)
+		@_ir(ptr) { %? = load Element $0 }
 	}
 }

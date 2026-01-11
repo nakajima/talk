@@ -126,70 +126,13 @@ impl From<Predicate<InferTy>> for Predicate<Ty> {
 
 impl From<Predicate<Ty>> for Predicate<InferTy> {
     fn from(value: Predicate<Ty>) -> Self {
-        match value {
-            Predicate::<Ty>::Projection {
-                protocol_id,
-                base,
-                label,
-                returns,
-            } => Predicate::Projection {
-                protocol_id,
-                base: base.into(),
-                label,
-                returns: returns.into(),
-            },
-            Predicate::<Ty>::Conforms { param, protocol_id } => {
-                Predicate::Conforms { param, protocol_id }
-            }
-            Predicate::<Ty>::Equals { lhs, rhs } => Self::Equals {
-                lhs: lhs.into(),
-                rhs: rhs.into(),
-            },
-            Predicate::<Ty>::HasField { row, label, ty } => Self::HasField {
-                row,
-                label,
-                ty: ty.into(),
-            },
-            Predicate::<Ty>::Member {
-                receiver,
-                label,
-                ty,
-                node_id,
-            } => Self::Member {
-                receiver: receiver.into(),
-                label,
-                ty: ty.into(),
-                node_id,
-            },
-            Predicate::<Ty>::TypeMember {
-                base: owner,
-                member,
-                returns,
-                generics,
-            } => Self::TypeMember {
-                base: owner.into(),
-                member: member.clone(),
-                returns: returns.into(),
-                generics: generics.into_iter().map(|g| g.into()).collect(),
-            },
-            Predicate::<Ty>::Call {
-                callee,
-                args,
-                returns,
-                receiver,
-            } => Self::Call {
-                callee: callee.into(),
-                args: args.into_iter().map(|arg| arg.into()).collect(),
-                returns: returns.into(),
-                receiver: receiver.map(|r| r.into()),
-            },
-        }
+        value.map_ty(&mut |t| t.into())
     }
 }
 
 impl<T: SomeType, U: SomeType> TyMappable<T, U> for Predicate<T> {
     type OutputTy = Predicate<U>;
-    fn map_ty(self, m: &mut impl FnMut(&T) -> U) -> Self::OutputTy {
+    fn map_ty(self, m: &mut impl FnMut(T) -> U) -> Self::OutputTy {
         match self {
             Predicate::Projection {
                 protocol_id,
@@ -198,8 +141,8 @@ impl<T: SomeType, U: SomeType> TyMappable<T, U> for Predicate<T> {
                 returns,
             } => Predicate::Projection {
                 protocol_id,
-                base: m(&base),
-                returns: m(&returns),
+                base: m(base),
+                returns: m(returns),
                 label,
             },
             Predicate::Conforms { param, protocol_id } => {
@@ -208,7 +151,7 @@ impl<T: SomeType, U: SomeType> TyMappable<T, U> for Predicate<T> {
             Predicate::HasField { row, label, ty } => Predicate::HasField {
                 row,
                 label,
-                ty: m(&ty),
+                ty: m(ty),
             },
             Predicate::Member {
                 receiver,
@@ -216,9 +159,9 @@ impl<T: SomeType, U: SomeType> TyMappable<T, U> for Predicate<T> {
                 ty,
                 node_id,
             } => Predicate::Member {
-                receiver: m(&receiver),
+                receiver: m(receiver),
                 label,
-                ty: m(&ty),
+                ty: m(ty),
                 node_id,
             },
             Predicate::TypeMember {
@@ -227,10 +170,10 @@ impl<T: SomeType, U: SomeType> TyMappable<T, U> for Predicate<T> {
                 returns,
                 generics,
             } => Predicate::TypeMember {
-                base: m(&owner),
+                base: m(owner),
                 member,
-                returns: m(&returns),
-                generics: generics.iter().map(m).collect(),
+                returns: m(returns),
+                generics: generics.into_iter().map(m).collect(),
             },
             Predicate::Call {
                 callee,
@@ -238,14 +181,14 @@ impl<T: SomeType, U: SomeType> TyMappable<T, U> for Predicate<T> {
                 returns,
                 receiver,
             } => Predicate::Call {
-                callee: m(&callee),
-                args: args.iter().map(&mut *m).collect(),
-                returns: m(&returns),
-                receiver: receiver.as_ref().map(m),
+                callee: m(callee),
+                args: args.into_iter().map(&mut *m).collect(),
+                returns: m(returns),
+                receiver: receiver.map(m),
             },
             Predicate::Equals { lhs, rhs } => Predicate::Equals {
-                lhs: m(&lhs),
-                rhs: m(&rhs),
+                lhs: m(lhs),
+                rhs: m(rhs),
             },
         }
     }
@@ -263,70 +206,8 @@ impl Predicate<InferTy> {
         substitutions: &mut UnificationSubstitutions,
         session: &mut TypeSession,
     ) -> Self {
-        match self {
-            Self::Projection {
-                protocol_id,
-                base,
-                label,
-                returns,
-            } => Self::Projection {
-                protocol_id: *protocol_id,
-                base: session.apply(base.clone(), substitutions),
-                returns: session.apply(returns.clone(), substitutions),
-                label: label.clone(),
-            },
-            Self::Conforms { param, protocol_id } => Self::Conforms {
-                param: *param,
-                protocol_id: *protocol_id,
-            },
-            Self::HasField { row, label, ty } => Self::HasField {
-                row: *row,
-                label: label.clone(),
-                ty: session.apply(ty.clone(), substitutions),
-            },
-            Self::Member {
-                receiver,
-                label,
-                ty,
-                node_id,
-            } => Self::Member {
-                receiver: session.apply(receiver.clone(), substitutions),
-                label: label.clone(),
-                ty: session.apply(ty.clone(), substitutions),
-                node_id: *node_id,
-            },
-            Self::TypeMember {
-                base: owner,
-                member,
-                returns,
-                generics,
-            } => Self::TypeMember {
-                base: session.apply(owner.clone(), substitutions),
-                member: member.clone(),
-                returns: session.apply(returns.clone(), substitutions),
-                generics: session.apply_mult(generics.clone(), substitutions),
-            },
-            Self::Call {
-                callee,
-                args,
-                returns,
-                receiver,
-            } => Self::Call {
-                callee: session.apply(callee.clone(), substitutions),
-                args: args
-                    .iter()
-                    .map(|arg| session.apply(arg.clone(), substitutions))
-                    .collect(),
-                returns: session.apply(returns.clone(), substitutions),
-                receiver: receiver
-                    .as_ref()
-                    .map(|r| session.apply(r.clone(), substitutions)),
-            },
-            Self::Equals { lhs, rhs } => Self::Equals {
-                lhs: session.apply(lhs.clone(), substitutions),
-                rhs: session.apply(rhs.clone(), substitutions),
-            },
-        }
+        self.clone()
+            .map_ty(&mut |t| session.apply(t.clone(), substitutions))
     }
 
     pub fn instantiate<'a>(
