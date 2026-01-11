@@ -1,22 +1,3 @@
-# talktalk
-
-<span style="color: white;">talktalk</span> is a programming language. It kind of looks like Swift or Rust or Go if you squint. You probably shouldn’t use it. But I'm having fun making it.
-
-Here’s some goals:
-
-- Learning stuff: I didn’t super understand all the ins and outs of compilers. I still don’t but at least I have a way to learn now
-- Fully typed everything: Types are cool.
-- As much type inference as possible: I don’t know if it's a good idea. I just think it’s neat.
-- Familiar-ish syntax: Haskell/ML-y syntax is beautiful. I hate it.
-- Figure out cool syntax highlighting color schemes: I feel like making full programming language is the only way to do this, right? Right? Don't answer that.
-
-Here’s some non-goals:
-
-- Blazingly fast performance.
- I mean I’m probably not gonna litter the codebase with `sleep`s but I’m allowed to if I want.
-- Everything perfectly sound and decidable.
- Is this even possible? I feel like I saw a YouTube video that said it’s not.
-
 It has some types you may have heard of before.
 ```tlk
 123 // Ints

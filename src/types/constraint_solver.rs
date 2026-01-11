@@ -56,6 +56,7 @@ impl<'a> ConstraintSolver<'a> {
                 let want = constraints.get(&want_id).clone();
                 let constraint = want.apply(&mut self.context.substitutions, session);
                 let solution = match constraint {
+                    Constraint::DefaultTy(ref c) => c.solve(self.context, session),
                     Constraint::Equals(ref equals) => {
                         match unify(&equals.lhs, &equals.rhs, self.context, session) {
                             Ok(metas) => SolveResult::Solved(metas),

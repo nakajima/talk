@@ -6,7 +6,6 @@ pub mod tests {
     use rustc_hash::FxHashMap;
 
     use crate::{
-        assert_eq_diff,
         compiling::{
             driver::{Driver, DriverConfig, Source},
             module::{Module, ModuleId},
@@ -202,7 +201,7 @@ pub mod tests {
     fn lowers_mutated_local_to_pointer() {
         let program = lower("let i = 0; i = 1; i");
 
-        assert_eq_diff!(
+        assert_eq!(
             program.functions.get(&Symbol::Main).unwrap().blocks,
             &[BasicBlock {
                 id: BasicBlockId(0),
@@ -258,7 +257,7 @@ pub mod tests {
         ",
         );
 
-        assert_eq_diff!(
+        assert_eq!(
             program
                 .functions
                 .get(&Symbol::from(GlobalId::from(1)))
@@ -313,7 +312,7 @@ pub mod tests {
         ",
         );
 
-        assert_eq_diff!(
+        assert_eq!(
             program.functions.get(&Symbol::Main).unwrap().blocks,
             &[BasicBlock {
                 id: BasicBlockId(0),
@@ -392,7 +391,7 @@ pub mod tests {
         ",
         );
 
-        assert_eq_diff!(
+        assert_eq!(
             *program.functions.get(&Symbol::Main).unwrap(),
             Function {
                 name: Symbol::Main,
@@ -469,7 +468,7 @@ pub mod tests {
             &["bar".to_string()]
         );
 
-        assert_eq_diff!(
+        assert_eq!(
             *program.functions.get(&Symbol::Main).unwrap(),
             Function {
                 name: Symbol::Main,
@@ -532,7 +531,7 @@ pub mod tests {
         ",
         );
 
-        assert_eq_diff!(
+        assert_eq!(
             *program.functions.get(&Symbol::Main).unwrap(),
             Function {
                 name: Symbol::Main,
@@ -589,7 +588,7 @@ pub mod tests {
     #[test]
     fn lowers_enum_constructor_with_no_vals() {
         let program = lower("enum Fizz { case foo, bar } ; Fizz.bar");
-        assert_eq_diff!(
+        assert_eq!(
             *program.functions.get(&Symbol::Main).unwrap(),
             Function {
                 name: Symbol::Main,
@@ -625,7 +624,7 @@ pub mod tests {
             enum Fizz { case foo(Int, Float), bar(Float, Int) }
             Fizz.bar(1.23, 456)",
         );
-        assert_eq_diff!(
+        assert_eq!(
             *program.functions.get(&Symbol::Main).unwrap(),
             Function {
                 name: Symbol::Main,
@@ -681,7 +680,7 @@ pub mod tests {
     #[test]
     fn lowers_add() {
         let program = lower("1 + 2");
-        assert_eq_diff!(
+        assert_eq!(
             *program.functions.get(&Symbol::Main).unwrap(),
             Function {
                 name: Symbol::Main,
@@ -781,7 +780,7 @@ pub mod tests {
         ",
         );
 
-        assert_eq_diff!(
+        assert_eq!(
             *program.functions.get(&Symbol::Main).unwrap(),
             Function {
                 name: Symbol::Main,
@@ -925,7 +924,7 @@ pub mod tests {
         ",
         );
 
-        assert_eq_diff!(
+        assert_eq!(
             *program.functions.get(&Symbol::Main).unwrap(),
             Function {
                 name: Symbol::Main,
@@ -976,7 +975,7 @@ pub mod tests {
             }
         );
 
-        assert_eq_diff!(
+        assert_eq!(
             *program
                 .functions
                 .get(&Symbol::Synthesized(1.into()))
@@ -998,7 +997,7 @@ pub mod tests {
             }
         );
 
-        assert_eq_diff!(
+        assert_eq!(
             *program
                 .functions
                 .get(&Symbol::Synthesized(2.into()))
@@ -1032,7 +1031,7 @@ pub mod tests {
         ",
         );
 
-        assert_eq_diff!(
+        assert_eq!(
             *program.functions.get(&Symbol::Main).unwrap(),
             Function::<IrTy> {
                 name: Symbol::Main,
@@ -1116,7 +1115,7 @@ pub mod tests {
         ",
         );
 
-        assert_eq_diff!(
+        assert_eq!(
             *program.functions.get(&Symbol::Main).unwrap(),
             Function::<IrTy> {
                 name: Symbol::Main,
@@ -1294,7 +1293,7 @@ pub mod tests {
             ",
         );
 
-        assert_eq_diff!(
+        assert_eq!(
             program.functions.get(&Symbol::Main).unwrap().blocks,
             &[
                 BasicBlock::from_str(
@@ -1368,7 +1367,7 @@ pub mod tests {
     #[test]
     fn lowers_array_literal() {
         let program = lower("[1,2,3]");
-        assert_eq_diff!(
+        assert_eq!(
             program.functions.get(&Symbol::Main).unwrap().blocks,
             &[BasicBlock {
                 id: BasicBlockId(0),
@@ -1445,7 +1444,7 @@ pub mod tests {
         ",
         );
 
-        assert_eq_diff!(
+        assert_eq!(
             program.functions.get(&Symbol::Main).unwrap().blocks,
             &[BasicBlock {
                 id: BasicBlockId(0),
@@ -1498,7 +1497,7 @@ pub mod tests {
             }]
         );
 
-        assert_eq_diff!(
+        assert_eq!(
             program
                 .functions
                 .get(&Symbol::Global(GlobalId::from(2)))
@@ -1619,7 +1618,10 @@ pub mod tests {
                         ty: IrTy::Record(None, vec![IrTy::Int, IrTy::Int])
                     }
                 }],
-                ty: IrTy::Func(vec![], IrTy::Record(None, vec![IrTy::Int, IrTy::Int]).into()),
+                ty: IrTy::Func(
+                    vec![],
+                    IrTy::Record(None, vec![IrTy::Int, IrTy::Int]).into()
+                ),
                 register_count: 4
             }
         );

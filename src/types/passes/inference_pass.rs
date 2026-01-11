@@ -174,6 +174,7 @@ impl<'a> InferencePass<'a> {
         for constraint in self.constraints.unsolved() {
             match constraint {
                 Constraint::Call(..) => (),
+                Constraint::DefaultTy(..) => (),
                 Constraint::Equals(..) => (),
                 Constraint::HasField(..) => (),
                 Constraint::Member(..) => (),

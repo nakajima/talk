@@ -15,6 +15,7 @@ use crate::{
         term_environment::EnvEntry,
         ty::{BaseRow, RowType, SomeType, Ty},
         type_error::TypeError,
+        typed_ast::TyMappable,
     },
 };
 
@@ -128,6 +129,38 @@ pub enum InferTy {
     Error(#[drive(skip)] Box<TypeError>),
 }
 
+impl TyMappable<InferTy, InferTy> for InferTy {
+    type OutputTy = InferTy;
+    fn map_ty(self, m: &mut impl FnMut(&InferTy) -> InferTy) -> Self::OutputTy {
+        match self {
+            InferTy::Projection {
+                base,
+                protocol_id,
+                associated,
+            } => InferTy::Projection {
+                base: m(&base).into(),
+                protocol_id,
+                associated,
+            },
+            InferTy::Constructor { name, params, ret } => InferTy::Constructor {
+                name,
+                params: params.iter().map(&mut *m).collect(),
+                ret: m(&ret).into(),
+            },
+            InferTy::Func(box param, box ret, box effects) => {
+                InferTy::Func(m(&param).into(), m(&ret).into(), effects.map_ty(m).into())
+            }
+            InferTy::Tuple(items) => InferTy::Tuple(items.iter().map(m).collect()),
+            InferTy::Record(infer_row) => InferTy::Record(infer_row.map_ty(m).into()),
+            InferTy::Nominal { symbol, type_args } => InferTy::Nominal {
+                symbol,
+                type_args: type_args.iter().map(m).collect(),
+            },
+            other => m(&other),
+        }
+    }
+}
+
 impl From<InferTy> for Ty {
     #[allow(clippy::panic)]
     fn from(value: InferTy) -> Self {
@@ -228,6 +261,10 @@ impl RowType for InferRow {
 
 impl SomeType for InferTy {
     type RowType = InferRow;
+
+    fn param(id: TypeParamId) -> Self {
+        InferTy::Param(id)
+    }
 
     fn void() -> Self {
         InferTy::Void

@@ -46,7 +46,7 @@ impl RowType for Row {
     }
 
     fn var(_id: RowMetaId) -> Self {
-        unreachable!()
+        unreachable!("cannot convert row meta");
     }
 
     fn extend(row: Self, label: Label, ty: Ty) -> Self {

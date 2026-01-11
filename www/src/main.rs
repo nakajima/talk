@@ -34,9 +34,15 @@ fn main() {
         ),
     );
 
-    let content = std::fs::read_to_string("./content/index.md").unwrap();
+    let content = [
+        std::fs::read_to_string("./content/intro.md").unwrap(),
+        std::fs::read_to_string("./content/index.md").unwrap(),
+    ]
+    .join("\n\n");
     let arena = Arena::new();
     let mut options = ComrakOptions::default();
+    options.extension.strikethrough = true;
+    options.extension.footnotes = true;
     options.render.unsafe_ = true;
 
     let root = parse_document(&arena, &content, &options);
@@ -75,7 +81,7 @@ fn line_count(value: &str) -> usize {
 }
 
 fn highlight(code: &str) -> String {
-    let mut child = std::process::Command::new("/home/nakajima/apps/talk/target/release/talk")
+    let mut child = std::process::Command::new("../target/debug/talk")
         .arg("html")
         .arg("-")
         .stdin(Stdio::piped())
@@ -94,8 +100,8 @@ fn highlight(code: &str) -> String {
     output.trim_end_matches(&['\n', '\r'][..]).to_string()
 }
 
-fn format(code: &str) -> String {
-    let mut child = std::process::Command::new("/home/nakajima/apps/talk/target/release/talk")
+fn _format(code: &str) -> String {
+    let mut child = std::process::Command::new("../target/debug/talk")
         .arg("format")
         .arg("-")
         .stdin(Stdio::piped())

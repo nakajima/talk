@@ -20,6 +20,7 @@ use crate::{
             call::Call,
             conforms::Conforms,
             constraint::{Constraint, ConstraintCause},
+            default_ty::DefaultTy,
             equals::Equals,
             has_field::HasField,
             member::Member,
@@ -35,6 +36,7 @@ use crate::{
 
 #[derive(Debug, PartialEq, PartialOrd, Eq, Ord)]
 pub enum ConstraintPriority {
+    DefaultTy,
     RowSubset,
     Conforms,
     Call,
@@ -59,6 +61,7 @@ impl Constraint {
             Constraint::TypeMember(..) => ConstraintPriority::TypeMember,
             Constraint::Projection(..) => ConstraintPriority::Projection,
             Constraint::RowSubset(..) => ConstraintPriority::RowSubset,
+            Constraint::DefaultTy(..) => ConstraintPriority::DefaultTy,
         }
     }
 }
@@ -388,6 +391,28 @@ impl ConstraintStore {
 
 // Helpers
 impl ConstraintStore {
+    pub fn wants_default(
+        &mut self,
+        node_id: NodeID,
+        var: InferTy,
+        ty: InferTy,
+        allowed: Vec<InferTy>,
+    ) -> &Constraint {
+        let id = self.ids.next_id();
+        self.wants(
+            id,
+            Constraint::DefaultTy(DefaultTy {
+                id,
+                node_id,
+                var,
+                ty,
+                allowed,
+                cause: ConstraintCause::Literal(node_id),
+            }),
+            &Default::default(),
+        )
+    }
+
     pub fn wants_equals(&mut self, lhs: InferTy, rhs: InferTy) -> &Constraint {
         let id = self.ids.next_id();
         self.wants(
