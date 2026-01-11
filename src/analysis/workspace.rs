@@ -9,7 +9,7 @@ use crate::diagnostic::AnyDiagnostic;
 use crate::name_resolution::symbol::set_symbol_names;
 use crate::node_id::FileID;
 use crate::parser_error::ParserError;
-use crate::types::type_session::Types;
+use crate::types::types::Types;
 
 #[derive(Clone)]
 pub struct Workspace {
@@ -224,7 +224,9 @@ fn diagnostic_for_any(
         AnyDiagnostic::NameResolution(diagnostic) => {
             (diagnostic.id, diagnostic.kind.to_string(), None, true)
         }
-        AnyDiagnostic::Typing(diagnostic) => (diagnostic.id, diagnostic.kind.to_string(), None, false),
+        AnyDiagnostic::Typing(diagnostic) => {
+            (diagnostic.id, diagnostic.kind.to_string(), None, false)
+        }
     };
 
     let file_idx = id.0.0 as usize;

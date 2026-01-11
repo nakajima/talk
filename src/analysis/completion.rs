@@ -16,7 +16,7 @@ use crate::{
         format::{SymbolNames, TypeFormatter},
         row::Row,
         ty::Ty,
-        type_session::Types,
+        types::Types,
     },
 };
 
@@ -199,7 +199,7 @@ fn member_completions(
 }
 
 fn static_member_symbols(
-    types: &crate::types::type_session::Types,
+    types: &crate::types::types::Types,
     receiver: Symbol,
 ) -> Vec<(Label, Symbol)> {
     let mut seen = FxHashSet::<Label>::default();
@@ -224,7 +224,7 @@ fn static_member_symbols(
 }
 
 fn instance_member_symbols(
-    types: &crate::types::type_session::Types,
+    types: &crate::types::types::Types,
     receiver: Symbol,
 ) -> Vec<(Label, Symbol)> {
     let mut seen = FxHashSet::<Label>::default();
@@ -338,7 +338,7 @@ fn completion_kind(symbol: Symbol) -> Option<CompletionItemKind> {
 
 fn symbol_member_items(
     formatter: &TypeFormatter<'_>,
-    types: &crate::types::type_session::Types,
+    types: &crate::types::types::Types,
     members: impl Iterator<Item = (Label, Symbol)>,
     receiver_substitutions: Option<&FxHashMap<Ty, Ty>>,
     property_types: Option<&IndexMap<Label, Ty>>,

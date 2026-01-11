@@ -1,12 +1,8 @@
-use crate::analysis::{node_ids_at_offset, resolve_member_symbol, span_contains, Hover, TextRange};
+use crate::analysis::{Hover, TextRange, node_ids_at_offset, resolve_member_symbol, span_contains};
 use crate::name_resolution::symbol::Symbol;
 use crate::node::Node;
 use crate::node_kinds::{
-    decl::Decl,
-    func::Func,
-    func_signature::FuncSignature,
-    parameter::Parameter,
-    pattern::Pattern,
+    decl::Decl, func::Func, func_signature::FuncSignature, parameter::Parameter, pattern::Pattern,
     type_annotation::TypeAnnotation,
 };
 
@@ -89,7 +85,7 @@ pub fn hover_for_node_id(
 
 struct HoverCtx<'a> {
     ast: &'a crate::ast::AST<crate::ast::NameResolved>,
-    types: Option<&'a crate::types::type_session::Types>,
+    types: Option<&'a crate::types::types::Types>,
     byte_offset: u32,
     formatter: TypeFormatter<'a>,
 }
@@ -258,13 +254,8 @@ fn hover_for_pattern(ctx: &HoverCtx<'_>, pattern: &Pattern) -> Option<Hover> {
         .types
         .and_then(|types| types.get(&pattern.id))
         .map(|entry| entry.as_mono_ty());
-    let line = hover_line_for_name_and_type(
-        &ctx.formatter,
-        name.name_str(),
-        symbol,
-        ctx.types,
-        node_ty,
-    )?;
+    let line =
+        hover_line_for_name_and_type(&ctx.formatter, name.name_str(), symbol, ctx.types, node_ty)?;
 
     Some(Hover {
         contents: line,
@@ -496,7 +487,7 @@ fn hover_line_for_name_and_type(
     formatter: &TypeFormatter,
     name: String,
     symbol: Option<Symbol>,
-    types: Option<&crate::types::type_session::Types>,
+    types: Option<&crate::types::types::Types>,
     node_ty: Option<&crate::types::ty::Ty>,
 ) -> Option<String> {
     let symbol_entry = symbol.and_then(|sym| types.and_then(|types| types.get_symbol(&sym)));

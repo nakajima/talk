@@ -20,6 +20,8 @@ pub mod type_operations;
 pub mod type_session;
 pub mod type_snapshot;
 pub mod typed_ast;
+#[allow(clippy::module_inception)]
+pub mod types;
 pub mod types_decorator;
 pub mod vars;
 // pub mod wants;

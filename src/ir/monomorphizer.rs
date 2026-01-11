@@ -14,7 +14,7 @@ use crate::{
     },
     name::Name,
     name_resolution::symbol::Symbol,
-    types::{ty::Ty, type_session::Types, typed_ast::TypedAST},
+    types::{ty::Ty, types::Types, typed_ast::TypedAST},
 };
 
 #[allow(dead_code)]

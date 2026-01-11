@@ -176,7 +176,12 @@ impl Projection {
                                 }
                             };
                             let group = constraints.copy_group(self.id);
-                            constraints.wants_equals_at(self.node_id, base.clone(), conforming_ty, &group);
+                            constraints.wants_equals_at(
+                                self.node_id,
+                                base.clone(),
+                                conforming_ty,
+                                &group,
+                            );
                             return SolveResult::Solved(vec![Meta::Ty(*id)]);
                         }
                         _ => {
@@ -194,14 +199,13 @@ impl Projection {
             InferTy::Nominal { symbol, .. } => Some(*symbol),
             InferTy::Primitive(symbol) => Some(*symbol),
             _ => None,
-        } {
-            if let Some(protocol_id) = self.protocol_id {
-                let key = ConformanceKey {
-                    protocol_id,
-                    conforming_id: base_sym,
-                };
-                return SolveResult::Defer(DeferralReason::WaitingOnConformance(key));
-            }
+        } && let Some(protocol_id) = self.protocol_id
+        {
+            let key = ConformanceKey {
+                protocol_id,
+                conforming_id: base_sym,
+            };
+            return SolveResult::Defer(DeferralReason::WaitingOnConformance(key));
         }
 
         SolveResult::Defer(DeferralReason::Unknown)

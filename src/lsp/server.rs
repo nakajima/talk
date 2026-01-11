@@ -976,7 +976,7 @@ fn rename_symbol_at_offset(
 
 fn rename_spans_in_ast(
     ast: &crate::ast::AST<crate::ast::NameResolved>,
-    types: Option<&crate::types::type_session::Types>,
+    types: Option<&crate::types::types::Types>,
     symbol: Symbol,
 ) -> Vec<(u32, u32)> {
     let mut collector = RenameCollector {
@@ -1009,7 +1009,7 @@ fn rename_spans_in_ast(
 )]
 struct RenameCollector<'a> {
     ast: &'a crate::ast::AST<crate::ast::NameResolved>,
-    types: Option<&'a crate::types::type_session::Types>,
+    types: Option<&'a crate::types::types::Types>,
     target: Symbol,
     spans: FxHashSet<(u32, u32)>,
 }
@@ -1247,7 +1247,7 @@ fn goto_definition(
 }
 
 fn goto_definition_symbol_from_expr(
-    types: Option<&crate::types::type_session::Types>,
+    types: Option<&crate::types::types::Types>,
     expr: &crate::node_kinds::expr::Expr,
     byte_offset: u32,
 ) -> Option<Symbol> {
@@ -1269,7 +1269,7 @@ fn goto_definition_symbol_from_expr(
 }
 
 fn goto_definition_symbol_from_stmt(
-    types: Option<&crate::types::type_session::Types>,
+    types: Option<&crate::types::types::Types>,
     stmt: &crate::node_kinds::stmt::Stmt,
     byte_offset: u32,
 ) -> Option<Symbol> {
@@ -1351,7 +1351,7 @@ fn goto_definition_symbol_from_decl(
 }
 
 fn resolve_member_symbol(
-    types: Option<&crate::types::type_session::Types>,
+    types: Option<&crate::types::types::Types>,
     receiver: &crate::node_kinds::expr::Expr,
     label: &crate::label::Label,
 ) -> Option<Symbol> {

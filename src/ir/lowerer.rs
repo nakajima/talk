@@ -43,7 +43,8 @@ use crate::{
         },
         scheme::ForAll,
         ty::Ty,
-        type_session::{TypeEntry, Types},
+        type_session::TypeEntry,
+        types::Types,
     },
 };
 use indexmap::IndexMap;

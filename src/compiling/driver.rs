@@ -12,12 +12,8 @@ use crate::{
     parser::Parser,
     parser_error::ParserError,
     types::{
-        matcher,
-        passes::inference_pass::InferencePass,
-        ty::Ty,
-        type_error::TypeError,
-        type_session::{TypeSession, Types},
-        typed_ast::TypedAST,
+        matcher, passes::inference_pass::InferencePass, ty::Ty, type_error::TypeError,
+        type_session::TypeSession, typed_ast::TypedAST, types::Types,
     },
 };
 use indexmap::IndexMap;

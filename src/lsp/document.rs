@@ -4,7 +4,7 @@ use std::sync::Arc;
 use crate::{
     ast::{AST, NameResolved},
     name_resolution::name_resolver::ResolvedNames,
-    types::type_session::Types,
+    types::types::Types,
 };
 
 pub struct DocumentAnalysis {
