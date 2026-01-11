@@ -5,6 +5,7 @@ use tracing::instrument;
 
 use crate::{
     ast::{AST, NameResolved},
+    common::metrics,
     compiling::module::ModuleId,
     diagnostic::{AnyDiagnostic, Diagnostic, Severity},
     formatter,
@@ -1014,6 +1015,7 @@ impl<'a> InferencePass<'a> {
         binders: Vec<Symbol>,
         placeholders: Vec<InferTy>,
     ) {
+        let _timer = metrics::timer("typecheck.solve_group");
         context.substitutions_mut().extend(&self.substitutions);
 
         let level = context.level();
@@ -1054,6 +1056,18 @@ impl<'a> InferencePass<'a> {
 
         self.substitutions.extend(&context.substitutions);
         self.session.apply_all(&mut self.substitutions);
+
+        #[cfg(feature = "metrics")]
+        {
+            tracing::info!(
+                target: "metrics",
+                metric = "typecheck.group",
+                group_id = context.group().0,
+                level = context.level().0,
+                binders = binders.len() as u64,
+                placeholders = placeholders.len() as u64
+            );
+        }
     }
 
     fn typed_expr(

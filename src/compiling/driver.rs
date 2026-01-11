@@ -1,5 +1,6 @@
 use crate::{
     ast::{self, AST},
+    common::metrics,
     compiling::module::{Module, ModuleEnvironment, ModuleId, StableModuleId},
     diagnostic::{AnyDiagnostic, Diagnostic, Severity},
     ir::{ir_error::IRError, lowerer::Lowerer, program::Program},
@@ -337,6 +338,7 @@ fn has_error_diagnostics(diagnostics: &[AnyDiagnostic]) -> bool {
 
 impl Driver<NameResolved> {
     pub fn typecheck(mut self) -> Result<Driver<Typed>, CompileError> {
+        let _timer = metrics::timer("typecheck.total");
         let mut session = TypeSession::new(
             self.config.module_id,
             self.config.modules.clone(),
@@ -345,15 +347,22 @@ impl Driver<NameResolved> {
         );
 
         let (_paths, mut asts): (Vec<_>, Vec<_>) = self.phase.asts.iter_mut().unzip();
-        let (ast, diagnostics) = InferencePass::drive(&mut asts, &mut session);
+        let (ast, diagnostics) = {
+            let _timer = metrics::timer("typecheck.inference_pass");
+            InferencePass::drive(&mut asts, &mut session)
+        };
 
         self.phase.diagnostics.extend(diagnostics);
         let symbols = std::mem::take(&mut session.symbols);
         let resolved_names = std::mem::take(&mut session.resolved_names);
-        let mut types = session.finalize().map_err(CompileError::Typing)?;
+        let mut types = {
+            let _timer = metrics::timer("typecheck.finalize");
+            session.finalize().map_err(CompileError::Typing)?
+        };
 
         // Don't bother with matcher diagnostics if we're not well typed already.
         if !has_error_diagnostics(&self.phase.diagnostics) {
+            let _timer = metrics::timer("typecheck.matcher");
             let matcher_result = matcher::check_ast(&ast, &types, &resolved_names.symbol_names);
             self.phase.diagnostics.extend(
                 matcher_result
@@ -381,6 +390,7 @@ impl Driver<NameResolved> {
 
 impl Driver<Typed> {
     pub fn lower(mut self) -> Result<Driver<Lowered>, CompileError> {
+        let _timer = metrics::timer("lower.total");
         let lowerer = Lowerer::new(
             &mut self.phase.ast,
             &mut self.phase.types,
@@ -389,7 +399,10 @@ impl Driver<Typed> {
             &self.config,
         );
 
-        let program = lowerer.lower().map_err(CompileError::Lowering)?;
+        let program = {
+            let _timer = metrics::timer("lower.lowerer");
+            lowerer.lower().map_err(CompileError::Lowering)?
+        };
 
         Ok(Driver {
             files: self.files,

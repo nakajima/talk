@@ -5,6 +5,7 @@ use rustc_hash::FxHashMap;
 use tracing::span::EnteredSpan;
 
 use crate::{
+    common::metrics,
     ir::{
         basic_block::{BasicBlock, BasicBlockId, Phi},
         function::Function,
@@ -177,6 +178,41 @@ pub struct Memory {
     pub mem: Vec<u8>,
 }
 
+#[cfg(feature = "metrics")]
+#[derive(Default)]
+struct InterpreterMetrics {
+    steps: u64,
+    phis: u64,
+    terminators: u64,
+    instructions: u64,
+    calls: u64,
+    max_frames: u64,
+    consts: u64,
+    adds: u64,
+    subs: u64,
+    muls: u64,
+    divs: u64,
+    cmps: u64,
+    instr_calls: u64,
+    nominals: u64,
+    records: u64,
+    get_fields: u64,
+    set_fields: u64,
+    refs: u64,
+    prints: u64,
+    allocs: u64,
+    copies: u64,
+    loads: u64,
+    stores: u64,
+    moves: u64,
+    geps: u64,
+    frees: u64,
+    branches: u64,
+    jumps: u64,
+    rets: u64,
+    unreachables: u64,
+}
+
 pub struct Interpreter<IO: super::io::IO> {
     program: Program,
     symbol_names: Option<FxHashMap<Symbol, String>>,
@@ -186,6 +222,8 @@ pub struct Interpreter<IO: super::io::IO> {
     memory: Memory,
     heap_start: usize,
     pub io: IO,
+    #[cfg(feature = "metrics")]
+    metrics: InterpreterMetrics,
 }
 
 #[allow(clippy::unwrap_used)]
@@ -204,10 +242,13 @@ impl<IO: super::io::IO> Interpreter<IO> {
             heap_start,
             symbol_names,
             io,
+            #[cfg(feature = "metrics")]
+            metrics: Default::default(),
         }
     }
 
     pub fn run(&mut self) -> Value {
+        let _timer = metrics::timer("interpreter.run");
         if std::env::var("SHOW_IR").is_ok() {
             let _guard = self
                 .symbol_names
@@ -228,10 +269,52 @@ impl<IO: super::io::IO> Interpreter<IO> {
             self.next();
         }
 
+        #[cfg(feature = "metrics")]
+        {
+            tracing::info!(
+                target: "metrics",
+                metric = "interpreter",
+                steps = self.metrics.steps,
+                phis = self.metrics.phis,
+                terminators = self.metrics.terminators,
+                instructions = self.metrics.instructions,
+                calls = self.metrics.calls,
+                max_frames = self.metrics.max_frames,
+                consts = self.metrics.consts,
+                adds = self.metrics.adds,
+                subs = self.metrics.subs,
+                muls = self.metrics.muls,
+                divs = self.metrics.divs,
+                cmps = self.metrics.cmps,
+                instr_calls = self.metrics.instr_calls,
+                nominals = self.metrics.nominals,
+                records = self.metrics.records,
+                get_fields = self.metrics.get_fields,
+                set_fields = self.metrics.set_fields,
+                refs = self.metrics.refs,
+                prints = self.metrics.prints,
+                allocs = self.metrics.allocs,
+                copies = self.metrics.copies,
+                loads = self.metrics.loads,
+                stores = self.metrics.stores,
+                moves = self.metrics.moves,
+                geps = self.metrics.geps,
+                frees = self.metrics.frees,
+                branches = self.metrics.branches,
+                jumps = self.metrics.jumps,
+                rets = self.metrics.rets,
+                unreachables = self.metrics.unreachables
+            );
+        }
+
         self.main_result.clone().unwrap_or(Value::Void)
     }
 
     pub fn call(&mut self, function: Symbol, args: Vec<Value>, dest: Register) {
+        #[cfg(feature = "metrics")]
+        {
+            self.metrics.calls += 1;
+        }
         let caller_name = self.current_func.as_ref().map(|f| f.name);
         if let Some(callee_func) = self.current_func.take() {
             self.program.functions.insert(callee_func.name, callee_func);
@@ -280,16 +363,33 @@ impl<IO: super::io::IO> Interpreter<IO> {
         self.frames.push(frame);
         self.current_func = Some(func);
 
+        #[cfg(feature = "metrics")]
+        {
+            let depth = self.frames.len() as u64;
+            if depth > self.metrics.max_frames {
+                self.metrics.max_frames = depth;
+            }
+        }
+
         tracing::trace!("{:?}", self.frames.last().unwrap());
     }
 
     pub fn next(&mut self) {
         let next_instruction = self.next_instr();
 
+        #[cfg(feature = "metrics")]
+        {
+            self.metrics.steps += 1;
+        }
+
         tracing::trace!("{}", self.display_ir(&next_instruction));
 
         match next_instruction {
             IR::Phi(phi) => {
+                #[cfg(feature = "metrics")]
+                {
+                    self.metrics.phis += 1;
+                }
                 let prev = self.frames.last().unwrap().prev_block.unwrap();
                 let source = phi
                     .sources
@@ -301,6 +401,11 @@ impl<IO: super::io::IO> Interpreter<IO> {
                 self.write_register(&phi.dest, val);
             }
             IR::Term(Terminator::Ret { val, .. }) => {
+                #[cfg(feature = "metrics")]
+                {
+                    self.metrics.terminators += 1;
+                    self.metrics.rets += 1;
+                }
                 let val = self.val(val);
                 let frame = self.frames.pop().unwrap();
 
@@ -317,8 +422,20 @@ impl<IO: super::io::IO> Interpreter<IO> {
                     self.current_func = Some(ret_func);
                 }
             }
-            IR::Term(Terminator::Unreachable) => panic!("Reached unreachable"),
+            IR::Term(Terminator::Unreachable) => {
+                #[cfg(feature = "metrics")]
+                {
+                    self.metrics.terminators += 1;
+                    self.metrics.unreachables += 1;
+                }
+                panic!("Reached unreachable")
+            }
             IR::Term(Terminator::Branch { cond, conseq, alt }) => {
+                #[cfg(feature = "metrics")]
+                {
+                    self.metrics.terminators += 1;
+                    self.metrics.branches += 1;
+                }
                 let cond_val = self.val(cond);
                 let next_block = if cond_val == Value::Bool(true) {
                     conseq
@@ -330,30 +447,67 @@ impl<IO: super::io::IO> Interpreter<IO> {
 
                 self.jump(next_block);
             }
-            IR::Term(Terminator::Jump { to }) => self.jump(to),
+            IR::Term(Terminator::Jump { to }) => {
+                #[cfg(feature = "metrics")]
+                {
+                    self.metrics.terminators += 1;
+                    self.metrics.jumps += 1;
+                }
+                self.jump(to)
+            }
             IR::Instr(Instruction::Constant { dest, val, .. }) => {
+                #[cfg(feature = "metrics")]
+                {
+                    self.metrics.instructions += 1;
+                    self.metrics.consts += 1;
+                }
                 let val = self.val(val);
                 self.write_register(&dest, val);
             }
             IR::Instr(Instruction::Add { dest, a, b, .. }) => {
+                #[cfg(feature = "metrics")]
+                {
+                    self.metrics.instructions += 1;
+                    self.metrics.adds += 1;
+                }
                 let result = self.val(a).add(self.val(b));
                 self.write_register(&dest, result);
             }
             IR::Instr(Instruction::Sub { dest, a, b, .. }) => {
+                #[cfg(feature = "metrics")]
+                {
+                    self.metrics.instructions += 1;
+                    self.metrics.subs += 1;
+                }
                 let result = self.val(a).sub(self.val(b));
                 self.write_register(&dest, result);
             }
             IR::Instr(Instruction::Mul { dest, a, b, .. }) => {
+                #[cfg(feature = "metrics")]
+                {
+                    self.metrics.instructions += 1;
+                    self.metrics.muls += 1;
+                }
                 let result = self.val(a).mul(self.val(b));
                 self.write_register(&dest, result);
             }
             IR::Instr(Instruction::Div { dest, a, b, .. }) => {
+                #[cfg(feature = "metrics")]
+                {
+                    self.metrics.instructions += 1;
+                    self.metrics.divs += 1;
+                }
                 let result = self.val(a).div(self.val(b));
                 self.write_register(&dest, result);
             }
             IR::Instr(Instruction::Call {
                 dest, callee, args, ..
             }) => {
+                #[cfg(feature = "metrics")]
+                {
+                    self.metrics.instructions += 1;
+                    self.metrics.instr_calls += 1;
+                }
                 let mut arg_vals: Vec<Value> =
                     args.items.iter().map(|v| self.val(v.clone())).collect();
 
@@ -374,6 +528,11 @@ impl<IO: super::io::IO> Interpreter<IO> {
                 meta,
                 ..
             }) => {
+                #[cfg(feature = "metrics")]
+                {
+                    self.metrics.instructions += 1;
+                    self.metrics.nominals += 1;
+                }
                 let record_id = if let Some(InstructionMeta::RecordId(id)) = meta
                     .items
                     .iter()
@@ -390,6 +549,11 @@ impl<IO: super::io::IO> Interpreter<IO> {
             IR::Instr(Instruction::Record {
                 dest, record, meta, ..
             }) => {
+                #[cfg(feature = "metrics")]
+                {
+                    self.metrics.instructions += 1;
+                    self.metrics.records += 1;
+                }
                 let record_id = if let Some(InstructionMeta::RecordId(id)) = meta
                     .items
                     .iter()
@@ -409,6 +573,11 @@ impl<IO: super::io::IO> Interpreter<IO> {
                 field,
                 ..
             }) => {
+                #[cfg(feature = "metrics")]
+                {
+                    self.metrics.instructions += 1;
+                    self.metrics.get_fields += 1;
+                }
                 let Value::Record(sym, fields) = self.read_register(&record) else {
                     panic!(
                         "did not get record from {record:?}: {:?}",
@@ -435,6 +604,11 @@ impl<IO: super::io::IO> Interpreter<IO> {
                 field,
                 ..
             }) => {
+                #[cfg(feature = "metrics")]
+                {
+                    self.metrics.instructions += 1;
+                    self.metrics.set_fields += 1;
+                }
                 let Label::Positional(idx) = field else {
                     panic!("did not get positional index for record field");
                 };
@@ -447,6 +621,11 @@ impl<IO: super::io::IO> Interpreter<IO> {
                 self.write_register(&dest, Value::Record(sym, fields));
             }
             IR::Instr(Instruction::Ref { dest, val, .. }) => {
+                #[cfg(feature = "metrics")]
+                {
+                    self.metrics.instructions += 1;
+                    self.metrics.refs += 1;
+                }
                 let val = match val {
                     super::value::Value::Func(name) => Reference::Func(name),
                     super::value::Value::Reg(reg) => Reference::Register {
@@ -469,6 +648,11 @@ impl<IO: super::io::IO> Interpreter<IO> {
             IR::Instr(Instruction::Cmp {
                 dest, lhs, rhs, op, ..
             }) => {
+                #[cfg(feature = "metrics")]
+                {
+                    self.metrics.instructions += 1;
+                    self.metrics.cmps += 1;
+                }
                 let val = match op {
                     CmpOperator::Greater => self.val(lhs).gt(self.val(rhs)),
                     CmpOperator::GreaterEquals => self.val(lhs).gte(self.val(rhs)),
@@ -481,6 +665,11 @@ impl<IO: super::io::IO> Interpreter<IO> {
                 self.write_register(&dest, val);
             }
             IR::Instr(Instruction::_Print { val }) => {
+                #[cfg(feature = "metrics")]
+                {
+                    self.metrics.instructions += 1;
+                    self.metrics.prints += 1;
+                }
                 let val = self.val(val.clone());
                 let val = self.display(val, false);
                 let val = format!("{val}\n");
@@ -490,6 +679,11 @@ impl<IO: super::io::IO> Interpreter<IO> {
                     .expect("unable to write to stdout");
             }
             IR::Instr(Instruction::Alloc { dest, ty, count }) => {
+                #[cfg(feature = "metrics")]
+                {
+                    self.metrics.instructions += 1;
+                    self.metrics.allocs += 1;
+                }
                 let count = match self.val(count) {
                     Value::Int(n) => n as usize,
                     v => panic!("alloc count must be int, got {v:?}"),
@@ -511,6 +705,11 @@ impl<IO: super::io::IO> Interpreter<IO> {
                 to,
                 length,
             }) => {
+                #[cfg(feature = "metrics")]
+                {
+                    self.metrics.instructions += 1;
+                    self.metrics.copies += 1;
+                }
                 let from_addr = match self.val(from) {
                     Value::RawPtr(a) => a,
                     Value::Int(a) => Addr(a as usize),
@@ -542,6 +741,11 @@ impl<IO: super::io::IO> Interpreter<IO> {
                 }
             }
             IR::Instr(Instruction::Load { dest, ty, addr }) => {
+                #[cfg(feature = "metrics")]
+                {
+                    self.metrics.instructions += 1;
+                    self.metrics.loads += 1;
+                }
                 let addr_val = self.val(addr);
                 let Value::RawPtr(ptr) = addr_val else {
                     panic!("Load expects RawPtr, got {addr_val:?}");
@@ -564,6 +768,11 @@ impl<IO: super::io::IO> Interpreter<IO> {
             IR::Instr(Instruction::Store {
                 value, addr, ty, ..
             }) => {
+                #[cfg(feature = "metrics")]
+                {
+                    self.metrics.instructions += 1;
+                    self.metrics.stores += 1;
+                }
                 let val = self.val(value);
                 let addr_val = self.val(addr);
                 let Value::RawPtr(ptr) = addr_val else {
@@ -586,6 +795,11 @@ impl<IO: super::io::IO> Interpreter<IO> {
             }
 
             IR::Instr(Instruction::Move { from, to, ty, .. }) => {
+                #[cfg(feature = "metrics")]
+                {
+                    self.metrics.instructions += 1;
+                    self.metrics.moves += 1;
+                }
                 // Move is like Store but maybe with different semantics?
                 // If it's the same as Store:
                 let val = self.val(from);
@@ -614,6 +828,11 @@ impl<IO: super::io::IO> Interpreter<IO> {
                 addr,
                 offset_index,
             }) => {
+                #[cfg(feature = "metrics")]
+                {
+                    self.metrics.instructions += 1;
+                    self.metrics.geps += 1;
+                }
                 let Value::RawPtr(ptr) = self.val(addr) else {
                     panic!("Addr must be pointer")
                 };
@@ -626,7 +845,14 @@ impl<IO: super::io::IO> Interpreter<IO> {
                 let new_ptr = Value::RawPtr(Addr(ptr.0 + offset));
                 self.write_register(&dest, new_ptr);
             }
-            IR::Instr(Instruction::Free { .. }) => unimplemented!(),
+            IR::Instr(Instruction::Free { .. }) => {
+                #[cfg(feature = "metrics")]
+                {
+                    self.metrics.instructions += 1;
+                    self.metrics.frees += 1;
+                }
+                unimplemented!()
+            }
         }
     }
 

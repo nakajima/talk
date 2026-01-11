@@ -3,6 +3,7 @@ use rustc_hash::FxHashMap;
 use tracing::instrument;
 
 use crate::{
+    common::metrics,
     compiling::{driver::DriverConfig, module::ModuleId},
     ir::{
         basic_block::{BasicBlock, Phi},
@@ -56,6 +57,7 @@ impl<'a> Monomorphizer<'a> {
 
     #[instrument(skip(self))]
     pub fn monomorphize(&mut self) -> IndexMap<Symbol, Function<IrTy>> {
+        let _timer = metrics::timer("lower.monomorphize");
         let mut result = IndexMap::<Symbol, Function<IrTy>>::default();
 
         for (base, specs) in self.specializations.clone() {
@@ -85,6 +87,34 @@ impl<'a> Monomorphizer<'a> {
         let syms: Vec<Symbol> = result.keys().copied().collect();
         for sym in syms {
             self.check_imports(&sym, &mut result, &mut checked);
+        }
+
+        #[cfg(feature = "metrics")]
+        {
+            let mut blocks = 0u64;
+            let mut instructions = 0u64;
+            let mut phis = 0u64;
+            for func in result.values() {
+                blocks += func.blocks.len() as u64;
+                for block in &func.blocks {
+                    instructions += block.instructions.len() as u64;
+                    phis += block.phis.len() as u64;
+                }
+            }
+            let specializations: u64 = self
+                .specializations
+                .values()
+                .map(|specs| specs.len() as u64)
+                .sum();
+            tracing::info!(
+                target: "metrics",
+                metric = "lower.ir",
+                functions = result.len() as u64,
+                blocks,
+                instructions,
+                phis,
+                specializations
+            );
         }
 
         result

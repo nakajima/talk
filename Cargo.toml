@@ -73,6 +73,7 @@ cli = [
 ]
 wasm = []
 verify_ir = []
+metrics = []
 
 [profile.release]
 strip = true  # Automatically strip symbols from the binary.

@@ -1,5 +1,6 @@
 use std::fmt::Display;
 
+use crate::common::metrics;
 use crate::compiling::driver::{CompilationMode, DriverConfig};
 use crate::compiling::module::ModuleId;
 use crate::ir::basic_block::{Phi, PhiSource};
@@ -357,6 +358,7 @@ impl<'a> Lowerer<'a> {
     }
 
     pub fn lower(mut self) -> Result<Program, IRError> {
+        let _timer = metrics::timer("lower.lowerer");
         if self.ast.roots().is_empty() {
             let mut program = Program::default();
             program.functions.insert(
@@ -394,9 +396,22 @@ impl<'a> Lowerer<'a> {
         let static_memory = std::mem::take(&mut self.static_memory);
         let record_labels = std::mem::take(&mut self.record_labels);
         let mut monomorphizer = Monomorphizer::new(self);
+        let functions = monomorphizer.monomorphize();
+
+        #[cfg(feature = "metrics")]
+        {
+            tracing::info!(
+                target: "metrics",
+                metric = "lower.output",
+                functions = functions.len() as u64,
+                polyfunctions = monomorphizer.functions.len() as u64,
+                static_memory_bytes = static_memory.data.len() as u64,
+                record_labels = record_labels.len() as u64
+            );
+        }
 
         Ok(Program {
-            functions: monomorphizer.monomorphize(),
+            functions,
             polyfunctions: monomorphizer.functions,
             static_memory,
             record_labels,

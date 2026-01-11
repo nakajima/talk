@@ -115,6 +115,18 @@ impl std::fmt::Display for ConstraintStoreEdge {
     }
 }
 
+#[cfg(feature = "metrics")]
+#[derive(Default, Debug, Clone)]
+pub struct ConstraintStoreMetrics {
+    pub created: u64,
+    pub deferred: u64,
+    pub solved: u64,
+    pub woken: u64,
+    pub woken_metas: u64,
+    pub woken_symbols: u64,
+    pub woken_conformances: u64,
+}
+
 #[derive(Default, Debug)]
 pub struct ConstraintStore {
     ids: IDGenerator,
@@ -125,6 +137,8 @@ pub struct ConstraintStore {
     wants: PriorityQueue<ConstraintId, ConstraintPriority>,
     pub(crate) deferred: IndexSet<ConstraintId>,
     solved: IndexSet<ConstraintId>,
+    #[cfg(feature = "metrics")]
+    metrics: ConstraintStoreMetrics,
 }
 
 impl ConstraintStore {
@@ -159,9 +173,18 @@ impl ConstraintStore {
         self.wants.is_empty()
     }
 
+    #[cfg(feature = "metrics")]
+    pub fn metrics_snapshot(&self) -> ConstraintStoreMetrics {
+        self.metrics.clone()
+    }
+
     #[instrument(skip(self))]
     pub fn defer(&mut self, id: ConstraintId, reason: DeferralReason) {
         self.deferred.insert(id);
+        #[cfg(feature = "metrics")]
+        {
+            self.metrics.deferred += 1;
+        }
         let constraint_node = ConstraintStoreNode::Constraint(id);
         match reason {
             DeferralReason::WaitingOnConformance(key) => {
@@ -213,6 +236,10 @@ impl ConstraintStore {
 
     pub fn solve(&mut self, id: ConstraintId) {
         tracing::debug!("solve constraint {:?}: {:?}", id, self.get(&id));
+        #[cfg(feature = "metrics")]
+        {
+            self.metrics.solved += 1;
+        }
         self.deferred.swap_remove(&id);
         self.solved.insert(id);
         let constraint_node = ConstraintStoreNode::Constraint(id);
@@ -252,6 +279,12 @@ impl ConstraintStore {
             awakened.extend(self.meta_dependents_for(*meta));
         }
         tracing::trace!("waking constraints: {awakened:?}");
+        #[cfg(feature = "metrics")]
+        {
+            let count = awakened.len() as u64;
+            self.metrics.woken += count;
+            self.metrics.woken_metas += count;
+        }
         for constraint_id in awakened {
             if self.solved.contains(&constraint_id) {
                 continue;
@@ -272,6 +305,12 @@ impl ConstraintStore {
             awakened.extend(self.symbol_dependents_for(*symbol));
         }
 
+        #[cfg(feature = "metrics")]
+        {
+            let count = awakened.len() as u64;
+            self.metrics.woken += count;
+            self.metrics.woken_symbols += count;
+        }
         for constraint_id in awakened {
             if self.solved.contains(&constraint_id) {
                 continue;
@@ -288,6 +327,12 @@ impl ConstraintStore {
             awakened.extend(self.conformance_dependents_for(*key));
         }
 
+        #[cfg(feature = "metrics")]
+        {
+            let count = awakened.len() as u64;
+            self.metrics.woken += count;
+            self.metrics.woken_conformances += count;
+        }
         for constraint_id in awakened {
             if self.solved.contains(&constraint_id) {
                 continue;
@@ -306,6 +351,10 @@ impl ConstraintStore {
     ) -> &Constraint {
         self.storage
             .add_node(ConstraintStoreNode::Constraint(constraint_id));
+        #[cfg(feature = "metrics")]
+        {
+            self.metrics.created += 1;
+        }
 
         self.wants.push(constraint_id, constraint.priority());
         self.meta.insert(
