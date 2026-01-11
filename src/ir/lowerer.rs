@@ -22,6 +22,7 @@ use crate::types::typed_ast::{
     TypedMatchArm, TypedNode, TypedParameter, TypedPattern, TypedPatternKind, TypedRecordField,
     TypedStmt, TypedStmtKind,
 };
+use crate::types::types::TypeEntry;
 use crate::{
     ir::{
         basic_block::{BasicBlock, BasicBlockId},
@@ -43,7 +44,6 @@ use crate::{
         },
         scheme::ForAll,
         ty::Ty,
-        type_session::TypeEntry,
         types::Types,
     },
 };

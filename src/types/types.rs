@@ -4,8 +4,63 @@ use crate::{
     compiling::module::ModuleId,
     name_resolution::symbol::Symbol,
     node_id::NodeID,
-    types::{matcher::MatchPlan, ty::Ty, type_catalog::TypeCatalog, type_session::TypeEntry},
+    types::{
+        infer_ty::InferTy,
+        matcher::MatchPlan,
+        scheme::Scheme,
+        term_environment::EnvEntry,
+        ty::{SomeType, Ty},
+        type_catalog::TypeCatalog,
+    },
 };
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum TypeEntry {
+    Mono(Ty),
+    Poly(Scheme<Ty>),
+}
+
+impl TypeEntry {
+    pub fn as_mono_ty(&self) -> &Ty {
+        match self {
+            Self::Mono(ty) => ty,
+            Self::Poly(scheme) => &scheme.ty,
+        }
+    }
+
+    pub fn import(self, module_id: ModuleId) -> Self {
+        match self {
+            Self::Mono(ty) => Self::Mono(ty.import(module_id)),
+            Self::Poly(scheme) => Self::Poly(scheme.import(module_id)),
+        }
+    }
+}
+
+impl From<EnvEntry<InferTy>> for TypeEntry {
+    fn from(value: EnvEntry<InferTy>) -> Self {
+        match value {
+            EnvEntry::Mono(ty) => TypeEntry::Mono(ty.into()),
+            EnvEntry::Scheme(scheme) => TypeEntry::Poly(Scheme {
+                foralls: scheme.foralls,
+                predicates: scheme.predicates.into_iter().map(|p| p.into()).collect(),
+                ty: scheme.ty.into(),
+            }),
+        }
+    }
+}
+
+impl From<TypeEntry> for EnvEntry<InferTy> {
+    fn from(value: TypeEntry) -> Self {
+        match value {
+            TypeEntry::Mono(ty) => EnvEntry::Mono(ty.into()),
+            TypeEntry::Poly(scheme) => EnvEntry::Scheme(Scheme {
+                foralls: scheme.foralls,
+                predicates: scheme.predicates.into_iter().map(|p| p.into()).collect(),
+                ty: scheme.ty.into(),
+            }),
+        }
+    }
+}
 
 // the Types object is the final result of the type checking phase
 #[derive(Clone, Debug, Default)]

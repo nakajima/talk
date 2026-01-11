@@ -15,7 +15,7 @@ use crate::{
         solve_context::Solve,
         ty::SomeType,
         type_operations::{InstantiationSubstitutions, UnificationSubstitutions, substitute},
-        type_session::{TypeEntry, TypeSession},
+        type_session::TypeSession,
         typed_ast::TyMappable,
     },
 };
@@ -47,32 +47,6 @@ impl From<EnvEntry<InferTy>> for (InferTy, Vec<Predicate<InferTy>>, IndexSet<For
         match val {
             EnvEntry::Mono(ty) => (ty, vec![], Default::default()),
             EnvEntry::Scheme(scheme) => (scheme.ty, scheme.predicates, scheme.foralls),
-        }
-    }
-}
-
-impl From<EnvEntry<InferTy>> for TypeEntry {
-    fn from(value: EnvEntry<InferTy>) -> Self {
-        match value {
-            EnvEntry::Mono(ty) => TypeEntry::Mono(ty.into()),
-            EnvEntry::Scheme(scheme) => TypeEntry::Poly(Scheme {
-                foralls: scheme.foralls,
-                predicates: scheme.predicates.into_iter().map(|p| p.into()).collect(),
-                ty: scheme.ty.into(),
-            }),
-        }
-    }
-}
-
-impl From<TypeEntry> for EnvEntry<InferTy> {
-    fn from(value: TypeEntry) -> Self {
-        match value {
-            TypeEntry::Mono(ty) => EnvEntry::Mono(ty.into()),
-            TypeEntry::Poly(scheme) => EnvEntry::Scheme(Scheme {
-                foralls: scheme.foralls,
-                predicates: scheme.predicates.into_iter().map(|p| p.into()).collect(),
-                ty: scheme.ty.into(),
-            }),
         }
     }
 }

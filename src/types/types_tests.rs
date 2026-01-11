@@ -17,12 +17,11 @@ pub mod tests {
             scheme::{ForAll, Scheme},
             ty::Ty,
             type_error::TypeError,
-            type_session::TypeEntry,
             typed_ast::{
                 TypedAST, TypedDeclKind, TypedExpr, TypedExprKind, TypedNode, TypedStmt,
                 TypedStmtKind,
             },
-            types::Types,
+            types::{TypeEntry, Types},
         },
     };
 

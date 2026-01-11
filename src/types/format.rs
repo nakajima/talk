@@ -6,7 +6,7 @@ use crate::types::infer_ty::TypeParamId;
 use crate::types::row::Row;
 use crate::types::scheme::{ForAll, Scheme};
 use crate::types::ty::Ty;
-use crate::types::type_session::TypeEntry;
+use crate::types::types::TypeEntry;
 
 #[derive(Clone, Copy, Default)]
 pub struct SymbolNames<'a> {

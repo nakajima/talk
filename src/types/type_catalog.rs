@@ -11,7 +11,8 @@ use crate::{
         infer_row::RowParamId,
         infer_ty::{InferTy, TypeParamId},
         ty::{SomeType, Ty},
-        type_session::{MemberSource, TypeEntry, TypeSession},
+        type_session::{MemberSource, TypeSession},
+        types::TypeEntry,
     },
 };
 

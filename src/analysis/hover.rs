@@ -8,6 +8,7 @@ use crate::node_kinds::{
 
 use crate::analysis::workspace::Workspace;
 use crate::types::format::{SymbolNames, TypeFormatter};
+use crate::types::types::TypeEntry;
 
 pub fn hover_at(
     module: &Workspace,
@@ -492,9 +493,7 @@ fn hover_line_for_name_and_type(
 ) -> Option<String> {
     let symbol_entry = symbol.and_then(|sym| types.and_then(|types| types.get_symbol(&sym)));
     let type_str = match symbol_entry {
-        Some(entry @ crate::types::type_session::TypeEntry::Poly(..)) => {
-            Some(formatter.format_type_entry(entry))
-        }
+        Some(entry @ TypeEntry::Poly(..)) => Some(formatter.format_type_entry(entry)),
         Some(entry) => node_ty
             .map(|ty| formatter.format_ty(ty))
             .or_else(|| Some(formatter.format_type_entry(entry))),

@@ -14,8 +14,7 @@ use crate::{
         conformance::{Conformance, ConformanceKey},
         ty::Ty,
         type_catalog::Nominal,
-        type_session::TypeEntry,
-        types::Types,
+        types::{TypeEntry, Types},
     },
 };
 
