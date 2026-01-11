@@ -18,9 +18,13 @@ use crate::{
     },
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct CallId(pub(crate) NodeID);
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Call {
     pub id: ConstraintId,
+    pub call_id: CallId,
     pub call_node_id: NodeID,
     pub callee_id: NodeID,
     pub callee: InferTy,
@@ -28,7 +32,7 @@ pub struct Call {
     pub type_args: Vec<InferTy>,
     pub returns: InferTy,
     pub receiver: Option<InferTy>, // If it's a method
-    pub effect_context_row: InferRow,
+    pub effect_context_row: Option<InferRow>,
 }
 
 impl Call {
@@ -68,10 +72,29 @@ impl Call {
                 let type_args = if nominal.type_params.is_empty() {
                     vec![]
                 } else if self.type_args.is_empty() {
+                    let level = context.level().next();
                     nominal
                         .type_params
                         .iter()
-                        .map(|_| session.new_ty_meta_var(context.level().next()))
+                        .map(|param| {
+                            if let Some(existing) = session
+                                .instantiations_by_call
+                                .get(&self.call_id)
+                                .and_then(|inst| inst.ty.get(param))
+                                .cloned()
+                            {
+                                return existing;
+                            }
+
+                            let var = session.new_ty_meta_var(level);
+                            session
+                                .instantiations_by_call
+                                .entry(self.call_id)
+                                .or_default()
+                                .ty
+                                .insert(*param, var.clone());
+                            var
+                        })
                         .collect()
                 } else if self.type_args.len() != nominal.type_params.len() {
                     return SolveResult::Err(TypeError::GenericArgCount {
@@ -79,6 +102,13 @@ impl Call {
                         actual: self.type_args.len() as u8,
                     });
                 } else {
+                    let call_entry = session.instantiations_by_call.entry(self.call_id).or_default();
+                    for (param, arg_ty) in nominal.type_params.iter().zip(self.type_args.iter()) {
+                        call_entry
+                            .ty
+                            .entry(*param)
+                            .or_insert_with(|| arg_ty.clone());
+                    }
                     self.type_args.clone()
                 };
 
@@ -96,7 +126,22 @@ impl Call {
                     args.insert(0, returns_type.clone());
 
                     if let Some(entry) = session.lookup(&initializer) {
-                        entry.instantiate(self.callee_id, constraints, context, session)
+                        let ty = entry.instantiate(self.callee_id, constraints, context, session);
+                        let call_entry =
+                            session.instantiations_by_call.entry(self.call_id).or_default();
+                        for (param_id, ty) in context.instantiations.ty.iter() {
+                            call_entry
+                                .ty
+                                .entry(*param_id)
+                                .or_insert_with(|| ty.clone());
+                        }
+                        for (row_param_id, row) in context.instantiations.row.iter() {
+                            call_entry
+                                .row
+                                .entry(*row_param_id)
+                                .or_insert_with(|| row.clone());
+                        }
+                        ty
                     } else {
                         InferTy::Error(
                             TypeError::TypeNotFound(format!(
@@ -154,12 +199,14 @@ impl Call {
                     )
                 };
 
-                constraints.wants_row_subset(
-                    Some(self.call_node_id),
-                    *effects.clone(),
-                    self.effect_context_row.clone(),
-                    &context.group_info(),
-                );
+                if let Some(row) = self.effect_context_row.clone() {
+                    constraints.wants_row_subset(
+                        Some(self.call_node_id),
+                        *effects.clone(),
+                        row,
+                        &context.group_info(),
+                    );
+                }
 
                 match res {
                     Ok(metas) => SolveResult::Solved(metas),

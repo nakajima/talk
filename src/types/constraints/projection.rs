@@ -10,8 +10,9 @@ use crate::{
         constraint_solver::{DeferralReason, SolveResult},
         constraints::store::{ConstraintId, ConstraintStore},
         infer_ty::{InferTy, Level, Meta},
-        solve_context::SolveContext,
+        solve_context::{Solve, SolveContext},
         type_error::TypeError,
+        type_operations::instantiate_ty,
         type_session::TypeSession,
     },
 };
@@ -60,7 +61,6 @@ impl Projection {
             };
 
             // Find a conformance for the nominal base that mentions this associated label
-            tracing::debug!("Projection: conformance={:?}", conformance);
             if let Some(conf) = conformance {
                 // Prefer the alias symbol (if the nominal actually provided `typealias T = ...`)
                 if let Some(alias_sym) = session
@@ -94,8 +94,10 @@ impl Projection {
                         )));
                     };
 
+                    let level = context.level();
+                    let alias_ty = alias_entry._as_ty();
                     let alias_inst =
-                        alias_entry.instantiate(self.node_id, constraints, context, session);
+                        instantiate_ty(self.node_id, alias_ty, context.instantiations_mut(), level);
 
                     // Self.T must equal the instantiated alias.
                     let group = constraints.copy_group(self.id);
@@ -177,7 +179,12 @@ impl Projection {
                                 }
                             };
                             let group = constraints.copy_group(self.id);
-                            constraints.wants_equals_at(self.node_id, base.clone(), conforming_ty, &group);
+                            constraints.wants_equals_at(
+                                self.node_id,
+                                base.clone(),
+                                conforming_ty,
+                                &group,
+                            );
                             return SolveResult::Solved(vec![Meta::Ty(*id)]);
                         }
                         _ => {
@@ -188,6 +195,20 @@ impl Projection {
             }
 
             return SolveResult::Defer(DeferralReason::WaitingOnMeta(Meta::Ty(*id)));
+        }
+
+        // If we have a concrete base type and a protocol, defer waiting for that conformance
+        if let Some(base_sym) = match &base {
+            InferTy::Nominal { symbol, .. } => Some(*symbol),
+            InferTy::Primitive(symbol) => Some(*symbol),
+            _ => None,
+        } && let Some(protocol_id) = self.protocol_id
+        {
+            let key = ConformanceKey {
+                protocol_id,
+                conforming_id: base_sym,
+            };
+            return SolveResult::Defer(DeferralReason::WaitingOnConformance(key));
         }
 
         SolveResult::Defer(DeferralReason::Unknown)

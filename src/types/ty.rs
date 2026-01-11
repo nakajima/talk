@@ -55,6 +55,9 @@ impl<T: SomeType, U: SomeType, V: RowType<T = T>> TyMappable<T, U> for V {
 pub trait SomeType: std::fmt::Debug + PartialEq + Clone + Eq + Hash + Drive + DriveMut {
     type RowType: RowType<T = Self>;
 
+    fn param(_id: TypeParamId) -> Self {
+        unimplemented!()
+    }
     fn void() -> Self;
     fn contains_var(&self) -> bool;
     fn import(self, module_id: ModuleId) -> Self;
@@ -62,6 +65,10 @@ pub trait SomeType: std::fmt::Debug + PartialEq + Clone + Eq + Hash + Drive + Dr
 
 impl SomeType for Ty {
     type RowType = Row;
+
+    fn param(id: TypeParamId) -> Self {
+        Ty::Param(id)
+    }
 
     fn void() -> Self {
         Ty::Void

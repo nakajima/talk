@@ -17,9 +17,10 @@ use crate::{
         conformance::ConformanceKey,
         constraint_solver::DeferralReason,
         constraints::{
-            call::Call,
+            call::{Call, CallId},
             conforms::Conforms,
             constraint::{Constraint, ConstraintCause},
+            default_ty::DefaultTy,
             equals::Equals,
             has_field::HasField,
             member::Member,
@@ -35,6 +36,7 @@ use crate::{
 
 #[derive(Debug, PartialEq, PartialOrd, Eq, Ord)]
 pub enum ConstraintPriority {
+    DefaultTy,
     RowSubset,
     Conforms,
     Call,
@@ -59,6 +61,7 @@ impl Constraint {
             Constraint::TypeMember(..) => ConstraintPriority::TypeMember,
             Constraint::Projection(..) => ConstraintPriority::Projection,
             Constraint::RowSubset(..) => ConstraintPriority::RowSubset,
+            Constraint::DefaultTy(..) => ConstraintPriority::DefaultTy,
         }
     }
 }
@@ -316,7 +319,7 @@ impl ConstraintStore {
         );
 
         for ty in constraint.collect_metas() {
-            if let InferTy::Var { id, .. } = ty {
+            if let Meta::Ty(id) = ty {
                 let meta_id = ConstraintStoreNode::Meta(Meta::Ty(id));
                 self.storage.add_node(meta_id);
                 self.storage.add_edge(
@@ -388,6 +391,28 @@ impl ConstraintStore {
 
 // Helpers
 impl ConstraintStore {
+    pub fn wants_default(
+        &mut self,
+        node_id: NodeID,
+        var: InferTy,
+        ty: InferTy,
+        allowed: Vec<InferTy>,
+    ) -> &Constraint {
+        let id = self.ids.next_id();
+        self.wants(
+            id,
+            Constraint::DefaultTy(DefaultTy {
+                id,
+                node_id,
+                var,
+                ty,
+                allowed,
+                cause: ConstraintCause::Literal(node_id),
+            }),
+            &Default::default(),
+        )
+    }
+
     pub fn wants_equals(&mut self, lhs: InferTy, rhs: InferTy) -> &Constraint {
         let id = self.ids.next_id();
         self.wants(
@@ -514,6 +539,7 @@ impl ConstraintStore {
         label: Label,
         ty: InferTy,
         group: &BindingGroup,
+        call_id: Option<CallId>,
     ) -> &Constraint {
         let id = self.ids.next_id();
         self.wants(
@@ -524,6 +550,7 @@ impl ConstraintStore {
                 receiver,
                 label,
                 ty,
+                call_id,
             }),
             group,
         )
@@ -559,6 +586,7 @@ impl ConstraintStore {
     #[allow(clippy::too_many_arguments)]
     pub fn wants_call(
         &mut self,
+        call_id: CallId,
         call_node_id: NodeID,
         callee_id: NodeID,
         callee: InferTy,
@@ -567,13 +595,14 @@ impl ConstraintStore {
         returns: InferTy,
         receiver: Option<InferTy>,
         group: &BindingGroup,
-        effect_context_row: InferRow,
+        effect_context_row: Option<InferRow>,
     ) -> &Constraint {
         let id = self.ids.next_id();
         self.wants(
             id,
             Constraint::Call(Call {
                 id,
+                call_id,
                 call_node_id,
                 callee_id,
                 callee,
@@ -693,6 +722,7 @@ pub mod tests {
                 id: 1.into(),
                 level: Level(1),
             },
+            call_id: None,
         });
 
         store.wants(1.into(), member, &Default::default());

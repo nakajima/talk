@@ -1,6 +1,7 @@
 #[macro_export]
 macro_rules! fxhashmap {
     ($($k:expr => $v:expr),* $(,)?) => {{
+        #[allow(unused_mut)]
         let mut m = rustc_hash::FxHashMap::default();
         $( m.insert($k, $v); )*
         m
@@ -345,8 +346,8 @@ pub mod trace {
             let tree = tracing_tree::HierarchicalLayer::new(2)
                 .with_ansi(std::env::var("NO_COLOR").is_err())
                 .with_writer(TestWriter::new())
-                .with_filter(SuppressPrelude) // kills everything inside a prelude span
-                .with_filter(EnvFilter::from_default_env()); // ordinary RUST_LOG filtering
+                .with_filter(EnvFilter::from_default_env()) // ordinary RUST_LOG filtering
+                .with_filter(SuppressPrelude); // kills everything inside a prelude span; 
             registry()
                 .with(MarkPreludeSpan) // sets the PreludeMarker
                 .with(tree)

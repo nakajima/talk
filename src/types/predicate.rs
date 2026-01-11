@@ -5,6 +5,7 @@ use crate::{
     node_id::NodeID,
     types::{
         constraints::{
+            call::CallId,
             constraint::{Constraint, ConstraintCause},
             store::ConstraintStore,
         },
@@ -388,6 +389,7 @@ impl Predicate<InferTy> {
                 label,
                 instantiate_ty(id, ty, context.instantiations_mut(), level),
                 &context.group_info(),
+                None,
             ),
             Self::TypeMember {
                 base,
@@ -412,6 +414,7 @@ impl Predicate<InferTy> {
                 returns,
                 receiver,
             } => constraints.wants_call(
+                CallId(id),
                 id,
                 id,
                 instantiate_ty(id, callee, context.instantiations_mut(), level),
@@ -422,7 +425,7 @@ impl Predicate<InferTy> {
                 instantiate_ty(id, returns, context.instantiations_mut(), level),
                 receiver.map(|r| instantiate_ty(id, r, context.instantiations_mut(), level)),
                 &context.group_info(),
-                InferRow::Var(0.into()),
+                None,
             ),
         }
     }

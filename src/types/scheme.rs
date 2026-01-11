@@ -9,7 +9,7 @@ use crate::{
     types::{
         constraints::store::ConstraintStore,
         infer_row::{InferRow, RowParamId},
-        infer_ty::{InferTy, Level, TypeParamId},
+        infer_ty::{InferTy, TypeParamId},
         predicate::Predicate,
         solve_context::Solve,
         ty::{SomeType, Ty},
@@ -120,48 +120,27 @@ impl Scheme<InferTy> {
         for forall in &self.foralls {
             match forall {
                 ForAll::Ty(param) => {
-                    if let Some(meta) = context.instantiations_mut().get_ty(&id, param) {
-                        session.type_catalog.instantiations.ty.insert(
-                            (id, *param),
-                            InferTy::Var {
-                                id: *meta,
-                                level: Level(1),
-                            },
-                        );
-
-                        continue;
-                    }
-
                     let InferTy::Var { id: meta, .. } = session.new_ty_meta_var(level) else {
                         unreachable!()
                     };
 
                     tracing::trace!("instantiating {param:?} with {meta:?}");
                     session.reverse_instantiations.ty.insert(meta, *param);
-                    context.instantiations_mut().insert_ty(id, *param, meta);
-
-                    session
-                        .type_catalog
-                        .instantiations
+                    context
+                        .instantiations_mut()
                         .ty
-                        .insert((id, *param), InferTy::Var { id: meta, level });
+                        .insert(*param, InferTy::Var { id: meta, level });
                 }
                 ForAll::Row(param) => {
-                    if context.instantiations_mut().get_row(&id, param).is_some() {
-                        continue;
-                    }
-
                     let InferRow::Var(meta) = session.new_row_meta_var(level) else {
                         unreachable!()
                     };
                     tracing::trace!("instantiating {param:?} with {meta:?}");
-                    context.instantiations_mut().insert_row(id, *param, meta);
-                    session.reverse_instantiations.row.insert(meta, *param);
-                    session
-                        .type_catalog
-                        .instantiations
+                    context
+                        .instantiations_mut()
                         .row
-                        .insert((id, *param), InferRow::Var(meta));
+                        .insert(*param, InferRow::Var(meta));
+                    session.reverse_instantiations.row.insert(meta, *param);
                 }
             };
         }
@@ -186,7 +165,8 @@ impl Scheme<InferTy> {
         session: &mut TypeSession,
         context: &mut impl Solve,
         constraints: &mut ConstraintStore,
-    ) -> (InferTy, InstantiationSubstitutions) {
+    ) -> (InferTy, InstantiationSubstitutions<InferTy>) {
+        let level = context.level();
         // Map each quantified meta id to a fresh meta at this use-site level
         let mut substitutions = InstantiationSubstitutions::default();
         let (ty_foralls, row_foralls): (Vec<ForAll>, Vec<ForAll>) = self
@@ -218,12 +198,19 @@ impl Scheme<InferTy> {
                 );
             };
 
-            substitutions.insert_ty(id, *param, meta_var);
-            session.type_catalog.instantiations.ty.insert(
-                (id, *param),
+            context.instantiations_mut().ty.insert(
+                *param,
                 InferTy::Var {
                     id: meta_var,
-                    level: Level(1),
+                    level,
+                },
+            );
+
+            substitutions.ty.insert(
+                *param,
+                InferTy::Var {
+                    id: meta_var,
+                    level: context.level(),
                 },
             );
         }
@@ -236,16 +223,15 @@ impl Scheme<InferTy> {
             let InferRow::Var(row_meta) = session.new_row_meta_var(context.level()) else {
                 unreachable!()
             };
-            substitutions.insert_row(id, row_param, row_meta);
+            substitutions.row.insert(row_param, InferRow::Var(row_meta));
             session
                 .reverse_instantiations
                 .row
                 .insert(row_meta, row_param);
-            session
-                .type_catalog
-                .instantiations
+            context
+                .instantiations_mut()
                 .row
-                .insert((id, row_param), InferRow::Var(row_meta));
+                .insert(row_param, InferRow::Var(row_meta));
         }
 
         for predicate in &self.predicates {

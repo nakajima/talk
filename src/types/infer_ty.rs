@@ -15,6 +15,7 @@ use crate::{
         term_environment::EnvEntry,
         ty::{BaseRow, RowType, SomeType, Ty},
         type_error::TypeError,
+        typed_ast::TyMappable,
     },
 };
 
@@ -128,6 +129,38 @@ pub enum InferTy {
     Error(#[drive(skip)] Box<TypeError>),
 }
 
+impl TyMappable<InferTy, InferTy> for InferTy {
+    type OutputTy = InferTy;
+    fn map_ty(self, m: &mut impl FnMut(&InferTy) -> InferTy) -> Self::OutputTy {
+        match self {
+            InferTy::Projection {
+                base,
+                protocol_id,
+                associated,
+            } => InferTy::Projection {
+                base: m(&base).into(),
+                protocol_id,
+                associated,
+            },
+            InferTy::Constructor { name, params, ret } => InferTy::Constructor {
+                name,
+                params: params.iter().map(&mut *m).collect(),
+                ret: m(&ret).into(),
+            },
+            InferTy::Func(box param, box ret, box effects) => {
+                InferTy::Func(m(&param).into(), m(&ret).into(), effects.map_ty(m).into())
+            }
+            InferTy::Tuple(items) => InferTy::Tuple(items.iter().map(m).collect()),
+            InferTy::Record(infer_row) => InferTy::Record(infer_row.map_ty(m).into()),
+            InferTy::Nominal { symbol, type_args } => InferTy::Nominal {
+                symbol,
+                type_args: type_args.iter().map(m).collect(),
+            },
+            other => m(&other),
+        }
+    }
+}
+
 impl From<InferTy> for Ty {
     #[allow(clippy::panic)]
     fn from(value: InferTy) -> Self {
@@ -228,6 +261,10 @@ impl RowType for InferRow {
 
 impl SomeType for InferTy {
     type RowType = InferRow;
+
+    fn param(id: TypeParamId) -> Self {
+        InferTy::Param(id)
+    }
 
     fn void() -> Self {
         InferTy::Void
@@ -331,13 +368,13 @@ impl InferTy {
         }
     }
 
-    pub fn collect_metas(&self) -> IndexSet<InferTy> {
+    pub fn collect_metas(&self) -> IndexSet<Meta> {
         let mut out = IndexSet::default();
         match self {
             InferTy::Error(..) => {}
             InferTy::Param(_) => {}
-            InferTy::Var { .. } => {
-                out.insert(self.clone());
+            InferTy::Var { id, .. } => {
+                out.insert(Meta::Ty(*id));
             }
             InferTy::Projection { base, .. } => {
                 out.extend(base.collect_metas());
@@ -352,17 +389,9 @@ impl InferTy {
                     out.extend(item.collect_metas());
                 }
             }
-            InferTy::Record(box row) => match row {
-                InferRow::Empty => (),
-                InferRow::Var(..) => {
-                    out.insert(self.clone());
-                }
-                InferRow::Param(..) => (),
-                InferRow::Extend { row, ty, .. } => {
-                    out.extend(ty.collect_metas());
-                    out.extend(InferTy::Record(row.clone()).collect_metas());
-                }
-            },
+            InferTy::Record(box row) => {
+                out.extend(row.collect_metas());
+            }
             InferTy::Nominal { type_args, .. } => {
                 for arg in type_args {
                     out.extend(arg.collect_metas());

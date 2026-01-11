@@ -2,13 +2,14 @@ use crate::{
     node_id::NodeID,
     types::{
         constraints::{
-            call::Call, conforms::Conforms, equals::Equals, has_field::HasField, member::Member,
-            projection::Projection, row_subset::RowSubset, store::ConstraintId,
-            type_member::TypeMember,
+            call::Call, conforms::Conforms, default_ty::DefaultTy, equals::Equals,
+            has_field::HasField, member::Member, projection::Projection, row_subset::RowSubset,
+            store::ConstraintId, type_member::TypeMember,
         },
         infer_row::InferRow,
-        infer_ty::InferTy,
+        infer_ty::{InferTy, Meta},
         predicate::Predicate,
+        scheme::ForAll,
         type_operations::{UnificationSubstitutions, substitute, substitute_mult, substitute_row},
         type_session::TypeSession,
     },
@@ -62,6 +63,7 @@ pub enum Constraint {
     TypeMember(TypeMember),
     Projection(Projection),
     RowSubset(RowSubset),
+    DefaultTy(DefaultTy),
 }
 
 impl Constraint {
@@ -75,6 +77,7 @@ impl Constraint {
             Constraint::TypeMember(c) => c.id,
             Constraint::Projection(c) => c.id,
             Constraint::RowSubset(c) => c.id,
+            Constraint::DefaultTy(c) => c.id,
         }
     }
 
@@ -88,6 +91,7 @@ impl Constraint {
             Constraint::Projection(projection) => Some(projection.node_id),
             Constraint::HasField(has_field) => has_field.node_id,
             Constraint::RowSubset(c) => c.node_id,
+            Constraint::DefaultTy(c) => Some(c.node_id),
         }
     }
 
@@ -101,6 +105,7 @@ impl Constraint {
             Constraint::TypeMember(..) => true,
             Constraint::Projection(..) => true,
             Constraint::RowSubset(..) => false,
+            Constraint::DefaultTy(..) => false,
         }
     }
 
@@ -133,6 +138,16 @@ impl Constraint {
             Constraint::Equals(e) => {
                 e.lhs = session.apply(e.lhs.clone(), substitutions);
                 e.rhs = session.apply(e.rhs.clone(), substitutions);
+            }
+            Constraint::DefaultTy(e) => {
+                e.var = session.apply(e.var.clone(), substitutions);
+                e.ty = session.apply(e.ty.clone(), substitutions);
+                e.allowed = e
+                    .allowed
+                    .iter()
+                    .cloned()
+                    .map(|ty| session.apply(ty, substitutions))
+                    .collect();
             }
             Constraint::HasField(h) => {
                 h.row = session.apply_row(h.row.clone(), substitutions);
@@ -173,6 +188,16 @@ impl Constraint {
                 c.base = substitute(c.base.clone(), substitutions);
                 c.result = substitute(c.result.clone(), substitutions);
             }
+            Constraint::DefaultTy(c) => {
+                c.var = substitute(c.var.clone(), substitutions);
+                c.ty = substitute(c.ty.clone(), substitutions);
+                c.allowed = c
+                    .allowed
+                    .iter()
+                    .cloned()
+                    .map(|ty| substitute(ty, substitutions))
+                    .collect();
+            }
             Constraint::Conforms(..) => (),
             Constraint::Equals(e) => {
                 e.lhs = substitute(e.lhs.clone(), substitutions);
@@ -200,7 +225,7 @@ impl Constraint {
         copy
     }
 
-    #[instrument(skip(substitutions, session), ret)]
+    #[instrument(skip(substitutions, session))]
     pub fn into_predicate(
         &self,
         substitutions: &mut UnificationSubstitutions,
@@ -272,12 +297,17 @@ impl Constraint {
         Some(pred)
     }
 
-    pub fn collect_metas(&self) -> IndexSet<InferTy> {
+    pub fn collect_metas(&self) -> IndexSet<Meta> {
         let mut out = IndexSet::default();
         match self {
             Constraint::Projection(c) => {
                 out.extend(c.base.collect_metas());
                 out.extend(c.result.collect_metas());
+            }
+            Constraint::DefaultTy(c) => {
+                out.extend(c.var.collect_metas());
+                out.extend(c.ty.collect_metas());
+                out.extend(c.allowed.iter().cloned().flat_map(|ty| ty.collect_metas()));
             }
             Constraint::Equals(equals) => {
                 out.extend(equals.lhs.collect_metas());
@@ -314,6 +344,64 @@ impl Constraint {
             Constraint::RowSubset(c) => {
                 out.extend(c.left.collect_metas());
                 out.extend(c.right.collect_metas());
+            }
+        }
+
+        out
+    }
+
+    pub fn collect_foralls(&self) -> IndexSet<ForAll> {
+        let mut out = IndexSet::default();
+        match self {
+            Constraint::Projection(c) => {
+                out.extend(c.base.collect_foralls());
+                out.extend(c.result.collect_foralls());
+            }
+            Constraint::DefaultTy(c) => {
+                out.extend(c.var.collect_foralls());
+                out.extend(c.ty.collect_foralls());
+                out.extend(
+                    c.allowed
+                        .iter()
+                        .cloned()
+                        .flat_map(|ty| ty.collect_foralls()),
+                );
+            }
+            Constraint::Equals(equals) => {
+                out.extend(equals.lhs.collect_foralls());
+                out.extend(equals.rhs.collect_foralls());
+            }
+            Constraint::Member(member) => {
+                out.extend(member.receiver.collect_foralls());
+                out.extend(member.ty.collect_foralls());
+            }
+            Constraint::Call(call) => {
+                out.extend(call.callee.collect_foralls());
+                for argument in &call.args {
+                    out.extend(argument.collect_foralls());
+                }
+                if let Some(receiver) = &call.receiver {
+                    out.extend(receiver.collect_foralls());
+                }
+                out.extend(call.returns.collect_foralls());
+            }
+            Constraint::HasField(has_field) => {
+                // The row meta is handled in your existing HasField block later.
+                out.extend(has_field.ty.collect_foralls());
+            }
+            Constraint::Conforms(c) => {
+                out.extend(c.ty.collect_foralls());
+            }
+            Constraint::TypeMember(c) => {
+                out.extend(c.base.collect_foralls());
+                out.extend(c.result.collect_foralls());
+                for ty in &c.generics {
+                    out.extend(ty.collect_foralls());
+                }
+            }
+            Constraint::RowSubset(c) => {
+                out.extend(c.left.collect_foralls());
+                out.extend(c.right.collect_foralls());
             }
         }
 

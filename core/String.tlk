@@ -16,7 +16,7 @@ extend String: Add {
 		let selfLen: Int = self.length
 		let rhsLen: Int = rhs.length
 		let newLen: Int = selfLen + rhsLen
-		let newBase: RawPtr = _alloc(newLen)
+		let newBase: RawPtr = _alloc<Byte>(newLen)
 		_copy(self.base, newBase, selfLen)
 
 		let rhsDest: RawPtr = _ptr_add(newBase, selfLen)

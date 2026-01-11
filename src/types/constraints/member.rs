@@ -8,6 +8,7 @@ use crate::{
     types::{
         constraint_solver::{DeferralReason, SolveResult},
         constraints::{
+            call::CallId,
             constraint::ConstraintCause,
             store::{ConstraintId, ConstraintStore},
         },
@@ -29,6 +30,7 @@ pub struct Member {
     pub receiver: InferTy,
     pub label: Label,
     pub ty: InferTy,
+    pub call_id: Option<CallId>,
 }
 
 impl Member {
@@ -92,27 +94,65 @@ impl Member {
                 return SolveResult::Solved(Default::default());
             }
             InferTy::Primitive(symbol) => {
-                return self.lookup_nominal_member(
+                let result = self.lookup_nominal_member(
                     constraints,
                     context,
                     session,
                     symbol,
                     Default::default(),
                 );
+                if matches!(result, SolveResult::Solved(_)) {
+                    self.record_witness_substitutions(session, context, *symbol);
+                }
+                return result;
             }
             InferTy::Nominal { symbol, type_args } => {
-                return self.lookup_nominal_member(
+                let result = self.lookup_nominal_member(
                     constraints,
                     context,
                     session,
                     symbol,
                     type_args,
                 );
+                if matches!(result, SolveResult::Solved(_)) {
+                    self.record_witness_substitutions(session, context, *symbol);
+                }
+                return result;
             }
             _ => {}
         }
 
         SolveResult::Defer(DeferralReason::Unknown)
+    }
+
+    fn record_witness_substitutions(
+        &self,
+        session: &mut TypeSession,
+        context: &mut SolveContext,
+        symbol: Symbol,
+    ) {
+        let Some(call_id) = self.call_id else {
+            return;
+        };
+
+        let witnesses =
+            session.witness_substitutions_for_symbol(symbol, &mut context.substitutions);
+
+        let call_entry = session.instantiations_by_call.entry(call_id).or_default();
+        for (param_id, ty) in context.instantiations.ty.iter() {
+            call_entry
+                .ty
+                .entry(*param_id)
+                .or_insert_with(|| ty.clone());
+        }
+        for (row_param_id, row) in context.instantiations.row.iter() {
+            call_entry
+                .row
+                .entry(*row_param_id)
+                .or_insert_with(|| row.clone());
+        }
+
+        call_entry.witnesses.extend(witnesses);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -204,34 +244,33 @@ impl Member {
                 return SolveResult::Defer(DeferralReason::WaitingOnSymbol(*nominal_symbol));
             };
 
-            for param in nominal.type_params.iter() {
-                let InferTy::Param(param_id) = param else {
-                    continue;
-                };
-
-                if context
-                    .instantiations
-                    .get_ty(&self.node_id, param_id)
-                    .is_some()
-                {
-                    continue;
-                }
-
+            for param_id in nominal.type_params.iter() {
                 let InferTy::Var { id: meta, .. } = session.new_ty_meta_var(context.level) else {
                     unreachable!();
                 };
 
                 session.reverse_instantiations.ty.insert(meta, *param_id);
-                context
-                    .instantiations
-                    .insert_ty(self.node_id, *param_id, meta);
-                session.type_catalog.instantiations.ty.insert(
-                    (self.node_id, *param_id),
+                context.instantiations.ty.insert(
+                    *param_id,
                     InferTy::Var {
                         id: meta,
                         level: context.level,
                     },
                 );
+                if let Some(call_id) = self.call_id {
+                    session
+                        .instantiations_by_call
+                        .entry(call_id)
+                        .or_default()
+                        .ty
+                        .insert(
+                            *param_id,
+                            InferTy::Var {
+                                id: meta,
+                                level: context.level,
+                            },
+                        );
+                }
             }
 
             let Some(variant) = nominal.variants.get(&self.label) else {

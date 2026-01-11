@@ -8,7 +8,7 @@ use crate::{
     compiling::module::ModuleId,
     label::Label,
     types::{
-        infer_ty::{InferTy, Level, format_row},
+        infer_ty::{InferTy, Level, Meta, format_row},
         row::Row,
         scheme::ForAll,
         ty::SomeType,
@@ -106,7 +106,7 @@ impl InferRow {
         close(self, ClosedRow::default())
     }
 
-    pub fn collect_metas(&self) -> Vec<InferTy> {
+    pub fn collect_metas(&self) -> Vec<Meta> {
         let mut result = vec![];
         match self {
             InferRow::Param(..) | InferRow::Empty => (),
@@ -115,7 +115,7 @@ impl InferRow {
                 result.extend(ty.collect_metas());
             }
             InferRow::Var(var) => {
-                result.push(InferTy::Record(InferRow::Var(*var).into())); // This is a hack
+                result.push(Meta::Row(*var));
             }
         }
         result

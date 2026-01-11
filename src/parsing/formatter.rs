@@ -1400,11 +1400,14 @@ impl<'a> Formatter<'a> {
             0 => (),
             1 => {
                 result = if func.effects.is_open {
-                    text("[")
-                        + text(func.effects.names[0].name_str())
-                        + text(",")
-                        + text("..")
-                        + text("]")
+                    concat_space(
+                        result,
+                        text("'[")
+                            + text(func.effects.names[0].name_str())
+                            + text(",")
+                            + text("..")
+                            + text("]"),
+                    )
                 } else {
                     concat_space(
                         result,

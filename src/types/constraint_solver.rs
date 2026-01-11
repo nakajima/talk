@@ -56,6 +56,7 @@ impl<'a> ConstraintSolver<'a> {
                 let want = constraints.get(&want_id).clone();
                 let constraint = want.apply(&mut self.context.substitutions, session);
                 let solution = match constraint {
+                    Constraint::DefaultTy(ref c) => c.solve(self.context, session),
                     Constraint::Equals(ref equals) => {
                         match unify(&equals.lhs, &equals.rhs, self.context, session) {
                             Ok(metas) => SolveResult::Solved(metas),
@@ -69,7 +70,9 @@ impl<'a> ConstraintSolver<'a> {
                     Constraint::Member(ref member) => {
                         member.solve(constraints, self.context, session)
                     }
-                    Constraint::Conforms(ref conforms) => conforms.solve(self.context, session),
+                    Constraint::Conforms(ref conforms) => {
+                        conforms.solve(constraints, self.context, session)
+                    }
                     Constraint::TypeMember(ref type_member) => {
                         type_member.solve(constraints, self.context, session)
                     }

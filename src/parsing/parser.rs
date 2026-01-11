@@ -553,6 +553,11 @@ impl<'a> Parser<'a> {
                     name: name.into(),
                     generics,
                     params,
+                    effects: EffectSet {
+                        names,
+                        spans,
+                        is_open,
+                    },
                     ret,
                 })
             });

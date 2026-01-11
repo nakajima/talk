@@ -1198,6 +1198,41 @@ fn goto_definition(
                     None
                 }
             }
+            crate::node::Node::Func(func) => {
+                if span_contains(func.name_span, byte_offset) {
+                    func.name.symbol().ok()
+                } else {
+                    None
+                }
+            }
+            crate::node::Node::FuncSignature(sig) => {
+                let meta = ast.meta.get(&sig.id)?;
+                let (start, end) = meta.identifiers.first().map(|t| (t.start, t.end))?;
+                if start <= byte_offset && byte_offset <= end {
+                    sig.name.symbol().ok()
+                } else {
+                    None
+                }
+            }
+            crate::node::Node::GenericDecl(generic) => {
+                if span_contains(generic.name_span, byte_offset) {
+                    generic.name.symbol().ok()
+                } else {
+                    None
+                }
+            }
+            crate::node::Node::Pattern(pattern) => match &pattern.kind {
+                crate::node_kinds::pattern::PatternKind::Bind(name) => {
+                    let meta = ast.meta.get(&pattern.id)?;
+                    let (start, end) = identifier_span_at_offset(meta, byte_offset)?;
+                    if start <= byte_offset && byte_offset <= end {
+                        name.symbol().ok()
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            },
             _ => None,
         };
 
@@ -1335,6 +1370,7 @@ fn resolve_member_symbol(
 
     match ty {
         Ty::Nominal { symbol, .. } => types.catalog.lookup_member(symbol, label).map(|m| m.0),
+        Ty::Primitive(symbol) => types.catalog.lookup_member(symbol, label).map(|m| m.0),
         _ => None,
     }
 }
@@ -1711,5 +1747,65 @@ extend Person {
             diagnostics_a.is_empty(),
             "expected no diagnostics, got: {diagnostics_a:?}"
         );
+    }
+
+    #[test]
+    fn goto_definition_finds_type_parameter() {
+        let code = "func id<T>(x: T) -> T { x }\n";
+        let uri = Url::from_file_path(std::env::temp_dir().join("goto_def_type_param.tlk"))
+            .expect("file uri");
+
+        let module = workspace_for_docs(vec![(uri.clone(), code)]);
+        // Find the T in the return type position
+        let return_t_offset = code.find(") -> T").expect("return T") + 5;
+        let target = super::goto_definition(&module, None, &uri, return_t_offset as u32);
+        assert!(target.is_some(), "should find type parameter definition");
+    }
+
+    #[test]
+    fn goto_definition_finds_pattern_binding() {
+        let code = r#"func main() {
+  let (a, b) = (1, 2)
+  a
+}
+"#;
+        let uri = Url::from_file_path(std::env::temp_dir().join("goto_def_pattern_bind.tlk"))
+            .expect("file uri");
+
+        let module = workspace_for_docs(vec![(uri.clone(), code)]);
+        // Find the usage of `a` at the end
+        let a_usage_offset = code.rfind("a\n").expect("a usage") as u32;
+        let target = super::goto_definition(&module, None, &uri, a_usage_offset);
+        assert!(target.is_some(), "should find pattern binding definition");
+    }
+
+    #[test]
+    fn goto_definition_finds_local_variable() {
+        let code = r#"func main() {
+  let x = 1
+  x
+}
+"#;
+        let uri = Url::from_file_path(std::env::temp_dir().join("goto_def_local_var.tlk"))
+            .expect("file uri");
+
+        let module = workspace_for_docs(vec![(uri.clone(), code)]);
+        // Find the usage of x at the end
+        let x_usage_offset = code.rfind("x\n").expect("x usage") as u32;
+        let target = super::goto_definition(&module, None, &uri, x_usage_offset);
+        assert!(target.is_some(), "should find local variable definition");
+    }
+
+    #[test]
+    fn goto_definition_finds_generic_decl() {
+        let code = "func id<T>(x: T) -> T { x }\n";
+        let uri = Url::from_file_path(std::env::temp_dir().join("goto_def_generic_decl.tlk"))
+            .expect("file uri");
+
+        let module = workspace_for_docs(vec![(uri.clone(), code)]);
+        // Find the T in the generic declaration <T>
+        let generic_t_offset = code.find("<T>").expect("generic T") + 1;
+        let target = super::goto_definition(&module, None, &uri, generic_t_offset as u32);
+        assert!(target.is_some(), "should find generic declaration");
     }
 }

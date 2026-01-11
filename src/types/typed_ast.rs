@@ -11,10 +11,13 @@ use crate::{
     node_kinds::inline_ir_instruction::TypedInlineIRInstruction,
     types::{
         conformance::ConformanceKey,
+        constraints::call::CallId,
         infer_ty::InferTy,
+        predicate::Predicate,
         scheme::ForAll,
+        term_environment::EnvEntry,
         ty::{SomeType, Ty},
-        type_operations::UnificationSubstitutions,
+        type_operations::{InstantiationSubstitutions, UnificationSubstitutions},
         type_session::TypeSession,
     },
 };
@@ -94,7 +97,7 @@ impl TypedStmtKind<InferTy> {
             Expr(typed_expr) => Expr(typed_expr.finalize(session, witnesses)),
             Assignment(lhs, rhs) => Assignment(
                 lhs.finalize(session, witnesses),
-                rhs.finalize(session, witnesses),
+                rhs.finalize(session, witnesses).into(),
             ),
             Handler { effect, func } => Handler {
                 effect,
@@ -336,14 +339,48 @@ impl TypedDeclKind<InferTy> {
 
 impl TypedExpr<InferTy> {
     fn finalize(
-        self,
+        mut self,
         session: &mut TypeSession,
         witnesses: &FxHashMap<NodeID, Symbol>,
     ) -> TypedExpr<Ty> {
+        if let Some(instantiations) = session.instantiations_by_call.get(&CallId(self.id)) {
+            self.instantiations.extend(instantiations.clone());
+        }
+
+        let ty = session.finalize_ty(self.ty).as_mono_ty().clone();
+        let kind = self.kind.finalize(self.id, session, witnesses);
+        let mut instantiations = InstantiationSubstitutions {
+            row: self
+                .instantiations
+                .row
+                .into_iter()
+                .map(|(k, v)| (k, session.finalize_row(v)))
+                .collect(),
+            ty: self
+                .instantiations
+                .ty
+                .into_iter()
+                .map(|(k, v)| (k, session.finalize_ty(v).as_mono_ty().clone()))
+                .collect(),
+            witnesses: self.instantiations.witnesses.clone(),
+        };
+        instantiations
+            .witnesses
+            .extend(call_witness_substitutions(&kind));
+        instantiations
+            .witnesses
+            .extend(call_witness_substitutions_from_predicates(
+                &kind,
+                &instantiations,
+                session,
+            ));
+
         TypedExpr {
             id: self.id,
-            ty: session.finalize_ty(self.ty).as_mono_ty().clone(),
-            kind: self.kind.finalize(self.id, session, witnesses),
+            ty,
+            kind,
+            instantiations, // .instantiations
+                            // .map_ty(&mut |t| session.finalize_ty(t.clone()).as_mono_ty().clone()),
         }
     }
 }
@@ -967,7 +1004,7 @@ impl<T: SomeType, U: SomeType> TyMappable<T, U> for TypedStmt<T> {
 #[derive(Debug, Clone, PartialEq, Drive, DriveMut)]
 pub enum TypedStmtKind<T: SomeType> {
     Expr(TypedExpr<T>),
-    Assignment(TypedExpr<T>, TypedExpr<T>),
+    Assignment(TypedExpr<T>, Box<TypedExpr<T>>),
     Return(Option<TypedExpr<T>>),
     Continue(Option<TypedExpr<T>>),
     Loop(TypedExpr<T>, TypedBlock<T>),
@@ -989,7 +1026,7 @@ impl<T: SomeType, U: SomeType> TyMappable<T, U> for TypedStmtKind<T> {
                 func: func.map_ty(m),
             },
             Expr(typed_expr) => Expr(typed_expr.map_ty(m)),
-            Assignment(lhs, rhs) => Assignment(lhs.map_ty(m), rhs.map_ty(m)),
+            Assignment(lhs, rhs) => Assignment(lhs.map_ty(m), rhs.map_ty(m).into()),
             Return(typed_expr) => Return(typed_expr.map(|e| e.map_ty(m))),
             Loop(cond, block) => Loop(cond.map_ty(m), block.map_ty(m)),
             Continue(expr) => Continue(expr.map(|e| e.map_ty(m))),
@@ -1273,6 +1310,8 @@ pub struct TypedExpr<T: SomeType> {
     pub id: NodeID,
     pub ty: T,
     pub kind: TypedExprKind<T>,
+    #[drive(skip)]
+    pub instantiations: InstantiationSubstitutions<T>,
 }
 
 impl<T: SomeType, U: SomeType> TyMappable<T, U> for TypedExpr<T> {
@@ -1282,6 +1321,7 @@ impl<T: SomeType, U: SomeType> TyMappable<T, U> for TypedExpr<T> {
             id: self.id,
             ty: m(&self.ty),
             kind: self.kind.map_ty(m),
+            instantiations: self.instantiations.map_ty(m),
         }
     }
 }
@@ -1292,6 +1332,77 @@ fn symbol_for_concrete_ty(ty: &Ty) -> Option<Symbol> {
         Ty::Nominal { symbol, .. } => Some(*symbol),
         _ => None,
     }
+}
+
+fn call_witness_substitutions(kind: &TypedExprKind<Ty>) -> FxHashMap<Symbol, Symbol> {
+    let TypedExprKind::Call { resolved, .. } = kind else {
+        return Default::default();
+    };
+
+    let mut witnesses = FxHashMap::default();
+    if let Some(target) = resolved {
+        witnesses.extend(target.witness_subs.clone());
+    }
+
+    witnesses
+}
+
+fn call_witness_substitutions_from_predicates(
+    kind: &TypedExprKind<Ty>,
+    instantiations: &InstantiationSubstitutions<Ty>,
+    session: &mut TypeSession,
+) -> FxHashMap<Symbol, Symbol> {
+    let TypedExprKind::Call { callee, .. } = kind else {
+        return Default::default();
+    };
+
+    let callee_sym = match &callee.kind {
+        TypedExprKind::Variable(sym) => *sym,
+        TypedExprKind::Func(func) => func.name,
+        TypedExprKind::Constructor(sym, ..) => *sym,
+        TypedExprKind::ProtocolMember { witness, .. } => *witness,
+        TypedExprKind::Member { receiver, label } => {
+            let Some(receiver_sym) = symbol_for_concrete_ty(&receiver.ty) else {
+                return Default::default();
+            };
+            let Some((member_sym, _)) = session.lookup_member(&receiver_sym, label) else {
+                return Default::default();
+            };
+            member_sym
+        }
+        _ => return Default::default(),
+    };
+
+    let Some(entry) = session.lookup(&callee_sym) else {
+        return Default::default();
+    };
+    let EnvEntry::Scheme(scheme) = entry else {
+        return Default::default();
+    };
+
+    let mut witnesses = FxHashMap::default();
+    for predicate in &scheme.predicates {
+        let Predicate::Conforms { param, protocol_id } = predicate else {
+            continue;
+        };
+
+        let Some(concrete_ty) = instantiations.ty.get(param) else {
+            continue;
+        };
+        let Some(conforming_sym) = symbol_for_concrete_ty(concrete_ty) else {
+            continue;
+        };
+
+        let key = ConformanceKey {
+            protocol_id: *protocol_id,
+            conforming_id: conforming_sym,
+        };
+        if let Some(conformance) = session.lookup_conformance(&key) {
+            witnesses.extend(conformance.witnesses.requirements);
+        }
+    }
+
+    witnesses
 }
 
 fn witness_subs_for_conformance(

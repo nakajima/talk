@@ -251,6 +251,21 @@ impl ModuleEnvironment {
         })
     }
 
+    /// Returns all conformances from all imported modules
+    pub fn all_conformances(&self) -> Vec<(ConformanceKey, Conformance<Ty>)> {
+        self.modules
+            .iter()
+            .flat_map(|(_, module)| {
+                module
+                    .types
+                    .catalog
+                    .conformances
+                    .iter()
+                    .map(|(k, v)| (*k, v.clone()))
+            })
+            .collect()
+    }
+
     pub fn lookup_nominal(&self, symbol: &Symbol) -> Option<&Nominal<Ty>> {
         let module_id = symbol.external_module_id()?;
         let stable_id = self.modules_by_local.get(&module_id)?;

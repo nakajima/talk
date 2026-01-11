@@ -1,10 +1,3 @@
-use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
-
-use indexmap::IndexMap;
-use itertools::Itertools;
-use rustc_hash::FxHashMap;
-use tracing::instrument;
-
 use crate::{
     label::Label,
     name_resolution::symbol::Symbol,
@@ -12,11 +5,18 @@ use crate::{
     types::{
         infer_row::{InferRow, RowMetaId, RowParamId, RowTail, normalize_row},
         infer_ty::{InferTy, Level, Meta, MetaVarId, TypeParamId},
+        row::Row,
         solve_context::Solve,
+        ty::{SomeType, Ty},
         type_error::TypeError,
         type_session::{TypeDefKind, TypeSession},
+        typed_ast::TyMappable,
     },
 };
+use itertools::Itertools;
+use rustc_hash::FxHashMap;
+use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
+use tracing::instrument;
 
 #[derive(Clone)]
 pub struct UnificationSubstitutions {
@@ -32,55 +32,63 @@ impl UnificationSubstitutions {
     }
 }
 
-#[derive(Clone, Debug, Default)]
-pub struct InstantiationSubstitutions {
-    pub row: FxHashMap<NodeID, IndexMap<RowParamId, RowMetaId>>,
-    pub ty: FxHashMap<NodeID, IndexMap<TypeParamId, MetaVarId>>,
+#[derive(Clone, Debug, PartialEq)]
+pub struct InstantiationSubstitutions<T: SomeType> {
+    pub row: FxHashMap<RowParamId, T::RowType>,
+    pub ty: FxHashMap<TypeParamId, T>,
+    pub witnesses: FxHashMap<Symbol, Symbol>,
+}
+impl<T: SomeType, U: SomeType> TyMappable<T, U> for InstantiationSubstitutions<T> {
+    type OutputTy = InstantiationSubstitutions<U>;
+    fn map_ty(self, m: &mut impl FnMut(&T) -> U) -> Self::OutputTy {
+        InstantiationSubstitutions {
+            row: self
+                .row
+                .into_iter()
+                .map(|(k, v)| (k, v.map_ty(m)))
+                .collect(),
+            ty: self.ty.into_iter().map(|(k, v)| (k, m(&v))).collect(),
+            witnesses: self.witnesses,
+        }
+    }
+}
+impl<T: SomeType> Default for InstantiationSubstitutions<T> {
+    fn default() -> Self {
+        Self {
+            row: Default::default(),
+            ty: Default::default(),
+            witnesses: Default::default(),
+        }
+    }
+}
+impl<T: SomeType> InstantiationSubstitutions<T> {
+    pub fn extend(&mut self, other: InstantiationSubstitutions<T>) {
+        self.ty.extend(other.ty);
+        self.row.extend(other.row);
+        self.witnesses.extend(other.witnesses);
+    }
 }
 
-impl InstantiationSubstitutions {
-    pub(super) fn ty_mappings(&self, id: &NodeID) -> IndexMap<TypeParamId, MetaVarId> {
-        self.ty.get(id).cloned().unwrap_or_default()
+/// Unified substitution for both types and row parameters.
+/// Used when we need to substitute both InferTy->InferTy mappings
+/// AND RowParamId->InferRow mappings in a single operation.
+#[derive(Default, Debug, Clone)]
+pub struct Substitutions {
+    pub ty: FxHashMap<InferTy, InferTy>,
+    pub row: FxHashMap<RowParamId, InferRow>,
+}
+
+impl Substitutions {
+    pub fn new() -> Self {
+        Self::default()
     }
 
-    pub(super) fn get_ty(
-        &mut self,
-        node_id: &NodeID,
-        type_param_id: &TypeParamId,
-    ) -> Option<&MetaVarId> {
-        self.ty.entry(*node_id).or_default().get(type_param_id)
+    pub fn insert_ty(&mut self, from: InferTy, to: InferTy) {
+        self.ty.insert(from, to);
     }
 
-    pub(super) fn get_row(
-        &mut self,
-        node_id: &NodeID,
-        type_param_id: &RowParamId,
-    ) -> Option<&RowMetaId> {
-        self.row.entry(*node_id).or_default().get(type_param_id)
-    }
-
-    pub(super) fn insert_ty(
-        &mut self,
-        node_id: NodeID,
-        type_param_id: TypeParamId,
-        meta: MetaVarId,
-    ) {
-        self.ty
-            .entry(node_id)
-            .or_default()
-            .insert(type_param_id, meta);
-    }
-
-    pub(super) fn insert_row(
-        &mut self,
-        node_id: NodeID,
-        row_param_id: RowParamId,
-        meta: RowMetaId,
-    ) {
-        self.row
-            .entry(node_id)
-            .or_default()
-            .insert(row_param_id, meta);
+    pub fn insert_row(&mut self, from: RowParamId, to: InferRow) {
+        self.row.insert(from, to);
     }
 }
 
@@ -561,6 +569,26 @@ pub(super) fn substitute_row(
     }
 }
 
+/// Substitute row with unified Substitutions that can handle row param substitution.
+pub(super) fn substitute_row_with_subs(row: InferRow, substitutions: &Substitutions) -> InferRow {
+    match row {
+        InferRow::Empty => row,
+        InferRow::Var(..) => row,
+        InferRow::Param(id) => {
+            if let Some(replacement) = substitutions.row.get(&id) {
+                replacement.clone()
+            } else {
+                row
+            }
+        }
+        InferRow::Extend { row, label, ty } => InferRow::Extend {
+            row: Box::new(substitute_row_with_subs(*row, substitutions)),
+            label,
+            ty: substitute_with_subs(ty, substitutions),
+        },
+    }
+}
+
 pub(super) fn substitute_mult(
     ty: &[InferTy],
     substitutions: &FxHashMap<InferTy, InferTy>,
@@ -619,20 +647,70 @@ pub(super) fn substitute(ty: InferTy, substitutions: &FxHashMap<InferTy, InferTy
     }
 }
 
+/// Substitute type with unified Substitutions that can handle both type and row param substitution.
+pub(super) fn substitute_with_subs(ty: InferTy, substitutions: &Substitutions) -> InferTy {
+    if let Some(subst) = substitutions.ty.get(&ty) {
+        return subst.clone();
+    }
+    match ty {
+        InferTy::Error(..) => ty,
+        InferTy::Param(..) => ty,
+        InferTy::Rigid(..) => ty,
+        InferTy::Var { .. } => ty,
+        InferTy::Primitive(..) => ty,
+        InferTy::Projection {
+            box base,
+            associated,
+            protocol_id,
+        } => InferTy::Projection {
+            base: substitute_with_subs(base, substitutions).into(),
+            associated,
+            protocol_id,
+        },
+        InferTy::Constructor { name, params, ret } => InferTy::Constructor {
+            name,
+            params: params
+                .into_iter()
+                .map(|p| substitute_with_subs(p, substitutions))
+                .collect(),
+            ret: Box::new(substitute_with_subs(*ret, substitutions)),
+        },
+        InferTy::Func(params, ret, effects) => InferTy::Func(
+            Box::new(substitute_with_subs(*params, substitutions)),
+            Box::new(substitute_with_subs(*ret, substitutions)),
+            Box::new(substitute_row_with_subs(*effects, substitutions)),
+        ),
+        InferTy::Tuple(items) => InferTy::Tuple(
+            items
+                .into_iter()
+                .map(|t| substitute_with_subs(t, substitutions))
+                .collect(),
+        ),
+        InferTy::Record(row) => {
+            InferTy::Record(Box::new(substitute_row_with_subs(*row, substitutions)))
+        }
+        InferTy::Nominal { symbol, type_args } => InferTy::Nominal {
+            symbol,
+            type_args: type_args
+                .into_iter()
+                .map(|t| substitute_with_subs(t, substitutions))
+                .collect(),
+        },
+    }
+}
+
 pub(super) fn instantiate_row(
     node_id: NodeID,
     row: InferRow,
-    substitutions: &InstantiationSubstitutions,
+    substitutions: &InstantiationSubstitutions<InferTy>,
     level: Level,
 ) -> InferRow {
     match row {
         InferRow::Empty => row,
         InferRow::Var(..) => row,
         InferRow::Param(id) => {
-            if let Some(row_metas) = substitutions.row.get(&node_id)
-                && let Some(row_meta) = row_metas.get(&id)
-            {
-                InferRow::Var(*row_meta)
+            if let Some(row) = substitutions.row.get(&id) {
+                row.clone()
             } else {
                 row
             }
@@ -648,7 +726,7 @@ pub(super) fn instantiate_row(
 pub(super) fn instantiate_ty(
     node_id: NodeID,
     ty: InferTy,
-    substitutions: &InstantiationSubstitutions,
+    substitutions: &InstantiationSubstitutions<InferTy>,
     level: Level,
 ) -> InferTy {
     if substitutions.row.is_empty() && substitutions.ty.is_empty() {
@@ -658,10 +736,8 @@ pub(super) fn instantiate_ty(
     match ty {
         InferTy::Error(..) => ty,
         InferTy::Param(param) => {
-            if let Some(metas) = substitutions.ty.get(&node_id)
-                && let Some(meta) = metas.get(&param)
-            {
-                InferTy::Var { id: *meta, level }
+            if let Some(ty) = substitutions.ty.get(&param) {
+                ty.clone()
             } else {
                 ty
             }
@@ -710,5 +786,103 @@ pub(super) fn instantiate_ty(
                 .map(|t| instantiate_ty(node_id, t, substitutions, level))
                 .collect(),
         },
+    }
+}
+
+pub(crate) fn collect_instantiations(
+    expected: &Ty,
+    actual: &Ty,
+    instantiations: &mut InstantiationSubstitutions<Ty>,
+) {
+    match expected {
+        Ty::Param(param_id) => {
+            instantiations
+                .ty
+                .entry(*param_id)
+                .or_insert_with(|| actual.clone());
+        }
+        Ty::Primitive(..) => {}
+        Ty::Constructor {
+            name,
+            params,
+            ret,
+        } => {
+            if let Ty::Constructor {
+                name: actual_name,
+                params: actual_params,
+                ret: actual_ret,
+            } = actual
+                && name == actual_name
+            {
+                for (expected_param, actual_param) in params.iter().zip(actual_params.iter()) {
+                    collect_instantiations(expected_param, actual_param, instantiations);
+                }
+                collect_instantiations(ret, actual_ret, instantiations);
+            }
+        }
+        Ty::Func(expected_param, expected_ret, expected_effects) => {
+            if let Ty::Func(actual_param, actual_ret, actual_effects) = actual {
+                collect_instantiations(expected_param, actual_param, instantiations);
+                collect_instantiations(expected_ret, actual_ret, instantiations);
+                collect_row_instantiations(expected_effects, actual_effects, instantiations);
+            }
+        }
+        Ty::Tuple(items) => {
+            if let Ty::Tuple(actual_items) = actual {
+                for (expected_item, actual_item) in items.iter().zip(actual_items.iter()) {
+                    collect_instantiations(expected_item, actual_item, instantiations);
+                }
+            }
+        }
+        Ty::Record(expected_sym, expected_row) => {
+            if let Ty::Record(actual_sym, actual_row) = actual
+                && expected_sym == actual_sym
+            {
+                collect_row_instantiations(expected_row, actual_row, instantiations);
+            }
+        }
+        Ty::Nominal {
+            symbol,
+            type_args,
+        } => {
+            if let Ty::Nominal {
+                symbol: actual_symbol,
+                type_args: actual_args,
+            } = actual
+                && symbol == actual_symbol
+            {
+                for (expected_arg, actual_arg) in type_args.iter().zip(actual_args.iter()) {
+                    collect_instantiations(expected_arg, actual_arg, instantiations);
+                }
+            }
+        }
+    }
+}
+
+pub(crate) fn collect_row_instantiations(
+    expected: &Row,
+    actual: &Row,
+    instantiations: &mut InstantiationSubstitutions<Ty>,
+) {
+    match expected {
+        Row::Empty => {}
+        Row::Param(param_id) => {
+            instantiations
+                .row
+                .entry(*param_id)
+                .or_insert_with(|| actual.clone());
+        }
+        Row::Extend { row, label, ty } => {
+            if let Row::Extend {
+                row: actual_row,
+                label: actual_label,
+                ty: actual_ty,
+            } = actual
+                && label == actual_label
+            {
+                collect_instantiations(ty, actual_ty, instantiations);
+                collect_row_instantiations(row, actual_row, instantiations);
+            }
+        }
     }
 }

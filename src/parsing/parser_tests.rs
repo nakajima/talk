@@ -2123,6 +2123,7 @@ pub mod tests {
                         name: "me".into(),
                         params: vec![],
                         generics: vec![],
+                        effects: Default::default(),
                         ret: Some(
                             annotation!(TypeAnnotationKind::Nominal {
                                 name: "Person".into(),

@@ -5,7 +5,8 @@ use crate::{
     name::Name,
     node_id::NodeID,
     node_kinds::{
-        generic_decl::GenericDecl, parameter::Parameter, type_annotation::TypeAnnotation,
+        func::EffectSet, generic_decl::GenericDecl, parameter::Parameter,
+        type_annotation::TypeAnnotation,
     },
     span::Span,
 };
@@ -19,6 +20,8 @@ pub struct FuncSignature {
     #[drive(skip)]
     pub name: Name,
     pub params: Vec<Parameter>,
+    #[drive(skip)]
+    pub effects: EffectSet,
     pub generics: Vec<GenericDecl>,
     pub ret: Option<Box<TypeAnnotation>>,
 }
