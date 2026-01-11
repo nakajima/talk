@@ -24,7 +24,6 @@ pub mod typed_ast;
 pub mod types;
 pub mod types_decorator;
 pub mod vars;
-// pub mod wants;
 
 #[cfg(test)]
 pub mod effects_tests;
