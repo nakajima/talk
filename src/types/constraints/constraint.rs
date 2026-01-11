@@ -7,9 +7,8 @@ use crate::{
             store::ConstraintId, type_member::TypeMember,
         },
         infer_row::InferRow,
-        infer_ty::{InferTy, Meta},
+        infer_ty::InferTy,
         predicate::Predicate,
-        scheme::ForAll,
         type_operations::{UnificationSubstitutions, substitute, substitute_mult, substitute_row},
         type_session::TypeSession,
     },
@@ -300,6 +299,9 @@ impl Constraint {
     pub fn collect_metas(&self) -> IndexSet<InferTy> {
         let mut out = IndexSet::default();
         match self {
+            Constraint::DefaultTy(..) => {
+                // Default constraints are always emitted with a default so they shouldn't be generalized
+            }
             Constraint::Projection(c) => {
                 out.extend(c.base.collect_metas());
                 out.extend(c.result.collect_metas());

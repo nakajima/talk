@@ -202,6 +202,14 @@ impl TypeSession {
             },
         );
 
+        // Import conformances from all modules
+        for (key, conformance) in modules.all_conformances() {
+            catalog
+                .conformances
+                .entry(key)
+                .or_insert_with(|| conformance.into());
+        }
+
         TypeSession {
             current_module_id,
             vars: Default::default(),

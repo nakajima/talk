@@ -1282,11 +1282,20 @@ impl<'a> InferencePass<'a> {
                 effect_name, args, ..
             } => self.visit_call_effect(expr, effect_name, args, context)?,
             ExprKind::LiteralArray(items) => self.visit_array(expr, items, context)?,
-            ExprKind::LiteralInt(v) => TypedExpr {
-                id: expr.id,
-                ty: InferTy::Int,
-                kind: TypedExprKind::LiteralInt(v.to_string()),
-            },
+            ExprKind::LiteralInt(v) => {
+                let var = self.session.new_ty_meta_var(context.level());
+                self.constraints.wants_default(
+                    expr.id,
+                    var.clone(),
+                    InferTy::Int,
+                    vec![InferTy::Int, InferTy::Byte],
+                );
+                TypedExpr {
+                    id: expr.id,
+                    ty: var,
+                    kind: TypedExprKind::LiteralInt(v.to_string()),
+                }
+            }
             ExprKind::LiteralFloat(v) => TypedExpr {
                 id: expr.id,
                 ty: InferTy::Float,
