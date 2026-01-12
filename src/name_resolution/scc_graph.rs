@@ -39,7 +39,7 @@ impl SCCGraph {
             .filter_map(|(i, ids)| {
                 let mut level = Level::default();
                 let mut is_top_level = false;
-                // Only include binders that have an rhs_id (i.e., are actually defined
+                // Only include binders that have an rhs_id (so actually defined
                 // in this AST, not just referenced from another AST)
                 let binders: Vec<_> = ids
                     .iter()
@@ -62,7 +62,6 @@ impl SCCGraph {
                     })
                     .collect();
 
-                // Skip empty groups (all binders were references, not definitions)
                 if binders.is_empty() {
                     return None;
                 }
@@ -84,15 +83,12 @@ impl SCCGraph {
         }
 
         if let Some(idx) = self.idx_map.get(&node) {
-            // Update stored level to the max of existing and new, so later
-            // passes (with more accurate nesting) can raise the level.
+            // We want the highiest possible level
             if let Some(existing) = self.level_map.get_mut(idx)
                 && level > *existing
             {
                 *existing = level;
             }
-            // Only set rhs_id if not already set (by a previous definition).
-            // This ensures the first definition wins, which is typically the actual declaration.
             self.rhs_ids.entry(node).or_insert(rhs_id);
             return *idx;
         }
@@ -115,8 +111,8 @@ impl SCCGraph {
             return *idx;
         }
 
-        // First time seeing this symbol, and it's from a reference (forward reference).
-        // Add the node but don't set rhs_id - let the definition set it later.
+        // We haven't seen the declaration of this symbol so just add the node
+        // and hope we find the decl later (which will set rhs id)
         let idx = self.graph.add_node(node);
         self.idx_map.insert(node, idx);
         self.level_map.insert(idx, Level::default());

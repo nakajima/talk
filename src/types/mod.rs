@@ -5,7 +5,6 @@ pub mod constraints;
 pub mod format;
 pub mod infer_row;
 pub mod infer_ty;
-pub mod kind;
 pub mod mappable;
 pub mod matcher;
 pub mod passes;

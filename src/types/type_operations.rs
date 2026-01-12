@@ -585,26 +585,6 @@ pub(super) fn substitute_row(
     }
 }
 
-/// Substitute row with unified Substitutions that can handle row param substitution.
-pub(super) fn substitute_row_with_subs(row: InferRow, substitutions: &Substitutions) -> InferRow {
-    match row {
-        InferRow::Empty => row,
-        InferRow::Var(..) => row,
-        InferRow::Param(id) => {
-            if let Some(replacement) = substitutions.row.get(&id) {
-                replacement.clone()
-            } else {
-                row
-            }
-        }
-        InferRow::Extend { row, label, ty } => InferRow::Extend {
-            row: Box::new(substitute_row_with_subs(*row, substitutions)),
-            label,
-            ty: substitute_with_subs(ty, substitutions),
-        },
-    }
-}
-
 pub(super) fn substitute_mult(
     ty: &[InferTy],
     substitutions: &FxHashMap<InferTy, InferTy>,

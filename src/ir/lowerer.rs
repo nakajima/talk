@@ -940,7 +940,7 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_param_binding(&mut self, param: &TypedParameter<Ty>, register: Register) {
-        if self.resolved_names.is_captured.contains(&param.name)
+        if self.resolved_names.captured.contains(&param.name)
             || self.resolved_names.mutated_symbols.contains(&param.name)
         {
             let ty = self
@@ -968,7 +968,7 @@ impl<'a> Lowerer<'a> {
         match &pattern.kind {
             TypedPatternKind::Or(..) => unimplemented!(),
             TypedPatternKind::Bind(symbol) => {
-                let value = if self.resolved_names.is_captured.contains(symbol)
+                let value = if self.resolved_names.captured.contains(symbol)
                     || self.resolved_names.mutated_symbols.contains(symbol)
                 {
                     let ty = self.ty_from_symbol(symbol).expect("did not get ty for sym");
@@ -1037,7 +1037,7 @@ impl<'a> Lowerer<'a> {
         }
 
         for (symbol, (value_id, ty)) in &symbol_binds {
-            if self.resolved_names.is_captured.contains(symbol) {
+            if self.resolved_names.captured.contains(symbol) {
                 let addr = self.next_register();
                 self.insert_binding(*symbol, Binding::Pointer(addr.into()));
             } else if let Some(reg) = value_regs.get(value_id).copied() {
@@ -1757,7 +1757,7 @@ impl<'a> Lowerer<'a> {
         };
 
         for (symbol, (value_id, ty)) in &symbol_binds {
-            if self.resolved_names.is_captured.contains(symbol) {
+            if self.resolved_names.captured.contains(symbol) {
                 let addr = self.next_register();
                 self.insert_binding(*symbol, Binding::Pointer(addr.into()));
             } else if let Some(reg) = value_regs.get(value_id).copied() {
@@ -2094,7 +2094,7 @@ impl<'a> Lowerer<'a> {
             return;
         }
 
-        if self.resolved_names.is_captured.contains(&symbol) {
+        if self.resolved_names.captured.contains(&symbol) {
             let addr = self.next_register();
             self.insert_binding(symbol, Binding::Pointer(addr.into()));
         } else {

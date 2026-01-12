@@ -110,7 +110,7 @@ impl Scope {
 #[derive(Clone, Debug, Default)]
 pub struct ResolvedNames {
     pub captures: FxHashMap<Symbol, FxHashSet<Capture>>,
-    pub is_captured: FxHashSet<Symbol>,
+    pub captured: FxHashSet<Symbol>,
     pub scopes: FxHashMap<NodeID, Scope>,
     pub symbol_names: FxHashMap<Symbol, String>,
     pub symbols_to_node: FxHashMap<Symbol, NodeID>,
@@ -348,7 +348,7 @@ impl NameResolver {
                 .entry(current_scope_binder)
                 .or_default()
                 .insert(capture);
-            self.phase.is_captured.insert(captured);
+            self.phase.captured.insert(captured);
 
             return Some(captured);
         }
@@ -419,7 +419,7 @@ impl NameResolver {
                 .entry(current_scope_binder)
                 .or_default()
                 .insert(capture);
-            self.phase.is_captured.insert(captured);
+            self.phase.captured.insert(captured);
 
             return Some(captured);
         }

@@ -201,12 +201,6 @@ impl TypeSession {
             })
             .collect();
 
-        let mut context = SolveContext::new(
-            UnificationSubstitutions::new(self.meta_levels.clone()),
-            Default::default(),
-            Default::default(),
-            SolveContextKind::Normal,
-        );
         let term_env = std::mem::take(&mut self.term_env);
         let types_by_symbol = term_env
             .symbols
@@ -214,49 +208,11 @@ impl TypeSession {
             .map(|(sym, entry)| {
                 let entry = match entry {
                     EnvEntry::Mono(ty) => self.finalize_ty(ty),
-                    EnvEntry::Scheme(scheme) => {
-                        if scheme.ty.contains_var() {
-                            // Merge with existing scheme's foralls/predicates
-                            let generalized = self.generalize(scheme.ty, &mut context, &Default::default(), &mut Default::default());
-                            let EnvEntry::Scheme(generalized) = generalized
-                            else {
-                                unreachable!(
-                                    "generalize returned Mono when scheme.ty.contains_var() {generalized:?}"
-                                );
-                            };
-
-                            TypeEntry::Poly(Scheme {
-                                foralls: [scheme.foralls, generalized.foralls]
-                                    .iter()
-                                    .flat_map(|f| f.clone())
-                                    .collect(),
-                                predicates: [
-                                    scheme
-                                        .predicates
-                                        .into_iter()
-                                        .map(|p| p.into())
-                                        .collect::<Vec<_>>(),
-                                    generalized
-                                        .predicates
-                                        .into_iter()
-                                        .map(|p| p.into())
-                                        .collect::<Vec<_>>(),
-                                ]
-                                .concat(),
-                                ty: self.finalize_infer_ty(generalized.ty).into(),
-                            })
-                        } else {
-                            TypeEntry::Poly(Scheme {
-                                foralls: scheme.foralls,
-                                predicates: scheme
-                                    .predicates
-                                    .into_iter()
-                                    .map(|p| p.into())
-                                    .collect(),
-                                ty: self.finalize_infer_ty(scheme.ty).into(),
-                            })
-                        }
-                    }
+                    EnvEntry::Scheme(scheme) => TypeEntry::Poly(Scheme {
+                        foralls: scheme.foralls,
+                        predicates: scheme.predicates.into_iter().map(|p| p.into()).collect(),
+                        ty: self.finalize_infer_ty(scheme.ty).into(),
+                    }),
                 };
                 (sym, entry)
             })
