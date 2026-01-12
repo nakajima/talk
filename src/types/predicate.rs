@@ -10,11 +10,11 @@ use crate::{
         },
         infer_row::{InferRow, RowParamId},
         infer_ty::{InferTy, TypeParamId},
+        mappable::Mappable,
         solve_context::Solve,
         ty::{SomeType, Ty},
         type_operations::{UnificationSubstitutions, instantiate_row, instantiate_ty},
         type_session::TypeSession,
-        typed_ast::TyMappable,
     },
 };
 
@@ -126,13 +126,17 @@ impl From<Predicate<InferTy>> for Predicate<Ty> {
 
 impl From<Predicate<Ty>> for Predicate<InferTy> {
     fn from(value: Predicate<Ty>) -> Self {
-        value.map_ty(&mut |t| t.into())
+        value.mapping(&mut |t| t.into(), &mut |r| r.into())
     }
 }
 
-impl<T: SomeType, U: SomeType> TyMappable<T, U> for Predicate<T> {
-    type OutputTy = Predicate<U>;
-    fn map_ty(self, m: &mut impl FnMut(T) -> U) -> Self::OutputTy {
+impl<T: SomeType, U: SomeType> Mappable<T, U> for Predicate<T> {
+    type Output = Predicate<U>;
+    fn mapping(
+        self,
+        ty_map: &mut impl FnMut(T) -> U,
+        _row_map: &mut impl FnMut(T::RowType) -> U::RowType,
+    ) -> Self::Output {
         match self {
             Predicate::Projection {
                 protocol_id,
@@ -141,8 +145,8 @@ impl<T: SomeType, U: SomeType> TyMappable<T, U> for Predicate<T> {
                 returns,
             } => Predicate::Projection {
                 protocol_id,
-                base: m(base),
-                returns: m(returns),
+                base: ty_map(base),
+                returns: ty_map(returns),
                 label,
             },
             Predicate::Conforms { param, protocol_id } => {
@@ -151,7 +155,7 @@ impl<T: SomeType, U: SomeType> TyMappable<T, U> for Predicate<T> {
             Predicate::HasField { row, label, ty } => Predicate::HasField {
                 row,
                 label,
-                ty: m(ty),
+                ty: ty_map(ty),
             },
             Predicate::Member {
                 receiver,
@@ -159,9 +163,9 @@ impl<T: SomeType, U: SomeType> TyMappable<T, U> for Predicate<T> {
                 ty,
                 node_id,
             } => Predicate::Member {
-                receiver: m(receiver),
+                receiver: ty_map(receiver),
                 label,
-                ty: m(ty),
+                ty: ty_map(ty),
                 node_id,
             },
             Predicate::TypeMember {
@@ -170,10 +174,10 @@ impl<T: SomeType, U: SomeType> TyMappable<T, U> for Predicate<T> {
                 returns,
                 generics,
             } => Predicate::TypeMember {
-                base: m(owner),
+                base: ty_map(owner),
                 member,
-                returns: m(returns),
-                generics: generics.into_iter().map(m).collect(),
+                returns: ty_map(returns),
+                generics: generics.into_iter().map(ty_map).collect(),
             },
             Predicate::Call {
                 callee,
@@ -181,14 +185,14 @@ impl<T: SomeType, U: SomeType> TyMappable<T, U> for Predicate<T> {
                 returns,
                 receiver,
             } => Predicate::Call {
-                callee: m(callee),
-                args: args.into_iter().map(&mut *m).collect(),
-                returns: m(returns),
-                receiver: receiver.map(m),
+                callee: ty_map(callee),
+                args: args.into_iter().map(&mut *ty_map).collect(),
+                returns: ty_map(returns),
+                receiver: receiver.map(ty_map),
             },
             Predicate::Equals { lhs, rhs } => Predicate::Equals {
-                lhs: m(lhs),
-                rhs: m(rhs),
+                lhs: ty_map(lhs),
+                rhs: ty_map(rhs),
             },
         }
     }
@@ -196,7 +200,7 @@ impl<T: SomeType, U: SomeType> TyMappable<T, U> for Predicate<T> {
 
 impl<T: SomeType> Predicate<T> {
     pub fn import(self, module_id: ModuleId) -> Self {
-        self.map_ty(&mut |t| t.clone().import(module_id))
+        self.mapping(&mut |t| t.clone().import(module_id), &mut |r| r)
     }
 }
 
@@ -206,8 +210,10 @@ impl Predicate<InferTy> {
         substitutions: &mut UnificationSubstitutions,
         session: &mut TypeSession,
     ) -> Self {
-        self.clone()
-            .map_ty(&mut |t| session.apply(t.clone(), substitutions))
+        self.clone().mapping(
+            &mut |t| session.apply(t.clone(), substitutions),
+            &mut |r| r, /* session.apply already handles rows */
+        )
     }
 
     pub fn instantiate<'a>(

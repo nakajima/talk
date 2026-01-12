@@ -10,13 +10,15 @@ use crate::{
         builtins::builtin_scope,
         constraints::store::ConstraintStore,
         infer_ty::InferTy,
+        mappable::Mappable,
         predicate::Predicate,
         scheme::{ForAll, Scheme},
         solve_context::Solve,
         ty::SomeType,
-        type_operations::{InstantiationSubstitutions, UnificationSubstitutions, substitute},
+        type_operations::{
+            InstantiationSubstitutions, UnificationSubstitutions, substitute, substitute_row,
+        },
         type_session::TypeSession,
-        typed_ast::TyMappable,
     },
 };
 
@@ -89,7 +91,11 @@ impl EnvEntry<InferTy> {
                 let predicates: Vec<Predicate<InferTy>> = scheme
                     .predicates
                     .into_iter()
-                    .map(|p| p.map_ty(&mut |t| substitute(t.clone(), substitutions)))
+                    .map(|p| {
+                        p.mapping(&mut |t| substitute(t, substitutions), &mut |r| {
+                            substitute_row(r, substitutions)
+                        })
+                    })
                     .collect();
                 if foralls.is_empty() {
                     EnvEntry::Mono(ty)

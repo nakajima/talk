@@ -145,17 +145,6 @@ impl InferRow {
         result
     }
 
-    pub fn map<F: FnMut(InferTy) -> InferTy>(&self, f: &mut F) -> InferRow {
-        match self.clone() {
-            InferRow::Extend { row, label, ty } => InferRow::Extend {
-                row: row.map(f).into(),
-                label,
-                ty: f(ty),
-            },
-            ty => ty,
-        }
-    }
-
     pub fn import(self, module_id: ModuleId) -> InferRow {
         if let InferRow::Extend { row, label, ty } = self {
             InferRow::Extend {

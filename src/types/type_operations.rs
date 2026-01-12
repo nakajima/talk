@@ -12,6 +12,7 @@ use crate::{
     types::{
         infer_row::{InferRow, RowMetaId, RowParamId, RowTail, normalize_row},
         infer_ty::{InferTy, Level, Meta, MetaVarId, TypeParamId},
+        mappable::Mappable,
         solve_context::Solve,
         type_error::TypeError,
         type_session::{TypeDefKind, TypeSession},
@@ -614,104 +615,32 @@ pub(super) fn substitute_mult(
 }
 
 pub(super) fn substitute(ty: InferTy, substitutions: &FxHashMap<InferTy, InferTy>) -> InferTy {
-    if let Some(subst) = substitutions.get(&ty) {
-        return subst.clone();
-    }
-    match ty {
-        InferTy::Error(..) => ty,
-        InferTy::Param(..) => ty,
-        InferTy::Rigid(..) => ty,
-        InferTy::Var { .. } => ty,
-        InferTy::Primitive(..) => ty,
-        InferTy::Projection {
-            box base,
-            associated,
-            protocol_id,
-        } => InferTy::Projection {
-            base: substitute(base, substitutions).into(),
-            associated,
-            protocol_id,
-        },
-        InferTy::Constructor { name, params, ret } => InferTy::Constructor {
-            name,
-            params: params
-                .into_iter()
-                .map(|p| substitute(p, substitutions))
-                .collect(),
-            ret: Box::new(substitute(*ret, substitutions)),
-        },
-        InferTy::Func(params, ret, effects) => InferTy::Func(
-            Box::new(substitute(*params, substitutions)),
-            Box::new(substitute(*ret, substitutions)),
-            Box::new(substitute_row(*effects, substitutions)),
-        ),
-        InferTy::Tuple(items) => InferTy::Tuple(
-            items
-                .into_iter()
-                .map(|t| substitute(t, substitutions))
-                .collect(),
-        ),
-        InferTy::Record(row) => InferTy::Record(Box::new(substitute_row(*row, substitutions))),
-        InferTy::Nominal { symbol, type_args } => InferTy::Nominal {
-            symbol,
-            type_args: type_args
-                .into_iter()
-                .map(|t| substitute(t, substitutions))
-                .collect(),
-        },
-    }
+    ty.mapping(
+        &mut |t| substitutions.get(&t).cloned().unwrap_or(t),
+        &mut |r| r,
+    )
 }
 
 /// Substitute type with unified Substitutions that can handle both type and row param substitution.
 pub(super) fn substitute_with_subs(ty: InferTy, substitutions: &Substitutions) -> InferTy {
-    if let Some(subst) = substitutions.ty.get(&ty) {
-        return subst.clone();
-    }
-    match ty {
-        InferTy::Error(..) => ty,
-        InferTy::Param(..) => ty,
-        InferTy::Rigid(..) => ty,
-        InferTy::Var { .. } => ty,
-        InferTy::Primitive(..) => ty,
-        InferTy::Projection {
-            box base,
-            associated,
-            protocol_id,
-        } => InferTy::Projection {
-            base: substitute_with_subs(base, substitutions).into(),
-            associated,
-            protocol_id,
+    ty.mapping(
+        &mut |t| {
+            if let Some(subst) = substitutions.ty.get(&t) {
+                return subst.clone();
+            }
+
+            t
         },
-        InferTy::Constructor { name, params, ret } => InferTy::Constructor {
-            name,
-            params: params
-                .into_iter()
-                .map(|p| substitute_with_subs(p, substitutions))
-                .collect(),
-            ret: Box::new(substitute_with_subs(*ret, substitutions)),
+        &mut |r| {
+            if let InferRow::Param(id) = r
+                && let Some(subst) = substitutions.row.get(&id)
+            {
+                return subst.clone();
+            }
+
+            r
         },
-        InferTy::Func(params, ret, effects) => InferTy::Func(
-            Box::new(substitute_with_subs(*params, substitutions)),
-            Box::new(substitute_with_subs(*ret, substitutions)),
-            Box::new(substitute_row_with_subs(*effects, substitutions)),
-        ),
-        InferTy::Tuple(items) => InferTy::Tuple(
-            items
-                .into_iter()
-                .map(|t| substitute_with_subs(t, substitutions))
-                .collect(),
-        ),
-        InferTy::Record(row) => {
-            InferTy::Record(Box::new(substitute_row_with_subs(*row, substitutions)))
-        }
-        InferTy::Nominal { symbol, type_args } => InferTy::Nominal {
-            symbol,
-            type_args: type_args
-                .into_iter()
-                .map(|t| substitute_with_subs(t, substitutions))
-                .collect(),
-        },
-    }
+    )
 }
 
 pub(super) fn instantiate_row(
@@ -750,60 +679,26 @@ pub(super) fn instantiate_ty(
         return ty;
     }
 
-    match ty {
-        InferTy::Error(..) => ty,
-        InferTy::Param(param) => {
-            if let Some(metas) = substitutions.ty.get(&node_id)
+    ty.mapping(
+        &mut |t| {
+            if let InferTy::Param(param) = t
+                && let Some(metas) = substitutions.ty.get(&node_id)
                 && let Some(meta) = metas.get(&param)
             {
-                InferTy::Var { id: *meta, level }
-            } else {
-                ty
-            }
-        }
-        InferTy::Rigid(..) => ty,
-        InferTy::Var { .. } => ty,
-        InferTy::Primitive(..) => ty,
-        InferTy::Projection {
-            box base,
-            associated,
-            protocol_id,
-        } => InferTy::Projection {
-            base: instantiate_ty(node_id, base, substitutions, level).into(),
-            associated,
-            protocol_id,
+                return InferTy::Var { id: *meta, level };
+            };
+
+            t
         },
-        InferTy::Constructor { name, params, ret } => InferTy::Constructor {
-            name,
-            params: params
-                .into_iter()
-                .map(|p| instantiate_ty(node_id, p, substitutions, level))
-                .collect(),
-            ret: Box::new(instantiate_ty(node_id, *ret, substitutions, level)),
+        &mut |r| {
+            if let InferRow::Param(id) = r
+                && let Some(metas) = substitutions.row.get(&node_id)
+                && let Some(meta) = metas.get(&id)
+            {
+                return InferRow::Var(*meta);
+            };
+
+            instantiate_row(node_id, r, substitutions, level)
         },
-        InferTy::Func(params, ret, effects) => InferTy::Func(
-            Box::new(instantiate_ty(node_id, *params, substitutions, level)),
-            Box::new(instantiate_ty(node_id, *ret, substitutions, level)),
-            Box::new(instantiate_row(node_id, *effects, substitutions, level)),
-        ),
-        InferTy::Tuple(items) => InferTy::Tuple(
-            items
-                .into_iter()
-                .map(|t| instantiate_ty(node_id, t, substitutions, level))
-                .collect(),
-        ),
-        InferTy::Record(row) => InferTy::Record(Box::new(instantiate_row(
-            node_id,
-            *row,
-            substitutions,
-            level,
-        ))),
-        InferTy::Nominal { symbol, type_args } => InferTy::Nominal {
-            symbol,
-            type_args: type_args
-                .into_iter()
-                .map(|t| instantiate_ty(node_id, t, substitutions, level))
-                .collect(),
-        },
-    }
+    )
 }

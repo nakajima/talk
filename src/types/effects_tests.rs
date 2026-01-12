@@ -3,7 +3,6 @@ pub mod tests {
     use indexmap::indexset;
 
     use crate::{
-        assert_eq_diff,
         diagnostic::{AnyDiagnostic, Diagnostic, Severity},
         label::Label,
         name_resolution::{
@@ -37,7 +36,7 @@ pub mod tests {
         ",
         );
 
-        assert_eq_diff!(
+        assert_eq!(
             types
                 .get_symbol(&Symbol::Global(GlobalId::from(2)))
                 .cloned(),

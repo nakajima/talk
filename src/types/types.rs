@@ -6,6 +6,7 @@ use crate::{
     node_id::NodeID,
     types::{
         infer_ty::InferTy,
+        mappable::Mappable,
         matcher::MatchPlan,
         scheme::Scheme,
         term_environment::EnvEntry,
@@ -55,7 +56,11 @@ impl From<TypeEntry> for EnvEntry<InferTy> {
             TypeEntry::Mono(ty) => EnvEntry::Mono(ty.into()),
             TypeEntry::Poly(scheme) => EnvEntry::Scheme(Scheme {
                 foralls: scheme.foralls,
-                predicates: scheme.predicates.into_iter().map(|p| p.into()).collect(),
+                predicates: scheme
+                    .predicates
+                    .into_iter()
+                    .map(|p| p.mapping(&mut |t| t.into(), &mut |r| r.into()))
+                    .collect(),
                 ty: scheme.ty.into(),
             }),
         }

@@ -18,9 +18,6 @@ pub struct ConformanceKey {
 pub struct Witnesses<T> {
     pub methods: FxHashMap<Label, Symbol>,
     pub associated_types: FxHashMap<Label, T>,
-    /// Direct mapping from `@MethodRequirement` symbol → concrete witness symbol.
-    ///
-    /// This avoids having to re-derive requirement symbols from labels during lowering/HIR work.
     pub requirements: FxHashMap<Symbol, Symbol>,
 }
 

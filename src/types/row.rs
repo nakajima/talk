@@ -5,6 +5,7 @@ use crate::{
     label::Label,
     types::{
         infer_row::{ClosedRow, RowMetaId, RowParamId},
+        mappable::Mappable,
         scheme::ForAll,
         ty::{BaseRow, RowType, SomeType, Ty},
     },
@@ -20,6 +21,23 @@ pub enum Row {
         label: Label,
         ty: Ty,
     },
+}
+
+impl<U: SomeType> Mappable<Ty, U> for Row {
+    type Output = U::RowType;
+    fn mapping(
+        self,
+        ty_map: &mut impl FnMut(Ty) -> U,
+        row_map: &mut impl FnMut(<Ty as SomeType>::RowType) -> <U as SomeType>::RowType,
+    ) -> Self::Output {
+        match self {
+            Row::Empty => U::RowType::empty(),
+            Row::Param(id) => U::RowType::param(id),
+            Row::Extend { box row, label, ty } => {
+                U::RowType::extend(row_map(row), label, ty_map(ty))
+            }
+        }
+    }
 }
 
 impl RowType for Row {

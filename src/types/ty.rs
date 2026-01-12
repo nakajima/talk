@@ -11,9 +11,9 @@ use crate::{
     types::{
         infer_row::{RowMetaId, RowParamId},
         infer_ty::{InferTy, TypeParamId},
+        mappable::Mappable,
         row::Row,
         scheme::ForAll,
-        typed_ast::TyMappable,
     },
 };
 
@@ -22,18 +22,6 @@ pub enum BaseRow<T: SomeType> {
     Param(RowParamId),
     Var(RowMetaId),
     Extend { row: Box<Self>, label: Label, ty: T },
-}
-
-impl<T: SomeType, U: SomeType> TyMappable<T, U> for BaseRow<T> {
-    type OutputTy = U::RowType;
-    fn map_ty(self, m: &mut impl FnMut(T) -> U) -> Self::OutputTy {
-        match self {
-            BaseRow::Empty => U::RowType::empty(),
-            BaseRow::Param(id) => U::RowType::param(id),
-            BaseRow::Var(id) => U::RowType::var(id),
-            BaseRow::Extend { row, label, ty } => U::RowType::extend(row.map_ty(m), label, m(ty)),
-        }
-    }
 }
 
 pub trait RowType: PartialEq + Clone + std::fmt::Debug + Drive + DriveMut {
@@ -45,14 +33,16 @@ pub trait RowType: PartialEq + Clone + std::fmt::Debug + Drive + DriveMut {
     fn extend(row: Self, label: Label, ty: Self::T) -> Self;
 }
 
-impl<T: SomeType, U: SomeType, V: RowType<T = T>> TyMappable<T, U> for V {
-    type OutputTy = U::RowType;
-    fn map_ty(self, m: &mut impl FnMut(T) -> U) -> Self::OutputTy {
-        self.base().map_ty(m)
-    }
-}
-
-pub trait SomeType: std::fmt::Debug + PartialEq + Clone + Eq + Hash + Drive + DriveMut {
+pub trait SomeType:
+    std::fmt::Debug
+    + PartialEq
+    + Clone
+    + Eq
+    + Hash
+    + Drive
+    + DriveMut
+    + Mappable<Self, Self, Output = Self>
+{
     type RowType: RowType<T = Self>;
 
     fn void() -> Self;
@@ -124,6 +114,46 @@ pub enum Ty {
         symbol: Symbol,
         type_args: Vec<Ty>,
     },
+}
+
+impl Mappable<Ty, Ty> for Ty {
+    type Output = Ty;
+    fn mapping(
+        self,
+        ty_map: &mut impl FnMut(Ty) -> Ty,
+        row_map: &mut impl FnMut(<Ty as SomeType>::RowType) -> <Ty as SomeType>::RowType,
+    ) -> Self::Output {
+        match self {
+            Ty::Constructor { name, params, ret } => Ty::Constructor {
+                name,
+                params: params
+                    .into_iter()
+                    .map(|p| p.mapping(ty_map, row_map))
+                    .collect(),
+                ret: ret.mapping(ty_map, row_map).into(),
+            },
+            Ty::Func(param, ret, effects) => Ty::Func(
+                param.mapping(ty_map, row_map).into(),
+                ret.mapping(ty_map, row_map).into(),
+                effects.mapping(ty_map, row_map).into(),
+            ),
+            Ty::Tuple(items) => Ty::Tuple(
+                items
+                    .into_iter()
+                    .map(|i| i.mapping(ty_map, row_map))
+                    .collect(),
+            ),
+            Ty::Record(symbol, row) => Ty::Record(symbol, row.mapping(ty_map, row_map).into()),
+            Ty::Nominal { symbol, type_args } => Ty::Nominal {
+                symbol,
+                type_args: type_args
+                    .into_iter()
+                    .map(|t| t.mapping(ty_map, row_map))
+                    .collect(),
+            },
+            other => ty_map(other),
+        }
+    }
 }
 
 impl std::fmt::Display for Ty {

@@ -11,11 +11,11 @@ use crate::{
     name_resolution::symbol::{ProtocolId, StructId, Symbol},
     types::{
         infer_row::{InferRow, RowMetaId, RowParamId},
+        mappable::Mappable,
         scheme::{ForAll, Scheme},
         term_environment::EnvEntry,
         ty::{BaseRow, RowType, SomeType, Ty},
         type_error::TypeError,
-        typed_ast::TyMappable,
     },
 };
 
@@ -129,16 +129,20 @@ pub enum InferTy {
     Error(#[drive(skip)] Box<TypeError>),
 }
 
-impl TyMappable<InferTy, InferTy> for InferTy {
-    type OutputTy = InferTy;
-    fn map_ty(self, m: &mut impl FnMut(InferTy) -> InferTy) -> Self::OutputTy {
+impl Mappable<InferTy, InferTy> for InferTy {
+    type Output = InferTy;
+    fn mapping(
+        self,
+        ty_map: &mut impl FnMut(InferTy) -> InferTy,
+        row_map: &mut impl FnMut(InferRow) -> InferRow,
+    ) -> Self::Output {
         match self {
             InferTy::Projection {
                 box base,
                 protocol_id,
                 associated,
             } => InferTy::Projection {
-                base: m(base).into(),
+                base: base.mapping(ty_map, row_map).into(),
                 protocol_id,
                 associated,
             },
@@ -148,19 +152,32 @@ impl TyMappable<InferTy, InferTy> for InferTy {
                 box ret,
             } => InferTy::Constructor {
                 name,
-                params: params.into_iter().map(&mut *m).collect(),
-                ret: m(ret).into(),
+                params: params
+                    .into_iter()
+                    .map(|p| p.mapping(ty_map, row_map))
+                    .collect(),
+                ret: ty_map(ret).into(),
             },
-            InferTy::Func(box param, box ret, box effects) => {
-                InferTy::Func(m(param).into(), m(ret).into(), effects.map_ty(m).into())
-            }
-            InferTy::Tuple(items) => InferTy::Tuple(items.into_iter().map(m).collect()),
-            InferTy::Record(infer_row) => InferTy::Record(infer_row.map_ty(m).into()),
+            InferTy::Func(box param, box ret, box effects) => InferTy::Func(
+                param.mapping(ty_map, row_map).into(),
+                ret.mapping(ty_map, row_map).into(),
+                row_map(effects).into(),
+            ),
+            InferTy::Tuple(items) => InferTy::Tuple(
+                items
+                    .into_iter()
+                    .map(|i| i.mapping(ty_map, row_map))
+                    .collect(),
+            ),
+            InferTy::Record(box infer_row) => InferTy::Record(row_map(infer_row).into()),
             InferTy::Nominal { symbol, type_args } => InferTy::Nominal {
                 symbol,
-                type_args: type_args.into_iter().map(m).collect(),
+                type_args: type_args
+                    .into_iter()
+                    .map(|i| i.mapping(ty_map, row_map))
+                    .collect(),
             },
-            other => m(other),
+            other => ty_map(other),
         }
     }
 }
@@ -271,27 +288,19 @@ impl SomeType for InferTy {
     }
 
     fn contains_var(&self) -> bool {
-        match self {
-            InferTy::Param(..) => false,
-            InferTy::Rigid(..) => false,
-            InferTy::Var { .. } => true,
-            InferTy::Primitive(..) => false,
-            InferTy::Error(..) => false,
-            InferTy::Projection { base, .. } => base.contains_var(),
-            InferTy::Constructor { params, .. } => params.iter().any(|p| p.contains_var()),
-            InferTy::Func(ty, ty1, effects) => {
-                ty.contains_var() || ty1.contains_var() || effects.contains_var()
-            }
-            InferTy::Tuple(items) => items.iter().any(|i| i.contains_var()),
-            InferTy::Record(box row) => match row {
-                InferRow::Extend { row, ty, .. } => {
-                    InferTy::Record(row.clone()).contains_var() || ty.contains_var()
-                }
-                InferRow::Var(_) => true,
-                _ => false,
+        let mut ty_contains = false;
+        let mut row_contains = false;
+        _ = self.clone().mapping(
+            &mut |t| {
+                ty_contains |= matches!(t, InferTy::Var { .. });
+                t
             },
-            InferTy::Nominal { type_args, .. } => type_args.contains(self),
-        }
+            &mut |r| {
+                row_contains |= r.contains_var();
+                r
+            },
+        );
+        ty_contains || row_contains
     }
 
     fn import(self, module_id: ModuleId) -> InferTy {
@@ -370,6 +379,7 @@ impl InferTy {
 
     pub fn collect_metas(&self) -> IndexSet<InferTy> {
         let mut out = IndexSet::default();
+
         match self {
             InferTy::Error(..) => {}
             InferTy::Param(_) => {}
