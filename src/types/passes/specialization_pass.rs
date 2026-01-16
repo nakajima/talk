@@ -9,15 +9,13 @@ use crate::{
         name_resolver::ResolvedNames,
         symbol::{Symbol, Symbols, set_symbol_names},
     },
-    node_kinds::inline_ir_instruction::TypedInlineIRInstruction,
     types::{
         row::Row,
         scheme::ForAll,
         ty::{Specializations, Ty},
         type_error::TypeError,
         typed_ast::{
-            TypedAST, TypedBlock, TypedExpr, TypedExprKind, TypedFunc, TypedMatchArm,
-            TypedRecordField, TypedStmt, TypedStmtKind,
+            TypedAST, TypedExpr, TypedExprKind, TypedRecordField, TypedStmt, TypedStmtKind,
         },
         types::{TypeEntry, Types},
     },
@@ -197,7 +195,7 @@ impl SpecializationPass {
             callee_ty,
             type_args,
             args,
-            mut callee_sym,
+            ..
         } = expr.kind
         else {
             unreachable!()
@@ -238,13 +236,12 @@ impl SpecializationPass {
                 .copied()
         {
             let specialized_init = self.specialize(&init_sym, &specializations);
-            callee_sym = Some(specialized_init);
             expr.kind = TypedExprKind::Call {
                 callee: callee.into(),
                 callee_ty,
                 type_args,
                 args: args.into_iter().map(|i| self.visit_expr(i)).try_collect()?,
-                callee_sym,
+                callee_sym: Some(specialized_init),
             };
         } else if matches!(callee.kind, TypedExprKind::Call { .. }) {
             // Callee is itself a call expression (e.g., b()() where b() returns a function)
@@ -267,7 +264,7 @@ impl SpecializationPass {
             self.current_specializations.push(specializations.clone());
             let caller = self.symbol_for_callee(&callee, &expr.ty, &specializations)?;
             let mut specialized_callee = self.visit_expr(callee.clone())?;
-            callee_sym = Some(self.specialize(&caller, &specializations));
+            let callee_sym = self.specialize(&caller, &specializations);
             self.specialize_callees(caller, &specializations)?;
             self.current_specializations.pop();
 
@@ -290,11 +287,11 @@ impl SpecializationPass {
                     specialized_callee = TypedExpr {
                         id: callee.id,
                         ty: callee.ty,
-                        kind: TypedExprKind::Variable(callee_sym.unwrap_or_else(|| unreachable!())),
+                        kind: TypedExprKind::Variable(callee_sym),
                     };
                 }
             } else if matches!(callee.kind, TypedExprKind::Variable(..)) {
-                callee.kind = TypedExprKind::Variable(callee_sym.unwrap_or_else(|| unreachable!()));
+                callee.kind = TypedExprKind::Variable(callee_sym);
             }
 
             expr.kind = TypedExprKind::Call {
@@ -302,7 +299,7 @@ impl SpecializationPass {
                 callee_ty,
                 type_args,
                 args: args.into_iter().map(|i| self.visit_expr(i)).try_collect()?,
-                callee_sym,
+                callee_sym: Some(callee_sym),
             };
         }
 

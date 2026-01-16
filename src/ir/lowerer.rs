@@ -9,7 +9,6 @@ use crate::ir::ir_ty::IrTy;
 use crate::ir::monomorphizer::uncurry_function;
 use crate::ir::value::{Addr, RecordId};
 use crate::label::Label;
-use crate::name_resolution::symbol::set_symbol_names;
 use crate::node_kinds::inline_ir_instruction::{InlineIRInstructionKind, TypedInlineIRInstruction};
 use crate::node_kinds::type_annotation::TypeAnnotation;
 use crate::types::row::Row;
@@ -977,7 +976,12 @@ impl<'a> Lowerer<'a> {
             TypedExprKind::LiteralString(val) => self.lower_string(expr, val, bind),
             TypedExprKind::Tuple(typed_exprs) => self.lower_tuple(expr.id, typed_exprs, bind),
             TypedExprKind::Block(typed_block) => self.lower_block(typed_block, bind),
-            TypedExprKind::Call { callee, args, callee_sym, .. } => self.lower_call(expr, callee, args, callee_sym.as_ref(), bind),
+            TypedExprKind::Call {
+                callee,
+                args,
+                callee_sym,
+                ..
+            } => self.lower_call(expr, callee, args, callee_sym.as_ref(), bind),
             TypedExprKind::Member { receiver, label } => {
                 self.lower_member(expr, &Some(receiver.clone()), label, None, bind)
             }
@@ -2163,13 +2167,13 @@ impl<'a> Lowerer<'a> {
             .get_index_of(variant_name)
             .unwrap_or_else(|| panic!("did not get tag for {enum_symbol:?} {variant_name:?}"));
 
-        let enum_entry = self
+        let _enum_entry = self
             .typed
             .types
             .get_symbol(enum_symbol)
             .unwrap_or_else(|| panic!("did not get enum entry {enum_symbol:?}"))
             .clone();
-        let init_entry = self
+        let _init_entry = self
             .typed
             .types
             .get_symbol(&constructor_sym)
@@ -2389,7 +2393,7 @@ impl<'a> Lowerer<'a> {
 
         // Extract return type from the initializer function
         let mut params = init_entry.as_mono_ty().clone().uncurry_params();
-        let ret = params.pop().expect("did not get init ret");
+        let _ret = params.pop().expect("did not get init ret");
 
         let Ty::Constructor { box ret, .. } = &callee.ty else {
             unreachable!()
@@ -2448,7 +2452,14 @@ impl<'a> Lowerer<'a> {
         }
 
         if let TypedExprKind::Constructor(name, ..) = &callee.kind {
-            return self.lower_constructor_call(call_expr.id, name, callee, arg_vals, dest, callee_sym.copied());
+            return self.lower_constructor_call(
+                call_expr.id,
+                name,
+                callee,
+                arg_vals,
+                dest,
+                callee_sym.copied(),
+            );
         }
 
         if let TypedExprKind::Member {
@@ -2571,9 +2582,11 @@ impl<'a> Lowerer<'a> {
                 }
             };
 
-            callee_sym.ok_or_else(|| IRError::WitnessNotFound(format!(
-                "could not determine callee sym for {receiver:?}.{label:?}"
-            )))?
+            callee_sym.ok_or_else(|| {
+                IRError::WitnessNotFound(format!(
+                    "could not determine callee sym for {receiver:?}.{label:?}"
+                ))
+            })?
         };
 
         self.push_instr(Instruction::Call {
@@ -3103,36 +3116,6 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    fn find_function(&self, symbol: &Symbol) -> Option<&PolyFunction> {
-        let module_id = symbol.module_id().unwrap_or(ModuleId::Current);
-        if module_id == self.config.module_id || (module_id == ModuleId::Current) {
-            self.functions.get(symbol)
-        } else {
-            let program = self.config.modules.program_for(module_id)?;
-            program.polyfunctions.get(symbol)
-        }
-    }
-
-    fn resolve_name(&self, sym: &Symbol) -> Option<&str> {
-        if matches!(sym, Symbol::Main) {
-            return Some("main");
-        }
-
-        if matches!(sym, Symbol::Library) {
-            return Some("lib");
-        }
-
-        if let Some(string) = self.typed.resolved_names.symbol_names.get(sym) {
-            return Some(string);
-        }
-
-        if let Some(string) = self.config.modules.resolve_name(sym) {
-            return Some(string);
-        }
-
-        None
-    }
-
     fn parsed_ty(&mut self, ty: &TypeAnnotation) -> Ty {
         let sym = ty.symbol().expect("did not get ty symbol");
         let entry = self
@@ -3179,14 +3162,6 @@ impl<'a> Lowerer<'a> {
                 Value::RawBuffer(items.to_vec())
             }
             crate::node_kinds::inline_ir_instruction::Value::Bind(i) => binds[*i].clone(),
-        }
-    }
-
-    fn symbol_for_ty(&self, ty: &Ty) -> Option<Symbol> {
-        match ty {
-            Ty::Primitive(symbol) => Some(*symbol),
-            Ty::Nominal { symbol, .. } => Some(*symbol),
-            _ => None,
         }
     }
 

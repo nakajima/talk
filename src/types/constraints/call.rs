@@ -57,11 +57,9 @@ impl Call {
             if let Some(receiver_ty) = &self.receiver
                 && let InferTy::Var { .. } = session.apply(receiver_ty.clone(), &mut context.substitutions)
                 && let InferTy::Nominal { .. } = &returns
-            {
-                if let Ok(metas) = unify(receiver_ty, &returns, context, session) {
+                && let Ok(metas) = unify(receiver_ty, &returns, context, session) {
                     return SolveResult::Solved(metas);
                 }
-            }
 
             // We don't know the callee yet, defer
             return SolveResult::Defer(DeferralReason::WaitingOnMeta(Meta::Ty(*id)));

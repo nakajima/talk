@@ -163,7 +163,10 @@ impl Conforms {
 
         // Build up some substitutions so we're not playing with the protocol's type params anymore
         let mut substitutions: FxHashMap<InferTy, InferTy> = FxHashMap::default();
-        substitutions.insert(InferTy::Param(protocol_self_id, protocol_self_bounds.clone()), self.ty.clone());
+        substitutions.insert(
+            InferTy::Param(protocol_self_id, protocol_self_bounds.clone()),
+            self.ty.clone(),
+        );
 
         let mut deferral_reasons = vec![];
 
@@ -293,7 +296,7 @@ impl Conforms {
         session: &mut TypeSession,
         protocol_id: ProtocolId,
         protocol_self_id: &TypeParamId,
-        protocol_self_bounds: &Vec<ProtocolId>,
+        protocol_self_bounds: &[ProtocolId],
         conforming_ty_sym: &Symbol,
         projections: FxHashMap<Label, InferTy>,
         ty_substitutions: FxHashMap<InferTy, InferTy>,
@@ -324,7 +327,7 @@ impl Conforms {
                     returns,
                     ..
                 } = predicate
-                    && base == InferTy::Param(*protocol_self_id, protocol_self_bounds.clone())
+                    && base == InferTy::Param(*protocol_self_id, protocol_self_bounds.to_owned())
                     && let Some(projection) = projections.get(&label)
                     && let Some(substitution) = substitutions.ty.get(projection).cloned()
                 {

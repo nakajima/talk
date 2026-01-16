@@ -17,10 +17,7 @@ pub mod tests {
             scheme::{ForAll, Scheme},
             ty::Ty,
             type_error::TypeError,
-            typed_ast::{
-                TypedAST, TypedDeclKind, TypedExpr, TypedExprKind, TypedNode, TypedStmt,
-                TypedStmtKind,
-            },
+            typed_ast::{TypedAST, TypedExpr, TypedExprKind, TypedStmt, TypedStmtKind},
             types::{TypeEntry, Types},
         },
     };

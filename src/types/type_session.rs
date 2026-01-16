@@ -586,7 +586,9 @@ impl TypeSession {
                             param_id
                         });
                     foralls.insert(ForAll::Ty(param_id));
-                    substitutions.ty.insert(*id, InferTy::Param(param_id, vec![]));
+                    substitutions
+                        .ty
+                        .insert(*id, InferTy::Param(param_id, vec![]));
                 }
                 InferTy::Record(box InferRow::Var(id)) => {
                     let levels = self.meta_levels.borrow();
@@ -678,14 +680,6 @@ impl TypeSession {
             predicates.into_iter().collect(),
             ty,
         ))
-    }
-
-    pub(super) fn resolve_name(&self, sym: &Symbol) -> Option<&str> {
-        if let Some(name) = self.resolved_names.symbol_names.get(sym) {
-            return Some(name);
-        }
-
-        self.modules.resolve_name(sym).map(|x| x.as_str())
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]

@@ -3,18 +3,14 @@ use derive_visitor::{DriveMut, VisitorMut};
 use crate::{
     ast::{AST, Parsed},
     id_generator::IDGenerator,
-    label::Label,
-    name::Name,
     node_id::{FileID, NodeID},
     node_kinds::{
-        call_arg::CallArg,
         decl::{Decl, DeclKind},
-        expr::{Expr, ExprKind},
+        expr::Expr,
         parameter::Parameter,
         type_annotation::{TypeAnnotation, TypeAnnotationKind},
     },
     span::Span,
-    types::constraints::member::Member,
 };
 
 #[derive(VisitorMut)]
@@ -37,7 +33,7 @@ impl PrependSelfToMethods {
         _ = std::mem::replace(&mut ast.node_ids, pass.node_ids);
     }
 
-    fn enter_expr(&mut self, expr: &mut Expr) {
+    fn enter_expr(&mut self, _expr: &mut Expr) {
         // if let ExprKind::Call {
         //     callee:
         //         box Expr {

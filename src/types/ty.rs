@@ -2,7 +2,6 @@ use std::hash::Hash;
 
 use crate::{
     compiling::module::ModuleId,
-    ir::lowerer::curry_ty,
     label::Label,
     name::Name,
     name_resolution::symbol::{ProtocolId, Symbol},
@@ -316,17 +315,17 @@ impl Ty {
             }
             (
                 Ty::Constructor {
-                    params: constructor_params,
-                    ret: box constructor_ret,
+                    params: _constructor_params,
+                    ret: box _constructor_ret,
                     ..
                 },
-                Ty::Func(func_params, func_ret, _),
+                Ty::Func(_func_params, _func_ret, _),
             )
             | (
-                Ty::Func(func_params, func_ret, _),
+                Ty::Func(_func_params, _func_ret, _),
                 Ty::Constructor {
-                    params: constructor_params,
-                    ret: box constructor_ret,
+                    params: _constructor_params,
+                    ret: box _constructor_ret,
                     ..
                 },
             ) => (),
