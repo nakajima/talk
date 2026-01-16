@@ -3,7 +3,10 @@ use rustc_hash::FxHashMap;
 
 use crate::{
     compiling::module::ModuleId,
-    name_resolution::symbol::Symbol,
+    name_resolution::{
+        call_tree::{CallTree, RawCallee},
+        symbol::Symbol,
+    },
     node_id::NodeID,
     types::{
         infer_ty::InferTy,
@@ -97,6 +100,7 @@ pub struct Types {
     pub types_by_symbol: FxHashMap<Symbol, TypeEntry>,
     pub catalog: TypeCatalog<Ty>,
     pub(crate) match_plans: FxHashMap<NodeID, MatchPlan>,
+    pub call_tree: CallTree<RawCallee>,
 }
 
 impl Types {
@@ -126,6 +130,7 @@ impl Types {
                 .collect(),
             catalog: self.catalog.import_as(module_id),
             match_plans: self.match_plans,
+            call_tree: self.call_tree, // TODO: may need import_as for symbols
         }
     }
 }

@@ -241,7 +241,7 @@ impl Predicate<InferTy> {
                 id,
                 instantiate_ty(
                     id,
-                    InferTy::Param(param),
+                    InferTy::Param(param, vec![protocol_id]),
                     context.instantiations_mut(),
                     level,
                 ),

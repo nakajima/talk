@@ -272,7 +272,7 @@ impl Constraint {
                 rhs: session.apply(equals.rhs.clone(), substitutions),
             },
             Self::Conforms(conforms) => {
-                let InferTy::Param(param) = session.apply(conforms.ty.clone(), substitutions)
+                let InferTy::Param(param, _) = session.apply(conforms.ty.clone(), substitutions)
                 else {
                     // If the type resolved to a concrete type (not a type parameter),
                     // we can't generalize this constraint - it should have already been

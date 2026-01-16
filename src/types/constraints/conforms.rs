@@ -53,7 +53,7 @@ impl Conforms {
             }
             InferTy::Primitive(symbol) => *symbol,
             InferTy::Nominal { symbol, .. } => *symbol,
-            InferTy::Param(param_id) => {
+            InferTy::Param(param_id, _) => {
                 for given in &context.givens {
                     if let Predicate::Conforms {
                         param,
@@ -152,7 +152,7 @@ impl Conforms {
         };
 
         let Some(EnvEntry::Scheme(Scheme {
-            ty: InferTy::Param(protocol_self_id),
+            ty: InferTy::Param(protocol_self_id, protocol_self_bounds),
             ..
         })) = session.lookup(&protocol_id.into())
         else {
@@ -163,7 +163,7 @@ impl Conforms {
 
         // Build up some substitutions so we're not playing with the protocol's type params anymore
         let mut substitutions: FxHashMap<InferTy, InferTy> = FxHashMap::default();
-        substitutions.insert(InferTy::Param(protocol_self_id), self.ty.clone());
+        substitutions.insert(InferTy::Param(protocol_self_id, protocol_self_bounds.clone()), self.ty.clone());
 
         let mut deferral_reasons = vec![];
 
@@ -185,7 +185,7 @@ impl Conforms {
                     protocol_id: id,
                 } = predicate
                     && id == Some(protocol_id)
-                    && base == InferTy::Param(protocol_self_id)
+                    && base == InferTy::Param(protocol_self_id, protocol_self_bounds.clone())
                 {
                     protocol_projections.insert(label, returns);
                 }
@@ -262,6 +262,7 @@ impl Conforms {
             session,
             protocol_id,
             &protocol_self_id,
+            &protocol_self_bounds,
             &conforming_ty_sym,
             protocol_projections,
             substitutions,
@@ -292,6 +293,7 @@ impl Conforms {
         session: &mut TypeSession,
         protocol_id: ProtocolId,
         protocol_self_id: &TypeParamId,
+        protocol_self_bounds: &Vec<ProtocolId>,
         conforming_ty_sym: &Symbol,
         projections: FxHashMap<Label, InferTy>,
         ty_substitutions: FxHashMap<InferTy, InferTy>,
@@ -322,7 +324,7 @@ impl Conforms {
                     returns,
                     ..
                 } = predicate
-                    && base == InferTy::Param(*protocol_self_id)
+                    && base == InferTy::Param(*protocol_self_id, protocol_self_bounds.clone())
                     && let Some(projection) = projections.get(&label)
                     && let Some(substitution) = substitutions.ty.get(projection).cloned()
                 {

@@ -977,7 +977,7 @@ impl<'a> Lowerer<'a> {
             TypedExprKind::LiteralString(val) => self.lower_string(expr, val, bind),
             TypedExprKind::Tuple(typed_exprs) => self.lower_tuple(expr.id, typed_exprs, bind),
             TypedExprKind::Block(typed_block) => self.lower_block(typed_block, bind),
-            TypedExprKind::Call { callee, args, .. } => self.lower_call(expr, callee, args, bind),
+            TypedExprKind::Call { callee, args, callee_sym, .. } => self.lower_call(expr, callee, args, callee_sym.as_ref(), bind),
             TypedExprKind::Member { receiver, label } => {
                 self.lower_member(expr, &Some(receiver.clone()), label, None, bind)
             }
@@ -2346,28 +2346,30 @@ impl<'a> Lowerer<'a> {
         callee: &TypedExpr<Ty>,
         mut args: Vec<Value>,
         dest: Register,
+        callee_sym: Option<Symbol>,
     ) -> Result<(Value, Ty), IRError> {
         let record_dest = self.next_register();
 
-        // Look up the initializer and specialize it using the already-computed instantiations
-        let init_sym = self
-            .typed
-            .types
-            .catalog
-            .initializers
-            .get(name)
-            .unwrap_or_else(|| panic!("didn't get initializers for {name:?}"))
-            .get(&Label::Named("init".into()))
-            .copied()
-            .unwrap_or_else(|| {
-                self.config
-                    .modules
-                    .lookup_initializers(name)
-                    .unwrap_or_else(|| panic!("did not get initializers for {name:?}"))
-                    .get(&Label::Named("init".into()))
-                    .copied()
-                    .expect("did not get init")
-            });
+        // Look up the initializer - use provided callee_sym (specialized) if available
+        let init_sym = callee_sym.unwrap_or_else(|| {
+            self.typed
+                .types
+                .catalog
+                .initializers
+                .get(name)
+                .unwrap_or_else(|| panic!("didn't get initializers for {name:?}"))
+                .get(&Label::Named("init".into()))
+                .copied()
+                .unwrap_or_else(|| {
+                    self.config
+                        .modules
+                        .lookup_initializers(name)
+                        .unwrap_or_else(|| panic!("did not get initializers for {name:?}"))
+                        .get(&Label::Named("init".into()))
+                        .copied()
+                        .expect("did not get init")
+                })
+        });
 
         let init_entry = self
             .typed
@@ -2423,6 +2425,7 @@ impl<'a> Lowerer<'a> {
         call_expr: &TypedExpr<Ty>,
         callee: &TypedExpr<Ty>,
         args: &[TypedExpr<Ty>],
+        callee_sym: Option<&Symbol>,
         bind: Bind,
     ) -> Result<(Value, Ty), IRError> {
         let dest = self.ret(bind);
@@ -2445,7 +2448,7 @@ impl<'a> Lowerer<'a> {
         }
 
         if let TypedExprKind::Constructor(name, ..) = &callee.kind {
-            return self.lower_constructor_call(call_expr.id, name, callee, arg_vals, dest);
+            return self.lower_constructor_call(call_expr.id, name, callee, arg_vals, dest, callee_sym.copied());
         }
 
         if let TypedExprKind::Member {
@@ -2458,7 +2461,7 @@ impl<'a> Lowerer<'a> {
                 callee,
                 receiver.clone(),
                 member,
-                None,
+                callee_sym.copied(),
                 args,
                 arg_vals,
                 dest,
@@ -2538,35 +2541,39 @@ impl<'a> Lowerer<'a> {
             args.insert(0, receiver_ir);
         }
 
-        let callee_sym = match &receiver.ty {
-            Ty::Primitive(sym) => self
-                .typed
-                .types
-                .catalog
-                .lookup_member(sym, label)
-                .map(|s| s.0),
-            Ty::Nominal { symbol, .. } => self
-                .typed
-                .types
-                .catalog
-                .lookup_member(symbol, label)
-                .map(|s| s.0),
-            Ty::Constructor {
-                name: Name::Resolved(sym, ..),
-                ..
-            } => self.typed.types.catalog.lookup_static_member(sym, label),
-            _ => {
-                return Err(IRError::WitnessNotFound(format!(
-                    "could not determine callee sym for {:?}.{label:?}",
-                    receiver.ty
-                )));
-            }
-        };
+        // Use the provided callee_sym if available (from specialization pass),
+        // otherwise look it up from the receiver type
+        let sym = if let Some(specialized_sym) = witness {
+            specialized_sym
+        } else {
+            let callee_sym = match &receiver.ty {
+                Ty::Primitive(sym) => self
+                    .typed
+                    .types
+                    .catalog
+                    .lookup_member(sym, label)
+                    .map(|s| s.0),
+                Ty::Nominal { symbol, .. } => self
+                    .typed
+                    .types
+                    .catalog
+                    .lookup_member(symbol, label)
+                    .map(|s| s.0),
+                Ty::Constructor {
+                    name: Name::Resolved(sym, ..),
+                    ..
+                } => self.typed.types.catalog.lookup_static_member(sym, label),
+                _ => {
+                    return Err(IRError::WitnessNotFound(format!(
+                        "could not determine callee sym for {:?}.{label:?}",
+                        receiver.ty
+                    )));
+                }
+            };
 
-        let Some(sym) = callee_sym else {
-            return Err(IRError::WitnessNotFound(format!(
+            callee_sym.ok_or_else(|| IRError::WitnessNotFound(format!(
                 "could not determine callee sym for {receiver:?}.{label:?}"
-            )));
+            )))?
         };
 
         self.push_instr(Instruction::Call {

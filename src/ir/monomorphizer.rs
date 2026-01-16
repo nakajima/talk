@@ -16,6 +16,7 @@ use crate::{
     name::Name,
     name_resolution::symbol::Symbol,
     types::{
+        conformance::ConformanceKey,
         passes::specialization_pass::SpecializedCallee,
         ty::{Specializations, Ty},
         typed_ast::TypedAST,
@@ -112,7 +113,34 @@ impl<'a> Monomorphizer<'a> {
                         result.insert(original, imported);
                     }
                 }
-                continue; // Skip normal import logic for synthesized symbols                                                              
+                continue; // Skip normal import logic for synthesized symbols
+            }
+
+            // Check if this callee has specializations that need to be generated
+            // This handles the case where the IR has the original symbol but we need
+            // a specialized version
+            if let Some(specialization_syms) = self.specializations.get(callee).cloned() {
+                for specialized_sym in specialization_syms {
+                    if result.contains_key(&specialized_sym) {
+                        continue; // Already generated
+                    }
+                    let Some(specialized_callee) = self.specialized_callees.get(&specialized_sym).cloned() else {
+                        continue;
+                    };
+                    // Get the poly function from external module if needed
+                    if let Some(module_id) = callee.module_id()
+                        && module_id != self.config.module_id
+                        && let Some(program) = self.config.modules.program_for(module_id)
+                        && let Some(poly_func) = program.polyfunctions.get(callee).cloned()
+                    {
+                        self.generate_specialized_function(
+                            &poly_func,
+                            specialized_sym,
+                            &specialized_callee,
+                            result,
+                        );
+                    }
+                }
             }
 
             let Some(module_id) = callee.module_id() else {
@@ -152,6 +180,16 @@ impl<'a> Monomorphizer<'a> {
             self.generate_specialized_function(&func, specialization, &specialized_callee, result);
         }
 
+        // Extract receiver type from function signature for instance methods
+        let receiver_ty = if let Ty::Func(box param, ..) = &func.ty {
+            match param {
+                Ty::Primitive(_) | Ty::Nominal { .. } => Some(param.clone()),
+                _ => None,
+            }
+        } else {
+            None
+        };
+
         let func = Function {
             name: func.name,
             ty: self.monomorphize_ty(func.ty, &Default::default()),
@@ -159,7 +197,7 @@ impl<'a> Monomorphizer<'a> {
             blocks: func
                 .blocks
                 .into_iter()
-                .map(|b| self.monomorphize_block(b, &Default::default()))
+                .map(|b| self.monomorphize_block(b, &Default::default(), receiver_ty.as_ref()))
                 .collect(),
             register_count: func.register_count,
         };
@@ -172,6 +210,7 @@ impl<'a> Monomorphizer<'a> {
         &mut self,
         block: BasicBlock<Ty>,
         substitutions: &Specializations,
+        receiver_ty: Option<&Ty>,
     ) -> BasicBlock<IrTy> {
         BasicBlock {
             id: block.id,
@@ -187,7 +226,7 @@ impl<'a> Monomorphizer<'a> {
             instructions: block
                 .instructions
                 .into_iter()
-                .map(|i| self.monomorphize_instruction(i, substitutions))
+                .map(|i| self.monomorphize_instruction(i, substitutions, receiver_ty))
                 .collect(),
             terminator: self.monomorphize_terminator(block.terminator, substitutions),
         }
@@ -215,6 +254,7 @@ impl<'a> Monomorphizer<'a> {
         &mut self,
         instruction: Instruction<Ty>,
         substitutions: &Specializations,
+        receiver_ty: Option<&Ty>,
     ) -> Instruction<IrTy> {
         // Handle Call instructions specially to substitute MethodRequirement callees
         if let Instruction::Call {
@@ -225,30 +265,97 @@ impl<'a> Monomorphizer<'a> {
             meta,
         } = instruction
         {
-            // let new_callee = match &callee {
-            //     Value::Func(sym @ Symbol::MethodRequirement(_)) => {
-            //         if let Some(impl_sym) = substitutions.witnesses.get(sym) {
-            //             Value::Func(*impl_sym)
-            //         } else {
-            //             if !substitutions.witnesses.is_empty() {
-            //                 tracing::error!("did not get witness for {sym:?}, {substitutions:?}");
-            //             }
-            //             callee
-            //         }
-            //     }
-            //     _ => callee,
-            // };
+            let new_callee = match &callee {
+                Value::Func(sym @ Symbol::MethodRequirement(_)) => {
+                    if let Some(witness) =
+                        self.resolve_method_requirement(sym, substitutions, receiver_ty)
+                    {
+                        Value::Func(witness)
+                    } else {
+                        callee
+                    }
+                }
+                // Check if callee has specializations in a non-generic function context
+                // This handles calls like n.lte(1) where n: Int in a non-generic function
+                // For specialized functions (substitutions non-empty), the specialization pass
+                // already handled this
+                // Exclude Void receiver (like main function) which has no meaningful receiver type
+                Value::Func(sym) if substitutions.is_empty()
+                    && receiver_ty.is_some()
+                    && !matches!(receiver_ty, Some(Ty::Primitive(Symbol::Void))) => {
+                    if let Some(specializations) = self.specializations.get(sym)
+                        && specializations.len() == 1
+                    {
+                        Value::Func(specializations[0])
+                    } else {
+                        callee
+                    }
+                }
+                _ => callee,
+            };
 
             return Instruction::Call {
                 dest,
                 ty: self.monomorphize_ty(ty, substitutions),
-                callee,
+                callee: new_callee,
                 args,
                 meta,
             };
         }
 
         instruction.map_type(|ty| self.monomorphize_ty(ty, substitutions))
+    }
+
+    /// Resolve a method requirement to a concrete witness implementation
+    fn resolve_method_requirement(
+        &self,
+        method_req: &Symbol,
+        substitutions: &Specializations,
+        receiver_ty: Option<&Ty>,
+    ) -> Option<Symbol> {
+        // Find the protocol for this method requirement
+        let protocol_sym = self.types.catalog.protocol_for_method_requirement(method_req)?;
+        let Symbol::Protocol(protocol_id) = protocol_sym else {
+            return None;
+        };
+
+        // Find the label for this method requirement
+        let method_reqs = self.types.catalog.method_requirements.get(&protocol_sym)?;
+        let label = method_reqs
+            .iter()
+            .find_map(|(label, sym)| if sym == method_req { Some(label.clone()) } else { None })?;
+
+        // Collect candidate types: from substitutions plus explicit receiver type
+        let mut candidates: Vec<&Ty> = substitutions.ty.values().collect();
+        if let Some(recv) = receiver_ty {
+            candidates.push(recv);
+        }
+
+        // Look through candidates to find a conforming type
+        for concrete_ty in candidates {
+            let conforming_sym = match concrete_ty {
+                Ty::Nominal { symbol, .. } => *symbol,
+                Ty::Primitive(sym) => *sym,
+                _ => continue,
+            };
+
+            let key = ConformanceKey {
+                conforming_id: conforming_sym,
+                protocol_id,
+            };
+
+            if let Some(conformance) = self.types.catalog.conformances.get(&key) {
+                // Try to find witness in methods first, then requirements
+                if let Some(witness) = conformance.witnesses.methods.get(&label) {
+                    return Some(*witness);
+                }
+                if let Some(witness) = conformance.witnesses.requirements.get(method_req) {
+                    return Some(*witness);
+                }
+            }
+        }
+
+        None
     }
 
     #[allow(clippy::only_used_in_recursion)]
@@ -265,13 +372,12 @@ impl<'a> Monomorphizer<'a> {
                 Symbol::Byte => IrTy::Byte,
                 _ => unreachable!(),
             },
-            Ty::Param(param) => {
+            Ty::Param(param, _) => {
                 if let Some(replaced) = substitutions.ty.get(&param).cloned() {
                     self.monomorphize_ty(replaced, substitutions)
                 } else {
-                    //unreachable!("did not specialize {ty:?}");
-
-                    #[allow(unreachable_code)]
+                    // Type parameter wasn't substituted - this happens for top-level generic struct access
+                    // where the type should have been resolved during type inference but wasn't
                     IrTy::Void
                 }
             }
@@ -349,7 +455,12 @@ impl<'a> Monomorphizer<'a> {
                         .unwrap_or_else(|| unreachable!("didn't get nominal: {symbol:?}"))
                 };
 
-                let properties = nominal.substitute_properties(&type_args);
+                // First monomorphize type_args to resolve any type parameters
+                let monomorphized_type_args: Vec<Ty> = type_args
+                    .iter()
+                    .map(|arg| substitutions.apply(arg.clone()))
+                    .collect();
+                let properties = nominal.substitute_properties(&monomorphized_type_args);
 
                 if matches!(symbol, Symbol::Enum(..)) {
                     IrTy::Record(Some(symbol), vec![IrTy::Int])
@@ -373,6 +484,14 @@ impl<'a> Monomorphizer<'a> {
         specialization: &SpecializedCallee,
         result: &mut IndexMap<Symbol, Function<IrTy>>,
     ) {
+        // Get receiver type from substitutions (first concrete type substitution)
+        let receiver_ty = specialization
+            .specializations
+            .ty
+            .values()
+            .find(|ty| matches!(ty, Ty::Primitive(_) | Ty::Nominal { .. }))
+            .cloned();
+
         let specialized_func = Function {
             name: specialized_name,
             ty: self.monomorphize_ty(func.ty.clone(), &specialization.specializations),
@@ -382,7 +501,9 @@ impl<'a> Monomorphizer<'a> {
                 .blocks
                 .clone()
                 .into_iter()
-                .map(|b| self.monomorphize_block(b, &specialization.specializations))
+                .map(|b| {
+                    self.monomorphize_block(b, &specialization.specializations, receiver_ty.as_ref())
+                })
                 .collect(),
         };
 

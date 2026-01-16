@@ -107,7 +107,7 @@ impl Projection {
                 // was recorded for this conformance, equate to it. Otherwise leave unsolved.
                 if let Some(witness) = conf.witnesses.associated_types.get(&self.label) {
                     let witness = session.apply(witness.clone(), &mut context.substitutions);
-                    if !matches!(witness, InferTy::Param(_)) {
+                    if !matches!(witness, InferTy::Param(..)) {
                         let group = constraints.copy_group(self.id);
                         constraints.wants_equals_at(self.node_id, result, witness, &group);
                         return SolveResult::Solved(Default::default());

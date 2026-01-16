@@ -92,7 +92,7 @@ impl<'a> TypeFormatter<'a> {
                 Symbol::Byte => "Byte".to_string(),
                 _ => symbol.to_string(),
             },
-            Ty::Param(id) => ctx
+            Ty::Param(id, _) => ctx
                 .type_param_names
                 .get(id)
                 .cloned()

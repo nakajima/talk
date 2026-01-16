@@ -559,7 +559,7 @@ pub mod tests {
                                 Some(Symbol::Struct(StructId::from(1))),
                                 vec![IrTy::Int]
                             ),
-                            callee: Value::Func(Symbol::from(SynthesizedId::from(1))),
+                            callee: Value::Func(Symbol::from(SynthesizedId::from(2))),
                             args: vec![Register(2).into(), Register(1).into()].into(),
                             meta: meta(),
                         },

@@ -405,7 +405,7 @@ pub(super) fn unify(
             Ok(result)
         }
         (InferTy::Rigid(lhs), InferTy::Rigid(rhs)) if lhs == rhs => Ok(Default::default()),
-        (InferTy::Param(lhs), InferTy::Param(rhs)) if lhs == rhs => Ok(Default::default()),
+        (InferTy::Param(lhs, _), InferTy::Param(rhs, _)) if lhs == rhs => Ok(Default::default()),
         (
             InferTy::Constructor {
                 params, box ret, ..
@@ -661,7 +661,7 @@ pub(super) fn instantiate_ty(
 
     ty.mapping(
         &mut |t| {
-            if let InferTy::Param(param) = t
+            if let InferTy::Param(param, _) = t
                 && let Some(metas) = substitutions.ty.get(&node_id)
                 && let Some(meta) = metas.get(&param)
             {

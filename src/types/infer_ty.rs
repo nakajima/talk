@@ -97,7 +97,7 @@ impl UnifyValue for Level {
 #[derive(PartialEq, Eq, Clone, Hash, Drive, DriveMut)]
 pub enum InferTy {
     Primitive(#[drive(skip)] Symbol),
-    Param(#[drive(skip)] TypeParamId),
+    Param(#[drive(skip)] TypeParamId, #[drive(skip)] Vec<ProtocolId>),
     Rigid(#[drive(skip)] SkolemId),
     Var {
         #[drive(skip)]
@@ -187,7 +187,7 @@ impl From<InferTy> for Ty {
     fn from(value: InferTy) -> Self {
         match value {
             InferTy::Primitive(primitive) => Ty::Primitive(primitive),
-            InferTy::Param(type_param_id) => Ty::Param(type_param_id),
+            InferTy::Param(type_param_id, bounds) => Ty::Param(type_param_id, bounds),
             InferTy::Constructor {
                 name,
                 params,
@@ -208,8 +208,8 @@ impl From<InferTy> for Ty {
                 symbol,
                 type_args: type_args.into_iter().map(|p| p.into()).collect(),
             },
-            InferTy::Projection { .. } => Ty::Param(420420.into()), // FIXME
-            _ => Ty::Param(420420.into()),
+            InferTy::Projection { .. } => Ty::Param(420420.into(), vec![]), // FIXME
+            _ => Ty::Param(420420.into(), vec![]),
         }
     }
 }
@@ -218,7 +218,7 @@ impl From<Ty> for InferTy {
     fn from(value: Ty) -> Self {
         match value {
             Ty::Primitive(primitive) => InferTy::Primitive(primitive),
-            Ty::Param(type_param_id) => InferTy::Param(type_param_id),
+            Ty::Param(type_param_id, bounds) => InferTy::Param(type_param_id, bounds),
             Ty::Constructor {
                 name,
                 params,
@@ -383,7 +383,7 @@ impl InferTy {
 
         match self {
             InferTy::Error(..) => {}
-            InferTy::Param(_) => {}
+            InferTy::Param(..) => {}
             InferTy::Var { .. } => {
                 out.insert(self.clone());
             }
@@ -443,7 +443,7 @@ impl InferTy {
     pub fn collect_foralls(&self) -> IndexSet<ForAll> {
         let mut result: IndexSet<ForAll> = Default::default();
         match self {
-            InferTy::Param(id) => {
+            InferTy::Param(id, _) => {
                 result.insert(ForAll::Ty(*id));
             }
             InferTy::Error(..) => (),
@@ -485,7 +485,7 @@ impl std::fmt::Debug for InferTy {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             InferTy::Error(err) => write!(f, "Error Ty: {err}"),
-            InferTy::Param(id) => write!(f, "typeparam(α{})", id.0),
+            InferTy::Param(id, _) => write!(f, "typeparam(α{})", id.0),
             InferTy::Rigid(id) => write!(f, "rigid(α{})", id.0),
             InferTy::Var { id, level } => write!(f, "meta(α{}, {})", id.0, level.0),
             InferTy::Primitive(primitive) => write!(f, "{primitive:?}"),
@@ -531,7 +531,7 @@ impl std::fmt::Display for InferTy {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             InferTy::Error(..) => write!(f, "error"),
-            InferTy::Param(id) => write!(f, "T{}", id.0),
+            InferTy::Param(id, _) => write!(f, "T{}", id.0),
             InferTy::Rigid(id) => write!(f, "^T{}", id.0),
             InferTy::Var { id, .. } => write!(f, "?T{}", id.0),
             InferTy::Primitive(primitive) => write!(f, "{}", format_symbol_name(*primitive)),

@@ -255,7 +255,7 @@ pub mod tests {
         };
 
         let TypeEntry::Poly(Scheme {
-            ty: Ty::Func(box Ty::Param(type_param), ..),
+            ty: Ty::Func(box Ty::Param(type_param, _), ..),
             ..
         }) = types
             .get_symbol(&Symbol::Global(GlobalId::from(1)))
@@ -1624,7 +1624,7 @@ pub mod tests {
             ty(2, &ast, &types),
             Ty::Nominal {
                 symbol: EnumId::from(1).into(),
-                type_args: vec![Ty::Param(1.into())],
+                type_args: vec![Ty::Param(1.into(), vec![])],
             }
         );
     }
@@ -2239,7 +2239,8 @@ pub mod tests {
                 .unwrap()
                 .as_mono_ty(),
             Ty::Func(
-                Ty::Param(3.into()).into(),
+                // T has bound B, so the param includes the protocol bound
+                Ty::Param(3.into(), vec![ProtocolId::from(2)]).into(),
                 Ty::Int.into(),
                 Row::Param(5.into()).into()
             )

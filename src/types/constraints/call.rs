@@ -51,6 +51,18 @@ impl Call {
                 self.callee
             );
 
+            // For unqualified variant calls like `.foo(123)`, if we know the return type
+            // is a Nominal and we have an unknown receiver, unify them - the receiver
+            // of a variant constructor is the same type as its return value.
+            if let Some(receiver_ty) = &self.receiver
+                && let InferTy::Var { .. } = session.apply(receiver_ty.clone(), &mut context.substitutions)
+                && let InferTy::Nominal { .. } = &returns
+            {
+                if let Ok(metas) = unify(receiver_ty, &returns, context, session) {
+                    return SolveResult::Solved(metas);
+                }
+            }
+
             // We don't know the callee yet, defer
             return SolveResult::Defer(DeferralReason::WaitingOnMeta(Meta::Ty(*id)));
         }
@@ -151,7 +163,7 @@ impl Call {
                         if let InferTy::Var { id, .. } = t
                             && let Some(param) = session.reverse_instantiations.ty.get(&id)
                         {
-                            return InferTy::Param(*param);
+                            return InferTy::Param(*param, vec![]);
                         }
 
                         t

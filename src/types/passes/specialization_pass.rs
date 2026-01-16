@@ -100,24 +100,22 @@ impl SpecializationPass {
             TypedStmtKind::Continue(expr) => {
                 TypedStmtKind::Continue(expr.map(|e| self.visit_expr(e)).transpose()?)
             }
-            TypedStmtKind::Loop(cond, body) => {
-                TypedStmtKind::Loop(self.visit_expr(cond)?, self.visit_block(body)?)
-            }
-            TypedStmtKind::Handler { effect, func } => TypedStmtKind::Handler {
-                effect,
-                func: self.visit_func(func)?,
-            },
+            TypedStmtKind::Loop(cond, body) => TypedStmtKind::Loop(self.visit_expr(cond)?, body),
             TypedStmtKind::Break => TypedStmtKind::Break,
+            kind => kind,
         };
 
         Ok(stmt)
     }
 
     fn visit_expr(&mut self, mut expr: TypedExpr<Ty>) -> Result<TypedExpr<Ty>, TypeError> {
+        // Apply current specializations to the type of this expression
+        if !self.current_specializations.is_empty() {
+            let specializations = self.collect_specializations();
+            expr.ty = specializations.apply(expr.ty);
+        }
+
         expr.kind = match expr.kind {
-            TypedExprKind::InlineIR(box instr) => {
-                TypedExprKind::InlineIR(self.visit_inline_ir(instr)?.into())
-            }
             TypedExprKind::LiteralArray(items) => TypedExprKind::LiteralArray(
                 items
                     .into_iter()
@@ -130,7 +128,6 @@ impl SpecializationPass {
                     .map(|i| self.visit_expr(i))
                     .try_collect()?,
             ),
-            TypedExprKind::Block(block) => TypedExprKind::Block(self.visit_block(block)?),
             TypedExprKind::CallEffect { effect, args } => TypedExprKind::CallEffect {
                 effect,
                 args: args.into_iter().map(|i| self.visit_expr(i)).try_collect()?,
@@ -144,18 +141,12 @@ impl SpecializationPass {
                 receiver: self.visit_expr(receiver)?.into(),
                 label,
             },
-            TypedExprKind::Func(func) => TypedExprKind::Func(self.visit_func(func)?),
-            TypedExprKind::If(box cond, conseq, alt) => TypedExprKind::If(
-                self.visit_expr(cond)?.into(),
-                self.visit_block(conseq)?,
-                self.visit_block(alt)?,
-            ),
-            TypedExprKind::Match(box scrutinee, arms) => TypedExprKind::Match(
-                self.visit_expr(scrutinee)?.into(),
-                arms.into_iter()
-                    .map(|a| self.visit_match_arm(a))
-                    .try_collect()?,
-            ),
+            TypedExprKind::If(box cond, conseq, alt) => {
+                TypedExprKind::If(self.visit_expr(cond)?.into(), conseq, alt)
+            }
+            TypedExprKind::Match(box scrutinee, arms) => {
+                TypedExprKind::Match(self.visit_expr(scrutinee)?.into(), arms)
+            }
             TypedExprKind::RecordLiteral { fields } => {
                 let mut new_fields: Vec<_> = Default::default();
                 for field in fields {
@@ -174,7 +165,8 @@ impl SpecializationPass {
     }
 
     fn visit_variable(&mut self, name: Symbol) -> Result<TypedExprKind<Ty>, TypeError> {
-        if self.current_specializations.is_empty() {
+        // Don't specialize builtins - they don't have polymorphic implementations
+        if self.current_specializations.is_empty() || matches!(name, Symbol::Builtin(..)) {
             return Ok(TypedExprKind::Variable(name));
         }
 
@@ -233,7 +225,7 @@ impl SpecializationPass {
             }
         }
 
-        self.apply_explicit_type_args(&callee, &type_args, &mut specializations)?;
+        self.apply_explicit_type_args(&callee, &expr.ty, &type_args, &mut specializations)?;
 
         if is_constructor
             && let TypedExprKind::Constructor(symbol, ..) = &callee.kind
@@ -254,6 +246,17 @@ impl SpecializationPass {
                 args: args.into_iter().map(|i| self.visit_expr(i)).try_collect()?,
                 callee_sym,
             };
+        } else if matches!(callee.kind, TypedExprKind::Call { .. }) {
+            // Callee is itself a call expression (e.g., b()() where b() returns a function)
+            // We can't statically specialize this - just visit the callee and args recursively
+            let specialized_callee = self.visit_expr(callee)?;
+            expr.kind = TypedExprKind::Call {
+                callee: specialized_callee.into(),
+                callee_ty,
+                type_args,
+                args: args.into_iter().map(|i| self.visit_expr(i)).try_collect()?,
+                callee_sym: None,
+            };
         } else {
             let type_args = if type_args.is_empty() {
                 specializations.ty.values().cloned().collect()
@@ -271,14 +274,25 @@ impl SpecializationPass {
             let mut args: Vec<_> = args.into_iter().map(|i| self.visit_expr(i)).try_collect()?;
 
             if let TypedExprKind::Member { receiver, .. } = callee.kind {
-                if !matches!(receiver.kind, TypedExprKind::Constructor(..)) {
+                // Don't convert enum variant constructors to Variable - the lowerer needs the Member
+                // expression to identify them as enum constructors
+                let is_enum_variant = matches!(caller, Symbol::Variant(..));
+
+                // Don't add receiver as first arg for enum constructors or unqualified variants (Hole)
+                if !matches!(
+                    receiver.kind,
+                    TypedExprKind::Constructor(..) | TypedExprKind::Hole
+                ) {
                     args.insert(0, *receiver);
                 }
-                specialized_callee = TypedExpr {
-                    id: callee.id,
-                    ty: callee.ty,
-                    kind: TypedExprKind::Variable(callee_sym.unwrap_or_else(|| unreachable!())),
-                };
+
+                if !is_enum_variant {
+                    specialized_callee = TypedExpr {
+                        id: callee.id,
+                        ty: callee.ty,
+                        kind: TypedExprKind::Variable(callee_sym.unwrap_or_else(|| unreachable!())),
+                    };
+                }
             } else if matches!(callee.kind, TypedExprKind::Variable(..)) {
                 callee.kind = TypedExprKind::Variable(callee_sym.unwrap_or_else(|| unreachable!()));
             }
@@ -293,28 +307,6 @@ impl SpecializationPass {
         }
 
         Ok(expr)
-    }
-
-    fn visit_block(&mut self, block: TypedBlock<Ty>) -> Result<TypedBlock<Ty>, TypeError> {
-        Ok(block)
-    }
-
-    fn visit_func(&mut self, func: TypedFunc<Ty>) -> Result<TypedFunc<Ty>, TypeError> {
-        Ok(func)
-    }
-
-    fn visit_match_arm(
-        &mut self,
-        match_arm: TypedMatchArm<Ty>,
-    ) -> Result<TypedMatchArm<Ty>, TypeError> {
-        Ok(match_arm)
-    }
-
-    fn visit_inline_ir(
-        &mut self,
-        instr: TypedInlineIRInstruction<Ty>,
-    ) -> Result<TypedInlineIRInstruction<Ty>, TypeError> {
-        Ok(instr)
     }
 
     fn constructor_specializations(&self, callee: &TypedExpr<Ty>, call_ty: &Ty) -> Specializations {
@@ -340,7 +332,7 @@ impl SpecializationPass {
         };
 
         for (param, arg) in nominal.type_params.iter().zip(type_args.iter()) {
-            if let Ty::Param(id) = param {
+            if let Ty::Param(id, _) = param {
                 specializations.ty.insert(*id, arg.clone());
             }
         }
@@ -417,6 +409,7 @@ impl SpecializationPass {
     fn apply_explicit_type_args(
         &self,
         callee: &TypedExpr<Ty>,
+        call_ty: &Ty,
         type_args: &[Ty],
         specializations: &mut Specializations,
     ) -> Result<(), TypeError> {
@@ -424,7 +417,7 @@ impl SpecializationPass {
             return Ok(());
         }
 
-        let callee_sym = self.symbol_for_callee(callee, &callee.ty, specializations)?;
+        let callee_sym = self.symbol_for_callee(callee, call_ty, specializations)?;
         let Some(TypeEntry::Poly(scheme)) = self.types.types_by_symbol.get(&callee_sym) else {
             return Ok(());
         };
@@ -446,29 +439,151 @@ impl SpecializationPass {
         caller: Symbol,
         specializations: &Specializations,
     ) -> Result<(), TypeError> {
-        if let Some(callees) = self.resolved_names.call_tree.lookup(&caller).cloned() {
+        if let Some(callees) = self.types.call_tree.lookup(&caller).cloned() {
             for callee in callees {
-                let callee_sym = match callee {
-                    RawCallee::Symbol(symbol) => symbol,
-                    RawCallee::Member { receiver_id, label } => {
-                        let Some(ty) = self.types.get(&receiver_id) else {
-                            return Ok(());
-                        };
-
-                        match self.symbol_from_ty(ty.as_mono_ty(), specializations) {
-                            Ok(sym) => sym,
-                            Err(..) => {
-                                return Err(TypeError::MemberNotFound(
-                                    Ty::Void.into(),
-                                    label.to_string(),
-                                ));
+                let (callee_sym, callee_specializations) = match callee {
+                    RawCallee::Symbol { sym, callee_id } => {
+                        // Look up instantiations for this specific call site
+                        let mut callee_specs = Specializations::default();
+                        if let Some(ty_instantiations) =
+                            self.types.catalog.instantiations.ty.get(&callee_id)
+                        {
+                            for (param, ty) in ty_instantiations {
+                                // Apply current specializations to the instantiated type
+                                let specialized_ty = specializations.apply(ty.clone());
+                                if !matches!(specialized_ty, Ty::Param(..)) {
+                                    callee_specs.ty.insert(*param, specialized_ty);
+                                }
                             }
                         }
+                        if let Some(row_instantiations) =
+                            self.types.catalog.instantiations.row.get(&callee_id)
+                        {
+                            for (param, row) in row_instantiations {
+                                // Apply row specializations
+                                let specialized_row = if let Row::Param(row_id) = row
+                                    && let Some(replacement) = specializations.row.get(row_id)
+                                {
+                                    replacement.clone()
+                                } else {
+                                    row.clone()
+                                };
+                                if !matches!(specialized_row, Row::Param(..)) {
+                                    callee_specs.row.insert(*param, specialized_row);
+                                }
+                            }
+                        }
+                        (sym, callee_specs)
+                    }
+                    RawCallee::Member {
+                        receiver_id,
+                        label,
+                        callee_id,
+                    } => {
+                        let Some(ty) = self.types.get(&receiver_id) else {
+                            continue;
+                        };
+
+                        // If the receiver is still a type parameter, skip - we can't specialize yet
+                        let receiver_sym =
+                            match self.symbol_from_ty(ty.as_mono_ty(), specializations) {
+                                Ok(sym) => sym,
+                                Err(..) => continue,
+                            };
+
+                        // Look up the actual member symbol on the receiver
+                        let member_sym = if let Some((member_sym, _)) =
+                            self.types.catalog.lookup_member(&receiver_sym, &label)
+                        {
+                            member_sym
+                        } else if let Some(member_sym) = self
+                            .types
+                            .catalog
+                            .lookup_static_member(&receiver_sym, &label)
+                        {
+                            member_sym
+                        } else {
+                            // Member not found on this receiver - skip
+                            continue;
+                        };
+
+                        // Look up instantiations for this specific call site
+                        let mut callee_specs = Specializations::default();
+                        if let Some(ty_instantiations) =
+                            self.types.catalog.instantiations.ty.get(&callee_id)
+                        {
+                            for (param, ty) in ty_instantiations {
+                                // Apply current specializations to the instantiated type
+                                let specialized_ty = specializations.apply(ty.clone());
+                                if !matches!(specialized_ty, Ty::Param(..)) {
+                                    callee_specs.ty.insert(*param, specialized_ty);
+                                }
+                            }
+                        }
+                        if let Some(row_instantiations) =
+                            self.types.catalog.instantiations.row.get(&callee_id)
+                        {
+                            for (param, row) in row_instantiations {
+                                // Apply row specializations
+                                let specialized_row = if let Row::Param(row_id) = row
+                                    && let Some(replacement) = specializations.row.get(row_id)
+                                {
+                                    replacement.clone()
+                                } else {
+                                    row.clone()
+                                };
+                                if !matches!(specialized_row, Row::Param(..)) {
+                                    callee_specs.row.insert(*param, specialized_row);
+                                }
+                            }
+                        }
+                        (member_sym, callee_specs)
                     }
                     RawCallee::Unqualified { .. } => unimplemented!(),
+                    // Resolved variants - symbol already known
+                    RawCallee::Property(sym) | RawCallee::Method(sym) => {
+                        (sym, specializations.clone())
+                    }
+                    RawCallee::MethodRequirement {
+                        method_req,
+                        callee_id,
+                        ..
+                    } => {
+                        // Look up instantiations for this specific method requirement call site
+                        let mut callee_specs = Specializations::default();
+                        if let Some(ty_instantiations) =
+                            self.types.catalog.instantiations.ty.get(&callee_id)
+                        {
+                            for (param, ty) in ty_instantiations {
+                                // Apply current specializations to the instantiated type
+                                let specialized_ty = specializations.apply(ty.clone());
+                                if !matches!(specialized_ty, Ty::Param(..)) {
+                                    callee_specs.ty.insert(*param, specialized_ty);
+                                }
+                            }
+                        }
+                        if let Some(row_instantiations) =
+                            self.types.catalog.instantiations.row.get(&callee_id)
+                        {
+                            for (param, row) in row_instantiations {
+                                // Apply row specializations
+                                let specialized_row = if let Row::Param(row_id) = row
+                                    && let Some(replacement) = specializations.row.get(row_id)
+                                {
+                                    replacement.clone()
+                                } else {
+                                    row.clone()
+                                };
+                                if !matches!(specialized_row, Row::Param(..)) {
+                                    callee_specs.row.insert(*param, specialized_row);
+                                }
+                            }
+                        }
+                        (method_req, callee_specs)
+                    }
                 };
 
-                self.specialize(&callee_sym, specializations);
+                self.specialize(&callee_sym, &callee_specializations);
             }
         };
 
@@ -640,8 +755,8 @@ pub mod tests {
                     }
                     .into(),
                     callee_ty: Ty::Func(
-                        Ty::Param(2.into()).into(),
-                        Ty::Param(2.into()).into(),
+                        Ty::Param(2.into(), vec![]).into(),
+                        Ty::Param(2.into(), vec![]).into(),
                         Row::Param(2.into()).into()
                     ),
                     type_args: vec![Ty::Int],

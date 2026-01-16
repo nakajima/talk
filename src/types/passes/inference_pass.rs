@@ -438,7 +438,7 @@ impl<'a> InferencePass<'a> {
             let protocol_self_id = self.session.new_type_param_id(None);
             self.session.insert(
                 protocol_sym,
-                InferTy::Param(protocol_self_id),
+                InferTy::Param(protocol_self_id, vec![*protocol_id]),
                 &mut self.constraints,
             );
 
@@ -500,28 +500,24 @@ impl<'a> InferencePass<'a> {
         };
 
         let ret_id = self.session.new_type_param_id(None);
-        let ret = InferTy::Param(ret_id);
 
-        let mut predicates = vec![Predicate::Projection {
-            base: InferTy::Param(protocol_self_id),
-            label: generic.name.name_str().into(),
-            protocol_id: Some(protocol_id),
-            returns: ret.clone(),
-        }];
-
-        // Add conformance predicates for each associated type constraint
+        // Collect bounds from conformances for the associated type
+        let mut bounds = vec![];
+        let mut conformance_predicates = vec![];
         for conformance in generic.conformances.iter() {
             let Ok(Symbol::Protocol(conforms_to_id)) = conformance.symbol() else {
                 tracing::warn!("could not determine associated type conformance: {conformance:?}");
                 continue;
             };
 
+            bounds.push(conforms_to_id);
+
             let predicate = Predicate::Conforms {
                 param: ret_id,
                 protocol_id: conforms_to_id,
             };
 
-            predicates.push(predicate.clone());
+            conformance_predicates.push(predicate.clone());
 
             // Add to context givens so member resolution works within protocol methods
             context.givens_mut().insert(predicate.clone());
@@ -533,6 +529,17 @@ impl<'a> InferencePass<'a> {
                 .or_default()
                 .insert(predicate);
         }
+
+        let ret = InferTy::Param(ret_id, bounds);
+
+        let mut predicates = vec![Predicate::Projection {
+            base: InferTy::Param(protocol_self_id, vec![protocol_id]),
+            label: generic.name.name_str().into(),
+            protocol_id: Some(protocol_id),
+            returns: ret.clone(),
+        }];
+
+        predicates.extend(conformance_predicates);
 
         let scheme = Scheme {
             ty: ret.clone(),
@@ -575,7 +582,7 @@ impl<'a> InferencePass<'a> {
             return Err(TypeError::NameNotResolved(name.clone()));
         };
 
-        let Some(InferTy::Param(protocol_self_id)) =
+        let Some(InferTy::Param(protocol_self_id, _)) =
             self.session.lookup(&protocol_symbol).map(|s| s._as_ty())
         else {
             return Err(TypeError::TypeNotFound(
@@ -632,7 +639,7 @@ impl<'a> InferencePass<'a> {
             });
         self.session.insert(
             protocol_symbol,
-            InferTy::Param(protocol_self_id),
+            InferTy::Param(protocol_self_id, vec![protocol_id]),
             &mut self.constraints,
         );
 
@@ -650,7 +657,7 @@ impl<'a> InferencePass<'a> {
             {
                 let label: Label = generic.name.name_str().into();
                 let assoc_param_id = match &ty {
-                    InferTy::Param(param_id) => {
+                    InferTy::Param(param_id, _) => {
                         assoc_type_params.insert(*param_id);
                         Some(*param_id)
                     }
@@ -661,9 +668,9 @@ impl<'a> InferencePass<'a> {
 
                 if let Some(assoc_param) = assoc_param_id {
                     assoc_type_predicates.insert(Predicate::Projection {
-                        base: InferTy::Param(protocol_self_id),
+                        base: InferTy::Param(protocol_self_id, vec![protocol_id]),
                         label: label.clone(),
-                        returns: InferTy::Param(assoc_param),
+                        returns: InferTy::Param(assoc_param, vec![]),
                         protocol_id: Some(protocol_id),
                     });
                 }
@@ -1684,7 +1691,7 @@ impl<'a> InferencePass<'a> {
             };
 
             self.session
-                .insert_mono(name_sym, InferTy::Param(param_id), &mut self.constraints);
+                .insert_mono(name_sym, InferTy::Param(param_id, vec![]), &mut self.constraints);
         }
 
         let mut effects_row = if func_signature.effects.is_open {
@@ -1836,7 +1843,7 @@ impl<'a> InferencePass<'a> {
         let mut type_params = vec![];
         for generic in generics.iter() {
             let id = self.register_generic(generic, context);
-            type_params.push(InferTy::Param(id));
+            type_params.push(InferTy::Param(id, vec![]));
             let name = generic
                 .name
                 .symbol()
@@ -1974,7 +1981,7 @@ impl<'a> InferencePass<'a> {
                     for g in generics {
                         if let Ok(sym) = g.name.symbol()
                             && let Some(entry) = self.session.lookup(&sym)
-                            && let InferTy::Param(pid) = entry._as_ty()
+                            && let InferTy::Param(pid, _) = entry._as_ty()
                         {
                             foralls.insert(ForAll::Ty(pid));
                         }
@@ -3043,27 +3050,22 @@ impl<'a> InferencePass<'a> {
             .map(|a| self.visit_type_annotation(a, context))
             .try_collect()?;
 
-        let receiver = match &callee.kind {
-            ExprKind::Member(Some(rcv), ..) => {
-                if let ExprKind::Constructor(Name::Resolved(Symbol::Protocol(protocol_id), ..)) =
-                    &rcv.kind
+        let receiver = match &callee_ty.kind {
+            TypedExprKind::Member { receiver, .. } => {
+                // Special handling for protocol method calls
+                if let TypedExprKind::Constructor(Symbol::Protocol(protocol_id), ..) =
+                    &receiver.kind
                     && let Some(first_arg) = arg_tys.first()
                 {
                     self.constraints.wants_conforms(
-                        rcv.id,
+                        receiver.id,
                         first_arg.ty.clone(),
                         *protocol_id,
                         &context.group_info(),
                     );
                 }
-
-                Some(self.visit_expr(rcv, context)?)
+                Some(receiver.as_ref().clone())
             }
-            ExprKind::Member(None, ..) => Some(TypedExpr {
-                id: callee.id,
-                ty: self.session.new_ty_meta_var(context.level()),
-                kind: TypedExprKind::Hole,
-            }),
             _ => None,
         };
 
@@ -3359,14 +3361,32 @@ impl<'a> InferencePass<'a> {
                             .iter()
                             .find(|fa| matches!(fa, ForAll::Ty(p) if *p != protocol_self))
                     {
-                        return Ok(InferTy::Param(*assoc_param));
+                        // Look up bounds for the associated type param
+                        let bounds: Vec<_> = self
+                            .session
+                            .type_param_bounds
+                            .get(assoc_param)
+                            .map(|preds| {
+                                preds
+                                    .iter()
+                                    .filter_map(|p| {
+                                        if let Predicate::Conforms { protocol_id, .. } = p {
+                                            Some(*protocol_id)
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        return Ok(InferTy::Param(*assoc_param, bounds));
                     }
 
                     // Fallback: fresh variable for the associated type's value in this position.
                     let result = self.session.new_ty_meta_var(context.level());
 
                     // Base is the protocol "Self" variable in this requirement.
-                    let base = InferTy::Param(protocol_self);
+                    let base = InferTy::Param(protocol_self, vec![protocol_id]);
 
                     self.constraints.wants_projection(
                         type_annotation.id,
@@ -3425,8 +3445,8 @@ impl<'a> InferencePass<'a> {
                     return Ok(resolve_builtin_type(&sym).0);
                 }
 
-                if let SolveContextKind::Protocol { protocol_self, .. } = context.kind() {
-                    return Ok(InferTy::Param(protocol_self));
+                if let SolveContextKind::Protocol { protocol_self, protocol_id } = context.kind() {
+                    return Ok(InferTy::Param(protocol_self, vec![protocol_id]));
                 }
 
                 if self.session.lookup_nominal(&sym).is_some() {
@@ -3642,6 +3662,9 @@ impl<'a> InferencePass<'a> {
             self.protocol_associated_type_requirements.keys().collect::<Vec<_>>()
         );
 
+        // Collect protocol bounds for the type param
+        let mut bounds = vec![];
+
         for conformance in generic.conformances.iter() {
             let Ok(Symbol::Protocol(protocol_id)) = conformance.symbol() else {
                 tracing::warn!("could not determine conformance: {conformance:?}");
@@ -3649,6 +3672,8 @@ impl<'a> InferencePass<'a> {
             };
 
             tracing::debug!("Processing conformance to protocol_id: {:?}", protocol_id);
+
+            bounds.push(protocol_id);
 
             let predicate = Predicate::Conforms {
                 param: param_id,
@@ -3703,7 +3728,7 @@ impl<'a> InferencePass<'a> {
         };
 
         self.session
-            .insert_mono(sym, InferTy::Param(param_id), &mut self.constraints);
+            .insert_mono(sym, InferTy::Param(param_id, bounds), &mut self.constraints);
 
         param_id
     }

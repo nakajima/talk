@@ -54,11 +54,11 @@ impl TypeMember {
             InferTy::Var { id, .. } => {
                 SolveResult::Defer(DeferralReason::WaitingOnMeta(Meta::Ty(*id)))
             }
-            InferTy::Param(type_param_id) => {
+            InferTy::Param(type_param_id, _) => {
                 self.lookup_for_type_param(constraints, context, session, *type_param_id)
             }
             InferTy::Rigid(skolem_id) => {
-                let Some(InferTy::Param(type_param_id)) =
+                let Some(InferTy::Param(type_param_id, _)) =
                     session.skolem_map.get(&InferTy::Rigid(*skolem_id))
                 else {
                     unreachable!();

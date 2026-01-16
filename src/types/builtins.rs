@@ -29,12 +29,12 @@ pub fn resolve_builtin_type(id: &Symbol) -> (InferTy, Vec<Predicate<InferTy>>, I
         Symbol::Byte => InferTy::Primitive(Symbol::Byte),
         Symbol::IR => InferTy::Func(
             InferTy::String().into(),
-            InferTy::Param(TypeParamId::IR_TYPE_PARAM).into(),
+            InferTy::Param(TypeParamId::IR_TYPE_PARAM, vec![]).into(),
             InferRow::Empty.into(),
         ),
         Symbol::PRINT => InferTy::Func(
             InferTy::String().into(),
-            InferTy::Param(TypeParamId::IR_TYPE_PARAM).into(),
+            InferTy::Param(TypeParamId::IR_TYPE_PARAM, vec![]).into(),
             InferRow::Empty.into(),
         ),
         _ => unreachable!("no builtin named {id:?}"),
@@ -63,7 +63,7 @@ pub fn builtin_scope() -> FxHashMap<Symbol, EnvEntry<InferTy>> {
             vec![],
             InferTy::Func(
                 InferTy::String().into(),
-                InferTy::Param(TypeParamId::IR_TYPE_PARAM).into(),
+                InferTy::Param(TypeParamId::IR_TYPE_PARAM, vec![]).into(),
                 InferRow::Empty.into(),
             ),
         )),
@@ -74,7 +74,7 @@ pub fn builtin_scope() -> FxHashMap<Symbol, EnvEntry<InferTy>> {
             indexset!(ForAll::Ty(TypeParamId::IR_TYPE_PARAM)),
             vec![],
             InferTy::Func(
-                InferTy::Param(TypeParamId::IR_TYPE_PARAM).into(),
+                InferTy::Param(TypeParamId::IR_TYPE_PARAM, vec![]).into(),
                 InferTy::Void.into(),
                 InferRow::Empty.into(),
             ),

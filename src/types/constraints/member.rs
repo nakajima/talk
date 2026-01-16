@@ -56,7 +56,7 @@ impl Member {
                 return SolveResult::Defer(DeferralReason::WaitingOnMeta(Meta::Ty(*id)));
             }
             InferTy::Rigid(id) => {
-                let Some(InferTy::Param(type_param_id)) =
+                let Some(InferTy::Param(type_param_id, _)) =
                     session.skolem_map.get(&InferTy::Rigid(*id))
                 else {
                     unreachable!();
@@ -70,7 +70,7 @@ impl Member {
                     *type_param_id,
                 );
             }
-            InferTy::Param(id) => {
+            InferTy::Param(id, _) => {
                 return self.lookup_type_param_member(constraints, context, session, &ty, *id);
             }
             InferTy::Constructor { name, .. } => {
@@ -205,7 +205,7 @@ impl Member {
             };
 
             for param in nominal.type_params.iter() {
-                let InferTy::Param(param_id) = param else {
+                let InferTy::Param(param_id, _) = param else {
                     continue;
                 };
 

@@ -915,13 +915,20 @@ impl NameResolver {
             match &callee.kind {
                 ExprKind::Variable(Name::Resolved(sym, ..))
                 | ExprKind::Constructor(Name::Resolved(sym, ..)) => {
-                    self.phase.call_tree.track(*caller, RawCallee::Symbol(*sym));
+                    self.phase.call_tree.track(
+                        *caller,
+                        RawCallee::Symbol {
+                            sym: *sym,
+                            callee_id: callee.id,
+                        },
+                    );
                 }
                 ExprKind::Member(Some(receiver), label, ..) => self.phase.call_tree.track(
                     *caller,
                     RawCallee::Member {
                         receiver_id: receiver.id,
                         label: label.clone(),
+                        callee_id: callee.id,
                     },
                 ),
                 ExprKind::Member(None, label, ..) => self.phase.call_tree.track(

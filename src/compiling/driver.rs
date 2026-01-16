@@ -381,8 +381,8 @@ impl Driver<NameResolved> {
 
         self.phase.diagnostics.extend(diagnostics);
         let symbols = std::mem::take(&mut session.symbols);
-        let resolved_names = std::mem::take(&mut session.resolved_names);
-        let (types, protocol_members) = session.finalize().map_err(CompileError::Typing)?;
+        let (types, protocol_members, resolved_names) =
+            session.finalize().map_err(CompileError::Typing)?;
 
         let (ast, types, resolved_names) =
             WitnessResolutionPass::new(ast, types, resolved_names, protocol_members)

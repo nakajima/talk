@@ -5,7 +5,7 @@ use crate::{
     ir::lowerer::curry_ty,
     label::Label,
     name::Name,
-    name_resolution::symbol::Symbol,
+    name_resolution::symbol::{ProtocolId, Symbol},
     types::{
         infer_row::{RowMetaId, RowParamId},
         infer_ty::{InferTy, TypeParamId},
@@ -68,7 +68,7 @@ impl SomeType for Ty {
     fn import(self, module_id: ModuleId) -> Self {
         match self {
             Ty::Primitive(symbol) => Ty::Primitive(symbol),
-            Ty::Param(type_param_id) => Ty::Param(type_param_id),
+            Ty::Param(type_param_id, bounds) => Ty::Param(type_param_id, bounds),
             Ty::Constructor {
                 name: Name::Resolved(sym, name),
                 params,
@@ -100,7 +100,7 @@ impl SomeType for Ty {
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Drive, DriveMut)]
 pub enum Ty {
     Primitive(#[drive(skip)] Symbol),
-    Param(#[drive(skip)] TypeParamId),
+    Param(#[drive(skip)] TypeParamId, #[drive(skip)] Vec<ProtocolId>),
     Constructor {
         #[drive(skip)]
         name: Name,
@@ -172,7 +172,7 @@ impl std::fmt::Display for Ty {
                 Symbol::RawPtr => write!(f, "RawPtr"),
                 _ => write!(f, "{symbol}"),
             },
-            Ty::Param(type_param_id) => write!(f, "{:?}", type_param_id),
+            Ty::Param(type_param_id, _bounds) => write!(f, "{:?}", type_param_id),
             Ty::Constructor { name, .. } => {
                 write!(f, "{}", name.name_str())
             }
@@ -244,7 +244,7 @@ impl Specializations {
     pub fn apply(&self, ty: Ty) -> Ty {
         ty.mapping(
             &mut |t| {
-                if let Ty::Param(id) = t
+                if let Ty::Param(id, _) = t
                     && let Some(replacement) = self.ty.get(&id)
                 {
                     replacement.clone()
@@ -289,7 +289,7 @@ impl Ty {
         let mut result = Specializations::default();
         match (self, concrete) {
             (Ty::Primitive(..), Ty::Primitive(..)) => (),
-            (Ty::Param(id), other) => {
+            (Ty::Param(id, _), other) => {
                 if !matches!(other, Ty::Param(..)) {
                     result.ty.insert(*id, other.clone());
                 }
@@ -380,7 +380,7 @@ impl Ty {
         let mut result: IndexSet<ForAll> = Default::default();
         match self {
             Ty::Primitive(..) => (),
-            Ty::Param(id) => {
+            Ty::Param(id, _) => {
                 result.insert(ForAll::Ty(*id));
             }
             Ty::Constructor { params, ret, .. } => {

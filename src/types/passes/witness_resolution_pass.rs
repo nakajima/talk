@@ -2,26 +2,32 @@ use derive_visitor::{DriveMut, VisitorMut};
 use rustc_hash::FxHashMap;
 
 use crate::{
-    name_resolution::{name_resolver::ResolvedNames, symbol::Symbol},
+    name_resolution::{
+        call_tree::RawCallee,
+        name_resolver::ResolvedNames,
+        symbol::{ProtocolId, Symbol},
+    },
     node_id::NodeID,
     types::{
         conformance::ConformanceKey,
         ty::Ty,
         type_error::TypeError,
-        typed_ast::{TypedAST, TypedExpr, TypedExprKind},
+        typed_ast::{TypedAST, TypedExpr, TypedExprKind, TypedFunc},
         types::Types,
     },
 };
 
 type TypedExprTy = TypedExpr<Ty>;
+type TypedFuncTy = TypedFunc<Ty>;
 
 #[derive(VisitorMut)]
-#[visitor(TypedExprTy(enter, exit))]
+#[visitor(TypedExprTy(enter, exit), TypedFuncTy(enter, exit))]
 pub struct WitnessResolutionPass {
     ast: TypedAST<Ty>,
     types: Types,
     resolved_names: ResolvedNames,
     protocol_members: FxHashMap<NodeID, Symbol>,
+    current_function: Vec<Symbol>,
 }
 
 impl WitnessResolutionPass {
@@ -36,7 +42,29 @@ impl WitnessResolutionPass {
             types,
             resolved_names,
             protocol_members,
+            current_function: vec![],
         }
+    }
+
+    fn enter_typed_func_ty(&mut self, func: &mut TypedFunc<Ty>) {
+        self.current_function.push(func.name);
+    }
+
+    fn exit_typed_func_ty(&mut self, _func: &mut TypedFunc<Ty>) {
+        self.current_function.pop();
+    }
+
+    /// Update the call_tree to record a method requirement call
+    fn record_method_requirement(&mut self, method_req: Symbol, protocol_id: ProtocolId, callee_id: NodeID) {
+        let Some(caller) = self.current_function.last().copied() else {
+            return;
+        };
+
+        // Record the method requirement in the call_tree
+        self.types.call_tree.track(
+            caller,
+            RawCallee::MethodRequirement { method_req, protocol_id, callee_id },
+        );
     }
 
     pub fn drive(mut self) -> Result<(TypedAST<Ty>, Types, ResolvedNames), TypeError> {
@@ -77,12 +105,6 @@ impl WitnessResolutionPass {
                     return;
                 };
 
-                let Ok(conforming_sym) = self.symbol_from_ty(&self_arg.ty) else {
-                    // Fall back to method requirement if we can't determine conforming type
-                    callee.kind = TypedExprKind::Variable(req_sym);
-                    return;
-                };
-
                 // Find the protocol for this method requirement
                 let Some(protocol_sym) =
                     self.types.catalog.protocol_for_method_requirement(&req_sym)
@@ -92,6 +114,13 @@ impl WitnessResolutionPass {
                 };
 
                 let Symbol::Protocol(protocol_id) = protocol_sym else {
+                    callee.kind = TypedExprKind::Variable(req_sym);
+                    return;
+                };
+
+                let Ok(conforming_sym) = self.symbol_from_ty(&self_arg.ty) else {
+                    // Can't determine conforming type (e.g., type param) - record as method requirement
+                    self.record_method_requirement(req_sym, protocol_id, callee.id);
                     callee.kind = TypedExprKind::Variable(req_sym);
                     return;
                 };
@@ -247,7 +276,7 @@ mod tests {
                     }
                     .into(),
                     callee_ty: Ty::Func(
-                        Ty::Param(2.into()).into(),
+                        Ty::Param(2.into(), vec![]).into(),
                         Ty::Int.into(),
                         Row::Param(3.into()).into()
                     ),

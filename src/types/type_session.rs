@@ -191,7 +191,10 @@ impl TypeSession {
         constraints.wake_symbols(&[symbol]);
     }
 
-    pub fn finalize(mut self) -> Result<(Types, FxHashMap<NodeID, Symbol>), TypeError> {
+    #[allow(clippy::type_complexity)]
+    pub fn finalize(
+        mut self,
+    ) -> Result<(Types, FxHashMap<NodeID, Symbol>, ResolvedNames), TypeError> {
         let types_by_node = std::mem::take(&mut self.types_by_node);
         let entries = types_by_node
             .into_iter()
@@ -226,9 +229,11 @@ impl TypeSession {
             types_by_node: entries,
             types_by_symbol,
             match_plans: Default::default(),
+            call_tree: std::mem::take(&mut self.resolved_names.call_tree),
         };
 
-        Ok((types, self.protocol_members))
+        let resolved_names = std::mem::take(&mut self.resolved_names);
+        Ok((types, self.protocol_members, resolved_names))
     }
 
     fn shallow_generalize_row(&mut self, row: InferRow) -> InferRow {
@@ -270,15 +275,14 @@ impl TypeSession {
                     .get(&meta)
                     .cloned()
                     .unwrap_or_else(|| {
-                        let InferTy::Param(id) = self.new_type_param(Some(meta)) else {
+                        let InferTy::Param(id, _) = self.new_type_param(Some(meta)) else {
                             unreachable!()
                         };
                         tracing::warn!("did not solve {meta:?}, generating a type param even tho that's probably not what we want.");
-                        self.reverse_instantiations.ty.insert(meta, id);
                         id
                     });
 
-                InferTy::Param(id)
+                InferTy::Param(id, vec![])
             }
             InferTy::Constructor {
                 name,
@@ -501,7 +505,7 @@ impl TypeSession {
             };
 
             let new_id = self.new_skolem(id);
-            skolems.insert(InferTy::Param(id), new_id);
+            skolems.insert(InferTy::Param(id, vec![]), new_id);
         }
 
         substitute(entry._as_ty().clone(), &skolems)
@@ -555,7 +559,7 @@ impl TypeSession {
         let mut substitutions = UnificationSubstitutions::new(self.meta_levels.clone());
         for m in &metas {
             match m {
-                InferTy::Param(p) => {
+                InferTy::Param(p, _) => {
                     predicates.extend(self.type_param_bounds.get(p).cloned().unwrap_or_default());
                     foralls.insert(ForAll::Ty(*p));
                 }
@@ -582,7 +586,7 @@ impl TypeSession {
                             param_id
                         });
                     foralls.insert(ForAll::Ty(param_id));
-                    substitutions.ty.insert(*id, InferTy::Param(param_id));
+                    substitutions.ty.insert(*id, InferTy::Param(param_id, vec![]));
                 }
                 InferTy::Record(box InferRow::Var(id)) => {
                     let levels = self.meta_levels.borrow();
@@ -1032,7 +1036,7 @@ impl TypeSession {
         }
 
         tracing::trace!("Fresh type param {id:?}");
-        InferTy::Param(id)
+        InferTy::Param(id, vec![])
     }
 
     pub(crate) fn new_type_param_id(&mut self, meta: Option<MetaVarId>) -> TypeParamId {
@@ -1064,7 +1068,7 @@ impl TypeSession {
     pub(crate) fn new_skolem_id(&mut self, param: TypeParamId) -> SkolemId {
         let id = self.vars.skolems.next_id();
         self.skolem_map
-            .insert(InferTy::Rigid(id), InferTy::Param(param));
+            .insert(InferTy::Rigid(id), InferTy::Param(param, vec![]));
         tracing::trace!("Fresh skolem {id:?}");
         id
     }
