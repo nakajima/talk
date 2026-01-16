@@ -53,6 +53,7 @@ impl ConstraintCause {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[allow(clippy::large_enum_variant)]
 pub enum Constraint {
     Call(Call),
     Equals(Equals),

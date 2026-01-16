@@ -149,6 +149,27 @@ impl<'a> InferencePass<'a> {
 
         for i in 0..self.asts.len() {
             self.discover_protocols(i, Level::default());
+
+            let conformances: Vec<_> = self
+                .session
+                .type_catalog
+                .conformances
+                .values()
+                .cloned()
+                .collect();
+            for conformance in conformances {
+                let protocol_symbol = Symbol::Protocol(conformance.protocol_id);
+                let protocol_methods = self.session.lookup_instance_methods(&protocol_symbol);
+                if !protocol_methods.is_empty() {
+                    self.session
+                        .type_catalog
+                        .instance_methods
+                        .entry(conformance.conforming_id)
+                        .or_default()
+                        .extend(protocol_methods);
+                }
+            }
+
             self.session.apply_all(&mut self.substitutions);
         }
 
@@ -228,10 +249,7 @@ impl<'a> InferencePass<'a> {
 
         let ast = typed_ast
             .apply(&mut self.substitutions, self.session)
-            .finalize(
-                self.session,
-                &self.session.protocol_member_witnesses.clone(),
-            );
+            .finalize(self.session);
 
         (ast, self.diagnostics.into_iter().collect())
     }
@@ -686,6 +704,11 @@ impl<'a> InferencePass<'a> {
             predicates: assoc_type_predicates.clone(),
         };
         if !protocol_associated_type_requirements.is_empty() {
+            tracing::debug!(
+                "Inserting protocol_associated_type_requirements for {:?}: {:?}",
+                protocol_id,
+                protocol_associated_type_requirements
+            );
             self.protocol_associated_type_requirements
                 .insert(protocol_id, protocol_associated_type_requirements.clone());
         }
@@ -1738,16 +1761,18 @@ impl<'a> InferencePass<'a> {
         &mut self,
         expr: &Expr,
         name: &Name,
-        _context: &mut impl Solve,
+        context: &mut impl Solve,
     ) -> TypedRet<TypedExpr<InferTy>> {
         let symbol = name
             .symbol()
             .map_err(|_| TypeError::NameNotResolved(name.clone()))?;
 
+        let ret = self.session.new_ty_meta_var(context.level()).into();
+
         let ty = InferTy::Constructor {
             name: name.clone(),
             params: vec![],
-            ret: InferTy::Void.into(),
+            ret,
         };
 
         Ok(TypedExpr {
@@ -3074,6 +3099,7 @@ impl<'a> InferencePass<'a> {
         // if matches!(callee_ty, InferTy::Constructor { .. }) {
         //     arg_tys.insert(0, ret.clone());
         // }
+        let callee_ty_var = self.session.new_ty_meta_var(context.level());
 
         self.constraints.wants_call(
             id,
@@ -3082,6 +3108,7 @@ impl<'a> InferencePass<'a> {
             arg_tys.iter().map(|a| a.ty.clone()).collect_vec(),
             type_arg_tys.clone(),
             ret.clone(),
+            callee_ty_var.clone(),
             receiver.map(|r| r.ty.clone()),
             &context.group_info(),
             self.tracked_effect_rows
@@ -3092,12 +3119,13 @@ impl<'a> InferencePass<'a> {
 
         Ok(TypedExpr {
             id,
-            ty: ret,
+            ty: ret.clone(),
             kind: TypedExprKind::Call {
                 callee: callee_ty.into(),
+                callee_ty: callee_ty_var,
                 type_args: type_arg_tys,
                 args: arg_tys,
-                resolved: None,
+                callee_sym: None,
             },
         })
     }
@@ -3112,6 +3140,12 @@ impl<'a> InferencePass<'a> {
             .name
             .symbol()
             .map_err(|_| TypeError::NameNotResolved(func.name.clone()))?;
+
+        tracing::debug!(
+            "visit_func: {:?}, generics: {:?}",
+            func.name,
+            func.generics
+        );
 
         for generic in func.generics.iter() {
             self.register_generic(generic, context);
@@ -3601,11 +3635,20 @@ impl<'a> InferencePass<'a> {
     fn register_generic(&mut self, generic: &GenericDecl, context: &mut impl Solve) -> TypeParamId {
         let param_id = self.session.new_type_param_id(None);
 
+        tracing::debug!(
+            "register_generic: {:?}, conformances: {:?}, available requirements: {:?}",
+            generic.name,
+            generic.conformances,
+            self.protocol_associated_type_requirements.keys().collect::<Vec<_>>()
+        );
+
         for conformance in generic.conformances.iter() {
             let Ok(Symbol::Protocol(protocol_id)) = conformance.symbol() else {
                 tracing::warn!("could not determine conformance: {conformance:?}");
                 continue;
             };
+
+            tracing::debug!("Processing conformance to protocol_id: {:?}", protocol_id);
 
             let predicate = Predicate::Conforms {
                 param: param_id,
@@ -3618,6 +3661,36 @@ impl<'a> InferencePass<'a> {
                 .entry(param_id)
                 .or_default()
                 .insert(predicate);
+
+            // Also add associated type predicates from this protocol to context.givens
+            // This enables member resolution on associated types (e.g., T.Food: Named)
+            if let Some(requirements) = self.protocol_associated_type_requirements.get(&protocol_id)
+            {
+                tracing::debug!(
+                    "Found protocol_associated_type_requirements for {:?}: {:?}",
+                    protocol_id,
+                    requirements
+                );
+                for assoc_predicate in &requirements.predicates {
+                    tracing::debug!("Adding assoc_predicate to givens: {:?}", assoc_predicate);
+                    context.givens_mut().insert(assoc_predicate.clone());
+                    if let Predicate::Conforms {
+                        param: assoc_param, ..
+                    } = assoc_predicate
+                    {
+                        self.session
+                            .type_param_bounds
+                            .entry(*assoc_param)
+                            .or_default()
+                            .insert(assoc_predicate.clone());
+                    }
+                }
+            } else {
+                tracing::debug!(
+                    "No protocol_associated_type_requirements found for {:?}",
+                    protocol_id
+                );
+            }
         }
 
         let Ok(sym) = generic.name.symbol() else {

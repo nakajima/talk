@@ -121,8 +121,9 @@ impl Scheme<InferTy> {
             match forall {
                 ForAll::Ty(param) => {
                     if let Some(meta) = context.instantiations_mut().get_ty(&id, param) {
-                        session.type_catalog.instantiations.ty.insert(
-                            (id, *param),
+                        session.type_catalog.instantiations.insert_ty(
+                            id,
+                            *param,
                             InferTy::Var {
                                 id: *meta,
                                 level: Level(1),
@@ -140,11 +141,11 @@ impl Scheme<InferTy> {
                     session.reverse_instantiations.ty.insert(meta, *param);
                     context.instantiations_mut().insert_ty(id, *param, meta);
 
-                    session
-                        .type_catalog
-                        .instantiations
-                        .ty
-                        .insert((id, *param), InferTy::Var { id: meta, level });
+                    session.type_catalog.instantiations.insert_ty(
+                        id,
+                        *param,
+                        InferTy::Var { id: meta, level },
+                    );
                 }
                 ForAll::Row(param) => {
                     if context.instantiations_mut().get_row(&id, param).is_some() {
@@ -160,8 +161,7 @@ impl Scheme<InferTy> {
                     session
                         .type_catalog
                         .instantiations
-                        .row
-                        .insert((id, *param), InferRow::Var(meta));
+                        .insert_row(id, *param, InferRow::Var(meta));
                 }
             };
         }
@@ -219,8 +219,9 @@ impl Scheme<InferTy> {
             };
 
             substitutions.insert_ty(id, *param, meta_var);
-            session.type_catalog.instantiations.ty.insert(
-                (id, *param),
+            session.type_catalog.instantiations.insert_ty(
+                id,
+                *param,
                 InferTy::Var {
                     id: meta_var,
                     level: Level(1),
@@ -244,8 +245,7 @@ impl Scheme<InferTy> {
             session
                 .type_catalog
                 .instantiations
-                .row
-                .insert((id, row_param), InferRow::Var(row_meta));
+                .insert_row(id, row_param, InferRow::Var(row_meta));
         }
 
         for predicate in &self.predicates {

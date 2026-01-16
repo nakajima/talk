@@ -10,6 +10,7 @@ use crate::{
         },
         infer_row::InferRow,
         infer_ty::{InferTy, Meta},
+        mappable::Mappable,
         solve_context::{Solve, SolveContext},
         term_environment::EnvEntry,
         type_error::TypeError,
@@ -24,6 +25,7 @@ pub struct Call {
     pub call_node_id: NodeID,
     pub callee_id: NodeID,
     pub callee: InferTy,
+    pub callee_type: InferTy,
     pub args: Vec<InferTy>,
     pub type_args: Vec<InferTy>,
     pub returns: InferTy,
@@ -56,7 +58,7 @@ impl Call {
         let mut args = self.args.to_vec();
 
         match &self.callee {
-            InferTy::Constructor { name, .. } => {
+            InferTy::Constructor { name, box ret, .. } => {
                 let Ok(sym) = name.symbol() else {
                     return SolveResult::Err(TypeError::NameNotResolved(name.clone()));
                 };
@@ -86,6 +88,8 @@ impl Call {
                     symbol: sym,
                     type_args,
                 };
+
+                constraints.wants_equals(ret.clone(), returns_type.clone());
 
                 // TODO: Figure out if we're dealing with a struct vs an enum here and be more explicit.
                 // This is ok for now since enums can't have initializers and structs always have them.
@@ -123,17 +127,40 @@ impl Call {
                     &group,
                 );
 
+                let mut metas = vec![];
+                match unify(&init_ty, &self.callee_type, context, session) {
+                    Ok(vars) => metas.extend(vars),
+                    Err(e) => return SolveResult::Err(e.with_cause(cause)),
+                }
+
                 match unify(
                     &init_ty,
                     &curry(args, returns_type, InferRow::Empty.into()),
                     context,
                     session,
                 ) {
-                    Ok(metas) => SolveResult::Solved(metas),
-                    Err(e) => SolveResult::Err(e.with_cause(cause)),
+                    Ok(vars) => metas.extend(vars),
+                    Err(e) => return SolveResult::Err(e.with_cause(cause)),
                 }
+
+                SolveResult::Solved(metas)
             }
             InferTy::Func(.., effects) => {
+                let reversed = self.callee.clone().mapping(
+                    &mut |t| {
+                        if let InferTy::Var { id, .. } = t
+                            && let Some(param) = session.reverse_instantiations.ty.get(&id)
+                        {
+                            return InferTy::Param(*param);
+                        }
+
+                        t
+                    },
+                    &mut |r| r,
+                );
+
+                unify(&reversed, &self.callee_type, context, session).ok();
+
                 let res = if args.is_empty() {
                     unify(
                         &self.callee,

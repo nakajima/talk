@@ -12,8 +12,17 @@ use crate::{
     parser::Parser,
     parser_error::ParserError,
     types::{
-        matcher, passes::inference_pass::InferencePass, ty::Ty, type_error::TypeError,
-        type_session::TypeSession, typed_ast::TypedAST, types::Types,
+        matcher,
+        passes::{
+            inference_pass::InferencePass,
+            specialization_pass::{SpecializationPass, SpecializedCallee},
+            witness_resolution_pass::WitnessResolutionPass,
+        },
+        ty::Ty,
+        type_error::TypeError,
+        type_session::TypeSession,
+        typed_ast::TypedAST,
+        types::Types,
     },
 };
 use indexmap::IndexMap;
@@ -50,6 +59,8 @@ pub struct Typed {
     pub symbols: Symbols,
     pub resolved_names: ResolvedNames,
     pub diagnostics: Vec<AnyDiagnostic>,
+    pub specialized_callees: FxHashMap<Symbol, SpecializedCallee>,
+    pub specializations: FxHashMap<Symbol, Vec<Symbol>>,
 }
 
 impl DriverPhase for Lowered {}
@@ -341,12 +352,47 @@ impl Driver<NameResolved> {
         );
 
         let (_paths, mut asts): (Vec<_>, Vec<_>) = self.phase.asts.iter_mut().unzip();
+
+        // Collect NodeID -> Span mappings before type checking
+        #[cfg(feature = "types_html")]
+        let node_spans = {
+            use derive_visitor::{Drive, Visitor};
+
+            #[derive(Visitor)]
+            #[visitor(crate::parsing::node::Node(enter))]
+            struct SpanCollector(FxHashMap<NodeID, crate::span::Span>);
+
+            impl SpanCollector {
+                fn enter_node(&mut self, node: &crate::parsing::node::Node) {
+                    self.0.insert(node.node_id(), node.span());
+                }
+            }
+
+            let mut collector = SpanCollector(FxHashMap::default());
+            for ast in asts.iter() {
+                for root in &ast.roots {
+                    root.drive(&mut collector);
+                }
+            }
+            collector.0
+        };
+
         let (ast, diagnostics) = InferencePass::drive(&mut asts, &mut session);
 
         self.phase.diagnostics.extend(diagnostics);
         let symbols = std::mem::take(&mut session.symbols);
         let resolved_names = std::mem::take(&mut session.resolved_names);
-        let mut types = session.finalize().map_err(CompileError::Typing)?;
+        let (types, protocol_members) = session.finalize().map_err(CompileError::Typing)?;
+
+        let (ast, types, resolved_names) =
+            WitnessResolutionPass::new(ast, types, resolved_names, protocol_members)
+                .drive()
+                .map_err(CompileError::Typing)?;
+
+        let specialization_pass = SpecializationPass::new(ast, symbols, resolved_names, types);
+
+        let (ast, symbols, resolved_names, mut types, specializations, specialized_callees) =
+            specialization_pass.drive().map_err(CompileError::Typing)?;
 
         // Don't bother with matcher diagnostics if we're not well typed already.
         if !has_error_diagnostics(&self.phase.diagnostics) {
@@ -360,6 +406,26 @@ impl Driver<NameResolved> {
             types.match_plans = matcher_result.plans;
         }
 
+        // Generate types visualization HTML
+        #[cfg(feature = "types_html")]
+        {
+            let sources: Vec<_> = self
+                .files
+                .iter()
+                .filter_map(|f| {
+                    let path = std::path::PathBuf::from(f.path());
+                    f.read().ok().map(|text| (path, text))
+                })
+                .collect();
+            let viz = crate::types_trace::TypesVisualization {
+                sources,
+                node_spans,
+                types: types.clone(),
+            };
+            let html = crate::types_trace::generate_html(&viz);
+            let _ = std::fs::write("types.html", html);
+        }
+
         Ok(Driver {
             files: self.files,
             config: self.config,
@@ -370,6 +436,8 @@ impl Driver<NameResolved> {
                 symbols,
                 resolved_names,
                 diagnostics: self.phase.diagnostics,
+                specializations,
+                specialized_callees,
             },
         })
     }
@@ -377,14 +445,7 @@ impl Driver<NameResolved> {
 
 impl Driver<Typed> {
     pub fn lower(mut self) -> Result<Driver<Lowered>, CompileError> {
-        let lowerer = Lowerer::new(
-            &mut self.phase.ast,
-            &mut self.phase.types,
-            &mut self.phase.symbols,
-            &mut self.phase.resolved_names,
-            &self.config,
-        );
-
+        let lowerer = Lowerer::new(&mut self.phase, &self.config);
         let program = lowerer.lower().map_err(CompileError::Lowering)?;
 
         Ok(Driver {

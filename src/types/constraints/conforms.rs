@@ -22,7 +22,7 @@ use crate::{
     },
 };
 use itertools::Itertools;
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 use tracing::instrument;
 
 enum CheckWitnessResult {
@@ -40,7 +40,7 @@ pub struct Conforms {
 }
 
 impl Conforms {
-    #[instrument(skip(session))]
+    #[instrument(skip(session, constraints, context))]
     pub fn solve(
         &self,
         constraints: &mut ConstraintStore,
@@ -113,7 +113,7 @@ impl Conforms {
         }
     }
 
-    #[instrument(level = tracing::Level::TRACE, skip(context, session))]
+    #[instrument(level = tracing::Level::TRACE, skip(context, session, constraints))]
     fn check_conformance(
         &self,
         conforming_ty_sym: Symbol,
@@ -164,19 +164,6 @@ impl Conforms {
         // Build up some substitutions so we're not playing with the protocol's type params anymore
         let mut substitutions: FxHashMap<InferTy, InferTy> = FxHashMap::default();
         substitutions.insert(InferTy::Param(protocol_self_id), self.ty.clone());
-
-        // If we're registering a conformance for a nominal, copy specialized versions of default methods
-        if !matches!(conforming_ty_sym, Symbol::Protocol(..))
-            && let Err(e) = self.specialize_methods(
-                &conforming_ty_sym,
-                protocol_id,
-                session,
-                substitutions.clone(),
-                Default::default(),
-            )
-        {
-            return CheckWitnessResult::Err(e);
-        };
 
         let mut deferral_reasons = vec![];
 
@@ -296,95 +283,6 @@ impl Conforms {
         } else {
             CheckWitnessResult::Defer(deferral_reasons)
         }
-    }
-
-    fn specialize_methods(
-        &self,
-        conforming_ty_sym: &Symbol,
-        protocol_id: ProtocolId,
-        session: &mut TypeSession,
-        mut substitutions: FxHashMap<InferTy, InferTy>,
-        mut seen: FxHashSet<ProtocolId>,
-    ) -> Result<(), TypeError> {
-        if seen.contains(&protocol_id) {
-            return Ok(());
-        }
-
-        seen.insert(protocol_id);
-
-        let Some(EnvEntry::Scheme(Scheme {
-            ty: InferTy::Param(protocol_self_id),
-            ..
-        })) = session.lookup(&protocol_id.into())
-        else {
-            return Err(TypeError::TypeNotFound(format!(
-                "Did not find protocol self for {:?}",
-                protocol_id
-            )));
-        };
-
-        substitutions.insert(InferTy::Param(protocol_self_id), self.ty.clone());
-
-        for (label, sym) in session.lookup_instance_methods(&protocol_id.into()) {
-            let Some(entry) = session.lookup(&sym) else {
-                tracing::error!("didn't get entry for {sym:?}");
-                continue;
-            };
-
-            // For default methods (InstanceMethod), use the original symbol directly.
-            if matches!(sym, Symbol::InstanceMethod(..)) {
-                session
-                    .type_catalog
-                    .instance_methods
-                    .entry(*conforming_ty_sym)
-                    .or_default()
-                    .insert(label, sym);
-                continue;
-            }
-
-            let specialized_entry = entry.substitute(&substitutions);
-            let specialized_symbol = session
-                .symbols
-                .next_instance_method(session.current_module_id);
-            let name_str = session
-                .resolve_name(&sym)
-                .unwrap_or_else(|| unreachable!("Didn't get name for symbol: {sym:}"));
-            session
-                .resolved_names
-                .symbol_names
-                .insert(specialized_symbol.into(), name_str.to_string());
-
-            session.insert_term(
-                specialized_symbol.into(),
-                specialized_entry,
-                &mut Default::default(),
-            );
-
-            session
-                .type_catalog
-                .instance_methods
-                .entry(*conforming_ty_sym)
-                .or_default()
-                .insert(label, specialized_symbol.into());
-
-            for key in session
-                .type_catalog
-                .conformances
-                .keys()
-                .cloned()
-                .collect_vec()
-            {
-                self.specialize_methods(
-                    conforming_ty_sym,
-                    key.protocol_id,
-                    session,
-                    substitutions.clone(),
-                    seen.clone(),
-                )?;
-            }
-        }
-
-        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]

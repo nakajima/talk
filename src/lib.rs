@@ -37,6 +37,9 @@ pub mod lsp;
 #[cfg(test)]
 pub mod test_utils;
 
+#[cfg(feature = "types_html")]
+pub mod types_trace;
+
 #[cfg(test)]
 #[ctor::ctor]
 pub fn init_tracing() {

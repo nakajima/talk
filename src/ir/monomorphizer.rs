@@ -1,4 +1,5 @@
 use indexmap::{IndexMap, IndexSet};
+use rustc_hash::FxHashMap;
 use tracing::instrument;
 
 use crate::{
@@ -8,13 +9,18 @@ use crate::{
         function::Function,
         instruction::Instruction,
         ir_ty::IrTy,
-        lowerer::{Lowerer, PolyFunction, Specialization, Substitutions},
+        lowerer::{Lowerer, PolyFunction},
         terminator::Terminator,
         value::{Reference, Value},
     },
     name::Name,
     name_resolution::symbol::Symbol,
-    types::{ty::Ty, types::Types, typed_ast::TypedAST},
+    types::{
+        passes::specialization_pass::SpecializedCallee,
+        ty::{Specializations, Ty},
+        typed_ast::TypedAST,
+        types::Types,
+    },
 };
 
 #[allow(dead_code)]
@@ -23,18 +29,20 @@ pub struct Monomorphizer<'a> {
     types: &'a mut Types,
     config: &'a DriverConfig,
     pub(super) functions: IndexMap<Symbol, PolyFunction>,
-    specializations: IndexMap<Symbol, Vec<Specialization>>,
+    specializations: FxHashMap<Symbol, Vec<Symbol>>,
+    specialized_callees: &'a mut FxHashMap<Symbol, SpecializedCallee>,
 }
 
 #[allow(clippy::expect_used)]
 impl<'a> Monomorphizer<'a> {
     pub fn new(lowerer: Lowerer<'a>) -> Self {
         Monomorphizer {
-            ast: lowerer.ast,
-            types: lowerer.types,
+            ast: &mut lowerer.typed.ast,
+            types: &mut lowerer.typed.types,
             functions: lowerer.functions,
             specializations: lowerer.specializations,
             config: lowerer.config,
+            specialized_callees: &mut lowerer.typed.specialized_callees,
         }
     }
 
@@ -85,6 +93,28 @@ impl<'a> Monomorphizer<'a> {
         }
 
         for callee in callees {
+            // Check if this is a synthesized callee pointing to an external function
+            if let Some(specialized_callee) = self.specialized_callees.get(callee).cloned() {
+                let original = specialized_callee.original_symbol;
+                if let Some(module_id) = original.module_id()
+                    && module_id != self.config.module_id
+                    && let Some(program) = self.config.modules.program_for(module_id)
+                    && let Some(poly_func) = program.polyfunctions.get(&original).cloned()
+                {
+                    self.generate_specialized_function(
+                        &poly_func,
+                        *callee,
+                        &specialized_callee,
+                        result,
+                    );
+                    // Also import the original monomorphized version
+                    if let Some(imported) = program.functions.get(&original).cloned() {
+                        result.insert(original, imported);
+                    }
+                }
+                continue; // Skip normal import logic for synthesized symbols                                                              
+            }
+
             let Some(module_id) = callee.module_id() else {
                 tracing::warn!("Trying to import {callee:?}, no module ID found");
                 continue;
@@ -113,7 +143,13 @@ impl<'a> Monomorphizer<'a> {
             .cloned()
             .unwrap_or_default()
         {
-            self.generate_specialized_function(&func, &specialization, result);
+            let Some(specialized_callee) = self.specialized_callees.get(&specialization).cloned()
+            else {
+                tracing::error!("did not find specialization for {specialization:?}");
+                continue;
+            };
+
+            self.generate_specialized_function(&func, specialization, &specialized_callee, result);
         }
 
         let func = Function {
@@ -135,7 +171,7 @@ impl<'a> Monomorphizer<'a> {
     fn monomorphize_block(
         &mut self,
         block: BasicBlock<Ty>,
-        substitutions: &Substitutions,
+        substitutions: &Specializations,
     ) -> BasicBlock<IrTy> {
         BasicBlock {
             id: block.id,
@@ -161,7 +197,7 @@ impl<'a> Monomorphizer<'a> {
     fn monomorphize_terminator(
         &mut self,
         terminator: Terminator<Ty>,
-        substitutions: &Substitutions,
+        substitutions: &Specializations,
     ) -> Terminator<IrTy> {
         match terminator {
             Terminator::Ret { val, ty } => Terminator::Ret {
@@ -178,7 +214,7 @@ impl<'a> Monomorphizer<'a> {
     fn monomorphize_instruction(
         &mut self,
         instruction: Instruction<Ty>,
-        substitutions: &Substitutions,
+        substitutions: &Specializations,
     ) -> Instruction<IrTy> {
         // Handle Call instructions specially to substitute MethodRequirement callees
         if let Instruction::Call {
@@ -189,24 +225,24 @@ impl<'a> Monomorphizer<'a> {
             meta,
         } = instruction
         {
-            let new_callee = match &callee {
-                Value::Func(sym @ Symbol::MethodRequirement(_)) => {
-                    if let Some(impl_sym) = substitutions.witnesses.get(sym) {
-                        Value::Func(*impl_sym)
-                    } else {
-                        if !substitutions.witnesses.is_empty() {
-                            tracing::error!("did not get witness for {sym:?}, {substitutions:?}");
-                        }
-                        callee
-                    }
-                }
-                _ => callee,
-            };
+            // let new_callee = match &callee {
+            //     Value::Func(sym @ Symbol::MethodRequirement(_)) => {
+            //         if let Some(impl_sym) = substitutions.witnesses.get(sym) {
+            //             Value::Func(*impl_sym)
+            //         } else {
+            //             if !substitutions.witnesses.is_empty() {
+            //                 tracing::error!("did not get witness for {sym:?}, {substitutions:?}");
+            //             }
+            //             callee
+            //         }
+            //     }
+            //     _ => callee,
+            // };
 
             return Instruction::Call {
                 dest,
                 ty: self.monomorphize_ty(ty, substitutions),
-                callee: new_callee,
+                callee,
                 args,
                 meta,
             };
@@ -217,7 +253,7 @@ impl<'a> Monomorphizer<'a> {
 
     #[allow(clippy::only_used_in_recursion)]
     #[instrument(skip(self))]
-    fn monomorphize_ty(&mut self, ty: Ty, substitutions: &Substitutions) -> IrTy {
+    fn monomorphize_ty(&mut self, ty: Ty, substitutions: &Specializations) -> IrTy {
         match ty {
             Ty::Primitive(symbol) => match symbol {
                 Symbol::Int => IrTy::Int,
@@ -229,8 +265,8 @@ impl<'a> Monomorphizer<'a> {
                 Symbol::Byte => IrTy::Byte,
                 _ => unreachable!(),
             },
-            Ty::Param(_param) => {
-                if let Some(replaced) = substitutions.ty.get(&ty).cloned() {
+            Ty::Param(param) => {
+                if let Some(replaced) = substitutions.ty.get(&param).cloned() {
                     self.monomorphize_ty(replaced, substitutions)
                 } else {
                     //unreachable!("did not specialize {ty:?}");
@@ -333,26 +369,27 @@ impl<'a> Monomorphizer<'a> {
     fn generate_specialized_function(
         &mut self,
         func: &PolyFunction,
-        specialization: &Specialization,
+        specialized_name: Symbol,
+        specialization: &SpecializedCallee,
         result: &mut IndexMap<Symbol, Function<IrTy>>,
     ) {
         let specialized_func = Function {
-            name: specialization.name,
-            ty: self.monomorphize_ty(func.ty.clone(), &specialization.substitutions),
+            name: specialized_name,
+            ty: self.monomorphize_ty(func.ty.clone(), &specialization.specializations),
             params: func.params.clone().into(),
             register_count: func.register_count,
             blocks: func
                 .blocks
                 .clone()
                 .into_iter()
-                .map(|b| self.monomorphize_block(b, &specialization.substitutions))
+                .map(|b| self.monomorphize_block(b, &specialization.specializations))
                 .collect(),
         };
 
-        result.insert(specialization.name, specialized_func);
+        result.insert(specialized_name, specialized_func);
 
         let mut checked = IndexSet::default();
-        self.check_imports(&specialization.name, result, &mut checked);
+        self.check_imports(&specialized_name, result, &mut checked);
     }
 }
 

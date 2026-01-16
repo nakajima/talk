@@ -1,3 +1,4 @@
+use derive_visitor::{Drive, DriveMut};
 use rustc_hash::FxHashMap;
 
 use crate::{
@@ -15,10 +16,32 @@ use crate::{
     },
 };
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Drive, DriveMut)]
 pub enum TypeEntry {
     Mono(Ty),
     Poly(Scheme<Ty>),
+}
+
+impl Mappable<Ty, Ty> for TypeEntry {
+    type Output = TypeEntry;
+    fn mapping(
+        self,
+        ty_map: &mut impl FnMut(Ty) -> Ty,
+        row_map: &mut impl FnMut(<Ty as SomeType>::RowType) -> <Ty as SomeType>::RowType,
+    ) -> Self::Output {
+        match self {
+            Self::Mono(ty) => TypeEntry::Mono(ty.mapping(ty_map, row_map)),
+            Self::Poly(scheme) => Self::Poly(Scheme {
+                ty: scheme.ty.mapping(ty_map, row_map),
+                foralls: scheme.foralls,
+                predicates: scheme
+                    .predicates
+                    .into_iter()
+                    .map(|p| p.mapping(ty_map, row_map))
+                    .collect(),
+            }),
+        }
+    }
 }
 
 impl TypeEntry {

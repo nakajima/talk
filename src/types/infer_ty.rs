@@ -56,7 +56,7 @@ impl std::fmt::Debug for MetaVarId {
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord)]
-pub struct TypeParamId(u32);
+pub struct TypeParamId(pub u32);
 impl TypeParamId {
     pub const IR_TYPE_PARAM: TypeParamId = TypeParamId(u32::MAX - 1);
 }
@@ -282,6 +282,7 @@ impl RowType for InferRow {
 
 impl SomeType for InferTy {
     type RowType = InferRow;
+    type Entry = EnvEntry<InferTy>;
 
     fn void() -> Self {
         InferTy::Void

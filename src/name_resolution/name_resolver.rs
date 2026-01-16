@@ -14,10 +14,12 @@ use crate::{
         module::{ModuleEnvironment, ModuleId},
     },
     diagnostic::{AnyDiagnostic, Diagnostic, Severity},
+    formatter,
     label::Label,
     name::Name,
     name_resolution::{
         builtins,
+        call_tree::{CallTree, RawCallee},
         decl_declarer::DeclDeclarer,
         scc_graph::SCCGraph,
         symbol::{Symbol, Symbols},
@@ -121,6 +123,7 @@ pub struct ResolvedNames {
     pub child_types: IndexMap<Symbol, IndexMap<Label, Symbol>>,
     pub diagnostics: Vec<AnyDiagnostic>,
     pub mutated_symbols: IndexSet<Symbol>,
+    pub call_tree: CallTree<RawCallee>,
 }
 
 impl ResolvedNames {
@@ -146,7 +149,7 @@ pub type ScopeId = Index;
     Stmt(enter, exit),
     MatchArm(enter, exit),
     Decl(enter, exit),
-    Expr(enter),
+    Expr(enter, exit),
     TypeAnnotation(enter),
     Pattern(enter)
 )]
@@ -158,6 +161,8 @@ pub struct NameResolver {
 
     pub(super) current_module_id: crate::compiling::module::ModuleId,
     pub(super) modules: Rc<ModuleEnvironment>,
+
+    current_func_symbols: Vec<Symbol>,
 
     // Scope stuff
     pub(super) scopes: FxHashMap<NodeID, Scope>,
@@ -176,6 +181,7 @@ impl NameResolver {
             symbols: Default::default(),
             diagnostics: Default::default(),
             phase: ResolvedNames::default(),
+            current_func_symbols: Default::default(),
             current_module_id,
             scopes: Default::default(),
             current_scope_id: None,
@@ -211,6 +217,13 @@ impl NameResolver {
             LowerFuncsToLets::run(ast);
             LowerOperators::run(ast);
             PrependSelfToMethods::run(ast);
+        }
+
+        if std::env::var("SHOW_TRANSFORM").is_ok() {
+            for ast in asts.iter() {
+                println!("{:?}", ast.path);
+                println!("{}", formatter::format(ast, 80));
+            }
         }
 
         {
@@ -893,20 +906,48 @@ impl NameResolver {
         });
     }
 
+    fn exit_expr(&mut self, expr: &mut Expr) {
+        on!(&expr.kind, ExprKind::Call { callee, .. }, {
+            let Some(caller) = self.current_func_symbols.last() else {
+                return;
+            };
+
+            match &callee.kind {
+                ExprKind::Variable(Name::Resolved(sym, ..))
+                | ExprKind::Constructor(Name::Resolved(sym, ..)) => {
+                    self.phase.call_tree.track(*caller, RawCallee::Symbol(*sym));
+                }
+                ExprKind::Member(Some(receiver), label, ..) => self.phase.call_tree.track(
+                    *caller,
+                    RawCallee::Member {
+                        receiver_id: receiver.id,
+                        label: label.clone(),
+                    },
+                ),
+                ExprKind::Member(None, label, ..) => self.phase.call_tree.track(
+                    *caller,
+                    RawCallee::Unqualified {
+                        node_id: callee.id,
+                        label: label.clone(),
+                    },
+                ),
+                other => {
+                    tracing::error!("exit_expr {other:?}");
+                }
+            }
+        });
+    }
+
     ///////////////////////////////////////////////////////////////////////////
     // Func scoping
     ///////////////////////////////////////////////////////////////////////////
 
     fn enter_func(&mut self, func: &mut Func) {
-        self.enter_scope(
-            func.id,
-            Some(vec![(
-                func.name
-                    .symbol()
-                    .unwrap_or_else(|_| unreachable!("did not resolve func")),
-                func.id,
-            )]),
-        );
+        let Ok(func_symbol) = func.name.symbol() else {
+            unreachable!("did not resolve func");
+        };
+        self.enter_scope(func.id, Some(vec![(func_symbol, func.id)]));
+        self.current_func_symbols.push(func_symbol);
 
         for name in &mut func.effects.names {
             let Some(resolved_name) = self.lookup(name, None) else {
@@ -918,6 +959,7 @@ impl NameResolver {
     }
 
     fn exit_func(&mut self, func: &mut Func) {
+        self.current_func_symbols.pop();
         self.exit_scope(func.id);
     }
 

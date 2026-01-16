@@ -13,7 +13,7 @@ use crate::{
         mappable::Mappable,
         solve_context::Solve,
         ty::{SomeType, Ty},
-        type_operations::{UnificationSubstitutions, instantiate_row, instantiate_ty},
+        type_operations::{UnificationSubstitutions, curry, instantiate_row, instantiate_ty},
         type_session::TypeSession,
     },
 };
@@ -306,7 +306,8 @@ impl Predicate<InferTy> {
                     .map(|f| instantiate_ty(id, f.clone(), context.instantiations_mut(), level))
                     .collect(),
                 Default::default(),
-                instantiate_ty(id, returns, context.instantiations_mut(), level),
+                instantiate_ty(id, returns.clone(), context.instantiations_mut(), level),
+                curry(args, returns, InferRow::Var(0.into()).into()),
                 receiver.map(|r| instantiate_ty(id, r, context.instantiations_mut(), level)),
                 &context.group_info(),
                 InferRow::Var(0.into()),

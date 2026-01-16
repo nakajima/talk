@@ -10,7 +10,6 @@ use crate::{
     node_id::NodeID,
     node_kinds::inline_ir_instruction::TypedInlineIRInstruction,
     types::{
-        conformance::ConformanceKey,
         infer_ty::InferTy,
         mappable::Mappable,
         scheme::ForAll,
@@ -48,106 +47,72 @@ impl TypedAST<InferTy> {
         )
     }
 
-    pub fn finalize(
-        self,
-        session: &mut TypeSession,
-        witnesses: &FxHashMap<NodeID, Symbol>,
-    ) -> TypedAST<Ty> {
+    pub fn finalize(self, session: &mut TypeSession) -> TypedAST<Ty> {
         TypedAST::<Ty> {
             decls: self
                 .decls
                 .into_iter()
-                .map(|d| d.finalize(session, witnesses))
+                .map(|d| d.finalize(session))
                 .collect(),
             stmts: self
                 .stmts
                 .into_iter()
-                .map(|s| s.finalize(session, witnesses))
+                .map(|s| s.finalize(session))
                 .collect(),
         }
     }
 }
 
 impl TypedStmt<InferTy> {
-    fn finalize(
-        self,
-        session: &mut TypeSession,
-        witnesses: &FxHashMap<NodeID, Symbol>,
-    ) -> TypedStmt<Ty> {
+    fn finalize(self, session: &mut TypeSession) -> TypedStmt<Ty> {
         TypedStmt {
             id: self.id,
             ty: session.finalize_ty(self.ty).as_mono_ty().clone(),
-            kind: self.kind.finalize(session, witnesses),
+            kind: self.kind.finalize(session),
         }
     }
 }
 
 impl TypedStmtKind<InferTy> {
-    fn finalize(
-        self,
-        session: &mut TypeSession,
-        witnesses: &FxHashMap<NodeID, Symbol>,
-    ) -> TypedStmtKind<Ty> {
+    fn finalize(self, session: &mut TypeSession) -> TypedStmtKind<Ty> {
         use TypedStmtKind::*;
         match self {
-            Expr(typed_expr) => Expr(typed_expr.finalize(session, witnesses)),
-            Assignment(lhs, rhs) => Assignment(
-                lhs.finalize(session, witnesses),
-                rhs.finalize(session, witnesses),
-            ),
+            Expr(typed_expr) => Expr(typed_expr.finalize(session)),
+            Assignment(lhs, rhs) => Assignment(lhs.finalize(session), rhs.finalize(session)),
             Handler { effect, func } => Handler {
                 effect,
-                func: func.finalize(session, witnesses),
+                func: func.finalize(session),
             },
-            Return(typed_expr) => Return(typed_expr.map(|e| e.finalize(session, witnesses))),
-            Continue(typed_expr) => Continue(typed_expr.map(|e| e.finalize(session, witnesses))),
-            Loop(cond, block) => Loop(
-                cond.finalize(session, witnesses),
-                block.finalize(session, witnesses),
-            ),
+            Return(typed_expr) => Return(typed_expr.map(|e| e.finalize(session))),
+            Continue(typed_expr) => Continue(typed_expr.map(|e| e.finalize(session))),
+            Loop(cond, block) => Loop(cond.finalize(session), block.finalize(session)),
             Break => Break,
         }
     }
 }
 
 impl TypedDecl<InferTy> {
-    fn finalize(
-        self,
-        session: &mut TypeSession,
-        witnesses: &FxHashMap<NodeID, Symbol>,
-    ) -> TypedDecl<Ty> {
+    fn finalize(self, session: &mut TypeSession) -> TypedDecl<Ty> {
         TypedDecl {
             id: self.id,
             ty: session.finalize_ty(self.ty).as_mono_ty().clone(),
-            kind: self.kind.finalize(session, witnesses),
+            kind: self.kind.finalize(session),
         }
     }
 }
 
 impl TypedBlock<InferTy> {
-    fn finalize(
-        self,
-        session: &mut TypeSession,
-        witnesses: &FxHashMap<NodeID, Symbol>,
-    ) -> TypedBlock<Ty> {
+    fn finalize(self, session: &mut TypeSession) -> TypedBlock<Ty> {
         TypedBlock {
             id: self.id,
-            body: self
-                .body
-                .into_iter()
-                .map(|e| e.finalize(session, witnesses))
-                .collect(),
+            body: self.body.into_iter().map(|e| e.finalize(session)).collect(),
             ret: session.finalize_ty(self.ret).as_mono_ty().clone(),
         }
     }
 }
 
 impl TypedFunc<InferTy> {
-    fn finalize(
-        self,
-        session: &mut TypeSession,
-        witnesses: &FxHashMap<NodeID, Symbol>,
-    ) -> TypedFunc<Ty> {
+    fn finalize(self, session: &mut TypeSession) -> TypedFunc<Ty> {
         TypedFunc {
             name: self.name,
             foralls: self.foralls,
@@ -162,21 +127,17 @@ impl TypedFunc<InferTy> {
                 }
             }),
             effects_row: session.finalize_row(self.effects_row),
-            body: self.body.finalize(session, witnesses),
+            body: self.body.finalize(session),
             ret: session.finalize_ty(self.ret).as_mono_ty().clone(),
         }
     }
 }
 
 impl TypedMatchArm<InferTy> {
-    fn finalize(
-        self,
-        session: &mut TypeSession,
-        witnesses: &FxHashMap<NodeID, Symbol>,
-    ) -> TypedMatchArm<Ty> {
+    fn finalize(self, session: &mut TypeSession) -> TypedMatchArm<Ty> {
         TypedMatchArm {
             pattern: self.pattern.finalize(session),
-            body: self.body.finalize(session, witnesses),
+            body: self.body.finalize(session),
         }
     }
 }
@@ -195,38 +156,26 @@ impl TypedPattern<InferTy> {
 }
 
 impl TypedRecordField<InferTy> {
-    fn finalize(
-        self,
-        session: &mut TypeSession,
-        witnesses: &FxHashMap<NodeID, Symbol>,
-    ) -> TypedRecordField<Ty> {
+    fn finalize(self, session: &mut TypeSession) -> TypedRecordField<Ty> {
         TypedRecordField {
             name: self.name,
-            value: self.value.finalize(session, witnesses),
+            value: self.value.finalize(session),
         }
     }
 }
 
 impl TypedNode<InferTy> {
-    fn finalize(
-        self,
-        session: &mut TypeSession,
-        witnesses: &FxHashMap<NodeID, Symbol>,
-    ) -> TypedNode<Ty> {
+    fn finalize(self, session: &mut TypeSession) -> TypedNode<Ty> {
         match self {
-            TypedNode::Decl(d) => TypedNode::Decl(d.finalize(session, witnesses)),
-            TypedNode::Expr(e) => TypedNode::Expr(e.finalize(session, witnesses)),
-            TypedNode::Stmt(s) => TypedNode::Stmt(s.finalize(session, witnesses)),
+            TypedNode::Decl(d) => TypedNode::Decl(d.finalize(session)),
+            TypedNode::Expr(e) => TypedNode::Expr(e.finalize(session)),
+            TypedNode::Stmt(s) => TypedNode::Stmt(s.finalize(session)),
         }
     }
 }
 
 impl TypedDeclKind<InferTy> {
-    fn finalize(
-        self,
-        session: &mut TypeSession,
-        witnesses: &FxHashMap<NodeID, Symbol>,
-    ) -> TypedDeclKind<Ty> {
+    fn finalize(self, session: &mut TypeSession) -> TypedDeclKind<Ty> {
         use TypedDeclKind::*;
         match self {
             Let {
@@ -236,7 +185,7 @@ impl TypedDeclKind<InferTy> {
             } => Let {
                 pattern: pattern.finalize(session),
                 ty: session.finalize_ty(ty).as_mono_ty().clone(),
-                initializer: initializer.map(|e| e.finalize(session, witnesses)),
+                initializer: initializer.map(|e| e.finalize(session)),
             },
             StructDef {
                 symbol,
@@ -248,7 +197,7 @@ impl TypedDeclKind<InferTy> {
                 symbol,
                 initializers: initializers
                     .into_iter()
-                    .map(|(k, v)| (k, v.finalize(session, witnesses)))
+                    .map(|(k, v)| (k, v.finalize(session)))
                     .collect(),
                 properties: properties
                     .into_iter()
@@ -256,7 +205,7 @@ impl TypedDeclKind<InferTy> {
                     .collect(),
                 instance_methods: instance_methods
                     .into_iter()
-                    .map(|(k, v)| (k, v.finalize(session, witnesses)))
+                    .map(|(k, v)| (k, v.finalize(session)))
                     .collect(),
                 typealiases: typealiases
                     .into_iter()
@@ -271,7 +220,7 @@ impl TypedDeclKind<InferTy> {
                 symbol,
                 instance_methods: instance_methods
                     .into_iter()
-                    .map(|(k, v)| (k, v.finalize(session, witnesses)))
+                    .map(|(k, v)| (k, v.finalize(session)))
                     .collect(),
                 typealiases: typealiases
                     .into_iter()
@@ -298,7 +247,7 @@ impl TypedDeclKind<InferTy> {
                     .collect(),
                 instance_methods: instance_methods
                     .into_iter()
-                    .map(|(k, v)| (k, v.finalize(session, witnesses)))
+                    .map(|(k, v)| (k, v.finalize(session)))
                     .collect(),
                 typealiases: typealiases
                     .into_iter()
@@ -315,7 +264,7 @@ impl TypedDeclKind<InferTy> {
                 symbol,
                 instance_methods: instance_methods
                     .into_iter()
-                    .map(|(k, v)| (k, v.finalize(session, witnesses)))
+                    .map(|(k, v)| (k, v.finalize(session)))
                     .collect(),
                 instance_method_requirements: instance_method_requirements
                     .into_iter()
@@ -335,26 +284,17 @@ impl TypedDeclKind<InferTy> {
 }
 
 impl TypedExpr<InferTy> {
-    fn finalize(
-        self,
-        session: &mut TypeSession,
-        witnesses: &FxHashMap<NodeID, Symbol>,
-    ) -> TypedExpr<Ty> {
+    fn finalize(self, session: &mut TypeSession) -> TypedExpr<Ty> {
         TypedExpr {
             id: self.id,
             ty: session.finalize_ty(self.ty).as_mono_ty().clone(),
-            kind: self.kind.finalize(self.id, session, witnesses),
+            kind: self.kind.finalize(session),
         }
     }
 }
 
 impl TypedExprKind<InferTy> {
-    fn finalize(
-        self,
-        node_id: NodeID,
-        session: &mut TypeSession,
-        witnesses: &FxHashMap<NodeID, Symbol>,
-    ) -> TypedExprKind<Ty> {
+    fn finalize(self, session: &mut TypeSession) -> TypedExprKind<Ty> {
         use TypedExprKind::*;
         match self {
             Hole => Hole,
@@ -366,83 +306,47 @@ impl TypedExprKind<InferTy> {
                     )
                     .into(),
             ),
-            LiteralArray(exprs) => LiteralArray(
-                exprs
-                    .into_iter()
-                    .map(|e| e.finalize(session, witnesses))
-                    .collect(),
-            ),
+            LiteralArray(exprs) => {
+                LiteralArray(exprs.into_iter().map(|e| e.finalize(session)).collect())
+            }
             LiteralInt(v) => LiteralInt(v),
             LiteralFloat(v) => LiteralFloat(v),
             LiteralTrue => LiteralTrue,
             LiteralFalse => LiteralFalse,
             LiteralString(v) => LiteralString(v),
-            Tuple(exprs) => Tuple(
-                exprs
-                    .into_iter()
-                    .map(|e| e.finalize(session, witnesses))
-                    .collect(),
-            ),
-            Block(block) => Block(block.finalize(session, witnesses)),
+            Tuple(exprs) => Tuple(exprs.into_iter().map(|e| e.finalize(session)).collect()),
+            Block(block) => Block(block.finalize(session)),
             CallEffect { effect, args } => CallEffect {
                 effect,
-                args: args
-                    .into_iter()
-                    .map(|a| a.finalize(session, witnesses))
-                    .collect(),
+                args: args.into_iter().map(|a| a.finalize(session)).collect(),
             },
             Call {
                 callee,
+                callee_ty,
                 type_args,
                 args,
-                resolved,
+                callee_sym,
             } => {
-                let callee = callee.finalize(session, witnesses);
+                let callee = callee.finalize(session);
+                let callee_ty = session.finalize_ty(callee_ty).as_mono_ty().clone();
                 let type_args = type_args
                     .into_iter()
                     .map(|t| session.finalize_ty(t).as_mono_ty().clone())
                     .collect();
-                let args: Vec<_> = args
-                    .into_iter()
-                    .map(|e| e.finalize(session, witnesses))
-                    .collect();
-
-                let resolved = resolved.or_else(|| {
-                    try_resolve_protocol_constructor_default_call(&callee, &args, session)
-                });
-
+                let args: Vec<_> = args.into_iter().map(|e| e.finalize(session)).collect();
                 Call {
                     callee: callee.into(),
+                    callee_ty,
                     type_args,
                     args,
-                    resolved,
+                    callee_sym,
                 }
             }
-            Member { receiver, label } => {
-                // Check if this member access has a recorded witness (protocol member)
-                if let Some(&witness) = witnesses.get(&node_id) {
-                    ProtocolMember {
-                        receiver: receiver.finalize(session, witnesses).into(),
-                        label,
-                        witness,
-                    }
-                } else {
-                    Member {
-                        receiver: receiver.finalize(session, witnesses).into(),
-                        label,
-                    }
-                }
-            }
-            ProtocolMember {
-                receiver,
+            Member { receiver, label } => Member {
+                receiver: receiver.finalize(session).into(),
                 label,
-                witness,
-            } => ProtocolMember {
-                receiver: receiver.finalize(session, witnesses).into(),
-                label,
-                witness,
             },
-            Func(func) => Func(func.finalize(session, witnesses)),
+            Func(func) => Func(func.finalize(session)),
             Variable(sym) => Variable(sym),
             Constructor(sym, items) => Constructor(
                 sym,
@@ -452,21 +356,16 @@ impl TypedExprKind<InferTy> {
                     .collect(),
             ),
             If(cond, conseq, alt) => If(
-                cond.finalize(session, witnesses).into(),
-                conseq.finalize(session, witnesses),
-                alt.finalize(session, witnesses),
+                cond.finalize(session).into(),
+                conseq.finalize(session),
+                alt.finalize(session),
             ),
             Match(scrutinee, arms) => Match(
-                scrutinee.finalize(session, witnesses).into(),
-                arms.into_iter()
-                    .map(|a| a.finalize(session, witnesses))
-                    .collect(),
+                scrutinee.finalize(session).into(),
+                arms.into_iter().map(|a| a.finalize(session)).collect(),
             ),
             RecordLiteral { fields } => RecordLiteral {
-                fields: fields
-                    .into_iter()
-                    .map(|f| f.finalize(session, witnesses))
-                    .collect(),
+                fields: fields.into_iter().map(|f| f.finalize(session)).collect(),
             },
         }
     }
@@ -1217,23 +1116,17 @@ pub enum TypedExprKind<T: SomeType> {
     },
     Call {
         callee: Box<TypedExpr<T>>,
+        callee_ty: T,
         type_args: Vec<T>,
         args: Vec<TypedExpr<T>>,
         #[drive(skip)]
-        resolved: Option<ResolvedCallTarget>,
+        callee_sym: Option<Symbol>,
     },
     // A member access on a concrete type (property, instance method, etc.)
     Member {
         receiver: Box<TypedExpr<T>>,
         #[drive(skip)]
         label: Label,
-    },
-    ProtocolMember {
-        receiver: Box<TypedExpr<T>>,
-        #[drive(skip)]
-        label: Label,
-        #[drive(skip)]
-        witness: Symbol,
     },
     // Function stuff
     Func(TypedFunc<T>),
@@ -1285,27 +1178,20 @@ impl<T: SomeType, U: SomeType> Mappable<T, U> for TypedExprKind<T> {
             Block(typed_block) => Block(typed_block.mapping(m, r)),
             Call {
                 callee,
+                callee_ty,
                 type_args,
                 args,
-                resolved,
+                callee_sym,
             } => Call {
                 callee: callee.mapping(m, r).into(),
+                callee_ty: m(callee_ty),
                 type_args: type_args.into_iter().map(&mut *m).collect(),
                 args: args.into_iter().map(|e| e.mapping(m, r)).collect(),
-                resolved,
+                callee_sym,
             },
             Member { receiver, label } => Member {
                 receiver: receiver.mapping(m, r).into(),
                 label,
-            },
-            ProtocolMember {
-                receiver,
-                label,
-                witness,
-            } => ProtocolMember {
-                receiver: receiver.mapping(m, r).into(),
-                label,
-                witness,
             },
             Func(typed_func) => Func(typed_func.mapping(m, r)),
             Variable(symbol) => Variable(symbol),
@@ -1356,62 +1242,4 @@ impl<T: SomeType, U: SomeType> Mappable<T, U> for TypedExpr<T> {
             kind: self.kind.mapping(m, r),
         }
     }
-}
-
-fn symbol_for_concrete_ty(ty: &Ty) -> Option<Symbol> {
-    match ty {
-        Ty::Primitive(sym) => Some(*sym),
-        Ty::Nominal { symbol, .. } => Some(*symbol),
-        _ => None,
-    }
-}
-
-fn witness_subs_for_conformance(
-    session: &mut TypeSession,
-    protocol_sym: Symbol,
-    conforming_sym: Symbol,
-) -> FxHashMap<Symbol, Symbol> {
-    let Symbol::Protocol(protocol_id) = protocol_sym else {
-        return Default::default();
-    };
-
-    let key = ConformanceKey {
-        protocol_id,
-        conforming_id: conforming_sym,
-    };
-    session
-        .lookup_conformance(&key)
-        .map(|c| c.witnesses.requirements)
-        .unwrap_or_default()
-}
-
-fn try_resolve_protocol_constructor_default_call(
-    callee: &TypedExpr<Ty>,
-    args: &[TypedExpr<Ty>],
-    session: &mut TypeSession,
-) -> Option<ResolvedCallTarget> {
-    let TypedExprKind::Member { receiver, label } = &callee.kind else {
-        return None;
-    };
-    let TypedExprKind::Constructor(protocol_sym @ Symbol::Protocol(_), _) = &receiver.kind else {
-        return None;
-    };
-
-    let member_sym = session
-        .type_catalog
-        .lookup_member(protocol_sym, label)
-        .map(|(sym, _src)| sym)
-        .or_else(|| session.modules.lookup_member(protocol_sym, label))?;
-    if !matches!(member_sym, Symbol::InstanceMethod(_)) {
-        return None;
-    }
-
-    let self_arg = args.first()?;
-    let conforming_sym = symbol_for_concrete_ty(&self_arg.ty)?;
-
-    let witness_subs = witness_subs_for_conformance(session, *protocol_sym, conforming_sym);
-    Some(ResolvedCallTarget {
-        symbol: member_sym,
-        witness_subs,
-    })
 }

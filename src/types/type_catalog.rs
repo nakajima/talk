@@ -11,6 +11,7 @@ use crate::{
         infer_row::RowParamId,
         infer_ty::{InferTy, TypeParamId},
         ty::{SomeType, Ty},
+        type_operations::UnificationSubstitutions,
         type_session::{MemberSource, TypeSession},
         types::TypeEntry,
     },
@@ -120,8 +121,51 @@ impl From<Nominal<InferTy>> for Nominal<Ty> {
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct TrackedInstantiations<T: SomeType> {
-    pub ty: FxHashMap<(NodeID, TypeParamId), T>,
-    pub row: FxHashMap<(NodeID, RowParamId), T::RowType>,
+    pub ty: FxHashMap<NodeID, FxHashMap<TypeParamId, T>>,
+    pub row: FxHashMap<NodeID, FxHashMap<RowParamId, T::RowType>>,
+}
+
+impl TrackedInstantiations<InferTy> {
+    pub fn apply(
+        mut self,
+        session: &mut TypeSession,
+        substitutions: &mut UnificationSubstitutions,
+    ) -> Self {
+        let ty = std::mem::take(&mut self.ty);
+        let row = std::mem::take(&mut self.row);
+
+        let mut instantiations = TrackedInstantiations::default();
+        for (id, entries) in ty {
+            for (param, ty) in entries {
+                instantiations
+                    .ty
+                    .entry(id)
+                    .or_default()
+                    .insert(param, session.apply(ty, substitutions));
+            }
+        }
+        for (id, entries) in row {
+            for (param, row) in entries {
+                instantiations
+                    .row
+                    .entry(id)
+                    .or_default()
+                    .insert(param, session.apply_row(row, substitutions));
+            }
+        }
+
+        instantiations
+    }
+}
+
+impl<T: SomeType> TrackedInstantiations<T> {
+    pub fn insert_ty(&mut self, id: NodeID, param: TypeParamId, ty: T) {
+        self.ty.entry(id).or_default().insert(param, ty);
+    }
+
+    pub fn insert_row(&mut self, id: NodeID, param: RowParamId, ty: T::RowType) {
+        self.row.entry(id).or_default().insert(param, ty);
+    }
 }
 
 impl<T: SomeType> Default for TrackedInstantiations<T> {
@@ -175,17 +219,23 @@ impl<T: SomeType> Default for TypeCatalog<T> {
 impl TypeCatalog<InferTy> {
     pub fn finalize(self, session: &mut TypeSession) -> TypeCatalog<Ty> {
         let mut instantiations = TrackedInstantiations::default();
-        for (key, infer_ty) in self.instantiations.ty {
-            let ty = match session.finalize_ty(infer_ty) {
-                TypeEntry::Mono(ty) => ty.clone(),
-                TypeEntry::Poly(scheme) => scheme.ty.clone(),
-            };
-            instantiations.ty.insert(key, ty);
+        for (id, entries) in self.instantiations.ty {
+            for (param, ty) in entries {
+                let ty = match session.finalize_ty(ty) {
+                    TypeEntry::Mono(ty) => ty.clone(),
+                    TypeEntry::Poly(scheme) => scheme.ty.clone(),
+                };
+                instantiations.ty.entry(id).or_default().insert(param, ty);
+            }
         }
-        for (key, infer_row) in self.instantiations.row {
-            instantiations
-                .row
-                .insert(key, session.finalize_row(infer_row));
+        for (id, entries) in self.instantiations.row {
+            for (param, row) in entries {
+                instantiations
+                    .row
+                    .entry(id)
+                    .or_default()
+                    .insert(param, session.finalize_row(row));
+            }
         }
         TypeCatalog {
             nominals: self
@@ -293,6 +343,18 @@ impl<T: SomeType> TypeCatalog<T> {
             }
         }
 
+        None
+    }
+
+    pub fn protocol_for_method_requirement(&self, method_req: &Symbol) -> Option<Symbol> {
+        // TODO: this is gonna be slow. we can make it faster probably.
+        for (protocol_sym, entries) in &self.method_requirements {
+            for (_, sym) in entries {
+                if sym == method_req {
+                    return Some(*protocol_sym);
+                }
+            }
+        }
         None
     }
 
@@ -405,13 +467,27 @@ impl TypeCatalog<Ty> {
                     .instantiations
                     .ty
                     .into_iter()
-                    .map(|(k, v)| (k, v.import(module_id)))
+                    .map(|(k, v)| {
+                        (
+                            k,
+                            v.into_iter()
+                                .map(|(k, v)| (k, v.import(module_id)))
+                                .collect(),
+                        )
+                    })
                     .collect(),
                 row: self
                     .instantiations
                     .row
                     .into_iter()
-                    .map(|(k, v)| (k, v.import(module_id)))
+                    .map(|(k, v)| {
+                        (
+                            k,
+                            v.into_iter()
+                                .map(|(k, v)| (k, v.import(module_id)))
+                                .collect(),
+                        )
+                    })
                     .collect(),
             },
             effects: self

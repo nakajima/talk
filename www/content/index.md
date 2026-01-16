@@ -164,7 +164,7 @@ Cat().handleDSTChange()
 Dog().handleDSTChange()
 ```
 
-Check it out, we can parse effects (the rest is one big todo)
+Check it out, we've got effects:
 
 ```tlk
 // Define an effect. Effect names have the prefix `'`

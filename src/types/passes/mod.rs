@@ -2,6 +2,7 @@ use crate::types::{infer_row::InferRow, infer_ty::InferTy};
 
 pub mod inference_pass;
 pub mod specialization_pass;
+pub mod witness_resolution_pass;
 
 // Helpers
 pub fn uncurry_function(ty: InferTy) -> (Vec<InferTy>, InferTy, InferRow) {

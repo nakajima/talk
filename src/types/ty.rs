@@ -1,10 +1,8 @@
 use std::hash::Hash;
 
-use derive_visitor::{Drive, DriveMut};
-use indexmap::IndexSet;
-
 use crate::{
     compiling::module::ModuleId,
+    ir::lowerer::curry_ty,
     label::Label,
     name::Name,
     name_resolution::symbol::Symbol,
@@ -14,8 +12,12 @@ use crate::{
         mappable::Mappable,
         row::Row,
         scheme::ForAll,
+        type_error::TypeError,
+        types::TypeEntry,
     },
 };
+use derive_visitor::{Drive, DriveMut};
+use indexmap::{IndexMap, IndexSet};
 
 pub enum BaseRow<T: SomeType> {
     Empty,
@@ -44,6 +46,7 @@ pub trait SomeType:
     + Mappable<Self, Self, Output = Self>
 {
     type RowType: RowType<T = Self>;
+    type Entry: Drive + DriveMut + PartialEq + Clone + std::fmt::Debug;
 
     fn void() -> Self;
     fn contains_var(&self) -> bool;
@@ -52,6 +55,7 @@ pub trait SomeType:
 
 impl SomeType for Ty {
     type RowType = Row;
+    type Entry = TypeEntry;
 
     fn void() -> Self {
         Ty::Void
@@ -212,6 +216,55 @@ impl std::fmt::Display for Ty {
     }
 }
 
+#[derive(Default, Debug, Clone, PartialEq)]
+pub struct Specializations {
+    pub ty: IndexMap<TypeParamId, Ty>,
+    pub row: IndexMap<RowParamId, Row>,
+}
+impl Specializations {
+    pub fn is_empty(&self) -> bool {
+        self.ty.is_empty() && self.row.is_empty()
+    }
+
+    pub fn extend(&mut self, other: Specializations) {
+        self.ty.extend(
+            other
+                .ty
+                .into_iter()
+                .filter(|(_, v)| !matches!(v, Ty::Param(..))),
+        );
+        self.row.extend(
+            other
+                .row
+                .into_iter()
+                .filter(|(_, v)| !matches!(v, Row::Param(..))),
+        );
+    }
+
+    pub fn apply(&self, ty: Ty) -> Ty {
+        ty.mapping(
+            &mut |t| {
+                if let Ty::Param(id) = t
+                    && let Some(replacement) = self.ty.get(&id)
+                {
+                    replacement.clone()
+                } else {
+                    t
+                }
+            },
+            &mut |r| {
+                if let Row::Param(id) = r
+                    && let Some(replacement) = self.row.get(&id)
+                {
+                    replacement.clone()
+                } else {
+                    r
+                }
+            },
+        )
+    }
+}
+
 #[allow(non_upper_case_globals)]
 #[allow(non_snake_case)]
 impl Ty {
@@ -230,6 +283,97 @@ impl Ty {
     }
     pub fn Array(t: Ty) -> Ty {
         InferTy::Array(t.into()).into()
+    }
+
+    pub fn collect_specializations(&self, concrete: &Ty) -> Result<Specializations, TypeError> {
+        let mut result = Specializations::default();
+        match (self, concrete) {
+            (Ty::Primitive(..), Ty::Primitive(..)) => (),
+            (Ty::Param(id), other) => {
+                if !matches!(other, Ty::Param(..)) {
+                    result.ty.insert(*id, other.clone());
+                }
+            }
+            (
+                Ty::Constructor {
+                    params: lhs_params,
+                    ret: lhs_ret,
+                    ..
+                },
+                Ty::Constructor {
+                    params: rhs_params,
+                    ret: rhs_ret,
+                    ..
+                },
+            ) => {
+                for (lhs, rhs) in lhs_params.iter().zip(rhs_params) {
+                    result.ty.extend(lhs.collect_specializations(rhs)?.ty);
+                }
+
+                result
+                    .ty
+                    .extend(lhs_ret.collect_specializations(rhs_ret)?.ty);
+            }
+            (
+                Ty::Constructor {
+                    params: constructor_params,
+                    ret: box constructor_ret,
+                    ..
+                },
+                Ty::Func(func_params, func_ret, _),
+            )
+            | (
+                Ty::Func(func_params, func_ret, _),
+                Ty::Constructor {
+                    params: constructor_params,
+                    ret: box constructor_ret,
+                    ..
+                },
+            ) => (),
+            (
+                Ty::Func(lhs_param, lhs_ret, lhs_effects),
+                Ty::Func(rhs_param, rhs_ret, rhs_effects),
+            ) => {
+                result
+                    .ty
+                    .extend(lhs_param.collect_specializations(rhs_param)?.ty);
+                result
+                    .ty
+                    .extend(lhs_ret.collect_specializations(rhs_ret)?.ty);
+                result
+                    .row
+                    .extend(lhs_effects.collect_specializations(rhs_effects)?.row)
+            }
+            (Ty::Tuple(lhs_items), Ty::Tuple(rhs_items)) => {
+                for (lhs, rhs) in lhs_items.iter().zip(rhs_items) {
+                    result.ty.extend(lhs.collect_specializations(rhs)?.ty);
+                }
+            }
+            (Ty::Record(.., lhs_row), Ty::Record(.., rhs_row)) => {
+                result
+                    .row
+                    .extend(lhs_row.collect_specializations(rhs_row)?.row);
+            }
+            (
+                Ty::Nominal {
+                    type_args: lhs_args,
+                    ..
+                },
+                Ty::Nominal {
+                    type_args: rhs_args,
+                    ..
+                },
+            ) => {
+                for (lhs, rhs) in lhs_args.iter().zip(rhs_args) {
+                    result.ty.extend(lhs.collect_specializations(rhs)?.ty);
+                }
+            }
+            tup => {
+                tracing::error!("{tup:?}");
+                return Err(TypeError::SpecializationMismatch);
+            }
+        }
+        Ok(result)
     }
 
     pub fn collect_foralls(&self) -> IndexSet<ForAll> {

@@ -59,7 +59,7 @@ pub struct TypeSession {
     pub aliases: FxHashMap<Symbol, Scheme<InferTy>>,
     pub(super) reverse_instantiations: ReverseInstantiations,
 
-    pub protocol_member_witnesses: FxHashMap<NodeID, Symbol>,
+    pub protocol_members: FxHashMap<NodeID, Symbol>,
     pub(crate) symbols: Symbols,
     pub(crate) resolved_names: ResolvedNames,
 
@@ -162,7 +162,7 @@ impl TypeSession {
             type_catalog: catalog,
             modules,
             aliases: Default::default(),
-            protocol_member_witnesses: Default::default(),
+            protocol_members: Default::default(),
 
             meta_vars: Default::default(),
             row_vars: Default::default(),
@@ -191,7 +191,7 @@ impl TypeSession {
         constraints.wake_symbols(&[symbol]);
     }
 
-    pub fn finalize(mut self) -> Result<Types, TypeError> {
+    pub fn finalize(mut self) -> Result<(Types, FxHashMap<NodeID, Symbol>), TypeError> {
         let types_by_node = std::mem::take(&mut self.types_by_node);
         let entries = types_by_node
             .into_iter()
@@ -228,7 +228,7 @@ impl TypeSession {
             match_plans: Default::default(),
         };
 
-        Ok(types)
+        Ok((types, self.protocol_members))
     }
 
     fn shallow_generalize_row(&mut self, row: InferRow) -> InferRow {
@@ -477,19 +477,8 @@ impl TypeSession {
             self.term_env.insert(key, entry);
         }
 
-        #[allow(clippy::unwrap_used)]
-        for key in self
-            .type_catalog
-            .instantiations
-            .ty
-            .keys()
-            .copied()
-            .collect_vec()
-        {
-            let ty = self.type_catalog.instantiations.ty.remove(&key).unwrap();
-            let ty = self.apply(ty.clone(), substitutions);
-            self.type_catalog.instantiations.ty.insert(key, ty);
-        }
+        let instantiations = std::mem::take(&mut self.type_catalog.instantiations);
+        self.type_catalog.instantiations = instantiations.apply(self, substitutions);
 
         let mut conformances = std::mem::take(&mut self.type_catalog.conformances);
         for conformance in conformances.values_mut() {
@@ -498,20 +487,6 @@ impl TypeSession {
             }
         }
         _ = std::mem::replace(&mut self.type_catalog.conformances, conformances);
-
-        #[allow(clippy::unwrap_used)]
-        for key in self
-            .type_catalog
-            .instantiations
-            .row
-            .keys()
-            .copied()
-            .collect_vec()
-        {
-            let row = self.type_catalog.instantiations.row.remove(&key).unwrap();
-            let row = self.apply_row(row, substitutions);
-            self.type_catalog.instantiations.row.insert(key, row);
-        }
     }
 
     pub fn get_term_env(&self) -> &TermEnv {
@@ -554,7 +529,7 @@ impl TypeSession {
             .unwrap_or_else(|_| unreachable!());
     }
 
-    #[instrument(level = tracing::Level::TRACE, skip(self, unsolved, context))]
+    #[instrument(level = tracing::Level::TRACE, skip(self, unsolved, context, constraints))]
     pub fn generalize(
         &mut self,
         ty: InferTy,

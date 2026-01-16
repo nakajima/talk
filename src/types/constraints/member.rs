@@ -165,7 +165,7 @@ impl Member {
                 };
 
                 // Record the witness for protocol member access
-                session.protocol_member_witnesses.insert(self.node_id, req);
+                session.protocol_members.insert(self.node_id, req);
 
                 return SolveResult::Solved(solved_metas);
             }
@@ -225,8 +225,9 @@ impl Member {
                 context
                     .instantiations
                     .insert_ty(self.node_id, *param_id, meta);
-                session.type_catalog.instantiations.ty.insert(
-                    (self.node_id, *param_id),
+                session.type_catalog.instantiations.insert_ty(
+                    self.node_id,
+                    *param_id,
                     InferTy::Var {
                         id: meta,
                         level: context.level,
