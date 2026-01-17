@@ -23,6 +23,7 @@ pub mod typed_ast;
 #[allow(clippy::module_inception)]
 pub mod types;
 pub mod types_decorator;
+pub mod variational;
 pub mod vars;
 
 #[cfg(test)]

@@ -16,6 +16,7 @@ use crate::{
         term_environment::EnvEntry,
         ty::{SomeType, Ty},
         type_catalog::TypeCatalog,
+        variational::ChoiceStore,
     },
 };
 
@@ -101,6 +102,9 @@ pub struct Types {
     pub catalog: TypeCatalog<Ty>,
     pub(crate) match_plans: FxHashMap<NodeID, MatchPlan>,
     pub call_tree: CallTree<RawCallee>,
+    /// Variational choices for protocol method resolution.
+    /// Maps call sites to alternatives with witness symbols.
+    pub choices: ChoiceStore,
 }
 
 impl Types {
@@ -131,6 +135,7 @@ impl Types {
             catalog: self.catalog.import_as(module_id),
             match_plans: self.match_plans,
             call_tree: self.call_tree, // TODO: may need import_as for symbols
+            choices: self.choices, // TODO: may need import_as for symbols
         }
     }
 }

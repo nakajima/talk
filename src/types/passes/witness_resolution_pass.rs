@@ -2,32 +2,28 @@ use derive_visitor::{DriveMut, VisitorMut};
 use rustc_hash::FxHashMap;
 
 use crate::{
-    name_resolution::{
-        call_tree::RawCallee,
-        name_resolver::ResolvedNames,
-        symbol::{ProtocolId, Symbol},
-    },
+    label::Label,
+    name_resolution::{name_resolver::ResolvedNames, symbol::{ProtocolId, Symbol}},
     node_id::NodeID,
     types::{
         conformance::ConformanceKey,
         ty::Ty,
         type_error::TypeError,
-        typed_ast::{TypedAST, TypedExpr, TypedExprKind, TypedFunc},
+        typed_ast::{TypedAST, TypedExpr, TypedExprKind},
         types::Types,
+        variational::{AlternativeIndex, ChoiceAlternative, DimensionId},
     },
 };
 
 type TypedExprTy = TypedExpr<Ty>;
-type TypedFuncTy = TypedFunc<Ty>;
 
 #[derive(VisitorMut)]
-#[visitor(TypedExprTy(enter, exit), TypedFuncTy(enter, exit))]
+#[visitor(TypedExprTy(enter, exit))]
 pub struct WitnessResolutionPass {
     ast: TypedAST<Ty>,
     types: Types,
     resolved_names: ResolvedNames,
     protocol_members: FxHashMap<NodeID, Symbol>,
-    current_function: Vec<Symbol>,
 }
 
 impl WitnessResolutionPass {
@@ -42,29 +38,52 @@ impl WitnessResolutionPass {
             types,
             resolved_names,
             protocol_members,
-            current_function: vec![],
         }
     }
 
-    fn enter_typed_func_ty(&mut self, func: &mut TypedFunc<Ty>) {
-        self.current_function.push(func.name);
-    }
+    /// Register variational choices for protocol method resolution.
+    /// For each conformance to the protocol, register the witness as an alternative.
+    fn register_protocol_method_choices(
+        &mut self,
+        callee_id: NodeID,
+        protocol_id: ProtocolId,
+        method_req: Symbol,
+        label: &Label,
+    ) {
+        let dimension = DimensionId(callee_id);
 
-    fn exit_typed_func_ty(&mut self, _func: &mut TypedFunc<Ty>) {
-        self.current_function.pop();
-    }
+        // Find all conformances to this protocol and register each as an alternative
+        let conformances: Vec<_> = self
+            .types
+            .catalog
+            .conformances
+            .iter()
+            .filter(|(key, _)| key.protocol_id == protocol_id)
+            .map(|(key, conf)| (key.conforming_id, conf.witnesses.clone()))
+            .collect();
 
-    /// Update the call_tree to record a method requirement call
-    fn record_method_requirement(&mut self, method_req: Symbol, protocol_id: ProtocolId, callee_id: NodeID) {
-        let Some(caller) = self.current_function.last().copied() else {
-            return;
-        };
+        for (i, (conforming_id, witnesses)) in conformances.iter().enumerate() {
+            // Get the witness method - first try by label, then by method requirement
+            let witness_sym = witnesses
+                .methods
+                .get(label)
+                .copied()
+                .or_else(|| witnesses.requirements.get(&method_req).copied());
 
-        // Record the method requirement in the call_tree
-        self.types.call_tree.track(
-            caller,
-            RawCallee::MethodRequirement { method_req, protocol_id, callee_id },
-        );
+            if let Some(witness) = witness_sym {
+                let alternative = ChoiceAlternative {
+                    conforming_type: *conforming_id,
+                    witness_sym: witness,
+                    protocol_id,
+                };
+
+                self.types.choices.register_alternative(
+                    dimension,
+                    AlternativeIndex(i),
+                    alternative,
+                );
+            }
+        }
     }
 
     pub fn drive(mut self) -> Result<(TypedAST<Ty>, Types, ResolvedNames), TypeError> {
@@ -119,8 +138,9 @@ impl WitnessResolutionPass {
                 };
 
                 let Ok(conforming_sym) = self.symbol_from_ty(&self_arg.ty) else {
-                    // Can't determine conforming type (e.g., type param) - record as method requirement
-                    self.record_method_requirement(req_sym, protocol_id, callee.id);
+                    // Can't determine conforming type (e.g., type param)
+                    // Register choices for variational resolution
+                    self.register_protocol_method_choices(callee.id, protocol_id, req_sym, &label);
                     callee.kind = TypedExprKind::Variable(req_sym);
                     return;
                 };
@@ -131,16 +151,23 @@ impl WitnessResolutionPass {
                     conforming_id: conforming_sym,
                 };
 
-                if let Some(witness) = self
-                    .types
-                    .catalog
-                    .conformances
-                    .get(&key)
-                    .and_then(|c| c.witnesses.requirements.get(&req_sym))
-                {
-                    callee.kind = TypedExprKind::Variable(*witness);
+                if let Some(conformance) = self.types.catalog.conformances.get(&key) {
+                    // Try both methods (by label) and requirements (by symbol)
+                    let witness = conformance
+                        .witnesses
+                        .methods
+                        .get(&label)
+                        .copied()
+                        .or_else(|| conformance.witnesses.requirements.get(&req_sym).copied());
+
+                    if let Some(witness) = witness {
+                        callee.kind = TypedExprKind::Variable(witness);
+                    } else {
+                        // Fall back to method requirement if witness not found
+                        callee.kind = TypedExprKind::Variable(req_sym);
+                    }
                 } else {
-                    // Fall back to method requirement if witness not found
+                    // Fall back to method requirement if conformance not found
                     callee.kind = TypedExprKind::Variable(req_sym);
                 }
                 return;

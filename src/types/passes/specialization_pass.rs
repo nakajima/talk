@@ -18,6 +18,7 @@ use crate::{
             TypedAST, TypedExpr, TypedExprKind, TypedRecordField, TypedStmt, TypedStmtKind,
         },
         types::{TypeEntry, Types},
+        variational::DimensionId,
     },
 };
 
@@ -262,7 +263,27 @@ impl SpecializationPass {
             };
 
             self.current_specializations.push(specializations.clone());
-            let caller = self.symbol_for_callee(&callee, &expr.ty, &specializations)?;
+            let mut caller = self.symbol_for_callee(&callee, &expr.ty, &specializations)?;
+
+            // For MethodRequirement symbols, resolve via variational choices
+            if matches!(caller, Symbol::MethodRequirement(_)) {
+                // The first arg is the receiver (added by WitnessResolutionPass)
+                if let Some(first_arg) = args.first() {
+                    // Apply specializations to get the concrete receiver type
+                    let receiver_ty = specializations.apply(first_arg.ty.clone());
+                    if let Ok(receiver_sym) = self.symbol_from_ty(&receiver_ty, &specializations) {
+                        // Resolve using choices
+                        if let Some(witness) = self
+                            .types
+                            .choices
+                            .resolve_for_type(DimensionId(callee.id), receiver_sym)
+                        {
+                            caller = witness;
+                        }
+                    }
+                }
+            }
+
             let mut specialized_callee = self.visit_expr(callee.clone())?;
             let callee_sym = self.specialize(&caller, &specializations);
             self.specialize_callees(caller, &specializations)?;
@@ -376,6 +397,13 @@ impl SpecializationPass {
                     .lookup_static_member(&receiver_sym, label)
                 {
                     Ok(sym)
+                } else if let Some(witness_sym) = self
+                    .types
+                    .choices
+                    .resolve_for_type(DimensionId(callee.id), receiver_sym)
+                {
+                    // Variational resolution: use choices to find the witness
+                    Ok(witness_sym)
                 } else {
                     Err(TypeError::MemberNotFound(
                         receiver.ty.clone().into(),
@@ -540,43 +568,6 @@ impl SpecializationPass {
                     // Resolved variants - symbol already known
                     RawCallee::Property(sym) | RawCallee::Method(sym) => {
                         (sym, specializations.clone())
-                    }
-                    RawCallee::MethodRequirement {
-                        method_req,
-                        callee_id,
-                        ..
-                    } => {
-                        // Look up instantiations for this specific method requirement call site
-                        let mut callee_specs = Specializations::default();
-                        if let Some(ty_instantiations) =
-                            self.types.catalog.instantiations.ty.get(&callee_id)
-                        {
-                            for (param, ty) in ty_instantiations {
-                                // Apply current specializations to the instantiated type
-                                let specialized_ty = specializations.apply(ty.clone());
-                                if !matches!(specialized_ty, Ty::Param(..)) {
-                                    callee_specs.ty.insert(*param, specialized_ty);
-                                }
-                            }
-                        }
-                        if let Some(row_instantiations) =
-                            self.types.catalog.instantiations.row.get(&callee_id)
-                        {
-                            for (param, row) in row_instantiations {
-                                // Apply row specializations
-                                let specialized_row = if let Row::Param(row_id) = row
-                                    && let Some(replacement) = specializations.row.get(row_id)
-                                {
-                                    replacement.clone()
-                                } else {
-                                    row.clone()
-                                };
-                                if !matches!(specialized_row, Row::Param(..)) {
-                                    callee_specs.row.insert(*param, specialized_row);
-                                }
-                            }
-                        }
-                        (method_req, callee_specs)
                     }
                 };
 

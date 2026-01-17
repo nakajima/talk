@@ -1,7 +1,7 @@
 use indexmap::IndexSet;
 use rustc_hash::FxHashMap;
 
-use crate::{label::Label, name_resolution::symbol::{ProtocolId, Symbol}, node_id::NodeID};
+use crate::{label::Label, name_resolution::symbol::Symbol, node_id::NodeID};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RawCallee {
@@ -11,11 +11,6 @@ pub enum RawCallee {
     // Resolved variants (populated during type checking)
     Property(Symbol),
     Method(Symbol),
-    MethodRequirement {
-        method_req: Symbol,
-        protocol_id: ProtocolId,
-        callee_id: NodeID,
-    },
 }
 
 impl std::hash::Hash for RawCallee {
@@ -37,11 +32,6 @@ impl std::hash::Hash for RawCallee {
             }
             Self::Property(sym) => sym.hash(state),
             Self::Method(sym) => sym.hash(state),
-            Self::MethodRequirement { method_req, protocol_id, callee_id } => {
-                method_req.hash(state);
-                protocol_id.hash(state);
-                callee_id.hash(state);
-            }
         }
     }
 }

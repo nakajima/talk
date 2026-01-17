@@ -3,7 +3,7 @@ use tracing::instrument;
 
 use crate::{
     label::Label,
-    name_resolution::symbol::Symbol,
+    name_resolution::symbol::{ProtocolId, Symbol},
     node_id::NodeID,
     types::{
         constraint_solver::{DeferralReason, SolveResult},
@@ -127,19 +127,25 @@ impl Member {
     ) -> SolveResult {
         let mut solved_metas: Vec<Meta> = Default::default();
         let cause = ConstraintCause::Member(self.node_id);
-        let mut candidates = vec![];
-        for given in &context.givens {
-            if let Predicate::Conforms {
-                param, protocol_id, ..
-            } = given
-                && param == &type_param_id
-            {
-                candidates.push(protocol_id);
-            };
-        }
+        // Collect protocol_ids by value to avoid borrowing context.givens
+        let candidates: Vec<ProtocolId> = context
+            .givens
+            .iter()
+            .filter_map(|given| {
+                if let Predicate::Conforms {
+                    param, protocol_id, ..
+                } = given
+                    && param == &type_param_id
+                {
+                    Some(*protocol_id)
+                } else {
+                    None
+                }
+            })
+            .collect();
 
-        for candidate in candidates {
-            if let Some((req, _source)) = session.lookup_member(&candidate.into(), &self.label) {
+        for protocol_id in candidates {
+            if let Some((req, _source)) = session.lookup_member(&protocol_id.into(), &self.label) {
                 let Some(entry) = session.lookup(&req) else {
                     return SolveResult::Err(TypeError::MemberNotFound(
                         self.receiver.clone(),
@@ -164,7 +170,7 @@ impl Member {
                     Err(e) => return SolveResult::Err(e),
                 };
 
-                // Record the witness for protocol member access
+                // Record the method requirement for protocol member access
                 session.protocol_members.insert(self.node_id, req);
 
                 return SolveResult::Solved(solved_metas);

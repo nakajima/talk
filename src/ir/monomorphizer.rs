@@ -257,6 +257,7 @@ impl<'a> Monomorphizer<'a> {
         receiver_ty: Option<&Ty>,
     ) -> Instruction<IrTy> {
         // Handle Call instructions specially to substitute MethodRequirement callees
+        // This is needed for protocol default method bodies where the receiver is a type param
         if let Instruction::Call {
             dest,
             ty,

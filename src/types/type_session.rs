@@ -30,6 +30,7 @@ use crate::{
         type_error::TypeError,
         type_operations::{UnificationSubstitutions, substitute},
         types::{TypeEntry, Types},
+        variational::ChoiceStore,
         vars::Vars,
     },
 };
@@ -60,6 +61,10 @@ pub struct TypeSession {
     pub(super) reverse_instantiations: ReverseInstantiations,
 
     pub protocol_members: FxHashMap<NodeID, Symbol>,
+    /// Variational choices for protocol method calls.
+    /// Each call site (NodeID) that involves a protocol method on a type parameter
+    /// gets choices registered here, allowing resolution at specialization time.
+    pub choices: ChoiceStore,
     pub(crate) symbols: Symbols,
     pub(crate) resolved_names: ResolvedNames,
 
@@ -163,6 +168,7 @@ impl TypeSession {
             modules,
             aliases: Default::default(),
             protocol_members: Default::default(),
+            choices: ChoiceStore::new(),
 
             meta_vars: Default::default(),
             row_vars: Default::default(),
@@ -230,6 +236,7 @@ impl TypeSession {
             types_by_symbol,
             match_plans: Default::default(),
             call_tree: std::mem::take(&mut self.resolved_names.call_tree),
+            choices: std::mem::take(&mut self.choices),
         };
 
         let resolved_names = std::mem::take(&mut self.resolved_names);
