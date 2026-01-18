@@ -188,7 +188,6 @@ pub struct Lowerer<'a> {
     pub(super) functions: IndexMap<Symbol, PolyFunction>,
     pub(super) current_function_stack: Vec<CurrentFunction>,
     pub(super) config: &'a DriverConfig,
-    pub(super) specializations: FxHashMap<Symbol, Vec<Symbol>>,
     static_memory: StaticMemory,
     record_labels: FxHashMap<RecordId, Vec<String>>,
     next_record_id: u32,
@@ -204,7 +203,6 @@ impl<'a> Lowerer<'a> {
         Self {
             functions: Default::default(),
             current_function_stack: Default::default(),
-            specializations: typed.specializations.clone(),
             typed,
             static_memory: Default::default(),
             config,

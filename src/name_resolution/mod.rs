@@ -1,5 +1,4 @@
 pub mod builtins;
-pub mod call_tree;
 pub mod decl_declarer;
 pub mod name_resolver;
 pub mod scc_graph;

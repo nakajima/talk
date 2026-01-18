@@ -19,7 +19,6 @@ use crate::{
     name::Name,
     name_resolution::{
         builtins,
-        call_tree::{CallTree, RawCallee},
         decl_declarer::DeclDeclarer,
         scc_graph::SCCGraph,
         symbol::{Symbol, Symbols},
@@ -123,7 +122,6 @@ pub struct ResolvedNames {
     pub child_types: IndexMap<Symbol, IndexMap<Label, Symbol>>,
     pub diagnostics: Vec<AnyDiagnostic>,
     pub mutated_symbols: IndexSet<Symbol>,
-    pub call_tree: CallTree<RawCallee>,
 }
 
 impl ResolvedNames {
@@ -906,44 +904,7 @@ impl NameResolver {
         });
     }
 
-    fn exit_expr(&mut self, expr: &mut Expr) {
-        on!(&expr.kind, ExprKind::Call { callee, .. }, {
-            let Some(caller) = self.current_func_symbols.last() else {
-                return;
-            };
-
-            match &callee.kind {
-                ExprKind::Variable(Name::Resolved(sym, ..))
-                | ExprKind::Constructor(Name::Resolved(sym, ..)) => {
-                    self.phase.call_tree.track(
-                        *caller,
-                        RawCallee::Symbol {
-                            sym: *sym,
-                            callee_id: callee.id,
-                        },
-                    );
-                }
-                ExprKind::Member(Some(receiver), label, ..) => self.phase.call_tree.track(
-                    *caller,
-                    RawCallee::Member {
-                        receiver_id: receiver.id,
-                        label: label.clone(),
-                        callee_id: callee.id,
-                    },
-                ),
-                ExprKind::Member(None, label, ..) => self.phase.call_tree.track(
-                    *caller,
-                    RawCallee::Unqualified {
-                        node_id: callee.id,
-                        label: label.clone(),
-                    },
-                ),
-                other => {
-                    tracing::error!("exit_expr {other:?}");
-                }
-            }
-        });
-    }
+    fn exit_expr(&mut self, _expr: &mut Expr) {}
 
     ///////////////////////////////////////////////////////////////////////////
     // Func scoping

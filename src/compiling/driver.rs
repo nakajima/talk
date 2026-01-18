@@ -64,11 +64,9 @@ pub struct Typed {
 
 impl DriverPhase for Lowered {}
 pub struct Lowered {
-    pub ast: TypedAST<Ty>,
     pub types: Types,
     pub exports: Exports,
     pub symbol_names: FxHashMap<Symbol, String>,
-    pub symbols: Symbols,
     pub program: Program,
     pub diagnostics: Vec<AnyDiagnostic>,
 }
@@ -445,11 +443,9 @@ impl Driver<Typed> {
             files: self.files,
             config: self.config,
             phase: Lowered {
-                ast: self.phase.ast,
                 symbol_names: self.phase.resolved_names.symbol_names,
                 types: self.phase.types,
                 exports: self.phase.exports,
-                symbols: self.phase.symbols,
                 program,
                 diagnostics: self.phase.diagnostics,
             },

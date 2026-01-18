@@ -197,14 +197,7 @@ impl Member {
                 .collect();
 
             for (conforming_id, witnesses) in conformances {
-                // Get the witness method - first try by label, then by method requirement
-                let witness_sym = witnesses
-                    .methods
-                    .get(&self.label)
-                    .copied()
-                    .or_else(|| witnesses.requirements.get(req).copied());
-
-                if let Some(witness) = witness_sym {
+                if let Some(witness) = witnesses.get_witness(&self.label, req) {
                     let alternative = ChoiceAlternative {
                         conforming_type: conforming_id,
                         witness_sym: witness,

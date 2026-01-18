@@ -76,8 +76,6 @@ pub struct TypeSession {
     row_vars: InPlaceUnificationTable<RowMetaId>,
 }
 
-pub struct Typed {}
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum MemberSource {
     SelfMember,
@@ -252,7 +250,6 @@ impl TypeSession {
             types_by_node: entries,
             types_by_symbol,
             match_plans: Default::default(),
-            call_tree: std::mem::take(&mut self.resolved_names.call_tree),
             choices,
             resolution,
         };

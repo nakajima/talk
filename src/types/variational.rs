@@ -66,26 +66,6 @@ impl Configuration {
         self.choices.get(dimension).copied()
     }
 
-    /// Extend this configuration with another dimension selection.
-    pub fn with(mut self, dimension: DimensionId, alternative: AlternativeIndex) -> Self {
-        self.choices.insert(dimension, alternative);
-        self
-    }
-
-    /// Merge two configurations. Returns None if they conflict on any dimension.
-    pub fn merge(&self, other: &Configuration) -> Option<Configuration> {
-        let mut result = self.clone();
-        for (dim, alt) in &other.choices {
-            if let Some(existing) = result.choices.get(dim) {
-                if existing != alt {
-                    return None; // Conflict
-                }
-            } else {
-                result.choices.insert(*dim, *alt);
-            }
-        }
-        Some(result)
-    }
 }
 
 /// Stores the resolved choice for each dimension after constraint solving.
@@ -107,11 +87,6 @@ impl Resolution {
     /// Get the resolved alternative for a dimension.
     pub fn get(&self, dimension: &DimensionId) -> Option<AlternativeIndex> {
         self.resolved.get(dimension).copied()
-    }
-
-    /// Check if a dimension has been resolved.
-    pub fn is_resolved(&self, dimension: &DimensionId) -> bool {
-        self.resolved.contains_key(dimension)
     }
 }
 
@@ -154,17 +129,6 @@ impl ErrorConstraintStore {
     /// Get all recorded error constraints.
     pub fn errors(&self) -> &[ErrorConstraint] {
         &self.errors
-    }
-
-    /// Check if a particular configuration is ruled out by errors.
-    /// A configuration is ruled out if any error's config is a subset of it.
-    pub fn is_ruled_out(&self, config: &Configuration) -> bool {
-        self.errors.iter().any(|e| {
-            // If error config is universal, nothing is ruled out
-            // If error config matches or is a subset, this config is ruled out
-            !e.config.is_universal()
-                && e.config.merge(config).is_some()
-        })
     }
 
     /// Check if a specific alternative in a dimension is ruled out.

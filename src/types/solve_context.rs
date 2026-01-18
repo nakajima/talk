@@ -30,7 +30,6 @@ pub struct ChildSolveContext<'a> {
     pub(super) parent: &'a mut SolveContext,
     pub(super) level: Level,
     pub(super) instantiations: InstantiationSubstitutions,
-    pub(super) expected_return: Option<InferTy>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -74,7 +73,6 @@ impl<'a> Solve for ChildSolveContext<'a> {
             level: self.level().next(),
             parent: self.parent,
             instantiations: Default::default(),
-            expected_return: self.expected_return.clone(),
         }
     }
 
@@ -119,7 +117,6 @@ impl Solve for SolveContext {
             level: self.level().next(),
             parent: self,
             instantiations: Default::default(),
-            expected_return: None,
         }
     }
 

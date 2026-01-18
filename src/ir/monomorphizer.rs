@@ -19,31 +19,27 @@ use crate::{
         conformance::ConformanceKey,
         passes::specialization_pass::SpecializedCallee,
         ty::{Specializations, Ty},
-        typed_ast::TypedAST,
         types::Types,
     },
 };
 
-#[allow(dead_code)]
 pub struct Monomorphizer<'a> {
-    ast: &'a mut TypedAST<Ty>,
-    types: &'a mut Types,
+    types: &'a Types,
     config: &'a DriverConfig,
     pub(super) functions: IndexMap<Symbol, PolyFunction>,
-    specializations: FxHashMap<Symbol, Vec<Symbol>>,
-    specialized_callees: &'a mut FxHashMap<Symbol, SpecializedCallee>,
+    specializations: &'a FxHashMap<Symbol, Vec<Symbol>>,
+    specialized_callees: &'a FxHashMap<Symbol, SpecializedCallee>,
 }
 
 #[allow(clippy::expect_used)]
 impl<'a> Monomorphizer<'a> {
     pub fn new(lowerer: Lowerer<'a>) -> Self {
         Monomorphizer {
-            ast: &mut lowerer.typed.ast,
-            types: &mut lowerer.typed.types,
+            types: &lowerer.typed.types,
             functions: lowerer.functions,
-            specializations: lowerer.specializations,
+            specializations: &lowerer.typed.specializations,
             config: lowerer.config,
-            specialized_callees: &mut lowerer.typed.specialized_callees,
+            specialized_callees: &lowerer.typed.specialized_callees,
         }
     }
 
@@ -268,26 +264,11 @@ impl<'a> Monomorphizer<'a> {
         {
             let new_callee = match &callee {
                 Value::Func(sym @ Symbol::MethodRequirement(_)) => {
+                    // Resolve MethodRequirement to concrete witness when monomorphizing
                     if let Some(witness) =
                         self.resolve_method_requirement(sym, substitutions, receiver_ty)
                     {
                         Value::Func(witness)
-                    } else {
-                        callee
-                    }
-                }
-                // Check if callee has specializations in a non-generic function context
-                // This handles calls like n.lte(1) where n: Int in a non-generic function
-                // For specialized functions (substitutions non-empty), the specialization pass
-                // already handled this
-                // Exclude Void receiver (like main function) which has no meaningful receiver type
-                Value::Func(sym) if substitutions.is_empty()
-                    && receiver_ty.is_some()
-                    && !matches!(receiver_ty, Some(Ty::Primitive(Symbol::Void))) => {
-                    if let Some(specializations) = self.specializations.get(sym)
-                        && specializations.len() == 1
-                    {
-                        Value::Func(specializations[0])
                     } else {
                         callee
                     }
@@ -346,12 +327,8 @@ impl<'a> Monomorphizer<'a> {
             };
 
             if let Some(conformance) = self.types.catalog.conformances.get(&key) {
-                // Try to find witness in methods first, then requirements
-                if let Some(witness) = conformance.witnesses.methods.get(&label) {
-                    return Some(*witness);
-                }
-                if let Some(witness) = conformance.witnesses.requirements.get(method_req) {
-                    return Some(*witness);
+                if let Some(witness) = conformance.witnesses.get_witness(&label, method_req) {
+                    return Some(witness);
                 }
             }
         }

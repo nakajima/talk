@@ -1,6 +1,5 @@
 use derive_visitor::{Drive, DriveMut};
 use indexmap::{IndexMap, IndexSet};
-use rustc_hash::FxHashMap;
 
 use crate::{
     compiling::module::ModuleId,
@@ -1096,13 +1095,6 @@ pub struct TypedRecordField<T: SomeType> {
     #[drive(skip)]
     pub name: Label,
     pub value: TypedExpr<T>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ResolvedCallTarget {
-    pub symbol: Symbol,
-    /// Maps `@MethodRequirement` symbols to their concrete implementations for this call site.
-    pub witness_subs: FxHashMap<Symbol, Symbol>,
 }
 
 #[derive(Debug, Clone, PartialEq, Drive, DriveMut)]
