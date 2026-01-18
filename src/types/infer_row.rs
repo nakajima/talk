@@ -9,6 +9,7 @@ use crate::{
     label::Label,
     types::{
         infer_ty::{InferTy, Level, format_row},
+        predicate::Predicate,
         row::Row,
         scheme::ForAll,
         ty::SomeType,
@@ -140,6 +141,18 @@ impl InferRow {
             Self::Extend { row, ty, .. } => {
                 result.extend(ty.collect_foralls());
                 result.extend(row.collect_foralls());
+            }
+        }
+        result
+    }
+
+    pub fn collect_param_predicates(&self) -> Vec<Predicate<InferTy>> {
+        let mut result = vec![];
+        match self {
+            Self::Empty | Self::Var(..) | Self::Param(..) => (),
+            Self::Extend { row, ty, .. } => {
+                result.extend(ty.collect_param_predicates());
+                result.extend(row.collect_param_predicates());
             }
         }
         result

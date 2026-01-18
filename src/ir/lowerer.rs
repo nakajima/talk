@@ -1013,6 +1013,14 @@ impl<'a> Lowerer<'a> {
             TypedExprKind::RecordLiteral { fields } => {
                 self.lower_record_literal(expr, fields, bind)
             }
+            TypedExprKind::Choice { dimension, .. } => {
+                // Choice nodes should be resolved before lowering.
+                // If we reach here, resolution failed.
+                Err(IRError::TypeNotFound(format!(
+                    "Unresolved choice at dimension {:?}",
+                    dimension
+                )))
+            }
         }?;
 
         // Quick check to make sure types are right

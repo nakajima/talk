@@ -16,7 +16,7 @@ use crate::{
         term_environment::EnvEntry,
         ty::{SomeType, Ty},
         type_catalog::TypeCatalog,
-        variational::ChoiceStore,
+        variational::{ChoiceStore, Resolution},
     },
 };
 
@@ -105,6 +105,9 @@ pub struct Types {
     /// Variational choices for protocol method resolution.
     /// Maps call sites to alternatives with witness symbols.
     pub choices: ChoiceStore,
+    /// Resolved overloads after variational type checking.
+    /// Maps dimensions (call sites) to their resolved alternative index.
+    pub resolution: Resolution,
 }
 
 impl Types {
@@ -135,7 +138,8 @@ impl Types {
             catalog: self.catalog.import_as(module_id),
             match_plans: self.match_plans,
             call_tree: self.call_tree, // TODO: may need import_as for symbols
-            choices: self.choices, // TODO: may need import_as for symbols
+            choices: self.choices,     // TODO: may need import_as for symbols
+            resolution: self.resolution,
         }
     }
 }

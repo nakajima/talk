@@ -16,7 +16,6 @@ use crate::{
         passes::{
             inference_pass::InferencePass,
             specialization_pass::{SpecializationPass, SpecializedCallee},
-            witness_resolution_pass::WitnessResolutionPass,
         },
         ty::Ty,
         type_error::TypeError,
@@ -381,13 +380,7 @@ impl Driver<NameResolved> {
 
         self.phase.diagnostics.extend(diagnostics);
         let symbols = std::mem::take(&mut session.symbols);
-        let (types, protocol_members, resolved_names) =
-            session.finalize().map_err(CompileError::Typing)?;
-
-        let (ast, types, resolved_names) =
-            WitnessResolutionPass::new(ast, types, resolved_names, protocol_members)
-                .drive()
-                .map_err(CompileError::Typing)?;
+        let (types, resolved_names) = session.finalize().map_err(CompileError::Typing)?;
 
         let specialization_pass = SpecializationPass::new(ast, symbols, resolved_names, types);
 

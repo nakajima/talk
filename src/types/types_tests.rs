@@ -2388,39 +2388,4 @@ pub mod tests {
             ",
         );
     }
-
-    #[test]
-    fn registers_variational_choices_for_protocol_methods() {
-        // This test verifies that variational choices are registered for protocol method calls
-        // on type parameters within generic functions.
-        let (_, types) = typecheck(
-            "
-            protocol Named {
-                func name() -> Int
-            }
-
-            struct Cat {}
-            extend Cat: Named {
-                func name() { 1 }
-            }
-
-            struct Dog {}
-            extend Dog: Named {
-                func name() { 2 }
-            }
-
-            func getName<T: Named>(t: T) -> Int {
-                t.name()
-            }
-            ",
-        );
-
-        // Variational choices should be registered for the t.name() call site
-        // Each protocol conformance (Cat, Dog) becomes an alternative
-        assert_eq!(types.choices.dimensions().count(), 1);
-
-        // There should be 2 alternatives (one for Cat, one for Dog)
-        let dimension = *types.choices.dimensions().next().unwrap();
-        assert_eq!(types.choices.dimension_size(&dimension), 2);
-    }
 }

@@ -10,6 +10,7 @@ use crate::{
         predicate::Predicate,
         type_operations::{InstantiationSubstitutions, UnificationSubstitutions},
         type_session::TypeSession,
+        variational::Configuration,
     },
 };
 
@@ -61,6 +62,7 @@ where
             level: self.level(),
             binders: Default::default(),
             is_top_level: Default::default(),
+            config: Configuration::universal(),
         }
     }
 }

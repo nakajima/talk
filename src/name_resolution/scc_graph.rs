@@ -8,7 +8,7 @@ use tracing::instrument;
 use crate::{
     name_resolution::symbol::Symbol,
     node_id::NodeID,
-    types::{constraints::store::GroupId, infer_ty::Level},
+    types::{constraints::store::GroupId, infer_ty::Level, variational::Configuration},
 };
 
 #[derive(Default, Debug, Clone, PartialEq)]
@@ -17,6 +17,9 @@ pub struct BindingGroup {
     pub level: Level,
     pub binders: Vec<Symbol>,
     pub is_top_level: bool,
+    /// The configuration (world) for constraints in this group.
+    /// Default is universal (applies in all worlds).
+    pub config: Configuration,
 }
 
 #[derive(Default, Debug, Clone)]
@@ -71,6 +74,7 @@ impl SCCGraph {
                     binders,
                     level,
                     is_top_level,
+                    config: Configuration::universal(),
                 })
             })
             .collect()

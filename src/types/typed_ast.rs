@@ -16,6 +16,7 @@ use crate::{
         ty::{SomeType, Ty},
         type_operations::UnificationSubstitutions,
         type_session::TypeSession,
+        variational::DimensionId,
     },
 };
 
@@ -366,6 +367,13 @@ impl TypedExprKind<InferTy> {
             ),
             RecordLiteral { fields } => RecordLiteral {
                 fields: fields.into_iter().map(|f| f.finalize(session)).collect(),
+            },
+            Choice {
+                dimension,
+                alternatives,
+            } => Choice {
+                dimension,
+                alternatives: alternatives.into_iter().map(|e| e.finalize(session)).collect(),
             },
         }
     }
@@ -1149,6 +1157,16 @@ pub enum TypedExprKind<T: SomeType> {
     RecordLiteral {
         fields: Vec<TypedRecordField<T>>,
     },
+
+    /// Variational choice: alternatives for overloaded calls.
+    /// During constraint solving, we create Choice nodes when we can't
+    /// immediately determine which implementation to use. After resolution,
+    /// these are specialized to the selected alternative.
+    Choice {
+        #[drive(skip)]
+        dimension: DimensionId,
+        alternatives: Vec<TypedExpr<T>>,
+    },
 }
 
 impl<T: SomeType, U: SomeType> Mappable<T, U> for TypedExprKind<T> {
@@ -1216,6 +1234,13 @@ impl<T: SomeType, U: SomeType> Mappable<T, U> for TypedExprKind<T> {
                         value: f.value.mapping(m, r),
                     })
                     .collect(),
+            },
+            Choice {
+                dimension,
+                alternatives,
+            } => Choice {
+                dimension,
+                alternatives: alternatives.into_iter().map(|e| e.mapping(m, r)).collect(),
             },
         }
     }

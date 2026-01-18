@@ -161,7 +161,8 @@ impl Call {
                         if let InferTy::Var { id, .. } = t
                             && let Some(param) = session.reverse_instantiations.ty.get(&id)
                         {
-                            return InferTy::Param(*param, vec![]);
+                            // reverse_instantiations now stores the full InferTy::Param with bounds
+                            return param.clone();
                         }
 
                         t

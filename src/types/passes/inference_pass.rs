@@ -521,16 +521,9 @@ impl<'a> InferencePass<'a> {
 
             // Add to context givens so member resolution works within protocol methods
             context.givens_mut().insert(predicate.clone());
-
-            // Register in type_param_bounds for member resolution
-            self.session
-                .type_param_bounds
-                .entry(ret_id)
-                .or_default()
-                .insert(predicate);
         }
 
-        let ret = InferTy::Param(ret_id, bounds);
+        let ret = InferTy::Param(ret_id, bounds.clone());
 
         let mut predicates = vec![Predicate::Projection {
             base: InferTy::Param(protocol_self_id, vec![protocol_id]),
@@ -629,14 +622,6 @@ impl<'a> InferencePass<'a> {
             protocol_id,
         });
 
-        self.session
-            .type_param_bounds
-            .entry(protocol_self_id)
-            .or_default()
-            .insert(Predicate::Conforms {
-                param: protocol_self_id,
-                protocol_id,
-            });
         self.session.insert(
             protocol_symbol,
             InferTy::Param(protocol_self_id, vec![protocol_id]),
@@ -666,11 +651,13 @@ impl<'a> InferencePass<'a> {
 
                 associated_types.insert(label.clone(), ty.clone());
 
-                if let Some(assoc_param) = assoc_param_id {
+                if assoc_param_id.is_some() {
+                    // Use ty.clone() here instead of creating a new Param with empty bounds,
+                    // because ty already has the correct protocol bounds from visit_associated_type
                     assoc_type_predicates.insert(Predicate::Projection {
                         base: InferTy::Param(protocol_self_id, vec![protocol_id]),
                         label: label.clone(),
-                        returns: InferTy::Param(assoc_param, vec![]),
+                        returns: ty.clone(),
                         protocol_id: Some(protocol_id),
                     });
                 }
@@ -1854,6 +1841,14 @@ impl<'a> InferencePass<'a> {
                 .entry(nominal_symbol)
                 .or_default()
                 .insert(generic.name.name_str().into(), name);
+        }
+
+        // For extend blocks without explicit generics, use the existing nominal's type params
+        if matches!(decl.kind, DeclKind::Extend { .. })
+            && type_params.is_empty()
+            && let Some(nominal) = self.session.lookup_nominal(&nominal_symbol)
+        {
+            type_params = nominal.type_params.clone();
         }
 
         let ty = if matches!(nominal_symbol, Symbol::Builtin(..)) {
@@ -3361,24 +3356,12 @@ impl<'a> InferencePass<'a> {
                             .iter()
                             .find(|fa| matches!(fa, ForAll::Ty(p) if *p != protocol_self))
                     {
-                        // Look up bounds for the associated type param
-                        let bounds: Vec<_> = self
-                            .session
-                            .type_param_bounds
-                            .get(assoc_param)
-                            .map(|preds| {
-                                preds
-                                    .iter()
-                                    .filter_map(|p| {
-                                        if let Predicate::Conforms { protocol_id, .. } = p {
-                                            Some(*protocol_id)
-                                        } else {
-                                            None
-                                        }
-                                    })
-                                    .collect()
-                            })
-                            .unwrap_or_default();
+                        // Get bounds directly from the entry's type if it's a Param
+                        let bounds = if let InferTy::Param(_, bounds) = entry._as_ty() {
+                            bounds
+                        } else {
+                            vec![]
+                        };
                         return Ok(InferTy::Param(*assoc_param, bounds));
                     }
 
@@ -3449,10 +3432,10 @@ impl<'a> InferencePass<'a> {
                     return Ok(InferTy::Param(protocol_self, vec![protocol_id]));
                 }
 
-                if self.session.lookup_nominal(&sym).is_some() {
+                if let Some(nominal) = self.session.lookup_nominal(&sym) {
                     return Ok(InferTy::Nominal {
                         symbol: sym,
-                        type_args: vec![],
+                        type_args: nominal.type_params.clone(),
                     });
                 }
 
@@ -3681,11 +3664,6 @@ impl<'a> InferencePass<'a> {
             };
 
             context.givens_mut().insert(predicate.clone());
-            self.session
-                .type_param_bounds
-                .entry(param_id)
-                .or_default()
-                .insert(predicate);
 
             // Also add associated type predicates from this protocol to context.givens
             // This enables member resolution on associated types (e.g., T.Food: Named)
@@ -3699,16 +3677,6 @@ impl<'a> InferencePass<'a> {
                 for assoc_predicate in &requirements.predicates {
                     tracing::debug!("Adding assoc_predicate to givens: {:?}", assoc_predicate);
                     context.givens_mut().insert(assoc_predicate.clone());
-                    if let Predicate::Conforms {
-                        param: assoc_param, ..
-                    } = assoc_predicate
-                    {
-                        self.session
-                            .type_param_bounds
-                            .entry(*assoc_param)
-                            .or_default()
-                            .insert(assoc_predicate.clone());
-                    }
                 }
             } else {
                 tracing::debug!(

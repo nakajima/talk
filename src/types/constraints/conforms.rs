@@ -47,12 +47,13 @@ impl Conforms {
         context: &mut SolveContext,
         session: &mut TypeSession,
     ) -> SolveResult {
-        let conforming_ty_sym = match &self.ty {
+        // Extract both the symbol and type args from the conforming type
+        let (conforming_ty_sym, conforming_type_args) = match &self.ty {
             InferTy::Var { id, .. } => {
                 return SolveResult::Defer(DeferralReason::WaitingOnMeta(Meta::Ty(*id)));
             }
-            InferTy::Primitive(symbol) => *symbol,
-            InferTy::Nominal { symbol, .. } => *symbol,
+            InferTy::Primitive(symbol) => (*symbol, vec![]),
+            InferTy::Nominal { symbol, type_args } => (*symbol, type_args.clone()),
             InferTy::Param(param_id, _) => {
                 for given in &context.givens {
                     if let Predicate::Conforms {
@@ -94,6 +95,7 @@ impl Conforms {
 
         match self.check_conformance(
             conforming_ty_sym,
+            &conforming_type_args,
             self.protocol_id,
             constraints,
             context,
@@ -117,6 +119,7 @@ impl Conforms {
     fn check_conformance(
         &self,
         conforming_ty_sym: Symbol,
+        conforming_type_args: &[InferTy],
         protocol_id: ProtocolId,
         constraints: &mut ConstraintStore,
         context: &mut SolveContext,
@@ -167,6 +170,16 @@ impl Conforms {
             InferTy::Param(protocol_self_id, protocol_self_bounds.clone()),
             self.ty.clone(),
         );
+
+        // Add substitutions for the conforming type's type params
+        // e.g., for Person<Float> conforming to Aged, substitute A -> Float
+        if !conforming_type_args.is_empty() {
+            if let Some(nominal) = session.lookup_nominal(&conforming_ty_sym) {
+                for (param, arg) in nominal.type_params.iter().zip(conforming_type_args.iter()) {
+                    substitutions.insert(param.clone(), arg.clone());
+                }
+            }
+        }
 
         let mut deferral_reasons = vec![];
 
@@ -245,6 +258,7 @@ impl Conforms {
             if conformance.conforming_id == protocol_id.into() {
                 match self.check_conformance(
                     conforming_ty_sym,
+                    conforming_type_args,
                     conformance.protocol_id,
                     constraints,
                     context,
@@ -358,6 +372,10 @@ impl Conforms {
             // Substitute required type with type and row substitutions
             let required_ty = substitute_with_subs(required_entry._as_ty(), &substitutions);
 
+            // Also substitute the witness type with the struct's type params
+            // e.g., for Person<Float>, substitute A -> Float in getAge's type
+            let witness_ty = substitute_with_subs(witness._as_ty(), &substitutions);
+
             // Update witnesses
             let key = ConformanceKey {
                 protocol_id: self.protocol_id,
@@ -382,7 +400,12 @@ impl Conforms {
                 .requirements
                 .insert(required_sym, witness_sym);
 
-            match unify(&required_ty, &witness._as_ty(), context, session) {
+            tracing::debug!(
+                "Checking witness {label:?}: required_ty={:?}, witness_ty={:?}",
+                required_ty,
+                witness_ty,
+            );
+            match unify(&required_ty, &witness_ty, context, session) {
                 Ok(vars) => solved_metas.extend(vars),
                 Err(e) => {
                     tracing::error!("Error checking witness {label:?}: {e:?}");

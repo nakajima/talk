@@ -12,6 +12,7 @@ use crate::{
     types::{
         infer_row::{InferRow, RowMetaId, RowParamId},
         mappable::Mappable,
+        predicate::Predicate,
         scheme::{ForAll, Scheme},
         term_environment::EnvEntry,
         ty::{BaseRow, RowType, SomeType, Ty},
@@ -476,6 +477,49 @@ impl InferTy {
             InferTy::Record(box row) => {
                 result.extend(row.collect_foralls());
             }
+        }
+        result
+    }
+
+    /// Collects Conforms predicates from bounds embedded in InferTy::Param nodes
+    pub fn collect_param_predicates(&self) -> Vec<Predicate<InferTy>> {
+        let mut result = vec![];
+        match self {
+            InferTy::Param(id, bounds) => {
+                for protocol_id in bounds {
+                    result.push(Predicate::Conforms {
+                        param: *id,
+                        protocol_id: *protocol_id,
+                    });
+                }
+            }
+            InferTy::Nominal { type_args, .. } => {
+                for arg in type_args {
+                    result.extend(arg.collect_param_predicates());
+                }
+            }
+            InferTy::Projection { base, .. } => {
+                result.extend(base.collect_param_predicates());
+            }
+            InferTy::Constructor { params, .. } => {
+                for item in params {
+                    result.extend(item.collect_param_predicates());
+                }
+            }
+            InferTy::Func(ty, ty1, effects) => {
+                result.extend(ty.collect_param_predicates());
+                result.extend(ty1.collect_param_predicates());
+                result.extend(effects.collect_param_predicates());
+            }
+            InferTy::Tuple(items) => {
+                for item in items {
+                    result.extend(item.collect_param_predicates());
+                }
+            }
+            InferTy::Record(box row) => {
+                result.extend(row.collect_param_predicates());
+            }
+            _ => (),
         }
         result
     }

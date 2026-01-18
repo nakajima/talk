@@ -116,6 +116,12 @@ impl Scheme<InferTy> {
         context: &mut impl Solve,
         session: &mut TypeSession,
     ) -> InferTy {
+        tracing::debug!(
+            "Scheme::instantiate - foralls: {:?}, predicates: {:?}, ty: {:?}",
+            self.foralls,
+            self.predicates,
+            self.ty
+        );
         let level = context.level();
         for forall in &self.foralls {
             match forall {
@@ -137,8 +143,33 @@ impl Scheme<InferTy> {
                         unreachable!()
                     };
 
-                    tracing::trace!("instantiating {param:?} with {meta:?}");
-                    session.reverse_instantiations.ty.insert(meta, *param);
+                    // Collect protocol bounds for this param from the scheme's predicates
+                    let bounds: Vec<_> = self
+                        .predicates
+                        .iter()
+                        .filter_map(|pred| {
+                            if let Predicate::Conforms {
+                                param: p,
+                                protocol_id,
+                                ..
+                            } = pred
+                            {
+                                if p == param {
+                                    Some(*protocol_id)
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+
+                    tracing::debug!("instantiating {param:?} with {meta:?}, bounds: {bounds:?}");
+                    session
+                        .reverse_instantiations
+                        .ty
+                        .insert(meta, InferTy::Param(*param, bounds));
                     context.instantiations_mut().insert_ty(id, *param, meta);
 
                     session.type_catalog.instantiations.insert_ty(
@@ -207,7 +238,32 @@ impl Scheme<InferTy> {
                 unreachable!();
             };
 
-            session.reverse_instantiations.ty.insert(meta_var, *param);
+            // Collect protocol bounds for this param from the scheme's predicates
+            let bounds: Vec<_> = self
+                .predicates
+                .iter()
+                .filter_map(|pred| {
+                    if let Predicate::Conforms {
+                        param: p,
+                        protocol_id,
+                        ..
+                    } = pred
+                    {
+                        if p == param {
+                            Some(*protocol_id)
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            session
+                .reverse_instantiations
+                .ty
+                .insert(meta_var, InferTy::Param(*param, bounds));
 
             if let Some((arg_ty, arg_id)) = args.pop() {
                 constraints.wants_equals_at(

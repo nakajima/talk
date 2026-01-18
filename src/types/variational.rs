@@ -5,6 +5,7 @@
 //! Key concepts:
 //! - **DimensionId**: A choice point, typically tied to a call site where overload resolution is needed
 //! - **AlternativeIndex**: Which alternative within a dimension is selected
+//! - **Configuration**: Maps dimensions to selected alternatives (represents a "world")
 //! - **ChoiceStore**: Maps (dimension, alternative) to witness information for resolution
 
 use rustc_hash::FxHashMap;
@@ -12,6 +13,7 @@ use rustc_hash::FxHashMap;
 use crate::{
     name_resolution::symbol::{ProtocolId, Symbol},
     node_id::NodeID,
+    types::{constraints::store::ConstraintId, type_error::TypeError},
 };
 
 /// Identifies a choice point in the program.
@@ -26,6 +28,154 @@ pub struct AlternativeIndex(pub usize);
 impl From<usize> for AlternativeIndex {
     fn from(value: usize) -> Self {
         AlternativeIndex(value)
+    }
+}
+
+/// A configuration represents a "world" - an assignment of alternatives to dimensions.
+///
+/// In variational type checking, constraints can be annotated with configurations
+/// that specify in which world(s) they apply. A universal configuration applies
+/// in all worlds.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Configuration {
+    /// Maps each dimension to its selected alternative.
+    /// If a dimension is not in the map, the constraint applies to all alternatives.
+    choices: FxHashMap<DimensionId, AlternativeIndex>,
+}
+
+impl Configuration {
+    /// Create a universal configuration (applies in all worlds).
+    pub fn universal() -> Self {
+        Self::default()
+    }
+
+    /// Create a configuration with a single dimension selection.
+    pub fn single(dimension: DimensionId, alternative: AlternativeIndex) -> Self {
+        let mut choices = FxHashMap::default();
+        choices.insert(dimension, alternative);
+        Self { choices }
+    }
+
+    /// Check if this is the universal configuration.
+    pub fn is_universal(&self) -> bool {
+        self.choices.is_empty()
+    }
+
+    /// Get the selected alternative for a dimension, if any.
+    pub fn get(&self, dimension: &DimensionId) -> Option<AlternativeIndex> {
+        self.choices.get(dimension).copied()
+    }
+
+    /// Extend this configuration with another dimension selection.
+    pub fn with(mut self, dimension: DimensionId, alternative: AlternativeIndex) -> Self {
+        self.choices.insert(dimension, alternative);
+        self
+    }
+
+    /// Merge two configurations. Returns None if they conflict on any dimension.
+    pub fn merge(&self, other: &Configuration) -> Option<Configuration> {
+        let mut result = self.clone();
+        for (dim, alt) in &other.choices {
+            if let Some(existing) = result.choices.get(dim) {
+                if existing != alt {
+                    return None; // Conflict
+                }
+            } else {
+                result.choices.insert(*dim, *alt);
+            }
+        }
+        Some(result)
+    }
+}
+
+/// Stores the resolved choice for each dimension after constraint solving.
+#[derive(Clone, Debug, Default)]
+pub struct Resolution {
+    resolved: FxHashMap<DimensionId, AlternativeIndex>,
+}
+
+impl Resolution {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Record a resolved choice for a dimension.
+    pub fn resolve(&mut self, dimension: DimensionId, alternative: AlternativeIndex) {
+        self.resolved.insert(dimension, alternative);
+    }
+
+    /// Get the resolved alternative for a dimension.
+    pub fn get(&self, dimension: &DimensionId) -> Option<AlternativeIndex> {
+        self.resolved.get(dimension).copied()
+    }
+
+    /// Check if a dimension has been resolved.
+    pub fn is_resolved(&self, dimension: &DimensionId) -> bool {
+        self.resolved.contains_key(dimension)
+    }
+}
+
+/// An error constraint records a type error that occurred in a specific world.
+///
+/// During variational type checking, when a constraint fails in a configured
+/// (non-universal) context, we don't immediately fail. Instead, we record the
+/// error and continue solving. This allows us to rule out alternatives that
+/// lead to type errors.
+#[derive(Clone, Debug)]
+pub struct ErrorConstraint {
+    /// The configuration (world) where this error occurred.
+    pub config: Configuration,
+    /// The type error that occurred.
+    pub error: TypeError,
+    /// The ID of the constraint that failed.
+    pub constraint_id: ConstraintId,
+}
+
+/// Stores collected error constraints during constraint solving.
+#[derive(Clone, Debug, Default)]
+pub struct ErrorConstraintStore {
+    errors: Vec<ErrorConstraint>,
+}
+
+impl ErrorConstraintStore {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Record an error constraint.
+    pub fn record(&mut self, config: Configuration, error: TypeError, constraint_id: ConstraintId) {
+        self.errors.push(ErrorConstraint {
+            config,
+            error,
+            constraint_id,
+        });
+    }
+
+    /// Get all recorded error constraints.
+    pub fn errors(&self) -> &[ErrorConstraint] {
+        &self.errors
+    }
+
+    /// Check if a particular configuration is ruled out by errors.
+    /// A configuration is ruled out if any error's config is a subset of it.
+    pub fn is_ruled_out(&self, config: &Configuration) -> bool {
+        self.errors.iter().any(|e| {
+            // If error config is universal, nothing is ruled out
+            // If error config matches or is a subset, this config is ruled out
+            !e.config.is_universal()
+                && e.config.merge(config).is_some()
+        })
+    }
+
+    /// Check if a specific alternative in a dimension is ruled out.
+    pub fn is_alternative_ruled_out(
+        &self,
+        dimension: &DimensionId,
+        alternative: AlternativeIndex,
+    ) -> bool {
+        self.errors.iter().any(|e| {
+            e.config.get(dimension) == Some(alternative)
+        })
     }
 }
 
@@ -101,5 +251,90 @@ impl ChoiceStore {
             }
         }
         None
+    }
+}
+
+/// Error that occurs when overload resolution fails.
+#[derive(Clone, Debug)]
+pub enum ResolutionError {
+    /// All alternatives for a dimension were ruled out by type errors.
+    NoValidAlternative {
+        dimension: DimensionId,
+        errors: Vec<TypeError>,
+    },
+    /// Multiple alternatives are valid (ambiguous overload).
+    Ambiguous {
+        dimension: DimensionId,
+        valid_alternatives: Vec<AlternativeIndex>,
+    },
+}
+
+/// Resolve overloads by analyzing which alternatives are ruled out by error constraints.
+///
+/// For each dimension (choice point) in the ChoiceStore:
+/// - If exactly one alternative is valid (not ruled out), resolve to it
+/// - If no alternatives are valid, return an error with all the type errors
+/// - If multiple alternatives are valid, return an ambiguity error
+pub fn resolve_overloads(
+    choices: &ChoiceStore,
+    errors: &ErrorConstraintStore,
+) -> Result<Resolution, Vec<ResolutionError>> {
+    let mut resolution = Resolution::new();
+    let mut resolution_errors = vec![];
+
+    for dimension in choices.dimensions() {
+        let size = choices.dimension_size(dimension);
+        if size == 0 {
+            continue;
+        }
+
+        // Find which alternatives are still valid (not ruled out by errors)
+        let valid: Vec<_> = (0..size)
+            .map(AlternativeIndex)
+            .filter(|alt| !errors.is_alternative_ruled_out(dimension, *alt))
+            .collect();
+
+        match valid.len() {
+            0 => {
+                // All alternatives ruled out - collect all errors for this dimension
+                let dimension_errors: Vec<_> = errors
+                    .errors()
+                    .iter()
+                    .filter(|e| e.config.get(dimension).is_some())
+                    .map(|e| e.error.clone())
+                    .collect();
+
+                resolution_errors.push(ResolutionError::NoValidAlternative {
+                    dimension: *dimension,
+                    errors: dimension_errors,
+                });
+            }
+            1 => {
+                // Exactly one valid alternative - resolve to it
+                resolution.resolve(*dimension, valid[0]);
+            }
+            _ => {
+                // Multiple valid alternatives - ambiguous
+                // For now, we'll pick the first one and continue
+                // A stricter version would report this as an error
+                tracing::debug!(
+                    "Ambiguous resolution for {:?}: {} valid alternatives, picking first",
+                    dimension,
+                    valid.len()
+                );
+                resolution.resolve(*dimension, valid[0]);
+                // Uncomment to report as error instead:
+                // resolution_errors.push(ResolutionError::Ambiguous {
+                //     dimension: *dimension,
+                //     valid_alternatives: valid,
+                // });
+            }
+        }
+    }
+
+    if resolution_errors.is_empty() {
+        Ok(resolution)
+    } else {
+        Err(resolution_errors)
     }
 }

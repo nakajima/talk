@@ -31,6 +31,7 @@ use crate::{
         infer_row::InferRow,
         infer_ty::{InferTy, Level, Meta},
         solve_context::SolveContext,
+        variational::Configuration,
     },
 };
 
@@ -66,12 +67,15 @@ impl Constraint {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConstraintMeta {
     pub id: ConstraintId,
     pub group_id: GroupId,
     pub level: Level,
     pub is_top_level: bool,
+    /// The configuration (world) in which this constraint applies.
+    /// Universal configuration means the constraint applies in all worlds.
+    pub config: Configuration,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -152,6 +156,7 @@ impl ConstraintStore {
             level: existing.level,
             binders: Default::default(),
             is_top_level: existing.is_top_level,
+            config: existing.config.clone(),
         }
     }
 
@@ -315,6 +320,7 @@ impl ConstraintStore {
                 group_id: group.id,
                 level: group.level,
                 is_top_level: group.is_top_level,
+                config: group.config.clone(),
             },
         );
 
@@ -429,6 +435,7 @@ impl ConstraintStore {
                 level: Default::default(),
                 binders: Default::default(),
                 is_top_level: Default::default(),
+                config: Configuration::universal(),
             },
         )
     }
