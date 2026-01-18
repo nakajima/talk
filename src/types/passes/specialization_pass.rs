@@ -11,6 +11,7 @@ use crate::{
     },
     node_id::NodeID,
     types::{
+        call_tree::CalleeInfo,
         row::Row,
         scheme::ForAll,
         ty::{Specializations, Ty},
@@ -23,19 +24,6 @@ use crate::{
         variational::DimensionId,
     },
 };
-
-/// Information about a callee within a function, used for specialization propagation.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-enum CalleeInfo {
-    /// Direct function call with known symbol
-    Direct { sym: Symbol, call_id: NodeID },
-    /// Method call on a receiver
-    Member {
-        receiver_id: NodeID,
-        label: Label,
-        call_id: NodeID,
-    },
-}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct SpecializedCallee {
@@ -51,8 +39,6 @@ pub struct SpecializationPass {
     pub(crate) specialized_callees: FxHashMap<Symbol, SpecializedCallee>,
     pub(crate) specializations: FxHashMap<Symbol, Vec<Symbol>>,
     current_specializations: Vec<Specializations>,
-    /// Cached callee info per function symbol, computed on first access
-    callees_by_function: FxHashMap<Symbol, Vec<CalleeInfo>>,
 }
 
 impl SpecializationPass {
@@ -70,7 +56,6 @@ impl SpecializationPass {
             specialized_callees: Default::default(),
             specializations: Default::default(),
             current_specializations: Default::default(),
-            callees_by_function: Default::default(),
         }
     }
 
@@ -682,15 +667,8 @@ impl SpecializationPass {
             return Ok(());
         }
 
-        // Get or compute callees for this function
-        let callees = if let Some(cached) = self.callees_by_function.get(&caller) {
-            cached.clone()
-        } else {
-            // Compute callees by finding the function's body in the AST
-            let callees = self.compute_callees_for_function(&caller);
-            self.callees_by_function.insert(caller, callees.clone());
-            callees
-        };
+        // Get callees from call tree (computed during inference)
+        let callees = self.types.call_tree.get(&caller).cloned().unwrap_or_default();
 
         for callee_info in callees {
             let (callee_sym, callee_specializations) = match callee_info {
@@ -775,176 +753,6 @@ impl SpecializationPass {
         }
 
         callee_specs
-    }
-
-    /// Find all callees in a function's body by walking the AST.
-    fn compute_callees_for_function(&self, func_sym: &Symbol) -> Vec<CalleeInfo> {
-        let mut callees = Vec::new();
-
-        // Search through all declarations for the function
-        for decl in &self.ast.decls {
-            match &decl.kind {
-                TypedDeclKind::StructDef {
-                    initializers,
-                    instance_methods,
-                    ..
-                } => {
-                    for func in initializers.values().chain(instance_methods.values()) {
-                        if &func.name == func_sym {
-                            self.collect_callees_from_block(&func.body, &mut callees);
-                            return callees;
-                        }
-                    }
-                }
-                TypedDeclKind::Extend {
-                    instance_methods, ..
-                } => {
-                    for func in instance_methods.values() {
-                        if &func.name == func_sym {
-                            self.collect_callees_from_block(&func.body, &mut callees);
-                            return callees;
-                        }
-                    }
-                }
-                TypedDeclKind::EnumDef {
-                    instance_methods, ..
-                } => {
-                    for func in instance_methods.values() {
-                        if &func.name == func_sym {
-                            self.collect_callees_from_block(&func.body, &mut callees);
-                            return callees;
-                        }
-                    }
-                }
-                TypedDeclKind::ProtocolDef {
-                    instance_methods, ..
-                } => {
-                    for func in instance_methods.values() {
-                        if &func.name == func_sym {
-                            self.collect_callees_from_block(&func.body, &mut callees);
-                            return callees;
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        // Also check top-level Let declarations for function expressions
-        for decl in &self.ast.decls {
-            if let TypedDeclKind::Let {
-                initializer: Some(expr),
-                ..
-            } = &decl.kind
-            {
-                if let TypedExprKind::Func(func) = &expr.kind {
-                    if &func.name == func_sym {
-                        self.collect_callees_from_block(&func.body, &mut callees);
-                        return callees;
-                    }
-                }
-            }
-        }
-
-        callees
-    }
-
-    /// Collect callee info from a block by walking its nodes.
-    fn collect_callees_from_block(&self, block: &TypedBlock<Ty>, callees: &mut Vec<CalleeInfo>) {
-        for node in &block.body {
-            match node {
-                TypedNode::Expr(expr) => self.collect_callees_from_expr(expr, callees),
-                TypedNode::Stmt(stmt) => self.collect_callees_from_stmt(stmt, callees),
-                TypedNode::Decl(decl) => self.collect_callees_from_decl(decl, callees),
-            }
-        }
-    }
-
-    fn collect_callees_from_decl(&self, decl: &TypedDecl<Ty>, callees: &mut Vec<CalleeInfo>) {
-        if let TypedDeclKind::Let { initializer, .. } = &decl.kind {
-            if let Some(expr) = initializer {
-                self.collect_callees_from_expr(expr, callees);
-            }
-        }
-    }
-
-    fn collect_callees_from_stmt(&self, stmt: &TypedStmt<Ty>, callees: &mut Vec<CalleeInfo>) {
-        match &stmt.kind {
-            TypedStmtKind::Expr(expr) => self.collect_callees_from_expr(expr, callees),
-            TypedStmtKind::Assignment(lhs, rhs) => {
-                self.collect_callees_from_expr(lhs, callees);
-                self.collect_callees_from_expr(rhs, callees);
-            }
-            TypedStmtKind::Return(Some(expr)) | TypedStmtKind::Continue(Some(expr)) => {
-                self.collect_callees_from_expr(expr, callees);
-            }
-            TypedStmtKind::Loop(cond, body) => {
-                self.collect_callees_from_expr(cond, callees);
-                self.collect_callees_from_block(body, callees);
-            }
-            _ => {}
-        }
-    }
-
-    fn collect_callees_from_expr(&self, expr: &TypedExpr<Ty>, callees: &mut Vec<CalleeInfo>) {
-        match &expr.kind {
-            TypedExprKind::Call { callee, args, .. } => {
-                // Record this call - note: instantiations are keyed by callee.id, not expr.id
-                match &callee.kind {
-                    TypedExprKind::Variable(sym) => {
-                        callees.push(CalleeInfo::Direct {
-                            sym: *sym,
-                            call_id: callee.id,
-                        });
-                    }
-                    TypedExprKind::Member { receiver, label } => {
-                        callees.push(CalleeInfo::Member {
-                            receiver_id: receiver.id,
-                            label: label.clone(),
-                            call_id: callee.id,
-                        });
-                        self.collect_callees_from_expr(receiver, callees);
-                    }
-                    _ => {
-                        self.collect_callees_from_expr(callee, callees);
-                    }
-                }
-                for arg in args {
-                    self.collect_callees_from_expr(arg, callees);
-                }
-            }
-            TypedExprKind::Member { receiver, .. } => {
-                self.collect_callees_from_expr(receiver, callees);
-            }
-            TypedExprKind::If(cond, then_block, else_block) => {
-                self.collect_callees_from_expr(cond, callees);
-                self.collect_callees_from_block(then_block, callees);
-                self.collect_callees_from_block(else_block, callees);
-            }
-            TypedExprKind::Match(subject, arms) => {
-                self.collect_callees_from_expr(subject, callees);
-                for arm in arms {
-                    self.collect_callees_from_block(&arm.body, callees);
-                }
-            }
-            TypedExprKind::Block(block) => {
-                self.collect_callees_from_block(block, callees);
-            }
-            TypedExprKind::Tuple(items) | TypedExprKind::LiteralArray(items) => {
-                for item in items {
-                    self.collect_callees_from_expr(item, callees);
-                }
-            }
-            TypedExprKind::RecordLiteral { fields } => {
-                for field in fields {
-                    self.collect_callees_from_expr(&field.value, callees);
-                }
-            }
-            TypedExprKind::Func(func) => {
-                self.collect_callees_from_block(&func.body, callees);
-            }
-            _ => {}
-        }
     }
 
     fn specialize(&mut self, callee_sym: &Symbol, specializations: &Specializations) -> Symbol {

@@ -6,6 +6,7 @@ use crate::{
     name_resolution::symbol::Symbol,
     node_id::NodeID,
     types::{
+        call_tree::CallTree,
         infer_ty::InferTy,
         mappable::Mappable,
         matcher::MatchPlan,
@@ -104,6 +105,8 @@ pub struct Types {
     /// Resolved overloads after variational type checking.
     /// Maps dimensions (call sites) to their resolved alternative index.
     pub resolution: Resolution,
+    /// Call tree mapping each function to the callees in its body.
+    pub call_tree: CallTree,
 }
 
 impl Types {
@@ -135,6 +138,8 @@ impl Types {
             match_plans: self.match_plans,
             choices: self.choices,
             resolution: self.resolution,
+            // Call tree is not imported - it's only relevant for the current module's specialization
+            call_tree: Default::default(),
         }
     }
 }

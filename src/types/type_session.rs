@@ -16,6 +16,7 @@ use crate::{
     node_id::NodeID,
     types::{
         builtins::builtin_scope,
+        call_tree::CallTree,
         conformance::{Conformance, ConformanceKey},
         constraints::{constraint::Constraint, store::ConstraintStore},
         infer_row::{InferRow, RowMetaId, RowParamId},
@@ -68,6 +69,10 @@ pub struct TypeSession {
     /// recorded here instead of immediately failing. This allows resolution
     /// to determine which alternatives are valid.
     pub error_constraints: ErrorConstraintStore,
+
+    /// Call tree mapping each function to the callees in its body.
+    /// Built during inference and used by specialization pass.
+    pub call_tree: CallTree,
 
     pub(crate) symbols: Symbols,
     pub(crate) resolved_names: ResolvedNames,
@@ -172,6 +177,7 @@ impl TypeSession {
             aliases: Default::default(),
             choices: ChoiceStore::new(),
             error_constraints: ErrorConstraintStore::new(),
+            call_tree: Default::default(),
 
             meta_vars: Default::default(),
             row_vars: Default::default(),
@@ -245,6 +251,8 @@ impl TypeSession {
             Default::default()
         });
 
+        let call_tree = std::mem::take(&mut self.call_tree);
+
         let types = Types {
             catalog,
             types_by_node: entries,
@@ -252,6 +260,7 @@ impl TypeSession {
             match_plans: Default::default(),
             choices,
             resolution,
+            call_tree,
         };
 
         let resolved_names = std::mem::take(&mut self.resolved_names);

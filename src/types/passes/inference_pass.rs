@@ -36,6 +36,7 @@ use crate::{
     span::Span,
     types::{
         builtins::resolve_builtin_type,
+        call_tree::CalleeInfo,
         conformance::{Conformance, ConformanceKey, Witnesses},
         constraint_solver::ConstraintSolver,
         constraints::{
@@ -107,6 +108,9 @@ pub struct InferencePass<'a> {
     protocol_associated_type_requirements:
         FxHashMap<ProtocolId, ProtocolAssociatedTypeRequirements>,
 
+    /// Tracks which function we're currently inside, for building the call tree.
+    current_function: Option<Symbol>,
+
     // These are what we eventually produce
     root_decls: Vec<TypedDecl<InferTy>>,
     root_stmts: Vec<TypedStmt<InferTy>>,
@@ -132,6 +136,7 @@ impl<'a> InferencePass<'a> {
             handler_contexts: Default::default(),
             or_binders: Default::default(),
             protocol_associated_type_requirements: Default::default(),
+            current_function: None,
             root_decls: Default::default(),
             root_stmts: Default::default(),
         };
@@ -3036,6 +3041,25 @@ impl<'a> InferencePass<'a> {
     ) -> TypedRet<TypedExpr<InferTy>> {
         let callee_ty = self.visit_expr(callee, context)?;
 
+        // Record callee info for the call tree
+        if let Some(caller) = self.current_function {
+            let callee_info = match &callee_ty.kind {
+                TypedExprKind::Variable(sym) => Some(CalleeInfo::Direct {
+                    sym: *sym,
+                    call_id: callee.id,
+                }),
+                TypedExprKind::Member { receiver, label } => Some(CalleeInfo::Member {
+                    receiver_id: receiver.id,
+                    label: label.clone(),
+                    call_id: callee.id,
+                }),
+                _ => None,
+            };
+            if let Some(info) = callee_info {
+                self.session.call_tree.entry(caller).or_default().push(info);
+            }
+        }
+
         let arg_tys: Vec<_> = args
             .iter()
             .map(|a| self.visit_expr(&a.value, context))
@@ -3138,6 +3162,9 @@ impl<'a> InferencePass<'a> {
             .symbol()
             .map_err(|_| TypeError::NameNotResolved(func.name.clone()))?;
 
+        // Track which function we're in for building the call tree
+        let prev_function = self.current_function.replace(func_sym);
+
         tracing::debug!(
             "visit_func: {:?}, generics: {:?}",
             func.name,
@@ -3188,6 +3215,9 @@ impl<'a> InferencePass<'a> {
             ),
             &mut Default::default(),
         );
+
+        // Restore previous function context
+        self.current_function = prev_function;
 
         Ok(TypedFunc {
             name: func_sym,
