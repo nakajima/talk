@@ -75,7 +75,6 @@ cli = [
 ]
 wasm = []
 verify_ir = []
-types_html = []
 
 [profile.release]
 strip = true  # Automatically strip symbols from the binary.

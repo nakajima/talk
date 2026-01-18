@@ -350,30 +350,6 @@ impl Driver<NameResolved> {
 
         let (_paths, mut asts): (Vec<_>, Vec<_>) = self.phase.asts.iter_mut().unzip();
 
-        // Collect NodeID -> Span mappings before type checking
-        #[cfg(feature = "types_html")]
-        let node_spans = {
-            use derive_visitor::{Drive, Visitor};
-
-            #[derive(Visitor)]
-            #[visitor(crate::parsing::node::Node(enter))]
-            struct SpanCollector(FxHashMap<NodeID, crate::span::Span>);
-
-            impl SpanCollector {
-                fn enter_node(&mut self, node: &crate::parsing::node::Node) {
-                    self.0.insert(node.node_id(), node.span());
-                }
-            }
-
-            let mut collector = SpanCollector(FxHashMap::default());
-            for ast in asts.iter() {
-                for root in &ast.roots {
-                    root.drive(&mut collector);
-                }
-            }
-            collector.0
-        };
-
         let (ast, diagnostics) = InferencePass::drive(&mut asts, &mut session);
 
         self.phase.diagnostics.extend(diagnostics);
@@ -395,26 +371,6 @@ impl Driver<NameResolved> {
                     .map(AnyDiagnostic::Typing),
             );
             types.match_plans = matcher_result.plans;
-        }
-
-        // Generate types visualization HTML
-        #[cfg(feature = "types_html")]
-        {
-            let sources: Vec<_> = self
-                .files
-                .iter()
-                .filter_map(|f| {
-                    let path = std::path::PathBuf::from(f.path());
-                    f.read().ok().map(|text| (path, text))
-                })
-                .collect();
-            let viz = crate::types_trace::TypesVisualization {
-                sources,
-                node_spans,
-                types: types.clone(),
-            };
-            let html = crate::types_trace::generate_html(&viz);
-            let _ = std::fs::write("types.html", html);
         }
 
         Ok(Driver {
