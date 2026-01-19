@@ -1574,9 +1574,9 @@ foo.bar
                 panic!("unexpected hover: {hover:?}");
             };
 
-            // Effect row is now polymorphic for functions without declared effects
+            // Row params are hidden for cleaner display
             assert!(
-                markup.value.contains("id: <T, R>(T) ..R -> T"),
+                markup.value.contains("id: <T>(T) -> T"),
                 "{markup:?}"
             );
             assert!(!markup.value.contains("TypeParamId"), "{markup:?}");
