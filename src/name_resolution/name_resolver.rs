@@ -490,8 +490,12 @@ impl NameResolver {
             return;
         }
 
-        if to_sym.external_module_id().is_some() {
-            return;
+        // Skip external dependencies, but track Core module dependencies
+        // when we're compiling the Core module itself
+        if let Some(external_id) = to_sym.external_module_id() {
+            if external_id != ModuleId::Core || self.current_module_id != ModuleId::Core {
+                return;
+            }
         }
 
         tracing::debug!("track_dependency from {from_sym:?} to {to_sym:?}");

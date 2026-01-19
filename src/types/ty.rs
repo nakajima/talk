@@ -284,6 +284,25 @@ impl Ty {
         InferTy::Array(t.into()).into()
     }
 
+    /// Returns true if this type contains any unsubstituted type parameters.
+    pub fn contains_type_params(&self) -> bool {
+        match self {
+            Ty::Param(..) => true,
+            Ty::Primitive(..) => false,
+            Ty::Constructor { params, ret, .. } => {
+                params.iter().any(|p| p.contains_type_params()) || ret.contains_type_params()
+            }
+            Ty::Func(param, ret, effects) => {
+                param.contains_type_params()
+                    || ret.contains_type_params()
+                    || effects.contains_type_params()
+            }
+            Ty::Tuple(items) => items.iter().any(|i| i.contains_type_params()),
+            Ty::Record(_, row) => row.contains_type_params(),
+            Ty::Nominal { type_args, .. } => type_args.iter().any(|t| t.contains_type_params()),
+        }
+    }
+
     pub fn collect_specializations(&self, concrete: &Ty) -> Result<Specializations, TypeError> {
         let mut result = Specializations::default();
         match (self, concrete) {

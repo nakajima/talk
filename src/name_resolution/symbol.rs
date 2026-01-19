@@ -655,6 +655,12 @@ impl Symbols {
     pub fn next_synthesized(&mut self, module_id: ModuleId) -> SynthesizedId {
         SynthesizedId::new(module_id, self.synthesized.next_id())
     }
+
+    /// Returns the next synthesized ID value without consuming it.
+    /// Used for monomorphization to continue generating unique IDs.
+    pub fn next_synthesized_id(&self) -> usize {
+        self.synthesized.current()
+    }
 }
 
 #[cfg(test)]

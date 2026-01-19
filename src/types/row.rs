@@ -97,6 +97,15 @@ impl Row {
         result
     }
 
+    /// Returns true if this row or any type within it contains unsubstituted type parameters.
+    pub fn contains_type_params(&self) -> bool {
+        match self {
+            Row::Empty => false,
+            Row::Param(_) => false, // Row params are different from type params
+            Row::Extend { row, ty, .. } => row.contains_type_params() || ty.contains_type_params(),
+        }
+    }
+
     pub fn import(self, module_id: ModuleId) -> Self {
         match self {
             Row::Empty => Row::Empty,

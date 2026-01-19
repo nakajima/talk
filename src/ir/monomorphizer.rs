@@ -7,14 +7,15 @@ use crate::{
     ir::{
         basic_block::{BasicBlock, Phi},
         function::Function,
-        instruction::Instruction,
+        instruction::{Instruction, InstructionMeta},
         ir_ty::IrTy,
-        lowerer::{Lowerer, PolyFunction},
+        lowerer::PolyFunction,
         terminator::Terminator,
         value::{Reference, Value},
     },
     name::Name,
     name_resolution::symbol::Symbol,
+    node_id::NodeID,
     types::{
         conformance::ConformanceKey,
         passes::specialization_pass::SpecializedCallee,
@@ -29,17 +30,28 @@ pub struct Monomorphizer<'a> {
     pub(super) functions: IndexMap<Symbol, PolyFunction>,
     specializations: &'a FxHashMap<Symbol, Vec<Symbol>>,
     specialized_callees: &'a FxHashMap<Symbol, SpecializedCallee>,
+    /// Maps (specialized_caller, call_site_id) -> specialized_callee.
+    /// Aligns with the paper's model: each call site is a dimension, resolution maps to the callee.
+    call_resolutions: &'a FxHashMap<(Symbol, NodeID), Symbol>,
 }
 
 #[allow(clippy::expect_used)]
 impl<'a> Monomorphizer<'a> {
-    pub fn new(lowerer: Lowerer<'a>) -> Self {
+    pub fn new(
+        types: &'a Types,
+        functions: IndexMap<Symbol, PolyFunction>,
+        config: &'a DriverConfig,
+        specializations: &'a FxHashMap<Symbol, Vec<Symbol>>,
+        specialized_callees: &'a FxHashMap<Symbol, SpecializedCallee>,
+        call_resolutions: &'a FxHashMap<(Symbol, NodeID), Symbol>,
+    ) -> Self {
         Monomorphizer {
-            types: &lowerer.typed.types,
-            functions: lowerer.functions,
-            specializations: &lowerer.typed.specializations,
-            config: lowerer.config,
-            specialized_callees: &lowerer.typed.specialized_callees,
+            types,
+            functions,
+            config,
+            specializations,
+            specialized_callees,
+            call_resolutions,
         }
     }
 
@@ -193,7 +205,7 @@ impl<'a> Monomorphizer<'a> {
             blocks: func
                 .blocks
                 .into_iter()
-                .map(|b| self.monomorphize_block(b, &Default::default(), receiver_ty.as_ref()))
+                .map(|b| self.monomorphize_block(b, &Default::default(), receiver_ty.as_ref(), None))
                 .collect(),
             register_count: func.register_count,
         };
@@ -207,6 +219,7 @@ impl<'a> Monomorphizer<'a> {
         block: BasicBlock<Ty>,
         substitutions: &Specializations,
         receiver_ty: Option<&Ty>,
+        specialized_caller: Option<Symbol>,
     ) -> BasicBlock<IrTy> {
         BasicBlock {
             id: block.id,
@@ -222,7 +235,7 @@ impl<'a> Monomorphizer<'a> {
             instructions: block
                 .instructions
                 .into_iter()
-                .map(|i| self.monomorphize_instruction(i, substitutions, receiver_ty))
+                .map(|i| self.monomorphize_instruction(i, substitutions, receiver_ty, specialized_caller))
                 .collect(),
             terminator: self.monomorphize_terminator(block.terminator, substitutions),
         }
@@ -251,9 +264,9 @@ impl<'a> Monomorphizer<'a> {
         instruction: Instruction<Ty>,
         substitutions: &Specializations,
         receiver_ty: Option<&Ty>,
+        specialized_caller: Option<Symbol>,
     ) -> Instruction<IrTy> {
-        // Handle Call instructions specially to substitute MethodRequirement callees
-        // This is needed for protocol default method bodies where the receiver is a type param
+        // Handle Call instructions specially to substitute callees
         if let Instruction::Call {
             dest,
             ty,
@@ -273,6 +286,33 @@ impl<'a> Monomorphizer<'a> {
                         callee
                     }
                 }
+                Value::Func(_sym) => {
+                    // Only substitute if the call's return type has type params
+                    // For concrete return types (like protocol default methods returning Int),
+                    // no substitution is needed
+                    if !ty.contains_type_params() {
+                        callee
+                    } else if let Some(caller) = specialized_caller {
+                        // Extract call site ID from instruction meta
+                        let call_id = meta.items.iter().find_map(|m| {
+                            if let InstructionMeta::Source(id) = m {
+                                Some(id)
+                            } else {
+                                None
+                            }
+                        });
+                        // Look up by (caller, call_site) - aligns with paper's dimension model
+                        if let Some(call_id) = call_id
+                            && let Some(specialized_sym) = self.call_resolutions.get(&(caller, *call_id))
+                        {
+                            Value::Func(*specialized_sym)
+                        } else {
+                            callee
+                        }
+                    } else {
+                        callee
+                    }
+                }
                 _ => callee,
             };
 
@@ -287,6 +327,7 @@ impl<'a> Monomorphizer<'a> {
 
         instruction.map_type(|ty| self.monomorphize_ty(ty, substitutions))
     }
+
 
     /// Resolve a method requirement to a concrete witness implementation
     fn resolve_method_requirement(
@@ -480,7 +521,7 @@ impl<'a> Monomorphizer<'a> {
                 .clone()
                 .into_iter()
                 .map(|b| {
-                    self.monomorphize_block(b, &specialization.specializations, receiver_ty.as_ref())
+                    self.monomorphize_block(b, &specialization.specializations, receiver_ty.as_ref(), Some(specialized_name))
                 })
                 .collect(),
         };

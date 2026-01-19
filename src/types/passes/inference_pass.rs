@@ -926,7 +926,9 @@ impl<'a> InferencePass<'a> {
         for (i, binder) in group.binders.iter().enumerate() {
             if let Some(captures) = self.session.resolved_names.captures.get(binder).cloned() {
                 for capture in captures {
-                    if self.session.lookup(&capture.symbol).is_none() {
+                    if self.session.lookup(&capture.symbol).is_none()
+                        && !matches!(capture.symbol, Symbol::Global(_))
+                    {
                         let placeholder = self.session.new_ty_meta_var(capture.level);
                         tracing::trace!(
                             "capture placeholder {:?} = {placeholder:?}",
@@ -3042,6 +3044,7 @@ impl<'a> InferencePass<'a> {
         let callee_ty = self.visit_expr(callee, context)?;
 
         // Record callee info for the call tree
+        // call_id is the callee expression ID, which uniquely identifies call sites
         if let Some(caller) = self.current_function {
             let callee_info = match &callee_ty.kind {
                 TypedExprKind::Variable(sym) => Some(CalleeInfo::Direct {

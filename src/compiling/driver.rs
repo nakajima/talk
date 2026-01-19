@@ -60,6 +60,9 @@ pub struct Typed {
     pub diagnostics: Vec<AnyDiagnostic>,
     pub specialized_callees: FxHashMap<Symbol, SpecializedCallee>,
     pub specializations: FxHashMap<Symbol, Vec<Symbol>>,
+    /// Maps (specialized_caller, call_site_id) -> specialized_callee.
+    /// Aligns with the paper's model: each call site is a dimension, resolution maps to the callee.
+    pub call_resolutions: FxHashMap<(Symbol, NodeID), Symbol>,
 }
 
 impl DriverPhase for Lowered {}
@@ -356,9 +359,10 @@ impl Driver<NameResolved> {
         let symbols = std::mem::take(&mut session.symbols);
         let (types, resolved_names) = session.finalize().map_err(CompileError::Typing)?;
 
-        let specialization_pass = SpecializationPass::new(ast, symbols, resolved_names, types);
+        let specialization_pass =
+            SpecializationPass::new(ast, symbols, resolved_names, types, &self.config.modules);
 
-        let (ast, symbols, resolved_names, mut types, specializations, specialized_callees) =
+        let (ast, symbols, resolved_names, mut types, specializations, specialized_callees, call_resolutions) =
             specialization_pass.drive().map_err(CompileError::Typing)?;
 
         // Don't bother with matcher diagnostics if we're not well typed already.
@@ -385,6 +389,7 @@ impl Driver<NameResolved> {
                 diagnostics: self.phase.diagnostics,
                 specializations,
                 specialized_callees,
+                call_resolutions,
             },
         })
     }

@@ -138,8 +138,17 @@ impl Types {
             match_plans: self.match_plans,
             choices: self.choices,
             resolution: self.resolution,
-            // Call tree is not imported - it's only relevant for the current module's specialization
-            call_tree: Default::default(),
+            // Import call tree so specialization can propagate to callees in imported modules
+            call_tree: self
+                .call_tree
+                .into_iter()
+                .map(|(k, v)| {
+                    (
+                        k.import(module_id),
+                        v.into_iter().map(|c| c.import(module_id)).collect(),
+                    )
+                })
+                .collect(),
         }
     }
 }

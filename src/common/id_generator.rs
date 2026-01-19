@@ -16,4 +16,9 @@ impl IDGenerator {
         }
         result
     }
+
+    /// Returns the next ID value that would be generated (last + 1)
+    pub fn current(&self) -> usize {
+        (self.last + 1) as usize
+    }
 }

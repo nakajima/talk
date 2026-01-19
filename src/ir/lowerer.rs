@@ -245,7 +245,15 @@ impl<'a> Lowerer<'a> {
 
         let static_memory = std::mem::take(&mut self.static_memory);
         let record_labels = std::mem::take(&mut self.record_labels);
-        let mut monomorphizer = Monomorphizer::new(self);
+        let functions = std::mem::take(&mut self.functions);
+        let mut monomorphizer = Monomorphizer::new(
+            &self.typed.types,
+            functions,
+            self.config,
+            &self.typed.specializations,
+            &self.typed.specialized_callees,
+            &self.typed.call_resolutions,
+        );
 
         Ok(Program {
             functions: monomorphizer.monomorphize(),
@@ -2492,7 +2500,7 @@ impl<'a> Lowerer<'a> {
             ty: ty.clone(),
             callee: callee_ir,
             args: arg_vals.into(),
-            meta: vec![InstructionMeta::Source(call_expr.id)].into(),
+            meta: vec![InstructionMeta::Source(callee.id)].into(),
         });
 
         Ok((dest.into(), ty))
@@ -2600,7 +2608,7 @@ impl<'a> Lowerer<'a> {
             ty: call_expr.ty.clone(),
             callee: Value::Func(sym),
             args: args.into(),
-            meta: vec![InstructionMeta::Source(call_expr.id)].into(),
+            meta: vec![InstructionMeta::Source(callee_expr.id)].into(),
         });
 
         Ok((dest.into(), ty))

@@ -105,6 +105,12 @@ impl ModuleEnvironment {
         module.types.get_symbol(symbol).cloned()
     }
 
+    /// Get a reference to a module by its local module ID
+    pub fn get_module(&self, module_id: ModuleId) -> Option<&Module> {
+        let stable_id = self.modules_by_local.get(&module_id)?;
+        self.modules.get(stable_id)
+    }
+
     pub fn lookup_member(&self, receiver: &Symbol, label: &Label) -> Option<Symbol> {
         let module_id = receiver.external_module_id()?;
         let stable_id = self.modules_by_local.get(&module_id)?;

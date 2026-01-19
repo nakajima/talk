@@ -3,7 +3,7 @@ use itertools::Itertools;
 use rustc_hash::FxHashMap;
 
 use crate::{
-    compiling::module::ModuleId,
+    compiling::module::{ModuleEnvironment, ModuleId},
     label::Label,
     name_resolution::{
         name_resolver::ResolvedNames,
@@ -31,30 +31,37 @@ pub struct SpecializedCallee {
     pub specializations: Specializations,
 }
 
-pub struct SpecializationPass {
+pub struct SpecializationPass<'a> {
     ast: TypedAST<Ty>,
     symbols: Symbols,
     resolved_names: ResolvedNames,
     types: Types,
+    modules: &'a ModuleEnvironment,
     pub(crate) specialized_callees: FxHashMap<Symbol, SpecializedCallee>,
     pub(crate) specializations: FxHashMap<Symbol, Vec<Symbol>>,
+    /// Maps (specialized_caller, call_site_id) -> specialized_callee.
+    /// Aligns with the paper's model: each call site is a dimension, resolution maps to the callee.
+    pub(crate) call_resolutions: FxHashMap<(Symbol, NodeID), Symbol>,
     current_specializations: Vec<Specializations>,
 }
 
-impl SpecializationPass {
+impl<'a> SpecializationPass<'a> {
     pub fn new(
         ast: TypedAST<Ty>,
         symbols: Symbols,
         resolved_names: ResolvedNames,
         types: Types,
+        modules: &'a ModuleEnvironment,
     ) -> Self {
         Self {
             ast,
             symbols,
             resolved_names,
             types,
+            modules,
             specialized_callees: Default::default(),
             specializations: Default::default(),
+            call_resolutions: Default::default(),
             current_specializations: Default::default(),
         }
     }
@@ -70,6 +77,7 @@ impl SpecializationPass {
             Types,
             FxHashMap<Symbol, Vec<Symbol>>,
             FxHashMap<Symbol, SpecializedCallee>,
+            FxHashMap<(Symbol, NodeID), Symbol>,
         ),
         TypeError,
     > {
@@ -95,6 +103,7 @@ impl SpecializationPass {
             self.types,
             self.specializations,
             self.specialized_callees,
+            self.call_resolutions,
         ))
     }
 
@@ -463,7 +472,7 @@ impl SpecializationPass {
 
             let mut specialized_callee = self.visit_expr(callee.clone())?;
             let callee_sym = self.specialize(&caller, &accumulated_specs);
-            self.specialize_callees(caller, &accumulated_specs)?;
+            self.specialize_callees(callee_sym, caller, &accumulated_specs)?;
             self.current_specializations.pop();
 
             let mut args: Vec<_> = args.into_iter().map(|i| self.visit_expr(i)).try_collect()?;
@@ -657,9 +666,12 @@ impl SpecializationPass {
     }
 
     /// Compute specializations for callees of a function and propagate.
+    /// `specialized_caller` is the specialized symbol (e.g., `Array.get[Int]`)
+    /// `original_caller` is the original symbol (e.g., `Array.get`)
     fn specialize_callees(
         &mut self,
-        caller: Symbol,
+        specialized_caller: Symbol,
+        original_caller: Symbol,
         specializations: &Specializations,
     ) -> Result<(), TypeError> {
         // Skip if specializations are empty
@@ -667,15 +679,17 @@ impl SpecializationPass {
             return Ok(());
         }
 
-        // Get callees from call tree (computed during inference)
-        let callees = self.types.call_tree.get(&caller).cloned().unwrap_or_default();
+        // Get callees from call tree - look up in imported module if needed
+        let callees = self.get_call_tree_for(&original_caller);
 
         for callee_info in callees {
-            let (callee_sym, callee_specializations) = match callee_info {
+            // call_id is the callee expression ID, used for both instantiation lookup
+            // and call_resolutions key (matches IR instruction meta)
+            let (callee_sym, callee_specializations, call_id) = match callee_info {
                 CalleeInfo::Direct { sym, call_id } => {
                     let callee_specs =
-                        self.compute_callee_specializations(&call_id, specializations);
-                    (sym, callee_specs)
+                        self.compute_callee_specializations(&original_caller, &call_id, specializations);
+                    (sym, callee_specs, call_id)
                 }
                 CalleeInfo::Member {
                     receiver_id,
@@ -707,28 +721,64 @@ impl SpecializationPass {
                     };
 
                     let callee_specs =
-                        self.compute_callee_specializations(&call_id, specializations);
-                    (member_sym, callee_specs)
+                        self.compute_callee_specializations(&original_caller, &call_id, specializations);
+                    (member_sym, callee_specs, call_id)
                 }
             };
 
-            // Specialize this callee and then recursively propagate to its callees
-            self.specialize(&callee_sym, &callee_specializations);
-            self.specialize_callees(callee_sym, &callee_specializations)?;
+            // Skip MethodRequirement symbols - they're resolved at monomorphization time
+            // via resolve_method_requirement based on the concrete receiver type
+            if matches!(callee_sym, Symbol::MethodRequirement(_)) {
+                continue;
+            }
+
+            // Specialize this callee and record the resolution
+            let specialized_callee = self.specialize(&callee_sym, &callee_specializations);
+
+            // Record: for this call site within specialized_caller, use specialized_callee
+            // This aligns with the paper's model: each call site is a dimension
+            if specialized_callee != callee_sym {
+                self.call_resolutions
+                    .insert((specialized_caller, call_id), specialized_callee);
+            }
+
+            // Recursively propagate to callees
+            self.specialize_callees(specialized_callee, callee_sym, &callee_specializations)?;
         }
 
         Ok(())
     }
 
+    /// Get call tree entries for a function, looking in imported modules if needed
+    fn get_call_tree_for(&self, caller: &Symbol) -> Vec<CalleeInfo> {
+        // First check local types
+        if let Some(callees) = self.types.call_tree.get(caller) {
+            return callees.clone();
+        }
+        // Then check imported modules
+        if let Some(module_id) = caller.external_module_id() {
+            if let Some(module) = self.modules.get_module(module_id) {
+                if let Some(callees) = module.types.call_tree.get(caller) {
+                    return callees.clone();
+                }
+            }
+        }
+        vec![]
+    }
+
     /// Compute specializations for a callee based on instantiations at the call site.
     fn compute_callee_specializations(
         &self,
+        caller: &Symbol,
         call_id: &NodeID,
         specializations: &Specializations,
     ) -> Specializations {
         let mut callee_specs = Specializations::default();
 
-        if let Some(ty_instantiations) = self.types.catalog.instantiations.ty.get(call_id) {
+        // Look up instantiations - in imported module if caller is from there
+        let (ty_insts, row_insts) = self.get_instantiations_for(caller, call_id);
+
+        if let Some(ty_instantiations) = ty_insts {
             for (param, ty) in ty_instantiations {
                 let specialized_ty = specializations.apply(ty.clone());
                 if !matches!(specialized_ty, Ty::Param(..)) {
@@ -737,7 +787,7 @@ impl SpecializationPass {
             }
         }
 
-        if let Some(row_instantiations) = self.types.catalog.instantiations.row.get(call_id) {
+        if let Some(row_instantiations) = row_insts {
             for (param, row) in row_instantiations {
                 let specialized_row = if let Row::Param(row_id) = row
                     && let Some(replacement) = specializations.row.get(row_id)
@@ -755,16 +805,52 @@ impl SpecializationPass {
         callee_specs
     }
 
+    /// Get instantiations for a call site, looking in imported modules if needed
+    fn get_instantiations_for(
+        &self,
+        caller: &Symbol,
+        call_id: &NodeID,
+    ) -> (
+        Option<&FxHashMap<crate::types::infer_ty::TypeParamId, Ty>>,
+        Option<&FxHashMap<crate::types::infer_row::RowParamId, Row>>,
+    ) {
+        // First check local catalog
+        let local_ty = self.types.catalog.instantiations.ty.get(call_id);
+        let local_row = self.types.catalog.instantiations.row.get(call_id);
+        if local_ty.is_some() || local_row.is_some() {
+            return (local_ty, local_row);
+        }
+
+        // Then check imported module based on caller's module
+        if let Some(module_id) = caller.external_module_id() {
+            if let Some(module) = self.modules.get_module(module_id) {
+                return (
+                    module.types.catalog.instantiations.ty.get(call_id),
+                    module.types.catalog.instantiations.row.get(call_id),
+                );
+            }
+        }
+
+        (None, None)
+    }
+
+    /// Get type entry for a symbol, looking in imported modules if needed
+    fn get_type_for(&self, sym: &Symbol) -> Option<TypeEntry> {
+        // First check local types
+        if let Some(ty) = self.types.types_by_symbol.get(sym) {
+            return Some(ty.clone());
+        }
+        // Then check imported modules
+        self.modules.lookup(sym)
+    }
+
     fn specialize(&mut self, callee_sym: &Symbol, specializations: &Specializations) -> Symbol {
         if specializations.is_empty() {
             return *callee_sym;
         }
 
-        // Get the original
-        let ty = self
-            .types
-            .types_by_symbol
-            .get(callee_sym)
+        // Get the original type - look in imported modules if needed
+        let ty = self.get_type_for(callee_sym)
             .unwrap_or_else(|| unreachable!("did not get ty for {callee_sym:?}"));
 
         // Check if applying specializations actually changes the type
