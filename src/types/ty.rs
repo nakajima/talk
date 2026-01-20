@@ -1,39 +1,28 @@
 use std::hash::Hash;
 
-use derive_visitor::{Drive, DriveMut};
-use indexmap::IndexSet;
-
 use crate::{
     compiling::module::ModuleId,
     label::Label,
     name::Name,
-    name_resolution::symbol::Symbol,
+    name_resolution::symbol::{ProtocolId, Symbol},
     types::{
         infer_row::{RowMetaId, RowParamId},
         infer_ty::{InferTy, TypeParamId},
+        mappable::Mappable,
         row::Row,
         scheme::ForAll,
-        typed_ast::TyMappable,
+        type_error::TypeError,
+        types::TypeEntry,
     },
 };
+use derive_visitor::{Drive, DriveMut};
+use indexmap::{IndexMap, IndexSet};
 
 pub enum BaseRow<T: SomeType> {
     Empty,
     Param(RowParamId),
     Var(RowMetaId),
     Extend { row: Box<Self>, label: Label, ty: T },
-}
-
-impl<T: SomeType, U: SomeType> TyMappable<T, U> for BaseRow<T> {
-    type OutputTy = U::RowType;
-    fn map_ty(self, m: &mut impl FnMut(&T) -> U) -> Self::OutputTy {
-        match self {
-            BaseRow::Empty => U::RowType::empty(),
-            BaseRow::Param(id) => U::RowType::param(id),
-            BaseRow::Var(id) => U::RowType::var(id),
-            BaseRow::Extend { row, label, ty } => U::RowType::extend(row.map_ty(m), label, m(&ty)),
-        }
-    }
 }
 
 pub trait RowType: PartialEq + Clone + std::fmt::Debug + Drive + DriveMut {
@@ -45,15 +34,18 @@ pub trait RowType: PartialEq + Clone + std::fmt::Debug + Drive + DriveMut {
     fn extend(row: Self, label: Label, ty: Self::T) -> Self;
 }
 
-impl<T: SomeType, U: SomeType, V: RowType<T = T>> TyMappable<T, U> for V {
-    type OutputTy = U::RowType;
-    fn map_ty(self, m: &mut impl FnMut(&T) -> U) -> Self::OutputTy {
-        self.base().map_ty(m)
-    }
-}
-
-pub trait SomeType: std::fmt::Debug + PartialEq + Clone + Eq + Hash + Drive + DriveMut {
+pub trait SomeType:
+    std::fmt::Debug
+    + PartialEq
+    + Clone
+    + Eq
+    + Hash
+    + Drive
+    + DriveMut
+    + Mappable<Self, Self, Output = Self>
+{
     type RowType: RowType<T = Self>;
+    type Entry: Drive + DriveMut + PartialEq + Clone + std::fmt::Debug;
 
     fn void() -> Self;
     fn contains_var(&self) -> bool;
@@ -62,6 +54,7 @@ pub trait SomeType: std::fmt::Debug + PartialEq + Clone + Eq + Hash + Drive + Dr
 
 impl SomeType for Ty {
     type RowType = Row;
+    type Entry = TypeEntry;
 
     fn void() -> Self {
         Ty::Void
@@ -74,7 +67,7 @@ impl SomeType for Ty {
     fn import(self, module_id: ModuleId) -> Self {
         match self {
             Ty::Primitive(symbol) => Ty::Primitive(symbol),
-            Ty::Param(type_param_id) => Ty::Param(type_param_id),
+            Ty::Param(type_param_id, bounds) => Ty::Param(type_param_id, bounds),
             Ty::Constructor {
                 name: Name::Resolved(sym, name),
                 params,
@@ -106,7 +99,7 @@ impl SomeType for Ty {
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Drive, DriveMut)]
 pub enum Ty {
     Primitive(#[drive(skip)] Symbol),
-    Param(#[drive(skip)] TypeParamId),
+    Param(#[drive(skip)] TypeParamId, #[drive(skip)] Vec<ProtocolId>),
     Constructor {
         #[drive(skip)]
         name: Name,
@@ -126,6 +119,46 @@ pub enum Ty {
     },
 }
 
+impl Mappable<Ty, Ty> for Ty {
+    type Output = Ty;
+    fn mapping(
+        self,
+        ty_map: &mut impl FnMut(Ty) -> Ty,
+        row_map: &mut impl FnMut(<Ty as SomeType>::RowType) -> <Ty as SomeType>::RowType,
+    ) -> Self::Output {
+        match self {
+            Ty::Constructor { name, params, ret } => Ty::Constructor {
+                name,
+                params: params
+                    .into_iter()
+                    .map(|p| p.mapping(ty_map, row_map))
+                    .collect(),
+                ret: ret.mapping(ty_map, row_map).into(),
+            },
+            Ty::Func(param, ret, effects) => Ty::Func(
+                param.mapping(ty_map, row_map).into(),
+                ret.mapping(ty_map, row_map).into(),
+                effects.mapping(ty_map, row_map).into(),
+            ),
+            Ty::Tuple(items) => Ty::Tuple(
+                items
+                    .into_iter()
+                    .map(|i| i.mapping(ty_map, row_map))
+                    .collect(),
+            ),
+            Ty::Record(symbol, row) => Ty::Record(symbol, row.mapping(ty_map, row_map).into()),
+            Ty::Nominal { symbol, type_args } => Ty::Nominal {
+                symbol,
+                type_args: type_args
+                    .into_iter()
+                    .map(|t| t.mapping(ty_map, row_map))
+                    .collect(),
+            },
+            other => ty_map(other),
+        }
+    }
+}
+
 impl std::fmt::Display for Ty {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -138,7 +171,7 @@ impl std::fmt::Display for Ty {
                 Symbol::RawPtr => write!(f, "RawPtr"),
                 _ => write!(f, "{symbol}"),
             },
-            Ty::Param(type_param_id) => write!(f, "{:?}", type_param_id),
+            Ty::Param(type_param_id, _bounds) => write!(f, "{:?}", type_param_id),
             Ty::Constructor { name, .. } => {
                 write!(f, "{}", name.name_str())
             }
@@ -182,6 +215,55 @@ impl std::fmt::Display for Ty {
     }
 }
 
+#[derive(Default, Debug, Clone, PartialEq)]
+pub struct Specializations {
+    pub ty: IndexMap<TypeParamId, Ty>,
+    pub row: IndexMap<RowParamId, Row>,
+}
+impl Specializations {
+    pub fn is_empty(&self) -> bool {
+        self.ty.is_empty() && self.row.is_empty()
+    }
+
+    pub fn extend(&mut self, other: Specializations) {
+        self.ty.extend(
+            other
+                .ty
+                .into_iter()
+                .filter(|(_, v)| !matches!(v, Ty::Param(..))),
+        );
+        self.row.extend(
+            other
+                .row
+                .into_iter()
+                .filter(|(_, v)| !matches!(v, Row::Param(..))),
+        );
+    }
+
+    pub fn apply(&self, ty: Ty) -> Ty {
+        ty.mapping(
+            &mut |t| {
+                if let Ty::Param(id, _) = t
+                    && let Some(replacement) = self.ty.get(&id)
+                {
+                    replacement.clone()
+                } else {
+                    t
+                }
+            },
+            &mut |r| {
+                if let Row::Param(id) = r
+                    && let Some(replacement) = self.row.get(&id)
+                {
+                    replacement.clone()
+                } else {
+                    r
+                }
+            },
+        )
+    }
+}
+
 #[allow(non_upper_case_globals)]
 #[allow(non_snake_case)]
 impl Ty {
@@ -202,11 +284,121 @@ impl Ty {
         InferTy::Array(t.into()).into()
     }
 
+    /// Returns true if this type contains any unsubstituted type parameters.
+    pub fn contains_type_params(&self) -> bool {
+        match self {
+            Ty::Param(..) => true,
+            Ty::Primitive(..) => false,
+            Ty::Constructor { params, ret, .. } => {
+                params.iter().any(|p| p.contains_type_params()) || ret.contains_type_params()
+            }
+            Ty::Func(param, ret, effects) => {
+                param.contains_type_params()
+                    || ret.contains_type_params()
+                    || effects.contains_type_params()
+            }
+            Ty::Tuple(items) => items.iter().any(|i| i.contains_type_params()),
+            Ty::Record(_, row) => row.contains_type_params(),
+            Ty::Nominal { type_args, .. } => type_args.iter().any(|t| t.contains_type_params()),
+        }
+    }
+
+    pub fn collect_specializations(&self, concrete: &Ty) -> Result<Specializations, TypeError> {
+        let mut result = Specializations::default();
+        match (self, concrete) {
+            (Ty::Primitive(..), Ty::Primitive(..)) => (),
+            (Ty::Param(id, _), other) => {
+                if !matches!(other, Ty::Param(..)) {
+                    result.ty.insert(*id, other.clone());
+                }
+            }
+            (
+                Ty::Constructor {
+                    params: lhs_params,
+                    ret: lhs_ret,
+                    ..
+                },
+                Ty::Constructor {
+                    params: rhs_params,
+                    ret: rhs_ret,
+                    ..
+                },
+            ) => {
+                for (lhs, rhs) in lhs_params.iter().zip(rhs_params) {
+                    result.ty.extend(lhs.collect_specializations(rhs)?.ty);
+                }
+
+                result
+                    .ty
+                    .extend(lhs_ret.collect_specializations(rhs_ret)?.ty);
+            }
+            (
+                Ty::Constructor {
+                    params: _constructor_params,
+                    ret: box _constructor_ret,
+                    ..
+                },
+                Ty::Func(_func_params, _func_ret, _),
+            )
+            | (
+                Ty::Func(_func_params, _func_ret, _),
+                Ty::Constructor {
+                    params: _constructor_params,
+                    ret: box _constructor_ret,
+                    ..
+                },
+            ) => (),
+            (
+                Ty::Func(lhs_param, lhs_ret, lhs_effects),
+                Ty::Func(rhs_param, rhs_ret, rhs_effects),
+            ) => {
+                result
+                    .ty
+                    .extend(lhs_param.collect_specializations(rhs_param)?.ty);
+                result
+                    .ty
+                    .extend(lhs_ret.collect_specializations(rhs_ret)?.ty);
+                result
+                    .row
+                    .extend(lhs_effects.collect_specializations(rhs_effects)?.row)
+            }
+            (Ty::Tuple(lhs_items), Ty::Tuple(rhs_items)) => {
+                for (lhs, rhs) in lhs_items.iter().zip(rhs_items) {
+                    result.ty.extend(lhs.collect_specializations(rhs)?.ty);
+                }
+            }
+            (Ty::Record(.., lhs_row), Ty::Record(.., rhs_row)) => {
+                result
+                    .row
+                    .extend(lhs_row.collect_specializations(rhs_row)?.row);
+            }
+            (
+                Ty::Nominal {
+                    type_args: lhs_args,
+                    ..
+                },
+                Ty::Nominal {
+                    type_args: rhs_args,
+                    ..
+                },
+            ) => {
+                for (lhs, rhs) in lhs_args.iter().zip(rhs_args) {
+                    result.ty.extend(lhs.collect_specializations(rhs)?.ty);
+                }
+            }
+            tup => {
+                tracing::error!("{tup:?}");
+                return Err(TypeError::SpecializationMismatch);
+            }
+        }
+        Ok(result)
+    }
+
     pub fn collect_foralls(&self) -> IndexSet<ForAll> {
         let mut result: IndexSet<ForAll> = Default::default();
         match self {
             Ty::Primitive(..) => (),
-            Ty::Param(id) => {
+            Ty::Param(id, _) => {
                 result.insert(ForAll::Ty(*id));
             }
             Ty::Constructor { params, ret, .. } => {

@@ -12,7 +12,8 @@ use crate::{
     types::{
         infer_row::{InferRow, RowMetaId, RowParamId, RowTail, normalize_row},
         infer_ty::{InferTy, Level, Meta, MetaVarId, TypeParamId},
-        solve_context::Solve,
+        mappable::Mappable,
+        solve_context::SolveContext,
         type_error::TypeError,
         type_session::{TypeDefKind, TypeSession},
     },
@@ -215,14 +216,14 @@ fn unify_rows(
     kind: TypeDefKind,
     lhs: &InferRow,
     rhs: &InferRow,
-    context: &mut impl Solve,
+    context: &mut SolveContext,
     session: &mut TypeSession,
 ) -> Result<Vec<Meta>, TypeError> {
     let mut result = vec![];
     let (mut lhs_fields, lhs_tail) =
-        normalize_row(lhs.clone(), context.substitutions_mut(), session);
+        normalize_row(lhs.clone(), &mut context.substitutions_mut(), session);
     let (mut rhs_fields, rhs_tail) =
-        normalize_row(rhs.clone(), context.substitutions_mut(), session);
+        normalize_row(rhs.clone(), &mut context.substitutions_mut(), session);
 
     // Check to see if one side is closed and the other is a var. If so,
     // just unify the var as the other side
@@ -240,7 +241,7 @@ fn unify_rows(
             };
         }
 
-        if row_occurs_structural(*var, &acc, context.substitutions_mut()) {
+        if row_occurs_structural(*var, &acc, &mut context.substitutions_mut()) {
             return Err(TypeError::OccursCheck(InferTy::Record(Box::new(acc))));
         }
         context.substitutions_mut().row.insert(*var, acc);
@@ -274,7 +275,7 @@ fn unify_rows(
                     ty,
                 };
             }
-            if row_occurs(tail_id, &acc, context.substitutions_mut(), session) {
+            if row_occurs(tail_id, &acc, &mut context.substitutions_mut(), session) {
                 return Err(TypeError::OccursCheck(InferTy::Record(Box::new(acc))));
             }
 
@@ -352,13 +353,13 @@ fn unify_rows(
 pub(super) fn unify(
     lhs: &InferTy,
     rhs: &InferTy,
-    context: &mut impl Solve,
+    context: &mut SolveContext,
     session: &mut TypeSession,
 ) -> Result<Vec<Meta>, TypeError> {
     let lhs = context.normalize(lhs.clone(), session);
     let rhs = context.normalize(rhs.clone(), session);
-    let lhs = session.apply(lhs, context.substitutions_mut());
-    let rhs = session.apply(rhs, context.substitutions_mut());
+    let lhs = session.apply(lhs, &mut context.substitutions_mut());
+    let rhs = session.apply(rhs, &mut context.substitutions_mut());
 
     if lhs == rhs {
         return Ok(Default::default());
@@ -404,7 +405,7 @@ pub(super) fn unify(
             Ok(result)
         }
         (InferTy::Rigid(lhs), InferTy::Rigid(rhs)) if lhs == rhs => Ok(Default::default()),
-        (InferTy::Param(lhs), InferTy::Param(rhs)) if lhs == rhs => Ok(Default::default()),
+        (InferTy::Param(lhs, _), InferTy::Param(rhs, _)) if lhs == rhs => Ok(Default::default()),
         (
             InferTy::Constructor {
                 params, box ret, ..
@@ -540,10 +541,12 @@ pub(super) fn unify(
             Err(TypeError::invalid_unification(lhs.clone(), rhs.clone()))
         }
         _ => {
+            let applied_lhs = session.apply(lhs.clone(), &mut context.substitutions_mut());
+            let applied_rhs = session.apply(rhs.clone(), &mut context.substitutions_mut());
             tracing::error!(
                 "attempted to unify {:?} <> {:?}",
-                session.apply(lhs.clone(), context.substitutions_mut(),),
-                session.apply(rhs.clone(), context.substitutions_mut(),)
+                applied_lhs,
+                applied_rhs
             );
             Err(TypeError::invalid_unification(lhs.clone(), rhs.clone()))
         }
@@ -584,26 +587,6 @@ pub(super) fn substitute_row(
     }
 }
 
-/// Substitute row with unified Substitutions that can handle row param substitution.
-pub(super) fn substitute_row_with_subs(row: InferRow, substitutions: &Substitutions) -> InferRow {
-    match row {
-        InferRow::Empty => row,
-        InferRow::Var(..) => row,
-        InferRow::Param(id) => {
-            if let Some(replacement) = substitutions.row.get(&id) {
-                replacement.clone()
-            } else {
-                row
-            }
-        }
-        InferRow::Extend { row, label, ty } => InferRow::Extend {
-            row: Box::new(substitute_row_with_subs(*row, substitutions)),
-            label,
-            ty: substitute_with_subs(ty, substitutions),
-        },
-    }
-}
-
 pub(super) fn substitute_mult(
     ty: &[InferTy],
     substitutions: &FxHashMap<InferTy, InferTy>,
@@ -614,104 +597,32 @@ pub(super) fn substitute_mult(
 }
 
 pub(super) fn substitute(ty: InferTy, substitutions: &FxHashMap<InferTy, InferTy>) -> InferTy {
-    if let Some(subst) = substitutions.get(&ty) {
-        return subst.clone();
-    }
-    match ty {
-        InferTy::Error(..) => ty,
-        InferTy::Param(..) => ty,
-        InferTy::Rigid(..) => ty,
-        InferTy::Var { .. } => ty,
-        InferTy::Primitive(..) => ty,
-        InferTy::Projection {
-            box base,
-            associated,
-            protocol_id,
-        } => InferTy::Projection {
-            base: substitute(base, substitutions).into(),
-            associated,
-            protocol_id,
-        },
-        InferTy::Constructor { name, params, ret } => InferTy::Constructor {
-            name,
-            params: params
-                .into_iter()
-                .map(|p| substitute(p, substitutions))
-                .collect(),
-            ret: Box::new(substitute(*ret, substitutions)),
-        },
-        InferTy::Func(params, ret, effects) => InferTy::Func(
-            Box::new(substitute(*params, substitutions)),
-            Box::new(substitute(*ret, substitutions)),
-            Box::new(substitute_row(*effects, substitutions)),
-        ),
-        InferTy::Tuple(items) => InferTy::Tuple(
-            items
-                .into_iter()
-                .map(|t| substitute(t, substitutions))
-                .collect(),
-        ),
-        InferTy::Record(row) => InferTy::Record(Box::new(substitute_row(*row, substitutions))),
-        InferTy::Nominal { symbol, type_args } => InferTy::Nominal {
-            symbol,
-            type_args: type_args
-                .into_iter()
-                .map(|t| substitute(t, substitutions))
-                .collect(),
-        },
-    }
+    ty.mapping(
+        &mut |t| substitutions.get(&t).cloned().unwrap_or(t),
+        &mut |r| r,
+    )
 }
 
 /// Substitute type with unified Substitutions that can handle both type and row param substitution.
 pub(super) fn substitute_with_subs(ty: InferTy, substitutions: &Substitutions) -> InferTy {
-    if let Some(subst) = substitutions.ty.get(&ty) {
-        return subst.clone();
-    }
-    match ty {
-        InferTy::Error(..) => ty,
-        InferTy::Param(..) => ty,
-        InferTy::Rigid(..) => ty,
-        InferTy::Var { .. } => ty,
-        InferTy::Primitive(..) => ty,
-        InferTy::Projection {
-            box base,
-            associated,
-            protocol_id,
-        } => InferTy::Projection {
-            base: substitute_with_subs(base, substitutions).into(),
-            associated,
-            protocol_id,
+    ty.mapping(
+        &mut |t| {
+            if let Some(subst) = substitutions.ty.get(&t) {
+                return subst.clone();
+            }
+
+            t
         },
-        InferTy::Constructor { name, params, ret } => InferTy::Constructor {
-            name,
-            params: params
-                .into_iter()
-                .map(|p| substitute_with_subs(p, substitutions))
-                .collect(),
-            ret: Box::new(substitute_with_subs(*ret, substitutions)),
+        &mut |r| {
+            if let InferRow::Param(id) = r
+                && let Some(subst) = substitutions.row.get(&id)
+            {
+                return subst.clone();
+            }
+
+            r
         },
-        InferTy::Func(params, ret, effects) => InferTy::Func(
-            Box::new(substitute_with_subs(*params, substitutions)),
-            Box::new(substitute_with_subs(*ret, substitutions)),
-            Box::new(substitute_row_with_subs(*effects, substitutions)),
-        ),
-        InferTy::Tuple(items) => InferTy::Tuple(
-            items
-                .into_iter()
-                .map(|t| substitute_with_subs(t, substitutions))
-                .collect(),
-        ),
-        InferTy::Record(row) => {
-            InferTy::Record(Box::new(substitute_row_with_subs(*row, substitutions)))
-        }
-        InferTy::Nominal { symbol, type_args } => InferTy::Nominal {
-            symbol,
-            type_args: type_args
-                .into_iter()
-                .map(|t| substitute_with_subs(t, substitutions))
-                .collect(),
-        },
-    }
+    )
 }
 
 pub(super) fn instantiate_row(
@@ -750,60 +661,26 @@ pub(super) fn instantiate_ty(
         return ty;
     }
 
-    match ty {
-        InferTy::Error(..) => ty,
-        InferTy::Param(param) => {
-            if let Some(metas) = substitutions.ty.get(&node_id)
+    ty.mapping(
+        &mut |t| {
+            if let InferTy::Param(param, _) = t
+                && let Some(metas) = substitutions.ty.get(&node_id)
                 && let Some(meta) = metas.get(&param)
             {
-                InferTy::Var { id: *meta, level }
-            } else {
-                ty
-            }
-        }
-        InferTy::Rigid(..) => ty,
-        InferTy::Var { .. } => ty,
-        InferTy::Primitive(..) => ty,
-        InferTy::Projection {
-            box base,
-            associated,
-            protocol_id,
-        } => InferTy::Projection {
-            base: instantiate_ty(node_id, base, substitutions, level).into(),
-            associated,
-            protocol_id,
+                return InferTy::Var { id: *meta, level };
+            };
+
+            t
         },
-        InferTy::Constructor { name, params, ret } => InferTy::Constructor {
-            name,
-            params: params
-                .into_iter()
-                .map(|p| instantiate_ty(node_id, p, substitutions, level))
-                .collect(),
-            ret: Box::new(instantiate_ty(node_id, *ret, substitutions, level)),
+        &mut |r| {
+            if let InferRow::Param(id) = r
+                && let Some(metas) = substitutions.row.get(&node_id)
+                && let Some(meta) = metas.get(&id)
+            {
+                return InferRow::Var(*meta);
+            };
+
+            instantiate_row(node_id, r, substitutions, level)
         },
-        InferTy::Func(params, ret, effects) => InferTy::Func(
-            Box::new(instantiate_ty(node_id, *params, substitutions, level)),
-            Box::new(instantiate_ty(node_id, *ret, substitutions, level)),
-            Box::new(instantiate_row(node_id, *effects, substitutions, level)),
-        ),
-        InferTy::Tuple(items) => InferTy::Tuple(
-            items
-                .into_iter()
-                .map(|t| instantiate_ty(node_id, t, substitutions, level))
-                .collect(),
-        ),
-        InferTy::Record(row) => InferTy::Record(Box::new(instantiate_row(
-            node_id,
-            *row,
-            substitutions,
-            level,
-        ))),
-        InferTy::Nominal { symbol, type_args } => InferTy::Nominal {
-            symbol,
-            type_args: type_args
-                .into_iter()
-                .map(|t| instantiate_ty(node_id, t, substitutions, level))
-                .collect(),
-        },
-    }
+    )
 }

@@ -10,10 +10,7 @@ use crate::{
     },
     span::Span,
     token_kind::TokenKind,
-    types::{
-        ty::SomeType,
-        typed_ast::{TyMappable, TypedExpr},
-    },
+    types::{mappable::Mappable, ty::SomeType, typed_ast::TypedExpr},
 };
 use std::fmt::Display;
 
@@ -200,13 +197,17 @@ pub struct TypedInlineIRInstruction<T: SomeType> {
     pub kind: InlineIRInstructionKind,
 }
 
-impl<T: SomeType, U: SomeType> TyMappable<T, U> for TypedInlineIRInstruction<T> {
-    type OutputTy = TypedInlineIRInstruction<U>;
-    fn map_ty(self, m: &mut impl FnMut(&T) -> U) -> Self::OutputTy {
+impl<T: SomeType, U: SomeType> Mappable<T, U> for TypedInlineIRInstruction<T> {
+    type Output = TypedInlineIRInstruction<U>;
+    fn mapping(
+        self,
+        m: &mut impl FnMut(T) -> U,
+        r: &mut impl FnMut(T::RowType) -> U::RowType,
+    ) -> Self::Output {
         TypedInlineIRInstruction {
             id: self.id,
             span: self.span,
-            binds: self.binds.into_iter().map(|b| b.map_ty(m)).collect(),
+            binds: self.binds.into_iter().map(|b| b.mapping(m, r)).collect(),
             instr_name_span: self.instr_name_span,
             kind: self.kind,
         }

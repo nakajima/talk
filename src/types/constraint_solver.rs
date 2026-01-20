@@ -48,13 +48,13 @@ impl<'a> ConstraintSolver<'a> {
         mut substitutions: UnificationSubstitutions,
     ) -> Vec<AnyDiagnostic> {
         let mut diagnostics = Vec::default();
-        substitutions.extend(&self.context.substitutions);
+        substitutions.extend(&self.context.substitutions_mut());
         while !constraints.is_stalled() {
             let mut solved_metas = vec![];
             let worklist = constraints.worklist();
             for want_id in worklist {
                 let want = constraints.get(&want_id).clone();
-                let constraint = want.apply(&mut self.context.substitutions, session);
+                let constraint = want.apply(&mut self.context.substitutions_mut(), session);
                 let solution = match constraint {
                     Constraint::DefaultTy(ref c) => c.solve(self.context, session),
                     Constraint::Equals(ref equals) => {
@@ -91,17 +91,37 @@ impl<'a> ConstraintSolver<'a> {
                         constraints.defer(want_id, reason);
                     }
                     SolveResult::Err(e) => {
-                        tracing::error!("Error solving constraint: {constraint:?} {e:?}");
-                        //unimplemented!("Error solving constraint: {constraint:?} {e:?}");
-                        let diagnostic = AnyDiagnostic::Typing(Diagnostic {
-                            id: constraint
-                                .diagnostic_node_id()
-                                .unwrap_or(NodeID::SYNTHESIZED),
-                            severity: Severity::Error,
-                            kind: e,
-                        });
+                        // Check if this constraint is in a non-universal configuration.
+                        // If so, record it as an error constraint for resolution phase
+                        // rather than immediately failing.
+                        let config = constraints
+                            .meta
+                            .get(&want_id)
+                            .map(|m| m.config.clone())
+                            .unwrap_or_default();
 
-                        diagnostics.push(diagnostic);
+                        if config.is_universal() {
+                            // Universal constraint failed - this is a real error
+                            tracing::error!("Error solving constraint: {constraint:?} {e:?}");
+                            let diagnostic = AnyDiagnostic::Typing(Diagnostic {
+                                id: constraint
+                                    .diagnostic_node_id()
+                                    .unwrap_or(NodeID::SYNTHESIZED),
+                                severity: Severity::Error,
+                                kind: e,
+                            });
+                            diagnostics.push(diagnostic);
+                        } else {
+                            // Non-universal constraint failed - record for resolution
+                            tracing::debug!(
+                                "Recording error constraint in config {:?}: {constraint:?} {e:?}",
+                                config
+                            );
+                            session.error_constraints.record(config, e, want_id);
+                        }
+
+                        // Mark as solved so we don't keep retrying
+                        constraints.solve(want_id);
                     }
                 }
             }

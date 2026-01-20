@@ -45,6 +45,7 @@ pub enum TypeError {
     UnhandledEffect(String),
     HandlerMustBeBound,
     ContinueOutsideHandler,
+    SpecializationMismatch,
 }
 
 impl Error for TypeError {}
@@ -127,6 +128,9 @@ impl Display for TypeError {
             }
             Self::ContinueOutsideHandler => {
                 write!(f, "continue with a value is only valid inside a handler")
+            }
+            Self::SpecializationMismatch => {
+                write!(f, "cannot determine specializations")
             }
         }
     }

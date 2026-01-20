@@ -11,11 +11,12 @@ use crate::{
     name_resolution::symbol::{ProtocolId, StructId, Symbol},
     types::{
         infer_row::{InferRow, RowMetaId, RowParamId},
+        mappable::Mappable,
+        predicate::Predicate,
         scheme::{ForAll, Scheme},
         term_environment::EnvEntry,
         ty::{BaseRow, RowType, SomeType, Ty},
         type_error::TypeError,
-        typed_ast::TyMappable,
     },
 };
 
@@ -56,7 +57,7 @@ impl std::fmt::Debug for MetaVarId {
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord)]
-pub struct TypeParamId(u32);
+pub struct TypeParamId(pub u32);
 impl TypeParamId {
     pub const IR_TYPE_PARAM: TypeParamId = TypeParamId(u32::MAX - 1);
 }
@@ -97,7 +98,7 @@ impl UnifyValue for Level {
 #[derive(PartialEq, Eq, Clone, Hash, Drive, DriveMut)]
 pub enum InferTy {
     Primitive(#[drive(skip)] Symbol),
-    Param(#[drive(skip)] TypeParamId),
+    Param(#[drive(skip)] TypeParamId, #[drive(skip)] Vec<ProtocolId>),
     Rigid(#[drive(skip)] SkolemId),
     Var {
         #[drive(skip)]
@@ -129,34 +130,55 @@ pub enum InferTy {
     Error(#[drive(skip)] Box<TypeError>),
 }
 
-impl TyMappable<InferTy, InferTy> for InferTy {
-    type OutputTy = InferTy;
-    fn map_ty(self, m: &mut impl FnMut(&InferTy) -> InferTy) -> Self::OutputTy {
+impl Mappable<InferTy, InferTy> for InferTy {
+    type Output = InferTy;
+    fn mapping(
+        self,
+        ty_map: &mut impl FnMut(InferTy) -> InferTy,
+        row_map: &mut impl FnMut(InferRow) -> InferRow,
+    ) -> Self::Output {
         match self {
             InferTy::Projection {
-                base,
+                box base,
                 protocol_id,
                 associated,
             } => InferTy::Projection {
-                base: m(&base).into(),
+                base: base.mapping(ty_map, row_map).into(),
                 protocol_id,
                 associated,
             },
-            InferTy::Constructor { name, params, ret } => InferTy::Constructor {
+            InferTy::Constructor {
                 name,
-                params: params.iter().map(&mut *m).collect(),
-                ret: m(&ret).into(),
+                params,
+                box ret,
+            } => InferTy::Constructor {
+                name,
+                params: params
+                    .into_iter()
+                    .map(|p| p.mapping(ty_map, row_map))
+                    .collect(),
+                ret: ty_map(ret).into(),
             },
-            InferTy::Func(box param, box ret, box effects) => {
-                InferTy::Func(m(&param).into(), m(&ret).into(), effects.map_ty(m).into())
-            }
-            InferTy::Tuple(items) => InferTy::Tuple(items.iter().map(m).collect()),
-            InferTy::Record(infer_row) => InferTy::Record(infer_row.map_ty(m).into()),
+            InferTy::Func(box param, box ret, box effects) => InferTy::Func(
+                param.mapping(ty_map, row_map).into(),
+                ret.mapping(ty_map, row_map).into(),
+                row_map(effects).into(),
+            ),
+            InferTy::Tuple(items) => InferTy::Tuple(
+                items
+                    .into_iter()
+                    .map(|i| i.mapping(ty_map, row_map))
+                    .collect(),
+            ),
+            InferTy::Record(box infer_row) => InferTy::Record(row_map(infer_row).into()),
             InferTy::Nominal { symbol, type_args } => InferTy::Nominal {
                 symbol,
-                type_args: type_args.iter().map(m).collect(),
+                type_args: type_args
+                    .into_iter()
+                    .map(|i| i.mapping(ty_map, row_map))
+                    .collect(),
             },
-            other => m(&other),
+            other => ty_map(other),
         }
     }
 }
@@ -166,7 +188,7 @@ impl From<InferTy> for Ty {
     fn from(value: InferTy) -> Self {
         match value {
             InferTy::Primitive(primitive) => Ty::Primitive(primitive),
-            InferTy::Param(type_param_id) => Ty::Param(type_param_id),
+            InferTy::Param(type_param_id, bounds) => Ty::Param(type_param_id, bounds),
             InferTy::Constructor {
                 name,
                 params,
@@ -187,8 +209,8 @@ impl From<InferTy> for Ty {
                 symbol,
                 type_args: type_args.into_iter().map(|p| p.into()).collect(),
             },
-            InferTy::Projection { .. } => Ty::Param(420420.into()), // FIXME
-            _ => Ty::Param(420420.into()),
+            InferTy::Projection { .. } => Ty::Param(420420.into(), vec![]), // FIXME
+            _ => Ty::Param(420420.into(), vec![]),
         }
     }
 }
@@ -197,7 +219,7 @@ impl From<Ty> for InferTy {
     fn from(value: Ty) -> Self {
         match value {
             Ty::Primitive(primitive) => InferTy::Primitive(primitive),
-            Ty::Param(type_param_id) => InferTy::Param(type_param_id),
+            Ty::Param(type_param_id, bounds) => InferTy::Param(type_param_id, bounds),
             Ty::Constructor {
                 name,
                 params,
@@ -261,33 +283,26 @@ impl RowType for InferRow {
 
 impl SomeType for InferTy {
     type RowType = InferRow;
+    type Entry = EnvEntry<InferTy>;
 
     fn void() -> Self {
         InferTy::Void
     }
 
     fn contains_var(&self) -> bool {
-        match self {
-            InferTy::Param(..) => false,
-            InferTy::Rigid(..) => false,
-            InferTy::Var { .. } => true,
-            InferTy::Primitive(..) => false,
-            InferTy::Error(..) => false,
-            InferTy::Projection { base, .. } => base.contains_var(),
-            InferTy::Constructor { params, .. } => params.iter().any(|p| p.contains_var()),
-            InferTy::Func(ty, ty1, effects) => {
-                ty.contains_var() || ty1.contains_var() || effects.contains_var()
-            }
-            InferTy::Tuple(items) => items.iter().any(|i| i.contains_var()),
-            InferTy::Record(box row) => match row {
-                InferRow::Extend { row, ty, .. } => {
-                    InferTy::Record(row.clone()).contains_var() || ty.contains_var()
-                }
-                InferRow::Var(_) => true,
-                _ => false,
+        let mut ty_contains = false;
+        let mut row_contains = false;
+        _ = self.clone().mapping(
+            &mut |t| {
+                ty_contains |= matches!(t, InferTy::Var { .. });
+                t
             },
-            InferTy::Nominal { type_args, .. } => type_args.contains(self),
-        }
+            &mut |r| {
+                row_contains |= r.contains_var();
+                r
+            },
+        );
+        ty_contains || row_contains
     }
 
     fn import(self, module_id: ModuleId) -> InferTy {
@@ -366,9 +381,10 @@ impl InferTy {
 
     pub fn collect_metas(&self) -> IndexSet<InferTy> {
         let mut out = IndexSet::default();
+
         match self {
             InferTy::Error(..) => {}
-            InferTy::Param(_) => {}
+            InferTy::Param(..) => {}
             InferTy::Var { .. } => {
                 out.insert(self.clone());
             }
@@ -428,7 +444,7 @@ impl InferTy {
     pub fn collect_foralls(&self) -> IndexSet<ForAll> {
         let mut result: IndexSet<ForAll> = Default::default();
         match self {
-            InferTy::Param(id) => {
+            InferTy::Param(id, _) => {
                 result.insert(ForAll::Ty(*id));
             }
             InferTy::Error(..) => (),
@@ -464,13 +480,56 @@ impl InferTy {
         }
         result
     }
+
+    /// Collects Conforms predicates from bounds embedded in InferTy::Param nodes
+    pub fn collect_param_predicates(&self) -> Vec<Predicate<InferTy>> {
+        let mut result = vec![];
+        match self {
+            InferTy::Param(id, bounds) => {
+                for protocol_id in bounds {
+                    result.push(Predicate::Conforms {
+                        param: *id,
+                        protocol_id: *protocol_id,
+                    });
+                }
+            }
+            InferTy::Nominal { type_args, .. } => {
+                for arg in type_args {
+                    result.extend(arg.collect_param_predicates());
+                }
+            }
+            InferTy::Projection { base, .. } => {
+                result.extend(base.collect_param_predicates());
+            }
+            InferTy::Constructor { params, .. } => {
+                for item in params {
+                    result.extend(item.collect_param_predicates());
+                }
+            }
+            InferTy::Func(ty, ty1, effects) => {
+                result.extend(ty.collect_param_predicates());
+                result.extend(ty1.collect_param_predicates());
+                result.extend(effects.collect_param_predicates());
+            }
+            InferTy::Tuple(items) => {
+                for item in items {
+                    result.extend(item.collect_param_predicates());
+                }
+            }
+            InferTy::Record(box row) => {
+                result.extend(row.collect_param_predicates());
+            }
+            _ => (),
+        }
+        result
+    }
 }
 
 impl std::fmt::Debug for InferTy {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             InferTy::Error(err) => write!(f, "Error Ty: {err}"),
-            InferTy::Param(id) => write!(f, "typeparam(α{})", id.0),
+            InferTy::Param(id, _) => write!(f, "typeparam(α{})", id.0),
             InferTy::Rigid(id) => write!(f, "rigid(α{})", id.0),
             InferTy::Var { id, level } => write!(f, "meta(α{}, {})", id.0, level.0),
             InferTy::Primitive(primitive) => write!(f, "{primitive:?}"),
@@ -516,7 +575,7 @@ impl std::fmt::Display for InferTy {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             InferTy::Error(..) => write!(f, "error"),
-            InferTy::Param(id) => write!(f, "T{}", id.0),
+            InferTy::Param(id, _) => write!(f, "T{}", id.0),
             InferTy::Rigid(id) => write!(f, "^T{}", id.0),
             InferTy::Var { id, .. } => write!(f, "?T{}", id.0),
             InferTy::Primitive(primitive) => write!(f, "{}", format_symbol_name(*primitive)),

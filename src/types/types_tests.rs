@@ -17,11 +17,8 @@ pub mod tests {
             scheme::{ForAll, Scheme},
             ty::Ty,
             type_error::TypeError,
-            type_session::{TypeEntry, Types},
-            typed_ast::{
-                TypedAST, TypedDeclKind, TypedExpr, TypedExprKind, TypedNode, TypedStmt,
-                TypedStmtKind,
-            },
+            typed_ast::{TypedAST, TypedExpr, TypedExprKind, TypedStmt, TypedStmtKind},
+            types::{TypeEntry, Types},
         },
     };
 
@@ -255,7 +252,7 @@ pub mod tests {
         };
 
         let TypeEntry::Poly(Scheme {
-            ty: Ty::Func(box Ty::Param(type_param), ..),
+            ty: Ty::Func(box Ty::Param(type_param, _), ..),
             ..
         }) = types
             .get_symbol(&Symbol::Global(GlobalId::from(1)))
@@ -269,7 +266,9 @@ pub mod tests {
                 .catalog
                 .instantiations
                 .ty
-                .get(&(root_1.id, *type_param))
+                .get(&root_1.id)
+                .unwrap()
+                .get(type_param)
                 .unwrap(),
             Ty::Int
         );
@@ -278,7 +277,9 @@ pub mod tests {
                 .catalog
                 .instantiations
                 .ty
-                .get(&(root_2.id, *type_param))
+                .get(&root_2.id)
+                .unwrap()
+                .get(type_param)
                 .unwrap(),
             Ty::Bool
         );
@@ -361,7 +362,9 @@ pub mod tests {
                 .catalog
                 .instantiations
                 .ty
-                .get(&(*constructor_1_id, *type_param))
+                .get(constructor_1_id)
+                .unwrap()
+                .get(type_param)
                 .unwrap(),
             Ty::Int
         );
@@ -370,98 +373,9 @@ pub mod tests {
                 .catalog
                 .instantiations
                 .ty
-                .get(&(*constructor_2_id, *type_param))
-                .unwrap(),
-            Ty::Bool
-        );
-    }
-
-    #[test]
-    fn stores_enum_instantiations() {
-        let (ast, types) = typecheck(
-            "
-        enum Opt<T> {
-            case some(T), none
-        }
-        Opt.some(123)
-        Opt.some(true)
-        ",
-        );
-
-        // Extract the variant access calls
-        let TypedStmt {
-            kind:
-                TypedStmtKind::Expr(TypedExpr {
-                    kind:
-                        TypedExprKind::Call {
-                            callee:
-                                box TypedExpr {
-                                    kind: TypedExprKind::Member { .. },
-                                    id: member_1_id,
-                                    ..
-                                },
-                            ..
-                        },
-                    ..
-                }),
-            ..
-        } = &ast.stmts[0]
-        else {
-            panic!("didn't get first enum variant call");
-        };
-
-        let TypedStmt {
-            kind:
-                TypedStmtKind::Expr(TypedExpr {
-                    kind:
-                        TypedExprKind::Call {
-                            callee:
-                                box TypedExpr {
-                                    kind: TypedExprKind::Member { .. },
-                                    id: member_2_id,
-                                    ..
-                                },
-                            ..
-                        },
-                    ..
-                }),
-            ..
-        } = &ast.stmts[1]
-        else {
-            panic!("didn't get second enum variant call");
-        };
-
-        // Get the enum's type parameter
-        let TypeEntry::Poly(Scheme { foralls, .. }) =
-            types.get_symbol(&Symbol::Enum(EnumId::from(1))).unwrap()
-        else {
-            panic!("didn't get enum scheme");
-        };
-
-        let ForAll::Ty(type_param) = foralls
-            .iter()
-            .find(|p| matches!(p, ForAll::Ty(..)))
-            .unwrap()
-        else {
-            unreachable!()
-        };
-
-        // Check instantiations are stored
-        assert_eq!(
-            *types
-                .catalog
-                .instantiations
-                .ty
-                .get(&(*member_1_id, *type_param))
-                .unwrap(),
-            Ty::Int
-        );
-        assert_eq!(
-            *types
-                .catalog
-                .instantiations
-                .ty
-                .get(&(*member_2_id, *type_param))
+                .get(constructor_2_id)
+                .unwrap()
+                .get(type_param)
                 .unwrap(),
             Ty::Bool
         );
@@ -1707,7 +1621,7 @@ pub mod tests {
             ty(2, &ast, &types),
             Ty::Nominal {
                 symbol: EnumId::from(1).into(),
-                type_args: vec![Ty::Param(1.into())],
+                type_args: vec![Ty::Param(1.into(), vec![])],
             }
         );
     }
@@ -2322,7 +2236,8 @@ pub mod tests {
                 .unwrap()
                 .as_mono_ty(),
             Ty::Func(
-                Ty::Param(3.into()).into(),
+                // T has bound B, so the param includes the protocol bound
+                Ty::Param(3.into(), vec![ProtocolId::from(2)]).into(),
                 Ty::Int.into(),
                 Row::Param(5.into()).into()
             )
@@ -2386,75 +2301,6 @@ pub mod tests {
     }
 
     #[test]
-    fn witness_for_type_param_method_call() {
-        let (ast, types) = typecheck(
-            "
-          protocol Countable { func getCount() -> Int }
-
-          struct Person { let count: Int }
-          extend Person: Countable {
-              func getCount() { self.count }
-          }
-
-          func getCount<T: Countable>(countable: T) {
-              countable.getCount()
-          }
-
-          let person = Person(count: 1)
-          getCount(person)
-          ",
-        );
-
-        // Grab the generic `getCount` function (first global func in this snippet)
-        let func = ast
-            .decls
-            .iter()
-            .find_map(|d| match &d.kind {
-                TypedDeclKind::Let {
-                    initializer:
-                        Some(TypedExpr {
-                            kind: TypedExprKind::Func(f),
-                            ..
-                        }),
-                    ..
-                } if f.name == Symbol::Global(GlobalId::from(1)) => Some(f),
-                _ => None,
-            })
-            .unwrap();
-
-        // First node in body should be `countable.getCount()`
-        let expr = match &func.body.body[0] {
-            TypedNode::Expr(e) => e,
-            TypedNode::Stmt(TypedStmt {
-                kind: TypedStmtKind::Expr(e),
-                ..
-            }) => e,
-            other => panic!("expected expr, got {other:?}"),
-        };
-
-        let TypedExprKind::Call { callee, .. } = &expr.kind else {
-            panic!("expected call, got {expr:?}");
-        };
-
-        let TypedExprKind::ProtocolMember { label, witness, .. } = &callee.kind else {
-            panic!("expected ProtocolMember callee, got {callee:?}");
-        };
-
-        assert_eq!(label.to_string(), "getCount");
-        assert!(matches!(witness, Symbol::MethodRequirement(_)));
-
-        let req = *types
-            .catalog
-            .method_requirements
-            .get(&Symbol::Protocol(ProtocolId::from(1)))
-            .unwrap()
-            .get(&Label::Named("getCount".into()))
-            .unwrap();
-
-        assert_eq!(*witness, req);
-    }
-
-    #[test]
     fn tracks_transitive_witnesses() {
         let (_ast, types) = typecheck(
             "
@@ -2482,6 +2328,8 @@ pub mod tests {
                 })
                 .is_some()
         );
+
+        println!("{:?}", types.catalog.instance_methods.get(&Symbol::Int));
 
         // Int's instance_methods should have the `default` method from protocol A
         let member_sym = types

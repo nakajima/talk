@@ -3,7 +3,6 @@ use crate::span::Span;
 use crate::types::conformance::{Conformance, ConformanceKey, Witnesses};
 use crate::types::constraints::store::ConstraintStore;
 use crate::types::scheme::ForAll;
-use crate::types::solve_context::Solve;
 use crate::types::type_operations::{Substitutions, substitute_with_subs};
 use crate::{
     label::Label,
@@ -22,7 +21,7 @@ use crate::{
     },
 };
 use itertools::Itertools;
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 use tracing::instrument;
 
 enum CheckWitnessResult {
@@ -40,21 +39,22 @@ pub struct Conforms {
 }
 
 impl Conforms {
-    #[instrument(skip(session))]
+    #[instrument(skip(session, constraints, context))]
     pub fn solve(
         &self,
         constraints: &mut ConstraintStore,
         context: &mut SolveContext,
         session: &mut TypeSession,
     ) -> SolveResult {
-        let conforming_ty_sym = match &self.ty {
+        // Extract both the symbol and type args from the conforming type
+        let (conforming_ty_sym, conforming_type_args) = match &self.ty {
             InferTy::Var { id, .. } => {
                 return SolveResult::Defer(DeferralReason::WaitingOnMeta(Meta::Ty(*id)));
             }
-            InferTy::Primitive(symbol) => *symbol,
-            InferTy::Nominal { symbol, .. } => *symbol,
-            InferTy::Param(param_id) => {
-                for given in &context.givens {
+            InferTy::Primitive(symbol) => (*symbol, vec![]),
+            InferTy::Nominal { symbol, type_args } => (*symbol, type_args.clone()),
+            InferTy::Param(param_id, _) => {
+                for given in context.givens_mut().iter() {
                     if let Predicate::Conforms {
                         param,
                         protocol_id: given_protocol_id,
@@ -62,7 +62,7 @@ impl Conforms {
                         && param == param_id
                     {
                         // Direct conformance: param conforms to exactly the protocol we need
-                        if *given_protocol_id == self.protocol_id {
+                        if given_protocol_id == &self.protocol_id {
                             return SolveResult::Solved(Default::default());
                         }
 
@@ -94,6 +94,7 @@ impl Conforms {
 
         match self.check_conformance(
             conforming_ty_sym,
+            &conforming_type_args,
             self.protocol_id,
             constraints,
             context,
@@ -113,10 +114,11 @@ impl Conforms {
         }
     }
 
-    #[instrument(level = tracing::Level::TRACE, skip(context, session))]
+    #[instrument(level = tracing::Level::TRACE, skip(context, session, constraints))]
     fn check_conformance(
         &self,
         conforming_ty_sym: Symbol,
+        conforming_type_args: &[InferTy],
         protocol_id: ProtocolId,
         constraints: &mut ConstraintStore,
         context: &mut SolveContext,
@@ -152,7 +154,7 @@ impl Conforms {
         };
 
         let Some(EnvEntry::Scheme(Scheme {
-            ty: InferTy::Param(protocol_self_id),
+            ty: InferTy::Param(protocol_self_id, protocol_self_bounds),
             ..
         })) = session.lookup(&protocol_id.into())
         else {
@@ -163,20 +165,19 @@ impl Conforms {
 
         // Build up some substitutions so we're not playing with the protocol's type params anymore
         let mut substitutions: FxHashMap<InferTy, InferTy> = FxHashMap::default();
-        substitutions.insert(InferTy::Param(protocol_self_id), self.ty.clone());
+        substitutions.insert(
+            InferTy::Param(protocol_self_id, protocol_self_bounds.clone()),
+            self.ty.clone(),
+        );
 
-        // If we're registering a conformance for a nominal, copy specialized versions of default methods
-        if !matches!(conforming_ty_sym, Symbol::Protocol(..))
-            && let Err(e) = self.specialize_methods(
-                &conforming_ty_sym,
-                protocol_id,
-                session,
-                substitutions.clone(),
-                Default::default(),
-            )
-        {
-            return CheckWitnessResult::Err(e);
-        };
+        // Add substitutions for the conforming type's type params
+        // e.g., for Person<Float> conforming to Aged, substitute A -> Float
+        if !conforming_type_args.is_empty()
+            && let Some(nominal) = session.lookup_nominal(&conforming_ty_sym) {
+                for (param, arg) in nominal.type_params.iter().zip(conforming_type_args.iter()) {
+                    substitutions.insert(param.clone(), arg.clone());
+                }
+            }
 
         let mut deferral_reasons = vec![];
 
@@ -198,7 +199,7 @@ impl Conforms {
                     protocol_id: id,
                 } = predicate
                     && id == Some(protocol_id)
-                    && base == InferTy::Param(protocol_self_id)
+                    && base == InferTy::Param(protocol_self_id, protocol_self_bounds.clone())
                 {
                     protocol_projections.insert(label, returns);
                 }
@@ -228,7 +229,7 @@ impl Conforms {
                             .associated_types
                             .get(&label)
                             .cloned()
-                            .unwrap_or_else(|| session.new_ty_meta_var(context.level))
+                            .unwrap_or_else(|| session.new_ty_meta_var(context.level()))
                     })
                     .clone()
             } else {
@@ -238,7 +239,7 @@ impl Conforms {
                     .associated_types
                     .get(&label)
                     .cloned()
-                    .unwrap_or_else(|| session.new_ty_meta_var(context.level))
+                    .unwrap_or_else(|| session.new_ty_meta_var(context.level()))
             };
 
             substitutions.insert(associated_entry._as_ty(), associated_witness_ty);
@@ -255,6 +256,7 @@ impl Conforms {
             if conformance.conforming_id == protocol_id.into() {
                 match self.check_conformance(
                     conforming_ty_sym,
+                    conforming_type_args,
                     conformance.protocol_id,
                     constraints,
                     context,
@@ -275,6 +277,7 @@ impl Conforms {
             session,
             protocol_id,
             &protocol_self_id,
+            &protocol_self_bounds,
             &conforming_ty_sym,
             protocol_projections,
             substitutions,
@@ -298,95 +301,6 @@ impl Conforms {
         }
     }
 
-    fn specialize_methods(
-        &self,
-        conforming_ty_sym: &Symbol,
-        protocol_id: ProtocolId,
-        session: &mut TypeSession,
-        mut substitutions: FxHashMap<InferTy, InferTy>,
-        mut seen: FxHashSet<ProtocolId>,
-    ) -> Result<(), TypeError> {
-        if seen.contains(&protocol_id) {
-            return Ok(());
-        }
-
-        seen.insert(protocol_id);
-
-        let Some(EnvEntry::Scheme(Scheme {
-            ty: InferTy::Param(protocol_self_id),
-            ..
-        })) = session.lookup(&protocol_id.into())
-        else {
-            return Err(TypeError::TypeNotFound(format!(
-                "Did not find protocol self for {:?}",
-                protocol_id
-            )));
-        };
-
-        substitutions.insert(InferTy::Param(protocol_self_id), self.ty.clone());
-
-        for (label, sym) in session.lookup_instance_methods(&protocol_id.into()) {
-            let Some(entry) = session.lookup(&sym) else {
-                tracing::error!("didn't get entry for {sym:?}");
-                continue;
-            };
-
-            // For default methods (InstanceMethod), use the original symbol directly.
-            if matches!(sym, Symbol::InstanceMethod(..)) {
-                session
-                    .type_catalog
-                    .instance_methods
-                    .entry(*conforming_ty_sym)
-                    .or_default()
-                    .insert(label, sym);
-                continue;
-            }
-
-            let specialized_entry = entry.substitute(&substitutions);
-            let specialized_symbol = session
-                .symbols
-                .next_instance_method(session.current_module_id);
-            let name_str = session
-                .resolve_name(&sym)
-                .unwrap_or_else(|| unreachable!("Didn't get name for symbol: {sym:}"));
-            session
-                .resolved_names
-                .symbol_names
-                .insert(specialized_symbol.into(), name_str.to_string());
-
-            session.insert_term(
-                specialized_symbol.into(),
-                specialized_entry,
-                &mut Default::default(),
-            );
-
-            session
-                .type_catalog
-                .instance_methods
-                .entry(*conforming_ty_sym)
-                .or_default()
-                .insert(label, specialized_symbol.into());
-
-            for key in session
-                .type_catalog
-                .conformances
-                .keys()
-                .cloned()
-                .collect_vec()
-            {
-                self.specialize_methods(
-                    conforming_ty_sym,
-                    key.protocol_id,
-                    session,
-                    substitutions.clone(),
-                    seen.clone(),
-                )?;
-            }
-        }
-
-        Ok(())
-    }
-
     #[allow(clippy::too_many_arguments)]
     fn check_witnesses(
         &self,
@@ -394,6 +308,7 @@ impl Conforms {
         session: &mut TypeSession,
         protocol_id: ProtocolId,
         protocol_self_id: &TypeParamId,
+        protocol_self_bounds: &[ProtocolId],
         conforming_ty_sym: &Symbol,
         projections: FxHashMap<Label, InferTy>,
         ty_substitutions: FxHashMap<InferTy, InferTy>,
@@ -424,7 +339,7 @@ impl Conforms {
                     returns,
                     ..
                 } = predicate
-                    && base == InferTy::Param(*protocol_self_id)
+                    && base == InferTy::Param(*protocol_self_id, protocol_self_bounds.to_owned())
                     && let Some(projection) = projections.get(&label)
                     && let Some(substitution) = substitutions.ty.get(projection).cloned()
                 {
@@ -455,6 +370,10 @@ impl Conforms {
             // Substitute required type with type and row substitutions
             let required_ty = substitute_with_subs(required_entry._as_ty(), &substitutions);
 
+            // Also substitute the witness type with the struct's type params
+            // e.g., for Person<Float>, substitute A -> Float in getAge's type
+            let witness_ty = substitute_with_subs(witness._as_ty(), &substitutions);
+
             // Update witnesses
             let key = ConformanceKey {
                 protocol_id: self.protocol_id,
@@ -479,7 +398,12 @@ impl Conforms {
                 .requirements
                 .insert(required_sym, witness_sym);
 
-            match unify(&required_ty, &witness._as_ty(), context, session) {
+            tracing::debug!(
+                "Checking witness {label:?}: required_ty={:?}, witness_ty={:?}",
+                required_ty,
+                witness_ty,
+            );
+            match unify(&required_ty, &witness_ty, context, session) {
                 Ok(vars) => solved_metas.extend(vars),
                 Err(e) => {
                     tracing::error!("Error checking witness {label:?}: {e:?}");

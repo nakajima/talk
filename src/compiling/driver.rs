@@ -13,11 +13,15 @@ use crate::{
     parser_error::ParserError,
     types::{
         matcher,
-        passes::inference_pass::InferencePass,
+        passes::{
+            inference_pass::InferencePass,
+            specialization_pass::{SpecializationPass, SpecializedCallee},
+        },
         ty::Ty,
         type_error::TypeError,
-        type_session::{TypeSession, Types},
+        type_session::TypeSession,
         typed_ast::TypedAST,
+        types::Types,
     },
 };
 use indexmap::IndexMap;
@@ -54,15 +58,18 @@ pub struct Typed {
     pub symbols: Symbols,
     pub resolved_names: ResolvedNames,
     pub diagnostics: Vec<AnyDiagnostic>,
+    pub specialized_callees: FxHashMap<Symbol, SpecializedCallee>,
+    pub specializations: FxHashMap<Symbol, Vec<Symbol>>,
+    /// Maps (specialized_caller, call_site_id) -> specialized_callee.
+    /// Aligns with the paper's model: each call site is a dimension, resolution maps to the callee.
+    pub call_resolutions: FxHashMap<(Symbol, NodeID), Symbol>,
 }
 
 impl DriverPhase for Lowered {}
 pub struct Lowered {
-    pub ast: TypedAST<Ty>,
     pub types: Types,
     pub exports: Exports,
     pub symbol_names: FxHashMap<Symbol, String>,
-    pub symbols: Symbols,
     pub program: Program,
     pub diagnostics: Vec<AnyDiagnostic>,
 }
@@ -345,12 +352,18 @@ impl Driver<NameResolved> {
         );
 
         let (_paths, mut asts): (Vec<_>, Vec<_>) = self.phase.asts.iter_mut().unzip();
+
         let (ast, diagnostics) = InferencePass::drive(&mut asts, &mut session);
 
         self.phase.diagnostics.extend(diagnostics);
         let symbols = std::mem::take(&mut session.symbols);
-        let resolved_names = std::mem::take(&mut session.resolved_names);
-        let mut types = session.finalize().map_err(CompileError::Typing)?;
+        let (types, resolved_names) = session.finalize().map_err(CompileError::Typing)?;
+
+        let specialization_pass =
+            SpecializationPass::new(ast, symbols, resolved_names, types, &self.config.modules);
+
+        let (ast, symbols, resolved_names, mut types, specializations, specialized_callees, call_resolutions) =
+            specialization_pass.drive().map_err(CompileError::Typing)?;
 
         // Don't bother with matcher diagnostics if we're not well typed already.
         if !has_error_diagnostics(&self.phase.diagnostics) {
@@ -374,6 +387,9 @@ impl Driver<NameResolved> {
                 symbols,
                 resolved_names,
                 diagnostics: self.phase.diagnostics,
+                specializations,
+                specialized_callees,
+                call_resolutions,
             },
         })
     }
@@ -381,25 +397,16 @@ impl Driver<NameResolved> {
 
 impl Driver<Typed> {
     pub fn lower(mut self) -> Result<Driver<Lowered>, CompileError> {
-        let lowerer = Lowerer::new(
-            &mut self.phase.ast,
-            &mut self.phase.types,
-            &mut self.phase.symbols,
-            &mut self.phase.resolved_names,
-            &self.config,
-        );
-
+        let lowerer = Lowerer::new(&mut self.phase, &self.config);
         let program = lowerer.lower().map_err(CompileError::Lowering)?;
 
         Ok(Driver {
             files: self.files,
             config: self.config,
             phase: Lowered {
-                ast: self.phase.ast,
                 symbol_names: self.phase.resolved_names.symbol_names,
                 types: self.phase.types,
                 exports: self.phase.exports,
-                symbols: self.phase.symbols,
                 program,
                 diagnostics: self.phase.diagnostics,
             },

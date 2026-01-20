@@ -18,9 +18,6 @@ pub struct ConformanceKey {
 pub struct Witnesses<T> {
     pub methods: FxHashMap<Label, Symbol>,
     pub associated_types: FxHashMap<Label, T>,
-    /// Direct mapping from `@MethodRequirement` symbol → concrete witness symbol.
-    ///
-    /// This avoids having to re-derive requirement symbols from labels during lowering/HIR work.
     pub requirements: FxHashMap<Symbol, Symbol>,
 }
 
@@ -31,6 +28,16 @@ impl<T> Default for Witnesses<T> {
             associated_types: Default::default(),
             requirements: Default::default(),
         }
+    }
+}
+
+impl<T> Witnesses<T> {
+    /// Look up a witness by label, falling back to lookup by method requirement symbol.
+    pub fn get_witness(&self, label: &Label, method_req: &Symbol) -> Option<Symbol> {
+        self.methods
+            .get(label)
+            .copied()
+            .or_else(|| self.requirements.get(method_req).copied())
     }
 }
 

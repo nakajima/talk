@@ -12,7 +12,7 @@ use crate::{
         },
         infer_row::InferRow,
         infer_ty::{InferTy, Meta},
-        solve_context::Solve,
+        solve_context::SolveContext,
         type_error::TypeError,
         type_session::TypeSession,
     },
@@ -32,7 +32,7 @@ impl HasField {
     pub fn solve(
         &self,
         constraints: &mut ConstraintStore,
-        context: &mut impl Solve,
+        context: &mut SolveContext,
         session: &mut TypeSession,
     ) -> SolveResult {
         match &self.row {

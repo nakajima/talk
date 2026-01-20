@@ -10,13 +10,15 @@ use crate::{
         builtins::builtin_scope,
         constraints::store::ConstraintStore,
         infer_ty::InferTy,
+        mappable::Mappable,
         predicate::Predicate,
         scheme::{ForAll, Scheme},
-        solve_context::Solve,
+        solve_context::SolveContext,
         ty::SomeType,
-        type_operations::{InstantiationSubstitutions, UnificationSubstitutions, substitute},
-        type_session::{TypeEntry, TypeSession},
-        typed_ast::TyMappable,
+        type_operations::{
+            InstantiationSubstitutions, UnificationSubstitutions, substitute, substitute_row,
+        },
+        type_session::TypeSession,
     },
 };
 
@@ -47,32 +49,6 @@ impl From<EnvEntry<InferTy>> for (InferTy, Vec<Predicate<InferTy>>, IndexSet<For
         match val {
             EnvEntry::Mono(ty) => (ty, vec![], Default::default()),
             EnvEntry::Scheme(scheme) => (scheme.ty, scheme.predicates, scheme.foralls),
-        }
-    }
-}
-
-impl From<EnvEntry<InferTy>> for TypeEntry {
-    fn from(value: EnvEntry<InferTy>) -> Self {
-        match value {
-            EnvEntry::Mono(ty) => TypeEntry::Mono(ty.into()),
-            EnvEntry::Scheme(scheme) => TypeEntry::Poly(Scheme {
-                foralls: scheme.foralls,
-                predicates: scheme.predicates.into_iter().map(|p| p.into()).collect(),
-                ty: scheme.ty.into(),
-            }),
-        }
-    }
-}
-
-impl From<TypeEntry> for EnvEntry<InferTy> {
-    fn from(value: TypeEntry) -> Self {
-        match value {
-            TypeEntry::Mono(ty) => EnvEntry::Mono(ty.into()),
-            TypeEntry::Poly(scheme) => EnvEntry::Scheme(Scheme {
-                foralls: scheme.foralls,
-                predicates: scheme.predicates.into_iter().map(|p| p.into()).collect(),
-                ty: scheme.ty.into(),
-            }),
         }
     }
 }
@@ -115,7 +91,11 @@ impl EnvEntry<InferTy> {
                 let predicates: Vec<Predicate<InferTy>> = scheme
                     .predicates
                     .into_iter()
-                    .map(|p| p.map_ty(&mut |t| substitute(t.clone(), substitutions)))
+                    .map(|p| {
+                        p.mapping(&mut |t| substitute(t, substitutions), &mut |r| {
+                            substitute_row(r, substitutions)
+                        })
+                    })
                     .collect();
                 if foralls.is_empty() {
                     EnvEntry::Mono(ty)
@@ -184,7 +164,7 @@ impl EnvEntry<InferTy> {
         id: NodeID,
         args: &[(InferTy, NodeID)],
         session: &mut TypeSession,
-        context: &mut impl Solve,
+        context: &mut SolveContext,
         constraints: &mut ConstraintStore,
     ) -> (InferTy, InstantiationSubstitutions) {
         tracing::debug!("inference instantiate (id: {id:?})");
@@ -200,7 +180,7 @@ impl EnvEntry<InferTy> {
         &self,
         id: NodeID,
         constraints: &mut ConstraintStore,
-        context: &mut impl Solve,
+        context: &mut SolveContext,
         session: &mut TypeSession,
     ) -> InferTy {
         tracing::debug!("inference instantiate (id: {id:?})");

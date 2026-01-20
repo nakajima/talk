@@ -5,8 +5,10 @@ use crate::{
     label::Label,
     types::{
         infer_row::{ClosedRow, RowMetaId, RowParamId},
+        mappable::Mappable,
         scheme::ForAll,
-        ty::{BaseRow, RowType, SomeType, Ty},
+        ty::{BaseRow, RowType, SomeType, Specializations, Ty},
+        type_error::TypeError,
     },
 };
 
@@ -20,6 +22,23 @@ pub enum Row {
         label: Label,
         ty: Ty,
     },
+}
+
+impl<U: SomeType> Mappable<Ty, U> for Row {
+    type Output = U::RowType;
+    fn mapping(
+        self,
+        ty_map: &mut impl FnMut(Ty) -> U,
+        row_map: &mut impl FnMut(<Ty as SomeType>::RowType) -> <U as SomeType>::RowType,
+    ) -> Self::Output {
+        match self {
+            Row::Empty => U::RowType::empty(),
+            Row::Param(id) => U::RowType::param(id),
+            Row::Extend { box row, label, ty } => {
+                U::RowType::extend(row_map(row), label, ty_map(ty))
+            }
+        }
+    }
 }
 
 impl RowType for Row {
@@ -78,6 +97,15 @@ impl Row {
         result
     }
 
+    /// Returns true if this row or any type within it contains unsubstituted type parameters.
+    pub fn contains_type_params(&self) -> bool {
+        match self {
+            Row::Empty => false,
+            Row::Param(_) => false, // Row params are different from type params
+            Row::Extend { row, ty, .. } => row.contains_type_params() || ty.contains_type_params(),
+        }
+    }
+
     pub fn import(self, module_id: ModuleId) -> Self {
         match self {
             Row::Empty => Row::Empty,
@@ -88,6 +116,37 @@ impl Row {
                 ty: ty.import(module_id),
             },
         }
+    }
+
+    pub fn collect_specializations(&self, concrete: &Row) -> Result<Specializations, TypeError> {
+        let mut result = Specializations::default();
+        match (self, concrete) {
+            (Row::Empty, Row::Empty) => (),
+            (Row::Param(id), other) => {
+                if !matches!(other, Row::Param(..)) {
+                    result.row.insert(*id, other.clone());
+                }
+            }
+            (
+                Row::Extend {
+                    row: lhs_row,
+                    ty: lhs_ty,
+                    ..
+                },
+                Row::Extend {
+                    row: rhs_row,
+                    ty: rhs_ty,
+                    ..
+                },
+            ) => {
+                result.ty.extend(lhs_ty.collect_specializations(rhs_ty)?.ty);
+                result
+                    .row
+                    .extend(lhs_row.collect_specializations(rhs_row)?.row);
+            }
+            _ => return Err(TypeError::SpecializationMismatch),
+        }
+        Ok(result)
     }
 }
 

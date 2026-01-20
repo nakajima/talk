@@ -3,6 +3,7 @@ use derive_visitor::Visitor;
 use indexmap::{IndexSet, indexset};
 use rustc_hash::FxHashMap;
 
+use crate::types::types::Types;
 use crate::{
     diagnostic::{Diagnostic, Severity},
     label::Label,
@@ -12,7 +13,6 @@ use crate::{
         row::Row,
         ty::Ty,
         type_error::TypeError,
-        type_session::Types,
         typed_ast::{
             TypedAST, TypedExpr, TypedExprKind, TypedMatchArm, TypedPattern, TypedPatternKind,
             TypedRecordFieldPattern, TypedRecordFieldPatternKind,

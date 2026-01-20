@@ -36,6 +36,7 @@ use crate::{
     span::Span,
     types::{
         builtins::resolve_builtin_type,
+        call_tree::CalleeInfo,
         conformance::{Conformance, ConformanceKey, Witnesses},
         constraint_solver::ConstraintSolver,
         constraints::{
@@ -47,7 +48,7 @@ use crate::{
         passes::uncurry_function,
         predicate::Predicate,
         scheme::{ForAll, Scheme},
-        solve_context::{Solve, SolveContext, SolveContextKind},
+        solve_context::{SolveContext, SolveContextKind},
         term_environment::EnvEntry,
         ty::Ty,
         type_catalog::Nominal,
@@ -107,6 +108,9 @@ pub struct InferencePass<'a> {
     protocol_associated_type_requirements:
         FxHashMap<ProtocolId, ProtocolAssociatedTypeRequirements>,
 
+    /// Tracks which function we're currently inside, for building the call tree.
+    current_function: Option<Symbol>,
+
     // These are what we eventually produce
     root_decls: Vec<TypedDecl<InferTy>>,
     root_stmts: Vec<TypedStmt<InferTy>>,
@@ -132,6 +136,7 @@ impl<'a> InferencePass<'a> {
             handler_contexts: Default::default(),
             or_binders: Default::default(),
             protocol_associated_type_requirements: Default::default(),
+            current_function: None,
             root_decls: Default::default(),
             root_stmts: Default::default(),
         };
@@ -149,6 +154,27 @@ impl<'a> InferencePass<'a> {
 
         for i in 0..self.asts.len() {
             self.discover_protocols(i, Level::default());
+
+            let conformances: Vec<_> = self
+                .session
+                .type_catalog
+                .conformances
+                .values()
+                .cloned()
+                .collect();
+            for conformance in conformances {
+                let protocol_symbol = Symbol::Protocol(conformance.protocol_id);
+                let protocol_methods = self.session.lookup_instance_methods(&protocol_symbol);
+                if !protocol_methods.is_empty() {
+                    self.session
+                        .type_catalog
+                        .instance_methods
+                        .entry(conformance.conforming_id)
+                        .or_default()
+                        .extend(protocol_methods);
+                }
+            }
+
             self.session.apply_all(&mut self.substitutions);
         }
 
@@ -228,10 +254,7 @@ impl<'a> InferencePass<'a> {
 
         let ast = typed_ast
             .apply(&mut self.substitutions, self.session)
-            .finalize(
-                self.session,
-                &self.session.protocol_member_witnesses.clone(),
-            );
+            .finalize(self.session);
 
         (ast, self.diagnostics.into_iter().collect())
     }
@@ -420,7 +443,7 @@ impl<'a> InferencePass<'a> {
             let protocol_self_id = self.session.new_type_param_id(None);
             self.session.insert(
                 protocol_sym,
-                InferTy::Param(protocol_self_id),
+                InferTy::Param(protocol_self_id, vec![*protocol_id]),
                 &mut self.constraints,
             );
 
@@ -434,7 +457,7 @@ impl<'a> InferencePass<'a> {
                 },
             );
 
-            context.givens.insert(Predicate::Conforms {
+            context.givens_mut().insert(Predicate::Conforms {
                 param: protocol_self_id,
                 protocol_id: *protocol_id,
             });
@@ -475,46 +498,46 @@ impl<'a> InferencePass<'a> {
         generic: &GenericDecl,
         protocol_self_id: TypeParamId,
         protocol_symbol: Symbol,
-        context: &mut impl Solve,
+        context: &mut SolveContext,
     ) -> TypedRet<InferTy> {
         let Symbol::Protocol(protocol_id) = protocol_symbol else {
             unreachable!()
         };
 
         let ret_id = self.session.new_type_param_id(None);
-        let ret = InferTy::Param(ret_id);
 
-        let mut predicates = vec![Predicate::Projection {
-            base: InferTy::Param(protocol_self_id),
-            label: generic.name.name_str().into(),
-            protocol_id: Some(protocol_id),
-            returns: ret.clone(),
-        }];
-
-        // Add conformance predicates for each associated type constraint
+        // Collect bounds from conformances for the associated type
+        let mut bounds = vec![];
+        let mut conformance_predicates = vec![];
         for conformance in generic.conformances.iter() {
             let Ok(Symbol::Protocol(conforms_to_id)) = conformance.symbol() else {
                 tracing::warn!("could not determine associated type conformance: {conformance:?}");
                 continue;
             };
 
+            bounds.push(conforms_to_id);
+
             let predicate = Predicate::Conforms {
                 param: ret_id,
                 protocol_id: conforms_to_id,
             };
 
-            predicates.push(predicate.clone());
+            conformance_predicates.push(predicate.clone());
 
             // Add to context givens so member resolution works within protocol methods
             context.givens_mut().insert(predicate.clone());
-
-            // Register in type_param_bounds for member resolution
-            self.session
-                .type_param_bounds
-                .entry(ret_id)
-                .or_default()
-                .insert(predicate);
         }
+
+        let ret = InferTy::Param(ret_id, bounds.clone());
+
+        let mut predicates = vec![Predicate::Projection {
+            base: InferTy::Param(protocol_self_id, vec![protocol_id]),
+            label: generic.name.name_str().into(),
+            protocol_id: Some(protocol_id),
+            returns: ret.clone(),
+        }];
+
+        predicates.extend(conformance_predicates);
 
         let scheme = Scheme {
             ty: ret.clone(),
@@ -551,13 +574,13 @@ impl<'a> InferencePass<'a> {
         _generics: &[GenericDecl],
         conformances: &[TypeAnnotation],
         body: &Body,
-        context: &mut impl Solve,
+        context: &mut SolveContext,
     ) -> TypedRet<(TypedDecl<InferTy>, IndexMap<Symbol, InferTy>)> {
         let Ok(protocol_symbol @ Symbol::Protocol(protocol_id)) = name.symbol() else {
             return Err(TypeError::NameNotResolved(name.clone()));
         };
 
-        let Some(InferTy::Param(protocol_self_id)) =
+        let Some(InferTy::Param(protocol_self_id, _)) =
             self.session.lookup(&protocol_symbol).map(|s| s._as_ty())
         else {
             return Err(TypeError::TypeNotFound(
@@ -604,17 +627,9 @@ impl<'a> InferencePass<'a> {
             protocol_id,
         });
 
-        self.session
-            .type_param_bounds
-            .entry(protocol_self_id)
-            .or_default()
-            .insert(Predicate::Conforms {
-                param: protocol_self_id,
-                protocol_id,
-            });
         self.session.insert(
             protocol_symbol,
-            InferTy::Param(protocol_self_id),
+            InferTy::Param(protocol_self_id, vec![protocol_id]),
             &mut self.constraints,
         );
 
@@ -632,7 +647,7 @@ impl<'a> InferencePass<'a> {
             {
                 let label: Label = generic.name.name_str().into();
                 let assoc_param_id = match &ty {
-                    InferTy::Param(param_id) => {
+                    InferTy::Param(param_id, _) => {
                         assoc_type_params.insert(*param_id);
                         Some(*param_id)
                     }
@@ -641,11 +656,13 @@ impl<'a> InferencePass<'a> {
 
                 associated_types.insert(label.clone(), ty.clone());
 
-                if let Some(assoc_param) = assoc_param_id {
+                if assoc_param_id.is_some() {
+                    // Use ty.clone() here instead of creating a new Param with empty bounds,
+                    // because ty already has the correct protocol bounds from visit_associated_type
                     assoc_type_predicates.insert(Predicate::Projection {
-                        base: InferTy::Param(protocol_self_id),
+                        base: InferTy::Param(protocol_self_id, vec![protocol_id]),
                         label: label.clone(),
-                        returns: InferTy::Param(assoc_param),
+                        returns: ty.clone(),
                         protocol_id: Some(protocol_id),
                     });
                 }
@@ -686,6 +703,11 @@ impl<'a> InferencePass<'a> {
             predicates: assoc_type_predicates.clone(),
         };
         if !protocol_associated_type_requirements.is_empty() {
+            tracing::debug!(
+                "Inserting protocol_associated_type_requirements for {:?}: {:?}",
+                protocol_id,
+                protocol_associated_type_requirements
+            );
             self.protocol_associated_type_requirements
                 .insert(protocol_id, protocol_associated_type_requirements.clone());
         }
@@ -865,7 +887,7 @@ impl<'a> InferencePass<'a> {
         self.solve(&mut context, Default::default(), Default::default());
 
         // Apply substitutions to types_by_node for top-level expressions
-        self.session.apply_all(&mut context.substitutions);
+        self.session.apply_all(&mut context.substitutions_mut());
     }
 
     #[instrument(skip(self))]
@@ -904,7 +926,9 @@ impl<'a> InferencePass<'a> {
         for (i, binder) in group.binders.iter().enumerate() {
             if let Some(captures) = self.session.resolved_names.captures.get(binder).cloned() {
                 for capture in captures {
-                    if self.session.lookup(&capture.symbol).is_none() {
+                    if self.session.lookup(&capture.symbol).is_none()
+                        && !matches!(capture.symbol, Symbol::Global(_))
+                    {
                         let placeholder = self.session.new_ty_meta_var(capture.level);
                         tracing::trace!(
                             "capture placeholder {:?} = {placeholder:?}",
@@ -1043,7 +1067,7 @@ impl<'a> InferencePass<'a> {
         for (i, binder) in binders.iter().enumerate() {
             let ty = self
                 .session
-                .apply(placeholders[i].clone(), &mut context.substitutions);
+                .apply(placeholders[i].clone(), &mut context.substitutions_mut());
             let entry = self
                 .session
                 .generalize(ty, context, &generalizable, &mut self.constraints);
@@ -1055,7 +1079,7 @@ impl<'a> InferencePass<'a> {
             self.session.promote(*binder, entry, &mut self.constraints);
         }
 
-        self.substitutions.extend(&context.substitutions);
+        self.substitutions.extend(&context.substitutions_mut());
         self.session.apply_all(&mut self.substitutions);
     }
 
@@ -1063,7 +1087,7 @@ impl<'a> InferencePass<'a> {
     fn visit_node(
         &mut self,
         node: &Node,
-        context: &mut impl Solve,
+        context: &mut SolveContext,
     ) -> TypedRet<TypedNode<InferTy>> {
         match &node {
             Node::Decl(decl) => Ok(TypedNode::Decl(self.visit_decl(decl, context)?)),
@@ -1079,7 +1103,7 @@ impl<'a> InferencePass<'a> {
     fn visit_decl(
         &mut self,
         decl: &Decl,
-        context: &mut impl Solve,
+        context: &mut SolveContext,
     ) -> TypedRet<TypedDecl<InferTy>> {
         match &decl.kind {
             DeclKind::Effect { name, .. } => Ok(TypedDecl {
@@ -1143,7 +1167,7 @@ impl<'a> InferencePass<'a> {
     fn visit_stmt(
         &mut self,
         stmt: &Stmt,
-        context: &mut impl Solve,
+        context: &mut SolveContext,
     ) -> TypedRet<TypedStmt<InferTy>> {
         let ty = match &stmt.kind {
             StmtKind::Expr(expr) => {
@@ -1259,7 +1283,7 @@ impl<'a> InferencePass<'a> {
     fn visit_expr(
         &mut self,
         expr: &Expr,
-        context: &mut impl Solve,
+        context: &mut SolveContext,
     ) -> TypedRet<TypedExpr<InferTy>> {
         let expr = match &expr.kind {
             ExprKind::Incomplete(incomplete) => {
@@ -1411,7 +1435,7 @@ impl<'a> InferencePass<'a> {
         expr: &Stmt,
         effect_name: &Name,
         body: &Block,
-        context: &mut impl Solve,
+        context: &mut SolveContext,
     ) -> TypedRet<TypedStmt<InferTy>> {
         let effect_symbol = effect_name
             .symbol()
@@ -1480,7 +1504,7 @@ impl<'a> InferencePass<'a> {
         expr: &Expr,
         effect_name: &Name,
         args: &[CallArg],
-        context: &mut impl Solve,
+        context: &mut SolveContext,
     ) -> TypedRet<TypedExpr<InferTy>> {
         let Ok(effect_sym) = effect_name.symbol() else {
             return Err(TypeError::NameNotResolved(effect_name.clone()));
@@ -1530,7 +1554,7 @@ impl<'a> InferencePass<'a> {
     fn visit_inline_ir(
         &mut self,
         instr: &InlineIRInstruction,
-        context: &mut impl Solve,
+        context: &mut SolveContext,
     ) -> TypedRet<TypedExpr<InferTy>> {
         for bind in instr.binds.iter() {
             self.visit_expr(bind, context)?;
@@ -1562,7 +1586,7 @@ impl<'a> InferencePass<'a> {
         &mut self,
         stmt: &Stmt,
         expr: &Option<Expr>,
-        context: &mut impl Solve,
+        context: &mut SolveContext,
     ) -> TypedRet<TypedStmt<InferTy>> {
         let ty_expr = if let Some(expr) = expr {
             Some(self.visit_expr(expr, context)?)
@@ -1590,7 +1614,7 @@ impl<'a> InferencePass<'a> {
         &mut self,
         lhs: &Expr,
         rhs: &TypeAnnotation,
-        context: &mut impl Solve,
+        context: &mut SolveContext,
     ) -> TypedRet<TypedExpr<InferTy>> {
         let lhs_ty = self.visit_expr(lhs, context)?;
         let Ok(Symbol::Protocol(id)) = rhs.symbol() else {
@@ -1609,7 +1633,7 @@ impl<'a> InferencePass<'a> {
         &mut self,
         expr: &Expr,
         items: &[Expr],
-        context: &mut impl Solve,
+        context: &mut SolveContext,
     ) -> TypedRet<TypedExpr<InferTy>> {
         let Some(first_item) = items.first() else {
             let id = self.session.new_ty_meta_var_id(context.level());
@@ -1651,7 +1675,7 @@ impl<'a> InferencePass<'a> {
         protocol_self_id: TypeParamId,
         protocol_id: ProtocolId,
         func_signature: &FuncSignature,
-        context: &mut impl Solve,
+        context: &mut SolveContext,
     ) -> TypedRet<InferTy> {
         for generic in func_signature.generics.iter() {
             let param_id = self.session.new_type_param_id(None);
@@ -1661,7 +1685,7 @@ impl<'a> InferencePass<'a> {
             };
 
             self.session
-                .insert_mono(name_sym, InferTy::Param(param_id), &mut self.constraints);
+                .insert_mono(name_sym, InferTy::Param(param_id, vec![]), &mut self.constraints);
         }
 
         let mut effects_row = if func_signature.effects.is_open {
@@ -1738,16 +1762,18 @@ impl<'a> InferencePass<'a> {
         &mut self,
         expr: &Expr,
         name: &Name,
-        _context: &mut impl Solve,
+        context: &mut SolveContext,
     ) -> TypedRet<TypedExpr<InferTy>> {
         let symbol = name
             .symbol()
             .map_err(|_| TypeError::NameNotResolved(name.clone()))?;
 
+        let ret = self.session.new_ty_meta_var(context.level()).into();
+
         let ty = InferTy::Constructor {
             name: name.clone(),
             params: vec![],
-            ret: InferTy::Void.into(),
+            ret,
         };
 
         Ok(TypedExpr {
@@ -1762,7 +1788,7 @@ impl<'a> InferencePass<'a> {
         expr: &Expr,
         receiver: &Option<Box<Expr>>,
         label: &Label,
-        context: &mut impl Solve,
+        context: &mut SolveContext,
     ) -> TypedRet<TypedExpr<InferTy>> {
         let receiver_ty = if let Some(receiver) = receiver {
             self.visit_expr(receiver, context)?
@@ -1802,7 +1828,7 @@ impl<'a> InferencePass<'a> {
         generics: &[GenericDecl],
         conformances: &[TypeAnnotation],
         body: &Body,
-        context: &mut impl Solve,
+        context: &mut SolveContext,
     ) -> TypedRet<TypedDecl<InferTy>> {
         let Ok(nominal_symbol) = name.symbol() else {
             return Err(TypeError::NameNotResolved(name.clone()));
@@ -1811,7 +1837,7 @@ impl<'a> InferencePass<'a> {
         let mut type_params = vec![];
         for generic in generics.iter() {
             let id = self.register_generic(generic, context);
-            type_params.push(InferTy::Param(id));
+            type_params.push(InferTy::Param(id, vec![]));
             let name = generic
                 .name
                 .symbol()
@@ -1822,6 +1848,14 @@ impl<'a> InferencePass<'a> {
                 .entry(nominal_symbol)
                 .or_default()
                 .insert(generic.name.name_str().into(), name);
+        }
+
+        // For extend blocks without explicit generics, use the existing nominal's type params
+        if matches!(decl.kind, DeclKind::Extend { .. })
+            && type_params.is_empty()
+            && let Some(nominal) = self.session.lookup_nominal(&nominal_symbol)
+        {
+            type_params = nominal.type_params.clone();
         }
 
         let ty = if matches!(nominal_symbol, Symbol::Builtin(..)) {
@@ -1949,7 +1983,7 @@ impl<'a> InferencePass<'a> {
                     for g in generics {
                         if let Ok(sym) = g.name.symbol()
                             && let Some(entry) = self.session.lookup(&sym)
-                            && let InferTy::Param(pid) = entry._as_ty()
+                            && let InferTy::Param(pid, _) = entry._as_ty()
                         {
                             foralls.insert(ForAll::Ty(pid));
                         }
@@ -2056,7 +2090,7 @@ impl<'a> InferencePass<'a> {
         protocol_symbol: Symbol,
         conformance_node_id: NodeID,
         conformance_span: Span,
-        context: &mut impl Solve,
+        context: &mut SolveContext,
     ) -> TypedRet<()> {
         let _s = set_symbol_names(self.session.resolved_names.symbol_names.clone());
 
@@ -2176,7 +2210,7 @@ impl<'a> InferencePass<'a> {
         id: NodeID,
         fields: &[RecordField],
         spread: &Option<Box<Expr>>,
-        context: &mut impl Solve,
+        context: &mut SolveContext,
     ) -> TypedRet<TypedExpr<InferTy>> {
         let mut row = InferRow::Empty;
         let mut typed_fields = vec![];
@@ -2212,7 +2246,7 @@ impl<'a> InferencePass<'a> {
         owner_symbol: Symbol,
         func: &Func,
         is_static: bool,
-        context: &mut impl Solve,
+        context: &mut SolveContext,
     ) -> TypedRet<TypedFunc<InferTy>> {
         let Ok(func_sym) = func.name.symbol() else {
             return Err(TypeError::NameNotResolved(func.name.clone()));
@@ -2258,7 +2292,7 @@ impl<'a> InferencePass<'a> {
         is_static: bool,
         type_annotation: &Option<TypeAnnotation>,
         default_value: &Option<Expr>,
-        context: &mut impl Solve,
+        context: &mut SolveContext,
     ) -> TypedRet<InferTy> {
         let Ok(sym) = name.symbol() else {
             return Err(TypeError::NameNotResolved(name.clone()));
@@ -2315,7 +2349,7 @@ impl<'a> InferencePass<'a> {
         name: &Name,
         params: &[Parameter],
         body: &Block,
-        context: &mut impl Solve,
+        context: &mut SolveContext,
     ) -> TypedRet<TypedFunc<InferTy>> {
         let Ok(sym) = name.symbol() else {
             return Err(TypeError::NameNotResolved(name.clone()));
@@ -2372,7 +2406,7 @@ impl<'a> InferencePass<'a> {
         id: NodeID,
         scrutinee: &Expr,
         arms: &[MatchArm],
-        context: &mut impl Solve,
+        context: &mut SolveContext,
     ) -> TypedRet<TypedExpr<InferTy>> {
         let mut last_arm_ty: Option<InferTy> = None;
         let scrutinee_ty = self.visit_expr(scrutinee, context)?;
@@ -2413,7 +2447,7 @@ impl<'a> InferencePass<'a> {
         &mut self,
         pattern: &Pattern,
         expected: &InferTy,
-        context: &mut impl Solve,
+        context: &mut SolveContext,
     ) -> InferTy {
         match &pattern.kind {
             PatternKind::Bind(Name::Resolved(sym, _)) => {
@@ -2551,7 +2585,7 @@ impl<'a> InferencePass<'a> {
         &mut self,
         pattern_id: NodeID,
         patterns: &[Pattern],
-        context: &mut impl Solve,
+        context: &mut SolveContext,
     ) -> FxHashMap<Symbol, InferTy> {
         let mut sets = vec![];
         for pattern in patterns {
@@ -2597,7 +2631,7 @@ impl<'a> InferencePass<'a> {
         &mut self,
         pattern: &Pattern,
         expected: &InferTy,
-        context: &mut impl Solve,
+        context: &mut SolveContext,
     ) -> TypedRet<TypedPattern<InferTy>> {
         let Pattern { kind, .. } = &pattern;
 
@@ -2855,7 +2889,7 @@ impl<'a> InferencePass<'a> {
         cond: &Expr,
         conseq: &Block,
         alt: &Block,
-        context: &mut impl Solve,
+        context: &mut SolveContext,
     ) -> TypedRet<TypedExpr<InferTy>> {
         let cond_ty = self.visit_expr(cond, context)?;
         self.constraints.wants_equals_at_with_cause(
@@ -2890,7 +2924,7 @@ impl<'a> InferencePass<'a> {
         cond: &Expr,
         conseq: &Block,
         alt: &Option<Block>,
-        context: &mut impl Solve,
+        context: &mut SolveContext,
     ) -> TypedRet<TypedStmt<InferTy>> {
         let cond_ty = self.visit_expr(cond, context)?;
         self.constraints.wants_equals_at_with_cause(
@@ -2938,7 +2972,7 @@ impl<'a> InferencePass<'a> {
     fn infer_block(
         &mut self,
         block: &Block,
-        context: &mut impl Solve,
+        context: &mut SolveContext,
     ) -> TypedRet<TypedBlock<InferTy>> {
         let mut ret = InferTy::Void;
 
@@ -2960,7 +2994,7 @@ impl<'a> InferencePass<'a> {
     fn infer_block_with_returns(
         &mut self,
         block: &Block,
-        context: &mut impl Solve,
+        context: &mut SolveContext,
     ) -> TypedRet<TypedBlock<InferTy>> {
         let tok = self.tracking_returns();
         let block = self.infer_block(block, context)?;
@@ -2973,7 +3007,7 @@ impl<'a> InferencePass<'a> {
         &mut self,
         expr: &Expr,
         name: &Name,
-        context: &mut impl Solve,
+        context: &mut SolveContext,
     ) -> TypedRet<TypedExpr<InferTy>> {
         let Ok(sym) = name.symbol() else {
             return Err(TypeError::NameNotResolved(name.clone()));
@@ -3005,9 +3039,29 @@ impl<'a> InferencePass<'a> {
         callee: &Expr,
         type_args: &[TypeAnnotation],
         args: &[CallArg],
-        context: &mut impl Solve,
+        context: &mut SolveContext,
     ) -> TypedRet<TypedExpr<InferTy>> {
         let callee_ty = self.visit_expr(callee, context)?;
+
+        // Record callee info for the call tree
+        // call_id is the callee expression ID, which uniquely identifies call sites
+        if let Some(caller) = self.current_function {
+            let callee_info = match &callee_ty.kind {
+                TypedExprKind::Variable(sym) => Some(CalleeInfo::Direct {
+                    sym: *sym,
+                    call_id: callee.id,
+                }),
+                TypedExprKind::Member { receiver, label } => Some(CalleeInfo::Member {
+                    receiver_id: receiver.id,
+                    label: label.clone(),
+                    call_id: callee.id,
+                }),
+                _ => None,
+            };
+            if let Some(info) = callee_info {
+                self.session.call_tree.entry(caller).or_default().push(info);
+            }
+        }
 
         let arg_tys: Vec<_> = args
             .iter()
@@ -3018,27 +3072,22 @@ impl<'a> InferencePass<'a> {
             .map(|a| self.visit_type_annotation(a, context))
             .try_collect()?;
 
-        let receiver = match &callee.kind {
-            ExprKind::Member(Some(rcv), ..) => {
-                if let ExprKind::Constructor(Name::Resolved(Symbol::Protocol(protocol_id), ..)) =
-                    &rcv.kind
+        let receiver = match &callee_ty.kind {
+            TypedExprKind::Member { receiver, .. } => {
+                // Special handling for protocol method calls
+                if let TypedExprKind::Constructor(Symbol::Protocol(protocol_id), ..) =
+                    &receiver.kind
                     && let Some(first_arg) = arg_tys.first()
                 {
                     self.constraints.wants_conforms(
-                        rcv.id,
+                        receiver.id,
                         first_arg.ty.clone(),
                         *protocol_id,
                         &context.group_info(),
                     );
                 }
-
-                Some(self.visit_expr(rcv, context)?)
+                Some(receiver.as_ref().clone())
             }
-            ExprKind::Member(None, ..) => Some(TypedExpr {
-                id: callee.id,
-                ty: self.session.new_ty_meta_var(context.level()),
-                kind: TypedExprKind::Hole,
-            }),
             _ => None,
         };
 
@@ -3074,6 +3123,7 @@ impl<'a> InferencePass<'a> {
         // if matches!(callee_ty, InferTy::Constructor { .. }) {
         //     arg_tys.insert(0, ret.clone());
         // }
+        let callee_ty_var = self.session.new_ty_meta_var(context.level());
 
         self.constraints.wants_call(
             id,
@@ -3082,6 +3132,7 @@ impl<'a> InferencePass<'a> {
             arg_tys.iter().map(|a| a.ty.clone()).collect_vec(),
             type_arg_tys.clone(),
             ret.clone(),
+            callee_ty_var.clone(),
             receiver.map(|r| r.ty.clone()),
             &context.group_info(),
             self.tracked_effect_rows
@@ -3092,12 +3143,13 @@ impl<'a> InferencePass<'a> {
 
         Ok(TypedExpr {
             id,
-            ty: ret,
+            ty: ret.clone(),
             kind: TypedExprKind::Call {
                 callee: callee_ty.into(),
+                callee_ty: callee_ty_var,
                 type_args: type_arg_tys,
                 args: arg_tys,
-                resolved: None,
+                callee_sym: None,
             },
         })
     }
@@ -3106,12 +3158,21 @@ impl<'a> InferencePass<'a> {
     fn visit_func(
         &mut self,
         func: &Func,
-        context: &mut impl Solve,
+        context: &mut SolveContext,
     ) -> TypedRet<TypedFunc<InferTy>> {
         let func_sym = func
             .name
             .symbol()
             .map_err(|_| TypeError::NameNotResolved(func.name.clone()))?;
+
+        // Track which function we're in for building the call tree
+        let prev_function = self.current_function.replace(func_sym);
+
+        tracing::debug!(
+            "visit_func: {:?}, generics: {:?}",
+            func.name,
+            func.generics
+        );
 
         for generic in func.generics.iter() {
             self.register_generic(generic, context);
@@ -3158,6 +3219,9 @@ impl<'a> InferencePass<'a> {
             &mut Default::default(),
         );
 
+        // Restore previous function context
+        self.current_function = prev_function;
+
         Ok(TypedFunc {
             name: func_sym,
             params,
@@ -3172,7 +3236,7 @@ impl<'a> InferencePass<'a> {
     fn visit_params(
         &mut self,
         params: &[Parameter],
-        context: &mut impl Solve,
+        context: &mut SolveContext,
     ) -> TypedRet<Vec<TypedParameter<InferTy>>> {
         params
             .iter()
@@ -3183,7 +3247,7 @@ impl<'a> InferencePass<'a> {
     fn visit_param(
         &mut self,
         param: &Parameter,
-        context: &mut impl Solve,
+        context: &mut SolveContext,
     ) -> TypedRet<TypedParameter<InferTy>> {
         let Ok(sym) = param.name.symbol() else {
             return Err(TypeError::NameNotResolved(param.name.clone()));
@@ -3233,7 +3297,7 @@ impl<'a> InferencePass<'a> {
         &mut self,
         block: &Block,
         expected: InferTy,
-        context: &mut impl Solve,
+        context: &mut SolveContext,
     ) -> TypedRet<TypedBlock<InferTy>> {
         let tok = self.tracking_returns();
         let ret = self.infer_block(block, context)?;
@@ -3259,7 +3323,7 @@ impl<'a> InferencePass<'a> {
         body: &Block,
         expected_params: Vec<InferTy>,
         expected_ret: InferTy,
-        context: &mut impl Solve,
+        context: &mut SolveContext,
     ) -> TypedRet<()> {
         for (param, expected_param_ty) in params.iter().zip(expected_params) {
             let Ok(sym) = param.name.symbol() else {
@@ -3295,7 +3359,7 @@ impl<'a> InferencePass<'a> {
     fn visit_type_annotation(
         &mut self,
         type_annotation: &TypeAnnotation,
-        context: &mut impl Solve,
+        context: &mut SolveContext,
     ) -> TypedRet<InferTy> {
         match &type_annotation.kind {
             TypeAnnotationKind::Nominal { name, generics, .. } => {
@@ -3325,14 +3389,20 @@ impl<'a> InferencePass<'a> {
                             .iter()
                             .find(|fa| matches!(fa, ForAll::Ty(p) if *p != protocol_self))
                     {
-                        return Ok(InferTy::Param(*assoc_param));
+                        // Get bounds directly from the entry's type if it's a Param
+                        let bounds = if let InferTy::Param(_, bounds) = entry._as_ty() {
+                            bounds
+                        } else {
+                            vec![]
+                        };
+                        return Ok(InferTy::Param(*assoc_param, bounds));
                     }
 
                     // Fallback: fresh variable for the associated type's value in this position.
                     let result = self.session.new_ty_meta_var(context.level());
 
                     // Base is the protocol "Self" variable in this requirement.
-                    let base = InferTy::Param(protocol_self);
+                    let base = InferTy::Param(protocol_self, vec![protocol_id]);
 
                     self.constraints.wants_projection(
                         type_annotation.id,
@@ -3391,14 +3461,14 @@ impl<'a> InferencePass<'a> {
                     return Ok(resolve_builtin_type(&sym).0);
                 }
 
-                if let SolveContextKind::Protocol { protocol_self, .. } = context.kind() {
-                    return Ok(InferTy::Param(protocol_self));
+                if let SolveContextKind::Protocol { protocol_self, protocol_id } = context.kind() {
+                    return Ok(InferTy::Param(protocol_self, vec![protocol_id]));
                 }
 
-                if self.session.lookup_nominal(&sym).is_some() {
+                if let Some(nominal) = self.session.lookup_nominal(&sym) {
                     return Ok(InferTy::Nominal {
                         symbol: sym,
-                        type_args: vec![],
+                        type_args: nominal.type_params.clone(),
                     });
                 }
 
@@ -3483,7 +3553,7 @@ impl<'a> InferencePass<'a> {
         lhs: &Pattern,
         type_annotation: &Option<TypeAnnotation>,
         rhs: &Option<Expr>,
-        context: &mut impl Solve,
+        context: &mut SolveContext,
     ) -> TypedRet<TypedDecl<InferTy>> {
         let typed_rhs = if let Some(rhs) = rhs {
             Some(self.visit_expr(rhs, context)?)
@@ -3529,7 +3599,7 @@ impl<'a> InferencePass<'a> {
     fn tracking_effects(
         &mut self,
         effect_set: &EffectSet,
-        context: &mut impl Solve,
+        context: &mut SolveContext,
     ) -> Result<(ReturnToken, Vec<TypedEffect<InferTy>>), TypeError> {
         let mut effects = vec![];
         for effect in effect_set.names.iter() {
@@ -3565,7 +3635,7 @@ impl<'a> InferencePass<'a> {
         Ok((ReturnToken {}, effects))
     }
 
-    fn verify_returns(&mut self, _tok: ReturnToken, ret: InferTy, context: &mut impl Solve) {
+    fn verify_returns(&mut self, _tok: ReturnToken, ret: InferTy, context: &mut SolveContext) {
         for tracked_ret in self.tracked_returns.pop().unwrap_or_else(|| unreachable!()) {
             self.constraints.wants_equals_at(
                 tracked_ret.0,
@@ -3580,7 +3650,7 @@ impl<'a> InferencePass<'a> {
         &mut self,
         expected: &InferTy,
         node_id: NodeID,
-        context: &mut impl Solve,
+        context: &mut SolveContext,
     ) -> InferRow {
         match expected {
             InferTy::Record(box row) => row.clone(),
@@ -3598,8 +3668,18 @@ impl<'a> InferencePass<'a> {
         }
     }
 
-    fn register_generic(&mut self, generic: &GenericDecl, context: &mut impl Solve) -> TypeParamId {
+    fn register_generic(&mut self, generic: &GenericDecl, context: &mut SolveContext) -> TypeParamId {
         let param_id = self.session.new_type_param_id(None);
+
+        tracing::debug!(
+            "register_generic: {:?}, conformances: {:?}, available requirements: {:?}",
+            generic.name,
+            generic.conformances,
+            self.protocol_associated_type_requirements.keys().collect::<Vec<_>>()
+        );
+
+        // Collect protocol bounds for the type param
+        let mut bounds = vec![];
 
         for conformance in generic.conformances.iter() {
             let Ok(Symbol::Protocol(protocol_id)) = conformance.symbol() else {
@@ -3607,17 +3687,36 @@ impl<'a> InferencePass<'a> {
                 continue;
             };
 
+            tracing::debug!("Processing conformance to protocol_id: {:?}", protocol_id);
+
+            bounds.push(protocol_id);
+
             let predicate = Predicate::Conforms {
                 param: param_id,
                 protocol_id,
             };
 
             context.givens_mut().insert(predicate.clone());
-            self.session
-                .type_param_bounds
-                .entry(param_id)
-                .or_default()
-                .insert(predicate);
+
+            // Also add associated type predicates from this protocol to context.givens
+            // This enables member resolution on associated types (e.g., T.Food: Named)
+            if let Some(requirements) = self.protocol_associated_type_requirements.get(&protocol_id)
+            {
+                tracing::debug!(
+                    "Found protocol_associated_type_requirements for {:?}: {:?}",
+                    protocol_id,
+                    requirements
+                );
+                for assoc_predicate in &requirements.predicates {
+                    tracing::debug!("Adding assoc_predicate to givens: {:?}", assoc_predicate);
+                    context.givens_mut().insert(assoc_predicate.clone());
+                }
+            } else {
+                tracing::debug!(
+                    "No protocol_associated_type_requirements found for {:?}",
+                    protocol_id
+                );
+            }
         }
 
         let Ok(sym) = generic.name.symbol() else {
@@ -3630,7 +3729,7 @@ impl<'a> InferencePass<'a> {
         };
 
         self.session
-            .insert_mono(sym, InferTy::Param(param_id), &mut self.constraints);
+            .insert_mono(sym, InferTy::Param(param_id, bounds), &mut self.constraints);
 
         param_id
     }

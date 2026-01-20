@@ -97,7 +97,7 @@ pub(crate) fn span_contains(span: crate::span::Span, byte_offset: u32) -> bool {
 }
 
 pub(crate) fn resolve_member_symbol(
-    types: Option<&crate::types::type_session::Types>,
+    types: Option<&crate::types::types::Types>,
     receiver: &crate::node_kinds::expr::Expr,
     label: &crate::label::Label,
 ) -> Option<crate::name_resolution::symbol::Symbol> {

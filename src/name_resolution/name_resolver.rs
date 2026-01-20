@@ -14,6 +14,7 @@ use crate::{
         module::{ModuleEnvironment, ModuleId},
     },
     diagnostic::{AnyDiagnostic, Diagnostic, Severity},
+    formatter,
     label::Label,
     name::Name,
     name_resolution::{
@@ -110,7 +111,7 @@ impl Scope {
 #[derive(Clone, Debug, Default)]
 pub struct ResolvedNames {
     pub captures: FxHashMap<Symbol, FxHashSet<Capture>>,
-    pub is_captured: FxHashSet<Symbol>,
+    pub captured: FxHashSet<Symbol>,
     pub scopes: FxHashMap<NodeID, Scope>,
     pub symbol_names: FxHashMap<Symbol, String>,
     pub symbols_to_node: FxHashMap<Symbol, NodeID>,
@@ -146,7 +147,7 @@ pub type ScopeId = Index;
     Stmt(enter, exit),
     MatchArm(enter, exit),
     Decl(enter, exit),
-    Expr(enter),
+    Expr(enter, exit),
     TypeAnnotation(enter),
     Pattern(enter)
 )]
@@ -158,6 +159,8 @@ pub struct NameResolver {
 
     pub(super) current_module_id: crate::compiling::module::ModuleId,
     pub(super) modules: Rc<ModuleEnvironment>,
+
+    current_func_symbols: Vec<Symbol>,
 
     // Scope stuff
     pub(super) scopes: FxHashMap<NodeID, Scope>,
@@ -176,6 +179,7 @@ impl NameResolver {
             symbols: Default::default(),
             diagnostics: Default::default(),
             phase: ResolvedNames::default(),
+            current_func_symbols: Default::default(),
             current_module_id,
             scopes: Default::default(),
             current_scope_id: None,
@@ -211,6 +215,13 @@ impl NameResolver {
             LowerFuncsToLets::run(ast);
             LowerOperators::run(ast);
             PrependSelfToMethods::run(ast);
+        }
+
+        if std::env::var("SHOW_TRANSFORM").is_ok() {
+            for ast in asts.iter() {
+                println!("{:?}", ast.path);
+                println!("{}", formatter::format(ast, 80));
+            }
         }
 
         {
@@ -348,7 +359,7 @@ impl NameResolver {
                 .entry(current_scope_binder)
                 .or_default()
                 .insert(capture);
-            self.phase.is_captured.insert(captured);
+            self.phase.captured.insert(captured);
 
             return Some(captured);
         }
@@ -419,7 +430,7 @@ impl NameResolver {
                 .entry(current_scope_binder)
                 .or_default()
                 .insert(capture);
-            self.phase.is_captured.insert(captured);
+            self.phase.captured.insert(captured);
 
             return Some(captured);
         }
@@ -479,9 +490,12 @@ impl NameResolver {
             return;
         }
 
-        if to_sym.external_module_id().is_some() {
-            return;
-        }
+        // Skip external dependencies, but track Core module dependencies
+        // when we're compiling the Core module itself
+        if let Some(external_id) = to_sym.external_module_id()
+            && (external_id != ModuleId::Core || self.current_module_id != ModuleId::Core) {
+                return;
+            }
 
         tracing::debug!("track_dependency from {from_sym:?} to {to_sym:?}");
         self.phase
@@ -893,20 +907,18 @@ impl NameResolver {
         });
     }
 
+    fn exit_expr(&mut self, _expr: &mut Expr) {}
+
     ///////////////////////////////////////////////////////////////////////////
     // Func scoping
     ///////////////////////////////////////////////////////////////////////////
 
     fn enter_func(&mut self, func: &mut Func) {
-        self.enter_scope(
-            func.id,
-            Some(vec![(
-                func.name
-                    .symbol()
-                    .unwrap_or_else(|_| unreachable!("did not resolve func")),
-                func.id,
-            )]),
-        );
+        let Ok(func_symbol) = func.name.symbol() else {
+            unreachable!("did not resolve func");
+        };
+        self.enter_scope(func.id, Some(vec![(func_symbol, func.id)]));
+        self.current_func_symbols.push(func_symbol);
 
         for name in &mut func.effects.names {
             let Some(resolved_name) = self.lookup(name, None) else {
@@ -918,6 +930,7 @@ impl NameResolver {
     }
 
     fn exit_func(&mut self, func: &mut Func) {
+        self.current_func_symbols.pop();
         self.exit_scope(func.id);
     }
 

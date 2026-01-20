@@ -1,17 +1,14 @@
-use crate::analysis::{node_ids_at_offset, resolve_member_symbol, span_contains, Hover, TextRange};
+use crate::analysis::{Hover, TextRange, node_ids_at_offset, resolve_member_symbol, span_contains};
 use crate::name_resolution::symbol::Symbol;
 use crate::node::Node;
 use crate::node_kinds::{
-    decl::Decl,
-    func::Func,
-    func_signature::FuncSignature,
-    parameter::Parameter,
-    pattern::Pattern,
+    decl::Decl, func::Func, func_signature::FuncSignature, parameter::Parameter, pattern::Pattern,
     type_annotation::TypeAnnotation,
 };
 
 use crate::analysis::workspace::Workspace;
 use crate::types::format::{SymbolNames, TypeFormatter};
+use crate::types::types::TypeEntry;
 
 pub fn hover_at(
     module: &Workspace,
@@ -89,7 +86,7 @@ pub fn hover_for_node_id(
 
 struct HoverCtx<'a> {
     ast: &'a crate::ast::AST<crate::ast::NameResolved>,
-    types: Option<&'a crate::types::type_session::Types>,
+    types: Option<&'a crate::types::types::Types>,
     byte_offset: u32,
     formatter: TypeFormatter<'a>,
 }
@@ -258,13 +255,8 @@ fn hover_for_pattern(ctx: &HoverCtx<'_>, pattern: &Pattern) -> Option<Hover> {
         .types
         .and_then(|types| types.get(&pattern.id))
         .map(|entry| entry.as_mono_ty());
-    let line = hover_line_for_name_and_type(
-        &ctx.formatter,
-        name.name_str(),
-        symbol,
-        ctx.types,
-        node_ty,
-    )?;
+    let line =
+        hover_line_for_name_and_type(&ctx.formatter, name.name_str(), symbol, ctx.types, node_ty)?;
 
     Some(Hover {
         contents: line,
@@ -275,32 +267,42 @@ fn hover_for_pattern(ctx: &HoverCtx<'_>, pattern: &Pattern) -> Option<Hover> {
 fn hover_for_type_annotation(ctx: &HoverCtx<'_>, ty: &TypeAnnotation) -> Option<Hover> {
     use crate::node_kinds::type_annotation::TypeAnnotationKind;
 
-    let types = ctx.types?;
-    let entry = types.get(&ty.id)?;
-    let (start, end) = match &ty.kind {
-        TypeAnnotationKind::Nominal { name_span, .. } => {
+    let (start, end, name, symbol) = match &ty.kind {
+        TypeAnnotationKind::Nominal { name, name_span, .. } => {
             if !span_contains(*name_span, ctx.byte_offset) {
                 return None;
             }
-            (name_span.start, name_span.end)
+            (name_span.start, name_span.end, name.name_str(), name.symbol().ok())
         }
         TypeAnnotationKind::NominalPath { member_span, .. } => {
             if !span_contains(*member_span, ctx.byte_offset) {
                 return None;
             }
-            (member_span.start, member_span.end)
+            (member_span.start, member_span.end, String::new(), None)
         }
-        TypeAnnotationKind::SelfType(..) => {
+        TypeAnnotationKind::SelfType(name) => {
             let meta = ctx.ast.meta.get(&ty.id)?;
-            identifier_span_at_offset(meta, ctx.byte_offset)?
+            let (start, end) = identifier_span_at_offset(meta, ctx.byte_offset)?;
+            (start, end, name.name_str(), name.symbol().ok())
         }
         _ => return None,
     };
 
     let range = TextRange::new(start, end);
 
+    // Try to get type info for this annotation
+    if let Some(types) = ctx.types
+        && let Some(entry) = types.get(&ty.id) {
+            return Some(Hover {
+                contents: ctx.formatter.format_ty(entry.as_mono_ty()),
+                range: Some(range),
+            });
+        }
+
+    // Fall back to symbol-based hover if no type entry
+    let line = hover_line_for_name_and_type(&ctx.formatter, name, symbol, ctx.types, None)?;
     Some(Hover {
-        contents: ctx.formatter.format_ty(entry.as_mono_ty()),
+        contents: line,
         range: Some(range),
     })
 }
@@ -468,6 +470,8 @@ fn hover_for_decl(ctx: &HoverCtx<'_>, decl: &Decl) -> Option<Hover> {
                 range: Some(range),
             })
         }
+        DeclKind::Method { func, .. } => hover_for_func(ctx, func),
+        DeclKind::Func(func) => hover_for_func(ctx, func),
         _ => None,
     }
 }
@@ -496,21 +500,16 @@ fn hover_line_for_name_and_type(
     formatter: &TypeFormatter,
     name: String,
     symbol: Option<Symbol>,
-    types: Option<&crate::types::type_session::Types>,
+    types: Option<&crate::types::types::Types>,
     node_ty: Option<&crate::types::ty::Ty>,
 ) -> Option<String> {
     let symbol_entry = symbol.and_then(|sym| types.and_then(|types| types.get_symbol(&sym)));
-    let type_str = match symbol_entry {
-        Some(entry @ crate::types::type_session::TypeEntry::Poly(..)) => {
-            Some(formatter.format_type_entry(entry))
-        }
-        Some(entry) => node_ty
-            .map(|ty| formatter.format_ty(ty))
-            .or_else(|| Some(formatter.format_type_entry(entry))),
-        None => node_ty.map(|ty| formatter.format_ty(ty)),
-    };
 
     let Some(symbol) = symbol else {
+        let type_str = match symbol_entry {
+            Some(entry) => Some(formatter.format_type_entry(entry)),
+            None => node_ty.map(|ty| formatter.format_ty(ty)),
+        };
         return type_str.map(|t| format!("{name}: {t}"));
     };
 
@@ -518,6 +517,28 @@ fn hover_line_for_name_and_type(
         symbol,
         Symbol::Int | Symbol::Float | Symbol::Bool | Symbol::Void | Symbol::RawPtr | Symbol::Byte
     );
+
+    // For instance methods, use special formatting that omits self and uncurries
+    let is_instance_method = matches!(symbol, Symbol::InstanceMethod(..));
+
+    // Check if the type is a function type
+    let is_func_type = symbol_entry
+        .map(|entry| matches!(entry.as_mono_ty(), crate::types::ty::Ty::Func(..)))
+        .unwrap_or(false);
+
+    let type_str = if is_instance_method {
+        symbol_entry.map(|entry| formatter.format_method_type_entry(entry))
+    } else if is_func_type {
+        symbol_entry.map(|entry| formatter.format_func_type_entry(entry))
+    } else {
+        match symbol_entry {
+            Some(entry @ TypeEntry::Poly(..)) => Some(formatter.format_type_entry(entry)),
+            Some(entry) => node_ty
+                .map(|ty| formatter.format_ty(ty))
+                .or_else(|| Some(formatter.format_type_entry(entry))),
+            None => node_ty.map(|ty| formatter.format_ty(ty)),
+        }
+    };
 
     Some(match symbol {
         Symbol::Struct(..) => format!("struct {name}"),
@@ -531,7 +552,7 @@ fn hover_line_for_name_and_type(
             .unwrap_or_else(|| format!("let {name}")),
         Symbol::InstanceMethod(..) | Symbol::StaticMethod(..) | Symbol::MethodRequirement(..) => {
             type_str
-                .map(|t| format!("func {name}: {t}"))
+                .map(|t| format!("func {name}{t}"))
                 .unwrap_or_else(|| format!("func {name}"))
         }
         Symbol::Initializer(..) => type_str
@@ -543,4 +564,97 @@ fn hover_line_for_name_and_type(
         Symbol::Builtin(..) if is_builtin_type => name,
         _ => type_str.map(|t| format!("{name}: {t}"))?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::analysis::{DocumentInput, Workspace};
+
+    fn analyze(code: &str) -> Workspace {
+        let doc = DocumentInput {
+            id: "test.tlk".to_string(),
+            path: "test.tlk".to_string(),
+            version: 0,
+            text: code.to_string(),
+        };
+
+        Workspace::new(vec![doc]).expect("workspace")
+    }
+
+    fn byte_offset_for(code: &str, needle: &str, nth: usize) -> u32 {
+        code.match_indices(needle)
+            .nth(nth)
+            .map(|(i, _)| i as u32)
+            .expect("needle")
+    }
+
+    #[test]
+    fn hover_on_method_in_struct() {
+        let code = r#"
+struct Foo {
+    func bar() -> Int { 1 }
+}
+"#;
+        let workspace = analyze(code);
+        let doc_id = "test.tlk".to_string();
+        let byte_offset = byte_offset_for(code, "bar", 0);
+        let hover = hover_at(&workspace, None, &doc_id, byte_offset);
+        assert!(hover.is_some(), "expected hover info for method");
+        let hover = hover.expect("hover");
+        assert_eq!(hover.contents, "func bar() -> Int");
+    }
+
+    #[test]
+    fn hover_on_method_with_params() {
+        let code = r#"
+struct Foo {
+    func add(a: Int, b: Int) -> Int { a }
+}
+"#;
+        let workspace = analyze(code);
+        let doc_id = "test.tlk".to_string();
+        let byte_offset = byte_offset_for(code, "add", 0);
+        let hover = hover_at(&workspace, None, &doc_id, byte_offset);
+        assert!(hover.is_some(), "expected hover info for method");
+        let hover = hover.expect("hover");
+        assert_eq!(hover.contents, "func add(Int, Int) -> Int");
+    }
+
+    #[test]
+    fn hover_on_return_type_in_method() {
+        let code = r#"
+struct Foo<T> {
+    let value: T
+
+    func get() -> T {
+        self.value
+    }
+}
+"#;
+        let workspace = analyze(code);
+        let doc_id = "test.tlk".to_string();
+        // Find "T" in "-> T"
+        let byte_offset = byte_offset_for(code, "-> T", 0) + 3; // point to T after ->
+        let hover = hover_at(&workspace, None, &doc_id, byte_offset);
+        assert!(hover.is_some(), "expected hover info for return type T, offset: {byte_offset}");
+        let hover = hover.expect("hover");
+        assert!(hover.contents.contains("T"), "expected 'T' in hover: {}", hover.contents);
+    }
+
+    #[test]
+    fn hover_on_top_level_func_shows_uncurried() {
+        let code = r#"
+func add(a: Int, b: Int) -> Int { a }
+"#;
+        let workspace = analyze(code);
+        let doc_id = "test.tlk".to_string();
+        let byte_offset = byte_offset_for(code, "add", 0);
+        let hover = hover_at(&workspace, None, &doc_id, byte_offset);
+        assert!(hover.is_some(), "expected hover info for top-level func");
+        let hover = hover.expect("hover");
+        // Should show uncurried: (Int, Int) -> Int, not curried: (Int) -> (Int) -> Int
+        assert_eq!(hover.contents, "add: (Int, Int) -> Int");
+    }
+
 }

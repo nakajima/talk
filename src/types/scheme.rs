@@ -11,7 +11,7 @@ use crate::{
         infer_row::{InferRow, RowParamId},
         infer_ty::{InferTy, Level, TypeParamId},
         predicate::Predicate,
-        solve_context::Solve,
+        solve_context::SolveContext,
         ty::{SomeType, Ty},
         type_operations::{InstantiationSubstitutions, instantiate_ty},
         type_session::TypeSession,
@@ -113,16 +113,23 @@ impl Scheme<InferTy> {
         &self,
         id: NodeID,
         constraints: &mut ConstraintStore,
-        context: &mut impl Solve,
+        context: &mut SolveContext,
         session: &mut TypeSession,
     ) -> InferTy {
+        tracing::debug!(
+            "Scheme::instantiate - foralls: {:?}, predicates: {:?}, ty: {:?}",
+            self.foralls,
+            self.predicates,
+            self.ty
+        );
         let level = context.level();
         for forall in &self.foralls {
             match forall {
                 ForAll::Ty(param) => {
                     if let Some(meta) = context.instantiations_mut().get_ty(&id, param) {
-                        session.type_catalog.instantiations.ty.insert(
-                            (id, *param),
+                        session.type_catalog.instantiations.insert_ty(
+                            id,
+                            *param,
                             InferTy::Var {
                                 id: *meta,
                                 level: Level(1),
@@ -136,15 +143,40 @@ impl Scheme<InferTy> {
                         unreachable!()
                     };
 
-                    tracing::trace!("instantiating {param:?} with {meta:?}");
-                    session.reverse_instantiations.ty.insert(meta, *param);
+                    // Collect protocol bounds for this param from the scheme's predicates
+                    let bounds: Vec<_> = self
+                        .predicates
+                        .iter()
+                        .filter_map(|pred| {
+                            if let Predicate::Conforms {
+                                param: p,
+                                protocol_id,
+                                ..
+                            } = pred
+                            {
+                                if p == param {
+                                    Some(*protocol_id)
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+
+                    tracing::debug!("instantiating {param:?} with {meta:?}, bounds: {bounds:?}");
+                    session
+                        .reverse_instantiations
+                        .ty
+                        .insert(meta, InferTy::Param(*param, bounds));
                     context.instantiations_mut().insert_ty(id, *param, meta);
 
-                    session
-                        .type_catalog
-                        .instantiations
-                        .ty
-                        .insert((id, *param), InferTy::Var { id: meta, level });
+                    session.type_catalog.instantiations.insert_ty(
+                        id,
+                        *param,
+                        InferTy::Var { id: meta, level },
+                    );
                 }
                 ForAll::Row(param) => {
                     if context.instantiations_mut().get_row(&id, param).is_some() {
@@ -160,8 +192,7 @@ impl Scheme<InferTy> {
                     session
                         .type_catalog
                         .instantiations
-                        .row
-                        .insert((id, *param), InferRow::Var(meta));
+                        .insert_row(id, *param, InferRow::Var(meta));
                 }
             };
         }
@@ -184,7 +215,7 @@ impl Scheme<InferTy> {
         id: NodeID,
         args: &[(InferTy, NodeID)],
         session: &mut TypeSession,
-        context: &mut impl Solve,
+        context: &mut SolveContext,
         constraints: &mut ConstraintStore,
     ) -> (InferTy, InstantiationSubstitutions) {
         // Map each quantified meta id to a fresh meta at this use-site level
@@ -207,7 +238,32 @@ impl Scheme<InferTy> {
                 unreachable!();
             };
 
-            session.reverse_instantiations.ty.insert(meta_var, *param);
+            // Collect protocol bounds for this param from the scheme's predicates
+            let bounds: Vec<_> = self
+                .predicates
+                .iter()
+                .filter_map(|pred| {
+                    if let Predicate::Conforms {
+                        param: p,
+                        protocol_id,
+                        ..
+                    } = pred
+                    {
+                        if p == param {
+                            Some(*protocol_id)
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            session
+                .reverse_instantiations
+                .ty
+                .insert(meta_var, InferTy::Param(*param, bounds));
 
             if let Some((arg_ty, arg_id)) = args.pop() {
                 constraints.wants_equals_at(
@@ -219,8 +275,9 @@ impl Scheme<InferTy> {
             };
 
             substitutions.insert_ty(id, *param, meta_var);
-            session.type_catalog.instantiations.ty.insert(
-                (id, *param),
+            session.type_catalog.instantiations.insert_ty(
+                id,
+                *param,
                 InferTy::Var {
                     id: meta_var,
                     level: Level(1),
@@ -244,8 +301,7 @@ impl Scheme<InferTy> {
             session
                 .type_catalog
                 .instantiations
-                .row
-                .insert((id, row_param), InferRow::Var(row_meta));
+                .insert_row(id, row_param, InferRow::Var(row_meta));
         }
 
         for predicate in &self.predicates {

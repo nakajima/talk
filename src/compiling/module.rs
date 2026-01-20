@@ -14,7 +14,7 @@ use crate::{
         conformance::{Conformance, ConformanceKey},
         ty::Ty,
         type_catalog::Nominal,
-        type_session::{TypeEntry, Types},
+        types::{TypeEntry, Types},
     },
 };
 
@@ -103,6 +103,12 @@ impl ModuleEnvironment {
         let module = self.modules.get(stable_id)?;
         tracing::trace!("lookup \"{}\" in {}", symbol, module.name);
         module.types.get_symbol(symbol).cloned()
+    }
+
+    /// Get a reference to a module by its local module ID
+    pub fn get_module(&self, module_id: ModuleId) -> Option<&Module> {
+        let stable_id = self.modules_by_local.get(&module_id)?;
+        self.modules.get(stable_id)
     }
 
     pub fn lookup_member(&self, receiver: &Symbol, label: &Label) -> Option<Symbol> {

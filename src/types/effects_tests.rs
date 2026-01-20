@@ -3,18 +3,19 @@ pub mod tests {
     use indexmap::indexset;
 
     use crate::{
-        assert_eq_diff,
         diagnostic::{AnyDiagnostic, Diagnostic, Severity},
         label::Label,
-        name_resolution::name_resolver::NameResolverError,
-        name_resolution::symbol::{EffectId, GlobalId, ParamLocalId, Symbol},
+        name_resolution::{
+            name_resolver::NameResolverError,
+            symbol::{EffectId, GlobalId, ParamLocalId, Symbol},
+        },
         types::{
             infer_row::RowParamId,
             row::Row,
             scheme::{ForAll, Scheme},
             ty::Ty,
             type_error::TypeError,
-            type_session::TypeEntry,
+            types::TypeEntry,
             types_tests::tests::{typecheck, typecheck_err},
         },
     };
@@ -35,7 +36,7 @@ pub mod tests {
         ",
         );
 
-        assert_eq_diff!(
+        assert_eq!(
             types
                 .get_symbol(&Symbol::Global(GlobalId::from(2)))
                 .cloned(),

@@ -3,7 +3,7 @@ use tracing::instrument;
 
 use crate::{
     label::Label,
-    name_resolution::symbol::Symbol,
+    name_resolution::symbol::{ProtocolId, Symbol},
     node_id::NodeID,
     types::{
         constraint_solver::{DeferralReason, SolveResult},
@@ -19,6 +19,7 @@ use crate::{
         type_error::TypeError,
         type_operations::{curry, instantiate_ty, unify},
         type_session::TypeSession,
+        variational::{AlternativeIndex, ChoiceAlternative, Configuration, DimensionId},
     },
 };
 
@@ -42,11 +43,29 @@ impl Member {
         let receiver = self.receiver.clone();
         let ty = self.ty.clone();
 
+        // Debug: trace member constraint solving for `.name()` specifically
+        if self.label.to_string() == "name" {
+            tracing::debug!(
+                "Member::solve for .name() - receiver: {:?}, ty: {:?}, node_id: {:?}",
+                receiver,
+                ty,
+                self.node_id
+            );
+            if let InferTy::Var { id, .. } = &receiver {
+                tracing::debug!(
+                    "  receiver is Var, lookup_reverse_instantiation: {:?}",
+                    session.lookup_reverse_instantiation(*id)
+                );
+            }
+        }
+
         match &receiver {
             InferTy::Var { id, .. } => {
-                if let Some(param) = session.reverse_instantiations.ty.get(id)
+                // Use lookup_reverse_instantiation to find the type param through the union-find.
+                // This handles the case where the meta was unified with another that has the mapping.
+                if let Some(InferTy::Param(param_id, _)) = session.lookup_reverse_instantiation(*id)
                     && let SolveResult::Solved(metas) =
-                        self.lookup_type_param_member(constraints, context, session, &ty, *param)
+                        self.lookup_type_param_member(constraints, context, session, &ty, param_id)
                 {
                     return SolveResult::Solved(metas);
                 }
@@ -56,7 +75,7 @@ impl Member {
                 return SolveResult::Defer(DeferralReason::WaitingOnMeta(Meta::Ty(*id)));
             }
             InferTy::Rigid(id) => {
-                let Some(InferTy::Param(type_param_id)) =
+                let Some(InferTy::Param(type_param_id, _)) =
                     session.skolem_map.get(&InferTy::Rigid(*id))
                 else {
                     unreachable!();
@@ -70,7 +89,7 @@ impl Member {
                     *type_param_id,
                 );
             }
-            InferTy::Param(id) => {
+            InferTy::Param(id, _) => {
                 return self.lookup_type_param_member(constraints, context, session, &ty, *id);
             }
             InferTy::Constructor { name, .. } => {
@@ -127,54 +146,159 @@ impl Member {
     ) -> SolveResult {
         let mut solved_metas: Vec<Meta> = Default::default();
         let cause = ConstraintCause::Member(self.node_id);
-        let mut candidates = vec![];
-        for given in &context.givens {
-            if let Predicate::Conforms {
-                param, protocol_id, ..
-            } = given
-                && param == &type_param_id
-            {
-                candidates.push(protocol_id);
-            };
+
+        // Collect protocol_ids by value to avoid borrowing context.givens
+        let candidates: Vec<ProtocolId> = context
+            .givens_mut()
+            .iter()
+            .filter_map(|given| {
+                if let Predicate::Conforms {
+                    param, protocol_id, ..
+                } = given
+                    && param == &type_param_id
+                {
+                    Some(*protocol_id)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        // Collect all matching protocol methods
+        let matching_methods: Vec<(ProtocolId, Symbol)> = candidates
+            .iter()
+            .filter_map(|protocol_id| {
+                session
+                    .lookup_member(&(*protocol_id).into(), &self.label)
+                    .map(|(req, _source)| (*protocol_id, req))
+            })
+            .collect();
+
+        if matching_methods.is_empty() {
+            return SolveResult::Err(TypeError::MemberNotFound(
+                self.receiver.clone(),
+                self.label.to_string(),
+            ));
         }
 
-        for candidate in candidates {
-            if let Some((req, _source)) = session.lookup_member(&candidate.into(), &self.label) {
-                let Some(entry) = session.lookup(&req) else {
-                    return SolveResult::Err(TypeError::MemberNotFound(
-                        self.receiver.clone(),
-                        self.label.to_string(),
-                    ));
+        // Register variational choices for ALL type param member accesses.
+        // This allows SpecializationPass to resolve the concrete witness.
+        let dimension = DimensionId(self.node_id);
+        let mut alt_index = 0;
+
+        for (protocol_id, req) in matching_methods.iter() {
+            // For each conformance to this protocol, register a choice alternative
+            let conformances: Vec<_> = session
+                .type_catalog
+                .conformances
+                .iter()
+                .filter(|(key, _)| key.protocol_id == *protocol_id)
+                .map(|(key, conf)| (key.conforming_id, conf.witnesses.clone()))
+                .collect();
+
+            for (conforming_id, witnesses) in conformances {
+                if let Some(witness) = witnesses.get_witness(&self.label, req) {
+                    let alternative = ChoiceAlternative {
+                        conforming_type: conforming_id,
+                        witness_sym: witness,
+                        protocol_id: *protocol_id,
+                    };
+
+                    session.choices.register_alternative(
+                        dimension,
+                        AlternativeIndex(alt_index),
+                        alternative,
+                    );
+                    alt_index += 1;
+                }
+            }
+        }
+
+        if alt_index > 0 {
+            tracing::debug!(
+                "Registered {} variational choices for member {} at {:?}",
+                alt_index,
+                self.label,
+                self.node_id
+            );
+        }
+
+        // For multiple alternatives, create variational constraints for each one
+        // so the resolution phase can eliminate invalid alternatives based on type errors.
+        if alt_index > 1 {
+            for alt_idx in 0..alt_index {
+                let Some(alternative) = session.choices.get_alternative(
+                    DimensionId(self.node_id),
+                    AlternativeIndex(alt_idx),
+                ) else {
+                    continue;
                 };
+
+                let Some((_, req)) = matching_methods
+                    .iter()
+                    .find(|(pid, _)| *pid == alternative.protocol_id)
+                else {
+                    continue;
+                };
+
+                let Some(entry) = session.lookup(req) else {
+                    continue;
+                };
+
+                let config = Configuration::single(dimension, AlternativeIndex(alt_idx));
+                let mut group = constraints.copy_group(self.id);
+                group.config = config;
 
                 let req_ty = entry.instantiate(self.node_id, constraints, context, session);
                 let (req_self, req_func) = consume_self(&req_ty);
 
-                match unify(&req_self, &self.receiver, context, session)
-                    .map_err(|e| e.with_cause(cause))
-                {
-                    Ok(metas) => {
-                        solved_metas.extend(metas);
-                    }
-                    Err(e) => return SolveResult::Err(e),
-                }
-
-                match unify(ty, &req_func, context, session).map_err(|e| e.with_cause(cause)) {
-                    Ok(metas) => solved_metas.extend(metas),
-                    Err(e) => return SolveResult::Err(e),
-                };
-
-                // Record the witness for protocol member access
-                session.protocol_member_witnesses.insert(self.node_id, req);
-
-                return SolveResult::Solved(solved_metas);
+                constraints.wants_equals_at_with_cause(
+                    self.node_id,
+                    req_self,
+                    self.receiver.clone(),
+                    &group,
+                    Some(cause),
+                );
+                constraints.wants_equals_at_with_cause(
+                    self.node_id,
+                    req_func,
+                    ty.clone(),
+                    &group,
+                    Some(cause),
+                );
             }
         }
 
-        SolveResult::Err(TypeError::MemberNotFound(
-            self.receiver.clone(),
-            self.label.to_string(),
-        ))
+        // Unify with first method universally (for single alternative, or as optimistic solution)
+        let (protocol_id, req) = &matching_methods[0];
+        let Some(entry) = session.lookup(req) else {
+            return SolveResult::Err(TypeError::MemberNotFound(
+                self.receiver.clone(),
+                self.label.to_string(),
+            ));
+        };
+
+        let req_ty = entry.instantiate(self.node_id, constraints, context, session);
+        let (req_self, req_func) = consume_self(&req_ty);
+
+        match unify(&req_self, &self.receiver, context, session).map_err(|e| e.with_cause(cause)) {
+            Ok(metas) => solved_metas.extend(metas),
+            Err(e) => return SolveResult::Err(e),
+        }
+
+        match unify(ty, &req_func, context, session).map_err(|e| e.with_cause(cause)) {
+            Ok(metas) => solved_metas.extend(metas),
+            Err(e) => return SolveResult::Err(e),
+        };
+
+        tracing::trace!(
+            "Chose protocol {:?} for member {} at {:?}",
+            protocol_id,
+            self.label,
+            self.node_id
+        );
+
+        SolveResult::Solved(solved_metas)
     }
 
     #[instrument(skip(self, context, session, constraints))]
@@ -205,31 +329,36 @@ impl Member {
             };
 
             for param in nominal.type_params.iter() {
-                let InferTy::Param(param_id) = param else {
+                let InferTy::Param(param_id, _) = param else {
                     continue;
                 };
 
                 if context
-                    .instantiations
+                    .instantiations_mut()
                     .get_ty(&self.node_id, param_id)
                     .is_some()
                 {
                     continue;
                 }
 
-                let InferTy::Var { id: meta, .. } = session.new_ty_meta_var(context.level) else {
+                let InferTy::Var { id: meta, .. } = session.new_ty_meta_var(context.level()) else {
                     unreachable!();
                 };
 
-                session.reverse_instantiations.ty.insert(meta, *param_id);
+                // Store the full type param with bounds
+                session
+                    .reverse_instantiations
+                    .ty
+                    .insert(meta, param.clone());
                 context
-                    .instantiations
+                    .instantiations_mut()
                     .insert_ty(self.node_id, *param_id, meta);
-                session.type_catalog.instantiations.ty.insert(
-                    (self.node_id, *param_id),
+                session.type_catalog.instantiations.insert_ty(
+                    self.node_id,
+                    *param_id,
                     InferTy::Var {
                         id: meta,
-                        level: context.level,
+                        level: context.level(),
                     },
                 );
             }
@@ -239,32 +368,36 @@ impl Member {
             };
 
             member_ty = if let Some(enum_entry) = session.lookup(nominal_symbol) {
+                let level = context.level();
                 let enum_ty = instantiate_ty(
                     self.node_id,
                     enum_entry._as_ty(),
-                    &context.instantiations,
-                    context.level,
+                    context.instantiations_mut(),
+                    level,
                 );
 
                 match variant.len() {
                     0 => enum_ty,
-                    _ => curry(
-                        variant.iter().map(|v| {
-                            instantiate_ty(
-                                self.node_id,
-                                v.clone(),
-                                &context.instantiations,
-                                context.level,
-                            )
-                        }),
-                        instantiate_ty(
+                    _ => {
+                        let instantiated_variants: Vec<_> = variant
+                            .iter()
+                            .map(|v| {
+                                instantiate_ty(
+                                    self.node_id,
+                                    v.clone(),
+                                    context.instantiations_mut(),
+                                    level,
+                                )
+                            })
+                            .collect();
+                        let instantiated_enum = instantiate_ty(
                             self.node_id,
                             enum_ty,
-                            &context.instantiations,
-                            context.level,
-                        ),
-                        InferRow::Empty.into(),
-                    ),
+                            context.instantiations_mut(),
+                            level,
+                        );
+                        curry(instantiated_variants, instantiated_enum, InferRow::Empty.into())
+                    }
                 }
             } else {
                 InferTy::Error(
@@ -312,7 +445,7 @@ impl Member {
                     };
 
                     let method = entry.instantiate(self.node_id, constraints, context, session);
-                    let method = session.apply(method, &mut context.substitutions);
+                    let method = session.apply(method, &mut context.substitutions_mut());
                     let (method_receiver, method_fn) = consume_self(&method);
 
                     match unify(&method_receiver, &self.receiver, context, session)

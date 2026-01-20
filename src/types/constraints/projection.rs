@@ -35,8 +35,8 @@ impl Projection {
         context: &mut SolveContext,
         session: &mut TypeSession,
     ) -> SolveResult {
-        let base = session.apply(self.base.clone(), &mut context.substitutions);
-        let result = session.apply(self.result.clone(), &mut context.substitutions);
+        let base = session.apply(self.base.clone(), &mut context.substitutions_mut());
+        let result = session.apply(self.result.clone(), &mut context.substitutions_mut());
 
         // Try to reduce when base is a concrete nominal or primitive
         let base_sym = match &base {
@@ -105,11 +105,11 @@ impl Projection {
 
                 // Fallback: no alias symbol recorded; if a concrete (non-param) witness
                 // was recorded for this conformance, equate to it. Otherwise leave unsolved.
-                if let Some(witness) = conf.witnesses.associated_types.get(&self.label) {
-                    let witness = session.apply(witness.clone(), &mut context.substitutions);
-                    if !matches!(witness, InferTy::Param(_)) {
+                if let Some(witness) = conf.witnesses.associated_types.get(&self.label).cloned() {
+                    let witness_applied = session.apply(witness.clone(), &mut context.substitutions_mut());
+                    if !matches!(witness_applied, InferTy::Param(..)) {
                         let group = constraints.copy_group(self.id);
-                        constraints.wants_equals_at(self.node_id, result, witness, &group);
+                        constraints.wants_equals_at(self.node_id, result, witness_applied, &group);
                         return SolveResult::Solved(Default::default());
                     }
                 }
@@ -146,7 +146,7 @@ impl Projection {
                                 .get(&self.label)?
                                 .clone();
                             let applied =
-                                session.apply(assoc_ty.clone(), &mut context.substitutions);
+                                session.apply(assoc_ty.clone(), &mut context.substitutions_mut());
                             if applied == result {
                                 Some((key, assoc_ty))
                             } else {
@@ -176,7 +176,12 @@ impl Projection {
                                 }
                             };
                             let group = constraints.copy_group(self.id);
-                            constraints.wants_equals_at(self.node_id, base.clone(), conforming_ty, &group);
+                            constraints.wants_equals_at(
+                                self.node_id,
+                                base.clone(),
+                                conforming_ty,
+                                &group,
+                            );
                             return SolveResult::Solved(vec![Meta::Ty(*id)]);
                         }
                         _ => {
@@ -194,14 +199,13 @@ impl Projection {
             InferTy::Nominal { symbol, .. } => Some(*symbol),
             InferTy::Primitive(symbol) => Some(*symbol),
             _ => None,
-        } {
-            if let Some(protocol_id) = self.protocol_id {
-                let key = ConformanceKey {
-                    protocol_id,
-                    conforming_id: base_sym,
-                };
-                return SolveResult::Defer(DeferralReason::WaitingOnConformance(key));
-            }
+        } && let Some(protocol_id) = self.protocol_id
+        {
+            let key = ConformanceKey {
+                protocol_id,
+                conforming_id: base_sym,
+            };
+            return SolveResult::Defer(DeferralReason::WaitingOnConformance(key));
         }
 
         SolveResult::Defer(DeferralReason::Unknown)
