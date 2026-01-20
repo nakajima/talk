@@ -52,10 +52,11 @@ impl Call {
             );
 
             // For unqualified variant calls like `.foo(123)`, if we know the return type
-            // is a Nominal and we have an unknown receiver, unify them - the receiver
+            // is a Nominal and we have an unknown receiver, unify them since the receiver
             // of a variant constructor is the same type as its return value.
             if let Some(receiver_ty) = &self.receiver {
-                let applied_receiver = session.apply(receiver_ty.clone(), &mut context.substitutions_mut());
+                let applied_receiver =
+                    session.apply(receiver_ty.clone(), &mut context.substitutions_mut());
                 if let InferTy::Var { .. } = applied_receiver
                     && let InferTy::Nominal { .. } = &returns
                     && let Ok(metas) = unify(receiver_ty, &returns, context, session)
@@ -164,7 +165,6 @@ impl Call {
                         if let InferTy::Var { id, .. } = t
                             && let Some(param) = session.reverse_instantiations.ty.get(&id)
                         {
-                            // reverse_instantiations now stores the full InferTy::Param with bounds
                             return param.clone();
                         }
 
