@@ -114,7 +114,26 @@ impl Call {
                     args.insert(0, returns_type.clone());
 
                     if let Some(entry) = session.lookup(&initializer) {
-                        entry.instantiate(self.callee_id, constraints, context, session)
+                        if !self.type_args.is_empty() {
+                            // When explicit type args are provided, use instantiate_with_args
+                            // to constrain the init's type params to match
+                            let type_arg_pairs: Vec<_> = self
+                                .type_args
+                                .iter()
+                                .cloned()
+                                .map(|ty| (ty, self.callee_id))
+                                .collect();
+                            let (ty, _) = entry.instantiate_with_args(
+                                self.callee_id,
+                                &type_arg_pairs,
+                                session,
+                                context,
+                                constraints,
+                            );
+                            ty
+                        } else {
+                            entry.instantiate(self.callee_id, constraints, context, session)
+                        }
                     } else {
                         InferTy::Error(
                             TypeError::TypeNotFound(format!(

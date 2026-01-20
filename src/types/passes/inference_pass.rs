@@ -111,6 +111,9 @@ pub struct InferencePass<'a> {
     /// Tracks which function we're currently inside, for building the call tree.
     current_function: Option<Symbol>,
 
+    /// Tracks the current nominal self type (for resolving SelfType annotations in extensions)
+    current_self_ty: Option<InferTy>,
+
     // These are what we eventually produce
     root_decls: Vec<TypedDecl<InferTy>>,
     root_stmts: Vec<TypedStmt<InferTy>>,
@@ -137,6 +140,7 @@ impl<'a> InferencePass<'a> {
             or_binders: Default::default(),
             protocol_associated_type_requirements: Default::default(),
             current_function: None,
+            current_self_ty: None,
             root_decls: Default::default(),
             root_stmts: Default::default(),
         };
@@ -1885,6 +1889,9 @@ impl<'a> InferencePass<'a> {
         let mut variants: IndexMap<Label, Vec<InferTy>> = IndexMap::default();
         let mut typealiases: IndexMap<Label, InferTy> = IndexMap::default();
 
+        // Set current_self_ty for proper SelfType resolution in extensions
+        let old_self_ty = self.current_self_ty.replace(ty.clone());
+
         for decl in body.decls.iter() {
             match &decl.kind {
                 DeclKind::Init { name, params, body } => {
@@ -2076,6 +2083,9 @@ impl<'a> InferencePass<'a> {
                 );
             }
         }
+
+        // Restore old_self_ty
+        self.current_self_ty = old_self_ty;
 
         Ok(TypedDecl {
             id: decl.id,
@@ -3448,37 +3458,17 @@ impl<'a> InferencePass<'a> {
                 })
             }
             TypeAnnotationKind::SelfType(name) => {
-                let Ok(sym) = name.symbol() else {
-                    self.diagnostics.insert(AnyDiagnostic::Typing(Diagnostic {
-                        id: type_annotation.id,
-                        severity: Severity::Error,
-                        kind: TypeError::NameNotResolved(name.clone()),
-                    }));
-                    return Err(TypeError::NameNotResolved(name.clone()));
-                };
-
-                if matches!(name.symbol(), Ok(Symbol::Builtin(..))) {
-                    return Ok(resolve_builtin_type(&sym).0);
-                }
-
                 if let SolveContextKind::Protocol { protocol_self, protocol_id } = context.kind() {
                     return Ok(InferTy::Param(protocol_self, vec![protocol_id]));
                 }
 
-                if let Some(nominal) = self.session.lookup_nominal(&sym) {
-                    return Ok(InferTy::Nominal {
-                        symbol: sym,
-                        type_args: nominal.type_params.clone(),
-                    });
-                }
-
-                let Some(entry) = self.session.lookup(&sym) else {
+                let Some(self_ty) = &self.current_self_ty else {
                     return Err(TypeError::TypeNotFound(format!(
-                        "Type annotation entry not found {name:?}"
+                        "SelfType outside of nominal context: {name:?}"
                     )));
                 };
 
-                Ok(entry._as_ty())
+                Ok(self_ty.clone())
             }
             TypeAnnotationKind::Record { fields } => {
                 let mut row = InferRow::Empty;
@@ -3669,6 +3659,15 @@ impl<'a> InferencePass<'a> {
     }
 
     fn register_generic(&mut self, generic: &GenericDecl, context: &mut SolveContext) -> TypeParamId {
+        // Check if this generic has already been registered (e.g., in a previous pass)
+        if let Ok(sym) = generic.name.symbol() {
+            if let Some(entry) = self.session.lookup(&sym) {
+                if let InferTy::Param(existing_id, _) = entry._as_ty() {
+                    return existing_id;
+                }
+            }
+        }
+
         let param_id = self.session.new_type_param_id(None);
 
         tracing::debug!(

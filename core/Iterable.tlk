@@ -1,26 +1,34 @@
-// protocol Iterator<Element> {
-// 	func next()	-> Element?
-// }
+protocol Iterator {
+	associated Element
+	func next() -> Optional<Element>
+}
 
-// protocol Iterable<Element> {
-// 	func iter<T: Iterator<Element>>() -> T
-// }
+protocol Iterable {
+	associated Element
+	associated T: Iterator
+	func iter() -> T
+}
 
-// struct ArrayIterator<Element>: Iterator<Element> {
-// 	let array: Array<Element>
-// 	let cur: Int
+struct ArrayIterator<Element> {
+	let array: Array<Element>
+	let cur: Int
 
-// 	func next() -> Element? {
-// 		if self.cur < self.array.count {
-// 			Optional.some(self.array.get(self.cur))
-// 		} else {
-// 			Optional.none
-// 		}
-// 	}
-// }
+	init(array: Array<Element>) {
+		self.array = array
+		self.cur = 0
+	}
 
-// extend Array<Element>: Iterable<Element> {
-// 	func iter() -> ArrayIterator<Element> {
-// 		ArrayIterator<Element>(array: self, cur: 0)
-// 	}
-// }
+	extend Self: Iterator<Element> {
+		func next() -> Optional<Element> {
+			if self.cur < self.array.count { Optional.some(self.array.get(self.cur)) } else { Optional.none }
+		}
+	}
+}
+
+extend Array<Element>: Iterable {
+	func iter() -> ArrayIterator<Element> {
+		ArrayIterator<Element>(array: self)
+	}
+}
+
+print("ok")

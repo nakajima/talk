@@ -1792,6 +1792,56 @@ pub mod tests {
     }
 
     #[test]
+    fn generic_constructor_in_extension_block() {
+        let (_ast, _types) = typecheck(
+            "
+          struct Wrapper<T> {
+              let value: T
+
+              init(value: T) {
+                  self.value = value
+              }
+          }
+
+          struct Box<T> {
+              let inner: T
+          }
+
+          extend Box<T> {
+              func wrap() -> Wrapper<T> {
+                  Wrapper<T>(value: self.inner)
+              }
+          }
+          ",
+        );
+    }
+
+    #[test]
+    fn generic_constructor_with_explicit_type_arg() {
+        let (_ast, _types) = typecheck(
+            "
+          struct Container<Element> {
+              let item: Element
+
+              init(item: Element) {
+                  self.item = item
+              }
+          }
+
+          struct MyList<Element> {
+              let first: Element
+          }
+
+          extend MyList<Element> {
+              func boxFirst() -> Container<Element> {
+                  Container<Element>(item: self.first)
+              }
+          }
+          ",
+        );
+    }
+
+    #[test]
     fn checks_method_protocol_conformance() {
         let (_ast, _types, diagnostics) = typecheck_err(
             "
