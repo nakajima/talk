@@ -13,7 +13,7 @@ use crate::{
         infer_row::{InferRow, RowMetaId, RowParamId, RowTail, normalize_row},
         infer_ty::{InferTy, Level, Meta, MetaVarId, TypeParamId},
         mappable::Mappable,
-        solve_context::Solve,
+        solve_context::SolveContext,
         type_error::TypeError,
         type_session::{TypeDefKind, TypeSession},
     },
@@ -216,14 +216,14 @@ fn unify_rows(
     kind: TypeDefKind,
     lhs: &InferRow,
     rhs: &InferRow,
-    context: &mut impl Solve,
+    context: &mut SolveContext,
     session: &mut TypeSession,
 ) -> Result<Vec<Meta>, TypeError> {
     let mut result = vec![];
     let (mut lhs_fields, lhs_tail) =
-        normalize_row(lhs.clone(), context.substitutions_mut(), session);
+        normalize_row(lhs.clone(), &mut context.substitutions_mut(), session);
     let (mut rhs_fields, rhs_tail) =
-        normalize_row(rhs.clone(), context.substitutions_mut(), session);
+        normalize_row(rhs.clone(), &mut context.substitutions_mut(), session);
 
     // Check to see if one side is closed and the other is a var. If so,
     // just unify the var as the other side
@@ -241,7 +241,7 @@ fn unify_rows(
             };
         }
 
-        if row_occurs_structural(*var, &acc, context.substitutions_mut()) {
+        if row_occurs_structural(*var, &acc, &mut context.substitutions_mut()) {
             return Err(TypeError::OccursCheck(InferTy::Record(Box::new(acc))));
         }
         context.substitutions_mut().row.insert(*var, acc);
@@ -275,7 +275,7 @@ fn unify_rows(
                     ty,
                 };
             }
-            if row_occurs(tail_id, &acc, context.substitutions_mut(), session) {
+            if row_occurs(tail_id, &acc, &mut context.substitutions_mut(), session) {
                 return Err(TypeError::OccursCheck(InferTy::Record(Box::new(acc))));
             }
 
@@ -353,13 +353,13 @@ fn unify_rows(
 pub(super) fn unify(
     lhs: &InferTy,
     rhs: &InferTy,
-    context: &mut impl Solve,
+    context: &mut SolveContext,
     session: &mut TypeSession,
 ) -> Result<Vec<Meta>, TypeError> {
     let lhs = context.normalize(lhs.clone(), session);
     let rhs = context.normalize(rhs.clone(), session);
-    let lhs = session.apply(lhs, context.substitutions_mut());
-    let rhs = session.apply(rhs, context.substitutions_mut());
+    let lhs = session.apply(lhs, &mut context.substitutions_mut());
+    let rhs = session.apply(rhs, &mut context.substitutions_mut());
 
     if lhs == rhs {
         return Ok(Default::default());
@@ -541,10 +541,12 @@ pub(super) fn unify(
             Err(TypeError::invalid_unification(lhs.clone(), rhs.clone()))
         }
         _ => {
+            let applied_lhs = session.apply(lhs.clone(), &mut context.substitutions_mut());
+            let applied_rhs = session.apply(rhs.clone(), &mut context.substitutions_mut());
             tracing::error!(
                 "attempted to unify {:?} <> {:?}",
-                session.apply(lhs.clone(), context.substitutions_mut(),),
-                session.apply(rhs.clone(), context.substitutions_mut(),)
+                applied_lhs,
+                applied_rhs
             );
             Err(TypeError::invalid_unification(lhs.clone(), rhs.clone()))
         }

@@ -24,14 +24,14 @@ use crate::{
         predicate::Predicate,
         row::Row,
         scheme::{ForAll, Scheme},
-        solve_context::{Solve, SolveContext, SolveContextKind},
+        solve_context::{SolveContext, SolveContextKind},
         term_environment::{EnvEntry, TermEnv},
         ty::SomeType,
         type_catalog::{Nominal, TypeCatalog},
         type_error::TypeError,
         type_operations::{UnificationSubstitutions, substitute},
         types::{TypeEntry, Types},
-        variational::{resolve_overloads, ChoiceStore, ErrorConstraintStore},
+        variational::{ChoiceStore, ErrorConstraintStore, resolve_overloads},
         vars::Vars,
     },
 };
@@ -551,10 +551,6 @@ impl TypeSession {
         self.meta_vars.find(id)
     }
 
-    /// Look up the type param for a meta, checking through the union-find equivalence class.
-    /// This is needed because reverse_instantiations is keyed by the original meta id,
-    /// but after unification we might be looking up with a different meta id.
-    /// Returns the full InferTy::Param with bounds.
     pub fn lookup_reverse_instantiation(&mut self, id: MetaVarId) -> Option<InferTy> {
         // First try direct lookup
         if let Some(param) = self.reverse_instantiations.ty.get(&id).cloned() {
@@ -565,10 +561,10 @@ impl TypeSession {
         let canon = self.canon_meta(id);
 
         // Check if canonical representative has a mapping
-        if canon != id {
-            if let Some(param) = self.reverse_instantiations.ty.get(&canon).cloned() {
-                return Some(param);
-            }
+        if canon != id
+            && let Some(param) = self.reverse_instantiations.ty.get(&canon).cloned()
+        {
+            return Some(param);
         }
 
         // Search all entries for one with the same canonical representative
@@ -584,9 +580,6 @@ impl TypeSession {
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
     pub fn link_meta(&mut self, a: MetaVarId, b: MetaVarId) {
-        // Before unifying, check if either has a reverse_instantiation entry
-        // and propagate it to both so lookup works after unification.
-        // Prefer entries with non-empty bounds over empty bounds.
         let entry_a = self.reverse_instantiations.ty.get(&a).cloned();
         let entry_b = self.reverse_instantiations.ty.get(&b).cloned();
 
@@ -625,12 +618,12 @@ impl TypeSession {
     pub fn generalize(
         &mut self,
         ty: InferTy,
-        context: &mut impl Solve,
+        context: &mut SolveContext,
         unsolved: &IndexSet<Constraint>,
         constraints: &mut ConstraintStore,
     ) -> EnvEntry<InferTy> {
         // Make sure we're up to date
-        let ty = self.apply(ty, context.substitutions_mut());
+        let ty = self.apply(ty, &mut context.substitutions_mut());
 
         // collect metas in ty
         let mut metas = FxHashSet::default();
@@ -638,7 +631,9 @@ impl TypeSession {
 
         // Also collect metas that appear only in constraints
         for constraint in unsolved {
-            let constraint = constraint.clone().apply(context.substitutions_mut(), self);
+            let constraint = constraint
+                .clone()
+                .apply(&mut context.substitutions_mut(), self);
             metas.extend(constraint.collect_metas());
         }
 
@@ -670,16 +665,14 @@ impl TypeSession {
                     // Use lookup_reverse_instantiation to find the param through union-find.
                     // This handles the case where this meta var was unified with another
                     // that has the mapping (e.g., return type of a call unified with scheme's param).
-                    let param = self
-                        .lookup_reverse_instantiation(*id)
-                        .unwrap_or_else(|| {
-                            let param_id: TypeParamId = self.vars.type_params.next_id();
-                            let param = InferTy::Param(param_id, vec![]);
-                            self.reverse_instantiations.ty.insert(*id, param.clone());
-                            tracing::trace!("generalizing {m:?} to {param_id:?}");
-                            foralls.insert(ForAll::Ty(param_id));
-                            param
-                        });
+                    let param = self.lookup_reverse_instantiation(*id).unwrap_or_else(|| {
+                        let param_id: TypeParamId = self.vars.type_params.next_id();
+                        let param = InferTy::Param(param_id, vec![]);
+                        self.reverse_instantiations.ty.insert(*id, param.clone());
+                        tracing::trace!("generalizing {m:?} to {param_id:?}");
+                        foralls.insert(ForAll::Ty(param_id));
+                        param
+                    });
                     if let InferTy::Param(param_id, bounds) = &param {
                         foralls.insert(ForAll::Ty(*param_id));
                         // Add predicates for bounds embedded in the param
@@ -801,10 +794,6 @@ impl TypeSession {
             };
 
             self.term_env.insert(*sym, entry.clone());
-            return Some(entry);
-        }
-
-        if let Some(entry) = builtin_scope().get(sym).cloned() {
             return Some(entry);
         }
 

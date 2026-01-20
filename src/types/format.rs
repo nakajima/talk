@@ -1,7 +1,7 @@
 use rustc_hash::FxHashMap;
 
-use crate::name_resolution::symbol::Symbol;
 use crate::label::Label;
+use crate::name_resolution::symbol::Symbol;
 use crate::types::infer_row::RowParamId;
 use crate::types::infer_ty::TypeParamId;
 use crate::types::row::Row;
@@ -151,15 +151,10 @@ impl<'a> TypeFormatter<'a> {
         let mut current = inner;
         let mut final_effects = &Row::Empty;
 
-        loop {
-            match current {
-                Ty::Func(box param, box ret, box effects) => {
-                    params.push(self.format_ty_in_context(param, ctx));
-                    final_effects = effects;
-                    current = ret;
-                }
-                _ => break,
-            }
+        while let Ty::Func(box param, box ret, box effects) = current {
+            params.push(self.format_ty_in_context(param, ctx));
+            final_effects = effects;
+            current = ret;
         }
 
         let ret_str = self.format_ty_in_context(current, ctx);
@@ -187,15 +182,10 @@ impl<'a> TypeFormatter<'a> {
         let mut current = ty;
         let mut final_effects = &Row::Empty;
 
-        loop {
-            match current {
-                Ty::Func(box param, box ret, box effects) => {
-                    params.push(self.format_ty_in_context(param, ctx));
-                    final_effects = effects;
-                    current = ret;
-                }
-                _ => break,
-            }
+        while let Ty::Func(box param, box ret, box effects) = current {
+            params.push(self.format_ty_in_context(param, ctx));
+            final_effects = effects;
+            current = ret;
         }
 
         let ret_str = self.format_ty_in_context(current, ctx);
@@ -333,7 +323,7 @@ impl<'a> TypeFormatter<'a> {
                 .collect();
 
             match (effect_names.len(), is_open) {
-                (0, true) => String::new(), // No effects, open row: omit
+                (0, true) => String::new(),      // No effects, open row: omit
                 (0, false) => "'[]".to_string(), // No effects, closed row
                 (1, false) => format!("'{}", effect_names[0]), // One effect, closed
                 (1, true) => format!("'[{}, ..]", effect_names[0]), // One effect, open

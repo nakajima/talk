@@ -291,14 +291,13 @@ fn hover_for_type_annotation(ctx: &HoverCtx<'_>, ty: &TypeAnnotation) -> Option<
     let range = TextRange::new(start, end);
 
     // Try to get type info for this annotation
-    if let Some(types) = ctx.types {
-        if let Some(entry) = types.get(&ty.id) {
+    if let Some(types) = ctx.types
+        && let Some(entry) = types.get(&ty.id) {
             return Some(Hover {
                 contents: ctx.formatter.format_ty(entry.as_mono_ty()),
                 range: Some(range),
             });
         }
-    }
 
     // Fall back to symbol-based hover if no type entry
     let line = hover_line_for_name_and_type(&ctx.formatter, name, symbol, ctx.types, None)?;

@@ -11,7 +11,7 @@ use crate::{
         infer_row::{InferRow, RowParamId},
         infer_ty::{InferTy, TypeParamId},
         mappable::Mappable,
-        solve_context::Solve,
+        solve_context::SolveContext,
         ty::{SomeType, Ty},
         type_operations::{UnificationSubstitutions, curry, instantiate_row, instantiate_ty},
         type_session::TypeSession,
@@ -220,7 +220,7 @@ impl Predicate<InferTy> {
         &self,
         id: NodeID,
         constraints: &'a mut ConstraintStore,
-        context: &mut impl Solve,
+        context: &mut SolveContext,
     ) -> &'a Constraint {
         let level = context.level();
         match self.clone() {

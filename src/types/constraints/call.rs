@@ -11,7 +11,7 @@ use crate::{
         infer_row::InferRow,
         infer_ty::{InferTy, Meta},
         mappable::Mappable,
-        solve_context::{Solve, SolveContext},
+        solve_context::SolveContext,
         term_environment::EnvEntry,
         type_error::TypeError,
         type_operations::{curry, unify},
@@ -42,8 +42,8 @@ impl Call {
         session: &mut TypeSession,
     ) -> SolveResult {
         let cause = ConstraintCause::Call(self.call_node_id);
-        let callee = session.apply(self.callee.clone(), &mut context.substitutions);
-        let returns = session.apply(self.returns.clone(), &mut context.substitutions);
+        let callee = session.apply(self.callee.clone(), &mut context.substitutions_mut());
+        let returns = session.apply(self.returns.clone(), &mut context.substitutions_mut());
 
         if let InferTy::Var { id, .. } = &callee {
             tracing::trace!(
@@ -54,12 +54,15 @@ impl Call {
             // For unqualified variant calls like `.foo(123)`, if we know the return type
             // is a Nominal and we have an unknown receiver, unify them - the receiver
             // of a variant constructor is the same type as its return value.
-            if let Some(receiver_ty) = &self.receiver
-                && let InferTy::Var { .. } = session.apply(receiver_ty.clone(), &mut context.substitutions)
-                && let InferTy::Nominal { .. } = &returns
-                && let Ok(metas) = unify(receiver_ty, &returns, context, session) {
+            if let Some(receiver_ty) = &self.receiver {
+                let applied_receiver = session.apply(receiver_ty.clone(), &mut context.substitutions_mut());
+                if let InferTy::Var { .. } = applied_receiver
+                    && let InferTy::Nominal { .. } = &returns
+                    && let Ok(metas) = unify(receiver_ty, &returns, context, session)
+                {
                     return SolveResult::Solved(metas);
                 }
+            }
 
             // We don't know the callee yet, defer
             return SolveResult::Defer(DeferralReason::WaitingOnMeta(Meta::Ty(*id)));

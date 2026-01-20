@@ -3,7 +3,6 @@ use crate::span::Span;
 use crate::types::conformance::{Conformance, ConformanceKey, Witnesses};
 use crate::types::constraints::store::ConstraintStore;
 use crate::types::scheme::ForAll;
-use crate::types::solve_context::Solve;
 use crate::types::type_operations::{Substitutions, substitute_with_subs};
 use crate::{
     label::Label,
@@ -55,7 +54,7 @@ impl Conforms {
             InferTy::Primitive(symbol) => (*symbol, vec![]),
             InferTy::Nominal { symbol, type_args } => (*symbol, type_args.clone()),
             InferTy::Param(param_id, _) => {
-                for given in &context.givens {
+                for given in context.givens_mut().iter() {
                     if let Predicate::Conforms {
                         param,
                         protocol_id: given_protocol_id,
@@ -63,7 +62,7 @@ impl Conforms {
                         && param == param_id
                     {
                         // Direct conformance: param conforms to exactly the protocol we need
-                        if *given_protocol_id == self.protocol_id {
+                        if given_protocol_id == &self.protocol_id {
                             return SolveResult::Solved(Default::default());
                         }
 
@@ -173,13 +172,12 @@ impl Conforms {
 
         // Add substitutions for the conforming type's type params
         // e.g., for Person<Float> conforming to Aged, substitute A -> Float
-        if !conforming_type_args.is_empty() {
-            if let Some(nominal) = session.lookup_nominal(&conforming_ty_sym) {
+        if !conforming_type_args.is_empty()
+            && let Some(nominal) = session.lookup_nominal(&conforming_ty_sym) {
                 for (param, arg) in nominal.type_params.iter().zip(conforming_type_args.iter()) {
                     substitutions.insert(param.clone(), arg.clone());
                 }
             }
-        }
 
         let mut deferral_reasons = vec![];
 
@@ -231,7 +229,7 @@ impl Conforms {
                             .associated_types
                             .get(&label)
                             .cloned()
-                            .unwrap_or_else(|| session.new_ty_meta_var(context.level))
+                            .unwrap_or_else(|| session.new_ty_meta_var(context.level()))
                     })
                     .clone()
             } else {
@@ -241,7 +239,7 @@ impl Conforms {
                     .associated_types
                     .get(&label)
                     .cloned()
-                    .unwrap_or_else(|| session.new_ty_meta_var(context.level))
+                    .unwrap_or_else(|| session.new_ty_meta_var(context.level()))
             };
 
             substitutions.insert(associated_entry._as_ty(), associated_witness_ty);

@@ -48,13 +48,13 @@ impl<'a> ConstraintSolver<'a> {
         mut substitutions: UnificationSubstitutions,
     ) -> Vec<AnyDiagnostic> {
         let mut diagnostics = Vec::default();
-        substitutions.extend(&self.context.substitutions);
+        substitutions.extend(&self.context.substitutions_mut());
         while !constraints.is_stalled() {
             let mut solved_metas = vec![];
             let worklist = constraints.worklist();
             for want_id in worklist {
                 let want = constraints.get(&want_id).clone();
-                let constraint = want.apply(&mut self.context.substitutions, session);
+                let constraint = want.apply(&mut self.context.substitutions_mut(), session);
                 let solution = match constraint {
                     Constraint::DefaultTy(ref c) => c.solve(self.context, session),
                     Constraint::Equals(ref equals) => {

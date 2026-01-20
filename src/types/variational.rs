@@ -65,7 +65,6 @@ impl Configuration {
     pub fn get(&self, dimension: &DimensionId) -> Option<AlternativeIndex> {
         self.choices.get(dimension).copied()
     }
-
 }
 
 /// Stores the resolved choice for each dimension after constraint solving.
@@ -137,9 +136,9 @@ impl ErrorConstraintStore {
         dimension: &DimensionId,
         alternative: AlternativeIndex,
     ) -> bool {
-        self.errors.iter().any(|e| {
-            e.config.get(dimension) == Some(alternative)
-        })
+        self.errors
+            .iter()
+            .any(|e| e.config.get(dimension) == Some(alternative))
     }
 }
 
@@ -208,10 +207,10 @@ impl ChoiceStore {
     ) -> Option<Symbol> {
         let size = self.dimension_size(&dimension);
         for i in 0..size {
-            if let Some(alt) = self.get_alternative(dimension, AlternativeIndex(i)) {
-                if alt.conforming_type == conforming_type {
-                    return Some(alt.witness_sym);
-                }
+            if let Some(alt) = self.get_alternative(dimension, AlternativeIndex(i))
+                && alt.conforming_type == conforming_type
+            {
+                return Some(alt.witness_sym);
             }
         }
         None
@@ -278,20 +277,10 @@ pub fn resolve_overloads(
                 resolution.resolve(*dimension, valid[0]);
             }
             _ => {
-                // Multiple valid alternatives - ambiguous
-                // For now, we'll pick the first one and continue
-                // A stricter version would report this as an error
-                tracing::debug!(
-                    "Ambiguous resolution for {:?}: {} valid alternatives, picking first",
-                    dimension,
-                    valid.len()
-                );
-                resolution.resolve(*dimension, valid[0]);
-                // Uncomment to report as error instead:
-                // resolution_errors.push(ResolutionError::Ambiguous {
-                //     dimension: *dimension,
-                //     valid_alternatives: valid,
-                // });
+                resolution_errors.push(ResolutionError::Ambiguous {
+                    dimension: *dimension,
+                    valid_alternatives: valid,
+                });
             }
         }
     }

@@ -13,7 +13,7 @@ use crate::{
         mappable::Mappable,
         predicate::Predicate,
         scheme::{ForAll, Scheme},
-        solve_context::Solve,
+        solve_context::SolveContext,
         ty::SomeType,
         type_operations::{
             InstantiationSubstitutions, UnificationSubstitutions, substitute, substitute_row,
@@ -164,7 +164,7 @@ impl EnvEntry<InferTy> {
         id: NodeID,
         args: &[(InferTy, NodeID)],
         session: &mut TypeSession,
-        context: &mut impl Solve,
+        context: &mut SolveContext,
         constraints: &mut ConstraintStore,
     ) -> (InferTy, InstantiationSubstitutions) {
         tracing::debug!("inference instantiate (id: {id:?})");
@@ -180,7 +180,7 @@ impl EnvEntry<InferTy> {
         &self,
         id: NodeID,
         constraints: &mut ConstraintStore,
-        context: &mut impl Solve,
+        context: &mut SolveContext,
         session: &mut TypeSession,
     ) -> InferTy {
         tracing::debug!("inference instantiate (id: {id:?})");

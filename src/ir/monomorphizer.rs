@@ -367,11 +367,10 @@ impl<'a> Monomorphizer<'a> {
                 protocol_id,
             };
 
-            if let Some(conformance) = self.types.catalog.conformances.get(&key) {
-                if let Some(witness) = conformance.witnesses.get_witness(&label, method_req) {
+            if let Some(conformance) = self.types.catalog.conformances.get(&key)
+                && let Some(witness) = conformance.witnesses.get_witness(&label, method_req) {
                     return Some(witness);
                 }
-            }
         }
 
         None

@@ -149,7 +149,7 @@ impl Member {
 
         // Collect protocol_ids by value to avoid borrowing context.givens
         let candidates: Vec<ProtocolId> = context
-            .givens
+            .givens_mut()
             .iter()
             .filter_map(|given| {
                 if let Predicate::Conforms {
@@ -334,14 +334,14 @@ impl Member {
                 };
 
                 if context
-                    .instantiations
+                    .instantiations_mut()
                     .get_ty(&self.node_id, param_id)
                     .is_some()
                 {
                     continue;
                 }
 
-                let InferTy::Var { id: meta, .. } = session.new_ty_meta_var(context.level) else {
+                let InferTy::Var { id: meta, .. } = session.new_ty_meta_var(context.level()) else {
                     unreachable!();
                 };
 
@@ -351,14 +351,14 @@ impl Member {
                     .ty
                     .insert(meta, param.clone());
                 context
-                    .instantiations
+                    .instantiations_mut()
                     .insert_ty(self.node_id, *param_id, meta);
                 session.type_catalog.instantiations.insert_ty(
                     self.node_id,
                     *param_id,
                     InferTy::Var {
                         id: meta,
-                        level: context.level,
+                        level: context.level(),
                     },
                 );
             }
@@ -368,32 +368,36 @@ impl Member {
             };
 
             member_ty = if let Some(enum_entry) = session.lookup(nominal_symbol) {
+                let level = context.level();
                 let enum_ty = instantiate_ty(
                     self.node_id,
                     enum_entry._as_ty(),
-                    &context.instantiations,
-                    context.level,
+                    context.instantiations_mut(),
+                    level,
                 );
 
                 match variant.len() {
                     0 => enum_ty,
-                    _ => curry(
-                        variant.iter().map(|v| {
-                            instantiate_ty(
-                                self.node_id,
-                                v.clone(),
-                                &context.instantiations,
-                                context.level,
-                            )
-                        }),
-                        instantiate_ty(
+                    _ => {
+                        let instantiated_variants: Vec<_> = variant
+                            .iter()
+                            .map(|v| {
+                                instantiate_ty(
+                                    self.node_id,
+                                    v.clone(),
+                                    context.instantiations_mut(),
+                                    level,
+                                )
+                            })
+                            .collect();
+                        let instantiated_enum = instantiate_ty(
                             self.node_id,
                             enum_ty,
-                            &context.instantiations,
-                            context.level,
-                        ),
-                        InferRow::Empty.into(),
-                    ),
+                            context.instantiations_mut(),
+                            level,
+                        );
+                        curry(instantiated_variants, instantiated_enum, InferRow::Empty.into())
+                    }
                 }
             } else {
                 InferTy::Error(
@@ -441,7 +445,7 @@ impl Member {
                     };
 
                     let method = entry.instantiate(self.node_id, constraints, context, session);
-                    let method = session.apply(method, &mut context.substitutions);
+                    let method = session.apply(method, &mut context.substitutions_mut());
                     let (method_receiver, method_fn) = consume_self(&method);
 
                     match unify(&method_receiver, &self.receiver, context, session)

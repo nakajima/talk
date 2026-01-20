@@ -12,6 +12,8 @@ use crate::{
     node_id::NodeID,
     types::{
         call_tree::CalleeInfo,
+        infer_row::RowParamId,
+        infer_ty::TypeParamId,
         row::Row,
         scheme::ForAll,
         ty::{Specializations, Ty},
@@ -420,26 +422,23 @@ impl<'a> SpecializationPass<'a> {
             if let TypedExprKind::Member { receiver, label } = &callee.kind {
                 // Check for direct protocol method calls: Protocol.method(arg1, arg2, ...)
                 // In this case, the actual receiver is the first argument
-                if let TypedExprKind::Constructor(Symbol::Protocol(protocol_id), _) =
-                    &receiver.kind
+                if let TypedExprKind::Constructor(Symbol::Protocol(protocol_id), _) = &receiver.kind
                 {
                     // This is a direct protocol method call like Add.add(1, 2)
                     // The conforming type comes from the first argument
                     if let Some(first_arg) = args.first() {
                         let arg_ty = accumulated_specs.apply(first_arg.ty.clone());
-                        if let Ok(conforming_sym) =
-                            self.symbol_from_ty(&arg_ty, &accumulated_specs)
+                        if let Ok(conforming_sym) = self.symbol_from_ty(&arg_ty, &accumulated_specs)
                         {
                             let key = crate::types::conformance::ConformanceKey {
                                 protocol_id: *protocol_id,
                                 conforming_id: conforming_sym,
                             };
-                            if let Some(conformance) = self.types.catalog.conformances.get(&key) {
-                                if let Some(witness) =
+                            if let Some(conformance) = self.types.catalog.conformances.get(&key)
+                                && let Some(witness) =
                                     conformance.witnesses.get_witness(label, &caller)
-                                {
-                                    caller = witness;
-                                }
+                            {
+                                caller = witness;
                             }
                         }
                     }
@@ -459,12 +458,10 @@ impl<'a> SpecializationPass<'a> {
                         let receiver_ty = accumulated_specs.apply(receiver.ty.clone());
                         if let Ok(receiver_sym) =
                             self.symbol_from_ty(&receiver_ty, &accumulated_specs)
-                        {
-                            if let Some(witness_sym) =
+                            && let Some(witness_sym) =
                                 self.types.choices.resolve_for_type(dimension, receiver_sym)
-                            {
-                                caller = witness_sym;
-                            }
+                        {
+                            caller = witness_sym;
                         }
                     }
                 }
@@ -687,8 +684,11 @@ impl<'a> SpecializationPass<'a> {
             // and call_resolutions key (matches IR instruction meta)
             let (callee_sym, callee_specializations, call_id) = match callee_info {
                 CalleeInfo::Direct { sym, call_id } => {
-                    let callee_specs =
-                        self.compute_callee_specializations(&original_caller, &call_id, specializations);
+                    let callee_specs = self.compute_callee_specializations(
+                        &original_caller,
+                        &call_id,
+                        specializations,
+                    );
                     (sym, callee_specs, call_id)
                 }
                 CalleeInfo::Member {
@@ -701,27 +701,31 @@ impl<'a> SpecializationPass<'a> {
                     };
 
                     // If the receiver is still a type parameter, skip
-                    let receiver_sym =
-                        match self.symbol_from_ty(ty.as_mono_ty(), specializations) {
-                            Ok(sym) => sym,
-                            Err(..) => continue,
-                        };
+                    let receiver_sym = match self.symbol_from_ty(ty.as_mono_ty(), specializations) {
+                        Ok(sym) => sym,
+                        Err(..) => continue,
+                    };
 
                     // Look up the actual member symbol on the receiver
                     let member_sym = if let Some((member_sym, _)) =
                         self.types.catalog.lookup_member(&receiver_sym, &label)
                     {
                         member_sym
-                    } else if let Some(member_sym) =
-                        self.types.catalog.lookup_static_member(&receiver_sym, &label)
+                    } else if let Some(member_sym) = self
+                        .types
+                        .catalog
+                        .lookup_static_member(&receiver_sym, &label)
                     {
                         member_sym
                     } else {
                         continue;
                     };
 
-                    let callee_specs =
-                        self.compute_callee_specializations(&original_caller, &call_id, specializations);
+                    let callee_specs = self.compute_callee_specializations(
+                        &original_caller,
+                        &call_id,
+                        specializations,
+                    );
                     (member_sym, callee_specs, call_id)
                 }
             };
@@ -756,12 +760,11 @@ impl<'a> SpecializationPass<'a> {
             return callees.clone();
         }
         // Then check imported modules
-        if let Some(module_id) = caller.external_module_id() {
-            if let Some(module) = self.modules.get_module(module_id) {
-                if let Some(callees) = module.types.call_tree.get(caller) {
-                    return callees.clone();
-                }
-            }
+        if let Some(module_id) = caller.external_module_id()
+            && let Some(module) = self.modules.get_module(module_id)
+            && let Some(callees) = module.types.call_tree.get(caller)
+        {
+            return callees.clone();
         }
         vec![]
     }
@@ -806,13 +809,14 @@ impl<'a> SpecializationPass<'a> {
     }
 
     /// Get instantiations for a call site, looking in imported modules if needed
+    #[allow(clippy::type_complexity)]
     fn get_instantiations_for(
         &self,
         caller: &Symbol,
         call_id: &NodeID,
     ) -> (
-        Option<&FxHashMap<crate::types::infer_ty::TypeParamId, Ty>>,
-        Option<&FxHashMap<crate::types::infer_row::RowParamId, Row>>,
+        Option<&FxHashMap<TypeParamId, Ty>>,
+        Option<&FxHashMap<RowParamId, Row>>,
     ) {
         // First check local catalog
         let local_ty = self.types.catalog.instantiations.ty.get(call_id);
@@ -822,13 +826,13 @@ impl<'a> SpecializationPass<'a> {
         }
 
         // Then check imported module based on caller's module
-        if let Some(module_id) = caller.external_module_id() {
-            if let Some(module) = self.modules.get_module(module_id) {
-                return (
-                    module.types.catalog.instantiations.ty.get(call_id),
-                    module.types.catalog.instantiations.row.get(call_id),
-                );
-            }
+        if let Some(module_id) = caller.external_module_id()
+            && let Some(module) = self.modules.get_module(module_id)
+        {
+            return (
+                module.types.catalog.instantiations.ty.get(call_id),
+                module.types.catalog.instantiations.row.get(call_id),
+            );
         }
 
         (None, None)
@@ -850,7 +854,8 @@ impl<'a> SpecializationPass<'a> {
         }
 
         // Get the original type - look in imported modules if needed
-        let ty = self.get_type_for(callee_sym)
+        let ty = self
+            .get_type_for(callee_sym)
             .unwrap_or_else(|| unreachable!("did not get ty for {callee_sym:?}"));
 
         // Check if applying specializations actually changes the type

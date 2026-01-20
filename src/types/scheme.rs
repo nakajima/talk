@@ -11,7 +11,7 @@ use crate::{
         infer_row::{InferRow, RowParamId},
         infer_ty::{InferTy, Level, TypeParamId},
         predicate::Predicate,
-        solve_context::Solve,
+        solve_context::SolveContext,
         ty::{SomeType, Ty},
         type_operations::{InstantiationSubstitutions, instantiate_ty},
         type_session::TypeSession,
@@ -113,7 +113,7 @@ impl Scheme<InferTy> {
         &self,
         id: NodeID,
         constraints: &mut ConstraintStore,
-        context: &mut impl Solve,
+        context: &mut SolveContext,
         session: &mut TypeSession,
     ) -> InferTy {
         tracing::debug!(
@@ -215,7 +215,7 @@ impl Scheme<InferTy> {
         id: NodeID,
         args: &[(InferTy, NodeID)],
         session: &mut TypeSession,
-        context: &mut impl Solve,
+        context: &mut SolveContext,
         constraints: &mut ConstraintStore,
     ) -> (InferTy, InstantiationSubstitutions) {
         // Map each quantified meta id to a fresh meta at this use-site level

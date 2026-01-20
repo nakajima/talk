@@ -119,13 +119,13 @@ impl TypeMember {
         type_param_id: TypeParamId,
     ) -> SolveResult {
         let mut candidates = vec![];
-        for given in &context.givens {
+        for given in context.givens_mut().iter() {
             if let Predicate::Conforms {
                 param, protocol_id, ..
             } = given
                 && param == &type_param_id
             {
-                candidates.push(protocol_id);
+                candidates.push(*protocol_id);
             };
         }
 
@@ -133,7 +133,7 @@ impl TypeMember {
             if let Some(child_types) = session
                 .resolved_names
                 .child_types
-                .get(&Symbol::Protocol(*candidate))
+                .get(&Symbol::Protocol(candidate))
                 .cloned()
                 && let Some(child_sym) = child_types.get(&self.name)
             {

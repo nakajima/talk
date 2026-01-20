@@ -1,6 +1,4 @@
 use indexmap::IndexSet;
-use itertools::Itertools;
-use petgraph::prelude::DiGraphMap;
 use priority_queue::PriorityQueue;
 use rustc_hash::FxHashMap;
 use tracing::instrument;
@@ -86,45 +84,17 @@ impl From<u32> for ConstraintId {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) enum ConstraintStoreNode {
-    Constraint(ConstraintId),
-    Meta(Meta),
-    Symbol(Symbol),
-    ConformanceKey(ConformanceKey),
-}
-
-impl std::fmt::Display for ConstraintStoreNode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Constraint(id) => write!(f, "constraint({id:?})"),
-            Self::Meta(meta) => write!(f, "meta({meta:?})"),
-            Self::Symbol(sym) => write!(f, "symbol({sym:?})"),
-            Self::ConformanceKey(key) => write!(f, "conformancekey({key:?})"),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-#[allow(clippy::enum_variant_names)]
-pub(crate) enum ConstraintStoreEdge {
-    MetaDependency,
-    SymbolDependency,
-    ConformanceDependency,
-}
-
-impl std::fmt::Display for ConstraintStoreEdge {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{self:?}")
-    }
-}
 
 #[derive(Default, Debug)]
 pub struct ConstraintStore {
     ids: IDGenerator,
     constraints: FxHashMap<ConstraintId, Constraint>,
-    pub(crate) storage: DiGraphMap<ConstraintStoreNode, ConstraintStoreEdge>,
     pub(crate) meta: FxHashMap<ConstraintId, ConstraintMeta>,
+
+    // Dependency tracking: maps from dependency key to constraints waiting on it
+    meta_deps: FxHashMap<Meta, Vec<ConstraintId>>,
+    symbol_deps: FxHashMap<Symbol, Vec<ConstraintId>>,
+    conformance_deps: FxHashMap<ConformanceKey, Vec<ConstraintId>>,
 
     wants: PriorityQueue<ConstraintId, ConstraintPriority>,
     pub(crate) deferred: IndexSet<ConstraintId>,
@@ -167,44 +137,19 @@ impl ConstraintStore {
     #[instrument(skip(self))]
     pub fn defer(&mut self, id: ConstraintId, reason: DeferralReason) {
         self.deferred.insert(id);
-        let constraint_node = ConstraintStoreNode::Constraint(id);
         match reason {
             DeferralReason::WaitingOnConformance(key) => {
-                let meta_node = ConstraintStoreNode::ConformanceKey(key);
-                self.storage.add_node(meta_node);
-                self.storage.add_edge(
-                    meta_node,
-                    constraint_node,
-                    ConstraintStoreEdge::ConformanceDependency,
-                );
+                self.conformance_deps.entry(key).or_default().push(id);
             }
             DeferralReason::WaitingOnMeta(meta) => {
-                let meta_node = ConstraintStoreNode::Meta(meta);
-                self.storage.add_node(meta_node);
-                self.storage.add_edge(
-                    meta_node,
-                    constraint_node,
-                    ConstraintStoreEdge::MetaDependency,
-                );
+                self.meta_deps.entry(meta).or_default().push(id);
             }
             DeferralReason::WaitingOnSymbol(symbol) => {
-                let sym_node = ConstraintStoreNode::Symbol(symbol);
-                self.storage.add_node(sym_node);
-                self.storage.add_edge(
-                    sym_node,
-                    constraint_node,
-                    ConstraintStoreEdge::SymbolDependency,
-                );
+                self.symbol_deps.entry(symbol).or_default().push(id);
             }
             DeferralReason::WaitingOnSymbols(symbols) => {
                 for symbol in symbols {
-                    let sym_node = ConstraintStoreNode::Symbol(symbol);
-                    self.storage.add_node(sym_node);
-                    self.storage.add_edge(
-                        sym_node,
-                        constraint_node,
-                        ConstraintStoreEdge::SymbolDependency,
-                    );
+                    self.symbol_deps.entry(symbol).or_default().push(id);
                 }
             }
             DeferralReason::Multi(reasons) => {
@@ -220,16 +165,8 @@ impl ConstraintStore {
         tracing::debug!("solve constraint {:?}: {:?}", id, self.get(&id));
         self.deferred.swap_remove(&id);
         self.solved.insert(id);
-        let constraint_node = ConstraintStoreNode::Constraint(id);
-        let edges = self
-            .storage
-            .edges_directed(constraint_node, petgraph::Direction::Incoming)
-            .map(|(_, other, _)| other)
-            .collect_vec();
-        for other in edges {
-            self.storage.remove_edge(constraint_node, other);
-            self.storage.remove_edge(other, constraint_node);
-        }
+        // Note: We don't remove the constraint from dependency maps here.
+        // The lookup methods will filter out solved constraints.
     }
 
     #[instrument(skip(self))]
@@ -237,7 +174,7 @@ impl ConstraintStore {
         let mut res = IndexSet::default();
         for (id, constraint) in self.constraints.iter() {
             let group = self.meta.get(id).unwrap_or_else(|| unreachable!()).group_id;
-            if group != context.group {
+            if group != context.group() {
                 continue;
             }
 
@@ -309,9 +246,6 @@ impl ConstraintStore {
         constraint: Constraint,
         group: &BindingGroup,
     ) -> &Constraint {
-        self.storage
-            .add_node(ConstraintStoreNode::Constraint(constraint_id));
-
         self.wants.push(constraint_id, constraint.priority());
         self.meta.insert(
             constraint_id,
@@ -324,15 +258,13 @@ impl ConstraintStore {
             },
         );
 
+        // Track meta variable dependencies for wake-up on solve
         for ty in constraint.collect_metas() {
             if let InferTy::Var { id, .. } = ty {
-                let meta_id = ConstraintStoreNode::Meta(Meta::Ty(id));
-                self.storage.add_node(meta_id);
-                self.storage.add_edge(
-                    meta_id,
-                    ConstraintStoreNode::Constraint(constraint_id),
-                    ConstraintStoreEdge::MetaDependency,
-                );
+                self.meta_deps
+                    .entry(Meta::Ty(id))
+                    .or_default()
+                    .push(constraint_id);
             }
         }
 
@@ -343,55 +275,24 @@ impl ConstraintStore {
     }
 
     pub fn meta_dependents_for(&self, meta: Meta) -> Vec<ConstraintId> {
-        self.storage
-            .neighbors(ConstraintStoreNode::Meta(meta))
-            .filter_map(|n| {
-                if let ConstraintStoreNode::Constraint(c) = n {
-                    Some(c)
-                } else {
-                    None
-                }
-            })
-            .collect()
+        self.meta_deps
+            .get(&meta)
+            .cloned()
+            .unwrap_or_default()
     }
 
     pub fn symbol_dependents_for(&self, symbol: Symbol) -> Vec<ConstraintId> {
-        self.storage
-            .neighbors(ConstraintStoreNode::Symbol(symbol))
-            .filter_map(|n| {
-                if let ConstraintStoreNode::Constraint(c) = n {
-                    Some(c)
-                } else {
-                    None
-                }
-            })
-            .collect()
+        self.symbol_deps
+            .get(&symbol)
+            .cloned()
+            .unwrap_or_default()
     }
 
     pub fn conformance_dependents_for(&self, key: ConformanceKey) -> Vec<ConstraintId> {
-        self.storage
-            .neighbors(ConstraintStoreNode::ConformanceKey(key))
-            .filter_map(|n| {
-                if let ConstraintStoreNode::Constraint(c) = n {
-                    Some(c)
-                } else {
-                    None
-                }
-            })
-            .collect()
-    }
-
-    pub fn constraint_symbol_dependents_for(&self, constraint_id: ConstraintId) -> Vec<Symbol> {
-        self.storage
-            .neighbors(ConstraintStoreNode::Constraint(constraint_id))
-            .filter_map(|n| {
-                if let ConstraintStoreNode::Symbol(symbol) = n {
-                    Some(symbol)
-                } else {
-                    None
-                }
-            })
-            .collect()
+        self.conformance_deps
+            .get(&key)
+            .cloned()
+            .unwrap_or_default()
     }
 }
 

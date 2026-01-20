@@ -7,7 +7,7 @@ use crate::{
         constraints::store::{ConstraintId, ConstraintStore},
         infer_row::{InferRow, RowTail, normalize_row},
         infer_ty::{InferTy, Meta},
-        solve_context::Solve,
+        solve_context::SolveContext,
         type_error::TypeError,
         type_session::TypeSession,
     },
@@ -26,16 +26,16 @@ impl RowSubset {
     pub fn solve(
         &self,
         constraints: &mut ConstraintStore,
-        context: &mut impl Solve,
+        context: &mut SolveContext,
         session: &mut TypeSession,
     ) -> SolveResult {
-        let left = session.apply_row(self.left.clone(), context.substitutions_mut());
-        let right = session.apply_row(self.right.clone(), context.substitutions_mut());
+        let left = session.apply_row(self.left.clone(), &mut context.substitutions_mut());
+        let right = session.apply_row(self.right.clone(), &mut context.substitutions_mut());
 
         let (left_fields, left_tail) =
-            normalize_row(left.clone(), context.substitutions_mut(), session);
+            normalize_row(left.clone(), &mut context.substitutions_mut(), session);
         let (mut right_fields, right_tail) =
-            normalize_row(right.clone(), context.substitutions_mut(), session);
+            normalize_row(right.clone(), &mut context.substitutions_mut(), session);
 
         let group = context.group_info();
         let node_id = self.node_id.unwrap_or(NodeID::SYNTHESIZED);
