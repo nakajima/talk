@@ -39,6 +39,7 @@ pub struct SpecializationPass<'a> {
     resolved_names: ResolvedNames,
     types: Types,
     modules: &'a ModuleEnvironment,
+    module_id: ModuleId,
     pub(crate) specialized_callees: FxHashMap<Symbol, SpecializedCallee>,
     pub(crate) specializations: FxHashMap<Symbol, Vec<Symbol>>,
     /// Maps (specialized_caller, call_site_id) -> specialized_callee.
@@ -54,6 +55,7 @@ impl<'a> SpecializationPass<'a> {
         resolved_names: ResolvedNames,
         types: Types,
         modules: &'a ModuleEnvironment,
+        module_id: ModuleId,
     ) -> Self {
         Self {
             ast,
@@ -61,6 +63,7 @@ impl<'a> SpecializationPass<'a> {
             resolved_names,
             types,
             modules,
+            module_id,
             specialized_callees: Default::default(),
             specializations: Default::default(),
             call_resolutions: Default::default(),
@@ -366,6 +369,12 @@ impl<'a> SpecializationPass<'a> {
                 .get(symbol)
                 .and_then(|inits| inits.get(&Label::Named("init".into())))
                 .copied()
+                // Fallback to look up initializers from external modules
+                .or_else(|| {
+                    self.modules
+                        .lookup_initializers(symbol)
+                        .and_then(|inits| inits.get(&Label::Named("init".into())).copied())
+                })
         {
             let specialized_init = self.specialize(&init_sym, &specializations);
             expr.kind = TypedExprKind::Call {
@@ -866,7 +875,7 @@ impl<'a> SpecializationPass<'a> {
             return *callee_sym;
         }
 
-        let new_sym = self.symbols.next_synthesized(ModuleId::Current);
+        let new_sym = self.symbols.next_synthesized(self.module_id);
 
         // Save the specialized version
         self.types.types_by_symbol.insert(
