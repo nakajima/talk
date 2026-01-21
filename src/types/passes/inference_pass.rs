@@ -1688,8 +1688,11 @@ impl<'a> InferencePass<'a> {
                 return Err(TypeError::NameNotResolved(generic.name.clone()));
             };
 
-            self.session
-                .insert_mono(name_sym, InferTy::Param(param_id, vec![]), &mut self.constraints);
+            self.session.insert_mono(
+                name_sym,
+                InferTy::Param(param_id, vec![]),
+                &mut self.constraints,
+            );
         }
 
         let mut effects_row = if func_signature.effects.is_open {
@@ -2011,6 +2014,81 @@ impl<'a> InferencePass<'a> {
 
                     self.session.insert(lhs_sym, rhs_ty, &mut self.constraints);
                 }
+                DeclKind::Extend {
+                    conformances: nested_conformances,
+                    body: nested_body,
+                    ..
+                } => {
+                    // Register conformances from the nested extend block
+                    for conformance in nested_conformances {
+                        let Ok(sym) = conformance.symbol() else {
+                            continue;
+                        };
+                        let Symbol::Protocol(protocol_id) = sym else {
+                            continue;
+                        };
+
+                        self.register_conformance(
+                            nominal_symbol,
+                            sym,
+                            conformance.id,
+                            conformance.span,
+                            context,
+                        )
+                        .ok();
+
+                        // Add to conformances catalog (matching discover_conformances behavior)
+                        let key = ConformanceKey {
+                            protocol_id,
+                            conforming_id: nominal_symbol,
+                        };
+                        self.session
+                            .type_catalog
+                            .conformances
+                            .entry(key)
+                            .or_insert_with(|| Conformance {
+                                node_id: conformance.id,
+                                conforming_id: nominal_symbol,
+                                protocol_id,
+                                witnesses: Default::default(),
+                                span: conformance.span,
+                            });
+
+                        self.constraints.wants_conforms(
+                            conformance.id,
+                            ty.clone(),
+                            protocol_id,
+                            &context.group_info(),
+                        );
+                    }
+
+                    // Process methods in the nested extend body
+                    for nested_decl in &nested_body.decls {
+                        if let DeclKind::Method { func, is_static } = &nested_decl.kind {
+                            let func_name = &func.name;
+                            let func = self.visit_method(
+                                nominal_symbol,
+                                func,
+                                *is_static,
+                                &mut context.next(),
+                            )?;
+                            instance_methods.insert(func.name.to_string().into(), func);
+
+                            // Also register in the type catalog (like regular methods)
+                            self.session
+                                .type_catalog
+                                .instance_methods
+                                .entry(nominal_symbol)
+                                .or_default()
+                                .insert(
+                                    func_name.name_str().into(),
+                                    func_name
+                                        .symbol()
+                                        .map_err(|_| TypeError::NameNotResolved(name.clone()))?,
+                                );
+                        }
+                    }
+                }
                 _ => tracing::warn!("Unhandled nominal decl: {:?}", decl.kind),
             }
         }
@@ -2279,6 +2357,22 @@ impl<'a> InferencePass<'a> {
         }
 
         let func_ty = self.visit_func(func, context)?;
+
+        // For instance methods, ensure the self parameter is unified with the enclosing type.
+        // This is critical for nested extend blocks where self needs to be the struct type.
+        if !is_static
+            && let Some(self_param) = func_ty.params.first()
+            && let Some(self_ty) = &self.current_self_ty
+        {
+            self.constraints.wants_equals_at_with_cause(
+                func.id,
+                self_param.ty.clone(),
+                self_ty.clone(),
+                &context.group_info(),
+                Some(ConstraintCause::SelfType),
+            );
+        }
+
         self.session.insert(
             func_sym,
             curry(
@@ -2665,7 +2759,9 @@ impl<'a> InferencePass<'a> {
                     Some(ConstraintCause::Pattern(pattern.id)),
                 );
                 TypedPatternKind::Bind(Symbol::Synthesized(
-                    self.session.symbols.next_synthesized(ModuleId::Current),
+                    self.session
+                        .symbols
+                        .next_synthesized(self.session.current_module_id),
                 ))
             }
             PatternKind::Bind(Name::Resolved(sym, _)) => {
@@ -2684,7 +2780,9 @@ impl<'a> InferencePass<'a> {
                 TypedPatternKind::Bind(*sym)
             }
             PatternKind::Bind(Name::SelfType(..)) => TypedPatternKind::Bind(Symbol::Synthesized(
-                self.session.symbols.next_synthesized(ModuleId::Current),
+                self.session
+                    .symbols
+                    .next_synthesized(self.session.current_module_id),
             )),
             PatternKind::LiteralInt(val) => {
                 self.constraints.wants_equals_at_with_cause(
@@ -3178,11 +3276,7 @@ impl<'a> InferencePass<'a> {
         // Track which function we're in for building the call tree
         let prev_function = self.current_function.replace(func_sym);
 
-        tracing::debug!(
-            "visit_func: {:?}, generics: {:?}",
-            func.name,
-            func.generics
-        );
+        tracing::debug!("visit_func: {:?}, generics: {:?}", func.name, func.generics);
 
         for generic in func.generics.iter() {
             self.register_generic(generic, context);
@@ -3458,7 +3552,11 @@ impl<'a> InferencePass<'a> {
                 })
             }
             TypeAnnotationKind::SelfType(name) => {
-                if let SolveContextKind::Protocol { protocol_self, protocol_id } = context.kind() {
+                if let SolveContextKind::Protocol {
+                    protocol_self,
+                    protocol_id,
+                } = context.kind()
+                {
                     return Ok(InferTy::Param(protocol_self, vec![protocol_id]));
                 }
 
@@ -3658,7 +3756,11 @@ impl<'a> InferencePass<'a> {
         }
     }
 
-    fn register_generic(&mut self, generic: &GenericDecl, context: &mut SolveContext) -> TypeParamId {
+    fn register_generic(
+        &mut self,
+        generic: &GenericDecl,
+        context: &mut SolveContext,
+    ) -> TypeParamId {
         // Check if this generic has already been registered (e.g., in a previous pass)
         if let Ok(sym) = generic.name.symbol() {
             if let Some(entry) = self.session.lookup(&sym) {
@@ -3674,7 +3776,9 @@ impl<'a> InferencePass<'a> {
             "register_generic: {:?}, conformances: {:?}, available requirements: {:?}",
             generic.name,
             generic.conformances,
-            self.protocol_associated_type_requirements.keys().collect::<Vec<_>>()
+            self.protocol_associated_type_requirements
+                .keys()
+                .collect::<Vec<_>>()
         );
 
         // Collect protocol bounds for the type param

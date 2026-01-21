@@ -177,6 +177,18 @@ pub mod tests {
     }
 
     #[test]
+    fn let_again() {
+        let (ast, types) = typecheck(
+            r#"
+        let a = 123
+        let a = 1.23
+        a
+    "#,
+        );
+        assert_eq!(ty(0, &ast, &types), Ty::Float);
+    }
+
+    #[test]
     fn monomorphic_let_annotation() {
         let (ast, types) = typecheck(
             r#"
@@ -2437,5 +2449,110 @@ pub mod tests {
             }
             ",
         );
+    }
+
+    #[test]
+    fn types_nested_extend_conformance() {
+        // Test that extend blocks nested inside struct definitions register conformances
+        let (_ast, types) = typecheck(
+            "
+            protocol Counter {
+                func next() -> Int
+            }
+
+            struct MyCounter {
+                let value: Int
+
+                extend Self: Counter {
+                    func next() -> Int {
+                        self.value
+                    }
+                }
+            }
+
+            func useCounter<T: Counter>(c: T) -> Int {
+                c.next()
+            }
+
+            useCounter(MyCounter(value: 42))
+            ",
+        );
+
+        // Verify the conformance is registered
+        assert!(types.catalog.conformances.contains_key(&ConformanceKey {
+            protocol_id: ProtocolId::from(1),
+            conforming_id: StructId::from(1).into(),
+        }));
+    }
+
+    #[test]
+    fn types_nested_extend_with_enum_ref() {
+        // Test nested extend that references an enum - similar to core's ArrayIterator
+        let (_ast, types) = typecheck(
+            "
+            protocol Getter {
+                func get() -> Int
+            }
+
+            enum Result<T> {
+                case ok(T)
+                case err
+            }
+
+            struct MyGetter {
+                let value: Int
+
+                extend Self: Getter {
+                    func get() -> Int {
+                        self.value
+                    }
+                }
+            }
+
+            Result.ok(123)
+            ",
+        );
+
+        // Verify the conformance is registered (MyGetter is struct 2 due to internal ID assignment)
+        assert!(types.catalog.conformances.contains_key(&ConformanceKey {
+            protocol_id: ProtocolId::from(1),
+            conforming_id: StructId::from(2).into(),
+        }));
+    }
+
+    #[test]
+    fn types_nested_extend_with_member_method_call() {
+        // Test nested extend that calls a method on a member - like ArrayIterator calling self.array.get()
+        let (_ast, types) = typecheck(
+            "
+            struct Inner {
+                let data: Int
+
+                func getData() -> Int {
+                    self.data
+                }
+            }
+
+            protocol Wrapper {
+                func getValue() -> Int
+            }
+
+            struct Outer {
+                let inner: Inner
+
+                extend Self: Wrapper {
+                    func getValue() -> Int {
+                        self.inner.getData()
+                    }
+                }
+            }
+            ",
+        );
+
+        // Verify the conformance is registered
+        assert!(types.catalog.conformances.contains_key(&ConformanceKey {
+            protocol_id: ProtocolId::from(1),
+            conforming_id: StructId::from(2).into(),
+        }));
     }
 }
