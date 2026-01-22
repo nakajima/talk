@@ -5,7 +5,6 @@ use tracing::instrument;
 
 use crate::{
     ast::{AST, NameResolved},
-    compiling::module::ModuleId,
     diagnostic::{AnyDiagnostic, Diagnostic, Severity},
     formatter,
     label::Label,
@@ -2369,7 +2368,7 @@ impl<'a> InferencePass<'a> {
                 self_param.ty.clone(),
                 self_ty.clone(),
                 &context.group_info(),
-                Some(ConstraintCause::SelfType),
+                Some(ConstraintCause::Internal),
             );
         }
 
@@ -3762,12 +3761,11 @@ impl<'a> InferencePass<'a> {
         context: &mut SolveContext,
     ) -> TypeParamId {
         // Check if this generic has already been registered (e.g., in a previous pass)
-        if let Ok(sym) = generic.name.symbol() {
-            if let Some(entry) = self.session.lookup(&sym) {
-                if let InferTy::Param(existing_id, _) = entry._as_ty() {
-                    return existing_id;
-                }
-            }
+        if let Ok(sym) = generic.name.symbol()
+            && let Some(entry) = self.session.lookup(&sym)
+            && let InferTy::Param(existing_id, _) = entry._as_ty()
+        {
+            return existing_id;
         }
 
         let param_id = self.session.new_type_param_id(None);

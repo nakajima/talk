@@ -359,11 +359,24 @@ impl Driver<NameResolved> {
         let symbols = std::mem::take(&mut session.symbols);
         let (types, resolved_names) = session.finalize().map_err(CompileError::Typing)?;
 
-        let specialization_pass =
-            SpecializationPass::new(ast, symbols, resolved_names, types, &self.config.modules);
+        let specialization_pass = SpecializationPass::new(
+            ast,
+            symbols,
+            resolved_names,
+            types,
+            &self.config.modules,
+            self.config.module_id,
+        );
 
-        let (ast, symbols, resolved_names, mut types, specializations, specialized_callees, call_resolutions) =
-            specialization_pass.drive().map_err(CompileError::Typing)?;
+        let (
+            ast,
+            symbols,
+            resolved_names,
+            mut types,
+            specializations,
+            specialized_callees,
+            call_resolutions,
+        ) = specialization_pass.drive().map_err(CompileError::Typing)?;
 
         // Don't bother with matcher diagnostics if we're not well typed already.
         if !has_error_diagnostics(&self.phase.diagnostics) {
