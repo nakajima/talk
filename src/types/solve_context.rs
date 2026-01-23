@@ -128,7 +128,12 @@ impl SolveContext {
         self.normalize_with_level(ty, session, self.level)
     }
 
-    fn normalize_with_level(&self, ty: InferTy, session: &mut TypeSession, level: Level) -> InferTy {
+    fn normalize_with_level(
+        &self,
+        ty: InferTy,
+        session: &mut TypeSession,
+        level: Level,
+    ) -> InferTy {
         let ty = {
             let mut shared = self.shared.borrow_mut();
             session.apply(ty, &mut shared.substitutions)
@@ -144,7 +149,9 @@ impl SolveContext {
                 }
 
                 let placeholder = session.new_ty_meta_var(level);
-                shared.projection_placeholders.insert(ty, placeholder.clone());
+                shared
+                    .projection_placeholders
+                    .insert(ty, placeholder.clone());
                 placeholder
             }
             InferTy::Func(box param, box ret, effects) => InferTy::Func(
@@ -161,8 +168,6 @@ impl SolveContext {
 
 #[cfg(test)]
 pub mod tests {
-    use std::assert_matches::assert_matches;
-
     use crate::{
         compiling::module::ModuleId,
         label::Label,
@@ -199,7 +204,7 @@ pub mod tests {
 
         let stable_1 = context.normalize(ty.clone(), &mut session);
         let stable_2 = context.normalize(ty, &mut session);
-        assert_matches!(stable_1, InferTy::Var { .. });
+        assert!(matches!(stable_1, InferTy::Var { .. }));
         assert_eq!(stable_1, stable_2);
     }
 }

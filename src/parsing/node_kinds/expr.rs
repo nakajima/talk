@@ -28,6 +28,7 @@ pub enum ExprKind {
         effect_name: Name,
         #[drive(skip)]
         effect_name_span: Span,
+        type_args: Vec<TypeAnnotation>,
         args: Vec<CallArg>,
     },
 

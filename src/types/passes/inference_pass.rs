@@ -362,6 +362,7 @@ impl<'a> InferencePass<'a> {
                 kind:
                     DeclKind::Effect {
                         name: Name::Resolved(symbol, ..),
+                        generics,
                         params,
                         ret,
                         ..
@@ -371,6 +372,11 @@ impl<'a> InferencePass<'a> {
             else {
                 continue;
             };
+
+            // Register generic type parameters for the effect
+            for generic in generics.iter() {
+                self.register_generic(generic, &mut context);
+            }
 
             let params = match self.visit_params(params, &mut context) {
                 Ok(params) => params,
@@ -1332,8 +1338,11 @@ impl<'a> InferencePass<'a> {
                 }
             }
             ExprKind::CallEffect {
-                effect_name, args, ..
-            } => self.visit_call_effect(expr, effect_name, args, context)?,
+                effect_name,
+                type_args,
+                args,
+                ..
+            } => self.visit_call_effect(expr, effect_name, type_args, args, context)?,
             ExprKind::LiteralArray(items) => self.visit_array(expr, items, context)?,
             ExprKind::LiteralInt(v) => TypedExpr {
                 id: expr.id,
@@ -1532,6 +1541,7 @@ impl<'a> InferencePass<'a> {
         &mut self,
         expr: &Expr,
         effect_name: &Name,
+        type_args: &[TypeAnnotation],
         args: &[CallArg],
         context: &mut SolveContext,
     ) -> TypedRet<TypedExpr<InferTy>> {
@@ -1543,8 +1553,37 @@ impl<'a> InferencePass<'a> {
             return Err(TypeError::EffectNotFound(effect_name.name_str()));
         };
 
+        // Process explicit type args
+        let type_arg_tys: Vec<_> = type_args
+            .iter()
+            .map(|a| self.visit_type_annotation(a, context))
+            .try_collect()?;
+
+        // Instantiate the effect signature (replace Params with fresh meta vars)
+        let foralls = effect.collect_foralls();
+        let instantiated_effect = if foralls.is_empty() {
+            effect.clone()
+        } else {
+            // Build a scheme from the foralls and instantiate it
+            let scheme = Scheme::<InferTy>::new(foralls.into_iter().collect(), vec![], effect.clone());
+            let (instantiated, subs) = scheme.instantiate_with_args(
+                expr.id,
+                &type_arg_tys
+                    .iter()
+                    .zip(type_args.iter())
+                    .map(|(ty, ann)| (ty.clone(), ann.id))
+                    .collect::<Vec<_>>(),
+                &mut self.session,
+                context,
+                &mut self.constraints,
+            );
+            // Store instantiations for later use
+            self.instantiations.insert(expr.id, subs);
+            instantiated
+        };
+
         let mut typed_args = vec![];
-        let (params, ret, _effects) = uncurry_function(effect.clone());
+        let (params, ret, _effects) = uncurry_function(instantiated_effect.clone());
         for (effect_ty, arg) in params.iter().zip(args) {
             let typed_arg = self.visit_expr(&arg.value, context)?;
             self.constraints.wants_equals_at_with_cause(
@@ -1564,7 +1603,7 @@ impl<'a> InferencePass<'a> {
             self.constraints._has_field(
                 current_effect_row.clone(),
                 Label::_Symbol(effect_sym),
-                effect,
+                instantiated_effect,
                 Some(expr.id),
                 &context.group_info(),
             );
@@ -1575,6 +1614,7 @@ impl<'a> InferencePass<'a> {
             ty: ret.clone(),
             kind: TypedExprKind::CallEffect {
                 effect: effect_sym,
+                type_args: type_arg_tys,
                 args: typed_args,
             },
         })
@@ -1707,17 +1747,7 @@ impl<'a> InferencePass<'a> {
         context: &mut SolveContext,
     ) -> TypedRet<InferTy> {
         for generic in func_signature.generics.iter() {
-            let param_id = self.session.new_type_param_id(None);
-
-            let Ok(name_sym) = generic.name.symbol() else {
-                return Err(TypeError::NameNotResolved(generic.name.clone()));
-            };
-
-            self.session.insert_mono(
-                name_sym,
-                InferTy::Param(param_id, vec![]),
-                &mut self.constraints,
-            );
+            self.register_generic(generic, context);
         }
 
         let mut effects_row = if func_signature.effects.is_open {

@@ -1,7 +1,5 @@
 #[cfg(test)]
 pub mod tests {
-    use std::assert_matches::assert_matches;
-
     use crate::{
         any, any_block, any_body, any_expr, any_pattern, assert_eq_diff,
         ast::{AST, Parsed},
@@ -168,7 +166,7 @@ pub mod tests {
     fn parses_literal_expr() {
         let parsed = parse("123");
 
-        assert_matches!(
+        assert!(matches!(
             parsed.roots[0],
             Node::Stmt(Stmt {
                 kind: StmtKind::Expr(Expr {
@@ -177,38 +175,38 @@ pub mod tests {
                 },),
                 ..
             })
-        );
+        ));
     }
 
     #[test]
     fn parses_string_literal() {
         let parsed = parse("\"hello world\"");
-        assert_matches!(
+        assert!(matches!(
             parsed.roots[0].as_stmt().kind,
             StmtKind::Expr(Expr {
                 kind: ExprKind::LiteralString(_),
                 ..
             },)
-        );
+        ));
     }
 
     #[test]
     fn handles_semicolons() {
         let parsed = parse("123 ; 456");
-        assert_matches!(
+        assert!(matches!(
             parsed.roots[0].as_stmt().kind,
             StmtKind::Expr(Expr {
                 kind: ExprKind::LiteralInt(_),
                 ..
             },)
-        );
-        assert_matches!(
+        ));
+        assert!(matches!(
             parsed.roots[1].as_stmt().kind,
             StmtKind::Expr(Expr {
                 kind: ExprKind::LiteralInt(_),
                 ..
             },)
-        );
+        ));
     }
 
     #[test]
@@ -248,13 +246,13 @@ pub mod tests {
     #[test]
     fn parses_eq() {
         let parsed = parse("1 == 2");
-        assert_matches!(
+        assert!(matches!(
             parsed.roots[0].as_stmt().kind,
             StmtKind::Expr(Expr {
                 kind: ExprKind::Binary(_, _, _),
                 ..
             })
-        );
+        ));
     }
 
     #[test]
@@ -273,7 +271,7 @@ pub mod tests {
     #[test]
     fn parses_not_eq() {
         let parsed = parse("1 != 2");
-        assert_matches!(
+        assert!(matches!(
             parsed.roots[0].as_stmt(),
             expr_stmt!(
                 ExprKind::Binary(
@@ -282,13 +280,13 @@ pub mod tests {
                     box expr!(ExprKind::LiteralInt(_)),
                 )
             )
-        );
+        ));
     }
 
     #[test]
     fn parses_greater() {
         let parsed = parse("1 > 2");
-        assert_matches!(
+        assert!(matches!(
             parsed.roots[0].as_stmt(),
             expr_stmt!(
                 ExprKind::Binary(
@@ -297,13 +295,13 @@ pub mod tests {
                     box expr!(ExprKind::LiteralInt(_)),
                 )
             )
-        );
+        ));
     }
 
     #[test]
     fn parses_greater_eq() {
         let parsed = parse("1 >= 2");
-        assert_matches!(
+        assert!(matches!(
             parsed.roots[0].as_stmt(),
             expr_stmt!(
                 ExprKind::Binary(
@@ -312,13 +310,13 @@ pub mod tests {
                     box expr!(ExprKind::LiteralInt(_)),
                 )
             )
-        );
+        ));
     }
 
     #[test]
     fn parses_less() {
         let parsed = parse("1 < 2");
-        assert_matches!(
+        assert!(matches!(
             parsed.roots[0].as_stmt(),
             expr_stmt!(
                 ExprKind::Binary(
@@ -327,13 +325,13 @@ pub mod tests {
                     box expr!(ExprKind::LiteralInt(_)),
                 )
             )
-        );
+        ));
     }
 
     #[test]
     fn parses_less_eq() {
         let parsed = parse("1 <= 2");
-        assert_matches!(
+        assert!(matches!(
             parsed.roots[0].as_stmt(),
             expr_stmt!(
                 ExprKind::Binary(
@@ -342,14 +340,14 @@ pub mod tests {
                     box expr!(ExprKind::LiteralInt(_)),
                 )
             )
-        );
+        ));
     }
 
     #[test]
     fn parses_plus_expr() {
         let parsed = parse("1 + 2");
 
-        assert_matches!(
+        assert!(matches!(
             parsed.roots[0].as_stmt(),
             expr_stmt!(
                 ExprKind::Binary(
@@ -358,13 +356,13 @@ pub mod tests {
                     box expr!(ExprKind::LiteralInt(_)),
                 )
             )
-        );
+        ));
     }
 
     #[test]
     fn parses_minus_expr() {
         let parsed = parse("1 - 2");
-        assert_matches!(
+        assert!(matches!(
             parsed.roots[0].as_stmt(),
             expr_stmt!(
                 ExprKind::Binary(
@@ -373,13 +371,13 @@ pub mod tests {
                     box expr!(ExprKind::LiteralInt(_)),
                 )
             )
-        );
+        ));
     }
 
     #[test]
     fn parses_div_expr() {
         let parsed = parse("1 / 2");
-        assert_matches!(
+        assert!(matches!(
             parsed.roots[0].as_stmt(),
             expr_stmt!(
                 ExprKind::Binary(
@@ -388,13 +386,13 @@ pub mod tests {
                     box expr!(ExprKind::LiteralInt(_)),
                 )
             )
-        );
+        ));
     }
 
     #[test]
     fn parses_mult_expr() {
         let parsed = parse("1 * 2");
-        assert_matches!(
+        assert!(matches!(
             parsed.roots[0].as_stmt(),
             expr_stmt!(
                 ExprKind::Binary(
@@ -403,13 +401,13 @@ pub mod tests {
                     box expr!(ExprKind::LiteralInt(_)),
                 )
             )
-        );
+        ));
     }
 
     #[test]
     fn parses_greater_expr() {
         let parsed = parse("1 > 2");
-        assert_matches!(
+        assert!(matches!(
             parsed.roots[0].as_stmt(),
             expr_stmt!(
                 ExprKind::Binary(
@@ -418,13 +416,13 @@ pub mod tests {
                     box expr!(ExprKind::LiteralInt(_)),
                 )
             )
-        );
+        ));
     }
 
     #[test]
     fn parses_caret_expr() {
         let parsed = parse("1 ^ 2");
-        assert_matches!(
+        assert!(matches!(
             parsed.roots[0].as_stmt(),
             expr_stmt!(
                 ExprKind::Binary(
@@ -433,13 +431,13 @@ pub mod tests {
                     box expr!(ExprKind::LiteralInt(_)),
                 )
             )
-        );
+        ));
     }
 
     #[test]
     fn parses_pipe_expr() {
         let parsed = parse("1 | 2");
-        assert_matches!(
+        assert!(matches!(
             parsed.roots[0].as_stmt(),
             expr_stmt!(
                 ExprKind::Binary(
@@ -448,14 +446,14 @@ pub mod tests {
                     box expr!(ExprKind::LiteralInt(_)),
                 )
             )
-        );
+        ));
     }
 
     #[test]
     fn parses_correct_precedence() {
         let parsed = parse("1 + 2 * 2");
 
-        assert_matches!(
+        assert!(matches!(
             parsed.roots[0].as_stmt(),
             expr_stmt!(
                 ExprKind::Binary(
@@ -470,7 +468,7 @@ pub mod tests {
                     ),
                 )
             )
-        );
+        ));
     }
 
     #[test]
@@ -2448,6 +2446,7 @@ pub mod tests {
             any_decl!(DeclKind::Effect {
                 name: "fizz".into(),
                 name_span: Span::ANY,
+                generics: vec![],
                 params: vec![any!(Parameter, {
                     name: "x".into(),
                     name_span: Span::ANY,
@@ -2495,7 +2494,7 @@ pub mod tests {
                 body: any!(Block, {
                     args: Default::default(),
                     body: vec![
-                        any_expr_stmt!(ExprKind::CallEffect { effect_name: "fizz".into(), effect_name_span: Span::ANY, args: vec![any!(CallArg, {
+                        any_expr_stmt!(ExprKind::CallEffect { effect_name: "fizz".into(), effect_name_span: Span::ANY, type_args: vec![], args: vec![any!(CallArg, {
                             label: Label::Positional(0),
                             label_span: Span::ANY,
                             value: any_expr!(ExprKind::Variable("x".into()))
@@ -2535,10 +2534,10 @@ pub mod tests {
     #[ignore = "todo"]
     fn handles_unclosed_paren() {
         let parsed = parse("func foo(");
-        assert_matches!(
+        assert!(matches!(
             parsed.roots[0],
             Node::IncompleteExpr(IncompleteExpr::Func { .. })
-        );
+        ));
     }
 
     // #[test]

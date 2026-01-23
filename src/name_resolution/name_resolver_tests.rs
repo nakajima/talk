@@ -1529,6 +1529,7 @@ pub mod tests {
             any_expr_stmt!(ExprKind::CallEffect {
                 effect_name: Name::Resolved(Symbol::Effect(EffectId::from(1)), "fizz".into()),
                 effect_name_span: Span::ANY,
+                type_args: vec![],
                 args: vec![any!(CallArg, {
                     label: Label::Positional(0),
                     label_span: Span::ANY,

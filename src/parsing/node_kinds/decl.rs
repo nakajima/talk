@@ -20,6 +20,7 @@ pub enum DeclKind {
         name: Name,
         #[drive(skip)]
         name_span: Span,
+        generics: Vec<GenericDecl>,
         params: Vec<Parameter>,
         ret: TypeAnnotation,
     },

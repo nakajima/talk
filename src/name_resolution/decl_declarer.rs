@@ -247,6 +247,15 @@ impl<'a> DeclDeclarer<'a> {
         self.resolver.current_scope_id = current.parent_id;
     }
 
+    /// Declares generics as TypeParameter symbols in the current scope.
+    fn declare_generics(&mut self, generics: &mut [GenericDecl]) {
+        for generic in generics {
+            generic.name = self
+                .resolver
+                .declare(&generic.name, some!(TypeParameter), generic.id);
+        }
+    }
+
     pub(super) fn predeclare_nominals(&mut self, decls: &[&Decl]) {
         for decl in decls.iter() {
             if let Decl {
@@ -374,11 +383,7 @@ impl<'a> DeclDeclarer<'a> {
             .types
             .insert("Self".into(), sym);
 
-        for generic in generics {
-            generic.name = self
-                .resolver
-                .declare(&generic.name, some!(TypeParameter), generic.id);
-        }
+        self.declare_generics(generics);
 
         self.predeclare_nominals(decls.iter().collect_vec().as_slice());
     }
@@ -466,11 +471,7 @@ impl<'a> DeclDeclarer<'a> {
                 };
                 self.start_scope(binder, *id, false);
 
-                for generic in generics {
-                    generic.name =
-                        self.resolver
-                            .declare(&generic.name, some!(TypeParameter), generic.id);
-                }
+                self.declare_generics(generics);
 
                 for param in params {
                     param.name = self
@@ -506,11 +507,7 @@ impl<'a> DeclDeclarer<'a> {
                     false,
                 );
 
-                for generic in generics {
-                    generic.name =
-                        self.resolver
-                            .declare(&generic.name, some!(TypeParameter), generic.id);
-                }
+                self.declare_generics(generics);
 
                 for param in params {
                     param.name = self
@@ -625,9 +622,7 @@ impl<'a> DeclDeclarer<'a> {
                 }
 
                 // self.start_scope(name.symbol().ok(), *id, true);
-                for generic in generics {
-                    generic.name = self.resolver.declare(&generic.name, some!(TypeParameter), decl.id);
-                }
+                self.declare_generics(generics);
             }
         );
 
@@ -674,11 +669,7 @@ impl<'a> DeclDeclarer<'a> {
                 self.resolver
                     .track_dependency_from_to(nominal_sym, nominal_id, method_sym, *id);
 
-                for generic in generics {
-                    generic.name =
-                        self.resolver
-                            .declare(&generic.name, some!(TypeParameter), decl.id);
-                }
+                self.declare_generics(generics);
             }
         );
 
@@ -720,14 +711,29 @@ impl<'a> DeclDeclarer<'a> {
             }
         });
 
-        on!(&mut decl.kind, DeclKind::Effect { name, params, .. }, {
-            *name = self.resolver.declare(name, some!(Effect), decl.id);
-            for param in params {
-                param.name = self
-                    .resolver
-                    .declare(&param.name, some!(ParamLocal), param.id);
+        on!(
+            &mut decl.kind,
+            DeclKind::Effect {
+                name,
+                generics,
+                params,
+                ..
+            },
+            {
+                *name = self.resolver.declare(name, some!(Effect), decl.id);
+
+                // Start a scope for the effect's generics and params
+                self.start_scope(None, decl.id, false);
+
+                self.declare_generics(generics);
+
+                for param in params {
+                    param.name = self
+                        .resolver
+                        .declare(&param.name, some!(ParamLocal), param.id);
+                }
             }
-        });
+        );
     }
 
     fn exit_decl(&mut self, decl: &mut Decl) {
@@ -766,7 +772,8 @@ impl<'a> DeclDeclarer<'a> {
             DeclKind::Protocol { .. }
                 | DeclKind::Enum { .. }
                 | DeclKind::Extend { .. }
-                | DeclKind::Init { .. },
+                | DeclKind::Init { .. }
+                | DeclKind::Effect { .. },
             {
                 self.end_scope();
             }

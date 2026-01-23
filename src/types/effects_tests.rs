@@ -278,4 +278,64 @@ pub mod tests {
 
         assert_eq!(0, diagnostics.len(), "{diagnostics:?}");
     }
+
+    #[test]
+    fn generic_effect_declaration() {
+        let (_ast, _types) = typecheck("effect 'state<T>(value: T) -> T");
+    }
+
+    #[test]
+    fn generic_effect_call_with_type_arg() {
+        let (_ast, _types) = typecheck(
+            "
+            effect 'state<T>(value: T) -> T
+            @handle 'state { v in continue v }
+            'state<Int>(42)
+        ",
+        );
+    }
+
+    #[test]
+    fn generic_effect_call_inferred() {
+        let (_ast, _types) = typecheck(
+            "
+            effect 'state<T>(value: T) -> T
+            @handle 'state { v in continue v }
+            'state(42)
+        ",
+        );
+    }
+
+    #[test]
+    fn generic_effect_type_mismatch() {
+        let (.., diagnostics) = typecheck_err(
+            "
+            effect 'state<T>(value: T) -> T
+            @handle 'state { v in continue v }
+            'state<Int>(true)
+        ",
+        );
+
+        assert!(
+            diagnostics.iter().any(|diag| matches!(
+                diag,
+                AnyDiagnostic::Typing(Diagnostic {
+                    kind: TypeError::InvalidUnification(..),
+                    ..
+                })
+            )),
+            "{diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn generic_effect_multiple_params() {
+        let (_ast, _types) = typecheck(
+            "
+            effect 'pair<A, B>(first: A, second: B) -> (A, B)
+            @handle 'pair { a, b in continue (a, b) }
+            'pair<Int, Bool>(42, true)
+        ",
+        );
+    }
 }

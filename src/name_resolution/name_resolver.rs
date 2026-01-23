@@ -971,6 +971,10 @@ impl NameResolver {
             }
         });
 
+        on!(&decl.kind, DeclKind::Effect { .. }, {
+            self.enter_scope(decl.id, None);
+        });
+
         on!(&mut decl.kind, DeclKind::Method { func, .. }, {
             let sym = func
                 .name
@@ -1006,7 +1010,8 @@ impl NameResolver {
                 | DeclKind::Protocol { .. }
                 | DeclKind::Extend { .. }
                 | DeclKind::Method { .. }
-                | DeclKind::Init { .. },
+                | DeclKind::Init { .. }
+                | DeclKind::Effect { .. },
             {
                 self.exit_scope(decl.id);
             }
