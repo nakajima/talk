@@ -14,17 +14,8 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-    - name: Cache cargo registry + binary installs
-      uses: actions/cache@v4
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          ~/.cargo/bin
-        key: cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
-        restore-keys: |
-          cargo-${{ runner.os }}-
     - uses: dtolnay/rust-toolchain@nightly
+    - uses: Swatinem/rust-cache@v2
     - name: Build
       run: cargo build --verbose
     - name: Run tests
