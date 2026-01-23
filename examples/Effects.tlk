@@ -3,9 +3,7 @@ effect 'throwsies(error) -> Never
 @handle 'throwsies { err in print(err) }
 
 func uhoh() 'throwsies -> () {
-	'throwsies(
-	"whoops"
-	)
+	'throwsies("whoops")
 	print("this should not be printed")
 }
 
