@@ -1,3 +1,4 @@
+use std::assert_matches::assert_matches;
 use tracing::instrument;
 
 use crate::{
@@ -518,7 +519,7 @@ impl Member {
 
 #[instrument(level = tracing::Level::TRACE, ret)]
 pub fn consume_self(method: &InferTy) -> (InferTy, InferTy) {
-    assert!(matches!(method, InferTy::Func(..)), "didn't get func to consume self");
+    assert_matches!(method, InferTy::Func(..), "didn't get func to consume self");
     let (mut params, ret, effects) = uncurry_function(method.clone());
     let method_receiver = params.remove(0);
     if params.is_empty() {

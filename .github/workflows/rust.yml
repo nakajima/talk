@@ -24,11 +24,7 @@ jobs:
         key: cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
         restore-keys: |
           cargo-${{ runner.os }}-
-    - uses: actions-rs/toolchain@v1
-      with:
-        toolchain: nightly
-        profile: minimal
-        override: true
+    - uses: dtolnay/rust-toolchain@nightly
     - name: Build
       run: cargo build --verbose
     - name: Run tests
