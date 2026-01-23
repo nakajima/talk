@@ -11,18 +11,18 @@ protocol Iterable {
 
 struct ArrayIterator<Element> {
 	let array: Array<Element>
-	let cur: Int
+	let current: Int
 
 	init(array: Array<Element>) {
 		self.array = array
-		self.cur = 0
+		self.current = 0
 	}
 
 	extend Self: Iterator<Element> {
 		func next() -> Optional<Element> {
-			if self.cur < self.array.count {
-				let result = self.array.get(self.cur)
-				self.cur = self.cur + 1
+			if self.current < self.array.count {
+				let result = self.array.get(self.current)
+				self.current = self.current + 1
 				Optional.some(result)
 			} else {
 				Optional.none
