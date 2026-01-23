@@ -1,13 +1,12 @@
 use indexmap::IndexSet;
 use rustc_hash::FxHashMap;
 
+use crate::name_resolution::symbol::Symbol;
 use crate::types::infer_row::InferRow;
-use crate::types::infer_ty::{InferTy, TypeParamId};
+use crate::types::infer_ty::InferTy;
 use crate::types::predicate::Predicate;
 use crate::types::scheme::{ForAll, Scheme};
 use crate::types::term_environment::EnvEntry;
-
-use crate::name_resolution::symbol::Symbol;
 
 #[macro_export]
 macro_rules! indexset {
@@ -29,12 +28,12 @@ pub fn resolve_builtin_type(id: &Symbol) -> (InferTy, Vec<Predicate<InferTy>>, I
         Symbol::Byte => InferTy::Primitive(Symbol::Byte),
         Symbol::IR => InferTy::Func(
             InferTy::String().into(),
-            InferTy::Param(TypeParamId::IR_TYPE_PARAM, vec![]).into(),
+            InferTy::Param(Symbol::IR_TYPE_PARAM, vec![]).into(),
             InferRow::Empty.into(),
         ),
         Symbol::PRINT => InferTy::Func(
             InferTy::String().into(),
-            InferTy::Param(TypeParamId::IR_TYPE_PARAM, vec![]).into(),
+            InferTy::Param(Symbol::IR_TYPE_PARAM, vec![]).into(),
             InferRow::Empty.into(),
         ),
         _ => unreachable!("no builtin named {id:?}"),
@@ -59,11 +58,11 @@ pub fn builtin_scope() -> FxHashMap<Symbol, EnvEntry<InferTy>> {
     res.insert(
         Symbol::IR,
         EnvEntry::Scheme(Scheme::<InferTy>::new(
-            indexset!(ForAll::Ty(TypeParamId::IR_TYPE_PARAM)),
+            indexset!(ForAll::Ty(Symbol::IR_TYPE_PARAM)),
             vec![],
             InferTy::Func(
                 InferTy::String().into(),
-                InferTy::Param(TypeParamId::IR_TYPE_PARAM, vec![]).into(),
+                InferTy::Param(Symbol::IR_TYPE_PARAM, vec![]).into(),
                 InferRow::Empty.into(),
             ),
         )),
@@ -71,10 +70,10 @@ pub fn builtin_scope() -> FxHashMap<Symbol, EnvEntry<InferTy>> {
     res.insert(
         Symbol::PRINT,
         EnvEntry::Scheme(Scheme::<InferTy>::new(
-            indexset!(ForAll::Ty(TypeParamId::IR_TYPE_PARAM)),
+            indexset!(ForAll::Ty(Symbol::IR_TYPE_PARAM)),
             vec![],
             InferTy::Func(
-                InferTy::Param(TypeParamId::IR_TYPE_PARAM, vec![]).into(),
+                InferTy::Param(Symbol::IR_TYPE_PARAM, vec![]).into(),
                 InferTy::Void.into(),
                 InferRow::Empty.into(),
             ),

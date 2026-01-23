@@ -437,12 +437,18 @@ impl Driver<Lowered> {
     }
 
     pub fn module<T: Into<String>>(self, name: T) -> Module {
+        let mut program = self.phase.program;
+        // Merge record_labels from imported modules (e.g., Core) for proper enum display
+        for (record_id, labels) in self.config.modules.imported_record_labels() {
+            program.record_labels.entry(record_id).or_insert(labels);
+        }
+
         Module {
             id: StableModuleId::generate(&self.phase.exports),
             name: name.into(),
             types: self.phase.types,
             exports: self.phase.exports,
-            program: self.phase.program,
+            program,
             symbol_names: self.phase.symbol_names,
         }
     }

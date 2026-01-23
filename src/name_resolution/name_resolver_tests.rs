@@ -42,6 +42,11 @@ pub mod tests {
         types::infer_ty::Level,
     };
 
+    /// Helper to create a test TypeParameterId using ModuleId::Current
+    fn test_type_param(id: u32) -> Symbol {
+        Symbol::TypeParameter(TypeParameterId::new(ModuleId::Current, id))
+    }
+
     #[macro_export]
     macro_rules! param {
         ($id:expr, $name:expr) => {
@@ -527,7 +532,7 @@ pub mod tests {
                     generics: vec![GenericDecl {
                         id: NodeID::ANY,
                         span: Span::ANY,
-                        name: Name::Resolved(Symbol::TypeParameter(TypeParameterId(1)), "T".into()),
+                        name: Name::Resolved(test_type_param(1), "T".into()),
                         name_span: Span::ANY,
                         generics: vec![],
                         conformances: vec![],
@@ -538,7 +543,7 @@ pub mod tests {
                         "t",
                         annotation!(TypeAnnotationKind::Nominal {
                             name: Name::Resolved(
-                                Symbol::TypeParameter(TypeParameterId(1)),
+                                test_type_param(1),
                                 "T".into()
                             ),
                             name_span: Span::ANY,
@@ -549,7 +554,7 @@ pub mod tests {
                         any_stmt!(StmtKind::Expr(variable!(ParamLocalId(1), "t"))).into(),
                     ]),
                     ret: Some(annotation!(TypeAnnotationKind::Nominal {
-                        name: Name::Resolved(Symbol::TypeParameter(TypeParameterId(1)), "T".into()),
+                        name: Name::Resolved(test_type_param(1), "T".into()),
                         name_span: Span::ANY,
                         generics: vec![]
                     })),
@@ -787,7 +792,7 @@ pub mod tests {
                 name_span: Span::ANY,
                 generics: vec![GenericDecl {
                     id: NodeID::ANY,
-                    name: Name::Resolved(Symbol::TypeParameter(TypeParameterId(1)), "T".into()),
+                    name: Name::Resolved(test_type_param(1), "T".into()),
                     name_span: Span::ANY,
                     generics: vec![],
                     conformances: vec![],
@@ -809,7 +814,7 @@ pub mod tests {
                                 ParamLocalId(4),
                                 "me",
                                 annotation!(TypeAnnotationKind::Nominal {
-                                    name: Name::Resolved(TypeParameterId(1).into(), "T".into()),
+                                    name: Name::Resolved(test_type_param(1), "T".into()),
                                     name_span: Span::ANY,
                                     generics: vec![],
                                 })
@@ -838,7 +843,7 @@ pub mod tests {
                         is_static: false,
                         type_annotation: Some(annotation!(TypeAnnotationKind::Nominal {
                             name: Name::Resolved(
-                                Symbol::TypeParameter(TypeParameterId(1)),
+                                test_type_param(1),
                                 "T".into()
                             ),
                             name_span: Span::ANY,

@@ -573,7 +573,7 @@ impl NameResolver {
             Symbol::Struct(..) => Symbol::Struct(self.symbols.next_struct(module_id)),
             Symbol::Enum(..) => Symbol::Enum(self.symbols.next_enum(module_id)),
             Symbol::TypeAlias(..) => Symbol::TypeAlias(self.symbols.next_type_alias(module_id)),
-            Symbol::TypeParameter(..) => Symbol::TypeParameter(self.symbols.next_type_parameter()),
+            Symbol::TypeParameter(..) => Symbol::TypeParameter(self.symbols.next_type_parameter(module_id)),
             Symbol::Global(..) => Symbol::Global(self.symbols.next_global(module_id)),
             Symbol::DeclaredLocal(..) => Symbol::DeclaredLocal(self.symbols.next_local()),
             Symbol::PatternBindLocal(..) => {
@@ -642,12 +642,13 @@ impl NameResolver {
 
     fn enter_pattern(&mut self, pattern: &mut Pattern) {
         match &mut pattern.kind {
-            PatternKind::Bind(name) => {
+            PatternKind::Bind(name @ Name::Raw(_)) => {
                 *name = self.lookup(name, None).unwrap_or_else(|| {
                     self.diagnostic(pattern.id, NameResolverError::Unresolved(name.clone()));
                     name.clone()
                 })
             }
+            PatternKind::Bind(_) => {} // Already resolved in declaration pass, keep existing symbol
             PatternKind::Or(subpatterns) => {
                 for pattern in subpatterns {
                     self.enter_pattern(pattern);

@@ -143,10 +143,13 @@ macro_rules! some {
             ),
         )
     };
-    // Local-only symbols (simple tuple structs)
+    // Module-scoped type parameters
     (TypeParameter) => {
         $crate::name_resolution::symbol::Symbol::TypeParameter(
-            $crate::name_resolution::symbol::TypeParameterId(0),
+            $crate::name_resolution::symbol::TypeParameterId::new(
+                $crate::compiling::module::ModuleId::Current,
+                0,
+            ),
         )
     };
     (DeclaredLocal) => {

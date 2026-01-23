@@ -9,7 +9,7 @@ pub mod tests {
         diagnostic::{AnyDiagnostic, Diagnostic},
         ir::monomorphizer::uncurry_function,
         label::Label,
-        name_resolution::symbol::{EnumId, GlobalId, ProtocolId, StructId, Symbol, SynthesizedId},
+        name_resolution::symbol::{EnumId, GlobalId, ProtocolId, StructId, Symbol, SynthesizedId, TypeParameterId},
         types::{
             conformance::ConformanceKey,
             infer_row::RowParamId,
@@ -21,6 +21,11 @@ pub mod tests {
             types::{TypeEntry, Types},
         },
     };
+
+    /// Helper to create a test type parameter symbol
+    fn test_type_param(id: u32) -> Symbol {
+        Symbol::TypeParameter(TypeParameterId::new(ModuleId::Current, id))
+    }
 
     pub fn typecheck(code: &'static str) -> (TypedAST<Ty>, Types) {
         let (ast, types, diagnostics) = typecheck_err(code);
@@ -1633,7 +1638,7 @@ pub mod tests {
             ty(2, &ast, &types),
             Ty::Nominal {
                 symbol: EnumId::from(1).into(),
-                type_args: vec![Ty::Param(1.into(), vec![])],
+                type_args: vec![Ty::Param(test_type_param(1), vec![])],
             }
         );
     }
@@ -2299,7 +2304,7 @@ pub mod tests {
                 .as_mono_ty(),
             Ty::Func(
                 // T has bound B, so the param includes the protocol bound
-                Ty::Param(3.into(), vec![ProtocolId::from(2)]).into(),
+                Ty::Param(test_type_param(3), vec![ProtocolId::from(2)]).into(),
                 Ty::Int.into(),
                 Row::Param(5.into()).into()
             )

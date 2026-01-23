@@ -13,7 +13,6 @@ use crate::{
     types::{
         call_tree::CalleeInfo,
         infer_row::RowParamId,
-        infer_ty::TypeParamId,
         row::Row,
         scheme::ForAll,
         ty::{Specializations, Ty},
@@ -705,7 +704,15 @@ impl<'a> SpecializationPass<'a> {
                     label,
                     call_id,
                 } => {
-                    let Some(ty) = self.types.get(&receiver_id) else {
+                    // Try local types first, then fall back to the caller's module
+                    let ty = if let Some(ty) = self.types.get(&receiver_id) {
+                        ty.clone()
+                    } else if let Some(module_id) = original_caller.external_module_id()
+                        && let Some(module) = self.modules.get_module(module_id)
+                        && let Some(ty) = module.types.get(&receiver_id)
+                    {
+                        ty.clone()
+                    } else {
                         continue;
                     };
 
@@ -724,6 +731,14 @@ impl<'a> SpecializationPass<'a> {
                         .types
                         .catalog
                         .lookup_static_member(&receiver_sym, &label)
+                    {
+                        member_sym
+                    } else if let Some(member_sym) =
+                        self.modules.lookup_member(&receiver_sym, &label)
+                    {
+                        member_sym
+                    } else if let Some(member_sym) =
+                        self.modules.lookup_static_member(&receiver_sym, &label)
                     {
                         member_sym
                     } else {
@@ -824,7 +839,7 @@ impl<'a> SpecializationPass<'a> {
         caller: &Symbol,
         call_id: &NodeID,
     ) -> (
-        Option<&FxHashMap<TypeParamId, Ty>>,
+        Option<&FxHashMap<Symbol, Ty>>,
         Option<&FxHashMap<RowParamId, Row>>,
     ) {
         // First check local catalog
@@ -937,8 +952,9 @@ pub mod tests {
     use crate::{
         assert_eq_diff,
         compiling::driver::{Driver, DriverConfig, Source, Typed},
+        compiling::module::ModuleId,
         fxhashmap,
-        name_resolution::symbol::{GlobalId, Symbol, SynthesizedId, set_symbol_names},
+        name_resolution::symbol::{GlobalId, Symbol, SynthesizedId, TypeParameterId, set_symbol_names},
         node_id::NodeID,
         types::{
             passes::specialization_pass::SpecializedCallee,
@@ -947,6 +963,11 @@ pub mod tests {
             typed_ast::{TypedExpr, TypedExprKind, TypedStmtKind},
         },
     };
+
+    /// Helper to create a test type parameter symbol
+    fn test_type_param(id: u32) -> Symbol {
+        Symbol::TypeParameter(TypeParameterId::new(ModuleId::Current, id))
+    }
 
     fn specialize(code: &'static str) -> Typed {
         let driver = Driver::new_bare(vec![Source::from(code)], DriverConfig::new("TestDriver"));
@@ -986,7 +1007,7 @@ pub mod tests {
             SpecializedCallee {
                 original_symbol: GlobalId::from(2).into(),
                 specializations: Specializations {
-                    ty: indexmap! { 1.into() => Ty::Int },
+                    ty: indexmap! { test_type_param(1) => Ty::Int },
                     row: Default::default(),
                 }
             }
@@ -1000,7 +1021,7 @@ pub mod tests {
             SpecializedCallee {
                 original_symbol: GlobalId::from(2).into(),
                 specializations: Specializations {
-                    ty: indexmap! { 1.into() => Ty::Int },
+                    ty: indexmap! { test_type_param(1) => Ty::Int },
                     row: Default::default(),
                 }
             }
@@ -1020,8 +1041,8 @@ pub mod tests {
                     }
                     .into(),
                     callee_ty: Ty::Func(
-                        Ty::Param(1.into(), vec![]).into(),
-                        Ty::Param(1.into(), vec![]).into(),
+                        Ty::Param(test_type_param(1), vec![]).into(),
+                        Ty::Param(test_type_param(1), vec![]).into(),
                         Row::Param(2.into()).into()
                     ),
                     type_args: vec![Ty::Int],

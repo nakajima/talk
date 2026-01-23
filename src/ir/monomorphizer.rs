@@ -208,6 +208,7 @@ impl<'a> Monomorphizer<'a> {
                 .map(|b| self.monomorphize_block(b, &Default::default(), receiver_ty.as_ref(), None))
                 .collect(),
             register_count: func.register_count,
+            self_out: func.self_out,
         };
 
         result.insert(func.name, func);
@@ -272,6 +273,7 @@ impl<'a> Monomorphizer<'a> {
             ty,
             callee,
             args,
+            self_dest,
             meta,
         } = instruction
         {
@@ -321,6 +323,7 @@ impl<'a> Monomorphizer<'a> {
                 ty: self.monomorphize_ty(ty, substitutions),
                 callee: new_callee,
                 args,
+                self_dest,
                 meta,
             };
         }
@@ -523,6 +526,7 @@ impl<'a> Monomorphizer<'a> {
                     self.monomorphize_block(b, &specialization.specializations, receiver_ty.as_ref(), Some(specialized_name))
                 })
                 .collect(),
+            self_out: func.self_out,
         };
 
         result.insert(specialized_name, specialized_func);

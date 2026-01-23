@@ -5,11 +5,12 @@ use tracing::instrument;
 
 use crate::{
     compiling::module::ModuleId,
+    name_resolution::symbol::Symbol,
     node_id::NodeID,
     types::{
         constraints::store::ConstraintStore,
         infer_row::{InferRow, RowParamId},
-        infer_ty::{InferTy, Level, TypeParamId},
+        infer_ty::{InferTy, Level},
         predicate::Predicate,
         solve_context::SolveContext,
         ty::{SomeType, Ty},
@@ -20,7 +21,7 @@ use crate::{
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum ForAll {
-    Ty(TypeParamId),
+    Ty(Symbol),
     Row(RowParamId),
 }
 

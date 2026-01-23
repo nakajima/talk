@@ -11,7 +11,7 @@ use crate::{
             constraint::ConstraintCause,
             store::{ConstraintId, ConstraintStore},
         },
-        infer_ty::{InferTy, Meta, TypeParamId},
+        infer_ty::{InferTy, Meta},
         predicate::Predicate,
         solve_context::SolveContext,
         type_error::TypeError,
@@ -116,14 +116,14 @@ impl TypeMember {
         constraints: &mut ConstraintStore,
         context: &mut SolveContext,
         session: &mut TypeSession,
-        type_param_id: TypeParamId,
+        type_param: Symbol,
     ) -> SolveResult {
         let mut candidates = vec![];
         for given in context.givens_mut().iter() {
             if let Predicate::Conforms {
                 param, protocol_id, ..
             } = given
-                && param == &type_param_id
+                && param == &type_param
             {
                 candidates.push(*protocol_id);
             };

@@ -108,6 +108,7 @@ pub mod tests {
                         ty: IrTy::Int
                     }
                 }],
+                self_out: None,
             })
         );
     }
@@ -138,6 +139,7 @@ pub mod tests {
                     ty: IrTy::Float
                 }
                 }],
+                self_out: None,
             })
         );
     }
@@ -163,6 +165,7 @@ pub mod tests {
                         ty: IrTy::Int
                     }
                 }],
+                self_out: None,
             })
         );
     }
@@ -188,6 +191,7 @@ pub mod tests {
                         ty: IrTy::Int
                     }
                 }],
+                self_out: None,
             })
         );
     }
@@ -285,6 +289,12 @@ pub mod tests {
                     },
                     Instruction::Load {
                         dest: 3.into(),
+                        ty: IrTy::Int,
+                        addr: Value::Reg(1),
+                    },
+                    // Load for self_out (final value of first param)
+                    Instruction::Load {
+                        dest: 4.into(),
                         ty: IrTy::Int,
                         addr: Value::Reg(1),
                     },
@@ -413,6 +423,7 @@ pub mod tests {
                             ty: IrTy::Int,
                             callee: Value::Reg(0),
                             args: vec![Value::Reg(2)].into(),
+                            self_dest: None,
                             meta: meta()
                         }
                     ],
@@ -421,6 +432,7 @@ pub mod tests {
                         ty: IrTy::Int
                     }
                 }],
+                self_out: None,
             }
         );
         assert_eq!(
@@ -442,6 +454,7 @@ pub mod tests {
                         ty: IrTy::Int
                     }
                 }],
+                self_out: Some(Register(0)),
             }
         );
     }
@@ -498,6 +511,7 @@ pub mod tests {
                             ),
                             callee: Value::Func(Symbol::from(SynthesizedId::from(1))),
                             args: vec![Register(2).into(), Register(1).into()].into(),
+                            self_dest: None,
                             meta: meta(),
                         },
                         Instruction::GetField {
@@ -513,6 +527,7 @@ pub mod tests {
                         ty: IrTy::Int
                     }
                 }],
+                self_out: None,
             }
         );
     }
@@ -561,6 +576,7 @@ pub mod tests {
                             ),
                             callee: Value::Func(Symbol::from(SynthesizedId::from(2))),
                             args: vec![Register(2).into(), Register(1).into()].into(),
+                            self_dest: None,
                             meta: meta(),
                         },
                         Instruction::GetField {
@@ -576,6 +592,7 @@ pub mod tests {
                         ty: IrTy::Int
                     }
                 }],
+                self_out: None,
             }
         );
     }
@@ -608,6 +625,7 @@ pub mod tests {
                         ty: IrTy::Record(Some(Symbol::Enum(EnumId::from(1))), vec![IrTy::Int]),
                     }
                 }],
+                self_out: None,
             }
         )
     }
@@ -668,6 +686,7 @@ pub mod tests {
                         ),
                     }
                 }],
+                self_out: None,
             }
         )
     }
@@ -706,6 +725,7 @@ pub mod tests {
                                 local_id: 3
                             })),
                             args: vec![Register(1).into(), Register(2).into()].into(),
+                            self_dest: None,
                             meta: meta()
                         },
                     ],
@@ -714,6 +734,7 @@ pub mod tests {
                         ty: IrTy::Int
                     }
                 }],
+                self_out: None,
             }
         );
         assert!(
@@ -810,6 +831,7 @@ pub mod tests {
                             ),
                             callee: Value::Func(Symbol::from(SynthesizedId::from(1))),
                             args: vec![Register(3).into(), Register(2).into()].into(),
+                            self_dest: None,
                             meta: meta(),
                         },
                         Instruction::Call {
@@ -817,6 +839,7 @@ pub mod tests {
                             ty: IrTy::Int,
                             callee: Value::Func(InstanceMethodId::from(1).into()),
                             args: vec![Register(1).into()].into(),
+                            self_dest: None,
                             meta: meta(),
                         },
                     ],
@@ -825,6 +848,7 @@ pub mod tests {
                         ty: IrTy::Int
                     }
                 }],
+                self_out: None,
             }
         );
     }
@@ -858,6 +882,7 @@ pub mod tests {
                         ty: IrTy::Int
                     }
                 }],
+                self_out: None,
             })
         );
     }
@@ -905,6 +930,7 @@ pub mod tests {
                         ty: IrTy::Int
                     }
                 }],
+                self_out: None,
             }
         );
     }
@@ -946,6 +972,7 @@ pub mod tests {
                             ty: IrTy::Int,
                             callee: Value::Func(SynthesizedId::from(1).into()),
                             args: vec![Value::Reg(2)].into(),
+                            self_dest: None,
                             meta: meta(),
                         },
                         Instruction::Constant {
@@ -959,6 +986,7 @@ pub mod tests {
                             ty: IrTy::Float,
                             callee: Value::Func(SynthesizedId::from(3).into()),
                             args: vec![Value::Reg(4)].into(),
+                            self_dest: None,
                             meta: meta(),
                         },
                     ],
@@ -967,6 +995,7 @@ pub mod tests {
                         ty: IrTy::Float
                     }
                 }],
+                self_out: None,
             }
         );
 
@@ -989,6 +1018,7 @@ pub mod tests {
                         ty: IrTy::Int
                     }
                 }],
+                self_out: Some(Register(0)),
             }
         );
 
@@ -1011,6 +1041,7 @@ pub mod tests {
                         ty: IrTy::Float
                     }
                 }],
+                self_out: Some(Register(0)),
             }
         );
     }
@@ -1094,6 +1125,7 @@ pub mod tests {
                         }
                     }
                 ],
+                self_out: None,
             }
         );
     }
@@ -1273,7 +1305,8 @@ pub mod tests {
                         instructions: vec![],
                         terminator: Terminator::Unreachable,
                     },
-                ]
+                ],
+                self_out: None,
             }
         );
     }
@@ -1477,6 +1510,7 @@ pub mod tests {
                         ty: IrTy::Int,
                         callee: Value::Reg(2),
                         args: vec![].into(),
+                        self_dest: None,
                         meta: meta(),
                     },
                     Instruction::Load {
@@ -1563,6 +1597,7 @@ pub mod tests {
                             ty: IrTy::Int,
                             callee: Value::Func(SynthesizedId::from(1).into()),
                             args: vec![Register(1).into()].into(),
+                            self_dest: None,
                             meta: meta(),
                         },
                     ],
@@ -1571,6 +1606,7 @@ pub mod tests {
                         ty: IrTy::Int,
                     },
                 }],
+                self_out: None,
             }
         );
 
@@ -1584,22 +1620,32 @@ pub mod tests {
                 name: Symbol::Synthesized(SynthesizedId::from(1)),
                 params: vec![Value::Reg(0)].into(),
                 ty: IrTy::Func(vec![IrTy::Int], IrTy::Int.into()),
-                register_count: 2,
+                register_count: 3,
                 blocks: vec![BasicBlock {
                     id: BasicBlockId(0),
                     phis: Default::default(),
-                    instructions: vec![Instruction::Call {
-                        dest: 1.into(),
-                        ty: IrTy::Int,
-                        callee: Value::Func(InstanceMethodId::from(1).into()),
-                        args: vec![Register(0).into()].into(),
-                        meta: meta(),
-                    }],
+                    instructions: vec![
+                        Instruction::Constant {
+                            dest: 2.into(),
+                            ty: IrTy::Int,
+                            val: Register(0).into(),
+                            meta: Default::default(),
+                        },
+                        Instruction::Call {
+                            dest: 1.into(),
+                            ty: IrTy::Int,
+                            callee: Value::Func(InstanceMethodId::from(1).into()),
+                            args: vec![Register(0).into()].into(),
+                            self_dest: Some(Register(2)),
+                            meta: meta(),
+                        },
+                    ],
                     terminator: Terminator::Ret {
                         val: Value::Reg(1),
                         ty: IrTy::Int,
                     },
                 }],
+                self_out: Some(Register(2)),
             }
         );
     }
@@ -1662,6 +1708,7 @@ pub mod tests {
                             ty: IrTy::Func(vec![IrTy::Int], IrTy::Void.into()),
                             callee: Value::Func(Symbol::Effect(EffectId::from(1))),
                             args: vec![Value::Reg(3), Value::Reg(2)].into(),
+                            self_dest: None,
                             meta: meta()
                         }
                     ],
@@ -1674,7 +1721,8 @@ pub mod tests {
                     vec![],
                     IrTy::Record(None, vec![IrTy::Int, IrTy::Int]).into()
                 ),
-                register_count: 4
+                register_count: 4,
+                self_out: None,
             }
         );
     }

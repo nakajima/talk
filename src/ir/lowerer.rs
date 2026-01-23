@@ -147,6 +147,8 @@ pub struct PolyFunction {
     pub blocks: Vec<BasicBlock<Ty>>,
     pub ty: Ty,
     pub register_count: usize,
+    /// For methods, the register containing the final self value (after mutations).
+    pub self_out: Option<Register>,
 }
 
 pub enum FlowContext {
@@ -225,6 +227,7 @@ impl<'a> Lowerer<'a> {
                     blocks: Default::default(),
                     ty: IrTy::Void,
                     register_count: 0,
+                    self_out: None,
                 },
             );
             return Ok(program);
@@ -479,20 +482,21 @@ impl<'a> Lowerer<'a> {
             self.lower_param_binding(param, register);
         }
 
-        let mut ret_ty = initializer.ret.clone();
-        let mut ret = Value::Void;
+        let ret_ty = initializer.ret.clone();
         for node in initializer.body.body.iter() {
-            (ret, ret_ty) = self.lower_node(node)?;
+            self.lower_node(node)?;
         }
 
-        if ret == Value::Poison {
-            self.push_terminator(Terminator::Unreachable);
-        } else {
-            self.push_terminator(Terminator::Ret {
-                val: ret.clone(),
-                ty: ret_ty.clone(),
-            });
-        }
+        // Return the first parameter (the struct being initialized).
+        // We must look up its current binding, as field assignments update the binding
+        // to point to new registers containing the modified struct (SSA-style).
+        let self_param = &initializer.params[0];
+        let self_out_reg = self.get_binding(&self_param.name);
+        let struct_val: Value = self_out_reg.into();
+        self.push_terminator(Terminator::Ret {
+            val: struct_val.clone(),
+            ty: ret_ty.clone(),
+        });
 
         #[allow(clippy::expect_used)]
         let current_function = self
@@ -504,7 +508,7 @@ impl<'a> Lowerer<'a> {
             initializer.name,
             PolyFunction {
                 name: initializer.name,
-                params: param_values,
+                params: param_values.clone(),
                 blocks: current_function.blocks,
                 ty: Ty::Func(
                     Box::new(param_ty.clone()),
@@ -512,10 +516,11 @@ impl<'a> Lowerer<'a> {
                     Row::Empty.into(),
                 ),
                 register_count: (current_function.registers.next) as usize,
+                self_out: Some(self_out_reg),
             },
         );
 
-        Ok((ret, ret_ty))
+        Ok((struct_val, ret_ty))
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self, stmt), fields(stmt.id = %stmt.id))]
@@ -549,6 +554,7 @@ impl<'a> Lowerer<'a> {
             ty: val_ty.clone(),
             callee: Value::Reg(0),
             args: vec![val].into(),
+            self_dest: None,
             meta: vec![].into(),
         });
 
@@ -1121,6 +1127,7 @@ impl<'a> Lowerer<'a> {
             ty: self.ty_from_symbol(&handler_sym)?,
             callee: Value::Func(handler_sym),
             args: arg_vals.into(),
+            self_dest: None,
             meta: vec![InstructionMeta::Source(expr.id)].into(),
         });
 
@@ -1268,6 +1275,7 @@ impl<'a> Lowerer<'a> {
                     ty: ty.clone(),
                     callee,
                     args,
+                    self_dest: None,
                     meta: vec![InstructionMeta::Source(instr.id)].into(),
                 });
                 Ok((dest.into(), ty))
@@ -2322,8 +2330,23 @@ impl<'a> Lowerer<'a> {
             {
                 let env: Vec<Value> = captures
                     .iter()
-                    .map(
-                        |cap| match self.current_func_mut().bindings.get(&cap.symbol).cloned() {
+                    .filter_map(|cap| {
+                        // Global functions are resolved by symbol; don't treat them as captured env fields.
+                        // This matches the logic in lower_func.
+                        let cap_ty = self.ty_from_symbol(&cap.symbol).ok()?;
+                        let is_handler = self
+                            .typed
+                            .resolved_names
+                            .handler_symbols
+                            .contains(&cap.symbol);
+                        if matches!(cap.symbol, Symbol::Global(_))
+                            && matches!(cap_ty, Ty::Func(..) | Ty::Constructor { .. })
+                            && !is_handler
+                        {
+                            return None;
+                        }
+
+                        Some(match self.current_func_mut().bindings.get(&cap.symbol).cloned() {
                             Some(Binding::Pointer(addr)) => addr,
                             Some(Binding::Register(reg)) => Value::Reg(reg),
                             Some(Binding::Capture { index, ty }) => {
@@ -2338,12 +2361,16 @@ impl<'a> Lowerer<'a> {
                                 dest.into()
                             }
                             other => panic!("unexpected binding for capture: {other:?}"),
-                        },
-                    )
+                        })
+                    })
                     .collect();
-                Value::Closure {
-                    func: *name,
-                    env: env.into(),
+                if env.is_empty() {
+                    Value::Func(*name)
+                } else {
+                    Value::Closure {
+                        func: *name,
+                        env: env.into(),
+                    }
                 }
             } else {
                 Value::Func(*name)
@@ -2431,6 +2458,7 @@ impl<'a> Lowerer<'a> {
             ty: ret.clone(),
             callee: Value::Func(init_sym),
             args: args.into(),
+            self_dest: None,
             meta: vec![InstructionMeta::Source(id)].into(),
         });
 
@@ -2493,6 +2521,36 @@ impl<'a> Lowerer<'a> {
             );
         }
 
+        // For specialized method calls (callee is Variable but was originally a method),
+        // the first arg is `self`. Check if it's a variable and set up self_dest.
+        // This applies to InstanceMethod calls and Synthesized calls (which are specialized methods).
+        let is_method_like = matches!(callee_sym, Some(Symbol::InstanceMethod(_)) | Some(Symbol::Synthesized(_)));
+        let (self_dest, receiver_binding, first_arg_var_sym) = if is_method_like
+            && !arg_vals.is_empty()
+            && let Some(first_arg) = args.first()
+            && let TypedExprKind::Variable(var_sym) = &first_arg.kind
+        {
+            let self_dest_reg = self.next_register();
+            let binding = self.current_func().bindings.get(var_sym).cloned();
+            // Initialize self_dest_reg with current self value (in case method doesn't mutate)
+            self.push_instr(Instruction::Constant {
+                dest: self_dest_reg,
+                ty: first_arg.ty.clone(),
+                val: arg_vals[0].clone(),
+                meta: Default::default(),
+            });
+            // For non-Pointer bindings, update the binding now
+            // For Pointer bindings, we'll emit a Store after the Call
+            if !matches!(binding, Some(Binding::Pointer(_))) {
+                if binding.is_some() {
+                    self.set_binding(var_sym, self_dest_reg);
+                }
+            }
+            (Some(self_dest_reg), binding, Some((var_sym, first_arg.ty.clone())))
+        } else {
+            (None, None, None)
+        };
+
         let callee_ir = self.lower_expr(callee, Bind::Fresh)?.0;
 
         self.push_instr(Instruction::Call {
@@ -2500,8 +2558,20 @@ impl<'a> Lowerer<'a> {
             ty: ty.clone(),
             callee: callee_ir,
             args: arg_vals.into(),
+            self_dest,
             meta: vec![InstructionMeta::Source(callee.id)].into(),
         });
+
+        // For Pointer bindings, emit Store AFTER the Call
+        if let (Some(self_dest_reg), Some(Binding::Pointer(addr)), Some((_, first_arg_ty))) =
+            (self_dest, receiver_binding, first_arg_var_sym)
+        {
+            self.push_instr(Instruction::Store {
+                value: self_dest_reg.into(),
+                ty: first_arg_ty,
+                addr,
+            });
+        }
 
         Ok((dest.into(), ty))
     }
@@ -2556,6 +2626,14 @@ impl<'a> Lowerer<'a> {
             );
         }
 
+        // Capture the receiver variable symbol before any modification
+        // This is needed to write back mutated self after the method call
+        let receiver_var_sym = if let TypedExprKind::Variable(sym) = &receiver.kind {
+            Some(*sym)
+        } else {
+            None
+        };
+
         // Is this an instance method call on a constructor? If so we don't need
         // to prepend a self arg because it's passed explicitly (like Foo.bar(fizz) where
         // fizz == self)
@@ -2603,13 +2681,53 @@ impl<'a> Lowerer<'a> {
             })?
         };
 
+        // Determine self_dest: if receiver is a variable, allocate a register
+        // to receive the mutated self
+        let (self_dest, receiver_binding) = if let Some(var_sym) = receiver_var_sym {
+            let self_dest_reg = self.next_register();
+            let binding = self.current_func().bindings.get(&var_sym).cloned();
+            tracing::trace!(?var_sym, ?binding, ?self_dest_reg, "lower_method_call: checking receiver binding");
+            // Initialize self_dest_reg with current self value (in case method doesn't mutate)
+            self.push_instr(Instruction::Constant {
+                dest: self_dest_reg,
+                ty: receiver.ty.clone(),
+                val: args[0].clone(),
+                meta: Default::default(),
+            });
+            // For non-Pointer bindings, update the binding now
+            // For Pointer bindings, we'll emit a Store after the Call
+            if !matches!(binding, Some(Binding::Pointer(_))) {
+                if binding.is_some() {
+                    tracing::trace!(?var_sym, ?self_dest_reg, "lower_method_call: updating binding");
+                    self.set_binding(&var_sym, self_dest_reg);
+                } else {
+                    tracing::trace!(?var_sym, "lower_method_call: no binding found, skipping set_binding");
+                }
+            }
+            (Some(self_dest_reg), binding)
+        } else {
+            (None, None)
+        };
+
         self.push_instr(Instruction::Call {
             dest,
             ty: call_expr.ty.clone(),
             callee: Value::Func(sym),
             args: args.into(),
+            self_dest,
             meta: vec![InstructionMeta::Source(callee_expr.id)].into(),
         });
+
+        // For Pointer bindings, emit Store AFTER the Call so that self_dest_reg
+        // has the mutated value from the callee
+        if let (Some(self_dest_reg), Some(Binding::Pointer(addr))) = (self_dest, receiver_binding) {
+            let ty = receiver.ty.clone();
+            self.push_instr(Instruction::Store {
+                value: self_dest_reg.into(),
+                ty,
+                addr,
+            });
+        }
 
         Ok((dest.into(), ty))
     }
@@ -2756,6 +2874,10 @@ impl<'a> Lowerer<'a> {
             // Keep the same ret_ty since handler returns the same type
         }
 
+        // For methods, get the final self register (after any mutations).
+        // This must be done before the terminator because get_binding may emit Load instructions.
+        let self_out = func.params.first().map(|p| self.get_binding(&p.name));
+
         if ret == Value::Poison {
             self.push_terminator(Terminator::Unreachable);
         } else {
@@ -2780,6 +2902,7 @@ impl<'a> Lowerer<'a> {
                 blocks: current_function.blocks,
                 ty: func_ty.clone(),
                 register_count: (current_function.registers.next) as usize,
+                self_out,
             },
         );
 
@@ -2835,6 +2958,7 @@ impl<'a> Lowerer<'a> {
                     blocks: continuation.blocks,
                     ty: cont_ty,
                     register_count: continuation.registers.next as usize,
+                    self_out: None,
                 },
             );
         }

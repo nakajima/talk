@@ -180,6 +180,7 @@ pub enum Instruction<T> {
         ty: T,
         callee: Value,
         args: List<Value>,
+        self_dest: Option<Register>,
         meta: List<InstructionMeta>,
     },
     #[doc = "$dest = nominal $sym $ty $record $meta"]
@@ -417,12 +418,14 @@ impl<T> Instruction<T> {
                 ty,
                 callee,
                 args,
+                self_dest,
                 meta,
             } => Instruction::Call {
                 dest,
                 ty: map(ty),
                 callee,
                 args,
+                self_dest,
                 meta,
             },
             Instruction::Cmp {

@@ -7,10 +7,13 @@ use std::{
 };
 
 use crate::{
-    name_resolution::{scc_graph::BindingGroup, symbol::ProtocolId},
+    name_resolution::{
+        scc_graph::BindingGroup,
+        symbol::{ProtocolId, Symbol},
+    },
     types::{
         constraints::store::GroupId,
-        infer_ty::{InferTy, Level, TypeParamId},
+        infer_ty::{InferTy, Level},
         predicate::Predicate,
         type_operations::{InstantiationSubstitutions, UnificationSubstitutions},
         type_session::TypeSession,
@@ -49,7 +52,7 @@ impl Debug for SolveContext {
 pub enum SolveContextKind {
     Normal,
     Protocol {
-        protocol_self: TypeParamId,
+        protocol_self: Symbol,
         protocol_id: ProtocolId,
     },
     Nominal,

@@ -43,7 +43,7 @@ use crate::{
             store::{ConstraintStore, GroupId},
         },
         infer_row::InferRow,
-        infer_ty::{InferTy, Level, Meta, MetaVarId, TypeParamId},
+        infer_ty::{InferTy, Level, Meta, MetaVarId},
         passes::uncurry_function,
         predicate::Predicate,
         scheme::{ForAll, Scheme},
@@ -78,7 +78,7 @@ struct HandlerContext {
 // Protocol-level obligations derived from associated type declarations.
 #[derive(Clone, Debug, Default)]
 struct ProtocolAssociatedTypeRequirements {
-    assoc_params: IndexSet<TypeParamId>,
+    assoc_params: IndexSet<Symbol>,
     predicates: IndexSet<Predicate<InferTy>>,
 }
 
@@ -499,7 +499,7 @@ impl<'a> InferencePass<'a> {
     fn visit_associated_type(
         &mut self,
         generic: &GenericDecl,
-        protocol_self_id: TypeParamId,
+        protocol_self_id: Symbol,
         protocol_symbol: Symbol,
         context: &mut SolveContext,
     ) -> TypedRet<InferTy> {
@@ -641,7 +641,7 @@ impl<'a> InferencePass<'a> {
         let mut associated_types = IndexMap::default();
 
         // First pass: collect protocol-level associated type requirements.
-        let mut assoc_type_params: IndexSet<TypeParamId> = IndexSet::default();
+        let mut assoc_type_params: IndexSet<Symbol> = IndexSet::default();
         let mut assoc_type_predicates: IndexSet<Predicate<InferTy>> = IndexSet::default();
         for decl in &body.decls {
             if let DeclKind::Associated { generic } = &decl.kind
@@ -845,6 +845,32 @@ impl<'a> InferencePass<'a> {
 
         for group in groups {
             let is_top_level = group.is_top_level;
+
+            // Skip groups that capture a self parameter (ParamLocal named "self").
+            // These are DeclaredLocals inside struct methods that will be visited as
+            // part of their containing struct, where current_self_ty is properly set.
+            // Processing them separately would generate Member constraints without the
+            // correct self type constraint.
+            let captures_self = group.binders.iter().any(|b| {
+                self.session
+                    .resolved_names
+                    .captures
+                    .get(b)
+                    .map(|caps| {
+                        caps.iter().any(|c| {
+                            matches!(c.symbol, Symbol::ParamLocal(..))
+                                && self.session.resolved_names.symbol_names.get(&c.symbol)
+                                    == Some(&"self".to_string())
+                        })
+                    })
+                    .unwrap_or(false)
+            });
+
+            if captures_self && !is_top_level {
+                continue;
+            }
+
+
             let (new_decls, new_stmts) = self.generate_for_group(group.clone());
 
             if is_top_level {
@@ -1675,7 +1701,7 @@ impl<'a> InferencePass<'a> {
 
     fn visit_func_signature(
         &mut self,
-        protocol_self_id: TypeParamId,
+        protocol_self_id: Symbol,
         protocol_id: ProtocolId,
         func_signature: &FuncSignature,
         context: &mut SolveContext,
@@ -3759,13 +3785,13 @@ impl<'a> InferencePass<'a> {
         &mut self,
         generic: &GenericDecl,
         context: &mut SolveContext,
-    ) -> TypeParamId {
+    ) -> Symbol {
         // Check if this generic has already been registered (e.g., in a previous pass)
         if let Ok(sym) = generic.name.symbol()
             && let Some(entry) = self.session.lookup(&sym)
             && let InferTy::Param(existing_id, _) = entry._as_ty()
         {
-            return existing_id;
+            return existing_id.clone();
         }
 
         let param_id = self.session.new_type_param_id(None);
@@ -3826,7 +3852,7 @@ impl<'a> InferencePass<'a> {
                 severity: Severity::Error,
                 kind: TypeError::NameNotResolved(generic.name.clone()),
             }));
-            return 0.into();
+            return Symbol::IR_TYPE_PARAM;
         };
 
         self.session

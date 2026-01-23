@@ -7,7 +7,7 @@ use tracing::instrument;
 
 use crate::{
     compiling::driver::Exports,
-    ir::program::Program,
+    ir::{program::Program, value::RecordId},
     label::Label,
     name_resolution::symbol::{ProtocolId, Symbol},
     types::{
@@ -284,6 +284,15 @@ impl ModuleEnvironment {
             .values()
             .fold(FxHashMap::default(), |mut acc, module| {
                 acc.extend(module.symbol_names.clone());
+                acc
+            })
+    }
+
+    pub fn imported_record_labels(&self) -> FxHashMap<RecordId, Vec<String>> {
+        self.modules
+            .values()
+            .fold(FxHashMap::default(), |mut acc, module| {
+                acc.extend(module.program.record_labels.clone());
                 acc
             })
     }

@@ -1,7 +1,7 @@
 use std::fmt::{Debug, Display};
 
 use crate::{
-    ir::{basic_block::BasicBlock, ir_ty::IrTy, list::List, value::Value},
+    ir::{basic_block::BasicBlock, ir_ty::IrTy, list::List, register::Register, value::Value},
     name_resolution::symbol::Symbol,
 };
 
@@ -12,6 +12,9 @@ pub struct Function<T: Debug + Display> {
     pub blocks: Vec<BasicBlock<T>>,
     pub ty: IrTy,
     pub register_count: usize,
+    /// For methods, the register containing the final self value (after mutations).
+    /// Used by the interpreter to write back mutated self to the caller.
+    pub self_out: Option<Register>,
 }
 
 impl<T> Display for Function<T>

@@ -11,7 +11,7 @@ use crate::{
     label::Label,
     name_resolution::{
         name_resolver::ResolvedNames,
-        symbol::{ProtocolId, Symbol, Symbols},
+        symbol::{ProtocolId, Symbol, Symbols, TypeParameterId},
     },
     node_id::NodeID,
     types::{
@@ -20,7 +20,7 @@ use crate::{
         conformance::{Conformance, ConformanceKey},
         constraints::{constraint::Constraint, store::ConstraintStore},
         infer_row::{InferRow, RowMetaId, RowParamId},
-        infer_ty::{InferTy, Level, Meta, MetaVarId, SkolemId, TypeParamId},
+        infer_ty::{InferTy, Level, Meta, MetaVarId, SkolemId},
         predicate::Predicate,
         row::Row,
         scheme::{ForAll, Scheme},
@@ -666,11 +666,15 @@ impl TypeSession {
                     // This handles the case where this meta var was unified with another
                     // that has the mapping (e.g., return type of a call unified with scheme's param).
                     let param = self.lookup_reverse_instantiation(*id).unwrap_or_else(|| {
-                        let param_id: TypeParamId = self.vars.type_params.next_id();
-                        let param = InferTy::Param(param_id, vec![]);
+                        let local_id: u32 = self.vars.type_params.next_id();
+                        let sym = Symbol::TypeParameter(TypeParameterId::new(
+                            self.current_module_id,
+                            local_id,
+                        ));
+                        let param = InferTy::Param(sym, vec![]);
                         self.reverse_instantiations.ty.insert(*id, param.clone());
-                        tracing::trace!("generalizing {m:?} to {param_id:?}");
-                        foralls.insert(ForAll::Ty(param_id));
+                        tracing::trace!("generalizing {m:?} to {sym:?}");
+                        foralls.insert(ForAll::Ty(sym));
                         param
                     });
                     if let InferTy::Param(param_id, bounds) = &param {
@@ -1115,26 +1119,28 @@ impl TypeSession {
     }
 
     pub(crate) fn new_type_param(&mut self, meta: Option<MetaVarId>) -> InferTy {
-        let id: TypeParamId = self.vars.type_params.next_id();
-        let param = InferTy::Param(id, vec![]);
+        let local_id: u32 = self.vars.type_params.next_id();
+        let sym = Symbol::TypeParameter(TypeParameterId::new(self.current_module_id, local_id));
+        let param = InferTy::Param(sym, vec![]);
         if let Some(meta) = meta {
             self.reverse_instantiations.ty.insert(meta, param.clone());
         }
 
-        tracing::trace!("Fresh type param {id:?}");
+        tracing::trace!("Fresh type param {sym:?}");
         param
     }
 
-    pub(crate) fn new_type_param_id(&mut self, meta: Option<MetaVarId>) -> TypeParamId {
-        let id: TypeParamId = self.vars.type_params.next_id();
+    pub(crate) fn new_type_param_id(&mut self, meta: Option<MetaVarId>) -> Symbol {
+        let local_id: u32 = self.vars.type_params.next_id();
+        let sym = Symbol::TypeParameter(TypeParameterId::new(self.current_module_id, local_id));
         if let Some(meta) = meta {
             self.reverse_instantiations
                 .ty
-                .insert(meta, InferTy::Param(id, vec![]));
+                .insert(meta, InferTy::Param(sym, vec![]));
         }
 
-        tracing::trace!("Fresh type param {id:?}");
-        id
+        tracing::trace!("Fresh type param {sym:?}");
+        sym
     }
 
     pub(crate) fn new_row_type_param(&mut self, meta: Option<RowMetaId>) -> InferRow {
@@ -1148,12 +1154,12 @@ impl TypeSession {
         InferRow::Param(id)
     }
 
-    pub(crate) fn new_skolem(&mut self, param: TypeParamId) -> InferTy {
+    pub(crate) fn new_skolem(&mut self, param: Symbol) -> InferTy {
         let id = self.new_skolem_id(param);
         InferTy::Rigid(id)
     }
 
-    pub(crate) fn new_skolem_id(&mut self, param: TypeParamId) -> SkolemId {
+    pub(crate) fn new_skolem_id(&mut self, param: Symbol) -> SkolemId {
         let id = self.vars.skolems.next_id();
         self.skolem_map
             .insert(InferTy::Rigid(id), InferTy::Param(param, vec![]));

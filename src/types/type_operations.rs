@@ -11,7 +11,7 @@ use crate::{
     node_id::NodeID,
     types::{
         infer_row::{InferRow, RowMetaId, RowParamId, RowTail, normalize_row},
-        infer_ty::{InferTy, Level, Meta, MetaVarId, TypeParamId},
+        infer_ty::{InferTy, Level, Meta, MetaVarId},
         mappable::Mappable,
         solve_context::SolveContext,
         type_error::TypeError,
@@ -36,20 +36,16 @@ impl UnificationSubstitutions {
 #[derive(Clone, Debug, Default)]
 pub struct InstantiationSubstitutions {
     pub row: FxHashMap<NodeID, IndexMap<RowParamId, RowMetaId>>,
-    pub ty: FxHashMap<NodeID, IndexMap<TypeParamId, MetaVarId>>,
+    pub ty: FxHashMap<NodeID, IndexMap<Symbol, MetaVarId>>,
 }
 
 impl InstantiationSubstitutions {
-    pub(super) fn ty_mappings(&self, id: &NodeID) -> IndexMap<TypeParamId, MetaVarId> {
+    pub(super) fn ty_mappings(&self, id: &NodeID) -> IndexMap<Symbol, MetaVarId> {
         self.ty.get(id).cloned().unwrap_or_default()
     }
 
-    pub(super) fn get_ty(
-        &mut self,
-        node_id: &NodeID,
-        type_param_id: &TypeParamId,
-    ) -> Option<&MetaVarId> {
-        self.ty.entry(*node_id).or_default().get(type_param_id)
+    pub(super) fn get_ty(&mut self, node_id: &NodeID, type_param: &Symbol) -> Option<&MetaVarId> {
+        self.ty.entry(*node_id).or_default().get(type_param)
     }
 
     pub(super) fn get_row(
@@ -60,16 +56,11 @@ impl InstantiationSubstitutions {
         self.row.entry(*node_id).or_default().get(type_param_id)
     }
 
-    pub(super) fn insert_ty(
-        &mut self,
-        node_id: NodeID,
-        type_param_id: TypeParamId,
-        meta: MetaVarId,
-    ) {
+    pub(super) fn insert_ty(&mut self, node_id: NodeID, type_param: Symbol, meta: MetaVarId) {
         self.ty
             .entry(node_id)
             .or_default()
-            .insert(type_param_id, meta);
+            .insert(type_param, meta);
     }
 
     pub(super) fn insert_row(

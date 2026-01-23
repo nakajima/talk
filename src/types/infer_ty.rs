@@ -8,7 +8,7 @@ use crate::{
     compiling::module::ModuleId,
     label::Label,
     name::Name,
-    name_resolution::symbol::{ProtocolId, StructId, Symbol},
+    name_resolution::symbol::{ProtocolId, StructId, Symbol, TypeParameterId},
     types::{
         infer_row::{InferRow, RowMetaId, RowParamId},
         mappable::Mappable,
@@ -98,7 +98,7 @@ impl UnifyValue for Level {
 #[derive(PartialEq, Eq, Clone, Hash, Drive, DriveMut)]
 pub enum InferTy {
     Primitive(#[drive(skip)] Symbol),
-    Param(#[drive(skip)] TypeParamId, #[drive(skip)] Vec<ProtocolId>),
+    Param(#[drive(skip)] Symbol, #[drive(skip)] Vec<ProtocolId>),
     Rigid(#[drive(skip)] SkolemId),
     Var {
         #[drive(skip)]
@@ -209,8 +209,14 @@ impl From<InferTy> for Ty {
                 symbol,
                 type_args: type_args.into_iter().map(|p| p.into()).collect(),
             },
-            InferTy::Projection { .. } => Ty::Param(420420.into(), vec![]), // FIXME
-            _ => Ty::Param(420420.into(), vec![]),
+            InferTy::Projection { .. } => Ty::Param(
+                Symbol::TypeParameter(TypeParameterId::new(ModuleId::Core, 420420)),
+                vec![],
+            ), // FIXME
+            _ => Ty::Param(
+                Symbol::TypeParameter(TypeParameterId::new(ModuleId::Core, 420420)),
+                vec![],
+            ),
         }
     }
 }
@@ -529,7 +535,7 @@ impl std::fmt::Debug for InferTy {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             InferTy::Error(err) => write!(f, "Error Ty: {err}"),
-            InferTy::Param(id, _) => write!(f, "typeparam(α{})", id.0),
+            InferTy::Param(sym, _) => write!(f, "typeparam({sym:?})"),
             InferTy::Rigid(id) => write!(f, "rigid(α{})", id.0),
             InferTy::Var { id, level } => write!(f, "meta(α{}, {})", id.0, level.0),
             InferTy::Primitive(primitive) => write!(f, "{primitive:?}"),
@@ -575,7 +581,7 @@ impl std::fmt::Display for InferTy {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             InferTy::Error(..) => write!(f, "error"),
-            InferTy::Param(id, _) => write!(f, "T{}", id.0),
+            InferTy::Param(sym, _) => write!(f, "{sym}"),
             InferTy::Rigid(id) => write!(f, "^T{}", id.0),
             InferTy::Var { id, .. } => write!(f, "?T{}", id.0),
             InferTy::Primitive(primitive) => write!(f, "{}", format_symbol_name(*primitive)),

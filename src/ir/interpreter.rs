@@ -122,11 +122,12 @@ pub struct Frame {
     pc: usize,
     current_block: usize,
     prev_block: Option<usize>,
+    self_dest: Option<Register>,
     _span: EnteredSpan,
 }
 
 impl Frame {
-    pub fn new(span: EnteredSpan, func: Symbol, dest: Register, ret: Option<Symbol>) -> Self {
+    pub fn new(span: EnteredSpan, func: Symbol, dest: Register, ret: Option<Symbol>, self_dest: Option<Register>) -> Self {
         Self {
             func,
             _span: span,
@@ -136,6 +137,7 @@ impl Frame {
             pc: 0,
             current_block: 0,
             prev_block: None,
+            self_dest,
         }
     }
 }
@@ -151,6 +153,7 @@ impl Clone for Frame {
             pc: self.pc,
             current_block: self.current_block,
             prev_block: self.prev_block,
+            self_dest: self.self_dest,
             _span: span,
         }
     }
@@ -222,7 +225,7 @@ impl<IO: super::io::IO> Interpreter<IO> {
             .entrypoint()
             .expect("No entrypoint found for program.");
 
-        self.call(entrypoint.name, vec![], Register::MAIN);
+        self.call(entrypoint.name, vec![], Register::MAIN, None);
 
         while !self.frames.is_empty() {
             self.next();
@@ -231,7 +234,7 @@ impl<IO: super::io::IO> Interpreter<IO> {
         self.main_result.clone().unwrap_or(Value::Void)
     }
 
-    pub fn call(&mut self, function: Symbol, args: Vec<Value>, dest: Register) {
+    pub fn call(&mut self, function: Symbol, args: Vec<Value>, dest: Register, self_dest: Option<Register>) {
         let caller_name = self.current_func.as_ref().map(|f| f.name);
         if let Some(callee_func) = self.current_func.take() {
             self.program.functions.insert(callee_func.name, callee_func);
@@ -267,7 +270,7 @@ impl<IO: super::io::IO> Interpreter<IO> {
             .as_ref()
             .map(|names| set_symbol_names(names.clone()));
         let span = tracing::trace_span!("call", func = format!("{function}")).entered();
-        let mut frame = Frame::new(span, function, dest, caller_name);
+        let mut frame = Frame::new(span, function, dest, caller_name, self_dest);
         frame.registers.resize(func.register_count, Value::Uninit);
         for (param, arg) in func.params.items.iter().zip(args.into_iter()) {
             match param {
@@ -302,9 +305,20 @@ impl<IO: super::io::IO> Interpreter<IO> {
             }
             IR::Term(Terminator::Ret { val, .. }) => {
                 let val = self.val(val);
+                // Get mutated self from self_out register (if this is a method)
+                let self_val = self.current_func.as_ref()
+                    .and_then(|f| f.self_out)
+                    .map(|reg| self.frames.last().unwrap().registers[reg.0 as usize].clone());
                 let frame = self.frames.pop().unwrap();
 
                 self.write_register(&frame.dest, val);
+
+                // Write back mutated self to caller's register
+                if let Some(self_dest) = frame.self_dest {
+                    if let Some(sv) = self_val {
+                        self.write_register(&self_dest, sv);
+                    }
+                }
 
                 let Some(func) = self.current_func.take() else {
                     unreachable!("but where did the frame come from");
@@ -352,7 +366,7 @@ impl<IO: super::io::IO> Interpreter<IO> {
                 self.write_register(&dest, result);
             }
             IR::Instr(Instruction::Call {
-                dest, callee, args, ..
+                dest, callee, args, self_dest, ..
             }) => {
                 let mut arg_vals: Vec<Value> =
                     args.items.iter().map(|v| self.val(v.clone())).collect();
@@ -365,7 +379,7 @@ impl<IO: super::io::IO> Interpreter<IO> {
                     arg_vals.insert(0, Value::Record(RecordId::Anon, env_vals));
                 }
 
-                self.call(func, arg_vals, dest);
+                self.call(func, arg_vals, dest, self_dest);
             }
             IR::Instr(Instruction::Nominal {
                 dest,
@@ -569,6 +583,7 @@ impl<IO: super::io::IO> Interpreter<IO> {
                 let Value::RawPtr(ptr) = addr_val else {
                     panic!("Store expects RawPtr, got {addr_val:?}");
                 };
+
 
                 let bytes = self.value_to_bytes(&ty, val);
                 if bytes.len() != ty.bytes_len() {
@@ -1105,7 +1120,7 @@ pub mod tests {
                     return fib(n - 2) + fib(n - 1)
                 }
 
-                fib(7) 
+                fib(7)
                 "
             ),
             Value::Int(13)
@@ -1683,9 +1698,6 @@ Dog().handleDSTChange()
     #[test]
     fn interprets_iterator() {
         // next() returns Optional<Element>, so the output includes the enum wrapper
-        // Note: Currently the iterator doesn't increment cur because mutation
-        // in nested extend methods isn't fully supported yet. This test verifies
-        // that the iterator protocol mechanics work, even if the increment is missing.
         let (_val, interpreter) = interpret_with(
             "
             let a = [1,2,3]
@@ -1696,8 +1708,6 @@ Dog().handleDSTChange()
             ",
         );
 
-        // TODO: When mutation is properly supported, this should be:
-        // "Optional.some(1)\nOptional.some(2)\nOptional.some(3)\n"
-        assert_eq!(interpreter.io.stdout, "Optional.some(1)\nOptional.some(1)\nOptional.some(1)\n".as_bytes());
+        assert_eq!(interpreter.io.stdout, "Optional.some(1)\nOptional.some(2)\nOptional.some(3)\n".as_bytes());
     }
 }

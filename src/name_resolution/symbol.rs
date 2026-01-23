@@ -250,6 +250,12 @@ impl Symbol {
         local_id: 3,
     });
 
+    /// Special type parameter used for the IR and PRINT builtins
+    pub const IR_TYPE_PARAM: Symbol = Symbol::TypeParameter(TypeParameterId {
+        module_id: ModuleId::Core,
+        local_id: u32::MAX - 1,
+    });
+
     #[allow(clippy::expect_used)]
     pub fn from_bytes(bytes: &[u8; 8]) -> Symbol {
         let discriminant = bytes[0];
@@ -271,7 +277,10 @@ impl Symbol {
                 module_id,
                 local_id,
             }),
-            3 => Symbol::TypeParameter(TypeParameterId(local_id)),
+            3 => Symbol::TypeParameter(TypeParameterId {
+                module_id,
+                local_id,
+            }),
             4 => Symbol::Global(GlobalId {
                 module_id,
                 local_id,
@@ -353,7 +362,7 @@ impl Symbol {
             Symbol::Effect(v) => v.local_id.to_le_bytes(),
             Symbol::Enum(v) => v.local_id.to_le_bytes(),
             Symbol::TypeAlias(v) => v.local_id.to_le_bytes(),
-            Symbol::TypeParameter(v) => v.0.to_le_bytes(),
+            Symbol::TypeParameter(v) => v.local_id.to_le_bytes(),
             Symbol::Global(v) => v.local_id.to_le_bytes(),
             Symbol::DeclaredLocal(v) => v.0.to_le_bytes(),
             Symbol::PatternBindLocal(v) => v.0.to_le_bytes(),
@@ -387,7 +396,8 @@ impl Symbol {
             | Symbol::Protocol(ProtocolId { module_id, .. })
             | Symbol::AssociatedType(AssociatedTypeId { module_id, .. })
             | Symbol::Enum(EnumId { module_id, .. })
-            | Symbol::TypeAlias(TypeAliasId { module_id, .. }) => module_id,
+            | Symbol::TypeAlias(TypeAliasId { module_id, .. })
+            | Symbol::TypeParameter(TypeParameterId { module_id, .. }) => module_id,
             _ => {
                 tracing::warn!("looking up module id for non-module symbol: {self:?}");
                 return None;
@@ -412,7 +422,8 @@ impl Symbol {
             | Symbol::Protocol(ProtocolId { module_id, .. })
             | Symbol::AssociatedType(AssociatedTypeId { module_id, .. })
             | Symbol::Enum(EnumId { module_id, .. })
-            | Symbol::TypeAlias(TypeAliasId { module_id, .. }) => module_id,
+            | Symbol::TypeAlias(TypeAliasId { module_id, .. })
+            | Symbol::TypeParameter(TypeParameterId { module_id, .. }) => module_id,
             _ => {
                 tracing::warn!("looking up module id for non-module symbol: {self:?}");
                 return None;
@@ -430,6 +441,9 @@ impl Symbol {
             Symbol::Struct(type_id) => Symbol::Struct(type_id.import(module_id)),
             Symbol::Enum(type_id) => Symbol::Enum(type_id.import(module_id)),
             Symbol::TypeAlias(type_id) => Symbol::TypeAlias(type_id.import(module_id)),
+            Symbol::TypeParameter(type_param_id) => {
+                Symbol::TypeParameter(type_param_id.import(module_id))
+            }
             Symbol::Global(global_id) => Symbol::Global(global_id.import(module_id)),
             Symbol::Builtin(builtin_id) => Symbol::Builtin(builtin_id.import(module_id)),
             Symbol::Property(property_id) => Symbol::Property(property_id.import(module_id)),
@@ -510,8 +524,8 @@ impl_module_symbol_id!(Builtin, BuiltinId);
 impl_module_symbol_id!(Synthesized, SynthesizedId);
 impl_module_symbol_id!(Effect, EffectId);
 
-// Local-only IDs (simple u32)
-impl_local_symbol_id!(TypeParameter, TypeParameterId);
+// Module-scoped IDs (for cross-module matching)
+impl_module_symbol_id!(TypeParameter, TypeParameterId);
 impl_local_symbol_id!(DeclaredLocal, DeclaredLocalId);
 impl_local_symbol_id!(ParamLocal, ParamLocalId);
 impl_local_symbol_id!(PatternBindLocal, PatternBindLocalId);
@@ -635,9 +649,9 @@ impl Symbols {
         ProtocolId::new(module_id, self.protocols.next_id())
     }
 
-    // Local-only IDs (no ModuleId needed)
-    pub fn next_type_parameter(&mut self) -> TypeParameterId {
-        TypeParameterId(self.type_parameters.next_id())
+    // Module-scoped type parameter ID
+    pub fn next_type_parameter(&mut self, module_id: ModuleId) -> TypeParameterId {
+        TypeParameterId::new(module_id, self.type_parameters.next_id())
     }
 
     pub fn next_param(&mut self) -> ParamLocalId {
@@ -693,7 +707,7 @@ mod tests {
 
     #[test]
     fn roundtrip_type_parameter() {
-        let symbol = Symbol::TypeParameter(TypeParameterId(999));
+        let symbol = Symbol::TypeParameter(TypeParameterId::new(ModuleId(7), 999));
         let bytes = symbol.as_bytes();
         let recovered = Symbol::from_bytes(&bytes);
         assert_eq!(symbol, recovered);

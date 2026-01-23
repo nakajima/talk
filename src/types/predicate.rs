@@ -1,7 +1,7 @@
 use crate::{
     compiling::module::ModuleId,
     label::Label,
-    name_resolution::symbol::ProtocolId,
+    name_resolution::symbol::{ProtocolId, Symbol},
     node_id::NodeID,
     types::{
         constraints::{
@@ -9,7 +9,7 @@ use crate::{
             store::ConstraintStore,
         },
         infer_row::{InferRow, RowParamId},
-        infer_ty::{InferTy, TypeParamId},
+        infer_ty::InferTy,
         mappable::Mappable,
         solve_context::SolveContext,
         ty::{SomeType, Ty},
@@ -34,7 +34,7 @@ pub enum Predicate<T: SomeType> {
         protocol_id: Option<ProtocolId>,
     },
     Conforms {
-        param: TypeParamId,
+        param: Symbol,
         protocol_id: ProtocolId,
     },
     Member {

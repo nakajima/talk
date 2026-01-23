@@ -185,6 +185,18 @@ fn generate_from_str_impl(instr_enum: &syn::ItemEnum) -> proc_macro2::TokenStrea
                 .push(quote! { let #local = #cap.parse().map_err(|e| anyhow::anyhow!("{}", e))?; });
         }
 
+        // For fields not mentioned in the template, set them to Default::default()
+        let hole_set: std::collections::HashSet<_> = holes.iter().collect();
+        let mut all_field_idents = Vec::new();
+        for field in &fields {
+            let field_name = field.to_string();
+            if hole_set.contains(&field_name) {
+                all_field_idents.push(quote! { #field });
+            } else {
+                all_field_idents.push(quote! { #field: Default::default() });
+            }
+        }
+
         let re_ident = format_ident!("RE_{}", v_ident);
         let branch = quote! {
             #[allow(clippy::unwrap_used)]
@@ -194,7 +206,7 @@ fn generate_from_str_impl(instr_enum: &syn::ItemEnum) -> proc_macro2::TokenStrea
                 use std::str::FromStr as _;
                 #(#grab_caps)*
                 #(#parse_locals)*
-                let value = Self::#v_ident { #(#hole_idents),* };
+                let value = Self::#v_ident { #(#all_field_idents),* };
                 return Ok(value);
             }
         };

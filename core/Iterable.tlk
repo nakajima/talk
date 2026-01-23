@@ -20,7 +20,13 @@ struct ArrayIterator<Element> {
 
 	extend Self: Iterator<Element> {
 		func next() -> Optional<Element> {
-			if self.cur < self.array.count { Optional.some(self.array.get(self.cur)) } else { Optional.none }
+			if self.cur < self.array.count {
+				let result = self.array.get(self.cur)
+				self.cur = self.cur + 1
+				Optional.some(result)
+			} else {
+				Optional.none
+			}
 		}
 	}
 }
@@ -30,5 +36,3 @@ extend Array<Element>: Iterable {
 		ArrayIterator<Element>(array: self)
 	}
 }
-
-print("ok")

@@ -3,7 +3,6 @@ use rustc_hash::FxHashMap;
 use crate::label::Label;
 use crate::name_resolution::symbol::Symbol;
 use crate::types::infer_row::RowParamId;
-use crate::types::infer_ty::TypeParamId;
 use crate::types::row::Row;
 use crate::types::scheme::{ForAll, Scheme};
 use crate::types::ty::Ty;
@@ -368,15 +367,15 @@ impl<'a> TypeFormatter<'a> {
 
 #[derive(Default)]
 struct TyFormatContext {
-    type_param_order: Vec<TypeParamId>,
+    type_param_order: Vec<Symbol>,
     row_param_order: Vec<RowParamId>,
-    type_param_names: FxHashMap<TypeParamId, String>,
+    type_param_names: FxHashMap<Symbol, String>,
     row_param_names: FxHashMap<RowParamId, String>,
 }
 
 impl TyFormatContext {
     fn from_scheme(scheme: &Scheme<Ty>) -> Self {
-        let mut type_params: Vec<TypeParamId> = vec![];
+        let mut type_params: Vec<Symbol> = vec![];
         let mut row_params: Vec<RowParamId> = vec![];
         for forall in &scheme.foralls {
             match forall {
@@ -385,7 +384,6 @@ impl TyFormatContext {
             }
         }
 
-        type_params.sort();
         row_params.sort();
 
         let mut ctx = Self {
@@ -408,14 +406,13 @@ impl TyFormatContext {
 
     fn from_ty(ty: &Ty) -> Self {
         let foralls = ty.collect_foralls();
-        let mut type_param_order: Vec<_> = foralls
+        let type_param_order: Vec<_> = foralls
             .iter()
             .filter_map(|forall| match forall {
                 ForAll::Ty(id) => Some(*id),
                 ForAll::Row(..) => None,
             })
             .collect();
-        type_param_order.sort();
         let mut row_param_order: Vec<_> = foralls
             .iter()
             .filter_map(|forall| match forall {
@@ -446,14 +443,13 @@ impl TyFormatContext {
     /// Like from_ty but doesn't include row params (used for method display)
     fn from_ty_without_row_params(ty: &Ty) -> Self {
         let foralls = ty.collect_foralls();
-        let mut type_param_order: Vec<_> = foralls
+        let type_param_order: Vec<_> = foralls
             .iter()
             .filter_map(|forall| match forall {
                 ForAll::Ty(id) => Some(*id),
                 ForAll::Row(..) => None,
             })
             .collect();
-        type_param_order.sort();
 
         let mut ctx = Self {
             type_param_order: type_param_order.clone(),
@@ -472,14 +468,12 @@ impl TyFormatContext {
 
     /// Like from_scheme but doesn't include row params (used for function display)
     fn from_scheme_without_row_params(scheme: &Scheme<Ty>) -> Self {
-        let mut type_params: Vec<TypeParamId> = vec![];
+        let mut type_params: Vec<Symbol> = vec![];
         for forall in &scheme.foralls {
             if let ForAll::Ty(id) = forall {
                 type_params.push(*id);
             }
         }
-
-        type_params.sort();
 
         let mut ctx = Self {
             type_param_order: type_params.clone(),

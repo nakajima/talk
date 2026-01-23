@@ -604,7 +604,7 @@ impl<'a> Formatter<'a> {
                 if let Some(else_block) = else_block {
                     result = concat_space(
                         result,
-                        concat_space(text("else"), self.format_block(else_block)),
+                        concat_space(text("else"), self.format_block_inner(else_block, false)),
                     )
                 }
 
@@ -1543,7 +1543,7 @@ impl<'a> Formatter<'a> {
         if !else_block.body.is_empty() {
             result = concat_space(
                 result,
-                concat_space(text("else"), self.format_block(else_block)),
+                concat_space(text("else"), self.format_block_inner(else_block, false)),
             );
         }
 
@@ -2185,7 +2185,7 @@ mod formatter_tests {
         assert_eq!(format_code("if true { 123 }", 80), "if true { 123 }");
         assert_eq!(
             format_code("if true { 123 } else { 456 }", 80),
-            "if true { 123 } else { 456 }"
+            "if true { 123 } else {\n\t456\n}"
         );
 
         // Nested

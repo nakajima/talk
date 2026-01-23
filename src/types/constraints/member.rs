@@ -12,7 +12,7 @@ use crate::{
             store::{ConstraintId, ConstraintStore},
         },
         infer_row::InferRow,
-        infer_ty::{InferTy, Meta, TypeParamId},
+        infer_ty::{InferTy, Meta},
         passes::uncurry_function,
         predicate::Predicate,
         solve_context::SolveContext,
@@ -142,7 +142,7 @@ impl Member {
         context: &mut SolveContext,
         session: &mut TypeSession,
         ty: &InferTy,
-        type_param_id: TypeParamId,
+        type_param: Symbol,
     ) -> SolveResult {
         let mut solved_metas: Vec<Meta> = Default::default();
         let cause = ConstraintCause::Member(self.node_id);
@@ -155,7 +155,7 @@ impl Member {
                 if let Predicate::Conforms {
                     param, protocol_id, ..
                 } = given
-                    && param == &type_param_id
+                    && param == &type_param
                 {
                     Some(*protocol_id)
                 } else {

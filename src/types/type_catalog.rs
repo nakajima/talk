@@ -9,7 +9,7 @@ use crate::{
     types::{
         conformance::{Conformance, ConformanceKey, Witnesses},
         infer_row::RowParamId,
-        infer_ty::{InferTy, TypeParamId},
+        infer_ty::InferTy,
         ty::{SomeType, Ty},
         type_operations::UnificationSubstitutions,
         type_session::{MemberSource, TypeSession},
@@ -121,7 +121,7 @@ impl From<Nominal<InferTy>> for Nominal<Ty> {
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct TrackedInstantiations<T: SomeType> {
-    pub ty: FxHashMap<NodeID, FxHashMap<TypeParamId, T>>,
+    pub ty: FxHashMap<NodeID, FxHashMap<Symbol, T>>,
     pub row: FxHashMap<NodeID, FxHashMap<RowParamId, T::RowType>>,
 }
 
@@ -159,7 +159,7 @@ impl TrackedInstantiations<InferTy> {
 }
 
 impl<T: SomeType> TrackedInstantiations<T> {
-    pub fn insert_ty(&mut self, id: NodeID, param: TypeParamId, ty: T) {
+    pub fn insert_ty(&mut self, id: NodeID, param: Symbol, ty: T) {
         self.ty.entry(id).or_default().insert(param, ty);
     }
 

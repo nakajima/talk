@@ -10,7 +10,7 @@ use crate::{
     types::{
         constraint_solver::{DeferralReason, SolveResult},
         constraints::store::ConstraintId,
-        infer_ty::{InferTy, Meta, TypeParamId},
+        infer_ty::{InferTy, Meta},
         predicate::Predicate,
         scheme::Scheme,
         solve_context::SolveContext,
@@ -307,7 +307,7 @@ impl Conforms {
         context: &mut SolveContext,
         session: &mut TypeSession,
         protocol_id: ProtocolId,
-        protocol_self_id: &TypeParamId,
+        protocol_self: &Symbol,
         protocol_self_bounds: &[ProtocolId],
         conforming_ty_sym: &Symbol,
         projections: FxHashMap<Label, InferTy>,
@@ -339,7 +339,7 @@ impl Conforms {
                     returns,
                     ..
                 } = predicate
-                    && base == InferTy::Param(*protocol_self_id, protocol_self_bounds.to_owned())
+                    && base == InferTy::Param(*protocol_self, protocol_self_bounds.to_owned())
                     && let Some(projection) = projections.get(&label)
                     && let Some(substitution) = substitutions.ty.get(projection).cloned()
                 {

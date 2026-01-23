@@ -7,7 +7,7 @@ use crate::{
     name_resolution::symbol::{ProtocolId, Symbol},
     types::{
         infer_row::{RowMetaId, RowParamId},
-        infer_ty::{InferTy, TypeParamId},
+        infer_ty::InferTy,
         mappable::Mappable,
         row::Row,
         scheme::ForAll,
@@ -99,7 +99,7 @@ impl SomeType for Ty {
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Drive, DriveMut)]
 pub enum Ty {
     Primitive(#[drive(skip)] Symbol),
-    Param(#[drive(skip)] TypeParamId, #[drive(skip)] Vec<ProtocolId>),
+    Param(#[drive(skip)] Symbol, #[drive(skip)] Vec<ProtocolId>),
     Constructor {
         #[drive(skip)]
         name: Name,
@@ -217,7 +217,7 @@ impl std::fmt::Display for Ty {
 
 #[derive(Default, Debug, Clone, PartialEq)]
 pub struct Specializations {
-    pub ty: IndexMap<TypeParamId, Ty>,
+    pub ty: IndexMap<Symbol, Ty>,
     pub row: IndexMap<RowParamId, Row>,
 }
 impl Specializations {
