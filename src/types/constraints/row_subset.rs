@@ -74,8 +74,6 @@ impl RowSubset {
 
 #[cfg(test)]
 mod tests {
-    use std::assert_matches::assert_matches;
-
     use crate::{
         compiling::module::ModuleId,
         label::Label,
@@ -131,7 +129,7 @@ mod tests {
         };
 
         let result = subset.solve(&mut constraints, &mut context, &mut session);
-        assert_matches!(result, SolveResult::Solved(_));
+        assert!(matches!(result, SolveResult::Solved(_)));
     }
 
     #[test]
@@ -150,7 +148,10 @@ mod tests {
         };
 
         let result = subset.solve(&mut constraints, &mut context, &mut session);
-        assert_matches!(result, SolveResult::Err(TypeError::MemberNotFound(..)));
+        assert!(matches!(
+            result,
+            SolveResult::Err(TypeError::MemberNotFound(..))
+        ));
     }
 
     #[test]
@@ -172,9 +173,9 @@ mod tests {
         };
 
         let result = subset.solve(&mut constraints, &mut context, &mut session);
-        assert_matches!(
+        assert!(matches!(
             result,
             SolveResult::Defer(DeferralReason::WaitingOnMeta(Meta::Row(id))) if id == left_meta
-        );
+        ));
     }
 }

@@ -1,6 +1,5 @@
 #![feature(box_patterns)]
 #![feature(associated_type_defaults)]
-#![feature(assert_matches)]
 #![feature(iter_advance_by)]
 #![feature(if_let_guard)]
 #![feature(hash_set_entry)]

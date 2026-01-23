@@ -316,8 +316,16 @@ impl TypedExprKind<InferTy> {
             LiteralString(v) => LiteralString(v),
             Tuple(exprs) => Tuple(exprs.into_iter().map(|e| e.finalize(session)).collect()),
             Block(block) => Block(block.finalize(session)),
-            CallEffect { effect, args } => CallEffect {
+            CallEffect {
                 effect,
+                type_args,
+                args,
+            } => CallEffect {
+                effect,
+                type_args: type_args
+                    .into_iter()
+                    .map(|t| session.finalize_ty(t).as_mono_ty().clone())
+                    .collect(),
                 args: args.into_iter().map(|a| a.finalize(session)).collect(),
             },
             Call {
@@ -1112,6 +1120,7 @@ pub enum TypedExprKind<T: SomeType> {
     CallEffect {
         #[drive(skip)]
         effect: Symbol,
+        type_args: Vec<T>,
         args: Vec<TypedExpr<T>>,
     },
     Call {
@@ -1171,8 +1180,13 @@ impl<T: SomeType, U: SomeType> Mappable<T, U> for TypedExprKind<T> {
         use TypedExprKind::*;
         match self {
             Hole => Hole,
-            CallEffect { effect, args } => CallEffect {
+            CallEffect {
                 effect,
+                type_args,
+                args,
+            } => CallEffect {
+                effect,
+                type_args: type_args.into_iter().map(&mut *m).collect(),
                 args: args.into_iter().map(|a| a.mapping(m, r)).collect(),
             },
             InlineIR(inline_irinstruction) => InlineIR(inline_irinstruction.mapping(m, r).into()),

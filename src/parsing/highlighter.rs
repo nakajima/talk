@@ -225,11 +225,13 @@ impl<'a> Higlighter<'a> {
             Node::Decl(decl) => match &decl.kind {
                 DeclKind::Effect {
                     name_span,
+                    generics,
                     params,
                     ret,
                     ..
                 } => {
                     result.push(self.make_span(Kind::EFFECT, *name_span));
+                    result.extend(self.tokens_from_exprs(generics, ast));
                     result.extend(self.tokens_from_exprs(params, ast));
                     result.extend(self.tokens_from_expr(ret, ast));
                 }

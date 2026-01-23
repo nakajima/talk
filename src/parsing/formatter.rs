@@ -416,15 +416,20 @@ impl<'a> Formatter<'a> {
             ExprKind::CallEffect {
                 effect_name, args, ..
             } => {
-                text(format!("'{}", effect_name.name_str()))
-                    + text("(")
-                    + softline()
-                    + join(
-                        args.iter().map(|a| self.format_call_arg(a)).collect(),
-                        text(","),
-                    )
-                    + softline()
-                    + text(")")
+                let arg_docs: Vec<_> = args.iter().map(|a| self.format_call_arg(a)).collect();
+                group(concat(
+                    text(format!("'{}", effect_name.name_str())),
+                    concat(
+                        text("("),
+                        concat(
+                            nest(
+                                1,
+                                concat(softline(), join(arg_docs, concat(text(","), line()))),
+                            ),
+                            concat(softline(), text(")")),
+                        ),
+                    ),
+                ))
             }
             ExprKind::As(lhs, rhs) => {
                 text("(")
@@ -500,10 +505,25 @@ impl<'a> Formatter<'a> {
         let doc = match &decl.kind {
             #[warn(clippy::todo)]
             DeclKind::Effect {
-                name, params, ret, ..
+                name,
+                generics,
+                params,
+                ret,
+                ..
             } => {
+                let generics_doc = if generics.is_empty() {
+                    text("")
+                } else {
+                    text("<")
+                        + join(
+                            generics.iter().map(|g| self.format_generic_decl(g)).collect(),
+                            text(", "),
+                        )
+                        + text(">")
+                };
                 text("effect '")
                     + self.format_name(name)
+                    + generics_doc
                     + text("(")
                     + join(
                         params.iter().map(|p| self.format_parameter(p)).collect(),
@@ -2412,6 +2432,16 @@ mod formatter_tests {
         let input = "func foo() {\n// note\n}";
         let expected = "func foo() {\n\t// note\n}";
         assert_eq!(format_string(input), expected);
+    }
+
+    #[test]
+    fn test_effect_call_formatting() {
+        // Effect calls should stay on one line when they fit
+        assert_eq!(format_code("'emit(123)", 80), "'emit(123)");
+        assert_eq!(format_code("'emit(x, y)", 80), "'emit(x, y)");
+
+        // Effect calls with labels
+        assert_eq!(format_code("'emit(value: 123)", 80), "'emit(value: 123)");
     }
 
     #[test]

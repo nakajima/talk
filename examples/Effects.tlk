@@ -1,5 +1,11 @@
-effect 'throw() -> ()
+effect 'throwsies(error) -> Never
 
-@handle 'throw { print("sup") }
+@handle 'throwsies { err in print(err) }
 
-func fizz() 'throw -> () { 'throw() }
+func uhoh() 'throwsies -> () {
+	'throwsies("whoops")
+	print("this should not be printed")
+}
+
+uhoh()
+

@@ -244,8 +244,13 @@ impl<'a> SpecializationPass<'a> {
                     .map(|i| self.visit_expr(i))
                     .try_collect()?,
             ),
-            TypedExprKind::CallEffect { effect, args } => TypedExprKind::CallEffect {
+            TypedExprKind::CallEffect {
                 effect,
+                type_args,
+                args,
+            } => TypedExprKind::CallEffect {
+                effect,
+                type_args,
                 args: args.into_iter().map(|i| self.visit_expr(i)).try_collect()?,
             },
             TypedExprKind::Constructor(name, args) => self.visit_constructor(name, args)?,

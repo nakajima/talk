@@ -243,6 +243,7 @@ impl<'a> Parser<'a> {
         self.consume(TokenKind::Effect)?;
 
         let (effect_name, name_span) = self.effect_name()?;
+        let generics = self.generics()?;
 
         self.consume(TokenKind::LeftParen)?;
         let params = self.parameters()?;
@@ -257,6 +258,7 @@ impl<'a> Parser<'a> {
             kind: DeclKind::Effect {
                 name: effect_name.clone().into(),
                 name_span,
+                generics,
                 params,
                 ret,
             },
@@ -1711,6 +1713,15 @@ impl<'a> Parser<'a> {
     pub(super) fn effect_callee(&mut self, _can_assign: bool) -> Result<Node, ParserError> {
         let tok = self.push_source_location();
         let (effect_name, effect_name_span) = self.effect_name()?;
+
+        // Parse optional type arguments: 'effect<Type>(...)
+        let type_args = if self.peek_is(TokenKind::Less) {
+            self.consume(TokenKind::Less)?;
+            self.type_annotations(TokenKind::Greater)?
+        } else {
+            vec![]
+        };
+
         self.consume(TokenKind::LeftParen)?;
         let args = if self.did_match(TokenKind::RightParen)? {
             vec![]
@@ -1726,6 +1737,7 @@ impl<'a> Parser<'a> {
                 kind: ExprKind::CallEffect {
                     effect_name: effect_name.into(),
                     effect_name_span,
+                    type_args,
                     args,
                 },
             }

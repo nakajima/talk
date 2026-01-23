@@ -928,7 +928,7 @@ impl<'a> Lowerer<'a> {
     fn lower_expr(&mut self, expr: &TypedExpr<Ty>, bind: Bind) -> Result<(Value, Ty), IRError> {
         let (value, ty) = match &expr.kind {
             TypedExprKind::Hole => Err(IRError::TypeNotFound("nope".into())),
-            TypedExprKind::CallEffect { effect, args } => {
+            TypedExprKind::CallEffect { effect, args, .. } => {
                 self.lower_effect_call(expr, effect, args, bind)
             }
             TypedExprKind::InlineIR(inline_irinstruction) => {
