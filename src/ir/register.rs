@@ -64,3 +64,4 @@ impl std::fmt::Display for Register {
         write!(f, "%{}", self.0)
     }
 }
+

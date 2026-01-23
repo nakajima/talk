@@ -304,6 +304,12 @@ fn generate_display_impl(instr_enum: &syn::ItemEnum) -> proc_macro2::TokenStream
         // $name tokens are formatted via Display on that field.
         let tokens: Vec<String> = doc.split_whitespace().map(|s| s.to_string()).collect();
 
+        // Collect which fields are used in the template
+        let used_fields: std::collections::HashSet<String> = tokens
+            .iter()
+            .filter_map(|t| t.strip_prefix('$').map(|s| s.to_string()))
+            .collect();
+
         // Build code that pushes each piece into a Vec<String>
         let mut pushes = Vec::new();
         for t in &tokens {
@@ -322,8 +328,20 @@ fn generate_display_impl(instr_enum: &syn::ItemEnum) -> proc_macro2::TokenStream
             }
         }
 
-        // Pattern: destructure all fields so we can use shorthand names
-        let pat_fields = quote! { { #( #field_idents ),* } };
+        // Pattern: destructure all fields, prefixing unused ones with _
+        let pat_field_tokens: Vec<_> = field_idents
+            .iter()
+            .map(|f| {
+                let name = f.to_string();
+                if used_fields.contains(&name) {
+                    quote! { #f }
+                } else {
+                    let underscore_name = format_ident!("_{}", name);
+                    quote! { #f: #underscore_name }
+                }
+            })
+            .collect();
+        let pat_fields = quote! { { #( #pat_field_tokens ),* } };
 
         // One match arm
         arms.push(quote! {
