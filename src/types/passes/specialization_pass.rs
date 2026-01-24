@@ -190,6 +190,7 @@ impl<'a> SpecializationPass<'a> {
                 typealiases,
                 associated_types,
             },
+            TypedDeclKind::Import => TypedDeclKind::Import,
         };
         Ok(decl)
     }

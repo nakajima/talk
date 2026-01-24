@@ -129,6 +129,7 @@ impl<'a> Higlighter<'a> {
                 TokenKind::Case => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::Match => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::Import => self.make(tok, Kind::KEYWORD, &mut tokens),
+                TokenKind::Public => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::StringLiteral(_) => self.make_string(tok, Kind::STRING, &mut tokens),
                 TokenKind::Underscore => (),
                 TokenKind::QuestionMark => self.make(tok, Kind::OPERATOR, &mut tokens),

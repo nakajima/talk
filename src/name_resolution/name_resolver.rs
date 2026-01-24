@@ -1,4 +1,4 @@
-use std::{error::Error, fmt::Display, rc::Rc};
+use std::{error::Error, fmt::Display, path::Path, rc::Rc};
 
 use derive_visitor::{DriveMut, VisitorMut};
 use generational_arena::Index;
@@ -30,7 +30,7 @@ use crate::{
     node::Node,
     node_id::{FileID, NodeID},
     node_kinds::{
-        decl::{Decl, DeclKind},
+        decl::{Decl, DeclKind, Import, ImportPath, ImportedSymbols, Visibility},
         expr::{Expr, ExprKind},
         func::Func,
         func_signature::FuncSignature,
@@ -50,6 +50,10 @@ pub enum NameResolverError {
     Unresolved(Name),
     AmbiguousName(Name, Vec<Symbol>),
     ShadowedEffectHandler(String),
+    ModuleNotFound(String),
+    SymbolNotFoundInModule(String),
+    SymbolNotPublic(String),
+    PackageImportsNotSupported,
 }
 
 impl Error for NameResolverError {}
@@ -63,6 +67,18 @@ impl Display for NameResolverError {
             }
             Self::ShadowedEffectHandler(name) => {
                 write!(f, "Effect handler shadowed: {name}")
+            }
+            Self::ModuleNotFound(path) => {
+                write!(f, "Cannot find module: {path}")
+            }
+            Self::SymbolNotFoundInModule(name) => {
+                write!(f, "Symbol '{name}' not found in module")
+            }
+            Self::SymbolNotPublic(name) => {
+                write!(f, "Symbol '{name}' is not public")
+            }
+            Self::PackageImportsNotSupported => {
+                write!(f, "Package imports are not yet supported")
             }
         }
     }
@@ -122,6 +138,8 @@ pub struct ResolvedNames {
     pub child_types: IndexMap<Symbol, IndexMap<Label, Symbol>>,
     pub diagnostics: Vec<AnyDiagnostic>,
     pub mutated_symbols: IndexSet<Symbol>,
+    /// Tracks which symbols are public (visible outside their file)
+    pub public_symbols: FxHashSet<Symbol>,
 }
 
 impl ResolvedNames {
@@ -194,21 +212,41 @@ impl NameResolver {
     }
 
     fn init_root_scope(&mut self) {
-        let root_scope = Scope::new(None, self.current_level, NodeID(FileID(0), 0), None, 1);
-        self.scopes.insert(NodeID(FileID(0), 0), root_scope);
-        self.current_scope_id = Some(NodeID(FileID(0), 0));
+        // This is kept for backwards compatibility but doesn't add builtins
+        // Builtins are added per-file in resolve()
+    }
+
+    /// Create a root scope for a specific file and import builtins into it
+    fn init_file_scope(&mut self, file_id: FileID) {
+        let scope_id = NodeID(file_id, 0);
+        // Always create fresh scope with builtins
+        let mut scope = Scope::new(None, self.current_level, scope_id, None, 1);
+        builtins::import_builtins(&mut scope);
+        self.scopes.insert(scope_id, scope);
+        self.current_scope_id = Some(scope_id);
     }
 
     pub fn resolve(
         &mut self,
         mut asts: Vec<AST<Parsed>>,
     ) -> (Vec<AST<NameResolved>>, ResolvedNames) {
-        let scope = self
-            .scopes
-            .get_mut(&NodeID(FileID(0), 0))
-            .expect("root scope");
+        // Core module uses shared scope (its files depend on each other internally)
+        // All other modules use per-file isolated scopes
+        let use_shared_scope = self.current_module_id == ModuleId::Core;
 
-        builtins::import_builtins(scope);
+        if use_shared_scope {
+            // Single shared root scope for Core module
+            let root_scope_id = NodeID(FileID(0), 0);
+            let mut scope = Scope::new(None, self.current_level, root_scope_id, None, 1);
+            builtins::import_builtins(&mut scope);
+            self.scopes.insert(root_scope_id, scope);
+            self.current_scope_id = Some(root_scope_id);
+        } else {
+            // Create per-file scopes with builtins for module isolation
+            for ast in &asts {
+                self.init_file_scope(ast.file_id);
+            }
+        }
 
         // First pass: run transforms and declare all types
         for ast in asts.iter_mut() {
@@ -224,59 +262,264 @@ impl NameResolver {
             }
         }
 
+        // Helper to get the root scope ID for an AST
+        let scope_for_ast = |ast: &AST<Parsed>, use_shared: bool| -> NodeID {
+            if use_shared {
+                NodeID(FileID(0), 0)
+            } else {
+                NodeID(ast.file_id, 0)
+            }
+        };
+
+        // Predeclare module-scope nominals across all ASTs first, so `extend` resolution
+        // doesn't depend on file order.
+        for ast in asts.iter_mut() {
+            let file_scope_id = scope_for_ast(ast, use_shared_scope);
+            self.current_scope_id = Some(file_scope_id);
+            let mut declarer = DeclDeclarer::new(self, &mut ast.node_ids);
+            let decls: Vec<&Decl> = ast
+                .roots
+                .iter()
+                .filter_map(|r| {
+                    if let Node::Decl(decl) = r {
+                        Some(decl)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            declarer.predeclare_nominals(&decls);
+            declarer.predeclare_values(&decls);
+        }
+
+        // Process imports (before full declaration phase so extends can see imported types)
         {
-            // Predeclare module-scope nominals across all ASTs first, so `extend` resolution
-            // doesn't depend on file order.
-            for ast in asts.iter_mut() {
-                self.current_scope_id = Some(NodeID(FileID(0), 0));
-                let mut declarer = DeclDeclarer::new(self, &mut ast.node_ids);
-                declarer.predeclare_nominals(
-                    ast.roots
+            // Build a map from file paths to FileIDs
+            let path_to_file_id: FxHashMap<String, FileID> = asts
+                .iter()
+                .map(|ast| (ast.path.clone(), ast.file_id))
+                .collect();
+
+            // Build a map of private let binding names per file (for better error messages)
+            let private_let_names: FxHashMap<FileID, FxHashSet<String>> = asts
+                .iter()
+                .map(|ast| {
+                    let names: FxHashSet<String> = ast
+                        .roots
                         .iter()
-                        .filter_map(|r| {
-                            if let Node::Decl(decl) = r {
-                                Some(decl)
-                            } else {
-                                None
+                        .filter_map(|root| {
+                            if let Node::Decl(Decl {
+                                visibility: Visibility::Private,
+                                kind: DeclKind::Let { lhs, .. },
+                                ..
+                            }) = root
+                            {
+                                if let PatternKind::Bind(name) = &lhs.kind {
+                                    return Some(name.name_str());
+                                }
                             }
+                            None
                         })
-                        .collect_vec()
-                        .as_slice(),
-                );
+                        .collect();
+                    (ast.file_id, names)
+                })
+                .collect();
+
+            // Collect imports for each file (to avoid borrow conflicts)
+            // (file_id, source_path, vec of (import, decl_node_id))
+            let mut file_imports: Vec<(FileID, String, Vec<(Import, NodeID)>)> = Vec::new();
+            for ast in &asts {
+                let mut imports = Vec::new();
+                for root in &ast.roots {
+                    if let Node::Decl(Decl {
+                        id,
+                        kind: DeclKind::Import(import),
+                        ..
+                    }) = root
+                    {
+                        imports.push((import.clone(), *id));
+                    }
+                }
+                if !imports.is_empty() {
+                    file_imports.push((ast.file_id, ast.path.clone(), imports));
+                }
             }
 
-            // One declarer per AST so the single &mut self borrow ends after each AST.
-            for ast in asts.iter_mut() {
-                self.current_scope_id = Some(NodeID(FileID(0), 0));
-                let mut declarer = DeclDeclarer::new(self, &mut ast.node_ids);
-                for root in &mut ast.roots {
-                    match root {
-                        Node::Stmt(Stmt { id, .. }) => {
-                            // If it's just a top level expr, it's not bound to anything so we stash
-                            // it away so we can still type check it.
-                            declarer.resolver.phase.unbound_nodes.push(*id);
-                        }
-                        Node::Decl(Decl {
-                            id,
-                            kind: DeclKind::Extend { .. },
-                            ..
-                        }) => {
-                            declarer.resolver.phase.unbound_nodes.push(*id);
-                        }
-                        _ => {}
-                    }
+            // Process each file's imports
+            for (file_id, source_path, imports) in file_imports {
+                let source_scope_id = NodeID(file_id, 0);
 
-                    root.drive_mut(&mut declarer);
+                for (import, decl_id) in imports {
+                    // Resolve the import path to a target file path
+                    let target_path = match &import.path {
+                        ImportPath::Relative(rel_path) => {
+                            // Resolve relative to the source file's directory
+                            let source_dir = Path::new(&source_path)
+                                .parent()
+                                .unwrap_or(Path::new("."));
+                            // Strip leading "./" from relative path before joining
+                            let clean_rel = rel_path.strip_prefix("./").unwrap_or(rel_path);
+                            let resolved = source_dir.join(clean_rel);
+                            resolved.to_string_lossy().to_string()
+                        }
+                        ImportPath::Package(_pkg_name) => {
+                            // Package imports not yet implemented
+                            self.diagnostic(decl_id, NameResolverError::PackageImportsNotSupported);
+                            continue;
+                        }
+                    };
+
+                    // Look up the target FileID
+                    let Some(&target_file_id) = path_to_file_id.get(&target_path) else {
+                        self.diagnostic(
+                            decl_id,
+                            NameResolverError::ModuleNotFound(target_path.clone()),
+                        );
+                        continue;
+                    };
+
+                    let target_scope_id = NodeID(target_file_id, 0);
+
+                    // Get symbols from the target scope
+                    let target_symbols: Vec<(String, Symbol, bool)> = {
+                        let Some(target_scope) = self.scopes.get(&target_scope_id) else {
+                            continue;
+                        };
+                        // Collect all value and type symbols
+                        let mut symbols = Vec::new();
+                        for (name, &symbol) in &target_scope.values {
+                            symbols.push((name.clone(), symbol, false)); // false = value
+                        }
+                        for (name, &symbol) in &target_scope.types {
+                            symbols.push((name.clone(), symbol, true)); // true = type
+                        }
+                        symbols
+                    };
+
+                    // Import the requested symbols
+                    match &import.symbols {
+                        ImportedSymbols::All => {
+                            // Import all public non-builtin symbols
+                            let Some(source_scope) = self.scopes.get_mut(&source_scope_id) else {
+                                continue;
+                            };
+                            for (name, symbol, is_type) in target_symbols {
+                                // Skip builtins and private symbols
+                                if matches!(symbol, Symbol::Builtin(..)) {
+                                    continue;
+                                }
+                                if !self.phase.public_symbols.contains(&symbol) {
+                                    continue;
+                                }
+                                if is_type {
+                                    source_scope.types.insert(name, symbol);
+                                } else {
+                                    source_scope.values.insert(name, symbol);
+                                }
+                            }
+                        }
+                        ImportedSymbols::Named(named_imports) => {
+                            for imported in named_imports {
+                                let name_to_find = &imported.name;
+                                let local_name = imported.alias.as_ref().unwrap_or(name_to_find);
+
+                                // Find the symbol in target
+                                let found = target_symbols
+                                    .iter()
+                                    .find(|(n, _, _)| n == name_to_find);
+
+                                match found {
+                                    Some((_, symbol, is_type)) => {
+                                        // Check if the symbol is public
+                                        if !self.phase.public_symbols.contains(symbol) {
+                                            self.diagnostic(
+                                                decl_id,
+                                                NameResolverError::SymbolNotPublic(
+                                                    name_to_find.clone(),
+                                                ),
+                                            );
+                                            continue;
+                                        }
+                                        let Some(source_scope) =
+                                            self.scopes.get_mut(&source_scope_id)
+                                        else {
+                                            continue;
+                                        };
+                                        if *is_type {
+                                            source_scope.types.insert(local_name.clone(), *symbol);
+                                        } else {
+                                            source_scope.values.insert(local_name.clone(), *symbol);
+                                        }
+                                    }
+                                    None => {
+                                        // Check if the symbol is a private let binding
+                                        let is_private = private_let_names
+                                            .get(&target_file_id)
+                                            .map(|names| names.contains(name_to_find))
+                                            .unwrap_or(false);
+                                        if is_private {
+                                            self.diagnostic(
+                                                decl_id,
+                                                NameResolverError::SymbolNotPublic(
+                                                    name_to_find.clone(),
+                                                ),
+                                            );
+                                        } else {
+                                            self.diagnostic(
+                                                decl_id,
+                                                NameResolverError::SymbolNotFoundInModule(
+                                                    name_to_find.clone(),
+                                                ),
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
+            }
+
+            // Move any diagnostics accumulated during import processing
+            for diagnostic in std::mem::take(&mut self.diagnostics) {
+                self.phase.diagnostics.push(diagnostic.into());
+            }
+        }
+
+        // Full declaration phase - process all declarations including extends
+        // (now that imports are resolved, extends can see imported types)
+        for ast in asts.iter_mut() {
+            let file_scope_id = scope_for_ast(ast, use_shared_scope);
+            self.current_scope_id = Some(file_scope_id);
+            let mut declarer = DeclDeclarer::new(self, &mut ast.node_ids);
+            for root in &mut ast.roots {
+                match root {
+                    Node::Stmt(Stmt { id, .. }) => {
+                        // If it's just a top level expr, it's not bound to anything so we stash
+                        // it away so we can still type check it.
+                        declarer.resolver.phase.unbound_nodes.push(*id);
+                    }
+                    Node::Decl(Decl {
+                        id,
+                        kind: DeclKind::Extend { .. },
+                        ..
+                    }) => {
+                        declarer.resolver.phase.unbound_nodes.push(*id);
+                    }
+                    _ => {}
+                }
+
+                root.drive_mut(&mut declarer);
             }
         }
 
         // Second pass: resolve all names
 
         for ast in asts.iter_mut() {
+            let file_scope_id = scope_for_ast(ast, use_shared_scope);
             // Borrow &mut self only while walking each root, then drop immediately.
             for root in &mut ast.roots {
-                self.current_scope_id = Some(NodeID(FileID(0), 0));
+                self.current_scope_id = Some(file_scope_id);
                 root.drive_mut(self);
             }
 
@@ -308,6 +551,11 @@ impl NameResolver {
         }
 
         None
+    }
+
+    /// Returns true if the current scope is the module's root scope (not nested)
+    pub(super) fn at_module_scope(&self) -> bool {
+        matches!(self.current_scope_id, Some(NodeID(_, 0)))
     }
 
     fn lookup_in_scope(&mut self, name: &Name, scope_id: NodeID) -> Option<Symbol> {
@@ -560,10 +808,38 @@ impl NameResolver {
     }
 
     pub(super) fn declare(&mut self, name: &Name, kind: Symbol, node_id: NodeID) -> Name {
+        let at_module_scope = self.at_module_scope();
         let scope = self
             .scopes
             .get_mut(&self.current_scope_id.expect("no scope to declare in"))
             .unwrap_or_else(|| unreachable!("scope not found: {:?}", self.current_scope_id));
+
+        // Check if this is a nominal type or effect that was already predeclared
+        // If so, return the existing symbol to avoid duplicate creation
+        if matches!(
+            kind,
+            Symbol::Struct(..) | Symbol::Enum(..) | Symbol::Protocol(..) | Symbol::Effect(..)
+        ) {
+            if let Some(&existing) = scope.types.get(&name.name_str()) {
+                if std::mem::discriminant(&existing) == std::mem::discriminant(&kind) {
+                    return Name::Resolved(existing, name.name_str());
+                }
+            }
+        }
+
+        // Check for predeclared Globals at module scope
+        // This handles public Let bindings that were predeclared for import resolution
+        // Only reuse if the existing Global is public (i.e., was predeclared)
+        // Non-public Globals should allow shadowing (create new symbol)
+        if at_module_scope && matches!(kind, Symbol::Global(..)) {
+            if let Some(&existing) = scope.types.get(&name.name_str()) {
+                if matches!(existing, Symbol::Global(..))
+                    && self.phase.public_symbols.contains(&existing)
+                {
+                    return Name::Resolved(existing, name.name_str());
+                }
+            }
+        }
 
         let module_id = self.current_module_id;
         let symbol = match kind {
@@ -617,6 +893,12 @@ impl NameResolver {
 
         Name::Resolved(symbol, name.name_str())
     }
+
+    /// Mark a symbol as public (visible outside its file)
+    pub(super) fn mark_public(&mut self, symbol: Symbol) {
+        self.phase.public_symbols.insert(symbol);
+    }
+
 
     fn nearest_enclosing_binder_from(
         &self,

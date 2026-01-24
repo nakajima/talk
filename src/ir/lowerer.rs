@@ -436,6 +436,8 @@ impl<'a> Lowerer<'a> {
                     self.lower_method(method)?;
                 }
             }
+            // Import declarations are handled at name resolution time, nothing to lower
+            TypedDeclKind::Import => {}
         }
 
         Ok((Value::Void, Ty::Void))

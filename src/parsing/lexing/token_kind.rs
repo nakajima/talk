@@ -5,6 +5,7 @@ pub enum TokenKind {
     LineComment(String),
 
     Import,
+    Public,
 
     // Effects
     Effect,
@@ -180,6 +181,7 @@ impl TokenKind {
             TokenKind::StringLiteral(string) => &format!("\"{string}\""),
             TokenKind::Extend => "extend",
             TokenKind::Import => "import",
+            TokenKind::Public => "public",
             TokenKind::Static => "static",
             TokenKind::At => "@",
             TokenKind::DotDot => "..",

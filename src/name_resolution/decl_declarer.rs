@@ -15,7 +15,7 @@ use crate::{
     node_kinds::{
         block::Block,
         body::Body,
-        decl::{Decl, DeclKind},
+        decl::{Decl, DeclKind, Visibility},
         expr::{Expr, ExprKind},
         func::Func,
         func_signature::FuncSignature,
@@ -258,26 +258,56 @@ impl<'a> DeclDeclarer<'a> {
 
     pub(super) fn predeclare_nominals(&mut self, decls: &[&Decl]) {
         for decl in decls.iter() {
-            if let Decl {
-                id,
-                kind:
-                    kind @ (DeclKind::Struct { name, .. }
-                    | DeclKind::Enum { name, .. }
-                    | DeclKind::Protocol { name, .. }),
-                ..
-            } = decl
-            {
-                let kind = match kind {
-                    DeclKind::Struct { .. } => some!(Struct),
-                    DeclKind::Enum { .. } => some!(Enum),
-                    DeclKind::Protocol { .. } => some!(Protocol),
-                    _ => unreachable!(),
-                };
+            // Note: Effects are NOT predeclared here to maintain ID stability for Core types
+            // (Array, String, etc. have hardcoded IDs). Effects get their IDs during
+            // the full declaration phase.
+            match &decl.kind {
+                DeclKind::Struct { name, .. }
+                | DeclKind::Enum { name, .. }
+                | DeclKind::Protocol { name, .. } => {
+                    let kind = match &decl.kind {
+                        DeclKind::Struct { .. } => some!(Struct),
+                        DeclKind::Enum { .. } => some!(Enum),
+                        DeclKind::Protocol { .. } => some!(Protocol),
+                        _ => unreachable!(),
+                    };
 
-                self.resolver.declare(name, kind, *id);
+                    let resolved = self.resolver.declare(name, kind, decl.id);
+
+                    // Mark as public if visibility is Public (needed for import resolution)
+                    if decl.visibility == Visibility::Public {
+                        if let Ok(sym) = resolved.symbol() {
+                            self.resolver.mark_public(sym);
+                        }
+                    }
+                }
+                _ => {}
             }
         }
     }
+
+    /// Predeclare public top-level Let bindings as Globals so they're available during import resolution.
+    /// Only handles simple Bind patterns (not destructuring).
+    /// Only public bindings are predeclared since they're the only ones that can be imported.
+    pub(super) fn predeclare_values(&mut self, decls: &[&Decl]) {
+        for decl in decls.iter() {
+            // Only predeclare public Let bindings
+            if decl.visibility != Visibility::Public {
+                continue;
+            }
+            if let DeclKind::Let { lhs, .. } = &decl.kind {
+                // For simple bind patterns, predeclare as Global
+                // Use lhs.id (pattern id) to match what declare_pattern uses
+                if let PatternKind::Bind(name) = &lhs.kind {
+                    let resolved = self.resolver.declare(name, some!(Global), lhs.id);
+                    if let Ok(sym) = resolved.symbol() {
+                        self.resolver.mark_public(sym);
+                    }
+                }
+            }
+        }
+    }
+
 
     ///////////////////////////////////////////////////////////////////////////
     // Local decls
@@ -799,6 +829,32 @@ impl<'a> DeclDeclarer<'a> {
                 self.resolver.nominal_stack.pop();
             }
         );
+
+        // Mark public declarations
+        if decl.visibility == Visibility::Public {
+            match &decl.kind {
+                DeclKind::Let { lhs, .. } => {
+                    // For let bindings, mark all bound symbols as public
+                    for (_, sym) in lhs.collect_binders() {
+                        self.resolver.mark_public(sym);
+                    }
+                }
+                DeclKind::Struct { name, .. }
+                | DeclKind::Enum { name, .. }
+                | DeclKind::Protocol { name, .. }
+                | DeclKind::Effect { name, .. } => {
+                    if let Ok(sym) = name.symbol() {
+                        self.resolver.mark_public(sym);
+                    }
+                }
+                DeclKind::TypeAlias(name, ..) => {
+                    if let Ok(sym) = name.symbol() {
+                        self.resolver.mark_public(sym);
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 
     fn synthesize_init(&mut self, body: &mut Body, type_members: &TypeMembers, type_id: StructId) {
@@ -904,6 +960,7 @@ impl<'a> DeclDeclarer<'a> {
         let init = Decl {
             id: init_id,
             span: Span::SYNTHESIZED,
+            visibility: Visibility::default(),
             kind: DeclKind::Init {
                 name: init_name,
                 params,

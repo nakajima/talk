@@ -1185,7 +1185,11 @@ impl<'a> InferencePass<'a> {
                 body,
                 ..
             } => self.visit_nominal(decl, name, generics, Default::default(), body, context),
-            DeclKind::Import(_) => unimplemented!(),
+            DeclKind::Import(_) => Ok(TypedDecl {
+                id: decl.id,
+                ty: InferTy::Void,
+                kind: TypedDeclKind::Import,
+            }),
             DeclKind::Func(..)
             | DeclKind::Init { .. }
             | DeclKind::TypeAlias(..)

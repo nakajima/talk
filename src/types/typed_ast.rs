@@ -279,6 +279,7 @@ impl TypedDeclKind<InferTy> {
                     .map(|(k, v)| (k, session.finalize_ty(v).as_mono_ty().clone()))
                     .collect(),
             },
+            Import => Import,
         }
     }
 }
@@ -590,6 +591,8 @@ pub enum TypedDeclKind<T: SomeType> {
         typealiases: IndexMap<Label, T>,
         associated_types: IndexMap<Label, T>,
     },
+    /// Import declarations - no type info, just bring symbols into scope
+    Import,
 }
 
 impl<T: SomeType> Drive for TypedDeclKind<T> {
@@ -672,6 +675,7 @@ impl<T: SomeType> Drive for TypedDeclKind<T> {
                     val.drive(visitor);
                 }
             }
+            TypedDeclKind::Import => {}
         }
     }
 }
@@ -756,6 +760,7 @@ impl<T: SomeType> DriveMut for TypedDeclKind<T> {
                     val.drive_mut(visitor);
                 }
             }
+            TypedDeclKind::Import => {}
         }
     }
 }
@@ -848,6 +853,7 @@ impl<T: SomeType, U: SomeType> Mappable<T, U> for TypedDeclKind<T> {
                     .map(|(k, v)| (k, m(v)))
                     .collect(),
             },
+            Import => Import,
         }
     }
 }

@@ -12,7 +12,7 @@ use crate::{
         block::Block,
         body::Body,
         call_arg::CallArg,
-        decl::{Decl, DeclKind},
+        decl::{Decl, DeclKind, Import, ImportPath, ImportedSymbols, Visibility},
         expr::{Expr, ExprKind},
         func::Func,
         func_signature::FuncSignature,
@@ -533,7 +533,7 @@ impl<'a> Formatter<'a> {
                     + text(" -> ")
                     + self.format_type_annotation(ret)
             }
-            DeclKind::Import(name) => join(vec![text("import"), text(name)], text(" ")),
+            DeclKind::Import(import) => self.format_import(import),
             DeclKind::Struct {
                 name,
                 generics,
@@ -585,6 +585,13 @@ impl<'a> Formatter<'a> {
             DeclKind::FuncSignature(sig) => self.format_func_signature(sig),
             DeclKind::MethodRequirement(sig) => self.format_func_signature(sig),
             DeclKind::TypeAlias(lhs, .., rhs) => self.format_type_alias(lhs, rhs),
+        };
+
+        // Prepend "public " for public declarations
+        let doc = if decl.visibility == Visibility::Public {
+            text("public ") + doc
+        } else {
+            doc
         };
 
         self.decorators
@@ -1172,6 +1179,35 @@ impl<'a> Formatter<'a> {
                 result.into_iter().fold(empty(), concat)
             }
         }
+    }
+
+    fn format_import(&self, import: &Import) -> Doc {
+        let symbols = match &import.symbols {
+            ImportedSymbols::All => text("_"),
+            ImportedSymbols::Named(symbols) => {
+                let symbol_docs: Vec<_> = symbols
+                    .iter()
+                    .map(|s| {
+                        if let Some(alias) = &s.alias {
+                            concat(text(&s.name), concat(text(": "), text(alias)))
+                        } else {
+                            text(&s.name)
+                        }
+                    })
+                    .collect();
+                concat(
+                    text("{ "),
+                    concat(join(symbol_docs, text(", ")), text(" }")),
+                )
+            }
+        };
+
+        let path = match &import.path {
+            ImportPath::Relative(p) => text(p),
+            ImportPath::Package(p) => text(p),
+        };
+
+        join(vec![text("import"), symbols, text("from"), path], text(" "))
     }
 
     fn format_struct(&self, name: &Name, generics: &[GenericDecl], body: &Body) -> Doc {

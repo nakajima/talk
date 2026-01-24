@@ -2,8 +2,9 @@ struct TickEvent;
 
 use async_lsp::LanguageClient;
 use async_lsp::lsp_types::{
-    CompletionOptions, Diagnostic, DiagnosticSeverity, Position, Range, SemanticTokens,
-    SemanticTokensResult, TextDocumentSyncCapability, TextDocumentSyncKind,
+    CodeAction, CodeActionKind, CodeActionOrCommand, CodeActionProviderCapability,
+    CodeActionResponse, CompletionOptions, Diagnostic, DiagnosticSeverity, Position, Range,
+    SemanticTokens, SemanticTokensResult, TextDocumentSyncCapability, TextDocumentSyncKind,
     TextDocumentSyncOptions, TextDocumentSyncSaveOptions, TextEdit,
 };
 use async_lsp::{
@@ -136,6 +137,7 @@ pub async fn start() {
                                 ..Default::default()
                             }),
                             document_formatting_provider: Some(OneOf::Left(true)),
+                            code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
                             semantic_tokens_provider: Some(
                                 SemanticTokensServerCapabilities::SemanticTokensOptions(
                                     SemanticTokensOptions {
@@ -387,6 +389,25 @@ pub async fn start() {
             })
             .notification::<notification::Initialized>(|_, _| ControlFlow::Continue(()))
             .notification::<notification::DidChangeConfiguration>(|_, _| ControlFlow::Continue(()))
+            .request::<request::CodeActionRequest, _>(|state, params| {
+                let uri = params.text_document.uri.clone();
+                let range = params.range;
+                let workspace = workspace_analysis(state, &uri);
+
+                async move {
+                    let Some(workspace) = workspace else {
+                        return Ok(None);
+                    };
+
+                    let document_id = document_id_for_uri(&uri);
+                    let actions = compute_code_actions(&workspace, &document_id, &uri, range);
+                    if actions.is_empty() {
+                        Ok(None)
+                    } else {
+                        Ok(Some(actions))
+                    }
+                }
+            })
             .notification::<notification::DidSaveTextDocument>(|_, _| ControlFlow::Continue(()))
             .notification::<notification::DidChangeWatchedFiles>(|state, params| {
                 let mut diagnostics_workspaces: FxHashMap<PathBuf, Url> = FxHashMap::default();
@@ -1180,6 +1201,13 @@ fn goto_definition(
             continue;
         };
 
+        // Special handling for import declarations
+        if let crate::node::Node::Decl(ref decl) = node {
+            if let Some(location) = goto_definition_from_import(module, uri, decl, byte_offset) {
+                return Some(location);
+            }
+        }
+
         let symbol = match node {
             crate::node::Node::Expr(expr) => {
                 goto_definition_symbol_from_expr(module.types.as_ref(), &expr, byte_offset)
@@ -1350,6 +1378,84 @@ fn goto_definition_symbol_from_decl(
     }
 }
 
+/// Handle go-to-definition for import declarations.
+/// Returns a location if the cursor is on an imported symbol or the import path.
+fn goto_definition_from_import(
+    module: &AnalysisWorkspace,
+    uri: &Url,
+    decl: &crate::node_kinds::decl::Decl,
+    byte_offset: u32,
+) -> Option<Location> {
+    use crate::node_kinds::decl::{DeclKind, ImportedSymbols};
+
+    let DeclKind::Import(import) = &decl.kind else {
+        return None;
+    };
+
+    // Check if cursor is on the import path - navigate to the file
+    if span_contains(import.path_span, byte_offset) {
+        let target_path = resolve_import_path(uri, &import.path)?;
+        let target_uri = Url::from_file_path(&target_path).ok()?;
+        return Some(Location {
+            uri: target_uri,
+            range: Range {
+                start: Position {
+                    line: 0,
+                    character: 0,
+                },
+                end: Position {
+                    line: 0,
+                    character: 0,
+                },
+            },
+        });
+    }
+
+    // Check if cursor is on an imported symbol - navigate to its definition
+    if let ImportedSymbols::Named(symbols) = &import.symbols {
+        for imported in symbols {
+            if span_contains(imported.span, byte_offset) {
+                // Find the target file and look up the symbol there
+                let target_path = resolve_import_path(uri, &import.path)?;
+                let target_uri = Url::from_file_path(&target_path).ok()?;
+                let target_doc_id = document_id_for_uri(&target_uri);
+                let target_file_id = *module.document_to_file_id.get(&target_doc_id)?;
+                let target_scope_id = crate::node_id::NodeID(target_file_id, 0);
+
+                // Look up the symbol in the target file's scope
+                let target_scope = module.resolved_names.scopes.get(&target_scope_id)?;
+                let symbol = target_scope
+                    .types
+                    .get(&imported.name)
+                    .or_else(|| target_scope.values.get(&imported.name))?;
+
+                return definition_location_in_module(module, *symbol);
+            }
+        }
+    }
+
+    None
+}
+
+/// Resolve an import path relative to the importing file's URI.
+fn resolve_import_path(uri: &Url, import_path: &crate::node_kinds::decl::ImportPath) -> Option<PathBuf> {
+    use crate::node_kinds::decl::ImportPath;
+
+    match import_path {
+        ImportPath::Relative(rel_path) => {
+            let source_path = uri.to_file_path().ok()?;
+            let source_dir = source_path.parent()?;
+            // Strip leading "./" if present
+            let clean_rel = rel_path.strip_prefix("./").unwrap_or(rel_path);
+            Some(source_dir.join(clean_rel))
+        }
+        ImportPath::Package(_) => {
+            // Package imports not yet supported for go-to-definition
+            None
+        }
+    }
+}
+
 fn resolve_member_symbol(
     types: Option<&crate::types::types::Types>,
     receiver: &crate::node_kinds::expr::Expr,
@@ -1456,6 +1562,151 @@ fn byte_offset_to_utf16_position(text: &str, byte_offset: u32) -> Option<Positio
     let col_slice = text.get(line_start..byte_offset)?;
     let col = col_slice.encode_utf16().count() as u32;
     Some(Position::new(line, col))
+}
+
+/// Compute code actions for a document, including auto-import suggestions
+fn compute_code_actions(
+    workspace: &AnalysisWorkspace,
+    document_id: &DocumentId,
+    uri: &Url,
+    range: Range,
+) -> CodeActionResponse {
+    let mut actions: Vec<CodeActionOrCommand> = Vec::new();
+
+    // Get diagnostics for this document
+    let Some(diagnostics) = workspace.diagnostics.get(document_id) else {
+        return actions;
+    };
+
+    // Get the file ID for this document
+    let Some(&file_id) = workspace.document_to_file_id.get(document_id) else {
+        return actions;
+    };
+
+    // Get the text for this document
+    let Some(text) = workspace.texts.get(file_id.0 as usize) else {
+        return actions;
+    };
+
+    // Build an index of public symbols from all other files
+    // Map from symbol name -> (source file path, symbol)
+    let mut public_exports: FxHashMap<String, Vec<(String, crate::name_resolution::symbol::Symbol)>> =
+        FxHashMap::default();
+
+    for (idx, doc_id) in workspace.file_id_to_document.iter().enumerate() {
+        if doc_id == document_id {
+            continue; // Skip current file
+        }
+
+        let target_file_id = crate::node_id::FileID(idx as u32);
+        let scope_id = crate::node_id::NodeID(target_file_id, 0);
+
+        if let Some(scope) = workspace.resolved_names.scopes.get(&scope_id) {
+            for (name, &symbol) in &scope.values {
+                if workspace.resolved_names.public_symbols.contains(&symbol) {
+                    public_exports
+                        .entry(name.clone())
+                        .or_default()
+                        .push((doc_id.clone(), symbol));
+                }
+            }
+            for (name, &symbol) in &scope.types {
+                if workspace.resolved_names.public_symbols.contains(&symbol) {
+                    public_exports
+                        .entry(name.clone())
+                        .or_default()
+                        .push((doc_id.clone(), symbol));
+                }
+            }
+        }
+    }
+
+    // Check each diagnostic for undefined name errors
+    for diagnostic in diagnostics {
+        // Only handle diagnostics that are in the range
+        let diag_range = byte_span_to_range_utf16(text, diagnostic.range.start, diagnostic.range.end);
+        let Some(diag_range) = diag_range else { continue };
+
+        // Check if this diagnostic intersects with the requested range
+        if diag_range.end.line < range.start.line
+            || diag_range.start.line > range.end.line
+        {
+            continue;
+        }
+
+        // Check if this is an "undefined name" diagnostic
+        if !diagnostic.message.starts_with("Undefined name:") {
+            continue;
+        }
+
+        // Extract the undefined name from the message
+        let Some(name) = diagnostic.message.strip_prefix("Undefined name: ") else {
+            continue;
+        };
+
+        // Look up if this name exists as a public export
+        if let Some(sources) = public_exports.get(name) {
+            for (source_path, _symbol) in sources {
+                // Compute relative path from current file to source file
+                let current_path = std::path::Path::new(document_id);
+                let source_path_obj = std::path::Path::new(source_path);
+
+                let relative_path = if let (Some(current_dir), Some(source_file)) = (
+                    current_path.parent(),
+                    source_path_obj.file_name(),
+                ) {
+                    // Simple case: both files in same directory
+                    if current_dir == source_path_obj.parent().unwrap_or(std::path::Path::new("")) {
+                        format!("./{}", source_file.to_string_lossy())
+                    } else {
+                        source_path.clone()
+                    }
+                } else {
+                    source_path.clone()
+                };
+
+                // Create the import statement
+                let import_stmt = format!("import {{ {} }} from {}\n", name, relative_path);
+
+                // Find where to insert (at the start of the file, after any existing imports)
+                let insert_position = Position::new(0, 0);
+
+                let edit = TextEdit::new(
+                    Range::new(insert_position, insert_position),
+                    import_stmt,
+                );
+
+                let mut changes: std::collections::HashMap<Url, Vec<TextEdit>> =
+                    std::collections::HashMap::new();
+                changes.insert(uri.clone(), vec![edit]);
+
+                let action = CodeAction {
+                    title: format!("Import '{}' from {}", name, relative_path),
+                    kind: Some(CodeActionKind::QUICKFIX),
+                    diagnostics: Some(vec![Diagnostic {
+                        range: diag_range,
+                        severity: Some(DiagnosticSeverity::ERROR),
+                        source: Some("talk".to_string()),
+                        message: diagnostic.message.clone(),
+                        ..Default::default()
+                    }]),
+                    edit: Some(WorkspaceEdit {
+                        changes: Some(changes),
+                        document_changes: None,
+                        change_annotations: None,
+                    }),
+                    command: None,
+                    is_preferred: Some(sources.len() == 1),
+                    disabled: None,
+                    data: None,
+                };
+
+                actions.push(CodeActionOrCommand::CodeAction(action));
+            }
+        }
+    }
+
+    actions
 }
 
 #[cfg(test)]
@@ -1621,12 +1872,14 @@ foo.bar
             .expect("file uri");
         let uri_b = Url::from_file_path(std::env::temp_dir().join("rename_across_files_b.tlk"))
             .expect("file uri");
-        let code_a = "let foo = 1\n";
-        let code_b = "foo\n";
+        let code_a = "public let foo = 1\n";
+        let code_b = "import { foo } from ./rename_across_files_a.tlk\nfoo\n";
 
         let module = workspace_for_docs(vec![(uri_a.clone(), code_a), (uri_b.clone(), code_b)]);
 
-        let byte_offset = code_b.find("foo").expect("foo") as u32;
+        // Find the "foo" reference in file B (after the import statement)
+        let foo_in_b = code_b.rfind("foo").expect("foo");
+        let byte_offset = foo_in_b as u32;
         let edit = super::rename_at(&module, &uri_b, byte_offset, "bar").expect("workspace edit");
 
         let range_a = super::byte_span_to_range_utf16(
@@ -1635,7 +1888,9 @@ foo.bar
             (code_a.find("foo").expect("foo") + 3) as u32,
         )
         .expect("range a");
-        let range_b = super::byte_span_to_range_utf16(code_b, 0, 3).expect("range b");
+        // The foo reference in B is at the last occurrence
+        let range_b = super::byte_span_to_range_utf16(code_b, foo_in_b as u32, (foo_in_b + 3) as u32)
+            .expect("range b");
 
         assert_eq!(edit_ranges_for_uri(&edit, &uri_a), vec![range_a]);
         assert_eq!(edit_ranges_for_uri(&edit, &uri_b), vec![range_b]);
@@ -1656,8 +1911,8 @@ foo.bar
 
         let path_a = root.join("a.tlk");
         let path_b = root.join("b.tlk");
-        let code_a = "foo\n";
-        let code_b = "let foo = 1\n";
+        let code_a = "import { foo } from ./b.tlk\nfoo\n";
+        let code_b = "public let foo = 1\n";
         std::fs::write(&path_a, code_a).expect("write a");
         std::fs::write(&path_b, code_b).expect("write b");
 
@@ -1685,7 +1940,8 @@ foo.bar
         );
 
         let workspace = super::workspace_analysis(&mut state, &uri_a).expect("workspace");
-        let byte_offset = code_a.find("foo").expect("foo") as u32;
+        // Find the "foo" reference after the import statement
+        let byte_offset = code_a.rfind("foo").expect("foo") as u32;
 
         let target = super::goto_definition(&workspace, None, &uri_a, byte_offset)
             .expect("definition location");
@@ -1733,12 +1989,12 @@ foo.bar
         let uri_b = Url::from_file_path(std::env::temp_dir().join("extend_before_struct_b.tlk"))
             .expect("file uri");
 
-        let code_a = r#"
+        let code_a = r#"import { Person } from ./extend_before_struct_b.tlk
 extend Person {
   func foo() {}
 }
 "#;
-        let code_b = "struct Person {}\n";
+        let code_b = "public struct Person {}\n";
 
         let module = workspace_for_docs(vec![(uri_a.clone(), code_a), (uri_b.clone(), code_b)]);
         let doc_id = super::document_id_for_uri(&uri_a);
@@ -1807,5 +2063,75 @@ extend Person {
         let generic_t_offset = code.find("<T>").expect("generic T") + 1;
         let target = super::goto_definition(&module, None, &uri, generic_t_offset as u32);
         assert!(target.is_some(), "should find generic declaration");
+    }
+
+    #[test]
+    fn goto_definition_on_imported_symbol_navigates_to_definition() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "talk_import_symbol_test_{}_{}",
+            std::process::id(),
+            nonce
+        ));
+        std::fs::create_dir_all(&root).expect("create temp root");
+
+        let path_a = root.join("a.tlk");
+        let path_b = root.join("b.tlk");
+        let code_a = "public let foo = 1\n";
+        let code_b = "import { foo } from ./a.tlk\nfoo\n";
+        std::fs::write(&path_a, code_a).expect("write a");
+        std::fs::write(&path_b, code_b).expect("write b");
+
+        let uri_a = Url::from_file_path(&path_a).expect("uri a");
+        let uri_b = Url::from_file_path(&path_b).expect("uri b");
+
+        let module = workspace_for_docs(vec![(uri_a.clone(), code_a), (uri_b.clone(), code_b)]);
+
+        // Click on "foo" in "import { foo }" - should navigate to definition in a.tlk
+        let import_foo_offset = code_b.find("{ foo }").expect("import foo") + 2;
+        let target =
+            super::goto_definition(&module, None, &uri_b, import_foo_offset as u32).expect("target");
+
+        assert_eq!(target.uri, uri_a, "should navigate to a.tlk");
+        // Should point to the definition location in a.tlk
+        assert_eq!(target.range.start.line, 0);
+    }
+
+    #[test]
+    fn goto_definition_on_import_path_navigates_to_file() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "talk_import_path_test_{}_{}",
+            std::process::id(),
+            nonce
+        ));
+        std::fs::create_dir_all(&root).expect("create temp root");
+
+        let path_a = root.join("a.tlk");
+        let path_b = root.join("b.tlk");
+        let code_a = "public let foo = 1\n";
+        let code_b = "import { foo } from ./a.tlk\nfoo\n";
+        std::fs::write(&path_a, code_a).expect("write a");
+        std::fs::write(&path_b, code_b).expect("write b");
+
+        let uri_a = Url::from_file_path(&path_a).expect("uri a");
+        let uri_b = Url::from_file_path(&path_b).expect("uri b");
+
+        let module = workspace_for_docs(vec![(uri_a.clone(), code_a), (uri_b.clone(), code_b)]);
+
+        // Click on "./a.tlk" in "from ./a.tlk" - should navigate to a.tlk
+        let path_offset = code_b.find("./a.tlk").expect("import path") as u32;
+        let target = super::goto_definition(&module, None, &uri_b, path_offset).expect("target");
+
+        assert_eq!(target.uri, uri_a, "should navigate to a.tlk");
+        // Should point to the start of the file
+        assert_eq!(target.range.start.line, 0);
+        assert_eq!(target.range.start.character, 0);
     }
 }

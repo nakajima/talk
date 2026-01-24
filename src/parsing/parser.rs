@@ -10,7 +10,7 @@ use crate::node_id::{FileID, NodeID};
 use crate::node_kinds::block::Block;
 use crate::node_kinds::body::Body;
 use crate::node_kinds::call_arg::CallArg;
-use crate::node_kinds::decl::{Decl, DeclKind};
+use crate::node_kinds::decl::{Decl, DeclKind, Import, ImportPath, ImportedSymbol, ImportedSymbols, Visibility};
 use crate::node_kinds::expr::{Expr, ExprKind};
 use crate::node_kinds::func::{EffectSet, Func};
 use crate::node_kinds::func_signature::FuncSignature;
@@ -171,7 +171,7 @@ impl<'a> Parser<'a> {
         use TokenKind::*;
         if matches!(
             kind,
-            Protocol | Struct | Enum | Let | Func | Case | Extend | Typealias | Effect
+            Protocol | Struct | Enum | Let | Func | Case | Extend | Typealias | Effect | Import | Public
         ) {
             self.decl(BlockContext::None, false)
         } else {
@@ -192,10 +192,20 @@ impl<'a> Parser<'a> {
         // Make sure to update next_root if adding a case here.
         use TokenKind::*;
         let node: Node = match &current.kind {
+            Public => {
+                self.consume(TokenKind::Public)?;
+                let mut node = self.decl(context, is_static)?;
+                // Set visibility to Public on the declaration
+                if let Node::Decl(ref mut decl) = node {
+                    decl.visibility = Visibility::Public;
+                }
+                node
+            }
             Static => {
                 self.consume(TokenKind::Static)?;
                 self.decl(context, true)?
             }
+            Import => self.import_decl()?.into(),
             Effect => self.effect()?.into(),
             Typealias => self.typealias()?.into(),
             Protocol => self
@@ -255,6 +265,7 @@ impl<'a> Parser<'a> {
         self.save_meta(tok, |id, span| Decl {
             id,
             span,
+            visibility: Visibility::default(),
             kind: DeclKind::Effect {
                 name: effect_name.clone().into(),
                 name_span,
@@ -262,6 +273,116 @@ impl<'a> Parser<'a> {
                 params,
                 ret,
             },
+        })
+    }
+
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
+    fn import_decl(&mut self) -> Result<Decl, ParserError> {
+        let tok = self.push_source_location();
+        self.consume(TokenKind::Import)?;
+
+        // Parse imported symbols: either { a, b } or _
+        let symbols = if self.did_match(TokenKind::Underscore)? {
+            ImportedSymbols::All
+        } else {
+            self.consume(TokenKind::LeftBrace)?;
+            let mut imported = vec![];
+
+            loop {
+                if matches!(self.current.as_ref().map(|t| &t.kind), Some(TokenKind::RightBrace)) {
+                    break;
+                }
+
+                let (name, name_span) = self.identifier()?;
+
+                // Check for alias: { Point: Pt }
+                let alias = if self.did_match(TokenKind::Colon)? {
+                    let (alias_name, _) = self.identifier()?;
+                    Some(alias_name)
+                } else {
+                    None
+                };
+
+                imported.push(ImportedSymbol {
+                    name,
+                    alias,
+                    span: name_span,
+                });
+
+                if !self.did_match(TokenKind::Comma)? {
+                    break;
+                }
+            }
+
+            self.consume(TokenKind::RightBrace)?;
+            ImportedSymbols::Named(imported)
+        };
+
+        // Expect 'from' keyword (as contextual keyword)
+        match &self.current {
+            Some(Token {
+                kind: TokenKind::Identifier(s),
+                ..
+            }) if s == "from" => {
+                self.advance();
+            }
+            _ => {
+                return Err(ParserError::UnexpectedToken {
+                    expected: "from".into(),
+                    actual: format!("{:?}", self.current),
+                    token: self.current.clone(),
+                });
+            }
+        }
+
+        // Parse import path
+        let path_start = self.current.as_ref().map(|t| t.start).unwrap_or(0);
+
+        let path = if matches!(self.current.as_ref().map(|t| &t.kind), Some(TokenKind::Dot)) {
+            // Relative path: ./foo.tlk or ../foo.tlk
+            let mut path_str = String::new();
+
+            while let Some(ref current) = self.current {
+                match &current.kind {
+                    TokenKind::Dot => {
+                        path_str.push('.');
+                        self.advance();
+                    }
+                    TokenKind::Slash => {
+                        path_str.push('/');
+                        self.advance();
+                    }
+                    TokenKind::Identifier(s) => {
+                        path_str.push_str(s);
+                        self.advance();
+                    }
+                    _ => break,
+                }
+            }
+
+            ImportPath::Relative(path_str)
+        } else {
+            // Package name: collections
+            let (pkg_name, _) = self.identifier()?;
+            ImportPath::Package(pkg_name)
+        };
+
+        let path_end = self.current.as_ref().map(|t| t.start).unwrap_or(path_start);
+        let path_span = Span {
+            start: path_start,
+            end: path_end,
+            file_id: self.file_id,
+        };
+
+        self.save_meta(tok, |id, span| Decl {
+            id,
+            span,
+            visibility: Visibility::default(),
+            kind: DeclKind::Import(Import {
+                symbols,
+                path,
+                path_span,
+            }),
         })
     }
 
@@ -275,6 +396,7 @@ impl<'a> Parser<'a> {
         self.save_meta(tok, |id, span| Decl {
             id,
             span,
+            visibility: Visibility::default(),
             kind: DeclKind::TypeAlias(lhs.into(), lhs_span, rhs),
         })
     }
@@ -291,6 +413,7 @@ impl<'a> Parser<'a> {
         self.save_meta(tok, |id, span| Decl {
             id,
             span,
+            visibility: Visibility::default(),
             kind: DeclKind::Init {
                 name: Name::Raw("init".into()),
                 params,
@@ -306,6 +429,7 @@ impl<'a> Parser<'a> {
             DeclKind::Func(func) => Ok(Decl {
                 id: func.id,
                 span: func_decl.span,
+                visibility: func_decl.visibility,
                 kind: DeclKind::Method {
                     func: Box::new(func),
                     is_static,
@@ -314,6 +438,7 @@ impl<'a> Parser<'a> {
             DeclKind::FuncSignature(func_sig) => Ok(Decl {
                 id: func_decl.id,
                 span: func_decl.span,
+                visibility: func_decl.visibility,
                 kind: DeclKind::MethodRequirement(func_sig),
             }),
             _ => unreachable!(),
@@ -339,6 +464,7 @@ impl<'a> Parser<'a> {
         self.save_meta(tok, |id, span| Decl {
             id,
             span,
+            visibility: Visibility::default(),
             kind: DeclKind::Property {
                 name: name.into(),
                 name_span,
@@ -365,6 +491,7 @@ impl<'a> Parser<'a> {
         self.save_meta(tok, |id, span| Decl {
             id,
             span,
+            visibility: Visibility::default(),
             kind: DeclKind::EnumVariant(name.into(), name_span, values),
         })
     }
@@ -424,7 +551,12 @@ impl<'a> Parser<'a> {
             }
         };
 
-        self.save_meta(tok, |id, span| Decl { id, span, kind })
+        self.save_meta(tok, |id, span| Decl {
+            id,
+            span,
+            visibility: Visibility::default(),
+            kind,
+        })
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
@@ -447,6 +579,7 @@ impl<'a> Parser<'a> {
         self.save_meta(tok, |id, span| Decl {
             id,
             span,
+            visibility: Visibility::default(),
             kind: DeclKind::Let {
                 lhs,
                 type_annotation,
@@ -468,7 +601,12 @@ impl<'a> Parser<'a> {
             FuncOrFuncSignature::FuncSignature(func_sig) => DeclKind::FuncSignature(func_sig),
         };
 
-        self.save_meta(tok, |id, span| Decl { id, span, kind })
+        self.save_meta(tok, |id, span| Decl {
+            id,
+            span,
+            visibility: Visibility::default(),
+            kind,
+        })
     }
 
     fn func(
@@ -2277,6 +2415,7 @@ impl<'a> Parser<'a> {
         self.save_meta(tok, |id, span| Decl {
             id,
             span,
+            visibility: Visibility::default(),
             kind: DeclKind::Associated { generic },
         })
     }
