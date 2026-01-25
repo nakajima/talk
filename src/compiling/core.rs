@@ -20,12 +20,12 @@ fn _compile() -> Module {
     config.mode = CompilationMode::Library;
     let driver = Driver::new_bare(
         vec![
-            Source::from(include_str!("../../core/Optional.tlk")),
-            Source::from(include_str!("../../core/Operators.tlk")),
-            Source::from(include_str!("../../core/String.tlk")),
-            Source::from(include_str!("../../core/Memory.tlk")),
-            Source::from(include_str!("../../core/Array.tlk")),
-            Source::from(include_str!("../../core/Iterable.tlk")),
+            Source::in_memory("Optional.tlk".into(), include_str!("../../core/Optional.tlk")),
+            Source::in_memory("Operators.tlk".into(), include_str!("../../core/Operators.tlk")),
+            Source::in_memory("String.tlk".into(), include_str!("../../core/String.tlk")),
+            Source::in_memory("Memory.tlk".into(), include_str!("../../core/Memory.tlk")),
+            Source::in_memory("Array.tlk".into(), include_str!("../../core/Array.tlk")),
+            Source::in_memory("Iterable.tlk".into(), include_str!("../../core/Iterable.tlk")),
         ],
         config,
     );

@@ -704,7 +704,7 @@ pub mod tests {
         let driver_a = Driver::new(
             vec![Source::from(
                 "
-            struct Hello {
+            public struct Hello {
                 let x: Int
             }
             ",

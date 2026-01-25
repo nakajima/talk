@@ -1,7 +1,7 @@
-protocol P {
+public protocol P {
   func required() -> Int
 }
 
-func getRequired<T: P>(t: T) {
+public func getRequired<T: P>(t: T) {
 	t.required()
 }

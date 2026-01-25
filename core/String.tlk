@@ -1,4 +1,7 @@
-struct String {
+import { Add, Equatable } from ./Operators.tlk
+import { _alloc, _copy, _ptr_add } from ./Memory.tlk
+
+public struct String {
 	let base: RawPtr
 	let length: Int
 	let capacity: Int

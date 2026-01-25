@@ -1,4 +1,4 @@
-enum Optional<Wrapped> {
+public enum Optional<Wrapped> {
 	case some(Wrapped)
 	case none
 }

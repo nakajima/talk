@@ -149,14 +149,22 @@ pub struct ResolvedNames {
 impl ResolvedNames {
     pub fn exports(&self) -> Exports {
         let mut res = Exports::default();
-        if let Some(scope) = self.scopes.get(&NodeID(FileID(0), 0)) {
-            res.extend(scope.types.clone());
-            res.extend(scope.values.clone());
-        }
+        for (&scope_id, scope) in &self.scopes {
+            // Only file-level scopes (node index 0)
+            if scope_id.1 != 0 { continue; }
 
-        res.into_iter()
-            .filter(|e| !matches!(e.1, Symbol::Builtin(..)))
-            .collect()
+            for (name, &symbol) in &scope.types {
+                if self.public_symbols.contains(&symbol) && !matches!(symbol, Symbol::Builtin(..)) {
+                    res.insert(name.clone(), symbol);
+                }
+            }
+            for (name, &symbol) in &scope.values {
+                if self.public_symbols.contains(&symbol) && !matches!(symbol, Symbol::Builtin(..)) {
+                    res.insert(name.clone(), symbol);
+                }
+            }
+        }
+        res
     }
 }
 
@@ -234,22 +242,9 @@ impl NameResolver {
         &mut self,
         mut asts: Vec<AST<Parsed>>,
     ) -> (Vec<AST<NameResolved>>, ResolvedNames) {
-        // Core module uses shared scope (its files depend on each other internally)
-        // All other modules use per-file isolated scopes
-        let use_shared_scope = self.current_module_id == ModuleId::Core;
-
-        if use_shared_scope {
-            // Single shared root scope for Core module
-            let root_scope_id = NodeID(FileID(0), 0);
-            let mut scope = Scope::new(None, self.current_level, root_scope_id, None, 1);
-            builtins::import_builtins(&mut scope);
-            self.scopes.insert(root_scope_id, scope);
-            self.current_scope_id = Some(root_scope_id);
-        } else {
-            // Create per-file scopes with builtins for module isolation
-            for ast in &asts {
-                self.init_file_scope(ast.file_id);
-            }
+        // Create per-file scopes with builtins for module isolation
+        for ast in &asts {
+            self.init_file_scope(ast.file_id);
         }
 
         // First pass: run transforms and declare all types
@@ -266,19 +261,10 @@ impl NameResolver {
             }
         }
 
-        // Helper to get the root scope ID for an AST
-        let scope_for_ast = |ast: &AST<Parsed>, use_shared: bool| -> NodeID {
-            if use_shared {
-                NodeID(FileID(0), 0)
-            } else {
-                NodeID(ast.file_id, 0)
-            }
-        };
-
         // Predeclare module-scope nominals across all ASTs first, so `extend` resolution
         // doesn't depend on file order.
         for ast in asts.iter_mut() {
-            let file_scope_id = scope_for_ast(ast, use_shared_scope);
+            let file_scope_id = NodeID(ast.file_id, 0);
             self.current_scope_id = Some(file_scope_id);
             let mut declarer = DeclDeclarer::new(self, &mut ast.node_ids);
             let decls: Vec<&Decl> = ast
@@ -493,7 +479,7 @@ impl NameResolver {
         // Full declaration phase - process all declarations including extends
         // (now that imports are resolved, extends can see imported types)
         for ast in asts.iter_mut() {
-            let file_scope_id = scope_for_ast(ast, use_shared_scope);
+            let file_scope_id = NodeID(ast.file_id, 0);
             self.current_scope_id = Some(file_scope_id);
             let mut declarer = DeclDeclarer::new(self, &mut ast.node_ids);
             for root in &mut ast.roots {
@@ -520,7 +506,7 @@ impl NameResolver {
         // Second pass: resolve all names
 
         for ast in asts.iter_mut() {
-            let file_scope_id = scope_for_ast(ast, use_shared_scope);
+            let file_scope_id = NodeID(ast.file_id, 0);
             // Borrow &mut self only while walking each root, then drop immediately.
             for root in &mut ast.roots {
                 self.current_scope_id = Some(file_scope_id);

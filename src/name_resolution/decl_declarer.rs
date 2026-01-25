@@ -849,10 +849,52 @@ impl<'a> DeclDeclarer<'a> {
                         self.resolver.mark_public(sym);
                     }
                 }
-                DeclKind::Struct { name, .. }
-                | DeclKind::Enum { name, .. }
-                | DeclKind::Protocol { name, .. }
-                | DeclKind::Effect { name, .. } => {
+                DeclKind::Struct { name, body, .. }
+                | DeclKind::Enum { name, body, .. }
+                | DeclKind::Protocol { name, body, .. } => {
+                    if let Ok(sym) = name.symbol() {
+                        self.resolver.mark_public(sym);
+                    }
+                    // Also mark members (init, methods, nested extends) as public
+                    for member in &body.decls {
+                        match &member.kind {
+                            DeclKind::Init { name, .. } => {
+                                if let Ok(sym) = name.symbol() {
+                                    self.resolver.mark_public(sym);
+                                }
+                            }
+                            DeclKind::Method { func, .. } => {
+                                if let Ok(sym) = func.name.symbol() {
+                                    self.resolver.mark_public(sym);
+                                }
+                            }
+                            DeclKind::EnumVariant(name, ..) => {
+                                if let Ok(sym) = name.symbol() {
+                                    self.resolver.mark_public(sym);
+                                }
+                            }
+                            DeclKind::Property { name, .. } => {
+                                if let Ok(sym) = name.symbol() {
+                                    self.resolver.mark_public(sym);
+                                }
+                            }
+                            // Handle nested extends (like extend Self: Protocol inside a struct)
+                            DeclKind::Extend {
+                                body: nested_body, ..
+                            } => {
+                                for nested_member in &nested_body.decls {
+                                    if let DeclKind::Method { func, .. } = &nested_member.kind {
+                                        if let Ok(sym) = func.name.symbol() {
+                                            self.resolver.mark_public(sym);
+                                        }
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                DeclKind::Effect { name, .. } => {
                     if let Ok(sym) = name.symbol() {
                         self.resolver.mark_public(sym);
                     }
@@ -863,6 +905,40 @@ impl<'a> DeclDeclarer<'a> {
                     }
                 }
                 _ => {}
+            }
+        }
+
+        // For Extend blocks, mark methods as public if the extended type is public
+        // This happens regardless of the extend's own visibility
+        if let DeclKind::Extend { name, body, .. } = &decl.kind {
+            // Check if the extended type is public
+            let extended_type_is_public = name
+                .symbol()
+                .map(|sym| self.resolver.phase.public_symbols.contains(&sym))
+                .unwrap_or(false);
+
+            if extended_type_is_public {
+                // Mark all methods in this extend as public
+                for member in &body.decls {
+                    match &member.kind {
+                        DeclKind::Method { func, .. } => {
+                            if let Ok(sym) = func.name.symbol() {
+                                self.resolver.mark_public(sym);
+                            }
+                        }
+                        // Handle nested extends (like extend Self: Protocol inside a struct)
+                        DeclKind::Extend { body: nested_body, .. } => {
+                            for nested_member in &nested_body.decls {
+                                if let DeclKind::Method { func, .. } = &nested_member.kind {
+                                    if let Ok(sym) = func.name.symbol() {
+                                        self.resolver.mark_public(sym);
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
             }
         }
     }
