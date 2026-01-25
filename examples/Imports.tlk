@@ -1,1 +1,3 @@
-import { a } from ./Array.tlk
+import { a } from ./Exports.tlk
+
+print(a)

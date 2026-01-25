@@ -290,6 +290,8 @@ impl<'a> DeclDeclarer<'a> {
     /// Only handles simple Bind patterns (not destructuring).
     /// Only public bindings are predeclared since they're the only ones that can be imported.
     pub(super) fn predeclare_values(&mut self, decls: &[&Decl]) {
+        let mut exported_names: FxHashMap<String, NodeID> = FxHashMap::default();
+
         for decl in decls.iter() {
             // Only predeclare public Let bindings
             if decl.visibility != Visibility::Public {
@@ -299,6 +301,14 @@ impl<'a> DeclDeclarer<'a> {
                 // For simple bind patterns, predeclare as Global
                 // Use lhs.id (pattern id) to match what declare_pattern uses
                 if let PatternKind::Bind(name) = &lhs.kind {
+                    let name_str = name.name_str();
+                    if exported_names.contains_key(&name_str) {
+                        self.resolver
+                            .diagnostic(lhs.id, NameResolverError::DuplicateExport(name_str));
+                        continue;
+                    }
+                    exported_names.insert(name_str, lhs.id);
+
                     let resolved = self.resolver.declare(name, some!(Global), lhs.id);
                     if let Ok(sym) = resolved.symbol() {
                         self.resolver.mark_public(sym);

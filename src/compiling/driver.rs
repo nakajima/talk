@@ -8,7 +8,9 @@ use crate::{
         name_resolver::{NameResolver, ResolvedNames},
         symbol::{Symbol, Symbols},
     },
+    node::Node,
     node_id::{FileID, NodeID},
+    node_kinds::decl::{DeclKind, ImportPath},
     parser::Parser,
     parser_error::ParserError,
     types::{
@@ -25,7 +27,8 @@ use crate::{
     },
 };
 use indexmap::IndexMap;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
+use std::collections::VecDeque;
 use std::{hash::Hash, hash::Hasher};
 use std::{io, path::PathBuf, rc::Rc};
 
@@ -234,6 +237,46 @@ pub struct Driver<Phase: DriverPhase = Initial> {
     pub phase: Phase,
 }
 
+/// Extract all import paths from a parsed AST
+fn extract_import_paths(ast: &AST<ast::Parsed>) -> Vec<ImportPath> {
+    let mut paths = Vec::new();
+    for root in &ast.roots {
+        if let Node::Decl(decl) = root {
+            if let DeclKind::Import(import) = &decl.kind {
+                paths.push(import.path.clone());
+            }
+        }
+    }
+    paths
+}
+
+/// Resolve an import path relative to a source file path.
+/// Returns a tuple of (normalized_path for tracking, resolved_path for the source).
+/// The resolved_path preserves the relative/absolute nature of the source_path.
+fn resolve_import_path(source_path: &str, import_path: &ImportPath) -> Option<(PathBuf, PathBuf)> {
+    match import_path {
+        ImportPath::Relative(rel_path) => {
+            // source_path is the file containing the import
+            let source = PathBuf::from(source_path);
+            let parent = source.parent()?;
+
+            // Strip leading "./" from relative path before joining (to match name resolver)
+            let clean_rel = rel_path.strip_prefix("./").unwrap_or(rel_path);
+            let resolved = parent.join(clean_rel);
+
+            // Canonicalize for cycle detection (normalizes .. and symlinks)
+            let canonical = resolved.canonicalize().ok()?;
+
+            // Return both the canonical path (for tracking) and the resolved path (for source)
+            Some((canonical, resolved))
+        }
+        ImportPath::Package(_) => {
+            // Package imports are handled by the module system, not file discovery
+            None
+        }
+    }
+}
+
 impl Driver {
     pub fn new(files: Vec<Source>, mut config: DriverConfig) -> Self {
         #[allow(clippy::unwrap_used)]
@@ -260,7 +303,35 @@ impl Driver {
         let mut asts: IndexMap<Source, AST<_>> = IndexMap::default();
         let mut diagnostics = vec![];
 
-        for (i, file) in self.files.iter().enumerate() {
+        // Track which files we've already processed (by canonical path) to detect cycles
+        let mut processed_paths: FxHashSet<PathBuf> = FxHashSet::default();
+
+        // Queue of files to parse - use VecDeque for FIFO ordering
+        let mut to_parse: VecDeque<Source> = self.files.iter().cloned().collect();
+
+        // Mark initial files as processed
+        for file in &self.files {
+            match &file.kind {
+                SourceKind::File(path) => {
+                    if let Ok(canonical) = path.canonicalize() {
+                        processed_paths.insert(canonical);
+                    }
+                }
+                SourceKind::InMemory { path, .. } => {
+                    // For in-memory sources, try to canonicalize if the file exists on disk
+                    if let Ok(canonical) = path.canonicalize() {
+                        processed_paths.insert(canonical);
+                    }
+                }
+                SourceKind::String(_) => {
+                    // String sources don't have paths, nothing to track
+                }
+            }
+        }
+
+        let mut file_index = 0u32;
+
+        while let Some(file) = to_parse.pop_front() {
             let input = file.read()?;
             let lexer = if self.config.preserve_comments {
                 Lexer::preserving_comments(&input)
@@ -268,11 +339,26 @@ impl Driver {
                 Lexer::new(&input)
             };
             tracing::info!("parsing {file:?}");
-            let file_id = FileID(i as u32);
+            let file_id = FileID(file_index);
+            file_index += 1;
             let parser = Parser::new(file.path(), file_id, lexer);
             match parser.parse() {
                 Ok((parsed, ast_diagnostics)) => {
                     diagnostics.extend(ast_diagnostics);
+
+                    // Discover imports and queue them for parsing
+                    let source_path = file.path();
+                    for import_path in extract_import_paths(&parsed) {
+                        if let Some((canonical, resolved)) =
+                            resolve_import_path(source_path, &import_path)
+                        {
+                            if !processed_paths.contains(&canonical) {
+                                processed_paths.insert(canonical);
+                                to_parse.push_back(Source::from(resolved));
+                            }
+                        }
+                    }
+
                     asts.insert(file.clone(), parsed);
                 }
                 Err(err) => {
@@ -428,6 +514,14 @@ impl Driver<Typed> {
 }
 
 impl Driver<Lowered> {
+    pub fn has_errors(&self) -> bool {
+        has_error_diagnostics(&self.phase.diagnostics)
+    }
+
+    pub fn diagnostics(&self) -> &[AnyDiagnostic] {
+        &self.phase.diagnostics
+    }
+
     pub fn display_symbol_names(&self) -> FxHashMap<Symbol, String> {
         let mut names = self.phase.symbol_names.clone();
         for (sym, name) in self.config.modules.imported_symbol_names() {
@@ -652,5 +746,43 @@ pub mod tests {
         let ast = typed.phase.ast;
 
         assert_eq!(types_tests::tests::ty(0, &ast, &typed.phase.types), Ty::Int);
+    }
+
+    #[test]
+    fn auto_discovers_imports() {
+        let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let importer_path = current_dir.join("dev/fixtures/importer.tlk");
+        let exportee_path = current_dir.join("dev/fixtures/exportee.tlk");
+
+        // Create the test files
+        std::fs::write(&exportee_path, "public let exported = 42\n").unwrap();
+        std::fs::write(&importer_path, "import { exported } from ./exportee.tlk\nexported\n")
+            .unwrap();
+
+        // Only pass the importer file - the exportee should be auto-discovered
+        let driver = Driver::new(
+            vec![Source::from(importer_path.clone())],
+            DriverConfig::new("TestDriver"),
+        );
+        let parsed = driver.parse().unwrap();
+
+        // Both files should be parsed
+        assert_eq!(
+            parsed.phase.asts.len(),
+            2,
+            "should auto-discover imported file"
+        );
+
+        // Verify the files can be compiled without errors
+        let typed = parsed.resolve_names().unwrap().typecheck().unwrap();
+        assert!(
+            typed.phase.diagnostics.is_empty(),
+            "no diagnostics: {:?}",
+            typed.phase.diagnostics
+        );
+
+        // Cleanup
+        let _ = std::fs::remove_file(&importer_path);
+        let _ = std::fs::remove_file(&exportee_path);
     }
 }

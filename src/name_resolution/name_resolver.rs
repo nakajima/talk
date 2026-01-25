@@ -54,6 +54,7 @@ pub enum NameResolverError {
     SymbolNotFoundInModule(String),
     SymbolNotPublic(String),
     PackageImportsNotSupported,
+    DuplicateExport(String),
 }
 
 impl Error for NameResolverError {}
@@ -79,6 +80,9 @@ impl Display for NameResolverError {
             }
             Self::PackageImportsNotSupported => {
                 write!(f, "Package imports are not yet supported")
+            }
+            Self::DuplicateExport(name) => {
+                write!(f, "Duplicate export: '{name}'")
             }
         }
     }

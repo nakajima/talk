@@ -1736,4 +1736,23 @@ pub mod tests {
         });
         assert!(has_private_error, "Expected SymbolNotPublic error");
     }
+
+    #[test]
+    fn duplicate_export_emits_error() {
+        let code = r#"
+public let a = 1
+public let a = 2
+"#;
+        let (_, resolved) = resolve_err(code);
+        let has_duplicate_error = resolved.diagnostics.iter().any(|d| {
+            matches!(
+                d,
+                AnyDiagnostic::NameResolution(Diagnostic {
+                    kind: NameResolverError::DuplicateExport(_),
+                    ..
+                })
+            )
+        });
+        assert!(has_duplicate_error, "Expected DuplicateExport error");
+    }
 }

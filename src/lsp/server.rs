@@ -51,6 +51,7 @@ use crate::node_kinds::{
     generic_decl::GenericDecl,
     parameter::Parameter,
     pattern::{Pattern, RecordFieldPattern},
+    stmt::Stmt,
     type_annotation::TypeAnnotation,
 };
 use crate::token_kind::TokenKind;
@@ -233,17 +234,24 @@ pub async fn start() {
                 let uri = params.text_document.uri;
                 let result = if let Some(result) = st.documents.get(&uri) {
                     let formatted = crate::formatter::format_string(&result.text);
-                    let last_line = result.text.lines().count() as u32;
-                    let last_char = result
-                        .text
-                        .lines()
-                        .last()
-                        .map(|line| line.len().saturating_sub(1));
+                    let newline_count = result.text.matches('\n').count();
+                    let ends_with_newline = result.text.ends_with('\n');
+                    let last_line = newline_count as u32;
+                    let last_char = if ends_with_newline {
+                        0
+                    } else {
+                        result
+                            .text
+                            .rsplit('\n')
+                            .next()
+                            .map(|s| s.len())
+                            .unwrap_or(result.text.len()) as u32
+                    };
 
                     Ok(Some(vec![TextEdit::new(
                         Range::new(
                             Position::new(0, 0),
-                            Position::new(last_line, last_char.unwrap_or(0) as u32),
+                            Position::new(last_line, last_char),
                         ),
                         formatted,
                     )]))
@@ -507,7 +515,8 @@ pub async fn start() {
     #[allow(clippy::expect_used)]
     let file = File::options()
         .create(true)
-        .append(true)
+        .write(true)
+        .truncate(true)
         .open("server.log")
         .expect("Could not create LSP server log");
 
@@ -1026,6 +1035,7 @@ fn rename_spans_in_ast(
     Parameter(enter),
     Pattern(enter),
     RecordFieldPattern(enter),
+    Stmt(enter),
     TypeAnnotation(enter)
 )]
 struct RenameCollector<'a> {
@@ -1073,6 +1083,13 @@ impl RenameCollector<'_> {
                     self.push_span(*name_span);
                 }
             }
+            DeclKind::Effect {
+                name, name_span, ..
+            } => {
+                if name.symbol().ok() == Some(self.target) {
+                    self.push_span(*name_span);
+                }
+            }
             _ => {}
         }
     }
@@ -1080,6 +1097,13 @@ impl RenameCollector<'_> {
     fn enter_func(&mut self, func: &crate::node_kinds::func::Func) {
         if func.name.symbol().ok() == Some(self.target) {
             self.push_span(func.name_span);
+        }
+
+        // Check effect annotations in the function signature
+        for (name, span) in func.effects.names.iter().zip(func.effects.spans.iter()) {
+            if name.symbol().ok() == Some(self.target) {
+                self.push_span(*span);
+            }
         }
     }
 
@@ -1112,13 +1136,121 @@ impl RenameCollector<'_> {
     fn enter_pattern(&mut self, pattern: &crate::node_kinds::pattern::Pattern) {
         use crate::node_kinds::pattern::PatternKind;
 
-        let PatternKind::Bind(name) = &pattern.kind else {
-            return;
-        };
-
-        if name.symbol().ok() == Some(self.target) {
-            self.push_span(pattern.span);
+        match &pattern.kind {
+            PatternKind::Bind(name) => {
+                if name.symbol().ok() == Some(self.target) {
+                    self.push_span(pattern.span);
+                }
+            }
+            PatternKind::Variant {
+                enum_name,
+                variant_name,
+                variant_name_span,
+                ..
+            } => {
+                // Check if the variant refers to our target symbol
+                if let Some(variant_symbol) = self.lookup_variant_symbol(pattern, enum_name.as_ref(), variant_name) {
+                    if variant_symbol == self.target {
+                        self.push_span(*variant_name_span);
+                    }
+                }
+            }
+            _ => {}
         }
+    }
+
+    /// Look up the symbol for a variant pattern
+    fn lookup_variant_symbol(
+        &self,
+        pattern: &crate::node_kinds::pattern::Pattern,
+        enum_name: Option<&crate::name::Name>,
+        variant_name: &str,
+    ) -> Option<Symbol> {
+        let types = self.types?;
+        let label: crate::label::Label = variant_name.to_string().into();
+
+        // First try: if enum_name is explicitly provided
+        if let Some(enum_name) = enum_name {
+            let enum_symbol = enum_name.symbol().ok()?;
+            return types.catalog.variants.get(&enum_symbol)?.get(&label).copied();
+        }
+
+        // Second try: infer enum from the pattern's type
+        if let Some(entry) = types.get(&pattern.id) {
+            let ty = entry.as_mono_ty();
+            if let crate::types::ty::Ty::Nominal { symbol, .. } = ty {
+                return types.catalog.variants.get(symbol)?.get(&label).copied();
+            }
+        }
+
+        // Third try: Find parent match expression and use scrutinee type
+        for (node_id, meta) in self.ast.meta.iter() {
+            if meta.start.start <= pattern.span.start && pattern.span.end <= meta.end.end {
+                if let Some(node) = self.ast.find(*node_id) {
+                    if let crate::node::Node::Stmt(stmt) = &node {
+                        if let crate::node_kinds::stmt::StmtKind::Expr(expr) = &stmt.kind {
+                            if let crate::node_kinds::expr::ExprKind::Match(scrutinee, _) = &expr.kind {
+                                if let Some(entry) = types.get(&scrutinee.id) {
+                                    let ty = entry.as_mono_ty();
+                                    if let crate::types::ty::Ty::Nominal { symbol, .. } = ty {
+                                        return types.catalog.variants.get(symbol)?.get(&label).copied();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if let crate::node::Node::Expr(expr) = node {
+                        if let crate::node_kinds::expr::ExprKind::Match(scrutinee, _) = &expr.kind {
+                            if let Some(entry) = types.get(&scrutinee.id) {
+                                let ty = entry.as_mono_ty();
+                                if let crate::types::ty::Ty::Nominal { symbol, .. } = ty {
+                                    return types.catalog.variants.get(symbol)?.get(&label).copied();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Look up the variant symbol from an expression's type (for shorthand .Variant access)
+    fn lookup_variant_from_expr_type(
+        &self,
+        expr: &crate::node_kinds::expr::Expr,
+        label: &crate::label::Label,
+    ) -> Option<Symbol> {
+        use crate::types::ty::Ty;
+
+        let types = self.types?;
+
+        // Get the expression's type
+        if let Some(entry) = types.get(&expr.id) {
+            let ty = entry.as_mono_ty();
+
+            // For a variant constructor like .Some, the type is Func(params..., return_type, effects)
+            // The return type contains the enum's Nominal type
+            let enum_symbol = match ty {
+                Ty::Nominal { symbol, .. } => Some(symbol),
+                Ty::Func(_, ret, _) => {
+                    // The return type should be the Nominal enum type
+                    if let Ty::Nominal { symbol, .. } = ret.as_ref() {
+                        Some(symbol)
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            };
+
+            if let Some(symbol) = enum_symbol {
+                return types.catalog.variants.get(symbol)?.get(label).copied();
+            }
+        }
+
+        None
     }
 
     fn enter_record_field_pattern(
@@ -1169,15 +1301,46 @@ impl RenameCollector<'_> {
                 }
             }
             ExprKind::Member(receiver, label, name_span) => {
-                let Some(receiver) = receiver.as_ref() else {
-                    return;
-                };
-                let member_sym = resolve_member_symbol(self.types, receiver, label);
-                if member_sym == Some(self.target) {
-                    self.push_span(*name_span);
+                if let Some(receiver) = receiver.as_ref() {
+                    let member_sym = resolve_member_symbol(self.types, receiver, label);
+                    if member_sym == Some(self.target) {
+                        self.push_span(*name_span);
+                    }
+                } else {
+                    // No receiver - this might be a shorthand variant access like .Some
+                    // Look up the variant from the expression's type
+                    if let Some(variant_sym) = self.lookup_variant_from_expr_type(expr, label) {
+                        if variant_sym == self.target {
+                            self.push_span(*name_span);
+                        }
+                    }
+                }
+            }
+            ExprKind::CallEffect {
+                effect_name,
+                effect_name_span,
+                ..
+            } => {
+                if effect_name.symbol().ok() == Some(self.target) {
+                    self.push_span(*effect_name_span);
                 }
             }
             _ => {}
+        }
+    }
+
+    fn enter_stmt(&mut self, stmt: &crate::node_kinds::stmt::Stmt) {
+        use crate::node_kinds::stmt::StmtKind;
+
+        if let StmtKind::Handling {
+            effect_name,
+            effect_name_span,
+            ..
+        } = &stmt.kind
+        {
+            if effect_name.symbol().ok() == Some(self.target) {
+                self.push_span(*effect_name_span);
+            }
         }
     }
 }
@@ -1249,18 +1412,12 @@ fn goto_definition(
                     None
                 }
             }
-            crate::node::Node::Pattern(pattern) => match &pattern.kind {
-                crate::node_kinds::pattern::PatternKind::Bind(name) => {
-                    let meta = ast.meta.get(&pattern.id)?;
-                    let (start, end) = identifier_span_at_offset(meta, byte_offset)?;
-                    if start <= byte_offset && byte_offset <= end {
-                        name.symbol().ok()
-                    } else {
-                        None
-                    }
-                }
-                _ => None,
-            },
+            crate::node::Node::Pattern(pattern) => {
+                goto_definition_symbol_from_pattern(module.types.as_ref(), ast, &pattern, byte_offset)
+            }
+            crate::node::Node::CallArg(call_arg) => {
+                goto_definition_symbol_from_call_arg(module.types.as_ref(), ast, &call_arg, byte_offset)
+            }
             _ => None,
         };
 
@@ -1268,6 +1425,58 @@ fn goto_definition(
             && let Some(target) = definition_location_for_symbol(module, core, symbol)
         {
             return Some(target);
+        }
+    }
+
+    // Fallback: search for CallArg nodes where label_span contains the offset
+    // (since CallArg's span may not include the label)
+    if let Some(result) = find_call_arg_by_label_span(module, core, ast, byte_offset) {
+        return Some(result);
+    }
+
+    None
+}
+
+/// Search all CallArg nodes for one where label_span contains the offset
+fn find_call_arg_by_label_span(
+    module: &AnalysisWorkspace,
+    core: Option<&AnalysisWorkspace>,
+    ast: &crate::ast::AST<crate::ast::NameResolved>,
+    byte_offset: u32,
+) -> Option<Location> {
+    use crate::node_kinds::call_arg::CallArg;
+    use derive_visitor::Visitor;
+
+    #[derive(Visitor)]
+    #[visitor(CallArg(enter))]
+    struct CallArgFinder {
+        byte_offset: u32,
+        found: Option<CallArg>,
+    }
+
+    impl CallArgFinder {
+        fn enter_call_arg(&mut self, call_arg: &CallArg) {
+            if span_contains(call_arg.label_span, self.byte_offset) {
+                self.found = Some(call_arg.clone());
+            }
+        }
+    }
+
+    let mut finder = CallArgFinder {
+        byte_offset,
+        found: None,
+    };
+
+    for root in &ast.roots {
+        root.drive(&mut finder);
+        if finder.found.is_some() {
+            break;
+        }
+    }
+
+    if let Some(call_arg) = finder.found {
+        if let Some(symbol) = goto_definition_symbol_from_call_arg(module.types.as_ref(), ast, &call_arg, byte_offset) {
+            return definition_location_for_symbol(module, core, symbol);
         }
     }
 
@@ -1292,6 +1501,33 @@ fn goto_definition_symbol_from_expr(
 
             resolve_member_symbol(types, receiver, label)
         }
+        ExprKind::CallEffect {
+            effect_name,
+            effect_name_span,
+            ..
+        } => {
+            if !span_contains(*effect_name_span, byte_offset) {
+                return None;
+            }
+            effect_name.symbol().ok()
+        }
+        ExprKind::Call { callee, args, .. } => {
+            // Check if cursor is on a call argument label
+            for arg in args {
+                if span_contains(arg.label_span, byte_offset) {
+                    if let crate::label::Label::Named(name) = &arg.label {
+                        // Try to get the callee's type to find the struct
+                        if let ExprKind::Constructor(constructor_name) = &callee.kind {
+                            if let Ok(struct_symbol) = constructor_name.symbol() {
+                                let label = crate::label::Label::Named(name.clone());
+                                return types?.catalog.properties.get(&struct_symbol)?.get(&label).copied();
+                            }
+                        }
+                    }
+                }
+            }
+            None
+        }
         _ => None,
     }
 }
@@ -1312,6 +1548,16 @@ fn goto_definition_symbol_from_stmt(
         }
         StmtKind::Assignment(lhs, rhs) => goto_definition_symbol_from_expr(types, lhs, byte_offset)
             .or_else(|| goto_definition_symbol_from_expr(types, rhs, byte_offset)),
+        StmtKind::Handling {
+            effect_name,
+            effect_name_span,
+            ..
+        } => {
+            if !span_contains(*effect_name_span, byte_offset) {
+                return None;
+            }
+            effect_name.symbol().ok()
+        }
         _ => None,
     }
 }
@@ -1333,6 +1579,161 @@ fn goto_definition_symbol_from_type_annotation(
         }
         _ => None,
     }
+}
+
+fn goto_definition_symbol_from_pattern(
+    types: Option<&crate::types::types::Types>,
+    ast: &crate::ast::AST<crate::ast::NameResolved>,
+    pattern: &crate::node_kinds::pattern::Pattern,
+    byte_offset: u32,
+) -> Option<Symbol> {
+    use crate::label::Label;
+    use crate::node_kinds::pattern::PatternKind;
+    use crate::types::ty::Ty;
+
+    match &pattern.kind {
+        PatternKind::Bind(name) => {
+            let meta = ast.meta.get(&pattern.id)?;
+            let (start, end) = identifier_span_at_offset(meta, byte_offset)?;
+            if start <= byte_offset && byte_offset <= end {
+                name.symbol().ok()
+            } else {
+                None
+            }
+        }
+        PatternKind::Variant {
+            enum_name,
+            variant_name,
+            variant_name_span,
+            ..
+        } => {
+            if !span_contains(*variant_name_span, byte_offset) {
+                return None;
+            }
+
+            let types = types?;
+            let label: Label = variant_name.clone().into();
+
+            // First try: if enum_name is explicitly provided (e.g., Option.Some)
+            if let Some(enum_name) = enum_name {
+                let enum_symbol = enum_name.symbol().ok()?;
+                return types.catalog.variants.get(&enum_symbol)?.get(&label).copied();
+            }
+
+            // Second try: infer enum from the pattern's type (if stored)
+            if let Some(entry) = types.get(&pattern.id) {
+                let ty = entry.as_mono_ty();
+                if let Ty::Nominal { symbol, .. } = ty {
+                    return types.catalog.variants.get(symbol)?.get(&label).copied();
+                }
+            }
+
+            // Third try: Find parent match expression and use scrutinee type
+            for (node_id, meta) in ast.meta.iter() {
+                if meta.start.start <= pattern.span.start && pattern.span.end <= meta.end.end {
+                    if let Some(node) = ast.find(*node_id) {
+                        // Check if this is a Stmt containing a match expression
+                        if let crate::node::Node::Stmt(stmt) = &node {
+                            if let crate::node_kinds::stmt::StmtKind::Expr(expr) = &stmt.kind {
+                                if let crate::node_kinds::expr::ExprKind::Match(scrutinee, _) = &expr.kind {
+                                    if let Some(entry) = types.get(&scrutinee.id) {
+                                        let ty = entry.as_mono_ty();
+                                        if let Ty::Nominal { symbol, .. } = ty {
+                                            return types.catalog.variants.get(symbol)?.get(&label).copied();
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        // Also check direct Expr nodes (for match expressions in expression position)
+                        if let crate::node::Node::Expr(expr) = node {
+                            if let crate::node_kinds::expr::ExprKind::Match(scrutinee, _) = &expr.kind {
+                                if let Some(entry) = types.get(&scrutinee.id) {
+                                    let ty = entry.as_mono_ty();
+                                    if let Ty::Nominal { symbol, .. } = ty {
+                                        return types.catalog.variants.get(symbol)?.get(&label).copied();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            None
+        }
+        _ => None,
+    }
+}
+
+fn goto_definition_symbol_from_call_arg(
+    types: Option<&crate::types::types::Types>,
+    ast: &crate::ast::AST<crate::ast::NameResolved>,
+    call_arg: &crate::node_kinds::call_arg::CallArg,
+    byte_offset: u32,
+) -> Option<Symbol> {
+    use crate::label::Label;
+    use crate::node_kinds::expr::ExprKind;
+    use derive_visitor::Visitor;
+
+    // Only handle if cursor is on the label
+    if !span_contains(call_arg.label_span, byte_offset) {
+        return None;
+    }
+
+    // Get the label name
+    let label = match &call_arg.label {
+        Label::Named(name) => Label::Named(name.clone()),
+        _ => return None, // Positional args don't have field definitions
+    };
+
+    let types = types?;
+
+    // Visitor to find the Call expression containing this arg
+    #[derive(Visitor)]
+    #[visitor(Expr(enter))]
+    struct CallFinder {
+        call_arg_id: crate::node_id::NodeID,
+        result: Option<Symbol>,
+        types: *const crate::types::types::Types,
+        label: Label,
+    }
+
+    impl CallFinder {
+        fn enter_expr(&mut self, expr: &crate::node_kinds::expr::Expr) {
+            if let ExprKind::Call { callee, args, .. } = &expr.kind {
+                // Check if this Call contains our arg
+                if args.iter().any(|a| a.id == self.call_arg_id) {
+                    // Found the parent Call - look up the field
+                    if let ExprKind::Constructor(name) = &callee.kind {
+                        if let Ok(struct_symbol) = name.symbol() {
+                            // Safety: we only use this within the same function call
+                            let types = unsafe { &*self.types };
+                            if let Some(props) = types.catalog.properties.get(&struct_symbol) {
+                                self.result = props.get(&self.label).copied();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let mut finder = CallFinder {
+        call_arg_id: call_arg.id,
+        result: None,
+        types,
+        label,
+    };
+
+    for root in &ast.roots {
+        root.drive(&mut finder);
+        if finder.result.is_some() {
+            break;
+        }
+    }
+
+    finder.result
 }
 
 fn goto_definition_symbol_from_decl(
@@ -1369,6 +1770,14 @@ fn goto_definition_symbol_from_decl(
             name.symbol().ok()
         }
         DeclKind::EnumVariant(name, name_span, ..) => {
+            if !span_contains(*name_span, byte_offset) {
+                return None;
+            }
+            name.symbol().ok()
+        }
+        DeclKind::Effect {
+            name, name_span, ..
+        } => {
             if !span_contains(*name_span, byte_offset) {
                 return None;
             }
@@ -2036,6 +2445,167 @@ extend Person {
     }
 
     #[test]
+    fn goto_definition_finds_variant_pattern() {
+        let code = r#"enum Option<T> {
+  case Some(T)
+  case None
+}
+
+func main() {
+  let x: Option<Int> = .Some(1)
+  match x {
+    .Some(val) -> val,
+    .None -> 0
+  }
+}
+"#;
+        let uri = Url::from_file_path(std::env::temp_dir().join("goto_def_variant_pattern.tlk"))
+            .expect("file uri");
+
+        let module = workspace_for_docs(vec![(uri.clone(), code)]);
+        // Find the `.Some` in the match pattern (the second occurrence of "Some")
+        let some_offsets: Vec<usize> = code.match_indices("Some").map(|(i, _)| i).collect();
+        assert_eq!(some_offsets.len(), 3, "expected 3 Some occurrences");
+        // The third occurrence is in the match pattern
+        let pattern_some_offset = some_offsets[2] as u32;
+
+        let target = super::goto_definition(&module, None, &uri, pattern_some_offset);
+        assert!(target.is_some(), "should find variant definition from pattern");
+    }
+
+    #[test]
+    fn goto_definition_finds_effect_call() {
+        let code = r#"effect 'fizz(x: Int) -> Int
+
+func main() '[fizz] {
+  'fizz(1)
+}
+"#;
+        let uri = Url::from_file_path(std::env::temp_dir().join("goto_def_effect_call.tlk"))
+            .expect("file uri");
+
+        let module = workspace_for_docs(vec![(uri.clone(), code)]);
+        // Find the 'fizz call (second occurrence)
+        let fizz_offsets: Vec<usize> = code.match_indices("fizz").map(|(i, _)| i).collect();
+        assert!(fizz_offsets.len() >= 2, "expected at least 2 fizz occurrences");
+        // The last occurrence is in the effect call
+        let call_fizz_offset = fizz_offsets.last().expect("last fizz") + 1; // +1 to be inside the identifier
+        let target = super::goto_definition(&module, None, &uri, call_fizz_offset as u32);
+        assert!(target.is_some(), "should find effect definition from call");
+    }
+
+    #[test]
+    fn goto_definition_finds_handling_block() {
+        let code = r#"effect 'fizz(x: Int) -> Int
+
+func main() {
+  @handle 'fizz { x in x }
+}
+"#;
+        let uri = Url::from_file_path(std::env::temp_dir().join("goto_def_handling.tlk"))
+            .expect("file uri");
+
+        let module = workspace_for_docs(vec![(uri.clone(), code)]);
+        // Find the 'fizz in the @handle statement (second occurrence)
+        let fizz_offsets: Vec<usize> = code.match_indices("fizz").map(|(i, _)| i).collect();
+        assert_eq!(fizz_offsets.len(), 2, "expected 2 fizz occurrences");
+        // The second occurrence is in the @handle statement
+        let handle_fizz_offset = fizz_offsets[1] as u32;
+        let target = super::goto_definition(&module, None, &uri, handle_fizz_offset);
+        assert!(target.is_some(), "should find effect definition from handling block");
+    }
+
+    #[test]
+    fn rename_updates_effect_in_handling_block() {
+        let code = r#"effect 'fizz(x: Int) -> Int
+
+func foo() '[fizz] {
+  'fizz(1)
+}
+
+func main() {
+  @handle 'fizz { x in x }
+  foo()
+}
+"#;
+        let uri = Url::from_file_path(std::env::temp_dir().join("rename_effect_handling.tlk"))
+            .expect("file uri");
+
+        let module = workspace_for_docs(vec![(uri.clone(), code)]);
+        // Find the 'fizz in the effect declaration (first occurrence)
+        let fizz_offsets: Vec<usize> = code.match_indices("fizz").map(|(i, _)| i).collect();
+        // Should be: decl, func signature, call, handler = 4 occurrences
+        assert!(fizz_offsets.len() >= 4, "expected at least 4 fizz occurrences, got {}", fizz_offsets.len());
+
+        let decl_fizz_offset = fizz_offsets[0] as u32;
+        let edit = super::rename_at(&module, &uri, decl_fizz_offset, "buzz").expect("workspace edit");
+
+        let ranges = edit_ranges_for_uri(&edit, &uri);
+        // Should have 4 ranges: decl, signature, call, handler
+        assert_eq!(ranges.len(), 4, "expected 4 rename ranges, got {:?}", ranges);
+    }
+
+    #[test]
+    fn rename_updates_variant_in_pattern() {
+        let code = r#"enum Option<T> {
+  case Some(T)
+  case None
+}
+
+func main() {
+  let x: Option<Int> = .Some(1)
+  match x {
+    .Some(val) -> val,
+    .None -> 0
+  }
+}
+"#;
+        let uri = Url::from_file_path(std::env::temp_dir().join("rename_variant_pattern.tlk"))
+            .expect("file uri");
+
+        let module = workspace_for_docs(vec![(uri.clone(), code)]);
+        // Find the 'Some' in the case declaration (first occurrence)
+        let some_offsets: Vec<usize> = code.match_indices("Some").map(|(i, _)| i).collect();
+        // Should be: case decl, constructor usage, pattern match = 3 occurrences
+        assert_eq!(some_offsets.len(), 3, "expected 3 Some occurrences, got {}", some_offsets.len());
+
+        let decl_some_offset = some_offsets[0] as u32;
+        let edit = super::rename_at(&module, &uri, decl_some_offset, "Just").expect("workspace edit");
+
+        let ranges = edit_ranges_for_uri(&edit, &uri);
+        // Should have 3 ranges: case decl, constructor, pattern
+        assert_eq!(ranges.len(), 3, "expected 3 rename ranges, got {:?}", ranges);
+    }
+
+    #[test]
+    fn goto_definition_finds_struct_field_in_constructor() {
+        let code = r#"struct Point {
+  let x: Int
+  let y: Int
+}
+
+func main() {
+  Point(x: 1, y: 2)
+}
+"#;
+        let uri = Url::from_file_path(std::env::temp_dir().join("goto_def_struct_field.tlk"))
+            .expect("file uri");
+
+        let module = workspace_for_docs(vec![(uri.clone(), code)]);
+        // Find the x label in Point(x: 1, y: 2) - the second "x:" occurrence
+        let x_offsets: Vec<usize> = code.match_indices("x:").map(|(i, _)| i).collect();
+        assert!(x_offsets.len() >= 2, "expected at least two x: occurrences");
+        let constructor_x_offset = x_offsets[1] as u32; // The x: in the constructor call
+
+        let target = super::goto_definition(&module, None, &uri, constructor_x_offset);
+        assert!(target.is_some(), "should find struct field definition from constructor");
+
+        // Verify it points to the field definition (line 1, "let x: Int")
+        let loc = target.unwrap();
+        assert_eq!(loc.range.start.line, 1, "should point to the x field definition line");
+    }
+
+    #[test]
     fn goto_definition_finds_local_variable() {
         let code = r#"func main() {
   let x = 1
@@ -2133,5 +2703,38 @@ extend Person {
         // Should point to the start of the file
         assert_eq!(target.range.start.line, 0);
         assert_eq!(target.range.start.character, 0);
+    }
+
+    #[test]
+    fn format_does_not_add_extra_newlines() {
+        // Simulates what LSP formatting does: calculate range, get formatted text, apply edit
+        fn apply_format(input: &str) -> String {
+            let formatted = crate::formatter::format_string(input);
+            let newline_count = input.matches('\n').count();
+            let ends_with_newline = input.ends_with('\n');
+            let last_line = newline_count;
+            let last_char = if ends_with_newline {
+                0
+            } else {
+                input.rsplit('\n').next().map(|s| s.len()).unwrap_or(input.len())
+            };
+
+            // Apply the edit: replace range [0,0] to [last_line, last_char] with formatted
+            let mut result = String::new();
+            for (i, line) in input.lines().enumerate() {
+                if i == last_line {
+                    // This line gets partially replaced
+                    result.push_str(&line[last_char..]);
+                    break;
+                }
+            }
+            // If we ended exactly at the end, result is empty (full replacement)
+            format!("{formatted}{result}")
+        }
+
+        assert_eq!(apply_format("let x = 1\n"), "let x = 1\n");
+        assert_eq!(apply_format("let x = 1\n\n\n"), "let x = 1\n");
+        assert_eq!(apply_format("let x=1\n"), "let x = 1\n");
+        assert_eq!(apply_format("let x=1\n\n"), "let x = 1\n");
     }
 }

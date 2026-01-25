@@ -1981,15 +1981,10 @@ impl<'a> Formatter<'a> {
 }
 
 fn adjust_trailing_newlines(input: &str, mut output: String) -> String {
-    let input_trailing = input
-        .as_bytes()
-        .iter()
-        .rev()
-        .take_while(|&&b| b == b'\n')
-        .count();
+    let input_has_trailing = input.ends_with('\n');
     let trimmed = output.trim_end_matches('\n');
     output.truncate(trimmed.len());
-    for _ in 0..input_trailing {
+    if input_has_trailing {
         output.push('\n');
     }
     output
