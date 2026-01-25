@@ -300,8 +300,7 @@ impl ModuleEnvironment {
     pub fn import_core(&mut self, module: Module) {
         self.modules_by_local.insert(ModuleId::Core, module.id);
         self.modules_by_name.insert("Core".into(), ModuleId::Core);
-        // Remap symbols from ModuleId::Current to ModuleId::Core
-        self.modules.insert(module.id, module.import_as(ModuleId::Core));
+        self.modules.insert(module.id, module);
     }
 
     pub fn import(&mut self, module: Module) -> ModuleId {

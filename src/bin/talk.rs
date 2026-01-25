@@ -128,6 +128,14 @@ async fn main() {
                 .unwrap()
                 .lower()
                 .unwrap();
+
+            if lowered.has_errors() {
+                for diagnostic in lowered.diagnostics() {
+                    eprintln!("error: {diagnostic}");
+                }
+                std::process::exit(1);
+            }
+
             let display_names = lowered.display_symbol_names();
             let module = lowered.module("talkin");
 
