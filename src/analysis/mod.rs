@@ -116,6 +116,7 @@ pub(crate) fn resolve_member_symbol(
 
     match ty {
         Ty::Nominal { symbol, .. } => types.catalog.lookup_member(symbol, label).map(|m| m.0),
+        Ty::Primitive(symbol) => types.catalog.lookup_member(symbol, label).map(|m| m.0),
         _ => None,
     }
 }
