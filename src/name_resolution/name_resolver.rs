@@ -41,6 +41,7 @@ use crate::{
         type_annotation::{TypeAnnotation, TypeAnnotationKind},
     },
     on, some,
+    span::Span,
     types::infer_ty::Level,
 };
 
@@ -144,6 +145,79 @@ pub struct ResolvedNames {
     pub mutated_symbols: IndexSet<Symbol>,
     /// Tracks which symbols are public (visible outside their file)
     pub public_symbols: FxHashSet<Symbol>,
+
+    /// Maps spans to symbols (sorted by file_id, start for binary search)
+    /// The optional NodeID allows looking up expression-specific types for hover.
+    pub span_to_symbol: Vec<(FileID, u32, u32, Symbol, Option<NodeID>)>,
+
+    /// Reverse lookup: all spans for a given symbol
+    pub symbol_to_spans: FxHashMap<Symbol, Vec<(FileID, u32, u32)>>,
+}
+
+impl ResolvedNames {
+    /// Record a span-to-symbol mapping for later lookup.
+    /// Skips synthesized spans and duplicate recordings.
+    pub fn record_span(&mut self, span: Span, symbol: Symbol) {
+        self.record_span_with_node(span, symbol, None);
+    }
+
+    /// Record a span-to-symbol mapping with an optional expression NodeID.
+    /// The NodeID allows looking up expression-specific types for hover.
+    pub fn record_span_with_node(&mut self, span: Span, symbol: Symbol, node_id: Option<NodeID>) {
+        if span == Span::SYNTHESIZED {
+            return;
+        }
+        // Check for duplicate (ignore node_id in comparison since span+symbol should be unique)
+        if self
+            .span_to_symbol
+            .iter()
+            .any(|(f, s, e, sym, _)| *f == span.file_id && *s == span.start && *e == span.end && *sym == symbol)
+        {
+            return;
+        }
+        self.span_to_symbol
+            .push((span.file_id, span.start, span.end, symbol, node_id));
+        self.symbol_to_spans
+            .entry(symbol)
+            .or_default()
+            .push((span.file_id, span.start, span.end));
+    }
+
+    /// Lookup a symbol at the given byte offset using the span index.
+    /// Returns the symbol, span (start, end), and optional NodeID if found.
+    /// Prefers the smallest (most specific) span containing the offset.
+    pub fn symbol_at_offset(
+        &self,
+        file_id: FileID,
+        byte_offset: u32,
+    ) -> Option<(Symbol, u32, u32, Option<NodeID>)> {
+        let spans = &self.span_to_symbol;
+
+        // Find first span in this file
+        let file_start = spans.partition_point(|(f, ..)| *f < file_id);
+
+        // Find first span after offset (spans where start > offset can't contain offset)
+        let search_end =
+            spans.partition_point(|(f, start, ..)| (*f, *start) <= (file_id, byte_offset));
+
+        let mut best: Option<(Symbol, u32, u32, Option<NodeID>, u32)> = None;
+
+        // Check all spans in this file where start <= offset
+        for (f, start, end, symbol, node_id) in &spans[file_start..search_end] {
+            if *f != file_id {
+                continue;
+            }
+            // Span contains offset if start <= offset <= end
+            if *end >= byte_offset {
+                let span_len = end - start;
+                if best.is_none() || span_len < best.as_ref().unwrap().4 {
+                    best = Some((*symbol, *start, *end, *node_id, span_len));
+                }
+            }
+        }
+
+        best.map(|(sym, start, end, node_id, _)| (sym, start, end, node_id))
+    }
 }
 
 impl ResolvedNames {
@@ -521,6 +595,11 @@ impl NameResolver {
 
         self.phase.scopes = self.scopes.clone();
 
+        // Sort span_to_symbol for efficient binary search lookups
+        self.phase
+            .span_to_symbol
+            .sort_by_key(|(file, start, ..)| (*file, *start));
+
         (
             asts.into_iter().map(|a| a.into()).collect_vec(),
             self.phase.clone(),
@@ -676,7 +755,7 @@ impl NameResolver {
         None
     }
 
-    pub(super) fn lookup(&mut self, name: &Name, node_id: Option<NodeID>) -> Option<Name> {
+    pub(super) fn lookup(&mut self, name: &Name, node_id: Option<NodeID>, span: Option<Span>) -> Option<Name> {
         let symbol = self.lookup_in_scope(
             name,
             self.current_scope_id
@@ -685,6 +764,10 @@ impl NameResolver {
 
         if let Some(node_id) = node_id {
             self.track_dependency(symbol, node_id);
+        }
+
+        if let Some(span) = span {
+            self.record_span(span, symbol);
         }
 
         Some(Name::Resolved(symbol, name.name_str()))
@@ -797,12 +880,10 @@ impl NameResolver {
         self.current_symbol_scope.pop();
     }
 
-    pub(super) fn declare(&mut self, name: &Name, kind: Symbol, node_id: NodeID) -> Name {
+    pub(super) fn declare(&mut self, name: &Name, kind: Symbol, node_id: NodeID, span: Span) -> Name {
         let at_module_scope = self.at_module_scope();
-        let scope = self
-            .scopes
-            .get_mut(&self.current_scope_id.expect("no scope to declare in"))
-            .unwrap_or_else(|| unreachable!("scope not found: {:?}", self.current_scope_id));
+        let scope_id = self.current_scope_id.expect("no scope to declare in");
+        let name_str = name.name_str();
 
         // Check if this is a nominal type or effect that was already predeclared
         // If so, return the existing symbol to avoid duplicate creation
@@ -810,9 +891,10 @@ impl NameResolver {
             kind,
             Symbol::Struct(..) | Symbol::Enum(..) | Symbol::Protocol(..) | Symbol::Effect(..)
         ) {
-            if let Some(&existing) = scope.types.get(&name.name_str()) {
+            if let Some(&existing) = self.scopes.get(&scope_id).and_then(|s| s.types.get(&name_str)) {
                 if std::mem::discriminant(&existing) == std::mem::discriminant(&kind) {
-                    return Name::Resolved(existing, name.name_str());
+                    self.record_span(span, existing);
+                    return Name::Resolved(existing, name_str);
                 }
             }
         }
@@ -821,12 +903,13 @@ impl NameResolver {
         // This handles public Let bindings that were predeclared for import resolution
         // Only reuse if the existing Global is public (i.e., was predeclared)
         // Non-public Globals should allow shadowing (create new symbol)
+        // Note: Don't record span here - it was already recorded during predeclaration
         if at_module_scope && matches!(kind, Symbol::Global(..)) {
-            if let Some(&existing) = scope.types.get(&name.name_str()) {
+            if let Some(&existing) = self.scopes.get(&scope_id).and_then(|s| s.types.get(&name_str)) {
                 if matches!(existing, Symbol::Global(..))
                     && self.phase.public_symbols.contains(&existing)
                 {
-                    return Name::Resolved(existing, name.name_str());
+                    return Name::Resolved(existing, name_str);
                 }
             }
         }
@@ -871,17 +954,23 @@ impl NameResolver {
         };
 
         self.phase.symbols_to_node.insert(symbol, node_id);
-        self.phase.symbol_names.insert(symbol, name.name_str());
+        self.phase.symbol_names.insert(symbol, name_str.clone());
+
+        self.record_span(span, symbol);
 
         tracing::debug!(
             "declare type {name} {} -> {symbol:?} {:?}",
-            name.name_str(),
+            name_str,
             self.current_scope_id
         );
 
-        scope.types.insert(name.name_str(), symbol);
+        let scope = self
+            .scopes
+            .get_mut(&scope_id)
+            .unwrap_or_else(|| unreachable!("scope not found: {:?}", scope_id));
+        scope.types.insert(name_str.clone(), symbol);
 
-        Name::Resolved(symbol, name.name_str())
+        Name::Resolved(symbol, name_str)
     }
 
     /// Mark a symbol as public (visible outside its file)
@@ -889,6 +978,10 @@ impl NameResolver {
         self.phase.public_symbols.insert(symbol);
     }
 
+    /// Record a span-to-symbol mapping for later lookup
+    pub(super) fn record_span(&mut self, span: Span, symbol: Symbol) {
+        self.phase.record_span(span, symbol);
+    }
 
     fn nearest_enclosing_binder_from(
         &self,
@@ -915,7 +1008,7 @@ impl NameResolver {
     fn enter_pattern(&mut self, pattern: &mut Pattern) {
         match &mut pattern.kind {
             PatternKind::Bind(name @ Name::Raw(_)) => {
-                *name = self.lookup(name, None).unwrap_or_else(|| {
+                *name = self.lookup(name, None, Some(pattern.span)).unwrap_or_else(|| {
                     self.diagnostic(pattern.id, NameResolverError::Unresolved(name.clone()));
                     name.clone()
                 })
@@ -931,7 +1024,8 @@ impl NameResolver {
                 fields,
                 ..
             } => {
-                let Some(resolved) = self.lookup(enum_name, None) else {
+                // enum_name doesn't have a dedicated span; use pattern span
+                let Some(resolved) = self.lookup(enum_name, None, Some(pattern.span)) else {
                     self.diagnostic(
                         pattern.id,
                         NameResolverError::UndefinedName(enum_name.name_str()),
@@ -963,13 +1057,13 @@ impl NameResolver {
                 for field in fields {
                     match &mut field.kind {
                         RecordFieldPatternKind::Bind(name) => {
-                            *name = self.lookup(name, None).unwrap_or_else(|| {
+                            *name = self.lookup(name, None, Some(field.span)).unwrap_or_else(|| {
                                 tracing::error!("Lookup failed for {name:?}");
                                 name.clone()
                             });
                         }
-                        RecordFieldPatternKind::Equals { name, value, .. } => {
-                            *name = self.lookup(name, None).unwrap_or_else(|| {
+                        RecordFieldPatternKind::Equals { name, name_span, value } => {
+                            *name = self.lookup(name, None, Some(*name_span)).unwrap_or_else(|| {
                                 tracing::error!("Lookup failed for {name:?}");
                                 name.clone()
                             });
@@ -997,8 +1091,8 @@ impl NameResolver {
     // Type lookups
     ///////////////////////////////////////////////////////////////////////////
     fn enter_type_annotation(&mut self, ty: &mut TypeAnnotation) {
-        if let TypeAnnotationKind::Nominal { name, .. } = &mut ty.kind {
-            if let Some(resolved_name) = self.lookup(name, Some(ty.id)) {
+        if let TypeAnnotationKind::Nominal { name, name_span, .. } = &mut ty.kind {
+            if let Some(resolved_name) = self.lookup(name, Some(ty.id), Some(*name_span)) {
                 *name = resolved_name
             } else {
                 self.diagnostic(ty.id, NameResolverError::UndefinedName(name.name_str()));
@@ -1006,7 +1100,7 @@ impl NameResolver {
         }
 
         if let TypeAnnotationKind::SelfType(name) = &mut ty.kind {
-            if let Some(resolved_name) = self.lookup(name, Some(ty.id)) {
+            if let Some(resolved_name) = self.lookup(name, Some(ty.id), Some(ty.span)) {
                 *name = resolved_name
             } else {
                 self.diagnostic(ty.id, NameResolverError::UndefinedName(name.name_str()));
@@ -1026,8 +1120,8 @@ impl NameResolver {
             self.enter_scope(block.id, None);
         }
 
-        on!(&mut stmt.kind, StmtKind::Handling { effect_name, .. }, {
-            let Some(Name::Resolved(effect_sym, _)) = self.lookup(effect_name, Some(stmt.id))
+        on!(&mut stmt.kind, StmtKind::Handling { effect_name, effect_name_span, .. }, {
+            let Some(Name::Resolved(effect_sym, _)) = self.lookup(effect_name, Some(stmt.id), Some(*effect_name_span))
             else {
                 self.diagnostic(stmt.id, NameResolverError::Unresolved(effect_name.clone()));
                 return;
@@ -1072,10 +1166,10 @@ impl NameResolver {
     }
 
     fn track_assignment_mutation(&mut self, expr: &mut Expr) {
-        let Some((name, id)) = Self::assignment_base_name(expr) else {
+        let Some((name, id, span)) = Self::assignment_base_name(expr) else {
             return;
         };
-        let Some(resolved) = self.lookup(name, Some(id)) else {
+        let Some(resolved) = self.lookup(name, Some(id), Some(span)) else {
             self.diagnostic(id, NameResolverError::UndefinedName(name.name_str()));
             return;
         };
@@ -1087,9 +1181,9 @@ impl NameResolver {
         *name = resolved;
     }
 
-    fn assignment_base_name(expr: &mut Expr) -> Option<(&mut Name, NodeID)> {
+    fn assignment_base_name(expr: &mut Expr) -> Option<(&mut Name, NodeID, Span)> {
         match &mut expr.kind {
-            ExprKind::Variable(name) => Some((name, expr.id)),
+            ExprKind::Variable(name) => Some((name, expr.id, expr.span)),
             ExprKind::Member(Some(inner), ..) => Self::assignment_base_name(inner),
             _ => None,
         }
@@ -1138,7 +1232,7 @@ impl NameResolver {
         });
 
         on!(&mut expr.kind, ExprKind::Variable(name), {
-            let Some(resolved_name) = self.lookup(name, Some(expr.id)) else {
+            let Some(resolved_name) = self.lookup(name, Some(expr.id), Some(expr.span)) else {
                 self.diagnostic(expr.id, NameResolverError::UndefinedName(name.name_str()));
                 return;
             };
@@ -1159,8 +1253,8 @@ impl NameResolver {
             }
         });
 
-        on!(&mut expr.kind, ExprKind::CallEffect { effect_name, .. }, {
-            let Some(resolved_name) = self.lookup(effect_name, Some(expr.id)) else {
+        on!(&mut expr.kind, ExprKind::CallEffect { effect_name, effect_name_span, .. }, {
+            let Some(resolved_name) = self.lookup(effect_name, Some(expr.id), Some(*effect_name_span)) else {
                 self.diagnostic(
                     expr.id,
                     NameResolverError::UndefinedName(effect_name.name_str()),
@@ -1193,8 +1287,8 @@ impl NameResolver {
         self.enter_scope(func.id, Some(vec![(func_symbol, func.id)]));
         self.current_func_symbols.push(func_symbol);
 
-        for name in &mut func.effects.names {
-            let Some(resolved_name) = self.lookup(name, None) else {
+        for (name, span) in func.effects.names.iter_mut().zip(func.effects.spans.iter()) {
+            let Some(resolved_name) = self.lookup(name, None, Some(*span)) else {
                 self.diagnostic(func.id, NameResolverError::Unresolved(name.clone()));
                 continue;
             };
@@ -1239,7 +1333,7 @@ impl NameResolver {
             self.enter_scope(decl.id, None);
 
             for param in params {
-                param.name = self.declare(&param.name, some!(ParamLocal), param.id);
+                param.name = self.declare(&param.name, some!(ParamLocal), param.id, param.name_span);
             }
         });
 
@@ -1298,5 +1392,91 @@ impl NameResolver {
         on!(decl.kind, DeclKind::Let { .. }, {
             self.current_level = self.current_level.prev();
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::name_resolution::symbol::DeclaredLocalId;
+
+    fn make_symbol(n: u32) -> Symbol {
+        Symbol::DeclaredLocal(DeclaredLocalId(n))
+    }
+
+    #[test]
+    fn symbol_at_offset_empty() {
+        let resolved = ResolvedNames::default();
+        assert!(resolved.symbol_at_offset(FileID(0), 10).is_none());
+    }
+
+    #[test]
+    fn symbol_at_offset_exact_match() {
+        let mut resolved = ResolvedNames::default();
+        let file = FileID(0);
+        let sym = make_symbol(1);
+        resolved.span_to_symbol = vec![(file, 5, 10, sym, None)];
+
+        // At start
+        assert_eq!(resolved.symbol_at_offset(file, 5), Some((sym, 5, 10, None)));
+        // In middle
+        assert_eq!(resolved.symbol_at_offset(file, 7), Some((sym, 5, 10, None)));
+        // At end
+        assert_eq!(resolved.symbol_at_offset(file, 10), Some((sym, 5, 10, None)));
+        // Before
+        assert!(resolved.symbol_at_offset(file, 4).is_none());
+        // After
+        assert!(resolved.symbol_at_offset(file, 11).is_none());
+    }
+
+    #[test]
+    fn symbol_at_offset_prefers_smallest_span() {
+        let mut resolved = ResolvedNames::default();
+        let file = FileID(0);
+        let outer = make_symbol(1);
+        let inner = make_symbol(2);
+        // Outer span [0, 20], inner span [5, 10]
+        resolved.span_to_symbol = vec![(file, 0, 20, outer, None), (file, 5, 10, inner, None)];
+
+        // At offset 7, both spans contain it, but inner is smaller
+        assert_eq!(resolved.symbol_at_offset(file, 7), Some((inner, 5, 10, None)));
+        // At offset 2, only outer contains it
+        assert_eq!(resolved.symbol_at_offset(file, 2), Some((outer, 0, 20, None)));
+        // At offset 15, only outer contains it
+        assert_eq!(resolved.symbol_at_offset(file, 15), Some((outer, 0, 20, None)));
+    }
+
+    #[test]
+    fn symbol_at_offset_different_files() {
+        let mut resolved = ResolvedNames::default();
+        let file0 = FileID(0);
+        let file1 = FileID(1);
+        let sym0 = make_symbol(1);
+        let sym1 = make_symbol(2);
+        resolved.span_to_symbol = vec![(file0, 5, 10, sym0, None), (file1, 5, 10, sym1, None)];
+
+        assert_eq!(resolved.symbol_at_offset(file0, 7), Some((sym0, 5, 10, None)));
+        assert_eq!(resolved.symbol_at_offset(file1, 7), Some((sym1, 5, 10, None)));
+    }
+
+    #[test]
+    fn symbol_at_offset_multiple_non_overlapping() {
+        let mut resolved = ResolvedNames::default();
+        let file = FileID(0);
+        let sym1 = make_symbol(1);
+        let sym2 = make_symbol(2);
+        let sym3 = make_symbol(3);
+        resolved.span_to_symbol = vec![
+            (file, 0, 5, sym1, None),
+            (file, 10, 15, sym2, None),
+            (file, 20, 25, sym3, None),
+        ];
+
+        assert_eq!(resolved.symbol_at_offset(file, 2), Some((sym1, 0, 5, None)));
+        assert_eq!(resolved.symbol_at_offset(file, 12), Some((sym2, 10, 15, None)));
+        assert_eq!(resolved.symbol_at_offset(file, 22), Some((sym3, 20, 25, None)));
+        // In gaps
+        assert!(resolved.symbol_at_offset(file, 7).is_none());
+        assert!(resolved.symbol_at_offset(file, 17).is_none());
     }
 }

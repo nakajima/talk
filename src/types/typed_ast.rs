@@ -351,9 +351,10 @@ impl TypedExprKind<InferTy> {
                     callee_sym,
                 }
             }
-            Member { receiver, label } => Member {
+            Member { receiver, label, label_span } => Member {
                 receiver: receiver.finalize(session).into(),
                 label,
+                label_span,
             },
             Func(func) => Func(func.finalize(session)),
             Variable(sym) => Variable(sym),
@@ -465,6 +466,8 @@ pub enum TypedPatternKind<T: SomeType> {
         enum_name: Option<Symbol>, // None for .some, Some for Option.some
         #[drive(skip)]
         variant_name: String,
+        #[drive(skip)]
+        variant_name_span: crate::span::Span,
         fields: Vec<TypedPattern<T>>, // Recursive patterns for fields
     },
 
@@ -512,10 +515,12 @@ impl<T: SomeType, U: SomeType> Mappable<T, U> for TypedPatternKind<T> {
             Variant {
                 enum_name,
                 variant_name,
+                variant_name_span,
                 fields,
             } => Variant {
                 enum_name,
                 variant_name,
+                variant_name_span,
                 fields: fields.into_iter().map(|f| f.mapping(m, r)).collect(),
             },
             Record { fields } => Record {
@@ -1142,6 +1147,8 @@ pub enum TypedExprKind<T: SomeType> {
         receiver: Box<TypedExpr<T>>,
         #[drive(skip)]
         label: Label,
+        #[drive(skip)]
+        label_span: crate::span::Span,
     },
     // Function stuff
     Func(TypedFunc<T>),
@@ -1219,9 +1226,10 @@ impl<T: SomeType, U: SomeType> Mappable<T, U> for TypedExprKind<T> {
                 args: args.into_iter().map(|e| e.mapping(m, r)).collect(),
                 callee_sym,
             },
-            Member { receiver, label } => Member {
+            Member { receiver, label, label_span } => Member {
                 receiver: receiver.mapping(m, r).into(),
                 label,
+                label_span,
             },
             Func(typed_func) => Func(typed_func.mapping(m, r)),
             Variable(symbol) => Variable(symbol),

@@ -70,53 +70,6 @@ pub struct CompletionItem {
 
 pub use workspace::Workspace;
 
-pub(crate) fn node_ids_at_offset(
-    ast: &crate::ast::AST<crate::ast::NameResolved>,
-    byte_offset: u32,
-) -> Vec<crate::node_id::NodeID> {
-    let mut candidates: Vec<(crate::node_id::NodeID, u32)> = ast
-        .meta
-        .iter()
-        .filter_map(|(id, meta)| {
-            let start = meta.start.start;
-            let end = meta.end.end;
-            if start <= byte_offset && byte_offset <= end {
-                Some((*id, end.saturating_sub(start)))
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    candidates.sort_by_key(|(_, len)| *len);
-    candidates.into_iter().map(|(id, _)| id).collect()
-}
-
 pub(crate) fn span_contains(span: crate::span::Span, byte_offset: u32) -> bool {
     span.start <= byte_offset && byte_offset <= span.end
-}
-
-pub(crate) fn resolve_member_symbol(
-    types: Option<&crate::types::types::Types>,
-    receiver: &crate::node_kinds::expr::Expr,
-    label: &crate::label::Label,
-) -> Option<crate::name_resolution::symbol::Symbol> {
-    use crate::node_kinds::expr::ExprKind;
-    use crate::types::ty::Ty;
-
-    if let ExprKind::Constructor(name) = &receiver.kind {
-        let receiver_symbol = name.symbol().ok()?;
-        let types = types?;
-        return types.catalog.lookup_static_member(&receiver_symbol, label);
-    }
-
-    let types = types?;
-    let entry = types.get(&receiver.id)?;
-    let ty = entry.as_mono_ty();
-
-    match ty {
-        Ty::Nominal { symbol, .. } => types.catalog.lookup_member(symbol, label).map(|m| m.0),
-        Ty::Primitive(symbol) => types.catalog.lookup_member(symbol, label).map(|m| m.0),
-        _ => None,
-    }
 }

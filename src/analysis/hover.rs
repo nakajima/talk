@@ -1,6 +1,7 @@
-use crate::analysis::{Hover, TextRange, node_ids_at_offset, resolve_member_symbol, span_contains};
+use crate::analysis::{Hover, TextRange, span_contains};
 use crate::name_resolution::symbol::Symbol;
 use crate::node::Node;
+use crate::node_id::FileID;
 use crate::node_kinds::{
     decl::Decl, func::Func, func_signature::FuncSignature, parameter::Parameter, pattern::Pattern,
     type_annotation::TypeAnnotation,
@@ -17,6 +18,7 @@ pub fn hover_at(
     byte_offset: u32,
 ) -> Option<Hover> {
     let idx = module.document_index(document_id)?;
+    let file_id = FileID(idx as u32);
     let ast = module.asts.get(idx).and_then(|a| a.as_ref())?;
     let types = module.types.as_ref();
     let formatter = TypeFormatter::new(SymbolNames::new(
@@ -31,6 +33,39 @@ pub fn hover_at(
         formatter,
     };
 
+    // Try the symbol index first - fast path for most symbols
+    if let Some((symbol, start, end, node_id)) =
+        module.resolved_names.symbol_at_offset(file_id, byte_offset)
+    {
+        let range = TextRange::new(start, end);
+        let symbol_name = module
+            .resolved_names
+            .symbol_names
+            .get(&symbol)
+            .cloned()
+            .unwrap_or_else(|| format!("{:?}", symbol));
+
+        // For Property symbols with a NodeID, get the expression type for specialized generics
+        let node_ty = if matches!(symbol, Symbol::Property(..)) {
+            node_id
+                .and_then(|id| types.and_then(|t| t.get(&id)))
+                .map(|e| e.as_mono_ty())
+                .or_else(|| types.and_then(|t| t.get_symbol(&symbol)).map(|e| e.as_mono_ty()))
+        } else {
+            types.and_then(|t| t.get_symbol(&symbol)).map(|e| e.as_mono_ty())
+        };
+
+        if let Some(line) =
+            hover_line_for_name_and_type(&ctx.formatter, symbol_name, Some(symbol), ctx.types, node_ty)
+        {
+            return Some(Hover {
+                contents: line,
+                range: Some(range),
+            });
+        }
+    }
+
+    // Fall back to AST-based lookup for expressions without symbols (e.g., 1 + 2)
     let candidate_ids = node_ids_at_offset(ctx.ast, ctx.byte_offset);
 
     for node_id in candidate_ids {
@@ -38,20 +73,10 @@ pub fn hover_at(
             continue;
         };
 
-        let hover = match node {
-            crate::node::Node::Expr(expr) => hover_for_expr(&ctx, &expr),
-            crate::node::Node::Stmt(stmt) => hover_for_stmt(&ctx, &stmt),
-            crate::node::Node::Pattern(pattern) => hover_for_pattern(&ctx, &pattern),
-            crate::node::Node::TypeAnnotation(ty) => hover_for_type_annotation(&ctx, &ty),
-            crate::node::Node::Parameter(param) => hover_for_parameter(&ctx, &param),
-            crate::node::Node::Func(func) => hover_for_func(&ctx, &func),
-            crate::node::Node::FuncSignature(sig) => hover_for_func_signature(&ctx, &sig),
-            crate::node::Node::Decl(decl) => hover_for_decl(&ctx, &decl),
-            _ => None,
-        };
-
-        if hover.is_some() {
-            return hover;
+        if let crate::node::Node::Expr(expr) = node {
+            if let Some(hover) = hover_for_expr(&ctx, &expr) {
+                return Some(hover);
+            }
         }
     }
 
@@ -82,6 +107,29 @@ pub fn hover_for_node_id(
     };
 
     hover_for_node(&ctx, &node)
+}
+
+/// Find node IDs at a given byte offset, sorted by span size (smallest first).
+fn node_ids_at_offset(
+    ast: &crate::ast::AST<crate::ast::NameResolved>,
+    byte_offset: u32,
+) -> Vec<crate::node_id::NodeID> {
+    let mut candidates: Vec<(crate::node_id::NodeID, u32)> = ast
+        .meta
+        .iter()
+        .filter_map(|(id, meta)| {
+            let start = meta.start.start;
+            let end = meta.end.end;
+            if start <= byte_offset && byte_offset <= end {
+                Some((*id, end.saturating_sub(start)))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    candidates.sort_by_key(|(_, len)| *len);
+    candidates.into_iter().map(|(id, _)| id).collect()
 }
 
 struct HoverCtx<'a> {
@@ -172,71 +220,16 @@ fn hover_for_stmt(ctx: &HoverCtx<'_>, stmt: &crate::node_kinds::stmt::Stmt) -> O
 }
 
 fn hover_for_expr(ctx: &HoverCtx<'_>, expr: &crate::node_kinds::expr::Expr) -> Option<Hover> {
-    use crate::node_kinds::expr::ExprKind;
+    // For expressions without symbols (literals, operations, etc.), show just the type
+    let types = ctx.types?;
+    let entry = types.get(&expr.id)?;
+    let meta = ctx.ast.meta.get(&expr.id)?;
+    let range = range_from_meta_at_offset(meta, ctx.byte_offset)?;
 
-    match &expr.kind {
-        ExprKind::Member(receiver, label, name_span) => {
-            if !span_contains(*name_span, ctx.byte_offset) {
-                return None;
-            }
-
-            let receiver = receiver.as_ref()?;
-            let member_symbol = resolve_member_symbol(ctx.types, receiver, label);
-            let node_ty = ctx
-                .types
-                .and_then(|types| types.get(&expr.id))
-                .map(|entry| entry.as_mono_ty());
-
-            let line = hover_line_for_name_and_type(
-                &ctx.formatter,
-                label.to_string(),
-                member_symbol,
-                ctx.types,
-                node_ty,
-            )?;
-            let range = TextRange::new(name_span.start, name_span.end);
-
-            Some(Hover {
-                contents: line,
-                range: Some(range),
-            })
-        }
-        ExprKind::Variable(name) | ExprKind::Constructor(name) => {
-            let meta = ctx.ast.meta.get(&expr.id)?;
-            let (start, end) = identifier_span_at_offset(meta, ctx.byte_offset)?;
-            let range = TextRange::new(start, end);
-
-            let symbol = name.symbol().ok();
-            let node_ty = ctx
-                .types
-                .and_then(|types| types.get(&expr.id))
-                .map(|entry| entry.as_mono_ty());
-
-            let line = hover_line_for_name_and_type(
-                &ctx.formatter,
-                name.name_str(),
-                symbol,
-                ctx.types,
-                node_ty,
-            )?;
-
-            Some(Hover {
-                contents: line,
-                range: Some(range),
-            })
-        }
-        _ => {
-            let types = ctx.types?;
-            let entry = types.get(&expr.id)?;
-            let meta = ctx.ast.meta.get(&expr.id)?;
-            let range = range_from_meta_at_offset(meta, ctx.byte_offset)?;
-
-            Some(Hover {
-                contents: ctx.formatter.format_ty(entry.as_mono_ty()),
-                range: Some(range),
-            })
-        }
-    }
+    Some(Hover {
+        contents: ctx.formatter.format_ty(entry.as_mono_ty()),
+        range: Some(range),
+    })
 }
 
 fn hover_for_pattern(ctx: &HoverCtx<'_>, pattern: &Pattern) -> Option<Hover> {
@@ -657,4 +650,26 @@ func add(a: Int, b: Int) -> Int { a }
         assert_eq!(hover.contents, "add: (Int, Int) -> Int");
     }
 
+    #[test]
+    fn hover_on_property_access_shows_specialized_type() {
+        let code = r#"
+struct Box<T> {
+    let value: T
+}
+
+func test() {
+    let box = Box(value: 42)
+    box.value
+}
+"#;
+        let workspace = analyze(code);
+        let doc_id = "test.tlk".to_string();
+        // Find "value" in "box.value" (second occurrence)
+        let byte_offset = byte_offset_for(code, "value", 2);
+        let hover = hover_at(&workspace, None, &doc_id, byte_offset);
+        assert!(hover.is_some(), "expected hover info for property access");
+        let hover = hover.expect("hover");
+        // Should show specialized type Int, not generic type T
+        assert_eq!(hover.contents, "let value: Int");
+    }
 }

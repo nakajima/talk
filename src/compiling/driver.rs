@@ -241,10 +241,10 @@ pub struct Driver<Phase: DriverPhase = Initial> {
 fn extract_import_paths(ast: &AST<ast::Parsed>) -> Vec<ImportPath> {
     let mut paths = Vec::new();
     for root in &ast.roots {
-        if let Node::Decl(decl) = root {
-            if let DeclKind::Import(import) = &decl.kind {
-                paths.push(import.path.clone());
-            }
+        if let Node::Decl(decl) = root
+            && let DeclKind::Import(import) = &decl.kind
+        {
+            paths.push(import.path.clone());
         }
     }
     paths
@@ -756,8 +756,11 @@ pub mod tests {
 
         // Create the test files
         std::fs::write(&exportee_path, "public let exported = 42\n").unwrap();
-        std::fs::write(&importer_path, "import { exported } from ./exportee.tlk\nexported\n")
-            .unwrap();
+        std::fs::write(
+            &importer_path,
+            "import { exported } from ./exportee.tlk\nexported\n",
+        )
+        .unwrap();
 
         // Only pass the importer file - the exportee should be auto-discovered
         let driver = Driver::new(

@@ -797,6 +797,7 @@ impl<'a> Lowerer<'a> {
             TypedExprKind::Member {
                 receiver: box receiver,
                 label,
+                ..
             } => {
                 let receiver_ty = receiver.ty.clone();
                 let receiver_lvalue = self.lower_lvalue(receiver)?;
@@ -996,7 +997,7 @@ impl<'a> Lowerer<'a> {
                 callee_sym,
                 ..
             } => self.lower_call(expr, callee, args, callee_sym.as_ref(), bind),
-            TypedExprKind::Member { receiver, label } => {
+            TypedExprKind::Member { receiver, label, .. } => {
                 self.lower_member(expr, &Some(receiver.clone()), label, None, bind)
             }
 
@@ -2509,6 +2510,7 @@ impl<'a> Lowerer<'a> {
         if let TypedExprKind::Member {
             receiver: box receiver,
             label: member,
+            ..
         } = &callee.kind
         {
             return self.lower_method_call(

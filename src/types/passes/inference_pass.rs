@@ -1423,8 +1423,8 @@ impl<'a> InferencePass<'a> {
                 type_args,
                 args,
             } => self.visit_call(expr.id, callee, type_args, args, &mut context.next())?,
-            ExprKind::Member(receiver, label, ..) => {
-                self.visit_member(expr, receiver, label, context)?
+            ExprKind::Member(receiver, label, label_span) => {
+                self.visit_member(expr, receiver, label, *label_span, context)?
             }
             ExprKind::Func(func) => {
                 let func = self.visit_func(func, context)?;
@@ -1854,6 +1854,7 @@ impl<'a> InferencePass<'a> {
         expr: &Expr,
         receiver: &Option<Box<Expr>>,
         label: &Label,
+        label_span: Span,
         context: &mut SolveContext,
     ) -> TypedRet<TypedExpr<InferTy>> {
         let receiver_ty = if let Some(receiver) = receiver {
@@ -1882,6 +1883,7 @@ impl<'a> InferencePass<'a> {
             kind: TypedExprKind::Member {
                 receiver: Box::new(receiver_ty),
                 label: label.clone(),
+                label_span,
             },
         })
     }
@@ -2981,8 +2983,8 @@ impl<'a> InferencePass<'a> {
             PatternKind::Variant {
                 enum_name,
                 variant_name,
+                variant_name_span,
                 fields,
-                ..
             } => {
                 let field_metas: Vec<InferTy> = fields
                     .iter()
@@ -3028,6 +3030,7 @@ impl<'a> InferencePass<'a> {
                         })
                         .transpose()?,
                     variant_name: variant_name.clone(),
+                    variant_name_span: *variant_name_span,
                     fields: fields
                         .iter()
                         .zip(field_metas)
@@ -3041,6 +3044,11 @@ impl<'a> InferencePass<'a> {
             #[allow(clippy::todo)]
             PatternKind::Struct { .. } => todo!(),
         };
+
+        // Store pattern type for symbol index resolution (variant patterns, etc.)
+        self.session
+            .types_by_node
+            .insert(pattern.id, expected.clone());
 
         Ok(TypedPattern {
             id: pattern.id,
@@ -3218,7 +3226,7 @@ impl<'a> InferencePass<'a> {
                     sym: *sym,
                     call_id: callee.id,
                 }),
-                TypedExprKind::Member { receiver, label } => Some(CalleeInfo::Member {
+                TypedExprKind::Member { receiver, label, .. } => Some(CalleeInfo::Member {
                     receiver_id: receiver.id,
                     label: label.clone(),
                     call_id: callee.id,
@@ -3234,6 +3242,29 @@ impl<'a> InferencePass<'a> {
             .iter()
             .map(|a| self.visit_expr(&a.value, context))
             .try_collect()?;
+
+        // Record call arg label spans immediately for Constructor callees
+        // The struct symbol is available now, so we can resolve directly
+        if let TypedExprKind::Constructor(struct_sym, _) = &callee_ty.kind {
+            for arg in args {
+                if let Label::Named(_) = &arg.label {
+                    if arg.label_span != Span::SYNTHESIZED {
+                        if let Some(prop_sym) = self
+                            .session
+                            .type_catalog
+                            .properties
+                            .get(struct_sym)
+                            .and_then(|p| p.get(&arg.label))
+                        {
+                            self.session
+                                .resolved_names
+                                .record_span(arg.label_span, *prop_sym);
+                        }
+                    }
+                }
+            }
+        }
+
         let type_arg_tys: Vec<_> = type_args
             .iter()
             .map(|a| self.visit_type_annotation(a, context))

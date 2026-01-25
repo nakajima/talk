@@ -48,6 +48,27 @@ pub struct SpecializationPass<'a> {
 }
 
 impl<'a> SpecializationPass<'a> {
+    /// Extract the container symbol (struct/enum) from a type.
+    /// Handles both direct nominal types and function types (for variants/methods).
+    fn extract_container_symbol(ty: &Ty) -> Option<Symbol> {
+        match ty {
+            // Direct nominal type
+            Ty::Nominal { symbol, .. } => Some(*symbol),
+            Ty::Primitive(symbol) => Some(*symbol),
+            // Function type - extract from return type (for variant constructors like .Some)
+            Ty::Func(_, ret, _) => match ret.as_ref() {
+                Ty::Nominal { symbol, .. } => Some(*symbol),
+                _ => None,
+            },
+            // Constructor type - extract from return type
+            Ty::Constructor { ret, .. } => match ret.as_ref() {
+                Ty::Nominal { symbol, .. } => Some(*symbol),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     pub fn new(
         ast: TypedAST<Ty>,
         symbols: Symbols,
@@ -99,6 +120,11 @@ impl<'a> SpecializationPass<'a> {
             specialized_decls.push(self.visit_decl(decl)?);
         }
         _ = std::mem::replace(&mut self.ast.decls, specialized_decls);
+
+        // Re-sort span_to_symbol since we may have added new spans during traversal
+        self.resolved_names
+            .span_to_symbol
+            .sort_by_key(|(file, start, ..)| (*file, *start));
 
         Ok((
             self.ast,
@@ -217,11 +243,70 @@ impl<'a> SpecializationPass<'a> {
         Ok(TypedBlock { body, ..block })
     }
 
+    fn visit_pattern(&mut self, pattern: &crate::types::typed_ast::TypedPattern<Ty>) {
+        use crate::types::typed_ast::TypedPatternKind;
+
+        match &pattern.kind {
+            TypedPatternKind::Variant {
+                variant_name,
+                variant_name_span,
+                fields,
+                ..
+            } => {
+                // Record variant_name_span -> variant symbol now that types are resolved
+                if *variant_name_span != crate::span::Span::SYNTHESIZED {
+                    // Get the enum symbol from the pattern's type
+                    if let Ty::Nominal { symbol: enum_sym, .. } = &pattern.ty {
+                        let label: Label = variant_name.clone().into();
+                        // First try local catalog
+                        let variant_sym = self.types.catalog.variants.get(enum_sym)
+                            .and_then(|variants| variants.get(&label))
+                            .copied()
+                            // Then try modules via lookup_member (which checks variants)
+                            .or_else(|| self.modules.lookup_member(enum_sym, &label));
+                        if let Some(variant_sym) = variant_sym {
+                            self.resolved_names.record_span(*variant_name_span, variant_sym);
+                        }
+                    }
+                }
+                // Recursively visit field patterns
+                for field in fields {
+                    self.visit_pattern(field);
+                }
+            }
+            TypedPatternKind::Tuple(patterns) | TypedPatternKind::Or(patterns) => {
+                for p in patterns {
+                    self.visit_pattern(p);
+                }
+            }
+            TypedPatternKind::Record { fields } => {
+                for field in fields {
+                    if let crate::types::typed_ast::TypedRecordFieldPatternKind::Equals { value, .. } = &field.kind {
+                        self.visit_pattern(value);
+                    }
+                }
+            }
+            TypedPatternKind::Struct { fields, .. } => {
+                for field in fields {
+                    self.visit_pattern(field);
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn visit_node(&mut self, node: TypedNode<Ty>) -> Result<TypedNode<Ty>, TypeError> {
         Ok(match node {
-            TypedNode::Stmt(stmt) => TypedNode::Stmt(self.visit_stmt(stmt)?),
-            TypedNode::Expr(expr) => TypedNode::Expr(self.visit_expr(expr)?),
-            TypedNode::Decl(decl) => TypedNode::Decl(decl), // Decls are already processed at top level
+            TypedNode::Stmt(stmt) => {
+                TypedNode::Stmt(self.visit_stmt(stmt)?)
+            }
+            TypedNode::Expr(expr) => {
+                TypedNode::Expr(self.visit_expr(expr)?)
+            }
+            TypedNode::Decl(decl) => {
+                // Also visit decls that appear inside blocks (e.g., let bindings in function bodies)
+                TypedNode::Decl(self.visit_decl(decl)?)
+            }
         })
     }
 
@@ -259,10 +344,35 @@ impl<'a> SpecializationPass<'a> {
             TypedExprKind::Member {
                 box receiver,
                 label,
-            } => TypedExprKind::Member {
-                receiver: self.visit_expr(receiver)?.into(),
-                label,
-            },
+                label_span,
+            } => {
+                let visited_receiver = self.visit_expr(receiver)?;
+
+                // Record label_span -> member symbol now that types are resolved
+                if label_span != crate::span::Span::SYNTHESIZED {
+                    let specializations = self.collect_specializations();
+                    // For shorthand enum constructors like .Some, the receiver is Hole and we need
+                    // to extract the container symbol from the expression's return type
+                    let container_sym = if matches!(visited_receiver.kind, TypedExprKind::Hole) {
+                        // For shorthand variants, extract enum symbol from the expression's return type
+                        Self::extract_container_symbol(&expr.ty)
+                    } else {
+                        self.symbol_from_ty(&visited_receiver.ty, &specializations).ok()
+                    };
+                    if let Some(receiver_sym) = container_sym {
+                        if let Some((member_sym, _)) = self.types.catalog.lookup_member(&receiver_sym, &label) {
+                            // Pass the expression's NodeID to enable expression-type lookup in hover
+                            self.resolved_names.record_span_with_node(label_span, member_sym, Some(expr.id));
+                        }
+                    }
+                }
+
+                TypedExprKind::Member {
+                    receiver: visited_receiver.into(),
+                    label,
+                    label_span,
+                }
+            }
             TypedExprKind::If(box cond, conseq, alt) => TypedExprKind::If(
                 self.visit_expr(cond)?.into(),
                 self.visit_block(conseq)?,
@@ -272,6 +382,7 @@ impl<'a> SpecializationPass<'a> {
                 let new_arms = arms
                     .into_iter()
                     .map(|arm| {
+                        self.visit_pattern(&arm.pattern);
                         Ok(TypedMatchArm {
                             pattern: arm.pattern,
                             body: self.visit_block(arm.body)?,
@@ -340,6 +451,7 @@ impl<'a> SpecializationPass<'a> {
         else {
             unreachable!()
         };
+
 
         let is_constructor = matches!(callee.kind, TypedExprKind::Constructor(..));
         let mut specializations = if is_constructor {
@@ -433,7 +545,7 @@ impl<'a> SpecializationPass<'a> {
             };
 
             // Handle protocol method resolution
-            if let TypedExprKind::Member { receiver, label } = &callee.kind {
+            if let TypedExprKind::Member { receiver, label, .. } = &callee.kind {
                 // Check for direct protocol method calls: Protocol.method(arg1, arg2, ...)
                 // In this case, the actual receiver is the first argument
                 if let TypedExprKind::Constructor(Symbol::Protocol(protocol_id), _) = &receiver.kind
@@ -570,7 +682,7 @@ impl<'a> SpecializationPass<'a> {
             TypedExprKind::LiteralInt(..) => Ok(Symbol::Int),
             TypedExprKind::LiteralFloat(..) => Ok(Symbol::Float),
             TypedExprKind::LiteralTrue | TypedExprKind::LiteralFalse => Ok(Symbol::Bool),
-            TypedExprKind::Member { receiver, label } => {
+            TypedExprKind::Member { receiver, label, .. } => {
                 let Some(receiver_ty) = self.types.get(&receiver.id) else {
                     return Err(TypeError::TypeNotFound(format!(
                         "could not find type for id: {:?}",

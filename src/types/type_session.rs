@@ -211,7 +211,7 @@ impl TypeSession {
 
     pub fn finalize(mut self) -> Result<(Types, ResolvedNames), TypeError> {
         let types_by_node = std::mem::take(&mut self.types_by_node);
-        let entries = types_by_node
+        let entries: FxHashMap<NodeID, TypeEntry> = types_by_node
             .into_iter()
             .map(|(id, ty)| {
                 let ty = self.finalize_ty(ty);
@@ -252,6 +252,11 @@ impl TypeSession {
         });
 
         let call_tree = std::mem::take(&mut self.call_tree);
+
+        // Sort span_to_symbol for efficient binary search lookups
+        self.resolved_names
+            .span_to_symbol
+            .sort_by_key(|(file, start, ..)| (*file, *start));
 
         let types = Types {
             catalog,
