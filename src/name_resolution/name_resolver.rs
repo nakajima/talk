@@ -156,27 +156,28 @@ pub struct ResolvedNames {
 
 impl ResolvedNames {
     /// Record a span-to-symbol mapping for later lookup.
-    /// Skips synthesized spans and duplicate recordings.
+    /// Note: Duplicate detection is handled by the caller (NameResolver::record_span).
     pub fn record_span(&mut self, span: Span, symbol: Symbol) {
-        self.record_span_with_node(span, symbol, None);
-    }
-
-    /// Record a span-to-symbol mapping with an optional expression NodeID.
-    /// The NodeID allows looking up expression-specific types for hover.
-    pub fn record_span_with_node(&mut self, span: Span, symbol: Symbol, node_id: Option<NodeID>) {
         if span == Span::SYNTHESIZED {
             return;
         }
-        // Check for duplicate (ignore node_id in comparison since span+symbol should be unique)
-        if self
-            .span_to_symbol
-            .iter()
-            .any(|(f, s, e, sym, _)| *f == span.file_id && *s == span.start && *e == span.end && *sym == symbol)
-        {
+        self.span_to_symbol
+            .push((span.file_id, span.start, span.end, symbol, None));
+        self.symbol_to_spans
+            .entry(symbol)
+            .or_default()
+            .push((span.file_id, span.start, span.end));
+    }
+
+    /// Record a span-to-symbol mapping with an expression NodeID.
+    /// The NodeID allows looking up expression-specific types for hover.
+    /// Note: Duplicate detection is handled by the caller.
+    pub fn record_span_with_node(&mut self, span: Span, symbol: Symbol, node_id: NodeID) {
+        if span == Span::SYNTHESIZED {
             return;
         }
         self.span_to_symbol
-            .push((span.file_id, span.start, span.end, symbol, node_id));
+            .push((span.file_id, span.start, span.end, symbol, Some(node_id)));
         self.symbol_to_spans
             .entry(symbol)
             .or_default()
@@ -274,6 +275,9 @@ pub struct NameResolver {
 
     // For figuring out child types
     pub(super) nominal_stack: Vec<(Symbol, NodeID)>,
+
+    // For O(1) duplicate detection in record_span
+    seen_spans: FxHashSet<(FileID, u32, u32, Symbol)>,
 }
 
 #[allow(clippy::expect_used)]
@@ -291,6 +295,7 @@ impl NameResolver {
             current_level: Level::default(),
             nominal_stack: Default::default(),
             modules,
+            seen_spans: Default::default(),
         };
 
         resolver.init_root_scope();
@@ -980,6 +985,12 @@ impl NameResolver {
 
     /// Record a span-to-symbol mapping for later lookup
     pub(super) fn record_span(&mut self, span: Span, symbol: Symbol) {
+        if span == Span::SYNTHESIZED {
+            return;
+        }
+        if !self.seen_spans.insert((span.file_id, span.start, span.end, symbol)) {
+            return;
+        }
         self.phase.record_span(span, symbol);
     }
 

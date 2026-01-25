@@ -362,7 +362,7 @@ impl<'a> SpecializationPass<'a> {
                     if let Some(receiver_sym) = container_sym {
                         if let Some((member_sym, _)) = self.types.catalog.lookup_member(&receiver_sym, &label) {
                             // Pass the expression's NodeID to enable expression-type lookup in hover
-                            self.resolved_names.record_span_with_node(label_span, member_sym, Some(expr.id));
+                            self.resolved_names.record_span_with_node(label_span, member_sym, expr.id);
                         }
                     }
                 }
