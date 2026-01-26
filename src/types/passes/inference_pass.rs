@@ -43,13 +43,13 @@ use crate::{
             store::{ConstraintStore, GroupId},
         },
         infer_row::InferRow,
-        infer_ty::{InferTy, Level, Meta, MetaVarId},
+        infer_ty::{Infer, InferTy, Level, Meta, MetaVarId},
         passes::uncurry_function,
         predicate::Predicate,
         scheme::{ForAll, Scheme},
         solve_context::{SolveContext, SolveContextKind},
         term_environment::EnvEntry,
-        ty::Ty,
+        ty::{Ty, Typed},
         type_catalog::Nominal,
         type_error::TypeError,
         type_operations::{
@@ -79,7 +79,7 @@ struct HandlerContext {
 #[derive(Clone, Debug, Default)]
 struct ProtocolAssociatedTypeRequirements {
     assoc_params: IndexSet<Symbol>,
-    predicates: IndexSet<Predicate<InferTy>>,
+    predicates: IndexSet<Predicate<Infer>>,
 }
 
 impl ProtocolAssociatedTypeRequirements {
@@ -111,18 +111,18 @@ pub struct InferencePass<'a> {
     current_function: Option<Symbol>,
 
     /// Tracks the current nominal self type (for resolving SelfType annotations in extensions)
-    current_self_ty: Option<InferTy>,
+    current_self_ty: Option<Infer>,
 
     // These are what we eventually produce
-    root_decls: Vec<TypedDecl<InferTy>>,
-    root_stmts: Vec<TypedStmt<InferTy>>,
+    root_decls: Vec<TypedDecl<Infer>>,
+    root_stmts: Vec<TypedStmt<Infer>>,
 }
 
 impl<'a> InferencePass<'a> {
     pub fn drive(
         asts: &'a mut [&'a mut AST<NameResolved>],
         session: &'a mut TypeSession,
-    ) -> (TypedAST<Ty>, Vec<AnyDiagnostic>) {
+    ) -> (TypedAST<Typed>, Vec<AnyDiagnostic>) {
         let substitutions = UnificationSubstitutions::new(session.meta_levels.clone());
         let pass = InferencePass {
             asts,
@@ -147,7 +147,7 @@ impl<'a> InferencePass<'a> {
         pass.drive_all()
     }
 
-    fn drive_all(mut self) -> (TypedAST<Ty>, Vec<AnyDiagnostic>) {
+    fn drive_all(mut self) -> (TypedAST<Typed>, Vec<AnyDiagnostic>) {
         let _s = set_symbol_names(self.session.resolved_names.symbol_names.clone());
 
         // Register extension conformances first, so they're available when processing protocol default methods
@@ -508,7 +508,7 @@ impl<'a> InferencePass<'a> {
         protocol_self_id: Symbol,
         protocol_symbol: Symbol,
         context: &mut SolveContext,
-    ) -> TypedRet<InferTy> {
+    ) -> TypedRet<Infer> {
         let Symbol::Protocol(protocol_id) = protocol_symbol else {
             unreachable!()
         };
@@ -584,7 +584,7 @@ impl<'a> InferencePass<'a> {
         conformances: &[TypeAnnotation],
         body: &Body,
         context: &mut SolveContext,
-    ) -> TypedRet<(TypedDecl<InferTy>, IndexMap<Symbol, InferTy>)> {
+    ) -> TypedRet<(TypedDecl<Infer>, IndexMap<Symbol, InferTy>)> {
         let Ok(protocol_symbol @ Symbol::Protocol(protocol_id)) = name.symbol() else {
             return Err(TypeError::NameNotResolved(name.clone()));
         };
@@ -648,7 +648,7 @@ impl<'a> InferencePass<'a> {
 
         // First pass: collect protocol-level associated type requirements.
         let mut assoc_type_params: IndexSet<Symbol> = IndexSet::default();
-        let mut assoc_type_predicates: IndexSet<Predicate<InferTy>> = IndexSet::default();
+        let mut assoc_type_predicates: IndexSet<Predicate<Infer>> = IndexSet::default();
         for decl in &body.decls {
             if let DeclKind::Associated { generic } = &decl.kind
                 && let Ok(ty) =
@@ -876,7 +876,6 @@ impl<'a> InferencePass<'a> {
                 continue;
             }
 
-
             let (new_decls, new_stmts) = self.generate_for_group(group.clone());
 
             if is_top_level {
@@ -929,7 +928,7 @@ impl<'a> InferencePass<'a> {
     fn generate_for_group(
         &mut self,
         group: BindingGroup,
-    ) -> (Vec<TypedDecl<InferTy>>, Vec<TypedStmt<InferTy>>) {
+    ) -> (Vec<TypedDecl<Infer>>, Vec<TypedStmt<Infer>>) {
         let mut decls = vec![];
         let mut stmts = vec![];
 
@@ -1035,9 +1034,9 @@ impl<'a> InferencePass<'a> {
 
     fn apply_protocol_associated_type_requirements(
         &self,
-        entry: EnvEntry<InferTy>,
+        entry: EnvEntry<Infer>,
         requirements: &ProtocolAssociatedTypeRequirements,
-    ) -> EnvEntry<InferTy> {
+    ) -> EnvEntry<Infer> {
         if requirements.is_empty() {
             return entry;
         }
@@ -1060,7 +1059,7 @@ impl<'a> InferencePass<'a> {
                     scheme.foralls.insert(ForAll::Ty(*param));
                 }
 
-                let mut predicates: IndexSet<Predicate<InferTy>> =
+                let mut predicates: IndexSet<Predicate<Infer>> =
                     scheme.predicates.into_iter().collect();
                 predicates.extend(requirements.predicates.iter().cloned());
                 scheme.predicates = predicates.into_iter().collect();
@@ -1074,7 +1073,7 @@ impl<'a> InferencePass<'a> {
         &mut self,
         context: &mut SolveContext,
         binders: Vec<Symbol>,
-        placeholders: Vec<InferTy>,
+        placeholders: Vec<Infer>,
     ) {
         context.substitutions_mut().extend(&self.substitutions);
 
@@ -1123,7 +1122,7 @@ impl<'a> InferencePass<'a> {
         &mut self,
         node: &Node,
         context: &mut SolveContext,
-    ) -> TypedRet<TypedNode<InferTy>> {
+    ) -> TypedRet<TypedNode<Infer>> {
         match &node {
             Node::Decl(decl) => Ok(TypedNode::Decl(self.visit_decl(decl, context)?)),
             Node::Stmt(stmt) => Ok(TypedNode::Stmt(self.visit_stmt(stmt, context)?)),
@@ -1139,7 +1138,7 @@ impl<'a> InferencePass<'a> {
         &mut self,
         decl: &Decl,
         context: &mut SolveContext,
-    ) -> TypedRet<TypedDecl<InferTy>> {
+    ) -> TypedRet<TypedDecl<Infer>> {
         match &decl.kind {
             DeclKind::Effect { name, .. } => Ok(TypedDecl {
                 id: decl.id,
@@ -1207,7 +1206,7 @@ impl<'a> InferencePass<'a> {
         &mut self,
         stmt: &Stmt,
         context: &mut SolveContext,
-    ) -> TypedRet<TypedStmt<InferTy>> {
+    ) -> TypedRet<TypedStmt<Infer>> {
         let ty = match &stmt.kind {
             StmtKind::Expr(expr) => {
                 let typed_expr = self.visit_expr(expr, context)?;
@@ -1323,7 +1322,7 @@ impl<'a> InferencePass<'a> {
         &mut self,
         expr: &Expr,
         context: &mut SolveContext,
-    ) -> TypedRet<TypedExpr<InferTy>> {
+    ) -> TypedRet<TypedExpr<Infer>> {
         let expr = match &expr.kind {
             ExprKind::Incomplete(incomplete) => {
                 use crate::node_kinds::incomplete_expr::IncompleteExpr;
@@ -1465,7 +1464,7 @@ impl<'a> InferencePass<'a> {
         id: NodeID,
         level: Level,
         ty: InferTy,
-        allowed: Vec<InferTy>,
+        allowed: Vec<Infer>,
     ) -> InferTy {
         let var = self.session.new_ty_meta_var(level);
         self.constraints.wants_default(id, var.clone(), ty, allowed);
@@ -1478,7 +1477,7 @@ impl<'a> InferencePass<'a> {
         effect_name: &Name,
         body: &Block,
         context: &mut SolveContext,
-    ) -> TypedRet<TypedStmt<InferTy>> {
+    ) -> TypedRet<TypedStmt<Infer>> {
         let effect_symbol = effect_name
             .symbol()
             .map_err(|_| TypeError::NameNotResolved(effect_name.clone()))?;
@@ -1548,7 +1547,7 @@ impl<'a> InferencePass<'a> {
         type_args: &[TypeAnnotation],
         args: &[CallArg],
         context: &mut SolveContext,
-    ) -> TypedRet<TypedExpr<InferTy>> {
+    ) -> TypedRet<TypedExpr<Infer>> {
         let Ok(effect_sym) = effect_name.symbol() else {
             return Err(TypeError::NameNotResolved(effect_name.clone()));
         };
@@ -1569,7 +1568,8 @@ impl<'a> InferencePass<'a> {
             effect.clone()
         } else {
             // Build a scheme from the foralls and instantiate it
-            let scheme = Scheme::<InferTy>::new(foralls.into_iter().collect(), vec![], effect.clone());
+            let scheme =
+                Scheme::<Infer>::new(foralls.into_iter().collect(), vec![], effect.clone());
             let (instantiated, subs) = scheme.instantiate_with_args(
                 expr.id,
                 &type_arg_tys
@@ -1628,7 +1628,7 @@ impl<'a> InferencePass<'a> {
         &mut self,
         instr: &InlineIRInstruction,
         context: &mut SolveContext,
-    ) -> TypedRet<TypedExpr<InferTy>> {
+    ) -> TypedRet<TypedExpr<Infer>> {
         for bind in instr.binds.iter() {
             self.visit_expr(bind, context)?;
         }
@@ -1660,7 +1660,7 @@ impl<'a> InferencePass<'a> {
         stmt: &Stmt,
         expr: &Option<Expr>,
         context: &mut SolveContext,
-    ) -> TypedRet<TypedStmt<InferTy>> {
+    ) -> TypedRet<TypedStmt<Infer>> {
         let ty_expr = if let Some(expr) = expr {
             Some(self.visit_expr(expr, context)?)
         } else {
@@ -1688,7 +1688,7 @@ impl<'a> InferencePass<'a> {
         lhs: &Expr,
         rhs: &TypeAnnotation,
         context: &mut SolveContext,
-    ) -> TypedRet<TypedExpr<InferTy>> {
+    ) -> TypedRet<TypedExpr<Infer>> {
         let lhs_ty = self.visit_expr(lhs, context)?;
         let Ok(Symbol::Protocol(id)) = rhs.symbol() else {
             return Err(TypeError::MissingConformanceRequirement(format!(
@@ -1707,7 +1707,7 @@ impl<'a> InferencePass<'a> {
         expr: &Expr,
         items: &[Expr],
         context: &mut SolveContext,
-    ) -> TypedRet<TypedExpr<InferTy>> {
+    ) -> TypedRet<TypedExpr<Infer>> {
         let Some(first_item) = items.first() else {
             let id = self.session.new_ty_meta_var_id(context.level());
 
@@ -1749,7 +1749,7 @@ impl<'a> InferencePass<'a> {
         protocol_id: ProtocolId,
         func_signature: &FuncSignature,
         context: &mut SolveContext,
-    ) -> TypedRet<InferTy> {
+    ) -> TypedRet<Infer> {
         for generic in func_signature.generics.iter() {
             self.register_generic(generic, context);
         }
@@ -1791,7 +1791,7 @@ impl<'a> InferencePass<'a> {
         let ty = curry(params.iter().map(|p| p.ty.clone()), ret, effects_row.into());
         let mut foralls: IndexSet<_> = ty.collect_foralls().into_iter().collect();
         foralls.insert(ForAll::Ty(protocol_self_id));
-        let predicates = vec![Predicate::<InferTy>::Conforms {
+        let predicates = vec![Predicate::<Infer>::Conforms {
             param: protocol_self_id,
             protocol_id,
         }];
@@ -1829,7 +1829,7 @@ impl<'a> InferencePass<'a> {
         expr: &Expr,
         name: &Name,
         context: &mut SolveContext,
-    ) -> TypedRet<TypedExpr<InferTy>> {
+    ) -> TypedRet<TypedExpr<Infer>> {
         let symbol = name
             .symbol()
             .map_err(|_| TypeError::NameNotResolved(name.clone()))?;
@@ -1856,7 +1856,7 @@ impl<'a> InferencePass<'a> {
         label: &Label,
         label_span: Span,
         context: &mut SolveContext,
-    ) -> TypedRet<TypedExpr<InferTy>> {
+    ) -> TypedRet<TypedExpr<Infer>> {
         let receiver_ty = if let Some(receiver) = receiver {
             self.visit_expr(receiver, context)?
         } else {
@@ -1897,7 +1897,7 @@ impl<'a> InferencePass<'a> {
         conformances: &[TypeAnnotation],
         body: &Body,
         context: &mut SolveContext,
-    ) -> TypedRet<TypedDecl<InferTy>> {
+    ) -> TypedRet<TypedDecl<Infer>> {
         let Ok(nominal_symbol) = name.symbol() else {
             return Err(TypeError::NameNotResolved(name.clone()));
         };
@@ -1947,10 +1947,10 @@ impl<'a> InferencePass<'a> {
         }
 
         let mut row_types = vec![];
-        let mut initializers = IndexMap::<Label, TypedFunc<InferTy>>::default();
-        let mut instance_methods = IndexMap::<Label, TypedFunc<InferTy>>::default();
+        let mut initializers = IndexMap::<Label, TypedFunc<Infer>>::default();
+        let mut instance_methods = IndexMap::<Label, TypedFunc<Infer>>::default();
         let mut properties: IndexMap<Label, InferTy> = IndexMap::default();
-        let mut variants: IndexMap<Label, Vec<InferTy>> = IndexMap::default();
+        let mut variants: IndexMap<Label, Vec<Infer>> = IndexMap::default();
         let mut typealiases: IndexMap<Label, InferTy> = IndexMap::default();
 
         // Set current_self_ty for proper SelfType resolution in extensions
@@ -2360,7 +2360,7 @@ impl<'a> InferencePass<'a> {
         fields: &[RecordField],
         spread: &Option<Box<Expr>>,
         context: &mut SolveContext,
-    ) -> TypedRet<TypedExpr<InferTy>> {
+    ) -> TypedRet<TypedExpr<Infer>> {
         let mut row = InferRow::Empty;
         let mut typed_fields = vec![];
         for field in fields.iter().rev() {
@@ -2396,7 +2396,7 @@ impl<'a> InferencePass<'a> {
         func: &Func,
         is_static: bool,
         context: &mut SolveContext,
-    ) -> TypedRet<TypedFunc<InferTy>> {
+    ) -> TypedRet<TypedFunc<Infer>> {
         let Ok(func_sym) = func.name.symbol() else {
             return Err(TypeError::NameNotResolved(func.name.clone()));
         };
@@ -2458,7 +2458,7 @@ impl<'a> InferencePass<'a> {
         type_annotation: &Option<TypeAnnotation>,
         default_value: &Option<Expr>,
         context: &mut SolveContext,
-    ) -> TypedRet<InferTy> {
+    ) -> TypedRet<Infer> {
         let Ok(sym) = name.symbol() else {
             return Err(TypeError::NameNotResolved(name.clone()));
         };
@@ -2515,7 +2515,7 @@ impl<'a> InferencePass<'a> {
         params: &[Parameter],
         body: &Block,
         context: &mut SolveContext,
-    ) -> TypedRet<TypedFunc<InferTy>> {
+    ) -> TypedRet<TypedFunc<Infer>> {
         let Ok(sym) = name.symbol() else {
             return Err(TypeError::NameNotResolved(name.clone()));
         };
@@ -2572,8 +2572,8 @@ impl<'a> InferencePass<'a> {
         scrutinee: &Expr,
         arms: &[MatchArm],
         context: &mut SolveContext,
-    ) -> TypedRet<TypedExpr<InferTy>> {
-        let mut last_arm_ty: Option<InferTy> = None;
+    ) -> TypedRet<TypedExpr<Infer>> {
+        let mut last_arm_ty: Option<Infer> = None;
         let scrutinee_ty = self.visit_expr(scrutinee, context)?;
         let mut typed_arms = vec![];
 
@@ -2737,7 +2737,7 @@ impl<'a> InferencePass<'a> {
         }
     }
 
-    fn lookup_or_binder(&self, sym: Symbol) -> Option<InferTy> {
+    fn lookup_or_binder(&self, sym: Symbol) -> Option<Infer> {
         for binders in self.or_binders.iter().rev() {
             if let Some(ty) = binders.get(&sym) {
                 return Some(ty.clone());
@@ -2797,7 +2797,7 @@ impl<'a> InferencePass<'a> {
         pattern: &Pattern,
         expected: &InferTy,
         context: &mut SolveContext,
-    ) -> TypedRet<TypedPattern<InferTy>> {
+    ) -> TypedRet<TypedPattern<Infer>> {
         let Pattern { kind, .. } = &pattern;
 
         let typed_kind = match kind {
@@ -2890,7 +2890,7 @@ impl<'a> InferencePass<'a> {
                 TypedPatternKind::LiteralTrue
             }
             PatternKind::Tuple(patterns) => {
-                let metas: Vec<InferTy> = (0..patterns.len())
+                let metas: Vec<Infer> = (0..patterns.len())
                     .map(|_| self.session.new_ty_meta_var(context.level()))
                     .collect();
 
@@ -2986,7 +2986,7 @@ impl<'a> InferencePass<'a> {
                 variant_name_span,
                 fields,
             } => {
-                let field_metas: Vec<InferTy> = fields
+                let field_metas: Vec<Infer> = fields
                     .iter()
                     .map(|_| {
                         let var_id = self.session.new_ty_meta_var_id(context.level());
@@ -3065,7 +3065,7 @@ impl<'a> InferencePass<'a> {
         conseq: &Block,
         alt: &Block,
         context: &mut SolveContext,
-    ) -> TypedRet<TypedExpr<InferTy>> {
+    ) -> TypedRet<TypedExpr<Infer>> {
         let cond_ty = self.visit_expr(cond, context)?;
         self.constraints.wants_equals_at_with_cause(
             cond.id,
@@ -3100,7 +3100,7 @@ impl<'a> InferencePass<'a> {
         conseq: &Block,
         alt: &Option<Block>,
         context: &mut SolveContext,
-    ) -> TypedRet<TypedStmt<InferTy>> {
+    ) -> TypedRet<TypedStmt<Infer>> {
         let cond_ty = self.visit_expr(cond, context)?;
         self.constraints.wants_equals_at_with_cause(
             cond.id,
@@ -3148,7 +3148,7 @@ impl<'a> InferencePass<'a> {
         &mut self,
         block: &Block,
         context: &mut SolveContext,
-    ) -> TypedRet<TypedBlock<InferTy>> {
+    ) -> TypedRet<TypedBlock<Infer>> {
         let mut ret = InferTy::Void;
 
         let mut nodes = vec![];
@@ -3170,7 +3170,7 @@ impl<'a> InferencePass<'a> {
         &mut self,
         block: &Block,
         context: &mut SolveContext,
-    ) -> TypedRet<TypedBlock<InferTy>> {
+    ) -> TypedRet<TypedBlock<Infer>> {
         let tok = self.tracking_returns();
         let block = self.infer_block(block, context)?;
         self.verify_returns(tok, block.ret.clone(), context);
@@ -3183,7 +3183,7 @@ impl<'a> InferencePass<'a> {
         expr: &Expr,
         name: &Name,
         context: &mut SolveContext,
-    ) -> TypedRet<TypedExpr<InferTy>> {
+    ) -> TypedRet<TypedExpr<Infer>> {
         let Ok(sym) = name.symbol() else {
             return Err(TypeError::NameNotResolved(name.clone()));
         };
@@ -3215,7 +3215,7 @@ impl<'a> InferencePass<'a> {
         type_args: &[TypeAnnotation],
         args: &[CallArg],
         context: &mut SolveContext,
-    ) -> TypedRet<TypedExpr<InferTy>> {
+    ) -> TypedRet<TypedExpr<Infer>> {
         let callee_ty = self.visit_expr(callee, context)?;
 
         // Record callee info for the call tree
@@ -3226,7 +3226,9 @@ impl<'a> InferencePass<'a> {
                     sym: *sym,
                     call_id: callee.id,
                 }),
-                TypedExprKind::Member { receiver, label, .. } => Some(CalleeInfo::Member {
+                TypedExprKind::Member {
+                    receiver, label, ..
+                } => Some(CalleeInfo::Member {
                     receiver_id: receiver.id,
                     label: label.clone(),
                     call_id: callee.id,
@@ -3357,7 +3359,7 @@ impl<'a> InferencePass<'a> {
         &mut self,
         func: &Func,
         context: &mut SolveContext,
-    ) -> TypedRet<TypedFunc<InferTy>> {
+    ) -> TypedRet<TypedFunc<Infer>> {
         let func_sym = func
             .name
             .symbol()
@@ -3431,7 +3433,7 @@ impl<'a> InferencePass<'a> {
         &mut self,
         params: &[Parameter],
         context: &mut SolveContext,
-    ) -> TypedRet<Vec<TypedParameter<InferTy>>> {
+    ) -> TypedRet<Vec<TypedParameter<Infer>>> {
         params
             .iter()
             .map(|param| self.visit_param(param, context))
@@ -3442,7 +3444,7 @@ impl<'a> InferencePass<'a> {
         &mut self,
         param: &Parameter,
         context: &mut SolveContext,
-    ) -> TypedRet<TypedParameter<InferTy>> {
+    ) -> TypedRet<TypedParameter<Infer>> {
         let Ok(sym) = param.name.symbol() else {
             return Err(TypeError::NameNotResolved(param.name.clone()));
         };
@@ -3492,7 +3494,7 @@ impl<'a> InferencePass<'a> {
         block: &Block,
         expected: InferTy,
         context: &mut SolveContext,
-    ) -> TypedRet<TypedBlock<InferTy>> {
+    ) -> TypedRet<TypedBlock<Infer>> {
         let tok = self.tracking_returns();
         let ret = self.infer_block(block, context)?;
         self.verify_returns(tok, ret.ret.clone(), context);
@@ -3515,7 +3517,7 @@ impl<'a> InferencePass<'a> {
         params: &[Parameter],
         ret: &Option<TypeAnnotation>,
         body: &Block,
-        expected_params: Vec<InferTy>,
+        expected_params: Vec<Infer>,
         expected_ret: InferTy,
         context: &mut SolveContext,
     ) -> TypedRet<()> {
@@ -3554,7 +3556,7 @@ impl<'a> InferencePass<'a> {
         &mut self,
         type_annotation: &TypeAnnotation,
         context: &mut SolveContext,
-    ) -> TypedRet<InferTy> {
+    ) -> TypedRet<Infer> {
         match &type_annotation.kind {
             TypeAnnotationKind::Nominal { name, generics, .. } => {
                 let Ok(sym) = name.symbol() else {
@@ -3732,7 +3734,7 @@ impl<'a> InferencePass<'a> {
         type_annotation: &Option<TypeAnnotation>,
         rhs: &Option<Expr>,
         context: &mut SolveContext,
-    ) -> TypedRet<TypedDecl<InferTy>> {
+    ) -> TypedRet<TypedDecl<Infer>> {
         let typed_rhs = if let Some(rhs) = rhs {
             Some(self.visit_expr(rhs, context)?)
         } else {
@@ -3778,7 +3780,7 @@ impl<'a> InferencePass<'a> {
         &mut self,
         effect_set: &EffectSet,
         context: &mut SolveContext,
-    ) -> Result<(ReturnToken, Vec<TypedEffect<InferTy>>), TypeError> {
+    ) -> Result<(ReturnToken, Vec<TypedEffect<Infer>>), TypeError> {
         let mut effects = vec![];
         for effect in effect_set.names.iter() {
             let Ok(symbol) = effect.symbol() else {
@@ -3846,11 +3848,7 @@ impl<'a> InferencePass<'a> {
         }
     }
 
-    fn register_generic(
-        &mut self,
-        generic: &GenericDecl,
-        context: &mut SolveContext,
-    ) -> Symbol {
+    fn register_generic(&mut self, generic: &GenericDecl, context: &mut SolveContext) -> Symbol {
         // Check if this generic has already been registered (e.g., in a previous pass)
         if let Ok(sym) = generic.name.symbol()
             && let Some(entry) = self.session.lookup(&sym)

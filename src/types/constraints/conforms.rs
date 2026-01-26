@@ -173,11 +173,12 @@ impl Conforms {
         // Add substitutions for the conforming type's type params
         // e.g., for Person<Float> conforming to Aged, substitute A -> Float
         if !conforming_type_args.is_empty()
-            && let Some(nominal) = session.lookup_nominal(&conforming_ty_sym) {
-                for (param, arg) in nominal.type_params.iter().zip(conforming_type_args.iter()) {
-                    substitutions.insert(param.clone(), arg.clone());
-                }
+            && let Some(nominal) = session.lookup_nominal(&conforming_ty_sym)
+        {
+            for (param, arg) in nominal.type_params.iter().zip(conforming_type_args.iter()) {
+                substitutions.insert(param.clone(), arg.clone());
             }
+        }
 
         let mut deferral_reasons = vec![];
 

@@ -13,7 +13,7 @@ use crate::{
     },
     types::{
         constraints::store::GroupId,
-        infer_ty::{InferTy, Level},
+        infer_ty::{Infer, InferTy, Level},
         predicate::Predicate,
         type_operations::{InstantiationSubstitutions, UnificationSubstitutions},
         type_session::TypeSession,
@@ -27,7 +27,7 @@ use crate::{
 struct SharedSolveState {
     projection_placeholders: FxHashMap<InferTy, InferTy>,
     substitutions: UnificationSubstitutions,
-    givens: IndexSet<Predicate<InferTy>>,
+    givens: IndexSet<Predicate<Infer>>,
 }
 
 pub struct SolveContext {
@@ -112,7 +112,7 @@ impl SolveContext {
         }
     }
 
-    pub fn givens_mut(&self) -> RefMut<'_, IndexSet<Predicate<InferTy>>> {
+    pub fn givens_mut(&self) -> RefMut<'_, IndexSet<Predicate<Infer>>> {
         RefMut::map(self.shared.borrow_mut(), |s| &mut s.givens)
     }
 

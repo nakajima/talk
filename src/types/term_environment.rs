@@ -9,12 +9,11 @@ use crate::{
     types::{
         builtins::builtin_scope,
         constraints::store::ConstraintStore,
-        infer_ty::InferTy,
+        infer_ty::{Infer, InferTy, InnerTy, TypePhase},
         mappable::Mappable,
         predicate::Predicate,
         scheme::{ForAll, Scheme},
         solve_context::SolveContext,
-        ty::SomeType,
         type_operations::{
             InstantiationSubstitutions, UnificationSubstitutions, substitute, substitute_row,
         },
@@ -23,13 +22,13 @@ use crate::{
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Drive, DriveMut)]
-pub enum EnvEntry<T: SomeType> {
-    Mono(T),
+pub enum EnvEntry<T: TypePhase> {
+    Mono(InnerTy<T>),
     Scheme(Scheme<T>),
 }
 
-impl From<(InferTy, Vec<Predicate<InferTy>>, IndexSet<ForAll>)> for EnvEntry<InferTy> {
-    fn from(value: (InferTy, Vec<Predicate<InferTy>>, IndexSet<ForAll>)) -> Self {
+impl From<(InferTy, Vec<Predicate<Infer>>, IndexSet<ForAll>)> for EnvEntry<Infer> {
+    fn from(value: (InferTy, Vec<Predicate<Infer>>, IndexSet<ForAll>)) -> Self {
         let mut foralls = value.2;
         foralls.extend(value.0.collect_foralls());
         if value.1.is_empty() && foralls.is_empty() {
@@ -44,8 +43,8 @@ impl From<(InferTy, Vec<Predicate<InferTy>>, IndexSet<ForAll>)> for EnvEntry<Inf
     }
 }
 
-impl From<EnvEntry<InferTy>> for (InferTy, Vec<Predicate<InferTy>>, IndexSet<ForAll>) {
-    fn from(val: EnvEntry<InferTy>) -> Self {
+impl From<EnvEntry<Infer>> for (InferTy, Vec<Predicate<Infer>>, IndexSet<ForAll>) {
+    fn from(val: EnvEntry<Infer>) -> Self {
         match val {
             EnvEntry::Mono(ty) => (ty, vec![], Default::default()),
             EnvEntry::Scheme(scheme) => (scheme.ty, scheme.predicates, scheme.foralls),
@@ -53,7 +52,7 @@ impl From<EnvEntry<InferTy>> for (InferTy, Vec<Predicate<InferTy>>, IndexSet<For
     }
 }
 
-impl<T: SomeType> EnvEntry<T> {
+impl<T: TypePhase> EnvEntry<T> {
     pub fn foralls(&self) -> IndexSet<ForAll> {
         match self {
             EnvEntry::Mono(..) => Default::default(),
@@ -69,8 +68,8 @@ impl<T: SomeType> EnvEntry<T> {
     }
 }
 
-impl EnvEntry<InferTy> {
-    pub fn substitute(self, substitutions: &FxHashMap<InferTy, InferTy>) -> EnvEntry<InferTy> {
+impl EnvEntry<Infer> {
+    pub fn substitute(self, substitutions: &FxHashMap<InferTy, InferTy>) -> EnvEntry<Infer> {
         match self {
             EnvEntry::Mono(ty) => {
                 let ty = substitute(ty, substitutions);
@@ -88,7 +87,7 @@ impl EnvEntry<InferTy> {
             EnvEntry::Scheme(scheme) => {
                 let ty = substitute(scheme.ty, substitutions);
                 let foralls: IndexSet<ForAll> = ty.collect_foralls();
-                let predicates: Vec<Predicate<InferTy>> = scheme
+                let predicates: Vec<Predicate<Infer>> = scheme
                     .predicates
                     .into_iter()
                     .map(|p| {
@@ -141,7 +140,7 @@ impl EnvEntry<InferTy> {
         }
     }
 
-    pub fn import(&self, module_id: ModuleId) -> EnvEntry<InferTy> {
+    pub fn import(&self, module_id: ModuleId) -> EnvEntry<Infer> {
         match self.clone() {
             EnvEntry::Mono(ty) => EnvEntry::Mono(ty.import(module_id)),
             EnvEntry::Scheme(scheme) => EnvEntry::Scheme(Scheme {
@@ -192,7 +191,7 @@ impl EnvEntry<InferTy> {
 
 #[derive(Debug, Default, PartialEq, Clone)]
 pub struct TermEnv {
-    pub(super) symbols: FxHashMap<Symbol, EnvEntry<InferTy>>,
+    pub(super) symbols: FxHashMap<Symbol, EnvEntry<Infer>>,
 }
 
 impl TermEnv {
@@ -206,15 +205,15 @@ impl TermEnv {
         self.insert(sym, EnvEntry::Mono(ty));
     }
 
-    pub fn lookup(&self, sym: &Symbol) -> Option<&EnvEntry<InferTy>> {
+    pub fn lookup(&self, sym: &Symbol) -> Option<&EnvEntry<Infer>> {
         self.symbols.get(sym)
     }
 
-    pub fn lookup_mut(&mut self, sym: &Symbol) -> Option<&mut EnvEntry<InferTy>> {
+    pub fn lookup_mut(&mut self, sym: &Symbol) -> Option<&mut EnvEntry<Infer>> {
         self.symbols.get_mut(sym)
     }
 
-    pub fn insert(&mut self, sym: Symbol, entry: EnvEntry<InferTy>) {
+    pub fn insert(&mut self, sym: Symbol, entry: EnvEntry<Infer>) {
         if let Some(existing) = self.symbols.get(&sym) {
             // Don't override a Scheme with a Mono - this happens when protocol
             // default methods get their bodies inferred in a specific context
@@ -234,7 +233,7 @@ impl TermEnv {
         self.symbols.insert(sym, entry);
     }
 
-    pub fn promote(&mut self, sym: Symbol, entry: EnvEntry<InferTy>) {
+    pub fn promote(&mut self, sym: Symbol, entry: EnvEntry<Infer>) {
         tracing::debug!("promote {sym:?} = {entry:?}");
         self.symbols.insert(sym, entry);
     }

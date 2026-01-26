@@ -10,9 +10,10 @@ use crate::{
         infer_ty::InferTy,
         mappable::Mappable,
         matcher::MatchPlan,
+        row::Row,
         scheme::Scheme,
         term_environment::EnvEntry,
-        ty::{SomeType, Ty},
+        ty::Ty,
         type_catalog::TypeCatalog,
         variational::{ChoiceStore, Resolution},
     },
@@ -29,7 +30,7 @@ impl Mappable<Ty, Ty> for TypeEntry {
     fn mapping(
         self,
         ty_map: &mut impl FnMut(Ty) -> Ty,
-        row_map: &mut impl FnMut(<Ty as SomeType>::RowType) -> <Ty as SomeType>::RowType,
+        row_map: &mut impl FnMut(Row) -> Row,
     ) -> Self::Output {
         match self {
             Self::Mono(ty) => TypeEntry::Mono(ty.mapping(ty_map, row_map)),

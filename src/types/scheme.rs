@@ -10,10 +10,9 @@ use crate::{
     types::{
         constraints::store::ConstraintStore,
         infer_row::{InferRow, RowParamId},
-        infer_ty::{InferTy, Level},
+        infer_ty::{Infer, InferTy, InnerTy, Level, TypePhase},
         predicate::Predicate,
         solve_context::SolveContext,
-        ty::{SomeType, Ty},
         type_operations::{InstantiationSubstitutions, instantiate_ty},
         type_session::TypeSession,
     },
@@ -26,15 +25,15 @@ pub enum ForAll {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
-pub struct Scheme<T: SomeType> {
+pub struct Scheme<T: TypePhase> {
     #[drive(skip)]
     pub(crate) foralls: IndexSet<ForAll>,
     #[drive(skip)]
     pub(crate) predicates: Vec<Predicate<T>>,
-    pub(crate) ty: T,
+    pub(crate) ty: InnerTy<T>,
 }
 
-impl<T: SomeType> std::hash::Hash for Scheme<T> {
+impl<T: TypePhase> std::hash::Hash for Scheme<T> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.ty.hash(state);
         for forall in self.foralls.iter() {
@@ -65,7 +64,7 @@ impl<T: SomeType> std::hash::Hash for Scheme<T> {
 //     }
 // }
 
-impl<T: SomeType> Scheme<T> {
+impl<T: TypePhase> Scheme<T> {
     pub fn import(self, module_id: ModuleId) -> Self {
         Self {
             foralls: self.foralls,
@@ -77,14 +76,8 @@ impl<T: SomeType> Scheme<T> {
             ty: self.ty.import(module_id),
         }
     }
-}
 
-impl Scheme<InferTy> {
-    pub fn new(
-        foralls: IndexSet<ForAll>,
-        predicates: Vec<Predicate<InferTy>>,
-        ty: InferTy,
-    ) -> Self {
+    pub fn new(foralls: IndexSet<ForAll>, predicates: Vec<Predicate<T>>, ty: InnerTy<T>) -> Self {
         Self {
             foralls,
             predicates,
@@ -93,22 +86,7 @@ impl Scheme<InferTy> {
     }
 }
 
-impl Scheme<Ty> {
-    pub fn new(foralls: IndexSet<ForAll>, predicates: Vec<Predicate<Ty>>, ty: Ty) -> Self {
-        assert!(
-            !ty.contains_var(),
-            "Scheme ty cannot contain type/row meta vars: {ty:?}"
-        );
-
-        Self {
-            foralls,
-            predicates,
-            ty,
-        }
-    }
-}
-
-impl Scheme<InferTy> {
+impl Scheme<Infer> {
     #[instrument(skip(self, session, context, constraints), ret)]
     pub(super) fn instantiate(
         &self,
@@ -155,11 +133,7 @@ impl Scheme<InferTy> {
                                 ..
                             } = pred
                             {
-                                if p == param {
-                                    Some(*protocol_id)
-                                } else {
-                                    None
-                                }
+                                if p == param { Some(*protocol_id) } else { None }
                             } else {
                                 None
                             }
@@ -250,11 +224,7 @@ impl Scheme<InferTy> {
                         ..
                     } = pred
                     {
-                        if p == param {
-                            Some(*protocol_id)
-                        } else {
-                            None
-                        }
+                        if p == param { Some(*protocol_id) } else { None }
                     } else {
                         None
                     }

@@ -8,11 +8,11 @@ use crate::{
             constraint::{Constraint, ConstraintCause},
             store::ConstraintStore,
         },
-        infer_row::{InferRow, RowParamId},
-        infer_ty::InferTy,
+        infer_row::{InferRow, InnerRow, RowParamId},
+        infer_ty::{InferTy, InnerTy, TypePhase},
         mappable::Mappable,
         solve_context::SolveContext,
-        ty::{SomeType, Ty},
+        ty::Ty,
         type_operations::{UnificationSubstitutions, curry, instantiate_row, instantiate_ty},
         type_session::TypeSession,
     },
@@ -21,16 +21,16 @@ use crate::{
 // Predicates are kinda like Constraint templates. They ride around with schemes and get instantiated
 // into constraints when the scheme itself is instantiated.
 #[derive(Clone, PartialEq, Eq, Hash)]
-pub enum Predicate<T: SomeType> {
+pub enum Predicate<Phase: TypePhase> {
     HasField {
         row: RowParamId,
         label: Label,
-        ty: T,
+        ty: InnerTy<Phase>,
     },
     Projection {
-        base: T,
+        base: InnerTy<Phase>,
         label: Label,
-        returns: T,
+        returns: InnerTy<Phase>,
         protocol_id: Option<ProtocolId>,
     },
     Conforms {
@@ -38,104 +38,35 @@ pub enum Predicate<T: SomeType> {
         protocol_id: ProtocolId,
     },
     Member {
-        receiver: T,
+        receiver: InnerTy<Phase>,
         label: Label,
-        ty: T,
+        ty: InnerTy<Phase>,
         node_id: NodeID,
     },
     Equals {
-        lhs: T,
-        rhs: T,
+        lhs: InnerTy<Phase>,
+        rhs: InnerTy<Phase>,
     },
     Call {
-        callee: T,
-        args: Vec<T>,
-        returns: T,
-        receiver: Option<T>,
+        callee: InnerTy<Phase>,
+        args: Vec<InnerTy<Phase>>,
+        returns: InnerTy<Phase>,
+        receiver: Option<InnerTy<Phase>>,
     },
     TypeMember {
-        base: T,
+        base: InnerTy<Phase>,
         member: Label,
-        returns: T,
-        generics: Vec<T>,
+        returns: InnerTy<Phase>,
+        generics: Vec<InnerTy<Phase>>,
     },
 }
 
-impl From<Predicate<InferTy>> for Predicate<Ty> {
-    fn from(value: Predicate<InferTy>) -> Self {
-        match value {
-            Predicate::Projection {
-                protocol_id,
-                base,
-                label,
-                returns,
-            } => Predicate::Projection {
-                base: base.into(),
-                label,
-                returns: returns.into(),
-                protocol_id,
-            },
-            Predicate::<InferTy>::Conforms { param, protocol_id } => {
-                Predicate::Conforms { param, protocol_id }
-            }
-            Predicate::<InferTy>::Equals { lhs, rhs } => Predicate::Equals {
-                lhs: lhs.into(),
-                rhs: rhs.into(),
-            },
-            Predicate::<InferTy>::HasField { row, label, ty } => Predicate::HasField {
-                row,
-                label,
-                ty: ty.into(),
-            },
-            Predicate::<InferTy>::Member {
-                receiver,
-                label,
-                ty,
-                node_id,
-            } => Predicate::Member {
-                receiver: receiver.into(),
-                label,
-                ty: ty.into(),
-                node_id,
-            },
-            Predicate::<InferTy>::TypeMember {
-                base: owner,
-                member,
-                returns,
-                generics,
-            } => Predicate::TypeMember {
-                base: owner.into(),
-                member: member.clone(),
-                returns: returns.into(),
-                generics: generics.into_iter().map(|g| g.into()).collect(),
-            },
-            Predicate::<InferTy>::Call {
-                callee,
-                args,
-                returns,
-                receiver,
-            } => Predicate::Call {
-                callee: callee.into(),
-                args: args.into_iter().map(|arg| arg.into()).collect(),
-                returns: returns.into(),
-                receiver: receiver.map(|r| r.into()),
-            },
-        }
-    }
-}
-
-impl From<Predicate<Ty>> for Predicate<InferTy> {
-    fn from(value: Predicate<Ty>) -> Self {
-        value.mapping(&mut |t| t.into(), &mut |r| r.into())
-    }
-}
-
-impl<T: SomeType, U: SomeType> Mappable<T, U> for Predicate<T> {
+impl<T: TypePhase, U: TypePhase> Mappable<T, U> for Predicate<T> {
     type Output = Predicate<U>;
     fn mapping(
         self,
-        ty_map: &mut impl FnMut(T) -> U,
-        _row_map: &mut impl FnMut(T::RowType) -> U::RowType,
+        ty_map: &mut impl FnMut(InnerTy<T>) -> InnerTy<U>,
+        _row_map: &mut impl FnMut(InnerRow<T>) -> InnerRow<U>,
     ) -> Self::Output {
         match self {
             Predicate::Projection {
@@ -198,13 +129,11 @@ impl<T: SomeType, U: SomeType> Mappable<T, U> for Predicate<T> {
     }
 }
 
-impl<T: SomeType> Predicate<T> {
+impl<T: TypePhase> Predicate<T> {
     pub fn import(self, module_id: ModuleId) -> Self {
         self.mapping(&mut |t| t.clone().import(module_id), &mut |r| r)
     }
-}
 
-impl Predicate<InferTy> {
     pub fn apply(
         &self,
         substitutions: &mut UnificationSubstitutions,
@@ -316,7 +245,7 @@ impl Predicate<InferTy> {
     }
 }
 
-impl<T: SomeType> std::fmt::Debug for Predicate<T> {
+impl<T: TypePhase> std::fmt::Debug for Predicate<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Predicate::Projection {

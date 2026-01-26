@@ -12,6 +12,7 @@ use crate::{
     name_resolution::symbol::{ProtocolId, Symbol},
     types::{
         conformance::{Conformance, ConformanceKey},
+        infer_ty::Infer,
         ty::Ty,
         type_catalog::Nominal,
         types::{TypeEntry, Types},
@@ -272,7 +273,7 @@ impl ModuleEnvironment {
             .collect()
     }
 
-    pub fn lookup_nominal(&self, symbol: &Symbol) -> Option<&Nominal<Ty>> {
+    pub fn lookup_nominal(&self, symbol: &Symbol) -> Option<&Nominal<Infer>> {
         let module_id = symbol.external_module_id()?;
         let stable_id = self.modules_by_local.get(&module_id)?;
         let module = self.modules.get(stable_id)?;

@@ -20,13 +20,12 @@ use crate::{
         conformance::{Conformance, ConformanceKey},
         constraints::{constraint::Constraint, store::ConstraintStore},
         infer_row::{InferRow, RowMetaId, RowParamId},
-        infer_ty::{InferTy, Level, Meta, MetaVarId, SkolemId},
+        infer_ty::{Infer, InferTy, Level, Meta, MetaVarId, SkolemId},
         predicate::Predicate,
         row::Row,
         scheme::{ForAll, Scheme},
         solve_context::{SolveContext, SolveContextKind},
         term_environment::{EnvEntry, TermEnv},
-        ty::SomeType,
         type_catalog::{Nominal, TypeCatalog},
         type_error::TypeError,
         type_operations::{UnificationSubstitutions, substitute},
@@ -53,10 +52,10 @@ pub struct TypeSession {
     pub(super) meta_levels: Rc<RefCell<FxHashMap<Meta, Level>>>,
     pub(super) skolem_map: FxHashMap<InferTy, InferTy>,
 
-    pub typealiases: FxHashMap<Symbol, Scheme<InferTy>>,
-    pub(super) type_catalog: TypeCatalog<InferTy>,
+    pub typealiases: FxHashMap<Symbol, Scheme<Infer>>,
+    pub(super) type_catalog: TypeCatalog<Infer>,
     pub(super) modules: Rc<ModuleEnvironment>,
-    pub aliases: FxHashMap<Symbol, Scheme<InferTy>>,
+    pub aliases: FxHashMap<Symbol, Scheme<Infer>>,
     pub(super) reverse_instantiations: ReverseInstantiations,
 
     /// Variational choices for protocol method calls.
@@ -111,7 +110,7 @@ impl TypeSession {
             term_env.insert(sym, entry);
         }
 
-        let mut catalog = TypeCatalog::<InferTy>::default();
+        let mut catalog = TypeCatalog::<Infer>::default();
 
         // Import builtin nominals
         catalog.nominals.insert(
@@ -482,9 +481,9 @@ impl TypeSession {
 
     pub fn apply_mult(
         &mut self,
-        tys: Vec<InferTy>,
+        tys: Vec<Infer>,
         substitutions: &mut UnificationSubstitutions,
-    ) -> Vec<InferTy> {
+    ) -> Vec<Infer> {
         tys.into_iter()
             .map(|ty| self.apply(ty, substitutions))
             .collect()
@@ -527,7 +526,7 @@ impl TypeSession {
         &self.term_env
     }
 
-    pub fn skolemize(&mut self, entry: &EnvEntry<InferTy>) -> InferTy {
+    pub fn skolemize(&mut self, entry: &EnvEntry<Infer>) -> InferTy {
         let mut skolems = FxHashMap::default();
         for forall in entry.foralls() {
             let ForAll::Ty(id) = forall else {
@@ -626,7 +625,7 @@ impl TypeSession {
         context: &mut SolveContext,
         unsolved: &IndexSet<Constraint>,
         constraints: &mut ConstraintStore,
-    ) -> EnvEntry<InferTy> {
+    ) -> EnvEntry<Infer> {
         // Make sure we're up to date
         let ty = self.apply(ty, &mut context.substitutions_mut());
 
@@ -643,7 +642,7 @@ impl TypeSession {
         }
 
         let mut foralls: IndexSet<_> = ty.collect_foralls().into_iter().collect();
-        let mut predicates: IndexSet<Predicate<InferTy>> = Default::default();
+        let mut predicates: IndexSet<Predicate<Infer>> = Default::default();
         let mut substitutions = UnificationSubstitutions::new(self.meta_levels.clone());
         for m in &metas {
             match m {
@@ -779,7 +778,7 @@ impl TypeSession {
             return EnvEntry::Mono(ty);
         }
 
-        EnvEntry::Scheme(Scheme::<InferTy>::new(
+        EnvEntry::Scheme(Scheme::<Infer>::new(
             foralls,
             predicates.into_iter().collect(),
             ty,
@@ -787,7 +786,7 @@ impl TypeSession {
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
-    pub(super) fn lookup(&mut self, sym: &Symbol) -> Option<EnvEntry<InferTy>> {
+    pub(super) fn lookup(&mut self, sym: &Symbol) -> Option<EnvEntry<Infer>> {
         if let Some(entry) = builtin_scope().get(sym).cloned() {
             return Some(entry);
         }
@@ -797,7 +796,7 @@ impl TypeSession {
         }
 
         if let Some(entry) = self.modules.lookup(sym) {
-            let entry: EnvEntry<InferTy> = match entry.clone() {
+            let entry: EnvEntry<Infer> = match entry.clone() {
                 TypeEntry::Mono(t) => EnvEntry::Mono(t.into()),
                 TypeEntry::Poly(..) => entry.into(),
             };
@@ -813,7 +812,7 @@ impl TypeSession {
     pub(super) fn promote(
         &mut self,
         sym: Symbol,
-        entry: EnvEntry<InferTy>,
+        entry: EnvEntry<Infer>,
         constraints: &mut ConstraintStore,
     ) {
         if matches!(sym, Symbol::Builtin(..)) {
@@ -830,7 +829,7 @@ impl TypeSession {
     pub(super) fn insert_term(
         &mut self,
         sym: Symbol,
-        entry: EnvEntry<InferTy>,
+        entry: EnvEntry<Infer>,
         constraints: &mut ConstraintStore,
     ) {
         if matches!(sym, Symbol::Builtin(..)) {
@@ -859,7 +858,7 @@ impl TypeSession {
         self.term_env.insert(sym, EnvEntry::Mono(ty));
     }
 
-    pub fn lookup_conformance(&mut self, key: &ConformanceKey) -> Option<Conformance<InferTy>> {
+    pub fn lookup_conformance(&mut self, key: &ConformanceKey) -> Option<Conformance<Infer>> {
         if let Some(conformance) = self.type_catalog.conformances.get(key) {
             return Some(conformance.clone());
         }
@@ -897,7 +896,7 @@ impl TypeSession {
         None
     }
 
-    pub fn lookup_effect(&self, id: &Symbol) -> Option<InferTy> {
+    pub fn lookup_effect(&self, id: &Symbol) -> Option<Infer> {
         if let Some(effect) = self.type_catalog.lookup_effect(id) {
             return Some(effect.clone());
         }
@@ -963,7 +962,7 @@ impl TypeSession {
         result
     }
 
-    pub fn lookup_nominal(&mut self, symbol: &Symbol) -> Option<Nominal<InferTy>> {
+    pub fn lookup_nominal(&mut self, symbol: &Symbol) -> Option<Nominal<Infer>> {
         if let Some(nominal) = self.type_catalog.nominals.get(symbol).cloned() {
             return Some(nominal);
         }

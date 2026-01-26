@@ -10,7 +10,12 @@ use crate::{
     },
     span::Span,
     token_kind::TokenKind,
-    types::{mappable::Mappable, ty::SomeType, typed_ast::TypedExpr},
+    types::{
+        infer_row::InnerRow,
+        infer_ty::{InnerTy, TypePhase},
+        mappable::Mappable,
+        typed_ast::TypedExpr,
+    },
 };
 use std::fmt::Display;
 
@@ -189,7 +194,7 @@ pub struct InlineIRInstruction {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct TypedInlineIRInstruction<T: SomeType> {
+pub struct TypedInlineIRInstruction<T: TypePhase> {
     pub id: NodeID,
     pub span: Span,
     pub binds: Vec<TypedExpr<T>>,
@@ -197,12 +202,14 @@ pub struct TypedInlineIRInstruction<T: SomeType> {
     pub kind: InlineIRInstructionKind,
 }
 
-impl<T: SomeType, U: SomeType> Mappable<T, U> for TypedInlineIRInstruction<T> {
+impl<T: TypePhase + 'static, U: TypePhase + 'static> Mappable<T, U>
+    for TypedInlineIRInstruction<T>
+{
     type Output = TypedInlineIRInstruction<U>;
     fn mapping(
         self,
-        m: &mut impl FnMut(T) -> U,
-        r: &mut impl FnMut(T::RowType) -> U::RowType,
+        m: &mut impl FnMut(InnerTy<T>) -> InnerTy<U>,
+        r: &mut impl FnMut(InnerRow<T>) -> InnerRow<U>,
     ) -> Self::Output {
         TypedInlineIRInstruction {
             id: self.id,

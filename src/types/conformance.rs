@@ -5,7 +5,11 @@ use crate::{
     name_resolution::symbol::{ProtocolId, Symbol},
     node_id::NodeID,
     span::Span,
-    types::{infer_ty::InferTy, ty::Ty, type_session::TypeSession},
+    types::{
+        infer_ty::{Infer, InferTy, InnerTy, TypePhase},
+        ty::{Ty, Typed},
+        type_session::TypeSession,
+    },
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -15,13 +19,13 @@ pub struct ConformanceKey {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Witnesses<T> {
+pub struct Witnesses<T: TypePhase> {
     pub methods: FxHashMap<Label, Symbol>,
-    pub associated_types: FxHashMap<Label, T>,
+    pub associated_types: FxHashMap<Label, InnerTy<T>>,
     pub requirements: FxHashMap<Symbol, Symbol>,
 }
 
-impl<T> Default for Witnesses<T> {
+impl<T: TypePhase> Default for Witnesses<T> {
     fn default() -> Self {
         Self {
             methods: Default::default(),
@@ -31,7 +35,7 @@ impl<T> Default for Witnesses<T> {
     }
 }
 
-impl<T> Witnesses<T> {
+impl<T: TypePhase> Witnesses<T> {
     /// Look up a witness by label, falling back to lookup by method requirement symbol.
     pub fn get_witness(&self, label: &Label, method_req: &Symbol) -> Option<Symbol> {
         self.methods
@@ -42,7 +46,7 @@ impl<T> Witnesses<T> {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Conformance<T> {
+pub struct Conformance<T: TypePhase> {
     pub node_id: NodeID,
     pub conforming_id: Symbol,
     pub protocol_id: ProtocolId,
@@ -50,8 +54,8 @@ pub struct Conformance<T> {
     pub span: Span,
 }
 
-impl Conformance<InferTy> {
-    pub(super) fn finalize(self, session: &mut TypeSession) -> Conformance<Ty> {
+impl Conformance<Infer> {
+    pub(super) fn finalize(self, session: &mut TypeSession) -> Conformance<Typed> {
         Conformance {
             node_id: self.node_id,
             conforming_id: self.conforming_id,
@@ -67,27 +71,6 @@ impl Conformance<InferTy> {
                 requirements: self.witnesses.requirements,
             },
             span: self.span,
-        }
-    }
-}
-
-impl From<Conformance<Ty>> for Conformance<InferTy> {
-    fn from(value: Conformance<Ty>) -> Self {
-        Conformance {
-            node_id: value.node_id,
-            conforming_id: value.conforming_id,
-            protocol_id: value.protocol_id,
-            witnesses: Witnesses {
-                methods: value.witnesses.methods,
-                associated_types: value
-                    .witnesses
-                    .associated_types
-                    .into_iter()
-                    .map(|(k, v)| (k, v.into()))
-                    .collect(),
-                requirements: value.witnesses.requirements,
-            },
-            span: value.span,
         }
     }
 }

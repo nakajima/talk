@@ -84,7 +84,6 @@ impl From<u32> for ConstraintId {
     }
 }
 
-
 #[derive(Default, Debug)]
 pub struct ConstraintStore {
     ids: IDGenerator,
@@ -275,24 +274,15 @@ impl ConstraintStore {
     }
 
     pub fn meta_dependents_for(&self, meta: Meta) -> Vec<ConstraintId> {
-        self.meta_deps
-            .get(&meta)
-            .cloned()
-            .unwrap_or_default()
+        self.meta_deps.get(&meta).cloned().unwrap_or_default()
     }
 
     pub fn symbol_dependents_for(&self, symbol: Symbol) -> Vec<ConstraintId> {
-        self.symbol_deps
-            .get(&symbol)
-            .cloned()
-            .unwrap_or_default()
+        self.symbol_deps.get(&symbol).cloned().unwrap_or_default()
     }
 
     pub fn conformance_dependents_for(&self, key: ConformanceKey) -> Vec<ConstraintId> {
-        self.conformance_deps
-            .get(&key)
-            .cloned()
-            .unwrap_or_default()
+        self.conformance_deps.get(&key).cloned().unwrap_or_default()
     }
 }
 

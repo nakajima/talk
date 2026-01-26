@@ -8,11 +8,10 @@ use crate::{
     compiling::module::ModuleId,
     label::Label,
     types::{
-        infer_ty::{InferTy, Level, format_row},
+        infer_ty::{Infer, InferTy, InnerTy, Level, TypePhase, format_row},
         predicate::Predicate,
         row::Row,
         scheme::ForAll,
-        ty::SomeType,
         type_operations::UnificationSubstitutions,
         type_session::TypeSession,
     },
@@ -58,18 +57,20 @@ impl From<u32> for RowParamId {
 
 pub type ClosedRow<T> = IndexMap<Label, T>;
 
+pub type InferRow = InnerRow<Infer>;
+
 // TODO: Add Level to Var once we support open rows
 #[derive(PartialEq, Eq, Hash, Clone, Drive, DriveMut)]
-pub enum InferRow {
+pub enum InnerRow<Phase: TypePhase> {
     Empty,
     Extend {
-        row: Box<InferRow>,
+        row: Box<InnerRow<Phase>>,
         #[drive(skip)]
         label: Label,
-        ty: InferTy,
+        ty: InnerTy<Phase>,
     },
     Param(#[drive(skip)] RowParamId),
-    Var(#[drive(skip)] RowMetaId),
+    Var(#[drive(skip)] Phase::RowVar),
 }
 
 impl From<InferRow> for Row {
@@ -102,21 +103,32 @@ impl From<Row> for InferRow {
     }
 }
 
-impl InferRow {
-    pub fn close(&self) -> ClosedRow<InferTy> {
+impl<Phase: TypePhase> InnerRow<Phase> {
+    pub fn close(&self) -> ClosedRow<Self> {
         close(self, ClosedRow::default())
     }
 
-    pub fn collect_metas(&self) -> Vec<InferTy> {
+    fn contains_type_params(&self) -> bool {
+        match self {
+            InnerRow::Empty => false,
+            InnerRow::Extend { row, ty, .. } => {
+                row.contains_type_params() || ty.contains_type_params()
+            }
+            InnerRow::Param(..) => true,
+            InnerRow::Var(_) => false,
+        }
+    }
+
+    pub fn collect_metas(&self) -> Vec<InnerTy<Phase>> {
         let mut result = vec![];
         match self {
-            InferRow::Param(..) | InferRow::Empty => (),
-            InferRow::Extend { row, ty, .. } => {
+            Self::Param(..) | Self::Empty => (),
+            Self::Extend { row, ty, .. } => {
                 result.extend(row.collect_metas());
                 result.extend(ty.collect_metas());
             }
-            InferRow::Var(var) => {
-                result.push(InferTy::Record(InferRow::Var(*var).into())); // This is a hack
+            Self::Var(var) => {
+                result.push(InnerTy::<Phase>::Record(Self::Var(*var).into())); // This is a hack
             }
         }
         result
@@ -146,7 +158,7 @@ impl InferRow {
         result
     }
 
-    pub fn collect_param_predicates(&self) -> Vec<Predicate<InferTy>> {
+    pub fn collect_param_predicates(&self) -> Vec<Predicate<Phase>> {
         let mut result = vec![];
         match self {
             Self::Empty | Self::Var(..) | Self::Param(..) => (),
@@ -215,15 +227,15 @@ pub fn normalize_row(
     }
 }
 
-impl std::fmt::Debug for InferRow {
+impl<T: TypePhase> std::fmt::Debug for InnerRow<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            InferRow::Empty => write!(f, "{{}}"),
-            InferRow::Extend { .. } => {
+            Self::Empty => write!(f, "{{}}"),
+            Self::Extend { .. } => {
                 write!(f, "{:?}", format_row(self))
             }
-            InferRow::Param(id) => write!(f, "rowparam{id:?}"),
-            InferRow::Var(id) => write!(f, "rowvar{id:?}"),
+            Self::Param(id) => write!(f, "rowparam{id:?}"),
+            Self::Var(id) => write!(f, "rowvar{id:?}"),
         }
     }
 }

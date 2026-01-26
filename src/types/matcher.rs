@@ -3,6 +3,7 @@ use derive_visitor::Visitor;
 use indexmap::{IndexSet, indexset};
 use rustc_hash::FxHashMap;
 
+use crate::types::ty::Typed;
 use crate::types::types::Types;
 use crate::{
     diagnostic::{Diagnostic, Severity},
@@ -52,7 +53,7 @@ enum ConstructorSet {
     Infinite,
 }
 
-type PatternMatrix = Vec<Vec<TypedPattern<Ty>>>;
+type PatternMatrix = Vec<Vec<TypedPattern<Typed>>>;
 
 #[derive(Clone, Debug)]
 pub(crate) struct MatchPlan {
@@ -108,7 +109,7 @@ pub(crate) enum Projection {
 
 #[derive(Clone, Debug)]
 struct PlanRow {
-    patterns: Vec<TypedPattern<Ty>>,
+    patterns: Vec<TypedPattern<Typed>>,
     binds: FxHashMap<Symbol, ValueId>,
     arm_index: usize,
 }
@@ -147,7 +148,7 @@ impl From<Constructor> for RequiredConstructor {
 }
 
 pub fn check_ast(
-    ast: &TypedAST<Ty>,
+    ast: &TypedAST<Typed>,
     types: &Types,
     symbol_names: &FxHashMap<Symbol, String>,
 ) -> MatcherCheckResult {
@@ -166,7 +167,7 @@ pub fn check_ast(
 pub(crate) fn plan_for_pattern(
     types: &Types,
     scrutinee_ty: Ty,
-    pattern: &TypedPattern<Ty>,
+    pattern: &TypedPattern<Typed>,
 ) -> MatchPlan {
     let symbol_names = FxHashMap::default();
     let checker = PatternChecker::new(types, &symbol_names);
@@ -193,7 +194,7 @@ pub(crate) fn plan_for_pattern(
     }
 }
 
-type TypedExprTy = TypedExpr<Ty>;
+type TypedExprTy = TypedExpr<Typed>;
 
 #[derive(Visitor)]
 #[visitor(TypedExprTy(enter))]
@@ -225,7 +226,7 @@ impl<'a> PatternChecker<'a> {
         }
     }
 
-    fn check_pattern(&mut self, pattern: &TypedPattern<Ty>) {
+    fn check_pattern(&mut self, pattern: &TypedPattern<Typed>) {
         match &pattern.kind {
             TypedPatternKind::Or(patterns) => {
                 for pattern in patterns {
@@ -264,12 +265,17 @@ impl<'a> PatternChecker<'a> {
         }
     }
 
-    fn check_match(&mut self, scrutinee: &TypedExpr<Ty>, arms: &[TypedMatchArm<Ty>]) {
-        let patterns: Vec<TypedPattern<Ty>> = arms.iter().map(|arm| arm.pattern.clone()).collect();
+    fn check_match(&mut self, scrutinee: &TypedExpr<Typed>, arms: &[TypedMatchArm<Typed>]) {
+        let patterns: Vec<TypedPattern<Typed>> =
+            arms.iter().map(|arm| arm.pattern.clone()).collect();
         self.check_match_patterns(scrutinee, &patterns);
     }
 
-    fn check_match_patterns(&mut self, scrutinee: &TypedExpr<Ty>, patterns: &[TypedPattern<Ty>]) {
+    fn check_match_patterns(
+        &mut self,
+        scrutinee: &TypedExpr<Typed>,
+        patterns: &[TypedPattern<Typed>],
+    ) {
         let mut matrix: PatternMatrix = vec![];
         for pattern in patterns {
             let row = vec![pattern.clone()];
@@ -297,7 +303,11 @@ impl<'a> PatternChecker<'a> {
         }
     }
 
-    fn build_match_plan(&self, scrutinee: &TypedExpr<Ty>, arms: &[TypedMatchArm<Ty>]) -> MatchPlan {
+    fn build_match_plan(
+        &self,
+        scrutinee: &TypedExpr<Typed>,
+        arms: &[TypedMatchArm<Typed>],
+    ) -> MatchPlan {
         let mut builder = MatchPlanBuilder::default();
         let scrutinee_value = builder.value(ValueRef::Scrutinee {
             ty: scrutinee.ty.clone(),
@@ -554,7 +564,7 @@ impl<'a> PatternChecker<'a> {
         }
     }
 
-    fn is_useful(&self, matrix: &PatternMatrix, row: &[TypedPattern<Ty>]) -> bool {
+    fn is_useful(&self, matrix: &PatternMatrix, row: &[TypedPattern<Typed>]) -> bool {
         if row.is_empty() {
             return matrix.is_empty();
         }
@@ -648,7 +658,7 @@ impl<'a> PatternChecker<'a> {
         constructors
     }
 
-    fn pattern_constructor(&self, pattern: &TypedPattern<Ty>) -> Option<Constructor> {
+    fn pattern_constructor(&self, pattern: &TypedPattern<Typed>) -> Option<Constructor> {
         match &pattern.kind {
             TypedPatternKind::LiteralTrue => Some(Constructor::LiteralTrue),
             TypedPatternKind::LiteralFalse => Some(Constructor::LiteralFalse),
@@ -666,7 +676,7 @@ impl<'a> PatternChecker<'a> {
         }
     }
 
-    fn expand_or_row_head(&self, row: &[TypedPattern<Ty>]) -> PatternMatrix {
+    fn expand_or_row_head(&self, row: &[TypedPattern<Typed>]) -> PatternMatrix {
         let Some(head) = row.first() else {
             return vec![vec![]];
         };
@@ -725,7 +735,7 @@ impl<'a> PatternChecker<'a> {
 
     fn row_head_matches_constructor(
         &self,
-        head: &TypedPattern<Ty>,
+        head: &TypedPattern<Typed>,
         constructor: &Constructor,
     ) -> bool {
         if self.is_wildcard(head) {
@@ -738,10 +748,10 @@ impl<'a> PatternChecker<'a> {
 
     fn specialize_row(
         &self,
-        head: &TypedPattern<Ty>,
+        head: &TypedPattern<Typed>,
         constructor: &Constructor,
         column_ty: &Ty,
-    ) -> Vec<TypedPattern<Ty>> {
+    ) -> Vec<TypedPattern<Typed>> {
         if self.is_wildcard(head) {
             return self.wildcards_for_constructor(constructor, column_ty);
         }
@@ -749,7 +759,7 @@ impl<'a> PatternChecker<'a> {
         match (&head.kind, constructor) {
             (TypedPatternKind::Tuple(items), Constructor::Tuple) => items.clone(),
             (TypedPatternKind::Record { .. }, Constructor::Record) => {
-                if let Ty::Record(_, row) = column_ty {
+                if let Ty::Record(row) = column_ty {
                     self.record_subpatterns(head, row)
                 } else {
                     vec![]
@@ -771,7 +781,7 @@ impl<'a> PatternChecker<'a> {
         &self,
         constructor: &Constructor,
         column_ty: &Ty,
-    ) -> Vec<TypedPattern<Ty>> {
+    ) -> Vec<TypedPattern<Typed>> {
         let subtypes = self.constructor_subtypes(constructor, column_ty);
         subtypes
             .into_iter()
@@ -812,7 +822,11 @@ impl<'a> PatternChecker<'a> {
         }
     }
 
-    fn record_subpatterns(&self, pattern: &TypedPattern<Ty>, row: &Row) -> Vec<TypedPattern<Ty>> {
+    fn record_subpatterns(
+        &self,
+        pattern: &TypedPattern<Typed>,
+        row: &Row,
+    ) -> Vec<TypedPattern<Typed>> {
         let TypedPatternKind::Record { fields } = &pattern.kind else {
             return vec![];
         };
@@ -855,7 +869,7 @@ impl<'a> PatternChecker<'a> {
             .collect()
     }
 
-    fn wildcard_pattern(&self, ty: Ty) -> TypedPattern<Ty> {
+    fn wildcard_pattern(&self, ty: Ty) -> TypedPattern<Typed> {
         TypedPattern {
             id: NodeID::SYNTHESIZED,
             ty,
@@ -863,7 +877,7 @@ impl<'a> PatternChecker<'a> {
         }
     }
 
-    fn is_wildcard(&self, pattern: &TypedPattern<Ty>) -> bool {
+    fn is_wildcard(&self, pattern: &TypedPattern<Typed>) -> bool {
         matches!(
             pattern.kind,
             TypedPatternKind::Wildcard | TypedPatternKind::Bind(_)
@@ -912,10 +926,10 @@ impl<'a> PatternChecker<'a> {
 
     fn check_record_pattern(
         &mut self,
-        pattern: &TypedPattern<Ty>,
-        fields: &[TypedRecordFieldPattern<Ty>],
+        pattern: &TypedPattern<Typed>,
+        fields: &[TypedRecordFieldPattern<Typed>],
     ) {
-        let Ty::Record(_, row) = &pattern.ty else {
+        let Ty::Record(row) = &pattern.ty else {
             return;
         };
 
@@ -950,7 +964,7 @@ impl<'a> PatternChecker<'a> {
         }
     }
 
-    fn record_pattern_labels(&self, fields: &[TypedRecordFieldPattern<Ty>]) -> IndexSet<Label> {
+    fn record_pattern_labels(&self, fields: &[TypedRecordFieldPattern<Typed>]) -> IndexSet<Label> {
         let mut labels = IndexSet::new();
         for field in fields {
             match &field.kind {
@@ -973,7 +987,7 @@ impl<'a> PatternChecker<'a> {
 
 enum RecordFieldValue {
     Bind { id: NodeID, symbol: Symbol },
-    Value(TypedPattern<Ty>),
+    Value(TypedPattern<Typed>),
 }
 
 #[cfg(test)]
@@ -982,15 +996,15 @@ pub mod tests {
 
     use super::*;
     use crate::{
-        compiling::driver::{Driver, DriverConfig, Source, Typed},
+        compiling::driver::{self, Driver, DriverConfig, Source},
         diagnostic::Severity,
         node_id::NodeID,
         types::typed_ast::{TypedExpr, TypedExprKind, TypedStmt, TypedStmtKind},
     };
 
     pub struct Matcher<'a> {
-        pub scrutinee: TypedExpr<Ty>,
-        pub patterns: Vec<TypedPattern<Ty>>,
+        pub scrutinee: TypedExpr<Typed>,
+        pub patterns: Vec<TypedPattern<Typed>>,
         types: &'a Types,
         symbol_names: &'a FxHashMap<Symbol, String>,
     }
@@ -1015,7 +1029,7 @@ pub mod tests {
             .typecheck()
             .unwrap();
 
-        let Typed {
+        let driver::Typed {
             ast,
             types,
             resolved_names,
