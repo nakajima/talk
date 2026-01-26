@@ -12,8 +12,7 @@ use crate::{
     name_resolution::symbol::{ProtocolId, Symbol},
     types::{
         conformance::{Conformance, ConformanceKey},
-        infer_ty::Infer,
-        ty::Ty,
+        infer_ty::Ty,
         type_catalog::Nominal,
         types::{TypeEntry, Types},
     },
@@ -225,7 +224,7 @@ impl ModuleEnvironment {
     }
 
     #[instrument(skip(self))]
-    pub fn lookup_conformance(&self, key: &ConformanceKey) -> Option<&Conformance<Ty>> {
+    pub fn lookup_conformance(&self, key: &ConformanceKey) -> Option<&Conformance> {
         if let Some(module_id) = key.conforming_id.external_module_id()
             && let Some(stable_id) = self.modules_by_local.get(&module_id)
             && let Some(module) = self.modules.get(stable_id)
@@ -259,7 +258,7 @@ impl ModuleEnvironment {
     }
 
     /// Returns all conformances from all imported modules
-    pub fn all_conformances(&self) -> Vec<(ConformanceKey, Conformance<Ty>)> {
+    pub fn all_conformances(&self) -> Vec<(ConformanceKey, Conformance)> {
         self.modules
             .iter()
             .flat_map(|(_, module)| {
@@ -273,7 +272,7 @@ impl ModuleEnvironment {
             .collect()
     }
 
-    pub fn lookup_nominal(&self, symbol: &Symbol) -> Option<&Nominal<Infer>> {
+    pub fn lookup_nominal(&self, symbol: &Symbol) -> Option<&Nominal> {
         let module_id = symbol.external_module_id()?;
         let stable_id = self.modules_by_local.get(&module_id)?;
         let module = self.modules.get(stable_id)?;

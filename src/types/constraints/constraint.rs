@@ -6,8 +6,8 @@ use crate::{
             has_field::HasField, member::Member, projection::Projection, row_subset::RowSubset,
             store::ConstraintId, type_member::TypeMember,
         },
-        infer_row::InferRow,
-        infer_ty::InferTy,
+        infer_row::Row,
+        infer_ty::Ty,
         predicate::Predicate,
         type_operations::{UnificationSubstitutions, substitute, substitute_mult, substitute_row},
         type_session::TypeSession,
@@ -170,7 +170,7 @@ impl Constraint {
         self
     }
 
-    pub fn substitute(&self, substitutions: &FxHashMap<InferTy, InferTy>) -> Constraint {
+    pub fn substitute(&self, substitutions: &FxHashMap<Ty, Ty>) -> Constraint {
         let mut copy = self.clone();
 
         match &mut copy {
@@ -230,11 +230,11 @@ impl Constraint {
         &self,
         substitutions: &mut UnificationSubstitutions,
         session: &mut TypeSession,
-    ) -> Option<Predicate<InferTy>> {
+    ) -> Option<Predicate> {
         let pred = match self {
             #[allow(clippy::panic)]
             Self::HasField(has_field) => {
-                let InferRow::Param(row_param) =
+                let Row::Param(row_param) =
                     session.apply_row(has_field.row.clone(), substitutions)
                 else {
                     panic!(
@@ -272,7 +272,7 @@ impl Constraint {
                 rhs: session.apply(equals.rhs.clone(), substitutions),
             },
             Self::Conforms(conforms) => {
-                let InferTy::Param(param, _) = session.apply(conforms.ty.clone(), substitutions)
+                let Ty::Param(param, _) = session.apply(conforms.ty.clone(), substitutions)
                 else {
                     // If the type resolved to a concrete type (not a type parameter),
                     // we can't generalize this constraint - it should have already been
@@ -297,7 +297,7 @@ impl Constraint {
         Some(pred)
     }
 
-    pub fn collect_metas(&self) -> IndexSet<InferTy> {
+    pub fn collect_metas(&self) -> IndexSet<Ty> {
         let mut out = IndexSet::default();
         match self {
             Constraint::Projection(c) => {

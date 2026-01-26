@@ -10,10 +10,9 @@ pub mod tests {
             symbol::{EffectId, GlobalId, ParamLocalId, Symbol},
         },
         types::{
-            infer_row::RowParamId,
-            row::Row,
+            infer_row::{Row, RowParamId},
+            infer_ty::Ty,
             scheme::{ForAll, Scheme},
-            ty::Ty,
             type_error::TypeError,
             types::TypeEntry,
             types_tests::tests::{typecheck, typecheck_err},

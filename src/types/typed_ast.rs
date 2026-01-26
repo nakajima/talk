@@ -9,11 +9,9 @@ use crate::{
     node_id::NodeID,
     node_kinds::inline_ir_instruction::TypedInlineIRInstruction,
     types::{
-        infer_row::InnerRow,
-        infer_ty::{Infer, InnerTy, TypePhase},
-        mappable::Mappable,
+        infer_row::Row,
+        infer_ty::Ty,
         scheme::ForAll,
-        ty::Typed,
         type_operations::UnificationSubstitutions,
         type_session::TypeSession,
         variational::DimensionId,
@@ -21,389 +19,44 @@ use crate::{
 };
 
 #[derive(Debug, Clone, Drive, DriveMut)]
-pub struct TypedAST<T: TypePhase> {
-    pub decls: Vec<TypedDecl<T>>,
-    pub stmts: Vec<TypedStmt<T>>,
+pub struct TypedAST {
+    pub decls: Vec<TypedDecl>,
+    pub stmts: Vec<TypedStmt>,
 }
 
-impl<T: TypePhase> TypedAST<T> {
-    pub fn roots(&self) -> Vec<TypedNode<T>> {
+impl TypedAST {
+    pub fn roots(&self) -> Vec<TypedNode> {
         let mut result = vec![];
         result.extend(self.decls.iter().cloned().map(TypedNode::Decl));
         result.extend(self.stmts.iter().cloned().map(TypedNode::Stmt));
         result.sort_by(|a, b| a.node_id().1.cmp(&b.node_id().1));
         result
     }
-}
 
-impl TypedAST<Infer> {
     pub fn apply(
         self,
         substitutions: &mut UnificationSubstitutions,
         session: &mut TypeSession,
     ) -> Self {
+        // We need to apply substitutions and then generalize types.
+        // shallow_generalize handles nested rows, so we only need to handle types.
+        // For the row closure, we just return the row as-is since shallow_generalize
+        // on types will handle any nested rows.
         self.mapping(
-            &mut |ty| session.apply(ty, substitutions),
-            &mut |row| row, /* session.apply handles rows */
+            &mut |ty| {
+                let applied = session.apply(ty, substitutions);
+                session.shallow_generalize(applied)
+            },
+            &mut |row| row,
         )
     }
 
-    pub fn finalize(self, session: &mut TypeSession) -> TypedAST<Typed> {
-        TypedAST::<Typed> {
-            decls: self
-                .decls
-                .into_iter()
-                .map(|d| d.finalize(session))
-                .collect(),
-            stmts: self
-                .stmts
-                .into_iter()
-                .map(|s| s.finalize(session))
-                .collect(),
-        }
-    }
-}
-
-impl TypedStmt<Infer> {
-    fn finalize(self, session: &mut TypeSession) -> TypedStmt<Typed> {
-        TypedStmt {
-            id: self.id,
-            ty: session.finalize_ty(self.ty).as_mono_ty().clone(),
-            kind: self.kind.finalize(session),
-        }
-    }
-}
-
-impl TypedStmtKind<Infer> {
-    fn finalize(self, session: &mut TypeSession) -> TypedStmtKind<Typed> {
-        use TypedStmtKind::*;
-        match self {
-            Expr(typed_expr) => Expr(typed_expr.finalize(session)),
-            Assignment(lhs, rhs) => Assignment(lhs.finalize(session), rhs.finalize(session)),
-            Handler { effect, func } => Handler {
-                effect,
-                func: func.finalize(session),
-            },
-            Return(typed_expr) => Return(typed_expr.map(|e| e.finalize(session))),
-            Continue(typed_expr) => Continue(typed_expr.map(|e| e.finalize(session))),
-            Loop(cond, block) => Loop(cond.finalize(session), block.finalize(session)),
-            Break => Break,
-        }
-    }
-}
-
-impl TypedDecl<Infer> {
-    fn finalize(self, session: &mut TypeSession) -> TypedDecl<Typed> {
-        TypedDecl {
-            id: self.id,
-            ty: session.finalize_ty(self.ty).as_mono_ty().clone(),
-            kind: self.kind.finalize(session),
-        }
-    }
-}
-
-impl TypedBlock<Infer> {
-    fn finalize(self, session: &mut TypeSession) -> TypedBlock<Typed> {
-        TypedBlock {
-            id: self.id,
-            body: self.body.into_iter().map(|e| e.finalize(session)).collect(),
-            ret: session.finalize_ty(self.ret).as_mono_ty().clone(),
-        }
-    }
-}
-
-impl TypedFunc<Infer> {
-    fn finalize(self, session: &mut TypeSession) -> TypedFunc<Typed> {
-        TypedFunc {
-            name: self.name,
-            foralls: self.foralls,
-            params: map_into!(self.params, |p| TypedParameter {
-                name: p.name,
-                ty: session.finalize_ty(p.ty).as_mono_ty().clone(),
-            }),
-            effects: map_into!(self.effects, |e| {
-                TypedEffect {
-                    name: e.name,
-                    ty: session.finalize_ty(e.ty).as_mono_ty().clone(),
-                }
-            }),
-            effects_row: session.finalize_row(self.effects_row),
-            body: self.body.finalize(session),
-            ret: session.finalize_ty(self.ret).as_mono_ty().clone(),
-        }
-    }
-}
-
-impl TypedMatchArm<Infer> {
-    fn finalize(self, session: &mut TypeSession) -> TypedMatchArm<Typed> {
-        TypedMatchArm {
-            pattern: self.pattern.finalize(session),
-            body: self.body.finalize(session),
-        }
-    }
-}
-
-impl TypedPattern<Infer> {
-    fn finalize(self, session: &mut TypeSession) -> TypedPattern<Typed> {
-        TypedPattern {
-            id: self.id,
-            ty: session.finalize_ty(self.ty).as_mono_ty().clone(),
-            kind: self.kind.mapping(
-                &mut |ty| session.finalize_ty(ty.clone()).as_mono_ty().clone(),
-                &mut |row| row.into(),
-            ),
-        }
-    }
-}
-
-impl TypedRecordField<Infer> {
-    fn finalize(self, session: &mut TypeSession) -> TypedRecordField<Typed> {
-        TypedRecordField {
-            name: self.name,
-            value: self.value.finalize(session),
-        }
-    }
-}
-
-impl TypedNode<Infer> {
-    fn finalize(self, session: &mut TypeSession) -> TypedNode<Typed> {
-        match self {
-            TypedNode::Decl(d) => TypedNode::Decl(d.finalize(session)),
-            TypedNode::Expr(e) => TypedNode::Expr(e.finalize(session)),
-            TypedNode::Stmt(s) => TypedNode::Stmt(s.finalize(session)),
-        }
-    }
-}
-
-impl TypedDeclKind<Infer> {
-    fn finalize(self, session: &mut TypeSession) -> TypedDeclKind<Typed> {
-        use TypedDeclKind::*;
-        match self {
-            Let {
-                pattern,
-                ty,
-                initializer,
-            } => Let {
-                pattern: pattern.finalize(session),
-                ty: session.finalize_ty(ty).as_mono_ty().clone(),
-                initializer: initializer.map(|e| e.finalize(session)),
-            },
-            StructDef {
-                symbol,
-                initializers,
-                properties,
-                instance_methods,
-                typealiases,
-            } => StructDef {
-                symbol,
-                initializers: initializers
-                    .into_iter()
-                    .map(|(k, v)| (k, v.finalize(session)))
-                    .collect(),
-                properties: properties
-                    .into_iter()
-                    .map(|(k, v)| (k, session.finalize_ty(v).as_mono_ty().clone()))
-                    .collect(),
-                instance_methods: instance_methods
-                    .into_iter()
-                    .map(|(k, v)| (k, v.finalize(session)))
-                    .collect(),
-                typealiases: typealiases
-                    .into_iter()
-                    .map(|(k, v)| (k, session.finalize_ty(v).as_mono_ty().clone()))
-                    .collect(),
-            },
-            Extend {
-                symbol,
-                instance_methods,
-                typealiases,
-            } => Extend {
-                symbol,
-                instance_methods: instance_methods
-                    .into_iter()
-                    .map(|(k, v)| (k, v.finalize(session)))
-                    .collect(),
-                typealiases: typealiases
-                    .into_iter()
-                    .map(|(k, v)| (k, session.finalize_ty(v).as_mono_ty().clone()))
-                    .collect(),
-            },
-            EnumDef {
-                symbol,
-                variants,
-                instance_methods,
-                typealiases,
-            } => EnumDef {
-                symbol,
-                variants: variants
-                    .into_iter()
-                    .map(|(k, v)| {
-                        (
-                            k,
-                            v.into_iter()
-                                .map(|t| session.finalize_ty(t).as_mono_ty().clone())
-                                .collect(),
-                        )
-                    })
-                    .collect(),
-                instance_methods: instance_methods
-                    .into_iter()
-                    .map(|(k, v)| (k, v.finalize(session)))
-                    .collect(),
-                typealiases: typealiases
-                    .into_iter()
-                    .map(|(k, v)| (k, session.finalize_ty(v).as_mono_ty().clone()))
-                    .collect(),
-            },
-            ProtocolDef {
-                symbol,
-                instance_methods,
-                instance_method_requirements,
-                typealiases,
-                associated_types,
-            } => ProtocolDef {
-                symbol,
-                instance_methods: instance_methods
-                    .into_iter()
-                    .map(|(k, v)| (k, v.finalize(session)))
-                    .collect(),
-                instance_method_requirements: instance_method_requirements
-                    .into_iter()
-                    .map(|(k, v)| (k, session.finalize_ty(v).as_mono_ty().clone()))
-                    .collect(),
-                typealiases: typealiases
-                    .into_iter()
-                    .map(|(k, v)| (k, session.finalize_ty(v).as_mono_ty().clone()))
-                    .collect(),
-                associated_types: associated_types
-                    .into_iter()
-                    .map(|(k, v)| (k, session.finalize_ty(v).as_mono_ty().clone()))
-                    .collect(),
-            },
-            Import => Import,
-        }
-    }
-}
-
-impl TypedExpr<Infer> {
-    fn finalize(self, session: &mut TypeSession) -> TypedExpr<Typed> {
-        TypedExpr {
-            id: self.id,
-            ty: session.finalize_ty(self.ty).as_mono_ty().clone(),
-            kind: self.kind.finalize(session),
-        }
-    }
-}
-
-impl TypedExprKind<Infer> {
-    fn finalize(self, session: &mut TypeSession) -> TypedExprKind<Typed> {
-        use TypedExprKind::*;
-        match self {
-            Hole => Hole,
-            InlineIR(inline_ir) => InlineIR(
-                inline_ir
-                    .mapping(
-                        &mut |t| session.finalize_ty(t.clone()).as_mono_ty().clone(),
-                        &mut |r| r.into(),
-                    )
-                    .into(),
-            ),
-            LiteralArray(exprs) => {
-                LiteralArray(exprs.into_iter().map(|e| e.finalize(session)).collect())
-            }
-            LiteralInt(v) => LiteralInt(v),
-            LiteralFloat(v) => LiteralFloat(v),
-            LiteralTrue => LiteralTrue,
-            LiteralFalse => LiteralFalse,
-            LiteralString(v) => LiteralString(v),
-            Tuple(exprs) => Tuple(exprs.into_iter().map(|e| e.finalize(session)).collect()),
-            Block(block) => Block(block.finalize(session)),
-            CallEffect {
-                effect,
-                type_args,
-                args,
-            } => CallEffect {
-                effect,
-                type_args: type_args
-                    .into_iter()
-                    .map(|t| session.finalize_ty(t).as_mono_ty().clone())
-                    .collect(),
-                args: args.into_iter().map(|a| a.finalize(session)).collect(),
-            },
-            Call {
-                callee,
-                callee_ty,
-                type_args,
-                args,
-                callee_sym,
-            } => {
-                let callee = callee.finalize(session);
-                let callee_ty = session.finalize_ty(callee_ty).as_mono_ty().clone();
-                let type_args = type_args
-                    .into_iter()
-                    .map(|t| session.finalize_ty(t).as_mono_ty().clone())
-                    .collect();
-                let args: Vec<_> = args.into_iter().map(|e| e.finalize(session)).collect();
-                Call {
-                    callee: callee.into(),
-                    callee_ty,
-                    type_args,
-                    args,
-                    callee_sym,
-                }
-            }
-            Member {
-                receiver,
-                label,
-                label_span,
-            } => Member {
-                receiver: receiver.finalize(session).into(),
-                label,
-                label_span,
-            },
-            Func(func) => Func(func.finalize(session)),
-            Variable(sym) => Variable(sym),
-            Constructor(sym, items) => Constructor(
-                sym,
-                items
-                    .into_iter()
-                    .map(|t| session.finalize_ty(t).as_mono_ty().clone())
-                    .collect(),
-            ),
-            If(cond, conseq, alt) => If(
-                cond.finalize(session).into(),
-                conseq.finalize(session),
-                alt.finalize(session),
-            ),
-            Match(scrutinee, arms) => Match(
-                scrutinee.finalize(session).into(),
-                arms.into_iter().map(|a| a.finalize(session)).collect(),
-            ),
-            RecordLiteral { fields } => RecordLiteral {
-                fields: fields.into_iter().map(|f| f.finalize(session)).collect(),
-            },
-            Choice {
-                dimension,
-                alternatives,
-            } => Choice {
-                dimension,
-                alternatives: alternatives
-                    .into_iter()
-                    .map(|e| e.finalize(session))
-                    .collect(),
-            },
-        }
-    }
-}
-
-impl<T: TypePhase, U: TypePhase> Mappable<T, U> for TypedAST<T> {
-    type Output = TypedAST<U>;
-    fn mapping(
+    pub fn mapping(
         self,
-        m: &mut impl FnMut(InnerTy<T>) -> InnerTy<U>,
-        r: &mut impl FnMut(InnerRow<T>) -> InnerRow<U>,
-    ) -> Self::Output {
-        TypedAST::<U> {
+        m: &mut impl FnMut(Ty) -> Ty,
+        r: &mut impl FnMut(Row) -> Row,
+    ) -> Self {
+        TypedAST {
             decls: self.decls.into_iter().map(|d| d.mapping(m, r)).collect(),
             stmts: self.stmts.into_iter().map(|d| d.mapping(m, r)).collect(),
         }
@@ -411,29 +64,29 @@ impl<T: TypePhase, U: TypePhase> Mappable<T, U> for TypedAST<T> {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Drive, DriveMut)]
-pub enum TypedRecordFieldPatternKind<T: TypePhase> {
+pub enum TypedRecordFieldPatternKind {
     Bind(#[drive(skip)] Symbol),
     Equals {
         #[drive(skip)]
         name: Symbol,
-        value: TypedPattern<T>,
+        value: TypedPattern,
     },
     Rest,
 }
+
 #[derive(Clone, Debug, PartialEq, Eq, Drive, DriveMut)]
-pub struct TypedRecordFieldPattern<T: TypePhase> {
+pub struct TypedRecordFieldPattern {
     #[drive(skip)]
     pub id: NodeID,
-    pub kind: TypedRecordFieldPatternKind<T>,
+    pub kind: TypedRecordFieldPatternKind,
 }
 
-impl<T: TypePhase, U: TypePhase> Mappable<T, U> for TypedRecordFieldPattern<T> {
-    type Output = TypedRecordFieldPattern<U>;
-    fn mapping(
+impl TypedRecordFieldPattern {
+    pub fn mapping(
         self,
-        m: &mut impl FnMut(InnerTy<T>) -> InnerTy<U>,
-        r: &mut impl FnMut(InnerRow<T>) -> InnerRow<U>,
-    ) -> Self::Output {
+        m: &mut impl FnMut(Ty) -> Ty,
+        r: &mut impl FnMut(Row) -> Row,
+    ) -> Self {
         TypedRecordFieldPattern {
             id: self.id,
             kind: match self.kind {
@@ -451,7 +104,7 @@ impl<T: TypePhase, U: TypePhase> Mappable<T, U> for TypedRecordFieldPattern<T> {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Drive, DriveMut)]
-pub enum TypedPatternKind<T: TypePhase> {
+pub enum TypedPatternKind {
     // Literals that must match exactly
     LiteralInt(#[drive(skip)] String),
     LiteralFloat(#[drive(skip)] String),
@@ -461,9 +114,9 @@ pub enum TypedPatternKind<T: TypePhase> {
     // Variable binding (always succeeds, binds value)
     Bind(#[drive(skip)] Symbol),
 
-    Tuple(Vec<TypedPattern<T>>),
+    Tuple(Vec<TypedPattern>),
 
-    Or(Vec<TypedPattern<T>>),
+    Or(Vec<TypedPattern>),
 
     // Wildcard (always succeeds, ignores value)
     Wildcard,
@@ -476,18 +129,18 @@ pub enum TypedPatternKind<T: TypePhase> {
         variant_name: String,
         #[drive(skip)]
         variant_name_span: crate::span::Span,
-        fields: Vec<TypedPattern<T>>, // Recursive patterns for fields
+        fields: Vec<TypedPattern>, // Recursive patterns for fields
     },
 
     Record {
-        fields: Vec<TypedRecordFieldPattern<T>>,
+        fields: Vec<TypedRecordFieldPattern>,
     },
 
     // Struct/Record destructuring
     Struct {
         #[drive(skip)]
         struct_name: Symbol, // The struct type name
-        fields: Vec<TypedPattern<T>>, // Field patterns (we'll store field names separately)
+        fields: Vec<TypedPattern>, // Field patterns (we'll store field names separately)
         #[drive(skip)]
         field_names: Vec<Symbol>, // Field names corresponding to patterns
         #[drive(skip)]
@@ -495,13 +148,12 @@ pub enum TypedPatternKind<T: TypePhase> {
     },
 }
 
-impl<T: TypePhase, U: TypePhase> Mappable<T, U> for TypedPatternKind<T> {
-    type Output = TypedPatternKind<U>;
-    fn mapping(
+impl TypedPatternKind {
+    pub fn mapping(
         self,
-        m: &mut impl FnMut(InnerTy<T>) -> InnerTy<U>,
-        r: &mut impl FnMut(InnerRow<T>) -> InnerRow<U>,
-    ) -> Self::Output {
+        m: &mut impl FnMut(Ty) -> Ty,
+        r: &mut impl FnMut(Row) -> Row,
+    ) -> Self {
         use TypedPatternKind::*;
         match self {
             LiteralInt(val) => LiteralInt(val),
@@ -550,21 +202,20 @@ impl<T: TypePhase, U: TypePhase> Mappable<T, U> for TypedPatternKind<T> {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Drive, DriveMut)]
-pub struct TypedPattern<T: TypePhase> {
+pub struct TypedPattern {
     #[drive(skip)]
     pub id: NodeID,
-    pub ty: InnerTy<T>,
-    pub kind: TypedPatternKind<T>,
+    pub ty: Ty,
+    pub kind: TypedPatternKind,
 }
 
-impl<T: TypePhase, U: TypePhase> Mappable<T, U> for TypedPattern<T> {
-    type Output = TypedPattern<U>;
-    fn mapping(
+impl TypedPattern {
+    pub fn mapping(
         self,
-        m: &mut impl FnMut(InnerTy<T>) -> InnerTy<U>,
-        r: &mut impl FnMut(InnerRow<T>) -> InnerRow<U>,
-    ) -> Self::Output {
-        TypedPattern::<U> {
+        m: &mut impl FnMut(Ty) -> Ty,
+        r: &mut impl FnMut(Row) -> Row,
+    ) -> Self {
+        TypedPattern {
             id: self.id,
             ty: m(self.ty),
             kind: self.kind.mapping(m, r),
@@ -573,42 +224,42 @@ impl<T: TypePhase, U: TypePhase> Mappable<T, U> for TypedPattern<T> {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum TypedDeclKind<T: TypePhase> {
+pub enum TypedDeclKind {
     Let {
-        pattern: TypedPattern<T>,
-        ty: InnerTy<T>,
-        initializer: Option<TypedExpr<T>>,
+        pattern: TypedPattern,
+        ty: Ty,
+        initializer: Option<TypedExpr>,
     },
     StructDef {
         symbol: Symbol,
-        initializers: IndexMap<Label, TypedFunc<T>>,
-        properties: IndexMap<Label, InnerTy<T>>,
-        instance_methods: IndexMap<Label, TypedFunc<T>>,
-        typealiases: IndexMap<Label, InnerTy<T>>,
+        initializers: IndexMap<Label, TypedFunc>,
+        properties: IndexMap<Label, Ty>,
+        instance_methods: IndexMap<Label, TypedFunc>,
+        typealiases: IndexMap<Label, Ty>,
     },
     Extend {
         symbol: Symbol,
-        instance_methods: IndexMap<Label, TypedFunc<T>>,
-        typealiases: IndexMap<Label, InnerTy<T>>,
+        instance_methods: IndexMap<Label, TypedFunc>,
+        typealiases: IndexMap<Label, Ty>,
     },
     EnumDef {
         symbol: Symbol,
-        variants: IndexMap<Label, Vec<InnerTy<T>>>,
-        instance_methods: IndexMap<Label, TypedFunc<T>>,
-        typealiases: IndexMap<Label, InnerTy<T>>,
+        variants: IndexMap<Label, Vec<Ty>>,
+        instance_methods: IndexMap<Label, TypedFunc>,
+        typealiases: IndexMap<Label, Ty>,
     },
     ProtocolDef {
         symbol: Symbol,
-        instance_methods: IndexMap<Label, TypedFunc<T>>,
-        instance_method_requirements: IndexMap<Label, InnerTy<T>>,
-        typealiases: IndexMap<Label, InnerTy<T>>,
-        associated_types: IndexMap<Label, InnerTy<T>>,
+        instance_methods: IndexMap<Label, TypedFunc>,
+        instance_method_requirements: IndexMap<Label, Ty>,
+        typealiases: IndexMap<Label, Ty>,
+        associated_types: IndexMap<Label, Ty>,
     },
     /// Import declarations - no type info, just bring symbols into scope
     Import,
 }
 
-impl<T: TypePhase> Drive for TypedDeclKind<T> {
+impl Drive for TypedDeclKind {
     fn drive<V: derive_visitor::Visitor>(&self, visitor: &mut V) {
         match self {
             TypedDeclKind::Let {
@@ -693,7 +344,7 @@ impl<T: TypePhase> Drive for TypedDeclKind<T> {
     }
 }
 
-impl<T: TypePhase> DriveMut for TypedDeclKind<T> {
+impl DriveMut for TypedDeclKind {
     fn drive_mut<V: derive_visitor::VisitorMut>(&mut self, visitor: &mut V) {
         match self {
             TypedDeclKind::Let {
@@ -778,13 +429,12 @@ impl<T: TypePhase> DriveMut for TypedDeclKind<T> {
     }
 }
 
-impl<T: TypePhase, U: TypePhase> Mappable<T, U> for TypedDeclKind<T> {
-    type Output = TypedDeclKind<U>;
-    fn mapping(
+impl TypedDeclKind {
+    pub fn mapping(
         self,
-        m: &mut impl FnMut(InnerTy<T>) -> InnerTy<U>,
-        r: &mut impl FnMut(InnerRow<T>) -> InnerRow<U>,
-    ) -> Self::Output {
+        m: &mut impl FnMut(Ty) -> Ty,
+        r: &mut impl FnMut(Row) -> Row,
+    ) -> Self {
         use TypedDeclKind::*;
         match self {
             Let {
@@ -872,14 +522,14 @@ impl<T: TypePhase, U: TypePhase> Mappable<T, U> for TypedDeclKind<T> {
 }
 
 #[derive(Debug, Clone, PartialEq, Drive, DriveMut)]
-pub enum TypedNode<T: TypePhase> {
-    Decl(TypedDecl<T>),
-    Expr(TypedExpr<T>),
-    Stmt(TypedStmt<T>),
+pub enum TypedNode {
+    Decl(TypedDecl),
+    Expr(TypedExpr),
+    Stmt(TypedStmt),
 }
 
-impl<T: TypePhase> TypedNode<T> {
-    pub fn ty(&self) -> InnerTy<T> {
+impl TypedNode {
+    pub fn ty(&self) -> Ty {
         match self {
             TypedNode::Expr(e) => e.ty.clone(),
             TypedNode::Stmt(s) => s.ty.clone(),
@@ -894,15 +544,12 @@ impl<T: TypePhase> TypedNode<T> {
             TypedNode::Decl(n) => n.id,
         }
     }
-}
 
-impl<T: TypePhase, U: TypePhase> Mappable<T, U> for TypedNode<T> {
-    type Output = TypedNode<U>;
-    fn mapping(
+    pub fn mapping(
         self,
-        m: &mut impl FnMut(InnerTy<T>) -> InnerTy<U>,
-        r: &mut impl FnMut(InnerRow<T>) -> InnerRow<U>,
-    ) -> Self::Output {
+        m: &mut impl FnMut(Ty) -> Ty,
+        r: &mut impl FnMut(Row) -> Row,
+    ) -> Self {
         match self {
             TypedNode::Decl(typed_decl) => TypedNode::Decl(typed_decl.mapping(m, r)),
             TypedNode::Expr(typed_expr) => TypedNode::Expr(typed_expr.mapping(m, r)),
@@ -912,20 +559,19 @@ impl<T: TypePhase, U: TypePhase> Mappable<T, U> for TypedNode<T> {
 }
 
 #[derive(Debug, Clone, PartialEq, Drive, DriveMut)]
-pub struct TypedStmt<T: TypePhase> {
+pub struct TypedStmt {
     #[drive(skip)]
     pub id: NodeID,
-    pub ty: InnerTy<T>,
-    pub kind: TypedStmtKind<T>,
+    pub ty: Ty,
+    pub kind: TypedStmtKind,
 }
 
-impl<T: TypePhase, U: TypePhase> Mappable<T, U> for TypedStmt<T> {
-    type Output = TypedStmt<U>;
-    fn mapping(
+impl TypedStmt {
+    pub fn mapping(
         self,
-        m: &mut impl FnMut(InnerTy<T>) -> InnerTy<U>,
-        r: &mut impl FnMut(InnerRow<T>) -> InnerRow<U>,
-    ) -> Self::Output {
+        m: &mut impl FnMut(Ty) -> Ty,
+        r: &mut impl FnMut(Row) -> Row,
+    ) -> Self {
         TypedStmt {
             id: self.id,
             ty: m(self.ty),
@@ -935,27 +581,26 @@ impl<T: TypePhase, U: TypePhase> Mappable<T, U> for TypedStmt<T> {
 }
 
 #[derive(Debug, Clone, PartialEq, Drive, DriveMut)]
-pub enum TypedStmtKind<T: TypePhase> {
-    Expr(TypedExpr<T>),
-    Assignment(TypedExpr<T>, TypedExpr<T>),
-    Return(Option<TypedExpr<T>>),
-    Continue(Option<TypedExpr<T>>),
-    Loop(TypedExpr<T>, TypedBlock<T>),
+pub enum TypedStmtKind {
+    Expr(TypedExpr),
+    Assignment(TypedExpr, TypedExpr),
+    Return(Option<TypedExpr>),
+    Continue(Option<TypedExpr>),
+    Loop(TypedExpr, TypedBlock),
     Handler {
         #[drive(skip)]
         effect: Symbol,
-        func: TypedFunc<T>,
+        func: TypedFunc,
     },
     Break,
 }
 
-impl<T: TypePhase, U: TypePhase> Mappable<T, U> for TypedStmtKind<T> {
-    type Output = TypedStmtKind<U>;
-    fn mapping(
+impl TypedStmtKind {
+    pub fn mapping(
         self,
-        m: &mut impl FnMut(InnerTy<T>) -> InnerTy<U>,
-        r: &mut impl FnMut(InnerRow<T>) -> InnerRow<U>,
-    ) -> Self::Output {
+        m: &mut impl FnMut(Ty) -> Ty,
+        r: &mut impl FnMut(Row) -> Row,
+    ) -> Self {
         use TypedStmtKind::*;
         match self {
             Handler { effect, func } => Handler {
@@ -973,20 +618,19 @@ impl<T: TypePhase, U: TypePhase> Mappable<T, U> for TypedStmtKind<T> {
 }
 
 #[derive(Debug, Clone, PartialEq, Drive, DriveMut)]
-pub struct TypedDecl<T: TypePhase> {
+pub struct TypedDecl {
     #[drive(skip)]
     pub id: NodeID,
-    pub ty: InnerTy<T>,
-    pub kind: TypedDeclKind<T>,
+    pub ty: Ty,
+    pub kind: TypedDeclKind,
 }
 
-impl<T: TypePhase, U: TypePhase> Mappable<T, U> for TypedDecl<T> {
-    type Output = TypedDecl<U>;
-    fn mapping(
+impl TypedDecl {
+    pub fn mapping(
         self,
-        m: &mut impl FnMut(InnerTy<T>) -> InnerTy<U>,
-        r: &mut impl FnMut(InnerRow<T>) -> InnerRow<U>,
-    ) -> Self::Output {
+        m: &mut impl FnMut(Ty) -> Ty,
+        r: &mut impl FnMut(Row) -> Row,
+    ) -> Self {
         TypedDecl {
             id: self.id,
             ty: m(self.ty),
@@ -996,20 +640,19 @@ impl<T: TypePhase, U: TypePhase> Mappable<T, U> for TypedDecl<T> {
 }
 
 #[derive(Debug, Clone, PartialEq, Drive, DriveMut)]
-pub struct TypedBlock<T: TypePhase> {
+pub struct TypedBlock {
     #[drive(skip)]
     pub id: NodeID,
-    pub body: Vec<TypedNode<T>>,
-    pub ret: InnerTy<T>,
+    pub body: Vec<TypedNode>,
+    pub ret: Ty,
 }
 
-impl<T: TypePhase, U: TypePhase> Mappable<T, U> for TypedBlock<T> {
-    type Output = TypedBlock<U>;
-    fn mapping(
+impl TypedBlock {
+    pub fn mapping(
         self,
-        m: &mut impl FnMut(InnerTy<T>) -> InnerTy<U>,
-        r: &mut impl FnMut(InnerRow<T>) -> InnerRow<U>,
-    ) -> Self::Output {
+        m: &mut impl FnMut(Ty) -> Ty,
+        r: &mut impl FnMut(Row) -> Row,
+    ) -> Self {
         TypedBlock {
             id: self.id,
             body: self.body.into_iter().map(|e| e.mapping(m, r)).collect(),
@@ -1019,22 +662,13 @@ impl<T: TypePhase, U: TypePhase> Mappable<T, U> for TypedBlock<T> {
 }
 
 #[derive(Debug, Clone, PartialEq, Drive, DriveMut)]
-pub struct TypedParameter<T: TypePhase> {
+pub struct TypedParameter {
     #[drive(skip)]
     pub name: Symbol,
-    pub ty: InnerTy<T>,
+    pub ty: Ty,
 }
 
-impl From<TypedParameter<Typed>> for TypedParameter<Infer> {
-    fn from(value: TypedParameter<Typed>) -> Self {
-        TypedParameter {
-            name: value.name,
-            ty: value.ty.into(),
-        }
-    }
-}
-
-impl<T: TypePhase> TypedParameter<T> {
+impl TypedParameter {
     pub fn import(self, module_id: ModuleId) -> Self {
         TypedParameter {
             name: self.name.import(module_id),
@@ -1044,32 +678,31 @@ impl<T: TypePhase> TypedParameter<T> {
 }
 
 #[derive(Debug, Clone, PartialEq, Drive, DriveMut)]
-pub struct TypedEffect<T: TypePhase> {
+pub struct TypedEffect {
     #[drive(skip)]
     pub name: Symbol,
-    pub ty: InnerTy<T>,
+    pub ty: Ty,
 }
 
 #[derive(Debug, Clone, PartialEq, Drive, DriveMut)]
-pub struct TypedFunc<T: TypePhase> {
+pub struct TypedFunc {
     #[drive(skip)]
     pub name: Symbol,
     #[drive(skip)]
     pub foralls: IndexSet<ForAll>,
-    pub params: Vec<TypedParameter<T>>,
-    pub effects: Vec<TypedEffect<T>>,
-    pub effects_row: InnerRow<T>,
-    pub body: TypedBlock<T>,
-    pub ret: InnerTy<T>,
+    pub params: Vec<TypedParameter>,
+    pub effects: Vec<TypedEffect>,
+    pub effects_row: Row,
+    pub body: TypedBlock,
+    pub ret: Ty,
 }
 
-impl<T: TypePhase, U: TypePhase> Mappable<T, U> for TypedFunc<T> {
-    type Output = TypedFunc<U>;
-    fn mapping(
+impl TypedFunc {
+    pub fn mapping(
         self,
-        m: &mut impl FnMut(InnerTy<T>) -> InnerTy<U>,
-        r: &mut impl FnMut(InnerRow<T>) -> InnerRow<U>,
-    ) -> Self::Output {
+        m: &mut impl FnMut(Ty) -> Ty,
+        r: &mut impl FnMut(Row) -> Row,
+    ) -> Self {
         TypedFunc {
             name: self.name,
             foralls: self.foralls,
@@ -1089,18 +722,17 @@ impl<T: TypePhase, U: TypePhase> Mappable<T, U> for TypedFunc<T> {
 }
 
 #[derive(Debug, Clone, PartialEq, Drive, DriveMut)]
-pub struct TypedMatchArm<T: TypePhase> {
-    pub pattern: TypedPattern<T>,
-    pub body: TypedBlock<T>,
+pub struct TypedMatchArm {
+    pub pattern: TypedPattern,
+    pub body: TypedBlock,
 }
 
-impl<T: TypePhase, U: TypePhase> Mappable<T, U> for TypedMatchArm<T> {
-    type Output = TypedMatchArm<U>;
-    fn mapping(
+impl TypedMatchArm {
+    pub fn mapping(
         self,
-        m: &mut impl FnMut(InnerTy<T>) -> InnerTy<U>,
-        r: &mut impl FnMut(InnerRow<T>) -> InnerRow<U>,
-    ) -> Self::Output {
+        m: &mut impl FnMut(Ty) -> Ty,
+        r: &mut impl FnMut(Row) -> Row,
+    ) -> Self {
         TypedMatchArm {
             pattern: self.pattern.mapping(m, r),
             body: self.body.mapping(m, r),
@@ -1109,66 +741,66 @@ impl<T: TypePhase, U: TypePhase> Mappable<T, U> for TypedMatchArm<T> {
 }
 
 #[derive(Debug, Clone, PartialEq, Drive, DriveMut)]
-pub struct TypedRecordField<T: TypePhase> {
+pub struct TypedRecordField {
     #[drive(skip)]
     pub name: Label,
-    pub value: TypedExpr<T>,
+    pub value: TypedExpr,
 }
 
 #[derive(Debug, Clone, PartialEq, Drive, DriveMut)]
-pub enum TypedExprKind<T: TypePhase> {
+pub enum TypedExprKind {
     Hole,
-    InlineIR(#[drive(skip)] Box<TypedInlineIRInstruction<T>>),
-    LiteralArray(Vec<TypedExpr<T>>),
+    InlineIR(#[drive(skip)] Box<TypedInlineIRInstruction>),
+    LiteralArray(Vec<TypedExpr>),
     LiteralInt(#[drive(skip)] String),
     LiteralFloat(#[drive(skip)] String),
     LiteralTrue,
     LiteralFalse,
     LiteralString(#[drive(skip)] String),
-    Tuple(Vec<TypedExpr<T>>),
-    Block(TypedBlock<T>),
+    Tuple(Vec<TypedExpr>),
+    Block(TypedBlock),
     CallEffect {
         #[drive(skip)]
         effect: Symbol,
-        type_args: Vec<InnerTy<T>>,
-        args: Vec<TypedExpr<T>>,
+        type_args: Vec<Ty>,
+        args: Vec<TypedExpr>,
     },
     Call {
-        callee: Box<TypedExpr<T>>,
-        callee_ty: InnerTy<T>,
-        type_args: Vec<InnerTy<T>>,
-        args: Vec<TypedExpr<T>>,
+        callee: Box<TypedExpr>,
+        callee_ty: Ty,
+        type_args: Vec<Ty>,
+        args: Vec<TypedExpr>,
         #[drive(skip)]
         callee_sym: Option<Symbol>,
     },
     // A member access on a concrete type (property, instance method, etc.)
     Member {
-        receiver: Box<TypedExpr<T>>,
+        receiver: Box<TypedExpr>,
         #[drive(skip)]
         label: Label,
         #[drive(skip)]
         label_span: crate::span::Span,
     },
     // Function stuff
-    Func(TypedFunc<T>),
+    Func(TypedFunc),
     Variable(#[drive(skip)] Symbol),
-    Constructor(#[drive(skip)] Symbol, Vec<InnerTy<T>>),
+    Constructor(#[drive(skip)] Symbol, Vec<Ty>),
 
     If(
-        Box<TypedExpr<T>>, /* condition */
-        TypedBlock<T>,     /* condition block */
-        TypedBlock<T>,     /* else block */
+        Box<TypedExpr>, /* condition */
+        TypedBlock,     /* condition block */
+        TypedBlock,     /* else block */
     ),
 
     // Match expression
     Match(
-        Box<TypedExpr<T>>,     // scrutinee: the value being matched
-        Vec<TypedMatchArm<T>>, // arms: [MatchArm(pattern, body)]
+        Box<TypedExpr>,     // scrutinee: the value being matched
+        Vec<TypedMatchArm>, // arms: [MatchArm(pattern, body)]
     ),
 
     // Record literal: {x: 1, y: 2}
     RecordLiteral {
-        fields: Vec<TypedRecordField<T>>,
+        fields: Vec<TypedRecordField>,
     },
 
     /// Variational choice: alternatives for overloaded calls.
@@ -1178,17 +810,16 @@ pub enum TypedExprKind<T: TypePhase> {
     Choice {
         #[drive(skip)]
         dimension: DimensionId,
-        alternatives: Vec<TypedExpr<T>>,
+        alternatives: Vec<TypedExpr>,
     },
 }
 
-impl<T: TypePhase, U: TypePhase> Mappable<T, U> for TypedExprKind<T> {
-    type Output = TypedExprKind<U>;
-    fn mapping(
+impl TypedExprKind {
+    pub fn mapping(
         self,
-        m: &mut impl FnMut(InnerTy<T>) -> InnerTy<U>,
-        r: &mut impl FnMut(InnerRow<T>) -> InnerRow<U>,
-    ) -> Self::Output {
+        m: &mut impl FnMut(Ty) -> Ty,
+        r: &mut impl FnMut(Row) -> Row,
+    ) -> Self {
         use TypedExprKind::*;
         match self {
             Hole => Hole,
@@ -1270,20 +901,19 @@ impl<T: TypePhase, U: TypePhase> Mappable<T, U> for TypedExprKind<T> {
 }
 
 #[derive(Debug, Clone, PartialEq, Drive, DriveMut)]
-pub struct TypedExpr<T: TypePhase> {
+pub struct TypedExpr {
     #[drive(skip)]
     pub id: NodeID,
-    pub ty: InnerTy<T>,
-    pub kind: TypedExprKind<T>,
+    pub ty: Ty,
+    pub kind: TypedExprKind,
 }
 
-impl<T: TypePhase, U: TypePhase> Mappable<T, U> for TypedExpr<T> {
-    type Output = TypedExpr<U>;
-    fn mapping(
+impl TypedExpr {
+    pub fn mapping(
         self,
-        m: &mut impl FnMut(InnerTy<T>) -> InnerTy<U>,
-        r: &mut impl FnMut(InnerRow<T>) -> InnerRow<U>,
-    ) -> Self::Output {
+        m: &mut impl FnMut(Ty) -> Ty,
+        r: &mut impl FnMut(Row) -> Row,
+    ) -> Self {
         TypedExpr {
             id: self.id,
             ty: m(self.ty),

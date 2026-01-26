@@ -5,8 +5,8 @@ use crate::{
     types::{
         constraint_solver::{DeferralReason, SolveResult},
         constraints::store::{ConstraintId, ConstraintStore},
-        infer_row::{InferRow, RowTail, normalize_row},
-        infer_ty::{InferTy, Meta},
+        infer_row::{Row, RowTail, normalize_row},
+        infer_ty::{Meta, Ty},
         solve_context::SolveContext,
         type_error::TypeError,
         type_session::TypeSession,
@@ -17,8 +17,8 @@ use crate::{
 pub struct RowSubset {
     pub id: ConstraintId,
     pub node_id: Option<NodeID>,
-    pub left: InferRow,
-    pub right: InferRow,
+    pub left: Row,
+    pub right: Row,
 }
 
 impl RowSubset {
@@ -50,7 +50,7 @@ impl RowSubset {
                     }
                     RowTail::Empty | RowTail::Param(_) => {
                         return SolveResult::Err(TypeError::MemberNotFound(
-                            InferTy::Record(Box::new(right.clone())),
+                            Ty::Record(None, Box::new(right.clone())),
                             label.to_string(),
                         ));
                     }
@@ -62,8 +62,8 @@ impl RowSubset {
             RowTail::Var(id) => SolveResult::Defer(DeferralReason::WaitingOnMeta(Meta::Row(id))),
             RowTail::Param(_) => match right_tail {
                 RowTail::Empty => SolveResult::Err(TypeError::invalid_unification(
-                    InferTy::Record(Box::new(left)),
-                    InferTy::Record(Box::new(right)),
+                    Ty::Record(None, Box::new(left)),
+                    Ty::Record(None, Box::new(right)),
                 )),
                 RowTail::Param(_) | RowTail::Var(_) => SolveResult::Solved(Default::default()),
             },
@@ -80,8 +80,8 @@ mod tests {
         types::{
             constraint_solver::{DeferralReason, SolveResult},
             constraints::{row_subset::RowSubset, store::ConstraintStore},
-            infer_row::InferRow,
-            infer_ty::{InferTy, Level, Meta},
+            infer_row::Row,
+            infer_ty::{Level, Meta, Ty},
             solve_context::{SolveContext, SolveContextKind},
             type_error::TypeError,
             type_operations::UnificationSubstitutions,
@@ -105,9 +105,9 @@ mod tests {
         (session, context)
     }
 
-    fn single_field_row(label: &str, ty: InferTy) -> InferRow {
-        InferRow::Extend {
-            row: Box::new(InferRow::Empty),
+    fn single_field_row(label: &str, ty: Ty) -> Row {
+        Row::Extend {
+            row: Box::new(Row::Empty),
             label: Label::Named(label.into()),
             ty,
         }
@@ -118,8 +118,8 @@ mod tests {
         let (mut session, mut context) = setup();
         let mut constraints = ConstraintStore::default();
 
-        let left = single_field_row("a", InferTy::Int);
-        let right = single_field_row("a", InferTy::Int);
+        let left = single_field_row("a", Ty::Int);
+        let right = single_field_row("a", Ty::Int);
 
         let subset = RowSubset {
             id: 0.into(),
@@ -137,8 +137,8 @@ mod tests {
         let (mut session, mut context) = setup();
         let mut constraints = ConstraintStore::default();
 
-        let left = single_field_row("a", InferTy::Int);
-        let right = InferRow::Empty;
+        let left = single_field_row("a", Ty::Int);
+        let right = Row::Empty;
 
         let subset = RowSubset {
             id: 0.into(),
@@ -161,7 +161,7 @@ mod tests {
 
         let left = session.new_row_meta_var(Level::default());
         let left_meta = match left {
-            InferRow::Var(id) => id,
+            Row::Var(id) => id,
             _ => unreachable!("expected row var"),
         };
 
@@ -169,7 +169,7 @@ mod tests {
             id: 0.into(),
             node_id: None,
             left,
-            right: InferRow::Empty,
+            right: Row::Empty,
         };
 
         let result = subset.solve(&mut constraints, &mut context, &mut session);

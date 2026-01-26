@@ -13,7 +13,7 @@ use crate::{
     },
     types::{
         constraints::store::GroupId,
-        infer_ty::{Infer, InferTy, Level},
+        infer_ty::{Level, Ty},
         predicate::Predicate,
         type_operations::{InstantiationSubstitutions, UnificationSubstitutions},
         type_session::TypeSession,
@@ -25,9 +25,9 @@ use crate::{
 /// Accessed via Rc<RefCell<>> to allow child contexts to share
 /// substitutions, givens, and projection_placeholders with their parent.
 struct SharedSolveState {
-    projection_placeholders: FxHashMap<InferTy, InferTy>,
+    projection_placeholders: FxHashMap<Ty, Ty>,
     substitutions: UnificationSubstitutions,
-    givens: IndexSet<Predicate<Infer>>,
+    givens: IndexSet<Predicate>,
 }
 
 pub struct SolveContext {
@@ -112,7 +112,7 @@ impl SolveContext {
         }
     }
 
-    pub fn givens_mut(&self) -> RefMut<'_, IndexSet<Predicate<Infer>>> {
+    pub fn givens_mut(&self) -> RefMut<'_, IndexSet<Predicate>> {
         RefMut::map(self.shared.borrow_mut(), |s| &mut s.givens)
     }
 
@@ -124,23 +124,23 @@ impl SolveContext {
         &mut self.instantiations
     }
 
-    pub fn normalize(&self, ty: InferTy, session: &mut TypeSession) -> InferTy {
+    pub fn normalize(&self, ty: Ty, session: &mut TypeSession) -> Ty {
         self.normalize_with_level(ty, session, self.level)
     }
 
     fn normalize_with_level(
         &self,
-        ty: InferTy,
+        ty: Ty,
         session: &mut TypeSession,
         level: Level,
-    ) -> InferTy {
+    ) -> Ty {
         let ty = {
             let mut shared = self.shared.borrow_mut();
             session.apply(ty, &mut shared.substitutions)
         };
         match &ty {
-            InferTy::Projection {
-                base: box InferTy::Var { .. },
+            Ty::Projection {
+                base: box Ty::Var { .. },
                 ..
             } => {
                 let mut shared = self.shared.borrow_mut();
@@ -154,7 +154,7 @@ impl SolveContext {
                     .insert(ty, placeholder.clone());
                 placeholder
             }
-            InferTy::Func(box param, box ret, effects) => InferTy::Func(
+            Ty::Func(box param, box ret, effects) => Ty::Func(
                 self.normalize_with_level(param.clone(), session, level)
                     .into(),
                 self.normalize_with_level(ret.clone(), session, level)
@@ -173,7 +173,7 @@ pub mod tests {
         label::Label,
         name_resolution::symbol::ProtocolId,
         types::{
-            infer_ty::{InferTy, Level},
+            infer_ty::{Ty, Level},
             solve_context::{SolveContext, SolveContextKind},
             type_operations::UnificationSubstitutions,
             type_session::TypeSession,
@@ -189,7 +189,7 @@ pub mod tests {
             Default::default(),
         );
         let var = session.new_ty_meta_var(Level::default());
-        let ty = InferTy::Projection {
+        let ty = Ty::Projection {
             protocol_id: ProtocolId::from(1),
             base: var.into(),
             associated: Label::Named("foo".into()),
@@ -204,7 +204,7 @@ pub mod tests {
 
         let stable_1 = context.normalize(ty.clone(), &mut session);
         let stable_2 = context.normalize(ty, &mut session);
-        assert!(matches!(stable_1, InferTy::Var { .. }));
+        assert!(matches!(stable_1, Ty::Var { .. }));
         assert_eq!(stable_1, stable_2);
     }
 }

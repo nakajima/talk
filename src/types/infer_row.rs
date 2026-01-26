@@ -8,9 +8,8 @@ use crate::{
     compiling::module::ModuleId,
     label::Label,
     types::{
-        infer_ty::{Infer, InferTy, InnerTy, Level, TypePhase, format_row},
+        infer_ty::{Level, Ty},
         predicate::Predicate,
-        row::Row,
         scheme::ForAll,
         type_operations::UnificationSubstitutions,
         type_session::TypeSession,
@@ -55,71 +54,39 @@ impl From<u32> for RowParamId {
     }
 }
 
-pub type ClosedRow<T> = IndexMap<Label, T>;
+pub type ClosedRow = IndexMap<Label, Ty>;
 
-pub type InferRow = InnerRow<Infer>;
-
-// TODO: Add Level to Var once we support open rows
+/// Unified row representation - used for both inference and final types.
+/// The Var variant is only used during inference and should be resolved before codegen.
 #[derive(PartialEq, Eq, Hash, Clone, Drive, DriveMut)]
-pub enum InnerRow<Phase: TypePhase> {
+pub enum Row {
     Empty,
     Extend {
-        row: Box<InnerRow<Phase>>,
+        row: Box<Row>,
         #[drive(skip)]
         label: Label,
-        ty: InnerTy<Phase>,
+        ty: Ty,
     },
     Param(#[drive(skip)] RowParamId),
-    Var(#[drive(skip)] Phase::RowVar),
+    /// Meta (unification) row variable - used during inference
+    Var(#[drive(skip)] RowMetaId),
 }
 
-impl From<InferRow> for Row {
-    fn from(value: InferRow) -> Self {
-        match value {
-            InferRow::Empty => Row::Empty,
-            InferRow::Param(param) => Row::Param(param),
-            InferRow::Extend { box row, label, ty } => Row::Extend {
-                row: Box::new(row.into()),
-                label,
-                ty: ty.into(),
-            },
-            // In error cases, row Vars may not be resolved. Default to Empty.
-            InferRow::Var(_) => Row::Empty,
-        }
-    }
-}
-
-impl From<Row> for InferRow {
-    fn from(value: Row) -> Self {
-        match value {
-            Row::Empty => InferRow::Empty,
-            Row::Param(param) => InferRow::Param(param),
-            Row::Extend { box row, label, ty } => InferRow::Extend {
-                row: Box::new(row.into()),
-                label,
-                ty: ty.into(),
-            },
-        }
-    }
-}
-
-impl<Phase: TypePhase> InnerRow<Phase> {
-    pub fn close(&self) -> ClosedRow<Self> {
-        close(self, ClosedRow::default())
+impl Row {
+    pub fn close(&self) -> ClosedRow {
+        close_generic(self, ClosedRow::default())
     }
 
-    fn contains_type_params(&self) -> bool {
+    pub fn contains_type_params(&self) -> bool {
         match self {
-            InnerRow::Empty => false,
-            InnerRow::Extend { row, ty, .. } => {
-                row.contains_type_params() || ty.contains_type_params()
-            }
-            InnerRow::Param(..) => true,
-            InnerRow::Var(_) => false,
+            Row::Empty => false,
+            Row::Extend { row, ty, .. } => row.contains_type_params() || ty.contains_type_params(),
+            Row::Param(..) => true,
+            Row::Var(_) => false,
         }
     }
 
-    pub fn collect_metas(&self) -> Vec<InnerTy<Phase>> {
+    pub fn collect_metas(&self) -> Vec<Ty> {
         let mut result = vec![];
         match self {
             Self::Param(..) | Self::Empty => (),
@@ -128,7 +95,7 @@ impl<Phase: TypePhase> InnerRow<Phase> {
                 result.extend(ty.collect_metas());
             }
             Self::Var(var) => {
-                result.push(InnerTy::<Phase>::Record(Self::Var(*var).into())); // This is a hack
+                result.push(Ty::Record(None, Self::Var(*var).into())); // This is a hack
             }
         }
         result
@@ -158,7 +125,7 @@ impl<Phase: TypePhase> InnerRow<Phase> {
         result
     }
 
-    pub fn collect_param_predicates(&self) -> Vec<Predicate<Phase>> {
+    pub fn collect_param_predicates(&self) -> Vec<Predicate> {
         let mut result = vec![];
         match self {
             Self::Empty | Self::Var(..) | Self::Param(..) => (),
@@ -170,9 +137,9 @@ impl<Phase: TypePhase> InnerRow<Phase> {
         result
     }
 
-    pub fn import(self, module_id: ModuleId) -> InferRow {
-        if let InferRow::Extend { row, label, ty } = self {
-            InferRow::Extend {
+    pub fn import(self, module_id: ModuleId) -> Self {
+        if let Row::Extend { row, label, ty } = self {
+            Row::Extend {
                 row: row.import(module_id).into(),
                 label,
                 ty: ty.import(module_id),
@@ -181,17 +148,53 @@ impl<Phase: TypePhase> InnerRow<Phase> {
             self
         }
     }
+
+    pub fn collect_specializations(
+        &self,
+        concrete: &Row,
+    ) -> Result<Specializations, crate::types::type_error::TypeError> {
+        let mut result = Specializations::default();
+        match (self, concrete) {
+            (Row::Empty, Row::Empty) => (),
+            (Row::Param(id), other) => {
+                if !matches!(other, Row::Param(..)) {
+                    result.row.insert(*id, other.clone());
+                }
+            }
+            (
+                Row::Extend {
+                    row: lhs_row,
+                    ty: lhs_ty,
+                    ..
+                },
+                Row::Extend {
+                    row: rhs_row,
+                    ty: rhs_ty,
+                    ..
+                },
+            ) => {
+                result.ty.extend(lhs_ty.collect_specializations(rhs_ty)?.ty);
+                result
+                    .row
+                    .extend(lhs_row.collect_specializations(rhs_row)?.row);
+            }
+            _ => {
+                return Err(crate::types::type_error::TypeError::SpecializationMismatch)
+            }
+        }
+        Ok(result)
+    }
 }
 
 #[allow(clippy::panic)]
-fn close(row: &InferRow, mut closed_row: ClosedRow<InferTy>) -> ClosedRow<InferTy> {
+fn close_generic(row: &Row, mut closed_row: ClosedRow) -> ClosedRow {
     match row {
-        InferRow::Empty => closed_row,
-        InferRow::Var(_) => panic!("Cannot close var"),
-        InferRow::Param(_) => panic!("Cannot close param"),
-        InferRow::Extend { row, label, ty } => {
+        Row::Empty => closed_row,
+        Row::Var(_) => panic!("Cannot close var"),
+        Row::Param(_) => panic!("Cannot close param"),
+        Row::Extend { row, label, ty } => {
             closed_row.insert(label.clone(), ty.clone());
-            close(row, closed_row)
+            close_generic(row, closed_row)
         }
     }
 }
@@ -204,15 +207,15 @@ pub enum RowTail {
 }
 
 pub fn normalize_row(
-    mut row: InferRow,
+    mut row: Row,
     subs: &mut UnificationSubstitutions,
     session: &mut TypeSession,
-) -> (BTreeMap<Label, InferTy>, RowTail) {
+) -> (BTreeMap<Label, Ty>, RowTail) {
     let mut map = BTreeMap::new();
     loop {
         row = session.apply_row(row, subs);
         match row {
-            InferRow::Extend {
+            Row::Extend {
                 row: rest,
                 label,
                 ty,
@@ -220,22 +223,171 @@ pub fn normalize_row(
                 map.insert(label, session.apply(ty, subs));
                 row = *rest;
             }
-            InferRow::Empty => break (map, RowTail::Empty),
-            InferRow::Var(id) => break (map, RowTail::Var(session.canon_row(id))),
-            InferRow::Param(id) => break (map, RowTail::Param(id)),
+            Row::Empty => break (map, RowTail::Empty),
+            Row::Var(id) => break (map, RowTail::Var(session.canon_row(id))),
+            Row::Param(id) => break (map, RowTail::Param(id)),
         }
     }
 }
 
-impl<T: TypePhase> std::fmt::Debug for InnerRow<T> {
+impl std::fmt::Debug for Row {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Empty => write!(f, "{{}}"),
-            Self::Extend { .. } => {
-                write!(f, "{:?}", format_row(self))
+            Self::Extend { row, label, ty } => {
+                write!(f, "{{ {label}: {ty:?} | {row:?} }}")
             }
             Self::Param(id) => write!(f, "rowparam{id:?}"),
             Self::Var(id) => write!(f, "rowvar{id:?}"),
         }
+    }
+}
+
+// Specializations moved from ty.rs since it's needed here
+use crate::name_resolution::symbol::Symbol;
+
+#[derive(Default, Debug, Clone, PartialEq)]
+pub struct Specializations {
+    pub ty: IndexMap<Symbol, Ty>,
+    pub row: IndexMap<RowParamId, Row>,
+}
+
+impl Specializations {
+    pub fn is_empty(&self) -> bool {
+        self.ty.is_empty() && self.row.is_empty()
+    }
+
+    pub fn extend(&mut self, other: Specializations) {
+        self.ty.extend(
+            other
+                .ty
+                .into_iter()
+                .filter(|(_, v)| !matches!(v, Ty::Param(..))),
+        );
+        self.row.extend(
+            other
+                .row
+                .into_iter()
+                .filter(|(_, v)| !matches!(v, Row::Param(..))),
+        );
+    }
+
+    pub fn apply(&self, ty: Ty) -> Ty {
+        ty.mapping(
+            &mut |t| {
+                if let Ty::Param(id, _) = t
+                    && let Some(replacement) = self.ty.get(&id)
+                {
+                    replacement.clone()
+                } else {
+                    t
+                }
+            },
+            &mut |r| {
+                if let Row::Param(id) = r
+                    && let Some(replacement) = self.row.get(&id)
+                {
+                    replacement.clone()
+                } else {
+                    r
+                }
+            },
+        )
+    }
+}
+
+impl Ty {
+    pub fn collect_specializations(
+        &self,
+        concrete: &Self,
+    ) -> Result<Specializations, crate::types::type_error::TypeError> {
+        let mut result = Specializations::default();
+        match (self, concrete) {
+            (Self::Primitive(..), Self::Primitive(..)) => (),
+            (Self::Param(id, _), other) => {
+                if !matches!(other, Self::Param(..)) {
+                    result.ty.insert(*id, other.clone());
+                }
+            }
+            (
+                Self::Constructor {
+                    params: lhs_params,
+                    ret: lhs_ret,
+                    ..
+                },
+                Self::Constructor {
+                    params: rhs_params,
+                    ret: rhs_ret,
+                    ..
+                },
+            ) => {
+                for (lhs, rhs) in lhs_params.iter().zip(rhs_params) {
+                    result.ty.extend(lhs.collect_specializations(rhs)?.ty);
+                }
+
+                result
+                    .ty
+                    .extend(lhs_ret.collect_specializations(rhs_ret)?.ty);
+            }
+            (
+                Self::Constructor {
+                    params: _constructor_params,
+                    ret: box _constructor_ret,
+                    ..
+                },
+                Self::Func(_func_params, _func_ret, _),
+            )
+            | (
+                Self::Func(_func_params, _func_ret, _),
+                Self::Constructor {
+                    params: _constructor_params,
+                    ret: box _constructor_ret,
+                    ..
+                },
+            ) => (),
+            (
+                Self::Func(lhs_param, lhs_ret, lhs_effects),
+                Self::Func(rhs_param, rhs_ret, rhs_effects),
+            ) => {
+                result
+                    .ty
+                    .extend(lhs_param.collect_specializations(rhs_param)?.ty);
+                result
+                    .ty
+                    .extend(lhs_ret.collect_specializations(rhs_ret)?.ty);
+                result
+                    .row
+                    .extend(lhs_effects.collect_specializations(rhs_effects)?.row)
+            }
+            (Self::Tuple(lhs_items), Self::Tuple(rhs_items)) => {
+                for (lhs, rhs) in lhs_items.iter().zip(rhs_items) {
+                    result.ty.extend(lhs.collect_specializations(rhs)?.ty);
+                }
+            }
+            (Self::Record(.., lhs_row), Self::Record(.., rhs_row)) => {
+                result
+                    .row
+                    .extend(lhs_row.collect_specializations(rhs_row)?.row);
+            }
+            (
+                Self::Nominal {
+                    type_args: lhs_args,
+                    ..
+                },
+                Self::Nominal {
+                    type_args: rhs_args,
+                    ..
+                },
+            ) => {
+                for (lhs, rhs) in lhs_args.iter().zip(rhs_args) {
+                    result.ty.extend(lhs.collect_specializations(rhs)?.ty);
+                }
+            }
+            tup => {
+                tracing::error!("{tup:?}");
+                return Err(crate::types::type_error::TypeError::SpecializationMismatch);
+            }
+        }
+        Ok(result)
     }
 }

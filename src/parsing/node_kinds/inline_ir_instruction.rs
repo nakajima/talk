@@ -11,9 +11,8 @@ use crate::{
     span::Span,
     token_kind::TokenKind,
     types::{
-        infer_row::InnerRow,
-        infer_ty::{InnerTy, TypePhase},
-        mappable::Mappable,
+        infer_row::Row,
+        infer_ty::Ty,
         typed_ast::TypedExpr,
     },
 };
@@ -194,23 +193,20 @@ pub struct InlineIRInstruction {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct TypedInlineIRInstruction<T: TypePhase> {
+pub struct TypedInlineIRInstruction {
     pub id: NodeID,
     pub span: Span,
-    pub binds: Vec<TypedExpr<T>>,
+    pub binds: Vec<TypedExpr>,
     pub instr_name_span: Span,
     pub kind: InlineIRInstructionKind,
 }
 
-impl<T: TypePhase + 'static, U: TypePhase + 'static> Mappable<T, U>
-    for TypedInlineIRInstruction<T>
-{
-    type Output = TypedInlineIRInstruction<U>;
-    fn mapping(
+impl TypedInlineIRInstruction {
+    pub fn mapping(
         self,
-        m: &mut impl FnMut(InnerTy<T>) -> InnerTy<U>,
-        r: &mut impl FnMut(InnerRow<T>) -> InnerRow<U>,
-    ) -> Self::Output {
+        m: &mut impl FnMut(Ty) -> Ty,
+        r: &mut impl FnMut(Row) -> Row,
+    ) -> Self {
         TypedInlineIRInstruction {
             id: self.id,
             span: self.span,

@@ -11,7 +11,7 @@ use crate::ir::value::{Addr, RecordId};
 use crate::label::Label;
 use crate::node_kinds::inline_ir_instruction::{InlineIRInstructionKind, TypedInlineIRInstruction};
 use crate::node_kinds::type_annotation::TypeAnnotation;
-use crate::types::row::Row;
+use crate::types::infer_row::Row;
 use crate::types::typed_ast::{
     TypedBlock, TypedDecl, TypedDeclKind, TypedExpr, TypedExprKind, TypedFunc, TypedMatchArm,
     TypedNode, TypedParameter, TypedPattern, TypedPatternKind, TypedRecordField, TypedStmt,
@@ -37,7 +37,7 @@ use crate::{
             Constructor, MatchPlan, PlanNode, PlanNodeId, Projection, ValueId, ValueRef,
             plan_for_pattern,
         },
-        ty::Ty,
+        infer_ty::Ty,
     },
 };
 use indexmap::IndexMap;
@@ -278,7 +278,7 @@ impl<'a> Lowerer<'a> {
             let main_symbol = Symbol::Main;
             let mut ret_ty = Ty::Void;
 
-            let func = TypedFunc::<Ty> {
+            let func = TypedFunc {
                 name: main_symbol,
                 foralls: Default::default(),
                 params: Default::default(),
@@ -286,7 +286,7 @@ impl<'a> Lowerer<'a> {
                 effects_row: Row::Empty,
                 body: TypedBlock {
                     body: {
-                        let nodes: Vec<TypedNode<Ty>> = self.typed.ast.roots();
+                        let nodes: Vec<TypedNode> = self.typed.ast.roots();
 
                         if let Some(last) = nodes.last() {
                             ret_ty = last.ty();
@@ -331,14 +331,14 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    fn lower_node(&mut self, node: &TypedNode<Ty>) -> Result<(Value, Ty), IRError> {
+    fn lower_node(&mut self, node: &TypedNode) -> Result<(Value, Ty), IRError> {
         self.lower_node_with_bind(node, Bind::Fresh)
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self, node), fields(node.id = %node.node_id()))]
     fn lower_node_with_bind(
         &mut self,
-        node: &TypedNode<Ty>,
+        node: &TypedNode,
         bind: Bind,
     ) -> Result<(Value, Ty), IRError> {
         tracing::info!("{node:?}");
@@ -350,7 +350,7 @@ impl<'a> Lowerer<'a> {
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self, decl), fields(decl.id = %decl.id))]
-    fn lower_decl(&mut self, decl: &TypedDecl<Ty>) -> Result<(Value, Ty), IRError> {
+    fn lower_decl(&mut self, decl: &TypedDecl) -> Result<(Value, Ty), IRError> {
         match &decl.kind {
             TypedDeclKind::Let {
                 pattern,
@@ -443,16 +443,16 @@ impl<'a> Lowerer<'a> {
         Ok((Value::Void, Ty::Void))
     }
 
-    fn lower_method(&mut self, func: &TypedFunc<Ty>) -> Result<(Value, Ty), IRError> {
+    fn lower_method(&mut self, func: &TypedFunc) -> Result<(Value, Ty), IRError> {
         self.lower_func(func, Bind::Discard, FuncTermination::Return)
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self, decl, initializer))]
     fn lower_init(
         &mut self,
-        decl: &TypedDecl<Ty>,
+        decl: &TypedDecl,
         name: &Symbol,
-        initializer: &TypedFunc<Ty>,
+        initializer: &TypedFunc,
     ) -> Result<(Value, Ty), IRError> {
         let param_tys = initializer.params.iter().map(|p| &p.ty).collect_vec();
         let func_ty = curry_ty(param_tys.iter().cloned(), decl.ty.clone());
@@ -526,7 +526,7 @@ impl<'a> Lowerer<'a> {
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self, stmt), fields(stmt.id = %stmt.id))]
-    fn lower_stmt(&mut self, stmt: &TypedStmt<Ty>, bind: Bind) -> Result<(Value, Ty), IRError> {
+    fn lower_stmt(&mut self, stmt: &TypedStmt, bind: Bind) -> Result<(Value, Ty), IRError> {
         match &stmt.kind {
             TypedStmtKind::Expr(typed_expr) => self.lower_expr(typed_expr, bind),
             TypedStmtKind::Assignment(lhs, rhs) => self.lower_assignment(lhs, rhs),
@@ -544,7 +544,7 @@ impl<'a> Lowerer<'a> {
     fn lower_resume(
         &mut self,
         _id: NodeID,
-        expr: &TypedExpr<Ty>,
+        expr: &TypedExpr,
         bind: Bind,
     ) -> Result<(Value, Ty), IRError> {
         let (val, val_ty) = self.lower_expr(expr, Bind::Fresh)?;
@@ -591,8 +591,8 @@ impl<'a> Lowerer<'a> {
 
     fn lower_loop(
         &mut self,
-        cond: &Option<TypedExpr<Ty>>,
-        block: &TypedBlock<Ty>,
+        cond: &Option<TypedExpr>,
+        block: &TypedBlock,
     ) -> Result<(Value, Ty), IRError> {
         let top_block_id = self.new_basic_block();
         let body_block_id = self.new_basic_block();
@@ -634,7 +634,7 @@ impl<'a> Lowerer<'a> {
 
     fn lower_return(
         &mut self,
-        expr: &Option<TypedExpr<Ty>>,
+        expr: &Option<TypedExpr>,
         bind: Bind,
     ) -> Result<(Value, Ty), IRError> {
         let (val, ty) = if let Some(expr) = expr {
@@ -654,9 +654,9 @@ impl<'a> Lowerer<'a> {
     #[instrument(level = tracing::Level::TRACE, skip(self, cond, conseq, alt))]
     fn lower_if_expr(
         &mut self,
-        cond: &TypedExpr<Ty>,
-        conseq: &TypedBlock<Ty>,
-        alt: &TypedBlock<Ty>,
+        cond: &TypedExpr,
+        conseq: &TypedBlock,
+        alt: &TypedBlock,
         bind: Bind,
     ) -> Result<(Value, Ty), IRError> {
         let cond_ir = self.lower_expr(cond, Bind::Fresh)?;
@@ -706,7 +706,7 @@ impl<'a> Lowerer<'a> {
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self, block), fields(block.id = %block.id))]
-    fn lower_block(&mut self, block: &TypedBlock<Ty>, bind: Bind) -> Result<(Value, Ty), IRError> {
+    fn lower_block(&mut self, block: &TypedBlock, bind: Bind) -> Result<(Value, Ty), IRError> {
         for (i, node) in block.body.iter().enumerate() {
             // We want to skip the last one in the loop so we can handle it outside the loop and use our Bind
             if i < block.body.len() - 1 {
@@ -726,8 +726,8 @@ impl<'a> Lowerer<'a> {
     #[instrument(level = tracing::Level::TRACE, skip(self, lhs, rhs), fields(lhs.id = %lhs.id, rhs.id = %rhs.id))]
     fn lower_assignment(
         &mut self,
-        lhs: &TypedExpr<Ty>,
-        rhs: &TypedExpr<Ty>,
+        lhs: &TypedExpr,
+        rhs: &TypedExpr,
     ) -> Result<(Value, Ty), IRError> {
         let lvalue = self.lower_lvalue(lhs)?;
         let (value, ty) = self.lower_expr(rhs, Bind::Fresh)?;
@@ -791,7 +791,7 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    fn lower_lvalue(&mut self, expr: &TypedExpr<Ty>) -> Result<LValue, IRError> {
+    fn lower_lvalue(&mut self, expr: &TypedExpr) -> Result<LValue, IRError> {
         match &expr.kind {
             TypedExprKind::Variable(name) => Ok(LValue::Variable(*name)),
             TypedExprKind::Member {
@@ -812,7 +812,7 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    fn lower_param_binding(&mut self, param: &TypedParameter<Ty>, register: Register) {
+    fn lower_param_binding(&mut self, param: &TypedParameter, register: Register) {
         if self.typed.resolved_names.captured.contains(&param.name)
             || self
                 .typed
@@ -841,7 +841,7 @@ impl<'a> Lowerer<'a> {
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self, pattern), fields(pattern.id = %pattern.id))]
-    fn lower_pattern(&mut self, pattern: &TypedPattern<Ty>) -> Result<Bind, IRError> {
+    fn lower_pattern(&mut self, pattern: &TypedPattern) -> Result<Bind, IRError> {
         match &pattern.kind {
             TypedPatternKind::Or(..) => unimplemented!(),
             TypedPatternKind::Bind(symbol) => {
@@ -888,8 +888,8 @@ impl<'a> Lowerer<'a> {
 
     fn lower_let_pattern(
         &mut self,
-        pattern: &TypedPattern<Ty>,
-        initializer: &TypedExpr<Ty>,
+        pattern: &TypedPattern,
+        initializer: &TypedExpr,
     ) -> Result<(), IRError> {
         let scrutinee_register = self.next_register();
         self.lower_expr(initializer, Bind::Assigned(scrutinee_register))?;
@@ -928,7 +928,7 @@ impl<'a> Lowerer<'a> {
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self, expr), fields(expr.id = %expr.id))]
-    fn lower_expr(&mut self, expr: &TypedExpr<Ty>, bind: Bind) -> Result<(Value, Ty), IRError> {
+    fn lower_expr(&mut self, expr: &TypedExpr, bind: Bind) -> Result<(Value, Ty), IRError> {
         let (value, ty) = match &expr.kind {
             TypedExprKind::Hole => Err(IRError::TypeNotFound("nope".into())),
             TypedExprKind::CallEffect { effect, args, .. } => {
@@ -1055,7 +1055,7 @@ impl<'a> Lowerer<'a> {
     fn lower_effect_handler(
         &mut self,
         _id: NodeID,
-        func: &TypedFunc<Ty>,
+        func: &TypedFunc,
         bind: Bind,
     ) -> Result<(Value, Ty), IRError> {
         let (_val, _) = self.lower_func(func, bind, FuncTermination::Continuation(func.name))?;
@@ -1064,9 +1064,9 @@ impl<'a> Lowerer<'a> {
 
     fn lower_effect_call(
         &mut self,
-        expr: &TypedExpr<Ty>,
+        expr: &TypedExpr,
         _effect: &Symbol,
-        args: &[TypedExpr<Ty>],
+        args: &[TypedExpr],
         bind: Bind,
     ) -> Result<(Value, Ty), IRError> {
         let mut arg_vals = Vec::with_capacity(args.len());
@@ -1157,7 +1157,7 @@ impl<'a> Lowerer<'a> {
     #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn lower_inline_ir(
         &mut self,
-        instr: &TypedInlineIRInstruction<Ty>,
+        instr: &TypedInlineIRInstruction,
         bind: Bind,
     ) -> Result<(Value, Ty), IRError> {
         let binds: Vec<_> = instr
@@ -1449,8 +1449,8 @@ impl<'a> Lowerer<'a> {
     #[instrument(level = tracing::Level::TRACE, skip(self, expr, items))]
     fn lower_array(
         &mut self,
-        expr: &TypedExpr<Ty>,
-        items: &[TypedExpr<Ty>],
+        expr: &TypedExpr,
+        items: &[TypedExpr],
         bind: Bind,
     ) -> Result<(Value, Ty), IRError> {
         let item_irs: Vec<(Value, Ty)> = items
@@ -1511,7 +1511,7 @@ impl<'a> Lowerer<'a> {
     fn lower_tuple(
         &mut self,
         id: NodeID,
-        items: &[TypedExpr<Ty>],
+        items: &[TypedExpr],
         bind: Bind,
     ) -> Result<(Value, Ty), IRError> {
         let item_irs: Vec<(Value, Ty)> = items
@@ -1535,7 +1535,7 @@ impl<'a> Lowerer<'a> {
     #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn lower_string(
         &mut self,
-        expr: &TypedExpr<Ty>,
+        expr: &TypedExpr,
         string: &String,
         bind: Bind,
     ) -> Result<(Value, Ty), IRError> {
@@ -1563,9 +1563,9 @@ impl<'a> Lowerer<'a> {
     #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn lower_match(
         &mut self,
-        expr: &TypedExpr<Ty>,
-        scrutinee: &TypedExpr<Ty>,
-        arms: &[TypedMatchArm<Ty>],
+        expr: &TypedExpr,
+        scrutinee: &TypedExpr,
+        arms: &[TypedMatchArm],
         bind: Bind,
     ) -> Result<(Value, Ty), IRError> {
         let result_type = arms.first().map(|a| a.body.ret.clone()).unwrap_or(Ty::Void);
@@ -2034,8 +2034,8 @@ impl<'a> Lowerer<'a> {
 
     fn lower_record_literal(
         &mut self,
-        expr: &TypedExpr<Ty>,
-        fields: &[TypedRecordField<Ty>],
+        expr: &TypedExpr,
+        fields: &[TypedRecordField],
         bind: Bind,
     ) -> Result<(Value, Ty), IRError> {
         let mut field_vals_by_label: FxHashMap<Label, (Value, Ty)> = FxHashMap::default();
@@ -2131,7 +2131,7 @@ impl<'a> Lowerer<'a> {
     fn lower_constructor(
         &mut self,
         name: &Symbol,
-        expr: &TypedExpr<Ty>,
+        expr: &TypedExpr,
         bind: Bind,
     ) -> Result<(Value, Ty), IRError> {
         let constructor_sym = *self
@@ -2168,7 +2168,7 @@ impl<'a> Lowerer<'a> {
         id: NodeID,
         enum_symbol: &Symbol,
         variant_name: &Label,
-        arg_exprs: &[TypedExpr<Ty>],
+        arg_exprs: &[TypedExpr],
         mut args: Vec<Value>,
         bind: Bind,
     ) -> Result<(Value, Ty), IRError> {
@@ -2239,8 +2239,8 @@ impl<'a> Lowerer<'a> {
     #[allow(clippy::todo)]
     fn lower_member(
         &mut self,
-        expr: &TypedExpr<Ty>,
-        receiver: &Option<Box<TypedExpr<Ty>>>,
+        expr: &TypedExpr,
+        receiver: &Option<Box<TypedExpr>>,
         label: &Label,
         witness: Option<Symbol>,
         bind: Bind,
@@ -2318,7 +2318,7 @@ impl<'a> Lowerer<'a> {
     fn lower_variable(
         &mut self,
         name: &Symbol,
-        expr: &TypedExpr<Ty>,
+        expr: &TypedExpr,
     ) -> Result<(Value, Ty), IRError> {
         let ty = expr.ty.clone();
         // If we currently have a binding for this symbol, prefer that over just passing names around
@@ -2326,9 +2326,32 @@ impl<'a> Lowerer<'a> {
             return Ok((self.get_binding(name).into(), ty));
         }
 
+        // For synthesized symbols, check if the original symbol has a binding.
+        // Only use it if no type specialization was applied (i.e., for non-generic functions).
+        // For generic functions, we need to use the specialized Func directly.
+        let specialized_callee = self.typed.specialized_callees.get(name);
+        let original_symbol = specialized_callee.map(|s| s.original_symbol);
+        if let Some(callee) = specialized_callee {
+            // Only use original binding if no type specializations were applied
+            if callee.specializations.ty.is_empty() {
+                let original = callee.original_symbol;
+                if self.current_func_mut().bindings.contains_key(&original) {
+                    return Ok((self.get_binding(&original).into(), ty));
+                }
+            }
+        }
+
+        // Get the lookup name for captures (use original if this is a synthesized symbol)
+        let capture_lookup_name = original_symbol.as_ref().unwrap_or(name);
+
         let ret = if matches!(ty, Ty::Func(..)) {
             // Check if this function has captures
-            if let Some(captures) = self.typed.resolved_names.captures.get(name).cloned()
+            if let Some(captures) = self
+                .typed
+                .resolved_names
+                .captures
+                .get(capture_lookup_name)
+                .cloned()
                 && !captures.is_empty()
             {
                 let env: Vec<Value> = captures
@@ -2391,7 +2414,7 @@ impl<'a> Lowerer<'a> {
         &mut self,
         id: NodeID,
         name: &Symbol,
-        callee: &TypedExpr<Ty>,
+        callee: &TypedExpr,
         mut args: Vec<Value>,
         dest: Register,
         callee_sym: Option<Symbol>,
@@ -2471,9 +2494,9 @@ impl<'a> Lowerer<'a> {
     #[instrument(level = tracing::Level::TRACE, skip(self, call_expr, callee, args))]
     fn lower_call(
         &mut self,
-        call_expr: &TypedExpr<Ty>,
-        callee: &TypedExpr<Ty>,
-        args: &[TypedExpr<Ty>],
+        call_expr: &TypedExpr,
+        callee: &TypedExpr,
+        args: &[TypedExpr],
         callee_sym: Option<&Symbol>,
         bind: Bind,
     ) -> Result<(Value, Ty), IRError> {
@@ -2584,12 +2607,12 @@ impl<'a> Lowerer<'a> {
     #[instrument(level = tracing::Level::TRACE, skip(self, call_expr, callee_expr, receiver, arg_exprs, args ))]
     fn lower_method_call(
         &mut self,
-        call_expr: &TypedExpr<Ty>,
-        callee_expr: &TypedExpr<Ty>,
-        mut receiver: TypedExpr<Ty>,
+        call_expr: &TypedExpr,
+        callee_expr: &TypedExpr,
+        mut receiver: TypedExpr,
         label: &Label,
         witness: Option<Symbol>,
-        arg_exprs: &[TypedExpr<Ty>],
+        arg_exprs: &[TypedExpr],
         mut args: Vec<Value>,
         dest: Register,
     ) -> Result<(Value, Ty), IRError> {
@@ -2739,7 +2762,7 @@ impl<'a> Lowerer<'a> {
     #[instrument(level = tracing::Level::TRACE, skip(self, func), fields(func.name = %func.name))]
     fn lower_func(
         &mut self,
-        func: &TypedFunc<Ty>,
+        func: &TypedFunc,
         bind: Bind,
 
         terminates_with: FuncTermination,
@@ -2984,6 +3007,8 @@ impl<'a> Lowerer<'a> {
                 ty: func_ty.clone(),
                 val: func_val.clone(),
             });
+            // Bind the function symbol to the register so later references use the Ref'd value
+            self.insert_binding(func_sym, Binding::Register(dest.0));
         }
 
         Ok((func_val, func_ty))
@@ -3325,7 +3350,7 @@ impl<'a> Lowerer<'a> {
             {
                 Label::Positional(idx)
             }
-            _ => panic!("unable to determine field index of {receiver_ty}.{label}"),
+            _ => panic!("unable to determine field index of {receiver_ty:?}.{label}"),
         }
     }
 
@@ -3361,7 +3386,7 @@ impl<'a> Lowerer<'a> {
     }
 }
 
-fn is_main_func(node: &TypedDecl<Ty>, symbol_names: &FxHashMap<Symbol, String>) -> bool {
+fn is_main_func(node: &TypedDecl, symbol_names: &FxHashMap<Symbol, String>) -> bool {
     if let TypedDeclKind::Let {
         initializer:
             Some(TypedExpr {

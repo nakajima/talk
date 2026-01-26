@@ -9,7 +9,7 @@ use crate::{
         conformance::ConformanceKey,
         constraint_solver::{DeferralReason, SolveResult},
         constraints::store::{ConstraintId, ConstraintStore},
-        infer_ty::{InferTy, Level, Meta},
+        infer_ty::{Level, Meta, Ty},
         solve_context::SolveContext,
         type_error::TypeError,
         type_session::TypeSession,
@@ -21,9 +21,9 @@ pub struct Projection {
     pub id: ConstraintId,
     pub protocol_id: Option<ProtocolId>,
     pub node_id: NodeID,
-    pub base: InferTy,
+    pub base: Ty,
     pub label: Label,
-    pub result: InferTy,
+    pub result: Ty,
 }
 
 impl Projection {
@@ -40,8 +40,8 @@ impl Projection {
 
         // Try to reduce when base is a concrete nominal or primitive
         let base_sym = match &base {
-            InferTy::Nominal { symbol, .. } => Some(*symbol),
-            InferTy::Primitive(symbol) => Some(*symbol),
+            Ty::Nominal { symbol, .. } => Some(*symbol),
+            Ty::Primitive(symbol) => Some(*symbol),
             _ => None,
         };
 
@@ -107,7 +107,7 @@ impl Projection {
                 // was recorded for this conformance, equate to it. Otherwise leave unsolved.
                 if let Some(witness) = conf.witnesses.associated_types.get(&self.label).cloned() {
                     let witness_applied = session.apply(witness.clone(), &mut context.substitutions_mut());
-                    if !matches!(witness_applied, InferTy::Param(..)) {
+                    if !matches!(witness_applied, Ty::Param(..)) {
                         let group = constraints.copy_group(self.id);
                         constraints.wants_equals_at(self.node_id, result, witness_applied, &group);
                         return SolveResult::Solved(Default::default());
@@ -117,7 +117,7 @@ impl Projection {
         }
 
         // If the base is still a meta variable, try to infer it from the result type
-        if let InferTy::Var { id, .. } = &base {
+        if let Ty::Var { id, .. } = &base {
             // If we have a concrete result and a known protocol, try to find which type
             // would give us this associated type value (defaulting)
             if let Some(protocol_id) = self.protocol_id {
@@ -128,7 +128,7 @@ impl Projection {
                     protocol_id
                 );
 
-                if !matches!(result, InferTy::Var { .. }) {
+                if !matches!(result, Ty::Var { .. }) {
                     // Find all conformances to this protocol where the associated type matches
                     // First collect relevant conformance keys to avoid borrow issues
 
@@ -168,9 +168,9 @@ impl Projection {
                             let (key, _) = &matching[0];
                             let conforming_ty = if matches!(key.conforming_id, Symbol::Builtin(..))
                             {
-                                InferTy::Primitive(key.conforming_id)
+                                Ty::Primitive(key.conforming_id)
                             } else {
-                                InferTy::Nominal {
+                                Ty::Nominal {
                                     symbol: key.conforming_id,
                                     type_args: Default::default(),
                                 }
@@ -196,8 +196,8 @@ impl Projection {
 
         // If we have a concrete base type and a protocol, defer waiting for that conformance
         if let Some(base_sym) = match &base {
-            InferTy::Nominal { symbol, .. } => Some(*symbol),
-            InferTy::Primitive(symbol) => Some(*symbol),
+            Ty::Nominal { symbol, .. } => Some(*symbol),
+            Ty::Primitive(symbol) => Some(*symbol),
             _ => None,
         } && let Some(protocol_id) = self.protocol_id
         {

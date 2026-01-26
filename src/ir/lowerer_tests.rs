@@ -984,7 +984,7 @@ pub mod tests {
                         Instruction::Call {
                             dest: 3.into(),
                             ty: IrTy::Float,
-                            callee: Value::Func(SynthesizedId::from(3).into()),
+                            callee: Value::Func(SynthesizedId::from(2).into()),
                             args: vec![Value::Reg(4)].into(),
                             self_dest: None,
                             meta: meta(),
@@ -1002,10 +1002,10 @@ pub mod tests {
         assert_eq_diff!(
             *program
                 .functions
-                .get(&Symbol::Synthesized(2.into()))
+                .get(&Symbol::Synthesized(1.into()))
                 .unwrap(),
             Function {
-                name: Symbol::Synthesized(2.into()),
+                name: Symbol::Synthesized(1.into()),
                 params: vec![Value::Reg(0)].into(),
                 ty: IrTy::Func(vec![IrTy::Int], IrTy::Int.into()),
                 register_count: 1,
@@ -1025,10 +1025,10 @@ pub mod tests {
         assert_eq_diff!(
             *program
                 .functions
-                .get(&Symbol::Synthesized(3.into()))
+                .get(&Symbol::Synthesized(2.into()))
                 .unwrap(),
             Function {
-                name: Symbol::Synthesized(3.into()),
+                name: Symbol::Synthesized(2.into()),
                 params: vec![Value::Reg(0)].into(),
                 ty: IrTy::Func(vec![IrTy::Float], IrTy::Float.into()),
                 register_count: 1,

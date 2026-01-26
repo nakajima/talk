@@ -5,11 +5,7 @@ use crate::{
     name_resolution::symbol::{ProtocolId, Symbol},
     node_id::NodeID,
     span::Span,
-    types::{
-        infer_ty::{Infer, InferTy, InnerTy, TypePhase},
-        ty::{Ty, Typed},
-        type_session::TypeSession,
-    },
+    types::infer_ty::Ty,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -18,24 +14,14 @@ pub struct ConformanceKey {
     pub conforming_id: Symbol,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct Witnesses<T: TypePhase> {
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Witnesses {
     pub methods: FxHashMap<Label, Symbol>,
-    pub associated_types: FxHashMap<Label, InnerTy<T>>,
+    pub associated_types: FxHashMap<Label, Ty>,
     pub requirements: FxHashMap<Symbol, Symbol>,
 }
 
-impl<T: TypePhase> Default for Witnesses<T> {
-    fn default() -> Self {
-        Self {
-            methods: Default::default(),
-            associated_types: Default::default(),
-            requirements: Default::default(),
-        }
-    }
-}
-
-impl<T: TypePhase> Witnesses<T> {
+impl Witnesses {
     /// Look up a witness by label, falling back to lookup by method requirement symbol.
     pub fn get_witness(&self, label: &Label, method_req: &Symbol) -> Option<Symbol> {
         self.methods
@@ -46,31 +32,10 @@ impl<T: TypePhase> Witnesses<T> {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Conformance<T: TypePhase> {
+pub struct Conformance {
     pub node_id: NodeID,
     pub conforming_id: Symbol,
     pub protocol_id: ProtocolId,
-    pub witnesses: Witnesses<T>,
+    pub witnesses: Witnesses,
     pub span: Span,
-}
-
-impl Conformance<Infer> {
-    pub(super) fn finalize(self, session: &mut TypeSession) -> Conformance<Typed> {
-        Conformance {
-            node_id: self.node_id,
-            conforming_id: self.conforming_id,
-            protocol_id: self.protocol_id,
-            witnesses: Witnesses {
-                methods: self.witnesses.methods,
-                associated_types: self
-                    .witnesses
-                    .associated_types
-                    .into_iter()
-                    .map(|(k, v)| (k, session.finalize_ty(v).as_mono_ty().clone()))
-                    .collect(),
-                requirements: self.witnesses.requirements,
-            },
-            span: self.span,
-        }
-    }
 }

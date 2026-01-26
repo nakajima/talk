@@ -4,7 +4,7 @@ use crate::{
     ast::{AST, NameResolved},
     formatter::{Formatter, FormatterDecorator, annotate, concat},
     node_id::NodeID,
-    types::{infer_ty::InferTy, type_operations::UnificationSubstitutions},
+    types::{infer_ty::Ty, type_operations::UnificationSubstitutions},
 };
 
 #[derive(Clone)]
@@ -12,7 +12,7 @@ pub struct TypeSnapshot {
     pub generation: usize,
     pub ast: AST<NameResolved>,
     pub substitutions: UnificationSubstitutions,
-    pub types_by_node: FxHashMap<NodeID, InferTy>,
+    pub types_by_node: FxHashMap<NodeID, Ty>,
 }
 
 impl FormatterDecorator for TypeSnapshot {

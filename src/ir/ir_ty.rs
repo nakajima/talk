@@ -4,7 +4,7 @@ use crate::{
     ir::ir_error::IRError,
     label::Label,
     name_resolution::symbol::Symbol,
-    types::{row::Row, ty::Ty},
+    types::{infer_row::Row, infer_ty::Ty},
 };
 
 #[derive(Debug, PartialEq, Eq, Clone, Hash)]

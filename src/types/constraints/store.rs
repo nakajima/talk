@@ -26,8 +26,8 @@ use crate::{
             row_subset::RowSubset,
             type_member::TypeMember,
         },
-        infer_row::InferRow,
-        infer_ty::{InferTy, Level, Meta},
+        infer_row::Row,
+        infer_ty::{Level, Meta, Ty},
         solve_context::SolveContext,
         variational::Configuration,
     },
@@ -259,7 +259,7 @@ impl ConstraintStore {
 
         // Track meta variable dependencies for wake-up on solve
         for ty in constraint.collect_metas() {
-            if let InferTy::Var { id, .. } = ty {
+            if let Ty::Var { id, .. } = ty {
                 self.meta_deps
                     .entry(Meta::Ty(id))
                     .or_default()
@@ -291,9 +291,9 @@ impl ConstraintStore {
     pub fn wants_default(
         &mut self,
         node_id: NodeID,
-        var: InferTy,
-        ty: InferTy,
-        allowed: Vec<InferTy>,
+        var: Ty,
+        ty: Ty,
+        allowed: Vec<Ty>,
     ) -> &Constraint {
         let id = self.ids.next_id();
         self.wants(
@@ -310,7 +310,7 @@ impl ConstraintStore {
         )
     }
 
-    pub fn wants_equals(&mut self, lhs: InferTy, rhs: InferTy) -> &Constraint {
+    pub fn wants_equals(&mut self, lhs: Ty, rhs: Ty) -> &Constraint {
         let id = self.ids.next_id();
         self.wants(
             id,
@@ -334,8 +334,8 @@ impl ConstraintStore {
     pub fn wants_equals_at(
         &mut self,
         node_id: NodeID,
-        lhs: InferTy,
-        rhs: InferTy,
+        lhs: Ty,
+        rhs: Ty,
         group: &BindingGroup,
     ) -> &Constraint {
         self.wants_equals_at_with_cause(node_id, lhs, rhs, group, None)
@@ -344,8 +344,8 @@ impl ConstraintStore {
     pub fn wants_equals_at_with_cause(
         &mut self,
         node_id: NodeID,
-        lhs: InferTy,
-        rhs: InferTy,
+        lhs: Ty,
+        rhs: Ty,
         group: &BindingGroup,
         cause: Option<ConstraintCause>,
     ) -> &Constraint {
@@ -367,10 +367,10 @@ impl ConstraintStore {
     pub fn wants_projection(
         &mut self,
         node_id: NodeID,
-        base: InferTy,
+        base: Ty,
         label: Label,
         protocol_id: Option<ProtocolId>,
-        result: InferTy,
+        result: Ty,
         group: &BindingGroup,
     ) -> &Constraint {
         let id = self.ids.next_id();
@@ -391,7 +391,7 @@ impl ConstraintStore {
     pub fn wants_conforms(
         &mut self,
         conformance_node_id: NodeID,
-        ty: InferTy,
+        ty: Ty,
         protocol_id: ProtocolId,
         group: &BindingGroup,
     ) -> &Constraint {
@@ -410,9 +410,9 @@ impl ConstraintStore {
 
     pub fn _has_field(
         &mut self,
-        row: InferRow,
+        row: Row,
         label: Label,
-        ty: InferTy,
+        ty: Ty,
         node_id: Option<NodeID>,
         group: &BindingGroup,
     ) -> &Constraint {
@@ -433,9 +433,9 @@ impl ConstraintStore {
     pub fn wants_member(
         &mut self,
         node_id: NodeID,
-        receiver: InferTy,
+        receiver: Ty,
         label: Label,
-        ty: InferTy,
+        ty: Ty,
         group: &BindingGroup,
     ) -> &Constraint {
         let id = self.ids.next_id();
@@ -455,10 +455,10 @@ impl ConstraintStore {
     #[allow(clippy::too_many_arguments)]
     pub fn wants_type_member(
         &mut self,
-        base: InferTy,
+        base: Ty,
         name: Label,
-        generics: Vec<InferTy>,
-        result: InferTy,
+        generics: Vec<Ty>,
+        result: Ty,
         node_id: NodeID,
         group: &BindingGroup,
         cause: ConstraintCause,
@@ -484,14 +484,14 @@ impl ConstraintStore {
         &mut self,
         call_node_id: NodeID,
         callee_id: NodeID,
-        callee: InferTy,
-        args: Vec<InferTy>,
-        type_args: Vec<InferTy>,
-        returns: InferTy,
-        callee_type: InferTy,
-        receiver: Option<InferTy>,
+        callee: Ty,
+        args: Vec<Ty>,
+        type_args: Vec<Ty>,
+        returns: Ty,
+        callee_type: Ty,
+        receiver: Option<Ty>,
         group: &BindingGroup,
-        effect_context_row: InferRow,
+        effect_context_row: Row,
     ) -> &Constraint {
         let id = self.ids.next_id();
         self.wants(
@@ -515,8 +515,8 @@ impl ConstraintStore {
     pub fn wants_row_subset(
         &mut self,
         node_id: Option<NodeID>,
-        left: InferRow,
-        right: InferRow,
+        left: Row,
+        right: Row,
         group: &BindingGroup,
     ) -> &Constraint {
         let id = self.ids.next_id();
@@ -541,7 +541,7 @@ pub mod tests {
         node_id::NodeID,
         types::{
             constraints::{equals::Equals, member::Member},
-            infer_ty::{InferTy, Level, MetaVarId},
+            infer_ty::{Level, MetaVarId, Ty},
         },
     };
 
@@ -554,11 +554,11 @@ pub mod tests {
         let constraint = Constraint::Equals(Equals {
             id: 1.into(),
             node_id: None,
-            lhs: InferTy::Var {
+            lhs: Ty::Var {
                 id: meta,
                 level: Level(1),
             },
-            rhs: InferTy::Int,
+            rhs: Ty::Int,
             cause: None,
         });
 
@@ -581,11 +581,11 @@ pub mod tests {
         let constraint = Constraint::Equals(Equals {
             id: 1.into(),
             node_id: None,
-            lhs: InferTy::Var {
+            lhs: Ty::Var {
                 id: meta,
                 level: Level(1),
             },
-            rhs: InferTy::Int,
+            rhs: Ty::Int,
             cause: None,
         });
 
@@ -601,20 +601,20 @@ pub mod tests {
         let equals = Constraint::Equals(Equals {
             id: 1.into(),
             node_id: None,
-            lhs: InferTy::Var {
+            lhs: Ty::Var {
                 id: meta,
                 level: Level(1),
             },
-            rhs: InferTy::Int,
+            rhs: Ty::Int,
             cause: None,
         });
 
         let member = Constraint::Member(Member {
             id: 2.into(),
             node_id: NodeID::ANY,
-            receiver: InferTy::Int,
+            receiver: Ty::Int,
             label: "fizz".into(),
-            ty: InferTy::Var {
+            ty: Ty::Var {
                 id: 1.into(),
                 level: Level(1),
             },

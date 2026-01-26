@@ -8,9 +8,8 @@ use crate::{
             constraint::ConstraintCause,
             store::{ConstraintId, ConstraintStore},
         },
-        infer_row::InferRow,
-        infer_ty::{InferTy, Meta},
-        mappable::Mappable,
+        infer_row::Row,
+        infer_ty::{Meta, Ty},
         solve_context::SolveContext,
         term_environment::EnvEntry,
         type_error::TypeError,
@@ -24,13 +23,13 @@ pub struct Call {
     pub id: ConstraintId,
     pub call_node_id: NodeID,
     pub callee_id: NodeID,
-    pub callee: InferTy,
-    pub callee_type: InferTy,
-    pub args: Vec<InferTy>,
-    pub type_args: Vec<InferTy>,
-    pub returns: InferTy,
-    pub receiver: Option<InferTy>, // If it's a method
-    pub effect_context_row: InferRow,
+    pub callee: Ty,
+    pub callee_type: Ty,
+    pub args: Vec<Ty>,
+    pub type_args: Vec<Ty>,
+    pub returns: Ty,
+    pub receiver: Option<Ty>, // If it's a method
+    pub effect_context_row: Row,
 }
 
 impl Call {
@@ -45,7 +44,7 @@ impl Call {
         let callee = session.apply(self.callee.clone(), &mut context.substitutions_mut());
         let returns = session.apply(self.returns.clone(), &mut context.substitutions_mut());
 
-        if let InferTy::Var { id, .. } = &callee {
+        if let Ty::Var { id, .. } = &callee {
             tracing::trace!(
                 "unable to determine callee type: {:?}, substitutions: {returns:?}",
                 self.callee
@@ -57,8 +56,8 @@ impl Call {
             if let Some(receiver_ty) = &self.receiver {
                 let applied_receiver =
                     session.apply(receiver_ty.clone(), &mut context.substitutions_mut());
-                if let InferTy::Var { .. } = applied_receiver
-                    && let InferTy::Nominal { .. } = &returns
+                if let Ty::Var { .. } = applied_receiver
+                    && let Ty::Nominal { .. } = &returns
                     && let Ok(metas) = unify(receiver_ty, &returns, context, session)
                 {
                     return SolveResult::Solved(metas);
@@ -72,7 +71,7 @@ impl Call {
         let mut args = self.args.to_vec();
 
         match &self.callee {
-            InferTy::Constructor { name, box ret, .. } => {
+            Ty::Constructor { name, box ret, .. } => {
                 let Ok(sym) = name.symbol() else {
                     return SolveResult::Err(TypeError::NameNotResolved(name.clone()));
                 };
@@ -98,7 +97,7 @@ impl Call {
                     self.type_args.clone()
                 };
 
-                let returns_type = InferTy::Nominal {
+                let returns_type = Ty::Nominal {
                     symbol: sym,
                     type_args,
                 };
@@ -135,7 +134,7 @@ impl Call {
                             entry.instantiate(self.callee_id, constraints, context, session)
                         }
                     } else {
-                        InferTy::Error(
+                        Ty::Error(
                             TypeError::TypeNotFound(format!(
                                 "Initializer not found {initializer:?}"
                             ))
@@ -146,7 +145,7 @@ impl Call {
                     match session.lookup(&sym) {
                         Some(EnvEntry::Mono(ty)) => ty,
                         Some(EnvEntry::Scheme(s)) => s.ty.clone(),
-                        _ => InferTy::Error(
+                        _ => Ty::Error(
                             TypeError::TypeNotFound(format!("Missing {name:?}")).into(),
                         ),
                     }
@@ -168,7 +167,7 @@ impl Call {
 
                 match unify(
                     &init_ty,
-                    &curry(args, returns_type, InferRow::Empty.into()),
+                    &curry(args, returns_type, Row::Empty.into()),
                     context,
                     session,
                 ) {
@@ -178,10 +177,10 @@ impl Call {
 
                 SolveResult::Solved(metas)
             }
-            InferTy::Func(.., effects) => {
+            Ty::Func(.., effects) => {
                 let reversed = self.callee.clone().mapping(
                     &mut |t| {
-                        if let InferTy::Var { id, .. } = t
+                        if let Ty::Var { id, .. } = t
                             && let Some(param) = session.reverse_instantiations.ty.get(&id)
                         {
                             return param.clone();
@@ -197,8 +196,8 @@ impl Call {
                 let res = if args.is_empty() {
                     unify(
                         &self.callee,
-                        &InferTy::Func(
-                            InferTy::Void.into(),
+                        &Ty::Func(
+                            Ty::Void.into(),
                             self.returns.clone().into(),
                             effects.clone(),
                         ),

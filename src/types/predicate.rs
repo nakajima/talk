@@ -8,11 +8,9 @@ use crate::{
             constraint::{Constraint, ConstraintCause},
             store::ConstraintStore,
         },
-        infer_row::{InferRow, InnerRow, RowParamId},
-        infer_ty::{InferTy, InnerTy, TypePhase},
-        mappable::Mappable,
+        infer_row::{Row, RowParamId},
+        infer_ty::Ty,
         solve_context::SolveContext,
-        ty::Ty,
         type_operations::{UnificationSubstitutions, curry, instantiate_row, instantiate_ty},
         type_session::TypeSession,
     },
@@ -21,16 +19,16 @@ use crate::{
 // Predicates are kinda like Constraint templates. They ride around with schemes and get instantiated
 // into constraints when the scheme itself is instantiated.
 #[derive(Clone, PartialEq, Eq, Hash)]
-pub enum Predicate<Phase: TypePhase> {
+pub enum Predicate {
     HasField {
         row: RowParamId,
         label: Label,
-        ty: InnerTy<Phase>,
+        ty: Ty,
     },
     Projection {
-        base: InnerTy<Phase>,
+        base: Ty,
         label: Label,
-        returns: InnerTy<Phase>,
+        returns: Ty,
         protocol_id: Option<ProtocolId>,
     },
     Conforms {
@@ -38,36 +36,35 @@ pub enum Predicate<Phase: TypePhase> {
         protocol_id: ProtocolId,
     },
     Member {
-        receiver: InnerTy<Phase>,
+        receiver: Ty,
         label: Label,
-        ty: InnerTy<Phase>,
+        ty: Ty,
         node_id: NodeID,
     },
     Equals {
-        lhs: InnerTy<Phase>,
-        rhs: InnerTy<Phase>,
+        lhs: Ty,
+        rhs: Ty,
     },
     Call {
-        callee: InnerTy<Phase>,
-        args: Vec<InnerTy<Phase>>,
-        returns: InnerTy<Phase>,
-        receiver: Option<InnerTy<Phase>>,
+        callee: Ty,
+        args: Vec<Ty>,
+        returns: Ty,
+        receiver: Option<Ty>,
     },
     TypeMember {
-        base: InnerTy<Phase>,
+        base: Ty,
         member: Label,
-        returns: InnerTy<Phase>,
-        generics: Vec<InnerTy<Phase>>,
+        returns: Ty,
+        generics: Vec<Ty>,
     },
 }
 
-impl<T: TypePhase, U: TypePhase> Mappable<T, U> for Predicate<T> {
-    type Output = Predicate<U>;
-    fn mapping(
+impl Predicate {
+    pub fn mapping(
         self,
-        ty_map: &mut impl FnMut(InnerTy<T>) -> InnerTy<U>,
-        _row_map: &mut impl FnMut(InnerRow<T>) -> InnerRow<U>,
-    ) -> Self::Output {
+        ty_map: &mut impl FnMut(Ty) -> Ty,
+        _row_map: &mut impl FnMut(Row) -> Row,
+    ) -> Self {
         match self {
             Predicate::Projection {
                 protocol_id,
@@ -127,9 +124,7 @@ impl<T: TypePhase, U: TypePhase> Mappable<T, U> for Predicate<T> {
             },
         }
     }
-}
 
-impl<T: TypePhase> Predicate<T> {
     pub fn import(self, module_id: ModuleId) -> Self {
         self.mapping(&mut |t| t.clone().import(module_id), &mut |r| r)
     }
@@ -170,7 +165,7 @@ impl<T: TypePhase> Predicate<T> {
                 id,
                 instantiate_ty(
                     id,
-                    InferTy::Param(param, vec![protocol_id]),
+                    Ty::Param(param, vec![protocol_id]),
                     context.instantiations_mut(),
                     level,
                 ),
@@ -184,7 +179,7 @@ impl<T: TypePhase> Predicate<T> {
             Self::HasField { row, label, ty } => constraints._has_field(
                 instantiate_row(
                     id,
-                    InferRow::Param(row),
+                    Row::Param(row),
                     context.instantiations_mut(),
                     level,
                 ),
@@ -236,16 +231,16 @@ impl<T: TypePhase> Predicate<T> {
                     .collect(),
                 Default::default(),
                 instantiate_ty(id, returns.clone(), context.instantiations_mut(), level),
-                curry(args, returns, InferRow::Var(0.into()).into()),
+                curry(args, returns, Row::Var(0.into()).into()),
                 receiver.map(|r| instantiate_ty(id, r, context.instantiations_mut(), level)),
                 &context.group_info(),
-                InferRow::Var(0.into()),
+                Row::Var(0.into()),
             ),
         }
     }
 }
 
-impl<T: TypePhase> std::fmt::Debug for Predicate<T> {
+impl std::fmt::Debug for Predicate {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Predicate::Projection {

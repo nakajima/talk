@@ -4,7 +4,7 @@ use crate::{
     name::Name,
     name_resolution::symbol::{ProtocolId, Symbol},
     types::{
-        conformance::ConformanceKey, constraints::constraint::ConstraintCause, infer_ty::InferTy,
+        conformance::ConformanceKey, constraints::constraint::ConstraintCause, infer_ty::Ty,
         matcher::RequiredConstructor,
     },
 };
@@ -12,7 +12,7 @@ use crate::{
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum TypeError {
     TypeConstructorNotFound(Symbol),
-    ExpectedRow(InferTy),
+    ExpectedRow(Ty),
     GenericArgCount {
         expected: u8,
         actual: u8,
@@ -21,10 +21,10 @@ pub enum TypeError {
         conformance_key: ConformanceKey,
         label: String,
     },
-    InvalidUnification(Box<InferTy>, Box<InferTy>, Option<ConstraintCause>),
-    OccursCheck(InferTy),
-    CalleeNotCallable(InferTy),
-    MemberNotFound(InferTy, String),
+    InvalidUnification(Box<Ty>, Box<Ty>, Option<ConstraintCause>),
+    OccursCheck(Ty),
+    CalleeNotCallable(Ty),
+    MemberNotFound(Ty, String),
     NameNotResolved(Name),
     MissingConformanceRequirement(String),
     TypeNotFound(String),
@@ -33,7 +33,7 @@ pub enum TypeError {
         protocol_id: ProtocolId,
     },
     TypeCannotConform {
-        ty: InferTy,
+        ty: Ty,
         protocol_id: ProtocolId,
     },
     NonExhaustiveMatch(Vec<RequiredConstructor>),
@@ -64,13 +64,13 @@ impl Display for TypeError {
                 if let Some(cause) = cause {
                     write!(
                         f,
-                        "Type mismatch in {}: {} vs {}",
+                        "Type mismatch in {}: {:?} vs {:?}",
                         cause.label(),
                         lhs.as_ref(),
                         rhs.as_ref()
                     )
                 } else {
-                    write!(f, "Type mismatch: {} vs {}", lhs.as_ref(), rhs.as_ref())
+                    write!(f, "Type mismatch: {:?} vs {:?}", lhs.as_ref(), rhs.as_ref())
                 }
             }
             Self::OccursCheck(ty) => {
@@ -137,7 +137,7 @@ impl Display for TypeError {
 }
 
 impl TypeError {
-    pub fn invalid_unification(lhs: InferTy, rhs: InferTy) -> Self {
+    pub fn invalid_unification(lhs: Ty, rhs: Ty) -> Self {
         Self::InvalidUnification(lhs.into(), rhs.into(), None)
     }
 
