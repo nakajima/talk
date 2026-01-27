@@ -21,7 +21,7 @@ use crate::{
             TypedMatchArm, TypedNode, TypedRecordField, TypedStmt, TypedStmtKind,
         },
         types::{TypeEntry, Types},
-        variational::DimensionId,
+        variational::{DimensionId, Resolution, resolve_overloads},
     },
 };
 
@@ -44,6 +44,8 @@ pub struct SpecializationPass<'a> {
     /// Aligns with the paper's model: each call site is a dimension, resolution maps to the callee.
     pub(crate) call_resolutions: FxHashMap<(Symbol, NodeID), Symbol>,
     current_specializations: Vec<Specializations>,
+    /// Resolved overloads computed from choices and error constraints.
+    resolution: Resolution,
 }
 
 impl<'a> SpecializationPass<'a> {
@@ -76,6 +78,15 @@ impl<'a> SpecializationPass<'a> {
         modules: &'a ModuleEnvironment,
         module_id: ModuleId,
     ) -> Self {
+        // Resolve overloads using the variational type checking results
+        let resolution =
+            resolve_overloads(&types.choices, &types.error_constraints).unwrap_or_else(|errors| {
+                for error in &errors {
+                    tracing::warn!("Resolution error: {:?}", error);
+                }
+                Default::default()
+            });
+
         Self {
             ast,
             symbols,
@@ -87,6 +98,7 @@ impl<'a> SpecializationPass<'a> {
             specializations: Default::default(),
             call_resolutions: Default::default(),
             current_specializations: Default::default(),
+            resolution,
         }
     }
 
@@ -119,11 +131,6 @@ impl<'a> SpecializationPass<'a> {
             specialized_decls.push(self.visit_decl(decl)?);
         }
         _ = std::mem::replace(&mut self.ast.decls, specialized_decls);
-
-        // Re-sort span_to_symbol since we may have added new spans during traversal
-        self.resolved_names
-            .span_to_symbol
-            .sort_by_key(|(file, start, ..)| (*file, *start));
 
         Ok((
             self.ast,
@@ -246,28 +253,7 @@ impl<'a> SpecializationPass<'a> {
         use crate::types::typed_ast::TypedPatternKind;
 
         match &pattern.kind {
-            TypedPatternKind::Variant {
-                variant_name,
-                variant_name_span,
-                fields,
-                ..
-            } => {
-                // Record variant_name_span -> variant symbol now that types are resolved
-                if *variant_name_span != crate::span::Span::SYNTHESIZED {
-                    // Get the enum symbol from the pattern's type
-                    if let Ty::Nominal { symbol: enum_sym, .. } = &pattern.ty {
-                        let label: Label = variant_name.clone().into();
-                        // First try local catalog
-                        let variant_sym = self.types.catalog.variants.get(enum_sym)
-                            .and_then(|variants| variants.get(&label))
-                            .copied()
-                            // Then try modules via lookup_member (which checks variants)
-                            .or_else(|| self.modules.lookup_member(enum_sym, &label));
-                        if let Some(variant_sym) = variant_sym {
-                            self.resolved_names.record_span(*variant_name_span, variant_sym);
-                        }
-                    }
-                }
+            TypedPatternKind::Variant { fields, .. } => {
                 // Recursively visit field patterns
                 for field in fields {
                     self.visit_pattern(field);
@@ -358,12 +344,7 @@ impl<'a> SpecializationPass<'a> {
                     } else {
                         self.symbol_from_ty(&visited_receiver.ty, &specializations).ok()
                     };
-                    if let Some(receiver_sym) = container_sym {
-                        if let Some((member_sym, _)) = self.types.catalog.lookup_member(&receiver_sym, &label) {
-                            // Pass the expression's NodeID to enable expression-type lookup in hover
-                            self.resolved_names.record_span_with_node(label_span, member_sym, expr.id);
-                        }
-                    }
+                    let _ = container_sym;
                 }
 
                 TypedExprKind::Member {
@@ -571,7 +552,7 @@ impl<'a> SpecializationPass<'a> {
                     // Regular member access - use Resolution, then ChoiceStore for monomorphization
                     let dimension = DimensionId(callee.id);
 
-                    if let Some(resolved_alt) = self.types.resolution.get(&dimension) {
+                    if let Some(resolved_alt) = self.resolution.get(&dimension) {
                         // Use the resolved alternative from variational type checking
                         if let Some(alt) =
                             self.types.choices.get_alternative(dimension, resolved_alt)
@@ -996,53 +977,21 @@ impl<'a> SpecializationPass<'a> {
             return *callee_sym;
         }
 
-        // Check if we need to filter - avoid allocation in the common case
-        let needs_ty_filter = specializations.ty.values().any(|v| matches!(v, Ty::Var { .. }));
-        let needs_row_filter = specializations.row.values().any(|v| matches!(v, Row::Var(..)));
-
-        // If everything is metavariables, return early
-        if needs_ty_filter && specializations.ty.values().all(|v| matches!(v, Ty::Var { .. }))
-            && needs_row_filter && specializations.row.values().all(|v| matches!(v, Row::Var(..)))
-        {
-            return *callee_sym;
-        }
-        if needs_ty_filter && specializations.ty.values().all(|v| matches!(v, Ty::Var { .. }))
-            && specializations.row.is_empty()
-        {
-            return *callee_sym;
-        }
-        if specializations.ty.is_empty()
-            && needs_row_filter && specializations.row.values().all(|v| matches!(v, Row::Var(..)))
-        {
-            return *callee_sym;
-        }
-
-        // Only allocate if filtering is needed
-        let filtered_specs = if needs_ty_filter || needs_row_filter {
-            Specializations {
-                ty: if needs_ty_filter {
-                    specializations
-                        .ty
-                        .iter()
-                        .filter(|(_, v)| !matches!(v, Ty::Var { .. }))
-                        .map(|(k, v)| (*k, v.clone()))
-                        .collect()
-                } else {
-                    specializations.ty.clone()
-                },
-                row: if needs_row_filter {
-                    specializations
-                        .row
-                        .iter()
-                        .filter(|(_, v)| !matches!(v, Row::Var(..)))
-                        .map(|(k, v)| (*k, v.clone()))
-                        .collect()
-                } else {
-                    specializations.row.clone()
-                },
-            }
-        } else {
-            specializations.clone()
+        // Single-pass filter: remove metavars (Ty::Var and Row::Var) from specializations
+        // These represent unresolved types that shouldn't be specialized
+        let filtered_specs = Specializations {
+            ty: specializations
+                .ty
+                .iter()
+                .filter(|(_, v)| !matches!(v, Ty::Var { .. }))
+                .map(|(k, v)| (*k, v.clone()))
+                .collect(),
+            row: specializations
+                .row
+                .iter()
+                .filter(|(_, v)| !matches!(v, Row::Var(..)))
+                .map(|(k, v)| (*k, v.clone()))
+                .collect(),
         };
 
         if filtered_specs.is_empty() {

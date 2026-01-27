@@ -145,80 +145,6 @@ pub struct ResolvedNames {
     pub mutated_symbols: IndexSet<Symbol>,
     /// Tracks which symbols are public (visible outside their file)
     pub public_symbols: FxHashSet<Symbol>,
-
-    /// Maps spans to symbols (sorted by file_id, start for binary search)
-    /// The optional NodeID allows looking up expression-specific types for hover.
-    pub span_to_symbol: Vec<(FileID, u32, u32, Symbol, Option<NodeID>)>,
-
-    /// Reverse lookup: all spans for a given symbol
-    pub symbol_to_spans: FxHashMap<Symbol, Vec<(FileID, u32, u32)>>,
-}
-
-impl ResolvedNames {
-    /// Record a span-to-symbol mapping for later lookup.
-    /// Note: Duplicate detection is handled by the caller (NameResolver::record_span).
-    pub fn record_span(&mut self, span: Span, symbol: Symbol) {
-        if span == Span::SYNTHESIZED {
-            return;
-        }
-        self.span_to_symbol
-            .push((span.file_id, span.start, span.end, symbol, None));
-        self.symbol_to_spans
-            .entry(symbol)
-            .or_default()
-            .push((span.file_id, span.start, span.end));
-    }
-
-    /// Record a span-to-symbol mapping with an expression NodeID.
-    /// The NodeID allows looking up expression-specific types for hover.
-    /// Note: Duplicate detection is handled by the caller.
-    pub fn record_span_with_node(&mut self, span: Span, symbol: Symbol, node_id: NodeID) {
-        if span == Span::SYNTHESIZED {
-            return;
-        }
-        self.span_to_symbol
-            .push((span.file_id, span.start, span.end, symbol, Some(node_id)));
-        self.symbol_to_spans
-            .entry(symbol)
-            .or_default()
-            .push((span.file_id, span.start, span.end));
-    }
-
-    /// Lookup a symbol at the given byte offset using the span index.
-    /// Returns the symbol, span (start, end), and optional NodeID if found.
-    /// Prefers the smallest (most specific) span containing the offset.
-    pub fn symbol_at_offset(
-        &self,
-        file_id: FileID,
-        byte_offset: u32,
-    ) -> Option<(Symbol, u32, u32, Option<NodeID>)> {
-        let spans = &self.span_to_symbol;
-
-        // Find first span in this file
-        let file_start = spans.partition_point(|(f, ..)| *f < file_id);
-
-        // Find first span after offset (spans where start > offset can't contain offset)
-        let search_end =
-            spans.partition_point(|(f, start, ..)| (*f, *start) <= (file_id, byte_offset));
-
-        let mut best: Option<(Symbol, u32, u32, Option<NodeID>, u32)> = None;
-
-        // Check all spans in this file where start <= offset
-        for (f, start, end, symbol, node_id) in &spans[file_start..search_end] {
-            if *f != file_id {
-                continue;
-            }
-            // Span contains offset if start <= offset <= end
-            if *end >= byte_offset {
-                let span_len = end - start;
-                if best.is_none() || span_len < best.as_ref().unwrap_or_else(|| unreachable!()).4 {
-                    best = Some((*symbol, *start, *end, *node_id, span_len));
-                }
-            }
-        }
-
-        best.map(|(sym, start, end, node_id, _)| (sym, start, end, node_id))
-    }
 }
 
 impl ResolvedNames {
@@ -278,8 +204,6 @@ pub struct NameResolver {
     // For figuring out child types
     pub(super) nominal_stack: Vec<(Symbol, NodeID)>,
 
-    // For O(1) duplicate detection in record_span
-    seen_spans: FxHashSet<(FileID, u32, u32, Symbol)>,
 }
 
 #[allow(clippy::expect_used)]
@@ -297,7 +221,6 @@ impl NameResolver {
             current_level: Level::default(),
             nominal_stack: Default::default(),
             modules,
-            seen_spans: Default::default(),
         };
 
         resolver.init_root_scope();
@@ -600,11 +523,6 @@ impl NameResolver {
 
         self.phase.scopes = self.scopes.clone();
 
-        // Sort span_to_symbol for efficient binary search lookups
-        self.phase
-            .span_to_symbol
-            .sort_by_key(|(file, start, ..)| (*file, *start));
-
         (
             asts.into_iter().map(|a| a.into()).collect_vec(),
             self.phase.clone(),
@@ -776,9 +694,7 @@ impl NameResolver {
             self.track_dependency(symbol, node_id);
         }
 
-        if let Some(span) = span {
-            self.record_span(span, symbol);
-        }
+        let _ = span;
 
         Some(Name::Resolved(symbol, name.name_str()))
     }
@@ -914,7 +830,6 @@ impl NameResolver {
                 .and_then(|s| s.types.get(&name_str))
             {
                 if std::mem::discriminant(&existing) == std::mem::discriminant(&kind) {
-                    self.record_span(span, existing);
                     return Name::Resolved(existing, name_str);
                 }
             }
@@ -983,7 +898,7 @@ impl NameResolver {
         self.phase.symbols_to_node.insert(symbol, node_id);
         self.phase.symbol_names.insert(symbol, name_str.clone());
 
-        self.record_span(span, symbol);
+        let _ = span;
 
         tracing::debug!(
             "declare type {name} {} -> {symbol:?} {:?}",
@@ -1003,20 +918,6 @@ impl NameResolver {
     /// Mark a symbol as public (visible outside its file)
     pub(super) fn mark_public(&mut self, symbol: Symbol) {
         self.phase.public_symbols.insert(symbol);
-    }
-
-    /// Record a span-to-symbol mapping for later lookup
-    pub(super) fn record_span(&mut self, span: Span, symbol: Symbol) {
-        if span == Span::SYNTHESIZED {
-            return;
-        }
-        if !self
-            .seen_spans
-            .insert((span.file_id, span.start, span.end, symbol))
-        {
-            return;
-        }
-        self.phase.record_span(span, symbol);
     }
 
     fn nearest_enclosing_binder_from(
@@ -1464,112 +1365,3 @@ impl NameResolver {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::name_resolution::symbol::DeclaredLocalId;
-
-    fn make_symbol(n: u32) -> Symbol {
-        Symbol::DeclaredLocal(DeclaredLocalId(n))
-    }
-
-    #[test]
-    fn symbol_at_offset_empty() {
-        let resolved = ResolvedNames::default();
-        assert!(resolved.symbol_at_offset(FileID(0), 10).is_none());
-    }
-
-    #[test]
-    fn symbol_at_offset_exact_match() {
-        let mut resolved = ResolvedNames::default();
-        let file = FileID(0);
-        let sym = make_symbol(1);
-        resolved.span_to_symbol = vec![(file, 5, 10, sym, None)];
-
-        // At start
-        assert_eq!(resolved.symbol_at_offset(file, 5), Some((sym, 5, 10, None)));
-        // In middle
-        assert_eq!(resolved.symbol_at_offset(file, 7), Some((sym, 5, 10, None)));
-        // At end
-        assert_eq!(
-            resolved.symbol_at_offset(file, 10),
-            Some((sym, 5, 10, None))
-        );
-        // Before
-        assert!(resolved.symbol_at_offset(file, 4).is_none());
-        // After
-        assert!(resolved.symbol_at_offset(file, 11).is_none());
-    }
-
-    #[test]
-    fn symbol_at_offset_prefers_smallest_span() {
-        let mut resolved = ResolvedNames::default();
-        let file = FileID(0);
-        let outer = make_symbol(1);
-        let inner = make_symbol(2);
-        // Outer span [0, 20], inner span [5, 10]
-        resolved.span_to_symbol = vec![(file, 0, 20, outer, None), (file, 5, 10, inner, None)];
-
-        // At offset 7, both spans contain it, but inner is smaller
-        assert_eq!(
-            resolved.symbol_at_offset(file, 7),
-            Some((inner, 5, 10, None))
-        );
-        // At offset 2, only outer contains it
-        assert_eq!(
-            resolved.symbol_at_offset(file, 2),
-            Some((outer, 0, 20, None))
-        );
-        // At offset 15, only outer contains it
-        assert_eq!(
-            resolved.symbol_at_offset(file, 15),
-            Some((outer, 0, 20, None))
-        );
-    }
-
-    #[test]
-    fn symbol_at_offset_different_files() {
-        let mut resolved = ResolvedNames::default();
-        let file0 = FileID(0);
-        let file1 = FileID(1);
-        let sym0 = make_symbol(1);
-        let sym1 = make_symbol(2);
-        resolved.span_to_symbol = vec![(file0, 5, 10, sym0, None), (file1, 5, 10, sym1, None)];
-
-        assert_eq!(
-            resolved.symbol_at_offset(file0, 7),
-            Some((sym0, 5, 10, None))
-        );
-        assert_eq!(
-            resolved.symbol_at_offset(file1, 7),
-            Some((sym1, 5, 10, None))
-        );
-    }
-
-    #[test]
-    fn symbol_at_offset_multiple_non_overlapping() {
-        let mut resolved = ResolvedNames::default();
-        let file = FileID(0);
-        let sym1 = make_symbol(1);
-        let sym2 = make_symbol(2);
-        let sym3 = make_symbol(3);
-        resolved.span_to_symbol = vec![
-            (file, 0, 5, sym1, None),
-            (file, 10, 15, sym2, None),
-            (file, 20, 25, sym3, None),
-        ];
-
-        assert_eq!(resolved.symbol_at_offset(file, 2), Some((sym1, 0, 5, None)));
-        assert_eq!(
-            resolved.symbol_at_offset(file, 12),
-            Some((sym2, 10, 15, None))
-        );
-        assert_eq!(
-            resolved.symbol_at_offset(file, 22),
-            Some((sym3, 20, 25, None))
-        );
-        // In gaps
-        assert!(resolved.symbol_at_offset(file, 7).is_none());
-        assert!(resolved.symbol_at_offset(file, 17).is_none());
-    }
-}

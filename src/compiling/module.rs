@@ -1,8 +1,10 @@
+use std::fmt::Display;
+use std::sync::Arc;
+
 use indexmap::IndexMap;
 use itertools::Itertools;
 use rustc_hash::FxHashMap;
 use sha2::{Digest, Sha256};
-use std::fmt::Display;
 use tracing::instrument;
 
 use crate::{
@@ -78,7 +80,7 @@ impl std::fmt::Debug for ModuleId {
 pub struct ModuleEnvironment {
     modules_by_name: FxHashMap<String, ModuleId>,
     modules_by_local: FxHashMap<ModuleId, StableModuleId>,
-    modules: FxHashMap<StableModuleId, Module>,
+    modules: FxHashMap<StableModuleId, Arc<Module>>,
 }
 
 impl ModuleEnvironment {
@@ -108,7 +110,7 @@ impl ModuleEnvironment {
     /// Get a reference to a module by its local module ID
     pub fn get_module(&self, module_id: ModuleId) -> Option<&Module> {
         let stable_id = self.modules_by_local.get(&module_id)?;
-        self.modules.get(stable_id)
+        self.modules.get(stable_id).map(|arc| arc.as_ref())
     }
 
     pub fn lookup_member(&self, receiver: &Symbol, label: &Label) -> Option<Symbol> {
@@ -297,7 +299,7 @@ impl ModuleEnvironment {
             })
     }
 
-    pub fn import_core(&mut self, module: Module) {
+    pub fn import_core(&mut self, module: Arc<Module>) {
         self.modules_by_local.insert(ModuleId::Core, module.id);
         self.modules_by_name.insert("Core".into(), ModuleId::Core);
         self.modules.insert(module.id, module);
@@ -307,7 +309,7 @@ impl ModuleEnvironment {
         let id = ModuleId::External(self.modules.len() as u16);
         self.modules_by_local.insert(id, module.id);
         self.modules_by_name.insert(module.name.clone(), id);
-        self.modules.insert(module.id, module.import_as(id));
+        self.modules.insert(module.id, Arc::new(module.import_as(id)));
         id
     }
 

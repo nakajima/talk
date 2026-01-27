@@ -109,6 +109,19 @@ impl Row {
         }
     }
 
+    /// Visit all types and rows in this row, returning early if the visitor returns true.
+    pub fn visit_ty(&self, ty_visitor: &mut impl FnMut(&Ty) -> bool, row_visitor: &mut impl FnMut(&Row) -> bool) -> bool {
+        if row_visitor(self) {
+            return true;
+        }
+        match self {
+            Self::Extend { row, ty, .. } => {
+                ty.visit(ty_visitor, row_visitor) || row.visit_ty(ty_visitor, row_visitor)
+            }
+            _ => false,
+        }
+    }
+
     pub fn collect_foralls(&self) -> Vec<ForAll> {
         let mut result = vec![];
         match self {
@@ -213,14 +226,14 @@ pub fn normalize_row(
 ) -> (BTreeMap<Label, Ty>, RowTail) {
     let mut map = BTreeMap::new();
     loop {
-        row = session.apply_row(row, subs);
+        row = session.apply_row(&row, subs);
         match row {
             Row::Extend {
                 row: rest,
                 label,
                 ty,
             } => {
-                map.insert(label, session.apply(ty, subs));
+                map.insert(label, session.apply(&ty, subs));
                 row = *rest;
             }
             Row::Empty => break (map, RowTail::Empty),

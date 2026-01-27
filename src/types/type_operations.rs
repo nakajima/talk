@@ -190,12 +190,12 @@ fn row_occurs(
     subs: &mut UnificationSubstitutions,
     session: &mut TypeSession,
 ) -> bool {
-    match session.apply_row(row.clone(), subs) {
+    match session.apply_row(row, subs) {
         Row::Empty | Row::Param(_) => false,
         Row::Var(id) => id == target,
         Row::Extend { row, ty, .. } => {
             row_occurs(target, &row, subs, session)
-                || matches!(session.apply(ty.clone(), subs), Ty::Record(_, r) if row_occurs(target, &r, subs, session))
+                || matches!(session.apply(&ty, subs), Ty::Record(_, r) if row_occurs(target, &r, subs, session))
         }
     }
 }
@@ -348,8 +348,8 @@ pub(super) fn unify(
 ) -> Result<Vec<Meta>, TypeError> {
     let lhs = context.normalize(lhs.clone(), session);
     let rhs = context.normalize(rhs.clone(), session);
-    let lhs = session.apply(lhs, &mut context.substitutions_mut());
-    let rhs = session.apply(rhs, &mut context.substitutions_mut());
+    let lhs = session.apply(&lhs, &mut context.substitutions_mut());
+    let rhs = session.apply(&rhs, &mut context.substitutions_mut());
 
     if lhs == rhs {
         return Ok(Default::default());
@@ -531,8 +531,8 @@ pub(super) fn unify(
             Err(TypeError::invalid_unification(lhs.clone(), rhs.clone()))
         }
         _ => {
-            let applied_lhs = session.apply(lhs.clone(), &mut context.substitutions_mut());
-            let applied_rhs = session.apply(rhs.clone(), &mut context.substitutions_mut());
+            let applied_lhs = session.apply(&lhs, &mut context.substitutions_mut());
+            let applied_rhs = session.apply(&rhs, &mut context.substitutions_mut());
             tracing::error!(
                 "attempted to unify {:?} <> {:?}",
                 applied_lhs,
@@ -562,16 +562,14 @@ pub fn curry<I: IntoIterator<Item = Ty>>(
 }
 
 pub(super) fn substitute_row(
-    row: Row,
+    row: &Row,
     substitutions: &FxHashMap<Ty, Ty>,
 ) -> Row {
     match row {
-        Row::Empty => row,
-        Row::Var(..) => row,
-        Row::Param(..) => row,
+        Row::Empty | Row::Var(..) | Row::Param(..) => row.clone(),
         Row::Extend { row, label, ty } => Row::Extend {
-            row: Box::new(substitute_row(*row, substitutions)),
-            label,
+            row: Box::new(substitute_row(row, substitutions)),
+            label: label.clone(),
             ty: substitute(ty, substitutions),
         },
     }
@@ -582,12 +580,15 @@ pub(super) fn substitute_mult(
     substitutions: &FxHashMap<Ty, Ty>,
 ) -> Vec<Ty> {
     ty.iter()
-        .map(|t| substitute(t.clone(), substitutions))
+        .map(|t| substitute(t, substitutions))
         .collect()
 }
 
-pub(super) fn substitute(ty: Ty, substitutions: &FxHashMap<Ty, Ty>) -> Ty {
-    ty.mapping(
+pub(super) fn substitute(ty: &Ty, substitutions: &FxHashMap<Ty, Ty>) -> Ty {
+    if let Some(subst) = substitutions.get(ty) {
+        return subst.clone();
+    }
+    ty.clone().mapping(
         &mut |t| substitutions.get(&t).cloned().unwrap_or(t),
         &mut |r| r,
     )

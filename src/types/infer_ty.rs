@@ -10,7 +10,7 @@ use crate::{
     name::Name,
     name_resolution::symbol::{ProtocolId, StructId, Symbol},
     types::{
-        infer_row::{Row, RowMetaId, RowParamId},
+        infer_row::{Row, RowMetaId},
         predicate::Predicate,
         scheme::{ForAll, Scheme},
         term_environment::EnvEntry,
@@ -184,6 +184,30 @@ impl Ty {
             other => ty_map(other),
         }
     }
+
+    /// Visit all types and rows in the tree, returning early if the visitor returns true.
+    /// This does NOT clone the tree and is more efficient for read-only traversal.
+    pub fn visit(&self, ty_visitor: &mut impl FnMut(&Ty) -> bool, row_visitor: &mut impl FnMut(&Row) -> bool) -> bool {
+        if ty_visitor(self) {
+            return true;
+        }
+        match self {
+            Ty::Projection { base, .. } => base.visit(ty_visitor, row_visitor),
+            Ty::Constructor { params, ret, .. } => {
+                params.iter().any(|p| p.visit(ty_visitor, row_visitor))
+                    || ret.visit(ty_visitor, row_visitor)
+            }
+            Ty::Func(param, ret, effects) => {
+                param.visit(ty_visitor, row_visitor)
+                    || ret.visit(ty_visitor, row_visitor)
+                    || effects.visit_ty(ty_visitor, row_visitor)
+            }
+            Ty::Tuple(items) => items.iter().any(|i| i.visit(ty_visitor, row_visitor)),
+            Ty::Record(_, row) => row.visit_ty(ty_visitor, row_visitor),
+            Ty::Nominal { type_args, .. } => type_args.iter().any(|a| a.visit(ty_visitor, row_visitor)),
+            _ => false,
+        }
+    }
 }
 
 #[allow(non_upper_case_globals)]
@@ -213,19 +237,10 @@ impl Ty {
     }
 
     pub fn contains_var(&self) -> bool {
-        let mut ty_contains = false;
-        let mut row_contains = false;
-        _ = self.clone().mapping(
-            &mut |t| {
-                ty_contains |= matches!(t, Ty::Var { .. });
-                t
-            },
-            &mut |r| {
-                row_contains |= r.contains_var();
-                r
-            },
-        );
-        ty_contains || row_contains
+        self.visit(
+            &mut |t| matches!(t, Ty::Var { .. }),
+            &mut |r| matches!(r, Row::Var(..)),
+        )
     }
 
     pub fn import(self, module_id: ModuleId) -> Self {
@@ -482,43 +497,3 @@ impl std::fmt::Debug for Ty {
     }
 }
 
-fn collect_func_params<'a>(ty: &'a Ty, params: &mut Vec<&'a Ty>) -> &'a Ty {
-    match ty {
-        Ty::Func(param, ret, ..) => {
-            if **param != Ty::Void {
-                params.push(param);
-            }
-            collect_func_params(ret, params)
-        }
-        _ => ty,
-    }
-}
-
-fn format_symbol_name(symbol: Symbol) -> String {
-    match symbol {
-        Symbol::Int => "Int".to_string(),
-        Symbol::Float => "Float".to_string(),
-        Symbol::Bool => "Bool".to_string(),
-        Symbol::Void => "Void".to_string(),
-        Symbol::Never => "Never".to_string(),
-        Symbol::RawPtr => "RawPtr".to_string(),
-        Symbol::Byte => "Byte".to_string(),
-        Symbol::String => "String".to_string(),
-        Symbol::Array => "Array".to_string(),
-        _ => symbol.to_string(),
-    }
-}
-
-enum RowTailDisplay {
-    Param(RowParamId),
-    Var(RowMetaId),
-}
-
-impl std::fmt::Display for RowTailDisplay {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            RowTailDisplay::Param(id) => write!(f, "..R{}", id.0),
-            RowTailDisplay::Var(id) => write!(f, ".._R{}", id.0),
-        }
-    }
-}

@@ -1,6 +1,6 @@
 use async_lsp::lsp_types::{Location, Position, Range, Url};
 
-use crate::analysis::span_contains;
+use crate::analysis::{node_ids_at_offset, resolve_member_symbol, span_contains};
 use crate::analysis::workspace::Workspace as AnalysisWorkspace;
 use crate::compiling::module::ModuleId;
 use crate::name_resolution::symbol::Symbol;
@@ -15,24 +15,94 @@ pub fn goto_definition(
 ) -> Option<Location> {
     let document_id = document_id_for_uri(uri);
     let file_id = *module.document_to_file_id.get(&document_id)?;
+    let ast = module
+        .asts
+        .get(file_id.0 as usize)
+        .and_then(|a| a.as_ref())?;
 
     // Handle imports specially (need AST to get import path for file navigation)
-    if let Some(ast) = module.asts.get(file_id.0 as usize).and_then(|a| a.as_ref()) {
-        // Find the node at this offset to check for import declarations
-        for (node_id, meta) in ast.meta.iter() {
-            if meta.start.start <= byte_offset && byte_offset <= meta.end.end {
-                if let Some(crate::node::Node::Decl(ref decl)) = ast.find(*node_id) {
-                    if let Some(location) = goto_definition_from_import(module, uri, decl, byte_offset) {
-                        return Some(location);
-                    }
+    for (node_id, meta) in ast.meta.iter() {
+        if meta.start.start <= byte_offset && byte_offset <= meta.end.end {
+            if let Some(crate::node::Node::Decl(ref decl)) = ast.find(*node_id) {
+                if let Some(location) = goto_definition_from_import(module, uri, decl, byte_offset) {
+                    return Some(location);
                 }
             }
         }
     }
 
-    // Use symbol index for everything else
-    let (symbol, ..) = module.resolved_names.symbol_at_offset(file_id, byte_offset)?;
-    definition_location_for_symbol(module, core, symbol)
+    // Use AST-based lookup
+    let candidate_ids = node_ids_at_offset(ast, byte_offset);
+
+    for node_id in candidate_ids {
+        let Some(node) = ast.find(node_id) else {
+            continue;
+        };
+
+        let symbol = match node {
+            crate::node::Node::Expr(expr) => {
+                goto_definition_symbol_from_expr(module.types.as_ref(), &expr, byte_offset)
+            }
+            crate::node::Node::Stmt(stmt) => {
+                goto_definition_symbol_from_stmt(module.types.as_ref(), &stmt, byte_offset)
+            }
+            crate::node::Node::TypeAnnotation(ty) => {
+                goto_definition_symbol_from_type_annotation(&ty, byte_offset)
+            }
+            crate::node::Node::Decl(decl) => goto_definition_symbol_from_decl(&decl, byte_offset),
+            crate::node::Node::Parameter(param) => {
+                if span_contains(param.name_span, byte_offset) {
+                    param.name.symbol().ok()
+                } else {
+                    None
+                }
+            }
+            crate::node::Node::Func(func) => {
+                if span_contains(func.name_span, byte_offset) {
+                    func.name.symbol().ok()
+                } else {
+                    None
+                }
+            }
+            crate::node::Node::FuncSignature(sig) => {
+                let meta = ast.meta.get(&sig.id)?;
+                let (start, end) = meta.identifiers.first().map(|t| (t.start, t.end))?;
+                if start <= byte_offset && byte_offset <= end {
+                    sig.name.symbol().ok()
+                } else {
+                    None
+                }
+            }
+            crate::node::Node::GenericDecl(generic) => {
+                if span_contains(generic.name_span, byte_offset) {
+                    generic.name.symbol().ok()
+                } else {
+                    None
+                }
+            }
+            crate::node::Node::Pattern(pattern) => match &pattern.kind {
+                crate::node_kinds::pattern::PatternKind::Bind(name) => {
+                    let meta = ast.meta.get(&pattern.id)?;
+                    let (start, end) = identifier_span_at_offset(meta, byte_offset)?;
+                    if start <= byte_offset && byte_offset <= end {
+                        name.symbol().ok()
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            },
+            _ => None,
+        };
+
+        if let Some(symbol) = symbol
+            && let Some(target) = definition_location_for_symbol(module, core, symbol)
+        {
+            return Some(target);
+        }
+    }
+
+    None
 }
 
 /// Handle go-to-definition for import declarations.
@@ -111,6 +181,120 @@ fn resolve_import_path(uri: &Url, import_path: &crate::node_kinds::decl::ImportP
             None
         }
     }
+}
+
+fn goto_definition_symbol_from_expr(
+    types: Option<&crate::types::types::Types>,
+    expr: &crate::node_kinds::expr::Expr,
+    byte_offset: u32,
+) -> Option<Symbol> {
+    use crate::node_kinds::expr::ExprKind;
+
+    match &expr.kind {
+        ExprKind::Variable(name) | ExprKind::Constructor(name) => name.symbol().ok(),
+        ExprKind::Member(receiver, label, name_span) => {
+            if !span_contains(*name_span, byte_offset) {
+                return None;
+            }
+
+            let receiver = receiver.as_ref()?;
+
+            resolve_member_symbol(types, receiver, label)
+        }
+        _ => None,
+    }
+}
+
+fn goto_definition_symbol_from_stmt(
+    types: Option<&crate::types::types::Types>,
+    stmt: &crate::node_kinds::stmt::Stmt,
+    byte_offset: u32,
+) -> Option<Symbol> {
+    use crate::node_kinds::stmt::StmtKind;
+
+    match &stmt.kind {
+        StmtKind::Expr(expr) => goto_definition_symbol_from_expr(types, expr, byte_offset),
+        StmtKind::Return(Some(expr)) => goto_definition_symbol_from_expr(types, expr, byte_offset),
+        StmtKind::If(cond, ..) => goto_definition_symbol_from_expr(types, cond, byte_offset),
+        StmtKind::Loop(Some(cond), ..) => {
+            goto_definition_symbol_from_expr(types, cond, byte_offset)
+        }
+        StmtKind::Assignment(lhs, rhs) => goto_definition_symbol_from_expr(types, lhs, byte_offset)
+            .or_else(|| goto_definition_symbol_from_expr(types, rhs, byte_offset)),
+        _ => None,
+    }
+}
+
+fn goto_definition_symbol_from_type_annotation(
+    ty: &crate::node_kinds::type_annotation::TypeAnnotation,
+    byte_offset: u32,
+) -> Option<Symbol> {
+    use crate::node_kinds::type_annotation::TypeAnnotationKind;
+
+    match &ty.kind {
+        TypeAnnotationKind::Nominal {
+            name, name_span, ..
+        } => {
+            if !span_contains(*name_span, byte_offset) {
+                return None;
+            }
+            name.symbol().ok()
+        }
+        _ => None,
+    }
+}
+
+fn goto_definition_symbol_from_decl(
+    decl: &crate::node_kinds::decl::Decl,
+    byte_offset: u32,
+) -> Option<Symbol> {
+    use crate::node_kinds::decl::DeclKind;
+
+    match &decl.kind {
+        DeclKind::Struct {
+            name, name_span, ..
+        }
+        | DeclKind::Protocol {
+            name, name_span, ..
+        }
+        | DeclKind::Extend {
+            name, name_span, ..
+        }
+        | DeclKind::Enum {
+            name, name_span, ..
+        }
+        | DeclKind::Property {
+            name, name_span, ..
+        } => {
+            if !span_contains(*name_span, byte_offset) {
+                return None;
+            }
+            name.symbol().ok()
+        }
+        DeclKind::TypeAlias(name, name_span, ..) => {
+            if !span_contains(*name_span, byte_offset) {
+                return None;
+            }
+            name.symbol().ok()
+        }
+        DeclKind::EnumVariant(name, name_span, ..) => {
+            if !span_contains(*name_span, byte_offset) {
+                return None;
+            }
+            name.symbol().ok()
+        }
+        _ => None,
+    }
+}
+
+fn identifier_span_at_offset(
+    meta: &crate::node_meta::NodeMeta,
+    byte_offset: u32,
+) -> Option<(u32, u32)> {
+    meta.identifiers
+        .iter()
+        .find(|tok| tok.start <= byte_offset && byte_offset <= tok.end)
+        .map(|tok| (tok.start, tok.end))
 }
 
 pub(crate) fn definition_location_for_symbol(

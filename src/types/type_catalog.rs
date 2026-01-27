@@ -101,7 +101,7 @@ impl TrackedInstantiations {
                     .ty
                     .entry(id)
                     .or_default()
-                    .insert(param, session.apply(ty, substitutions));
+                    .insert(param, session.apply(&ty, substitutions));
             }
         }
         for (id, entries) in row {
@@ -110,7 +110,7 @@ impl TrackedInstantiations {
                     .row
                     .entry(id)
                     .or_default()
-                    .insert(param, session.apply_row(row, substitutions));
+                    .insert(param, session.apply_row(&row, substitutions));
             }
         }
 

@@ -118,53 +118,52 @@ impl Constraint {
             Constraint::Call(call) => {
                 call.receiver = call
                     .receiver
-                    .clone()
+                    .as_ref()
                     .map(|r| session.apply(r, substitutions));
-                call.callee = session.apply(call.callee.clone(), substitutions);
+                call.callee = session.apply(&call.callee, substitutions);
                 call.args = call
                     .args
                     .iter()
-                    .map(|f| session.apply(f.clone(), substitutions))
+                    .map(|f| session.apply(f, substitutions))
                     .collect();
-                call.returns = session.apply(call.returns.clone(), substitutions);
+                call.returns = session.apply(&call.returns, substitutions);
             }
             Constraint::Projection(c) => {
-                c.base = session.apply(c.base.clone(), substitutions);
-                c.result = session.apply(c.result.clone(), substitutions);
+                c.base = session.apply(&c.base, substitutions);
+                c.result = session.apply(&c.result, substitutions);
             }
             Constraint::Conforms(c) => {
-                c.ty = session.apply(c.ty.clone(), substitutions);
+                c.ty = session.apply(&c.ty, substitutions);
             }
             Constraint::Equals(e) => {
-                e.lhs = session.apply(e.lhs.clone(), substitutions);
-                e.rhs = session.apply(e.rhs.clone(), substitutions);
+                e.lhs = session.apply(&e.lhs, substitutions);
+                e.rhs = session.apply(&e.rhs, substitutions);
             }
             Constraint::DefaultTy(e) => {
-                e.var = session.apply(e.var.clone(), substitutions);
-                e.ty = session.apply(e.ty.clone(), substitutions);
+                e.var = session.apply(&e.var, substitutions);
+                e.ty = session.apply(&e.ty, substitutions);
                 e.allowed = e
                     .allowed
                     .iter()
-                    .cloned()
                     .map(|ty| session.apply(ty, substitutions))
                     .collect();
             }
             Constraint::HasField(h) => {
-                h.row = session.apply_row(h.row.clone(), substitutions);
-                h.ty = session.apply(h.ty.clone(), substitutions);
+                h.row = session.apply_row(&h.row, substitutions);
+                h.ty = session.apply(&h.ty, substitutions);
             }
             Constraint::Member(member) => {
-                member.ty = session.apply(member.ty.clone(), substitutions);
-                member.receiver = session.apply(member.receiver.clone(), substitutions)
+                member.ty = session.apply(&member.ty, substitutions);
+                member.receiver = session.apply(&member.receiver, substitutions)
             }
             Constraint::TypeMember(c) => {
-                c.base = session.apply(c.base.clone(), substitutions);
-                c.result = session.apply(c.result.clone(), substitutions);
-                c.generics = session.apply_mult(c.generics.clone(), substitutions);
+                c.base = session.apply(&c.base, substitutions);
+                c.result = session.apply(&c.result, substitutions);
+                c.generics = session.apply_mult(&c.generics, substitutions);
             }
             Constraint::RowSubset(c) => {
-                c.left = session.apply_row(c.left.clone(), substitutions);
-                c.right = session.apply_row(c.right.clone(), substitutions);
+                c.left = session.apply_row(&c.left, substitutions);
+                c.right = session.apply_row(&c.right, substitutions);
             }
         }
         self
@@ -175,50 +174,49 @@ impl Constraint {
 
         match &mut copy {
             Constraint::Call(call) => {
-                call.receiver = call.receiver.clone().map(|r| substitute(r, substitutions));
-                call.callee = substitute(call.callee.clone(), substitutions);
+                call.receiver = call.receiver.as_ref().map(|r| substitute(r, substitutions));
+                call.callee = substitute(&call.callee, substitutions);
                 call.args = call
                     .args
                     .iter()
-                    .map(|f| substitute(f.clone(), substitutions))
+                    .map(|f| substitute(f, substitutions))
                     .collect();
-                call.returns = substitute(call.returns.clone(), substitutions);
+                call.returns = substitute(&call.returns, substitutions);
             }
             Constraint::Projection(c) => {
-                c.base = substitute(c.base.clone(), substitutions);
-                c.result = substitute(c.result.clone(), substitutions);
+                c.base = substitute(&c.base, substitutions);
+                c.result = substitute(&c.result, substitutions);
             }
             Constraint::DefaultTy(c) => {
-                c.var = substitute(c.var.clone(), substitutions);
-                c.ty = substitute(c.ty.clone(), substitutions);
+                c.var = substitute(&c.var, substitutions);
+                c.ty = substitute(&c.ty, substitutions);
                 c.allowed = c
                     .allowed
                     .iter()
-                    .cloned()
                     .map(|ty| substitute(ty, substitutions))
                     .collect();
             }
             Constraint::Conforms(..) => (),
             Constraint::Equals(e) => {
-                e.lhs = substitute(e.lhs.clone(), substitutions);
-                e.rhs = substitute(e.rhs.clone(), substitutions);
+                e.lhs = substitute(&e.lhs, substitutions);
+                e.rhs = substitute(&e.rhs, substitutions);
             }
             Constraint::HasField(h) => {
-                h.row = substitute_row(h.row.clone(), substitutions);
-                h.ty = substitute(h.ty.clone(), substitutions);
+                h.row = substitute_row(&h.row, substitutions);
+                h.ty = substitute(&h.ty, substitutions);
             }
             Constraint::Member(member) => {
-                member.ty = substitute(member.ty.clone(), substitutions);
-                member.receiver = substitute(member.receiver.clone(), substitutions)
+                member.ty = substitute(&member.ty, substitutions);
+                member.receiver = substitute(&member.receiver, substitutions)
             }
             Constraint::TypeMember(c) => {
-                c.base = substitute(c.base.clone(), substitutions);
-                c.result = substitute(c.result.clone(), substitutions);
+                c.base = substitute(&c.base, substitutions);
+                c.result = substitute(&c.result, substitutions);
                 c.generics = substitute_mult(&c.generics, substitutions);
             }
             Constraint::RowSubset(c) => {
-                c.left = substitute_row(c.left.clone(), substitutions);
-                c.right = substitute_row(c.right.clone(), substitutions);
+                c.left = substitute_row(&c.left, substitutions);
+                c.right = substitute_row(&c.right, substitutions);
             }
         }
 
@@ -235,44 +233,44 @@ impl Constraint {
             #[allow(clippy::panic)]
             Self::HasField(has_field) => {
                 let Row::Param(row_param) =
-                    session.apply_row(has_field.row.clone(), substitutions)
+                    session.apply_row(&has_field.row, substitutions)
                 else {
                     panic!(
                         "HasField predicate must be for row, got: {:?}",
-                        session.apply_row(has_field.row.clone(), substitutions)
+                        session.apply_row(&has_field.row, substitutions)
                     )
                 };
                 Predicate::HasField {
                     row: row_param,
                     label: has_field.label.clone(),
-                    ty: session.apply(has_field.ty.clone(), substitutions),
+                    ty: session.apply(&has_field.ty, substitutions),
                 }
             }
             Self::Member(member) => Predicate::Member {
-                receiver: session.apply(member.receiver.clone(), substitutions),
+                receiver: session.apply(&member.receiver, substitutions),
                 label: member.label.clone(),
-                ty: session.apply(member.ty.clone(), substitutions),
+                ty: session.apply(&member.ty, substitutions),
                 node_id: member.node_id,
             },
             Self::Call(call) => Predicate::Call {
-                callee: session.apply(call.callee.clone(), substitutions),
+                callee: session.apply(&call.callee, substitutions),
                 args: call
                     .args
                     .iter()
-                    .map(|f| session.apply(f.clone(), substitutions))
+                    .map(|f| session.apply(f, substitutions))
                     .collect(),
-                returns: session.apply(call.returns.clone(), substitutions),
+                returns: session.apply(&call.returns, substitutions),
                 receiver: call
                     .receiver
                     .as_ref()
-                    .map(|r| session.apply(r.clone(), substitutions)),
+                    .map(|r| session.apply(r, substitutions)),
             },
             Self::Equals(equals) => Predicate::Equals {
-                lhs: session.apply(equals.lhs.clone(), substitutions),
-                rhs: session.apply(equals.rhs.clone(), substitutions),
+                lhs: session.apply(&equals.lhs, substitutions),
+                rhs: session.apply(&equals.rhs, substitutions),
             },
             Self::Conforms(conforms) => {
-                let Ty::Param(param, _) = session.apply(conforms.ty.clone(), substitutions)
+                let Ty::Param(param, _) = session.apply(&conforms.ty, substitutions)
                 else {
                     // If the type resolved to a concrete type (not a type parameter),
                     // we can't generalize this constraint - it should have already been
@@ -287,9 +285,9 @@ impl Constraint {
             }
             Self::Projection(projection) => Predicate::Projection {
                 protocol_id: projection.protocol_id,
-                base: session.apply(projection.base.clone(), substitutions),
+                base: session.apply(&projection.base, substitutions),
                 label: projection.label.clone(),
-                returns: session.apply(projection.result.clone(), substitutions),
+                returns: session.apply(&projection.result, substitutions),
             },
             _ => return None,
         };

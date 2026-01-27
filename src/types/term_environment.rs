@@ -69,7 +69,7 @@ impl EnvEntry {
     pub fn substitute(self, substitutions: &FxHashMap<Ty, Ty>) -> EnvEntry {
         match self {
             EnvEntry::Mono(ty) => {
-                let ty = substitute(ty, substitutions);
+                let ty = substitute(&ty, substitutions);
                 let foralls = ty.collect_foralls();
                 if foralls.is_empty() {
                     EnvEntry::Mono(ty)
@@ -82,14 +82,14 @@ impl EnvEntry {
                 }
             }
             EnvEntry::Scheme(scheme) => {
-                let ty = substitute(scheme.ty, substitutions);
+                let ty = substitute(&scheme.ty, substitutions);
                 let foralls: IndexSet<ForAll> = ty.collect_foralls();
                 let predicates: Vec<Predicate> = scheme
                     .predicates
                     .into_iter()
                     .map(|p| {
-                        p.mapping(&mut |t| substitute(t, substitutions), &mut |r| {
-                            substitute_row(r, substitutions)
+                        p.mapping(&mut |t| substitute(&t, substitutions), &mut |r| {
+                            substitute_row(&r, substitutions)
                         })
                     })
                     .collect();
@@ -111,7 +111,7 @@ impl EnvEntry {
         substitutions: &mut UnificationSubstitutions,
         session: &mut TypeSession,
     ) -> Self {
-        match self.clone() {
+        match self {
             EnvEntry::Mono(ty) => {
                 let ty = session.apply(ty, substitutions);
                 let foralls = ty.collect_foralls();
@@ -126,13 +126,13 @@ impl EnvEntry {
                 }
             }
             EnvEntry::Scheme(scheme) => EnvEntry::Scheme(Scheme {
-                foralls: scheme.foralls,
+                foralls: scheme.foralls.clone(),
                 predicates: scheme
                     .predicates
-                    .into_iter()
+                    .iter()
                     .map(|p| p.apply(substitutions, session))
                     .collect(),
-                ty: session.apply(scheme.ty, substitutions),
+                ty: session.apply(&scheme.ty, substitutions),
             }),
         }
     }

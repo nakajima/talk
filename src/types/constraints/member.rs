@@ -448,7 +448,7 @@ impl Member {
                     };
 
                     let method = entry.instantiate(self.node_id, constraints, context, session);
-                    let method = session.apply(method, &mut context.substitutions_mut());
+                    let method = session.apply(&method, &mut context.substitutions_mut());
                     let (method_receiver, method_fn) = consume_self(&method);
 
                     match unify(&method_receiver, &self.receiver, context, session)

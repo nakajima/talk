@@ -29,7 +29,7 @@ use crate::{
         type_error::TypeError,
         type_operations::{UnificationSubstitutions, substitute},
         types::{TypeEntry, Types},
-        variational::{ChoiceStore, ErrorConstraintStore, resolve_overloads},
+        variational::{ChoiceStore, ErrorConstraintStore},
         vars::Vars,
     },
 };
@@ -235,25 +235,9 @@ impl TypeSession {
             .collect();
 
         let catalog = std::mem::take(&mut self.type_catalog);
-
-        // Resolve overloads using the variational type checking results
         let choices = std::mem::take(&mut self.choices);
         let error_constraints = std::mem::take(&mut self.error_constraints);
-        let resolution = resolve_overloads(&choices, &error_constraints).unwrap_or_else(|errors| {
-            // Log resolution errors - these indicate no valid overload was found
-            for error in &errors {
-                tracing::warn!("Resolution error: {:?}", error);
-            }
-            // Return empty resolution on error - SpecializationPass will use fallback logic
-            Default::default()
-        });
-
         let call_tree = std::mem::take(&mut self.call_tree);
-
-        // Sort span_to_symbol for efficient binary search lookups
-        self.resolved_names
-            .span_to_symbol
-            .sort_by_key(|(file, start, ..)| (*file, *start));
 
         let types = Types {
             catalog,
@@ -261,7 +245,7 @@ impl TypeSession {
             types_by_symbol,
             match_plans: Default::default(),
             choices,
-            resolution,
+            error_constraints,
             call_tree,
         };
 
@@ -301,7 +285,7 @@ impl TypeSession {
 
     pub fn shallow_generalize(&mut self, ty: Ty) -> Ty {
         match ty {
-            Ty::Var { id: meta, level } => {
+            Ty::Var { id: meta, .. } => {
                 // Check if this var exists in our unification table
                 if self.try_canon_meta(meta).is_none() {
                     // This var is from an imported module - leave it as-is
@@ -355,7 +339,7 @@ impl TypeSession {
     }
 
     pub(super) fn finalize_infer_ty(&mut self, ty: Ty) -> Ty {
-        let ty = substitute(ty.clone(), &self.skolem_map);
+        let ty = substitute(&ty, &self.skolem_map);
         self.shallow_generalize(ty)
     }
 
@@ -381,59 +365,35 @@ impl TypeSession {
         }
     }
 
-    pub(super) fn finalize_row(&mut self, row: Row) -> Row {
-        let row = self.shallow_generalize_row(row);
-
-        match row {
-            Row::Empty => row,
-            Row::Param(..) => row,
-            Row::Var(var) => Row::Param(
-                *self
-                    .reverse_instantiations
-                    .row
-                    .get(&var)
-                    .expect("did not get reverse instantiation"),
-            ),
-            Row::Extend { box row, label, ty } => Row::Extend {
-                row: self.finalize_row(row).into(),
-                label,
-                ty: match self.finalize_ty(ty) {
-                    TypeEntry::Mono(ty) => ty.clone(),
-                    TypeEntry::Poly(scheme) => scheme.ty,
-                },
-            },
-        }
-    }
-
     pub(super) fn apply_row(
         &mut self,
-        row: Row,
+        row: &Row,
         substitutions: &mut UnificationSubstitutions,
     ) -> Row {
         match row {
             Row::Empty => Row::Empty,
             Row::Var(id) => {
                 // First check if we have a direct substitution for this id
-                if let Some(bound) = substitutions.row.get(&id).cloned() {
-                    return self.apply_row(bound, substitutions);
+                if let Some(bound) = substitutions.row.get(id).cloned() {
+                    return self.apply_row(&bound, substitutions);
                 }
 
                 // Try to canonicalize the id - if it doesn't exist in our table,
                 // this Var is from an imported module and we should leave it as-is
-                let Some(rep) = self.try_canon_row(id) else {
-                    return row;
+                let Some(rep) = self.try_canon_row(*id) else {
+                    return row.clone();
                 };
 
                 if let Some(bound) = substitutions.row.get(&rep).cloned() {
-                    self.apply_row(bound, substitutions)
+                    self.apply_row(&bound, substitutions)
                 } else {
                     Row::Var(rep)
                 }
             }
-            Row::Param(_) => row,
-            Row::Extend { row, label, ty } => Row::Extend {
-                row: Box::new(self.apply_row(*row, substitutions)),
-                label,
+            Row::Param(_) => row.clone(),
+            Row::Extend { row: inner, label, ty } => Row::Extend {
+                row: Box::new(self.apply_row(inner, substitutions)),
+                label: label.clone(),
                 ty: self.apply(ty, substitutions),
             },
         }
@@ -441,42 +401,42 @@ impl TypeSession {
 
     pub(super) fn apply(
         &mut self,
-        ty: Ty,
+        ty: &Ty,
         substitutions: &mut UnificationSubstitutions,
     ) -> Ty {
         match ty {
-            Ty::Error(..) => ty,
-            Ty::Param(..) => ty,
-            Ty::Rigid(..) => ty,
+            Ty::Error(..) => ty.clone(),
+            Ty::Param(..) => ty.clone(),
+            Ty::Rigid(..) => ty.clone(),
             Ty::Projection {
-                box base,
+                base,
                 associated,
                 protocol_id,
             } => Ty::Projection {
                 base: self.apply(base, substitutions).into(),
-                associated,
-                protocol_id,
+                associated: associated.clone(),
+                protocol_id: *protocol_id,
             },
             Ty::Var { id, level } => {
                 // First check if we have a direct substitution for this id
-                if let Some(bound) = substitutions.ty.get(&id).cloned()
-                    && !matches!(bound, Ty::Var { id: bound_id, .. } if bound_id == id)
+                if let Some(bound) = substitutions.ty.get(id).cloned()
+                    && !matches!(bound, Ty::Var { id: bound_id, .. } if bound_id == *id)
                 {
-                    return self.apply(bound, substitutions); // keep collapsing
+                    return self.apply(&bound, substitutions); // keep collapsing
                 }
 
                 // Try to canonicalize the id - if it doesn't exist in our table,
                 // this Var is from an imported module and we should leave it as-is
-                let Some(rep) = self.try_canon_meta(id) else {
+                let Some(rep) = self.try_canon_meta(*id) else {
                     // This Var was created by a different TypeSession (imported from a module)
                     // Return it unchanged
-                    return ty;
+                    return ty.clone();
                 };
 
                 if let Some(bound) = substitutions.ty.get(&rep).cloned()
                     && !matches!(bound, Ty::Var { id, .. } if rep == id)
                 {
-                    self.apply(bound, substitutions) // keep collapsing
+                    self.apply(&bound, substitutions) // keep collapsing
                 } else {
                     Ty::Var {
                         id: rep,
@@ -485,38 +445,38 @@ impl TypeSession {
                             .borrow()
                             .get(&Meta::Ty(rep))
                             .copied()
-                            .unwrap_or(level),
+                            .unwrap_or(*level),
                     }
                 }
             }
             Ty::Constructor { name, params, ret } => Ty::Constructor {
-                name,
-                params: self.apply_mult(params, substitutions),
-                ret: Box::new(self.apply(*ret, substitutions)),
+                name: name.clone(),
+                params: self.apply_mult(params.as_slice(), substitutions),
+                ret: Box::new(self.apply(ret.as_ref(), substitutions)),
             },
-            Ty::Primitive(..) => ty,
+            Ty::Primitive(..) => ty.clone(),
             Ty::Func(params, ret, effects) => Ty::Func(
-                Box::new(self.apply(*params, substitutions)),
-                Box::new(self.apply(*ret, substitutions)),
-                Box::new(self.apply_row(*effects, substitutions)),
+                Box::new(self.apply(params.as_ref(), substitutions)),
+                Box::new(self.apply(ret.as_ref(), substitutions)),
+                Box::new(self.apply_row(effects.as_ref(), substitutions)),
             ),
-            Ty::Tuple(items) => Ty::Tuple(self.apply_mult(items, substitutions)),
+            Ty::Tuple(items) => Ty::Tuple(self.apply_mult(items.as_slice(), substitutions)),
             Ty::Record(sym, row) => {
-                Ty::Record(sym, Box::new(self.apply_row(*row, substitutions)))
+                Ty::Record(*sym, Box::new(self.apply_row(row.as_ref(), substitutions)))
             }
             Ty::Nominal { symbol, type_args } => Ty::Nominal {
-                symbol,
-                type_args: self.apply_mult(type_args, substitutions),
+                symbol: *symbol,
+                type_args: self.apply_mult(type_args.as_slice(), substitutions),
             },
         }
     }
 
     pub fn apply_mult(
         &mut self,
-        tys: Vec<Ty>,
+        tys: &[Ty],
         substitutions: &mut UnificationSubstitutions,
     ) -> Vec<Ty> {
-        tys.into_iter()
+        tys.iter()
             .map(|ty| self.apply(ty, substitutions))
             .collect()
     }
@@ -528,7 +488,7 @@ impl TypeSession {
                 .types_by_node
                 .remove(&key)
                 .unwrap_or_else(|| unreachable!());
-            let ty = self.apply(ty.clone(), substitutions);
+            let ty = self.apply(&ty, substitutions);
             self.types_by_node.insert(key, ty);
         }
 
@@ -548,7 +508,7 @@ impl TypeSession {
         let mut conformances = std::mem::take(&mut self.type_catalog.conformances);
         for conformance in conformances.values_mut() {
             for ty in conformance.witnesses.associated_types.values_mut() {
-                *ty = self.apply(ty.clone(), substitutions);
+                *ty = self.apply(ty, substitutions);
             }
         }
         _ = std::mem::replace(&mut self.type_catalog.conformances, conformances);
@@ -569,7 +529,7 @@ impl TypeSession {
             skolems.insert(Ty::Param(id, vec![]), new_id);
         }
 
-        substitute(entry._as_ty().clone(), &skolems)
+        substitute(&entry._as_ty(), &skolems)
     }
 
     pub fn canon_row(&mut self, id: RowMetaId) -> RowMetaId {
@@ -683,7 +643,7 @@ impl TypeSession {
         constraints: &mut ConstraintStore,
     ) -> EnvEntry {
         // Make sure we're up to date
-        let ty = self.apply(ty, &mut context.substitutions_mut());
+        let ty = self.apply(&ty, &mut context.substitutions_mut());
 
         // collect metas in ty
         let mut metas = FxHashSet::default();
@@ -785,7 +745,7 @@ impl TypeSession {
         for c in unsolved {
             if let Constraint::HasField(h) = c {
                 tracing::info!("got unsolved hasfield: {c:?}");
-                let r = self.apply_row(h.row.clone(), &mut substitutions);
+                let r = self.apply_row(&h.row, &mut substitutions);
                 if let Row::Var(row_meta) = r {
                     // quantify if its level is above the binder's level
                     let levels = self.meta_levels.borrow();
@@ -802,8 +762,8 @@ impl TypeSession {
         }
 
         // De-skolemize
-        let ty = substitute(ty, &self.skolem_map);
-        let ty = self.apply(ty, &mut substitutions);
+        let ty = substitute(&ty, &self.skolem_map);
+        let ty = self.apply(&ty, &mut substitutions);
 
         predicates.extend(unsolved.iter().filter_map(|c| {
             let metas = c.collect_metas();

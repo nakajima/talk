@@ -44,7 +44,7 @@ impl TypedAST {
         // on types will handle any nested rows.
         self.mapping(
             &mut |ty| {
-                let applied = session.apply(ty, substitutions);
+                let applied = session.apply(&ty, substitutions);
                 session.shallow_generalize(applied)
             },
             &mut |row| row,

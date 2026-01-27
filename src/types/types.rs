@@ -13,7 +13,7 @@ use crate::{
         scheme::Scheme,
         term_environment::EnvEntry,
         type_catalog::TypeCatalog,
-        variational::{ChoiceStore, Resolution},
+        variational::{ChoiceStore, ErrorConstraintStore},
     },
 };
 
@@ -86,9 +86,8 @@ pub struct Types {
     /// Variational choices for protocol method resolution.
     /// Maps call sites to alternatives with witness symbols.
     pub choices: ChoiceStore,
-    /// Resolved overloads after variational type checking.
-    /// Maps dimensions (call sites) to their resolved alternative index.
-    pub resolution: Resolution,
+    /// Error constraints from type checking - used to resolve overloads.
+    pub error_constraints: ErrorConstraintStore,
     /// Call tree mapping each function to the callees in its body.
     pub call_tree: CallTree,
 }
@@ -121,7 +120,7 @@ impl Types {
             catalog: self.catalog.import_as(module_id),
             match_plans: self.match_plans,
             choices: self.choices,
-            resolution: self.resolution,
+            error_constraints: self.error_constraints,
             // Import call tree so specialization can propagate to callees in imported modules
             call_tree: self
                 .call_tree

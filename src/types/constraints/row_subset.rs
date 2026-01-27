@@ -29,8 +29,8 @@ impl RowSubset {
         context: &mut SolveContext,
         session: &mut TypeSession,
     ) -> SolveResult {
-        let left = session.apply_row(self.left.clone(), &mut context.substitutions_mut());
-        let right = session.apply_row(self.right.clone(), &mut context.substitutions_mut());
+        let left = session.apply_row(&self.left, &mut context.substitutions_mut());
+        let right = session.apply_row(&self.right, &mut context.substitutions_mut());
 
         let (left_fields, left_tail) =
             normalize_row(left.clone(), &mut context.substitutions_mut(), session);

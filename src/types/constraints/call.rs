@@ -41,8 +41,8 @@ impl Call {
         session: &mut TypeSession,
     ) -> SolveResult {
         let cause = ConstraintCause::Call(self.call_node_id);
-        let callee = session.apply(self.callee.clone(), &mut context.substitutions_mut());
-        let returns = session.apply(self.returns.clone(), &mut context.substitutions_mut());
+        let callee = session.apply(&self.callee, &mut context.substitutions_mut());
+        let returns = session.apply(&self.returns, &mut context.substitutions_mut());
 
         if let Ty::Var { id, .. } = &callee {
             tracing::trace!(
@@ -55,7 +55,7 @@ impl Call {
             // of a variant constructor is the same type as its return value.
             if let Some(receiver_ty) = &self.receiver {
                 let applied_receiver =
-                    session.apply(receiver_ty.clone(), &mut context.substitutions_mut());
+                    session.apply(receiver_ty, &mut context.substitutions_mut());
                 if let Ty::Var { .. } = applied_receiver
                     && let Ty::Nominal { .. } = &returns
                     && let Ok(metas) = unify(receiver_ty, &returns, context, session)

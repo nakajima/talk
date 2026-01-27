@@ -136,7 +136,7 @@ impl SolveContext {
     ) -> Ty {
         let ty = {
             let mut shared = self.shared.borrow_mut();
-            session.apply(ty, &mut shared.substitutions)
+            session.apply(&ty, &mut shared.substitutions)
         };
         match &ty {
             Ty::Projection {

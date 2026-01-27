@@ -135,7 +135,7 @@ impl Predicate {
         session: &mut TypeSession,
     ) -> Self {
         self.clone().mapping(
-            &mut |t| session.apply(t.clone(), substitutions),
+            &mut |t| session.apply(&t, substitutions),
             &mut |r| r, /* session.apply already handles rows */
         )
     }

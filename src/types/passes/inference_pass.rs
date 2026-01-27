@@ -1098,7 +1098,7 @@ impl<'a> InferencePass<'a> {
         for (i, binder) in binders.iter().enumerate() {
             let ty = self
                 .session
-                .apply(placeholders[i].clone(), &mut context.substitutions_mut());
+                .apply(&placeholders[i], &mut context.substitutions_mut());
             let entry = self
                 .session
                 .generalize(ty, context, &generalizable, &mut self.constraints);
@@ -2548,7 +2548,7 @@ impl<'a> InferencePass<'a> {
             .insert(Label::Named("init".into()), sym);
 
         let foralls = ty.collect_foralls();
-        let ty = substitute(ty, &self.session.skolem_map);
+        let ty = substitute(&ty, &self.session.skolem_map);
         self.session.insert(sym, ty, &mut self.constraints);
 
         Ok(TypedFunc {
@@ -3255,9 +3255,7 @@ impl<'a> InferencePass<'a> {
                             .get(struct_sym)
                             .and_then(|p| p.get(&arg.label))
                         {
-                            self.session
-                                .resolved_names
-                                .record_span(arg.label_span, *prop_sym);
+                            let _ = prop_sym;
                         }
                     }
                 }
@@ -3394,13 +3392,13 @@ impl<'a> InferencePass<'a> {
         let params = params
             .iter()
             .map(|t| {
-                let ty = substitute(t.ty.clone(), &self.session.skolem_map);
+                let ty = substitute(&t.ty, &self.session.skolem_map);
                 foralls.extend(ty.collect_foralls());
                 TypedParameter { name: t.name, ty }
             })
             .collect_vec();
 
-        let ret = substitute(body.ret.clone(), &self.session.skolem_map);
+        let ret = substitute(&body.ret, &self.session.skolem_map);
 
         self.session.insert(
             func_sym,
