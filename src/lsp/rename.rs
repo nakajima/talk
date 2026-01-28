@@ -21,7 +21,7 @@ fn is_valid_identifier(name: &str) -> bool {
     let Ok(token) = lexer.next() else {
         return false;
     };
-    if !matches!(token.kind, TokenKind::Identifier(..)) {
+    if token.kind != TokenKind::Identifier {
         return false;
     }
     matches!(lexer.next().ok().map(|t| t.kind), Some(TokenKind::EOF))

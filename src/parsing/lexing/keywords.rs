@@ -1,8 +1,8 @@
 use crate::token_kind::TokenKind;
 
-pub(super) fn handle(string: String) -> TokenKind {
+pub(super) fn handle(string: &str) -> TokenKind {
     use TokenKind::*;
-    match string.as_str() {
+    match string {
         "as" => As,
         "func" => Func,
         "let" => Let,
@@ -29,6 +29,7 @@ pub(super) fn handle(string: String) -> TokenKind {
         "handling" => Handling,
         "in" => In,
         "continue" => Continue,
-        _ => Identifier(string),
+        "mut" => Mut,
+        _ => Identifier,
     }
 }

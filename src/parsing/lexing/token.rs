@@ -28,8 +28,13 @@ impl Token {
         col: 0,
     };
 
-    pub fn as_str(&self) -> String {
+    pub fn as_str(&self) -> &'static str {
         self.kind.as_str()
+    }
+
+    /// Extract the lexeme text from source code
+    pub fn lexeme<'a>(&self, source: &'a str) -> &'a str {
+        &source[self.start as usize..self.end as usize]
     }
 
     pub fn span(&self, file_id: FileID) -> Span {

@@ -103,7 +103,8 @@ impl<'a> Higlighter<'a> {
                 TokenKind::Continue => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::SingleQuote => (),
                 TokenKind::In => self.make(tok, Kind::KEYWORD, &mut tokens),
-                TokenKind::EffectName(..) => {
+                TokenKind::EffectName => {
+                    // Span excludes the ', so we adjust for highlighting
                     let mut tok = tok.clone();
                     tok.start = tok.start.saturating_sub(1);
                     self.make(&tok, Kind::EFFECT, &mut tokens)
@@ -111,13 +112,13 @@ impl<'a> Higlighter<'a> {
                 TokenKind::Handling => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::Effect => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::Dollar => self.make(tok, Kind::OPERATOR, &mut tokens),
-                TokenKind::BoundVar(..) => self.make(tok, Kind::VARIABLE, &mut tokens),
+                TokenKind::BoundVar => self.make(tok, Kind::VARIABLE, &mut tokens),
                 TokenKind::Percent => self.make(tok, Kind::OPERATOR, &mut tokens),
-                TokenKind::IRRegister(..) => self.make(tok, Kind::PARAMETER, &mut tokens),
-                TokenKind::Attribute(..) => self.make(tok, Kind::DECORATOR, &mut tokens),
+                TokenKind::IRRegister => self.make(tok, Kind::PARAMETER, &mut tokens),
+                TokenKind::Attribute => self.make(tok, Kind::DECORATOR, &mut tokens),
                 TokenKind::As => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::At => self.make(tok, Kind::DECORATOR, &mut tokens),
-                TokenKind::LineComment(_) => self.make(tok, Kind::COMMENT, &mut tokens),
+                TokenKind::LineComment => self.make(tok, Kind::COMMENT, &mut tokens),
                 TokenKind::Extend => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::If => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::Else => self.make(tok, Kind::KEYWORD, &mut tokens),
@@ -130,7 +131,7 @@ impl<'a> Higlighter<'a> {
                 TokenKind::Match => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::Import => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::Public => self.make(tok, Kind::KEYWORD, &mut tokens),
-                TokenKind::StringLiteral(_) => self.make_string(tok, Kind::STRING, &mut tokens),
+                TokenKind::StringLiteral => self.make_string(tok, Kind::STRING, &mut tokens),
                 TokenKind::Underscore => (),
                 TokenKind::QuestionMark => self.make(tok, Kind::OPERATOR, &mut tokens),
                 TokenKind::Semicolon => (),
@@ -172,9 +173,9 @@ impl<'a> Higlighter<'a> {
                 TokenKind::Comma => (),
                 TokenKind::Struct => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::Break => self.make(tok, Kind::KEYWORD, &mut tokens),
-                TokenKind::Int(_) => self.make(tok, Kind::NUMBER, &mut tokens),
-                TokenKind::Float(_) => self.make(tok, Kind::NUMBER, &mut tokens),
-                TokenKind::Identifier(_) => (),
+                TokenKind::Int => self.make(tok, Kind::NUMBER, &mut tokens),
+                TokenKind::Float => self.make(tok, Kind::NUMBER, &mut tokens),
+                TokenKind::Identifier => (),
                 TokenKind::Func => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::Let => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::EOF => break,
@@ -622,11 +623,8 @@ impl<'a> Higlighter<'a> {
     }
 
     fn make_string(&self, token: &Token, token_type: Kind, tokens: &mut Vec<HighlightToken>) {
-        tokens.push(HighlightToken::new(
-            token_type,
-            token.start.saturating_sub(1),
-            token.end.saturating_add(1),
-        ));
+        // Token span now includes the quotes, no adjustment needed
+        tokens.push(HighlightToken::new(token_type, token.start, token.end));
     }
 }
 

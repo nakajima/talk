@@ -1993,7 +1993,7 @@ fn adjust_trailing_newlines(input: &str, mut output: String) -> String {
 fn comments_from_tokens(tokens: Vec<Token>, source: &str) -> Vec<Comment> {
     let mut comments = Vec::new();
     for token in tokens {
-        if !matches!(token.kind, TokenKind::LineComment(_)) {
+        if token.kind != TokenKind::LineComment {
             continue;
         }
 
