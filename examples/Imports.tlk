@@ -1,0 +1,3 @@
+import { a } from ./Exports.tlk
+
+print(a)

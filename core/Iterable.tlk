@@ -1,15 +1,19 @@
-protocol Iterator {
+import { Optional } from ./Optional.tlk
+import { Array } from ./Array.tlk
+import { Add, Comparable } from ./Operators.tlk
+
+public protocol Iterator {
 	associated Element
 	func next() -> Optional<Element>
 }
 
-protocol Iterable {
+public protocol Iterable {
 	associated Element
 	associated T: Iterator
 	func iter() -> T
 }
 
-struct ArrayIterator<Element> {
+public struct ArrayIterator<Element> {
 	let array: Array<Element>
 	let current: Int
 

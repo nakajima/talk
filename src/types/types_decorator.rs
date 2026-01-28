@@ -8,11 +8,11 @@ use crate::{
         expr::{Expr, ExprKind},
         stmt::Stmt,
     },
-    types::infer_ty::InferTy,
+    types::infer_ty::Ty,
 };
 
 pub struct TypesDecorator {
-    pub types_by_node: FxHashMap<NodeID, InferTy>,
+    pub types_by_node: FxHashMap<NodeID, Ty>,
 }
 
 impl FormatterDecorator for TypesDecorator {

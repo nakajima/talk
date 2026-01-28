@@ -12,9 +12,55 @@ use crate::{
     parsing::span::Span,
 };
 
+/// Visibility of a declaration - defaults to private (internal to file)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Drive, DriveMut)]
+pub enum Visibility {
+    #[default]
+    Private,
+    Public,
+}
+
+/// Path in an import statement
+#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
+pub enum ImportPath {
+    /// Relative path like ./utils.tlk or ../other.tlk
+    Relative(#[drive(skip)] String),
+    /// Package name like collections or http
+    Package(#[drive(skip)] String),
+}
+
+/// A single symbol being imported, with optional alias
+#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
+pub struct ImportedSymbol {
+    #[drive(skip)]
+    pub name: String,
+    #[drive(skip)]
+    pub alias: Option<String>,
+    #[drive(skip)]
+    pub span: Span,
+}
+
+/// What symbols to import
+#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
+pub enum ImportedSymbols {
+    /// Named imports: { a, b, c }
+    Named(Vec<ImportedSymbol>),
+    /// Import all public symbols: _
+    All,
+}
+
+/// Full import statement
+#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
+pub struct Import {
+    pub symbols: ImportedSymbols,
+    pub path: ImportPath,
+    #[drive(skip)]
+    pub path_span: Span,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
 pub enum DeclKind {
-    Import(#[drive(skip)] String),
+    Import(Import),
     Effect {
         #[drive(skip)]
         name: Name,
@@ -120,6 +166,8 @@ pub struct Decl {
     pub kind: DeclKind,
     #[drive(skip)]
     pub span: Span,
+    #[drive(skip)]
+    pub visibility: Visibility,
 }
 
 impl_into_node!(Decl);

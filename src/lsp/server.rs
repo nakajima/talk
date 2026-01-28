@@ -2,8 +2,9 @@ struct TickEvent;
 
 use async_lsp::LanguageClient;
 use async_lsp::lsp_types::{
-    CompletionOptions, Diagnostic, DiagnosticSeverity, Position, Range, SemanticTokens,
-    SemanticTokensResult, TextDocumentSyncCapability, TextDocumentSyncKind,
+    CodeAction, CodeActionKind, CodeActionOrCommand, CodeActionProviderCapability,
+    CodeActionResponse, CompletionOptions, Diagnostic, DiagnosticSeverity, Position, Range,
+    SemanticTokens, SemanticTokensResult, TextDocumentSyncCapability, TextDocumentSyncKind,
     TextDocumentSyncOptions, TextDocumentSyncSaveOptions, TextEdit,
 };
 use async_lsp::{
@@ -12,7 +13,7 @@ use async_lsp::{
     concurrency::ConcurrencyLayer,
     lsp_types::{
         CompletionResponse, GotoDefinitionResponse, Hover, HoverContents, HoverProviderCapability,
-        InitializeParams, InitializeResult, Location, MarkupContent, MarkupKind, OneOf,
+        InitializeParams, InitializeResult, MarkupContent, MarkupKind, OneOf,
         PublishDiagnosticsParams, SemanticTokensFullOptions, SemanticTokensLegend,
         SemanticTokensOptions, SemanticTokensServerCapabilities, ServerCapabilities,
         TextDocumentItem, Url, WorkspaceEdit, WorkspaceFolder, notification, request,
@@ -22,7 +23,6 @@ use async_lsp::{
     server::LifecycleLayer,
     tracing::TracingLayer,
 };
-use derive_visitor::{Drive, Visitor};
 use ignore::WalkBuilder;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::fs::File;
@@ -37,22 +37,10 @@ use crate::analysis::{
     DocumentInput, Hover as AnalysisHover, Workspace as AnalysisWorkspace,
     completion as analysis_completion, hover as analysis_hover,
 };
-use crate::compiling::module::ModuleId;
-use crate::lexer::Lexer;
 use crate::lsp::semantic_tokens::collect;
 use crate::lsp::{completion, document::Document, semantic_tokens::TOKEN_TYPES};
-use crate::name_resolution::symbol::{EffectId, Symbol};
-use crate::node_kinds::{
-    decl::Decl,
-    expr::Expr,
-    func::Func,
-    func_signature::FuncSignature,
-    generic_decl::GenericDecl,
-    parameter::Parameter,
-    pattern::{Pattern, RecordFieldPattern},
-    type_annotation::TypeAnnotation,
-};
-use crate::token_kind::TokenKind;
+use crate::lsp::goto_definition::goto_definition;
+use crate::lsp::rename::rename_at;
 
 #[allow(deprecated)]
 fn workspace_roots_from_initialize(params: &InitializeParams) -> Vec<PathBuf> {
@@ -136,6 +124,7 @@ pub async fn start() {
                                 ..Default::default()
                             }),
                             document_formatting_provider: Some(OneOf::Left(true)),
+                            code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
                             semantic_tokens_provider: Some(
                                 SemanticTokensServerCapabilities::SemanticTokensOptions(
                                     SemanticTokensOptions {
@@ -231,17 +220,24 @@ pub async fn start() {
                 let uri = params.text_document.uri;
                 let result = if let Some(result) = st.documents.get(&uri) {
                     let formatted = crate::formatter::format_string(&result.text);
-                    let last_line = result.text.lines().count() as u32;
-                    let last_char = result
-                        .text
-                        .lines()
-                        .last()
-                        .map(|line| line.len().saturating_sub(1));
+                    let newline_count = result.text.matches('\n').count();
+                    let ends_with_newline = result.text.ends_with('\n');
+                    let last_line = newline_count as u32;
+                    let last_char = if ends_with_newline {
+                        0
+                    } else {
+                        result
+                            .text
+                            .rsplit('\n')
+                            .next()
+                            .map(|s| s.len())
+                            .unwrap_or(result.text.len()) as u32
+                    };
 
                     Ok(Some(vec![TextEdit::new(
                         Range::new(
                             Position::new(0, 0),
-                            Position::new(last_line, last_char.unwrap_or(0) as u32),
+                            Position::new(last_line, last_char),
                         ),
                         formatted,
                     )]))
@@ -310,10 +306,6 @@ pub async fn start() {
                     let Some(byte_offset) = byte_offset else {
                         return Ok(None);
                     };
-
-                    if !is_valid_identifier(&new_name) {
-                        return Ok(None);
-                    }
 
                     let Some(workspace) = workspace else {
                         return Ok(None);
@@ -387,6 +379,25 @@ pub async fn start() {
             })
             .notification::<notification::Initialized>(|_, _| ControlFlow::Continue(()))
             .notification::<notification::DidChangeConfiguration>(|_, _| ControlFlow::Continue(()))
+            .request::<request::CodeActionRequest, _>(|state, params| {
+                let uri = params.text_document.uri.clone();
+                let range = params.range;
+                let workspace = workspace_analysis(state, &uri);
+
+                async move {
+                    let Some(workspace) = workspace else {
+                        return Ok(None);
+                    };
+
+                    let document_id = document_id_for_uri(&uri);
+                    let actions = compute_code_actions(&workspace, &document_id, &uri, range);
+                    if actions.is_empty() {
+                        Ok(None)
+                    } else {
+                        Ok(Some(actions))
+                    }
+                }
+            })
             .notification::<notification::DidSaveTextDocument>(|_, _| ControlFlow::Continue(()))
             .notification::<notification::DidChangeWatchedFiles>(|state, params| {
                 let mut diagnostics_workspaces: FxHashMap<PathBuf, Url> = FxHashMap::default();
@@ -486,7 +497,8 @@ pub async fn start() {
     #[allow(clippy::expect_used)]
     let file = File::options()
         .create(true)
-        .append(true)
+        .write(true)
+        .truncate(true)
         .open("server.log")
         .expect("Could not create LSP server log");
 
@@ -734,7 +746,7 @@ fn core_analysis(state: &mut ServerState) -> Option<Arc<AnalysisWorkspace>> {
     Some(core)
 }
 
-fn document_id_for_uri(uri: &Url) -> DocumentId {
+pub(crate) fn document_id_for_uri(uri: &Url) -> DocumentId {
     uri.as_str().to_string()
 }
 
@@ -744,7 +756,7 @@ fn document_path_for_uri(uri: &Url) -> String {
         .unwrap_or_else(|_| uri.as_str().to_string())
 }
 
-fn url_from_document_id(id: &DocumentId) -> Option<Url> {
+pub(crate) fn url_from_document_id(id: &DocumentId) -> Option<Url> {
     Url::parse(id).ok().or_else(|| Url::from_file_path(id).ok())
 }
 
@@ -790,658 +802,10 @@ fn hover_to_lsp(text: &str, hover: AnalysisHover) -> Hover {
     }
 }
 
-fn identifier_span_at_offset(
-    meta: &crate::node_meta::NodeMeta,
-    byte_offset: u32,
-) -> Option<(u32, u32)> {
-    meta.identifiers
-        .iter()
-        .find(|tok| tok.start <= byte_offset && byte_offset <= tok.end)
-        .map(|tok| (tok.start, tok.end))
-}
-
-fn is_valid_identifier(name: &str) -> bool {
-    let mut lexer = Lexer::new(name);
-    let Ok(token) = lexer.next() else {
-        return false;
-    };
-    if !matches!(token.kind, TokenKind::Identifier(..)) {
-        return false;
-    }
-    matches!(lexer.next().ok().map(|t| t.kind), Some(TokenKind::EOF))
-}
-
-fn is_symbol_renamable(symbol: Symbol) -> bool {
-    use crate::name_resolution::symbol::{
-        AssociatedTypeId, EnumId, GlobalId, InitializerId, InstanceMethodId, MethodRequirementId,
-        PropertyId, ProtocolId, StaticMethodId, StructId, TypeAliasId, VariantId,
-    };
-
-    match symbol {
-        Symbol::Builtin(..) | Symbol::Main | Symbol::Library | Symbol::Synthesized(..) => false,
-
-        Symbol::Struct(StructId { module_id, .. })
-        | Symbol::Enum(EnumId { module_id, .. })
-        | Symbol::TypeAlias(TypeAliasId { module_id, .. })
-        | Symbol::Global(GlobalId { module_id, .. })
-        | Symbol::Property(PropertyId { module_id, .. })
-        | Symbol::InstanceMethod(InstanceMethodId { module_id, .. })
-        | Symbol::Initializer(InitializerId { module_id, .. })
-        | Symbol::StaticMethod(StaticMethodId { module_id, .. })
-        | Symbol::Variant(VariantId { module_id, .. })
-        | Symbol::Protocol(ProtocolId { module_id, .. })
-        | Symbol::AssociatedType(AssociatedTypeId { module_id, .. })
-        | Symbol::Effect(EffectId { module_id, .. })
-        | Symbol::MethodRequirement(MethodRequirementId { module_id, .. }) => {
-            module_id == ModuleId::Current
-        }
-
-        Symbol::TypeParameter(..)
-        | Symbol::DeclaredLocal(..)
-        | Symbol::PatternBindLocal(..)
-        | Symbol::ParamLocal(..) => true,
-    }
-}
-
-fn rename_at(
-    module: &AnalysisWorkspace,
-    uri: &Url,
-    byte_offset: u32,
-    new_name: &str,
-) -> Option<WorkspaceEdit> {
-    let symbol = rename_symbol_at_offset(module, uri, byte_offset)?;
-    if !is_symbol_renamable(symbol) {
-        return None;
-    }
-
-    let mut changes: std::collections::HashMap<Url, Vec<TextEdit>> = Default::default();
-    for (idx, doc_id) in module.file_id_to_document.iter().enumerate() {
-        let Some(file_uri) = url_from_document_id(doc_id) else {
-            continue;
-        };
-        let text = module.texts.get(idx)?;
-        let Some(ast) = module.asts.get(idx).and_then(|a| a.as_ref()) else {
-            continue;
-        };
-        let spans = rename_spans_in_ast(ast, module.types.as_ref(), symbol);
-
-        let mut edits: Vec<TextEdit> = spans
-            .into_iter()
-            .filter_map(|(start, end)| {
-                let range = byte_span_to_range_utf16(text, start, end)?;
-                Some(TextEdit::new(range, new_name.to_string()))
-            })
-            .collect();
-
-        if edits.is_empty() {
-            continue;
-        }
-
-        edits.sort_by_key(|edit| (edit.range.start.line, edit.range.start.character));
-        changes.insert(file_uri, edits);
-    }
-
-    if changes.is_empty() {
-        return None;
-    }
-
-    Some(WorkspaceEdit {
-        changes: Some(changes),
-        document_changes: None,
-        change_annotations: None,
-    })
-}
-
-fn rename_symbol_at_offset(
-    module: &AnalysisWorkspace,
-    uri: &Url,
-    byte_offset: u32,
-) -> Option<Symbol> {
-    let document_id = document_id_for_uri(uri);
-    let file_id = *module.document_to_file_id.get(&document_id)?;
-    let ast = module
-        .asts
-        .get(file_id.0 as usize)
-        .and_then(|a| a.as_ref())?;
-    let candidate_ids = node_ids_at_offset(ast, byte_offset);
-
-    for node_id in candidate_ids {
-        let Some(node) = ast.find(node_id) else {
-            continue;
-        };
-
-        let symbol = match node {
-            crate::node::Node::Expr(expr) => {
-                goto_definition_symbol_from_expr(module.types.as_ref(), &expr, byte_offset)
-            }
-            crate::node::Node::Stmt(stmt) => {
-                goto_definition_symbol_from_stmt(module.types.as_ref(), &stmt, byte_offset)
-            }
-            crate::node::Node::TypeAnnotation(ty) => {
-                goto_definition_symbol_from_type_annotation(&ty, byte_offset)
-            }
-            crate::node::Node::Decl(decl) => goto_definition_symbol_from_decl(&decl, byte_offset),
-            crate::node::Node::Parameter(param) => {
-                if span_contains(param.name_span, byte_offset) {
-                    param.name.symbol().ok()
-                } else {
-                    None
-                }
-            }
-            crate::node::Node::Func(func) => {
-                if span_contains(func.name_span, byte_offset) {
-                    func.name.symbol().ok()
-                } else {
-                    None
-                }
-            }
-            crate::node::Node::FuncSignature(sig) => {
-                let meta = ast.meta.get(&sig.id)?;
-                let (start, end) = meta.identifiers.first().map(|t| (t.start, t.end))?;
-                if start <= byte_offset && byte_offset <= end {
-                    sig.name.symbol().ok()
-                } else {
-                    None
-                }
-            }
-            crate::node::Node::GenericDecl(generic) => {
-                if span_contains(generic.name_span, byte_offset) {
-                    generic.name.symbol().ok()
-                } else {
-                    None
-                }
-            }
-            crate::node::Node::Pattern(pattern) => match &pattern.kind {
-                crate::node_kinds::pattern::PatternKind::Bind(name) => {
-                    let meta = ast.meta.get(&pattern.id)?;
-                    let (start, end) = identifier_span_at_offset(meta, byte_offset)?;
-                    if start <= byte_offset && byte_offset <= end {
-                        name.symbol().ok()
-                    } else {
-                        None
-                    }
-                }
-                _ => None,
-            },
-            _ => None,
-        };
-
-        if symbol.is_some() {
-            return symbol;
-        }
-    }
-
-    None
-}
-
-fn rename_spans_in_ast(
-    ast: &crate::ast::AST<crate::ast::NameResolved>,
-    types: Option<&crate::types::types::Types>,
-    symbol: Symbol,
-) -> Vec<(u32, u32)> {
-    let mut collector = RenameCollector {
-        ast,
-        types,
-        target: symbol,
-        spans: FxHashSet::default(),
-    };
-
-    for root in &ast.roots {
-        root.drive(&mut collector);
-    }
-
-    let mut spans: Vec<(u32, u32)> = collector.spans.into_iter().collect();
-    spans.sort_unstable();
-    spans
-}
-
-#[derive(Visitor)]
-#[visitor(
-    Decl(enter),
-    Expr(enter),
-    Func(enter),
-    FuncSignature(enter),
-    GenericDecl(enter),
-    Parameter(enter),
-    Pattern(enter),
-    RecordFieldPattern(enter),
-    TypeAnnotation(enter)
-)]
-struct RenameCollector<'a> {
-    ast: &'a crate::ast::AST<crate::ast::NameResolved>,
-    types: Option<&'a crate::types::types::Types>,
-    target: Symbol,
-    spans: FxHashSet<(u32, u32)>,
-}
-
-impl RenameCollector<'_> {
-    fn push_span(&mut self, span: crate::span::Span) {
-        self.spans.insert((span.start, span.end));
-    }
-
-    fn push_u32_span(&mut self, start: u32, end: u32) {
-        self.spans.insert((start, end));
-    }
-
-    fn enter_decl(&mut self, decl: &crate::node_kinds::decl::Decl) {
-        use crate::node_kinds::decl::DeclKind;
-
-        match &decl.kind {
-            DeclKind::Struct {
-                name, name_span, ..
-            }
-            | DeclKind::Protocol {
-                name, name_span, ..
-            }
-            | DeclKind::Extend {
-                name, name_span, ..
-            }
-            | DeclKind::Enum {
-                name, name_span, ..
-            }
-            | DeclKind::Property {
-                name, name_span, ..
-            } => {
-                if name.symbol().ok() == Some(self.target) {
-                    self.push_span(*name_span);
-                }
-            }
-            DeclKind::TypeAlias(name, name_span, ..)
-            | DeclKind::EnumVariant(name, name_span, ..) => {
-                if name.symbol().ok() == Some(self.target) {
-                    self.push_span(*name_span);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    fn enter_func(&mut self, func: &crate::node_kinds::func::Func) {
-        if func.name.symbol().ok() == Some(self.target) {
-            self.push_span(func.name_span);
-        }
-    }
-
-    fn enter_func_signature(&mut self, sig: &crate::node_kinds::func_signature::FuncSignature) {
-        if sig.name.symbol().ok() != Some(self.target) {
-            return;
-        }
-
-        let Some(meta) = self.ast.meta.get(&sig.id) else {
-            return;
-        };
-        let Some(tok) = meta.identifiers.first() else {
-            return;
-        };
-        self.push_u32_span(tok.start, tok.end);
-    }
-
-    fn enter_generic_decl(&mut self, generic: &crate::node_kinds::generic_decl::GenericDecl) {
-        if generic.name.symbol().ok() == Some(self.target) {
-            self.push_span(generic.name_span);
-        }
-    }
-
-    fn enter_parameter(&mut self, param: &crate::node_kinds::parameter::Parameter) {
-        if param.name.symbol().ok() == Some(self.target) {
-            self.push_span(param.name_span);
-        }
-    }
-
-    fn enter_pattern(&mut self, pattern: &crate::node_kinds::pattern::Pattern) {
-        use crate::node_kinds::pattern::PatternKind;
-
-        let PatternKind::Bind(name) = &pattern.kind else {
-            return;
-        };
-
-        if name.symbol().ok() == Some(self.target) {
-            self.push_span(pattern.span);
-        }
-    }
-
-    fn enter_record_field_pattern(
-        &mut self,
-        field: &crate::node_kinds::pattern::RecordFieldPattern,
-    ) {
-        use crate::node_kinds::pattern::RecordFieldPatternKind;
-
-        match &field.kind {
-            RecordFieldPatternKind::Bind(name) => {
-                if name.symbol().ok() == Some(self.target) {
-                    self.push_span(field.span);
-                }
-            }
-            RecordFieldPatternKind::Equals {
-                name, name_span, ..
-            } => {
-                if name.symbol().ok() == Some(self.target) {
-                    self.push_span(*name_span);
-                }
-            }
-            RecordFieldPatternKind::Rest => {}
-        }
-    }
-
-    fn enter_type_annotation(&mut self, ty: &crate::node_kinds::type_annotation::TypeAnnotation) {
-        use crate::node_kinds::type_annotation::TypeAnnotationKind;
-
-        let TypeAnnotationKind::Nominal {
-            name, name_span, ..
-        } = &ty.kind
-        else {
-            return;
-        };
-
-        if name.symbol().ok() == Some(self.target) {
-            self.push_span(*name_span);
-        }
-    }
-
-    fn enter_expr(&mut self, expr: &crate::node_kinds::expr::Expr) {
-        use crate::node_kinds::expr::ExprKind;
-
-        match &expr.kind {
-            ExprKind::Variable(name) | ExprKind::Constructor(name) => {
-                if name.symbol().ok() == Some(self.target) {
-                    self.push_span(expr.span);
-                }
-            }
-            ExprKind::Member(receiver, label, name_span) => {
-                let Some(receiver) = receiver.as_ref() else {
-                    return;
-                };
-                let member_sym = resolve_member_symbol(self.types, receiver, label);
-                if member_sym == Some(self.target) {
-                    self.push_span(*name_span);
-                }
-            }
-            _ => {}
-        }
-    }
-}
-
-fn goto_definition(
-    module: &AnalysisWorkspace,
-    core: Option<&AnalysisWorkspace>,
-    uri: &Url,
-    byte_offset: u32,
-) -> Option<Location> {
-    let document_id = document_id_for_uri(uri);
-    let file_id = *module.document_to_file_id.get(&document_id)?;
-    let ast = module
-        .asts
-        .get(file_id.0 as usize)
-        .and_then(|a| a.as_ref())?;
-    let candidate_ids = node_ids_at_offset(ast, byte_offset);
-
-    for node_id in candidate_ids {
-        let Some(node) = ast.find(node_id) else {
-            continue;
-        };
-
-        let symbol = match node {
-            crate::node::Node::Expr(expr) => {
-                goto_definition_symbol_from_expr(module.types.as_ref(), &expr, byte_offset)
-            }
-            crate::node::Node::Stmt(stmt) => {
-                goto_definition_symbol_from_stmt(module.types.as_ref(), &stmt, byte_offset)
-            }
-            crate::node::Node::TypeAnnotation(ty) => {
-                goto_definition_symbol_from_type_annotation(&ty, byte_offset)
-            }
-            crate::node::Node::Decl(decl) => goto_definition_symbol_from_decl(&decl, byte_offset),
-            crate::node::Node::Parameter(param) => {
-                if span_contains(param.name_span, byte_offset) {
-                    param.name.symbol().ok()
-                } else {
-                    None
-                }
-            }
-            crate::node::Node::Func(func) => {
-                if span_contains(func.name_span, byte_offset) {
-                    func.name.symbol().ok()
-                } else {
-                    None
-                }
-            }
-            crate::node::Node::FuncSignature(sig) => {
-                let meta = ast.meta.get(&sig.id)?;
-                let (start, end) = meta.identifiers.first().map(|t| (t.start, t.end))?;
-                if start <= byte_offset && byte_offset <= end {
-                    sig.name.symbol().ok()
-                } else {
-                    None
-                }
-            }
-            crate::node::Node::GenericDecl(generic) => {
-                if span_contains(generic.name_span, byte_offset) {
-                    generic.name.symbol().ok()
-                } else {
-                    None
-                }
-            }
-            crate::node::Node::Pattern(pattern) => match &pattern.kind {
-                crate::node_kinds::pattern::PatternKind::Bind(name) => {
-                    let meta = ast.meta.get(&pattern.id)?;
-                    let (start, end) = identifier_span_at_offset(meta, byte_offset)?;
-                    if start <= byte_offset && byte_offset <= end {
-                        name.symbol().ok()
-                    } else {
-                        None
-                    }
-                }
-                _ => None,
-            },
-            _ => None,
-        };
-
-        if let Some(symbol) = symbol
-            && let Some(target) = definition_location_for_symbol(module, core, symbol)
-        {
-            return Some(target);
-        }
-    }
-
-    None
-}
-
-fn goto_definition_symbol_from_expr(
-    types: Option<&crate::types::types::Types>,
-    expr: &crate::node_kinds::expr::Expr,
-    byte_offset: u32,
-) -> Option<Symbol> {
-    use crate::node_kinds::expr::ExprKind;
-
-    match &expr.kind {
-        ExprKind::Variable(name) | ExprKind::Constructor(name) => name.symbol().ok(),
-        ExprKind::Member(receiver, label, name_span) => {
-            if !span_contains(*name_span, byte_offset) {
-                return None;
-            }
-
-            let receiver = receiver.as_ref()?;
-
-            resolve_member_symbol(types, receiver, label)
-        }
-        _ => None,
-    }
-}
-
-fn goto_definition_symbol_from_stmt(
-    types: Option<&crate::types::types::Types>,
-    stmt: &crate::node_kinds::stmt::Stmt,
-    byte_offset: u32,
-) -> Option<Symbol> {
-    use crate::node_kinds::stmt::StmtKind;
-
-    match &stmt.kind {
-        StmtKind::Expr(expr) => goto_definition_symbol_from_expr(types, expr, byte_offset),
-        StmtKind::Return(Some(expr)) => goto_definition_symbol_from_expr(types, expr, byte_offset),
-        StmtKind::If(cond, ..) => goto_definition_symbol_from_expr(types, cond, byte_offset),
-        StmtKind::Loop(Some(cond), ..) => {
-            goto_definition_symbol_from_expr(types, cond, byte_offset)
-        }
-        StmtKind::Assignment(lhs, rhs) => goto_definition_symbol_from_expr(types, lhs, byte_offset)
-            .or_else(|| goto_definition_symbol_from_expr(types, rhs, byte_offset)),
-        _ => None,
-    }
-}
-
-fn goto_definition_symbol_from_type_annotation(
-    ty: &crate::node_kinds::type_annotation::TypeAnnotation,
-    byte_offset: u32,
-) -> Option<Symbol> {
-    use crate::node_kinds::type_annotation::TypeAnnotationKind;
-
-    match &ty.kind {
-        TypeAnnotationKind::Nominal {
-            name, name_span, ..
-        } => {
-            if !span_contains(*name_span, byte_offset) {
-                return None;
-            }
-            name.symbol().ok()
-        }
-        _ => None,
-    }
-}
-
-fn goto_definition_symbol_from_decl(
-    decl: &crate::node_kinds::decl::Decl,
-    byte_offset: u32,
-) -> Option<Symbol> {
-    use crate::node_kinds::decl::DeclKind;
-
-    match &decl.kind {
-        DeclKind::Struct {
-            name, name_span, ..
-        }
-        | DeclKind::Protocol {
-            name, name_span, ..
-        }
-        | DeclKind::Extend {
-            name, name_span, ..
-        }
-        | DeclKind::Enum {
-            name, name_span, ..
-        }
-        | DeclKind::Property {
-            name, name_span, ..
-        } => {
-            if !span_contains(*name_span, byte_offset) {
-                return None;
-            }
-            name.symbol().ok()
-        }
-        DeclKind::TypeAlias(name, name_span, ..) => {
-            if !span_contains(*name_span, byte_offset) {
-                return None;
-            }
-            name.symbol().ok()
-        }
-        DeclKind::EnumVariant(name, name_span, ..) => {
-            if !span_contains(*name_span, byte_offset) {
-                return None;
-            }
-            name.symbol().ok()
-        }
-        _ => None,
-    }
-}
-
-fn resolve_member_symbol(
-    types: Option<&crate::types::types::Types>,
-    receiver: &crate::node_kinds::expr::Expr,
-    label: &crate::label::Label,
-) -> Option<Symbol> {
-    use crate::node_kinds::expr::ExprKind;
-    use crate::types::ty::Ty;
-
-    if let ExprKind::Constructor(name) = &receiver.kind {
-        let receiver_symbol = name.symbol().ok()?;
-        let types = types?;
-        return types.catalog.lookup_static_member(&receiver_symbol, label);
-    }
-
-    let types = types?;
-    let entry = types.get(&receiver.id)?;
-    let ty = entry.as_mono_ty();
-
-    match ty {
-        Ty::Nominal { symbol, .. } => types.catalog.lookup_member(symbol, label).map(|m| m.0),
-        Ty::Primitive(symbol) => types.catalog.lookup_member(symbol, label).map(|m| m.0),
-        _ => None,
-    }
-}
-
-fn definition_location_for_symbol(
-    module: &AnalysisWorkspace,
-    core: Option<&AnalysisWorkspace>,
-    symbol: Symbol,
-) -> Option<Location> {
-    if let Some(module_id) = symbol.external_module_id() {
-        if module_id == ModuleId::Core {
-            let core = core?;
-            return definition_location_in_module(core, symbol);
-        }
-        return None;
-    }
-
-    definition_location_in_module(module, symbol)
-}
-
-fn definition_location_in_module(module: &AnalysisWorkspace, symbol: Symbol) -> Option<Location> {
-    let def_node = *module.resolved_names.symbols_to_node.get(&symbol)?;
-    let file_id = def_node.0;
-    let doc_id = module.file_id_to_document.get(file_id.0 as usize)?;
-    let uri = url_from_document_id(doc_id)?;
-    let text = module.texts.get(file_id.0 as usize)?;
-    let ast = module
-        .asts
-        .get(file_id.0 as usize)
-        .and_then(|a| a.as_ref())?;
-
-    let meta = ast.meta.get(&def_node)?;
-    let (start, end) = match meta.identifiers.first() {
-        Some(tok) => (tok.start, tok.end),
-        None => (meta.start.start, meta.end.end),
-    };
-    let range = byte_span_to_range_utf16(text, start, end)?;
-
-    Some(Location { uri, range })
-}
-
-fn node_ids_at_offset(
-    ast: &crate::ast::AST<crate::ast::NameResolved>,
-    byte_offset: u32,
-) -> Vec<crate::node_id::NodeID> {
-    let mut candidates: Vec<(crate::node_id::NodeID, u32)> = ast
-        .meta
-        .iter()
-        .filter_map(|(id, meta)| {
-            let start = meta.start.start;
-            let end = meta.end.end;
-            if start <= byte_offset && byte_offset <= end {
-                Some((*id, end.saturating_sub(start)))
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    candidates.sort_by_key(|(_, len)| *len);
-    candidates.into_iter().map(|(id, _)| id).collect()
-}
-
-fn byte_span_to_range_utf16(text: &str, start: u32, end: u32) -> Option<Range> {
+pub(crate) fn byte_span_to_range_utf16(text: &str, start: u32, end: u32) -> Option<Range> {
     let start = byte_offset_to_utf16_position(text, start)?;
     let end = byte_offset_to_utf16_position(text, end)?;
     Some(Range::new(start, end))
-}
-
-fn span_contains(span: crate::span::Span, byte_offset: u32) -> bool {
-    span.start <= byte_offset && byte_offset <= span.end
 }
 
 fn byte_offset_to_utf16_position(text: &str, byte_offset: u32) -> Option<Position> {
@@ -1456,6 +820,151 @@ fn byte_offset_to_utf16_position(text: &str, byte_offset: u32) -> Option<Positio
     let col_slice = text.get(line_start..byte_offset)?;
     let col = col_slice.encode_utf16().count() as u32;
     Some(Position::new(line, col))
+}
+
+/// Compute code actions for a document, including auto-import suggestions
+fn compute_code_actions(
+    workspace: &AnalysisWorkspace,
+    document_id: &DocumentId,
+    uri: &Url,
+    range: Range,
+) -> CodeActionResponse {
+    let mut actions: Vec<CodeActionOrCommand> = Vec::new();
+
+    // Get diagnostics for this document
+    let Some(diagnostics) = workspace.diagnostics.get(document_id) else {
+        return actions;
+    };
+
+    // Get the file ID for this document
+    let Some(&file_id) = workspace.document_to_file_id.get(document_id) else {
+        return actions;
+    };
+
+    // Get the text for this document
+    let Some(text) = workspace.texts.get(file_id.0 as usize) else {
+        return actions;
+    };
+
+    // Build an index of public symbols from all other files
+    // Map from symbol name -> (source file path, symbol)
+    let mut public_exports: FxHashMap<String, Vec<(String, crate::name_resolution::symbol::Symbol)>> =
+        FxHashMap::default();
+
+    for (idx, doc_id) in workspace.file_id_to_document.iter().enumerate() {
+        if doc_id == document_id {
+            continue; // Skip current file
+        }
+
+        let target_file_id = crate::node_id::FileID(idx as u32);
+        let scope_id = crate::node_id::NodeID(target_file_id, 0);
+
+        if let Some(scope) = workspace.resolved_names.scopes.get(&scope_id) {
+            for (name, &symbol) in &scope.values {
+                if workspace.resolved_names.public_symbols.contains(&symbol) {
+                    public_exports
+                        .entry(name.clone())
+                        .or_default()
+                        .push((doc_id.clone(), symbol));
+                }
+            }
+            for (name, &symbol) in &scope.types {
+                if workspace.resolved_names.public_symbols.contains(&symbol) {
+                    public_exports
+                        .entry(name.clone())
+                        .or_default()
+                        .push((doc_id.clone(), symbol));
+                }
+            }
+        }
+    }
+
+    // Check each diagnostic for undefined name errors
+    for diagnostic in diagnostics {
+        // Only handle diagnostics that are in the range
+        let diag_range = byte_span_to_range_utf16(text, diagnostic.range.start, diagnostic.range.end);
+        let Some(diag_range) = diag_range else { continue };
+
+        // Check if this diagnostic intersects with the requested range
+        if diag_range.end.line < range.start.line
+            || diag_range.start.line > range.end.line
+        {
+            continue;
+        }
+
+        // Check if this is an "undefined name" diagnostic
+        if !diagnostic.message.starts_with("Undefined name:") {
+            continue;
+        }
+
+        // Extract the undefined name from the message
+        let Some(name) = diagnostic.message.strip_prefix("Undefined name: ") else {
+            continue;
+        };
+
+        // Look up if this name exists as a public export
+        if let Some(sources) = public_exports.get(name) {
+            for (source_path, _symbol) in sources {
+                // Compute relative path from current file to source file
+                let current_path = std::path::Path::new(document_id);
+                let source_path_obj = std::path::Path::new(source_path);
+
+                let relative_path = if let (Some(current_dir), Some(source_file)) = (
+                    current_path.parent(),
+                    source_path_obj.file_name(),
+                ) {
+                    // Simple case: both files in same directory
+                    if current_dir == source_path_obj.parent().unwrap_or(std::path::Path::new("")) {
+                        format!("./{}", source_file.to_string_lossy())
+                    } else {
+                        source_path.clone()
+                    }
+                } else {
+                    source_path.clone()
+                };
+
+                // Create the import statement
+                let import_stmt = format!("import {{ {} }} from {}\n", name, relative_path);
+
+                // Find where to insert (at the start of the file, after any existing imports)
+                let insert_position = Position::new(0, 0);
+
+                let edit = TextEdit::new(
+                    Range::new(insert_position, insert_position),
+                    import_stmt,
+                );
+
+                let mut changes: std::collections::HashMap<Url, Vec<TextEdit>> =
+                    std::collections::HashMap::new();
+                changes.insert(uri.clone(), vec![edit]);
+
+                let action = CodeAction {
+                    title: format!("Import '{}' from {}", name, relative_path),
+                    kind: Some(CodeActionKind::QUICKFIX),
+                    diagnostics: Some(vec![Diagnostic {
+                        range: diag_range,
+                        severity: Some(DiagnosticSeverity::ERROR),
+                        source: Some("talk".to_string()),
+                        message: diagnostic.message.clone(),
+                        ..Default::default()
+                    }]),
+                    edit: Some(WorkspaceEdit {
+                        changes: Some(changes),
+                        document_changes: None,
+                        change_annotations: None,
+                    }),
+                    command: None,
+                    is_preferred: Some(sources.len() == 1),
+                    disabled: None,
+                    data: None,
+                };
+
+                actions.push(CodeActionOrCommand::CodeAction(action));
+            }
+        }
+    }
+
+    actions
 }
 
 #[cfg(test)]
@@ -1621,12 +1130,14 @@ foo.bar
             .expect("file uri");
         let uri_b = Url::from_file_path(std::env::temp_dir().join("rename_across_files_b.tlk"))
             .expect("file uri");
-        let code_a = "let foo = 1\n";
-        let code_b = "foo\n";
+        let code_a = "public let foo = 1\n";
+        let code_b = "import { foo } from ./rename_across_files_a.tlk\nfoo\n";
 
         let module = workspace_for_docs(vec![(uri_a.clone(), code_a), (uri_b.clone(), code_b)]);
 
-        let byte_offset = code_b.find("foo").expect("foo") as u32;
+        // Find the "foo" reference in file B (after the import statement)
+        let foo_in_b = code_b.rfind("foo").expect("foo");
+        let byte_offset = foo_in_b as u32;
         let edit = super::rename_at(&module, &uri_b, byte_offset, "bar").expect("workspace edit");
 
         let range_a = super::byte_span_to_range_utf16(
@@ -1635,7 +1146,9 @@ foo.bar
             (code_a.find("foo").expect("foo") + 3) as u32,
         )
         .expect("range a");
-        let range_b = super::byte_span_to_range_utf16(code_b, 0, 3).expect("range b");
+        // The foo reference in B is at the last occurrence
+        let range_b = super::byte_span_to_range_utf16(code_b, foo_in_b as u32, (foo_in_b + 3) as u32)
+            .expect("range b");
 
         assert_eq!(edit_ranges_for_uri(&edit, &uri_a), vec![range_a]);
         assert_eq!(edit_ranges_for_uri(&edit, &uri_b), vec![range_b]);
@@ -1656,8 +1169,8 @@ foo.bar
 
         let path_a = root.join("a.tlk");
         let path_b = root.join("b.tlk");
-        let code_a = "foo\n";
-        let code_b = "let foo = 1\n";
+        let code_a = "import { foo } from ./b.tlk\nfoo\n";
+        let code_b = "public let foo = 1\n";
         std::fs::write(&path_a, code_a).expect("write a");
         std::fs::write(&path_b, code_b).expect("write b");
 
@@ -1685,7 +1198,8 @@ foo.bar
         );
 
         let workspace = super::workspace_analysis(&mut state, &uri_a).expect("workspace");
-        let byte_offset = code_a.find("foo").expect("foo") as u32;
+        // Find the "foo" reference after the import statement
+        let byte_offset = code_a.rfind("foo").expect("foo") as u32;
 
         let target = super::goto_definition(&workspace, None, &uri_a, byte_offset)
             .expect("definition location");
@@ -1733,12 +1247,12 @@ foo.bar
         let uri_b = Url::from_file_path(std::env::temp_dir().join("extend_before_struct_b.tlk"))
             .expect("file uri");
 
-        let code_a = r#"
+        let code_a = r#"import { Person } from ./extend_before_struct_b.tlk
 extend Person {
   func foo() {}
 }
 "#;
-        let code_b = "struct Person {}\n";
+        let code_b = "public struct Person {}\n";
 
         let module = workspace_for_docs(vec![(uri_a.clone(), code_a), (uri_b.clone(), code_b)]);
         let doc_id = super::document_id_for_uri(&uri_a);
@@ -1807,5 +1321,108 @@ extend Person {
         let generic_t_offset = code.find("<T>").expect("generic T") + 1;
         let target = super::goto_definition(&module, None, &uri, generic_t_offset as u32);
         assert!(target.is_some(), "should find generic declaration");
+    }
+
+    #[test]
+    fn goto_definition_on_imported_symbol_navigates_to_definition() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "talk_import_symbol_test_{}_{}",
+            std::process::id(),
+            nonce
+        ));
+        std::fs::create_dir_all(&root).expect("create temp root");
+
+        let path_a = root.join("a.tlk");
+        let path_b = root.join("b.tlk");
+        let code_a = "public let foo = 1\n";
+        let code_b = "import { foo } from ./a.tlk\nfoo\n";
+        std::fs::write(&path_a, code_a).expect("write a");
+        std::fs::write(&path_b, code_b).expect("write b");
+
+        let uri_a = Url::from_file_path(&path_a).expect("uri a");
+        let uri_b = Url::from_file_path(&path_b).expect("uri b");
+
+        let module = workspace_for_docs(vec![(uri_a.clone(), code_a), (uri_b.clone(), code_b)]);
+
+        // Click on "foo" in "import { foo }" - should navigate to definition in a.tlk
+        let import_foo_offset = code_b.find("{ foo }").expect("import foo") + 2;
+        let target =
+            super::goto_definition(&module, None, &uri_b, import_foo_offset as u32).expect("target");
+
+        assert_eq!(target.uri, uri_a, "should navigate to a.tlk");
+        // Should point to the definition location in a.tlk
+        assert_eq!(target.range.start.line, 0);
+    }
+
+    #[test]
+    fn goto_definition_on_import_path_navigates_to_file() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "talk_import_path_test_{}_{}",
+            std::process::id(),
+            nonce
+        ));
+        std::fs::create_dir_all(&root).expect("create temp root");
+
+        let path_a = root.join("a.tlk");
+        let path_b = root.join("b.tlk");
+        let code_a = "public let foo = 1\n";
+        let code_b = "import { foo } from ./a.tlk\nfoo\n";
+        std::fs::write(&path_a, code_a).expect("write a");
+        std::fs::write(&path_b, code_b).expect("write b");
+
+        let uri_a = Url::from_file_path(&path_a).expect("uri a");
+        let uri_b = Url::from_file_path(&path_b).expect("uri b");
+
+        let module = workspace_for_docs(vec![(uri_a.clone(), code_a), (uri_b.clone(), code_b)]);
+
+        // Click on "./a.tlk" in "from ./a.tlk" - should navigate to a.tlk
+        let path_offset = code_b.find("./a.tlk").expect("import path") as u32;
+        let target = super::goto_definition(&module, None, &uri_b, path_offset).expect("target");
+
+        assert_eq!(target.uri, uri_a, "should navigate to a.tlk");
+        // Should point to the start of the file
+        assert_eq!(target.range.start.line, 0);
+        assert_eq!(target.range.start.character, 0);
+    }
+
+    #[test]
+    fn format_does_not_add_extra_newlines() {
+        // Simulates what LSP formatting does: calculate range, get formatted text, apply edit
+        fn apply_format(input: &str) -> String {
+            let formatted = crate::formatter::format_string(input);
+            let newline_count = input.matches('\n').count();
+            let ends_with_newline = input.ends_with('\n');
+            let last_line = newline_count;
+            let last_char = if ends_with_newline {
+                0
+            } else {
+                input.rsplit('\n').next().map(|s| s.len()).unwrap_or(input.len())
+            };
+
+            // Apply the edit: replace range [0,0] to [last_line, last_char] with formatted
+            let mut result = String::new();
+            for (i, line) in input.lines().enumerate() {
+                if i == last_line {
+                    // This line gets partially replaced
+                    result.push_str(&line[last_char..]);
+                    break;
+                }
+            }
+            // If we ended exactly at the end, result is empty (full replacement)
+            format!("{formatted}{result}")
+        }
+
+        assert_eq!(apply_format("let x = 1\n"), "let x = 1\n");
+        assert_eq!(apply_format("let x = 1\n\n\n"), "let x = 1\n");
+        assert_eq!(apply_format("let x=1\n"), "let x = 1\n");
+        assert_eq!(apply_format("let x=1\n\n"), "let x = 1\n");
     }
 }

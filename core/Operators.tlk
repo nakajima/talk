@@ -1,31 +1,31 @@
-protocol Add {
+public protocol Add {
 	associated RHS
 	associated Ret
 	func add(rhs: RHS) -> Ret
 }
 
-protocol Subtract {
+public protocol Subtract {
 	associated RHS
 	associated Ret
 
 	func minus(rhs: RHS) -> Ret
 }
 
-protocol Multiply {
+public protocol Multiply {
 	associated RHS
 	associated Ret
 
 	func times(rhs: RHS) -> Ret
 }
 
-protocol Divide {
+public protocol Divide {
 	associated RHS
 	associated Ret
 
 	func divide(rhs: RHS) -> Ret
 }
 
-protocol Equatable {
+public protocol Equatable {
 	associated RHS
 
 	func equals(rhs: RHS) -> Bool
@@ -37,13 +37,13 @@ protocol Equatable {
 	}
 }
 
-protocol Negatable {
+public protocol Negatable {
 	associated Ret
 
 	func negated() -> Ret
 }
 
-protocol Not {
+public protocol Not {
 	associated Ret
 
 	func not() -> Ret
@@ -133,7 +133,7 @@ extend Float: Negatable {
 	}
 }
 
-protocol Comparable: Equatable {
+public protocol Comparable: Equatable {
 	associated RHS
 
 	func gt(rhs: RHS) -> Bool

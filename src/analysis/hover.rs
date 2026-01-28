@@ -501,7 +501,7 @@ fn hover_line_for_name_and_type(
     name: String,
     symbol: Option<Symbol>,
     types: Option<&crate::types::types::Types>,
-    node_ty: Option<&crate::types::ty::Ty>,
+    node_ty: Option<&crate::types::infer_ty::Ty>,
 ) -> Option<String> {
     let symbol_entry = symbol.and_then(|sym| types.and_then(|types| types.get_symbol(&sym)));
 
@@ -523,7 +523,7 @@ fn hover_line_for_name_and_type(
 
     // Check if the type is a function type
     let is_func_type = symbol_entry
-        .map(|entry| matches!(entry.as_mono_ty(), crate::types::ty::Ty::Func(..)))
+        .map(|entry| matches!(entry.as_mono_ty(), crate::types::infer_ty::Ty::Func(..)))
         .unwrap_or(false);
 
     let type_str = if is_instance_method {

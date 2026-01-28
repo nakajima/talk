@@ -78,7 +78,7 @@ verify_ir = []
 
 [profile.release]
 strip = true  # Automatically strip symbols from the binary.
-debug = false
+debug = true
 #opt-level=1
 
 [lints.clippy]

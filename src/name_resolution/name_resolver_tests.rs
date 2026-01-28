@@ -1619,4 +1619,140 @@ pub mod tests {
             indexset! { Symbol::Global(1.into()) }
         );
     }
+
+    /// Helper to resolve multiple files with isolated modules enabled
+    fn resolve_multi(
+        files: &[(&str, &str)],
+    ) -> (Vec<AST<NameResolved>>, ResolvedNames) {
+        use crate::lexer::Lexer;
+        use crate::parser::Parser;
+
+        let modules = ModuleEnvironment::default();
+        let mut name_resolver = NameResolver::new(Rc::new(modules), ModuleId::Current);
+        let mut parseds = Vec::new();
+
+        for (i, (path, code)) in files.iter().enumerate() {
+            let lexer = Lexer::new(code);
+            let parser = Parser::new(path.to_string(), FileID(i as u32), lexer);
+            let ast = parser.parse().unwrap().0;
+            parseds.push(ast);
+        }
+
+        name_resolver.resolve(parseds)
+    }
+
+    #[test]
+    fn resolves_named_import() {
+        let (asts, resolved) = resolve_multi(&[
+            ("./utils.tlk", "public let helper = 42"),
+            ("./main.tlk", "import { helper } from ./utils.tlk\nhelper"),
+        ]);
+
+        // Check that the main file resolved 'helper' to the symbol from utils
+        assert!(
+            resolved.diagnostics.is_empty(),
+            "Expected no errors but got: {:?}",
+            resolved.diagnostics
+        );
+
+        // The second file should have resolved the variable reference
+        let main_ast = &asts[1];
+        // Check the last statement (the 'helper' reference) resolved correctly
+        if let crate::node::Node::Stmt(Stmt {
+            kind: StmtKind::Expr(Expr { kind: ExprKind::Variable(name), .. }),
+            ..
+        }) = &main_ast.roots[1]
+        {
+            assert!(
+                matches!(name, Name::Resolved(Symbol::Global(_), _)),
+                "Expected resolved global, got {name:?}"
+            );
+        } else {
+            panic!("Expected variable expression");
+        }
+    }
+
+    #[test]
+    fn resolves_import_all() {
+        let (asts, resolved) = resolve_multi(&[
+            ("./lib.tlk", "public let a = 1\npublic let b = 2"),
+            ("./main.tlk", "import _ from ./lib.tlk\na\nb"),
+        ]);
+
+        assert!(
+            resolved.diagnostics.is_empty(),
+            "Expected no errors but got: {:?}",
+            resolved.diagnostics
+        );
+
+        // Both 'a' and 'b' should be resolved in main
+        let main_ast = &asts[1];
+        assert!(main_ast.roots.len() >= 3, "Expected at least 3 roots");
+    }
+
+    #[test]
+    fn import_nonexistent_symbol_errors() {
+        let (_, resolved) = resolve_multi(&[
+            ("./lib.tlk", "let existing = 1"),
+            ("./main.tlk", "import { nonexistent } from ./lib.tlk"),
+        ]);
+
+        assert!(
+            !resolved.diagnostics.is_empty(),
+            "Expected error for nonexistent symbol"
+        );
+    }
+
+    #[test]
+    fn import_nonexistent_module_errors() {
+        let (_, resolved) = resolve_multi(&[("./main.tlk", "import { a } from ./missing.tlk")]);
+
+        assert!(
+            !resolved.diagnostics.is_empty(),
+            "Expected error for missing module"
+        );
+    }
+
+    #[test]
+    fn import_private_symbol_errors() {
+        let (_, resolved) = resolve_multi(&[
+            ("./lib.tlk", "let private_val = 42"),
+            ("./main.tlk", "import { private_val } from ./lib.tlk"),
+        ]);
+
+        assert!(
+            !resolved.diagnostics.is_empty(),
+            "Expected error for importing private symbol"
+        );
+        // Verify it's specifically a SymbolNotPublic error
+        let has_private_error = resolved.diagnostics.iter().any(|d| {
+            matches!(
+                d,
+                AnyDiagnostic::NameResolution(Diagnostic {
+                    kind: NameResolverError::SymbolNotPublic(_),
+                    ..
+                })
+            )
+        });
+        assert!(has_private_error, "Expected SymbolNotPublic error");
+    }
+
+    #[test]
+    fn duplicate_export_emits_error() {
+        let code = r#"
+public let a = 1
+public let a = 2
+"#;
+        let (_, resolved) = resolve_err(code);
+        let has_duplicate_error = resolved.diagnostics.iter().any(|d| {
+            matches!(
+                d,
+                AnyDiagnostic::NameResolution(Diagnostic {
+                    kind: NameResolverError::DuplicateExport(_),
+                    ..
+                })
+            )
+        });
+        assert!(has_duplicate_error, "Expected DuplicateExport error");
+    }
 }

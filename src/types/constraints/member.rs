@@ -10,8 +10,8 @@ use crate::{
             constraint::ConstraintCause,
             store::{ConstraintId, ConstraintStore},
         },
-        infer_row::InferRow,
-        infer_ty::{InferTy, Meta},
+        infer_row::Row,
+        infer_ty::{Meta, Ty},
         passes::uncurry_function,
         predicate::Predicate,
         solve_context::SolveContext,
@@ -26,9 +26,9 @@ use crate::{
 pub struct Member {
     pub id: ConstraintId,
     pub node_id: NodeID,
-    pub receiver: InferTy,
+    pub receiver: Ty,
     pub label: Label,
-    pub ty: InferTy,
+    pub ty: Ty,
 }
 
 impl Member {
@@ -50,7 +50,7 @@ impl Member {
                 ty,
                 self.node_id
             );
-            if let InferTy::Var { id, .. } = &receiver {
+            if let Ty::Var { id, .. } = &receiver {
                 tracing::debug!(
                     "  receiver is Var, lookup_reverse_instantiation: {:?}",
                     session.lookup_reverse_instantiation(*id)
@@ -59,10 +59,10 @@ impl Member {
         }
 
         match &receiver {
-            InferTy::Var { id, .. } => {
+            Ty::Var { id, .. } => {
                 // Use lookup_reverse_instantiation to find the type param through the union-find.
                 // This handles the case where the meta was unified with another that has the mapping.
-                if let Some(InferTy::Param(param_id, _)) = session.lookup_reverse_instantiation(*id)
+                if let Some(Ty::Param(param_id, _)) = session.lookup_reverse_instantiation(*id)
                     && let SolveResult::Solved(metas) =
                         self.lookup_type_param_member(constraints, context, session, &ty, param_id)
                 {
@@ -73,9 +73,9 @@ impl Member {
 
                 return SolveResult::Defer(DeferralReason::WaitingOnMeta(Meta::Ty(*id)));
             }
-            InferTy::Rigid(id) => {
-                let Some(InferTy::Param(type_param_id, _)) =
-                    session.skolem_map.get(&InferTy::Rigid(*id))
+            Ty::Rigid(id) => {
+                let Some(Ty::Param(type_param_id, _)) =
+                    session.skolem_map.get(&Ty::Rigid(*id))
                 else {
                     unreachable!();
                 };
@@ -88,10 +88,10 @@ impl Member {
                     *type_param_id,
                 );
             }
-            InferTy::Param(id, _) => {
+            Ty::Param(id, _) => {
                 return self.lookup_type_param_member(constraints, context, session, &ty, *id);
             }
-            InferTy::Constructor { name, .. } => {
+            Ty::Constructor { name, .. } => {
                 return self.lookup_static_member(
                     constraints,
                     context,
@@ -99,9 +99,9 @@ impl Member {
                     &name.symbol().unwrap_or_else(|_| unreachable!()),
                 );
             }
-            InferTy::Record(box row) => {
+            Ty::Record(_, box row) => {
                 constraints._has_field(
-                    row.clone(),
+                    (*row).clone(),
                     self.label.clone(),
                     ty,
                     Some(self.node_id),
@@ -109,7 +109,7 @@ impl Member {
                 );
                 return SolveResult::Solved(Default::default());
             }
-            InferTy::Primitive(symbol) => {
+            Ty::Primitive(symbol) => {
                 return self.lookup_nominal_member(
                     constraints,
                     context,
@@ -118,7 +118,7 @@ impl Member {
                     Default::default(),
                 );
             }
-            InferTy::Nominal { symbol, type_args } => {
+            Ty::Nominal { symbol, type_args } => {
                 return self.lookup_nominal_member(
                     constraints,
                     context,
@@ -140,7 +140,7 @@ impl Member {
         constraints: &mut ConstraintStore,
         context: &mut SolveContext,
         session: &mut TypeSession,
-        ty: &InferTy,
+        ty: &Ty,
         type_param: Symbol,
     ) -> SolveResult {
         let mut solved_metas: Vec<Meta> = Default::default();
@@ -317,7 +317,7 @@ impl Member {
             entry.instantiate(self.node_id, constraints, context, session)
         } else {
             return SolveResult::Defer(DeferralReason::WaitingOnSymbol(member_sym));
-            // InferTy::Error(
+            // Ty::Error(
             //     TypeError::MemberNotFound(self.receiver.clone(), self.label.to_string()).into(),
             // )
         };
@@ -328,7 +328,7 @@ impl Member {
             };
 
             for param in nominal.type_params.iter() {
-                let InferTy::Param(param_id, _) = param else {
+                let Ty::Param(param_id, _) = param else {
                     continue;
                 };
 
@@ -340,7 +340,7 @@ impl Member {
                     continue;
                 }
 
-                let InferTy::Var { id: meta, .. } = session.new_ty_meta_var(context.level()) else {
+                let Ty::Var { id: meta, .. } = session.new_ty_meta_var(context.level()) else {
                     unreachable!();
                 };
 
@@ -355,7 +355,7 @@ impl Member {
                 session.type_catalog.instantiations.insert_ty(
                     self.node_id,
                     *param_id,
-                    InferTy::Var {
+                    Ty::Var {
                         id: meta,
                         level: context.level(),
                     },
@@ -398,12 +398,12 @@ impl Member {
                         curry(
                             instantiated_variants,
                             instantiated_enum,
-                            InferRow::Empty.into(),
+                            Row::Empty.into(),
                         )
                     }
                 }
             } else {
-                InferTy::Error(
+                Ty::Error(
                     TypeError::TypeNotFound(format!(
                         "{nominal_symbol:?} while looking up static member {:?}",
                         self.label
@@ -426,7 +426,7 @@ impl Member {
         context: &mut SolveContext,
         session: &mut TypeSession,
         symbol: &Symbol,
-        type_args: &[InferTy],
+        type_args: &[Ty],
     ) -> SolveResult {
         let mut solved_metas: Vec<Meta> = Default::default();
         let cause = ConstraintCause::Member(self.node_id);
@@ -448,7 +448,7 @@ impl Member {
                     };
 
                     let method = entry.instantiate(self.node_id, constraints, context, session);
-                    let method = session.apply(method, &mut context.substitutions_mut());
+                    let method = session.apply(&method, &mut context.substitutions_mut());
                     let (method_receiver, method_fn) = consume_self(&method);
 
                     match unify(&method_receiver, &self.receiver, context, session)
@@ -481,7 +481,7 @@ impl Member {
 
                     let constructor_ty = match values.len() {
                         0 => self.receiver.clone(),
-                        _ => curry(values, self.receiver.clone(), InferRow::Empty.into()),
+                        _ => curry(values, self.receiver.clone(), Row::Empty.into()),
                     };
 
                     let group = constraints.copy_group(self.id);
@@ -521,16 +521,16 @@ impl Member {
 }
 
 #[instrument(level = tracing::Level::TRACE, ret)]
-pub fn consume_self(method: &InferTy) -> (InferTy, InferTy) {
+pub fn consume_self(method: &Ty) -> (Ty, Ty) {
     assert!(
-        matches!(method, InferTy::Func(..)),
+        matches!(method, Ty::Func(..)),
         "didn't get func to consume self"
     );
     let (mut params, ret, effects) = uncurry_function(method.clone());
     let method_receiver = params.remove(0);
     if params.is_empty() {
         // We need to make sure there's at least one param or else curry doesn't return a func.
-        params.insert(0, InferTy::Void);
+        params.insert(0, Ty::Void);
     }
     (method_receiver, curry(params, ret, effects.into()))
 }

@@ -1,4 +1,6 @@
-struct Array<Element> {
+import { _alloc, _load } from ./Memory.tlk
+
+public struct Array<Element> {
 	let storage: RawPtr
 	let count: Int
 	let capacity: Int

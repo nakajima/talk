@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use lazy_static::lazy_static;
 
 use crate::compiling::{
@@ -6,10 +8,10 @@ use crate::compiling::{
 };
 
 lazy_static! {
-    static ref CORE_MODULE: Module = _compile();
+    static ref CORE_MODULE: Arc<Module> = Arc::new(_compile());
 }
 
-pub fn compile() -> Module {
+pub fn compile() -> Arc<Module> {
     CORE_MODULE.clone()
 }
 
@@ -20,12 +22,12 @@ fn _compile() -> Module {
     config.mode = CompilationMode::Library;
     let driver = Driver::new_bare(
         vec![
-            Source::from(include_str!("../../core/Optional.tlk")),
-            Source::from(include_str!("../../core/Operators.tlk")),
-            Source::from(include_str!("../../core/String.tlk")),
-            Source::from(include_str!("../../core/Memory.tlk")),
-            Source::from(include_str!("../../core/Array.tlk")),
-            Source::from(include_str!("../../core/Iterable.tlk")),
+            Source::in_memory("Optional.tlk".into(), include_str!("../../core/Optional.tlk")),
+            Source::in_memory("Operators.tlk".into(), include_str!("../../core/Operators.tlk")),
+            Source::in_memory("String.tlk".into(), include_str!("../../core/String.tlk")),
+            Source::in_memory("Memory.tlk".into(), include_str!("../../core/Memory.tlk")),
+            Source::in_memory("Array.tlk".into(), include_str!("../../core/Array.tlk")),
+            Source::in_memory("Iterable.tlk".into(), include_str!("../../core/Iterable.tlk")),
         ],
         config,
     );

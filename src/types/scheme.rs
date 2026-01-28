@@ -9,11 +9,10 @@ use crate::{
     node_id::NodeID,
     types::{
         constraints::store::ConstraintStore,
-        infer_row::{InferRow, RowParamId},
-        infer_ty::{InferTy, Level},
+        infer_row::{Row, RowParamId},
+        infer_ty::{Level, Ty},
         predicate::Predicate,
         solve_context::SolveContext,
-        ty::{SomeType, Ty},
         type_operations::{InstantiationSubstitutions, instantiate_ty},
         type_session::TypeSession,
     },
@@ -26,15 +25,15 @@ pub enum ForAll {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
-pub struct Scheme<T: SomeType> {
+pub struct Scheme {
     #[drive(skip)]
     pub(crate) foralls: IndexSet<ForAll>,
     #[drive(skip)]
-    pub(crate) predicates: Vec<Predicate<T>>,
-    pub(crate) ty: T,
+    pub(crate) predicates: Vec<Predicate>,
+    pub(crate) ty: Ty,
 }
 
-impl<T: SomeType> std::hash::Hash for Scheme<T> {
+impl std::hash::Hash for Scheme {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.ty.hash(state);
         for forall in self.foralls.iter() {
@@ -43,29 +42,7 @@ impl<T: SomeType> std::hash::Hash for Scheme<T> {
     }
 }
 
-// impl<T: SomeType> SomeType for EnvEntry<T> {
-//     type RowType = InferRow;
-
-//     fn void() -> Self {
-//         EnvEntry::Mono(T::void())
-//     }
-
-//     fn contains_var(&self) -> bool {
-//         match self {
-//             Self::Mono(ty) => ty.contains_var(),
-//             Self::Scheme(scheme) => scheme.ty.contains_var(),
-//         }
-//     }
-
-//     fn import(self, module_id: ModuleId) -> Self {
-//         match self {
-//             EnvEntry::Mono(ty) => EnvEntry::Mono(ty.import(module_id)),
-//             EnvEntry::Scheme(scheme) => EnvEntry::Scheme(scheme.import(module_id)),
-//         }
-//     }
-// }
-
-impl<T: SomeType> Scheme<T> {
+impl Scheme {
     pub fn import(self, module_id: ModuleId) -> Self {
         Self {
             foralls: self.foralls,
@@ -77,38 +54,15 @@ impl<T: SomeType> Scheme<T> {
             ty: self.ty.import(module_id),
         }
     }
-}
 
-impl Scheme<InferTy> {
-    pub fn new(
-        foralls: IndexSet<ForAll>,
-        predicates: Vec<Predicate<InferTy>>,
-        ty: InferTy,
-    ) -> Self {
+    pub fn new(foralls: IndexSet<ForAll>, predicates: Vec<Predicate>, ty: Ty) -> Self {
         Self {
             foralls,
             predicates,
             ty,
         }
     }
-}
 
-impl Scheme<Ty> {
-    pub fn new(foralls: IndexSet<ForAll>, predicates: Vec<Predicate<Ty>>, ty: Ty) -> Self {
-        assert!(
-            !ty.contains_var(),
-            "Scheme ty cannot contain type/row meta vars: {ty:?}"
-        );
-
-        Self {
-            foralls,
-            predicates,
-            ty,
-        }
-    }
-}
-
-impl Scheme<InferTy> {
     #[instrument(skip(self, session, context, constraints), ret)]
     pub(super) fn instantiate(
         &self,
@@ -116,7 +70,7 @@ impl Scheme<InferTy> {
         constraints: &mut ConstraintStore,
         context: &mut SolveContext,
         session: &mut TypeSession,
-    ) -> InferTy {
+    ) -> Ty {
         tracing::debug!(
             "Scheme::instantiate - foralls: {:?}, predicates: {:?}, ty: {:?}",
             self.foralls,
@@ -131,7 +85,7 @@ impl Scheme<InferTy> {
                         session.type_catalog.instantiations.insert_ty(
                             id,
                             *param,
-                            InferTy::Var {
+                            Ty::Var {
                                 id: *meta,
                                 level: Level(1),
                             },
@@ -140,7 +94,7 @@ impl Scheme<InferTy> {
                         continue;
                     }
 
-                    let InferTy::Var { id: meta, .. } = session.new_ty_meta_var(level) else {
+                    let Ty::Var { id: meta, .. } = session.new_ty_meta_var(level) else {
                         unreachable!()
                     };
 
@@ -155,11 +109,7 @@ impl Scheme<InferTy> {
                                 ..
                             } = pred
                             {
-                                if p == param {
-                                    Some(*protocol_id)
-                                } else {
-                                    None
-                                }
+                                if p == param { Some(*protocol_id) } else { None }
                             } else {
                                 None
                             }
@@ -170,13 +120,13 @@ impl Scheme<InferTy> {
                     session
                         .reverse_instantiations
                         .ty
-                        .insert(meta, InferTy::Param(*param, bounds));
+                        .insert(meta, Ty::Param(*param, bounds));
                     context.instantiations_mut().insert_ty(id, *param, meta);
 
                     session.type_catalog.instantiations.insert_ty(
                         id,
                         *param,
-                        InferTy::Var { id: meta, level },
+                        Ty::Var { id: meta, level },
                     );
                 }
                 ForAll::Row(param) => {
@@ -184,7 +134,7 @@ impl Scheme<InferTy> {
                         continue;
                     }
 
-                    let InferRow::Var(meta) = session.new_row_meta_var(level) else {
+                    let Row::Var(meta) = session.new_row_meta_var(level) else {
                         unreachable!()
                     };
                     tracing::trace!("instantiating {param:?} with {meta:?}");
@@ -193,7 +143,7 @@ impl Scheme<InferTy> {
                     session
                         .type_catalog
                         .instantiations
-                        .insert_row(id, *param, InferRow::Var(meta));
+                        .insert_row(id, *param, Row::Var(meta));
                 }
             };
         }
@@ -214,11 +164,11 @@ impl Scheme<InferTy> {
     pub fn instantiate_with_args(
         &self,
         id: NodeID,
-        args: &[(InferTy, NodeID)],
+        args: &[(Ty, NodeID)],
         session: &mut TypeSession,
         context: &mut SolveContext,
         constraints: &mut ConstraintStore,
-    ) -> (InferTy, InstantiationSubstitutions) {
+    ) -> (Ty, InstantiationSubstitutions) {
         // Map each quantified meta id to a fresh meta at this use-site level
         let mut substitutions = InstantiationSubstitutions::default();
         let (ty_foralls, row_foralls): (Vec<ForAll>, Vec<ForAll>) = self
@@ -234,8 +184,7 @@ impl Scheme<InferTy> {
                 unreachable!()
             };
 
-            let ty @ InferTy::Var { id: meta_var, .. } = session.new_ty_meta_var(context.level())
-            else {
+            let ty @ Ty::Var { id: meta_var, .. } = session.new_ty_meta_var(context.level()) else {
                 unreachable!();
             };
 
@@ -250,11 +199,7 @@ impl Scheme<InferTy> {
                         ..
                     } = pred
                     {
-                        if p == param {
-                            Some(*protocol_id)
-                        } else {
-                            None
-                        }
+                        if p == param { Some(*protocol_id) } else { None }
                     } else {
                         None
                     }
@@ -264,7 +209,7 @@ impl Scheme<InferTy> {
             session
                 .reverse_instantiations
                 .ty
-                .insert(meta_var, InferTy::Param(*param, bounds));
+                .insert(meta_var, Ty::Param(*param, bounds));
 
             if let Some((arg_ty, arg_id)) = args.pop() {
                 constraints.wants_equals_at(
@@ -279,7 +224,7 @@ impl Scheme<InferTy> {
             session.type_catalog.instantiations.insert_ty(
                 id,
                 *param,
-                InferTy::Var {
+                Ty::Var {
                     id: meta_var,
                     level: Level(1),
                 },
@@ -291,7 +236,7 @@ impl Scheme<InferTy> {
                 unreachable!();
             };
 
-            let InferRow::Var(row_meta) = session.new_row_meta_var(context.level()) else {
+            let Row::Var(row_meta) = session.new_row_meta_var(context.level()) else {
                 unreachable!()
             };
             substitutions.insert_row(id, row_param, row_meta);
@@ -302,7 +247,7 @@ impl Scheme<InferTy> {
             session
                 .type_catalog
                 .instantiations
-                .insert_row(id, row_param, InferRow::Var(row_meta));
+                .insert_row(id, row_param, Row::Var(row_meta));
         }
 
         for predicate in &self.predicates {

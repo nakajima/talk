@@ -1,17 +1,17 @@
-effect 'heap() -> ()
+public effect 'heap() -> ()
 
-func _alloc(count: Int) 'heap -> RawPtr {
+public func _alloc(count: Int) 'heap -> RawPtr {
 	@_ir(count) { %? = alloc Byte $0 }
 }
 
-func _load<Element>(ptr: RawPtr) 'heap -> Element {
+public func _load<Element>(ptr: RawPtr) 'heap -> Element {
 	@_ir(ptr) { %? = load Element $0 }
 }
 
-func _copy(from: RawPtr, to: RawPtr, length: Int) 'heap -> Void {
+public func _copy(from: RawPtr, to: RawPtr, length: Int) 'heap -> Void {
 	@_ir(from, to, length) { copy Byte $0 $1 $2 }
 }
 
-func _ptr_add(ptr: RawPtr, offset: Int) 'heap -> RawPtr {
+public func _ptr_add(ptr: RawPtr, offset: Int) 'heap -> RawPtr {
 	@_ir(ptr, offset) { %? = add RawPtr $0 $1 }
 }

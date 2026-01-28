@@ -4,13 +4,14 @@ use crate::ast::{AST, NewAST, Parsed};
 use crate::diagnostic::{AnyDiagnostic, Diagnostic, Severity};
 use crate::label::Label;
 use crate::lexer::Lexer;
+use crate::lexing::unescape;
 use crate::name::Name;
 use crate::node::Node;
 use crate::node_id::{FileID, NodeID};
 use crate::node_kinds::block::Block;
 use crate::node_kinds::body::Body;
 use crate::node_kinds::call_arg::CallArg;
-use crate::node_kinds::decl::{Decl, DeclKind};
+use crate::node_kinds::decl::{Decl, DeclKind, Import, ImportPath, ImportedSymbol, ImportedSymbols, Visibility};
 use crate::node_kinds::expr::{Expr, ExprKind};
 use crate::node_kinds::func::{EffectSet, Func};
 use crate::node_kinds::func_signature::FuncSignature;
@@ -74,6 +75,7 @@ pub struct SourceLocationStart {
 pub type SourceLocationStack = Vec<SourceLocationStart>;
 
 pub struct Parser<'a> {
+    source: &'a str,
     lexer: Lexer<'a>,
     source_location_stack: SourceLocationStack,
     next: Option<Token>,
@@ -88,7 +90,9 @@ pub struct Parser<'a> {
 #[allow(clippy::expect_used)]
 impl<'a> Parser<'a> {
     pub fn new(path: impl Into<String>, file_id: FileID, lexer: Lexer<'a>) -> Self {
+        let source = lexer.code;
         Self {
+            source,
             lexer,
             next: None,
             current: None,
@@ -107,6 +111,11 @@ impl<'a> Parser<'a> {
                 file_id,
             },
         }
+    }
+
+    /// Extract lexeme from a token
+    fn lexeme(&self, token: &Token) -> &'a str {
+        token.lexeme(self.source)
     }
 
     pub fn parse(self) -> Result<(AST<Parsed>, Vec<AnyDiagnostic>), ParserError> {
@@ -171,7 +180,7 @@ impl<'a> Parser<'a> {
         use TokenKind::*;
         if matches!(
             kind,
-            Protocol | Struct | Enum | Let | Func | Case | Extend | Typealias | Effect
+            Protocol | Struct | Enum | Let | Func | Case | Extend | Typealias | Effect | Import | Public
         ) {
             self.decl(BlockContext::None, false)
         } else {
@@ -192,10 +201,20 @@ impl<'a> Parser<'a> {
         // Make sure to update next_root if adding a case here.
         use TokenKind::*;
         let node: Node = match &current.kind {
+            Public => {
+                self.consume(TokenKind::Public)?;
+                let mut node = self.decl(context, is_static)?;
+                // Set visibility to Public on the declaration
+                if let Node::Decl(ref mut decl) = node {
+                    decl.visibility = Visibility::Public;
+                }
+                node
+            }
             Static => {
                 self.consume(TokenKind::Static)?;
                 self.decl(context, true)?
             }
+            Import => self.import_decl()?.into(),
             Effect => self.effect()?.into(),
             Typealias => self.typealias()?.into(),
             Protocol => self
@@ -255,6 +274,7 @@ impl<'a> Parser<'a> {
         self.save_meta(tok, |id, span| Decl {
             id,
             span,
+            visibility: Visibility::default(),
             kind: DeclKind::Effect {
                 name: effect_name.clone().into(),
                 name_span,
@@ -262,6 +282,113 @@ impl<'a> Parser<'a> {
                 params,
                 ret,
             },
+        })
+    }
+
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
+    fn import_decl(&mut self) -> Result<Decl, ParserError> {
+        let tok = self.push_source_location();
+        self.consume(TokenKind::Import)?;
+
+        // Parse imported symbols: either { a, b } or _
+        let symbols = if self.did_match(TokenKind::Underscore)? {
+            ImportedSymbols::All
+        } else {
+            self.consume(TokenKind::LeftBrace)?;
+            let mut imported = vec![];
+
+            loop {
+                if matches!(self.current.as_ref().map(|t| &t.kind), Some(TokenKind::RightBrace)) {
+                    break;
+                }
+
+                let (name, name_span) = self.identifier()?;
+
+                // Check for alias: { Point: Pt }
+                let alias = if self.did_match(TokenKind::Colon)? {
+                    let (alias_name, _) = self.identifier()?;
+                    Some(alias_name)
+                } else {
+                    None
+                };
+
+                imported.push(ImportedSymbol {
+                    name,
+                    alias,
+                    span: name_span,
+                });
+
+                if !self.did_match(TokenKind::Comma)? {
+                    break;
+                }
+            }
+
+            self.consume(TokenKind::RightBrace)?;
+            ImportedSymbols::Named(imported)
+        };
+
+        // Expect 'from' keyword (as contextual keyword)
+        match &self.current {
+            Some(tok) if tok.kind == TokenKind::Identifier && self.lexeme(tok) == "from" => {
+                self.advance();
+            }
+            _ => {
+                return Err(ParserError::UnexpectedToken {
+                    expected: "from".into(),
+                    actual: format!("{:?}", self.current),
+                    token: self.current.clone(),
+                });
+            }
+        }
+
+        // Parse import path
+        let path_start = self.current.as_ref().map(|t| t.start).unwrap_or(0);
+
+        let path = if matches!(self.current.as_ref().map(|t| &t.kind), Some(TokenKind::Dot)) {
+            // Relative path: ./foo.tlk or ../foo.tlk
+            let mut path_str = String::new();
+
+            while let Some(ref current) = self.current.clone() {
+                match &current.kind {
+                    TokenKind::Dot => {
+                        path_str.push('.');
+                        self.advance();
+                    }
+                    TokenKind::Slash => {
+                        path_str.push('/');
+                        self.advance();
+                    }
+                    TokenKind::Identifier => {
+                        path_str.push_str(self.lexeme(&current));
+                        self.advance();
+                    }
+                    _ => break,
+                }
+            }
+
+            ImportPath::Relative(path_str)
+        } else {
+            // Package name: collections
+            let (pkg_name, _) = self.identifier()?;
+            ImportPath::Package(pkg_name)
+        };
+
+        let path_end = self.current.as_ref().map(|t| t.start).unwrap_or(path_start);
+        let path_span = Span {
+            start: path_start,
+            end: path_end,
+            file_id: self.file_id,
+        };
+
+        self.save_meta(tok, |id, span| Decl {
+            id,
+            span,
+            visibility: Visibility::default(),
+            kind: DeclKind::Import(Import {
+                symbols,
+                path,
+                path_span,
+            }),
         })
     }
 
@@ -275,6 +402,7 @@ impl<'a> Parser<'a> {
         self.save_meta(tok, |id, span| Decl {
             id,
             span,
+            visibility: Visibility::default(),
             kind: DeclKind::TypeAlias(lhs.into(), lhs_span, rhs),
         })
     }
@@ -291,6 +419,7 @@ impl<'a> Parser<'a> {
         self.save_meta(tok, |id, span| Decl {
             id,
             span,
+            visibility: Visibility::default(),
             kind: DeclKind::Init {
                 name: Name::Raw("init".into()),
                 params,
@@ -306,6 +435,7 @@ impl<'a> Parser<'a> {
             DeclKind::Func(func) => Ok(Decl {
                 id: func.id,
                 span: func_decl.span,
+                visibility: func_decl.visibility,
                 kind: DeclKind::Method {
                     func: Box::new(func),
                     is_static,
@@ -314,6 +444,7 @@ impl<'a> Parser<'a> {
             DeclKind::FuncSignature(func_sig) => Ok(Decl {
                 id: func_decl.id,
                 span: func_decl.span,
+                visibility: func_decl.visibility,
                 kind: DeclKind::MethodRequirement(func_sig),
             }),
             _ => unreachable!(),
@@ -339,6 +470,7 @@ impl<'a> Parser<'a> {
         self.save_meta(tok, |id, span| Decl {
             id,
             span,
+            visibility: Visibility::default(),
             kind: DeclKind::Property {
                 name: name.into(),
                 name_span,
@@ -365,6 +497,7 @@ impl<'a> Parser<'a> {
         self.save_meta(tok, |id, span| Decl {
             id,
             span,
+            visibility: Visibility::default(),
             kind: DeclKind::EnumVariant(name.into(), name_span, values),
         })
     }
@@ -424,7 +557,12 @@ impl<'a> Parser<'a> {
             }
         };
 
-        self.save_meta(tok, |id, span| Decl { id, span, kind })
+        self.save_meta(tok, |id, span| Decl {
+            id,
+            span,
+            visibility: Visibility::default(),
+            kind,
+        })
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
@@ -447,6 +585,7 @@ impl<'a> Parser<'a> {
         self.save_meta(tok, |id, span| Decl {
             id,
             span,
+            visibility: Visibility::default(),
             kind: DeclKind::Let {
                 lhs,
                 type_annotation,
@@ -468,7 +607,12 @@ impl<'a> Parser<'a> {
             FuncOrFuncSignature::FuncSignature(func_sig) => DeclKind::FuncSignature(func_sig),
         };
 
-        self.save_meta(tok, |id, span| Decl { id, span, kind })
+        self.save_meta(tok, |id, span| Decl {
+            id,
+            span,
+            visibility: Visibility::default(),
+            kind,
+        })
     }
 
     fn func(
@@ -521,19 +665,15 @@ impl<'a> Parser<'a> {
                     });
                 }
             }
-        } else if let Some(Token {
-            kind: TokenKind::EffectName(name),
-            start,
-            end,
-            ..
-        }) = self.current.clone()
+        } else if let Some(tok) = self.current.clone()
+            && tok.kind == TokenKind::EffectName
         {
             self.advance();
-            names.push(Name::Raw(name));
+            names.push(Name::Raw(self.lexeme(&tok).to_string()));
             spans.push(Span {
                 file_id: self.file_id,
-                start,
-                end,
+                start: tok.start,
+                end: tok.end,
             });
         } else {
             is_open = true;
@@ -599,7 +739,7 @@ impl<'a> Parser<'a> {
             TokenKind::If => self.if_stmt(),
             TokenKind::Loop => self.loop_stmt(),
             TokenKind::Return => self.return_stmt(),
-            TokenKind::Attribute(name) if name == "handle" => self.effect_handler(),
+            TokenKind::Attribute if self.lexeme(&current) == "handle" => self.effect_handler(),
             TokenKind::Continue => {
                 let tok = self.push_source_location();
                 self.consume(TokenKind::Continue)?;
@@ -751,14 +891,11 @@ impl<'a> Parser<'a> {
     #[instrument(level = tracing::Level::TRACE, skip(self))]
     pub(crate) fn attribute(&mut self, _can_assign: bool) -> Result<Node, ParserError> {
         let tok = self.push_source_location();
-        let Some(Token {
-            kind: TokenKind::Attribute(attr),
-            ..
-        }) = self.advance()
-        else {
+        let Some(attr_tok) = self.advance() else {
             unreachable!()
         };
 
+        let attr = self.lexeme(&attr_tok);
         if attr == "_ir" {
             return self.inline_ir(tok);
         }
@@ -773,14 +910,15 @@ impl<'a> Parser<'a> {
             )));
         };
 
-        let TokenKind::IRRegister(reg) = &current.kind else {
+        if current.kind != TokenKind::IRRegister {
             return Err(ParserError::UnexpectedToken {
                 expected: "IR Register".into(),
                 actual: current.kind.as_str().to_string(),
                 token: Some(current),
             });
-        };
+        }
 
+        let reg = self.lexeme(&current);
         self.advance();
 
         Ok(Register(reg.to_string()))
@@ -802,8 +940,8 @@ impl<'a> Parser<'a> {
             return Err(ParserError::UnexpectedEndOfInput(None));
         };
 
-        let ir_instr = if let TokenKind::IRRegister(dest) = &current.kind {
-            let dest = Register(dest.into());
+        let ir_instr = if current.kind == TokenKind::IRRegister {
+            let dest = Register(self.lexeme(&current).to_string());
             self.advance();
             self.consume(TokenKind::Equals)?;
             let (instr, instr_span) = self.identifier()?;
@@ -1093,17 +1231,18 @@ impl<'a> Parser<'a> {
     }
 
     fn ir_value(&mut self) -> Result<Value, ParserError> {
-        let Some(current) = &self.current else {
+        let Some(current) = self.current.clone() else {
             return Err(ParserError::UnexpectedEndOfInput(Some("IR value".into())));
         };
 
-        let val = match &current.kind {
-            TokenKind::IRRegister(reg) => Value::Reg(parse_lexed(reg)),
-            TokenKind::Int(int) => Value::Int(parse_lexed(int)),
-            TokenKind::Float(int) => Value::Float(parse_lexed(int)),
+        let val = match current.kind {
+            TokenKind::IRRegister => Value::Reg(parse_lexed(self.lexeme(&current))),
+            TokenKind::Int => Value::Int(parse_lexed(self.lexeme(&current))),
+            TokenKind::Float => Value::Float(parse_lexed(self.lexeme(&current))),
             TokenKind::True => Value::Bool(true),
             TokenKind::False => Value::Bool(false),
-            TokenKind::BoundVar(v) => {
+            TokenKind::BoundVar => {
+                let v = self.lexeme(&current);
                 if !v.chars().all(|c| c.is_numeric()) {
                     return Err(ParserError::UnexpectedToken {
                         expected: "Numeric bound var".into(),
@@ -1117,7 +1256,7 @@ impl<'a> Parser<'a> {
                     .map_err(|e| ParserError::BadLabel(format!("{e}")))?;
                 Value::Bind(i)
             }
-            TokenKind::Identifier(v) if v == "void" => Value::Void,
+            TokenKind::Identifier if self.lexeme(&current) == "void" => Value::Void,
             _ => {
                 return Err(ParserError::UnexpectedToken {
                     expected: "IR".to_string(),
@@ -1199,11 +1338,13 @@ impl<'a> Parser<'a> {
         };
 
         let kind = match current.kind {
-            TokenKind::Int(val) => {
+            TokenKind::Int => {
+                let val = self.lexeme(&current).to_string();
                 self.advance();
                 PatternKind::LiteralInt(val)
             }
-            TokenKind::Float(val) => {
+            TokenKind::Float => {
+                let val = self.lexeme(&current).to_string();
                 self.advance();
                 PatternKind::LiteralFloat(val)
             }
@@ -1215,7 +1356,8 @@ impl<'a> Parser<'a> {
                 self.advance();
                 PatternKind::LiteralFalse
             }
-            TokenKind::Identifier(name) => {
+            TokenKind::Identifier => {
+                let name = self.lexeme(&current).to_string();
                 self.advance();
                 if self.did_match(TokenKind::Dot)? {
                     let (member_name, member_name_span) = self.identifier()?;
@@ -1326,7 +1468,7 @@ impl<'a> Parser<'a> {
 
                     break;
                 }
-                TokenKind::Identifier(_) => {
+                TokenKind::Identifier => {
                     let (name, name_span) = self.identifier()?;
                     let name = Name::Raw(name);
                     let kind = if self.peek_is(TokenKind::Colon) {
@@ -1373,8 +1515,8 @@ impl<'a> Parser<'a> {
         let tok = self.push_source_location();
         self.consume(TokenKind::Dot)?;
 
-        let (name, name_span) = match self.current.clone().map(|c| c.kind) {
-            Some(TokenKind::Identifier(_)) => match self.identifier() {
+        let (name, name_span) = match self.current.clone() {
+            Some(cur) if cur.kind == TokenKind::Identifier => match self.identifier() {
                 Ok((name, span)) => (Label::Named(name), span),
                 Err(err) => {
                     self.record_diagnostic(err);
@@ -1382,7 +1524,8 @@ impl<'a> Parser<'a> {
                     return Ok(Node::Expr(self.add_expr(incomplete_member, tok)?));
                 }
             },
-            Some(TokenKind::Int(val)) => {
+            Some(cur) if cur.kind == TokenKind::Int => {
+                let val = self.lexeme(&cur).to_string();
                 self.advance();
                 (
                     Label::Positional(str::parse(&val).map_err(|_| ParserError::BadLabel(val))?),
@@ -1438,8 +1581,8 @@ impl<'a> Parser<'a> {
         let tok = self.push_lhs_location(lhs.id);
         self.consume(TokenKind::Dot)?;
 
-        let (name, name_span) = match self.current.clone().map(|c| c.kind) {
-            Some(TokenKind::Identifier(_)) => match self.identifier() {
+        let (name, name_span) = match self.current.clone() {
+            Some(cur) if cur.kind == TokenKind::Identifier => match self.identifier() {
                 Ok((name, span)) => (Label::Named(name), span),
                 Err(err) => {
                     self.record_diagnostic(err);
@@ -1448,7 +1591,8 @@ impl<'a> Parser<'a> {
                     return Ok(Node::Expr(self.add_expr(incomplete_member, tok)?));
                 }
             },
-            Some(TokenKind::Int(val)) => {
+            Some(cur) if cur.kind == TokenKind::Int => {
+                let val = self.lexeme(&cur).to_string();
                 self.advance();
                 (
                     Label::Positional(str::parse(&val).map_err(|_| ParserError::BadLabel(val))?),
@@ -1557,13 +1701,16 @@ impl<'a> Parser<'a> {
     pub fn literal(&mut self, _can_assign: bool) -> Result<Node, ParserError> {
         let tok = self.push_source_location();
         let current = self.advance().expect("unreachable");
-        let expr = match &current.kind {
-            TokenKind::Int(val) => self.add_expr(ExprKind::LiteralInt(val.to_string()), tok),
-            TokenKind::Float(val) => self.add_expr(ExprKind::LiteralFloat(val.to_string()), tok),
+        let lexeme = self.lexeme(&current);
+        let expr = match current.kind {
+            TokenKind::Int => self.add_expr(ExprKind::LiteralInt(lexeme.to_string()), tok),
+            TokenKind::Float => self.add_expr(ExprKind::LiteralFloat(lexeme.to_string()), tok),
             TokenKind::True => self.add_expr(ExprKind::LiteralTrue, tok),
             TokenKind::False => self.add_expr(ExprKind::LiteralFalse, tok),
-            TokenKind::StringLiteral(val) => {
-                self.add_expr(ExprKind::LiteralString(val.into()), tok)
+            TokenKind::StringLiteral => {
+                // Unescape the string literal (raw lexeme includes quotes)
+                let unescaped = unescape(lexeme);
+                self.add_expr(ExprKind::LiteralString(unescaped), tok)
             }
             _ => unreachable!(),
         };
@@ -1839,7 +1986,7 @@ impl<'a> Parser<'a> {
             if matches!(
                 &self.current,
                 Some(Token {
-                    kind: TokenKind::Identifier(_),
+                    kind: TokenKind::Identifier,
                     ..
                 })
             ) && matches!(
@@ -2201,7 +2348,7 @@ impl<'a> Parser<'a> {
 
         match &self.current {
             Some(Token {
-                kind: TokenKind::Identifier(_),
+                kind: TokenKind::Identifier,
                 ..
             }) => {
                 matches!(
@@ -2277,6 +2424,7 @@ impl<'a> Parser<'a> {
         self.save_meta(tok, |id, span| Decl {
             id,
             span,
+            visibility: Visibility::default(),
             kind: DeclKind::Associated { generic },
         })
     }
@@ -2346,13 +2494,7 @@ impl<'a> Parser<'a> {
     }
 
     fn effect_name(&mut self) -> Result<(String, Span), ParserError> {
-        let Some(Token {
-            kind: TokenKind::EffectName(effect_name),
-            start: name_start,
-            end: name_end,
-            ..
-        }) = self.advance()
-        else {
+        let Some(tok) = self.advance() else {
             return Err(ParserError::UnexpectedToken {
                 expected: "effect name (must start with ')".into(),
                 actual: format!("{:?}", self.current),
@@ -2360,10 +2502,19 @@ impl<'a> Parser<'a> {
             });
         };
 
+        if tok.kind != TokenKind::EffectName {
+            return Err(ParserError::UnexpectedToken {
+                expected: "effect name (must start with ')".into(),
+                actual: format!("{:?}", tok),
+                token: Some(tok),
+            });
+        }
+
+        let effect_name = self.lexeme(&tok).to_string();
         let name_span = Span {
             file_id: self.file_id,
-            start: name_start,
-            end: name_end,
+            start: tok.start,
+            end: tok.end,
         };
 
         Ok((effect_name, name_span))
@@ -2373,12 +2524,13 @@ impl<'a> Parser<'a> {
     pub(super) fn identifier(&mut self) -> Result<(String, Span), ParserError> {
         self.skip_semicolons_and_newlines();
         if let Some(current) = self.current.clone()
-            && let TokenKind::Identifier(ref name) = current.kind
+            && current.kind == TokenKind::Identifier
         {
+            let name = self.lexeme(&current).to_string();
             self.push_identifier(current.clone());
             self.advance();
             return Ok((
-                name.to_string(),
+                name,
                 Span {
                     start: current.start,
                     end: current.end,
@@ -2524,7 +2676,7 @@ impl<'a> Parser<'a> {
         if let Some(current) = self.current.clone()
             && current.kind == expected
         {
-            if matches!(current.kind, TokenKind::Identifier(_)) {
+            if current.kind == TokenKind::Identifier {
                 self.push_identifier(current.clone());
             }
 
@@ -2545,7 +2697,7 @@ impl<'a> Parser<'a> {
 
         match self.current.clone() {
             Some(current) => {
-                if matches!(current.kind, TokenKind::Identifier(_)) {
+                if current.kind == TokenKind::Identifier {
                     self.push_identifier(current.clone());
                 }
 
@@ -2563,7 +2715,7 @@ impl<'a> Parser<'a> {
             None => Err(ParserError::UnexpectedEndOfInput(Some(
                 possible_tokens
                     .iter()
-                    .map(|v| v.as_str())
+                    .map(|v| v.as_str().to_string())
                     .collect::<Vec<String>>()
                     .join(", "),
             ))),

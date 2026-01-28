@@ -1,4 +1,5 @@
 use std::error::Error;
+use std::fmt;
 
 use crate::{
     name_resolution::name_resolver::NameResolverError, node_id::NodeID, parser_error::ParserError,
@@ -34,5 +35,15 @@ impl From<Diagnostic<ParserError>> for AnyDiagnostic {
 impl From<Diagnostic<NameResolverError>> for AnyDiagnostic {
     fn from(value: Diagnostic<NameResolverError>) -> Self {
         Self::NameResolution(value)
+    }
+}
+
+impl fmt::Display for AnyDiagnostic {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            AnyDiagnostic::Parsing(d) => write!(f, "{}", d.kind),
+            AnyDiagnostic::NameResolution(d) => write!(f, "{}", d.kind),
+            AnyDiagnostic::Typing(d) => write!(f, "{}", d.kind),
+        }
     }
 }

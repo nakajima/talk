@@ -5,23 +5,23 @@ use crate::types::type_operations::unify;
 use crate::types::type_session::TypeSession;
 use crate::types::{
     constraints::{constraint::ConstraintCause, store::ConstraintId},
-    infer_ty::InferTy,
+    infer_ty::Ty,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DefaultTy {
     pub id: ConstraintId,
     pub node_id: NodeID,
-    pub var: InferTy,
-    pub ty: InferTy,
-    pub allowed: Vec<InferTy>,
+    pub var: Ty,
+    pub ty: Ty,
+    pub allowed: Vec<Ty>,
     pub cause: ConstraintCause,
 }
 
 impl DefaultTy {
     pub fn solve(&self, context: &mut SolveContext, session: &mut TypeSession) -> SolveResult {
         match &self.var {
-            InferTy::Var { .. } => match unify(&self.var, &self.ty, context, session) {
+            Ty::Var { .. } => match unify(&self.var, &self.ty, context, session) {
                 Ok(vars) => SolveResult::Solved(vars),
                 Err(e) => SolveResult::Err(e),
             },

@@ -102,7 +102,7 @@ pub(crate) fn resolve_member_symbol(
     label: &crate::label::Label,
 ) -> Option<crate::name_resolution::symbol::Symbol> {
     use crate::node_kinds::expr::ExprKind;
-    use crate::types::ty::Ty;
+    use crate::types::infer_ty::Ty;
 
     if let ExprKind::Constructor(name) = &receiver.kind {
         let receiver_symbol = name.symbol().ok()?;

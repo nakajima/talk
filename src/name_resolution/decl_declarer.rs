@@ -15,7 +15,7 @@ use crate::{
     node_kinds::{
         block::Block,
         body::Body,
-        decl::{Decl, DeclKind},
+        decl::{Decl, DeclKind, Visibility},
         expr::{Expr, ExprKind},
         func::Func,
         func_signature::FuncSignature,
@@ -252,46 +252,88 @@ impl<'a> DeclDeclarer<'a> {
         for generic in generics {
             generic.name = self
                 .resolver
-                .declare(&generic.name, some!(TypeParameter), generic.id);
+                .declare(&generic.name, some!(TypeParameter), generic.id, generic.name_span);
         }
     }
 
     pub(super) fn predeclare_nominals(&mut self, decls: &[&Decl]) {
         for decl in decls.iter() {
-            if let Decl {
-                id,
-                kind:
-                    kind @ (DeclKind::Struct { name, .. }
-                    | DeclKind::Enum { name, .. }
-                    | DeclKind::Protocol { name, .. }),
-                ..
-            } = decl
-            {
-                let kind = match kind {
-                    DeclKind::Struct { .. } => some!(Struct),
-                    DeclKind::Enum { .. } => some!(Enum),
-                    DeclKind::Protocol { .. } => some!(Protocol),
-                    _ => unreachable!(),
-                };
+            // Note: Effects are NOT predeclared here to maintain ID stability for Core types
+            // (Array, String, etc. have hardcoded IDs). Effects get their IDs during
+            // the full declaration phase.
+            match &decl.kind {
+                DeclKind::Struct { name, name_span, .. }
+                | DeclKind::Enum { name, name_span, .. }
+                | DeclKind::Protocol { name, name_span, .. } => {
+                    let kind = match &decl.kind {
+                        DeclKind::Struct { .. } => some!(Struct),
+                        DeclKind::Enum { .. } => some!(Enum),
+                        DeclKind::Protocol { .. } => some!(Protocol),
+                        _ => unreachable!(),
+                    };
 
-                self.resolver.declare(name, kind, *id);
+                    let resolved = self.resolver.declare(name, kind, decl.id, *name_span);
+
+                    // Mark as public if visibility is Public (needed for import resolution)
+                    if decl.visibility == Visibility::Public {
+                        if let Ok(sym) = resolved.symbol() {
+                            self.resolver.mark_public(sym);
+                        }
+                    }
+                }
+                _ => {}
             }
         }
     }
+
+    /// Predeclare public top-level Let bindings as Globals so they're available during import resolution.
+    /// Only handles simple Bind patterns (not destructuring).
+    /// Only public bindings are predeclared since they're the only ones that can be imported.
+    pub(super) fn predeclare_values(&mut self, decls: &[&Decl]) {
+        let mut exported_names: FxHashMap<String, NodeID> = FxHashMap::default();
+
+        for decl in decls.iter() {
+            // Only predeclare public Let bindings
+            if decl.visibility != Visibility::Public {
+                continue;
+            }
+            if let DeclKind::Let { lhs, .. } = &decl.kind {
+                // For simple bind patterns, predeclare as Global
+                // Use lhs.id (pattern id) to match what declare_pattern uses
+                if let PatternKind::Bind(name) = &lhs.kind {
+                    let name_str = name.name_str();
+                    if exported_names.contains_key(&name_str) {
+                        self.resolver
+                            .diagnostic(lhs.id, NameResolverError::DuplicateExport(name_str));
+                        continue;
+                    }
+                    exported_names.insert(name_str, lhs.id);
+
+                    // Pattern span is used for the binding since Bind pattern doesn't have name_span
+                    let resolved = self.resolver.declare(name, some!(Global), lhs.id, lhs.span);
+                    if let Ok(sym) = resolved.symbol() {
+                        self.resolver.mark_public(sym);
+                    }
+                }
+            }
+        }
+    }
+
 
     ///////////////////////////////////////////////////////////////////////////
     // Local decls
     ///////////////////////////////////////////////////////////////////////////
     #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn declare_pattern(&mut self, pattern: &mut Pattern, bind_type: Symbol) {
-        let Pattern { kind, .. } = pattern;
+        let Pattern { kind, span, .. } = pattern;
+        let span = *span;
 
         match kind {
             PatternKind::Bind(name @ Name::Raw(_)) => {
                 *name = if self.at_module_scope() {
-                    self.resolver.declare(name, some!(Global), pattern.id)
+                    self.resolver.declare(name, some!(Global), pattern.id, span)
                 } else {
-                    self.resolver.declare(name, bind_type, pattern.id)
+                    self.resolver.declare(name, bind_type, pattern.id, span)
                 }
             }
             PatternKind::Or(patterns) => {
@@ -310,12 +352,12 @@ impl<'a> DeclDeclarer<'a> {
                         RecordFieldPatternKind::Bind(name) => {
                             *name =
                                 self.resolver
-                                    .declare(name, some!(PatternBindLocal), pattern.id);
+                                    .declare(name, some!(PatternBindLocal), pattern.id, field.span);
                         }
-                        RecordFieldPatternKind::Equals { name, value, .. } => {
+                        RecordFieldPatternKind::Equals { name, name_span, value } => {
                             *name =
                                 self.resolver
-                                    .declare(name, some!(PatternBindLocal), pattern.id);
+                                    .declare(name, some!(PatternBindLocal), pattern.id, *name_span);
                             self.declare_pattern(value, some!(PatternBindLocal));
                         }
                         RecordFieldPatternKind::Rest => (),
@@ -349,7 +391,9 @@ impl<'a> DeclDeclarer<'a> {
         // Should be set by predeclare_nominals for Struct/Enum/Protocol, but `extend` can target
         // a nominal declared in another file. If we still can't resolve it, keep the resolver
         // state consistent so we don't crash while walking the body.
-        *name = self.resolver.lookup(name, Some(id)).unwrap_or(name.clone());
+        // Note: name_span is not available in this function signature, so we pass None.
+        // The spans are already recorded by predeclare_nominals for Struct/Enum/Protocol.
+        *name = self.resolver.lookup(name, Some(id), None).unwrap_or(name.clone());
 
         let sym = match name.symbol() {
             Ok(sym) => sym,
@@ -427,7 +471,7 @@ impl<'a> DeclDeclarer<'a> {
 
     fn enter_block(&mut self, block: &mut Block) {
         for arg in &mut block.args {
-            arg.name = self.resolver.declare(&arg.name, some!(ParamLocal), arg.id);
+            arg.name = self.resolver.declare(&arg.name, some!(ParamLocal), arg.id, arg.name_span);
         }
     }
 
@@ -437,6 +481,7 @@ impl<'a> DeclDeclarer<'a> {
     #[instrument(level = tracing::Level::TRACE, skip(self, func), fields(func.name = ?func.name))]
     fn enter_func(&mut self, func: &mut Func) {
         let func_id = func.id;
+        let func_name_span = func.name_span;
         on!(
             func,
             Func {
@@ -459,8 +504,8 @@ impl<'a> DeclDeclarer<'a> {
                 };
                 *name = self
                     .resolver
-                    .lookup(name, Some(*id))
-                    .unwrap_or_else(|| self.resolver.declare(name, fallback, func_id));
+                    .lookup(name, Some(*id), Some(func_name_span))
+                    .unwrap_or_else(|| self.resolver.declare(name, fallback, func_id, func_name_span));
 
                 let func_sym = name
                     .symbol()
@@ -476,7 +521,7 @@ impl<'a> DeclDeclarer<'a> {
                 for param in params {
                     param.name = self
                         .resolver
-                        .declare(&param.name, some!(ParamLocal), param.id);
+                        .declare(&param.name, some!(ParamLocal), param.id, param.name_span);
                 }
             }
         )
@@ -488,6 +533,7 @@ impl<'a> DeclDeclarer<'a> {
 
     #[instrument(level = tracing::Level::TRACE, skip(self, func))]
     fn enter_func_signature(&mut self, func: &mut FuncSignature) {
+        let func_span = func.span;
         on!(
             func,
             FuncSignature {
@@ -497,9 +543,10 @@ impl<'a> DeclDeclarer<'a> {
                 ..
             },
             {
+                // FuncSignature doesn't have a name_span, use its span
                 *name = self
                     .resolver
-                    .declare(name, some!(MethodRequirement), func.id);
+                    .declare(name, some!(MethodRequirement), func.id, func_span);
 
                 self.start_scope(
                     Some(name.symbol().unwrap_or_else(|_| unreachable!())),
@@ -512,7 +559,7 @@ impl<'a> DeclDeclarer<'a> {
                 for param in params {
                     param.name = self
                         .resolver
-                        .declare(&param.name, some!(ParamLocal), param.id);
+                        .declare(&param.name, some!(ParamLocal), param.id, param.name_span);
                 }
             }
         )
@@ -579,8 +626,8 @@ impl<'a> DeclDeclarer<'a> {
             }
         );
 
-        on!(&mut decl.kind, DeclKind::TypeAlias(lhs_name, ..), {
-            *lhs_name = self.resolver.declare(lhs_name, some!(TypeAlias), decl.id);
+        on!(&mut decl.kind, DeclKind::TypeAlias(lhs_name, name_span, ..), {
+            *lhs_name = self.resolver.declare(lhs_name, some!(TypeAlias), decl.id, *name_span);
 
             if let Some(parent) = self.resolver.nominal_stack.last() {
                 self.resolver
@@ -595,21 +642,21 @@ impl<'a> DeclDeclarer<'a> {
             }
         });
 
-        on!(&mut decl.kind, DeclKind::EnumVariant(name, ..), {
-            *name = self.resolver.declare(name, some!(Variant), decl.id);
+        on!(&mut decl.kind, DeclKind::EnumVariant(name, name_span, ..), {
+            *name = self.resolver.declare(name, some!(Variant), decl.id, *name_span);
         });
 
         on!(
             &mut decl.kind,
             DeclKind::Method {
-                func: box Func { id, name, generics, .. },
+                func: box Func { id, name, name_span, generics, .. },
                 is_static
             },
             {
                 *name = if *is_static {
-                    self.resolver.declare(name, some!(StaticMethod), decl.id)
+                    self.resolver.declare(name, some!(StaticMethod), decl.id, *name_span)
                 } else {
-                    self.resolver.declare(name, some!(InstanceMethod), decl.id)
+                    self.resolver.declare(name, some!(InstanceMethod), decl.id, *name_span)
                 };
 
                 if let Some((nominal_sym, nominal_id)) = self.resolver.nominal_stack.last().cloned()
@@ -629,7 +676,7 @@ impl<'a> DeclDeclarer<'a> {
         on!(&mut decl.kind, DeclKind::Associated { generic }, {
             generic.name = self
                 .resolver
-                .declare(&generic.name, some!(AssociatedType), decl.id);
+                .declare(&generic.name, some!(AssociatedType), decl.id, generic.name_span);
             let parent = self
                 .resolver
                 .nominal_stack
@@ -651,11 +698,13 @@ impl<'a> DeclDeclarer<'a> {
             DeclKind::FuncSignature(FuncSignature {
                 id,
                 name,
+                span,
                 generics,
                 ..
             }),
             {
-                *name = self.resolver.declare(name, some!(Global), decl.id);
+                // FuncSignature doesn't have name_span, use its span
+                *name = self.resolver.declare(name, some!(Global), decl.id, *span);
 
                 let (nominal_sym, nominal_id) = self
                     .resolver
@@ -675,8 +724,8 @@ impl<'a> DeclDeclarer<'a> {
 
         let decl_kind = decl.kind.clone();
 
-        on!(&mut decl.kind, DeclKind::Property { name, .. }, {
-            *name = self.resolver.declare(name, some!(Property), decl.id);
+        on!(&mut decl.kind, DeclKind::Property { name, name_span, .. }, {
+            *name = self.resolver.declare(name, some!(Property), decl.id, *name_span);
             let id = self
                 .resolver
                 .current_scope_id
@@ -699,7 +748,8 @@ impl<'a> DeclDeclarer<'a> {
                 .initializers
                 .push(decl_kind);
 
-            *name = self.resolver.declare(name, some!(Initializer), decl.id);
+            // Init declarations use decl.span since there's no dedicated name_span
+            *name = self.resolver.declare(name, some!(Initializer), decl.id, decl.span);
 
             self.start_scope(None, decl.id, false);
         });
@@ -715,12 +765,13 @@ impl<'a> DeclDeclarer<'a> {
             &mut decl.kind,
             DeclKind::Effect {
                 name,
+                name_span,
                 generics,
                 params,
                 ..
             },
             {
-                *name = self.resolver.declare(name, some!(Effect), decl.id);
+                *name = self.resolver.declare(name, some!(Effect), decl.id, *name_span);
 
                 // Start a scope for the effect's generics and params
                 self.start_scope(None, decl.id, false);
@@ -730,7 +781,7 @@ impl<'a> DeclDeclarer<'a> {
                 for param in params {
                     param.name = self
                         .resolver
-                        .declare(&param.name, some!(ParamLocal), param.id);
+                        .declare(&param.name, some!(ParamLocal), param.id, param.name_span);
                 }
             }
         );
@@ -799,6 +850,108 @@ impl<'a> DeclDeclarer<'a> {
                 self.resolver.nominal_stack.pop();
             }
         );
+
+        // Mark public declarations
+        if decl.visibility == Visibility::Public {
+            match &decl.kind {
+                DeclKind::Let { lhs, .. } => {
+                    // For let bindings, mark all bound symbols as public
+                    for (_, sym) in lhs.collect_binders() {
+                        self.resolver.mark_public(sym);
+                    }
+                }
+                DeclKind::Struct { name, body, .. }
+                | DeclKind::Enum { name, body, .. }
+                | DeclKind::Protocol { name, body, .. } => {
+                    if let Ok(sym) = name.symbol() {
+                        self.resolver.mark_public(sym);
+                    }
+                    // Also mark members (init, methods, nested extends) as public
+                    for member in &body.decls {
+                        match &member.kind {
+                            DeclKind::Init { name, .. } => {
+                                if let Ok(sym) = name.symbol() {
+                                    self.resolver.mark_public(sym);
+                                }
+                            }
+                            DeclKind::Method { func, .. } => {
+                                if let Ok(sym) = func.name.symbol() {
+                                    self.resolver.mark_public(sym);
+                                }
+                            }
+                            DeclKind::EnumVariant(name, ..) => {
+                                if let Ok(sym) = name.symbol() {
+                                    self.resolver.mark_public(sym);
+                                }
+                            }
+                            DeclKind::Property { name, .. } => {
+                                if let Ok(sym) = name.symbol() {
+                                    self.resolver.mark_public(sym);
+                                }
+                            }
+                            // Handle nested extends (like extend Self: Protocol inside a struct)
+                            DeclKind::Extend {
+                                body: nested_body, ..
+                            } => {
+                                for nested_member in &nested_body.decls {
+                                    if let DeclKind::Method { func, .. } = &nested_member.kind {
+                                        if let Ok(sym) = func.name.symbol() {
+                                            self.resolver.mark_public(sym);
+                                        }
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                DeclKind::Effect { name, .. } => {
+                    if let Ok(sym) = name.symbol() {
+                        self.resolver.mark_public(sym);
+                    }
+                }
+                DeclKind::TypeAlias(name, ..) => {
+                    if let Ok(sym) = name.symbol() {
+                        self.resolver.mark_public(sym);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // For Extend blocks, mark methods as public if the extended type is public
+        // This happens regardless of the extend's own visibility
+        if let DeclKind::Extend { name, body, .. } = &decl.kind {
+            // Check if the extended type is public
+            let extended_type_is_public = name
+                .symbol()
+                .map(|sym| self.resolver.phase.public_symbols.contains(&sym))
+                .unwrap_or(false);
+
+            if extended_type_is_public {
+                // Mark all methods in this extend as public
+                for member in &body.decls {
+                    match &member.kind {
+                        DeclKind::Method { func, .. } => {
+                            if let Ok(sym) = func.name.symbol() {
+                                self.resolver.mark_public(sym);
+                            }
+                        }
+                        // Handle nested extends (like extend Self: Protocol inside a struct)
+                        DeclKind::Extend { body: nested_body, .. } => {
+                            for nested_member in &nested_body.decls {
+                                if let DeclKind::Method { func, .. } = &nested_member.kind {
+                                    if let Ok(sym) = func.name.symbol() {
+                                        self.resolver.mark_public(sym);
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
     }
 
     fn synthesize_init(&mut self, body: &mut Body, type_members: &TypeMembers, type_id: StructId) {
@@ -807,7 +960,7 @@ impl<'a> DeclDeclarer<'a> {
 
         let init_name = self
             .resolver
-            .declare(&"init".into(), some!(Synthesized), init_id);
+            .declare(&"init".into(), some!(Synthesized), init_id, Span::SYNTHESIZED);
 
         self.start_scope(None, init_id, false);
 
@@ -816,6 +969,7 @@ impl<'a> DeclDeclarer<'a> {
             &Name::Raw("self".into()),
             some!(ParamLocal),
             NodeID(FileID::SYNTHESIZED, self.node_ids.next_id()),
+            Span::SYNTHESIZED,
         );
         let mut params: Vec<Parameter> = vec![Parameter {
             id: NodeID(FileID::SYNTHESIZED, self.node_ids.next_id()),
@@ -849,6 +1003,7 @@ impl<'a> DeclDeclarer<'a> {
                 &Name::Raw(name.name_str()),
                 some!(ParamLocal),
                 NodeID(FileID::SYNTHESIZED, self.node_ids.next_id()),
+                Span::SYNTHESIZED,
             );
             params.push(Parameter {
                 id: NodeID(FileID::SYNTHESIZED, self.node_ids.next_id()),
@@ -904,6 +1059,7 @@ impl<'a> DeclDeclarer<'a> {
         let init = Decl {
             id: init_id,
             span: Span::SYNTHESIZED,
+            visibility: Visibility::default(),
             kind: DeclKind::Init {
                 name: init_name,
                 params,

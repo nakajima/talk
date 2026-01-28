@@ -19,7 +19,8 @@ use crate::{
     types::{
         conformance::ConformanceKey,
         passes::specialization_pass::SpecializedCallee,
-        ty::{Specializations, Ty},
+        infer_row::Specializations,
+        infer_ty::Ty,
         types::Types,
     },
 };
@@ -214,7 +215,7 @@ impl<'a> Monomorphizer<'a> {
         result.insert(func.name, func);
     }
 
-    #[instrument(skip(self, block), fields(block = %block))]
+    #[instrument(skip(self, block), fields(block = ?block))]
     fn monomorphize_block(
         &mut self,
         block: BasicBlock<Ty>,
@@ -259,7 +260,7 @@ impl<'a> Monomorphizer<'a> {
         }
     }
 
-    #[instrument(skip(self, instruction), fields(instruction = %instruction), ret)]
+    #[instrument(skip(self, instruction), fields(instruction = ?instruction), ret)]
     fn monomorphize_instruction(
         &mut self,
         instruction: Instruction<Ty>,
@@ -324,6 +325,31 @@ impl<'a> Monomorphizer<'a> {
                 callee: new_callee,
                 args,
                 self_dest,
+                meta,
+            };
+        }
+
+        // Handle Nominal instructions specially to preserve the symbol in IrTy::Record
+        if let Instruction::Nominal {
+            dest,
+            sym,
+            ty,
+            record,
+            meta,
+        } = instruction
+        {
+            // Monomorphize the type to get the correct values
+            let mono_ty = self.monomorphize_ty(ty, substitutions);
+            // Extract values from the monomorphized IrTy::Record and recreate with the symbol
+            let ir_ty = match mono_ty {
+                IrTy::Record(_, values) => IrTy::Record(Some(sym), values),
+                other => other, // Shouldn't happen but preserve other types
+            };
+            return Instruction::Nominal {
+                dest,
+                sym,
+                ty: ir_ty,
+                record,
                 meta,
             };
         }

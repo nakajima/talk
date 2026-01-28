@@ -10,9 +10,8 @@ use crate::{
     name_resolution::symbol::Symbol,
     node_id::NodeID,
     types::{
-        infer_row::{InferRow, RowMetaId, RowParamId, RowTail, normalize_row},
-        infer_ty::{InferTy, Level, Meta, MetaVarId},
-        mappable::Mappable,
+        infer_row::{Row, RowMetaId, RowParamId, RowTail, normalize_row},
+        infer_ty::{Level, Meta, MetaVarId, Ty},
         solve_context::SolveContext,
         type_error::TypeError,
         type_session::{TypeDefKind, TypeSession},
@@ -21,8 +20,8 @@ use crate::{
 
 #[derive(Clone)]
 pub struct UnificationSubstitutions {
-    pub row: FxHashMap<RowMetaId, InferRow>,
-    pub ty: FxHashMap<MetaVarId, InferTy>,
+    pub row: FxHashMap<RowMetaId, Row>,
+    pub ty: FxHashMap<MetaVarId, Ty>,
     pub meta_levels: Rc<RefCell<FxHashMap<Meta, Level>>>,
 }
 
@@ -77,12 +76,12 @@ impl InstantiationSubstitutions {
 }
 
 /// Unified substitution for both types and row parameters.
-/// Used when we need to substitute both InferTy->InferTy mappings
-/// AND RowParamId->InferRow mappings in a single operation.
+/// Used when we need to substitute both Ty->Ty mappings
+/// AND RowParamId->Row mappings in a single operation.
 #[derive(Default, Debug, Clone)]
 pub struct Substitutions {
-    pub ty: FxHashMap<InferTy, InferTy>,
-    pub row: FxHashMap<RowParamId, InferRow>,
+    pub ty: FxHashMap<Ty, Ty>,
+    pub row: FxHashMap<RowParamId, Row>,
 }
 
 impl Substitutions {
@@ -90,11 +89,11 @@ impl Substitutions {
         Self::default()
     }
 
-    pub fn insert_ty(&mut self, from: InferTy, to: InferTy) {
+    pub fn insert_ty(&mut self, from: Ty, to: Ty) {
         self.ty.insert(from, to);
     }
 
-    pub fn insert_row(&mut self, from: RowParamId, to: InferRow) {
+    pub fn insert_row(&mut self, from: RowParamId, to: Row) {
         self.row.insert(from, to);
     }
 }
@@ -115,31 +114,31 @@ impl UnificationSubstitutions {
     }
 }
 
-fn occurs_in_row(id: MetaVarId, row: &InferRow) -> bool {
+fn occurs_in_row(id: MetaVarId, row: &Row) -> bool {
     match row {
-        InferRow::Empty => false,
-        InferRow::Var(_) => false,
-        InferRow::Param(_) => false,
-        InferRow::Extend { row, ty, .. } => occurs_in(id, ty) || occurs_in_row(id, row),
+        Row::Empty => false,
+        Row::Var(_) => false,
+        Row::Param(_) => false,
+        Row::Extend { row, ty, .. } => occurs_in(id, ty) || occurs_in_row(id, row),
     }
 }
 
 // Helper: occurs check
-fn occurs_in(id: MetaVarId, ty: &InferTy) -> bool {
+fn occurs_in(id: MetaVarId, ty: &Ty) -> bool {
     match ty {
-        InferTy::Error(..) => false,
-        InferTy::Var { id: mid, .. } => *mid == id,
-        InferTy::Func(a, b, effects) => {
+        Ty::Error(..) => false,
+        Ty::Var { id: mid, .. } => *mid == id,
+        Ty::Func(a, b, effects) => {
             occurs_in(id, a) || occurs_in(id, b) || occurs_in_row(id, effects)
         }
-        InferTy::Tuple(items) => items.iter().any(|t| occurs_in(id, t)),
-        InferTy::Record(row) => occurs_in_row(id, row),
-        InferTy::Nominal { type_args, .. } => type_args.iter().any(|t| occurs_in(id, t)),
-        InferTy::Projection { base, .. } => occurs_in(id, base),
-        InferTy::Param(..) => false,
-        InferTy::Rigid(..) => false,
-        InferTy::Primitive(..) => false,
-        InferTy::Constructor { params, ret, .. } => {
+        Ty::Tuple(items) => items.iter().any(|t| occurs_in(id, t)),
+        Ty::Record(_, row) => occurs_in_row(id, row),
+        Ty::Nominal { type_args, .. } => type_args.iter().any(|t| occurs_in(id, t)),
+        Ty::Projection { base, .. } => occurs_in(id, base),
+        Ty::Param(..) => false,
+        Ty::Rigid(..) => false,
+        Ty::Primitive(..) => false,
+        Ty::Constructor { params, ret, .. } => {
             params.iter().any(|t| occurs_in(id, t)) || occurs_in(id, ret)
         }
     }
@@ -148,13 +147,13 @@ fn occurs_in(id: MetaVarId, ty: &InferTy) -> bool {
 // Structural occurs check for row variables (doesn't follow substitutions to avoid infinite loops)
 fn row_occurs_structural(
     target: RowMetaId,
-    row: &InferRow,
+    row: &Row,
     subs: &mut UnificationSubstitutions,
 ) -> bool {
     match row {
-        InferRow::Empty | InferRow::Param(_) => false,
-        InferRow::Var(id) => *id == target,
-        InferRow::Extend { row, ty, .. } => {
+        Row::Empty | Row::Param(_) => false,
+        Row::Var(id) => *id == target,
+        Row::Extend { row, ty, .. } => {
             row_occurs_structural(target, row, subs) || ty_occurs_structural_row(target, ty, subs)
         }
     }
@@ -162,20 +161,20 @@ fn row_occurs_structural(
 
 fn ty_occurs_structural_row(
     target: RowMetaId,
-    ty: &InferTy,
+    ty: &Ty,
     subs: &mut UnificationSubstitutions,
 ) -> bool {
     match ty {
-        InferTy::Record(row) => row_occurs_structural(target, row, subs),
-        InferTy::Func(a, b, effects) => {
+        Ty::Record(_, row) => row_occurs_structural(target, row, subs),
+        Ty::Func(a, b, effects) => {
             ty_occurs_structural_row(target, a, subs)
                 || ty_occurs_structural_row(target, b, subs)
                 || row_occurs_structural(target, effects, subs)
         }
-        InferTy::Tuple(items) => items
+        Ty::Tuple(items) => items
             .iter()
             .any(|t| ty_occurs_structural_row(target, t, subs)),
-        InferTy::Constructor { params, ret, .. } => {
+        Ty::Constructor { params, ret, .. } => {
             params
                 .iter()
                 .any(|p| ty_occurs_structural_row(target, p, subs))
@@ -187,16 +186,16 @@ fn ty_occurs_structural_row(
 
 fn row_occurs(
     target: RowMetaId,
-    row: &InferRow,
+    row: &Row,
     subs: &mut UnificationSubstitutions,
     session: &mut TypeSession,
 ) -> bool {
-    match session.apply_row(row.clone(), subs) {
-        InferRow::Empty | InferRow::Param(_) => false,
-        InferRow::Var(id) => id == target,
-        InferRow::Extend { row, ty, .. } => {
+    match session.apply_row(row, subs) {
+        Row::Empty | Row::Param(_) => false,
+        Row::Var(id) => id == target,
+        Row::Extend { row, ty, .. } => {
             row_occurs(target, &row, subs, session)
-                || matches!(session.apply(ty.clone(), subs), InferTy::Record(r) if row_occurs(target, &r, subs, session))
+                || matches!(session.apply(&ty, subs), Ty::Record(_, r) if row_occurs(target, &r, subs, session))
         }
     }
 }
@@ -205,8 +204,8 @@ fn row_occurs(
 #[instrument(level = tracing::Level::TRACE, skip(context, session))]
 fn unify_rows(
     kind: TypeDefKind,
-    lhs: &InferRow,
-    rhs: &InferRow,
+    lhs: &Row,
+    rhs: &Row,
     context: &mut SolveContext,
     session: &mut TypeSession,
 ) -> Result<Vec<Meta>, TypeError> {
@@ -223,9 +222,9 @@ fn unify_rows(
         (&lhs_fields, &lhs_tail, &rhs_fields, &rhs_tail)
     {
         tracing::debug!("unifying closed row with row var");
-        let mut acc = InferRow::Empty;
+        let mut acc = Row::Empty;
         for (label, ty) in closed.iter().rev() {
-            acc = InferRow::Extend {
+            acc = Row::Extend {
                 row: Box::new(acc),
                 label: label.clone(),
                 ty: ty.clone(),
@@ -233,7 +232,7 @@ fn unify_rows(
         }
 
         if row_occurs_structural(*var, &acc, &mut context.substitutions_mut()) {
-            return Err(TypeError::OccursCheck(InferTy::Record(Box::new(acc))));
+            return Err(TypeError::OccursCheck(Ty::Record(None, Box::new(acc))));
         }
         context.substitutions_mut().row.insert(*var, acc);
         result.push(Meta::Row(*var));
@@ -253,21 +252,21 @@ fn unify_rows(
 
     // helper: extend a Var tail with leftover fields (prepend over a fresh tail)
     let mut extend_var_tail =
-        |tail_id: RowMetaId, fields: BTreeMap<Label, InferTy>| -> Result<Vec<Meta>, TypeError> {
+        |tail_id: RowMetaId, fields: BTreeMap<Label, Ty>| -> Result<Vec<Meta>, TypeError> {
             let mut result = vec![];
             if fields.is_empty() {
                 return Ok(result);
             }
             let mut acc = session.new_row_meta_var(context.level());
             for (label, ty) in fields.into_iter().rev() {
-                acc = InferRow::Extend {
+                acc = Row::Extend {
                     row: Box::new(acc),
                     label,
                     ty,
                 };
             }
             if row_occurs(tail_id, &acc, &mut context.substitutions_mut(), session) {
-                return Err(TypeError::OccursCheck(InferTy::Record(Box::new(acc))));
+                return Err(TypeError::OccursCheck(Ty::Record(None, Box::new(acc))));
             }
 
             let can = session.canon_row(tail_id);
@@ -284,14 +283,14 @@ fn unify_rows(
             }
             RowTail::Empty => {
                 return Err(TypeError::invalid_unification(
-                    InferTy::Record(Box::new(lhs.clone())),
-                    InferTy::Record(Box::new(rhs.clone())),
+                    Ty::Record(None, Box::new(lhs.clone())),
+                    Ty::Record(None, Box::new(rhs.clone())),
                 ));
             }
             RowTail::Param(_) => {
                 return Err(TypeError::invalid_unification(
-                    InferTy::Record(Box::new(lhs.clone())),
-                    InferTy::Record(Box::new(rhs.clone())),
+                    Ty::Record(None, Box::new(lhs.clone())),
+                    Ty::Record(None, Box::new(rhs.clone())),
                 ));
             }
         }
@@ -305,14 +304,14 @@ fn unify_rows(
             }
             RowTail::Empty => {
                 return Err(TypeError::invalid_unification(
-                    InferTy::Record(Box::new(lhs.clone())),
-                    InferTy::Record(Box::new(rhs.clone())),
+                    Ty::Record(None, Box::new(lhs.clone())),
+                    Ty::Record(None, Box::new(rhs.clone())),
                 ));
             }
             RowTail::Param(_) => {
                 return Err(TypeError::invalid_unification(
-                    InferTy::Record(Box::new(lhs.clone())),
-                    InferTy::Record(Box::new(rhs.clone())),
+                    Ty::Record(None, Box::new(lhs.clone())),
+                    Ty::Record(None, Box::new(rhs.clone())),
                 ));
             }
         }
@@ -330,8 +329,8 @@ fn unify_rows(
         (RowTail::Param(a), RowTail::Param(b)) if a == b => {}
         (RowTail::Param(_), RowTail::Param(_)) => {
             return Err(TypeError::invalid_unification(
-                InferTy::Record(Box::new(lhs.clone())),
-                InferTy::Record(Box::new(rhs.clone())),
+                Ty::Record(None, Box::new(lhs.clone())),
+                Ty::Record(None, Box::new(rhs.clone())),
             ));
         }
         _ => {}
@@ -342,22 +341,22 @@ fn unify_rows(
 
 // Unify types. Returns true if progress was made.
 pub(super) fn unify(
-    lhs: &InferTy,
-    rhs: &InferTy,
+    lhs: &Ty,
+    rhs: &Ty,
     context: &mut SolveContext,
     session: &mut TypeSession,
 ) -> Result<Vec<Meta>, TypeError> {
     let lhs = context.normalize(lhs.clone(), session);
     let rhs = context.normalize(rhs.clone(), session);
-    let lhs = session.apply(lhs, &mut context.substitutions_mut());
-    let rhs = session.apply(rhs, &mut context.substitutions_mut());
+    let lhs = session.apply(&lhs, &mut context.substitutions_mut());
+    let rhs = session.apply(&rhs, &mut context.substitutions_mut());
 
     if lhs == rhs {
         return Ok(Default::default());
     }
 
-    if matches!(lhs, InferTy::Primitive(Symbol::Never))
-        || matches!(rhs, InferTy::Primitive(Symbol::Never))
+    if matches!(lhs, Ty::Primitive(Symbol::Never))
+        || matches!(rhs, Ty::Primitive(Symbol::Never))
     {
         return Ok(Default::default());
     }
@@ -368,58 +367,58 @@ pub(super) fn unify(
     let mut result = vec![];
 
     match (&lhs, &rhs) {
-        (InferTy::Primitive(lhs), InferTy::Primitive(rhs)) => {
+        (Ty::Primitive(lhs), Ty::Primitive(rhs)) => {
             if lhs == rhs {
                 Ok(Default::default())
             } else {
                 Err(TypeError::invalid_unification(
-                    InferTy::Primitive(*lhs),
-                    InferTy::Primitive(*rhs),
+                    Ty::Primitive(*lhs),
+                    Ty::Primitive(*rhs),
                 ))
             }
         }
-        (InferTy::Primitive(lhs), InferTy::Nominal { symbol: rhs, .. })
-        | (InferTy::Nominal { symbol: rhs, .. }, InferTy::Primitive(lhs)) => {
+        (Ty::Primitive(lhs), Ty::Nominal { symbol: rhs, .. })
+        | (Ty::Nominal { symbol: rhs, .. }, Ty::Primitive(lhs)) => {
             if lhs == rhs {
                 Ok(Default::default())
             } else {
                 Err(TypeError::invalid_unification(
-                    InferTy::Primitive(*lhs),
-                    InferTy::Primitive(*rhs),
+                    Ty::Primitive(*lhs),
+                    Ty::Primitive(*rhs),
                 ))
             }
         }
-        (InferTy::Tuple(lhs), InferTy::Tuple(rhs)) => {
+        (Ty::Tuple(lhs), Ty::Tuple(rhs)) => {
             for (lhs, rhs) in lhs.iter().zip(rhs) {
                 result.extend(unify(lhs, rhs, context, session)?);
             }
             Ok(result)
         }
-        (InferTy::Rigid(lhs), InferTy::Rigid(rhs)) if lhs == rhs => Ok(Default::default()),
-        (InferTy::Param(lhs, _), InferTy::Param(rhs, _)) if lhs == rhs => Ok(Default::default()),
+        (Ty::Rigid(lhs), Ty::Rigid(rhs)) if lhs == rhs => Ok(Default::default()),
+        (Ty::Param(lhs, _), Ty::Param(rhs, _)) if lhs == rhs => Ok(Default::default()),
         (
-            InferTy::Constructor {
+            Ty::Constructor {
                 params, box ret, ..
             },
-            InferTy::Func(func_param, func_ret, effects),
+            Ty::Func(func_param, func_ret, effects),
         )
         | (
-            InferTy::Func(func_param, func_ret, effects),
-            InferTy::Constructor {
+            Ty::Func(func_param, func_ret, effects),
+            Ty::Constructor {
                 params, box ret, ..
             },
         ) => unify(
             &curry(params.clone(), ret.clone(), effects.clone()),
-            &InferTy::Func(func_param.clone(), func_ret.clone(), effects.clone()),
+            &Ty::Func(func_param.clone(), func_ret.clone(), effects.clone()),
             context,
             session,
         ),
         (
-            InferTy::Nominal {
+            Ty::Nominal {
                 symbol: lhs_id,
                 type_args: lhs_type_args,
             },
-            InferTy::Nominal {
+            Ty::Nominal {
                 symbol: rhs_id,
                 type_args: rhs_type_args,
             },
@@ -440,8 +439,8 @@ pub(super) fn unify(
         }
         // (Ty::TypeConstructor(lhs), Ty::TypeConstructor(rhs)) if lhs == rhs => Ok(false),
         (
-            InferTy::Func(lhs_param, lhs_ret, lhs_effects),
-            InferTy::Func(rhs_param, rhs_ret, rhs_effects),
+            Ty::Func(lhs_param, lhs_ret, lhs_effects),
+            Ty::Func(rhs_param, rhs_ret, rhs_effects),
         ) => {
             result.extend(unify(lhs_param, rhs_param, context, session)?);
             result.extend(unify(lhs_ret, rhs_ret, context, session)?);
@@ -455,11 +454,11 @@ pub(super) fn unify(
             Ok(result)
         }
         (
-            InferTy::Var {
+            Ty::Var {
                 id: lhs_id,
                 level: _,
             },
-            InferTy::Var {
+            Ty::Var {
                 id: rhs_id,
                 level: _,
             },
@@ -480,7 +479,7 @@ pub(super) fn unify(
                 Ok(Default::default())
             }
         }
-        (ty, InferTy::Var { id, .. }) | (InferTy::Var { id, .. }, ty) => {
+        (ty, Ty::Var { id, .. }) | (Ty::Var { id, .. }, ty) => {
             if occurs_in(*id, ty) {
                 return Err(TypeError::OccursCheck(ty.clone()));
             }
@@ -492,12 +491,12 @@ pub(super) fn unify(
             result.push(Meta::Ty(id));
             Ok(result)
         }
-        (InferTy::Record(lhs_row), InferTy::Record(rhs_row)) => {
+        (Ty::Record(_, lhs_row), Ty::Record(_, rhs_row)) => {
             unify_rows(TypeDefKind::Struct, lhs_row, rhs_row, context, session)
         }
         // Handle Projection vs concrete type                                                                         13:48:55 [35/2876]
         (
-            InferTy::Projection {
+            Ty::Projection {
                 base: box base_ty,
                 associated,
                 protocol_id,
@@ -506,13 +505,13 @@ pub(super) fn unify(
         )
         | (
             other,
-            InferTy::Projection {
+            Ty::Projection {
                 base: box base_ty,
                 associated,
                 protocol_id,
             },
         ) => {
-            let projection = InferTy::Projection {
+            let projection = Ty::Projection {
                 base: Box::new(base_ty.clone()),
                 associated: associated.clone(),
                 protocol_id: *protocol_id,
@@ -520,7 +519,7 @@ pub(super) fn unify(
             let normalized = context.normalize(projection.clone(), session);
 
             // If normalization resolved it (not still a Projection), unify recursively
-            if !matches!(&normalized, InferTy::Projection { .. }) {
+            if !matches!(&normalized, Ty::Projection { .. }) {
                 unify(&normalized, other, context, session)
             } else {
                 // Base is still unknown - error (the constraint solver will defer)
@@ -528,12 +527,12 @@ pub(super) fn unify(
             }
         }
 
-        (_, InferTy::Rigid(_)) | (InferTy::Rigid(_), _) => {
+        (_, Ty::Rigid(_)) | (Ty::Rigid(_), _) => {
             Err(TypeError::invalid_unification(lhs.clone(), rhs.clone()))
         }
         _ => {
-            let applied_lhs = session.apply(lhs.clone(), &mut context.substitutions_mut());
-            let applied_rhs = session.apply(rhs.clone(), &mut context.substitutions_mut());
+            let applied_lhs = session.apply(&lhs, &mut context.substitutions_mut());
+            let applied_rhs = session.apply(&rhs, &mut context.substitutions_mut());
             tracing::error!(
                 "attempted to unify {:?} <> {:?}",
                 applied_lhs,
@@ -544,58 +543,59 @@ pub(super) fn unify(
     }
 }
 
-pub fn curry<I: IntoIterator<Item = InferTy>>(
+pub fn curry<I: IntoIterator<Item = Ty>>(
     params: I,
-    ret: InferTy,
-    effects: Box<InferRow>,
-) -> InferTy {
+    ret: Ty,
+    effects: Box<Row>,
+) -> Ty {
     let mut params = params.into_iter().collect_vec();
     if params.is_empty() {
-        params.push(InferTy::Void);
+        params.push(Ty::Void);
     }
     params
         .into_iter()
         .collect::<Vec<_>>()
         .into_iter()
         .rfold(ret, |acc, p| {
-            InferTy::Func(Box::new(p), Box::new(acc), effects.clone())
+            Ty::Func(Box::new(p), Box::new(acc), effects.clone())
         })
 }
 
 pub(super) fn substitute_row(
-    row: InferRow,
-    substitutions: &FxHashMap<InferTy, InferTy>,
-) -> InferRow {
+    row: &Row,
+    substitutions: &FxHashMap<Ty, Ty>,
+) -> Row {
     match row {
-        InferRow::Empty => row,
-        InferRow::Var(..) => row,
-        InferRow::Param(..) => row,
-        InferRow::Extend { row, label, ty } => InferRow::Extend {
-            row: Box::new(substitute_row(*row, substitutions)),
-            label,
+        Row::Empty | Row::Var(..) | Row::Param(..) => row.clone(),
+        Row::Extend { row, label, ty } => Row::Extend {
+            row: Box::new(substitute_row(row, substitutions)),
+            label: label.clone(),
             ty: substitute(ty, substitutions),
         },
     }
 }
 
 pub(super) fn substitute_mult(
-    ty: &[InferTy],
-    substitutions: &FxHashMap<InferTy, InferTy>,
-) -> Vec<InferTy> {
+    ty: &[Ty],
+    substitutions: &FxHashMap<Ty, Ty>,
+) -> Vec<Ty> {
     ty.iter()
-        .map(|t| substitute(t.clone(), substitutions))
+        .map(|t| substitute(t, substitutions))
         .collect()
 }
 
-pub(super) fn substitute(ty: InferTy, substitutions: &FxHashMap<InferTy, InferTy>) -> InferTy {
-    ty.mapping(
+pub(super) fn substitute(ty: &Ty, substitutions: &FxHashMap<Ty, Ty>) -> Ty {
+    if let Some(subst) = substitutions.get(ty) {
+        return subst.clone();
+    }
+    ty.clone().mapping(
         &mut |t| substitutions.get(&t).cloned().unwrap_or(t),
         &mut |r| r,
     )
 }
 
 /// Substitute type with unified Substitutions that can handle both type and row param substitution.
-pub(super) fn substitute_with_subs(ty: InferTy, substitutions: &Substitutions) -> InferTy {
+pub(super) fn substitute_with_subs(ty: Ty, substitutions: &Substitutions) -> Ty {
     ty.mapping(
         &mut |t| {
             if let Some(subst) = substitutions.ty.get(&t) {
@@ -605,7 +605,7 @@ pub(super) fn substitute_with_subs(ty: InferTy, substitutions: &Substitutions) -
             t
         },
         &mut |r| {
-            if let InferRow::Param(id) = r
+            if let Row::Param(id) = r
                 && let Some(subst) = substitutions.row.get(&id)
             {
                 return subst.clone();
@@ -618,23 +618,23 @@ pub(super) fn substitute_with_subs(ty: InferTy, substitutions: &Substitutions) -
 
 pub(super) fn instantiate_row(
     node_id: NodeID,
-    row: InferRow,
+    row: Row,
     substitutions: &InstantiationSubstitutions,
     level: Level,
-) -> InferRow {
+) -> Row {
     match row {
-        InferRow::Empty => row,
-        InferRow::Var(..) => row,
-        InferRow::Param(id) => {
+        Row::Empty => row,
+        Row::Var(..) => row,
+        Row::Param(id) => {
             if let Some(row_metas) = substitutions.row.get(&node_id)
                 && let Some(row_meta) = row_metas.get(&id)
             {
-                InferRow::Var(*row_meta)
+                Row::Var(*row_meta)
             } else {
                 row
             }
         }
-        InferRow::Extend { row, label, ty } => InferRow::Extend {
+        Row::Extend { row, label, ty } => Row::Extend {
             row: Box::new(instantiate_row(node_id, *row, substitutions, level)),
             label,
             ty: instantiate_ty(node_id, ty, substitutions, level),
@@ -644,31 +644,31 @@ pub(super) fn instantiate_row(
 
 pub(super) fn instantiate_ty(
     node_id: NodeID,
-    ty: InferTy,
+    ty: Ty,
     substitutions: &InstantiationSubstitutions,
     level: Level,
-) -> InferTy {
+) -> Ty {
     if substitutions.row.is_empty() && substitutions.ty.is_empty() {
         return ty;
     }
 
     ty.mapping(
         &mut |t| {
-            if let InferTy::Param(param, _) = t
+            if let Ty::Param(param, _) = t
                 && let Some(metas) = substitutions.ty.get(&node_id)
                 && let Some(meta) = metas.get(&param)
             {
-                return InferTy::Var { id: *meta, level };
+                return Ty::Var { id: *meta, level };
             };
 
             t
         },
         &mut |r| {
-            if let InferRow::Param(id) = r
+            if let Row::Param(id) = r
                 && let Some(metas) = substitutions.row.get(&node_id)
                 && let Some(meta) = metas.get(&id)
             {
-                return InferRow::Var(*meta);
+                return Row::Var(*meta);
             };
 
             instantiate_row(node_id, r, substitutions, level)

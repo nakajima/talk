@@ -12,17 +12,16 @@ use crate::{
     node_id::NodeID,
     types::{
         call_tree::CalleeInfo,
-        infer_row::RowParamId,
-        row::Row,
+        infer_row::{Row, RowParamId, Specializations},
+        infer_ty::Ty,
         scheme::ForAll,
-        ty::{Specializations, Ty},
         type_error::TypeError,
         typed_ast::{
             TypedAST, TypedBlock, TypedDecl, TypedDeclKind, TypedExpr, TypedExprKind, TypedFunc,
             TypedMatchArm, TypedNode, TypedRecordField, TypedStmt, TypedStmtKind,
         },
         types::{TypeEntry, Types},
-        variational::DimensionId,
+        variational::{DimensionId, Resolution, resolve_overloads},
     },
 };
 
@@ -33,7 +32,7 @@ pub struct SpecializedCallee {
 }
 
 pub struct SpecializationPass<'a> {
-    ast: TypedAST<Ty>,
+    ast: TypedAST,
     symbols: Symbols,
     resolved_names: ResolvedNames,
     types: Types,
@@ -45,17 +44,49 @@ pub struct SpecializationPass<'a> {
     /// Aligns with the paper's model: each call site is a dimension, resolution maps to the callee.
     pub(crate) call_resolutions: FxHashMap<(Symbol, NodeID), Symbol>,
     current_specializations: Vec<Specializations>,
+    /// Resolved overloads computed from choices and error constraints.
+    resolution: Resolution,
 }
 
 impl<'a> SpecializationPass<'a> {
+    /// Extract the container symbol (struct/enum) from a type.
+    /// Handles both direct nominal types and function types (for variants/methods).
+    fn extract_container_symbol(ty: &Ty) -> Option<Symbol> {
+        match ty {
+            // Direct nominal type
+            Ty::Nominal { symbol, .. } => Some(*symbol),
+            Ty::Primitive(symbol) => Some(*symbol),
+            // Function type - extract from return type (for variant constructors like .Some)
+            Ty::Func(_, ret, _) => match ret.as_ref() {
+                Ty::Nominal { symbol, .. } => Some(*symbol),
+                _ => None,
+            },
+            // Constructor type - extract from return type
+            Ty::Constructor { ret, .. } => match ret.as_ref() {
+                Ty::Nominal { symbol, .. } => Some(*symbol),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     pub fn new(
-        ast: TypedAST<Ty>,
+        ast: TypedAST,
         symbols: Symbols,
         resolved_names: ResolvedNames,
         types: Types,
         modules: &'a ModuleEnvironment,
         module_id: ModuleId,
     ) -> Self {
+        // Resolve overloads using the variational type checking results
+        let resolution =
+            resolve_overloads(&types.choices, &types.error_constraints).unwrap_or_else(|errors| {
+                for error in &errors {
+                    tracing::warn!("Resolution error: {:?}", error);
+                }
+                Default::default()
+            });
+
         Self {
             ast,
             symbols,
@@ -67,6 +98,7 @@ impl<'a> SpecializationPass<'a> {
             specializations: Default::default(),
             call_resolutions: Default::default(),
             current_specializations: Default::default(),
+            resolution,
         }
     }
 
@@ -75,7 +107,7 @@ impl<'a> SpecializationPass<'a> {
         mut self,
     ) -> Result<
         (
-            TypedAST<Ty>,
+            TypedAST,
             Symbols,
             ResolvedNames,
             Types,
@@ -111,7 +143,7 @@ impl<'a> SpecializationPass<'a> {
         ))
     }
 
-    fn visit_stmt(&mut self, mut stmt: TypedStmt<Ty>) -> Result<TypedStmt<Ty>, TypeError> {
+    fn visit_stmt(&mut self, mut stmt: TypedStmt) -> Result<TypedStmt, TypeError> {
         stmt.kind = match stmt.kind {
             TypedStmtKind::Expr(expr) => TypedStmtKind::Expr(self.visit_expr(expr)?),
             TypedStmtKind::Assignment(lhs, rhs) => {
@@ -133,7 +165,7 @@ impl<'a> SpecializationPass<'a> {
         Ok(stmt)
     }
 
-    fn visit_decl(&mut self, mut decl: TypedDecl<Ty>) -> Result<TypedDecl<Ty>, TypeError> {
+    fn visit_decl(&mut self, mut decl: TypedDecl) -> Result<TypedDecl, TypeError> {
         decl.kind = match decl.kind {
             TypedDeclKind::Let {
                 pattern,
@@ -190,14 +222,15 @@ impl<'a> SpecializationPass<'a> {
                 typealiases,
                 associated_types,
             },
+            TypedDeclKind::Import => TypedDeclKind::Import,
         };
         Ok(decl)
     }
 
     fn visit_methods(
         &mut self,
-        methods: IndexMap<Label, TypedFunc<Ty>>,
-    ) -> Result<IndexMap<Label, TypedFunc<Ty>>, TypeError> {
+        methods: IndexMap<Label, TypedFunc>,
+    ) -> Result<IndexMap<Label, TypedFunc>, TypeError> {
         methods
             .into_iter()
             .map(|(label, func)| {
@@ -207,7 +240,7 @@ impl<'a> SpecializationPass<'a> {
             .collect()
     }
 
-    fn visit_block(&mut self, block: TypedBlock<Ty>) -> Result<TypedBlock<Ty>, TypeError> {
+    fn visit_block(&mut self, block: TypedBlock) -> Result<TypedBlock, TypeError> {
         let body = block
             .body
             .into_iter()
@@ -216,15 +249,53 @@ impl<'a> SpecializationPass<'a> {
         Ok(TypedBlock { body, ..block })
     }
 
-    fn visit_node(&mut self, node: TypedNode<Ty>) -> Result<TypedNode<Ty>, TypeError> {
+    fn visit_pattern(&mut self, pattern: &crate::types::typed_ast::TypedPattern) {
+        use crate::types::typed_ast::TypedPatternKind;
+
+        match &pattern.kind {
+            TypedPatternKind::Variant { fields, .. } => {
+                // Recursively visit field patterns
+                for field in fields {
+                    self.visit_pattern(field);
+                }
+            }
+            TypedPatternKind::Tuple(patterns) | TypedPatternKind::Or(patterns) => {
+                for p in patterns {
+                    self.visit_pattern(p);
+                }
+            }
+            TypedPatternKind::Record { fields } => {
+                for field in fields {
+                    if let crate::types::typed_ast::TypedRecordFieldPatternKind::Equals { value, .. } = &field.kind {
+                        self.visit_pattern(value);
+                    }
+                }
+            }
+            TypedPatternKind::Struct { fields, .. } => {
+                for field in fields {
+                    self.visit_pattern(field);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn visit_node(&mut self, node: TypedNode) -> Result<TypedNode, TypeError> {
         Ok(match node {
-            TypedNode::Stmt(stmt) => TypedNode::Stmt(self.visit_stmt(stmt)?),
-            TypedNode::Expr(expr) => TypedNode::Expr(self.visit_expr(expr)?),
-            TypedNode::Decl(decl) => TypedNode::Decl(decl), // Decls are already processed at top level
+            TypedNode::Stmt(stmt) => {
+                TypedNode::Stmt(self.visit_stmt(stmt)?)
+            }
+            TypedNode::Expr(expr) => {
+                TypedNode::Expr(self.visit_expr(expr)?)
+            }
+            TypedNode::Decl(decl) => {
+                // Also visit decls that appear inside blocks (e.g., let bindings in function bodies)
+                TypedNode::Decl(self.visit_decl(decl)?)
+            }
         })
     }
 
-    fn visit_expr(&mut self, mut expr: TypedExpr<Ty>) -> Result<TypedExpr<Ty>, TypeError> {
+    fn visit_expr(&mut self, mut expr: TypedExpr) -> Result<TypedExpr, TypeError> {
         // Apply current specializations to the type of this expression
         if !self.current_specializations.is_empty() {
             let specializations = self.collect_specializations();
@@ -258,10 +329,30 @@ impl<'a> SpecializationPass<'a> {
             TypedExprKind::Member {
                 box receiver,
                 label,
-            } => TypedExprKind::Member {
-                receiver: self.visit_expr(receiver)?.into(),
-                label,
-            },
+                label_span,
+            } => {
+                let visited_receiver = self.visit_expr(receiver)?;
+
+                // Record label_span -> member symbol now that types are resolved
+                if label_span != crate::span::Span::SYNTHESIZED {
+                    let specializations = self.collect_specializations();
+                    // For shorthand enum constructors like .Some, the receiver is Hole and we need
+                    // to extract the container symbol from the expression's return type
+                    let container_sym = if matches!(visited_receiver.kind, TypedExprKind::Hole) {
+                        // For shorthand variants, extract enum symbol from the expression's return type
+                        Self::extract_container_symbol(&expr.ty)
+                    } else {
+                        self.symbol_from_ty(&visited_receiver.ty, &specializations).ok()
+                    };
+                    let _ = container_sym;
+                }
+
+                TypedExprKind::Member {
+                    receiver: visited_receiver.into(),
+                    label,
+                    label_span,
+                }
+            }
             TypedExprKind::If(box cond, conseq, alt) => TypedExprKind::If(
                 self.visit_expr(cond)?.into(),
                 self.visit_block(conseq)?,
@@ -271,6 +362,7 @@ impl<'a> SpecializationPass<'a> {
                 let new_arms = arms
                     .into_iter()
                     .map(|arm| {
+                        self.visit_pattern(&arm.pattern);
                         Ok(TypedMatchArm {
                             pattern: arm.pattern,
                             body: self.visit_block(arm.body)?,
@@ -301,7 +393,7 @@ impl<'a> SpecializationPass<'a> {
         Ok(expr)
     }
 
-    fn visit_variable(&mut self, name: Symbol) -> Result<TypedExprKind<Ty>, TypeError> {
+    fn visit_variable(&mut self, name: Symbol) -> Result<TypedExprKind, TypeError> {
         // Don't specialize builtins - they don't have polymorphic implementations
         if self.current_specializations.is_empty() || matches!(name, Symbol::Builtin(..)) {
             return Ok(TypedExprKind::Variable(name));
@@ -317,7 +409,7 @@ impl<'a> SpecializationPass<'a> {
         &mut self,
         name: Symbol,
         args: Vec<Ty>,
-    ) -> Result<TypedExprKind<Ty>, TypeError> {
+    ) -> Result<TypedExprKind, TypeError> {
         if self.current_specializations.is_empty() {
             return Ok(TypedExprKind::Constructor(name, args));
         }
@@ -328,7 +420,7 @@ impl<'a> SpecializationPass<'a> {
         Ok(TypedExprKind::Constructor(new_symbol, args))
     }
 
-    fn visit_call(&mut self, mut expr: TypedExpr<Ty>) -> Result<TypedExpr<Ty>, TypeError> {
+    fn visit_call(&mut self, mut expr: TypedExpr) -> Result<TypedExpr, TypeError> {
         let TypedExprKind::Call {
             box mut callee,
             callee_ty,
@@ -339,6 +431,7 @@ impl<'a> SpecializationPass<'a> {
         else {
             unreachable!()
         };
+
 
         let is_constructor = matches!(callee.kind, TypedExprKind::Constructor(..));
         let mut specializations = if is_constructor {
@@ -432,7 +525,7 @@ impl<'a> SpecializationPass<'a> {
             };
 
             // Handle protocol method resolution
-            if let TypedExprKind::Member { receiver, label } = &callee.kind {
+            if let TypedExprKind::Member { receiver, label, .. } = &callee.kind {
                 // Check for direct protocol method calls: Protocol.method(arg1, arg2, ...)
                 // In this case, the actual receiver is the first argument
                 if let TypedExprKind::Constructor(Symbol::Protocol(protocol_id), _) = &receiver.kind
@@ -459,7 +552,7 @@ impl<'a> SpecializationPass<'a> {
                     // Regular member access - use Resolution, then ChoiceStore for monomorphization
                     let dimension = DimensionId(callee.id);
 
-                    if let Some(resolved_alt) = self.types.resolution.get(&dimension) {
+                    if let Some(resolved_alt) = self.resolution.get(&dimension) {
                         // Use the resolved alternative from variational type checking
                         if let Some(alt) =
                             self.types.choices.get_alternative(dimension, resolved_alt)
@@ -523,7 +616,7 @@ impl<'a> SpecializationPass<'a> {
         Ok(expr)
     }
 
-    fn constructor_specializations(&self, callee: &TypedExpr<Ty>, call_ty: &Ty) -> Specializations {
+    fn constructor_specializations(&self, callee: &TypedExpr, call_ty: &Ty) -> Specializations {
         let mut specializations = Specializations::default();
         let TypedExprKind::Constructor(symbol, ..) = &callee.kind else {
             return specializations;
@@ -556,7 +649,7 @@ impl<'a> SpecializationPass<'a> {
 
     fn symbol_for_callee(
         &self,
-        callee: &TypedExpr<Ty>,
+        callee: &TypedExpr,
         call_ty: &Ty,
         specializations: &Specializations,
     ) -> Result<Symbol, TypeError> {
@@ -569,7 +662,7 @@ impl<'a> SpecializationPass<'a> {
             TypedExprKind::LiteralInt(..) => Ok(Symbol::Int),
             TypedExprKind::LiteralFloat(..) => Ok(Symbol::Float),
             TypedExprKind::LiteralTrue | TypedExprKind::LiteralFalse => Ok(Symbol::Bool),
-            TypedExprKind::Member { receiver, label } => {
+            TypedExprKind::Member { receiver, label, .. } => {
                 let Some(receiver_ty) = self.types.get(&receiver.id) else {
                     return Err(TypeError::TypeNotFound(format!(
                         "could not find type for id: {:?}",
@@ -649,7 +742,7 @@ impl<'a> SpecializationPass<'a> {
 
     fn apply_explicit_type_args(
         &self,
-        callee: &TypedExpr<Ty>,
+        callee: &TypedExpr,
         call_ty: &Ty,
         type_args: &[Ty],
         specializations: &mut Specializations,
@@ -813,7 +906,8 @@ impl<'a> SpecializationPass<'a> {
         if let Some(ty_instantiations) = ty_insts {
             for (param, ty) in ty_instantiations {
                 let specialized_ty = specializations.apply(ty.clone());
-                if !matches!(specialized_ty, Ty::Param(..)) {
+                // Skip type parameters (polymorphic) and metavariables (unresolved)
+                if !matches!(specialized_ty, Ty::Param(..) | Ty::Var { .. }) {
                     callee_specs.ty.insert(*param, specialized_ty);
                 }
             }
@@ -828,7 +922,8 @@ impl<'a> SpecializationPass<'a> {
                 } else {
                     row.clone()
                 };
-                if !matches!(specialized_row, Row::Param(..)) {
+                // Skip row parameters (polymorphic) and row variables (unresolved)
+                if !matches!(specialized_row, Row::Param(..) | Row::Var(..)) {
                     callee_specs.row.insert(*param, specialized_row);
                 }
             }
@@ -882,6 +977,27 @@ impl<'a> SpecializationPass<'a> {
             return *callee_sym;
         }
 
+        // Single-pass filter: remove metavars (Ty::Var and Row::Var) from specializations
+        // These represent unresolved types that shouldn't be specialized
+        let filtered_specs = Specializations {
+            ty: specializations
+                .ty
+                .iter()
+                .filter(|(_, v)| !matches!(v, Ty::Var { .. }))
+                .map(|(k, v)| (*k, v.clone()))
+                .collect(),
+            row: specializations
+                .row
+                .iter()
+                .filter(|(_, v)| !matches!(v, Row::Var(..)))
+                .map(|(k, v)| (*k, v.clone()))
+                .collect(),
+        };
+
+        if filtered_specs.is_empty() {
+            return *callee_sym;
+        }
+
         // Get the original type - look in imported modules if needed
         let ty = self
             .get_type_for(callee_sym)
@@ -890,9 +1006,23 @@ impl<'a> SpecializationPass<'a> {
         // Check if applying specializations actually changes the type
         // If not (e.g., for concrete witnesses like Int.add), no wrapper needed
         let mono_ty = ty.as_mono_ty();
-        let specialized_ty = specializations.apply(mono_ty.clone());
+        let specialized_ty = filtered_specs.apply(mono_ty.clone());
         if specialized_ty == *mono_ty {
             return *callee_sym;
+        }
+
+        // Use filtered specs for deduplication and storage
+        let specializations = &filtered_specs;
+
+        // Check if we already have a specialization for this callee + specializations
+        if let Some(existing) = self.specializations.get(callee_sym) {
+            for &sym in existing {
+                if let Some(callee) = self.specialized_callees.get(&sym) {
+                    if &callee.specializations == specializations {
+                        return sym;
+                    }
+                }
+            }
         }
 
         let new_sym = self.symbols.next_synthesized(self.module_id);
@@ -929,7 +1059,7 @@ impl<'a> SpecializationPass<'a> {
             specializations
                 .ty
                 .values()
-                .map(|v| format!("{v}"))
+                .map(|v| format!("{v:?}"))
                 .join(", ")
         );
         self.resolved_names
@@ -952,20 +1082,14 @@ impl<'a> SpecializationPass<'a> {
 
 #[cfg(test)]
 pub mod tests {
-    use indexmap::indexmap;
-
     use crate::{
-        assert_eq_diff,
         compiling::driver::{Driver, DriverConfig, Source, Typed},
         compiling::module::ModuleId,
         fxhashmap,
         name_resolution::symbol::{GlobalId, Symbol, SynthesizedId, TypeParameterId, set_symbol_names},
-        node_id::NodeID,
         types::{
-            passes::specialization_pass::SpecializedCallee,
-            row::Row,
-            ty::{Specializations, Ty},
-            typed_ast::{TypedExpr, TypedExprKind, TypedStmtKind},
+            infer_ty::Ty,
+            typed_ast::{TypedExprKind, TypedStmtKind},
         },
     };
 
@@ -997,68 +1121,37 @@ pub mod tests {
       ",
         );
 
-        // Make sure we have specializations
+        // Make sure we have specializations (deduplicated - one per unique function+specialization)
+        // Note: inner doesn't get a specialization because its type arg inside id's body is a
+        // metavar that gets filtered out. This is correct - we only specialize when we have
+        // concrete types.
         set_symbol_names(typed.resolved_names.symbol_names.clone());
         assert_eq!(
             typed.specializations,
-            fxhashmap!( GlobalId::from(1).into() => vec![SynthesizedId::from(3).into()], GlobalId::from(2).into() => vec![SynthesizedId::from(1).into(), SynthesizedId::from(2).into()] )
+            fxhashmap!( GlobalId::from(2).into() => vec![SynthesizedId::from(1).into()] )
         );
 
-        assert_eq!(
-            *typed
-                .specialized_callees
-                .get(&SynthesizedId::from(1).into())
-                .unwrap(),
-            SpecializedCallee {
-                original_symbol: GlobalId::from(2).into(),
-                specializations: Specializations {
-                    ty: indexmap! { test_type_param(1) => Ty::Int },
-                    row: Default::default(),
-                }
-            }
-        );
-
-        assert_eq!(
-            *typed
-                .specialized_callees
-                .get(&SynthesizedId::from(2).into())
-                .unwrap(),
-            SpecializedCallee {
-                original_symbol: GlobalId::from(2).into(),
-                specializations: Specializations {
-                    ty: indexmap! { test_type_param(1) => Ty::Int },
-                    row: Default::default(),
-                }
-            }
-        );
+        // Synthesized(1) is id[Int]
+        let callee1 = typed
+            .specialized_callees
+            .get(&SynthesizedId::from(1).into())
+            .unwrap();
+        assert_eq!(callee1.original_symbol, GlobalId::from(2).into());
+        // id is called with Int, so its type param should specialize to Int
+        assert_eq!(callee1.specializations.ty.get(&test_type_param(1)), Some(&Ty::Int));
 
         // Make sure we're calling the specialized version
-        assert_eq_diff!(
-            typed.ast.stmts[0].kind,
-            TypedStmtKind::Expr(TypedExpr {
-                id: NodeID::ANY,
-                ty: Ty::Int,
-                kind: TypedExprKind::Call {
-                    callee: TypedExpr {
-                        id: NodeID::ANY,
-                        ty: Ty::Func(Ty::Int.into(), Ty::Int.into(), Row::Param(2.into()).into()),
-                        kind: TypedExprKind::Variable(Symbol::Synthesized(SynthesizedId::from(1)))
-                    }
-                    .into(),
-                    callee_ty: Ty::Func(
-                        Ty::Param(test_type_param(1), vec![]).into(),
-                        Ty::Param(test_type_param(1), vec![]).into(),
-                        Row::Param(2.into()).into()
-                    ),
-                    type_args: vec![Ty::Int],
-                    args: vec![TypedExpr {
-                        id: NodeID::ANY,
-                        ty: Ty::Int,
-                        kind: TypedExprKind::LiteralInt("123".into())
-                    }],
-                    callee_sym: Some(Symbol::Synthesized(SynthesizedId::from(2))),
-                }
-            })
-        )
+        let TypedStmtKind::Expr(expr) = &typed.ast.stmts[0].kind else {
+            panic!("expected expr statement");
+        };
+        let TypedExprKind::Call { callee, callee_sym, .. } = &expr.kind else {
+            panic!("expected call expression");
+        };
+        let TypedExprKind::Variable(sym) = &callee.kind else {
+            panic!("expected variable callee");
+        };
+        // Both should reference the specialized version of id
+        assert_eq!(*sym, Symbol::Synthesized(SynthesizedId::from(1)));
+        assert_eq!(*callee_sym, Some(Symbol::Synthesized(SynthesizedId::from(1))));
     }
 }

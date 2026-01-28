@@ -11,7 +11,7 @@ pub mod tests {
         node_kinds::{
             block::Block,
             call_arg::CallArg,
-            decl::{Decl, DeclKind},
+            decl::{Decl, DeclKind, Visibility},
             expr::{Expr, ExprKind},
             func::{EffectSet, Func},
             func_signature::FuncSignature,
@@ -106,6 +106,7 @@ pub mod tests {
             $crate::node_kinds::decl::Decl {
                 id: NodeID::ANY,
                 span: $crate::parsing::span::Span::ANY,
+                visibility: $crate::node_kinds::decl::Visibility::default(),
                 kind: $expr,
             }
         };
@@ -564,6 +565,7 @@ pub mod tests {
             Decl {
                 id: NodeID::ANY,
                 span: Span::ANY,
+                visibility: Visibility::default(),
                 kind: DeclKind::Func(Func {
                     id: NodeID::ANY,
                     name: "foo".into(),
@@ -880,6 +882,7 @@ pub mod tests {
             Decl {
                 id: NodeID::ANY,
                 span: Span::ANY,
+                visibility: Visibility::default(),
                 kind: DeclKind::Let {
                     lhs: Pattern {
                         id: NodeID::ANY,
@@ -901,6 +904,7 @@ pub mod tests {
             Decl {
                 id: NodeID::ANY,
                 span: Span::ANY,
+                visibility: Visibility::default(),
                 kind: DeclKind::Let {
                     lhs: Pattern {
                         id: NodeID::ANY,
@@ -926,6 +930,7 @@ pub mod tests {
             Decl {
                 id: NodeID::ANY,
                 span: Span::ANY,
+                visibility: Visibility::default(),
                 kind: DeclKind::Let {
                     lhs: Pattern {
                         id: NodeID::ANY,
@@ -955,6 +960,7 @@ pub mod tests {
             Decl {
                 id: NodeID::ANY,
                 span: Span::ANY,
+                visibility: Visibility::default(),
                 kind: DeclKind::Let {
                     lhs: Pattern {
                         id: NodeID::ANY,
@@ -3331,4 +3337,108 @@ pub mod tests {
     //         "Should have exactly one root expression"
     //     );
     // }
+
+    #[test]
+    fn parses_named_import() {
+        use crate::node_kinds::decl::{ImportPath, ImportedSymbols};
+
+        let parsed = parse("import { greet, Point } from ./utils.tlk");
+
+        let decl = parsed.roots[0].as_decl();
+        let DeclKind::Import(import) = &decl.kind else {
+            panic!("Expected import, got {:?}", decl.kind);
+        };
+
+        match &import.symbols {
+            ImportedSymbols::Named(symbols) => {
+                assert_eq!(symbols.len(), 2);
+                assert_eq!(symbols[0].name, "greet");
+                assert_eq!(symbols[1].name, "Point");
+            }
+            _ => panic!("Expected named imports"),
+        }
+
+        match &import.path {
+            ImportPath::Relative(p) => assert_eq!(p, "./utils.tlk"),
+            _ => panic!("Expected relative path"),
+        }
+    }
+
+    #[test]
+    fn parses_import_all() {
+        use crate::node_kinds::decl::{ImportPath, ImportedSymbols};
+
+        let parsed = parse("import _ from ./utils.tlk");
+
+        let decl = parsed.roots[0].as_decl();
+        let DeclKind::Import(import) = &decl.kind else {
+            panic!("Expected import, got {:?}", decl.kind);
+        };
+
+        assert!(matches!(import.symbols, ImportedSymbols::All));
+        match &import.path {
+            ImportPath::Relative(p) => assert_eq!(p, "./utils.tlk"),
+            _ => panic!("Expected relative path"),
+        }
+    }
+
+    #[test]
+    fn parses_package_import() {
+        use crate::node_kinds::decl::{ImportPath, ImportedSymbols};
+
+        let parsed = parse("import { HashMap } from collections");
+
+        let decl = parsed.roots[0].as_decl();
+        let DeclKind::Import(import) = &decl.kind else {
+            panic!("Expected import, got {:?}", decl.kind);
+        };
+
+        match &import.symbols {
+            ImportedSymbols::Named(symbols) => {
+                assert_eq!(symbols.len(), 1);
+                assert_eq!(symbols[0].name, "HashMap");
+            }
+            _ => panic!("Expected named imports"),
+        }
+
+        match &import.path {
+            ImportPath::Package(p) => assert_eq!(p, "collections"),
+            _ => panic!("Expected package path"),
+        }
+    }
+
+    #[test]
+    fn parses_public_func() {
+        let parsed = parse("public func greet() {}");
+
+        let decl = parsed.roots[0].as_decl();
+        assert_eq!(decl.visibility, Visibility::Public);
+        assert!(matches!(decl.kind, DeclKind::Func(_)));
+    }
+
+    #[test]
+    fn parses_public_struct() {
+        let parsed = parse("public struct Point {}");
+
+        let decl = parsed.roots[0].as_decl();
+        assert_eq!(decl.visibility, Visibility::Public);
+        assert!(matches!(decl.kind, DeclKind::Struct { .. }));
+    }
+
+    #[test]
+    fn parses_public_let() {
+        let parsed = parse("public let x = 5");
+
+        let decl = parsed.roots[0].as_decl();
+        assert_eq!(decl.visibility, Visibility::Public);
+        assert!(matches!(decl.kind, DeclKind::Let { .. }));
+    }
+
+    #[test]
+    fn parses_private_func_by_default() {
+        let parsed = parse("func greet() {}");
+
+        let decl = parsed.roots[0].as_decl();
+        assert_eq!(decl.visibility, Visibility::Private);
+    }
 }

@@ -7,30 +7,28 @@ use crate::{
     node_id::NodeID,
     types::{
         call_tree::CallTree,
-        infer_ty::InferTy,
-        mappable::Mappable,
+        infer_row::Row,
+        infer_ty::Ty,
         matcher::MatchPlan,
         scheme::Scheme,
         term_environment::EnvEntry,
-        ty::{SomeType, Ty},
         type_catalog::TypeCatalog,
-        variational::{ChoiceStore, Resolution},
+        variational::{ChoiceStore, ErrorConstraintStore},
     },
 };
 
 #[derive(Debug, Clone, PartialEq, Drive, DriveMut)]
 pub enum TypeEntry {
     Mono(Ty),
-    Poly(Scheme<Ty>),
+    Poly(Scheme),
 }
 
-impl Mappable<Ty, Ty> for TypeEntry {
-    type Output = TypeEntry;
-    fn mapping(
+impl TypeEntry {
+    pub fn mapping(
         self,
         ty_map: &mut impl FnMut(Ty) -> Ty,
-        row_map: &mut impl FnMut(<Ty as SomeType>::RowType) -> <Ty as SomeType>::RowType,
-    ) -> Self::Output {
+        row_map: &mut impl FnMut(Row) -> Row,
+    ) -> Self {
         match self {
             Self::Mono(ty) => TypeEntry::Mono(ty.mapping(ty_map, row_map)),
             Self::Poly(scheme) => Self::Poly(Scheme {
@@ -44,9 +42,7 @@ impl Mappable<Ty, Ty> for TypeEntry {
             }),
         }
     }
-}
 
-impl TypeEntry {
     pub fn as_mono_ty(&self) -> &Ty {
         match self {
             Self::Mono(ty) => ty,
@@ -62,32 +58,20 @@ impl TypeEntry {
     }
 }
 
-impl From<EnvEntry<InferTy>> for TypeEntry {
-    fn from(value: EnvEntry<InferTy>) -> Self {
+impl From<EnvEntry> for TypeEntry {
+    fn from(value: EnvEntry) -> Self {
         match value {
-            EnvEntry::Mono(ty) => TypeEntry::Mono(ty.into()),
-            EnvEntry::Scheme(scheme) => TypeEntry::Poly(Scheme {
-                foralls: scheme.foralls,
-                predicates: scheme.predicates.into_iter().map(|p| p.into()).collect(),
-                ty: scheme.ty.into(),
-            }),
+            EnvEntry::Mono(ty) => TypeEntry::Mono(ty),
+            EnvEntry::Scheme(scheme) => TypeEntry::Poly(scheme),
         }
     }
 }
 
-impl From<TypeEntry> for EnvEntry<InferTy> {
+impl From<TypeEntry> for EnvEntry {
     fn from(value: TypeEntry) -> Self {
         match value {
-            TypeEntry::Mono(ty) => EnvEntry::Mono(ty.into()),
-            TypeEntry::Poly(scheme) => EnvEntry::Scheme(Scheme {
-                foralls: scheme.foralls,
-                predicates: scheme
-                    .predicates
-                    .into_iter()
-                    .map(|p| p.mapping(&mut |t| t.into(), &mut |r| r.into()))
-                    .collect(),
-                ty: scheme.ty.into(),
-            }),
+            TypeEntry::Mono(ty) => EnvEntry::Mono(ty),
+            TypeEntry::Poly(scheme) => EnvEntry::Scheme(scheme),
         }
     }
 }
@@ -97,14 +81,13 @@ impl From<TypeEntry> for EnvEntry<InferTy> {
 pub struct Types {
     pub types_by_node: FxHashMap<NodeID, TypeEntry>,
     pub types_by_symbol: FxHashMap<Symbol, TypeEntry>,
-    pub catalog: TypeCatalog<Ty>,
+    pub catalog: TypeCatalog,
     pub(crate) match_plans: FxHashMap<NodeID, MatchPlan>,
     /// Variational choices for protocol method resolution.
     /// Maps call sites to alternatives with witness symbols.
     pub choices: ChoiceStore,
-    /// Resolved overloads after variational type checking.
-    /// Maps dimensions (call sites) to their resolved alternative index.
-    pub resolution: Resolution,
+    /// Error constraints from type checking - used to resolve overloads.
+    pub error_constraints: ErrorConstraintStore,
     /// Call tree mapping each function to the callees in its body.
     pub call_tree: CallTree,
 }
@@ -137,7 +120,7 @@ impl Types {
             catalog: self.catalog.import_as(module_id),
             match_plans: self.match_plans,
             choices: self.choices,
-            resolution: self.resolution,
+            error_constraints: self.error_constraints,
             // Import call tree so specialization can propagate to callees in imported modules
             call_tree: self
                 .call_tree
