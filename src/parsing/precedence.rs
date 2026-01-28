@@ -79,13 +79,13 @@ impl Precedence {
                 precedence: Precedence::Primary,
             },
 
-            TokenKind::EffectName(..) => ParseHandler {
+            TokenKind::EffectName => ParseHandler {
                 prefix: Some(Parser::effect_callee),
                 infix: None,
                 precedence: Precedence::Primary,
             },
 
-            TokenKind::Attribute(..) => ParseHandler {
+            TokenKind::Attribute => ParseHandler {
                 prefix: Some(Parser::attribute),
                 infix: None,
                 precedence: Precedence::Primary,
@@ -121,7 +121,7 @@ impl Precedence {
                 precedence: Precedence::Call,
             },
 
-            TokenKind::StringLiteral(_) => ParseHandler {
+            TokenKind::StringLiteral => ParseHandler {
                 prefix: Some(Parser::literal),
                 infix: None,
                 precedence: Precedence::Primary,
@@ -157,13 +157,13 @@ impl Precedence {
                 precedence: Precedence::Call,
             },
 
-            TokenKind::Int(_) => ParseHandler {
+            TokenKind::Int => ParseHandler {
                 prefix: Some(Parser::literal),
                 infix: None,
                 precedence: Precedence::Primary,
             },
 
-            TokenKind::Float(_) => ParseHandler {
+            TokenKind::Float => ParseHandler {
                 prefix: Some(Parser::literal),
                 infix: None,
                 precedence: Precedence::Primary,
@@ -253,7 +253,7 @@ impl Precedence {
                 precedence: Precedence::Factor,
             },
 
-            TokenKind::Identifier(_) => ParseHandler {
+            TokenKind::Identifier => ParseHandler {
                 prefix: Some(Parser::variable),
                 infix: None,
                 precedence: Precedence::None,

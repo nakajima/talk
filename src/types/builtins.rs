@@ -2,8 +2,8 @@ use indexmap::IndexSet;
 use rustc_hash::FxHashMap;
 
 use crate::name_resolution::symbol::Symbol;
-use crate::types::infer_row::InferRow;
-use crate::types::infer_ty::InferTy;
+use crate::types::infer_row::Row;
+use crate::types::infer_ty::Ty;
 use crate::types::predicate::Predicate;
 use crate::types::scheme::{ForAll, Scheme};
 use crate::types::term_environment::EnvEntry;
@@ -17,24 +17,24 @@ macro_rules! indexset {
     }};
 }
 
-pub fn resolve_builtin_type(id: &Symbol) -> (InferTy, Vec<Predicate<InferTy>>, IndexSet<ForAll>) {
+pub fn resolve_builtin_type(id: &Symbol) -> (Ty, Vec<Predicate>, IndexSet<ForAll>) {
     let ty = match *id {
-        Symbol::Int => InferTy::Primitive(Symbol::Int),
-        Symbol::Float => InferTy::Primitive(Symbol::Float),
-        Symbol::Bool => InferTy::Primitive(Symbol::Bool),
-        Symbol::Void => InferTy::Primitive(Symbol::Void),
-        Symbol::Never => InferTy::Primitive(Symbol::Never),
-        Symbol::RawPtr => InferTy::Primitive(Symbol::RawPtr),
-        Symbol::Byte => InferTy::Primitive(Symbol::Byte),
-        Symbol::IR => InferTy::Func(
-            InferTy::String().into(),
-            InferTy::Param(Symbol::IR_TYPE_PARAM, vec![]).into(),
-            InferRow::Empty.into(),
+        Symbol::Int => Ty::Primitive(Symbol::Int),
+        Symbol::Float => Ty::Primitive(Symbol::Float),
+        Symbol::Bool => Ty::Primitive(Symbol::Bool),
+        Symbol::Void => Ty::Primitive(Symbol::Void),
+        Symbol::Never => Ty::Primitive(Symbol::Never),
+        Symbol::RawPtr => Ty::Primitive(Symbol::RawPtr),
+        Symbol::Byte => Ty::Primitive(Symbol::Byte),
+        Symbol::IR => Ty::Func(
+            Ty::String().into(),
+            Ty::Param(Symbol::IR_TYPE_PARAM, vec![]).into(),
+            Row::Empty.into(),
         ),
-        Symbol::PRINT => InferTy::Func(
-            InferTy::String().into(),
-            InferTy::Param(Symbol::IR_TYPE_PARAM, vec![]).into(),
-            InferRow::Empty.into(),
+        Symbol::PRINT => Ty::Func(
+            Ty::String().into(),
+            Ty::Param(Symbol::IR_TYPE_PARAM, vec![]).into(),
+            Row::Empty.into(),
         ),
         _ => unreachable!("no builtin named {id:?}"),
     };
@@ -42,40 +42,40 @@ pub fn resolve_builtin_type(id: &Symbol) -> (InferTy, Vec<Predicate<InferTy>>, I
     (ty, vec![], Default::default())
 }
 
-pub fn builtin_scope() -> FxHashMap<Symbol, EnvEntry<InferTy>> {
-    let mut res: FxHashMap<Symbol, EnvEntry<InferTy>> = Default::default();
+pub fn builtin_scope() -> FxHashMap<Symbol, EnvEntry> {
+    let mut res: FxHashMap<Symbol, EnvEntry> = Default::default();
 
-    res.insert(Symbol::Int, EnvEntry::Mono(InferTy::Int));
-    res.insert(Symbol::Float, EnvEntry::Mono(InferTy::Float));
-    res.insert(Symbol::Bool, EnvEntry::Mono(InferTy::Bool));
-    res.insert(Symbol::Void, EnvEntry::Mono(InferTy::Void));
-    res.insert(Symbol::Never, EnvEntry::Mono(InferTy::Never));
-    res.insert(Symbol::Byte, EnvEntry::Mono(InferTy::Byte));
+    res.insert(Symbol::Int, EnvEntry::Mono(Ty::Int));
+    res.insert(Symbol::Float, EnvEntry::Mono(Ty::Float));
+    res.insert(Symbol::Bool, EnvEntry::Mono(Ty::Bool));
+    res.insert(Symbol::Void, EnvEntry::Mono(Ty::Void));
+    res.insert(Symbol::Never, EnvEntry::Mono(Ty::Never));
+    res.insert(Symbol::Byte, EnvEntry::Mono(Ty::Byte));
     res.insert(
         Symbol::RawPtr,
-        EnvEntry::Mono(InferTy::Primitive(Symbol::RawPtr)),
+        EnvEntry::Mono(Ty::Primitive(Symbol::RawPtr)),
     );
     res.insert(
         Symbol::IR,
-        EnvEntry::Scheme(Scheme::<InferTy>::new(
+        EnvEntry::Scheme(Scheme::new(
             indexset!(ForAll::Ty(Symbol::IR_TYPE_PARAM)),
             vec![],
-            InferTy::Func(
-                InferTy::String().into(),
-                InferTy::Param(Symbol::IR_TYPE_PARAM, vec![]).into(),
-                InferRow::Empty.into(),
+            Ty::Func(
+                Ty::String().into(),
+                Ty::Param(Symbol::IR_TYPE_PARAM, vec![]).into(),
+                Row::Empty.into(),
             ),
         )),
     );
     res.insert(
         Symbol::PRINT,
-        EnvEntry::Scheme(Scheme::<InferTy>::new(
+        EnvEntry::Scheme(Scheme::new(
             indexset!(ForAll::Ty(Symbol::IR_TYPE_PARAM)),
             vec![],
-            InferTy::Func(
-                InferTy::Param(Symbol::IR_TYPE_PARAM, vec![]).into(),
-                InferTy::Void.into(),
-                InferRow::Empty.into(),
+            Ty::Func(
+                Ty::Param(Symbol::IR_TYPE_PARAM, vec![]).into(),
+                Ty::Void.into(),
+                Row::Empty.into(),
             ),
         )),
     );

@@ -8,24 +8,22 @@ use crate::{
     node_id::NodeID,
     types::{
         conformance::{Conformance, ConformanceKey, Witnesses},
-        infer_row::RowParamId,
-        infer_ty::InferTy,
-        ty::{SomeType, Ty},
+        infer_row::{Row, RowParamId},
+        infer_ty::Ty,
         type_operations::UnificationSubstitutions,
         type_session::{MemberSource, TypeSession},
-        types::TypeEntry,
     },
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Nominal<T: SomeType> {
-    pub properties: IndexMap<Label, T>,
-    pub variants: IndexMap<Label, Vec<T>>,
-    pub type_params: Vec<T>,
+pub struct Nominal {
+    pub properties: IndexMap<Label, Ty>,
+    pub variants: IndexMap<Label, Vec<Ty>>,
+    pub type_params: Vec<Ty>,
 }
 
-impl Nominal<Ty> {
-    pub fn import_as(self, module_id: ModuleId) -> Nominal<Ty> {
+impl Nominal {
+    pub fn import_as(self, module_id: ModuleId) -> Nominal {
         Nominal {
             properties: self
                 .properties
@@ -44,10 +42,8 @@ impl Nominal<Ty> {
                 .collect(),
         }
     }
-}
 
-impl<T: SomeType> Nominal<T> {
-    pub fn substitutions(&self, type_args: &[T]) -> FxHashMap<T, T> {
+    pub fn substitutions(&self, type_args: &[Ty]) -> FxHashMap<Ty, Ty> {
         self.type_params
             .clone()
             .into_iter()
@@ -55,77 +51,41 @@ impl<T: SomeType> Nominal<T> {
             .collect()
     }
 
-    pub fn substituted_variant_values(&self, type_args: &[T]) -> IndexMap<Label, Vec<T>> {
+    pub fn substituted_variant_values(&self, type_args: &[Ty]) -> IndexMap<Label, Vec<Ty>> {
         let substitutions = self.substitutions(type_args);
-        self.variants.clone().into_iter().fold(
-            IndexMap::<Label, Vec<T>>::default(),
-            |mut acc, (label, tys)| {
+        self.variants
+            .clone()
+            .into_iter()
+            .fold(IndexMap::<Label, Vec<Ty>>::default(), |mut acc, (label, tys)| {
                 let values = tys
                     .into_iter()
                     .map(|t| substitutions.get(&t).unwrap_or(&t).clone())
                     .collect();
                 acc.insert(label, values);
                 acc
-            },
-        )
+            })
     }
 
-    pub fn substitute_properties(&self, type_args: &[T]) -> IndexMap<Label, T> {
+    pub fn substitute_properties(&self, type_args: &[Ty]) -> IndexMap<Label, Ty> {
         let substitutions = self.substitutions(type_args);
-        self.properties.clone().into_iter().fold(
-            IndexMap::<Label, T>::default(),
-            |mut acc, (label, ty)| {
+        self.properties
+            .clone()
+            .into_iter()
+            .fold(IndexMap::<Label, Ty>::default(), |mut acc, (label, ty)| {
                 let t = substitutions.get(&ty);
                 acc.insert(label, t.unwrap_or(&ty).clone());
                 acc
-            },
-        )
-    }
-}
-
-impl From<Nominal<Ty>> for Nominal<InferTy> {
-    fn from(value: Nominal<Ty>) -> Self {
-        Nominal::<InferTy> {
-            properties: value
-                .properties
-                .into_iter()
-                .map(|(label, ty)| (label, ty.into()))
-                .collect(),
-            variants: value
-                .variants
-                .into_iter()
-                .map(|(label, tys)| (label, tys.into_iter().map(|t| t.into()).collect()))
-                .collect(),
-            type_params: value.type_params.into_iter().map(|ty| ty.into()).collect(),
-        }
-    }
-}
-
-impl From<Nominal<InferTy>> for Nominal<Ty> {
-    fn from(value: Nominal<InferTy>) -> Self {
-        Nominal::<Ty> {
-            properties: value
-                .properties
-                .into_iter()
-                .map(|(label, ty)| (label, ty.into()))
-                .collect(),
-            variants: value
-                .variants
-                .into_iter()
-                .map(|(label, tys)| (label, tys.into_iter().map(|t| t.into()).collect()))
-                .collect(),
-            type_params: value.type_params.into_iter().map(|ty| ty.into()).collect(),
-        }
+            })
     }
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub struct TrackedInstantiations<T: SomeType> {
-    pub ty: FxHashMap<NodeID, FxHashMap<Symbol, T>>,
-    pub row: FxHashMap<NodeID, FxHashMap<RowParamId, T::RowType>>,
+pub struct TrackedInstantiations {
+    pub ty: FxHashMap<NodeID, FxHashMap<Symbol, Ty>>,
+    pub row: FxHashMap<NodeID, FxHashMap<RowParamId, Row>>,
 }
 
-impl TrackedInstantiations<InferTy> {
+impl TrackedInstantiations {
     pub fn apply(
         mut self,
         session: &mut TypeSession,
@@ -141,7 +101,7 @@ impl TrackedInstantiations<InferTy> {
                     .ty
                     .entry(id)
                     .or_default()
-                    .insert(param, session.apply(ty, substitutions));
+                    .insert(param, session.apply(&ty, substitutions));
             }
         }
         for (id, entries) in row {
@@ -150,25 +110,23 @@ impl TrackedInstantiations<InferTy> {
                     .row
                     .entry(id)
                     .or_default()
-                    .insert(param, session.apply_row(row, substitutions));
+                    .insert(param, session.apply_row(&row, substitutions));
             }
         }
 
         instantiations
     }
-}
 
-impl<T: SomeType> TrackedInstantiations<T> {
-    pub fn insert_ty(&mut self, id: NodeID, param: Symbol, ty: T) {
+    pub fn insert_ty(&mut self, id: NodeID, param: Symbol, ty: Ty) {
         self.ty.entry(id).or_default().insert(param, ty);
     }
 
-    pub fn insert_row(&mut self, id: NodeID, param: RowParamId, ty: T::RowType) {
+    pub fn insert_row(&mut self, id: NodeID, param: RowParamId, ty: Row) {
         self.row.entry(id).or_default().insert(param, ty);
     }
 }
 
-impl<T: SomeType> Default for TrackedInstantiations<T> {
+impl Default for TrackedInstantiations {
     fn default() -> Self {
         Self {
             ty: Default::default(),
@@ -178,9 +136,9 @@ impl<T: SomeType> Default for TrackedInstantiations<T> {
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub struct TypeCatalog<T: SomeType> {
-    pub nominals: IndexMap<Symbol, Nominal<T>>,
-    pub conformances: IndexMap<ConformanceKey, Conformance<T>>,
+pub struct TypeCatalog {
+    pub nominals: IndexMap<Symbol, Nominal>,
+    pub conformances: IndexMap<ConformanceKey, Conformance>,
     pub associated_types: IndexMap<Symbol, IndexMap<Label, Symbol>>,
     pub extensions: IndexMap<Symbol, IndexMap<Label, Symbol>>,
     pub child_types: IndexMap<Symbol, IndexMap<Label, Symbol>>,
@@ -190,11 +148,11 @@ pub struct TypeCatalog<T: SomeType> {
     pub static_methods: IndexMap<Symbol, IndexMap<Label, Symbol>>,
     pub variants: IndexMap<Symbol, IndexMap<Label, Symbol>>,
     pub method_requirements: IndexMap<Symbol, IndexMap<Label, Symbol>>,
-    pub instantiations: TrackedInstantiations<T>,
-    pub effects: IndexMap<Symbol, T>, // Effects are represented as T::Func since they have params, ret, and possibly effects
+    pub instantiations: TrackedInstantiations,
+    pub effects: IndexMap<Symbol, Ty>,
 }
 
-impl<T: SomeType> Default for TypeCatalog<T> {
+impl Default for TypeCatalog {
     fn default() -> Self {
         Self {
             nominals: Default::default(),
@@ -216,58 +174,7 @@ impl<T: SomeType> Default for TypeCatalog<T> {
     }
 }
 
-impl TypeCatalog<InferTy> {
-    pub fn finalize(self, session: &mut TypeSession) -> TypeCatalog<Ty> {
-        let mut instantiations = TrackedInstantiations::default();
-        for (id, entries) in self.instantiations.ty {
-            for (param, ty) in entries {
-                let ty = match session.finalize_ty(ty) {
-                    TypeEntry::Mono(ty) => ty.clone(),
-                    TypeEntry::Poly(scheme) => scheme.ty.clone(),
-                };
-                instantiations.ty.entry(id).or_default().insert(param, ty);
-            }
-        }
-        for (id, entries) in self.instantiations.row {
-            for (param, row) in entries {
-                instantiations
-                    .row
-                    .entry(id)
-                    .or_default()
-                    .insert(param, session.finalize_row(row));
-            }
-        }
-        TypeCatalog {
-            nominals: self
-                .nominals
-                .into_iter()
-                .map(|(k, v)| (k, v.into()))
-                .collect(),
-            associated_types: self.associated_types,
-            conformances: self
-                .conformances
-                .into_iter()
-                .map(|(k, v)| (k, v.finalize(session)))
-                .collect(),
-            extensions: self.extensions,
-            child_types: self.child_types,
-            initializers: self.initializers,
-            properties: self.properties,
-            instance_methods: self.instance_methods,
-            static_methods: self.static_methods,
-            variants: self.variants,
-            method_requirements: self.method_requirements,
-            instantiations,
-            effects: self
-                .effects
-                .into_iter()
-                .map(|(k, v)| (k, session.finalize_ty(v).as_mono_ty().clone()))
-                .collect(),
-        }
-    }
-}
-
-impl<T: SomeType> TypeCatalog<T> {
+impl TypeCatalog {
     pub fn lookup_initializers(&self, receiver: &Symbol) -> Option<IndexMap<Label, Symbol>> {
         self.initializers.get(receiver).cloned()
     }
@@ -347,7 +254,6 @@ impl<T: SomeType> TypeCatalog<T> {
     }
 
     pub fn protocol_for_method_requirement(&self, method_req: &Symbol) -> Option<Symbol> {
-        // TODO: this is gonna be slow. we can make it faster probably.
         for (protocol_sym, entries) in &self.method_requirements {
             for (_, sym) in entries {
                 if sym == method_req {
@@ -358,7 +264,7 @@ impl<T: SomeType> TypeCatalog<T> {
         None
     }
 
-    pub fn lookup_effect(&self, id: &Symbol) -> Option<T> {
+    pub fn lookup_effect(&self, id: &Symbol) -> Option<Ty> {
         self.effects.get(id).cloned()
     }
 
@@ -400,10 +306,8 @@ impl<T: SomeType> TypeCatalog<T> {
             .cloned()
             .unwrap_or_default()
     }
-}
 
-impl TypeCatalog<Ty> {
-    pub fn import_as(self, module_id: ModuleId) -> TypeCatalog<Ty> {
+    pub fn import_as(self, module_id: ModuleId) -> TypeCatalog {
         TypeCatalog {
             nominals: self
                 .nominals
@@ -423,7 +327,7 @@ impl TypeCatalog<Ty> {
                             node_id: v.node_id,
                             conforming_id: v.conforming_id.import(module_id),
                             protocol_id: v.protocol_id.import(module_id),
-                            witnesses: Witnesses::<Ty> {
+                            witnesses: Witnesses {
                                 methods: import_mapped(v.witnesses.methods, module_id),
                                 associated_types: v
                                     .witnesses

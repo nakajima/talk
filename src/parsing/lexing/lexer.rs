@@ -201,7 +201,7 @@ impl<'a> Lexer<'a> {
                 self.advance();
             }
 
-            let comment = self.make(LineComment(self.string_from(self.started, self.current)))?;
+            let comment = self.make(LineComment)?;
             self.comments.push(comment);
         }
 
@@ -238,6 +238,8 @@ impl<'a> Lexer<'a> {
     }
 
     fn effect_name(&mut self) -> Result<Token, LexerError> {
+        // Note: ' has already been consumed, self.started points after it
+        // We want the span to start after the ' prefix
         self.started = self.current;
 
         if !self
@@ -256,14 +258,13 @@ impl<'a> Lexer<'a> {
             }
         }
 
-        let string = self.string_from(self.started, self.current);
-        self.make(TokenKind::EffectName(string))
+        self.make(TokenKind::EffectName)
     }
 
     fn string(&mut self) -> Result<Token, LexerError> {
         // opening quote was already eaten by `next()`
-        self.started = self.current;
-        let mut buf = String::new();
+        // We keep self.started pointing at the opening quote position
+        // The span will include the quotes so the parser can strip them
 
         loop {
             // pull the next physical character
@@ -272,24 +273,16 @@ impl<'a> Lexer<'a> {
             match ch {
                 '"' => break,
                 '\\' => {
-                    // start of an escape
+                    // skip past escape sequence
                     let esc = self.advance().ok_or(LexerError::UnexpectedEOF)?;
                     match esc {
-                        'n' => buf.push('\n'),
-                        't' => buf.push('\t'),
-                        'r' => buf.push('\r'),
-                        '"' => buf.push('"'),
-                        '\\' => buf.push('\\'),
+                        'n' | 't' | 'r' | '"' | '\\' => {}
 
                         // Unicode escape: \u{1F600}
                         'u' => {
                             self.expect_char('{')?;
-                            let digits = self.take_hex_digits(1..=6)?;
+                            let _digits = self.take_hex_digits(1..=6)?;
                             self.expect_char('}')?;
-
-                            let cp = u32::from_str_radix(&digits, 16)
-                                .map_err(|_| LexerError::InvalidUnicodeEscape)?;
-                            buf.push(char::from_u32(cp).ok_or(LexerError::InvalidUnicodeEscape)?);
                         }
 
                         '\n' => {
@@ -300,17 +293,19 @@ impl<'a> Lexer<'a> {
                         other => return Err(LexerError::InvalidEscape(other)),
                     }
                 }
-                '\n' => buf.push('\n'),
-                _ => buf.push(ch),
+                '\n' => {
+                    self.line += 1;
+                    self.col = 0;
+                }
+                _ => {}
             }
         }
 
-        let mut tok = self.make(TokenKind::StringLiteral(buf))?;
-        tok.end -= 1; // move `end` back over the quote only
-        Ok(tok)
+        // Span includes the quotes: "hello" -> start points at ", end points after "
+        self.make(TokenKind::StringLiteral)
     }
 
-    fn identifier(&mut self, starting_at: u32) -> TokenKind {
+    fn identifier(&mut self, _starting_at: u32) -> TokenKind {
         while let Some(ch) = self.peek() {
             if ch.is_alphanumeric() || ch == '_' {
                 self.advance();
@@ -319,9 +314,8 @@ impl<'a> Lexer<'a> {
             }
         }
 
-        let string = self.string_from(starting_at, self.current);
-
-        // Keyword handling
+        // Keyword handling - use the source slice for keyword matching
+        let string = &self.code[(self.started as usize)..(self.current as usize)];
         keywords::handle(string)
     }
 
@@ -335,7 +329,8 @@ impl<'a> Lexer<'a> {
             return self.make(TokenKind::At);
         }
 
-        let starting_at = self.current;
+        // Span excludes the @ prefix - start from current position
+        self.started = self.current;
 
         // It's an attribute
         while let Some(ch) = self.peek() {
@@ -346,8 +341,7 @@ impl<'a> Lexer<'a> {
             }
         }
 
-        let string = self.string_from(starting_at, self.current);
-        self.make(TokenKind::Attribute(string))
+        self.make(TokenKind::Attribute)
     }
 
     fn dollar(&mut self) -> Result<Token, LexerError> {
@@ -360,9 +354,10 @@ impl<'a> Lexer<'a> {
             return self.make(TokenKind::Dollar);
         }
 
-        let starting_at = self.current;
+        // Span excludes the $ prefix - start from current position
+        self.started = self.current;
 
-        // It's an attribute
+        // It's a bound var
         while let Some(ch) = self.peek() {
             if ch.is_alphanumeric() || ch == '_' {
                 self.advance();
@@ -371,8 +366,7 @@ impl<'a> Lexer<'a> {
             }
         }
 
-        let string = self.string_from(starting_at, self.current);
-        self.make(TokenKind::BoundVar(string))
+        self.make(TokenKind::BoundVar)
     }
 
     fn percent(&mut self) -> Result<Token, LexerError> {
@@ -385,9 +379,10 @@ impl<'a> Lexer<'a> {
             return self.make(TokenKind::Percent);
         }
 
-        let starting_at = self.current;
+        // Span excludes the % prefix - start from current position
+        self.started = self.current;
 
-        // It's an attribute
+        // It's a register
         while let Some(ch) = self.peek() {
             if ch.is_numeric() || ch == '?' {
                 self.advance();
@@ -396,8 +391,7 @@ impl<'a> Lexer<'a> {
             }
         }
 
-        let string = self.string_from(starting_at, self.current);
-        self.make(TokenKind::IRRegister(string))
+        self.make(TokenKind::IRRegister)
     }
 
     fn minus(&mut self) -> Result<Token, LexerError> {
@@ -426,7 +420,7 @@ impl<'a> Lexer<'a> {
         self.make(Dot)
     }
 
-    fn number(&mut self, starting_at: u32) -> TokenKind {
+    fn number(&mut self, _starting_at: u32) -> TokenKind {
         let mut is_float = false;
 
         while let Some(ch) = self.peek() {
@@ -441,14 +435,10 @@ impl<'a> Lexer<'a> {
         }
 
         if is_float {
-            Float(self.string_from(starting_at, self.current))
+            Float
         } else {
-            Int(self.string_from(starting_at, self.current))
+            Int
         }
-    }
-
-    fn string_from(&self, start: u32, end: u32) -> String {
-        self.code[(start as usize)..=(end as usize - 1)].to_string()
     }
 
     fn make(&mut self, kind: TokenKind) -> Result<Token, LexerError> {
@@ -514,6 +504,12 @@ impl<'a> Lexer<'a> {
 mod tests {
     use super::*;
 
+    /// Helper to check both token kind and lexeme
+    fn assert_token(source: &str, token: &Token, expected_kind: TokenKind, expected_lexeme: &str) {
+        assert_eq!(token.kind, expected_kind);
+        assert_eq!(token.lexeme(source), expected_lexeme);
+    }
+
     #[test]
     fn braces() {
         let mut lexer = Lexer::new("{}");
@@ -524,9 +520,11 @@ mod tests {
 
     #[test]
     fn arrow() {
-        let mut lexer = Lexer::new("-> Int");
+        let source = "-> Int";
+        let mut lexer = Lexer::new(source);
         assert_eq!(lexer.next().unwrap().kind, Arrow);
-        assert_eq!(lexer.next().unwrap().kind, Identifier("Int".to_string()));
+        let tok = lexer.next().unwrap();
+        assert_token(source, &tok, Identifier, "Int");
         assert_eq!(lexer.next().unwrap().kind, EOF);
     }
 
@@ -547,59 +545,78 @@ mod tests {
 
     #[test]
     fn dot() {
-        let mut lexer = Lexer::new("fizz.buzz");
-        assert_eq!(lexer.next().unwrap().kind, Identifier("fizz".to_string()));
+        let source = "fizz.buzz";
+        let mut lexer = Lexer::new(source);
+        let tok = lexer.next().unwrap();
+        assert_token(source, &tok, Identifier, "fizz");
         assert_eq!(lexer.next().unwrap().kind, Dot);
-        assert_eq!(lexer.next().unwrap().kind, Identifier("buzz".to_string()));
+        let tok = lexer.next().unwrap();
+        assert_token(source, &tok, Identifier, "buzz");
         assert_eq!(lexer.next().unwrap().kind, EOF);
     }
 
     #[test]
     fn dot_dot() {
-        let mut lexer = Lexer::new("..R");
+        let source = "..R";
+        let mut lexer = Lexer::new(source);
         assert_eq!(lexer.next().unwrap().kind, DotDot);
-        assert_eq!(lexer.next().unwrap().kind, Identifier("R".to_string()));
+        let tok = lexer.next().unwrap();
+        assert_token(source, &tok, Identifier, "R");
         assert_eq!(lexer.next().unwrap().kind, EOF);
     }
 
     #[test]
     fn dot_dot_dot() {
-        let mut lexer = Lexer::new("...obj");
+        let source = "...obj";
+        let mut lexer = Lexer::new(source);
         assert_eq!(lexer.next().unwrap().kind, DotDotDot);
-        assert_eq!(lexer.next().unwrap().kind, Identifier("obj".to_string()));
+        let tok = lexer.next().unwrap();
+        assert_token(source, &tok, Identifier, "obj");
         assert_eq!(lexer.next().unwrap().kind, EOF);
     }
 
     #[test]
     fn attribute() {
-        let mut lexer = Lexer::new("@sup @ sup");
-        assert_eq!(lexer.next().unwrap().kind, Attribute("sup".to_string()));
+        let source = "@sup @ sup";
+        let mut lexer = Lexer::new(source);
+        let tok = lexer.next().unwrap();
+        assert_token(source, &tok, Attribute, "sup"); // span excludes @
         assert_eq!(lexer.next().unwrap().kind, At);
-        assert_eq!(lexer.next().unwrap().kind, Identifier("sup".to_string()));
+        let tok = lexer.next().unwrap();
+        assert_token(source, &tok, Identifier, "sup");
         assert_eq!(lexer.next().unwrap().kind, EOF);
     }
 
     #[test]
     fn identifier() {
-        let mut lexer = Lexer::new("hello world");
-        assert_eq!(lexer.next().unwrap().kind, Identifier("hello".to_string()));
-        assert_eq!(lexer.next().unwrap().kind, Identifier("world".to_string()));
+        let source = "hello world";
+        let mut lexer = Lexer::new(source);
+        let tok = lexer.next().unwrap();
+        assert_token(source, &tok, Identifier, "hello");
+        let tok = lexer.next().unwrap();
+        assert_token(source, &tok, Identifier, "world");
         assert_eq!(lexer.next().unwrap().kind, EOF);
     }
 
     #[test]
     fn ints() {
-        let mut lexer = Lexer::new("123 4_56");
-        assert_eq!(lexer.next().unwrap().kind, Int("123".into()));
-        assert_eq!(lexer.next().unwrap().kind, Int("4_56".into()));
+        let source = "123 4_56";
+        let mut lexer = Lexer::new(source);
+        let tok = lexer.next().unwrap();
+        assert_token(source, &tok, Int, "123");
+        let tok = lexer.next().unwrap();
+        assert_token(source, &tok, Int, "4_56");
         assert_eq!(lexer.next().unwrap().kind, EOF);
     }
 
     #[test]
     fn floats() {
-        let mut lexer = Lexer::new("12.3 4.56");
-        assert_eq!(lexer.next().unwrap().kind, Float("12.3".into()));
-        assert_eq!(lexer.next().unwrap().kind, Float("4.56".into()));
+        let source = "12.3 4.56";
+        let mut lexer = Lexer::new(source);
+        let tok = lexer.next().unwrap();
+        assert_token(source, &tok, Float, "12.3");
+        let tok = lexer.next().unwrap();
+        assert_token(source, &tok, Float, "4.56");
         assert_eq!(lexer.next().unwrap().kind, EOF);
     }
 
@@ -655,47 +672,49 @@ mod tests {
 
     #[test]
     fn strings() {
-        let mut lexer = Lexer::new("- \"hello world\" + ");
+        let source = "- \"hello world\" + ";
+        let mut lexer = Lexer::new(source);
         assert_eq!(lexer.next().unwrap().kind, Minus);
-        assert_eq!(
-            lexer.next().unwrap().kind,
-            StringLiteral("hello world".to_string())
-        );
+        let tok = lexer.next().unwrap();
+        assert_eq!(tok.kind, StringLiteral);
+        // String literal span includes quotes
+        assert_eq!(tok.lexeme(source), "\"hello world\"");
         assert_eq!(lexer.next().unwrap().kind, Plus);
         assert_eq!(lexer.next().unwrap().kind, EOF);
     }
 
     #[test]
     fn strings_with_emoji() {
-        let mut lexer = Lexer::new("- \"😎😎 hello 🗿\" + ");
+        let source = "- \"😎😎 hello 🗿\" + ";
+        let mut lexer = Lexer::new(source);
         assert_eq!(lexer.next().unwrap().kind, Minus);
-        assert_eq!(
-            lexer.next().unwrap().kind,
-            StringLiteral("😎😎 hello 🗿".to_string())
-        );
+        let tok = lexer.next().unwrap();
+        assert_eq!(tok.kind, StringLiteral);
+        assert_eq!(tok.lexeme(source), "\"😎😎 hello 🗿\"");
         assert_eq!(lexer.next().unwrap().kind, Plus);
         assert_eq!(lexer.next().unwrap().kind, EOF);
     }
 
     #[test]
     fn strings_with_escapes() {
-        let mut lexer = Lexer::new(r#""\thello\nworld""#);
-        assert_eq!(
-            lexer.next().unwrap().kind,
-            StringLiteral("\thello\nworld".to_string())
-        );
+        let source = r#""\thello\nworld""#;
+        let mut lexer = Lexer::new(source);
+        let tok = lexer.next().unwrap();
+        assert_eq!(tok.kind, StringLiteral);
+        // Raw lexeme still has escape sequences
+        assert_eq!(tok.lexeme(source), r#""\thello\nworld""#);
         assert_eq!(lexer.next().unwrap().kind, EOF);
     }
 
     #[test]
     fn strings_with_unicode_escape() {
         // 😀 = U+1F600
-        let mut lexer = Lexer::new(r#""smile: \u{1F600}""#);
-
-        assert_eq!(
-            lexer.next().unwrap().kind,
-            StringLiteral("smile: 😀".to_string())
-        );
+        let source = r#""smile: \u{1F600}""#;
+        let mut lexer = Lexer::new(source);
+        let tok = lexer.next().unwrap();
+        assert_eq!(tok.kind, StringLiteral);
+        // Raw lexeme still has escape sequence
+        assert_eq!(tok.lexeme(source), r#""smile: \u{1F600}""#);
         assert_eq!(lexer.next().unwrap().kind, EOF);
     }
 
@@ -708,9 +727,11 @@ mod tests {
 
     #[test]
     fn underscore() {
-        let mut lexer = Lexer::new("_ _sup");
+        let source = "_ _sup";
+        let mut lexer = Lexer::new(source);
         assert_eq!(lexer.next().unwrap().kind, Underscore);
-        assert_eq!(lexer.next().unwrap().kind, Identifier("_sup".to_string()));
+        let tok = lexer.next().unwrap();
+        assert_token(source, &tok, Identifier, "_sup");
         assert_eq!(lexer.next().unwrap().kind, EOF);
     }
 
@@ -752,31 +773,44 @@ mod tests {
 
     #[test]
     fn ir_register() {
-        let mut lexer = Lexer::new("%? %1 %123 % 1");
-        assert_eq!(lexer.next().unwrap().kind, IRRegister("?".into()));
-        assert_eq!(lexer.next().unwrap().kind, IRRegister("1".into()));
-        assert_eq!(lexer.next().unwrap().kind, IRRegister("123".into()));
+        let source = "%? %1 %123 % 1";
+        let mut lexer = Lexer::new(source);
+        let tok = lexer.next().unwrap();
+        assert_token(source, &tok, IRRegister, "?"); // span excludes %
+        let tok = lexer.next().unwrap();
+        assert_token(source, &tok, IRRegister, "1");
+        let tok = lexer.next().unwrap();
+        assert_token(source, &tok, IRRegister, "123");
         assert_eq!(lexer.next().unwrap().kind, Percent);
-        assert_eq!(lexer.next().unwrap().kind, Int("1".into()));
+        let tok = lexer.next().unwrap();
+        assert_token(source, &tok, Int, "1");
         assert_eq!(lexer.next().unwrap().kind, EOF);
     }
 
     #[test]
     fn bound_var() {
-        let mut lexer = Lexer::new("$1 $2 $sup $ sup");
-        assert_eq!(lexer.next().unwrap().kind, BoundVar("1".into()));
-        assert_eq!(lexer.next().unwrap().kind, BoundVar("2".into()));
-        assert_eq!(lexer.next().unwrap().kind, BoundVar("sup".into()));
+        let source = "$1 $2 $sup $ sup";
+        let mut lexer = Lexer::new(source);
+        let tok = lexer.next().unwrap();
+        assert_token(source, &tok, BoundVar, "1"); // span excludes $
+        let tok = lexer.next().unwrap();
+        assert_token(source, &tok, BoundVar, "2");
+        let tok = lexer.next().unwrap();
+        assert_token(source, &tok, BoundVar, "sup");
         assert_eq!(lexer.next().unwrap().kind, Dollar);
-        assert_eq!(lexer.next().unwrap().kind, Identifier("sup".into()));
+        let tok = lexer.next().unwrap();
+        assert_token(source, &tok, Identifier, "sup");
         assert_eq!(lexer.next().unwrap().kind, EOF);
     }
 
     #[test]
     fn effect() {
-        let mut lexer = Lexer::new("123 'sup");
-        assert_eq!(lexer.next().unwrap().kind, Int("123".into()));
-        assert_eq!(lexer.next().unwrap().kind, EffectName("sup".into()));
+        let source = "123 'sup";
+        let mut lexer = Lexer::new(source);
+        let tok = lexer.next().unwrap();
+        assert_token(source, &tok, Int, "123");
+        let tok = lexer.next().unwrap();
+        assert_token(source, &tok, EffectName, "sup"); // span excludes '
         assert_eq!(lexer.next().unwrap().kind, EOF);
     }
 }

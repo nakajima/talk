@@ -12,10 +12,9 @@ pub mod tests {
         name_resolution::symbol::{EnumId, GlobalId, ProtocolId, StructId, Symbol, SynthesizedId, TypeParameterId},
         types::{
             conformance::ConformanceKey,
-            infer_row::RowParamId,
-            row::Row,
+            infer_row::{Row, RowParamId},
+            infer_ty::Ty,
             scheme::{ForAll, Scheme},
-            ty::Ty,
             type_error::TypeError,
             typed_ast::{TypedAST, TypedExpr, TypedExprKind, TypedStmt, TypedStmtKind},
             types::{TypeEntry, Types},
@@ -27,7 +26,7 @@ pub mod tests {
         Symbol::TypeParameter(TypeParameterId::new(ModuleId::Current, id))
     }
 
-    pub fn typecheck(code: &'static str) -> (TypedAST<Ty>, Types) {
+    pub fn typecheck(code: &'static str) -> (TypedAST, Types) {
         let (ast, types, diagnostics) = typecheck_err(code);
         assert!(
             diagnostics.is_empty(),
@@ -37,7 +36,7 @@ pub mod tests {
         (ast, types)
     }
 
-    pub fn typecheck_err(code: &'static str) -> (TypedAST<Ty>, Types, Vec<AnyDiagnostic>) {
+    pub fn typecheck_err(code: &'static str) -> (TypedAST, Types, Vec<AnyDiagnostic>) {
         let driver = Driver::new_bare(vec![Source::from(code)], DriverConfig::new("TestDriver"));
         let typed = driver
             .parse()
@@ -50,7 +49,7 @@ pub mod tests {
         (typed.phase.ast, typed.phase.types, typed.phase.diagnostics)
     }
 
-    pub fn typecheck_core(code: &'static str) -> (TypedAST<Ty>, Types) {
+    pub fn typecheck_core(code: &'static str) -> (TypedAST, Types) {
         let (ast, types, diagnostics) = typecheck_core_err(code);
 
         assert!(
@@ -62,7 +61,7 @@ pub mod tests {
         (ast, types)
     }
 
-    pub fn typecheck_core_err(code: &'static str) -> (TypedAST<Ty>, Types, Vec<AnyDiagnostic>) {
+    pub fn typecheck_core_err(code: &'static str) -> (TypedAST, Types, Vec<AnyDiagnostic>) {
         let driver = Driver::new(vec![Source::from(code)], DriverConfig::new("TestDriver"));
         let typed = driver
             .parse()
@@ -87,7 +86,7 @@ pub mod tests {
         }
     }
 
-    pub fn ty(i: usize, ast: &TypedAST<Ty>, _session: &Types) -> Ty {
+    pub fn ty(i: usize, ast: &TypedAST, _session: &Types) -> Ty {
         ast.stmts[i].ty.clone()
     }
 
@@ -940,7 +939,7 @@ pub mod tests {
         "#,
         );
 
-        let Ty::Record(None, row) = ty(0, &ast, &types) else {
+        let Ty::Record(_, row) = ty(0, &ast, &types) else {
             panic!("did not get record");
         };
 
@@ -965,7 +964,7 @@ pub mod tests {
         ",
         );
 
-        let Ty::Record(None, row) = ty(0, &ast, &types) else {
+        let Ty::Record(_, row) = ty(0, &ast, &types) else {
             panic!("Didn't get row");
         };
 

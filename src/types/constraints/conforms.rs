@@ -10,7 +10,7 @@ use crate::{
     types::{
         constraint_solver::{DeferralReason, SolveResult},
         constraints::store::ConstraintId,
-        infer_ty::{InferTy, Meta},
+        infer_ty::{Meta, Ty},
         predicate::Predicate,
         scheme::Scheme,
         solve_context::SolveContext,
@@ -34,7 +34,7 @@ enum CheckWitnessResult {
 pub struct Conforms {
     pub id: ConstraintId,
     pub conformance_node_id: NodeID,
-    pub ty: InferTy,
+    pub ty: Ty,
     pub protocol_id: ProtocolId,
 }
 
@@ -48,12 +48,12 @@ impl Conforms {
     ) -> SolveResult {
         // Extract both the symbol and type args from the conforming type
         let (conforming_ty_sym, conforming_type_args) = match &self.ty {
-            InferTy::Var { id, .. } => {
+            Ty::Var { id, .. } => {
                 return SolveResult::Defer(DeferralReason::WaitingOnMeta(Meta::Ty(*id)));
             }
-            InferTy::Primitive(symbol) => (*symbol, vec![]),
-            InferTy::Nominal { symbol, type_args } => (*symbol, type_args.clone()),
-            InferTy::Param(param_id, _) => {
+            Ty::Primitive(symbol) => (*symbol, vec![]),
+            Ty::Nominal { symbol, type_args } => (*symbol, type_args.clone()),
+            Ty::Param(param_id, _) => {
                 for given in context.givens_mut().iter() {
                     if let Predicate::Conforms {
                         param,
@@ -118,7 +118,7 @@ impl Conforms {
     fn check_conformance(
         &self,
         conforming_ty_sym: Symbol,
-        conforming_type_args: &[InferTy],
+        conforming_type_args: &[Ty],
         protocol_id: ProtocolId,
         constraints: &mut ConstraintStore,
         context: &mut SolveContext,
@@ -136,7 +136,7 @@ impl Conforms {
         let conformance = if let Some(conformance) = session.lookup_conformance(&key) {
             conformance
         } else {
-            let conformance = Conformance::<InferTy> {
+            let conformance = Conformance {
                 node_id: self.conformance_node_id,
                 conforming_id: conforming_ty_sym,
                 protocol_id,
@@ -154,7 +154,7 @@ impl Conforms {
         };
 
         let Some(EnvEntry::Scheme(Scheme {
-            ty: InferTy::Param(protocol_self_id, protocol_self_bounds),
+            ty: Ty::Param(protocol_self_id, protocol_self_bounds),
             ..
         })) = session.lookup(&protocol_id.into())
         else {
@@ -164,24 +164,25 @@ impl Conforms {
         };
 
         // Build up some substitutions so we're not playing with the protocol's type params anymore
-        let mut substitutions: FxHashMap<InferTy, InferTy> = FxHashMap::default();
+        let mut substitutions: FxHashMap<Ty, Ty> = FxHashMap::default();
         substitutions.insert(
-            InferTy::Param(protocol_self_id, protocol_self_bounds.clone()),
+            Ty::Param(protocol_self_id, protocol_self_bounds.clone()),
             self.ty.clone(),
         );
 
         // Add substitutions for the conforming type's type params
         // e.g., for Person<Float> conforming to Aged, substitute A -> Float
         if !conforming_type_args.is_empty()
-            && let Some(nominal) = session.lookup_nominal(&conforming_ty_sym) {
-                for (param, arg) in nominal.type_params.iter().zip(conforming_type_args.iter()) {
-                    substitutions.insert(param.clone(), arg.clone());
-                }
+            && let Some(nominal) = session.lookup_nominal(&conforming_ty_sym)
+        {
+            for (param, arg) in nominal.type_params.iter().zip(conforming_type_args.iter()) {
+                substitutions.insert(param.clone(), arg.clone());
             }
+        }
 
         let mut deferral_reasons = vec![];
 
-        let mut protocol_projections = FxHashMap::<Label, InferTy>::default();
+        let mut protocol_projections = FxHashMap::<Label, Ty>::default();
         for (label, associated_sym) in session
             .lookup_associated_types(protocol_id.into())
             .unwrap_or_default()
@@ -199,7 +200,7 @@ impl Conforms {
                     protocol_id: id,
                 } = predicate
                     && id == Some(protocol_id)
-                    && base == InferTy::Param(protocol_self_id, protocol_self_bounds.clone())
+                    && base == Ty::Param(protocol_self_id, protocol_self_bounds.clone())
                 {
                     protocol_projections.insert(label, returns);
                 }
@@ -310,8 +311,8 @@ impl Conforms {
         protocol_self: &Symbol,
         protocol_self_bounds: &[ProtocolId],
         conforming_ty_sym: &Symbol,
-        projections: FxHashMap<Label, InferTy>,
-        ty_substitutions: FxHashMap<InferTy, InferTy>,
+        projections: FxHashMap<Label, Ty>,
+        ty_substitutions: FxHashMap<Ty, Ty>,
     ) -> Result<CheckWitnessResult, TypeError> {
         let mut missing_witnesses = vec![];
         let mut solved_metas = vec![];
@@ -339,7 +340,7 @@ impl Conforms {
                     returns,
                     ..
                 } = predicate
-                    && base == InferTy::Param(*protocol_self, protocol_self_bounds.to_owned())
+                    && base == Ty::Param(*protocol_self, protocol_self_bounds.to_owned())
                     && let Some(projection) = projections.get(&label)
                     && let Some(substitution) = substitutions.ty.get(projection).cloned()
                 {

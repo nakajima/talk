@@ -12,7 +12,7 @@ use crate::{
     name_resolution::symbol::Symbol,
     node_id::{FileID, NodeID},
     token_kind::TokenKind,
-    types::ty::Ty,
+    types::infer_ty::Ty,
 };
 
 #[derive(Debug, Clone, PartialEq)]

@@ -11,7 +11,7 @@ use crate::{
             constraint::ConstraintCause,
             store::{ConstraintId, ConstraintStore},
         },
-        infer_ty::{InferTy, Meta},
+        infer_ty::{Meta, Ty},
         predicate::Predicate,
         solve_context::SolveContext,
         type_error::TypeError,
@@ -23,11 +23,11 @@ use crate::{
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TypeMember {
     pub id: ConstraintId,
-    pub base: InferTy,
+    pub base: Ty,
     pub name: Label,
     pub node_id: NodeID,
-    pub generics: Vec<InferTy>,
-    pub result: InferTy,
+    pub generics: Vec<Ty>,
+    pub result: Ty,
     pub cause: ConstraintCause,
 }
 
@@ -44,22 +44,22 @@ impl TypeMember {
 
     fn solve_for(
         &self,
-        ty: &InferTy,
+        ty: &Ty,
         constraints: &mut ConstraintStore,
         context: &mut SolveContext,
         session: &mut TypeSession,
     ) -> SolveResult {
         let cause = ConstraintCause::TypeMember(self.node_id);
         match ty {
-            InferTy::Var { id, .. } => {
+            Ty::Var { id, .. } => {
                 SolveResult::Defer(DeferralReason::WaitingOnMeta(Meta::Ty(*id)))
             }
-            InferTy::Param(type_param_id, _) => {
+            Ty::Param(type_param_id, _) => {
                 self.lookup_for_type_param(constraints, context, session, *type_param_id)
             }
-            InferTy::Rigid(skolem_id) => {
-                let Some(InferTy::Param(type_param_id, _)) =
-                    session.skolem_map.get(&InferTy::Rigid(*skolem_id))
+            Ty::Rigid(skolem_id) => {
+                let Some(Ty::Param(type_param_id, _)) =
+                    session.skolem_map.get(&Ty::Rigid(*skolem_id))
                 else {
                     unreachable!();
                 };
@@ -67,9 +67,9 @@ impl TypeMember {
                 self.lookup_for_type_param(constraints, context, session, *type_param_id)
             }
             #[allow(clippy::todo)]
-            InferTy::Constructor { .. } => todo!(),
+            Ty::Constructor { .. } => todo!(),
             #[allow(clippy::todo)]
-            InferTy::Nominal { symbol, type_args } => {
+            Ty::Nominal { symbol, type_args } => {
                 if let Some(children) = session.type_catalog.child_types.get(symbol)
                     && let Some(child_sym) = children.get(&self.name).copied()
                     && let Some(ty) = session.lookup(&child_sym)

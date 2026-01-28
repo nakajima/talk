@@ -19,7 +19,6 @@ use crate::{
             inference_pass::InferencePass,
             specialization_pass::{SpecializationPass, SpecializedCallee},
         },
-        ty::Ty,
         type_error::TypeError,
         type_session::TypeSession,
         typed_ast::TypedAST,
@@ -55,7 +54,7 @@ pub struct NameResolved {
 
 impl DriverPhase for Typed {}
 pub struct Typed {
-    pub ast: TypedAST<Ty>,
+    pub ast: TypedAST,
     pub types: Types,
     pub exports: Exports,
     pub symbols: Symbols,
@@ -553,7 +552,7 @@ pub mod tests {
     use super::*;
     use crate::{
         compiling::module::ModuleId,
-        types::{ty::Ty, types_tests},
+        types::{infer_ty::Ty, types_tests},
     };
     use std::path::PathBuf;
 

@@ -8,14 +8,12 @@ use crate::{
     compiling::module::ModuleId,
     label::Label,
     name::Name,
-    name_resolution::symbol::{ProtocolId, StructId, Symbol, TypeParameterId},
+    name_resolution::symbol::{ProtocolId, StructId, Symbol},
     types::{
-        infer_row::{InferRow, RowMetaId, RowParamId},
-        mappable::Mappable,
+        infer_row::{Row, RowMetaId},
         predicate::Predicate,
         scheme::{ForAll, Scheme},
         term_environment::EnvEntry,
-        ty::{BaseRow, RowType, SomeType, Ty},
         type_error::TypeError,
     },
 };
@@ -95,19 +93,25 @@ impl UnifyValue for Level {
     }
 }
 
+/// Unified type representation - used for both inference and final types.
+/// The inference-specific variants (Var, Rigid, Projection, Error) are only
+/// populated during type checking and should be resolved before codegen.
 #[derive(PartialEq, Eq, Clone, Hash, Drive, DriveMut)]
-pub enum InferTy {
+pub enum Ty {
     Primitive(#[drive(skip)] Symbol),
     Param(#[drive(skip)] Symbol, #[drive(skip)] Vec<ProtocolId>),
+    /// Skolem (rigid) type variable - used during subsumption checking
     Rigid(#[drive(skip)] SkolemId),
+    /// Meta (unification) type variable - used during inference
     Var {
         #[drive(skip)]
         id: MetaVarId,
         #[drive(skip)]
         level: Level,
     },
+    /// Type projection - e.g., T.AssociatedType where T conforms to a protocol
     Projection {
-        base: Box<InferTy>,
+        base: Box<Self>,
         #[drive(skip)]
         protocol_id: ProtocolId,
         #[drive(skip)]
@@ -116,42 +120,41 @@ pub enum InferTy {
     Constructor {
         #[drive(skip)]
         name: Name,
-        params: Vec<InferTy>,
-        ret: Box<InferTy>,
+        params: Vec<Self>,
+        ret: Box<Self>,
     },
-    Func(Box<InferTy>, Box<InferTy>, Box<InferRow>),
-    Tuple(Vec<InferTy>),
-    Record(Box<InferRow>),
+    Func(Box<Self>, Box<Self>, Box<Row>),
+    Tuple(Vec<Self>),
+    Record(#[drive(skip)] Option<Symbol>, Box<Row>),
     Nominal {
         #[drive(skip)]
         symbol: Symbol,
-        type_args: Vec<InferTy>,
+        type_args: Vec<Self>,
     },
     Error(#[drive(skip)] Box<TypeError>),
 }
 
-impl Mappable<InferTy, InferTy> for InferTy {
-    type Output = InferTy;
-    fn mapping(
+impl Ty {
+    pub fn mapping(
         self,
-        ty_map: &mut impl FnMut(InferTy) -> InferTy,
-        row_map: &mut impl FnMut(InferRow) -> InferRow,
-    ) -> Self::Output {
+        ty_map: &mut impl FnMut(Ty) -> Ty,
+        row_map: &mut impl FnMut(Row) -> Row,
+    ) -> Self {
         match self {
-            InferTy::Projection {
+            Ty::Projection {
                 box base,
                 protocol_id,
                 associated,
-            } => InferTy::Projection {
+            } => Ty::Projection {
                 base: base.mapping(ty_map, row_map).into(),
                 protocol_id,
                 associated,
             },
-            InferTy::Constructor {
+            Ty::Constructor {
                 name,
                 params,
                 box ret,
-            } => InferTy::Constructor {
+            } => Ty::Constructor {
                 name,
                 params: params
                     .into_iter()
@@ -159,19 +162,19 @@ impl Mappable<InferTy, InferTy> for InferTy {
                     .collect(),
                 ret: ty_map(ret).into(),
             },
-            InferTy::Func(box param, box ret, box effects) => InferTy::Func(
+            Ty::Func(box param, box ret, box effects) => Ty::Func(
                 param.mapping(ty_map, row_map).into(),
                 ret.mapping(ty_map, row_map).into(),
                 row_map(effects).into(),
             ),
-            InferTy::Tuple(items) => InferTy::Tuple(
+            Ty::Tuple(items) => Ty::Tuple(
                 items
                     .into_iter()
                     .map(|i| i.mapping(ty_map, row_map))
                     .collect(),
             ),
-            InferTy::Record(box infer_row) => InferTy::Record(row_map(infer_row).into()),
-            InferTy::Nominal { symbol, type_args } => InferTy::Nominal {
+            Ty::Record(sym, box row) => Ty::Record(sym, row_map(row).into()),
+            Ty::Nominal { symbol, type_args } => Ty::Nominal {
                 symbol,
                 type_args: type_args
                     .into_iter()
@@ -181,202 +184,50 @@ impl Mappable<InferTy, InferTy> for InferTy {
             other => ty_map(other),
         }
     }
-}
 
-impl From<InferTy> for Ty {
-    #[allow(clippy::panic)]
-    fn from(value: InferTy) -> Self {
-        match value {
-            InferTy::Primitive(primitive) => Ty::Primitive(primitive),
-            InferTy::Param(type_param_id, bounds) => Ty::Param(type_param_id, bounds),
-            InferTy::Constructor {
-                name,
-                params,
-                box ret,
-            } => Ty::Constructor {
-                name,
-                params: params.into_iter().map(|p| p.into()).collect(),
-                ret: Box::new(ret.into()),
-            },
-            InferTy::Func(box param, box ret, box effects) => Ty::Func(
-                Box::new(param.into()),
-                Box::new(ret.into()),
-                Box::new(effects.into()),
-            ),
-            InferTy::Tuple(items) => Ty::Tuple(items.into_iter().map(|t| t.into()).collect()),
-            InferTy::Record(box infer_row) => Ty::Record(None, Box::new(infer_row.into())),
-            InferTy::Nominal { symbol, type_args } => Ty::Nominal {
-                symbol,
-                type_args: type_args.into_iter().map(|p| p.into()).collect(),
-            },
-            InferTy::Projection { .. } => Ty::Param(
-                Symbol::TypeParameter(TypeParameterId::new(ModuleId::Core, 420420)),
-                vec![],
-            ), // FIXME
-            _ => Ty::Param(
-                Symbol::TypeParameter(TypeParameterId::new(ModuleId::Core, 420420)),
-                vec![],
-            ),
+    /// Visit all types and rows in the tree, returning early if the visitor returns true.
+    /// This does NOT clone the tree and is more efficient for read-only traversal.
+    pub fn visit(&self, ty_visitor: &mut impl FnMut(&Ty) -> bool, row_visitor: &mut impl FnMut(&Row) -> bool) -> bool {
+        if ty_visitor(self) {
+            return true;
         }
-    }
-}
-
-impl From<Ty> for InferTy {
-    fn from(value: Ty) -> Self {
-        match value {
-            Ty::Primitive(primitive) => InferTy::Primitive(primitive),
-            Ty::Param(type_param_id, bounds) => InferTy::Param(type_param_id, bounds),
-            Ty::Constructor {
-                name,
-                params,
-                box ret,
-            } => InferTy::Constructor {
-                name,
-                params: params.into_iter().map(|p| p.into()).collect(),
-                ret: Box::new(ret.into()),
-            },
-            Ty::Func(box param, box ret, box effects) => InferTy::Func(
-                Box::new(param.into()),
-                Box::new(ret.into()),
-                Box::new(effects.into()),
-            ),
-            Ty::Tuple(items) => InferTy::Tuple(items.into_iter().map(|t| t.into()).collect()),
-            Ty::Record(.., box infer_row) => InferTy::Record(Box::new(infer_row.into())),
-            Ty::Nominal { symbol, type_args } => InferTy::Nominal {
-                symbol,
-                type_args: type_args.into_iter().map(|t| t.into()).collect(),
-            },
-        }
-    }
-}
-
-impl RowType for InferRow {
-    type T = InferTy;
-
-    fn base(&self) -> BaseRow<InferTy> {
-        match self.clone() {
-            Self::Empty => BaseRow::Empty,
-            Self::Param(id) => BaseRow::Param(id),
-            Self::Var(id) => BaseRow::Var(id),
-            Self::Extend { row, label, ty } => BaseRow::Extend {
-                row: row.base().into(),
-                label,
-                ty,
-            },
-        }
-    }
-
-    fn empty() -> Self {
-        Self::Empty
-    }
-
-    fn param(id: RowParamId) -> Self {
-        Self::Param(id)
-    }
-
-    fn var(id: RowMetaId) -> Self {
-        Self::Var(id)
-    }
-
-    fn extend(row: Self, label: Label, ty: Self::T) -> Self {
-        Self::Extend {
-            row: row.into(),
-            label,
-            ty,
-        }
-    }
-}
-
-impl SomeType for InferTy {
-    type RowType = InferRow;
-    type Entry = EnvEntry<InferTy>;
-
-    fn void() -> Self {
-        InferTy::Void
-    }
-
-    fn contains_var(&self) -> bool {
-        let mut ty_contains = false;
-        let mut row_contains = false;
-        _ = self.clone().mapping(
-            &mut |t| {
-                ty_contains |= matches!(t, InferTy::Var { .. });
-                t
-            },
-            &mut |r| {
-                row_contains |= r.contains_var();
-                r
-            },
-        );
-        ty_contains || row_contains
-    }
-
-    fn import(self, module_id: ModuleId) -> InferTy {
         match self {
-            InferTy::Error(..) => self,
-            InferTy::Primitive(..) => self,
-            InferTy::Param(..) => self,
-            InferTy::Rigid(..) => self,
-            InferTy::Var { .. } => self,
-            InferTy::Projection {
-                base,
-                associated,
-                protocol_id,
-            } => InferTy::Projection {
-                base: base.import(module_id).into(),
-                associated,
-                protocol_id,
-            },
-            InferTy::Constructor {
-                name: name @ Name::Resolved(..),
-                params,
-                ret,
-            } => InferTy::Constructor {
-                name: Name::Resolved(
-                    name.symbol()
-                        .unwrap_or_else(|_| unreachable!())
-                        .import(module_id),
-                    name.name_str(),
-                ),
-                params,
-                ret,
-            },
-            InferTy::Func(ty, ty1, effects) => InferTy::Func(
-                ty.import(module_id).into(),
-                ty1.import(module_id).into(),
-                effects.import(module_id).into(),
-            ),
-            InferTy::Tuple(items) => {
-                InferTy::Tuple(items.into_iter().map(|i| i.import(module_id)).collect())
+            Ty::Projection { base, .. } => base.visit(ty_visitor, row_visitor),
+            Ty::Constructor { params, ret, .. } => {
+                params.iter().any(|p| p.visit(ty_visitor, row_visitor))
+                    || ret.visit(ty_visitor, row_visitor)
             }
-            InferTy::Record(row) => InferTy::Record(row.import(module_id).into()),
-            InferTy::Nominal { symbol, type_args } => InferTy::Nominal {
-                symbol: symbol.import(module_id),
-                type_args: type_args.into_iter().map(|f| f.import(module_id)).collect(),
-            },
-            _ => self,
+            Ty::Func(param, ret, effects) => {
+                param.visit(ty_visitor, row_visitor)
+                    || ret.visit(ty_visitor, row_visitor)
+                    || effects.visit_ty(ty_visitor, row_visitor)
+            }
+            Ty::Tuple(items) => items.iter().any(|i| i.visit(ty_visitor, row_visitor)),
+            Ty::Record(_, row) => row.visit_ty(ty_visitor, row_visitor),
+            Ty::Nominal { type_args, .. } => type_args.iter().any(|a| a.visit(ty_visitor, row_visitor)),
+            _ => false,
         }
     }
 }
 
 #[allow(non_upper_case_globals)]
 #[allow(non_snake_case)]
-impl InferTy {
-    pub const Int: InferTy = InferTy::Primitive(Symbol::Int);
-    pub const Float: InferTy = InferTy::Primitive(Symbol::Float);
-    pub const Bool: InferTy = InferTy::Primitive(Symbol::Bool);
-    pub const RawPtr: InferTy = InferTy::Primitive(Symbol::RawPtr);
-    pub const Void: InferTy = InferTy::Primitive(Symbol::Void);
-    pub const Never: InferTy = InferTy::Primitive(Symbol::Never);
-    pub const Byte: InferTy = InferTy::Primitive(Symbol::Byte);
-    pub fn String() -> InferTy {
-        InferTy::Nominal {
+impl Ty {
+    pub const Int: Self = Self::Primitive(Symbol::Int);
+    pub const Float: Self = Self::Primitive(Symbol::Float);
+    pub const Bool: Self = Self::Primitive(Symbol::Bool);
+    pub const RawPtr: Self = Self::Primitive(Symbol::RawPtr);
+    pub const Void: Self = Self::Primitive(Symbol::Void);
+    pub const Never: Self = Self::Primitive(Symbol::Never);
+    pub const Byte: Self = Self::Primitive(Symbol::Byte);
+    pub fn String() -> Self {
+        Self::Nominal {
             symbol: Symbol::String,
             type_args: Default::default(),
         }
     }
-    pub fn Array(t: InferTy) -> InferTy {
-        InferTy::Nominal {
+    pub fn Array(t: Self) -> Self {
+        Self::Nominal {
             symbol: Symbol::Struct(StructId {
                 module_id: ModuleId::Core,
                 local_id: 3,
@@ -385,56 +236,96 @@ impl InferTy {
         }
     }
 
-    pub fn collect_metas(&self) -> IndexSet<InferTy> {
+    pub fn contains_var(&self) -> bool {
+        self.visit(
+            &mut |t| matches!(t, Ty::Var { .. }),
+            &mut |r| matches!(r, Row::Var(..)),
+        )
+    }
+
+    pub fn import(self, module_id: ModuleId) -> Self {
+        match self {
+            Self::Primitive(symbol) => Self::Primitive(symbol),
+            Self::Param(type_param_id, bounds) => Self::Param(type_param_id, bounds),
+            Self::Constructor {
+                name: Name::Resolved(sym, name),
+                params,
+                ret,
+            } => Self::Constructor {
+                name: Name::Resolved(sym.import(module_id), name),
+                params: params.into_iter().map(|p| p.import(module_id)).collect(),
+                ret: ret.import(module_id).into(),
+            },
+            Self::Func(param, ret, effects) => Self::Func(
+                param.import(module_id).into(),
+                ret.import(module_id).into(),
+                effects.import(module_id).into(),
+            ),
+            Self::Tuple(items) => {
+                Self::Tuple(items.into_iter().map(|t| t.import(module_id)).collect())
+            }
+            Self::Record(sym, box row) => Self::Record(
+                sym.map(|s| s.import(module_id)),
+                row.import(module_id).into(),
+            ),
+            Self::Nominal { symbol, type_args } => Self::Nominal {
+                symbol: symbol.import(module_id),
+                type_args: type_args.into_iter().map(|t| t.import(module_id)).collect(),
+            },
+            other => other,
+        }
+    }
+
+    pub fn collect_metas(&self) -> IndexSet<Self> {
         let mut out = IndexSet::default();
 
         match self {
-            InferTy::Error(..) => {}
-            InferTy::Param(..) => {}
-            InferTy::Var { .. } => {
+            Self::Error(..) => {}
+            Self::Param(..) => {}
+            Self::Var { .. } => {
                 out.insert(self.clone());
             }
-            InferTy::Projection { base, .. } => {
+            Self::Projection { base, .. } => {
                 out.extend(base.collect_metas());
             }
-            InferTy::Func(param, ret, effects) => {
+            Self::Func(param, ret, effects) => {
                 out.extend(param.collect_metas());
                 out.extend(ret.collect_metas());
                 out.extend(effects.collect_metas());
             }
-            InferTy::Tuple(items) => {
+            Self::Tuple(items) => {
                 for item in items {
                     out.extend(item.collect_metas());
                 }
             }
-            InferTy::Record(box row) => match row {
-                InferRow::Empty => (),
-                InferRow::Var(..) => {
+            Self::Record(sym, box row) => match row {
+                Row::Empty => (),
+                Row::Var(..) => {
                     out.insert(self.clone());
                 }
-                InferRow::Param(..) => (),
-                InferRow::Extend { row, ty, .. } => {
+                Row::Param(..) => (),
+                Row::Extend { row, ty, .. } => {
                     out.extend(ty.collect_metas());
-                    out.extend(InferTy::Record(row.clone()).collect_metas());
+                    out.extend(Self::Record(sym.clone(), row.clone()).collect_metas());
                 }
             },
-            InferTy::Nominal { type_args, .. } => {
+            Self::Nominal { type_args, .. } => {
                 for arg in type_args {
                     out.extend(arg.collect_metas());
                 }
             }
-            InferTy::Constructor { params, .. } => {
+            Self::Constructor { params, .. } => {
                 for param in params {
                     out.extend(param.collect_metas());
                 }
             }
-            InferTy::Primitive(_) | InferTy::Rigid(_) => {}
+            Self::Primitive(_) | Self::Rigid(_) => {}
         }
 
         out
     }
 
-    pub fn to_entry(&self) -> EnvEntry<InferTy> {
+    pub fn to_entry(&self) -> EnvEntry {
         let foralls: IndexSet<ForAll> = self.collect_foralls().into_iter().collect();
         if foralls.is_empty() {
             EnvEntry::Mono(self.clone())
@@ -450,48 +341,48 @@ impl InferTy {
     pub fn collect_foralls(&self) -> IndexSet<ForAll> {
         let mut result: IndexSet<ForAll> = Default::default();
         match self {
-            InferTy::Param(id, _) => {
+            Self::Param(id, _) => {
                 result.insert(ForAll::Ty(*id));
             }
-            InferTy::Error(..) => (),
-            InferTy::Rigid(..) => (),
-            InferTy::Var { .. } => (),
-            InferTy::Primitive(..) => (),
-            InferTy::Nominal { type_args, .. } => {
+            Self::Error(..) => (),
+            Self::Rigid(..) => (),
+            Self::Var { .. } => (),
+            Self::Primitive(..) => (),
+            Self::Nominal { type_args, .. } => {
                 for arg in type_args {
                     result.extend(arg.collect_foralls());
                 }
             }
-            InferTy::Projection { base, .. } => {
+            Self::Projection { base, .. } => {
                 result.extend(base.collect_foralls());
             }
-            InferTy::Constructor { params, .. } => {
+            Self::Constructor { params, .. } => {
                 for item in params {
                     result.extend(item.collect_foralls());
                 }
             }
-            InferTy::Func(ty, ty1, effects) => {
+            Self::Func(ty, ty1, effects) => {
                 result.extend(ty.collect_foralls());
                 result.extend(ty1.collect_foralls());
                 result.extend(effects.collect_foralls());
             }
-            InferTy::Tuple(items) => {
+            Self::Tuple(items) => {
                 for item in items {
                     result.extend(item.collect_foralls());
                 }
             }
-            InferTy::Record(box row) => {
+            Self::Record(_, box row) => {
                 result.extend(row.collect_foralls());
             }
         }
         result
     }
 
-    /// Collects Conforms predicates from bounds embedded in InferTy::Param nodes
-    pub fn collect_param_predicates(&self) -> Vec<Predicate<InferTy>> {
+    /// Collects Conforms predicates from bounds embedded in Ty::Param nodes
+    pub fn collect_param_predicates(&self) -> Vec<Predicate> {
         let mut result = vec![];
         match self {
-            InferTy::Param(id, bounds) => {
+            Self::Param(id, bounds) => {
                 for protocol_id in bounds {
                     result.push(Predicate::Conforms {
                         param: *id,
@@ -499,217 +390,110 @@ impl InferTy {
                     });
                 }
             }
-            InferTy::Nominal { type_args, .. } => {
+            Self::Nominal { type_args, .. } => {
                 for arg in type_args {
                     result.extend(arg.collect_param_predicates());
                 }
             }
-            InferTy::Projection { base, .. } => {
+            Self::Projection { base, .. } => {
                 result.extend(base.collect_param_predicates());
             }
-            InferTy::Constructor { params, .. } => {
+            Self::Constructor { params, .. } => {
                 for item in params {
                     result.extend(item.collect_param_predicates());
                 }
             }
-            InferTy::Func(ty, ty1, effects) => {
+            Self::Func(ty, ty1, effects) => {
                 result.extend(ty.collect_param_predicates());
                 result.extend(ty1.collect_param_predicates());
                 result.extend(effects.collect_param_predicates());
             }
-            InferTy::Tuple(items) => {
+            Self::Tuple(items) => {
                 for item in items {
                     result.extend(item.collect_param_predicates());
                 }
             }
-            InferTy::Record(box row) => {
+            Self::Record(_, box row) => {
                 result.extend(row.collect_param_predicates());
             }
             _ => (),
         }
         result
     }
+
+    /// Returns true if this type contains any unsubstituted type parameters.
+    pub fn contains_type_params(&self) -> bool {
+        match self {
+            Self::Param(..) => true,
+            Self::Primitive(..) => false,
+            Self::Constructor { params, ret, .. } => {
+                params.iter().any(|p| p.contains_type_params()) || ret.contains_type_params()
+            }
+            Self::Func(param, ret, effects) => {
+                param.contains_type_params()
+                    || ret.contains_type_params()
+                    || effects.contains_type_params()
+            }
+            Self::Tuple(items) => items.iter().any(|i| i.contains_type_params()),
+            Self::Record(_, row) => row.contains_type_params(),
+            Self::Nominal { type_args, .. } => type_args.iter().any(|t| t.contains_type_params()),
+            Self::Rigid(_) | Self::Var { .. } | Self::Error(_) => false,
+            Self::Projection { base, .. } => base.contains_type_params(),
+        }
+    }
+
+    pub(crate) fn uncurry_params(self) -> Vec<Ty> {
+        let mut result = vec![];
+
+        match self {
+            Ty::Void => (),
+            Ty::Primitive(..) => result.push(self),
+            Ty::Param(..) => result.push(self),
+            Ty::Constructor { .. } => result.push(self),
+            Ty::Func(param, ..) => result.extend(param.uncurry_params()),
+            Ty::Tuple(..) => result.push(self),
+            Ty::Record(..) => result.push(self),
+            Ty::Nominal { .. } => result.push(self),
+            Ty::Var { .. } | Ty::Rigid(_) | Ty::Projection { .. } | Ty::Error(_) => {
+                // These variants should be resolved before reaching codegen
+                // but we allow them through for error recovery
+                result.push(self)
+            }
+        }
+
+        result
+    }
 }
 
-impl std::fmt::Debug for InferTy {
+impl std::fmt::Debug for Ty {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            InferTy::Error(err) => write!(f, "Error Ty: {err}"),
-            InferTy::Param(sym, _) => write!(f, "typeparam({sym:?})"),
-            InferTy::Rigid(id) => write!(f, "rigid(α{})", id.0),
-            InferTy::Var { id, level } => write!(f, "meta(α{}, {})", id.0, level.0),
-            InferTy::Primitive(primitive) => write!(f, "{primitive:?}"),
-            InferTy::Constructor { name, params, .. } => {
+            Self::Error(err) => write!(f, "Error Ty: {err}"),
+            Self::Param(sym, _) => write!(f, "typeparam({sym:?})"),
+            Self::Rigid(id) => write!(f, "rigid(a{id:?})"),
+            Self::Var { id, level } => write!(f, "meta(a{id:?}, {level:?})"),
+            Self::Primitive(primitive) => write!(f, "{primitive:?}"),
+            Self::Constructor { name, params, .. } => {
                 write!(f, "Constructor({name:?},{params:?})")
             }
-            InferTy::Projection {
+            Self::Projection {
                 base,
                 associated,
                 protocol_id,
             } => write!(f, "{base:?}.{associated:?}[{protocol_id:?}"),
-            InferTy::Func(param, ret, effects) => {
+            Self::Func(param, ret, effects) => {
                 write!(f, "func({param:?}) {effects:?} -> {ret:?}")
             }
-            InferTy::Tuple(items) => {
+            Self::Tuple(items) => {
                 write!(f, "({})", items.iter().map(|i| format!("{i:?}")).join(", "))
             }
-            InferTy::Nominal { symbol, type_args } => {
+            Self::Nominal { symbol, type_args } => {
                 write!(f, "Nominal({symbol:?}, {type_args:?})")
             }
-            InferTy::Record(box row) => {
-                let row_debug = match row {
-                    InferRow::Empty => "emptyrow()".to_string(),
-                    InferRow::Param(id) => format!("rowparam(π{})", id.0),
-                    InferRow::Extend { .. } => {
-                        let closed = row.close();
-                        let mut parts = vec![];
-                        for (field, value) in closed {
-                            parts.push(format!("{field}: {value:?}"));
-                        }
-                        parts.join(", ")
-                    }
-                    InferRow::Var(row_meta_id) => format!("rowmeta(π{})", row_meta_id.0),
-                };
-
-                write!(f, "{{{row_debug}}}",)
+            Self::Record(_, row) => {
+                write!(f, "{{{row:?}}}")
             }
         }
     }
 }
 
-impl std::fmt::Display for InferTy {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            InferTy::Error(..) => write!(f, "error"),
-            InferTy::Param(sym, _) => write!(f, "{sym}"),
-            InferTy::Rigid(id) => write!(f, "^T{}", id.0),
-            InferTy::Var { id, .. } => write!(f, "?T{}", id.0),
-            InferTy::Primitive(primitive) => write!(f, "{}", format_symbol_name(*primitive)),
-            InferTy::Projection {
-                base, associated, ..
-            } => write!(f, "{}.{}", base.as_ref(), associated),
-            InferTy::Constructor { name, params, ret } => {
-                if params.is_empty() {
-                    write!(f, "{}", name.name_str())
-                } else {
-                    let params = params
-                        .iter()
-                        .map(|p| p.to_string())
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    write!(f, "({}) -> {}", params, ret.as_ref())
-                }
-            }
-            InferTy::Func(..) => {
-                let mut params = Vec::new();
-                let ret = collect_func_params(self, &mut params);
-                let params = params
-                    .into_iter()
-                    .map(|p| p.to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                write!(f, "({}) -> {}", params, ret)
-            }
-            InferTy::Tuple(items) => write!(
-                f,
-                "({})",
-                items
-                    .iter()
-                    .map(|p| p.to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
-            InferTy::Record(row) => write!(f, "{{ {} }}", format_row(row)),
-            InferTy::Nominal { symbol, type_args } => {
-                let base = format_symbol_name(*symbol);
-                if type_args.is_empty() {
-                    write!(f, "{base}")
-                } else {
-                    let args = type_args
-                        .iter()
-                        .map(|t| t.to_string())
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    write!(f, "{base}<{args}>")
-                }
-            }
-        }
-    }
-}
-
-fn collect_func_params<'a>(ty: &'a InferTy, params: &mut Vec<&'a InferTy>) -> &'a InferTy {
-    match ty {
-        InferTy::Func(param, ret, ..) => {
-            if **param != InferTy::Void {
-                params.push(param);
-            }
-            collect_func_params(ret, params)
-        }
-        _ => ty,
-    }
-}
-
-fn format_symbol_name(symbol: Symbol) -> String {
-    match symbol {
-        Symbol::Int => "Int".to_string(),
-        Symbol::Float => "Float".to_string(),
-        Symbol::Bool => "Bool".to_string(),
-        Symbol::Void => "Void".to_string(),
-        Symbol::Never => "Never".to_string(),
-        Symbol::RawPtr => "RawPtr".to_string(),
-        Symbol::Byte => "Byte".to_string(),
-        Symbol::String => "String".to_string(),
-        Symbol::Array => "Array".to_string(),
-        _ => symbol.to_string(),
-    }
-}
-
-pub(super) fn format_row(row: &InferRow) -> String {
-    let mut fields: Vec<(Label, InferTy)> = Vec::new();
-    let mut tail: Option<RowTailDisplay> = None;
-    let mut cursor = row;
-
-    loop {
-        match cursor {
-            InferRow::Empty => break,
-            InferRow::Param(id) => {
-                tail = Some(RowTailDisplay::Param(*id));
-                break;
-            }
-            InferRow::Var(id) => {
-                tail = Some(RowTailDisplay::Var(*id));
-                break;
-            }
-            InferRow::Extend { row, label, ty } => {
-                fields.push((label.clone(), ty.clone()));
-                cursor = row.as_ref();
-            }
-        }
-    }
-
-    fields.reverse();
-    let mut rendered = fields
-        .into_iter()
-        .map(|(label, ty)| format!("{label}: {ty}"))
-        .collect::<Vec<_>>();
-
-    if let Some(tail) = tail {
-        rendered.push(tail.to_string());
-    }
-
-    rendered.join(", ")
-}
-
-enum RowTailDisplay {
-    Param(RowParamId),
-    Var(RowMetaId),
-}
-
-impl std::fmt::Display for RowTailDisplay {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            RowTailDisplay::Param(id) => write!(f, "..R{}", id.0),
-            RowTailDisplay::Var(id) => write!(f, ".._R{}", id.0),
-        }
-    }
-}

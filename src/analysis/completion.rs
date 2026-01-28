@@ -14,8 +14,8 @@ use crate::{
     node_kinds::expr::ExprKind,
     types::{
         format::{SymbolNames, TypeFormatter},
-        row::Row,
-        ty::Ty,
+        infer_row::Row,
+        infer_ty::Ty,
         types::Types,
     },
 };
@@ -405,6 +405,7 @@ fn record_fields(row: &Row) -> Vec<(Label, Ty)> {
                 }
                 cursor = row;
             }
+            Row::Var(_) => unreachable!("Row::Var cannot exist in Typed phase"),
         }
     }
     result
@@ -447,7 +448,9 @@ fn substitute_ty(ty: &Ty, substitutions: &FxHashMap<Ty, Ty>) -> Ty {
                 .map(|t| substitute_ty(t, substitutions))
                 .collect(),
         ),
-        Ty::Record(symbol, row) => Ty::Record(*symbol, substitute_row(row, substitutions).into()),
+        Ty::Record(sym, row) => {
+            Ty::Record(sym.clone(), substitute_row(row, substitutions).into())
+        }
         Ty::Nominal { symbol, type_args } => Ty::Nominal {
             symbol: *symbol,
             type_args: type_args
@@ -455,6 +458,10 @@ fn substitute_ty(ty: &Ty, substitutions: &FxHashMap<Ty, Ty>) -> Ty {
                 .map(|t| substitute_ty(t, substitutions))
                 .collect(),
         },
+        // These variants cannot exist in the Typed phase
+        Ty::Var { .. } | Ty::Rigid(_) | Ty::Projection { .. } | Ty::Error(_) => {
+            unreachable!("inference-only variants cannot exist in Typed phase")
+        }
     }
 }
 
@@ -467,6 +474,7 @@ fn substitute_row(row: &Row, substitutions: &FxHashMap<Ty, Ty>) -> Row {
             label: label.clone(),
             ty: substitute_ty(ty, substitutions),
         },
+        Row::Var(_) => unreachable!("Row::Var cannot exist in Typed phase"),
     }
 }
 

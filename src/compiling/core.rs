@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use lazy_static::lazy_static;
 
 use crate::compiling::{
@@ -6,10 +8,10 @@ use crate::compiling::{
 };
 
 lazy_static! {
-    static ref CORE_MODULE: Module = _compile();
+    static ref CORE_MODULE: Arc<Module> = Arc::new(_compile());
 }
 
-pub fn compile() -> Module {
+pub fn compile() -> Arc<Module> {
     CORE_MODULE.clone()
 }
 

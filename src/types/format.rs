@@ -2,10 +2,9 @@ use rustc_hash::FxHashMap;
 
 use crate::label::Label;
 use crate::name_resolution::symbol::Symbol;
-use crate::types::infer_row::RowParamId;
-use crate::types::row::Row;
+use crate::types::infer_row::{Row, RowParamId};
+use crate::types::infer_ty::Ty;
 use crate::types::scheme::{ForAll, Scheme};
-use crate::types::ty::Ty;
 use crate::types::types::TypeEntry;
 
 #[derive(Clone, Copy, Default)]
@@ -79,7 +78,7 @@ impl<'a> TypeFormatter<'a> {
         self.format_method_ty_in_context(ty, &ctx)
     }
 
-    pub fn format_scheme(&self, scheme: &Scheme<Ty>) -> String {
+    pub fn format_scheme(&self, scheme: &Scheme) -> String {
         let ctx = TyFormatContext::from_scheme(scheme);
         let body = self.format_ty_in_context(&scheme.ty, &ctx);
 
@@ -92,7 +91,7 @@ impl<'a> TypeFormatter<'a> {
     }
 
     /// Format a method type, omitting the implicit self parameter and uncurrying
-    pub fn format_method_scheme(&self, scheme: &Scheme<Ty>) -> String {
+    pub fn format_method_scheme(&self, scheme: &Scheme) -> String {
         let ctx = TyFormatContext::from_scheme(scheme);
         let body = self.format_method_ty_in_context(&scheme.ty, &ctx);
 
@@ -119,7 +118,7 @@ impl<'a> TypeFormatter<'a> {
     }
 
     /// Format a function scheme (uncurrying parameters, omitting row params)
-    pub fn format_func_scheme(&self, scheme: &Scheme<Ty>) -> String {
+    pub fn format_func_scheme(&self, scheme: &Scheme) -> String {
         let ctx = TyFormatContext::from_scheme_without_row_params(scheme);
         let body = self.format_func_ty_in_context(&scheme.ty, &ctx);
 
@@ -268,6 +267,10 @@ impl<'a> TypeFormatter<'a> {
                     format!("{base}<{args}>")
                 }
             }
+            // These variants cannot exist in the Typed phase
+            Ty::Var { .. } | Ty::Rigid(_) | Ty::Projection { .. } | Ty::Error(_) => {
+                unreachable!("inference-only variants cannot exist in Typed phase")
+            }
         }
     }
 
@@ -293,6 +296,7 @@ impl<'a> TypeFormatter<'a> {
                     fields.push((label.clone(), ty.clone()));
                     cursor = row;
                 }
+                Row::Var(_) => unreachable!("Row::Var cannot exist in Typed phase"),
             }
         }
         fields.reverse();
@@ -374,7 +378,7 @@ struct TyFormatContext {
 }
 
 impl TyFormatContext {
-    fn from_scheme(scheme: &Scheme<Ty>) -> Self {
+    fn from_scheme(scheme: &Scheme) -> Self {
         let mut type_params: Vec<Symbol> = vec![];
         let mut row_params: Vec<RowParamId> = vec![];
         for forall in &scheme.foralls {
@@ -467,7 +471,7 @@ impl TyFormatContext {
     }
 
     /// Like from_scheme but doesn't include row params (used for function display)
-    fn from_scheme_without_row_params(scheme: &Scheme<Ty>) -> Self {
+    fn from_scheme_without_row_params(scheme: &Scheme) -> Self {
         let mut type_params: Vec<Symbol> = vec![];
         for forall in &scheme.foralls {
             if let ForAll::Ty(id) = forall {

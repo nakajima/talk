@@ -1,8 +1,8 @@
 use std::fmt::Display;
 
-#[derive(PartialEq, Eq, Debug, Clone, Hash)]
+#[derive(PartialEq, Eq, Debug, Clone, Copy, Hash)]
 pub enum TokenKind {
-    LineComment(String),
+    LineComment,
 
     Import,
     Public,
@@ -10,7 +10,7 @@ pub enum TokenKind {
     // Effects
     Effect,
     Handling,
-    EffectName(String),
+    EffectName,
     SingleQuote,
 
     // Control flow
@@ -79,11 +79,11 @@ pub enum TokenKind {
     Struct,
     Static,
     Break,
-    Int(String),
-    Float(String),
-    Identifier(String),
-    StringLiteral(String),
-    Attribute(String),
+    Int,
+    Float,
+    Identifier,
+    StringLiteral,
+    Attribute,
     Func,
     Init,
     In,
@@ -93,30 +93,30 @@ pub enum TokenKind {
     Generated,
     DotDot,
     DotDotDot,
-    IRRegister(String),
-    BoundVar(String),
+    IRRegister,
+    BoundVar,
     Dollar,
 }
 
 impl Display for TokenKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.as_str())
+        f.write_str(self.as_str())
     }
 }
 
 impl TokenKind {
-    pub fn as_str(&self) -> String {
-        let text = match &self {
+    pub fn as_str(&self) -> &'static str {
+        match self {
             TokenKind::Continue => "continue",
-            TokenKind::EffectName(v) => &format!("'{v}"),
+            TokenKind::EffectName => "'<effect>",
             TokenKind::Dollar => "$",
-            TokenKind::BoundVar(v) => &format!("${v}"),
+            TokenKind::BoundVar => "$<var>",
             TokenKind::Percent => "%",
-            TokenKind::IRRegister(v) => &format!("%{v}"),
+            TokenKind::IRRegister => "%<reg>",
             TokenKind::As => "as",
-            TokenKind::Attribute(attr) => &format!("@{attr}"),
+            TokenKind::Attribute => "@<attr>",
             TokenKind::Typealias => "typealias",
-            TokenKind::LineComment(text) => &format!("// {text}"),
+            TokenKind::LineComment => "// <comment>",
             TokenKind::If => "if",
             TokenKind::Associated => "associated",
             TokenKind::Else => "else",
@@ -166,9 +166,9 @@ impl TokenKind {
             TokenKind::RightBracket => "]",
             TokenKind::Comma => ",",
             TokenKind::Struct => "struct",
-            TokenKind::Int(val) => val,
-            TokenKind::Float(val) => val,
-            TokenKind::Identifier(ident) => ident,
+            TokenKind::Int => "<int>",
+            TokenKind::Float => "<float>",
+            TokenKind::Identifier => "<ident>",
             TokenKind::Func => "func",
             TokenKind::Let => "let",
             TokenKind::Mut => "mut",
@@ -178,7 +178,7 @@ impl TokenKind {
             TokenKind::Break => "break",
             TokenKind::Protocol => "protocol",
             TokenKind::Semicolon => ";",
-            TokenKind::StringLiteral(string) => &format!("\"{string}\""),
+            TokenKind::StringLiteral => "\"<string>\"",
             TokenKind::Extend => "extend",
             TokenKind::Import => "import",
             TokenKind::Public => "public",
@@ -190,8 +190,6 @@ impl TokenKind {
             TokenKind::Handling => "handling",
             TokenKind::In => "in",
             TokenKind::SingleQuote => "'",
-        };
-
-        text.to_string()
+        }
     }
 }

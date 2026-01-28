@@ -10,8 +10,8 @@ use crate::{
             constraint::ConstraintCause,
             store::{ConstraintId, ConstraintStore},
         },
-        infer_row::InferRow,
-        infer_ty::{InferTy, Meta},
+        infer_row::Row,
+        infer_ty::{Meta, Ty},
         solve_context::SolveContext,
         type_error::TypeError,
         type_session::TypeSession,
@@ -22,9 +22,9 @@ use crate::{
 pub struct HasField {
     pub id: ConstraintId,
     pub node_id: Option<NodeID>,
-    pub row: InferRow,
+    pub row: Row,
     pub label: Label,
-    pub ty: InferTy,
+    pub ty: Ty,
 }
 
 impl HasField {
@@ -36,7 +36,7 @@ impl HasField {
         session: &mut TypeSession,
     ) -> SolveResult {
         match &self.row {
-            InferRow::Empty => {
+            Row::Empty => {
                 // Check if this is an effect constraint - give a better error message
                 if let Label::_Symbol(Symbol::Effect(_)) = &self.label {
                     SolveResult::Err(TypeError::UnhandledEffect(self.label.to_string()))
@@ -47,11 +47,11 @@ impl HasField {
                     ))
                 }
             }
-            InferRow::Param(..) => SolveResult::Err(TypeError::MemberNotFound(
-                InferTy::Record(Box::new(self.row.clone())),
+            Row::Param(..) => SolveResult::Err(TypeError::MemberNotFound(
+                Ty::Record(None, Box::new(self.row.clone())),
                 self.label.to_string(),
             )),
-            InferRow::Var(id) => {
+            Row::Var(id) => {
                 // For effect constraints, extend the row immediately.
                 // For other constraints (records), defer until more info is available.
                 if let Label::_Symbol(Symbol::Effect(_)) = &self.label {
@@ -59,7 +59,7 @@ impl HasField {
                     let tail = session.new_row_meta_var(context.level());
 
                     // Build the extended row: Extend { row: tail, label, ty }
-                    let extended = InferRow::Extend {
+                    let extended = Row::Extend {
                         row: Box::new(tail),
                         label: self.label.clone(),
                         ty: self.ty.clone(),
@@ -75,7 +75,7 @@ impl HasField {
                     SolveResult::Defer(DeferralReason::WaitingOnMeta(Meta::Row(*id)))
                 }
             }
-            InferRow::Extend { box row, label, ty } => {
+            Row::Extend { box row, label, ty } => {
                 if self.label == *label {
                     let group = constraints.copy_group(self.id);
                     if let Some(node_id) = self.node_id {
