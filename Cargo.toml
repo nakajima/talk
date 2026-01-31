@@ -61,6 +61,7 @@ ena = "0.14.3"
 petgraph-graphml = "5.0.0"
 sha2 = "0.10.9"
 ignore = { version = "0.4", optional = true }
+libc = "0.2"
 
 [features]
 default = ["cli"]

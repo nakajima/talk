@@ -1,0 +1,86 @@
+import { _alloc } from ./Memory.tlk
+
+public effect 'io(fd: Int,events: Int) -> ()
+
+public let EPERM: Int = -1
+public let ENOENT: Int = -2
+public let EIO: Int = -5
+public let EBADF: Int = -9
+public let EAGAIN: Int = -11
+public let EACCES: Int = -13
+public let EEXIST: Int = -17
+public let ENOTDIR: Int = -20
+public let EISDIR: Int = -21
+public let EINVAL: Int = -22
+public let EMFILE: Int = -24
+public let ENOSPC: Int = -28
+public let EPIPE: Int = -32
+public let ETIMEDOUT: Int = -110
+public let ECONNREFUSED: Int = -111
+
+public let POLLIN: Int = 1
+public let POLLOUT: Int = 4
+public let POLLERR: Int = 8
+public let POLLHUP: Int = 16
+
+public let O_RDONLY: Int = 0
+public let O_WRONLY: Int = 1
+public let O_RDWR: Int = 2
+public let O_CREAT: Int = 64
+public let O_TRUNC: Int = 512
+public let O_APPEND: Int = 1024
+public let O_NONBLOCK: Int = 2048
+
+public let S_IRUSR: Int = 256
+public let S_IWUSR: Int = 128
+public let S_IXUSR: Int = 64
+public let S_IRGRP: Int = 32
+public let S_IWGRP: Int = 16
+public let S_IXGRP: Int = 8
+public let S_IROTH: Int = 4
+public let S_IWOTH: Int = 2
+public let S_IXOTH: Int = 1
+
+public let STDIN_FD: Int = 0
+public let STDOUT_FD: Int = 1
+public let STDERR_FD: Int = 2
+
+public func sleep(ms: Int) 'io -> Int {
+	@_ir(ms) { %? = io_sleep $0 }
+}
+
+public func _io_open(path: RawPtr, flags: Int, mode: Int) 'io -> Int {
+	@_ir(path, flags, mode) { %? = io_open $0 $1 $2 }
+}
+
+public func _io_read(fd: Int, buf: RawPtr, count: Int) 'io -> Int {
+	@_ir(fd, buf, count) { %? = io_read $0 $1 $2 }
+}
+
+public func _io_write(fd: Int, buf: RawPtr, count: Int) 'io -> Int {
+	@_ir(fd, buf, count) { %? = io_write $0 $1 $2 }
+}
+
+public func _io_close(fd: Int) 'io -> Int {
+	@_ir(fd) { %? = io_close $0 }
+}
+
+public func _io_ctl(fd: Int, op: Int, arg: Int) 'io -> Int {
+	@_ir(fd, op, arg) { %? = io_ctl $0 $1 $2 }
+}
+
+public func _io_poll(fds: RawPtr, count: Int, timeout: Int) 'io -> Int {
+	@_ir(fds, count, timeout) { %? = io_poll $0 $1 $2 }
+}
+
+public func is_error(result: Int) -> Bool {
+	result < 0
+}
+
+public func write_string(fd: Int, s: String) -> Int {
+	_io_write(fd, s.base, s.length)
+}
+
+public func print_raw(s: String) -> Int {
+	write_string(STDOUT_FD, s)
+}

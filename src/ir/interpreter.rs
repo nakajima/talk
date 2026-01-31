@@ -286,6 +286,123 @@ impl<IO: super::io::IO> Interpreter<IO> {
         tracing::trace!("{:?}", self.frames.last().unwrap());
     }
 
+    /// Call an effectful function compiled as a state machine.
+    /// This drives the poll loop until the function completes.
+    ///
+    /// The poll function has signature:
+    ///   (state: Int, state_data: Record, resumed: T) -> (Int, Record, Poll<R>)
+    ///
+    /// Where Poll is either:
+    ///   - Ready(result)
+    ///   - Pending(effect, args)
+    #[allow(dead_code)]
+    pub fn call_effectful(
+        &mut self,
+        poll_func: Symbol,
+        _initial_args: Vec<Value>,
+        effect_handler: impl Fn(&mut Self, Symbol, Vec<Value>) -> Value,
+    ) -> Value {
+        let mut state = 0i64;
+        let mut state_data = Value::Record(RecordId::Anon, vec![]);
+        let mut resumed = Value::Void;
+
+        loop {
+            // Build the poll function arguments: (state, state_data, resumed)
+            let poll_args = vec![
+                Value::Int(state),
+                state_data.clone(),
+                resumed,
+            ];
+
+            // Call the poll function
+            let dest_reg = self.current_func.as_ref().map_or(Register(0), |_| {
+                let reg = Register(self.frames.last().map_or(0, |f| f.registers.len() as u32));
+                reg
+            });
+            self.call(poll_func, poll_args, dest_reg, None);
+
+            // Run until the call returns
+            while !self.frames.is_empty() {
+                self.next();
+            }
+
+            // The result is a tuple: (next_state, state_data, poll_result)
+            let result = self.main_result.take().unwrap_or(Value::Void);
+
+            let Value::Record(_, fields) = result else {
+                // Not a valid state machine result, return as-is
+                return result;
+            };
+
+            if fields.len() < 3 {
+                // Not a valid state machine result
+                return Value::Record(RecordId::Anon, fields);
+            }
+
+            // Extract components
+            let new_state = match &fields[0] {
+                Value::Int(s) => *s,
+                _ => return Value::Record(RecordId::Anon, fields),
+            };
+
+            state_data = fields[1].clone();
+            let poll_result = fields[2].clone();
+
+            // Check if we have Ready or Pending
+            // For now, we use a simple convention:
+            // - If poll_result is a Record with tag 0, it's Pending(effect, args)
+            // - If poll_result is a Record with tag 1, it's Ready(value)
+            // - Otherwise, it's the final result (simplified)
+
+            match &poll_result {
+                Value::Record(_, inner_fields) if !inner_fields.is_empty() => {
+                    match &inner_fields[0] {
+                        Value::Int(0) => {
+                            // Pending - extract effect and args, call handler
+                            let effect_sym = if inner_fields.len() > 1 {
+                                match &inner_fields[1] {
+                                    Value::Func(s) => *s,
+                                    _ => Symbol::Main, // Placeholder
+                                }
+                            } else {
+                                Symbol::Main
+                            };
+
+                            let effect_args = if inner_fields.len() > 2 {
+                                match &inner_fields[2] {
+                                    Value::Record(_, args) => args.clone(),
+                                    v => vec![v.clone()],
+                                }
+                            } else {
+                                vec![]
+                            };
+
+                            // Call the effect handler to get the resumed value
+                            resumed = effect_handler(self, effect_sym, effect_args);
+                            state = new_state;
+                        }
+                        Value::Int(1) => {
+                            // Ready - return the value
+                            return if inner_fields.len() > 1 {
+                                inner_fields[1].clone()
+                            } else {
+                                Value::Void
+                            };
+                        }
+                        _ => {
+                            // Unknown poll result format, assume it's the final value
+                            return poll_result;
+                        }
+                    }
+                }
+                _ => {
+                    // Not a Poll enum, assume it's the final result
+                    return poll_result;
+                }
+            }
+        }
+    }
+
     pub fn next(&mut self) {
         let next_instruction = self.next_instr();
 
@@ -642,6 +759,197 @@ impl<IO: super::io::IO> Interpreter<IO> {
                 self.write_register(&dest, new_ptr);
             }
             IR::Instr(Instruction::Free { .. }) => unimplemented!(),
+            // I/O Instructions
+            IR::Instr(Instruction::IoOpen { dest, path, flags, mode }) => {
+                let path_val = self.val(path);
+                let flags_val = self.val(flags);
+                let mode_val = self.val(mode);
+
+                let path_bytes = self.get_bytes_from_value(path_val);
+                let Value::Int(flags_int) = flags_val else {
+                    panic!("IoOpen flags must be Int, got {flags_val:?}");
+                };
+                let Value::Int(mode_int) = mode_val else {
+                    panic!("IoOpen mode must be Int, got {mode_val:?}");
+                };
+
+                let result = self.io.io_open(&path_bytes, flags_int, mode_int);
+                self.write_register(&dest, Value::Int(result));
+            }
+            IR::Instr(Instruction::IoRead { dest, fd, buf, count }) => {
+                let fd_val = self.val(fd);
+                let buf_val = self.val(buf);
+                let count_val = self.val(count);
+
+                let Value::Int(fd_int) = fd_val else {
+                    panic!("IoRead fd must be Int, got {fd_val:?}");
+                };
+                let Value::RawPtr(buf_ptr) = buf_val else {
+                    panic!("IoRead buf must be RawPtr, got {buf_val:?}");
+                };
+                let Value::Int(count_int) = count_val else {
+                    panic!("IoRead count must be Int, got {count_val:?}");
+                };
+
+                // Read into a temporary buffer first
+                let mut temp_buf = vec![0u8; count_int as usize];
+                let result = self.io.io_read(fd_int, &mut temp_buf);
+
+                // If read was successful, copy to memory
+                if result > 0 {
+                    let heap_idx = buf_ptr.0 - self.heap_start;
+                    for (i, byte) in temp_buf.iter().take(result as usize).enumerate() {
+                        self.memory.mem[heap_idx + i] = *byte;
+                    }
+                }
+
+                self.write_register(&dest, Value::Int(result));
+            }
+            IR::Instr(Instruction::IoWrite { dest, fd, buf, count }) => {
+                let fd_val = self.val(fd);
+                let buf_val = self.val(buf);
+                let count_val = self.val(count);
+
+                let Value::Int(fd_int) = fd_val else {
+                    panic!("IoWrite fd must be Int, got {fd_val:?}");
+                };
+                let Value::RawPtr(buf_ptr) = buf_val else {
+                    panic!("IoWrite buf must be RawPtr, got {buf_val:?}");
+                };
+                let Value::Int(count_int) = count_val else {
+                    panic!("IoWrite count must be Int, got {count_val:?}");
+                };
+
+                // Get bytes from memory
+                let bytes = if buf_ptr.0 < self.heap_start {
+                    // Static memory
+                    self.program.static_memory.data[buf_ptr.0..buf_ptr.0 + count_int as usize].to_vec()
+                } else {
+                    // Heap memory
+                    let heap_idx = buf_ptr.0 - self.heap_start;
+                    self.memory.mem[heap_idx..heap_idx + count_int as usize].to_vec()
+                };
+
+                let result = self.io.io_write(fd_int, &bytes);
+                self.write_register(&dest, Value::Int(result));
+            }
+            IR::Instr(Instruction::IoClose { dest, fd }) => {
+                let fd_val = self.val(fd);
+
+                let Value::Int(fd_int) = fd_val else {
+                    panic!("IoClose fd must be Int, got {fd_val:?}");
+                };
+
+                let result = self.io.io_close(fd_int);
+                self.write_register(&dest, Value::Int(result));
+            }
+            IR::Instr(Instruction::IoCtl { dest, fd, op, arg }) => {
+                let fd_val = self.val(fd);
+                let op_val = self.val(op);
+                let arg_val = self.val(arg);
+
+                let Value::Int(fd_int) = fd_val else {
+                    panic!("IoCtl fd must be Int, got {fd_val:?}");
+                };
+                let Value::Int(op_int) = op_val else {
+                    panic!("IoCtl op must be Int, got {op_val:?}");
+                };
+                let Value::Int(arg_int) = arg_val else {
+                    panic!("IoCtl arg must be Int, got {arg_val:?}");
+                };
+
+                let result = self.io.io_ctl(fd_int, op_int, arg_int);
+                self.write_register(&dest, Value::Int(result));
+            }
+            IR::Instr(Instruction::IoPoll { dest, fds, count, timeout }) => {
+                let fds_val = self.val(fds);
+                let count_val = self.val(count);
+                let timeout_val = self.val(timeout);
+
+                let Value::RawPtr(fds_ptr) = fds_val else {
+                    panic!("IoPoll fds must be RawPtr, got {fds_val:?}");
+                };
+                let Value::Int(count_int) = count_val else {
+                    panic!("IoPoll count must be Int, got {count_val:?}");
+                };
+                let Value::Int(timeout_int) = timeout_val else {
+                    panic!("IoPoll timeout must be Int, got {timeout_val:?}");
+                };
+
+                // Read pollfd structs from memory (each is 8 bytes: i32 fd, i16 events, i16 revents)
+                let heap_idx = fds_ptr.0 - self.heap_start;
+                let mut poll_fds: Vec<(i32, i16, i16)> = Vec::with_capacity(count_int as usize);
+
+                for i in 0..count_int as usize {
+                    let offset = heap_idx + i * 8;
+                    let fd = i32::from_le_bytes(self.memory.mem[offset..offset + 4].try_into().unwrap());
+                    let events = i16::from_le_bytes(self.memory.mem[offset + 4..offset + 6].try_into().unwrap());
+                    let revents = i16::from_le_bytes(self.memory.mem[offset + 6..offset + 8].try_into().unwrap());
+                    poll_fds.push((fd, events, revents));
+                }
+
+                let result = self.io.io_poll(&mut poll_fds, timeout_int);
+
+                // Write back revents
+                for (i, (_, _, revents)) in poll_fds.iter().enumerate() {
+                    let offset = heap_idx + i * 8 + 6;
+                    let bytes = revents.to_le_bytes();
+                    self.memory.mem[offset] = bytes[0];
+                    self.memory.mem[offset + 1] = bytes[1];
+                }
+
+                self.write_register(&dest, Value::Int(result));
+            }
+            IR::Instr(Instruction::IoSleep { dest, ms }) => {
+                let ms_val = self.val(ms);
+                let Value::Int(ms_int) = ms_val else {
+                    panic!("IoSleep ms must be Int, got {ms_val:?}");
+                };
+                let result = self.io.io_sleep(ms_int);
+                self.write_register(&dest, Value::Int(result));
+            }
+        }
+    }
+
+    /// Helper to extract bytes from a value (for paths, etc.)
+    fn get_bytes_from_value(&self, val: Value) -> Vec<u8> {
+        match val {
+            Value::RawPtr(ptr) => {
+                // Read null-terminated string from memory
+                let mut bytes = Vec::new();
+                let mut addr = ptr.0;
+                loop {
+                    let byte = if addr < self.heap_start {
+                        self.program.static_memory.data[addr]
+                    } else {
+                        self.memory.mem[addr - self.heap_start]
+                    };
+                    if byte == 0 {
+                        break;
+                    }
+                    bytes.push(byte);
+                    addr += 1;
+                }
+                bytes
+            }
+            Value::RawBuffer(bytes) => bytes,
+            Value::Record(RecordId::Nominal(sym), fields) if sym == Symbol::String => {
+                // String struct: (ptr, len)
+                let Value::RawPtr(ptr) = &fields[0] else {
+                    panic!("String.ptr must be RawPtr");
+                };
+                let Value::Int(len) = &fields[1] else {
+                    panic!("String.len must be Int");
+                };
+                let len = *len as usize;
+                if ptr.0 < self.heap_start {
+                    self.program.static_memory.data[ptr.0..ptr.0 + len].to_vec()
+                } else {
+                    let heap_idx = ptr.0 - self.heap_start;
+                    self.memory.mem[heap_idx..heap_idx + len].to_vec()
+                }
+            }
+            other => panic!("Cannot get bytes from {other:?}"),
         }
     }
 
@@ -1709,5 +2017,63 @@ Dog().handleDSTChange()
         );
 
         assert_eq!(interpreter.io.stdout, "Optional.some(1)\nOptional.some(2)\nOptional.some(3)\n".as_bytes());
+    }
+
+    #[test]
+    fn interprets_io_open_and_close() {
+        // Test io_open and io_close via inline IR
+        let (val, _interpreter) = interpret_with(
+            "
+            func test_io_open(path: RawPtr, flags: Int, mode: Int) -> Int {
+                @_ir(path, flags, mode) { %? = io_open $0 $1 $2 }
+            }
+
+            func test_io_close(fd: Int) -> Int {
+                @_ir(fd) { %? = io_close $0 }
+            }
+
+            // Open returns a simulated fd >= 3
+            let fd = test_io_open(\"test.txt\".base, 0, 0)
+            // Close should succeed (return 0)
+            let result = test_io_close(fd)
+            result
+            ",
+        );
+
+        // CaptureIO.io_close returns 0 on success
+        assert_eq!(val, Value::Int(0));
+    }
+
+    #[test]
+    fn interprets_io_close_invalid_fd() {
+        let (val, _interpreter) = interpret_with(
+            "
+            func test_io_close(fd: Int) -> Int {
+                @_ir(fd) { %? = io_close $0 }
+            }
+
+            // Closing an invalid fd should return EBADF (-9)
+            test_io_close(999)
+            ",
+        );
+
+        // Should return -9 (EBADF) for invalid fd
+        assert_eq!(val, Value::Int(-9));
+    }
+
+    #[test]
+    fn interprets_io_sleep() {
+        let (val, _interpreter) = interpret_with(
+            "
+            func test_io_sleep(ms: Int) -> Int {
+                @_ir(ms) { %? = io_sleep $0 }
+            }
+
+            test_io_sleep(0)
+            ",
+        );
+
+        // CaptureIO.io_sleep returns 0 (no-op for testing)
+        assert_eq!(val, Value::Int(0));
     }
 }

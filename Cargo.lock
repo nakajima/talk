@@ -2416,6 +2416,7 @@ dependencies = [
  "indoc",
  "itertools 0.14.0",
  "lazy_static",
+ "libc",
  "miette",
  "once_cell",
  "petgraph",

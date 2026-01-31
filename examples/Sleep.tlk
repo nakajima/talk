@@ -1,0 +1,18 @@
+func _sleep(ms: Int) -> Int {
+	@_ir(ms) { %? = io_sleep $0 }
+}
+
+effect 'sleep(ms: Int) -> ()
+
+@handle 'sleep { ms in
+	_sleep(ms)
+	continue ()
+}
+
+func doSleep() 'sleep {
+	print("Starting...")
+	'sleep(1000)
+	print("Done after 1 second!")
+}
+
+doSleep()

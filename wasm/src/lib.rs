@@ -36,6 +36,36 @@ impl IO for ConsoleIO {
     fn read_stdio(&mut self, _bytes: &mut [u8]) -> Result<usize, talk::ir::io::IOError> {
         Err(IOError::Unsupported)
     }
+
+    // File I/O not supported in WASM
+    fn io_open(&mut self, _path: &[u8], _flags: i64, _mode: i64) -> i64 {
+        -1 // EPERM
+    }
+
+    fn io_read(&mut self, _fd: i64, _buf: &mut [u8]) -> i64 {
+        -1 // EPERM
+    }
+
+    fn io_write(&mut self, _fd: i64, _buf: &[u8]) -> i64 {
+        -1 // EPERM
+    }
+
+    fn io_close(&mut self, _fd: i64) -> i64 {
+        -1 // EPERM
+    }
+
+    fn io_ctl(&mut self, _fd: i64, _op: i64, _arg: i64) -> i64 {
+        -1 // EPERM
+    }
+
+    fn io_poll(&mut self, _fds: &mut [(i32, i16, i16)], _timeout: i64) -> i64 {
+        -1 // EPERM
+    }
+
+    fn io_sleep(&mut self, _ms: i64) -> i64 {
+        // In WASM, we can't block, so this is a no-op
+        0
+    }
 }
 
 fn init() {

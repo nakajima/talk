@@ -177,6 +177,46 @@ pub enum InlineIRInstructionKind {
         addr: Value,
         offset_index: Value,
     },
+    // I/O Instructions
+    #[doc = "$dest = io_open $path $flags $mode"]
+    IoOpen {
+        dest: Register,
+        path: Value,
+        flags: Value,
+        mode: Value,
+    },
+    #[doc = "$dest = io_read $fd $buf $count"]
+    IoRead {
+        dest: Register,
+        fd: Value,
+        buf: Value,
+        count: Value,
+    },
+    #[doc = "$dest = io_write $fd $buf $count"]
+    IoWrite {
+        dest: Register,
+        fd: Value,
+        buf: Value,
+        count: Value,
+    },
+    #[doc = "$dest = io_close $fd"]
+    IoClose { dest: Register, fd: Value },
+    #[doc = "$dest = io_ctl $fd $op $arg"]
+    IoCtl {
+        dest: Register,
+        fd: Value,
+        op: Value,
+        arg: Value,
+    },
+    #[doc = "$dest = io_poll $fds $count $timeout"]
+    IoPoll {
+        dest: Register,
+        fds: Value,
+        count: Value,
+        timeout: Value,
+    },
+    #[doc = "$dest = io_sleep $ms"]
+    IoSleep { dest: Register, ms: Value },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
@@ -373,6 +413,40 @@ impl Display for InlineIRInstruction {
                     addr,
                     offset_index
                 )
+            }
+            // I/O Instructions
+            InlineIRInstructionKind::IoOpen {
+                dest,
+                path,
+                flags,
+                mode,
+            } => write!(f, "{dest} = io_open {} {} {}", path, flags, mode),
+            InlineIRInstructionKind::IoRead {
+                dest,
+                fd,
+                buf,
+                count,
+            } => write!(f, "{dest} = io_read {} {} {}", fd, buf, count),
+            InlineIRInstructionKind::IoWrite {
+                dest,
+                fd,
+                buf,
+                count,
+            } => write!(f, "{dest} = io_write {} {} {}", fd, buf, count),
+            InlineIRInstructionKind::IoClose { dest, fd } => {
+                write!(f, "{dest} = io_close {}", fd)
+            }
+            InlineIRInstructionKind::IoCtl { dest, fd, op, arg } => {
+                write!(f, "{dest} = io_ctl {} {} {}", fd, op, arg)
+            }
+            InlineIRInstructionKind::IoPoll {
+                dest,
+                fds,
+                count,
+                timeout,
+            } => write!(f, "{dest} = io_poll {} {} {}", fds, count, timeout),
+            InlineIRInstructionKind::IoSleep { dest, ms } => {
+                write!(f, "{dest} = io_sleep {}", ms)
             }
         }
     }

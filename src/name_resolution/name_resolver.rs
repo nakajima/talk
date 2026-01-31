@@ -1187,6 +1187,14 @@ impl NameResolver {
                 InlineIRInstructionKind::Move { ty, .. } => self.enter_type_annotation(ty),
                 InlineIRInstructionKind::Copy { ty, .. } => self.enter_type_annotation(ty),
                 InlineIRInstructionKind::Gep { ty, .. } => self.enter_type_annotation(ty),
+                // I/O instructions have no type annotations
+                InlineIRInstructionKind::IoOpen { .. } => (),
+                InlineIRInstructionKind::IoRead { .. } => (),
+                InlineIRInstructionKind::IoWrite { .. } => (),
+                InlineIRInstructionKind::IoClose { .. } => (),
+                InlineIRInstructionKind::IoCtl { .. } => (),
+                InlineIRInstructionKind::IoPoll { .. } => (),
+                InlineIRInstructionKind::IoSleep { .. } => (),
             }
         });
 

@@ -1,0 +1,13 @@
+import _ from ./IO.tlk
+
+public enum Poll<T> {
+	case ready(T)
+	case pending
+}
+
+public protocol Future {
+	associated Output
+	func poll() -> Poll<Output>
+}
+
+public effect 'async() -> ()

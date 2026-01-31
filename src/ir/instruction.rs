@@ -241,6 +241,46 @@ pub enum Instruction<T> {
         addr: Value,
         offset_index: Value,
     },
+    // I/O Instructions
+    #[doc = "$dest = io_open $path $flags $mode"]
+    IoOpen {
+        dest: Register,
+        path: Value,
+        flags: Value,
+        mode: Value,
+    },
+    #[doc = "$dest = io_read $fd $buf $count"]
+    IoRead {
+        dest: Register,
+        fd: Value,
+        buf: Value,
+        count: Value,
+    },
+    #[doc = "$dest = io_write $fd $buf $count"]
+    IoWrite {
+        dest: Register,
+        fd: Value,
+        buf: Value,
+        count: Value,
+    },
+    #[doc = "$dest = io_close $fd"]
+    IoClose { dest: Register, fd: Value },
+    #[doc = "$dest = io_ctl $fd $op $arg"]
+    IoCtl {
+        dest: Register,
+        fd: Value,
+        op: Value,
+        arg: Value,
+    },
+    #[doc = "$dest = io_poll $fds $count $timeout"]
+    IoPoll {
+        dest: Register,
+        fds: Value,
+        count: Value,
+        timeout: Value,
+    },
+    #[doc = "$dest = io_sleep $ms"]
+    IoSleep { dest: Register, ms: Value },
 }
 
 impl<T> Instruction<T> {
@@ -444,6 +484,54 @@ impl<T> Instruction<T> {
                 ty: map(ty),
             },
             Instruction::_Print { val } => Instruction::_Print { val },
+            // I/O instructions have no type parameter to map
+            Instruction::IoOpen {
+                dest,
+                path,
+                flags,
+                mode,
+            } => Instruction::IoOpen {
+                dest,
+                path,
+                flags,
+                mode,
+            },
+            Instruction::IoRead {
+                dest,
+                fd,
+                buf,
+                count,
+            } => Instruction::IoRead {
+                dest,
+                fd,
+                buf,
+                count,
+            },
+            Instruction::IoWrite {
+                dest,
+                fd,
+                buf,
+                count,
+            } => Instruction::IoWrite {
+                dest,
+                fd,
+                buf,
+                count,
+            },
+            Instruction::IoClose { dest, fd } => Instruction::IoClose { dest, fd },
+            Instruction::IoCtl { dest, fd, op, arg } => Instruction::IoCtl { dest, fd, op, arg },
+            Instruction::IoPoll {
+                dest,
+                fds,
+                count,
+                timeout,
+            } => Instruction::IoPoll {
+                dest,
+                fds,
+                count,
+                timeout,
+            },
+            Instruction::IoSleep { dest, ms } => Instruction::IoSleep { dest, ms },
         }
     }
 }

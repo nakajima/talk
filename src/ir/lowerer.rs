@@ -184,6 +184,23 @@ pub enum FuncTermination {
     Continuation(Symbol),
 }
 
+/// Context for state machine compilation mode
+#[derive(Debug)]
+pub struct StateMachineContext {
+    /// The analysis results for this effectful function
+    pub analysis: super::effect_analysis::EffectAnalysis,
+    /// Current state index being generated
+    pub current_state: usize,
+    /// Register holding the state index parameter
+    pub state_var: Register,
+    /// Register holding the state data parameter
+    pub state_data: Register,
+    /// Register holding the resumed value parameter
+    pub resumed_var: Register,
+    /// The original function name being compiled
+    pub func_name: Symbol,
+}
+
 // Lowers an AST with Types to a monomorphized IR
 pub struct Lowerer<'a> {
     pub(super) typed: &'a mut Typed,
@@ -196,6 +213,8 @@ pub struct Lowerer<'a> {
     flow_context_stack: Vec<FlowContext>,
     pending_continuations: Vec<(CurrentFunction, Symbol, Register)>,
     current_continuation_idx: Option<usize>,
+    /// When set, we're compiling in state machine mode for effectful functions
+    state_machine_context: Option<StateMachineContext>,
 }
 
 #[allow(clippy::panic)]
@@ -213,6 +232,7 @@ impl<'a> Lowerer<'a> {
             flow_context_stack: Default::default(),
             pending_continuations: Default::default(),
             current_continuation_idx: None,
+            state_machine_context: None,
         }
     }
 
@@ -1065,6 +1085,23 @@ impl<'a> Lowerer<'a> {
     fn lower_effect_call(
         &mut self,
         expr: &TypedExpr,
+        effect: &Symbol,
+        args: &[TypedExpr],
+        bind: Bind,
+    ) -> Result<(Value, Ty), IRError> {
+        // Check if we're in state machine mode
+        if self.state_machine_context.is_some() {
+            return self.lower_effect_call_state_machine(expr, effect, args, bind);
+        }
+
+        // Original closure-based implementation
+        self.lower_effect_call_closure(expr, effect, args, bind)
+    }
+
+    /// Lower an effect call using the closure-based continuation approach (original behavior)
+    fn lower_effect_call_closure(
+        &mut self,
+        expr: &TypedExpr,
         _effect: &Symbol,
         args: &[TypedExpr],
         bind: Bind,
@@ -1151,6 +1188,156 @@ impl<'a> Lowerer<'a> {
 
         // Return the continuation's resumed value register, not the parent's dest
         Ok((Value::Reg(resumed_value_reg.0), expr.ty.clone()))
+    }
+
+    /// Lower an effect call in state machine mode.
+    /// Instead of creating a closure continuation, we:
+    /// 1. Build the state_data record with live variables
+    /// 2. Return (next_state, state_data, Pending(effect, args))
+    fn lower_effect_call_state_machine(
+        &mut self,
+        expr: &TypedExpr,
+        _effect: &Symbol,
+        args: &[TypedExpr],
+        bind: Bind,
+    ) -> Result<(Value, Ty), IRError> {
+        // Lower effect arguments
+        let mut arg_vals = Vec::with_capacity(args.len());
+        for arg in args {
+            let (val, _ty) = self.lower_expr(arg, Bind::Fresh)?;
+            arg_vals.push(val);
+        }
+
+        // Get the yield point info for this expression
+        let yield_point_idx = self
+            .state_machine_context
+            .as_ref()
+            .and_then(|ctx| ctx.analysis.yield_point_for_expr(expr.id))
+            .ok_or_else(|| IRError::TypeNotFound(format!(
+                "No yield point found for effect call {:?}",
+                expr.id
+            )))?;
+
+        let (next_state, live_vars) = {
+            let ctx = self.state_machine_context.as_ref().unwrap();
+            let yield_point = &ctx.analysis.yield_points[yield_point_idx];
+            (yield_point.resume_state, yield_point.live_vars.clone())
+        };
+
+        // Build state_data record with live variables
+        let mut state_data_fields = Vec::with_capacity(live_vars.len());
+        for (sym, _ty) in &live_vars {
+            let reg = self.get_binding(sym);
+            state_data_fields.push(reg.into());
+        }
+
+        let state_data_reg = self.next_register();
+        self.push_instr(Instruction::Record {
+            dest: state_data_reg,
+            ty: Ty::Record(
+                None,
+                live_vars
+                    .iter()
+                    .enumerate()
+                    .fold(Row::Empty, |row, (i, (_, ty))| Row::Extend {
+                        row: row.into(),
+                        label: Label::Positional(i),
+                        ty: ty.clone(),
+                    })
+                    .into(),
+            ),
+            record: state_data_fields.into(),
+            meta: Default::default(),
+        });
+
+        // Build the next state value
+        let next_state_reg = self.next_register();
+        self.push_instr(Instruction::Constant {
+            dest: next_state_reg,
+            val: Value::Int(next_state as i64),
+            ty: Ty::Int,
+            meta: Default::default(),
+        });
+
+        // Build the effect args tuple
+        let effect_args_reg = self.next_register();
+        self.push_instr(Instruction::Record {
+            dest: effect_args_reg,
+            ty: Ty::Tuple(args.iter().map(|a| a.ty.clone()).collect()),
+            record: arg_vals.into(),
+            meta: Default::default(),
+        });
+
+        // Build the Pending result: (effect_symbol, args)
+        // For now, we'll use a simple record to represent this
+        // In a full implementation, this would be a proper Poll::Pending enum variant
+        let pending_reg = self.next_register();
+        self.push_instr(Instruction::Record {
+            dest: pending_reg,
+            ty: Ty::Tuple(vec![Ty::Int, Ty::RawPtr]), // Simplified
+            record: vec![
+                Value::Int(0), // 0 = Pending tag
+                effect_args_reg.into(),
+            ].into(),
+            meta: Default::default(),
+        });
+
+        // Return tuple: (next_state, state_data, Pending)
+        let return_tuple_reg = self.next_register();
+        self.push_instr(Instruction::Record {
+            dest: return_tuple_reg,
+            ty: Ty::Tuple(vec![Ty::Int, Ty::RawPtr, expr.ty.clone()]),
+            record: vec![
+                next_state_reg.into(),
+                state_data_reg.into(),
+                pending_reg.into(),
+            ].into(),
+            meta: vec![InstructionMeta::Source(expr.id)].into(),
+        });
+
+        // Emit return terminator with the pending result
+        self.push_terminator(Terminator::Ret {
+            val: return_tuple_reg.into(),
+            ty: Ty::Tuple(vec![Ty::Int, Ty::RawPtr, expr.ty.clone()]),
+        });
+
+        // Update state machine context for next state
+        if let Some(ref mut ctx) = self.state_machine_context {
+            ctx.current_state = next_state;
+        }
+
+        // Create a new basic block for the continuation (code after the yield)
+        let continuation_block = self.new_basic_block();
+        self.set_current_block(continuation_block);
+
+        // In the continuation, the resumed value comes from the resumed_var parameter
+        // We need to restore live variables from state_data
+        let resumed_var = self.state_machine_context.as_ref().unwrap().resumed_var;
+        let state_data = self.state_machine_context.as_ref().unwrap().state_data;
+
+        // Restore live variables from state_data
+        for (i, (sym, ty)) in live_vars.iter().enumerate() {
+            let dest = self.next_register();
+            self.push_instr(Instruction::GetField {
+                dest,
+                ty: ty.clone(),
+                record: state_data,
+                field: Label::Positional(i),
+                meta: Default::default(),
+            });
+            self.insert_binding(*sym, Binding::Register(dest.0));
+        }
+
+        // The effect call result comes from the resumed value
+        let dest = self.ret(bind);
+        self.push_instr(Instruction::Constant {
+            dest,
+            val: Value::Reg(resumed_var.0),
+            ty: expr.ty.clone(),
+            meta: Default::default(),
+        });
+
+        Ok((dest.into(), expr.ty.clone()))
     }
 
     #[allow(clippy::todo)]
@@ -1442,6 +1629,106 @@ impl<'a> Lowerer<'a> {
                     offset_index,
                 });
                 Ok((dest.into(), Ty::RawPtr))
+            }
+            // I/O Instructions
+            InlineIRInstructionKind::IoOpen {
+                dest,
+                path,
+                flags,
+                mode,
+            } => {
+                let path = self.parsed_value(path, &binds);
+                let flags = self.parsed_value(flags, &binds);
+                let mode = self.parsed_value(mode, &binds);
+                let ret = self.ret(bind);
+                let dest = self.parsed_register(dest, ret);
+                self.push_instr(Instruction::IoOpen {
+                    dest,
+                    path,
+                    flags,
+                    mode,
+                });
+                Ok((dest.into(), Ty::Int))
+            }
+            InlineIRInstructionKind::IoRead {
+                dest,
+                fd,
+                buf,
+                count,
+            } => {
+                let fd = self.parsed_value(fd, &binds);
+                let buf = self.parsed_value(buf, &binds);
+                let count = self.parsed_value(count, &binds);
+                let ret = self.ret(bind);
+                let dest = self.parsed_register(dest, ret);
+                self.push_instr(Instruction::IoRead {
+                    dest,
+                    fd,
+                    buf,
+                    count,
+                });
+                Ok((dest.into(), Ty::Int))
+            }
+            InlineIRInstructionKind::IoWrite {
+                dest,
+                fd,
+                buf,
+                count,
+            } => {
+                let fd = self.parsed_value(fd, &binds);
+                let buf = self.parsed_value(buf, &binds);
+                let count = self.parsed_value(count, &binds);
+                let ret = self.ret(bind);
+                let dest = self.parsed_register(dest, ret);
+                self.push_instr(Instruction::IoWrite {
+                    dest,
+                    fd,
+                    buf,
+                    count,
+                });
+                Ok((dest.into(), Ty::Int))
+            }
+            InlineIRInstructionKind::IoClose { dest, fd } => {
+                let fd = self.parsed_value(fd, &binds);
+                let ret = self.ret(bind);
+                let dest = self.parsed_register(dest, ret);
+                self.push_instr(Instruction::IoClose { dest, fd });
+                Ok((dest.into(), Ty::Int))
+            }
+            InlineIRInstructionKind::IoCtl { dest, fd, op, arg } => {
+                let fd = self.parsed_value(fd, &binds);
+                let op = self.parsed_value(op, &binds);
+                let arg = self.parsed_value(arg, &binds);
+                let ret = self.ret(bind);
+                let dest = self.parsed_register(dest, ret);
+                self.push_instr(Instruction::IoCtl { dest, fd, op, arg });
+                Ok((dest.into(), Ty::Int))
+            }
+            InlineIRInstructionKind::IoPoll {
+                dest,
+                fds,
+                count,
+                timeout,
+            } => {
+                let fds = self.parsed_value(fds, &binds);
+                let count = self.parsed_value(count, &binds);
+                let timeout = self.parsed_value(timeout, &binds);
+                let ret = self.ret(bind);
+                let dest = self.parsed_register(dest, ret);
+                self.push_instr(Instruction::IoPoll {
+                    dest,
+                    fds,
+                    count,
+                    timeout,
+                });
+                Ok((dest.into(), Ty::Int))
+            }
+            InlineIRInstructionKind::IoSleep { dest, ms } => {
+                let ms = self.parsed_value(ms, &binds);
+                let ret = self.ret(bind);
+                let dest = self.parsed_register(dest, ret);
+                self.push_instr(Instruction::IoSleep { dest, ms });
+                Ok((dest.into(), Ty::Int))
             }
         }
     }
@@ -3012,6 +3299,161 @@ impl<'a> Lowerer<'a> {
         }
 
         Ok((func_val, func_ty))
+    }
+
+    /// Check if we're currently compiling in state machine mode
+    #[allow(dead_code)]
+    fn is_state_machine_mode(&self) -> bool {
+        self.state_machine_context.is_some()
+    }
+
+    /// Get the yield point index for the current expression, if any
+    #[allow(dead_code)]
+    fn get_yield_point_index(&self, expr_id: crate::node_id::NodeID) -> Option<usize> {
+        self.state_machine_context
+            .as_ref()
+            .and_then(|ctx| ctx.analysis.yield_point_for_expr(expr_id))
+    }
+
+    /// Lower an effectful function as a state machine.
+    /// The generated function has signature:
+    ///   (state: Int, state_data: Record, resumed: T) -> (Int, Record, Poll<R>)
+    #[allow(dead_code)]
+    fn lower_func_as_state_machine(
+        &mut self,
+        func: &TypedFunc,
+        analysis: super::effect_analysis::EffectAnalysis,
+        bind: Bind,
+    ) -> Result<(Value, Ty), IRError> {
+        let func_ty = self.ty_from_symbol(&func.name)?;
+        let (_param_tys, ret_ty) = uncurry_function(func_ty.clone());
+
+        // Generate a poll function name
+        let poll_func_sym = Symbol::Synthesized(
+            self.typed.symbols.next_synthesized(self.config.module_id),
+        );
+        self.typed.resolved_names.symbol_names.insert(
+            poll_func_sym,
+            format!("{}_poll", self.typed.resolved_names.symbol_names.get(&func.name).cloned().unwrap_or_else(|| format!("{:?}", func.name))),
+        );
+
+        // Create the poll function
+        self.current_function_stack.push(CurrentFunction::new(poll_func_sym));
+
+        // Parameters for poll function: state: Int, state_data: Record, resumed: T
+        let state_var = self.next_register();
+        let state_data = self.next_register();
+        let resumed_var = self.next_register();
+
+        let poll_params = vec![
+            Value::Reg(state_var.0),
+            Value::Reg(state_data.0),
+            Value::Reg(resumed_var.0),
+        ];
+
+        // Set up state machine context
+        self.state_machine_context = Some(StateMachineContext {
+            analysis: analysis.clone(),
+            current_state: 0,
+            state_var,
+            state_data,
+            resumed_var,
+            func_name: func.name,
+        });
+
+        // Build parameter bindings for the original function parameters.
+        // In state 0, parameters come from the state_data record.
+        // In subsequent states, they also come from state_data.
+        for (i, param) in func.params.iter().enumerate() {
+            // For now, use a simple approach: parameters are stored in state_data
+            // and extracted at the start of each state that needs them.
+            // We'll bind them to Continued bindings.
+            self.insert_binding(param.name, Binding::Continued {
+                index: i,
+                ty: param.ty.clone(),
+            });
+        }
+
+        // Generate the state machine body
+        // For the initial state (0), we run the function body until the first yield
+        // For subsequent states, we resume from where we left off
+
+        // For now, use a simplified approach:
+        // - State 0: run body up to first yield, then return Pending
+        // - State N: restore live vars, continue from yield N, return Ready or Pending
+
+        // Lower the function body - the state machine context will cause
+        // lower_effect_call to emit state transitions instead of closures
+        let mut ret = Value::Void;
+        let mut ret_ty_local = ret_ty.clone();
+        for node in func.body.body.iter() {
+            (ret, ret_ty_local) = self.lower_node(node)?;
+        }
+
+        // Build the final return value as Ready(result)
+        // For a proper implementation, we'd build a Poll enum value here
+        let result_reg = self.next_register();
+        self.push_instr(Instruction::Constant {
+            dest: result_reg,
+            val: Value::Int(self.state_machine_context.as_ref().map_or(0, |ctx| ctx.analysis.state_count() as i64)),
+            ty: Ty::Int,
+            meta: Default::default(),
+        });
+
+        // Return tuple: (state, state_data, result)
+        let return_val = self.next_register();
+        self.push_instr(Instruction::Record {
+            dest: return_val,
+            ty: Ty::Tuple(vec![Ty::Int, Ty::RawPtr, ret_ty_local.clone()]),
+            record: vec![
+                result_reg.into(),
+                state_data.into(),
+                ret,
+            ].into(),
+            meta: Default::default(),
+        });
+
+        self.push_terminator(Terminator::Ret {
+            val: return_val.into(),
+            ty: Ty::Tuple(vec![Ty::Int, Ty::RawPtr, ret_ty_local.clone()]),
+        });
+
+        // Clear state machine context
+        self.state_machine_context = None;
+
+        let poll_func = self.current_function_stack.pop().expect("no current function");
+
+        // Poll function type: (Int, Record, T) -> (Int, Record, Poll<R>)
+        let poll_func_ty = Ty::Func(
+            Ty::Tuple(vec![Ty::Int, Ty::RawPtr, Ty::Void]).into(),
+            Ty::Tuple(vec![Ty::Int, Ty::RawPtr, ret_ty_local]).into(),
+            Row::Empty.into(),
+        );
+
+        self.functions.insert(
+            poll_func_sym,
+            PolyFunction {
+                name: poll_func_sym,
+                params: poll_params,
+                blocks: poll_func.blocks,
+                ty: poll_func_ty.clone(),
+                register_count: poll_func.registers.next as usize,
+                self_out: None,
+            },
+        );
+
+        // Return a reference to the poll function
+        let func_val = Value::Func(poll_func_sym);
+        if bind != Bind::Discard {
+            let dest = self.ret(bind);
+            self.push_instr(Instruction::Ref {
+                dest,
+                ty: poll_func_ty.clone(),
+                val: func_val.clone(),
+            });
+        }
+
+        Ok((func_val, poll_func_ty))
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]

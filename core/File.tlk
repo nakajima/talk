@@ -1,0 +1,44 @@
+import { _io_open, _io_read, _io_write, _io_close, O_RDONLY, O_WRONLY, O_RDWR, O_CREAT, O_TRUNC, O_APPEND, S_IRUSR, S_IWUSR, EAGAIN, POLLIN, POLLOUT } from ./IO.tlk
+import { _alloc } from ./Memory.tlk
+import { Poll } from ./Async.tlk
+
+public enum FileMode {
+	case read
+	case write
+	case append
+}
+
+public struct File {
+	let fd: Int
+
+	public func open_read(path: RawPtr) -> File {
+		let fd = _io_open(path, O_RDONLY, 0)
+		File(fd: fd)
+	}
+
+	public func open_write(path: RawPtr) -> File {
+		let mode = S_IRUSR + S_IWUSR
+		let fd = _io_open(path, O_WRONLY + O_CREAT + O_TRUNC, mode)
+		File(fd: fd)
+	}
+
+	public func open_append(path: RawPtr) -> File {
+		let mode = S_IRUSR + S_IWUSR
+		let fd = _io_open(path, O_WRONLY + O_CREAT + O_APPEND, mode)
+		File(fd: fd)
+	}
+
+	public func read(buf: RawPtr, count: Int) -> Int {
+		_io_read(self.fd, buf, count)
+	}
+
+	public func write(buf: RawPtr, count: Int) -> Int {
+		_io_write(self.fd, buf, count)
+	}
+
+	public func close() -> Int {
+		_io_close(self.fd)
+	}
+
+	public func is_valid() -> Bool { self.fd >= 0 }
+}

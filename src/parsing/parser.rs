@@ -1126,6 +1126,107 @@ impl<'a> Parser<'a> {
                         },
                     })
                 }
+                // I/O Instructions
+                "io_open" => {
+                    let path = self.ir_value()?;
+                    let flags = self.ir_value()?;
+                    let mode = self.ir_value()?;
+                    self.save_meta(tok, |id, span| InlineIRInstruction {
+                        id,
+                        span,
+                        binds,
+                        instr_name_span: instr_span,
+                        kind: InlineIRInstructionKind::IoOpen {
+                            dest,
+                            path,
+                            flags,
+                            mode,
+                        },
+                    })
+                }
+                "io_read" => {
+                    let fd = self.ir_value()?;
+                    let buf = self.ir_value()?;
+                    let count = self.ir_value()?;
+                    self.save_meta(tok, |id, span| InlineIRInstruction {
+                        id,
+                        span,
+                        binds,
+                        instr_name_span: instr_span,
+                        kind: InlineIRInstructionKind::IoRead {
+                            dest,
+                            fd,
+                            buf,
+                            count,
+                        },
+                    })
+                }
+                "io_write" => {
+                    let fd = self.ir_value()?;
+                    let buf = self.ir_value()?;
+                    let count = self.ir_value()?;
+                    self.save_meta(tok, |id, span| InlineIRInstruction {
+                        id,
+                        span,
+                        binds,
+                        instr_name_span: instr_span,
+                        kind: InlineIRInstructionKind::IoWrite {
+                            dest,
+                            fd,
+                            buf,
+                            count,
+                        },
+                    })
+                }
+                "io_close" => {
+                    let fd = self.ir_value()?;
+                    self.save_meta(tok, |id, span| InlineIRInstruction {
+                        id,
+                        span,
+                        binds,
+                        instr_name_span: instr_span,
+                        kind: InlineIRInstructionKind::IoClose { dest, fd },
+                    })
+                }
+                "io_ctl" => {
+                    let fd = self.ir_value()?;
+                    let op = self.ir_value()?;
+                    let arg = self.ir_value()?;
+                    self.save_meta(tok, |id, span| InlineIRInstruction {
+                        id,
+                        span,
+                        binds,
+                        instr_name_span: instr_span,
+                        kind: InlineIRInstructionKind::IoCtl { dest, fd, op, arg },
+                    })
+                }
+                "io_poll" => {
+                    let fds = self.ir_value()?;
+                    let count = self.ir_value()?;
+                    let timeout = self.ir_value()?;
+                    self.save_meta(tok, |id, span| InlineIRInstruction {
+                        id,
+                        span,
+                        binds,
+                        instr_name_span: instr_span,
+                        kind: InlineIRInstructionKind::IoPoll {
+                            dest,
+                            fds,
+                            count,
+                            timeout,
+                        },
+                    })
+                }
+                "io_sleep" => {
+                    let ms = self.ir_value()?;
+                    self.save_meta(tok, |id, span| InlineIRInstruction {
+                        id,
+                        span,
+                        binds,
+                        instr_name_span: instr_span,
+                        kind: InlineIRInstructionKind::IoSleep { dest, ms },
+                    })
+                }
                 _ => {
                     return Err(ParserError::UnexpectedToken {
                         expected: "ir instr".into(),
