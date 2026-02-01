@@ -1,4 +1,5 @@
 import { _alloc } from ./Memory.tlk
+import { Poll, Context, Waker } from ./Async.tlk
 
 public effect 'io(fd: Int,events: Int) -> ()
 
@@ -83,4 +84,18 @@ public func write_string(fd: Int, s: String) -> Int {
 
 public func print_raw(s: String) -> Int {
 	write_string(STDOUT_FD, s)
+}
+
+public func async_read(fd: Int, buf: RawPtr, count: Int, cx: Context) -> Poll<Int, ()> {
+	let result = _io_read(fd, buf, count)
+	if result != EAGAIN { return Poll.ready(result) }
+	yield(())
+	Poll.pending(())
+}
+
+public func async_write(fd: Int, buf: RawPtr, count: Int, cx: Context) -> Poll<Int, ()> {
+	let result = _io_write(fd, buf, count)
+	if result != EAGAIN { return Poll.ready(result) }
+	yield(())
+	Poll.pending(())
 }

@@ -11,7 +11,9 @@ use crate::node_id::{FileID, NodeID};
 use crate::node_kinds::block::Block;
 use crate::node_kinds::body::Body;
 use crate::node_kinds::call_arg::CallArg;
-use crate::node_kinds::decl::{Decl, DeclKind, Import, ImportPath, ImportedSymbol, ImportedSymbols, Visibility};
+use crate::node_kinds::decl::{
+    Decl, DeclKind, Import, ImportPath, ImportedSymbol, ImportedSymbols, Visibility,
+};
 use crate::node_kinds::expr::{Expr, ExprKind};
 use crate::node_kinds::func::{EffectSet, Func};
 use crate::node_kinds::func_signature::FuncSignature;
@@ -180,7 +182,17 @@ impl<'a> Parser<'a> {
         use TokenKind::*;
         if matches!(
             kind,
-            Protocol | Struct | Enum | Let | Func | Case | Extend | Typealias | Effect | Import | Public
+            Protocol
+                | Struct
+                | Enum
+                | Let
+                | Func
+                | Case
+                | Extend
+                | Typealias
+                | Effect
+                | Import
+                | Public
         ) {
             self.decl(BlockContext::None, false)
         } else {
@@ -298,7 +310,10 @@ impl<'a> Parser<'a> {
             let mut imported = vec![];
 
             loop {
-                if matches!(self.current.as_ref().map(|t| &t.kind), Some(TokenKind::RightBrace)) {
+                if matches!(
+                    self.current.as_ref().map(|t| &t.kind),
+                    Some(TokenKind::RightBrace)
+                ) {
                     break;
                 }
 
@@ -738,6 +753,7 @@ impl<'a> Parser<'a> {
         match &current.kind {
             TokenKind::If => self.if_stmt(),
             TokenKind::Loop => self.loop_stmt(),
+            TokenKind::For => self.for_stmt(),
             TokenKind::Return => self.return_stmt(),
             TokenKind::Attribute if self.lexeme(&current) == "handle" => self.effect_handler(),
             TokenKind::Continue => {
@@ -864,6 +880,26 @@ impl<'a> Parser<'a> {
             id,
             span,
             kind: StmtKind::Loop(cond.map(|c| c.as_expr()), body),
+        })
+    }
+
+    #[instrument(level = tracing::Level::TRACE, skip(self))]
+    fn for_stmt(&mut self) -> Result<Stmt, ParserError> {
+        let tok = self.push_source_location();
+        self.consume(TokenKind::For)?;
+        let pattern = self.parse_pattern()?;
+        self.consume(TokenKind::In)?;
+        let iterable = self.expr()?.as_expr();
+        let body = self.block(BlockContext::Loop, true)?;
+
+        self.save_meta(tok, |id, span| Stmt {
+            id,
+            span,
+            kind: StmtKind::For {
+                pattern,
+                iterable: Box::new(iterable),
+                body,
+            },
         })
     }
 

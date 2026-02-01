@@ -2,14 +2,19 @@ use async_lsp::lsp_types::{TextEdit, Url, WorkspaceEdit};
 use derive_visitor::{Drive, Visitor};
 use rustc_hash::FxHashSet;
 
-use crate::analysis::{node_ids_at_offset, resolve_member_symbol, span_contains};
 use crate::analysis::workspace::Workspace as AnalysisWorkspace;
+use crate::analysis::{node_ids_at_offset, resolve_member_symbol, span_contains};
 use crate::compiling::module::ModuleId;
 use crate::lexer::Lexer;
 use crate::name_resolution::symbol::{EffectId, Symbol};
 use crate::node_kinds::{
-    decl::Decl, expr::Expr, func::Func, func_signature::FuncSignature,
-    generic_decl::GenericDecl, parameter::Parameter, pattern::{Pattern, RecordFieldPattern},
+    decl::Decl,
+    expr::Expr,
+    func::Func,
+    func_signature::FuncSignature,
+    generic_decl::GenericDecl,
+    parameter::Parameter,
+    pattern::{Pattern, RecordFieldPattern},
     type_annotation::TypeAnnotation,
 };
 use crate::token_kind::TokenKind;

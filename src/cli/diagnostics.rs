@@ -75,8 +75,7 @@ pub fn render_json_entry(doc_id: &str, text: &str, diagnostic: &Diagnostic) -> S
     let highlight_end = clamp_to_char_boundary(text, diagnostic.range.end as usize)
         .clamp(highlight_start, line_end);
 
-    let underline_start =
-        text[line_start..highlight_start].encode_utf16().count() as u32 + 1;
+    let underline_start = text[line_start..highlight_start].encode_utf16().count() as u32 + 1;
     let underline_len = text[highlight_start..highlight_end]
         .encode_utf16()
         .count()

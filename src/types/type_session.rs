@@ -324,9 +324,7 @@ impl TypeSession {
                     .map(|p| self.shallow_generalize(p))
                     .collect(),
             ),
-            Ty::Record(sym, box row) => {
-                Ty::Record(sym, self.shallow_generalize_row(row).into())
-            }
+            Ty::Record(sym, box row) => Ty::Record(sym, self.shallow_generalize_row(row).into()),
             Ty::Nominal { symbol, type_args } => Ty::Nominal {
                 symbol,
                 type_args: type_args
@@ -391,7 +389,11 @@ impl TypeSession {
                 }
             }
             Row::Param(_) => row.clone(),
-            Row::Extend { row: inner, label, ty } => Row::Extend {
+            Row::Extend {
+                row: inner,
+                label,
+                ty,
+            } => Row::Extend {
                 row: Box::new(self.apply_row(inner, substitutions)),
                 label: label.clone(),
                 ty: self.apply(ty, substitutions),
@@ -399,11 +401,7 @@ impl TypeSession {
         }
     }
 
-    pub(super) fn apply(
-        &mut self,
-        ty: &Ty,
-        substitutions: &mut UnificationSubstitutions,
-    ) -> Ty {
+    pub(super) fn apply(&mut self, ty: &Ty, substitutions: &mut UnificationSubstitutions) -> Ty {
         match ty {
             Ty::Error(..) => ty.clone(),
             Ty::Param(..) => ty.clone(),
@@ -476,9 +474,7 @@ impl TypeSession {
         tys: &[Ty],
         substitutions: &mut UnificationSubstitutions,
     ) -> Vec<Ty> {
-        tys.iter()
-            .map(|ty| self.apply(ty, substitutions))
-            .collect()
+        tys.iter().map(|ty| self.apply(ty, substitutions)).collect()
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self, substitutions))]
@@ -753,9 +749,7 @@ impl TypeSession {
                     if *lvl >= context.level() {
                         let param_id = self.vars.row_params.next_id();
                         foralls.insert(ForAll::Row(param_id));
-                        substitutions
-                            .row
-                            .insert(row_meta, Row::Param(param_id));
+                        substitutions.row.insert(row_meta, Row::Param(param_id));
                     }
                 }
             }
@@ -794,11 +788,7 @@ impl TypeSession {
             return EnvEntry::Mono(ty);
         }
 
-        EnvEntry::Scheme(Scheme::new(
-            foralls,
-            predicates.into_iter().collect(),
-            ty,
-        ))
+        EnvEntry::Scheme(Scheme::new(foralls, predicates.into_iter().collect(), ty))
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
@@ -858,12 +848,7 @@ impl TypeSession {
         self.term_env.insert(sym, entry);
     }
 
-    pub(super) fn insert_mono(
-        &mut self,
-        sym: Symbol,
-        ty: Ty,
-        constraints: &mut ConstraintStore,
-    ) {
+    pub(super) fn insert_mono(&mut self, sym: Symbol, ty: Ty, constraints: &mut ConstraintStore) {
         if matches!(sym, Symbol::Builtin(..)) {
             tracing::error!("can't override builtin");
             return;

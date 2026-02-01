@@ -240,6 +240,10 @@ impl Symbol {
         module_id: ModuleId::Core,
         local_id: 8,
     });
+    pub const YIELD: Symbol = Symbol::Builtin(BuiltinId {
+        module_id: ModuleId::Core,
+        local_id: 10,
+    });
 
     pub const String: Symbol = Symbol::Struct(StructId {
         module_id: ModuleId::Core,
@@ -254,6 +258,18 @@ impl Symbol {
     pub const IR_TYPE_PARAM: Symbol = Symbol::TypeParameter(TypeParameterId {
         module_id: ModuleId::Core,
         local_id: u32::MAX - 1,
+    });
+
+    /// Type parameter T for yield<T>(value: T) -> R  (the yielded value type)
+    pub const YIELD_T_PARAM: Symbol = Symbol::TypeParameter(TypeParameterId {
+        module_id: ModuleId::Core,
+        local_id: u32::MAX - 2,
+    });
+
+    /// Type parameter R for yield<T>(value: T) -> R  (the resumed value type)
+    pub const YIELD_R_PARAM: Symbol = Symbol::TypeParameter(TypeParameterId {
+        module_id: ModuleId::Core,
+        local_id: u32::MAX - 3,
     });
 
     #[allow(clippy::expect_used)]

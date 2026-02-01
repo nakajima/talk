@@ -177,12 +177,7 @@ impl Predicate {
                 instantiate_ty(id, rhs, context.instantiations_mut(), level),
             ),
             Self::HasField { row, label, ty } => constraints._has_field(
-                instantiate_row(
-                    id,
-                    Row::Param(row),
-                    context.instantiations_mut(),
-                    level,
-                ),
+                instantiate_row(id, Row::Param(row), context.instantiations_mut(), level),
                 label,
                 instantiate_ty(id, ty, context.instantiations_mut(), level),
                 None,

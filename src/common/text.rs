@@ -38,11 +38,7 @@ pub fn line_info_for_offset_utf16(text: &str, byte_offset: u32) -> (u32, u32, us
     (line, col, line_start, line_end)
 }
 
-pub fn byte_offset_for_line_column_utf8(
-    text: &str,
-    line: u32,
-    column: u32,
-) -> Option<u32> {
+pub fn byte_offset_for_line_column_utf8(text: &str, line: u32, column: u32) -> Option<u32> {
     if line == 0 || column == 0 {
         return None;
     }

@@ -1180,6 +1180,59 @@ pub mod tests {
     }
 
     #[test]
+    fn parses_for_loop() {
+        let parsed = parse("for x in items { 123 }");
+        assert_eq!(
+            *parsed.roots[0].as_stmt(),
+            Stmt {
+                id: NodeID::ANY,
+                span: Span::ANY,
+                kind: StmtKind::For {
+                    pattern: Pattern {
+                        id: NodeID::ANY,
+                        span: Span::ANY,
+                        kind: PatternKind::Bind("x".into()),
+                    },
+                    iterable: Box::new(any_expr!(ExprKind::Variable("items".into()))),
+                    body: any_block!(vec![any_expr_stmt!(ExprKind::LiteralInt("123".into()))])
+                }
+            }
+        );
+    }
+
+    #[test]
+    fn parses_for_loop_with_tuple_pattern() {
+        let parsed = parse("for (a, b) in pairs { 123 }");
+        assert_eq!(
+            *parsed.roots[0].as_stmt(),
+            Stmt {
+                id: NodeID::ANY,
+                span: Span::ANY,
+                kind: StmtKind::For {
+                    pattern: Pattern {
+                        id: NodeID::ANY,
+                        span: Span::ANY,
+                        kind: PatternKind::Tuple(vec![
+                            Pattern {
+                                id: NodeID::ANY,
+                                span: Span::ANY,
+                                kind: PatternKind::Bind("a".into()),
+                            },
+                            Pattern {
+                                id: NodeID::ANY,
+                                span: Span::ANY,
+                                kind: PatternKind::Bind("b".into()),
+                            },
+                        ]),
+                    },
+                    iterable: Box::new(any_expr!(ExprKind::Variable("pairs".into()))),
+                    body: any_block!(vec![any_expr_stmt!(ExprKind::LiteralInt("123".into()))])
+                }
+            }
+        );
+    }
+
+    #[test]
     fn parses_empty_enum_decl() {
         let parsed = parse("enum Fizz {}");
 

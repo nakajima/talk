@@ -1,0 +1,29 @@
+import { Optional } from ./Optional.tlk
+import { Iterator } from ./Iterable.tlk
+
+public enum GeneratorState<Y> {
+	case yielded(Y)
+	case done
+}
+
+public struct Generator<Y, R> {
+	let poll: (Int, RawPtr, R) -> (Int, RawPtr, GeneratorState<Y>)
+	let state: Int
+	let state_data: RawPtr
+
+	func send(value: R) -> Optional<Y> {
+		let (new_state,new_data,result) = self.poll(self.state, self.state_data, value)
+		self.state = new_state
+		self.state_data = new_data
+		match result {
+			.yielded(y) -> Optional.some(y),
+			.done -> Optional.none
+		}
+	}
+}
+
+extend Generator<Y, Void>: Iterator<Y> {
+	func next() -> Optional<Y> {
+		self.send(())
+	}
+}

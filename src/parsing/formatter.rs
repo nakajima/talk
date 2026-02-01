@@ -516,7 +516,10 @@ impl<'a> Formatter<'a> {
                 } else {
                     text("<")
                         + join(
-                            generics.iter().map(|g| self.format_generic_decl(g)).collect(),
+                            generics
+                                .iter()
+                                .map(|g| self.format_generic_decl(g))
+                                .collect(),
                             text(", "),
                         )
                         + text(">")
@@ -653,6 +656,20 @@ impl<'a> Formatter<'a> {
                 }
                 concat_space(result, self.format_block(body))
             }
+            StmtKind::For {
+                pattern,
+                iterable,
+                body,
+            } => concat_space(
+                text("for"),
+                concat_space(
+                    self.format_pattern(pattern),
+                    concat_space(
+                        text("in"),
+                        concat_space(self.format_expr(iterable), self.format_block(body)),
+                    ),
+                ),
+            ),
         };
 
         self.decorators

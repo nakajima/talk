@@ -53,29 +53,29 @@ impl Nominal {
 
     pub fn substituted_variant_values(&self, type_args: &[Ty]) -> IndexMap<Label, Vec<Ty>> {
         let substitutions = self.substitutions(type_args);
-        self.variants
-            .clone()
-            .into_iter()
-            .fold(IndexMap::<Label, Vec<Ty>>::default(), |mut acc, (label, tys)| {
+        self.variants.clone().into_iter().fold(
+            IndexMap::<Label, Vec<Ty>>::default(),
+            |mut acc, (label, tys)| {
                 let values = tys
                     .into_iter()
                     .map(|t| substitutions.get(&t).unwrap_or(&t).clone())
                     .collect();
                 acc.insert(label, values);
                 acc
-            })
+            },
+        )
     }
 
     pub fn substitute_properties(&self, type_args: &[Ty]) -> IndexMap<Label, Ty> {
         let substitutions = self.substitutions(type_args);
-        self.properties
-            .clone()
-            .into_iter()
-            .fold(IndexMap::<Label, Ty>::default(), |mut acc, (label, ty)| {
+        self.properties.clone().into_iter().fold(
+            IndexMap::<Label, Ty>::default(),
+            |mut acc, (label, ty)| {
                 let t = substitutions.get(&ty);
                 acc.insert(label, t.unwrap_or(&ty).clone());
                 acc
-            })
+            },
+        )
     }
 }
 

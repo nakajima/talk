@@ -9,7 +9,9 @@ pub mod tests {
         diagnostic::{AnyDiagnostic, Diagnostic},
         ir::monomorphizer::uncurry_function,
         label::Label,
-        name_resolution::symbol::{EnumId, GlobalId, ProtocolId, StructId, Symbol, SynthesizedId, TypeParameterId},
+        name_resolution::symbol::{
+            EnumId, GlobalId, ProtocolId, StructId, Symbol, SynthesizedId, TypeParameterId,
+        },
         types::{
             conformance::ConformanceKey,
             infer_row::{Row, RowParamId},
@@ -917,6 +919,18 @@ pub mod tests {
     "#,
         );
         assert_eq!(ty(1, &ast, &types), Ty::Tuple(vec![Ty::Int, Ty::Bool]));
+    }
+
+    #[test]
+    fn concrete_func_type_annotation_works() {
+        // Test that we can have a let binding with a concrete function type annotation
+        let (ast, types) = typecheck(
+            r#"
+        let first: (Int, Bool) -> Int = func(a, b) { a }
+        first(1, true)
+    "#,
+        );
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
     }
 
     #[test]

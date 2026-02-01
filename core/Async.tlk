@@ -1,13 +1,40 @@
 import _ from ./IO.tlk
 
-public enum Poll<T> {
+public enum Poll<T, Y> {
+	case ready(T)
+	case pending(Y)
+}
+
+public enum FuturePoll<T> {
 	case ready(T)
 	case pending
 }
 
+public struct Waker {
+	let task_id: Int
+
+	init(task_id: Int) {
+		self.task_id = task_id
+		self
+	}
+}
+
+public struct Context {
+	let waker: Waker
+
+	init(waker: Waker) {
+		self.waker = waker
+		self
+	}
+}
+
 public protocol Future {
 	associated Output
-	func poll() -> Poll<Output>
+	func poll(cx: Context) -> FuturePoll<Output>
+}
+
+public protocol Generator<Y, R> {
+	func resume(value: R) -> Poll<R, Y>
 }
 
 public effect 'async() -> ()

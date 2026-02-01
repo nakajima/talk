@@ -265,16 +265,11 @@ impl<'a> PatternChecker<'a> {
     }
 
     fn check_match(&mut self, scrutinee: &TypedExpr, arms: &[TypedMatchArm]) {
-        let patterns: Vec<TypedPattern> =
-            arms.iter().map(|arm| arm.pattern.clone()).collect();
+        let patterns: Vec<TypedPattern> = arms.iter().map(|arm| arm.pattern.clone()).collect();
         self.check_match_patterns(scrutinee, &patterns);
     }
 
-    fn check_match_patterns(
-        &mut self,
-        scrutinee: &TypedExpr,
-        patterns: &[TypedPattern],
-    ) {
+    fn check_match_patterns(&mut self, scrutinee: &TypedExpr, patterns: &[TypedPattern]) {
         let mut matrix: PatternMatrix = vec![];
         for pattern in patterns {
             let row = vec![pattern.clone()];
@@ -302,11 +297,7 @@ impl<'a> PatternChecker<'a> {
         }
     }
 
-    fn build_match_plan(
-        &self,
-        scrutinee: &TypedExpr,
-        arms: &[TypedMatchArm],
-    ) -> MatchPlan {
+    fn build_match_plan(&self, scrutinee: &TypedExpr, arms: &[TypedMatchArm]) -> MatchPlan {
         let mut builder = MatchPlanBuilder::default();
         let scrutinee_value = builder.value(ValueRef::Scrutinee {
             ty: scrutinee.ty.clone(),
@@ -736,11 +727,7 @@ impl<'a> PatternChecker<'a> {
         result
     }
 
-    fn row_head_matches_constructor(
-        &self,
-        head: &TypedPattern,
-        constructor: &Constructor,
-    ) -> bool {
+    fn row_head_matches_constructor(&self, head: &TypedPattern, constructor: &Constructor) -> bool {
         if self.is_wildcard(head) {
             return true;
         }
@@ -825,11 +812,7 @@ impl<'a> PatternChecker<'a> {
         }
     }
 
-    fn record_subpatterns(
-        &self,
-        pattern: &TypedPattern,
-        row: &Row,
-    ) -> Vec<TypedPattern> {
+    fn record_subpatterns(&self, pattern: &TypedPattern, row: &Row) -> Vec<TypedPattern> {
         let TypedPatternKind::Record { fields } = &pattern.kind else {
             return vec![];
         };
@@ -928,11 +911,7 @@ impl<'a> PatternChecker<'a> {
         }
     }
 
-    fn check_record_pattern(
-        &mut self,
-        pattern: &TypedPattern,
-        fields: &[TypedRecordFieldPattern],
-    ) {
+    fn check_record_pattern(&mut self, pattern: &TypedPattern, fields: &[TypedRecordFieldPattern]) {
         let Ty::Record(_, row) = &pattern.ty else {
             return;
         };

@@ -9,12 +9,8 @@ use crate::{
     node_id::NodeID,
     node_kinds::inline_ir_instruction::TypedInlineIRInstruction,
     types::{
-        infer_row::Row,
-        infer_ty::Ty,
-        scheme::ForAll,
-        type_operations::UnificationSubstitutions,
-        type_session::TypeSession,
-        variational::DimensionId,
+        infer_row::Row, infer_ty::Ty, scheme::ForAll, type_operations::UnificationSubstitutions,
+        type_session::TypeSession, variational::DimensionId,
     },
 };
 
@@ -51,11 +47,7 @@ impl TypedAST {
         )
     }
 
-    pub fn mapping(
-        self,
-        m: &mut impl FnMut(Ty) -> Ty,
-        r: &mut impl FnMut(Row) -> Row,
-    ) -> Self {
+    pub fn mapping(self, m: &mut impl FnMut(Ty) -> Ty, r: &mut impl FnMut(Row) -> Row) -> Self {
         TypedAST {
             decls: self.decls.into_iter().map(|d| d.mapping(m, r)).collect(),
             stmts: self.stmts.into_iter().map(|d| d.mapping(m, r)).collect(),
@@ -82,11 +74,7 @@ pub struct TypedRecordFieldPattern {
 }
 
 impl TypedRecordFieldPattern {
-    pub fn mapping(
-        self,
-        m: &mut impl FnMut(Ty) -> Ty,
-        r: &mut impl FnMut(Row) -> Row,
-    ) -> Self {
+    pub fn mapping(self, m: &mut impl FnMut(Ty) -> Ty, r: &mut impl FnMut(Row) -> Row) -> Self {
         TypedRecordFieldPattern {
             id: self.id,
             kind: match self.kind {
@@ -149,11 +137,7 @@ pub enum TypedPatternKind {
 }
 
 impl TypedPatternKind {
-    pub fn mapping(
-        self,
-        m: &mut impl FnMut(Ty) -> Ty,
-        r: &mut impl FnMut(Row) -> Row,
-    ) -> Self {
+    pub fn mapping(self, m: &mut impl FnMut(Ty) -> Ty, r: &mut impl FnMut(Row) -> Row) -> Self {
         use TypedPatternKind::*;
         match self {
             LiteralInt(val) => LiteralInt(val),
@@ -210,11 +194,7 @@ pub struct TypedPattern {
 }
 
 impl TypedPattern {
-    pub fn mapping(
-        self,
-        m: &mut impl FnMut(Ty) -> Ty,
-        r: &mut impl FnMut(Row) -> Row,
-    ) -> Self {
+    pub fn mapping(self, m: &mut impl FnMut(Ty) -> Ty, r: &mut impl FnMut(Row) -> Row) -> Self {
         TypedPattern {
             id: self.id,
             ty: m(self.ty),
@@ -430,11 +410,7 @@ impl DriveMut for TypedDeclKind {
 }
 
 impl TypedDeclKind {
-    pub fn mapping(
-        self,
-        m: &mut impl FnMut(Ty) -> Ty,
-        r: &mut impl FnMut(Row) -> Row,
-    ) -> Self {
+    pub fn mapping(self, m: &mut impl FnMut(Ty) -> Ty, r: &mut impl FnMut(Row) -> Row) -> Self {
         use TypedDeclKind::*;
         match self {
             Let {
@@ -545,11 +521,7 @@ impl TypedNode {
         }
     }
 
-    pub fn mapping(
-        self,
-        m: &mut impl FnMut(Ty) -> Ty,
-        r: &mut impl FnMut(Row) -> Row,
-    ) -> Self {
+    pub fn mapping(self, m: &mut impl FnMut(Ty) -> Ty, r: &mut impl FnMut(Row) -> Row) -> Self {
         match self {
             TypedNode::Decl(typed_decl) => TypedNode::Decl(typed_decl.mapping(m, r)),
             TypedNode::Expr(typed_expr) => TypedNode::Expr(typed_expr.mapping(m, r)),
@@ -567,11 +539,7 @@ pub struct TypedStmt {
 }
 
 impl TypedStmt {
-    pub fn mapping(
-        self,
-        m: &mut impl FnMut(Ty) -> Ty,
-        r: &mut impl FnMut(Row) -> Row,
-    ) -> Self {
+    pub fn mapping(self, m: &mut impl FnMut(Ty) -> Ty, r: &mut impl FnMut(Row) -> Row) -> Self {
         TypedStmt {
             id: self.id,
             ty: m(self.ty),
@@ -596,11 +564,7 @@ pub enum TypedStmtKind {
 }
 
 impl TypedStmtKind {
-    pub fn mapping(
-        self,
-        m: &mut impl FnMut(Ty) -> Ty,
-        r: &mut impl FnMut(Row) -> Row,
-    ) -> Self {
+    pub fn mapping(self, m: &mut impl FnMut(Ty) -> Ty, r: &mut impl FnMut(Row) -> Row) -> Self {
         use TypedStmtKind::*;
         match self {
             Handler { effect, func } => Handler {
@@ -626,11 +590,7 @@ pub struct TypedDecl {
 }
 
 impl TypedDecl {
-    pub fn mapping(
-        self,
-        m: &mut impl FnMut(Ty) -> Ty,
-        r: &mut impl FnMut(Row) -> Row,
-    ) -> Self {
+    pub fn mapping(self, m: &mut impl FnMut(Ty) -> Ty, r: &mut impl FnMut(Row) -> Row) -> Self {
         TypedDecl {
             id: self.id,
             ty: m(self.ty),
@@ -648,11 +608,7 @@ pub struct TypedBlock {
 }
 
 impl TypedBlock {
-    pub fn mapping(
-        self,
-        m: &mut impl FnMut(Ty) -> Ty,
-        r: &mut impl FnMut(Row) -> Row,
-    ) -> Self {
+    pub fn mapping(self, m: &mut impl FnMut(Ty) -> Ty, r: &mut impl FnMut(Row) -> Row) -> Self {
         TypedBlock {
             id: self.id,
             body: self.body.into_iter().map(|e| e.mapping(m, r)).collect(),
@@ -698,11 +654,7 @@ pub struct TypedFunc {
 }
 
 impl TypedFunc {
-    pub fn mapping(
-        self,
-        m: &mut impl FnMut(Ty) -> Ty,
-        r: &mut impl FnMut(Row) -> Row,
-    ) -> Self {
+    pub fn mapping(self, m: &mut impl FnMut(Ty) -> Ty, r: &mut impl FnMut(Row) -> Row) -> Self {
         TypedFunc {
             name: self.name,
             foralls: self.foralls,
@@ -728,11 +680,7 @@ pub struct TypedMatchArm {
 }
 
 impl TypedMatchArm {
-    pub fn mapping(
-        self,
-        m: &mut impl FnMut(Ty) -> Ty,
-        r: &mut impl FnMut(Row) -> Row,
-    ) -> Self {
+    pub fn mapping(self, m: &mut impl FnMut(Ty) -> Ty, r: &mut impl FnMut(Row) -> Row) -> Self {
         TypedMatchArm {
             pattern: self.pattern.mapping(m, r),
             body: self.body.mapping(m, r),
@@ -815,11 +763,7 @@ pub enum TypedExprKind {
 }
 
 impl TypedExprKind {
-    pub fn mapping(
-        self,
-        m: &mut impl FnMut(Ty) -> Ty,
-        r: &mut impl FnMut(Row) -> Row,
-    ) -> Self {
+    pub fn mapping(self, m: &mut impl FnMut(Ty) -> Ty, r: &mut impl FnMut(Row) -> Row) -> Self {
         use TypedExprKind::*;
         match self {
             Hole => Hole,
@@ -909,11 +853,7 @@ pub struct TypedExpr {
 }
 
 impl TypedExpr {
-    pub fn mapping(
-        self,
-        m: &mut impl FnMut(Ty) -> Ty,
-        r: &mut impl FnMut(Row) -> Row,
-    ) -> Self {
+    pub fn mapping(self, m: &mut impl FnMut(Ty) -> Ty, r: &mut impl FnMut(Row) -> Row) -> Self {
         TypedExpr {
             id: self.id,
             ty: m(self.ty),

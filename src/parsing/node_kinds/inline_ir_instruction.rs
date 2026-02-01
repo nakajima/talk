@@ -10,11 +10,7 @@ use crate::{
     },
     span::Span,
     token_kind::TokenKind,
-    types::{
-        infer_row::Row,
-        infer_ty::Ty,
-        typed_ast::TypedExpr,
-    },
+    types::{infer_row::Row, infer_ty::Ty, typed_ast::TypedExpr},
 };
 use std::fmt::Display;
 
@@ -242,11 +238,7 @@ pub struct TypedInlineIRInstruction {
 }
 
 impl TypedInlineIRInstruction {
-    pub fn mapping(
-        self,
-        m: &mut impl FnMut(Ty) -> Ty,
-        r: &mut impl FnMut(Row) -> Row,
-    ) -> Self {
+    pub fn mapping(self, m: &mut impl FnMut(Ty) -> Ty, r: &mut impl FnMut(Row) -> Row) -> Self {
         TypedInlineIRInstruction {
             id: self.id,
             span: self.span,

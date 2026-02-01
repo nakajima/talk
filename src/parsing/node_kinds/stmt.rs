@@ -4,7 +4,7 @@ use crate::{
     impl_into_node,
     name::Name,
     node_id::NodeID,
-    node_kinds::{block::Block, expr::Expr},
+    node_kinds::{block::Block, expr::Expr, pattern::Pattern},
     parsing::span::Span,
 };
 
@@ -20,6 +20,11 @@ pub enum StmtKind {
     Break,
     Assignment(Box<Expr> /* LHS */, Box<Expr> /* RHS */),
     Loop(Option<Expr> /* condition */, Block /* body */),
+    For {
+        pattern: Pattern,
+        iterable: Box<Expr>,
+        body: Block,
+    },
     Continue(Option<Expr>),
     Handling {
         #[drive(skip)]

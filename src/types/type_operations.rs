@@ -56,10 +56,7 @@ impl InstantiationSubstitutions {
     }
 
     pub(super) fn insert_ty(&mut self, node_id: NodeID, type_param: Symbol, meta: MetaVarId) {
-        self.ty
-            .entry(node_id)
-            .or_default()
-            .insert(type_param, meta);
+        self.ty.entry(node_id).or_default().insert(type_param, meta);
     }
 
     pub(super) fn insert_row(
@@ -355,9 +352,7 @@ pub(super) fn unify(
         return Ok(Default::default());
     }
 
-    if matches!(lhs, Ty::Primitive(Symbol::Never))
-        || matches!(rhs, Ty::Primitive(Symbol::Never))
-    {
+    if matches!(lhs, Ty::Primitive(Symbol::Never)) || matches!(rhs, Ty::Primitive(Symbol::Never)) {
         return Ok(Default::default());
     }
 
@@ -438,10 +433,7 @@ pub(super) fn unify(
             Ok(result)
         }
         // (Ty::TypeConstructor(lhs), Ty::TypeConstructor(rhs)) if lhs == rhs => Ok(false),
-        (
-            Ty::Func(lhs_param, lhs_ret, lhs_effects),
-            Ty::Func(rhs_param, rhs_ret, rhs_effects),
-        ) => {
+        (Ty::Func(lhs_param, lhs_ret, lhs_effects), Ty::Func(rhs_param, rhs_ret, rhs_effects)) => {
             result.extend(unify(lhs_param, rhs_param, context, session)?);
             result.extend(unify(lhs_ret, rhs_ret, context, session)?);
             result.extend(unify_rows(
@@ -533,21 +525,13 @@ pub(super) fn unify(
         _ => {
             let applied_lhs = session.apply(&lhs, &mut context.substitutions_mut());
             let applied_rhs = session.apply(&rhs, &mut context.substitutions_mut());
-            tracing::error!(
-                "attempted to unify {:?} <> {:?}",
-                applied_lhs,
-                applied_rhs
-            );
+            tracing::error!("attempted to unify {:?} <> {:?}", applied_lhs, applied_rhs);
             Err(TypeError::invalid_unification(lhs.clone(), rhs.clone()))
         }
     }
 }
 
-pub fn curry<I: IntoIterator<Item = Ty>>(
-    params: I,
-    ret: Ty,
-    effects: Box<Row>,
-) -> Ty {
+pub fn curry<I: IntoIterator<Item = Ty>>(params: I, ret: Ty, effects: Box<Row>) -> Ty {
     let mut params = params.into_iter().collect_vec();
     if params.is_empty() {
         params.push(Ty::Void);
@@ -561,10 +545,7 @@ pub fn curry<I: IntoIterator<Item = Ty>>(
         })
 }
 
-pub(super) fn substitute_row(
-    row: &Row,
-    substitutions: &FxHashMap<Ty, Ty>,
-) -> Row {
+pub(super) fn substitute_row(row: &Row, substitutions: &FxHashMap<Ty, Ty>) -> Row {
     match row {
         Row::Empty | Row::Var(..) | Row::Param(..) => row.clone(),
         Row::Extend { row, label, ty } => Row::Extend {
@@ -575,13 +556,8 @@ pub(super) fn substitute_row(
     }
 }
 
-pub(super) fn substitute_mult(
-    ty: &[Ty],
-    substitutions: &FxHashMap<Ty, Ty>,
-) -> Vec<Ty> {
-    ty.iter()
-        .map(|t| substitute(t, substitutions))
-        .collect()
+pub(super) fn substitute_mult(ty: &[Ty], substitutions: &FxHashMap<Ty, Ty>) -> Vec<Ty> {
+    ty.iter().map(|t| substitute(t, substitutions)).collect()
 }
 
 pub(super) fn substitute(ty: &Ty, substitutions: &FxHashMap<Ty, Ty>) -> Ty {

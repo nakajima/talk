@@ -17,11 +17,8 @@ use crate::{
     name_resolution::symbol::Symbol,
     node_id::NodeID,
     types::{
-        conformance::ConformanceKey,
-        passes::specialization_pass::SpecializedCallee,
-        infer_row::Specializations,
-        infer_ty::Ty,
-        types::Types,
+        conformance::ConformanceKey, infer_row::Specializations, infer_ty::Ty,
+        passes::specialization_pass::SpecializedCallee, types::Types,
     },
 };
 
@@ -133,7 +130,9 @@ impl<'a> Monomorphizer<'a> {
                     if result.contains_key(&specialized_sym) {
                         continue; // Already generated
                     }
-                    let Some(specialized_callee) = self.specialized_callees.get(&specialized_sym).cloned() else {
+                    let Some(specialized_callee) =
+                        self.specialized_callees.get(&specialized_sym).cloned()
+                    else {
                         continue;
                     };
                     // Get the poly function from external module if needed
@@ -206,7 +205,9 @@ impl<'a> Monomorphizer<'a> {
             blocks: func
                 .blocks
                 .into_iter()
-                .map(|b| self.monomorphize_block(b, &Default::default(), receiver_ty.as_ref(), None))
+                .map(|b| {
+                    self.monomorphize_block(b, &Default::default(), receiver_ty.as_ref(), None)
+                })
                 .collect(),
             register_count: func.register_count,
             self_out: func.self_out,
@@ -237,7 +238,9 @@ impl<'a> Monomorphizer<'a> {
             instructions: block
                 .instructions
                 .into_iter()
-                .map(|i| self.monomorphize_instruction(i, substitutions, receiver_ty, specialized_caller))
+                .map(|i| {
+                    self.monomorphize_instruction(i, substitutions, receiver_ty, specialized_caller)
+                })
                 .collect(),
             terminator: self.monomorphize_terminator(block.terminator, substitutions),
         }
@@ -306,7 +309,8 @@ impl<'a> Monomorphizer<'a> {
                         });
                         // Look up by (caller, call_site) - aligns with paper's dimension model
                         if let Some(call_id) = call_id
-                            && let Some(specialized_sym) = self.call_resolutions.get(&(caller, *call_id))
+                            && let Some(specialized_sym) =
+                                self.call_resolutions.get(&(caller, *call_id))
                         {
                             Value::Func(*specialized_sym)
                         } else {
@@ -357,7 +361,6 @@ impl<'a> Monomorphizer<'a> {
         instruction.map_type(|ty| self.monomorphize_ty(ty, substitutions))
     }
 
-
     /// Resolve a method requirement to a concrete witness implementation
     fn resolve_method_requirement(
         &self,
@@ -366,16 +369,23 @@ impl<'a> Monomorphizer<'a> {
         receiver_ty: Option<&Ty>,
     ) -> Option<Symbol> {
         // Find the protocol for this method requirement
-        let protocol_sym = self.types.catalog.protocol_for_method_requirement(method_req)?;
+        let protocol_sym = self
+            .types
+            .catalog
+            .protocol_for_method_requirement(method_req)?;
         let Symbol::Protocol(protocol_id) = protocol_sym else {
             return None;
         };
 
         // Find the label for this method requirement
         let method_reqs = self.types.catalog.method_requirements.get(&protocol_sym)?;
-        let label = method_reqs
-            .iter()
-            .find_map(|(label, sym)| if sym == method_req { Some(label.clone()) } else { None })?;
+        let label = method_reqs.iter().find_map(|(label, sym)| {
+            if sym == method_req {
+                Some(label.clone())
+            } else {
+                None
+            }
+        })?;
 
         // Collect candidate types: from substitutions plus explicit receiver type
         let mut candidates: Vec<&Ty> = substitutions.ty.values().collect();
@@ -397,9 +407,10 @@ impl<'a> Monomorphizer<'a> {
             };
 
             if let Some(conformance) = self.types.catalog.conformances.get(&key)
-                && let Some(witness) = conformance.witnesses.get_witness(&label, method_req) {
-                    return Some(witness);
-                }
+                && let Some(witness) = conformance.witnesses.get_witness(&label, method_req)
+            {
+                return Some(witness);
+            }
         }
 
         None
@@ -549,7 +560,12 @@ impl<'a> Monomorphizer<'a> {
                 .clone()
                 .into_iter()
                 .map(|b| {
-                    self.monomorphize_block(b, &specialization.specializations, receiver_ty.as_ref(), Some(specialized_name))
+                    self.monomorphize_block(
+                        b,
+                        &specialization.specializations,
+                        receiver_ty.as_ref(),
+                        Some(specialized_name),
+                    )
                 })
                 .collect(),
             self_out: func.self_out,

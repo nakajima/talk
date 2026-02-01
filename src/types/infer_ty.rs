@@ -187,7 +187,11 @@ impl Ty {
 
     /// Visit all types and rows in the tree, returning early if the visitor returns true.
     /// This does NOT clone the tree and is more efficient for read-only traversal.
-    pub fn visit(&self, ty_visitor: &mut impl FnMut(&Ty) -> bool, row_visitor: &mut impl FnMut(&Row) -> bool) -> bool {
+    pub fn visit(
+        &self,
+        ty_visitor: &mut impl FnMut(&Ty) -> bool,
+        row_visitor: &mut impl FnMut(&Row) -> bool,
+    ) -> bool {
         if ty_visitor(self) {
             return true;
         }
@@ -204,7 +208,9 @@ impl Ty {
             }
             Ty::Tuple(items) => items.iter().any(|i| i.visit(ty_visitor, row_visitor)),
             Ty::Record(_, row) => row.visit_ty(ty_visitor, row_visitor),
-            Ty::Nominal { type_args, .. } => type_args.iter().any(|a| a.visit(ty_visitor, row_visitor)),
+            Ty::Nominal { type_args, .. } => {
+                type_args.iter().any(|a| a.visit(ty_visitor, row_visitor))
+            }
             _ => false,
         }
     }
@@ -237,10 +243,9 @@ impl Ty {
     }
 
     pub fn contains_var(&self) -> bool {
-        self.visit(
-            &mut |t| matches!(t, Ty::Var { .. }),
-            &mut |r| matches!(r, Row::Var(..)),
-        )
+        self.visit(&mut |t| matches!(t, Ty::Var { .. }), &mut |r| {
+            matches!(r, Row::Var(..))
+        })
     }
 
     pub fn import(self, module_id: ModuleId) -> Self {
@@ -496,4 +501,3 @@ impl std::fmt::Debug for Ty {
         }
     }
 }
-

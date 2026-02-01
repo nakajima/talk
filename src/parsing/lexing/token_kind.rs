@@ -17,6 +17,7 @@ pub enum TokenKind {
     If,
     Else,
     Loop,
+    For,
     Return,
     Continue,
 
@@ -121,6 +122,7 @@ impl TokenKind {
             TokenKind::Associated => "associated",
             TokenKind::Else => "else",
             TokenKind::Loop => "loop",
+            TokenKind::For => "for",
             TokenKind::Return => "return",
             TokenKind::True => "true",
             TokenKind::False => "false",

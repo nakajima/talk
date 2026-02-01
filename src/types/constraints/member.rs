@@ -74,8 +74,7 @@ impl Member {
                 return SolveResult::Defer(DeferralReason::WaitingOnMeta(Meta::Ty(*id)));
             }
             Ty::Rigid(id) => {
-                let Some(Ty::Param(type_param_id, _)) =
-                    session.skolem_map.get(&Ty::Rigid(*id))
+                let Some(Ty::Param(type_param_id, _)) = session.skolem_map.get(&Ty::Rigid(*id))
                 else {
                     unreachable!();
                 };
@@ -395,11 +394,7 @@ impl Member {
                             context.instantiations_mut(),
                             level,
                         );
-                        curry(
-                            instantiated_variants,
-                            instantiated_enum,
-                            Row::Empty.into(),
-                        )
+                        curry(instantiated_variants, instantiated_enum, Row::Empty.into())
                     }
                 }
             } else {

@@ -1,7 +1,7 @@
 use async_lsp::lsp_types::{Location, Position, Range, Url};
 
-use crate::analysis::{node_ids_at_offset, resolve_member_symbol, span_contains};
 use crate::analysis::workspace::Workspace as AnalysisWorkspace;
+use crate::analysis::{node_ids_at_offset, resolve_member_symbol, span_contains};
 use crate::compiling::module::ModuleId;
 use crate::name_resolution::symbol::Symbol;
 
@@ -24,7 +24,8 @@ pub fn goto_definition(
     for (node_id, meta) in ast.meta.iter() {
         if meta.start.start <= byte_offset && byte_offset <= meta.end.end {
             if let Some(crate::node::Node::Decl(ref decl)) = ast.find(*node_id) {
-                if let Some(location) = goto_definition_from_import(module, uri, decl, byte_offset) {
+                if let Some(location) = goto_definition_from_import(module, uri, decl, byte_offset)
+                {
                     return Some(location);
                 }
             }
@@ -165,7 +166,10 @@ fn goto_definition_from_import(
 }
 
 /// Resolve an import path relative to the importing file's URI.
-fn resolve_import_path(uri: &Url, import_path: &crate::node_kinds::decl::ImportPath) -> Option<std::path::PathBuf> {
+fn resolve_import_path(
+    uri: &Url,
+    import_path: &crate::node_kinds::decl::ImportPath,
+) -> Option<std::path::PathBuf> {
     use crate::node_kinds::decl::ImportPath;
 
     match import_path {
@@ -313,7 +317,10 @@ pub(crate) fn definition_location_for_symbol(
     definition_location_in_module(module, symbol)
 }
 
-pub(crate) fn definition_location_in_module(module: &AnalysisWorkspace, symbol: Symbol) -> Option<Location> {
+pub(crate) fn definition_location_in_module(
+    module: &AnalysisWorkspace,
+    symbol: Symbol,
+) -> Option<Location> {
     let def_node = *module.resolved_names.symbols_to_node.get(&symbol)?;
     let file_id = def_node.0;
     let doc_id = module.file_id_to_document.get(file_id.0 as usize)?;

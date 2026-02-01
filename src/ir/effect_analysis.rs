@@ -1,7 +1,11 @@
 //! Analysis pass for effectful functions to prepare for state machine compilation.
 //!
-//! This module analyzes functions that use effects to identify yield points
-//! (effect calls) and determine which variables are live at each point.
+//! This module analyzes functions that use effects or yield calls to identify yield points
+//! and determine which variables are live at each point.
+//!
+//! A function compiles to a state machine if it contains:
+//! - Effect calls (e.g., `'async()`)
+//! - Calls to the `yield` builtin (e.g., `yield(value)`)
 
 use indexmap::IndexSet;
 use rustc_hash::FxHashSet;
@@ -12,19 +16,28 @@ use crate::{
     types::{
         infer_ty::Ty,
         typed_ast::{
-            TypedBlock, TypedDecl, TypedDeclKind, TypedExpr, TypedExprKind, TypedFunc,
-            TypedNode, TypedPattern, TypedPatternKind, TypedStmt, TypedStmtKind,
+            TypedBlock, TypedDecl, TypedDeclKind, TypedExpr, TypedExprKind, TypedFunc, TypedNode,
+            TypedPattern, TypedPatternKind, TypedStmt, TypedStmtKind,
         },
     },
 };
 
-/// A yield point is an effect call site where execution can suspend.
+/// The kind of yield point - either an effect call or a yield builtin call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum YieldPointKind {
+    /// An effect call (e.g., `'async()`)
+    Effect(Symbol),
+    /// A call to the yield builtin (e.g., `yield(value)`)
+    YieldBuiltin,
+}
+
+/// A yield point is a call site where execution can suspend.
 #[derive(Debug, Clone)]
 pub struct YieldPoint {
-    /// The AST node ID of the effect call expression
+    /// The AST node ID of the yield expression
     pub expr_id: NodeID,
-    /// The effect being called
-    pub effect: Symbol,
+    /// What kind of yield point this is
+    pub kind: YieldPointKind,
     /// Variables that are live (needed after this yield point)
     pub live_vars: Vec<(Symbol, Ty)>,
     /// The state index after this yield point resumes
@@ -68,13 +81,27 @@ impl EffectAnalysis {
     }
 
     /// Analyze a function to find yield points and compute live variables.
-    /// Returns None if the function has no effects (not effectful).
+    /// This version finds ALL yield points (effect calls AND yield builtin calls).
+    /// Returns None if the function has no yield points.
     pub fn analyze(func: &TypedFunc, get_ty: impl Fn(&Symbol) -> Option<Ty>) -> Option<Self> {
-        // Check if function has effects
-        if func.effects.is_empty() {
-            return None;
-        }
+        Self::analyze_impl(func, get_ty, true)
+    }
 
+    /// Analyze a function to find only yield builtin calls (not effect calls).
+    /// Returns None if the function has no yield builtin calls.
+    /// This is used to determine if a function should compile to a state machine.
+    pub fn analyze_yield_only(
+        func: &TypedFunc,
+        get_ty: impl Fn(&Symbol) -> Option<Ty>,
+    ) -> Option<Self> {
+        Self::analyze_impl(func, get_ty, false)
+    }
+
+    fn analyze_impl(
+        func: &TypedFunc,
+        get_ty: impl Fn(&Symbol) -> Option<Ty>,
+        include_effects: bool,
+    ) -> Option<Self> {
         let mut analysis = Self::new();
 
         // Collect effect symbols
@@ -82,7 +109,7 @@ impl EffectAnalysis {
             analysis.effects.push(effect.name);
         }
 
-        // Find all effect call sites and collect all bindings
+        // Find yield points and collect all bindings
         let mut yield_points = Vec::new();
         let mut all_bindings: IndexSet<Symbol> = IndexSet::new();
 
@@ -91,8 +118,13 @@ impl EffectAnalysis {
             all_bindings.insert(param.name);
         }
 
-        // Walk the AST to find effect calls and collect bindings
-        Self::find_yields_and_bindings(&func.body, &mut yield_points, &mut all_bindings);
+        // Walk the AST to find yield points and collect bindings
+        Self::find_yields_and_bindings_impl(
+            &func.body,
+            &mut yield_points,
+            &mut all_bindings,
+            include_effects,
+        );
 
         if yield_points.is_empty() {
             return None;
@@ -100,7 +132,7 @@ impl EffectAnalysis {
 
         // For each yield point, compute live variables (variables defined before
         // and used after this point)
-        for (expr_id, effect) in yield_points.iter() {
+        for (expr_id, kind) in yield_points.iter() {
             // Collect variables defined before this yield point
             let mut defined_before: FxHashSet<Symbol> = FxHashSet::default();
             for param in &func.params {
@@ -121,39 +153,49 @@ impl EffectAnalysis {
                 })
                 .collect();
 
-            analysis.add_yield_point(*expr_id, *effect, live_vars);
+            analysis.add_yield_point(*expr_id, *kind, live_vars);
         }
 
         Some(analysis)
     }
 
-    /// Walk the AST to find effect call expressions and collect all bindings
-    fn find_yields_and_bindings(
+    /// Walk the AST to find yield point expressions and collect all bindings.
+    /// If include_effects is true, effect calls are also considered yield points.
+    fn find_yields_and_bindings_impl(
         block: &TypedBlock,
-        yield_points: &mut Vec<(NodeID, Symbol)>,
+        yield_points: &mut Vec<(NodeID, YieldPointKind)>,
         bindings: &mut IndexSet<Symbol>,
+        include_effects: bool,
     ) {
         for node in &block.body {
-            Self::find_yields_in_node(node, yield_points, bindings);
+            Self::find_yields_in_node_impl(node, yield_points, bindings, include_effects);
         }
     }
 
-    fn find_yields_in_node(
+    fn find_yields_in_node_impl(
         node: &TypedNode,
-        yield_points: &mut Vec<(NodeID, Symbol)>,
+        yield_points: &mut Vec<(NodeID, YieldPointKind)>,
         bindings: &mut IndexSet<Symbol>,
+        include_effects: bool,
     ) {
         match node {
-            TypedNode::Expr(expr) => Self::find_yields_in_expr(expr, yield_points, bindings),
-            TypedNode::Stmt(stmt) => Self::find_yields_in_stmt(stmt, yield_points, bindings),
-            TypedNode::Decl(decl) => Self::find_yields_in_decl(decl, yield_points, bindings),
+            TypedNode::Expr(expr) => {
+                Self::find_yields_in_expr_impl(expr, yield_points, bindings, include_effects)
+            }
+            TypedNode::Stmt(stmt) => {
+                Self::find_yields_in_stmt_impl(stmt, yield_points, bindings, include_effects)
+            }
+            TypedNode::Decl(decl) => {
+                Self::find_yields_in_decl_impl(decl, yield_points, bindings, include_effects)
+            }
         }
     }
 
-    fn find_yields_in_decl(
+    fn find_yields_in_decl_impl(
         decl: &TypedDecl,
-        yield_points: &mut Vec<(NodeID, Symbol)>,
+        yield_points: &mut Vec<(NodeID, YieldPointKind)>,
         bindings: &mut IndexSet<Symbol>,
+        include_effects: bool,
     ) {
         if let TypedDeclKind::Let {
             pattern,
@@ -166,35 +208,36 @@ impl EffectAnalysis {
 
             // Check initializer for yields
             if let Some(init) = initializer {
-                Self::find_yields_in_expr(init, yield_points, bindings);
+                Self::find_yields_in_expr_impl(init, yield_points, bindings, include_effects);
             }
         }
     }
 
-    fn find_yields_in_stmt(
+    fn find_yields_in_stmt_impl(
         stmt: &TypedStmt,
-        yield_points: &mut Vec<(NodeID, Symbol)>,
+        yield_points: &mut Vec<(NodeID, YieldPointKind)>,
         bindings: &mut IndexSet<Symbol>,
+        include_effects: bool,
     ) {
         match &stmt.kind {
             TypedStmtKind::Expr(expr) => {
-                Self::find_yields_in_expr(expr, yield_points, bindings);
+                Self::find_yields_in_expr_impl(expr, yield_points, bindings, include_effects);
             }
             TypedStmtKind::Assignment(lhs, rhs) => {
-                Self::find_yields_in_expr(lhs, yield_points, bindings);
-                Self::find_yields_in_expr(rhs, yield_points, bindings);
+                Self::find_yields_in_expr_impl(lhs, yield_points, bindings, include_effects);
+                Self::find_yields_in_expr_impl(rhs, yield_points, bindings, include_effects);
             }
             TypedStmtKind::Return(Some(expr)) => {
-                Self::find_yields_in_expr(expr, yield_points, bindings);
+                Self::find_yields_in_expr_impl(expr, yield_points, bindings, include_effects);
             }
             TypedStmtKind::Return(None) => {}
             TypedStmtKind::Continue(Some(expr)) => {
-                Self::find_yields_in_expr(expr, yield_points, bindings);
+                Self::find_yields_in_expr_impl(expr, yield_points, bindings, include_effects);
             }
             TypedStmtKind::Continue(None) => {}
             TypedStmtKind::Loop(cond, body) => {
-                Self::find_yields_in_expr(cond, yield_points, bindings);
-                Self::find_yields_and_bindings(body, yield_points, bindings);
+                Self::find_yields_in_expr_impl(cond, yield_points, bindings, include_effects);
+                Self::find_yields_and_bindings_impl(body, yield_points, bindings, include_effects);
             }
             TypedStmtKind::Break => {}
             TypedStmtKind::Handler { func, .. } => {
@@ -204,55 +247,91 @@ impl EffectAnalysis {
         }
     }
 
-    fn find_yields_in_expr(
+    fn find_yields_in_expr_impl(
         expr: &TypedExpr,
-        yield_points: &mut Vec<(NodeID, Symbol)>,
+        yield_points: &mut Vec<(NodeID, YieldPointKind)>,
         bindings: &mut IndexSet<Symbol>,
+        include_effects: bool,
     ) {
         match &expr.kind {
             TypedExprKind::CallEffect { effect, args, .. } => {
-                // This is a yield point!
-                yield_points.push((expr.id, *effect));
+                // Effect call is a yield point only if include_effects is true
+                if include_effects {
+                    yield_points.push((expr.id, YieldPointKind::Effect(*effect)));
+                }
                 // Check args for nested yields
                 for arg in args {
-                    Self::find_yields_in_expr(arg, yield_points, bindings);
+                    Self::find_yields_in_expr_impl(arg, yield_points, bindings, include_effects);
                 }
             }
             TypedExprKind::Call { callee, args, .. } => {
-                Self::find_yields_in_expr(callee, yield_points, bindings);
+                // Check if this is a yield builtin call
+                if let TypedExprKind::Variable(sym) = &callee.kind {
+                    if *sym == Symbol::YIELD {
+                        // yield builtin call is always a yield point
+                        yield_points.push((expr.id, YieldPointKind::YieldBuiltin));
+                        // Check args for nested yields (though typically yield has one arg)
+                        for arg in args {
+                            Self::find_yields_in_expr_impl(
+                                arg,
+                                yield_points,
+                                bindings,
+                                include_effects,
+                            );
+                        }
+                        return;
+                    }
+                }
+                // Regular call - check callee and args for nested yields
+                Self::find_yields_in_expr_impl(callee, yield_points, bindings, include_effects);
                 for arg in args {
-                    Self::find_yields_in_expr(arg, yield_points, bindings);
+                    Self::find_yields_in_expr_impl(arg, yield_points, bindings, include_effects);
                 }
             }
             TypedExprKind::Block(block) => {
-                Self::find_yields_and_bindings(block, yield_points, bindings);
+                Self::find_yields_and_bindings_impl(block, yield_points, bindings, include_effects);
             }
             TypedExprKind::If(cond, conseq, alt) => {
-                Self::find_yields_in_expr(cond, yield_points, bindings);
-                Self::find_yields_and_bindings(conseq, yield_points, bindings);
-                Self::find_yields_and_bindings(alt, yield_points, bindings);
+                Self::find_yields_in_expr_impl(cond, yield_points, bindings, include_effects);
+                Self::find_yields_and_bindings_impl(
+                    conseq,
+                    yield_points,
+                    bindings,
+                    include_effects,
+                );
+                Self::find_yields_and_bindings_impl(alt, yield_points, bindings, include_effects);
             }
             TypedExprKind::Match(scrutinee, arms) => {
-                Self::find_yields_in_expr(scrutinee, yield_points, bindings);
+                Self::find_yields_in_expr_impl(scrutinee, yield_points, bindings, include_effects);
                 for arm in arms {
                     Self::collect_pattern_bindings(&arm.pattern, bindings);
-                    Self::find_yields_and_bindings(&arm.body, yield_points, bindings);
+                    Self::find_yields_and_bindings_impl(
+                        &arm.body,
+                        yield_points,
+                        bindings,
+                        include_effects,
+                    );
                 }
             }
             TypedExprKind::Func(_) => {
                 // Don't descend into nested functions
             }
             TypedExprKind::Member { receiver, .. } => {
-                Self::find_yields_in_expr(receiver, yield_points, bindings);
+                Self::find_yields_in_expr_impl(receiver, yield_points, bindings, include_effects);
             }
             TypedExprKind::Tuple(exprs) | TypedExprKind::LiteralArray(exprs) => {
                 for e in exprs {
-                    Self::find_yields_in_expr(e, yield_points, bindings);
+                    Self::find_yields_in_expr_impl(e, yield_points, bindings, include_effects);
                 }
             }
             TypedExprKind::RecordLiteral { fields } => {
                 for field in fields {
-                    Self::find_yields_in_expr(&field.value, yield_points, bindings);
+                    Self::find_yields_in_expr_impl(
+                        &field.value,
+                        yield_points,
+                        bindings,
+                        include_effects,
+                    );
                 }
             }
             // Leaf expressions - no nested yields
@@ -354,28 +433,44 @@ impl EffectAnalysis {
             return true;
         }
         match &expr.kind {
-            TypedExprKind::CallEffect { args, .. } => args.iter().any(|a| Self::expr_contains_id(a, target_id)),
+            TypedExprKind::CallEffect { args, .. } => {
+                args.iter().any(|a| Self::expr_contains_id(a, target_id))
+            }
             TypedExprKind::Call { callee, args, .. } => {
                 Self::expr_contains_id(callee, target_id)
                     || args.iter().any(|a| Self::expr_contains_id(a, target_id))
             }
-            TypedExprKind::Block(block) => block.body.iter().any(|n| Self::node_contains_id(n, target_id)),
+            TypedExprKind::Block(block) => block
+                .body
+                .iter()
+                .any(|n| Self::node_contains_id(n, target_id)),
             TypedExprKind::If(cond, conseq, alt) => {
                 Self::expr_contains_id(cond, target_id)
-                    || conseq.body.iter().any(|n| Self::node_contains_id(n, target_id))
-                    || alt.body.iter().any(|n| Self::node_contains_id(n, target_id))
+                    || conseq
+                        .body
+                        .iter()
+                        .any(|n| Self::node_contains_id(n, target_id))
+                    || alt
+                        .body
+                        .iter()
+                        .any(|n| Self::node_contains_id(n, target_id))
             }
             TypedExprKind::Match(scrutinee, arms) => {
                 Self::expr_contains_id(scrutinee, target_id)
-                    || arms.iter().any(|arm| arm.body.body.iter().any(|n| Self::node_contains_id(n, target_id)))
+                    || arms.iter().any(|arm| {
+                        arm.body
+                            .body
+                            .iter()
+                            .any(|n| Self::node_contains_id(n, target_id))
+                    })
             }
             TypedExprKind::Member { receiver, .. } => Self::expr_contains_id(receiver, target_id),
             TypedExprKind::Tuple(exprs) | TypedExprKind::LiteralArray(exprs) => {
                 exprs.iter().any(|e| Self::expr_contains_id(e, target_id))
             }
-            TypedExprKind::RecordLiteral { fields } => {
-                fields.iter().any(|f| Self::expr_contains_id(&f.value, target_id))
-            }
+            TypedExprKind::RecordLiteral { fields } => fields
+                .iter()
+                .any(|f| Self::expr_contains_id(&f.value, target_id)),
             _ => false,
         }
     }
@@ -390,14 +485,21 @@ impl EffectAnalysis {
             TypedStmtKind::Continue(Some(expr)) => Self::expr_contains_id(expr, target_id),
             TypedStmtKind::Loop(cond, body) => {
                 Self::expr_contains_id(cond, target_id)
-                    || body.body.iter().any(|n| Self::node_contains_id(n, target_id))
+                    || body
+                        .body
+                        .iter()
+                        .any(|n| Self::node_contains_id(n, target_id))
             }
             _ => false,
         }
     }
 
     fn decl_contains_id(decl: &TypedDecl, target_id: NodeID) -> bool {
-        if let TypedDeclKind::Let { initializer: Some(init), .. } = &decl.kind {
+        if let TypedDeclKind::Let {
+            initializer: Some(init),
+            ..
+        } = &decl.kind
+        {
             Self::expr_contains_id(init, target_id)
         } else {
             false
@@ -453,7 +555,12 @@ impl EffectAnalysis {
             }
             TypedExprKind::Match(_, arms) => {
                 for arm in arms {
-                    if arm.body.body.iter().any(|n| Self::node_contains_id(n, target_id)) {
+                    if arm
+                        .body
+                        .body
+                        .iter()
+                        .any(|n| Self::node_contains_id(n, target_id))
+                    {
                         Self::collect_pattern_bindings_hash(&arm.pattern, defined);
                         Self::collect_definitions_before(&arm.body, target_id, defined);
                     }
@@ -575,20 +682,32 @@ impl EffectAnalysis {
         }
     }
 
-    fn collect_uses_in_node_suffix(node: &TypedNode, target_id: NodeID, used: &mut FxHashSet<Symbol>) {
+    fn collect_uses_in_node_suffix(
+        node: &TypedNode,
+        target_id: NodeID,
+        used: &mut FxHashSet<Symbol>,
+    ) {
         match node {
             TypedNode::Expr(expr) => Self::collect_uses_in_expr_suffix(expr, target_id, used),
             TypedNode::Stmt(stmt) => Self::collect_uses_in_stmt_suffix(stmt, target_id, used),
             TypedNode::Decl(decl) => {
                 // For let declarations, uses after the target in initializer
-                if let TypedDeclKind::Let { initializer: Some(init), .. } = &decl.kind {
+                if let TypedDeclKind::Let {
+                    initializer: Some(init),
+                    ..
+                } = &decl.kind
+                {
                     Self::collect_uses_in_expr_suffix(init, target_id, used);
                 }
             }
         }
     }
 
-    fn collect_uses_in_stmt_suffix(stmt: &TypedStmt, target_id: NodeID, used: &mut FxHashSet<Symbol>) {
+    fn collect_uses_in_stmt_suffix(
+        stmt: &TypedStmt,
+        target_id: NodeID,
+        used: &mut FxHashSet<Symbol>,
+    ) {
         match &stmt.kind {
             TypedStmtKind::Loop(_, body) => {
                 Self::collect_uses_after(body, target_id, used);
@@ -597,7 +716,11 @@ impl EffectAnalysis {
         }
     }
 
-    fn collect_uses_in_expr_suffix(expr: &TypedExpr, target_id: NodeID, used: &mut FxHashSet<Symbol>) {
+    fn collect_uses_in_expr_suffix(
+        expr: &TypedExpr,
+        target_id: NodeID,
+        used: &mut FxHashSet<Symbol>,
+    ) {
         match &expr.kind {
             TypedExprKind::Block(block) => {
                 Self::collect_uses_after(block, target_id, used);
@@ -608,7 +731,12 @@ impl EffectAnalysis {
             }
             TypedExprKind::Match(_, arms) => {
                 for arm in arms {
-                    if arm.body.body.iter().any(|n| Self::node_contains_id(n, target_id)) {
+                    if arm
+                        .body
+                        .body
+                        .iter()
+                        .any(|n| Self::node_contains_id(n, target_id))
+                    {
                         Self::collect_uses_after(&arm.body, target_id, used);
                     }
                 }
@@ -622,7 +750,11 @@ impl EffectAnalysis {
             TypedNode::Expr(expr) => Self::collect_all_uses_in_expr(expr, used),
             TypedNode::Stmt(stmt) => Self::collect_all_uses_in_stmt(stmt, used),
             TypedNode::Decl(decl) => {
-                if let TypedDeclKind::Let { initializer: Some(init), .. } = &decl.kind {
+                if let TypedDeclKind::Let {
+                    initializer: Some(init),
+                    ..
+                } = &decl.kind
+                {
                     Self::collect_all_uses_in_expr(init, used);
                 }
             }
@@ -704,12 +836,17 @@ impl EffectAnalysis {
     }
 
     /// Add a yield point and create a new state for it
-    pub fn add_yield_point(&mut self, expr_id: NodeID, effect: Symbol, live_vars: Vec<(Symbol, Ty)>) {
+    pub fn add_yield_point(
+        &mut self,
+        expr_id: NodeID,
+        kind: YieldPointKind,
+        live_vars: Vec<(Symbol, Ty)>,
+    ) {
         let resume_state = self.states.len();
 
         self.yield_points.push(YieldPoint {
             expr_id,
-            effect,
+            kind,
             live_vars: live_vars.clone(),
             resume_state,
         });
@@ -733,7 +870,9 @@ impl EffectAnalysis {
 
     /// Get the yield point index for a given expression ID, if any
     pub fn yield_point_for_expr(&self, expr_id: NodeID) -> Option<usize> {
-        self.yield_points.iter().position(|yp| yp.expr_id == expr_id)
+        self.yield_points
+            .iter()
+            .position(|yp| yp.expr_id == expr_id)
     }
 }
 
@@ -759,9 +898,8 @@ mod tests {
     fn test_add_yield_point_creates_state() {
         let mut analysis = EffectAnalysis::new();
         let expr_id = NodeID(FileID(0), 1);
-        let effect = Symbol::Main; // Using Main as a placeholder
 
-        analysis.add_yield_point(expr_id, effect, vec![]);
+        analysis.add_yield_point(expr_id, YieldPointKind::YieldBuiltin, vec![]);
 
         assert_eq!(analysis.state_count(), 2);
         assert!(analysis.has_yields());
@@ -773,9 +911,9 @@ mod tests {
     fn test_multiple_yield_points() {
         let mut analysis = EffectAnalysis::new();
 
-        analysis.add_yield_point(NodeID(FileID(0), 1), Symbol::Main, vec![]);
-        analysis.add_yield_point(NodeID(FileID(0), 2), Symbol::Main, vec![]);
-        analysis.add_yield_point(NodeID(FileID(0), 3), Symbol::Main, vec![]);
+        analysis.add_yield_point(NodeID(FileID(0), 1), YieldPointKind::YieldBuiltin, vec![]);
+        analysis.add_yield_point(NodeID(FileID(0), 2), YieldPointKind::YieldBuiltin, vec![]);
+        analysis.add_yield_point(NodeID(FileID(0), 3), YieldPointKind::YieldBuiltin, vec![]);
 
         assert_eq!(analysis.state_count(), 4); // Initial + 3 yield points
         assert_eq!(analysis.yield_points.len(), 3);
@@ -790,8 +928,8 @@ mod tests {
         let expr1 = NodeID(FileID(0), 10);
         let expr2 = NodeID(FileID(0), 20);
 
-        analysis.add_yield_point(expr1, Symbol::Main, vec![]);
-        analysis.add_yield_point(expr2, Symbol::Main, vec![]);
+        analysis.add_yield_point(expr1, YieldPointKind::YieldBuiltin, vec![]);
+        analysis.add_yield_point(expr2, YieldPointKind::Effect(Symbol::Main), vec![]);
 
         assert_eq!(analysis.yield_point_for_expr(expr1), Some(0));
         assert_eq!(analysis.yield_point_for_expr(expr2), Some(1));
@@ -802,8 +940,12 @@ mod tests {
     fn test_state_info_tracks_from_yield() {
         let mut analysis = EffectAnalysis::new();
 
-        analysis.add_yield_point(NodeID(FileID(0), 1), Symbol::Main, vec![]);
-        analysis.add_yield_point(NodeID(FileID(0), 2), Symbol::Main, vec![]);
+        analysis.add_yield_point(NodeID(FileID(0), 1), YieldPointKind::YieldBuiltin, vec![]);
+        analysis.add_yield_point(
+            NodeID(FileID(0), 2),
+            YieldPointKind::Effect(Symbol::Main),
+            vec![],
+        );
 
         // Initial state has no from_yield
         assert_eq!(analysis.states[0].from_yield, None);
@@ -819,12 +961,13 @@ mod tests {
     fn test_live_vars_stored_in_yield_point() {
         let mut analysis = EffectAnalysis::new();
 
-        let live_vars = vec![
-            (Symbol::Main, Ty::Int),
-            (Symbol::Library, Ty::Bool),
-        ];
+        let live_vars = vec![(Symbol::Main, Ty::Int), (Symbol::Library, Ty::Bool)];
 
-        analysis.add_yield_point(NodeID(FileID(0), 1), Symbol::Main, live_vars.clone());
+        analysis.add_yield_point(
+            NodeID(FileID(0), 1),
+            YieldPointKind::YieldBuiltin,
+            live_vars.clone(),
+        );
 
         assert_eq!(analysis.yield_points[0].live_vars, live_vars);
         assert_eq!(analysis.states[1].live_vars, live_vars);
@@ -835,13 +978,18 @@ mod tests {
         let mut analysis = EffectAnalysis::new();
 
         let live_vars1 = vec![(Symbol::Main, Ty::Int)];
-        let live_vars2 = vec![
-            (Symbol::Main, Ty::Int),
-            (Symbol::Library, Ty::Bool),
-        ];
+        let live_vars2 = vec![(Symbol::Main, Ty::Int), (Symbol::Library, Ty::Bool)];
 
-        analysis.add_yield_point(NodeID(FileID(0), 1), Symbol::Main, live_vars1.clone());
-        analysis.add_yield_point(NodeID(FileID(0), 2), Symbol::Main, live_vars2.clone());
+        analysis.add_yield_point(
+            NodeID(FileID(0), 1),
+            YieldPointKind::YieldBuiltin,
+            live_vars1.clone(),
+        );
+        analysis.add_yield_point(
+            NodeID(FileID(0), 2),
+            YieldPointKind::Effect(Symbol::Main),
+            live_vars2.clone(),
+        );
 
         // State 0 has no live vars (initial state)
         assert!(analysis.states[0].live_vars.is_empty());
@@ -851,5 +999,28 @@ mod tests {
 
         // State 2 has live vars from yield 1
         assert_eq!(analysis.states[2].live_vars, live_vars2);
+    }
+
+    #[test]
+    fn test_yield_builtin_kind() {
+        let mut analysis = EffectAnalysis::new();
+        analysis.add_yield_point(NodeID(FileID(0), 1), YieldPointKind::YieldBuiltin, vec![]);
+
+        assert_eq!(analysis.yield_points[0].kind, YieldPointKind::YieldBuiltin);
+    }
+
+    #[test]
+    fn test_effect_kind() {
+        let mut analysis = EffectAnalysis::new();
+        analysis.add_yield_point(
+            NodeID(FileID(0), 1),
+            YieldPointKind::Effect(Symbol::Main),
+            vec![],
+        );
+
+        assert_eq!(
+            analysis.yield_points[0].kind,
+            YieldPointKind::Effect(Symbol::Main)
+        );
     }
 }

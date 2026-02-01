@@ -232,9 +232,7 @@ impl Constraint {
         let pred = match self {
             #[allow(clippy::panic)]
             Self::HasField(has_field) => {
-                let Row::Param(row_param) =
-                    session.apply_row(&has_field.row, substitutions)
-                else {
+                let Row::Param(row_param) = session.apply_row(&has_field.row, substitutions) else {
                     panic!(
                         "HasField predicate must be for row, got: {:?}",
                         session.apply_row(&has_field.row, substitutions)
@@ -270,8 +268,7 @@ impl Constraint {
                 rhs: session.apply(&equals.rhs, substitutions),
             },
             Self::Conforms(conforms) => {
-                let Ty::Param(param, _) = session.apply(&conforms.ty, substitutions)
-                else {
+                let Ty::Param(param, _) = session.apply(&conforms.ty, substitutions) else {
                     // If the type resolved to a concrete type (not a type parameter),
                     // we can't generalize this constraint - it should have already been
                     // checked during constraint solving.

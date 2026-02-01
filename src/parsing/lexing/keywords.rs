@@ -30,6 +30,7 @@ pub(super) fn handle(string: &str) -> TokenKind {
         "in" => In,
         "continue" => Continue,
         "mut" => Mut,
+        "for" => For,
         _ => Identifier,
     }
 }

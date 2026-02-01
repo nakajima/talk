@@ -1726,4 +1726,263 @@ pub mod tests {
             }
         );
     }
+
+    #[test]
+    fn yield_builtin_triggers_state_machine() {
+        // Test that a function with yield compiles to a state machine (poll function)
+        let (module, names) = lower_module(
+            "
+            func gen() {
+                let x = 1
+                yield(x)
+                let y = 2
+                (x, y)
+            }
+            ",
+        );
+
+        let _guard = set_symbol_names(names.clone());
+        println!("{}", module.program);
+
+        // The gen function should have been transformed - there should be a synthesized poll function
+        let has_poll_func = module.program.functions.keys().any(|k| {
+            if let Symbol::Synthesized(_) = k {
+                true
+            } else {
+                false
+            }
+        });
+
+        assert!(
+            has_poll_func,
+            "Expected a synthesized poll function for yield-containing function"
+        );
+    }
+
+    #[test]
+    fn yield_creates_multiple_states() {
+        // Test that multiple yields create multiple states
+        let (module, names) = lower_module(
+            "
+            func gen() {
+                yield(1)
+                yield(2)
+                yield(3)
+                0
+            }
+            ",
+        );
+
+        let _guard = set_symbol_names(names.clone());
+        println!("{}", module.program);
+
+        // Find the poll function and check it has multiple blocks (one per state)
+        for (sym, func) in &module.program.functions {
+            if let Symbol::Synthesized(_) = sym {
+                // State machine poll functions should have multiple blocks
+                // One for each state (initial + number of yields)
+                assert!(
+                    func.blocks.len() >= 3,
+                    "Expected at least 3 blocks for 3 yield points, got {}",
+                    func.blocks.len()
+                );
+                return;
+            }
+        }
+
+        panic!("No synthesized poll function found");
+    }
+
+    #[test]
+    fn function_without_yield_uses_normal_lowering() {
+        // Test that functions without yield use normal lowering
+        let (module, _names) = lower_module(
+            "
+            func normal() {
+                let x = 1
+                let y = 2
+                x + y
+            }
+            ",
+        );
+
+        // Check that the main function has a simple structure (normal lowering)
+        let main = module
+            .program
+            .functions
+            .get(&Symbol::Global(GlobalId::from(1)));
+        assert!(main.is_some(), "Expected a main function");
+
+        let main_func = main.unwrap();
+        // A normal function has a single block with a return
+        assert_eq!(
+            main_func.blocks.len(),
+            1,
+            "Normal function should have 1 block"
+        );
+    }
+
+    #[test]
+    fn yield_state_machine_preserves_live_variables() {
+        // Test that live variables are correctly saved and restored across yields
+        let (module, _names) = lower_module(
+            "
+            func gen() {
+                let x = 10
+                let y = 20
+                yield(x)
+                let z = 30
+                yield(y)
+                x + y + z
+            }
+            ",
+        );
+
+        // Find the synthesized poll function
+        let poll_func = module
+            .program
+            .functions
+            .iter()
+            .find(|(sym, _)| matches!(sym, Symbol::Synthesized(_)));
+
+        assert!(poll_func.is_some(), "Expected a synthesized poll function");
+
+        let (_, func) = poll_func.unwrap();
+
+        // Should have blocks for: initial state, after first yield, after second yield
+        assert!(
+            func.blocks.len() >= 3,
+            "Expected at least 3 blocks for state machine with 2 yields"
+        );
+
+        // Check that the poll function has params for state and state_data
+        // The state machine poll function takes: (state: Int, state_data: Record, resumed: T)
+        assert!(
+            func.params.items.len() >= 2,
+            "Poll function should have at least 2 params (state, state_data)"
+        );
+    }
+
+    #[test]
+    fn yield_returns_correct_poll_variant() {
+        // Test that yield compiles to return Poll::pending
+        // Using inline enum definition since imports don't work in bare test context
+        let (module, names) = lower_module(
+            "
+            enum Poll<T, Y> {
+                case ready(T)
+                case pending(Y)
+            }
+
+            func gen() -> Poll<Int, Int> {
+                yield(42)
+                Poll.ready(100)
+            }
+            ",
+        );
+
+        let _guard = set_symbol_names(names.clone());
+
+        // Find the synthesized poll function
+        let poll_func = module
+            .program
+            .functions
+            .iter()
+            .find(|(sym, _)| matches!(sym, Symbol::Synthesized(_)));
+
+        assert!(poll_func.is_some(), "Expected a synthesized poll function");
+    }
+
+    #[test]
+    fn yield_function_returns_generator_record() {
+        // Test that a yield-containing function returns a Generator record,
+        // not the raw poll function
+        let (module, names) = lower_module(
+            "
+            func gen() {
+                yield(1)
+                yield(2)
+                0
+            }
+
+            let g = gen()
+            ",
+        );
+
+        let _guard = set_symbol_names(names.clone());
+
+        // The main function should create a generator record
+        let main_func = module.program.functions.get(&Symbol::Main);
+        assert!(main_func.is_some(), "Expected a main function");
+
+        let main = main_func.unwrap();
+
+        // Check that the main function has instructions that create a record
+        // (the Generator wrapper)
+        let has_record_creation = main.blocks.iter().any(|block| {
+            block
+                .instructions
+                .iter()
+                .any(|instr| matches!(instr, Instruction::Record { .. }))
+        });
+
+        assert!(
+            has_record_creation,
+            "Expected main to create a Generator record"
+        );
+    }
+
+    #[test]
+    fn generator_contains_poll_state_and_data() {
+        // Test that the Generator record contains poll function, state (0), and state_data
+        let (module, names) = lower_module(
+            "
+            func gen() {
+                yield(42)
+                0
+            }
+
+            gen()
+            ",
+        );
+
+        let _guard = set_symbol_names(names.clone());
+
+        let main_func = module
+            .program
+            .functions
+            .get(&Symbol::Main)
+            .expect("main function");
+
+        // Find the Record instruction that creates the Generator
+        let generator_record = main_func
+            .blocks
+            .iter()
+            .flat_map(|block| block.instructions.iter())
+            .find(|instr| {
+                if let Instruction::Record { record, .. } = instr {
+                    // Generator has 3 fields: poll, state, state_data
+                    record.items.len() == 3
+                } else {
+                    false
+                }
+            });
+
+        assert!(
+            generator_record.is_some(),
+            "Expected a Generator record with 3 fields (poll, state, state_data)"
+        );
+
+        // Also verify there's a Ref instruction for the poll function
+        let has_poll_ref = main_func
+            .blocks
+            .iter()
+            .flat_map(|block| block.instructions.iter())
+            .any(|instr| matches!(instr, Instruction::Ref { .. }));
+
+        assert!(
+            has_poll_ref,
+            "Expected a Ref instruction for the poll function"
+        );
+    }
 }

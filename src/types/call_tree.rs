@@ -1,6 +1,8 @@
 use rustc_hash::FxHashMap;
 
-use crate::{compiling::module::ModuleId, label::Label, name_resolution::symbol::Symbol, node_id::NodeID};
+use crate::{
+    compiling::module::ModuleId, label::Label, name_resolution::symbol::Symbol, node_id::NodeID,
+};
 
 /// Information about a callee within a function, used for specialization propagation.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -27,7 +29,11 @@ impl CalleeInfo {
                 sym: sym.import(module_id),
                 call_id,
             },
-            CalleeInfo::Member { receiver_id, label, call_id } => CalleeInfo::Member {
+            CalleeInfo::Member {
+                receiver_id,
+                label,
+                call_id,
+            } => CalleeInfo::Member {
                 receiver_id,
                 label,
                 call_id,

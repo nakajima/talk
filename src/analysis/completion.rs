@@ -448,9 +448,7 @@ fn substitute_ty(ty: &Ty, substitutions: &FxHashMap<Ty, Ty>) -> Ty {
                 .map(|t| substitute_ty(t, substitutions))
                 .collect(),
         ),
-        Ty::Record(sym, row) => {
-            Ty::Record(sym.clone(), substitute_row(row, substitutions).into())
-        }
+        Ty::Record(sym, row) => Ty::Record(sym.clone(), substitute_row(row, substitutions).into()),
         Ty::Nominal { symbol, type_args } => Ty::Nominal {
             symbol: *symbol,
             type_args: type_args

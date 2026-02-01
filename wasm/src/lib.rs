@@ -1,7 +1,7 @@
 use js_sys::{Array, Object, Reflect};
 use talk::{
-    analysis::{Diagnostic, DocumentInput, Workspace},
     analysis::hover::{hover_at, hover_for_node_id},
+    analysis::{Diagnostic, DocumentInput, Workspace},
     common::text::{
         byte_offset_for_line_column_utf8, clamp_to_char_boundary, line_info_for_offset,
         line_info_for_offset_utf16,
@@ -338,7 +338,10 @@ fn parse_node_id(input: &str) -> Result<talk::node_id::NodeID, JsValue> {
     let node_id = node_id
         .parse::<u32>()
         .map_err(|_| JsValue::from_str("node id must be a u32"))?;
-    Ok(talk::node_id::NodeID(talk::node_id::FileID(file_id), node_id))
+    Ok(talk::node_id::NodeID(
+        talk::node_id::FileID(file_id),
+        node_id,
+    ))
 }
 
 fn hover_to_js(

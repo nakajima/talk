@@ -23,8 +23,8 @@ use crate::{
         scc_graph::SCCGraph,
         symbol::{Symbol, Symbols},
         transforms::{
-            lower_funcs_to_lets::LowerFuncsToLets, lower_operators::LowerOperators,
-            prepend_self_to_methods::PrependSelfToMethods,
+            lower_for_loops::LowerForLoops, lower_funcs_to_lets::LowerFuncsToLets,
+            lower_operators::LowerOperators, prepend_self_to_methods::PrependSelfToMethods,
         },
     },
     node::Node,
@@ -203,7 +203,6 @@ pub struct NameResolver {
 
     // For figuring out child types
     pub(super) nominal_stack: Vec<(Symbol, NodeID)>,
-
 }
 
 #[allow(clippy::expect_used)]
@@ -253,6 +252,7 @@ impl NameResolver {
 
         // First pass: run transforms and declare all types
         for ast in asts.iter_mut() {
+            LowerForLoops::run(ast);
             LowerFuncsToLets::run(ast);
             LowerOperators::run(ast);
             PrependSelfToMethods::run(ast);
@@ -1372,4 +1372,3 @@ impl NameResolver {
         })
     }
 }
-

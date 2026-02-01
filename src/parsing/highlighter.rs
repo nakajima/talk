@@ -123,6 +123,7 @@ impl<'a> Higlighter<'a> {
                 TokenKind::If => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::Else => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::Loop => self.make(tok, Kind::KEYWORD, &mut tokens),
+                TokenKind::For => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::Return => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::True => self.make(tok, Kind::NUMBER, &mut tokens),
                 TokenKind::False => self.make(tok, Kind::NUMBER, &mut tokens),
@@ -439,6 +440,10 @@ impl<'a> Higlighter<'a> {
                     }
 
                     result.extend(self.tokens_from_expr(block, ast));
+                }
+                StmtKind::For { iterable, body, .. } => {
+                    result.extend(self.tokens_from_expr(iterable.as_ref(), ast));
+                    result.extend(self.tokens_from_expr(body, ast));
                 }
                 StmtKind::Handling {
                     effect_name_span,

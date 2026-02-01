@@ -128,12 +128,7 @@ impl SolveContext {
         self.normalize_with_level(ty, session, self.level)
     }
 
-    fn normalize_with_level(
-        &self,
-        ty: Ty,
-        session: &mut TypeSession,
-        level: Level,
-    ) -> Ty {
+    fn normalize_with_level(&self, ty: Ty, session: &mut TypeSession, level: Level) -> Ty {
         let ty = {
             let mut shared = self.shared.borrow_mut();
             session.apply(&ty, &mut shared.substitutions)
@@ -173,7 +168,7 @@ pub mod tests {
         label::Label,
         name_resolution::symbol::ProtocolId,
         types::{
-            infer_ty::{Ty, Level},
+            infer_ty::{Level, Ty},
             solve_context::{SolveContext, SolveContextKind},
             type_operations::UnificationSubstitutions,
             type_session::TypeSession,

@@ -309,7 +309,8 @@ impl ModuleEnvironment {
         let id = ModuleId::External(self.modules.len() as u16);
         self.modules_by_local.insert(id, module.id);
         self.modules_by_name.insert(module.name.clone(), id);
-        self.modules.insert(module.id, Arc::new(module.import_as(id)));
+        self.modules
+            .insert(module.id, Arc::new(module.import_as(id)));
         id
     }
 

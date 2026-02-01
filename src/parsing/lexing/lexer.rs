@@ -434,11 +434,7 @@ impl<'a> Lexer<'a> {
             }
         }
 
-        if is_float {
-            Float
-        } else {
-            Int
-        }
+        if is_float { Float } else { Int }
     }
 
     fn make(&mut self, kind: TokenKind) -> Result<Token, LexerError> {

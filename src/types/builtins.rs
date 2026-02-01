@@ -36,6 +36,14 @@ pub fn resolve_builtin_type(id: &Symbol) -> (Ty, Vec<Predicate>, IndexSet<ForAll
             Ty::Param(Symbol::IR_TYPE_PARAM, vec![]).into(),
             Row::Empty.into(),
         ),
+        // yield<T>(value: T) -> R
+        // When called, suspends execution and returns the value to the executor.
+        // When resumed, returns the value passed by the executor.
+        Symbol::YIELD => Ty::Func(
+            Ty::Param(Symbol::YIELD_T_PARAM, vec![]).into(),
+            Ty::Param(Symbol::YIELD_R_PARAM, vec![]).into(),
+            Row::Empty.into(),
+        ),
         _ => unreachable!("no builtin named {id:?}"),
     };
 
@@ -75,6 +83,23 @@ pub fn builtin_scope() -> FxHashMap<Symbol, EnvEntry> {
             Ty::Func(
                 Ty::Param(Symbol::IR_TYPE_PARAM, vec![]).into(),
                 Ty::Void.into(),
+                Row::Empty.into(),
+            ),
+        )),
+    );
+    // yield<T, R>(value: T) -> R
+    // Builtin that triggers state machine compilation.
+    res.insert(
+        Symbol::YIELD,
+        EnvEntry::Scheme(Scheme::new(
+            indexset!(
+                ForAll::Ty(Symbol::YIELD_T_PARAM),
+                ForAll::Ty(Symbol::YIELD_R_PARAM)
+            ),
+            vec![],
+            Ty::Func(
+                Ty::Param(Symbol::YIELD_T_PARAM, vec![]).into(),
+                Ty::Param(Symbol::YIELD_R_PARAM, vec![]).into(),
                 Row::Empty.into(),
             ),
         )),

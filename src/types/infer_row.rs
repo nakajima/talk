@@ -110,7 +110,11 @@ impl Row {
     }
 
     /// Visit all types and rows in this row, returning early if the visitor returns true.
-    pub fn visit_ty(&self, ty_visitor: &mut impl FnMut(&Ty) -> bool, row_visitor: &mut impl FnMut(&Row) -> bool) -> bool {
+    pub fn visit_ty(
+        &self,
+        ty_visitor: &mut impl FnMut(&Ty) -> bool,
+        row_visitor: &mut impl FnMut(&Row) -> bool,
+    ) -> bool {
         if row_visitor(self) {
             return true;
         }
@@ -191,9 +195,7 @@ impl Row {
                     .row
                     .extend(lhs_row.collect_specializations(rhs_row)?.row);
             }
-            _ => {
-                return Err(crate::types::type_error::TypeError::SpecializationMismatch)
-            }
+            _ => return Err(crate::types::type_error::TypeError::SpecializationMismatch),
         }
         Ok(result)
     }

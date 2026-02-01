@@ -250,9 +250,12 @@ impl<'a> DeclDeclarer<'a> {
     /// Declares generics as TypeParameter symbols in the current scope.
     fn declare_generics(&mut self, generics: &mut [GenericDecl]) {
         for generic in generics {
-            generic.name = self
-                .resolver
-                .declare(&generic.name, some!(TypeParameter), generic.id, generic.name_span);
+            generic.name = self.resolver.declare(
+                &generic.name,
+                some!(TypeParameter),
+                generic.id,
+                generic.name_span,
+            );
         }
     }
 
@@ -262,9 +265,15 @@ impl<'a> DeclDeclarer<'a> {
             // (Array, String, etc. have hardcoded IDs). Effects get their IDs during
             // the full declaration phase.
             match &decl.kind {
-                DeclKind::Struct { name, name_span, .. }
-                | DeclKind::Enum { name, name_span, .. }
-                | DeclKind::Protocol { name, name_span, .. } => {
+                DeclKind::Struct {
+                    name, name_span, ..
+                }
+                | DeclKind::Enum {
+                    name, name_span, ..
+                }
+                | DeclKind::Protocol {
+                    name, name_span, ..
+                } => {
                     let kind = match &decl.kind {
                         DeclKind::Struct { .. } => some!(Struct),
                         DeclKind::Enum { .. } => some!(Enum),
@@ -319,7 +328,6 @@ impl<'a> DeclDeclarer<'a> {
         }
     }
 
-
     ///////////////////////////////////////////////////////////////////////////
     // Local decls
     ///////////////////////////////////////////////////////////////////////////
@@ -350,14 +358,24 @@ impl<'a> DeclDeclarer<'a> {
                 for field in fields {
                     match &mut field.kind {
                         RecordFieldPatternKind::Bind(name) => {
-                            *name =
-                                self.resolver
-                                    .declare(name, some!(PatternBindLocal), pattern.id, field.span);
+                            *name = self.resolver.declare(
+                                name,
+                                some!(PatternBindLocal),
+                                pattern.id,
+                                field.span,
+                            );
                         }
-                        RecordFieldPatternKind::Equals { name, name_span, value } => {
-                            *name =
-                                self.resolver
-                                    .declare(name, some!(PatternBindLocal), pattern.id, *name_span);
+                        RecordFieldPatternKind::Equals {
+                            name,
+                            name_span,
+                            value,
+                        } => {
+                            *name = self.resolver.declare(
+                                name,
+                                some!(PatternBindLocal),
+                                pattern.id,
+                                *name_span,
+                            );
                             self.declare_pattern(value, some!(PatternBindLocal));
                         }
                         RecordFieldPatternKind::Rest => (),
@@ -393,7 +411,10 @@ impl<'a> DeclDeclarer<'a> {
         // state consistent so we don't crash while walking the body.
         // Note: name_span is not available in this function signature, so we pass None.
         // The spans are already recorded by predeclare_nominals for Struct/Enum/Protocol.
-        *name = self.resolver.lookup(name, Some(id), None).unwrap_or(name.clone());
+        *name = self
+            .resolver
+            .lookup(name, Some(id), None)
+            .unwrap_or(name.clone());
 
         let sym = match name.symbol() {
             Ok(sym) => sym,
@@ -471,7 +492,9 @@ impl<'a> DeclDeclarer<'a> {
 
     fn enter_block(&mut self, block: &mut Block) {
         for arg in &mut block.args {
-            arg.name = self.resolver.declare(&arg.name, some!(ParamLocal), arg.id, arg.name_span);
+            arg.name = self
+                .resolver
+                .declare(&arg.name, some!(ParamLocal), arg.id, arg.name_span);
         }
     }
 
@@ -505,7 +528,10 @@ impl<'a> DeclDeclarer<'a> {
                 *name = self
                     .resolver
                     .lookup(name, Some(*id), Some(func_name_span))
-                    .unwrap_or_else(|| self.resolver.declare(name, fallback, func_id, func_name_span));
+                    .unwrap_or_else(|| {
+                        self.resolver
+                            .declare(name, fallback, func_id, func_name_span)
+                    });
 
                 let func_sym = name
                     .symbol()
@@ -519,9 +545,12 @@ impl<'a> DeclDeclarer<'a> {
                 self.declare_generics(generics);
 
                 for param in params {
-                    param.name = self
-                        .resolver
-                        .declare(&param.name, some!(ParamLocal), param.id, param.name_span);
+                    param.name = self.resolver.declare(
+                        &param.name,
+                        some!(ParamLocal),
+                        param.id,
+                        param.name_span,
+                    );
                 }
             }
         )
@@ -557,9 +586,12 @@ impl<'a> DeclDeclarer<'a> {
                 self.declare_generics(generics);
 
                 for param in params {
-                    param.name = self
-                        .resolver
-                        .declare(&param.name, some!(ParamLocal), param.id, param.name_span);
+                    param.name = self.resolver.declare(
+                        &param.name,
+                        some!(ParamLocal),
+                        param.id,
+                        param.name_span,
+                    );
                 }
             }
         )
@@ -626,25 +658,37 @@ impl<'a> DeclDeclarer<'a> {
             }
         );
 
-        on!(&mut decl.kind, DeclKind::TypeAlias(lhs_name, name_span, ..), {
-            *lhs_name = self.resolver.declare(lhs_name, some!(TypeAlias), decl.id, *name_span);
+        on!(
+            &mut decl.kind,
+            DeclKind::TypeAlias(lhs_name, name_span, ..),
+            {
+                *lhs_name = self
+                    .resolver
+                    .declare(lhs_name, some!(TypeAlias), decl.id, *name_span);
 
-            if let Some(parent) = self.resolver.nominal_stack.last() {
-                self.resolver
-                    .phase
-                    .child_types
-                    .entry(parent.0)
-                    .or_default()
-                    .insert(
-                        lhs_name.name_str().into(),
-                        lhs_name.symbol().unwrap_or_else(|_| unreachable!()),
-                    );
+                if let Some(parent) = self.resolver.nominal_stack.last() {
+                    self.resolver
+                        .phase
+                        .child_types
+                        .entry(parent.0)
+                        .or_default()
+                        .insert(
+                            lhs_name.name_str().into(),
+                            lhs_name.symbol().unwrap_or_else(|_| unreachable!()),
+                        );
+                }
             }
-        });
+        );
 
-        on!(&mut decl.kind, DeclKind::EnumVariant(name, name_span, ..), {
-            *name = self.resolver.declare(name, some!(Variant), decl.id, *name_span);
-        });
+        on!(
+            &mut decl.kind,
+            DeclKind::EnumVariant(name, name_span, ..),
+            {
+                *name = self
+                    .resolver
+                    .declare(name, some!(Variant), decl.id, *name_span);
+            }
+        );
 
         on!(
             &mut decl.kind,
@@ -674,9 +718,12 @@ impl<'a> DeclDeclarer<'a> {
         );
 
         on!(&mut decl.kind, DeclKind::Associated { generic }, {
-            generic.name = self
-                .resolver
-                .declare(&generic.name, some!(AssociatedType), decl.id, generic.name_span);
+            generic.name = self.resolver.declare(
+                &generic.name,
+                some!(AssociatedType),
+                decl.id,
+                generic.name_span,
+            );
             let parent = self
                 .resolver
                 .nominal_stack
@@ -724,18 +771,28 @@ impl<'a> DeclDeclarer<'a> {
 
         let decl_kind = decl.kind.clone();
 
-        on!(&mut decl.kind, DeclKind::Property { name, name_span, .. }, {
-            *name = self.resolver.declare(name, some!(Property), decl.id, *name_span);
-            let id = self
-                .resolver
-                .current_scope_id
-                .expect("didn't get current scope id");
-            self.type_members
-                .entry(id)
-                .or_default()
-                .properties
-                .push(decl_kind.clone());
-        });
+        on!(
+            &mut decl.kind,
+            DeclKind::Property {
+                name,
+                name_span,
+                ..
+            },
+            {
+                *name = self
+                    .resolver
+                    .declare(name, some!(Property), decl.id, *name_span);
+                let id = self
+                    .resolver
+                    .current_scope_id
+                    .expect("didn't get current scope id");
+                self.type_members
+                    .entry(id)
+                    .or_default()
+                    .properties
+                    .push(decl_kind.clone());
+            }
+        );
 
         on!(&mut decl.kind, DeclKind::Init { name, .. }, {
             let id = self
@@ -749,7 +806,9 @@ impl<'a> DeclDeclarer<'a> {
                 .push(decl_kind);
 
             // Init declarations use decl.span since there's no dedicated name_span
-            *name = self.resolver.declare(name, some!(Initializer), decl.id, decl.span);
+            *name = self
+                .resolver
+                .declare(name, some!(Initializer), decl.id, decl.span);
 
             self.start_scope(None, decl.id, false);
         });
@@ -771,7 +830,9 @@ impl<'a> DeclDeclarer<'a> {
                 ..
             },
             {
-                *name = self.resolver.declare(name, some!(Effect), decl.id, *name_span);
+                *name = self
+                    .resolver
+                    .declare(name, some!(Effect), decl.id, *name_span);
 
                 // Start a scope for the effect's generics and params
                 self.start_scope(None, decl.id, false);
@@ -779,9 +840,12 @@ impl<'a> DeclDeclarer<'a> {
                 self.declare_generics(generics);
 
                 for param in params {
-                    param.name = self
-                        .resolver
-                        .declare(&param.name, some!(ParamLocal), param.id, param.name_span);
+                    param.name = self.resolver.declare(
+                        &param.name,
+                        some!(ParamLocal),
+                        param.id,
+                        param.name_span,
+                    );
                 }
             }
         );
@@ -938,7 +1002,9 @@ impl<'a> DeclDeclarer<'a> {
                             }
                         }
                         // Handle nested extends (like extend Self: Protocol inside a struct)
-                        DeclKind::Extend { body: nested_body, .. } => {
+                        DeclKind::Extend {
+                            body: nested_body, ..
+                        } => {
                             for nested_member in &nested_body.decls {
                                 if let DeclKind::Method { func, .. } = &nested_member.kind {
                                     if let Ok(sym) = func.name.symbol() {
@@ -958,9 +1024,12 @@ impl<'a> DeclDeclarer<'a> {
         let init_id = NodeID(FileID::SYNTHESIZED, self.node_ids.next_id());
         tracing::debug!("synthesizing init for type {type_id:?} as: {init_id:?}");
 
-        let init_name = self
-            .resolver
-            .declare(&"init".into(), some!(Synthesized), init_id, Span::SYNTHESIZED);
+        let init_name = self.resolver.declare(
+            &"init".into(),
+            some!(Synthesized),
+            init_id,
+            Span::SYNTHESIZED,
+        );
 
         self.start_scope(None, init_id, false);
 

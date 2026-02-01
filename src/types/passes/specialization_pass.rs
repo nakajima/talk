@@ -79,8 +79,8 @@ impl<'a> SpecializationPass<'a> {
         module_id: ModuleId,
     ) -> Self {
         // Resolve overloads using the variational type checking results
-        let resolution =
-            resolve_overloads(&types.choices, &types.error_constraints).unwrap_or_else(|errors| {
+        let resolution = resolve_overloads(&types.choices, &types.error_constraints)
+            .unwrap_or_else(|errors| {
                 for error in &errors {
                     tracing::warn!("Resolution error: {:?}", error);
                 }
@@ -266,7 +266,11 @@ impl<'a> SpecializationPass<'a> {
             }
             TypedPatternKind::Record { fields } => {
                 for field in fields {
-                    if let crate::types::typed_ast::TypedRecordFieldPatternKind::Equals { value, .. } = &field.kind {
+                    if let crate::types::typed_ast::TypedRecordFieldPatternKind::Equals {
+                        value,
+                        ..
+                    } = &field.kind
+                    {
                         self.visit_pattern(value);
                     }
                 }
@@ -282,12 +286,8 @@ impl<'a> SpecializationPass<'a> {
 
     fn visit_node(&mut self, node: TypedNode) -> Result<TypedNode, TypeError> {
         Ok(match node {
-            TypedNode::Stmt(stmt) => {
-                TypedNode::Stmt(self.visit_stmt(stmt)?)
-            }
-            TypedNode::Expr(expr) => {
-                TypedNode::Expr(self.visit_expr(expr)?)
-            }
+            TypedNode::Stmt(stmt) => TypedNode::Stmt(self.visit_stmt(stmt)?),
+            TypedNode::Expr(expr) => TypedNode::Expr(self.visit_expr(expr)?),
             TypedNode::Decl(decl) => {
                 // Also visit decls that appear inside blocks (e.g., let bindings in function bodies)
                 TypedNode::Decl(self.visit_decl(decl)?)
@@ -342,7 +342,8 @@ impl<'a> SpecializationPass<'a> {
                         // For shorthand variants, extract enum symbol from the expression's return type
                         Self::extract_container_symbol(&expr.ty)
                     } else {
-                        self.symbol_from_ty(&visited_receiver.ty, &specializations).ok()
+                        self.symbol_from_ty(&visited_receiver.ty, &specializations)
+                            .ok()
                     };
                     let _ = container_sym;
                 }
@@ -431,7 +432,6 @@ impl<'a> SpecializationPass<'a> {
         else {
             unreachable!()
         };
-
 
         let is_constructor = matches!(callee.kind, TypedExprKind::Constructor(..));
         let mut specializations = if is_constructor {
@@ -525,7 +525,10 @@ impl<'a> SpecializationPass<'a> {
             };
 
             // Handle protocol method resolution
-            if let TypedExprKind::Member { receiver, label, .. } = &callee.kind {
+            if let TypedExprKind::Member {
+                receiver, label, ..
+            } = &callee.kind
+            {
                 // Check for direct protocol method calls: Protocol.method(arg1, arg2, ...)
                 // In this case, the actual receiver is the first argument
                 if let TypedExprKind::Constructor(Symbol::Protocol(protocol_id), _) = &receiver.kind
@@ -662,7 +665,9 @@ impl<'a> SpecializationPass<'a> {
             TypedExprKind::LiteralInt(..) => Ok(Symbol::Int),
             TypedExprKind::LiteralFloat(..) => Ok(Symbol::Float),
             TypedExprKind::LiteralTrue | TypedExprKind::LiteralFalse => Ok(Symbol::Bool),
-            TypedExprKind::Member { receiver, label, .. } => {
+            TypedExprKind::Member {
+                receiver, label, ..
+            } => {
                 let Some(receiver_ty) = self.types.get(&receiver.id) else {
                     return Err(TypeError::TypeNotFound(format!(
                         "could not find type for id: {:?}",
@@ -1086,7 +1091,9 @@ pub mod tests {
         compiling::driver::{Driver, DriverConfig, Source, Typed},
         compiling::module::ModuleId,
         fxhashmap,
-        name_resolution::symbol::{GlobalId, Symbol, SynthesizedId, TypeParameterId, set_symbol_names},
+        name_resolution::symbol::{
+            GlobalId, Symbol, SynthesizedId, TypeParameterId, set_symbol_names,
+        },
         types::{
             infer_ty::Ty,
             typed_ast::{TypedExprKind, TypedStmtKind},
@@ -1138,13 +1145,19 @@ pub mod tests {
             .unwrap();
         assert_eq!(callee1.original_symbol, GlobalId::from(2).into());
         // id is called with Int, so its type param should specialize to Int
-        assert_eq!(callee1.specializations.ty.get(&test_type_param(1)), Some(&Ty::Int));
+        assert_eq!(
+            callee1.specializations.ty.get(&test_type_param(1)),
+            Some(&Ty::Int)
+        );
 
         // Make sure we're calling the specialized version
         let TypedStmtKind::Expr(expr) = &typed.ast.stmts[0].kind else {
             panic!("expected expr statement");
         };
-        let TypedExprKind::Call { callee, callee_sym, .. } = &expr.kind else {
+        let TypedExprKind::Call {
+            callee, callee_sym, ..
+        } = &expr.kind
+        else {
             panic!("expected call expression");
         };
         let TypedExprKind::Variable(sym) = &callee.kind else {
@@ -1152,6 +1165,9 @@ pub mod tests {
         };
         // Both should reference the specialized version of id
         assert_eq!(*sym, Symbol::Synthesized(SynthesizedId::from(1)));
-        assert_eq!(*callee_sym, Some(Symbol::Synthesized(SynthesizedId::from(1))));
+        assert_eq!(
+            *callee_sym,
+            Some(Symbol::Synthesized(SynthesizedId::from(1)))
+        );
     }
 }

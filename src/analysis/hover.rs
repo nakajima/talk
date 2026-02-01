@@ -268,11 +268,18 @@ fn hover_for_type_annotation(ctx: &HoverCtx<'_>, ty: &TypeAnnotation) -> Option<
     use crate::node_kinds::type_annotation::TypeAnnotationKind;
 
     let (start, end, name, symbol) = match &ty.kind {
-        TypeAnnotationKind::Nominal { name, name_span, .. } => {
+        TypeAnnotationKind::Nominal {
+            name, name_span, ..
+        } => {
             if !span_contains(*name_span, ctx.byte_offset) {
                 return None;
             }
-            (name_span.start, name_span.end, name.name_str(), name.symbol().ok())
+            (
+                name_span.start,
+                name_span.end,
+                name.name_str(),
+                name.symbol().ok(),
+            )
         }
         TypeAnnotationKind::NominalPath { member_span, .. } => {
             if !span_contains(*member_span, ctx.byte_offset) {
@@ -292,12 +299,13 @@ fn hover_for_type_annotation(ctx: &HoverCtx<'_>, ty: &TypeAnnotation) -> Option<
 
     // Try to get type info for this annotation
     if let Some(types) = ctx.types
-        && let Some(entry) = types.get(&ty.id) {
-            return Some(Hover {
-                contents: ctx.formatter.format_ty(entry.as_mono_ty()),
-                range: Some(range),
-            });
-        }
+        && let Some(entry) = types.get(&ty.id)
+    {
+        return Some(Hover {
+            contents: ctx.formatter.format_ty(entry.as_mono_ty()),
+            range: Some(range),
+        });
+    }
 
     // Fall back to symbol-based hover if no type entry
     let line = hover_line_for_name_and_type(&ctx.formatter, name, symbol, ctx.types, None)?;
@@ -637,9 +645,16 @@ struct Foo<T> {
         // Find "T" in "-> T"
         let byte_offset = byte_offset_for(code, "-> T", 0) + 3; // point to T after ->
         let hover = hover_at(&workspace, None, &doc_id, byte_offset);
-        assert!(hover.is_some(), "expected hover info for return type T, offset: {byte_offset}");
+        assert!(
+            hover.is_some(),
+            "expected hover info for return type T, offset: {byte_offset}"
+        );
         let hover = hover.expect("hover");
-        assert!(hover.contents.contains("T"), "expected 'T' in hover: {}", hover.contents);
+        assert!(
+            hover.contents.contains("T"),
+            "expected 'T' in hover: {}",
+            hover.contents
+        );
     }
 
     #[test]
@@ -656,5 +671,4 @@ func add(a: Int, b: Int) -> Int { a }
         // Should show uncurried: (Int, Int) -> Int, not curried: (Int) -> (Int) -> Int
         assert_eq!(hover.contents, "add: (Int, Int) -> Int");
     }
-
 }

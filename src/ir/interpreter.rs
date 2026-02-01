@@ -127,7 +127,13 @@ pub struct Frame {
 }
 
 impl Frame {
-    pub fn new(span: EnteredSpan, func: Symbol, dest: Register, ret: Option<Symbol>, self_dest: Option<Register>) -> Self {
+    pub fn new(
+        span: EnteredSpan,
+        func: Symbol,
+        dest: Register,
+        ret: Option<Symbol>,
+        self_dest: Option<Register>,
+    ) -> Self {
         Self {
             func,
             _span: span,
@@ -183,9 +189,9 @@ pub struct Memory {
 pub struct Interpreter<IO: super::io::IO> {
     program: Program,
     symbol_names: Option<FxHashMap<Symbol, String>>,
-    frames: Vec<Frame>,
+    pub frames: Vec<Frame>,
     current_func: Option<Function<IrTy>>,
-    main_result: Option<Value>,
+    pub main_result: Option<Value>,
     memory: Memory,
     heap_start: usize,
     pub io: IO,
@@ -234,7 +240,13 @@ impl<IO: super::io::IO> Interpreter<IO> {
         self.main_result.clone().unwrap_or(Value::Void)
     }
 
-    pub fn call(&mut self, function: Symbol, args: Vec<Value>, dest: Register, self_dest: Option<Register>) {
+    pub fn call(
+        &mut self,
+        function: Symbol,
+        args: Vec<Value>,
+        dest: Register,
+        self_dest: Option<Register>,
+    ) {
         let caller_name = self.current_func.as_ref().map(|f| f.name);
         if let Some(callee_func) = self.current_func.take() {
             self.program.functions.insert(callee_func.name, callee_func);
@@ -308,11 +320,7 @@ impl<IO: super::io::IO> Interpreter<IO> {
 
         loop {
             // Build the poll function arguments: (state, state_data, resumed)
-            let poll_args = vec![
-                Value::Int(state),
-                state_data.clone(),
-                resumed,
-            ];
+            let poll_args = vec![Value::Int(state), state_data.clone(), resumed];
 
             // Call the poll function
             let dest_reg = self.current_func.as_ref().map_or(Register(0), |_| {
@@ -423,7 +431,9 @@ impl<IO: super::io::IO> Interpreter<IO> {
             IR::Term(Terminator::Ret { val, .. }) => {
                 let val = self.val(val);
                 // Get mutated self from self_out register (if this is a method)
-                let self_val = self.current_func.as_ref()
+                let self_val = self
+                    .current_func
+                    .as_ref()
                     .and_then(|f| f.self_out)
                     .map(|reg| self.frames.last().unwrap().registers[reg.0 as usize].clone());
                 let frame = self.frames.pop().unwrap();
@@ -483,7 +493,11 @@ impl<IO: super::io::IO> Interpreter<IO> {
                 self.write_register(&dest, result);
             }
             IR::Instr(Instruction::Call {
-                dest, callee, args, self_dest, ..
+                dest,
+                callee,
+                args,
+                self_dest,
+                ..
             }) => {
                 let mut arg_vals: Vec<Value> =
                     args.items.iter().map(|v| self.val(v.clone())).collect();
@@ -701,7 +715,6 @@ impl<IO: super::io::IO> Interpreter<IO> {
                     panic!("Store expects RawPtr, got {addr_val:?}");
                 };
 
-
                 let bytes = self.value_to_bytes(&ty, val);
                 if bytes.len() != ty.bytes_len() {
                     panic!(
@@ -760,7 +773,12 @@ impl<IO: super::io::IO> Interpreter<IO> {
             }
             IR::Instr(Instruction::Free { .. }) => unimplemented!(),
             // I/O Instructions
-            IR::Instr(Instruction::IoOpen { dest, path, flags, mode }) => {
+            IR::Instr(Instruction::IoOpen {
+                dest,
+                path,
+                flags,
+                mode,
+            }) => {
                 let path_val = self.val(path);
                 let flags_val = self.val(flags);
                 let mode_val = self.val(mode);
@@ -776,7 +794,12 @@ impl<IO: super::io::IO> Interpreter<IO> {
                 let result = self.io.io_open(&path_bytes, flags_int, mode_int);
                 self.write_register(&dest, Value::Int(result));
             }
-            IR::Instr(Instruction::IoRead { dest, fd, buf, count }) => {
+            IR::Instr(Instruction::IoRead {
+                dest,
+                fd,
+                buf,
+                count,
+            }) => {
                 let fd_val = self.val(fd);
                 let buf_val = self.val(buf);
                 let count_val = self.val(count);
@@ -805,7 +828,12 @@ impl<IO: super::io::IO> Interpreter<IO> {
 
                 self.write_register(&dest, Value::Int(result));
             }
-            IR::Instr(Instruction::IoWrite { dest, fd, buf, count }) => {
+            IR::Instr(Instruction::IoWrite {
+                dest,
+                fd,
+                buf,
+                count,
+            }) => {
                 let fd_val = self.val(fd);
                 let buf_val = self.val(buf);
                 let count_val = self.val(count);
@@ -823,7 +851,8 @@ impl<IO: super::io::IO> Interpreter<IO> {
                 // Get bytes from memory
                 let bytes = if buf_ptr.0 < self.heap_start {
                     // Static memory
-                    self.program.static_memory.data[buf_ptr.0..buf_ptr.0 + count_int as usize].to_vec()
+                    self.program.static_memory.data[buf_ptr.0..buf_ptr.0 + count_int as usize]
+                        .to_vec()
                 } else {
                     // Heap memory
                     let heap_idx = buf_ptr.0 - self.heap_start;
@@ -861,7 +890,12 @@ impl<IO: super::io::IO> Interpreter<IO> {
                 let result = self.io.io_ctl(fd_int, op_int, arg_int);
                 self.write_register(&dest, Value::Int(result));
             }
-            IR::Instr(Instruction::IoPoll { dest, fds, count, timeout }) => {
+            IR::Instr(Instruction::IoPoll {
+                dest,
+                fds,
+                count,
+                timeout,
+            }) => {
                 let fds_val = self.val(fds);
                 let count_val = self.val(count);
                 let timeout_val = self.val(timeout);
@@ -882,9 +916,14 @@ impl<IO: super::io::IO> Interpreter<IO> {
 
                 for i in 0..count_int as usize {
                     let offset = heap_idx + i * 8;
-                    let fd = i32::from_le_bytes(self.memory.mem[offset..offset + 4].try_into().unwrap());
-                    let events = i16::from_le_bytes(self.memory.mem[offset + 4..offset + 6].try_into().unwrap());
-                    let revents = i16::from_le_bytes(self.memory.mem[offset + 6..offset + 8].try_into().unwrap());
+                    let fd =
+                        i32::from_le_bytes(self.memory.mem[offset..offset + 4].try_into().unwrap());
+                    let events = i16::from_le_bytes(
+                        self.memory.mem[offset + 4..offset + 6].try_into().unwrap(),
+                    );
+                    let revents = i16::from_le_bytes(
+                        self.memory.mem[offset + 6..offset + 8].try_into().unwrap(),
+                    );
                     poll_fds.push((fd, events, revents));
                 }
 
@@ -1234,6 +1273,11 @@ impl<IO: super::io::IO> Interpreter<IO> {
     fn write_register(&mut self, register: &Register, val: Value) {
         if register == &Register::MAIN {
             self.main_result = Some(val);
+            return;
+        }
+
+        if register == &Register::DROP {
+            // Discard the value
             return;
         }
 
@@ -2016,7 +2060,10 @@ Dog().handleDSTChange()
             ",
         );
 
-        assert_eq!(interpreter.io.stdout, "Optional.some(1)\nOptional.some(2)\nOptional.some(3)\n".as_bytes());
+        assert_eq!(
+            interpreter.io.stdout,
+            "Optional.some(1)\nOptional.some(2)\nOptional.some(3)\n".as_bytes()
+        );
     }
 
     #[test]
@@ -2075,5 +2122,83 @@ Dog().handleDSTChange()
 
         // CaptureIO.io_sleep returns 0 (no-op for testing)
         assert_eq!(val, Value::Int(0));
+    }
+
+    #[test]
+    fn interprets_optional_match() {
+        // Test that match on custom Optional-like enum works
+        let (_val, interpreter) = interpret_with(
+            "
+            enum MyOptional<T> { case some(T), none }
+
+            let opt = MyOptional.some(42)
+            match opt {
+                .some(x) -> print(x),
+                .none -> print(0)
+            }
+            ",
+        );
+        assert_eq!(interpreter.io.stdout, "42\n".as_bytes());
+    }
+
+    #[test]
+    fn interprets_simple_loop_break() {
+        // Test basic loop with break
+        let (_val, interpreter) = interpret_with(
+            "
+            let i = 0
+            loop {
+                if i >= 3 {
+                    break
+                }
+                print(i)
+                i = i + 1
+            }
+            ",
+        );
+        assert_eq!(interpreter.io.stdout, "0\n1\n2\n".as_bytes());
+    }
+
+    #[test]
+    fn interprets_match_with_conditional_and_break() {
+        // Test match on conditionally created enum with break in arm
+        let (_val, interpreter) = interpret_with(
+            "
+            enum Opt { case yes(Int), no }
+            let i = 0
+            loop {
+                let opt = if i < 3 { Opt.yes(i) } else { Opt.no }
+                match opt {
+                    .yes(x) -> {
+                        print(x)
+                        i = i + 1
+                        ()
+                    },
+                    .no -> break
+                }
+            }
+            ",
+        );
+        assert_eq!(interpreter.io.stdout, "0\n1\n2\n".as_bytes());
+    }
+
+    #[test]
+    fn interprets_core_optional_match() {
+        // Test that matching on Optional from Core (imported enum) gets correct variant tags.
+        // The bug was that when enum variants from imported modules are cached in order of
+        // use rather than declaration order, the tag indices become wrong.
+        // We use the iterator pattern which returns Optional<Element>.
+        let (_val, interpreter) = interpret_with(
+            "
+            let a = [42]
+            let i = a.iter()
+            let opt = i.next()
+            match opt {
+                .some(x) -> print(x),
+                .none -> print(0)
+            }
+            ",
+        );
+        assert_eq!(interpreter.io.stdout, "42\n".as_bytes());
     }
 }

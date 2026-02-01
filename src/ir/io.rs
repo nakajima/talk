@@ -80,11 +80,7 @@ impl IO for StdioIO {
             // Use libc::open directly for full flag support
             let fd = unsafe { libc::open(path_cstr.as_ptr(), flags as i32, mode as u32) };
 
-            if fd < 0 {
-                -errno() as i64
-            } else {
-                fd as i64
-            }
+            if fd < 0 { -errno() as i64 } else { fd as i64 }
         }
 
         #[cfg(not(unix))]
@@ -137,11 +133,7 @@ impl IO for StdioIO {
         {
             let result = unsafe { libc::close(fd as i32) };
 
-            if result < 0 {
-                -errno() as i64
-            } else {
-                0
-            }
+            if result < 0 { -errno() as i64 } else { 0 }
         }
 
         #[cfg(not(unix))]

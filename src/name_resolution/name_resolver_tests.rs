@@ -542,10 +542,7 @@ pub mod tests {
                         ParamLocalId(1),
                         "t",
                         annotation!(TypeAnnotationKind::Nominal {
-                            name: Name::Resolved(
-                                test_type_param(1),
-                                "T".into()
-                            ),
+                            name: Name::Resolved(test_type_param(1), "T".into()),
                             name_span: Span::ANY,
                             generics: vec![]
                         })
@@ -842,10 +839,7 @@ pub mod tests {
                         name_span: Span::ANY,
                         is_static: false,
                         type_annotation: Some(annotation!(TypeAnnotationKind::Nominal {
-                            name: Name::Resolved(
-                                test_type_param(1),
-                                "T".into()
-                            ),
+                            name: Name::Resolved(test_type_param(1), "T".into()),
                             name_span: Span::ANY,
                             generics: vec![]
                         })),
@@ -1621,9 +1615,7 @@ pub mod tests {
     }
 
     /// Helper to resolve multiple files with isolated modules enabled
-    fn resolve_multi(
-        files: &[(&str, &str)],
-    ) -> (Vec<AST<NameResolved>>, ResolvedNames) {
+    fn resolve_multi(files: &[(&str, &str)]) -> (Vec<AST<NameResolved>>, ResolvedNames) {
         use crate::lexer::Lexer;
         use crate::parser::Parser;
 
@@ -1659,7 +1651,11 @@ pub mod tests {
         let main_ast = &asts[1];
         // Check the last statement (the 'helper' reference) resolved correctly
         if let crate::node::Node::Stmt(Stmt {
-            kind: StmtKind::Expr(Expr { kind: ExprKind::Variable(name), .. }),
+            kind:
+                StmtKind::Expr(Expr {
+                    kind: ExprKind::Variable(name),
+                    ..
+                }),
             ..
         }) = &main_ast.roots[1]
         {

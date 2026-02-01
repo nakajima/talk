@@ -54,8 +54,7 @@ impl Call {
             // is a Nominal and we have an unknown receiver, unify them since the receiver
             // of a variant constructor is the same type as its return value.
             if let Some(receiver_ty) = &self.receiver {
-                let applied_receiver =
-                    session.apply(receiver_ty, &mut context.substitutions_mut());
+                let applied_receiver = session.apply(receiver_ty, &mut context.substitutions_mut());
                 if let Ty::Var { .. } = applied_receiver
                     && let Ty::Nominal { .. } = &returns
                     && let Ok(metas) = unify(receiver_ty, &returns, context, session)
@@ -145,9 +144,7 @@ impl Call {
                     match session.lookup(&sym) {
                         Some(EnvEntry::Mono(ty)) => ty,
                         Some(EnvEntry::Scheme(s)) => s.ty.clone(),
-                        _ => Ty::Error(
-                            TypeError::TypeNotFound(format!("Missing {name:?}")).into(),
-                        ),
+                        _ => Ty::Error(TypeError::TypeNotFound(format!("Missing {name:?}")).into()),
                     }
                 };
 

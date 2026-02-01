@@ -31,7 +31,9 @@ impl Display for ParserError {
                     write!(f, "Unexpected end of input.")
                 }
             }
-            Self::UnexpectedToken { expected, actual, .. } => {
+            Self::UnexpectedToken {
+                expected, actual, ..
+            } => {
                 write!(f, "Unexpected token. Expected {expected:?}, got {actual:?}")
             }
             Self::InfiniteLoop(current) => {

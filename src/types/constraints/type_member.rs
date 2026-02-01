@@ -51,9 +51,7 @@ impl TypeMember {
     ) -> SolveResult {
         let cause = ConstraintCause::TypeMember(self.node_id);
         match ty {
-            Ty::Var { id, .. } => {
-                SolveResult::Defer(DeferralReason::WaitingOnMeta(Meta::Ty(*id)))
-            }
+            Ty::Var { id, .. } => SolveResult::Defer(DeferralReason::WaitingOnMeta(Meta::Ty(*id))),
             Ty::Param(type_param_id, _) => {
                 self.lookup_for_type_param(constraints, context, session, *type_param_id)
             }

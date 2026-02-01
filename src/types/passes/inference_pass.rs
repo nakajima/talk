@@ -399,11 +399,8 @@ impl<'a> InferencePass<'a> {
                 }
             };
 
-            let effect_signature = curry(
-                params.iter().map(|p| p.ty.clone()),
-                ret,
-                Row::Empty.into(),
-            );
+            let effect_signature =
+                curry(params.iter().map(|p| p.ty.clone()), ret, Row::Empty.into());
             self.session
                 .type_catalog
                 .effects
@@ -922,10 +919,7 @@ impl<'a> InferencePass<'a> {
     }
 
     #[instrument(skip(self))]
-    fn generate_for_group(
-        &mut self,
-        group: BindingGroup,
-    ) -> (Vec<TypedDecl>, Vec<TypedStmt>) {
+    fn generate_for_group(&mut self, group: BindingGroup) -> (Vec<TypedDecl>, Vec<TypedStmt>) {
         let mut decls = vec![];
         let mut stmts = vec![];
 
@@ -1056,8 +1050,7 @@ impl<'a> InferencePass<'a> {
                     scheme.foralls.insert(ForAll::Ty(*param));
                 }
 
-                let mut predicates: IndexSet<Predicate> =
-                    scheme.predicates.into_iter().collect();
+                let mut predicates: IndexSet<Predicate> = scheme.predicates.into_iter().collect();
                 predicates.extend(requirements.predicates.iter().cloned());
                 scheme.predicates = predicates.into_iter().collect();
 
@@ -1066,12 +1059,7 @@ impl<'a> InferencePass<'a> {
         }
     }
 
-    fn solve(
-        &mut self,
-        context: &mut SolveContext,
-        binders: Vec<Symbol>,
-        placeholders: Vec<Ty>,
-    ) {
+    fn solve(&mut self, context: &mut SolveContext, binders: Vec<Symbol>, placeholders: Vec<Ty>) {
         context.substitutions_mut().extend(&self.substitutions);
 
         let level = context.level();
@@ -1115,11 +1103,7 @@ impl<'a> InferencePass<'a> {
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self, node, context), fields(node.id = ?node.node_id()))]
-    fn visit_node(
-        &mut self,
-        node: &Node,
-        context: &mut SolveContext,
-    ) -> TypedRet<TypedNode> {
+    fn visit_node(&mut self, node: &Node, context: &mut SolveContext) -> TypedRet<TypedNode> {
         match &node {
             Node::Decl(decl) => Ok(TypedNode::Decl(self.visit_decl(decl, context)?)),
             Node::Stmt(stmt) => Ok(TypedNode::Stmt(self.visit_stmt(stmt, context)?)),
@@ -1131,11 +1115,7 @@ impl<'a> InferencePass<'a> {
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self, decl, context), fields(decl.id = ?decl.id))]
-    fn visit_decl(
-        &mut self,
-        decl: &Decl,
-        context: &mut SolveContext,
-    ) -> TypedRet<TypedDecl> {
+    fn visit_decl(&mut self, decl: &Decl, context: &mut SolveContext) -> TypedRet<TypedDecl> {
         match &decl.kind {
             DeclKind::Effect { name, .. } => Ok(TypedDecl {
                 id: decl.id,
@@ -1199,11 +1179,7 @@ impl<'a> InferencePass<'a> {
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self, stmt, context), fields(stmt.id = ?stmt.id))]
-    fn visit_stmt(
-        &mut self,
-        stmt: &Stmt,
-        context: &mut SolveContext,
-    ) -> TypedRet<TypedStmt> {
+    fn visit_stmt(&mut self, stmt: &Stmt, context: &mut SolveContext) -> TypedRet<TypedStmt> {
         let ty = match &stmt.kind {
             StmtKind::Expr(expr) => {
                 let typed_expr = self.visit_expr(expr, context)?;
@@ -1309,17 +1285,17 @@ impl<'a> InferencePass<'a> {
             StmtKind::Handling {
                 effect_name, body, ..
             } => self.visit_handler_stmt(stmt, effect_name, body, context)?,
+            StmtKind::For { .. } => {
+                // For loops should be desugared before type inference
+                unreachable!("for loops should be desugared before type inference")
+            }
         };
 
         Ok(ty)
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self, expr, context), fields(expr.id = ?expr.id, expr = formatter::format_node(&expr.into(), &self.asts[0].meta)))]
-    fn visit_expr(
-        &mut self,
-        expr: &Expr,
-        context: &mut SolveContext,
-    ) -> TypedRet<TypedExpr> {
+    fn visit_expr(&mut self, expr: &Expr, context: &mut SolveContext) -> TypedRet<TypedExpr> {
         let expr = match &expr.kind {
             ExprKind::Incomplete(incomplete) => {
                 use crate::node_kinds::incomplete_expr::IncompleteExpr;
@@ -1356,12 +1332,7 @@ impl<'a> InferencePass<'a> {
             },
             ExprKind::LiteralFloat(v) => TypedExpr {
                 id: expr.id,
-                ty: self.meta_with_default(
-                    expr.id,
-                    context.level(),
-                    Ty::Float,
-                    vec![Ty::Float],
-                ),
+                ty: self.meta_with_default(expr.id, context.level(), Ty::Float, vec![Ty::Float]),
                 kind: TypedExprKind::LiteralFloat(v.to_string()),
             },
             ExprKind::LiteralTrue => TypedExpr {
@@ -1456,13 +1427,7 @@ impl<'a> InferencePass<'a> {
         Ok(expr)
     }
 
-    fn meta_with_default(
-        &mut self,
-        id: NodeID,
-        level: Level,
-        ty: Ty,
-        allowed: Vec<Ty>,
-    ) -> Ty {
+    fn meta_with_default(&mut self, id: NodeID, level: Level, ty: Ty, allowed: Vec<Ty>) -> Ty {
         let var = self.session.new_ty_meta_var(level);
         self.constraints.wants_default(id, var.clone(), ty, allowed);
         var
@@ -1565,8 +1530,7 @@ impl<'a> InferencePass<'a> {
             effect.clone()
         } else {
             // Build a scheme from the foralls and instantiate it
-            let scheme =
-                Scheme::new(foralls.into_iter().collect(), vec![], effect.clone());
+            let scheme = Scheme::new(foralls.into_iter().collect(), vec![], effect.clone());
             let (instantiated, subs) = scheme.instantiate_with_args(
                 expr.id,
                 &type_arg_tys
@@ -1672,10 +1636,7 @@ impl<'a> InferencePass<'a> {
 
         Ok(TypedStmt {
             id: stmt.id,
-            ty: ty_expr
-                .as_ref()
-                .map(|t| t.ty.clone())
-                .unwrap_or(Ty::Void),
+            ty: ty_expr.as_ref().map(|t| t.ty.clone()).unwrap_or(Ty::Void),
             kind: TypedStmtKind::Return(ty_expr),
         })
     }
@@ -2667,9 +2628,7 @@ impl<'a> InferencePass<'a> {
                                     severity: Severity::Error,
                                     kind: TypeError::NameNotResolved(name.clone()),
                                 }));
-                                return Ty::Error(
-                                    TypeError::NameNotResolved(name.clone()).into(),
-                                );
+                                return Ty::Error(TypeError::NameNotResolved(name.clone()).into());
                             };
 
                             let var = self.session.new_ty_meta_var_id(context.level());
@@ -2692,9 +2651,7 @@ impl<'a> InferencePass<'a> {
                                     severity: Severity::Error,
                                     kind: TypeError::NameNotResolved(name.clone()),
                                 }));
-                                return Ty::Error(
-                                    TypeError::NameNotResolved(name.clone()).into(),
-                                );
+                                return Ty::Error(TypeError::NameNotResolved(name.clone()).into());
                             };
 
                             let ty = if let Some(existing) = self.session.lookup(&sym) {
@@ -3002,11 +2959,7 @@ impl<'a> InferencePass<'a> {
                         Row::Empty.into(),
                     )
                 } else {
-                    curry(
-                        field_metas.clone(),
-                        expected.clone(),
-                        Row::Empty.into(),
-                    )
+                    curry(field_metas.clone(), expected.clone(), Row::Empty.into())
                 };
 
                 self.constraints.wants_member(
@@ -3141,11 +3094,7 @@ impl<'a> InferencePass<'a> {
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self, block, context))]
-    fn infer_block(
-        &mut self,
-        block: &Block,
-        context: &mut SolveContext,
-    ) -> TypedRet<TypedBlock> {
+    fn infer_block(&mut self, block: &Block, context: &mut SolveContext) -> TypedRet<TypedBlock> {
         let mut ret = Ty::Void;
 
         let mut nodes = vec![];
@@ -3350,11 +3299,7 @@ impl<'a> InferencePass<'a> {
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self, context, func), fields(func.name = ?func.name))]
-    fn visit_func(
-        &mut self,
-        func: &Func,
-        context: &mut SolveContext,
-    ) -> TypedRet<TypedFunc> {
+    fn visit_func(&mut self, func: &Func, context: &mut SolveContext) -> TypedRet<TypedFunc> {
         let func_sym = func
             .name
             .symbol()
@@ -3715,9 +3660,15 @@ impl<'a> InferencePass<'a> {
                         .try_collect()?,
                 ))
             }
-            _ => Err(TypeError::TypeNotFound(format!(
-                "Type annotation unable to be determined {type_annotation:?}"
-            ))),
+            TypeAnnotationKind::Func { params, returns } => {
+                let param_tys: Vec<Ty> = params
+                    .iter()
+                    .map(|p| self.visit_type_annotation(p, context))
+                    .try_collect()?;
+                let return_ty = self.visit_type_annotation(returns, context)?;
+
+                Ok(curry(param_tys, return_ty, Row::Empty.into()))
+            }
         }
     }
 

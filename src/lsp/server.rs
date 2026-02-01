@@ -37,10 +37,10 @@ use crate::analysis::{
     DocumentInput, Hover as AnalysisHover, Workspace as AnalysisWorkspace,
     completion as analysis_completion, hover as analysis_hover,
 };
-use crate::lsp::semantic_tokens::collect;
-use crate::lsp::{completion, document::Document, semantic_tokens::TOKEN_TYPES};
 use crate::lsp::goto_definition::goto_definition;
 use crate::lsp::rename::rename_at;
+use crate::lsp::semantic_tokens::collect;
+use crate::lsp::{completion, document::Document, semantic_tokens::TOKEN_TYPES};
 
 #[allow(deprecated)]
 fn workspace_roots_from_initialize(params: &InitializeParams) -> Vec<PathBuf> {
@@ -235,10 +235,7 @@ pub async fn start() {
                     };
 
                     Ok(Some(vec![TextEdit::new(
-                        Range::new(
-                            Position::new(0, 0),
-                            Position::new(last_line, last_char),
-                        ),
+                        Range::new(Position::new(0, 0), Position::new(last_line, last_char)),
                         formatted,
                     )]))
                 } else {
@@ -848,8 +845,10 @@ fn compute_code_actions(
 
     // Build an index of public symbols from all other files
     // Map from symbol name -> (source file path, symbol)
-    let mut public_exports: FxHashMap<String, Vec<(String, crate::name_resolution::symbol::Symbol)>> =
-        FxHashMap::default();
+    let mut public_exports: FxHashMap<
+        String,
+        Vec<(String, crate::name_resolution::symbol::Symbol)>,
+    > = FxHashMap::default();
 
     for (idx, doc_id) in workspace.file_id_to_document.iter().enumerate() {
         if doc_id == document_id {
@@ -882,13 +881,14 @@ fn compute_code_actions(
     // Check each diagnostic for undefined name errors
     for diagnostic in diagnostics {
         // Only handle diagnostics that are in the range
-        let diag_range = byte_span_to_range_utf16(text, diagnostic.range.start, diagnostic.range.end);
-        let Some(diag_range) = diag_range else { continue };
+        let diag_range =
+            byte_span_to_range_utf16(text, diagnostic.range.start, diagnostic.range.end);
+        let Some(diag_range) = diag_range else {
+            continue;
+        };
 
         // Check if this diagnostic intersects with the requested range
-        if diag_range.end.line < range.start.line
-            || diag_range.start.line > range.end.line
-        {
+        if diag_range.end.line < range.start.line || diag_range.start.line > range.end.line {
             continue;
         }
 
@@ -909,10 +909,9 @@ fn compute_code_actions(
                 let current_path = std::path::Path::new(document_id);
                 let source_path_obj = std::path::Path::new(source_path);
 
-                let relative_path = if let (Some(current_dir), Some(source_file)) = (
-                    current_path.parent(),
-                    source_path_obj.file_name(),
-                ) {
+                let relative_path = if let (Some(current_dir), Some(source_file)) =
+                    (current_path.parent(), source_path_obj.file_name())
+                {
                     // Simple case: both files in same directory
                     if current_dir == source_path_obj.parent().unwrap_or(std::path::Path::new("")) {
                         format!("./{}", source_file.to_string_lossy())
@@ -929,10 +928,7 @@ fn compute_code_actions(
                 // Find where to insert (at the start of the file, after any existing imports)
                 let insert_position = Position::new(0, 0);
 
-                let edit = TextEdit::new(
-                    Range::new(insert_position, insert_position),
-                    import_stmt,
-                );
+                let edit = TextEdit::new(Range::new(insert_position, insert_position), import_stmt);
 
                 let mut changes: std::collections::HashMap<Url, Vec<TextEdit>> =
                     std::collections::HashMap::new();
@@ -1084,10 +1080,7 @@ foo.bar
             };
 
             // Row params are hidden for cleaner display
-            assert!(
-                markup.value.contains("id: <T>(T) -> T"),
-                "{markup:?}"
-            );
+            assert!(markup.value.contains("id: <T>(T) -> T"), "{markup:?}");
             assert!(!markup.value.contains("TypeParamId"), "{markup:?}");
             assert!(!markup.value.contains("Int"), "{markup:?}");
             assert!(!markup.value.contains("Float"), "{markup:?}");
@@ -1147,8 +1140,9 @@ foo.bar
         )
         .expect("range a");
         // The foo reference in B is at the last occurrence
-        let range_b = super::byte_span_to_range_utf16(code_b, foo_in_b as u32, (foo_in_b + 3) as u32)
-            .expect("range b");
+        let range_b =
+            super::byte_span_to_range_utf16(code_b, foo_in_b as u32, (foo_in_b + 3) as u32)
+                .expect("range b");
 
         assert_eq!(edit_ranges_for_uri(&edit, &uri_a), vec![range_a]);
         assert_eq!(edit_ranges_for_uri(&edit, &uri_b), vec![range_b]);
@@ -1350,8 +1344,8 @@ extend Person {
 
         // Click on "foo" in "import { foo }" - should navigate to definition in a.tlk
         let import_foo_offset = code_b.find("{ foo }").expect("import foo") + 2;
-        let target =
-            super::goto_definition(&module, None, &uri_b, import_foo_offset as u32).expect("target");
+        let target = super::goto_definition(&module, None, &uri_b, import_foo_offset as u32)
+            .expect("target");
 
         assert_eq!(target.uri, uri_a, "should navigate to a.tlk");
         // Should point to the definition location in a.tlk
@@ -1404,7 +1398,11 @@ extend Person {
             let last_char = if ends_with_newline {
                 0
             } else {
-                input.rsplit('\n').next().map(|s| s.len()).unwrap_or(input.len())
+                input
+                    .rsplit('\n')
+                    .next()
+                    .map(|s| s.len())
+                    .unwrap_or(input.len())
             };
 
             // Apply the edit: replace range [0,0] to [last_line, last_char] with formatted
