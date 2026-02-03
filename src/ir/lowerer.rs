@@ -199,6 +199,8 @@ pub struct StateMachineContext {
     pub resumed_var: Register,
     /// The original function name being compiled
     pub func_name: Symbol,
+    /// Entry block IDs for each state (state 0 = initial, state N = continuation after yield N-1)
+    pub state_entries: Vec<BasicBlockId>,
 }
 
 // Lowers an AST with Types to a monomorphized IR
@@ -377,6 +379,32 @@ impl<'a> Lowerer<'a> {
                 initializer,
                 ..
             } => {
+                // Store global constants for cross-module access
+                if let TypedPatternKind::Bind(sym @ Symbol::Global(_)) = &pattern.kind {
+                    if let Some(init) = initializer {
+                        let constant = match &init.kind {
+                            TypedExprKind::LiteralInt(val) => val
+                                .parse::<i64>()
+                                .ok()
+                                .map(crate::types::type_catalog::GlobalConstant::Int),
+                            TypedExprKind::LiteralFloat(val) => val
+                                .parse::<f64>()
+                                .ok()
+                                .map(crate::types::type_catalog::GlobalConstant::Float),
+                            TypedExprKind::LiteralTrue => {
+                                Some(crate::types::type_catalog::GlobalConstant::Bool(true))
+                            }
+                            TypedExprKind::LiteralFalse => {
+                                Some(crate::types::type_catalog::GlobalConstant::Bool(false))
+                            }
+                            _ => None,
+                        };
+                        if let Some(c) = constant {
+                            self.typed.types.catalog.global_constants.insert(*sym, c);
+                        }
+                    }
+                }
+
                 if matches!(
                     pattern.kind,
                     TypedPatternKind::Bind(_) | TypedPatternKind::Wildcard
@@ -1226,17 +1254,25 @@ impl<'a> Lowerer<'a> {
             (yield_point.resume_state, yield_point.live_vars.clone())
         };
 
-        // Build state_data record with live variables
-        let mut state_data_fields = Vec::with_capacity(live_vars.len());
-        for (sym, _ty) in &live_vars {
-            let reg = self.get_binding(sym);
-            state_data_fields.push(reg.into());
-        }
+        // Build state_data as a RawPtr. When live_vars is empty, use a null pointer.
+        // When non-empty, store the record to memory and return the pointer.
+        let state_data_reg = if live_vars.is_empty() {
+            let reg = self.next_register();
+            self.push_instr(Instruction::Constant {
+                dest: reg,
+                val: Value::Int(0),
+                ty: Ty::RawPtr,
+                meta: Default::default(),
+            });
+            reg
+        } else {
+            let mut state_data_fields = Vec::with_capacity(live_vars.len());
+            for (sym, _ty) in &live_vars {
+                let reg = self.get_binding(sym);
+                state_data_fields.push(reg.into());
+            }
 
-        let state_data_reg = self.next_register();
-        self.push_instr(Instruction::Record {
-            dest: state_data_reg,
-            ty: Ty::Record(
+            let record_ty = Ty::Record(
                 None,
                 live_vars
                     .iter()
@@ -1247,10 +1283,30 @@ impl<'a> Lowerer<'a> {
                         ty: ty.clone(),
                     })
                     .into(),
-            ),
-            record: state_data_fields.into(),
-            meta: Default::default(),
-        });
+            );
+
+            let record_reg = self.next_register();
+            self.push_instr(Instruction::Record {
+                dest: record_reg,
+                ty: record_ty.clone(),
+                record: state_data_fields.into(),
+                meta: Default::default(),
+            });
+
+            let addr_reg = self.next_register();
+            self.push_instr(Instruction::Alloc {
+                dest: addr_reg,
+                ty: record_ty.clone(),
+                count: Value::Int(1),
+            });
+            self.push_instr(Instruction::Store {
+                value: record_reg.into(),
+                ty: record_ty,
+                addr: addr_reg.into(),
+            });
+
+            addr_reg
+        };
 
         // Build the next state value
         let next_state_reg = self.next_register();
@@ -1310,26 +1366,53 @@ impl<'a> Lowerer<'a> {
             ctx.current_state = next_state;
         }
 
-        // Create a new basic block for the continuation (code after the yield)
+        // Create a new basic block for the continuation (code after the effect call)
         let continuation_block = self.new_basic_block();
         self.set_current_block(continuation_block);
+
+        // Record this continuation block as the entry for the next state
+        if let Some(ref mut ctx) = self.state_machine_context {
+            ctx.state_entries.push(continuation_block);
+        }
 
         // In the continuation, the resumed value comes from the resumed_var parameter
         // We need to restore live variables from state_data
         let resumed_var = self.state_machine_context.as_ref().unwrap().resumed_var;
         let state_data = self.state_machine_context.as_ref().unwrap().state_data;
 
-        // Restore live variables from state_data
-        for (i, (sym, ty)) in live_vars.iter().enumerate() {
-            let dest = self.next_register();
-            self.push_instr(Instruction::GetField {
-                dest,
-                ty: ty.clone(),
-                record: state_data,
-                field: Label::Positional(i),
-                meta: Default::default(),
+        // Restore live variables from state_data (which is a RawPtr)
+        if !live_vars.is_empty() {
+            let record_ty = Ty::Record(
+                None,
+                live_vars
+                    .iter()
+                    .enumerate()
+                    .fold(Row::Empty, |row, (i, (_, ty))| Row::Extend {
+                        row: row.into(),
+                        label: Label::Positional(i),
+                        ty: ty.clone(),
+                    })
+                    .into(),
+            );
+
+            let loaded_reg = self.next_register();
+            self.push_instr(Instruction::Load {
+                dest: loaded_reg,
+                ty: record_ty,
+                addr: state_data.into(),
             });
-            self.insert_binding(*sym, Binding::Register(dest.0));
+
+            for (i, (sym, ty)) in live_vars.iter().enumerate() {
+                let dest = self.next_register();
+                self.push_instr(Instruction::GetField {
+                    dest,
+                    ty: ty.clone(),
+                    record: loaded_reg,
+                    field: Label::Positional(i),
+                    meta: Default::default(),
+                });
+                self.insert_binding(*sym, Binding::Register(dest.0));
+            }
         }
 
         // The effect call result comes from the resumed value
@@ -1388,17 +1471,25 @@ impl<'a> Lowerer<'a> {
             (yield_point.resume_state, yield_point.live_vars.clone())
         };
 
-        // Build state_data record with live variables
-        let mut state_data_fields = Vec::with_capacity(live_vars.len());
-        for (sym, _ty) in &live_vars {
-            let reg = self.get_binding(sym);
-            state_data_fields.push(reg.into());
-        }
+        // Build state_data as a RawPtr. When live_vars is empty, use a null pointer.
+        // When non-empty, store the record to memory and return the pointer.
+        let state_data_reg = if live_vars.is_empty() {
+            let reg = self.next_register();
+            self.push_instr(Instruction::Constant {
+                dest: reg,
+                val: Value::Int(0),
+                ty: Ty::RawPtr,
+                meta: Default::default(),
+            });
+            reg
+        } else {
+            let mut state_data_fields = Vec::with_capacity(live_vars.len());
+            for (sym, _ty) in &live_vars {
+                let reg = self.get_binding(sym);
+                state_data_fields.push(reg.into());
+            }
 
-        let state_data_reg = self.next_register();
-        self.push_instr(Instruction::Record {
-            dest: state_data_reg,
-            ty: Ty::Record(
+            let record_ty = Ty::Record(
                 None,
                 live_vars
                     .iter()
@@ -1409,10 +1500,30 @@ impl<'a> Lowerer<'a> {
                         ty: ty.clone(),
                     })
                     .into(),
-            ),
-            record: state_data_fields.into(),
-            meta: Default::default(),
-        });
+            );
+
+            let record_reg = self.next_register();
+            self.push_instr(Instruction::Record {
+                dest: record_reg,
+                ty: record_ty.clone(),
+                record: state_data_fields.into(),
+                meta: Default::default(),
+            });
+
+            let addr_reg = self.next_register();
+            self.push_instr(Instruction::Alloc {
+                dest: addr_reg,
+                ty: record_ty.clone(),
+                count: Value::Int(1),
+            });
+            self.push_instr(Instruction::Store {
+                value: record_reg.into(),
+                ty: record_ty,
+                addr: addr_reg.into(),
+            });
+
+            addr_reg
+        };
 
         // Build the next state value
         let next_state_reg = self.next_register();
@@ -1469,6 +1580,11 @@ impl<'a> Lowerer<'a> {
         let continuation_block = self.new_basic_block();
         self.set_current_block(continuation_block);
 
+        // Record this continuation block as the entry for the next state
+        if let Some(ref mut ctx) = self.state_machine_context {
+            ctx.state_entries.push(continuation_block);
+        }
+
         // In the continuation, the resumed value comes from the resumed_var parameter
         let resumed_var = self
             .state_machine_context
@@ -1481,17 +1597,39 @@ impl<'a> Lowerer<'a> {
             .expect("state machine context")
             .state_data;
 
-        // Restore live variables from state_data
-        for (i, (sym, ty)) in live_vars.iter().enumerate() {
-            let dest = self.next_register();
-            self.push_instr(Instruction::GetField {
-                dest,
-                ty: ty.clone(),
-                record: state_data,
-                field: Label::Positional(i),
-                meta: Default::default(),
+        // Restore live variables from state_data (which is a RawPtr)
+        if !live_vars.is_empty() {
+            let record_ty = Ty::Record(
+                None,
+                live_vars
+                    .iter()
+                    .enumerate()
+                    .fold(Row::Empty, |row, (i, (_, ty))| Row::Extend {
+                        row: row.into(),
+                        label: Label::Positional(i),
+                        ty: ty.clone(),
+                    })
+                    .into(),
+            );
+
+            let loaded_reg = self.next_register();
+            self.push_instr(Instruction::Load {
+                dest: loaded_reg,
+                ty: record_ty,
+                addr: state_data.into(),
             });
-            self.insert_binding(*sym, Binding::Register(dest.0));
+
+            for (i, (sym, ty)) in live_vars.iter().enumerate() {
+                let dest = self.next_register();
+                self.push_instr(Instruction::GetField {
+                    dest,
+                    ty: ty.clone(),
+                    record: loaded_reg,
+                    field: Label::Positional(i),
+                    meta: Default::default(),
+                });
+                self.insert_binding(*sym, Binding::Register(dest.0));
+            }
         }
 
         // The yield call result comes from the resumed value
@@ -2782,6 +2920,15 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    /// Check if a symbol refers to a global constant (from external module or current module).
+    fn is_global_constant(&self, sym: &Symbol) -> bool {
+        self.config
+            .modules
+            .lookup_global_constant(sym)
+            .is_some()
+            || self.typed.types.catalog.global_constants.contains_key(sym)
+    }
+
     #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn lower_variable(&mut self, name: &Symbol, expr: &TypedExpr) -> Result<(Value, Ty), IRError> {
         let ty = expr.ty.clone();
@@ -2821,7 +2968,8 @@ impl<'a> Lowerer<'a> {
                 let env: Vec<Value> = captures
                     .iter()
                     .filter_map(|cap| {
-                        // Global functions are resolved by symbol; don't treat them as captured env fields.
+                        // Global functions and constants are resolved by symbol/inline;
+                        // don't treat them as captured env fields.
                         // This matches the logic in lower_func.
                         let cap_ty = self.ty_from_symbol(&cap.symbol).ok()?;
                         let is_handler = self
@@ -2829,11 +2977,19 @@ impl<'a> Lowerer<'a> {
                             .resolved_names
                             .handler_symbols
                             .contains(&cap.symbol);
-                        if matches!(cap.symbol, Symbol::Global(_))
-                            && matches!(cap_ty, Ty::Func(..) | Ty::Constructor { .. })
-                            && !is_handler
-                        {
-                            return None;
+                        if matches!(cap.symbol, Symbol::Global(_)) && !is_handler {
+                            if matches!(cap_ty, Ty::Func(..) | Ty::Constructor { .. }) {
+                                return None;
+                            }
+                            if self.is_global_constant(&cap.symbol)
+                                && !self
+                                    .typed
+                                    .resolved_names
+                                    .mutated_symbols
+                                    .contains(&cap.symbol)
+                            {
+                                return None;
+                            }
                         }
 
                         Some(
@@ -2868,6 +3024,31 @@ impl<'a> Lowerer<'a> {
                 Value::Func(*name)
             }
         } else {
+            // Check for global constant (external module or current module)
+            let global_constant = name
+                .external_module_id()
+                .and_then(|_| self.config.modules.lookup_global_constant(name).cloned())
+                .or_else(|| self.typed.types.catalog.global_constants.get(name).cloned());
+            if let Some(constant) = global_constant {
+                let dest = self.next_register();
+                let val = match &constant {
+                    crate::types::type_catalog::GlobalConstant::Int(i) => Value::Int(*i),
+                    crate::types::type_catalog::GlobalConstant::Float(f) => Value::Float(*f),
+                    crate::types::type_catalog::GlobalConstant::Bool(b) => Value::Bool(*b),
+                };
+                self.push_instr(Instruction::Constant {
+                    dest,
+                    ty: ty.clone(),
+                    val,
+                    meta: vec![].into(),
+                });
+                return Ok((dest.into(), ty));
+            }
+            if name.external_module_id().is_some() {
+                // External non-constant symbols are functions whose type may not
+                // have resolved to Ty::Func (e.g. stored as a type parameter).
+                return Ok((Value::Func(*name), ty));
+            }
             Value::Reg(self.get_binding(name).0)
         };
 
@@ -3019,6 +3200,51 @@ impl<'a> Lowerer<'a> {
                 arg_vals,
                 dest,
             );
+        }
+
+        // Handle Property (function-typed struct field) calls.
+        // The specialization pass transforms `self.poll(args)` into Variable(property_sym)
+        // with the receiver prepended as the first arg. We need to extract the field value
+        // from the receiver and call it indirectly.
+        if let Some(sym @ Symbol::Property(..)) = callee_sym {
+            let receiver_ty = &arg_tys[0];
+            let property_name = self
+                .typed
+                .resolved_names
+                .symbol_names
+                .get(sym)
+                .or_else(|| self.config.modules.resolve_name(sym))
+                .ok_or_else(|| {
+                    IRError::TypeNotFound(format!("no name for property symbol {sym}"))
+                })?
+                .clone();
+            let label = self.label_from_name(&property_name);
+            let field_label = self.field_index(receiver_ty, &label);
+
+            let receiver_reg = arg_vals[0].as_register().map_err(|_| {
+                IRError::TypeNotFound("expected register for property call receiver".into())
+            })?;
+
+            let field_reg = self.next_register();
+            self.push_instr(Instruction::GetField {
+                dest: field_reg,
+                ty: callee.ty.clone(),
+                record: receiver_reg,
+                field: field_label,
+                meta: Default::default(),
+            });
+
+            let field_args: Vec<Value> = arg_vals[1..].to_vec();
+            self.push_instr(Instruction::Call {
+                dest,
+                ty: ty.clone(),
+                callee: field_reg.into(),
+                args: field_args.into(),
+                self_dest: None,
+                meta: vec![InstructionMeta::Source(callee.id)].into(),
+            });
+
+            return Ok((dest.into(), ty));
         }
 
         // For specialized method calls (callee is Variable but was originally a method),
@@ -3302,11 +3528,20 @@ impl<'a> Lowerer<'a> {
                     .handler_symbols
                     .contains(&capture.symbol);
                 // Global functions are resolved by symbol; don't treat them as captured env fields.
-                if matches!(capture.symbol, Symbol::Global(_))
-                    && matches!(ty, Ty::Func(..))
-                    && !is_handler
-                {
-                    continue;
+                // Immutable global constants are inlined by lower_variable; don't capture them.
+                if matches!(capture.symbol, Symbol::Global(_)) && !is_handler {
+                    if matches!(ty, Ty::Func(..)) {
+                        continue;
+                    }
+                    if self.is_global_constant(&capture.symbol)
+                        && !self
+                            .typed
+                            .resolved_names
+                            .mutated_symbols
+                            .contains(&capture.symbol)
+                    {
+                        continue;
+                    }
                 }
 
                 let val = match self
@@ -3550,7 +3785,7 @@ impl<'a> Lowerer<'a> {
         bind: Bind,
     ) -> Result<(Value, Ty), IRError> {
         let func_ty = self.ty_from_symbol(&func.name)?;
-        let (_param_tys, ret_ty) = uncurry_function(func_ty.clone());
+        let (param_tys, ret_ty) = uncurry_function(func_ty.clone());
 
         // Generate a poll function name
         let poll_func_sym =
@@ -3583,6 +3818,12 @@ impl<'a> Lowerer<'a> {
             Value::Reg(resumed_var.0),
         ];
 
+        // Block 0 is reserved for the dispatch block (will be filled in later).
+        // Create block 1 for the initial state (state 0 code).
+        let dispatch_block_id = self.current_block_id(); // block 0
+        let initial_state_block = self.new_basic_block(); // block 1
+        self.set_current_block(initial_state_block);
+
         // Set up state machine context
         self.state_machine_context = Some(StateMachineContext {
             analysis: analysis.clone(),
@@ -3591,15 +3832,11 @@ impl<'a> Lowerer<'a> {
             state_data,
             resumed_var,
             func_name: func.name,
+            state_entries: vec![initial_state_block],
         });
 
         // Build parameter bindings for the original function parameters.
-        // In state 0, parameters come from the state_data record.
-        // In subsequent states, they also come from state_data.
         for (i, param) in func.params.iter().enumerate() {
-            // For now, use a simple approach: parameters are stored in state_data
-            // and extracted at the start of each state that needs them.
-            // We'll bind them to Continued bindings.
             self.insert_binding(
                 param.name,
                 Binding::Continued {
@@ -3609,16 +3846,8 @@ impl<'a> Lowerer<'a> {
             );
         }
 
-        // Generate the state machine body
-        // For the initial state (0), we run the function body until the first yield
-        // For subsequent states, we resume from where we left off
-
-        // For now, use a simplified approach:
-        // - State 0: run body up to first yield, then return Pending
-        // - State N: restore live vars, continue from yield N, return Ready or Pending
-
         // Lower the function body - the state machine context will cause
-        // lower_effect_call to emit state transitions instead of closures
+        // yield calls to emit state transitions
         let mut _ret = Value::Void;
         let mut ret_ty_local = ret_ty.clone();
         for node in func.body.body.iter() {
@@ -3626,9 +3855,7 @@ impl<'a> Lowerer<'a> {
         }
 
         // Build GeneratorState::done to return when the generator finishes
-        // Using structural representation: (tag: Int) where 0 = yielded, 1 = done
-        // done = Record(1) where 1 = done tag
-        let done_state_ty = Ty::Tuple(vec![Ty::Int]); // (tag)
+        let done_state_ty = Ty::Tuple(vec![Ty::Int]);
         let done_reg = self.next_register();
         self.push_instr(Instruction::Record {
             dest: done_reg,
@@ -3637,7 +3864,6 @@ impl<'a> Lowerer<'a> {
             meta: Default::default(),
         });
 
-        // Build the final state value (state count = done state)
         let final_state_reg = self.next_register();
         self.push_instr(Instruction::Constant {
             dest: final_state_reg,
@@ -3650,7 +3876,6 @@ impl<'a> Lowerer<'a> {
             meta: Default::default(),
         });
 
-        // Return tuple: (state, state_data, GeneratorState::done)
         let return_val = self.next_register();
         self.push_instr(Instruction::Record {
             dest: return_val,
@@ -3661,8 +3886,64 @@ impl<'a> Lowerer<'a> {
 
         self.push_terminator(Terminator::Ret {
             val: return_val.into(),
-            ty: Ty::Tuple(vec![Ty::Int, Ty::RawPtr, done_state_ty]),
+            ty: Ty::Tuple(vec![Ty::Int, Ty::RawPtr, done_state_ty.clone()]),
         });
+
+        // The "done" block we just finished is the fallback for unknown states
+        let done_block_id = self.current_block_id();
+
+        // Build the dispatch block (block 0). It checks state_var and branches
+        // to the appropriate state entry block.
+        let state_entries = self
+            .state_machine_context
+            .as_ref()
+            .map(|ctx| ctx.state_entries.clone())
+            .unwrap_or_default();
+
+        self.set_current_block(dispatch_block_id);
+
+        // Chain of comparisons: if state == 0 goto state_0, elif state == 1 goto state_1, ...
+        // For the last state, fall through to "done"
+        let mut current_check_block = dispatch_block_id;
+        for (i, &entry_block) in state_entries.iter().enumerate() {
+            self.set_current_block(current_check_block);
+
+            let cmp_reg = self.next_register();
+            self.push_instr(Instruction::Cmp {
+                dest: cmp_reg,
+                op: CmpOperator::Equals,
+                lhs: state_var.into(),
+                rhs: Value::Int(i as i64),
+                ty: Ty::Int,
+                meta: Default::default(),
+            });
+
+            if i + 1 < state_entries.len() {
+                // More states to check — create a new block for the next comparison
+                let next_check_block = self.new_basic_block();
+                self.push_terminator(Terminator::Branch {
+                    cond: cmp_reg.into(),
+                    conseq: entry_block,
+                    alt: next_check_block,
+                });
+                current_check_block = next_check_block;
+            } else {
+                // Last state — else goes to "done" block
+                self.push_terminator(Terminator::Branch {
+                    cond: cmp_reg.into(),
+                    conseq: entry_block,
+                    alt: done_block_id,
+                });
+            }
+        }
+
+        // If there are no state entries (shouldn't happen), just jump to done
+        if state_entries.is_empty() {
+            self.set_current_block(dispatch_block_id);
+            self.push_terminator(Terminator::Jump {
+                to: done_block_id,
+            });
+        }
 
         // Clear state machine context
         self.state_machine_context = None;
@@ -3673,8 +3954,6 @@ impl<'a> Lowerer<'a> {
             .expect("no current function");
 
         // Poll function type: (Int, RawPtr, R) -> (Int, RawPtr, GeneratorState<Y>)
-        // For now, use Void for R (resumed type) - can be improved with type inference
-        // GeneratorState is represented as (Int, Y?) structurally
         let poll_ret_ty = Ty::Tuple(vec![
             Ty::Int,
             Ty::RawPtr,
@@ -3698,8 +3977,17 @@ impl<'a> Lowerer<'a> {
             },
         );
 
-        // Create a Generator record wrapping the poll function
-        // Generator { poll, state, state_data } represented as a structural record
+        // Now create the wrapper function (gen itself) that returns a Generator record.
+        // This is a proper function that can be called: it creates the Generator and returns it.
+        self.current_function_stack
+            .push(CurrentFunction::new(func.name));
+
+        // Burn registers for any parameters the original function had
+        let mut wrapper_params = vec![];
+        for _param in func.params.iter() {
+            let reg = self.next_register();
+            wrapper_params.push(Value::Reg(reg.0));
+        }
 
         // Create reference to poll function
         let poll_ref_reg = self.next_register();
@@ -3718,38 +4006,40 @@ impl<'a> Lowerer<'a> {
             meta: Default::default(),
         });
 
-        // Initial state_data is an empty record (represented as null pointer)
+        // Initial state_data is a null pointer
         let initial_state_data_reg = self.next_register();
-        self.push_instr(Instruction::Record {
+        self.push_instr(Instruction::Constant {
             dest: initial_state_data_reg,
+            val: Value::Int(0),
             ty: Ty::RawPtr,
-            record: vec![].into(),
             meta: Default::default(),
         });
 
         // Create the Generator record: { poll, state, state_data }
+        // Row::Extend nesting: outermost label is first in closed row
         let generator_ty = Ty::Record(
             None,
             Row::Extend {
                 row: Row::Extend {
                     row: Row::Extend {
                         row: Row::Empty.into(),
-                        label: Label::Positional(0),
-                        ty: poll_func_ty.clone(),
+                        label: Label::Positional(2),
+                        ty: Ty::RawPtr,
                     }
                     .into(),
                     label: Label::Positional(1),
                     ty: Ty::Int,
                 }
                 .into(),
-                label: Label::Positional(2),
-                ty: Ty::RawPtr,
+                label: Label::Positional(0),
+                ty: poll_func_ty.clone(),
             }
             .into(),
         );
-        let dest = self.ret(bind);
+
+        let gen_result_reg = self.next_register();
         self.push_instr(Instruction::Record {
-            dest,
+            dest: gen_result_reg,
             ty: generator_ty.clone(),
             record: vec![
                 poll_ref_reg.into(),
@@ -3760,7 +4050,39 @@ impl<'a> Lowerer<'a> {
             meta: Default::default(),
         });
 
-        Ok((dest.into(), generator_ty))
+        self.push_terminator(Terminator::Ret {
+            val: gen_result_reg.into(),
+            ty: generator_ty.clone(),
+        });
+
+        let wrapper_func = self
+            .current_function_stack
+            .pop()
+            .expect("no current function");
+
+        let wrapper_func_ty = curry_ty(param_tys.iter(), generator_ty.clone());
+        self.functions.insert(
+            func.name,
+            PolyFunction {
+                name: func.name,
+                params: wrapper_params,
+                blocks: wrapper_func.blocks,
+                ty: wrapper_func_ty.clone(),
+                register_count: wrapper_func.registers.next as usize,
+                self_out: None,
+            },
+        );
+
+        // Return Value::Func so callers can call this function normally
+        let dest = self.ret(bind);
+        self.push_instr(Instruction::Constant {
+            dest,
+            val: Value::Func(func.name),
+            ty: wrapper_func_ty.clone(),
+            meta: Default::default(),
+        });
+
+        Ok((dest.into(), wrapper_func_ty))
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]

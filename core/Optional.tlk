@@ -1,3 +1,4 @@
+// no-core
 public enum Optional<Wrapped> {
 	case some(Wrapped)
 	case none

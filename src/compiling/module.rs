@@ -113,6 +113,12 @@ impl ModuleEnvironment {
         self.modules.get(stable_id).map(|arc| arc.as_ref())
     }
 
+    /// Get a reference to a module by its name
+    pub fn get_module_by_name(&self, name: &str) -> Option<&Module> {
+        let module_id = self.modules_by_name.get(name)?;
+        self.get_module(*module_id)
+    }
+
     pub fn lookup_member(&self, receiver: &Symbol, label: &Label) -> Option<Symbol> {
         let module_id = receiver.external_module_id()?;
         let stable_id = self.modules_by_local.get(&module_id)?;
@@ -279,6 +285,17 @@ impl ModuleEnvironment {
         let stable_id = self.modules_by_local.get(&module_id)?;
         let module = self.modules.get(stable_id)?;
         module.types.catalog.nominals.get(symbol)
+    }
+
+    /// Lookup a global constant value from an external module
+    pub fn lookup_global_constant(
+        &self,
+        symbol: &Symbol,
+    ) -> Option<&crate::types::type_catalog::GlobalConstant> {
+        let module_id = symbol.external_module_id()?;
+        let stable_id = self.modules_by_local.get(&module_id)?;
+        let module = self.modules.get(stable_id)?;
+        module.types.catalog.global_constants.get(symbol)
     }
 
     pub fn imported_symbol_names(&self) -> FxHashMap<Symbol, String> {

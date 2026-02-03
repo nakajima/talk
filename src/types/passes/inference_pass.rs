@@ -98,6 +98,8 @@ pub struct InferencePass<'a> {
     substitutions: UnificationSubstitutions,
     tracked_returns: Vec<IndexSet<(NodeID, Ty)>>,
     tracked_effect_rows: Vec<Row>,
+    /// Tracks yield types encountered within the current function for generator type inference
+    tracked_yields: Vec<Vec<Ty>>,
     handled_effects: IndexSet<Symbol>,
     handler_contexts: Vec<HandlerContext>,
     nominal_placeholders: FxHashMap<Symbol, (MetaVarId, Level)>,
@@ -133,6 +135,7 @@ impl<'a> InferencePass<'a> {
             diagnostics: Default::default(),
             nominal_placeholders: Default::default(),
             tracked_effect_rows: Default::default(),
+            tracked_yields: Default::default(),
             handled_effects: Default::default(),
             handler_contexts: Default::default(),
             or_binders: Default::default(),
@@ -1861,19 +1864,39 @@ impl<'a> InferencePass<'a> {
         };
 
         let mut type_params = vec![];
+        let is_extend = matches!(decl.kind, DeclKind::Extend { .. });
         for generic in generics.iter() {
-            let id = self.register_generic(generic, context);
-            type_params.push(Ty::Param(id, vec![]));
-            let name = generic
+            let sym = generic
                 .name
                 .symbol()
                 .map_err(|_| TypeError::NameNotResolved(generic.name.clone()))?;
+
+            // For extend blocks, a generic might resolve to a concrete type (e.g. Void)
+            // rather than a type parameter declaration
+            if is_extend && !matches!(sym, Symbol::TypeParameter(..)) {
+                let ty = if matches!(sym, Symbol::Builtin(..)) {
+                    Ty::Primitive(sym)
+                } else {
+                    Ty::Nominal { symbol: sym, type_args: vec![] }
+                };
+                type_params.push(ty);
+                self.session
+                    .type_catalog
+                    .child_types
+                    .entry(nominal_symbol)
+                    .or_default()
+                    .insert(generic.name.name_str().into(), sym);
+                continue;
+            }
+
+            let id = self.register_generic(generic, context);
+            type_params.push(Ty::Param(id, vec![]));
             self.session
                 .type_catalog
                 .child_types
                 .entry(nominal_symbol)
                 .or_default()
-                .insert(generic.name.name_str().into(), name);
+                .insert(generic.name.name_str().into(), sym);
         }
 
         // For extend blocks without explicit generics, use the existing nominal's type params
@@ -3191,6 +3214,15 @@ impl<'a> InferencePass<'a> {
             .map(|a| self.visit_expr(&a.value, context))
             .try_collect()?;
 
+        // Track yield calls for generator return type inference
+        if let TypedExprKind::Variable(sym) = &callee_ty.kind {
+            if *sym == Symbol::YIELD {
+                if let Some(arg) = arg_tys.first() {
+                    self.track_yield(arg.ty.clone());
+                }
+            }
+        }
+
         // Record call arg label spans immediately for Constructor callees
         // The struct symbol is available now, so we can resolve directly
         if let TypedExprKind::Constructor(struct_sym, _) = &callee_ty.kind {
@@ -3320,11 +3352,24 @@ impl<'a> InferencePass<'a> {
 
         let mut foralls = IndexSet::default();
 
+        // Start tracking yields for generator inference when there's no explicit return type
+        let track_yields = func.ret.is_none();
+        if track_yields {
+            self.tracking_yields();
+        }
+
         let body = if let Some(ret) = &func.ret {
             let ret = self.visit_type_annotation(ret, context)?;
             self.check_block(&func.body, ret.clone(), &mut context.next())?
         } else {
             self.infer_block_with_returns(&func.body, &mut context.next())?
+        };
+
+        // Check if this function contains yields and should be a generator
+        let tracked_yields = if track_yields {
+            self.pop_tracked_yields()
+        } else {
+            vec![]
         };
 
         let effects_row = self
@@ -3343,7 +3388,12 @@ impl<'a> InferencePass<'a> {
             })
             .collect_vec();
 
-        let ret = substitute(&body.ret, &self.session.skolem_map);
+        // If yields were found, infer Generator<Y, R> return type
+        let ret = if !tracked_yields.is_empty() {
+            self.make_generator_type(&tracked_yields, &body.ret, context)
+        } else {
+            substitute(&body.ret, &self.session.skolem_map)
+        };
 
         self.session.insert(
             func_sym,
@@ -3769,6 +3819,64 @@ impl<'a> InferencePass<'a> {
                 ret.clone(),
                 &context.group_info(),
             );
+        }
+    }
+
+    fn tracking_yields(&mut self) {
+        self.tracked_yields.push(Vec::new());
+    }
+
+    fn track_yield(&mut self, ty: Ty) {
+        if let Some(yields) = self.tracked_yields.last_mut() {
+            yields.push(ty);
+        }
+    }
+
+    fn pop_tracked_yields(&mut self) -> Vec<Ty> {
+        self.tracked_yields.pop().unwrap_or_default()
+    }
+
+    /// Construct a Generator<Y, R> type from tracked yields
+    fn make_generator_type(
+        &mut self,
+        yield_types: &[Ty],
+        _body_ret: &Ty,
+        context: &mut SolveContext,
+    ) -> Ty {
+        // Lookup the Generator symbol from Core module
+        let generator_symbols = self.session.modules.lookup_name("Generator");
+        let Some(&generator_sym) = generator_symbols.first() else {
+            // If Generator is not available, fall back to body return type
+            tracing::warn!("Generator type not found in Core, falling back to body return type");
+            return substitute(_body_ret, &self.session.skolem_map);
+        };
+
+        // Unify all yield types to get the Y type parameter
+        let y_type = if yield_types.is_empty() {
+            Ty::Void
+        } else if yield_types.len() == 1 {
+            yield_types[0].clone()
+        } else {
+            // Multiple yields - create a meta var and unify all with it
+            let y_var = self.session.new_ty_meta_var(context.level());
+            for yt in yield_types {
+                self.constraints.wants_equals_at(
+                    NodeID::SYNTHESIZED,
+                    y_var.clone(),
+                    yt.clone(),
+                    &context.group_info(),
+                );
+            }
+            y_var
+        };
+
+        // R type is Void for simple generators (no value passed back on resume)
+        let r_type = Ty::Void;
+
+        // Construct Generator<Y, R> nominal type
+        Ty::Nominal {
+            symbol: generator_sym,
+            type_args: vec![y_type, r_type],
         }
     }
 

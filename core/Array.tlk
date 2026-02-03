@@ -1,3 +1,4 @@
+// no-core
 import { _alloc, _load } from ./Memory.tlk
 
 public struct Array<Element> {

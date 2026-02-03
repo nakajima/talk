@@ -1088,7 +1088,7 @@ impl<IO: super::io::IO> Interpreter<IO> {
                 };
                 Value::Record(record_id, fields)
             }
-            IrTy::Void => panic!("Load not implemented for {ty:?}"),
+            IrTy::Void => Value::Void,
         }
     }
 
@@ -2200,5 +2200,183 @@ Dog().handleDSTChange()
             ",
         );
         assert_eq!(interpreter.io.stdout, "42\n".as_bytes());
+    }
+
+    #[test]
+    fn interprets_generator_creation() {
+        // Test that gen() returns a Generator without crashing
+        let (_val, interpreter) = interpret_with(
+            "
+            func gen() {
+                yield(42)
+            }
+
+            let g = gen()
+            print(\"created generator\")
+            ",
+        );
+
+        assert_eq!(interpreter.io.stdout, "created generator\n".as_bytes());
+    }
+
+    #[test]
+    fn interprets_generator_send() {
+        // Test Generator.send() returning Optional.some(42) on first send
+        let (_val, interpreter) = interpret_with(
+            "
+            func gen() {
+                yield(42)
+            }
+
+            let g = gen()
+            let result = g.send(())
+            print(result)
+            ",
+        );
+
+        assert_eq!(interpreter.io.stdout, "Optional.some(42)\n".as_bytes());
+    }
+
+    #[test]
+    fn interprets_generator_multiple_yields() {
+        // Test generator that yields 1, 2, 3 then finishes
+        let (_val, interpreter) = interpret_with(
+            "
+            func gen() {
+                yield(1)
+                yield(2)
+                yield(3)
+            }
+
+            let g = gen()
+            let r1 = g.send(())
+            print(r1)
+            let r2 = g.send(())
+            print(r2)
+            let r3 = g.send(())
+            print(r3)
+            let r4 = g.send(())
+            print(r4)
+            ",
+        );
+
+        assert_eq!(
+            interpreter.io.stdout,
+            "Optional.some(1)\nOptional.some(2)\nOptional.some(3)\nOptional.none\n".as_bytes()
+        );
+    }
+
+    #[test]
+    fn interprets_generator_with_live_vars() {
+        // Test that variables defined before yield are correctly saved and restored
+        let (_val, interpreter) = interpret_with(
+            "
+            func gen() {
+                let x = 10
+                let y = 20
+                yield(x + y)
+                yield(x * y)
+            }
+
+            let g = gen()
+            let r1 = g.send(())
+            print(r1)
+            let r2 = g.send(())
+            print(r2)
+            let r3 = g.send(())
+            print(r3)
+            ",
+        );
+
+        assert_eq!(
+            interpreter.io.stdout,
+            "Optional.some(30)\nOptional.some(200)\nOptional.none\n".as_bytes()
+        );
+    }
+
+    #[test]
+    fn interprets_io_write_to_stdout() {
+        // Test io_write to stdout (fd=1) via @_ir, verifying CaptureIO captures it
+        let (_val, interpreter) = interpret_with(
+            "
+            func raw_write(fd: Int, buf: RawPtr, count: Int) -> Int {
+                @_ir(fd, buf, count) { %? = io_write $0 $1 $2 }
+            }
+
+            let msg = \"hello from io\"
+            raw_write(1, msg.base, msg.length)
+            ",
+        );
+
+        assert_eq!(
+            String::from_utf8(interpreter.io.stdout).unwrap(),
+            "hello from io"
+        );
+    }
+
+    #[test]
+    fn interprets_io_open_write_read() {
+        // Test opening a file, writing to it, then reading back
+        let (val, _interpreter) = interpret_with(
+            "
+            func raw_open(path: RawPtr, flags: Int, mode: Int) -> Int {
+                @_ir(path, flags, mode) { %? = io_open $0 $1 $2 }
+            }
+            func raw_write(fd: Int, buf: RawPtr, count: Int) -> Int {
+                @_ir(fd, buf, count) { %? = io_write $0 $1 $2 }
+            }
+            func raw_read(fd: Int, buf: RawPtr, count: Int) -> Int {
+                @_ir(fd, buf, count) { %? = io_read $0 $1 $2 }
+            }
+            func raw_close(fd: Int) -> Int {
+                @_ir(fd) { %? = io_close $0 }
+            }
+
+            let fd = raw_open(\"test.txt\".base, 1, 0)
+            let msg = \"file content\"
+            let written = raw_write(fd, msg.base, msg.length)
+            written
+            ",
+        );
+
+        // raw_write returns number of bytes written
+        assert_eq!(val, Value::Int(12)); // "file content".len() == 12
+    }
+
+    #[test]
+    fn interprets_write_string_to_stdout() {
+        let (_val, interpreter) = interpret_with(
+            "
+            @handle 'io { fd, events in
+                continue ()
+            }
+
+            write_string(STDOUT_FD, \"hello\")
+            ",
+        );
+
+        assert_eq!(
+            String::from_utf8(interpreter.io.stdout).unwrap(),
+            "hello"
+        );
+    }
+
+    #[test]
+    fn interprets_print_raw() {
+        // Test print_raw from Core (calls write_string(STDOUT_FD, s))
+        let (_val, interpreter) = interpret_with(
+            "
+            @handle 'io { fd, events in
+                continue ()
+            }
+
+            print_raw(\"hello from print_raw\")
+            ",
+        );
+
+        assert_eq!(
+            String::from_utf8(interpreter.io.stdout).unwrap(),
+            "hello from print_raw"
+        );
     }
 }

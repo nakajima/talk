@@ -1,0 +1,30 @@
+// Generators - functions that yield values
+//
+// Generators are functions that use `yield` to produce values.
+// They compile to state machines that can be resumed with .send().
+
+// A simple generator that yields three values
+func counting() {
+	yield(1)
+	yield(2)
+	yield(3)
+}
+
+let gen = counting()
+print(gen.send(()))
+print(gen.send(()))
+print(gen.send(()))
+print(gen.send(()))
+
+// A generator with live variables across yields
+func math() {
+	let x = 10
+	let y = 20
+	yield(x + y)
+	yield(x * y)
+}
+
+let m = math()
+print(m.send(()))
+print(m.send(()))
+print(m.send(()))

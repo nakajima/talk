@@ -259,6 +259,9 @@ impl IO for CaptureIO {
     }
 
     fn io_read(&mut self, fd: i64, buf: &mut [u8]) -> i64 {
+        if fd == 0 {
+            return self.read_stdio(buf).unwrap_or(0) as i64;
+        }
         if let Some(content) = self.files.get(&fd) {
             let pos = self.file_positions.get(&fd).copied().unwrap_or(0);
             let remaining = &content[pos..];
@@ -272,6 +275,14 @@ impl IO for CaptureIO {
     }
 
     fn io_write(&mut self, fd: i64, buf: &[u8]) -> i64 {
+        if fd == 1 {
+            self.stdout.extend_from_slice(buf);
+            return buf.len() as i64;
+        }
+        if fd == 2 {
+            self.stderr.extend_from_slice(buf);
+            return buf.len() as i64;
+        }
         if let Some(content) = self.files.get_mut(&fd) {
             content.extend_from_slice(buf);
             buf.len() as i64

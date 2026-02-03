@@ -1,5 +1,8 @@
+// no-core
 import { _alloc } from ./Memory.tlk
 import { Poll, Context, Waker } from ./Async.tlk
+import { Comparable, Equatable } from ./Operators.tlk
+import { String } from ./String.tlk
 
 public effect 'io(fd: Int,events: Int) -> ()
 

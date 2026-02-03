@@ -1,17 +1,12 @@
-func _sleep(ms: Int) -> Int {
-	@_ir(ms) { %? = io_sleep $0 }
-}
+// Sleep demonstration using Core's sleep function
 
-effect 'sleep(ms: Int) -> ()
-
-@handle 'sleep { ms in
-	_sleep(ms)
+@handle 'io { fd, events in
 	continue ()
 }
 
-func doSleep() 'sleep {
+func doSleep() 'io {
 	print("Starting...")
-	'sleep(1000)
+	sleep(1000)
 	print("Done after 1 second!")
 }
 

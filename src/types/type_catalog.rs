@@ -135,6 +135,14 @@ impl Default for TrackedInstantiations {
     }
 }
 
+/// Represents a global constant value that can be inlined at use sites
+#[derive(Debug, PartialEq, Clone)]
+pub enum GlobalConstant {
+    Int(i64),
+    Float(f64),
+    Bool(bool),
+}
+
 #[derive(Debug, PartialEq, Clone)]
 pub struct TypeCatalog {
     pub nominals: IndexMap<Symbol, Nominal>,
@@ -150,6 +158,8 @@ pub struct TypeCatalog {
     pub method_requirements: IndexMap<Symbol, IndexMap<Label, Symbol>>,
     pub instantiations: TrackedInstantiations,
     pub effects: IndexMap<Symbol, Ty>,
+    /// Global constants (Int, Float, Bool) that can be inlined from external modules
+    pub global_constants: FxHashMap<Symbol, GlobalConstant>,
 }
 
 impl Default for TypeCatalog {
@@ -170,6 +180,7 @@ impl Default for TypeCatalog {
 
             instantiations: Default::default(),
             effects: Default::default(),
+            global_constants: Default::default(),
         }
     }
 }
@@ -386,6 +397,11 @@ impl TypeCatalog {
                 .effects
                 .into_iter()
                 .map(|(k, v)| (k.import(module_id), v.import(module_id)))
+                .collect(),
+            global_constants: self
+                .global_constants
+                .into_iter()
+                .map(|(k, v)| (k.import(module_id), v))
                 .collect(),
         }
     }

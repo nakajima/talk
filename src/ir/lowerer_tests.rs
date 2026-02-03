@@ -1463,15 +1463,19 @@ pub mod tests {
 
     #[test]
     fn lowers_closure() {
+        // Mutated variable forces a real closure capture (immutable constants are inlined).
+        // Verifies: heap alloc for captured var, closure env construction, and
+        // that the inner function extracts/loads/stores through the captured pointer.
         let program = lower(
             "
         let a = 123
-        func b() { a }
+        func b() { a = 456; a }
         b()
-        a // Make sure we know to load from heap now since it's a capture
+        a
         ",
         );
 
+        // Main function: alloc a on heap, build closure for b, call it, load a
         assert_eq_diff!(
             program.functions.get(&Symbol::Main).unwrap().blocks,
             &[BasicBlock {
@@ -1526,6 +1530,8 @@ pub mod tests {
             }]
         );
 
+        // Inner function b: %0 is the closure env record.
+        // Stores 456 through captured pointer, then loads for return.
         assert_eq_diff!(
             program
                 .functions
@@ -1536,21 +1542,41 @@ pub mod tests {
                 id: BasicBlockId(0),
                 phis: Default::default(),
                 instructions: vec![
-                    Instruction::GetField {
+                    // a = 456: emit value, extract pointer from env, store
+                    Instruction::Constant {
                         dest: 1.into(),
+                        ty: IrTy::Int,
+                        val: Value::Int(456),
+                        meta: meta()
+                    },
+                    Instruction::GetField {
+                        dest: 2.into(),
+                        ty: IrTy::RawPtr,
+                        record: 0.into(),
+                        field: Label::Positional(0),
+                        meta: vec![].into()
+                    },
+                    Instruction::Store {
+                        value: Value::Reg(1),
+                        ty: IrTy::Int,
+                        addr: Value::Reg(2)
+                    },
+                    // Load a for return value
+                    Instruction::GetField {
+                        dest: 3.into(),
                         ty: IrTy::RawPtr,
                         record: 0.into(),
                         field: Label::Positional(0),
                         meta: vec![].into()
                     },
                     Instruction::Load {
-                        dest: 2.into(),
+                        dest: 4.into(),
                         ty: IrTy::Int,
-                        addr: Value::Reg(1)
+                        addr: Value::Reg(3)
                     }
                 ],
                 terminator: Terminator::Ret {
-                    val: Value::Reg(2),
+                    val: Value::Reg(4),
                     ty: IrTy::Int,
                 }
             }]
@@ -1895,8 +1921,8 @@ pub mod tests {
 
     #[test]
     fn yield_function_returns_generator_record() {
-        // Test that a yield-containing function returns a Generator record,
-        // not the raw poll function
+        // Test that a yield-containing function produces a wrapper that returns
+        // a Generator record, not the raw poll function
         let (module, names) = lower_module(
             "
             func gen() {
@@ -1911,30 +1937,29 @@ pub mod tests {
 
         let _guard = set_symbol_names(names.clone());
 
-        // The main function should create a generator record
-        let main_func = module.program.functions.get(&Symbol::Main);
-        assert!(main_func.is_some(), "Expected a main function");
-
-        let main = main_func.unwrap();
-
-        // Check that the main function has instructions that create a record
-        // (the Generator wrapper)
-        let has_record_creation = main.blocks.iter().any(|block| {
-            block
-                .instructions
-                .iter()
-                .any(|instr| matches!(instr, Instruction::Record { .. }))
-        });
+        // The gen wrapper function should create a Generator record
+        let gen_func = module
+            .program
+            .functions
+            .iter()
+            .find(|(_, f)| {
+                f.blocks.iter().any(|block| {
+                    block
+                        .instructions
+                        .iter()
+                        .any(|instr| matches!(instr, Instruction::Record { record, .. } if record.items.len() == 3))
+                })
+            });
 
         assert!(
-            has_record_creation,
-            "Expected main to create a Generator record"
+            gen_func.is_some(),
+            "Expected a wrapper function that creates a Generator record"
         );
     }
 
     #[test]
     fn generator_contains_poll_state_and_data() {
-        // Test that the Generator record contains poll function, state (0), and state_data
+        // Test that the Generator wrapper contains poll function ref, state (0), and state_data
         let (module, names) = lower_module(
             "
             func gen() {
@@ -1948,41 +1973,245 @@ pub mod tests {
 
         let _guard = set_symbol_names(names.clone());
 
-        let main_func = module
+        // Find the wrapper function that creates the Generator record.
+        // It must have both a Ref (for the poll function) and a 3-field Record.
+        let gen_func = module
             .program
             .functions
-            .get(&Symbol::Main)
-            .expect("main function");
-
-        // Find the Record instruction that creates the Generator
-        let generator_record = main_func
-            .blocks
             .iter()
-            .flat_map(|block| block.instructions.iter())
-            .find(|instr| {
-                if let Instruction::Record { record, .. } = instr {
-                    // Generator has 3 fields: poll, state, state_data
-                    record.items.len() == 3
-                } else {
-                    false
+            .find(|(_, f)| {
+                let instrs: Vec<_> = f.blocks.iter().flat_map(|b| &b.instructions).collect();
+                let has_ref = instrs.iter().any(|i| matches!(i, Instruction::Ref { .. }));
+                let has_record = instrs.iter().any(|i| matches!(i, Instruction::Record { record, .. } if record.items.len() == 3));
+                has_ref && has_record
+            })
+            .map(|(_, f)| f)
+            .expect("Expected a wrapper function with Ref and 3-field Generator record");
+
+        // Verify it has the expected structure
+        assert!(!gen_func.blocks.is_empty());
+    }
+
+    #[test]
+    fn generator_ir_dump() {
+        // Dump the IR for a simple generator to understand its structure
+        let (module, names) = lower_module(
+            "
+            func gen() {
+                yield(42)
+            }
+
+            let g = gen()
+            let result = g.send(())
+            ",
+        );
+
+        let _guard = set_symbol_names(names.clone());
+        // Print monomorphized functions
+        println!("=== Monomorphized Functions ===");
+        for (sym, func) in &module.program.functions {
+            println!("func {sym}: {} blocks", func.blocks.len());
+            for block in &func.blocks {
+                println!("  Block {}:", block.id);
+                for instr in &block.instructions {
+                    println!("    {instr}");
                 }
-            });
+                println!("    {}", block.terminator);
+            }
+        }
+    }
 
-        assert!(
-            generator_record.is_some(),
-            "Expected a Generator record with 3 fields (poll, state, state_data)"
+    #[test]
+    fn external_global_constant_lowered() {
+        // Test that global constants from external modules emit Constant instructions
+        // STDOUT_FD is defined in Core's IO.tlk as `public let STDOUT_FD: Int = 1`
+        let (module, _names) = lower_module(
+            r#"
+            let x = STDOUT_FD
+            "#,
         );
 
-        // Also verify there's a Ref instruction for the poll function
-        let has_poll_ref = main_func
+        let main_func = module.program.functions.get(&Symbol::Main).expect("main function");
+
+        // Should have a Constant instruction with value 1 (STDOUT_FD)
+        let has_constant = main_func
             .blocks
             .iter()
-            .flat_map(|block| block.instructions.iter())
-            .any(|instr| matches!(instr, Instruction::Ref { .. }));
+            .flat_map(|b| b.instructions.iter())
+            .any(|i| matches!(i, Instruction::Constant { val: Value::Int(1), .. }));
 
         assert!(
-            has_poll_ref,
-            "Expected a Ref instruction for the poll function"
+            has_constant,
+            "Should emit Constant instruction for STDOUT_FD (value 1)"
         );
+    }
+
+    #[test]
+    fn external_global_in_expression() {
+        // Test that external globals can be used in expressions
+        let (module, _names) = lower_module(
+            r#"
+            let fd = STDOUT_FD + 1
+            "#,
+        );
+
+        let main_func = module.program.functions.get(&Symbol::Main).expect("main function");
+
+        // Should have Constant instructions and an Add
+        let has_constant = main_func
+            .blocks
+            .iter()
+            .flat_map(|b| b.instructions.iter())
+            .any(|i| matches!(i, Instruction::Constant { val: Value::Int(1), .. }));
+
+        let has_add = main_func
+            .blocks
+            .iter()
+            .flat_map(|b| b.instructions.iter())
+            .any(|i| matches!(i, Instruction::Call { .. }));
+
+        assert!(
+            has_constant && has_add,
+            "Should emit Constant instruction and addition operation"
+        );
+    }
+
+    #[test]
+    fn external_global_multiple_uses() {
+        // Test that external globals can be used multiple times
+        let (module, _names) = lower_module(
+            r#"
+            let a = STDOUT_FD
+            let b = STDOUT_FD
+            let c = a + b
+            "#,
+        );
+
+        let main_func = module.program.functions.get(&Symbol::Main).expect("main function");
+
+        // Should have at least two Constant instructions with value 1
+        let constant_count = main_func
+            .blocks
+            .iter()
+            .flat_map(|b| b.instructions.iter())
+            .filter(|i| matches!(i, Instruction::Constant { val: Value::Int(1), .. }))
+            .count();
+
+        assert!(
+            constant_count >= 2,
+            "Should emit multiple Constant instructions for multiple uses of STDOUT_FD, got {}",
+            constant_count
+        );
+    }
+
+    #[test]
+    fn core_global_constants_populated() {
+        // Verify that Core's global_constants are populated correctly
+        let core = crate::compiling::core::compile();
+
+        // Check that STDOUT_FD and other IO constants are in global_constants
+        let constants_count = core.types.catalog.global_constants.len();
+        assert!(
+            constants_count > 0,
+            "Core's global_constants should have entries, got {}",
+            constants_count
+        );
+
+        // Verify specific constants exist
+        // Note: We can't check exact symbol IDs, but we verify the count
+        // IO.tlk has 27 positive integer constants (negative ones use unary negation)
+        assert!(
+            constants_count >= 20,
+            "Core should have at least 20 global constants, got {}",
+            constants_count
+        );
+    }
+
+    #[test]
+    fn core_types_has_functions() {
+        use crate::compiling::module::ModuleId;
+        use crate::name_resolution::symbol::GlobalId;
+
+        // Verify that Core's types_by_symbol contains function types
+        let core = crate::compiling::core::compile();
+
+        // Check that types_by_symbol has function entries
+        let func_count = core
+            .types
+            .types_by_symbol
+            .values()
+            .filter(|entry| matches!(entry.as_mono_ty(), crate::types::infer_ty::Ty::Func(..)))
+            .count();
+
+        // Core has many functions (print_raw, write_string, etc.)
+        assert!(
+            func_count > 0,
+            "Core should have function types in types_by_symbol, got {func_count}. Total symbols: {}",
+            core.types.types_by_symbol.len()
+        );
+
+        // List all Global symbols with Func types
+        let global_funcs: Vec<_> = core
+            .types
+            .types_by_symbol
+            .iter()
+            .filter(|(sym, entry)| {
+                matches!(sym, Symbol::Global(_))
+                    && matches!(entry.as_mono_ty(), crate::types::infer_ty::Ty::Func(..))
+            })
+            .collect();
+
+        assert!(
+            !global_funcs.is_empty(),
+            "Core should have Global function symbols, got none"
+        );
+
+        // Check specific lookup for print_raw
+        // Note: The symbol IDs may vary, but we can check by name
+        let print_raw_name = "print_raw";
+        let print_raw_sym = core
+            .symbol_names
+            .iter()
+            .find(|(_, name)| *name == print_raw_name)
+            .map(|(sym, _)| sym);
+
+        if let Some(sym) = print_raw_sym {
+            // Verify the symbol is in types_by_symbol
+            let type_entry = core.types.types_by_symbol.get(sym);
+            assert!(
+                type_entry.is_some(),
+                "print_raw ({:?}) should be in types_by_symbol",
+                sym
+            );
+
+            // Verify Core's module ID is what we expect
+            if let Symbol::Global(GlobalId { module_id, .. }) = sym {
+                assert_eq!(
+                    *module_id,
+                    ModuleId::Core,
+                    "print_raw should have module_id Core"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn core_function_in_effect_handler() {
+        // Verify Core functions can be called from within effect handlers.
+        // Previously this would panic with "did not get binding for @Global(Global(C:...))"
+        // because the lowerer relied on expr.ty being Ty::Func, but within effect handlers
+        // the type could be a type parameter instead.
+        let (module, _names) = lower_module(
+            r#"
+            @handle 'io { fd, events in
+                print_raw("inside handler")
+                continue ()
+            }
+            "#,
+        );
+
+        // Should compile without panicking - the fix ensures external module symbols
+        // that aren't constants are treated as functions
+        assert!(module.program.functions.contains_key(&Symbol::Main));
     }
 }

@@ -1,3 +1,4 @@
+// no-core
 public effect 'heap() -> ()
 
 public func _alloc(count: Int) 'heap -> RawPtr {

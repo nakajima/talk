@@ -111,6 +111,7 @@ impl<'a> Parser<'a> {
                 node_ids: Default::default(),
                 synthsized_ids: Default::default(),
                 file_id,
+                skip_core_prelude: false,
             },
         }
     }
@@ -162,6 +163,7 @@ impl<'a> Parser<'a> {
             node_ids: self.ast.node_ids,
             file_id: self.file_id,
             synthsized_ids: self.ast.synthsized_ids,
+            skip_core_prelude: self.ast.skip_core_prelude,
         };
 
         Ok((ast, self.diagnostics, self.lexer.comments))

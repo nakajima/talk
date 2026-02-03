@@ -342,7 +342,9 @@ impl Driver {
             file_index += 1;
             let parser = Parser::new(file.path(), file_id, lexer);
             match parser.parse() {
-                Ok((parsed, ast_diagnostics)) => {
+                Ok((mut parsed, ast_diagnostics)) => {
+                    parsed.skip_core_prelude =
+                        input.starts_with("// no-core");
                     diagnostics.extend(ast_diagnostics);
 
                     // Discover imports and queue them for parsing
@@ -383,6 +385,7 @@ impl Driver {
                             node_ids: Default::default(),
                             synthsized_ids: Default::default(),
                             file_id,
+                            skip_core_prelude: false,
                         },
                     );
                 }
@@ -463,15 +466,20 @@ impl Driver<NameResolved> {
             call_resolutions,
         ) = specialization_pass.drive().map_err(CompileError::Typing)?;
 
-        // Don't bother with matcher diagnostics if we're not well typed already.
-        if !has_error_diagnostics(&self.phase.diagnostics) {
+        // Always run the matcher to build match plans, even when there are error
+        // diagnostics elsewhere. Match plan generation is independent of unrelated
+        // type errors, and skipping it causes match expressions to silently compile
+        // to void (e.g., Core module's Generator.send match on GeneratorState).
+        {
             let matcher_result = matcher::check_ast(&ast, &types, &resolved_names.symbol_names);
-            self.phase.diagnostics.extend(
-                matcher_result
-                    .diagnostics
-                    .into_iter()
-                    .map(AnyDiagnostic::Typing),
-            );
+            if !has_error_diagnostics(&self.phase.diagnostics) {
+                self.phase.diagnostics.extend(
+                    matcher_result
+                        .diagnostics
+                        .into_iter()
+                        .map(AnyDiagnostic::Typing),
+                );
+            }
             types.match_plans = matcher_result.plans;
         }
 

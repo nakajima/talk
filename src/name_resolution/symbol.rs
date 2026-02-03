@@ -439,7 +439,8 @@ impl Symbol {
             | Symbol::AssociatedType(AssociatedTypeId { module_id, .. })
             | Symbol::Enum(EnumId { module_id, .. })
             | Symbol::TypeAlias(TypeAliasId { module_id, .. })
-            | Symbol::TypeParameter(TypeParameterId { module_id, .. }) => module_id,
+            | Symbol::TypeParameter(TypeParameterId { module_id, .. })
+            | Symbol::Effect(EffectId { module_id, .. }) => module_id,
             _ => {
                 tracing::warn!("looking up module id for non-module symbol: {self:?}");
                 return None;
@@ -907,5 +908,16 @@ mod tests {
         // Protocol has discriminant 15
         let protocol_symbol = Symbol::Protocol(ProtocolId::new(ModuleId(1), 2));
         assert_eq!(protocol_symbol.as_bytes()[0], 15);
+    }
+
+    #[test]
+    fn effect_external_module_id() {
+        // Effects from external modules should return their module id
+        let effect = Symbol::Effect(EffectId::new(ModuleId::Core, 42));
+        assert_eq!(effect.external_module_id(), Some(ModuleId::Core));
+
+        // Effects from current module should return None
+        let local_effect = Symbol::Effect(EffectId::new(ModuleId::Current, 42));
+        assert_eq!(local_effect.external_module_id(), None);
     }
 }

@@ -1,3 +1,4 @@
+// no-core
 import { Optional } from ./Optional.tlk
 import { Array } from ./Array.tlk
 import { Add, Comparable } from ./Operators.tlk

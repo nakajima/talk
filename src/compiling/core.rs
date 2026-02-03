@@ -41,6 +41,8 @@ fn _compile() -> Module {
                 "Generator.tlk".into(),
                 include_str!("../../core/Generator.tlk"),
             ),
+            Source::in_memory("Async.tlk".into(), include_str!("../../core/Async.tlk")),
+            Source::in_memory("IO.tlk".into(), include_str!("../../core/IO.tlk")),
         ],
         config,
     );

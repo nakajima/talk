@@ -232,11 +232,25 @@ impl NameResolver {
     }
 
     /// Create a root scope for a specific file and import builtins into it
-    fn init_file_scope(&mut self, file_id: FileID) {
+    fn init_file_scope(&mut self, file_id: FileID, skip_core_prelude: bool) {
         let scope_id = NodeID(file_id, 0);
         // Always create fresh scope with builtins
         let mut scope = Scope::new(None, self.current_level, scope_id, None, 1);
         builtins::import_builtins(&mut scope);
+
+        // Import Core module exports as prelude (unless the file opts out)
+        if !skip_core_prelude {
+            if let Some(core_module) = self.modules.get_module_by_name("Core") {
+                for (name, &symbol) in &core_module.exports {
+                    if is_type_symbol(&symbol) {
+                        scope.types.insert(name.clone(), symbol);
+                    } else {
+                        scope.values.insert(name.clone(), symbol);
+                    }
+                }
+            }
+        }
+
         self.scopes.insert(scope_id, scope);
         self.current_scope_id = Some(scope_id);
     }
@@ -247,7 +261,7 @@ impl NameResolver {
     ) -> (Vec<AST<NameResolved>>, ResolvedNames) {
         // Create per-file scopes with builtins for module isolation
         for ast in &asts {
-            self.init_file_scope(ast.file_id);
+            self.init_file_scope(ast.file_id, ast.skip_core_prelude);
         }
 
         // First pass: run transforms and declare all types
@@ -1371,4 +1385,12 @@ impl NameResolver {
             self.current_level = self.current_level.prev();
         })
     }
+}
+
+/// Returns true if the symbol represents a type (as opposed to a value)
+fn is_type_symbol(symbol: &Symbol) -> bool {
+    matches!(
+        symbol,
+        Symbol::Struct(_) | Symbol::Enum(_) | Symbol::Protocol(_) | Symbol::TypeAlias(_)
+    )
 }

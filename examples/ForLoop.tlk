@@ -1,0 +1,34 @@
+// Iteration with the Iterator protocol
+// Demonstrates iterating over arrays using iterators
+
+let numbers = [1, 2, 3]
+
+// Basic iteration with iterator
+print("Iterating over [1, 2, 3]:")
+let iter = numbers.iter()
+print(iter.next())
+print(iter.next())
+print(iter.next())
+print(iter.next())
+
+// Manual array indexing for iteration
+print("")
+print("Using manual indexing:")
+let arr = [10, 20, 30, 40, 50]
+let i = 0
+loop {
+	if i >= arr.count { break }
+	print(arr.get(i))
+	i = i + 1
+}
+
+// Sum via indexing
+let sum = 0
+let j = 0
+loop {
+	if j >= arr.count { break }
+	sum = sum + arr.get(j)
+	j = j + 1
+}
+print("Sum of [10, 20, 30, 40, 50]:")
+print(sum)

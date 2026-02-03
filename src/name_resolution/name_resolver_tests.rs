@@ -1751,4 +1751,64 @@ public let a = 2
         });
         assert!(has_duplicate_error, "Expected DuplicateExport error");
     }
+
+    #[test]
+    fn core_prelude_imports_types_and_values() {
+        use crate::compiling::core;
+
+        // Get the compiled Core module
+        let core_module = core::compile();
+        let mut modules = ModuleEnvironment::default();
+        modules.import_core(core_module);
+
+        // Now resolve code that uses Core types without imports
+        let code = "let x: Optional<Int> = Optional.some(42)";
+        let parsed = parse(code);
+        let mut name_resolver = NameResolver::new(Rc::new(modules), ModuleId::Current);
+        let (_, resolved) = name_resolver.resolve(vec![parsed]);
+
+        assert!(
+            resolved.diagnostics.is_empty(),
+            "Expected no errors using Core prelude, got: {:?}",
+            resolved.diagnostics
+        );
+    }
+
+    #[test]
+    fn no_core_directive_skips_core_prelude() {
+        use crate::compiling::core;
+
+        let code = "let x = 1";
+
+        // Verify that without skip_core_prelude, the file scope contains Core symbols
+        {
+            let core_module = core::compile();
+            let mut modules = ModuleEnvironment::default();
+            modules.import_core(core_module);
+            let parsed = parse(code);
+            let mut name_resolver = NameResolver::new(Rc::new(modules), ModuleId::Current);
+            let (_, resolved) = name_resolver.resolve(vec![parsed]);
+            let file_scope = resolved.scopes.get(&NodeID(FileID(0), 0)).unwrap();
+            assert!(
+                file_scope.types.contains_key("Optional"),
+                "Without skip_core_prelude, file scope should contain Core types"
+            );
+        }
+
+        // Now verify that with skip_core_prelude, the file scope does NOT contain Core symbols
+        {
+            let core_module = core::compile();
+            let mut modules = ModuleEnvironment::default();
+            modules.import_core(core_module);
+            let mut parsed = parse(code);
+            parsed.skip_core_prelude = true;
+            let mut name_resolver = NameResolver::new(Rc::new(modules), ModuleId::Current);
+            let (_, resolved) = name_resolver.resolve(vec![parsed]);
+            let file_scope = resolved.scopes.get(&NodeID(FileID(0), 0)).unwrap();
+            assert!(
+                !file_scope.types.contains_key("Optional"),
+                "With skip_core_prelude, file scope should NOT contain Core types"
+            );
+        }
+    }
 }

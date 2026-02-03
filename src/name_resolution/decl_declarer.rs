@@ -248,8 +248,20 @@ impl<'a> DeclDeclarer<'a> {
     }
 
     /// Declares generics as TypeParameter symbols in the current scope.
-    fn declare_generics(&mut self, generics: &mut [GenericDecl]) {
+    /// For extend blocks, generics that already resolve to a concrete (non-TypeParameter) symbol
+    /// (e.g. `Void`) are kept as-is rather than being redeclared as fresh type parameters.
+    fn declare_generics(&mut self, generics: &mut [GenericDecl], is_extend: bool) {
         for generic in generics {
+            if is_extend {
+                if let Some(resolved) = self.resolver.lookup(&generic.name, None, None) {
+                    if let Ok(sym) = resolved.symbol() {
+                        if !matches!(sym, Symbol::TypeParameter(..)) {
+                            generic.name = resolved;
+                            continue;
+                        }
+                    }
+                }
+            }
             generic.name = self.resolver.declare(
                 &generic.name,
                 some!(TypeParameter),
@@ -405,6 +417,7 @@ impl<'a> DeclDeclarer<'a> {
         name: &mut Name,
         generics: &mut [GenericDecl],
         decls: &[Decl],
+        is_extend: bool,
     ) {
         // Should be set by predeclare_nominals for Struct/Enum/Protocol, but `extend` can target
         // a nominal declared in another file. If we still can't resolve it, keep the resolver
@@ -448,7 +461,7 @@ impl<'a> DeclDeclarer<'a> {
             .types
             .insert("Self".into(), sym);
 
-        self.declare_generics(generics);
+        self.declare_generics(generics, is_extend);
 
         self.predeclare_nominals(decls.iter().collect_vec().as_slice());
     }
@@ -542,7 +555,7 @@ impl<'a> DeclDeclarer<'a> {
                 };
                 self.start_scope(binder, *id, false);
 
-                self.declare_generics(generics);
+                self.declare_generics(generics, false);
 
                 for param in params {
                     param.name = self.resolver.declare(
@@ -583,7 +596,7 @@ impl<'a> DeclDeclarer<'a> {
                     false,
                 );
 
-                self.declare_generics(generics);
+                self.declare_generics(generics, false);
 
                 for param in params {
                     param.name = self.resolver.declare(
@@ -615,7 +628,7 @@ impl<'a> DeclDeclarer<'a> {
                 ..
             },
             {
-                self.enter_nominal(decl.id, name, generics, &body.decls);
+                self.enter_nominal(decl.id, name, generics, &body.decls, false);
             }
         );
 
@@ -628,7 +641,7 @@ impl<'a> DeclDeclarer<'a> {
                 ..
             },
             {
-                self.enter_nominal(decl.id, name, generics, &body.decls);
+                self.enter_nominal(decl.id, name, generics, &body.decls, false);
             }
         );
 
@@ -641,7 +654,7 @@ impl<'a> DeclDeclarer<'a> {
                 ..
             },
             {
-                self.enter_nominal(decl.id, name, generics, &body.decls);
+                self.enter_nominal(decl.id, name, generics, &body.decls, false);
             }
         );
 
@@ -654,7 +667,7 @@ impl<'a> DeclDeclarer<'a> {
                 ..
             },
             {
-                self.enter_nominal(decl.id, name, generics, &body.decls);
+                self.enter_nominal(decl.id, name, generics, &body.decls, true);
             }
         );
 
@@ -713,7 +726,7 @@ impl<'a> DeclDeclarer<'a> {
                 }
 
                 // self.start_scope(name.symbol().ok(), *id, true);
-                self.declare_generics(generics);
+                self.declare_generics(generics, false);
             }
         );
 
@@ -765,7 +778,7 @@ impl<'a> DeclDeclarer<'a> {
                 self.resolver
                     .track_dependency_from_to(nominal_sym, nominal_id, method_sym, *id);
 
-                self.declare_generics(generics);
+                self.declare_generics(generics, false);
             }
         );
 
@@ -837,7 +850,7 @@ impl<'a> DeclDeclarer<'a> {
                 // Start a scope for the effect's generics and params
                 self.start_scope(None, decl.id, false);
 
-                self.declare_generics(generics);
+                self.declare_generics(generics, false);
 
                 for param in params {
                     param.name = self.resolver.declare(

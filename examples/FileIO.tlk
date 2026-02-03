@@ -1,0 +1,8 @@
+// File I/O using Core's IO functions
+//
+// Demonstrates writing to stdout using the IO effect system.
+
+@handle 'io { fd, events in continue () }
+
+print_raw("Hello from print_raw!\n")
+write_string(STDOUT_FD, "Hello from write_string!\n")

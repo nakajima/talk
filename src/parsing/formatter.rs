@@ -2497,7 +2497,7 @@ mod formatter_tests {
         // Make sure core is the same before and after formatting
         for path in std::fs::read_dir("./core").unwrap() {
             let code = std::fs::read_to_string(path.unwrap().path()).unwrap();
-            assert_eq!(code, format_code(&code, 80));
+            assert_eq!(code, format_string(&code));
         }
     }
 }

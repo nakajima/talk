@@ -1,3 +1,4 @@
+// no-core
 import { Add, Equatable } from ./Operators.tlk
 import { _alloc, _copy, _ptr_add } from ./Memory.tlk
 

@@ -1,5 +1,4 @@
-import _ from ./IO.tlk
-
+// no-core
 public enum Poll<T, Y> {
 	case ready(T)
 	case pending(Y)

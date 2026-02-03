@@ -1,3 +1,4 @@
+// no-core
 import { Optional } from ./Optional.tlk
 import { Iterator } from ./Iterable.tlk
 

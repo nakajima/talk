@@ -1,3 +1,4 @@
+// no-core
 public protocol Add {
 	associated RHS
 	associated Ret

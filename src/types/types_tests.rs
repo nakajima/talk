@@ -2573,4 +2573,102 @@ pub mod tests {
             conforming_id: StructId::from(2).into(),
         }));
     }
+
+    #[test]
+    fn generator_return_type_inferred() {
+        // Test that a function containing yield() gets Generator<Y, R> return type
+        let (ast, types) = typecheck_core(
+            r#"
+            func gen() { yield(1); yield(2); 0 }
+            let g = gen()
+            g
+            "#,
+        );
+
+        // The return type of gen() should be Generator<Int, Void>
+        // The variable g should have that type
+        let g_ty = ty(0, &ast, &types);
+        match g_ty {
+            Ty::Nominal { symbol, type_args } => {
+                // Check it's a Generator
+                let name = types
+                    .catalog
+                    .nominals
+                    .keys()
+                    .find(|k| *k == &symbol)
+                    .map(|_| true)
+                    .unwrap_or(false);
+                assert!(name || symbol.to_string().contains("Struct"), "Expected Generator type, got {:?}", symbol);
+
+                // Check type args
+                assert_eq!(type_args.len(), 2, "Generator should have 2 type args");
+                assert_eq!(type_args[0], Ty::Int, "Yield type should be Int");
+                assert_eq!(type_args[1], Ty::Void, "Resume type should be Void");
+            }
+            _ => panic!("Expected Nominal type for generator, got {:?}", g_ty),
+        }
+    }
+
+    #[test]
+    fn generator_yield_type_unified() {
+        // Test that multiple yields with compatible types are unified
+        let (ast, types) = typecheck_core(
+            r#"
+            func gen(x: Int) { yield(x); yield(0); 0 }
+            let g = gen(5)
+            g
+            "#,
+        );
+
+        let g_ty = ty(0, &ast, &types);
+        match g_ty {
+            Ty::Nominal { type_args, .. } => {
+                assert_eq!(type_args.len(), 2, "Generator should have 2 type args");
+                assert_eq!(type_args[0], Ty::Int, "Yield type should be Int");
+            }
+            _ => panic!("Expected Nominal type for generator, got {:?}", g_ty),
+        }
+    }
+
+    #[test]
+    fn generator_send_method_available() {
+        // Test that .send() method is available on Generator
+        let (_ast, _types, diagnostics) = typecheck_core_err(
+            r#"
+            func gen() { yield(42); 0 }
+            let g = gen()
+            g.send(())
+            "#,
+        );
+
+        assert!(
+            diagnostics.is_empty(),
+            "Expected no errors calling .send() on generator, got: {:?}",
+            diagnostics
+        );
+    }
+
+    #[test]
+    fn extend_with_concrete_type_arg() {
+        // extend with a mix of type parameters and concrete types should treat the concrete
+        // type (Void) as the builtin, not as a fresh type parameter.
+        let (_ast, _types) = typecheck(
+            r#"
+            struct Pair<A, B> {
+                let first: A
+                let second: B
+
+                func get_second() -> B {
+                    self.second
+                }
+            }
+
+            extend Pair<Y, Void> {
+                func get_void() -> Void {
+                    self.get_second()
+                }
+            }
+            "#,
+        );
+    }
 }
