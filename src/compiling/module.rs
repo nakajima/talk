@@ -20,7 +20,7 @@ use crate::{
     },
 };
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 pub struct StableModuleId([u8; 32]);
 
 impl Display for StableModuleId {
@@ -36,7 +36,7 @@ impl StableModuleId {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default, serde::Serialize, serde::Deserialize)]
 pub struct ModuleId(pub u16);
 
 #[allow(non_snake_case, non_upper_case_globals)]
@@ -338,7 +338,7 @@ impl ModuleEnvironment {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Module {
     pub id: StableModuleId,
     pub name: String,

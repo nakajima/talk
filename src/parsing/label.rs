@@ -2,7 +2,7 @@ use std::{convert::Infallible, fmt::Display, str::FromStr};
 
 use crate::name_resolution::symbol::Symbol;
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 pub enum Label {
     Named(String),
     Positional(usize),

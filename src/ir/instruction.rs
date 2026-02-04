@@ -15,7 +15,7 @@ use crate::{
     types::infer_ty::Ty,
 };
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum InstructionMeta {
     #[doc = "id:$file_id:$id"]
     Source(NodeID),
@@ -58,7 +58,7 @@ impl FromStr for InstructionMeta {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum CmpOperator {
     Greater,
     GreaterEquals,
@@ -122,7 +122,8 @@ impl From<TokenKind> for CmpOperator {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(bound(serialize = "T: serde::Serialize", deserialize = "T: serde::de::DeserializeOwned"))]
 pub enum Instruction<T> {
     #[doc = "$dest = const $ty $val $meta"]
     Constant {

@@ -8,13 +8,13 @@ use crate::{
     types::infer_ty::Ty,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
 pub struct ConformanceKey {
     pub protocol_id: ProtocolId,
     pub conforming_id: Symbol,
 }
 
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
 pub struct Witnesses {
     pub methods: FxHashMap<Label, Symbol>,
     pub associated_types: FxHashMap<Label, Ty>,
@@ -31,7 +31,7 @@ impl Witnesses {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Conformance {
     pub node_id: NodeID,
     pub conforming_id: Symbol,

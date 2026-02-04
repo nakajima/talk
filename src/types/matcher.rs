@@ -25,7 +25,7 @@ pub struct MatcherCheckResult {
     pub(crate) plans: FxHashMap<NodeID, MatchPlan>,
 }
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum RequiredConstructor {
     LiteralTrue,
     LiteralFalse,
@@ -36,7 +36,7 @@ pub enum RequiredConstructor {
     Infinite,
 }
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) enum Constructor {
     LiteralTrue,
     LiteralFalse,
@@ -54,20 +54,20 @@ enum ConstructorSet {
 
 type PatternMatrix = Vec<Vec<TypedPattern>>;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub(crate) struct MatchPlan {
     pub root: PlanNodeId,
     pub nodes: Vec<PlanNode>,
     pub values: Vec<ValueRef>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub(crate) struct PlanNodeId(pub usize);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub(crate) struct ValueId(pub usize);
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub(crate) enum PlanNode {
     Switch {
         value: ValueId,
@@ -81,13 +81,13 @@ pub(crate) enum PlanNode {
     Fail,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub(crate) struct PlanCase {
     pub ctor: Constructor,
     pub target: PlanNodeId,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub(crate) enum ValueRef {
     Scrutinee {
         ty: Ty,
@@ -99,7 +99,7 @@ pub(crate) enum ValueRef {
     },
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub(crate) enum Projection {
     Tuple(usize),
     Record(Label),

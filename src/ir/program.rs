@@ -11,7 +11,7 @@ use crate::{
     name_resolution::symbol::Symbol,
 };
 
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Program {
     pub functions: IndexMap<Symbol, Function<IrTy>>,
     pub polyfunctions: IndexMap<Symbol, PolyFunction>,

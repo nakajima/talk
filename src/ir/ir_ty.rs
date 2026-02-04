@@ -7,7 +7,7 @@ use crate::{
     types::{infer_row::Row, infer_ty::Ty},
 };
 
-#[derive(Debug, PartialEq, Eq, Clone, Hash)]
+#[derive(Debug, PartialEq, Eq, Clone, Hash, serde::Serialize, serde::Deserialize)]
 pub enum IrTy {
     Int,
     Float,

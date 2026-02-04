@@ -28,7 +28,7 @@ fn lookup_symbol_name(sym: &Symbol) -> Option<String> {
 // Macro for cross-module IDs (with ModuleId)
 macro_rules! impl_module_symbol_id {
     ($case:ident, $ty: ident) => {
-        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
         pub struct $ty {
             pub module_id: ModuleId,
             pub local_id: u32,
@@ -107,7 +107,7 @@ macro_rules! impl_module_symbol_id {
 // Macro for local-only IDs (simple u32 wrapper)
 macro_rules! impl_local_symbol_id {
     ($case:ident, $ty: ident) => {
-        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
         pub struct $ty(pub u32);
 
         impl std::fmt::Display for $ty {
@@ -136,7 +136,7 @@ macro_rules! impl_local_symbol_id {
     };
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 #[repr(u8)]
 pub enum Symbol {
     Struct(StructId),

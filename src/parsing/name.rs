@@ -2,7 +2,7 @@ use std::fmt::Display;
 
 use crate::name_resolution::{name_resolver::NameResolverError, symbol::Symbol};
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 pub enum Name {
     Raw(String),
     Resolved(Symbol, String),

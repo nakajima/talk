@@ -18,11 +18,11 @@ use crate::{
 
 /// Identifies a choice point in the program.
 /// Each protocol method call site that needs resolution gets its own dimension.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct DimensionId(pub NodeID);
 
 /// Index into the alternatives of a choice.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 pub struct AlternativeIndex(pub usize);
 
 impl From<usize> for AlternativeIndex {
@@ -36,7 +36,7 @@ impl From<usize> for AlternativeIndex {
 /// In variational type checking, constraints can be annotated with configurations
 /// that specify in which world(s) they apply. A universal configuration applies
 /// in all worlds.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Configuration {
     /// Maps each dimension to its selected alternative.
     /// If a dimension is not in the map, the constraint applies to all alternatives.
@@ -95,7 +95,7 @@ impl Resolution {
 /// (non-universal) context, we don't immediately fail. Instead, we record the
 /// error and continue solving. This allows us to rule out alternatives that
 /// lead to type errors.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct ErrorConstraint {
     /// The configuration (world) where this error occurred.
     pub config: Configuration,
@@ -106,7 +106,7 @@ pub struct ErrorConstraint {
 }
 
 /// Stores collected error constraints during constraint solving.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct ErrorConstraintStore {
     errors: Vec<ErrorConstraint>,
 }
@@ -143,7 +143,7 @@ impl ErrorConstraintStore {
 }
 
 /// Information about a single alternative in a protocol method choice.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ChoiceAlternative {
     /// The type that conforms to the protocol (determines when this alternative applies).
     pub conforming_type: Symbol,
@@ -154,7 +154,7 @@ pub struct ChoiceAlternative {
 }
 
 /// Stores information about all choices and their alternatives.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct ChoiceStore {
     /// Maps (dimension, alternative_index) -> information about that alternative
     alternatives: FxHashMap<(DimensionId, AlternativeIndex), ChoiceAlternative>,

@@ -15,7 +15,7 @@ use crate::{
     },
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Nominal {
     pub properties: IndexMap<Label, Ty>,
     pub variants: IndexMap<Label, Vec<Ty>>,
@@ -79,7 +79,7 @@ impl Nominal {
     }
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TrackedInstantiations {
     pub ty: FxHashMap<NodeID, FxHashMap<Symbol, Ty>>,
     pub row: FxHashMap<NodeID, FxHashMap<RowParamId, Row>>,
@@ -136,14 +136,14 @@ impl Default for TrackedInstantiations {
 }
 
 /// Represents a global constant value that can be inlined at use sites
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, serde::Serialize, serde::Deserialize)]
 pub enum GlobalConstant {
     Int(i64),
     Float(f64),
     Bool(bool),
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TypeCatalog {
     pub nominals: IndexMap<Symbol, Nominal>,
     pub conformances: IndexMap<ConformanceKey, Conformance>,

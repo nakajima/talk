@@ -18,13 +18,13 @@ use crate::{
     },
 };
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum ForAll {
     Ty(Symbol),
     Row(RowParamId),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
+#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
 pub struct Scheme {
     #[drive(skip)]
     pub(crate) foralls: IndexSet<ForAll>,

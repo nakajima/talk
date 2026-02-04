@@ -5,7 +5,8 @@ use crate::{
     name_resolution::symbol::Symbol,
 };
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(bound(serialize = "T: serde::Serialize", deserialize = "T: serde::de::DeserializeOwned"))]
 pub struct Function<T: Debug + Display> {
     pub name: Symbol,
     pub params: List<Value>,

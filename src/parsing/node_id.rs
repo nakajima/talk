@@ -1,4 +1,4 @@
-#[derive(Default, Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Default, Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 pub struct FileID(pub u32);
 
 impl FileID {
@@ -6,7 +6,7 @@ impl FileID {
 }
 
 #[allow(clippy::derived_hash_with_manual_eq)]
-#[derive(Default, Clone, Copy, Hash, Eq, PartialOrd, Ord)]
+#[derive(Default, Clone, Copy, Hash, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 pub struct NodeID(pub FileID, pub u32);
 
 impl NodeID {

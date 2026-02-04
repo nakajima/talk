@@ -87,7 +87,7 @@ impl CurrentFunction {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct StaticMemory {
     pub data: Vec<u8>,
 }
@@ -140,7 +140,7 @@ impl RegisterAllocator {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PolyFunction {
     pub name: Symbol,
     pub params: Vec<Value>,

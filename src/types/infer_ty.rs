@@ -18,13 +18,13 @@ use crate::{
     },
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Meta {
     Ty(MetaVarId),
     Row(RowMetaId),
 }
 
-#[derive(PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord)]
+#[derive(PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 pub struct MetaVarId(u32);
 impl From<u32> for MetaVarId {
     fn from(value: u32) -> Self {
@@ -54,7 +54,7 @@ impl std::fmt::Debug for MetaVarId {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 pub struct TypeParamId(pub u32);
 impl TypeParamId {
     pub const IR_TYPE_PARAM: TypeParamId = TypeParamId(u32::MAX - 1);
@@ -65,7 +65,7 @@ impl From<u32> for TypeParamId {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 pub struct SkolemId(u32);
 impl From<u32> for SkolemId {
     fn from(value: u32) -> Self {
@@ -73,7 +73,7 @@ impl From<u32> for SkolemId {
     }
 }
 
-#[derive(Default, PartialEq, PartialOrd, Clone, Copy, Debug, Eq, Hash)]
+#[derive(Default, PartialEq, PartialOrd, Clone, Copy, Debug, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct Level(pub u32);
 impl Level {
     pub fn next(&self) -> Level {
@@ -96,7 +96,7 @@ impl UnifyValue for Level {
 /// Unified type representation - used for both inference and final types.
 /// The inference-specific variants (Var, Rigid, Projection, Error) are only
 /// populated during type checking and should be resolved before codegen.
-#[derive(PartialEq, Eq, Clone, Hash, Drive, DriveMut)]
+#[derive(PartialEq, Eq, Clone, Hash, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
 pub enum Ty {
     Primitive(#[drive(skip)] Symbol),
     Param(#[drive(skip)] Symbol, #[drive(skip)] Vec<ProtocolId>),

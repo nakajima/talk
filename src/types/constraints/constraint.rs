@@ -17,7 +17,7 @@ use indexmap::IndexSet;
 use rustc_hash::FxHashMap;
 use tracing::instrument;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum ConstraintCause {
     Annotation(NodeID),
     Member(NodeID),

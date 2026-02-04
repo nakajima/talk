@@ -2,7 +2,7 @@ use std::str::FromStr;
 
 use crate::ir::{ir_error::IRError, value::Value};
 
-#[derive(Clone, Copy, PartialEq, Hash, Eq)]
+#[derive(Clone, Copy, PartialEq, Hash, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Register(pub u32);
 
 impl Register {

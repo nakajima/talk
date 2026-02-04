@@ -9,7 +9,7 @@ use crate::{
     },
 };
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum TypeError {
     TypeConstructorNotFound(Symbol),
     ExpectedRow(Ty),

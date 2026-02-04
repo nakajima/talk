@@ -16,7 +16,7 @@ use crate::{
     },
 };
 
-#[derive(PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord)]
+#[derive(PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 pub struct RowMetaId(pub u32);
 impl From<u32> for RowMetaId {
     fn from(value: u32) -> Self {
@@ -46,7 +46,7 @@ impl std::fmt::Debug for RowMetaId {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 pub struct RowParamId(pub u32);
 impl From<u32> for RowParamId {
     fn from(value: u32) -> Self {
@@ -58,7 +58,7 @@ pub type ClosedRow = IndexMap<Label, Ty>;
 
 /// Unified row representation - used for both inference and final types.
 /// The Var variant is only used during inference and should be resolved before codegen.
-#[derive(PartialEq, Eq, Hash, Clone, Drive, DriveMut)]
+#[derive(PartialEq, Eq, Hash, Clone, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
 pub enum Row {
     Empty,
     Extend {
@@ -261,7 +261,7 @@ impl std::fmt::Debug for Row {
 // Specializations moved from ty.rs since it's needed here
 use crate::name_resolution::symbol::Symbol;
 
-#[derive(Default, Debug, Clone, PartialEq)]
+#[derive(Default, Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Specializations {
     pub ty: IndexMap<Symbol, Ty>,
     pub row: IndexMap<RowParamId, Row>,

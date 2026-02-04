@@ -1425,6 +1425,7 @@ checksum = "fe4cd85333e22411419a0bcae1297d25e58c9443848b11dc6a86fefe8c78a661"
 dependencies = [
  "equivalent",
  "hashbrown 0.15.4",
+ "serde",
 ]
 
 [[package]]
@@ -2400,6 +2401,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-lsp",
+ "bincode",
  "cargo-witgen",
  "clap 4.5.39",
  "clap_complete",

@@ -17,7 +17,7 @@ use crate::{
     },
 };
 
-#[derive(Debug, Clone, PartialEq, Drive, DriveMut)]
+#[derive(Debug, Clone, PartialEq, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
 pub enum TypeEntry {
     Mono(Ty),
     Poly(Scheme),
@@ -77,7 +77,7 @@ impl From<TypeEntry> for EnvEntry {
 }
 
 // the Types object is the final result of the type checking phase
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct Types {
     pub types_by_node: FxHashMap<NodeID, TypeEntry>,
     pub types_by_symbol: FxHashMap<Symbol, TypeEntry>,

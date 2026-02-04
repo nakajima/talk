@@ -5,7 +5,7 @@ use crate::{
 };
 
 /// Information about a callee within a function, used for specialization propagation.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum CalleeInfo {
     /// Direct function call with known symbol
     Direct {

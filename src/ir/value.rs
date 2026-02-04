@@ -7,24 +7,24 @@ use crate::{
     name_resolution::symbol::Symbol,
 };
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Reference {
     Func(Symbol),
     Closure(Symbol, List<Value>),
     Register { frame: usize, register: Register },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Addr(pub(super) usize);
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum RecordId {
     Nominal(Symbol),
     Record(u32),
     Anon,
 }
 
-#[derive(Default, Debug, Clone, PartialEq)]
+#[derive(Default, Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Value {
     Reg(u32),
     Int(i64),
