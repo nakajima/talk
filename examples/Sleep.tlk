@@ -1,13 +1,3 @@
-// Sleep demonstration using Core's sleep function
-
-@handle 'io { fd, events in
-	continue ()
-}
-
-func doSleep() 'io {
-	print("Starting...")
-	sleep(1000)
-	print("Done after 1 second!")
-}
-
-doSleep()
+print("Starting...")
+sleep(1000)
+print("Done after 1 second!")
