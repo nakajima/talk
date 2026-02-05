@@ -1,0 +1,7 @@
+func fizz(foo) {
+	sleep(1000)
+	foo()
+	sleep(1000)
+}
+
+fizz { print("oh hi") }

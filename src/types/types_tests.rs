@@ -2671,4 +2671,53 @@ pub mod tests {
             "#,
         );
     }
+
+    #[test]
+    fn types_trailing_block_as_function_arg() {
+        // Trailing block should be typed as a function and matched against the expected type
+        let (ast, types) = typecheck(
+            "
+            func apply(f: () -> Int) -> Int {
+                f()
+            }
+            apply(){ 123 }
+            ",
+        );
+
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
+    }
+
+    #[test]
+    fn types_trailing_block_with_params() {
+        // Trailing block with parameters
+        let (ast, types) = typecheck(
+            "
+            func transform(x: Int, f: (Int) -> Int) -> Int {
+                f(x)
+            }
+            transform(1){ n in n }
+            ",
+        );
+
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
+    }
+
+    #[test]
+    fn types_trailing_block_type_mismatch_returns_error() {
+        // Trailing block returns wrong type - should produce type error
+        let (_, _, diagnostics) = typecheck_err(
+            "
+            func apply(f: () -> Int) -> Int {
+                f()
+            }
+            apply(){ true }
+            ",
+        );
+
+        // Should have a type error about Int vs Bool
+        assert!(
+            !diagnostics.is_empty(),
+            "Expected type error for trailing block returning Bool when Int expected"
+        );
+    }
 }

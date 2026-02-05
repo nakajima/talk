@@ -89,6 +89,7 @@ impl LowerForLoops {
                 callee: Box::new(next_member),
                 type_args: vec![],
                 args: vec![],
+                trailing_block: None,
             },
         };
 
@@ -177,6 +178,7 @@ impl LowerForLoops {
                 callee: Box::new(iter_member),
                 type_args: vec![],
                 args: vec![],
+                trailing_block: None,
             },
         };
 

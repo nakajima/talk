@@ -2379,4 +2379,46 @@ Dog().handleDSTChange()
             "hello from print_raw"
         );
     }
+
+    #[test]
+    fn interprets_trailing_block_as_function_arg() {
+        // Trailing blocks should be converted to callable closures
+        let result = interpret(
+            "
+            func apply(f: () -> Int) -> Int { f() }
+            apply(){ 123 }
+            ",
+        );
+
+        assert_eq!(result, Value::Int(123));
+    }
+
+    #[test]
+    fn interprets_trailing_block_with_params() {
+        // Trailing block with parameters should work
+        let result = interpret(
+            "
+            func transform(x: Int, f: (Int) -> Int) -> Int { f(x) }
+            transform(10){ n in n * 2 }
+            ",
+        );
+
+        assert_eq!(result, Value::Int(20));
+    }
+
+    #[test]
+    fn interprets_trailing_block_with_side_effects() {
+        // Trailing block that prints should work
+        let (_val, interpreter) = interpret_with(
+            "
+            func fizz(foo) { foo() }
+            fizz{ print(\"oh hi\") }
+            ",
+        );
+
+        assert_eq!(
+            String::from_utf8(interpreter.io.stdout).unwrap(),
+            "oh hi\n"
+        );
+    }
 }

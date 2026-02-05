@@ -492,10 +492,14 @@ impl<'a> Higlighter<'a> {
                     box callee,
                     type_args,
                     args,
+                    trailing_block,
                 } => {
                     result.extend(self.tokens_from_expr(callee, ast));
                     result.extend(self.tokens_from_exprs(type_args, ast));
                     result.extend(self.tokens_from_exprs(args, ast));
+                    if let Some(block) = trailing_block {
+                        result.extend(self.tokens_from_exprs(&block.body, ast));
+                    }
                 }
                 ExprKind::Member(receiver, ..) => {
                     if let Some(box receiver) = receiver {

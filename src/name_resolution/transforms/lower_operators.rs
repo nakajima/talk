@@ -52,6 +52,7 @@ impl LowerOperators {
                     callee: member.into(),
                     type_args: vec![],
                     args: vec![],
+                    trailing_block: None,
                 }
             }
             ExprKind::Binary(lhs, op, box rhs) => {
@@ -147,6 +148,7 @@ impl LowerOperators {
                                 span: expr.span,
                             },
                         ],
+                        trailing_block: None,
                     }
                 }
             }

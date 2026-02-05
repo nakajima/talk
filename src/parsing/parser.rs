@@ -63,6 +63,23 @@ pub enum BlockContext {
     None,
 }
 
+/// Tracks parsing context to determine if trailing blocks are allowed
+#[derive(PartialEq, Clone, Copy, Debug)]
+pub enum ParseContext {
+    TopLevel,
+    Match, // inside match scrutinee
+    If,    // inside if condition
+    Loop,  // inside loop condition
+    For,   // inside for iterable
+}
+
+impl ParseContext {
+    /// Returns true if trailing blocks should be parsed in this context
+    fn allows_trailing_blocks(&self) -> bool {
+        matches!(self, ParseContext::TopLevel)
+    }
+}
+
 impl BlockContext {
     pub fn allows_conformances(&self) -> bool {
         matches!(self, BlockContext::Extend | BlockContext::Protocol)
@@ -87,6 +104,7 @@ pub struct Parser<'a> {
     ast: AST,
     file_id: FileID,
     diagnostics: Vec<AnyDiagnostic>,
+    context_stack: Vec<ParseContext>,
 }
 
 #[allow(clippy::expect_used)]
@@ -103,6 +121,7 @@ impl<'a> Parser<'a> {
             source_location_stack: Default::default(),
             file_id,
             diagnostics: Default::default(),
+            context_stack: vec![ParseContext::TopLevel],
             ast: AST::<NewAST> {
                 path: path.into(),
                 roots: Default::default(),
@@ -847,7 +866,9 @@ impl<'a> Parser<'a> {
     fn if_stmt(&mut self) -> Result<Stmt, ParserError> {
         let tok = self.push_source_location();
         self.consume(TokenKind::If)?;
+        self.push_context(ParseContext::If);
         let cond = self.expr()?;
+        self.pop_context();
         let body = self.block(BlockContext::If, true)?;
 
         if self.did_match(TokenKind::Else)? {
@@ -872,7 +893,10 @@ impl<'a> Parser<'a> {
         self.consume(TokenKind::Loop)?;
 
         let cond = if !self.peek_is(TokenKind::LeftBrace) {
-            Some(self.expr()?)
+            self.push_context(ParseContext::Loop);
+            let result = Some(self.expr()?);
+            self.pop_context();
+            result
         } else {
             None
         };
@@ -891,7 +915,9 @@ impl<'a> Parser<'a> {
         self.consume(TokenKind::For)?;
         let pattern = self.parse_pattern()?;
         self.consume(TokenKind::In)?;
+        self.push_context(ParseContext::For);
         let iterable = self.expr()?.as_expr();
+        self.pop_context();
         let body = self.block(BlockContext::Loop, true)?;
 
         self.save_meta(tok, |id, span| Stmt {
@@ -1435,7 +1461,9 @@ impl<'a> Parser<'a> {
     pub(crate) fn match_expr(&mut self, _can_assign: bool) -> Result<Node, ParserError> {
         let tok = self.push_source_location();
         self.consume(TokenKind::Match)?;
+        self.push_context(ParseContext::Match);
         let scrutinee = self.expr()?;
+        self.pop_context();
 
         self.consume(TokenKind::LeftBrace)?;
 
@@ -2075,7 +2103,28 @@ impl<'a> Parser<'a> {
             return Ok(Some(self.call(can_assign, vec![], callee.clone())?));
         }
 
+        // Check for trailing-block-only call: `foo { block }` without parens
+        if self.current_context().allows_trailing_blocks() && self.peek_is(TokenKind::LeftBrace) {
+            return Ok(Some(self.call_with_trailing_block_only(callee.clone())?));
+        }
+
         Ok(None)
+    }
+
+    /// Parse a call with only a trailing block (no parens): `foo { block }`
+    fn call_with_trailing_block_only(&mut self, callee: Expr) -> Result<Expr, ParserError> {
+        let tok = self.push_lhs_location(callee.id);
+        let trailing_block = self.block(BlockContext::None, true)?;
+
+        self.add_expr(
+            ExprKind::Call {
+                callee: Box::new(callee),
+                type_args: vec![],
+                args: vec![],
+                trailing_block: Some(trailing_block),
+            },
+            tok,
+        )
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
@@ -2096,11 +2145,23 @@ impl<'a> Parser<'a> {
             args
         };
 
+        // Check for trailing block after the closing paren.
+        // We only allow trailing blocks at the top level context, not inside
+        // match/if/loop/for scrutinees where { starts the body.
+        let trailing_block = if self.current_context().allows_trailing_blocks()
+            && self.peek_is(TokenKind::LeftBrace)
+        {
+            Some(self.block(BlockContext::None, true)?)
+        } else {
+            None
+        };
+
         let call = self.add_expr(
             ExprKind::Call {
                 callee: Box::new(callee),
                 type_args,
                 args,
+                trailing_block,
             },
             tok,
         )?;
@@ -2701,6 +2762,21 @@ impl<'a> Parser<'a> {
         } else {
             false
         }
+    }
+
+    fn push_context(&mut self, ctx: ParseContext) {
+        self.context_stack.push(ctx);
+    }
+
+    fn pop_context(&mut self) {
+        self.context_stack.pop();
+    }
+
+    fn current_context(&self) -> ParseContext {
+        self.context_stack
+            .last()
+            .copied()
+            .unwrap_or(ParseContext::TopLevel)
     }
 
     fn skip_newlines(&mut self) {

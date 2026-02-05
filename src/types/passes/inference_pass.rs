@@ -1392,7 +1392,8 @@ impl<'a> InferencePass<'a> {
                 callee,
                 type_args,
                 args,
-            } => self.visit_call(expr.id, callee, type_args, args, &mut context.next())?,
+                trailing_block,
+            } => self.visit_call(expr.id, callee, type_args, args, trailing_block.as_ref(), &mut context.next())?,
             ExprKind::Member(receiver, label, label_span) => {
                 self.visit_member(expr, receiver, label, *label_span, context)?
             }
@@ -3183,6 +3184,7 @@ impl<'a> InferencePass<'a> {
         callee: &Expr,
         type_args: &[TypeAnnotation],
         args: &[CallArg],
+        trailing_block: Option<&Block>,
         context: &mut SolveContext,
     ) -> TypedRet<TypedExpr> {
         let callee_ty = self.visit_expr(callee, context)?;
@@ -3209,10 +3211,57 @@ impl<'a> InferencePass<'a> {
             }
         }
 
-        let arg_tys: Vec<_> = args
+        let mut arg_tys: Vec<_> = args
             .iter()
             .map(|a| self.visit_expr(&a.value, context))
             .try_collect()?;
+
+        // If there's a trailing block, convert it to a function-typed argument
+        if let Some(block) = trailing_block {
+            // First, visit the block parameters to register their types
+            let typed_params = self.visit_params(&block.args, context)?;
+            let param_tys: Vec<Ty> = typed_params.iter().map(|p| p.ty.clone()).collect();
+
+            // Now infer the block body (parameters are now in scope)
+            let typed_block = self.infer_block(block, context)?;
+
+            // Build the function type: (param_types) -> return_type
+            let func_ty = curry(param_tys.iter().cloned(), typed_block.ret.clone(), Row::Empty.into());
+
+            // Create a synthesized symbol for this anonymous function
+            let anon_sym = Symbol::Synthesized(
+                self.session
+                    .symbols
+                    .next_synthesized(self.session.current_module_id),
+            );
+
+            // Register the symbol name for debugging/error messages
+            self.session
+                .resolved_names
+                .symbol_names
+                .insert(anon_sym, "<trailing_block>".to_string());
+
+            // Register the function type for the synthesized symbol
+            self.session
+                .insert(anon_sym, func_ty.clone(), &mut Default::default());
+
+            // Wrap the block in a TypedFunc so it's lowered as a callable
+            let typed_func = TypedFunc {
+                name: anon_sym,
+                foralls: Default::default(),
+                params: typed_params,
+                effects: vec![],
+                effects_row: Row::Empty,
+                body: typed_block.clone(),
+                ret: typed_block.ret.clone(),
+            };
+
+            arg_tys.push(TypedExpr {
+                id: block.id,
+                ty: func_ty,
+                kind: TypedExprKind::Func(typed_func),
+            });
+        }
 
         // Track yield calls for generator return type inference
         if let TypedExprKind::Variable(sym) = &callee_ty.kind {

@@ -257,7 +257,8 @@ pub mod tests {
                     body: any_block!(vec![any_expr_stmt!(ExprKind::Call {
                         callee: Box::new(variable!(Symbol::Global(GlobalId::from(2)), "even")),
                         type_args: vec![],
-                        args: vec![]
+                        args: vec![],
+                        trailing_block: None,
                     })]),
                     ret: None,
                     attributes: vec![]
@@ -287,7 +288,8 @@ pub mod tests {
                     body: any_block!(vec![any_expr_stmt!(ExprKind::Call {
                         callee: Box::new(variable!(Symbol::Global(GlobalId::from(1)), "odd")),
                         type_args: vec![],
-                        args: vec![]
+                        args: vec![],
+                        trailing_block: None,
                     })]),
                     ret: None,
                     attributes: vec![]
@@ -582,7 +584,8 @@ pub mod tests {
                     label: Label::Positional(0),
                     label_span: Span::ANY,
                     value: any_expr!(ExprKind::LiteralString("$0 = add int 1 2".into()))
-                })]
+                })],
+                trailing_block: None,
             })
         );
     }
@@ -968,7 +971,8 @@ pub mod tests {
                                 ))
                                 .into(),
                                 type_args: vec![],
-                                args: vec![]
+                                args: vec![],
+                                trailing_block: None,
                             })]),
                             ret: None,
                             attributes: vec![]
@@ -1004,7 +1008,8 @@ pub mod tests {
                                 ))
                                 .into(),
                                 type_args: vec![],
-                                args: vec![]
+                                args: vec![],
+                                trailing_block: None,
                             })]),
                             ret: None,
                             attributes: vec![]
@@ -1033,7 +1038,8 @@ pub mod tests {
                 )))
                 .into(),
                 type_args: vec![],
-                args: vec![]
+                args: vec![],
+                trailing_block: None,
             })
         )
     }
