@@ -3760,24 +3760,9 @@ impl<'a> Lowerer<'a> {
         Ok((func_val, func_ty))
     }
 
-    /// Check if we're currently compiling in state machine mode
-    #[allow(dead_code)]
-    fn is_state_machine_mode(&self) -> bool {
-        self.state_machine_context.is_some()
-    }
-
-    /// Get the yield point index for the current expression, if any
-    #[allow(dead_code)]
-    fn get_yield_point_index(&self, expr_id: crate::node_id::NodeID) -> Option<usize> {
-        self.state_machine_context
-            .as_ref()
-            .and_then(|ctx| ctx.analysis.yield_point_for_expr(expr_id))
-    }
-
     /// Lower an effectful function as a state machine.
     /// The generated function has signature:
     ///   (state: Int, state_data: Record, resumed: T) -> (Int, Record, Poll<R>)
-    #[allow(dead_code)]
     fn lower_func_as_state_machine(
         &mut self,
         func: &TypedFunc,

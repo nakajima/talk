@@ -222,7 +222,11 @@ impl RuntimeExecutor {
         // Poll<T, Y> is an enum: case ready(T), case pending(Y)
         // Represented as Record with tag as first field
         let Value::Record(_, poll_fields) = poll else {
-            // If it's not a record, treat as ready
+            // If it's not a record, treat as ready (but warn - this may hide bugs)
+            tracing::warn!(
+                "parse_poll_result: expected Poll record, got {:?}; treating as Ready",
+                poll
+            );
             return Some(PollResult::Ready(poll.clone()));
         };
 
@@ -231,6 +235,10 @@ impl RuntimeExecutor {
         }
 
         let Value::Int(tag) = &poll_fields[0] else {
+            tracing::warn!(
+                "parse_poll_result: Poll record first field should be Int tag, got {:?}; treating as Ready",
+                poll_fields[0]
+            );
             return Some(PollResult::Ready(poll.clone()));
         };
 
@@ -334,9 +342,16 @@ impl Executor for RuntimeExecutor {
                 if let Some(poll_result) = self.parse_poll_result(result) {
                     match poll_result {
                         PollResult::Ready(value) => {
-                            if let Some(task) = self.tasks.get_mut(&task_id) {
-                                task.status = TaskState::Complete;
-                                task.result = Some(value);
+                            // For non-root tasks, we can remove them immediately to free memory.
+                            // For the root task, we keep it to return the result at the end.
+                            if Some(task_id) == self.root_task {
+                                if let Some(task) = self.tasks.get_mut(&task_id) {
+                                    task.status = TaskState::Complete;
+                                    task.result = Some(value);
+                                }
+                            } else {
+                                // Remove completed non-root task to prevent memory leak
+                                self.tasks.remove(&task_id);
                             }
                         }
                         PollResult::Pending {

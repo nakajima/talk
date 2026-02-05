@@ -28,6 +28,7 @@ fn core_sources() -> Vec<(&'static str, &'static str)> {
         ("Generator.tlk", include_str!("../../core/Generator.tlk")),
         ("Async.tlk", include_str!("../../core/Async.tlk")),
         ("IO.tlk", include_str!("../../core/IO.tlk")),
+        ("File.tlk", include_str!("../../core/File.tlk")),
     ]
 }
 

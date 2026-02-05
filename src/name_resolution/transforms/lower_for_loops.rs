@@ -20,9 +20,9 @@ use crate::{
 /// Desugars `for pattern in iterable { body }` into:
 /// ```talk
 /// {
-///     let __iter = iterable.iter()
+///     let __iter# = iterable.iter()
 ///     loop {
-///         match __iter.next() {
+///         match __iter#.next() {
 ///             .some(pattern) { body }
 ///             .none { break }
 ///         }
@@ -65,11 +65,11 @@ impl LowerForLoops {
             return;
         };
 
-        // Build: __iter.next()
+        // Build: __iter#.next()
         let iter_var = Expr {
             id: self.next_id(),
             span: Span::SYNTHESIZED,
-            kind: ExprKind::Variable("__iter".into()),
+            kind: ExprKind::Variable("__iter#".into()),
         };
 
         let next_member = Expr {
@@ -144,7 +144,7 @@ impl LowerForLoops {
             kind: ExprKind::Match(Box::new(next_call), vec![some_arm, none_arm]),
         };
 
-        // Build loop body: match __iter.next() { ... }
+        // Build loop body: match __iter#.next() { ... }
         let loop_body = Block {
             id: self.next_id(),
             span: Span::SYNTHESIZED,
@@ -180,7 +180,7 @@ impl LowerForLoops {
             },
         };
 
-        // Build: let __iter = iterable.iter()
+        // Build: let __iter# = iterable.iter()
         let let_decl = Decl {
             id: self.next_id(),
             span: Span::SYNTHESIZED,
@@ -189,14 +189,14 @@ impl LowerForLoops {
                 lhs: Pattern {
                     id: self.next_id(),
                     span: Span::SYNTHESIZED,
-                    kind: PatternKind::Bind("__iter".into()),
+                    kind: PatternKind::Bind("__iter#".into()),
                 },
                 type_annotation: None,
                 rhs: Some(iter_call),
             },
         };
 
-        // Build outer block: { let __iter = ...; loop { ... } }
+        // Build outer block: { let __iter# = ...; loop { ... } }
         let outer_block = Expr {
             id: self.next_id(),
             span: stmt.span,
