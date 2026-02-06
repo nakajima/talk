@@ -1771,13 +1771,11 @@ pub mod tests {
         println!("{}", module.program);
 
         // The gen function should have been transformed - there should be a synthesized poll function
-        let has_poll_func = module.program.functions.keys().any(|k| {
-            if let Symbol::Synthesized(_) = k {
-                true
-            } else {
-                false
-            }
-        });
+        let has_poll_func = module
+            .program
+            .functions
+            .keys()
+            .any(|k| matches!(k, Symbol::Synthesized(_)));
 
         assert!(
             has_poll_func,

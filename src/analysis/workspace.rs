@@ -102,38 +102,22 @@ impl Workspace {
     }
 
     pub fn core() -> Option<Self> {
-        let root = std::env::current_dir().ok()?;
-        let core_files: [(std::path::PathBuf, &str); 5] = [
-            (
-                root.join("core/Optional.tlk"),
-                include_str!("../../core/Optional.tlk"),
-            ),
-            (
-                root.join("core/Operators.tlk"),
-                include_str!("../../core/Operators.tlk"),
-            ),
-            (
-                root.join("core/String.tlk"),
-                include_str!("../../core/String.tlk"),
-            ),
-            (
-                root.join("core/Memory.tlk"),
-                include_str!("../../core/Memory.tlk"),
-            ),
-            (
-                root.join("core/Array.tlk"),
-                include_str!("../../core/Array.tlk"),
-            ),
-        ];
+        let core_dir = std::env::temp_dir().join("talk-core");
+        let _ = std::fs::create_dir_all(&core_dir);
+
+        let core_files: Vec<(PathBuf, &str)> = crate::compiling::core::core_sources()
+            .into_iter()
+            .map(|(name, content)| {
+                let path = core_dir.join(name);
+                let _ = std::fs::write(&path, content);
+                (path, content)
+            })
+            .collect();
 
         let file_id_to_document: Vec<DocumentId> = core_files
             .iter()
             .map(|(path, _)| path.to_string_lossy().into_owned())
             .collect();
-
-        if file_id_to_document.len() != core_files.len() {
-            return None;
-        }
 
         let document_to_file_id: FxHashMap<DocumentId, FileID> = file_id_to_document
             .iter()

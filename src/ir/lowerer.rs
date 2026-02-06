@@ -1249,7 +1249,10 @@ impl<'a> Lowerer<'a> {
             })?;
 
         let (next_state, live_vars) = {
-            let ctx = self.state_machine_context.as_ref().unwrap();
+            let ctx = self
+                .state_machine_context
+                .as_ref()
+                .expect("did not get state machine context");
             let yield_point = &ctx.analysis.yield_points[yield_point_idx];
             (yield_point.resume_state, yield_point.live_vars.clone())
         };
@@ -1377,8 +1380,12 @@ impl<'a> Lowerer<'a> {
 
         // In the continuation, the resumed value comes from the resumed_var parameter
         // We need to restore live variables from state_data
-        let resumed_var = self.state_machine_context.as_ref().unwrap().resumed_var;
-        let state_data = self.state_machine_context.as_ref().unwrap().state_data;
+        let context = self
+            .state_machine_context
+            .as_ref()
+            .expect("didn't get state machine context");
+        let resumed_var = context.resumed_var;
+        let state_data = context.state_data;
 
         // Restore live variables from state_data (which is a RawPtr)
         if !live_vars.is_empty() {

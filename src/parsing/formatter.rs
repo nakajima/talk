@@ -2540,4 +2540,14 @@ mod formatter_tests {
             assert_eq!(code, format_string(&code));
         }
     }
+
+    #[test]
+    fn examples_smoke_test() {
+        // Make sure examples are the same before and after formatting
+        for path in std::fs::read_dir("./examples").unwrap() {
+            let path = path.unwrap().path();
+            let code = std::fs::read_to_string(&path).unwrap();
+            assert_eq!(code, format_string(&code), "formatter changed {}", path.display());
+        }
+    }
 }

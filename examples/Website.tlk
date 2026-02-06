@@ -1,4 +1,5 @@
-print("
+print(
+	"
 <html>
 <head>
 <title>it's a website</title>
@@ -7,5 +8,5 @@ print("
 <h1>welcome to my web page</h1>
 </body>
 </html>
-")
-
+"
+)

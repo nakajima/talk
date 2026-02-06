@@ -284,7 +284,16 @@ pub async fn start() {
                         return Ok(None);
                     };
 
-                    Ok(hover_at_lsp(&workspace, core.as_deref(), &uri, byte_offset))
+                    let result = hover_at_lsp(&workspace, core.as_deref(), &uri, byte_offset);
+                    if result.is_none() {
+                        crate::lsp::goto_definition::log_miss(
+                            "hover",
+                            &uri,
+                            byte_offset,
+                            &[],
+                        );
+                    }
+                    Ok(result)
                 }
             })
             .request::<request::Rename, _>(|st, params| {
@@ -1422,5 +1431,198 @@ extend Person {
         assert_eq!(apply_format("let x = 1\n\n\n"), "let x = 1\n");
         assert_eq!(apply_format("let x=1\n"), "let x = 1\n");
         assert_eq!(apply_format("let x=1\n\n"), "let x = 1\n");
+    }
+
+    #[test]
+    fn goto_definition_on_variant_pattern() {
+        let code = r#"enum Opt<T> {
+    case some(T), none
+}
+
+match Opt.some(123) {
+    .some(x) -> x,
+    .none -> 0,
+}
+"#;
+        let uri = Url::from_file_path(std::env::temp_dir().join("goto_def_variant_pattern.tlk"))
+            .expect("file uri");
+        let module = workspace_for_docs(vec![(uri.clone(), code)]);
+        // Find "some" in the pattern ".some(x)"
+        let byte_offset = code.find(".some(x)").expect("variant pattern") as u32 + 1;
+        let target = super::goto_definition(&module, None, &uri, byte_offset);
+        assert!(
+            target.is_some(),
+            "should find variant definition from pattern"
+        );
+    }
+
+    #[test]
+    fn goto_definition_on_effect_call() {
+        let code = r#"effect 'fizz() -> Int
+
+@handle 'fizz { 0 }
+
+'fizz()
+"#;
+        let uri = Url::from_file_path(std::env::temp_dir().join("goto_def_effect_call.tlk"))
+            .expect("file uri");
+        let module = workspace_for_docs(vec![(uri.clone(), code)]);
+        // Effect name span excludes the leading ', so find "fizz" in the call (third occurrence)
+        let byte_offset = code
+            .match_indices("fizz")
+            .nth(2)
+            .expect("effect call")
+            .0 as u32;
+        let target = super::goto_definition(&module, None, &uri, byte_offset);
+        assert!(
+            target.is_some(),
+            "should find effect definition from call"
+        );
+    }
+
+    #[test]
+    fn goto_definition_on_effect_handler() {
+        let code = r#"effect 'fizz() -> Int
+
+@handle 'fizz { 0 }
+"#;
+        let uri = Url::from_file_path(std::env::temp_dir().join("goto_def_effect_handler.tlk"))
+            .expect("file uri");
+        let module = workspace_for_docs(vec![(uri.clone(), code)]);
+        // Effect name span excludes the leading ', so find "fizz" in the handler (second occurrence)
+        let byte_offset = code
+            .match_indices("fizz")
+            .nth(1)
+            .expect("handler")
+            .0 as u32;
+        let target = super::goto_definition(&module, None, &uri, byte_offset);
+        assert!(
+            target.is_some(),
+            "should find effect definition from handler"
+        );
+    }
+
+    #[test]
+    fn goto_definition_on_effect_decl() {
+        let code = "effect 'fizz() -> Int\n";
+        let uri = Url::from_file_path(std::env::temp_dir().join("goto_def_effect_decl.tlk"))
+            .expect("file uri");
+        let module = workspace_for_docs(vec![(uri.clone(), code)]);
+        // Effect name span excludes the leading ', so point to 'fizz' (after ')
+        let byte_offset = code.find("fizz").expect("effect name") as u32;
+        let target = super::goto_definition(&module, None, &uri, byte_offset);
+        assert!(
+            target.is_some(),
+            "should find effect declaration definition"
+        );
+    }
+
+    #[test]
+    fn goto_definition_on_cross_file_function_call() {
+        let code_a = "public func helper() -> Int { 1 }\n";
+        let code_b = "import { helper } from ./goto_cross_a.tlk\nhelper()\n";
+        let uri_a =
+            Url::from_file_path(std::env::temp_dir().join("goto_cross_a.tlk")).expect("file uri");
+        let uri_b =
+            Url::from_file_path(std::env::temp_dir().join("goto_cross_b.tlk")).expect("file uri");
+
+        let module = workspace_for_docs(vec![(uri_a.clone(), code_a), (uri_b.clone(), code_b)]);
+
+        // Find "helper" in the call (second occurrence in code_b)
+        let byte_offset = code_b.rfind("helper").expect("helper call") as u32;
+        let target = super::goto_definition(&module, None, &uri_b, byte_offset);
+        assert!(
+            target.is_some(),
+            "should find cross-file function definition"
+        );
+        let target = target.expect("target");
+        assert_eq!(target.uri, uri_a, "should navigate to definition file");
+    }
+
+    #[test]
+    fn goto_definition_on_effect_in_func_signature() {
+        let code = r#"effect 'fizz() -> Int
+
+func foo() 'fizz -> Int {
+    'fizz()
+}
+"#;
+        let uri =
+            Url::from_file_path(std::env::temp_dir().join("goto_def_effect_in_func_sig.tlk"))
+                .expect("file uri");
+        let module = workspace_for_docs(vec![(uri.clone(), code)]);
+        // Find "fizz" in the function signature (second occurrence)
+        let byte_offset = code
+            .match_indices("fizz")
+            .nth(1)
+            .expect("func sig effect")
+            .0 as u32;
+        let target = super::goto_definition(&module, None, &uri, byte_offset);
+        assert!(
+            target.is_some(),
+            "should find effect definition from function signature"
+        );
+        let target = target.expect("target");
+        assert_eq!(target.range.start.line, 0, "should point to effect decl");
+    }
+
+    #[test]
+    fn goto_definition_on_self_type() {
+        let code = r#"struct Foo {
+    func make() -> Self { Foo() }
+}
+"#;
+        let uri = Url::from_file_path(std::env::temp_dir().join("goto_def_self_type.tlk"))
+            .expect("file uri");
+        let module = workspace_for_docs(vec![(uri.clone(), code)]);
+        let byte_offset = code.find("Self").expect("Self type") as u32;
+        let target = super::goto_definition(&module, None, &uri, byte_offset);
+        assert!(target.is_some(), "should find Self type definition");
+        let target = target.expect("target");
+        // Should navigate to the struct Foo definition (line 0)
+        assert_eq!(target.range.start.line, 0);
+    }
+
+    #[test]
+    fn goto_definition_on_core_function() {
+        // print_raw is defined in core/IO.tlk and available via the core prelude
+        let code = "print_raw(\"hello\")\n";
+        let uri = Url::from_file_path(std::env::temp_dir().join("goto_def_core_func.tlk"))
+            .expect("file uri");
+        let module = workspace_for_docs(vec![(uri.clone(), code)]);
+        let core = super::AnalysisWorkspace::core();
+
+        let byte_offset = code.find("print_raw").expect("print_raw") as u32;
+        let target =
+            super::goto_definition(&module, core.as_ref(), &uri, byte_offset);
+        assert!(
+            target.is_some(),
+            "should find core function definition"
+        );
+    }
+
+    #[test]
+    fn goto_definition_on_handler_effect_tick() {
+        // Clicking on the ' in '@handle 'fizz' should still navigate to the effect
+        let code = r#"effect 'fizz() -> Int
+
+@handle 'fizz { 0 }
+"#;
+        let uri =
+            Url::from_file_path(std::env::temp_dir().join("goto_def_handler_tick.tlk"))
+                .expect("file uri");
+        let module = workspace_for_docs(vec![(uri.clone(), code)]);
+        // Find the ' before "fizz" in the handler (the second ' in the code)
+        let tick_offset = code
+            .match_indices("'")
+            .nth(1)
+            .expect("handler tick")
+            .0;
+        assert_eq!(&code[tick_offset..tick_offset + 1], "'");
+        let target = super::goto_definition(&module, None, &uri, tick_offset as u32);
+        assert!(
+            target.is_some(),
+            "should find effect definition when clicking on tick mark"
+        );
     }
 }

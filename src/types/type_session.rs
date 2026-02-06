@@ -553,9 +553,7 @@ impl TypeSession {
 
         // Try to find canonical representative - if the id doesn't exist in our table,
         // return None (this var is from an imported module)
-        let Some(canon) = self.try_canon_meta(id) else {
-            return None;
-        };
+        let canon = self.try_canon_meta(id)?;
 
         // Check if canonical representative has a mapping
         if canon != id

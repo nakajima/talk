@@ -1,4 +1,4 @@
-use crate::analysis::{Hover, TextRange, node_ids_at_offset, resolve_member_symbol, span_contains};
+use crate::analysis::{Hover, TextRange, node_ids_at_offset, resolve_member_symbol, resolve_variant_symbol, span_contains};
 use crate::name_resolution::symbol::Symbol;
 use crate::node::Node;
 use crate::node_kinds::{
@@ -167,6 +167,32 @@ fn hover_for_stmt(ctx: &HoverCtx<'_>, stmt: &crate::node_kinds::stmt::Stmt) -> O
         StmtKind::Assignment(lhs, rhs) => {
             hover_for_expr(ctx, lhs).or_else(|| hover_for_expr(ctx, rhs))
         }
+        StmtKind::Handling {
+            effect_name,
+            effect_name_span,
+            ..
+        } => {
+            if !span_contains(*effect_name_span, ctx.byte_offset) {
+                return None;
+            }
+            let symbol = effect_name.symbol().ok();
+            let node_ty = ctx
+                .types
+                .and_then(|types| types.get(&stmt.id))
+                .map(|entry| entry.as_mono_ty());
+            let line = hover_line_for_name_and_type(
+                &ctx.formatter,
+                effect_name.name_str(),
+                symbol,
+                ctx.types,
+                node_ty,
+            )?;
+            Some(Hover {
+                contents: line,
+                range: Some(TextRange::new(effect_name_span.start, effect_name_span.end)),
+            })
+        }
+        StmtKind::Continue(Some(expr)) => hover_for_expr(ctx, expr),
         _ => None,
     }
 }
@@ -242,26 +268,58 @@ fn hover_for_expr(ctx: &HoverCtx<'_>, expr: &crate::node_kinds::expr::Expr) -> O
 fn hover_for_pattern(ctx: &HoverCtx<'_>, pattern: &Pattern) -> Option<Hover> {
     use crate::node_kinds::pattern::PatternKind;
 
-    let PatternKind::Bind(name) = &pattern.kind else {
-        return None;
-    };
+    match &pattern.kind {
+        PatternKind::Bind(name) => {
+            let meta = ctx.ast.meta.get(&pattern.id)?;
+            let (start, end) = identifier_span_at_offset(meta, ctx.byte_offset)?;
+            let range = TextRange::new(start, end);
 
-    let meta = ctx.ast.meta.get(&pattern.id)?;
-    let (start, end) = identifier_span_at_offset(meta, ctx.byte_offset)?;
-    let range = TextRange::new(start, end);
+            let symbol = name.symbol().ok();
+            let node_ty = ctx
+                .types
+                .and_then(|types| types.get(&pattern.id))
+                .map(|entry| entry.as_mono_ty());
+            let line = hover_line_for_name_and_type(
+                &ctx.formatter,
+                name.name_str(),
+                symbol,
+                ctx.types,
+                node_ty,
+            )?;
 
-    let symbol = name.symbol().ok();
-    let node_ty = ctx
-        .types
-        .and_then(|types| types.get(&pattern.id))
-        .map(|entry| entry.as_mono_ty());
-    let line =
-        hover_line_for_name_and_type(&ctx.formatter, name.name_str(), symbol, ctx.types, node_ty)?;
-
-    Some(Hover {
-        contents: line,
-        range: Some(range),
-    })
+            Some(Hover {
+                contents: line,
+                range: Some(range),
+            })
+        }
+        PatternKind::Variant {
+            variant_name,
+            variant_name_span,
+            ..
+        } => {
+            if !span_contains(*variant_name_span, ctx.byte_offset) {
+                return None;
+            }
+            let symbol =
+                resolve_variant_symbol(ctx.types, pattern.id, variant_name);
+            let node_ty = ctx
+                .types
+                .and_then(|t| t.get(&pattern.id))
+                .map(|e| e.as_mono_ty());
+            let line = hover_line_for_name_and_type(
+                &ctx.formatter,
+                variant_name.clone(),
+                symbol,
+                ctx.types,
+                node_ty,
+            )?;
+            Some(Hover {
+                contents: line,
+                range: Some(TextRange::new(variant_name_span.start, variant_name_span.end)),
+            })
+        }
+        _ => None,
+    }
 }
 
 fn hover_for_type_annotation(ctx: &HoverCtx<'_>, ty: &TypeAnnotation) -> Option<Hover> {
@@ -406,6 +464,9 @@ fn hover_for_decl(ctx: &HoverCtx<'_>, decl: &Decl) -> Option<Hover> {
             name, name_span, ..
         }
         | DeclKind::Property {
+            name, name_span, ..
+        }
+        | DeclKind::Effect {
             name, name_span, ..
         } => {
             if !span_contains(*name_span, ctx.byte_offset) {
@@ -670,5 +731,80 @@ func add(a: Int, b: Int) -> Int { a }
         let hover = hover.expect("hover");
         // Should show uncurried: (Int, Int) -> Int, not curried: (Int) -> (Int) -> Int
         assert_eq!(hover.contents, "add: (Int, Int) -> Int");
+    }
+
+    #[test]
+    fn hover_on_variant_pattern() {
+        let code = r#"
+enum Opt<T> {
+    case some(T), none
+}
+
+match Opt.some(123) {
+    .some(x) -> x,
+    .none -> 0,
+}
+"#;
+        let workspace = analyze(code);
+        let doc_id = "test.tlk".to_string();
+        // Find "some" in the pattern ".some(x)"
+        let byte_offset = byte_offset_for(code, ".some(x)", 0) + 1; // point to 'some'
+        let hover = hover_at(&workspace, None, &doc_id, byte_offset);
+        assert!(hover.is_some(), "expected hover info for variant pattern");
+        let hover = hover.expect("hover");
+        assert!(
+            hover.contents.contains("some"),
+            "expected 'some' in hover: {}",
+            hover.contents
+        );
+    }
+
+    #[test]
+    fn hover_on_handling_stmt() {
+        let code = r#"
+effect 'fizz() -> Int
+
+@handle 'fizz { 0 }
+"#;
+        let workspace = analyze(code);
+        let doc_id = "test.tlk".to_string();
+        // Effect name span excludes the leading ', so find "fizz" (second occurrence)
+        let byte_offset = byte_offset_for(code, "fizz", 1);
+        let hover = hover_at(&workspace, None, &doc_id, byte_offset);
+        assert!(hover.is_some(), "expected hover info for handling stmt");
+    }
+
+    #[test]
+    fn hover_on_effect_decl() {
+        let code = r#"
+effect 'fizz() -> Int
+"#;
+        let workspace = analyze(code);
+        let doc_id = "test.tlk".to_string();
+        // Effect name span excludes the leading ', so find "fizz"
+        let byte_offset = byte_offset_for(code, "fizz", 0);
+        let hover = hover_at(&workspace, None, &doc_id, byte_offset);
+        assert!(hover.is_some(), "expected hover info for effect decl");
+    }
+
+    #[test]
+    fn hover_on_continue_expr() {
+        let code = r#"
+func main() {
+    let x = 1
+    loop {
+        continue x
+    }
+}
+"#;
+        let workspace = analyze(code);
+        let doc_id = "test.tlk".to_string();
+        // Find "x" in "continue x"
+        let byte_offset = byte_offset_for(code, "continue x", 0) + 9; // point to 'x'
+        let hover = hover_at(&workspace, None, &doc_id, byte_offset);
+        assert!(
+            hover.is_some(),
+            "expected hover info for continue expr, offset: {byte_offset}"
+        );
     }
 }

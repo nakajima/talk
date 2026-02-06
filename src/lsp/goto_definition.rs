@@ -1,7 +1,7 @@
 use async_lsp::lsp_types::{Location, Position, Range, Url};
 
 use crate::analysis::workspace::Workspace as AnalysisWorkspace;
-use crate::analysis::{node_ids_at_offset, resolve_member_symbol, span_contains};
+use crate::analysis::{node_ids_at_offset, resolve_member_symbol, resolve_variant_symbol, span_contains};
 use crate::compiling::module::ModuleId;
 use crate::name_resolution::symbol::Symbol;
 
@@ -47,7 +47,7 @@ pub fn goto_definition(
                 goto_definition_symbol_from_stmt(module.types.as_ref(), &stmt, byte_offset)
             }
             crate::node::Node::TypeAnnotation(ty) => {
-                goto_definition_symbol_from_type_annotation(&ty, byte_offset)
+                goto_definition_symbol_from_type_annotation(module.types.as_ref(), &ty, byte_offset)
             }
             crate::node::Node::Decl(decl) => goto_definition_symbol_from_decl(&decl, byte_offset),
             crate::node::Node::Parameter(param) => {
@@ -61,7 +61,7 @@ pub fn goto_definition(
                 if span_contains(func.name_span, byte_offset) {
                     func.name.symbol().ok()
                 } else {
-                    None
+                    effect_symbol_at_offset(&func.effects, byte_offset)
                 }
             }
             crate::node::Node::FuncSignature(sig) => {
@@ -70,7 +70,7 @@ pub fn goto_definition(
                 if start <= byte_offset && byte_offset <= end {
                     sig.name.symbol().ok()
                 } else {
-                    None
+                    effect_symbol_at_offset(&sig.effects, byte_offset)
                 }
             }
             crate::node::Node::GenericDecl(generic) => {
@@ -90,6 +90,21 @@ pub fn goto_definition(
                         None
                     }
                 }
+                crate::node_kinds::pattern::PatternKind::Variant {
+                    variant_name,
+                    variant_name_span,
+                    ..
+                } => {
+                    if span_contains(*variant_name_span, byte_offset) {
+                        resolve_variant_symbol(
+                            module.types.as_ref(),
+                            pattern.id,
+                            variant_name,
+                        )
+                    } else {
+                        None
+                    }
+                }
                 _ => None,
             },
             _ => None,
@@ -101,6 +116,15 @@ pub fn goto_definition(
             return Some(target);
         }
     }
+
+    // Log a miss so we can identify remaining gaps
+    let candidate_ids = node_ids_at_offset(ast, byte_offset);
+    let node_descriptions: Vec<String> = candidate_ids
+        .iter()
+        .filter_map(|id| ast.find(*id))
+        .map(|n| describe_node(&n))
+        .collect();
+    log_miss("goto-def", uri, byte_offset, &node_descriptions);
 
     None
 }
@@ -204,6 +228,16 @@ fn goto_definition_symbol_from_expr(
 
             resolve_member_symbol(types, receiver, label)
         }
+        ExprKind::CallEffect {
+            effect_name,
+            effect_name_span,
+            ..
+        } => {
+            if !effect_span_contains(*effect_name_span, byte_offset) {
+                return None;
+            }
+            effect_name.symbol().ok()
+        }
         _ => None,
     }
 }
@@ -224,11 +258,25 @@ fn goto_definition_symbol_from_stmt(
         }
         StmtKind::Assignment(lhs, rhs) => goto_definition_symbol_from_expr(types, lhs, byte_offset)
             .or_else(|| goto_definition_symbol_from_expr(types, rhs, byte_offset)),
+        StmtKind::Handling {
+            effect_name,
+            effect_name_span,
+            ..
+        } => {
+            if !effect_span_contains(*effect_name_span, byte_offset) {
+                return None;
+            }
+            effect_name.symbol().ok()
+        }
+        StmtKind::Continue(Some(expr)) => {
+            goto_definition_symbol_from_expr(types, expr, byte_offset)
+        }
         _ => None,
     }
 }
 
 fn goto_definition_symbol_from_type_annotation(
+    types: Option<&crate::types::types::Types>,
     ty: &crate::node_kinds::type_annotation::TypeAnnotation,
     byte_offset: u32,
 ) -> Option<Symbol> {
@@ -242,6 +290,19 @@ fn goto_definition_symbol_from_type_annotation(
                 return None;
             }
             name.symbol().ok()
+        }
+        TypeAnnotationKind::SelfType(name) => name.symbol().ok(),
+        TypeAnnotationKind::NominalPath {
+            base,
+            member,
+            member_span,
+            ..
+        } => {
+            if !span_contains(*member_span, byte_offset) {
+                return None;
+            }
+            let base_symbol = base.symbol().ok()?;
+            types?.catalog.lookup_static_member(&base_symbol, member)
         }
         _ => None,
     }
@@ -268,6 +329,9 @@ fn goto_definition_symbol_from_decl(
         }
         | DeclKind::Property {
             name, name_span, ..
+        }
+        | DeclKind::Effect {
+            name, name_span, ..
         } => {
             if !span_contains(*name_span, byte_offset) {
                 return None;
@@ -290,6 +354,24 @@ fn goto_definition_symbol_from_decl(
     }
 }
 
+fn effect_symbol_at_offset(
+    effects: &crate::node_kinds::func::EffectSet,
+    byte_offset: u32,
+) -> Option<Symbol> {
+    for (name, span) in effects.names.iter().zip(effects.spans.iter()) {
+        if effect_span_contains(*span, byte_offset) {
+            return name.symbol().ok();
+        }
+    }
+    None
+}
+
+/// Like `span_contains` but also accepts the tick mark position one byte before
+/// the effect name span (the lexer excludes the `'` prefix from the name span).
+fn effect_span_contains(span: crate::span::Span, byte_offset: u32) -> bool {
+    span_contains(span, byte_offset) || (span.start > 0 && byte_offset == span.start - 1)
+}
+
 fn identifier_span_at_offset(
     meta: &crate::node_meta::NodeMeta,
     byte_offset: u32,
@@ -310,10 +392,44 @@ pub(crate) fn definition_location_for_symbol(
             let core = core?;
             return definition_location_in_module(core, symbol);
         }
-        return None;
+        // Cross-file import within the same workspace: normalize to Current
+        return definition_location_in_module(module, symbol.current());
     }
 
     definition_location_in_module(module, symbol)
+}
+
+pub(crate) fn log_miss(kind: &str, uri: &Url, byte_offset: u32, node_descriptions: &[String]) {
+    use std::io::Write;
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("lsp_misses.log")
+    {
+        let _ = writeln!(
+            f,
+            "{} miss at {}:{} nodes=[{}]",
+            kind,
+            uri.path(),
+            byte_offset,
+            node_descriptions.join(", ")
+        );
+    }
+}
+
+fn describe_node(node: &crate::node::Node) -> String {
+    match node {
+        crate::node::Node::Expr(e) => format!("Expr({:?})", std::mem::discriminant(&e.kind)),
+        crate::node::Node::Stmt(s) => format!("Stmt({:?})", std::mem::discriminant(&s.kind)),
+        crate::node::Node::Decl(d) => format!("Decl({:?})", std::mem::discriminant(&d.kind)),
+        crate::node::Node::Pattern(p) => {
+            format!("Pattern({:?})", std::mem::discriminant(&p.kind))
+        }
+        crate::node::Node::TypeAnnotation(t) => {
+            format!("TypeAnnotation({:?})", std::mem::discriminant(&t.kind))
+        }
+        other => format!("{:?}", std::mem::discriminant(other)),
+    }
 }
 
 pub(crate) fn definition_location_in_module(
@@ -330,12 +446,27 @@ pub(crate) fn definition_location_in_module(
         .get(file_id.0 as usize)
         .and_then(|a| a.as_ref())?;
 
-    let meta = ast.meta.get(&def_node)?;
-    let (start, end) = match meta.identifiers.first() {
-        Some(tok) => (tok.start, tok.end),
-        None => (meta.start.start, meta.end.end),
+    let (start, end) = if let Some(meta) = ast.meta.get(&def_node) {
+        match meta.identifiers.first() {
+            Some(tok) => (tok.start, tok.end),
+            None => (meta.start.start, meta.end.end),
+        }
+    } else {
+        // Synthetic nodes (e.g. from lower_funcs_to_lets) lack meta — use node span
+        node_span(ast, def_node)?
     };
     let range = byte_span_to_range_utf16(text, start, end)?;
 
     Some(Location { uri, range })
+}
+
+fn node_span(ast: &crate::ast::AST<crate::ast::NameResolved>, node_id: crate::node_id::NodeID) -> Option<(u32, u32)> {
+    let node = ast.find(node_id)?;
+    match node {
+        crate::node::Node::Pattern(p) => Some((p.span.start, p.span.end)),
+        crate::node::Node::Expr(e) => Some((e.span.start, e.span.end)),
+        crate::node::Node::Decl(d) => Some((d.span.start, d.span.end)),
+        crate::node::Node::Stmt(s) => Some((s.span.start, s.span.end)),
+        _ => None,
+    }
 }

@@ -17,7 +17,7 @@ pub fn compile() -> Arc<Module> {
 }
 
 /// All core source strings, in a fixed order for hashing.
-fn core_sources() -> Vec<(&'static str, &'static str)> {
+pub fn core_sources() -> Vec<(&'static str, &'static str)> {
     vec![
         ("Optional.tlk", include_str!("../../core/Optional.tlk")),
         ("Operators.tlk", include_str!("../../core/Operators.tlk")),

@@ -96,6 +96,23 @@ pub(crate) fn span_contains(span: crate::span::Span, byte_offset: u32) -> bool {
     span.start <= byte_offset && byte_offset <= span.end
 }
 
+pub(crate) fn resolve_variant_symbol(
+    types: Option<&crate::types::types::Types>,
+    pattern_id: crate::node_id::NodeID,
+    variant_name: &str,
+) -> Option<crate::name_resolution::symbol::Symbol> {
+    use crate::types::infer_ty::Ty;
+
+    let types = types?;
+    let entry = types.get(&pattern_id)?;
+    match entry.as_mono_ty() {
+        Ty::Nominal { symbol, .. } => types
+            .catalog
+            .lookup_static_member(symbol, &variant_name.into()),
+        _ => None,
+    }
+}
+
 pub(crate) fn resolve_member_symbol(
     types: Option<&crate::types::types::Types>,
     receiver: &crate::node_kinds::expr::Expr,
