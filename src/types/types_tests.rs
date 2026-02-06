@@ -2702,6 +2702,68 @@ pub mod tests {
         assert_eq!(ty(0, &ast, &types), Ty::Int);
     }
 
+    /// finalize_ty should produce Poly entries with correct foralls for polymorphic functions
+    #[test]
+    fn finalize_ty_produces_correct_poly_entry() {
+        let (_ast, types) = typecheck(
+            "
+            func id(x) { x }
+            id(123)
+            ",
+        );
+
+        let entry = types
+            .get_symbol(&Symbol::Global(GlobalId::from(1)))
+            .unwrap();
+
+        match entry {
+            TypeEntry::Poly(scheme) => {
+                // Should have exactly one ForAll::Ty for the type parameter
+                assert_eq!(
+                    scheme.foralls.iter().filter(|f| matches!(f, ForAll::Ty(..))).count(),
+                    1,
+                    "identity should have one type forall, got: {:?}",
+                    scheme.foralls
+                );
+            }
+            TypeEntry::Mono(_) => panic!("identity should be polymorphic"),
+        }
+    }
+
+    /// A function accessing a record field should generalize with ForAll::Row.
+    #[test]
+    fn record_field_func_generalizes_with_row_forall() {
+        let (_ast, types) = typecheck(
+            r#"
+            func getX(r) { r.x }
+            getX({ x: 1 })
+            "#,
+        );
+
+        let entry = types
+            .get_symbol(&Symbol::Global(GlobalId::from(1)))
+            .unwrap();
+
+        match entry {
+            TypeEntry::Poly(scheme) => {
+                assert!(
+                    scheme.foralls.iter().any(|f| matches!(f, ForAll::Row(..))),
+                    "should have a row forall, got: {:?}",
+                    scheme.foralls
+                );
+            }
+            TypeEntry::Mono(_) => panic!("getX should be polymorphic"),
+        }
+    }
+
+    /// Ty::Param should never appear in collect_metas output - params are already
+    /// generalized and are tracked separately via collect_foralls.
+    #[test]
+    fn param_collect_metas_is_empty() {
+        let param = Ty::Param(test_type_param(0), vec![]);
+        assert!(param.collect_metas().is_empty());
+    }
+
     #[test]
     fn types_trailing_block_type_mismatch_returns_error() {
         // Trailing block returns wrong type - should produce type error

@@ -323,7 +323,7 @@ impl Constraint {
                 out.extend(call.returns.collect_metas());
             }
             Constraint::HasField(has_field) => {
-                // The row meta is handled in your existing HasField block later.
+                out.extend(has_field.row.collect_metas());
                 out.extend(has_field.ty.collect_metas());
             }
             Constraint::Conforms(c) => {
