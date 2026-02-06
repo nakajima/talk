@@ -351,11 +351,10 @@ impl Driver {
                     for import_path in extract_import_paths(&parsed) {
                         if let Some((canonical, resolved)) =
                             resolve_import_path(source_path, &import_path)
+                            && !processed_paths.contains(&canonical)
                         {
-                            if !processed_paths.contains(&canonical) {
-                                processed_paths.insert(canonical);
-                                to_parse.push_back(Source::from(resolved));
-                            }
+                            processed_paths.insert(canonical);
+                            to_parse.push_back(Source::from(resolved));
                         }
                     }
 

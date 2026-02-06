@@ -1549,7 +1549,7 @@ impl<'a> InferencePass<'a> {
                     .zip(type_args.iter())
                     .map(|(ty, ann)| (ty.clone(), ann.id))
                     .collect::<Vec<_>>(),
-                &mut self.session,
+                self.session,
                 context,
                 &mut self.constraints,
             );
@@ -3278,30 +3278,27 @@ impl<'a> InferencePass<'a> {
         }
 
         // Track yield calls for generator return type inference
-        if let TypedExprKind::Variable(sym) = &callee_ty.kind {
-            if *sym == Symbol::YIELD {
-                if let Some(arg) = arg_tys.first() {
-                    self.track_yield(arg.ty.clone());
-                }
-            }
+        if let TypedExprKind::Variable(sym) = &callee_ty.kind
+            && *sym == Symbol::YIELD
+            && let Some(arg) = arg_tys.first()
+        {
+            self.track_yield(arg.ty.clone());
         }
 
         // Record call arg label spans immediately for Constructor callees
         // The struct symbol is available now, so we can resolve directly
         if let TypedExprKind::Constructor(struct_sym, _) = &callee_ty.kind {
             for arg in args {
-                if let Label::Named(_) = &arg.label {
-                    if arg.label_span != Span::SYNTHESIZED {
-                        if let Some(prop_sym) = self
-                            .session
-                            .type_catalog
-                            .properties
-                            .get(struct_sym)
-                            .and_then(|p| p.get(&arg.label))
-                        {
-                            let _ = prop_sym;
-                        }
-                    }
+                if let Label::Named(_) = &arg.label
+                    && arg.label_span != Span::SYNTHESIZED
+                    && let Some(prop_sym) = self
+                        .session
+                        .type_catalog
+                        .properties
+                        .get(struct_sym)
+                        .and_then(|p| p.get(&arg.label))
+                {
+                    let _ = prop_sym;
                 }
             }
         }
@@ -3971,7 +3968,7 @@ impl<'a> InferencePass<'a> {
             && let Some(entry) = self.session.lookup(&sym)
             && let Ty::Param(existing_id, _) = entry._as_ty()
         {
-            return existing_id.clone();
+            return existing_id;
         }
 
         let param_id = self.session.new_type_param_id(None);

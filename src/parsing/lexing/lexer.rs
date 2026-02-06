@@ -230,7 +230,7 @@ impl<'a> Lexer<'a> {
         for (expecting, found) in options {
             if self.peek() == Some(*expecting) {
                 self.advance();
-                return self.make(found.clone());
+                return self.make(*found);
             }
         }
 

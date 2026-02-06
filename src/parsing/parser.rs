@@ -395,7 +395,7 @@ impl<'a> Parser<'a> {
                         self.advance();
                     }
                     TokenKind::Identifier => {
-                        path_str.push_str(self.lexeme(&current));
+                        path_str.push_str(self.lexeme(current));
                         self.advance();
                     }
                     _ => break,
@@ -781,7 +781,7 @@ impl<'a> Parser<'a> {
             TokenKind::Loop => self.loop_stmt(),
             TokenKind::For => self.for_stmt(),
             TokenKind::Return => self.return_stmt(),
-            TokenKind::Attribute if self.lexeme(&current) == "handle" => self.effect_handler(),
+            TokenKind::Attribute if self.lexeme(current) == "handle" => self.effect_handler(),
             TokenKind::Continue => {
                 let tok = self.push_source_location();
                 self.consume(TokenKind::Continue)?;
@@ -2429,6 +2429,25 @@ impl<'a> Parser<'a> {
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn type_annotation(&mut self) -> Result<TypeAnnotation, ParserError> {
+        let mut base = self.type_annotation_base()?;
+
+        while self.did_match(TokenKind::QuestionMark)? {
+            let tok = self.push_lhs_location(base.id);
+            base = self.save_meta(tok, |id, span| TypeAnnotation {
+                id,
+                span,
+                kind: TypeAnnotationKind::Nominal {
+                    name: "Optional".into(),
+                    name_span: span,
+                    generics: vec![base],
+                },
+            })?;
+        }
+
+        Ok(base)
+    }
+
+    fn type_annotation_base(&mut self) -> Result<TypeAnnotation, ParserError> {
         let tok = self.push_source_location();
 
         if self.did_match(TokenKind::LeftParen)? {
@@ -2556,7 +2575,7 @@ impl<'a> Parser<'a> {
     fn type_annotations(&mut self, closer: TokenKind) -> Result<Vec<TypeAnnotation>, ParserError> {
         let mut annotations: Vec<TypeAnnotation> = vec![];
 
-        while !self.did_match(closer.clone())? {
+        while !self.did_match(closer)? {
             annotations.push(self.type_annotation()?);
             self.consume(TokenKind::Comma).ok();
         }

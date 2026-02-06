@@ -1040,8 +1040,10 @@ impl<'a> Formatter<'a> {
         }
 
         // If we have a trailing block and no args, omit parens
-        if trailing_block.is_some() && args.is_empty() {
-            let block_doc = self.format_block_inner(trailing_block.unwrap(), true);
+        if let Some(trailing_block) = trailing_block
+            && args.is_empty()
+        {
+            let block_doc = self.format_block_inner(trailing_block, true);
             return group(concat(result, concat(text(" "), block_doc)));
         }
 
@@ -1400,6 +1402,11 @@ impl<'a> Formatter<'a> {
                         concat_space(text(") ->"), self.format_type_annotation(returns)),
                     ),
                 )
+            }
+            TypeAnnotationKind::Nominal { name, generics, .. }
+                if name.name_str() == "Optional" && generics.len() == 1 =>
+            {
+                concat(self.format_type_annotation(&generics[0]), text("?"))
             }
             TypeAnnotationKind::Nominal { name, generics, .. } => {
                 self.format_nominal_type_annotation(name.name_str(), generics)
@@ -2366,7 +2373,7 @@ mod formatter_tests {
 
     #[test]
     fn test_type_annotations() {
-        // assert_eq!(format_code("let x: Int?", 80), "let x: Optional<Int>");
+        assert_eq!(format_code("let x: Int?", 80), "let x: Int?");
         assert_eq!(format_code("let x: (Int, Bool)", 80), "let x: (Int, Bool)");
         assert_eq!(
             format_code("let f: (Int) -> Bool", 80),

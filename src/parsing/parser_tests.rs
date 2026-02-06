@@ -615,6 +615,66 @@ pub mod tests {
     }
 
     #[test]
+    fn parses_optional_type_sugar() {
+        let parsed = parse("func c(a: Int?) { a }");
+        let DeclKind::Func(Func { params, .. }) = &parsed.roots[0].as_decl().kind else {
+            panic!("didn't get func");
+        };
+
+        assert_eq!(params.len(), 1);
+        assert_eq!(
+            params[0].type_annotation.clone().unwrap().kind,
+            TypeAnnotationKind::Nominal {
+                name: "Optional".into(),
+                name_span: Span::ANY,
+                generics: vec![TypeAnnotation {
+                    id: NodeID::ANY,
+                    span: Span::ANY,
+                    kind: TypeAnnotationKind::Nominal {
+                        name: "Int".into(),
+                        name_span: Span::ANY,
+                        generics: vec![]
+                    }
+                }]
+            }
+        );
+    }
+
+    #[test]
+    fn parses_nested_optional_type_sugar() {
+        let parsed = parse("func c(a: Int??) { a }");
+        let DeclKind::Func(Func { params, .. }) = &parsed.roots[0].as_decl().kind else {
+            panic!("didn't get func");
+        };
+
+        assert_eq!(params.len(), 1);
+        assert_eq!(
+            params[0].type_annotation.clone().unwrap().kind,
+            TypeAnnotationKind::Nominal {
+                name: "Optional".into(),
+                name_span: Span::ANY,
+                generics: vec![TypeAnnotation {
+                    id: NodeID::ANY,
+                    span: Span::ANY,
+                    kind: TypeAnnotationKind::Nominal {
+                        name: "Optional".into(),
+                        name_span: Span::ANY,
+                        generics: vec![TypeAnnotation {
+                            id: NodeID::ANY,
+                            span: Span::ANY,
+                            kind: TypeAnnotationKind::Nominal {
+                                name: "Int".into(),
+                                name_span: Span::ANY,
+                                generics: vec![]
+                            }
+                        }]
+                    }
+                }]
+            }
+        );
+    }
+
+    #[test]
     fn parses_func_literal_with_newlines() {
         let parsed = parse(
             "func greet(a) {

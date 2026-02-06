@@ -5,7 +5,7 @@ import { Add, Comparable } from ./Operators.tlk
 
 public protocol Iterator {
 	associated Element
-	func next() -> Optional<Element>
+	func next() -> Element?
 }
 
 public protocol Iterable {
@@ -24,7 +24,7 @@ public struct ArrayIterator<Element> {
 	}
 
 	extend Self: Iterator<Element> {
-		func next() -> Optional<Element> {
+		func next() -> Element? {
 			if self.current < self.array.count {
 				let result = self.array.get(self.current)
 				self.current = self.current + 1

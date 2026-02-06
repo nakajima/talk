@@ -721,11 +721,11 @@ impl<'a> SpecializationPass<'a> {
                 }
 
                 Err(TypeError::MemberNotFound(
-                    receiver.ty.clone().into(),
+                    receiver.ty.clone(),
                     label.to_string(),
                 ))
             }
-            _ => Err(TypeError::CalleeNotCallable(callee.ty.clone().into())),
+            _ => Err(TypeError::CalleeNotCallable(callee.ty.clone())),
         }
     }
 
@@ -1022,10 +1022,10 @@ impl<'a> SpecializationPass<'a> {
         // Check if we already have a specialization for this callee + specializations
         if let Some(existing) = self.specializations.get(callee_sym) {
             for &sym in existing {
-                if let Some(callee) = self.specialized_callees.get(&sym) {
-                    if &callee.specializations == specializations {
-                        return sym;
-                    }
+                if let Some(callee) = self.specialized_callees.get(&sym)
+                    && &callee.specializations == specializations
+                {
+                    return sym;
                 }
             }
         }

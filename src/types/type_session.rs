@@ -567,10 +567,10 @@ impl TypeSession {
         // Search all entries for one with the same canonical representative
         // This handles the case where another meta in the equivalence class has the mapping
         for (&meta_id, param) in &self.reverse_instantiations.ty.clone() {
-            if let Some(meta_canon) = self.try_canon_meta(meta_id) {
-                if meta_canon == canon {
-                    return Some(param.clone());
-                }
+            if let Some(meta_canon) = self.try_canon_meta(meta_id)
+                && meta_canon == canon
+            {
+                return Some(param.clone());
             }
         }
 
@@ -758,7 +758,7 @@ impl TypeSession {
 
         if let Some(entry) = self.modules.lookup(sym) {
             let entry: EnvEntry = match entry.clone() {
-                TypeEntry::Mono(t) => EnvEntry::Mono(t.into()),
+                TypeEntry::Mono(t) => EnvEntry::Mono(t),
                 TypeEntry::Poly(..) => entry.into(),
             };
 

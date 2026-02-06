@@ -380,28 +380,28 @@ impl<'a> Lowerer<'a> {
                 ..
             } => {
                 // Store global constants for cross-module access
-                if let TypedPatternKind::Bind(sym @ Symbol::Global(_)) = &pattern.kind {
-                    if let Some(init) = initializer {
-                        let constant = match &init.kind {
-                            TypedExprKind::LiteralInt(val) => val
-                                .parse::<i64>()
-                                .ok()
-                                .map(crate::types::type_catalog::GlobalConstant::Int),
-                            TypedExprKind::LiteralFloat(val) => val
-                                .parse::<f64>()
-                                .ok()
-                                .map(crate::types::type_catalog::GlobalConstant::Float),
-                            TypedExprKind::LiteralTrue => {
-                                Some(crate::types::type_catalog::GlobalConstant::Bool(true))
-                            }
-                            TypedExprKind::LiteralFalse => {
-                                Some(crate::types::type_catalog::GlobalConstant::Bool(false))
-                            }
-                            _ => None,
-                        };
-                        if let Some(c) = constant {
-                            self.typed.types.catalog.global_constants.insert(*sym, c);
+                if let TypedPatternKind::Bind(sym @ Symbol::Global(_)) = &pattern.kind
+                    && let Some(init) = initializer
+                {
+                    let constant = match &init.kind {
+                        TypedExprKind::LiteralInt(val) => val
+                            .parse::<i64>()
+                            .ok()
+                            .map(crate::types::type_catalog::GlobalConstant::Int),
+                        TypedExprKind::LiteralFloat(val) => val
+                            .parse::<f64>()
+                            .ok()
+                            .map(crate::types::type_catalog::GlobalConstant::Float),
+                        TypedExprKind::LiteralTrue => {
+                            Some(crate::types::type_catalog::GlobalConstant::Bool(true))
                         }
+                        TypedExprKind::LiteralFalse => {
+                            Some(crate::types::type_catalog::GlobalConstant::Bool(false))
+                        }
+                        _ => None,
+                    };
+                    if let Some(c) = constant {
+                        self.typed.types.catalog.global_constants.insert(*sym, c);
                     }
                 }
 
@@ -1687,7 +1687,7 @@ impl<'a> Lowerer<'a> {
                     ty: ty.clone(),
                     lhs,
                     rhs,
-                    op: op.clone().into(),
+                    op: (*op).into(),
                     meta: vec![InstructionMeta::Source(instr.id)].into(),
                 });
                 Ok((dest.into(), ty))
@@ -2476,14 +2476,12 @@ impl<'a> Lowerer<'a> {
     /// for imported enums to ensure correct tag ordering.
     fn get_variant_tag(&self, enum_symbol: &Symbol, variant_name: &Label) -> Result<i64, IRError> {
         // First, try to get from the original module's catalog for imported enums
-        if let Some(module_id) = enum_symbol.external_module_id() {
-            if let Some(module) = self.config.modules.get_module(module_id) {
-                if let Some(variants) = module.types.catalog.variants.get(enum_symbol) {
-                    if let Some(tag) = variants.get_index_of(variant_name) {
-                        return Ok(tag as i64);
-                    }
-                }
-            }
+        if let Some(module_id) = enum_symbol.external_module_id()
+            && let Some(module) = self.config.modules.get_module(module_id)
+            && let Some(variants) = module.types.catalog.variants.get(enum_symbol)
+            && let Some(tag) = variants.get_index_of(variant_name)
+        {
+            return Ok(tag as i64);
         }
 
         // Fall back to local catalog
@@ -3265,10 +3263,8 @@ impl<'a> Lowerer<'a> {
             });
             // For non-Pointer bindings, update the binding now
             // For Pointer bindings, we'll emit a Store after the Call
-            if !matches!(binding, Some(Binding::Pointer(_))) {
-                if binding.is_some() {
-                    self.set_binding(var_sym, self_dest_reg);
-                }
+            if !matches!(binding, Some(Binding::Pointer(_))) && binding.is_some() {
+                self.set_binding(var_sym, self_dest_reg);
             }
             (
                 Some(self_dest_reg),
@@ -3486,13 +3482,10 @@ impl<'a> Lowerer<'a> {
         // Note: Only explicit yield calls trigger state machine compilation, not effect calls.
         // Effect calls continue to use the closure-based continuation approach.
         let get_ty = |sym: &Symbol| {
-            self.typed
-                .types
-                .get_symbol(sym)
-                .and_then(|entry| match entry {
-                    TypeEntry::Mono(ty) => Some(ty.clone()),
-                    TypeEntry::Poly(scheme) => Some(scheme.ty.clone()),
-                })
+            self.typed.types.get_symbol(sym).map(|entry| match entry {
+                TypeEntry::Mono(ty) => ty.clone(),
+                TypeEntry::Poly(scheme) => scheme.ty.clone(),
+            })
         };
         if let Some(analysis) =
             super::effect_analysis::EffectAnalysis::analyze_yield_only(func, get_ty)

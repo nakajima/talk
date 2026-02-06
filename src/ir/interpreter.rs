@@ -324,8 +324,7 @@ impl<IO: super::io::IO> Interpreter<IO> {
 
             // Call the poll function
             let dest_reg = self.current_func.as_ref().map_or(Register(0), |_| {
-                let reg = Register(self.frames.last().map_or(0, |f| f.registers.len() as u32));
-                reg
+                Register(self.frames.last().map_or(0, |f| f.registers.len() as u32))
             });
             self.call(poll_func, poll_args, dest_reg, None);
 
@@ -441,10 +440,10 @@ impl<IO: super::io::IO> Interpreter<IO> {
                 self.write_register(&frame.dest, val);
 
                 // Write back mutated self to caller's register
-                if let Some(self_dest) = frame.self_dest {
-                    if let Some(sv) = self_val {
-                        self.write_register(&self_dest, sv);
-                    }
+                if let Some(self_dest) = frame.self_dest
+                    && let Some(sv) = self_val
+                {
+                    self.write_register(&self_dest, sv);
                 }
 
                 let Some(func) = self.current_func.take() else {

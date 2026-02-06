@@ -330,7 +330,7 @@ impl Ty {
                 Row::Param(..) => (),
                 Row::Extend { row, ty, .. } => {
                     out.extend(ty.collect_metas());
-                    out.extend(Self::Record(sym.clone(), row.clone()).collect_metas());
+                    out.extend(Self::Record(*sym, row.clone()).collect_metas());
                 }
             },
             Self::Nominal { type_args, .. } => {
