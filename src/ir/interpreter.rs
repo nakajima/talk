@@ -2355,10 +2355,7 @@ Dog().handleDSTChange()
             ",
         );
 
-        assert_eq!(
-            String::from_utf8(interpreter.io.stdout).unwrap(),
-            "hello"
-        );
+        assert_eq!(String::from_utf8(interpreter.io.stdout).unwrap(), "hello");
     }
 
     #[test]
@@ -2416,9 +2413,6 @@ Dog().handleDSTChange()
             ",
         );
 
-        assert_eq!(
-            String::from_utf8(interpreter.io.stdout).unwrap(),
-            "oh hi\n"
-        );
+        assert_eq!(String::from_utf8(interpreter.io.stdout).unwrap(), "oh hi\n");
     }
 }

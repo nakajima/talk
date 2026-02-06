@@ -1393,7 +1393,14 @@ impl<'a> InferencePass<'a> {
                 type_args,
                 args,
                 trailing_block,
-            } => self.visit_call(expr.id, callee, type_args, args, trailing_block.as_ref(), &mut context.next())?,
+            } => self.visit_call(
+                expr.id,
+                callee,
+                type_args,
+                args,
+                trailing_block.as_ref(),
+                &mut context.next(),
+            )?,
             ExprKind::Member(receiver, label, label_span) => {
                 self.visit_member(expr, receiver, label, *label_span, context)?
             }
@@ -1878,7 +1885,10 @@ impl<'a> InferencePass<'a> {
                 let ty = if matches!(sym, Symbol::Builtin(..)) {
                     Ty::Primitive(sym)
                 } else {
-                    Ty::Nominal { symbol: sym, type_args: vec![] }
+                    Ty::Nominal {
+                        symbol: sym,
+                        type_args: vec![],
+                    }
                 };
                 type_params.push(ty);
                 self.session
@@ -3226,7 +3236,11 @@ impl<'a> InferencePass<'a> {
             let typed_block = self.infer_block(block, context)?;
 
             // Build the function type: (param_types) -> return_type
-            let func_ty = curry(param_tys.iter().cloned(), typed_block.ret.clone(), Row::Empty.into());
+            let func_ty = curry(
+                param_tys.iter().cloned(),
+                typed_block.ret.clone(),
+                Row::Empty.into(),
+            );
 
             // Create a synthesized symbol for this anonymous function
             let anon_sym = Symbol::Synthesized(

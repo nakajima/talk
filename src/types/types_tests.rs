@@ -2598,7 +2598,11 @@ pub mod tests {
                     .find(|k| *k == &symbol)
                     .map(|_| true)
                     .unwrap_or(false);
-                assert!(name || symbol.to_string().contains("Struct"), "Expected Generator type, got {:?}", symbol);
+                assert!(
+                    name || symbol.to_string().contains("Struct"),
+                    "Expected Generator type, got {:?}",
+                    symbol
+                );
 
                 // Check type args
                 assert_eq!(type_args.len(), 2, "Generator should have 2 type args");
@@ -2720,7 +2724,11 @@ pub mod tests {
             TypeEntry::Poly(scheme) => {
                 // Should have exactly one ForAll::Ty for the type parameter
                 assert_eq!(
-                    scheme.foralls.iter().filter(|f| matches!(f, ForAll::Ty(..))).count(),
+                    scheme
+                        .foralls
+                        .iter()
+                        .filter(|f| matches!(f, ForAll::Ty(..)))
+                        .count(),
                     1,
                     "identity should have one type forall, got: {:?}",
                     scheme.foralls
@@ -2780,6 +2788,79 @@ pub mod tests {
         assert!(
             !diagnostics.is_empty(),
             "Expected type error for trailing block returning Bool when Int expected"
+        );
+    }
+
+    #[test]
+    fn if_let_binds_variables() {
+        // if let .some(x) = val { x } else { 0 } should produce Int
+        typecheck(
+            "
+            enum Opt<T> { case some(T), none }
+            let val = Opt.some(42)
+            let result: Int = if let .some(x) = val { x } else { 0 }
+            ",
+        );
+    }
+
+    #[test]
+    fn if_let_unifies_arm_types() {
+        let (_, _, diagnostics) = typecheck_err(
+            "
+            enum Opt<T> { case some(T), none }
+            let val = Opt.some(42)
+            if let .some(x) = val { x } else { true }
+            ",
+        );
+        // Arms return Int and Bool — should produce a type error
+        assert!(
+            !diagnostics.is_empty(),
+            "Expected type error for mismatched if let arm types"
+        );
+    }
+
+    #[test]
+    fn if_let_stmt_no_else() {
+        // if let without else in statement position — body must return Void
+        typecheck(
+            "
+            enum Opt<T> { case some(T), none }
+            func use_int(x: Int) {}
+            let val = Opt.some(42)
+            if let .some(x) = val { use_int(x) }
+            ",
+        );
+    }
+
+    #[test]
+    fn let_else_binds_in_enclosing_scope() {
+        // let else should bind pattern variables in the enclosing scope
+        typecheck(
+            "
+            enum Opt<T> { case some(T), none }
+            func f(val: Opt<Int>) -> Int {
+                let .some(x) = val else { return 0 }
+                x
+            }
+            ",
+        );
+    }
+
+    #[test]
+    fn let_else_body_is_typechecked() {
+        let (_, _, diagnostics) = typecheck_err(
+            "
+            enum Opt<T> { case some(T), none }
+            func f(val: Opt<Int>) -> Int {
+                let .some(x) = val else { return true }
+                x
+            }
+            ",
+        );
+        // The else body returns Bool but the function returns Int
+        assert!(
+            !diagnostics.is_empty(),
+            "Expected type error for return type mismatch in let else body"
         );
     }
 }

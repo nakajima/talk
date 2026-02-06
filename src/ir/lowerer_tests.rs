@@ -1982,7 +1982,9 @@ pub mod tests {
             .find(|(_, f)| {
                 let instrs: Vec<_> = f.blocks.iter().flat_map(|b| &b.instructions).collect();
                 let has_ref = instrs.iter().any(|i| matches!(i, Instruction::Ref { .. }));
-                let has_record = instrs.iter().any(|i| matches!(i, Instruction::Record { record, .. } if record.items.len() == 3));
+                let has_record = instrs.iter().any(
+                    |i| matches!(i, Instruction::Record { record, .. } if record.items.len() == 3),
+                );
                 has_ref && has_record
             })
             .map(|(_, f)| f)
@@ -2031,14 +2033,26 @@ pub mod tests {
             "#,
         );
 
-        let main_func = module.program.functions.get(&Symbol::Main).expect("main function");
+        let main_func = module
+            .program
+            .functions
+            .get(&Symbol::Main)
+            .expect("main function");
 
         // Should have a Constant instruction with value 1 (STDOUT_FD)
         let has_constant = main_func
             .blocks
             .iter()
             .flat_map(|b| b.instructions.iter())
-            .any(|i| matches!(i, Instruction::Constant { val: Value::Int(1), .. }));
+            .any(|i| {
+                matches!(
+                    i,
+                    Instruction::Constant {
+                        val: Value::Int(1),
+                        ..
+                    }
+                )
+            });
 
         assert!(
             has_constant,
@@ -2055,14 +2069,26 @@ pub mod tests {
             "#,
         );
 
-        let main_func = module.program.functions.get(&Symbol::Main).expect("main function");
+        let main_func = module
+            .program
+            .functions
+            .get(&Symbol::Main)
+            .expect("main function");
 
         // Should have Constant instructions and an Add
         let has_constant = main_func
             .blocks
             .iter()
             .flat_map(|b| b.instructions.iter())
-            .any(|i| matches!(i, Instruction::Constant { val: Value::Int(1), .. }));
+            .any(|i| {
+                matches!(
+                    i,
+                    Instruction::Constant {
+                        val: Value::Int(1),
+                        ..
+                    }
+                )
+            });
 
         let has_add = main_func
             .blocks
@@ -2087,14 +2113,26 @@ pub mod tests {
             "#,
         );
 
-        let main_func = module.program.functions.get(&Symbol::Main).expect("main function");
+        let main_func = module
+            .program
+            .functions
+            .get(&Symbol::Main)
+            .expect("main function");
 
         // Should have at least two Constant instructions with value 1
         let constant_count = main_func
             .blocks
             .iter()
             .flat_map(|b| b.instructions.iter())
-            .filter(|i| matches!(i, Instruction::Constant { val: Value::Int(1), .. }))
+            .filter(|i| {
+                matches!(
+                    i,
+                    Instruction::Constant {
+                        val: Value::Int(1),
+                        ..
+                    }
+                )
+            })
             .count();
 
         assert!(

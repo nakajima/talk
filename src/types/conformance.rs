@@ -8,7 +8,9 @@ use crate::{
     types::infer_ty::Ty,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub struct ConformanceKey {
     pub protocol_id: ProtocolId,
     pub conforming_id: Symbol,

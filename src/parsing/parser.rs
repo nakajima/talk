@@ -618,6 +618,11 @@ impl<'a> Parser<'a> {
             None
         };
 
+        if self.did_match(TokenKind::Else)? {
+            let else_body = self.block(BlockContext::If, true)?;
+            return self.desugar_let_else(tok, lhs, rhs, else_body);
+        }
+
         self.save_meta(tok, |id, span| Decl {
             id,
             span,
@@ -828,6 +833,11 @@ impl<'a> Parser<'a> {
     pub(super) fn if_expr(&mut self, _can_assign: bool) -> Result<Node, ParserError> {
         let tok = self.push_source_location();
         self.consume(TokenKind::If)?;
+
+        if self.peek_is(TokenKind::Let) {
+            return self.if_let_match(tok, true);
+        }
+
         let cond = self.expr()?;
         let body = self.block(BlockContext::If, true)?;
         self.consume(TokenKind::Else)?;
@@ -866,6 +876,17 @@ impl<'a> Parser<'a> {
     fn if_stmt(&mut self) -> Result<Stmt, ParserError> {
         let tok = self.push_source_location();
         self.consume(TokenKind::If)?;
+
+        if self.peek_is(TokenKind::Let) {
+            let match_node = self.if_let_match(tok, false)?;
+            let expr = match_node.as_expr();
+            return Ok(Stmt {
+                id: expr.id,
+                span: expr.span,
+                kind: StmtKind::Expr(expr),
+            });
+        }
+
         self.push_context(ParseContext::If);
         let cond = self.expr()?;
         self.pop_context();
@@ -885,6 +906,184 @@ impl<'a> Parser<'a> {
                 kind: StmtKind::If(cond.as_expr(), body, None),
             })
         }
+    }
+
+    /// Shared helper for `if let` in both expression and statement position.
+    /// Desugars `if let PAT = EXPR { BODY } [else { ALT }]` into a `match` with two arms.
+    /// When `require_else` is true (expression position), the else block is required.
+    fn if_let_match(&mut self, tok: LocToken, require_else: bool) -> Result<Node, ParserError> {
+        self.consume(TokenKind::Let)?;
+        let pattern = self.parse_pattern()?;
+        self.consume(TokenKind::Equals)?;
+        self.push_context(ParseContext::If);
+        let scrutinee = self.expr()?;
+        self.pop_context();
+        let body = self.block(BlockContext::If, true)?;
+
+        let alt = if require_else {
+            self.consume(TokenKind::Else)?;
+            self.block(BlockContext::If, true)?
+        } else if self.did_match(TokenKind::Else)? {
+            self.block(BlockContext::If, true)?
+        } else {
+            Block {
+                id: self.next_id(),
+                args: vec![],
+                body: vec![],
+                span: Span::SYNTHESIZED,
+            }
+        };
+
+        let pattern_arm = MatchArm {
+            id: self.next_id(),
+            pattern,
+            body,
+            span: Span::SYNTHESIZED,
+        };
+
+        let wildcard_arm = MatchArm {
+            id: self.next_id(),
+            pattern: Pattern {
+                id: self.next_id(),
+                kind: PatternKind::Wildcard,
+                span: Span::SYNTHESIZED,
+            },
+            body: alt,
+            span: Span::SYNTHESIZED,
+        };
+
+        self.save_meta(tok, |id, span| {
+            Expr {
+                id,
+                span,
+                kind: ExprKind::Match(
+                    Box::new(scrutinee.as_expr()),
+                    vec![pattern_arm, wildcard_arm],
+                ),
+            }
+            .into()
+        })
+    }
+
+    /// Desugars `let PAT = EXPR else { BODY }` into:
+    /// - 0 binders: `let _ = match EXPR { PAT -> (), _ -> BODY }`
+    /// - 1 binder:  `let x = match EXPR { PAT -> x, _ -> BODY }`
+    /// - N binders: `let (a, b) = match EXPR { PAT -> (a, b), _ -> BODY }`
+    fn desugar_let_else(
+        &mut self,
+        tok: LocToken,
+        pattern: Pattern,
+        rhs: Option<Expr>,
+        else_body: Block,
+    ) -> Result<Decl, ParserError> {
+        let scrutinee = rhs.unwrap_or(Expr {
+            id: self.next_id(),
+            span: Span::SYNTHESIZED,
+            kind: ExprKind::Tuple(vec![]),
+        });
+
+        let binder_names = collect_pattern_binder_names(&pattern);
+
+        // Build the success arm body expression
+        let success_body_expr: Expr = match binder_names.len() {
+            0 => Expr {
+                id: self.next_id(),
+                span: Span::SYNTHESIZED,
+                kind: ExprKind::Tuple(vec![]),
+            },
+            1 => Expr {
+                id: self.next_id(),
+                span: Span::SYNTHESIZED,
+                kind: ExprKind::Variable(binder_names[0].clone()),
+            },
+            _ => {
+                let items = binder_names
+                    .iter()
+                    .map(|name| Expr {
+                        id: self.next_id(),
+                        span: Span::SYNTHESIZED,
+                        kind: ExprKind::Variable(name.clone()),
+                    })
+                    .collect();
+                Expr {
+                    id: self.next_id(),
+                    span: Span::SYNTHESIZED,
+                    kind: ExprKind::Tuple(items),
+                }
+            }
+        };
+
+        let success_block = Block {
+            id: self.next_id(),
+            args: vec![],
+            body: vec![Node::Expr(success_body_expr)],
+            span: Span::SYNTHESIZED,
+        };
+
+        let pattern_arm = MatchArm {
+            id: self.next_id(),
+            pattern,
+            body: success_block,
+            span: Span::SYNTHESIZED,
+        };
+
+        let wildcard_pat_id = self.next_id();
+        let wildcard_arm = MatchArm {
+            id: self.next_id(),
+            pattern: Pattern {
+                id: wildcard_pat_id,
+                kind: PatternKind::Wildcard,
+                span: Span::SYNTHESIZED,
+            },
+            body: else_body,
+            span: Span::SYNTHESIZED,
+        };
+
+        let match_expr = Expr {
+            id: self.next_id(),
+            span: Span::SYNTHESIZED,
+            kind: ExprKind::Match(Box::new(scrutinee), vec![pattern_arm, wildcard_arm]),
+        };
+
+        // Build the outer let pattern for the binders
+        let outer_pattern = match binder_names.len() {
+            0 => Pattern {
+                id: self.next_id(),
+                kind: PatternKind::Wildcard,
+                span: Span::SYNTHESIZED,
+            },
+            1 => Pattern {
+                id: self.next_id(),
+                kind: PatternKind::Bind(binder_names[0].clone()),
+                span: Span::SYNTHESIZED,
+            },
+            _ => {
+                let items = binder_names
+                    .iter()
+                    .map(|name| Pattern {
+                        id: self.next_id(),
+                        kind: PatternKind::Bind(name.clone()),
+                        span: Span::SYNTHESIZED,
+                    })
+                    .collect();
+                Pattern {
+                    id: self.next_id(),
+                    kind: PatternKind::Tuple(items),
+                    span: Span::SYNTHESIZED,
+                }
+            }
+        };
+
+        self.save_meta(tok, |id, span| Decl {
+            id,
+            span,
+            visibility: Visibility::default(),
+            kind: DeclKind::Let {
+                lhs: outer_pattern,
+                type_annotation: None,
+                rhs: Some(match_expr),
+            },
+        })
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
@@ -2949,4 +3148,50 @@ fn parse_lexed<T: FromStr>(string: &str) -> T {
     string
         .parse::<T>()
         .unwrap_or_else(|_| unreachable!("lexer guarantees this is a number"))
+}
+
+/// Collects raw binder names from a parsed pattern (pre-name-resolution).
+fn collect_pattern_binder_names(pattern: &Pattern) -> Vec<Name> {
+    let mut names = vec![];
+    collect_pattern_binder_names_inner(pattern, &mut names);
+    names
+}
+
+fn collect_pattern_binder_names_inner(pattern: &Pattern, names: &mut Vec<Name>) {
+    match &pattern.kind {
+        PatternKind::Bind(name) => names.push(name.clone()),
+        PatternKind::Tuple(patterns) => {
+            for p in patterns {
+                collect_pattern_binder_names_inner(p, names);
+            }
+        }
+        PatternKind::Variant { fields, .. } => {
+            for p in fields {
+                collect_pattern_binder_names_inner(p, names);
+            }
+        }
+        PatternKind::Or(patterns) => {
+            // Take binders from the first alternative only
+            if let Some(first) = patterns.first() {
+                collect_pattern_binder_names_inner(first, names);
+            }
+        }
+        PatternKind::Record { fields } => {
+            for field in fields {
+                match &field.kind {
+                    RecordFieldPatternKind::Bind(name) => names.push(name.clone()),
+                    RecordFieldPatternKind::Equals { value, .. } => {
+                        collect_pattern_binder_names_inner(value, names);
+                    }
+                    RecordFieldPatternKind::Rest => {}
+                }
+            }
+        }
+        PatternKind::LiteralInt(_)
+        | PatternKind::LiteralFloat(_)
+        | PatternKind::LiteralTrue
+        | PatternKind::LiteralFalse
+        | PatternKind::Wildcard
+        | PatternKind::Struct { .. } => {}
+    }
 }

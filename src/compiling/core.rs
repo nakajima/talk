@@ -140,8 +140,7 @@ mod tests {
 
         // Serialize and deserialize
         let payload = bincode::serialize(&original).expect("serialization failed");
-        let deserialized: Module =
-            bincode::deserialize(&payload).expect("deserialization failed");
+        let deserialized: Module = bincode::deserialize(&payload).expect("deserialization failed");
 
         // The deserialized module should match the original
         assert_eq!(original.name, deserialized.name);
@@ -151,7 +150,10 @@ mod tests {
             original.program.functions.len(),
             deserialized.program.functions.len()
         );
-        assert_eq!(original.types.types_by_symbol.len(), deserialized.types.types_by_symbol.len());
+        assert_eq!(
+            original.types.types_by_symbol.len(),
+            deserialized.types.types_by_symbol.len()
+        );
     }
 
     #[test]

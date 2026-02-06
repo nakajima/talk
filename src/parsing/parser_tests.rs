@@ -1080,7 +1080,7 @@ pub mod tests {
                         kind: PatternKind::Bind("fizz".into())
                     },
                     type_annotation: None,
-                    rhs: None
+                    rhs: None,
                 }
             }
         );
@@ -1106,7 +1106,7 @@ pub mod tests {
                         name_span: Span::ANY,
                         generics: vec![]
                     })),
-                    rhs: None
+                    rhs: None,
                 }
             }
         );
@@ -1136,7 +1136,7 @@ pub mod tests {
                             generics: vec![]
                         })]
                     })),
-                    rhs: None
+                    rhs: None,
                 }
             }
         );
@@ -1181,7 +1181,7 @@ pub mod tests {
                             },
                         ])
                     }),
-                    rhs: None
+                    rhs: None,
                 }
             }
         );
@@ -1285,7 +1285,7 @@ pub mod tests {
                     any_expr!(ExprKind::LiteralTrue).into(),
                     any_block!(vec![any_expr_stmt!(ExprKind::LiteralInt("123".into()))]),
                     any_block!(vec![any_expr_stmt!(ExprKind::LiteralInt("456".into()))]),
-                )))
+                ))),
             })
         );
     }
@@ -1914,7 +1914,7 @@ pub mod tests {
                     kind: PatternKind::Bind("foo".into())
                 },
                 type_annotation: None,
-                rhs: Some(any_expr!(ExprKind::LiteralInt("123".into())))
+                rhs: Some(any_expr!(ExprKind::LiteralInt("123".into()))),
             })
         );
     }
@@ -2610,7 +2610,7 @@ pub mod tests {
                         ]
                     }
                 })),
-                rhs: None
+                rhs: None,
             })
         )
     }
@@ -3684,5 +3684,109 @@ pub mod tests {
 
         let decl = parsed.roots[0].as_decl();
         assert_eq!(decl.visibility, Visibility::Private);
+    }
+
+    #[test]
+    fn if_let_expr_desugars_to_match() {
+        // if let .some(x) = val { x } else { 0 }
+        // should desugar to: match val { .some(x) -> { x }, _ -> { 0 } }
+        let parsed = parse("if let .some(x) = val { x } else { 0 }");
+        let stmt = parsed.roots[0].as_stmt();
+        if let StmtKind::Expr(Expr {
+            kind: ExprKind::Match(scrutinee, arms),
+            ..
+        }) = &stmt.kind
+        {
+            // Scrutinee should be `val`
+            assert!(matches!(scrutinee.kind, ExprKind::Variable(..)));
+            // Two arms: .some(x) and _
+            assert_eq!(arms.len(), 2);
+            assert!(matches!(arms[0].pattern.kind, PatternKind::Variant { .. }));
+            assert!(matches!(arms[1].pattern.kind, PatternKind::Wildcard));
+        } else {
+            panic!("expected match expression, got {:?}", stmt.kind);
+        }
+    }
+
+    #[test]
+    fn if_let_expr_in_assignment() {
+        // if let in expression position (assigned to a variable)
+        let parsed = parse("let result = if let .some(x) = val { x } else { 0 }");
+        let decl = parsed.roots[0].as_decl();
+        let DeclKind::Let { rhs: Some(rhs), .. } = &decl.kind else {
+            panic!("expected let decl");
+        };
+        assert!(matches!(rhs.kind, ExprKind::Match(..)));
+    }
+
+    #[test]
+    fn if_let_stmt_with_else() {
+        // if let with else in statement position
+        let parsed = parse("if let .some(x) = val { x } else { 0 }");
+        let stmt = parsed.roots[0].as_stmt();
+        if let StmtKind::Expr(Expr {
+            kind: ExprKind::Match(_, arms),
+            ..
+        }) = &stmt.kind
+        {
+            assert_eq!(arms.len(), 2);
+            assert!(!arms[1].body.body.is_empty());
+        } else {
+            panic!("expected match expression");
+        }
+    }
+
+    #[test]
+    fn let_else_parses() {
+        let parsed = parse("func f(val) { let .some(x) = val else { return 0 } }");
+        let decl = parsed.roots[0].as_decl();
+        let DeclKind::Func(func) = &decl.kind else {
+            panic!("expected func decl");
+        };
+        let body_nodes = &func.body.body;
+        assert_eq!(body_nodes.len(), 1);
+        let inner = body_nodes[0].as_decl();
+        // let else desugars to: let x = match val { .some(x) -> x, _ -> { return 0 } }
+        if let DeclKind::Let { lhs, rhs, .. } = &inner.kind {
+            // The outer pattern binds the single binder "x"
+            assert!(matches!(lhs.kind, PatternKind::Bind(..)));
+            // The rhs is a match expression
+            let rhs = rhs.as_ref().expect("expected rhs");
+            if let ExprKind::Match(scrutinee, arms) = &rhs.kind {
+                assert!(matches!(scrutinee.kind, ExprKind::Variable(..)));
+                assert_eq!(arms.len(), 2);
+                // First arm: .some(x) -> x
+                assert!(matches!(arms[0].pattern.kind, PatternKind::Variant { .. }));
+                // Second arm: _ -> { return 0 }
+                assert!(matches!(arms[1].pattern.kind, PatternKind::Wildcard));
+                assert!(!arms[1].body.body.is_empty());
+            } else {
+                panic!("expected match expression in rhs, got {:?}", rhs.kind);
+            }
+        } else {
+            panic!("expected let decl, got {:?}", inner.kind);
+        }
+    }
+
+    #[test]
+    fn if_let_stmt_desugars_to_match() {
+        // if let .some(x) = val { use(x) }
+        // should desugar to: match val { .some(x) -> { use(x) }, _ -> {} }
+        let parsed = parse("if let .some(x) = val { x }");
+        let stmt = parsed.roots[0].as_stmt();
+        if let StmtKind::Expr(Expr {
+            kind: ExprKind::Match(scrutinee, arms),
+            ..
+        }) = &stmt.kind
+        {
+            assert!(matches!(scrutinee.kind, ExprKind::Variable(..)));
+            assert_eq!(arms.len(), 2);
+            assert!(matches!(arms[0].pattern.kind, PatternKind::Variant { .. }));
+            assert!(matches!(arms[1].pattern.kind, PatternKind::Wildcard));
+            // The wildcard arm should have an empty block
+            assert!(arms[1].body.body.is_empty());
+        } else {
+            panic!("expected match expression, got {:?}", stmt.kind);
+        }
     }
 }

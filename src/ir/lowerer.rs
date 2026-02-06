@@ -2922,10 +2922,7 @@ impl<'a> Lowerer<'a> {
 
     /// Check if a symbol refers to a global constant (from external module or current module).
     fn is_global_constant(&self, sym: &Symbol) -> bool {
-        self.config
-            .modules
-            .lookup_global_constant(sym)
-            .is_some()
+        self.config.modules.lookup_global_constant(sym).is_some()
             || self.typed.types.catalog.global_constants.contains_key(sym)
     }
 
@@ -3214,9 +3211,7 @@ impl<'a> Lowerer<'a> {
                 .symbol_names
                 .get(sym)
                 .or_else(|| self.config.modules.resolve_name(sym))
-                .ok_or_else(|| {
-                    IRError::TypeNotFound(format!("no name for property symbol {sym}"))
-                })?
+                .ok_or_else(|| IRError::TypeNotFound(format!("no name for property symbol {sym}")))?
                 .clone();
             let label = self.label_from_name(&property_name);
             let field_label = self.field_index(receiver_ty, &label);
@@ -3925,9 +3920,7 @@ impl<'a> Lowerer<'a> {
         // If there are no state entries (shouldn't happen), just jump to done
         if state_entries.is_empty() {
             self.set_current_block(dispatch_block_id);
-            self.push_terminator(Terminator::Jump {
-                to: done_block_id,
-            });
+            self.push_terminator(Terminator::Jump { to: done_block_id });
         }
 
         // Clear state machine context

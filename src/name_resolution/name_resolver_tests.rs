@@ -162,7 +162,7 @@ pub mod tests {
                     name_span: Span::ANY,
                     generics: vec![]
                 })),
-                rhs: None
+                rhs: None,
             })
         );
     }
@@ -221,7 +221,7 @@ pub mod tests {
                     ]),
                     ret: None,
                     attributes: vec![],
-                })))
+                }))),
             })
         );
     }
@@ -262,7 +262,7 @@ pub mod tests {
                     })]),
                     ret: None,
                     attributes: vec![]
-                })))
+                }))),
             })
         );
 
@@ -293,7 +293,7 @@ pub mod tests {
                     })]),
                     ret: None,
                     attributes: vec![]
-                })))
+                }))),
             })
         );
     }
@@ -350,14 +350,14 @@ pub mod tests {
                                 ]),
                                 ret: None,
                                 attributes: vec![],
-                            })))
+                            }))),
                         })
                         .into(),
                         any_stmt!(StmtKind::Expr(variable!(ParamLocalId(1), "x"))).into(),
                     ]),
                     ret: None,
                     attributes: vec![],
-                })))
+                }))),
             }),
         );
     }
@@ -399,7 +399,7 @@ pub mod tests {
                                 "count".into()
                             ))),
                             type_annotation: None,
-                            rhs: Some(any_expr!(ExprKind::LiteralInt("0".into())))
+                            rhs: Some(any_expr!(ExprKind::LiteralInt("0".into()))),
                         })
                         .into(),
                         any_decl!(DeclKind::Let {
@@ -434,13 +434,13 @@ pub mod tests {
                                 ]),
                                 ret: None,
                                 attributes: vec![]
-                            })))
+                            }))),
                         })
                         .into()
                     ]),
                     ret: None,
                     attributes: Default::default()
-                })))
+                }))),
             })
         );
 
@@ -558,7 +558,7 @@ pub mod tests {
                         generics: vec![]
                     })),
                     attributes: vec![],
-                })),)
+                })),),
             })
         );
     }
@@ -1417,7 +1417,7 @@ pub mod tests {
                     })
                 ])),
                 type_annotation: None,
-                rhs: None
+                rhs: None,
             })
         );
     }
@@ -1569,7 +1569,7 @@ pub mod tests {
                     body: any_block!(vec![]),
                     ret: None,
                     attributes: vec![]
-                })))
+                }))),
             })
         );
     }

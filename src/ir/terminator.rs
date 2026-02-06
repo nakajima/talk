@@ -3,7 +3,10 @@ use std::{fmt::Display, str::FromStr};
 use crate::ir::{basic_block::BasicBlockId, ir_error::IRError, ir_ty::IrTy, value::Value};
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(bound(serialize = "T: serde::Serialize", deserialize = "T: serde::de::DeserializeOwned"))]
+#[serde(bound(
+    serialize = "T: serde::Serialize",
+    deserialize = "T: serde::de::DeserializeOwned"
+))]
 pub enum Terminator<T> {
     Ret {
         val: Value,

@@ -343,8 +343,7 @@ impl Driver {
             let parser = Parser::new(file.path(), file_id, lexer);
             match parser.parse() {
                 Ok((mut parsed, ast_diagnostics)) => {
-                    parsed.skip_core_prelude =
-                        input.starts_with("// no-core");
+                    parsed.skip_core_prelude = input.starts_with("// no-core");
                     diagnostics.extend(ast_diagnostics);
 
                     // Discover imports and queue them for parsing
