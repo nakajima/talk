@@ -239,14 +239,12 @@ impl NameResolver {
         builtins::import_builtins(&mut scope);
 
         // Import Core module exports as prelude (unless the file opts out)
-        if !skip_core_prelude {
-            if let Some(core_module) = self.modules.get_module_by_name("Core") {
-                for (name, &symbol) in &core_module.exports {
-                    if is_type_symbol(&symbol) {
-                        scope.types.insert(name.clone(), symbol);
-                    } else {
-                        scope.values.insert(name.clone(), symbol);
-                    }
+        if !skip_core_prelude && let Some(core_module) = self.modules.get_module_by_name("Core") {
+            for (name, &symbol) in &core_module.exports {
+                if is_type_symbol(&symbol) {
+                    scope.types.insert(name.clone(), symbol);
+                } else {
+                    scope.values.insert(name.clone(), symbol);
                 }
             }
         }
@@ -321,10 +319,9 @@ impl NameResolver {
                                 kind: DeclKind::Let { lhs, .. },
                                 ..
                             }) = root
+                                && let PatternKind::Bind(name) = &lhs.kind
                             {
-                                if let PatternKind::Bind(name) = &lhs.kind {
-                                    return Some(name.name_str());
-                                }
+                                return Some(name.name_str());
                             }
                             None
                         })
@@ -335,6 +332,7 @@ impl NameResolver {
 
             // Collect imports for each file (to avoid borrow conflicts)
             // (file_id, source_path, vec of (import, decl_node_id))
+            #[allow(clippy::type_complexity)]
             let mut file_imports: Vec<(FileID, String, Vec<(Import, NodeID)>)> = Vec::new();
             for ast in &asts {
                 let mut imports = Vec::new();
@@ -837,16 +835,13 @@ impl NameResolver {
         if matches!(
             kind,
             Symbol::Struct(..) | Symbol::Enum(..) | Symbol::Protocol(..) | Symbol::Effect(..)
-        ) {
-            if let Some(&existing) = self
-                .scopes
-                .get(&scope_id)
-                .and_then(|s| s.types.get(&name_str))
-            {
-                if std::mem::discriminant(&existing) == std::mem::discriminant(&kind) {
-                    return Name::Resolved(existing, name_str);
-                }
-            }
+        ) && let Some(&existing) = self
+            .scopes
+            .get(&scope_id)
+            .and_then(|s| s.types.get(&name_str))
+            && std::mem::discriminant(&existing) == std::mem::discriminant(&kind)
+        {
+            return Name::Resolved(existing, name_str);
         }
 
         // Check for predeclared Globals at module scope
@@ -854,18 +849,16 @@ impl NameResolver {
         // Only reuse if the existing Global is public (i.e., was predeclared)
         // Non-public Globals should allow shadowing (create new symbol)
         // Note: Don't record span here - it was already recorded during predeclaration
-        if at_module_scope && matches!(kind, Symbol::Global(..)) {
-            if let Some(&existing) = self
+        if at_module_scope
+            && matches!(kind, Symbol::Global(..))
+            && let Some(&existing) = self
                 .scopes
                 .get(&scope_id)
                 .and_then(|s| s.types.get(&name_str))
-            {
-                if matches!(existing, Symbol::Global(..))
-                    && self.phase.public_symbols.contains(&existing)
-                {
-                    return Name::Resolved(existing, name_str);
-                }
-            }
+            && matches!(existing, Symbol::Global(..))
+            && self.phase.public_symbols.contains(&existing)
+        {
+            return Name::Resolved(existing, name_str);
         }
 
         let module_id = self.current_module_id;

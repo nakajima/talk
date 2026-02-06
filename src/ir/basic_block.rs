@@ -65,7 +65,10 @@ impl FromStr for PhiSource {
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(bound(serialize = "T: serde::Serialize", deserialize = "T: serde::de::DeserializeOwned"))]
+#[serde(bound(
+    serialize = "T: serde::Serialize",
+    deserialize = "T: serde::de::DeserializeOwned"
+))]
 pub struct Phi<T> {
     pub dest: Register,
     pub ty: T,
@@ -100,7 +103,10 @@ impl<T: Display> std::fmt::Display for Phi<T> {
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(bound(serialize = "T: serde::Serialize", deserialize = "T: serde::de::DeserializeOwned"))]
+#[serde(bound(
+    serialize = "T: serde::Serialize",
+    deserialize = "T: serde::de::DeserializeOwned"
+))]
 pub struct BasicBlock<T> {
     pub id: BasicBlockId,
     pub phis: Vec<Phi<T>>,

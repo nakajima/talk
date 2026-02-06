@@ -16,7 +16,9 @@ use crate::{
     },
 };
 
-#[derive(PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
+#[derive(
+    PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub struct RowMetaId(pub u32);
 impl From<u32> for RowMetaId {
     fn from(value: u32) -> Self {
@@ -46,7 +48,9 @@ impl std::fmt::Debug for RowMetaId {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub struct RowParamId(pub u32);
 impl From<u32> for RowParamId {
     fn from(value: u32) -> Self {

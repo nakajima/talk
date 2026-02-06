@@ -33,12 +33,13 @@ pub fn unescape(raw: &str) -> String {
                                 chars.next();
                                 break;
                             }
+                            #[allow(clippy::unwrap_used)]
                             hex.push(chars.next().unwrap());
                         }
-                        if let Ok(cp) = u32::from_str_radix(&hex, 16) {
-                            if let Some(ch) = char::from_u32(cp) {
-                                result.push(ch);
-                            }
+                        if let Ok(cp) = u32::from_str_radix(&hex, 16)
+                            && let Some(ch) = char::from_u32(cp)
+                        {
+                            result.push(ch);
                         }
                     }
                 }

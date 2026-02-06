@@ -123,7 +123,10 @@ impl From<TokenKind> for CmpOperator {
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(bound(serialize = "T: serde::Serialize", deserialize = "T: serde::de::DeserializeOwned"))]
+#[serde(bound(
+    serialize = "T: serde::Serialize",
+    deserialize = "T: serde::de::DeserializeOwned"
+))]
 pub enum Instruction<T> {
     #[doc = "$dest = const $ty $val $meta"]
     Constant {

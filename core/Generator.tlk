@@ -12,7 +12,7 @@ public struct Generator<Y, R> {
 	let state: Int
 	let state_data: RawPtr
 
-	func send(value: R) -> Optional<Y> {
+	func send(value: R) -> Y? {
 		let (new_state,new_data,result) = self.poll(self.state, self.state_data, value)
 		self.state = new_state
 		self.state_data = new_data
@@ -24,7 +24,5 @@ public struct Generator<Y, R> {
 }
 
 extend Generator<Y, Void>: Iterator<Y> {
-	func next() -> Optional<Y> {
-		self.send(())
-	}
+	func next() -> Y? { self.send(()) }
 }

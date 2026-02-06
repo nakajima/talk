@@ -76,7 +76,9 @@ pub struct ConstraintMeta {
     pub config: Configuration,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub struct ConstraintId(u32);
 impl From<u32> for ConstraintId {
     fn from(value: u32) -> Self {

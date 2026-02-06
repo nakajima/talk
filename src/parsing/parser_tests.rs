@@ -62,6 +62,7 @@ pub mod tests {
                     .into(),
                     type_args: vec![],
                     args: $args,
+                    trailing_block: None,
                 },
             }
         };
@@ -614,6 +615,66 @@ pub mod tests {
     }
 
     #[test]
+    fn parses_optional_type_sugar() {
+        let parsed = parse("func c(a: Int?) { a }");
+        let DeclKind::Func(Func { params, .. }) = &parsed.roots[0].as_decl().kind else {
+            panic!("didn't get func");
+        };
+
+        assert_eq!(params.len(), 1);
+        assert_eq!(
+            params[0].type_annotation.clone().unwrap().kind,
+            TypeAnnotationKind::Nominal {
+                name: "Optional".into(),
+                name_span: Span::ANY,
+                generics: vec![TypeAnnotation {
+                    id: NodeID::ANY,
+                    span: Span::ANY,
+                    kind: TypeAnnotationKind::Nominal {
+                        name: "Int".into(),
+                        name_span: Span::ANY,
+                        generics: vec![]
+                    }
+                }]
+            }
+        );
+    }
+
+    #[test]
+    fn parses_nested_optional_type_sugar() {
+        let parsed = parse("func c(a: Int??) { a }");
+        let DeclKind::Func(Func { params, .. }) = &parsed.roots[0].as_decl().kind else {
+            panic!("didn't get func");
+        };
+
+        assert_eq!(params.len(), 1);
+        assert_eq!(
+            params[0].type_annotation.clone().unwrap().kind,
+            TypeAnnotationKind::Nominal {
+                name: "Optional".into(),
+                name_span: Span::ANY,
+                generics: vec![TypeAnnotation {
+                    id: NodeID::ANY,
+                    span: Span::ANY,
+                    kind: TypeAnnotationKind::Nominal {
+                        name: "Optional".into(),
+                        name_span: Span::ANY,
+                        generics: vec![TypeAnnotation {
+                            id: NodeID::ANY,
+                            span: Span::ANY,
+                            kind: TypeAnnotationKind::Nominal {
+                                name: "Int".into(),
+                                name_span: Span::ANY,
+                                generics: vec![]
+                            }
+                        }]
+                    }
+                }]
+            }
+        );
+    }
+
+    #[test]
     fn parses_func_literal_with_newlines() {
         let parsed = parse(
             "func greet(a) {
@@ -714,7 +775,8 @@ pub mod tests {
                         generics: vec![]
                     }
                 }],
-                args: vec![]
+                args: vec![],
+                trailing_block: None,
             })
         );
     }
@@ -850,7 +912,8 @@ pub mod tests {
             any_expr_stmt!(ExprKind::Call {
                 callee: any_expr!(ExprKind::Variable("fizz".into())).into(),
                 type_args: vec![],
-                args: vec![]
+                args: vec![],
+                trailing_block: None,
             })
         );
     }
@@ -869,9 +932,196 @@ pub mod tests {
                     label: "foo".into(),
                     label_span: Span::ANY,
                     value: any_expr!(ExprKind::LiteralInt("123".into()))
-                }]
+                }],
+                trailing_block: None,
             })
         );
+    }
+
+    #[test]
+    fn parses_trailing_block_with_args() {
+        // Note: trailing block requires no space between ) and {
+        let parsed = parse("fizz(123){ 456 }");
+        assert_eq!(
+            *parsed.roots[0].as_stmt(),
+            any_expr_stmt!(ExprKind::Call {
+                callee: any_expr!(ExprKind::Variable("fizz".into())).into(),
+                type_args: vec![],
+                args: vec![CallArg {
+                    id: NodeID::ANY,
+                    span: Span::ANY,
+                    label: Label::Positional(0),
+                    label_span: Span::ANY,
+                    value: any_expr!(ExprKind::LiteralInt("123".into()))
+                }],
+                trailing_block: Some(any_block!(vec![any_expr_stmt!(ExprKind::LiteralInt(
+                    "456".into()
+                ))])),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_trailing_block_no_args() {
+        // Note: trailing block requires no space between ) and {
+        let parsed = parse("buzz(){ 456 }");
+        assert_eq!(
+            *parsed.roots[0].as_stmt(),
+            any_expr_stmt!(ExprKind::Call {
+                callee: any_expr!(ExprKind::Variable("buzz".into())).into(),
+                type_args: vec![],
+                args: vec![],
+                trailing_block: Some(any_block!(vec![any_expr_stmt!(ExprKind::LiteralInt(
+                    "456".into()
+                ))])),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_trailing_block_with_block_args() {
+        // Note: trailing block requires no space between ) and {
+        let parsed = parse("map(){ x in x }");
+        assert_eq!(
+            *parsed.roots[0].as_stmt(),
+            any_expr_stmt!(ExprKind::Call {
+                callee: any_expr!(ExprKind::Variable("map".into())).into(),
+                type_args: vec![],
+                args: vec![],
+                trailing_block: Some(Block {
+                    id: NodeID::ANY,
+                    span: Span::ANY,
+                    args: vec![Parameter {
+                        id: NodeID::ANY,
+                        span: Span::ANY,
+                        name: "x".into(),
+                        name_span: Span::ANY,
+                        type_annotation: None,
+                    }],
+                    body: vec![Node::Stmt(any_expr_stmt!(ExprKind::Variable("x".into())))],
+                }),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_trailing_block_with_space() {
+        // Space between ) and { should still parse as trailing block at top level
+        let parsed = parse("foo() { 123 }");
+        assert_eq!(parsed.roots.len(), 1);
+        assert_eq!(
+            *parsed.roots[0].as_stmt(),
+            any_expr_stmt!(ExprKind::Call {
+                callee: any_expr!(ExprKind::Variable("foo".into())).into(),
+                type_args: vec![],
+                args: vec![],
+                trailing_block: Some(any_block!(vec![any_expr_stmt!(ExprKind::LiteralInt(
+                    "123".into()
+                ))])),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_trailing_block_without_parens() {
+        // Trailing block without parens: foo { block }
+        let parsed = parse("foo { 123 }");
+        assert_eq!(parsed.roots.len(), 1);
+        assert_eq!(
+            *parsed.roots[0].as_stmt(),
+            any_expr_stmt!(ExprKind::Call {
+                callee: any_expr!(ExprKind::Variable("foo".into())).into(),
+                type_args: vec![],
+                args: vec![],
+                trailing_block: Some(any_block!(vec![any_expr_stmt!(ExprKind::LiteralInt(
+                    "123".into()
+                ))])),
+            })
+        );
+    }
+
+    #[test]
+    fn match_scrutinee_call_no_trailing_block() {
+        // Inside match scrutinee, { starts the match body, not a trailing block
+        let parsed = parse("match foo() { .a -> 1 }");
+        assert_eq!(parsed.roots.len(), 1);
+        let stmt = parsed.roots[0].as_stmt();
+        // The scrutinee should be a call without trailing block
+        if let StmtKind::Expr(Expr {
+            kind: ExprKind::Match(scrutinee, _),
+            ..
+        }) = &stmt.kind
+        {
+            assert!(matches!(
+                scrutinee.kind,
+                ExprKind::Call {
+                    trailing_block: None,
+                    ..
+                }
+            ));
+        } else {
+            panic!("expected match expression");
+        }
+    }
+
+    #[test]
+    fn if_condition_call_no_trailing_block() {
+        // Inside if condition, { starts the if body, not a trailing block
+        let parsed = parse("if foo() { 1 }");
+        assert_eq!(parsed.roots.len(), 1);
+        let stmt = parsed.roots[0].as_stmt();
+        // The condition should be a call without trailing block
+        if let StmtKind::If(cond, _, _) = &stmt.kind {
+            assert!(matches!(
+                cond.kind,
+                ExprKind::Call {
+                    trailing_block: None,
+                    ..
+                }
+            ));
+        } else {
+            panic!("expected if statement");
+        }
+    }
+
+    #[test]
+    fn for_iterable_call_no_trailing_block() {
+        // Inside for iterable, { starts the for body, not a trailing block
+        let parsed = parse("for x in items() { 1 }");
+        assert_eq!(parsed.roots.len(), 1);
+        let stmt = parsed.roots[0].as_stmt();
+        // The iterable should be a call without trailing block
+        if let StmtKind::For { iterable, .. } = &stmt.kind {
+            assert!(matches!(
+                iterable.kind,
+                ExprKind::Call {
+                    trailing_block: None,
+                    ..
+                }
+            ));
+        } else {
+            panic!("expected for statement");
+        }
+    }
+
+    #[test]
+    fn loop_condition_call_no_trailing_block() {
+        // Inside loop condition, { starts the loop body, not a trailing block
+        let parsed = parse("loop check() { 1 }");
+        assert_eq!(parsed.roots.len(), 1);
+        let stmt = parsed.roots[0].as_stmt();
+        // The condition should be a call without trailing block
+        if let StmtKind::Loop(Some(cond), _) = &stmt.kind {
+            assert!(matches!(
+                cond.kind,
+                ExprKind::Call {
+                    trailing_block: None,
+                    ..
+                }
+            ));
+        } else {
+            panic!("expected loop statement with condition");
+        }
     }
 
     #[test]
@@ -890,7 +1140,7 @@ pub mod tests {
                         kind: PatternKind::Bind("fizz".into())
                     },
                     type_annotation: None,
-                    rhs: None
+                    rhs: None,
                 }
             }
         );
@@ -916,7 +1166,7 @@ pub mod tests {
                         name_span: Span::ANY,
                         generics: vec![]
                     })),
-                    rhs: None
+                    rhs: None,
                 }
             }
         );
@@ -946,7 +1196,7 @@ pub mod tests {
                             generics: vec![]
                         })]
                     })),
-                    rhs: None
+                    rhs: None,
                 }
             }
         );
@@ -991,7 +1241,7 @@ pub mod tests {
                             },
                         ])
                     }),
-                    rhs: None
+                    rhs: None,
                 }
             }
         );
@@ -1095,7 +1345,7 @@ pub mod tests {
                     any_expr!(ExprKind::LiteralTrue).into(),
                     any_block!(vec![any_expr_stmt!(ExprKind::LiteralInt("123".into()))]),
                     any_block!(vec![any_expr_stmt!(ExprKind::LiteralInt("456".into()))]),
-                )))
+                ))),
             })
         );
     }
@@ -1281,7 +1531,8 @@ pub mod tests {
                     label: Label::Positional(0),
                     label_span: Span::ANY,
                     value: any_expr!(ExprKind::LiteralInt("123".into()))
-                }]
+                }],
+                trailing_block: None,
             })
         );
     }
@@ -1723,7 +1974,7 @@ pub mod tests {
                     kind: PatternKind::Bind("foo".into())
                 },
                 type_annotation: None,
-                rhs: Some(any_expr!(ExprKind::LiteralInt("123".into())))
+                rhs: Some(any_expr!(ExprKind::LiteralInt("123".into()))),
             })
         );
     }
@@ -2419,7 +2670,7 @@ pub mod tests {
                         ]
                     }
                 })),
-                rhs: None
+                rhs: None,
             })
         )
     }
@@ -3493,5 +3744,109 @@ pub mod tests {
 
         let decl = parsed.roots[0].as_decl();
         assert_eq!(decl.visibility, Visibility::Private);
+    }
+
+    #[test]
+    fn if_let_expr_desugars_to_match() {
+        // if let .some(x) = val { x } else { 0 }
+        // should desugar to: match val { .some(x) -> { x }, _ -> { 0 } }
+        let parsed = parse("if let .some(x) = val { x } else { 0 }");
+        let stmt = parsed.roots[0].as_stmt();
+        if let StmtKind::Expr(Expr {
+            kind: ExprKind::Match(scrutinee, arms),
+            ..
+        }) = &stmt.kind
+        {
+            // Scrutinee should be `val`
+            assert!(matches!(scrutinee.kind, ExprKind::Variable(..)));
+            // Two arms: .some(x) and _
+            assert_eq!(arms.len(), 2);
+            assert!(matches!(arms[0].pattern.kind, PatternKind::Variant { .. }));
+            assert!(matches!(arms[1].pattern.kind, PatternKind::Wildcard));
+        } else {
+            panic!("expected match expression, got {:?}", stmt.kind);
+        }
+    }
+
+    #[test]
+    fn if_let_expr_in_assignment() {
+        // if let in expression position (assigned to a variable)
+        let parsed = parse("let result = if let .some(x) = val { x } else { 0 }");
+        let decl = parsed.roots[0].as_decl();
+        let DeclKind::Let { rhs: Some(rhs), .. } = &decl.kind else {
+            panic!("expected let decl");
+        };
+        assert!(matches!(rhs.kind, ExprKind::Match(..)));
+    }
+
+    #[test]
+    fn if_let_stmt_with_else() {
+        // if let with else in statement position
+        let parsed = parse("if let .some(x) = val { x } else { 0 }");
+        let stmt = parsed.roots[0].as_stmt();
+        if let StmtKind::Expr(Expr {
+            kind: ExprKind::Match(_, arms),
+            ..
+        }) = &stmt.kind
+        {
+            assert_eq!(arms.len(), 2);
+            assert!(!arms[1].body.body.is_empty());
+        } else {
+            panic!("expected match expression");
+        }
+    }
+
+    #[test]
+    fn let_else_parses() {
+        let parsed = parse("func f(val) { let .some(x) = val else { return 0 } }");
+        let decl = parsed.roots[0].as_decl();
+        let DeclKind::Func(func) = &decl.kind else {
+            panic!("expected func decl");
+        };
+        let body_nodes = &func.body.body;
+        assert_eq!(body_nodes.len(), 1);
+        let inner = body_nodes[0].as_decl();
+        // let else desugars to: let x = match val { .some(x) -> x, _ -> { return 0 } }
+        if let DeclKind::Let { lhs, rhs, .. } = &inner.kind {
+            // The outer pattern binds the single binder "x"
+            assert!(matches!(lhs.kind, PatternKind::Bind(..)));
+            // The rhs is a match expression
+            let rhs = rhs.as_ref().expect("expected rhs");
+            if let ExprKind::Match(scrutinee, arms) = &rhs.kind {
+                assert!(matches!(scrutinee.kind, ExprKind::Variable(..)));
+                assert_eq!(arms.len(), 2);
+                // First arm: .some(x) -> x
+                assert!(matches!(arms[0].pattern.kind, PatternKind::Variant { .. }));
+                // Second arm: _ -> { return 0 }
+                assert!(matches!(arms[1].pattern.kind, PatternKind::Wildcard));
+                assert!(!arms[1].body.body.is_empty());
+            } else {
+                panic!("expected match expression in rhs, got {:?}", rhs.kind);
+            }
+        } else {
+            panic!("expected let decl, got {:?}", inner.kind);
+        }
+    }
+
+    #[test]
+    fn if_let_stmt_desugars_to_match() {
+        // if let .some(x) = val { use(x) }
+        // should desugar to: match val { .some(x) -> { use(x) }, _ -> {} }
+        let parsed = parse("if let .some(x) = val { x }");
+        let stmt = parsed.roots[0].as_stmt();
+        if let StmtKind::Expr(Expr {
+            kind: ExprKind::Match(scrutinee, arms),
+            ..
+        }) = &stmt.kind
+        {
+            assert!(matches!(scrutinee.kind, ExprKind::Variable(..)));
+            assert_eq!(arms.len(), 2);
+            assert!(matches!(arms[0].pattern.kind, PatternKind::Variant { .. }));
+            assert!(matches!(arms[1].pattern.kind, PatternKind::Wildcard));
+            // The wildcard arm should have an empty block
+            assert!(arms[1].body.body.is_empty());
+        } else {
+            panic!("expected match expression, got {:?}", stmt.kind);
+        }
     }
 }

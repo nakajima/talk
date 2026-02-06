@@ -3,7 +3,10 @@ use std::str::FromStr;
 use crate::ir::ir_error::IRError;
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(bound(serialize = "T: serde::Serialize", deserialize = "T: serde::de::DeserializeOwned"))]
+#[serde(bound(
+    serialize = "T: serde::Serialize",
+    deserialize = "T: serde::de::DeserializeOwned"
+))]
 pub struct List<T: std::fmt::Debug + Clone + PartialEq + FromStr> {
     pub items: Vec<T>,
 }

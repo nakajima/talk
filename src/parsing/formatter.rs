@@ -453,7 +453,8 @@ impl<'a> Formatter<'a> {
                 callee,
                 type_args,
                 args,
-            } => self.format_call(callee, type_args, args),
+                trailing_block,
+            } => self.format_call(callee, type_args, args, trailing_block.as_ref()),
             ExprKind::Member(receiver, property, ..) => self.format_member(receiver, property),
             ExprKind::Func(func) => self.format_func(func),
             ExprKind::Variable(name) | ExprKind::Constructor(name) => self.format_name(name),
@@ -1014,7 +1015,13 @@ impl<'a> Formatter<'a> {
         )
     }
 
-    fn format_call(&self, callee: &Expr, type_args: &[TypeAnnotation], args: &[CallArg]) -> Doc {
+    fn format_call(
+        &self,
+        callee: &Expr,
+        type_args: &[TypeAnnotation],
+        args: &[CallArg],
+        trailing_block: Option<&Block>,
+    ) -> Doc {
         let mut result = self.format_expr(callee);
 
         if !type_args.is_empty() {
@@ -1032,9 +1039,17 @@ impl<'a> Formatter<'a> {
             );
         }
 
+        // If we have a trailing block and no args, omit parens
+        if let Some(trailing_block) = trailing_block
+            && args.is_empty()
+        {
+            let block_doc = self.format_block_inner(trailing_block, true);
+            return group(concat(result, concat(text(" "), block_doc)));
+        }
+
         let arg_docs: Vec<_> = args.iter().map(|arg| self.format_call_arg(arg)).collect();
 
-        group(concat(
+        let call_doc = group(concat(
             result,
             concat(
                 text("("),
@@ -1046,7 +1061,15 @@ impl<'a> Formatter<'a> {
                     concat(softline(), text(")")),
                 ),
             ),
-        ))
+        ));
+
+        // Add trailing block after parens if present
+        if let Some(block) = trailing_block {
+            let block_doc = self.format_block_inner(block, true);
+            group(concat(call_doc, concat(text(" "), block_doc)))
+        } else {
+            call_doc
+        }
     }
 
     fn format_call_arg(&self, arg: &CallArg) -> Doc {
@@ -1379,6 +1402,11 @@ impl<'a> Formatter<'a> {
                         concat_space(text(") ->"), self.format_type_annotation(returns)),
                     ),
                 )
+            }
+            TypeAnnotationKind::Nominal { name, generics, .. }
+                if name.name_str() == "Optional" && generics.len() == 1 =>
+            {
+                concat(self.format_type_annotation(&generics[0]), text("?"))
             }
             TypeAnnotationKind::Nominal { name, generics, .. } => {
                 self.format_nominal_type_annotation(name.name_str(), generics)
@@ -2345,7 +2373,7 @@ mod formatter_tests {
 
     #[test]
     fn test_type_annotations() {
-        // assert_eq!(format_code("let x: Int?", 80), "let x: Optional<Int>");
+        assert_eq!(format_code("let x: Int?", 80), "let x: Int?");
         assert_eq!(format_code("let x: (Int, Bool)", 80), "let x: (Int, Bool)");
         assert_eq!(
             format_code("let f: (Int) -> Bool", 80),
@@ -2490,6 +2518,18 @@ mod formatter_tests {
 
         // Effect calls with labels
         assert_eq!(format_code("'emit(value: 123)", 80), "'emit(value: 123)");
+    }
+
+    #[test]
+    fn trailing_block_has_space() {
+        // Trailing block with no args - parens omitted, space before {
+        assert_eq!(format_code("foo(){ 1 }", 80), "foo { 1 }");
+        assert_eq!(format_code("foo() { 1 }", 80), "foo { 1 }");
+        // Trailing block without parens - stays the same
+        assert_eq!(format_code("foo { 1 }", 80), "foo { 1 }");
+        // Trailing block with args - space before {
+        assert_eq!(format_code("foo(1){ 2 }", 80), "foo(1) { 2 }");
+        assert_eq!(format_code("foo(1) { 2 }", 80), "foo(1) { 2 }");
     }
 
     #[test]

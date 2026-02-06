@@ -23,7 +23,7 @@ use crate::{
         infer_ty::{Level, Meta, MetaVarId, SkolemId, Ty},
         predicate::Predicate,
         scheme::{ForAll, Scheme},
-        solve_context::{SolveContext, SolveContextKind},
+        solve_context::SolveContext,
         term_environment::{EnvEntry, TermEnv},
         type_catalog::{Nominal, TypeCatalog},
         type_error::TypeError,
@@ -343,24 +343,7 @@ impl TypeSession {
 
     pub(super) fn finalize_ty(&mut self, ty: Ty) -> TypeEntry {
         let ty = self.finalize_infer_ty(ty);
-        let mut context = SolveContext::new(
-            UnificationSubstitutions::new(self.meta_levels.clone()),
-            Default::default(),
-            Default::default(),
-            SolveContextKind::Normal,
-        );
-
-        if ty.contains_var() {
-            self.generalize(
-                ty.clone(),
-                &mut context,
-                &Default::default(),
-                &mut Default::default(),
-            )
-            .into()
-        } else {
-            TypeEntry::Mono(ty.clone())
-        }
+        TypeEntry::Mono(ty)
     }
 
     pub(super) fn apply_row(
@@ -584,10 +567,10 @@ impl TypeSession {
         // Search all entries for one with the same canonical representative
         // This handles the case where another meta in the equivalence class has the mapping
         for (&meta_id, param) in &self.reverse_instantiations.ty.clone() {
-            if let Some(meta_canon) = self.try_canon_meta(meta_id) {
-                if meta_canon == canon {
-                    return Some(param.clone());
-                }
+            if let Some(meta_canon) = self.try_canon_meta(meta_id)
+                && meta_canon == canon
+            {
+                return Some(param.clone());
             }
         }
 
@@ -658,17 +641,6 @@ impl TypeSession {
         let mut substitutions = UnificationSubstitutions::new(self.meta_levels.clone());
         for m in &metas {
             match m {
-                Ty::Param(p, bounds) => {
-                    // Use bounds embedded in the Param to create Conforms predicates
-                    for protocol_id in bounds {
-                        predicates.insert(Predicate::Conforms {
-                            param: *p,
-                            protocol_id: *protocol_id,
-                        });
-                    }
-                    foralls.insert(ForAll::Ty(*p));
-                }
-
                 Ty::Var { level, id } => {
                     if *level < context.level() {
                         tracing::warn!(
@@ -738,23 +710,6 @@ impl TypeSession {
             }
         }
 
-        for c in unsolved {
-            if let Constraint::HasField(h) = c {
-                tracing::info!("got unsolved hasfield: {c:?}");
-                let r = self.apply_row(&h.row, &mut substitutions);
-                if let Row::Var(row_meta) = r {
-                    // quantify if its level is above the binder's level
-                    let levels = self.meta_levels.borrow();
-                    let lvl = levels.get(&Meta::Row(row_meta)).unwrap_or(&Level(0));
-                    if *lvl >= context.level() {
-                        let param_id = self.vars.row_params.next_id();
-                        foralls.insert(ForAll::Row(param_id));
-                        substitutions.row.insert(row_meta, Row::Param(param_id));
-                    }
-                }
-            }
-        }
-
         // De-skolemize
         let ty = substitute(&ty, &self.skolem_map);
         let ty = self.apply(&ty, &mut substitutions);
@@ -803,7 +758,7 @@ impl TypeSession {
 
         if let Some(entry) = self.modules.lookup(sym) {
             let entry: EnvEntry = match entry.clone() {
-                TypeEntry::Mono(t) => EnvEntry::Mono(t.into()),
+                TypeEntry::Mono(t) => EnvEntry::Mono(t),
                 TypeEntry::Poly(..) => entry.into(),
             };
 

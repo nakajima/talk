@@ -266,21 +266,21 @@ impl EffectAnalysis {
             }
             TypedExprKind::Call { callee, args, .. } => {
                 // Check if this is a yield builtin call
-                if let TypedExprKind::Variable(sym) = &callee.kind {
-                    if *sym == Symbol::YIELD {
-                        // yield builtin call is always a yield point
-                        yield_points.push((expr.id, YieldPointKind::YieldBuiltin));
-                        // Check args for nested yields (though typically yield has one arg)
-                        for arg in args {
-                            Self::find_yields_in_expr_impl(
-                                arg,
-                                yield_points,
-                                bindings,
-                                include_effects,
-                            );
-                        }
-                        return;
+                if let TypedExprKind::Variable(sym) = &callee.kind
+                    && *sym == Symbol::YIELD
+                {
+                    // yield builtin call is always a yield point
+                    yield_points.push((expr.id, YieldPointKind::YieldBuiltin));
+                    // Check args for nested yields (though typically yield has one arg)
+                    for arg in args {
+                        Self::find_yields_in_expr_impl(
+                            arg,
+                            yield_points,
+                            bindings,
+                            include_effects,
+                        );
                     }
+                    return;
                 }
                 // Regular call - check callee and args for nested yields
                 Self::find_yields_in_expr_impl(callee, yield_points, bindings, include_effects);
@@ -530,12 +530,9 @@ impl EffectAnalysis {
         target_id: NodeID,
         defined: &mut FxHashSet<Symbol>,
     ) {
-        match &stmt.kind {
-            TypedStmtKind::Loop(_, body) => {
-                // Definitions in loop body before target
-                Self::collect_definitions_before(body, target_id, defined);
-            }
-            _ => {}
+        if let TypedStmtKind::Loop(_, body) = &stmt.kind {
+            // Definitions in loop body before target
+            Self::collect_definitions_before(body, target_id, defined);
         }
     }
 
@@ -708,11 +705,8 @@ impl EffectAnalysis {
         target_id: NodeID,
         used: &mut FxHashSet<Symbol>,
     ) {
-        match &stmt.kind {
-            TypedStmtKind::Loop(_, body) => {
-                Self::collect_uses_after(body, target_id, used);
-            }
-            _ => {}
+        if let TypedStmtKind::Loop(_, body) = &stmt.kind {
+            Self::collect_uses_after(body, target_id, used);
         }
     }
 

@@ -49,6 +49,7 @@ pub enum ExprKind {
         callee: Box<Expr>,
         type_args: Vec<TypeAnnotation>,
         args: Vec<CallArg>,
+        trailing_block: Option<Block>,
     },
 
     // A dot thing

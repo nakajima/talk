@@ -173,7 +173,7 @@ impl RuntimeExecutor {
         let mut poll_fds: Vec<(i32, i16, i16)> = self
             .io_interests
             .keys()
-            .map(|&fd| (fd, libc::POLLIN as i16 | libc::POLLOUT as i16, 0))
+            .map(|&fd| (fd, libc::POLLIN | libc::POLLOUT, 0))
             .collect();
 
         let result = io.io_poll(&mut poll_fds, timeout_ms);
@@ -181,10 +181,10 @@ impl RuntimeExecutor {
         if result > 0 {
             // Wake tasks whose fds are ready
             for (fd, _, revents) in poll_fds {
-                if revents != 0 {
-                    if let Some(&task_id) = self.io_interests.get(&fd) {
-                        self.wake(task_id);
-                    }
+                if revents != 0
+                    && let Some(&task_id) = self.io_interests.get(&fd)
+                {
+                    self.wake(task_id);
                 }
             }
         }
@@ -287,11 +287,11 @@ impl Executor for RuntimeExecutor {
     }
 
     fn wake(&mut self, task_id: TaskId) {
-        if let Some(task) = self.tasks.get_mut(&task_id) {
-            if task.status == TaskState::Pending {
-                task.status = TaskState::Runnable;
-                self.run_queue.push_back(task_id);
-            }
+        if let Some(task) = self.tasks.get_mut(&task_id)
+            && task.status == TaskState::Pending
+        {
+            task.status = TaskState::Runnable;
+            self.run_queue.push_back(task_id);
         }
     }
 

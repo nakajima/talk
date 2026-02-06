@@ -252,15 +252,13 @@ impl<'a> DeclDeclarer<'a> {
     /// (e.g. `Void`) are kept as-is rather than being redeclared as fresh type parameters.
     fn declare_generics(&mut self, generics: &mut [GenericDecl], is_extend: bool) {
         for generic in generics {
-            if is_extend {
-                if let Some(resolved) = self.resolver.lookup(&generic.name, None, None) {
-                    if let Ok(sym) = resolved.symbol() {
-                        if !matches!(sym, Symbol::TypeParameter(..)) {
-                            generic.name = resolved;
-                            continue;
-                        }
-                    }
-                }
+            if is_extend
+                && let Some(resolved) = self.resolver.lookup(&generic.name, None, None)
+                && let Ok(sym) = resolved.symbol()
+                && !matches!(sym, Symbol::TypeParameter(..))
+            {
+                generic.name = resolved;
+                continue;
             }
             generic.name = self.resolver.declare(
                 &generic.name,
@@ -296,10 +294,10 @@ impl<'a> DeclDeclarer<'a> {
                     let resolved = self.resolver.declare(name, kind, decl.id, *name_span);
 
                     // Mark as public if visibility is Public (needed for import resolution)
-                    if decl.visibility == Visibility::Public {
-                        if let Ok(sym) = resolved.symbol() {
-                            self.resolver.mark_public(sym);
-                        }
+                    if decl.visibility == Visibility::Public
+                        && let Ok(sym) = resolved.symbol()
+                    {
+                        self.resolver.mark_public(sym);
                     }
                 }
                 _ => {}
@@ -971,10 +969,10 @@ impl<'a> DeclDeclarer<'a> {
                                 body: nested_body, ..
                             } => {
                                 for nested_member in &nested_body.decls {
-                                    if let DeclKind::Method { func, .. } = &nested_member.kind {
-                                        if let Ok(sym) = func.name.symbol() {
-                                            self.resolver.mark_public(sym);
-                                        }
+                                    if let DeclKind::Method { func, .. } = &nested_member.kind
+                                        && let Ok(sym) = func.name.symbol()
+                                    {
+                                        self.resolver.mark_public(sym);
                                     }
                                 }
                             }
@@ -1019,10 +1017,10 @@ impl<'a> DeclDeclarer<'a> {
                             body: nested_body, ..
                         } => {
                             for nested_member in &nested_body.decls {
-                                if let DeclKind::Method { func, .. } = &nested_member.kind {
-                                    if let Ok(sym) = func.name.symbol() {
-                                        self.resolver.mark_public(sym);
-                                    }
+                                if let DeclKind::Method { func, .. } = &nested_member.kind
+                                    && let Ok(sym) = func.name.symbol()
+                                {
+                                    self.resolver.mark_public(sym);
                                 }
                             }
                         }

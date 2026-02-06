@@ -162,7 +162,7 @@ pub mod tests {
                     name_span: Span::ANY,
                     generics: vec![]
                 })),
-                rhs: None
+                rhs: None,
             })
         );
     }
@@ -221,7 +221,7 @@ pub mod tests {
                     ]),
                     ret: None,
                     attributes: vec![],
-                })))
+                }))),
             })
         );
     }
@@ -257,11 +257,12 @@ pub mod tests {
                     body: any_block!(vec![any_expr_stmt!(ExprKind::Call {
                         callee: Box::new(variable!(Symbol::Global(GlobalId::from(2)), "even")),
                         type_args: vec![],
-                        args: vec![]
+                        args: vec![],
+                        trailing_block: None,
                     })]),
                     ret: None,
                     attributes: vec![]
-                })))
+                }))),
             })
         );
 
@@ -287,11 +288,12 @@ pub mod tests {
                     body: any_block!(vec![any_expr_stmt!(ExprKind::Call {
                         callee: Box::new(variable!(Symbol::Global(GlobalId::from(1)), "odd")),
                         type_args: vec![],
-                        args: vec![]
+                        args: vec![],
+                        trailing_block: None,
                     })]),
                     ret: None,
                     attributes: vec![]
-                })))
+                }))),
             })
         );
     }
@@ -348,14 +350,14 @@ pub mod tests {
                                 ]),
                                 ret: None,
                                 attributes: vec![],
-                            })))
+                            }))),
                         })
                         .into(),
                         any_stmt!(StmtKind::Expr(variable!(ParamLocalId(1), "x"))).into(),
                     ]),
                     ret: None,
                     attributes: vec![],
-                })))
+                }))),
             }),
         );
     }
@@ -397,7 +399,7 @@ pub mod tests {
                                 "count".into()
                             ))),
                             type_annotation: None,
-                            rhs: Some(any_expr!(ExprKind::LiteralInt("0".into())))
+                            rhs: Some(any_expr!(ExprKind::LiteralInt("0".into()))),
                         })
                         .into(),
                         any_decl!(DeclKind::Let {
@@ -432,13 +434,13 @@ pub mod tests {
                                 ]),
                                 ret: None,
                                 attributes: vec![]
-                            })))
+                            }))),
                         })
                         .into()
                     ]),
                     ret: None,
                     attributes: Default::default()
-                })))
+                }))),
             })
         );
 
@@ -556,7 +558,7 @@ pub mod tests {
                         generics: vec![]
                     })),
                     attributes: vec![],
-                })),)
+                })),),
             })
         );
     }
@@ -582,7 +584,8 @@ pub mod tests {
                     label: Label::Positional(0),
                     label_span: Span::ANY,
                     value: any_expr!(ExprKind::LiteralString("$0 = add int 1 2".into()))
-                })]
+                })],
+                trailing_block: None,
             })
         );
     }
@@ -968,7 +971,8 @@ pub mod tests {
                                 ))
                                 .into(),
                                 type_args: vec![],
-                                args: vec![]
+                                args: vec![],
+                                trailing_block: None,
                             })]),
                             ret: None,
                             attributes: vec![]
@@ -1004,7 +1008,8 @@ pub mod tests {
                                 ))
                                 .into(),
                                 type_args: vec![],
-                                args: vec![]
+                                args: vec![],
+                                trailing_block: None,
                             })]),
                             ret: None,
                             attributes: vec![]
@@ -1033,7 +1038,8 @@ pub mod tests {
                 )))
                 .into(),
                 type_args: vec![],
-                args: vec![]
+                args: vec![],
+                trailing_block: None,
             })
         )
     }
@@ -1411,7 +1417,7 @@ pub mod tests {
                     })
                 ])),
                 type_annotation: None,
-                rhs: None
+                rhs: None,
             })
         );
     }
@@ -1563,7 +1569,7 @@ pub mod tests {
                     body: any_block!(vec![]),
                     ret: None,
                     attributes: vec![]
-                })))
+                }))),
             })
         );
     }

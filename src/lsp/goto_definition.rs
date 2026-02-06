@@ -22,13 +22,12 @@ pub fn goto_definition(
 
     // Handle imports specially (need AST to get import path for file navigation)
     for (node_id, meta) in ast.meta.iter() {
-        if meta.start.start <= byte_offset && byte_offset <= meta.end.end {
-            if let Some(crate::node::Node::Decl(ref decl)) = ast.find(*node_id) {
-                if let Some(location) = goto_definition_from_import(module, uri, decl, byte_offset)
-                {
-                    return Some(location);
-                }
-            }
+        if meta.start.start <= byte_offset
+            && byte_offset <= meta.end.end
+            && let Some(crate::node::Node::Decl(ref decl)) = ast.find(*node_id)
+            && let Some(location) = goto_definition_from_import(module, uri, decl, byte_offset)
+        {
+            return Some(location);
         }
     }
 

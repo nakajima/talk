@@ -22,7 +22,9 @@ use crate::{
 pub struct DimensionId(pub NodeID);
 
 /// Index into the alternatives of a choice.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub struct AlternativeIndex(pub usize);
 
 impl From<usize> for AlternativeIndex {

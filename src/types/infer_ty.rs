@@ -18,13 +18,17 @@ use crate::{
     },
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub enum Meta {
     Ty(MetaVarId),
     Row(RowMetaId),
 }
 
-#[derive(PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
+#[derive(
+    PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub struct MetaVarId(u32);
 impl From<u32> for MetaVarId {
     fn from(value: u32) -> Self {
@@ -54,7 +58,9 @@ impl std::fmt::Debug for MetaVarId {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub struct TypeParamId(pub u32);
 impl TypeParamId {
     pub const IR_TYPE_PARAM: TypeParamId = TypeParamId(u32::MAX - 1);
@@ -65,7 +71,9 @@ impl From<u32> for TypeParamId {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub struct SkolemId(u32);
 impl From<u32> for SkolemId {
     fn from(value: u32) -> Self {
@@ -73,7 +81,18 @@ impl From<u32> for SkolemId {
     }
 }
 
-#[derive(Default, PartialEq, PartialOrd, Clone, Copy, Debug, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Default,
+    PartialEq,
+    PartialOrd,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    serde::Serialize,
+    serde::Deserialize,
+)]
 pub struct Level(pub u32);
 impl Level {
     pub fn next(&self) -> Level {
@@ -311,7 +330,7 @@ impl Ty {
                 Row::Param(..) => (),
                 Row::Extend { row, ty, .. } => {
                     out.extend(ty.collect_metas());
-                    out.extend(Self::Record(sym.clone(), row.clone()).collect_metas());
+                    out.extend(Self::Record(*sym, row.clone()).collect_metas());
                 }
             },
             Self::Nominal { type_args, .. } => {

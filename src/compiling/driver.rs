@@ -343,8 +343,7 @@ impl Driver {
             let parser = Parser::new(file.path(), file_id, lexer);
             match parser.parse() {
                 Ok((mut parsed, ast_diagnostics)) => {
-                    parsed.skip_core_prelude =
-                        input.starts_with("// no-core");
+                    parsed.skip_core_prelude = input.starts_with("// no-core");
                     diagnostics.extend(ast_diagnostics);
 
                     // Discover imports and queue them for parsing
@@ -352,11 +351,10 @@ impl Driver {
                     for import_path in extract_import_paths(&parsed) {
                         if let Some((canonical, resolved)) =
                             resolve_import_path(source_path, &import_path)
+                            && !processed_paths.contains(&canonical)
                         {
-                            if !processed_paths.contains(&canonical) {
-                                processed_paths.insert(canonical);
-                                to_parse.push_back(Source::from(resolved));
-                            }
+                            processed_paths.insert(canonical);
+                            to_parse.push_back(Source::from(resolved));
                         }
                     }
 

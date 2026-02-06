@@ -79,7 +79,7 @@ impl Nominal {
     }
 }
 
-#[derive(Debug, PartialEq, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, PartialEq, Clone, serde::Serialize, serde::Deserialize, Default)]
 pub struct TrackedInstantiations {
     pub ty: FxHashMap<NodeID, FxHashMap<Symbol, Ty>>,
     pub row: FxHashMap<NodeID, FxHashMap<RowParamId, Row>>,
@@ -126,15 +126,6 @@ impl TrackedInstantiations {
     }
 }
 
-impl Default for TrackedInstantiations {
-    fn default() -> Self {
-        Self {
-            ty: Default::default(),
-            row: Default::default(),
-        }
-    }
-}
-
 /// Represents a global constant value that can be inlined at use sites
 #[derive(Debug, PartialEq, Clone, serde::Serialize, serde::Deserialize)]
 pub enum GlobalConstant {
@@ -143,7 +134,7 @@ pub enum GlobalConstant {
     Bool(bool),
 }
 
-#[derive(Debug, PartialEq, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, PartialEq, Clone, serde::Serialize, serde::Deserialize, Default)]
 pub struct TypeCatalog {
     pub nominals: IndexMap<Symbol, Nominal>,
     pub conformances: IndexMap<ConformanceKey, Conformance>,
@@ -160,29 +151,6 @@ pub struct TypeCatalog {
     pub effects: IndexMap<Symbol, Ty>,
     /// Global constants (Int, Float, Bool) that can be inlined from external modules
     pub global_constants: FxHashMap<Symbol, GlobalConstant>,
-}
-
-impl Default for TypeCatalog {
-    fn default() -> Self {
-        Self {
-            nominals: Default::default(),
-            conformances: Default::default(),
-            extensions: Default::default(),
-            child_types: Default::default(),
-            associated_types: Default::default(),
-
-            initializers: Default::default(),
-            properties: Default::default(),
-            instance_methods: Default::default(),
-            static_methods: Default::default(),
-            variants: Default::default(),
-            method_requirements: Default::default(),
-
-            instantiations: Default::default(),
-            effects: Default::default(),
-            global_constants: Default::default(),
-        }
-    }
 }
 
 impl TypeCatalog {
