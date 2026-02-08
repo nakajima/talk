@@ -175,8 +175,13 @@ impl IO for StdioIO {
                 })
                 .collect();
 
-            let result =
-                unsafe { libc::poll(pollfds.as_mut_ptr(), pollfds.len() as u64, timeout as i32) };
+            let result = unsafe {
+                libc::poll(
+                    pollfds.as_mut_ptr(),
+                    pollfds.len() as libc::nfds_t,
+                    timeout as i32,
+                )
+            };
 
             // Copy revents back
             for (i, pfd) in pollfds.iter().enumerate() {

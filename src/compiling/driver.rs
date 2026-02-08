@@ -542,6 +542,25 @@ impl Driver<Lowered> {
             program.record_labels.entry(record_id).or_insert(labels);
         }
 
+        // Merge static memory from imported modules so string literals in
+        // imported functions (e.g. core's Showable.show()) resolve correctly.
+        let mut merged_module_ids = FxHashSet::default();
+        let all_fn_symbols: Vec<Symbol> = program.functions.keys().copied().collect();
+        for sym in &all_fn_symbols {
+            if let Some(module_id) = sym.external_module_id() {
+                if merged_module_ids.insert(module_id)
+                    && let Some(imported_prog) = self.config.modules.program_for(module_id)
+                {
+                    let module_symbols: Vec<Symbol> = all_fn_symbols
+                        .iter()
+                        .filter(|s| s.external_module_id() == Some(module_id))
+                        .copied()
+                        .collect();
+                    program.merge_static_memory(imported_prog, &module_symbols);
+                }
+            }
+        }
+
         Module {
             id: StableModuleId::generate(&self.phase.exports),
             name: name.into(),

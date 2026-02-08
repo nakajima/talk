@@ -213,6 +213,10 @@ pub enum InlineIRInstructionKind {
     },
     #[doc = "$dest = io_sleep $ms"]
     IoSleep { dest: Register, ms: Value },
+    #[doc = "$dest = trunc $val"]
+    Trunc { dest: Register, val: Value },
+    #[doc = "$dest = itof $val"]
+    IntToFloat { dest: Register, val: Value },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
@@ -260,7 +264,14 @@ impl Display for Value {
         match self {
             Value::Reg(reg) => write!(f, "%{reg}"),
             Value::Int(int) => write!(f, "{int}"),
-            Value::Float(float) => write!(f, "{float}"),
+            Value::Float(float) => {
+                let s = format!("{float}");
+                if s.contains('.') {
+                    write!(f, "{s}")
+                } else {
+                    write!(f, "{s}.0")
+                }
+            }
             Value::Bool(bool) => write!(f, "{bool}"),
             Value::Void => write!(f, "()"),
             Value::Uninit => write!(f, "uninit"),
@@ -439,6 +450,12 @@ impl Display for InlineIRInstruction {
             } => write!(f, "{dest} = io_poll {} {} {}", fds, count, timeout),
             InlineIRInstructionKind::IoSleep { dest, ms } => {
                 write!(f, "{dest} = io_sleep {}", ms)
+            }
+            InlineIRInstructionKind::Trunc { dest, val } => {
+                write!(f, "{dest} = trunc {}", val)
+            }
+            InlineIRInstructionKind::IntToFloat { dest, val } => {
+                write!(f, "{dest} = itof {}", val)
             }
         }
     }

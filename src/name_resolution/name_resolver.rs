@@ -1202,6 +1202,8 @@ impl NameResolver {
                 InlineIRInstructionKind::IoCtl { .. } => (),
                 InlineIRInstructionKind::IoPoll { .. } => (),
                 InlineIRInstructionKind::IoSleep { .. } => (),
+                InlineIRInstructionKind::Trunc { .. } => (),
+                InlineIRInstructionKind::IntToFloat { .. } => (),
             }
         });
 

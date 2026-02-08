@@ -496,6 +496,35 @@ impl Member {
             }
         }
 
+        // Auto-derive protocol if a method from an auto-derivable protocol is called
+        if let Some(protocol_id) = session.auto_derivable_method_protocol(&self.label) {
+            if let Some(method_sym) =
+                session.auto_derive_protocol(*symbol, protocol_id, constraints)
+            {
+                if let Some(entry) = session.lookup(&method_sym) {
+                    let method = entry.instantiate(self.node_id, constraints, context, session);
+                    let method = session.apply(&method, &mut context.substitutions_mut());
+                    let (method_receiver, method_fn) = consume_self(&method);
+
+                    match unify(&method_receiver, &self.receiver, context, session)
+                        .map_err(|e| e.with_cause(cause))
+                    {
+                        Ok(metas) => solved_metas.extend(metas),
+                        Err(e) => return SolveResult::Err(e),
+                    };
+
+                    match unify(&method_fn, &self.ty, context, session)
+                        .map_err(|e| e.with_cause(cause))
+                    {
+                        Ok(metas) => solved_metas.extend(metas),
+                        Err(e) => return SolveResult::Err(e),
+                    };
+
+                    return SolveResult::Solved(solved_metas);
+                }
+            }
+        }
+
         // If all else fails, see if it's a property
         if let Some(ty) = nominal
             .substitute_properties(type_args)

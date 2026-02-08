@@ -285,6 +285,18 @@ pub enum Instruction<T> {
     },
     #[doc = "$dest = io_sleep $ms"]
     IoSleep { dest: Register, ms: Value },
+    #[doc = "$dest = trunc $val $meta"]
+    Trunc {
+        dest: Register,
+        val: Value,
+        meta: List<InstructionMeta>,
+    },
+    #[doc = "$dest = itof $val $meta"]
+    IntToFloat {
+        dest: Register,
+        val: Value,
+        meta: List<InstructionMeta>,
+    },
 }
 
 impl<T> Instruction<T> {
@@ -536,6 +548,25 @@ impl<T> Instruction<T> {
                 timeout,
             },
             Instruction::IoSleep { dest, ms } => Instruction::IoSleep { dest, ms },
+            Instruction::Trunc { dest, val, meta } => Instruction::Trunc { dest, val, meta },
+            Instruction::IntToFloat { dest, val, meta } => {
+                Instruction::IntToFloat { dest, val, meta }
+            }
+        }
+    }
+}
+
+impl<T> Instruction<T> {
+    /// Offset all RawPtr addresses in this instruction's values.
+    pub fn offset_ptrs(&mut self, offset: usize) {
+        match self {
+            Instruction::Constant { val, .. } => val.offset_ptrs(offset),
+            Instruction::Nominal { record, .. } | Instruction::Record { record, .. } => {
+                for val in &mut record.items {
+                    val.offset_ptrs(offset);
+                }
+            }
+            _ => {}
         }
     }
 }

@@ -2511,6 +2511,17 @@ mod formatter_tests {
     }
 
     #[test]
+    fn test_string_literal_formatting() {
+        assert_eq!(format_code(r#""hello""#, 80), r#""hello""#);
+        // \n escape preserved
+        assert_eq!(format_code(r#""hello\nworld""#, 80), r#""hello\nworld""#);
+        // literal newline preserved
+        assert_eq!(format_code("\"hello\nworld\"", 80), "\"hello\nworld\"");
+        // \t preserved
+        assert_eq!(format_code(r#""tab\there""#, 80), r#""tab\there""#);
+    }
+
+    #[test]
     fn test_effect_call_formatting() {
         // Effect calls should stay on one line when they fit
         assert_eq!(format_code("'emit(123)", 80), "'emit(123)");

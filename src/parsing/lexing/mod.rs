@@ -4,17 +4,10 @@ pub mod token;
 pub mod token_kind;
 
 /// Process escape sequences in a string literal.
-/// The input should include surrounding quotes.
+/// The input should NOT include surrounding quotes.
 pub fn unescape(raw: &str) -> String {
-    // Strip surrounding quotes
-    let inner = if raw.len() >= 2 {
-        &raw[1..raw.len() - 1]
-    } else {
-        raw
-    };
-
-    let mut result = String::with_capacity(inner.len());
-    let mut chars = inner.chars().peekable();
+    let mut result = String::with_capacity(raw.len());
+    let mut chars = raw.chars().peekable();
 
     while let Some(c) = chars.next() {
         if c == '\\' {
@@ -66,16 +59,16 @@ mod tests {
 
     #[test]
     fn test_unescape_basic() {
-        assert_eq!(unescape(r#""hello""#), "hello");
-        assert_eq!(unescape(r#""hello\nworld""#), "hello\nworld");
-        assert_eq!(unescape(r#""hello\tworld""#), "hello\tworld");
-        assert_eq!(unescape(r#""hello\\world""#), "hello\\world");
-        assert_eq!(unescape(r#""hello\"world""#), "hello\"world");
+        assert_eq!(unescape("hello"), "hello");
+        assert_eq!(unescape(r"hello\nworld"), "hello\nworld");
+        assert_eq!(unescape(r"hello\tworld"), "hello\tworld");
+        assert_eq!(unescape(r"hello\\world"), "hello\\world");
+        assert_eq!(unescape(r#"hello\"world"#), "hello\"world");
     }
 
     #[test]
     fn test_unescape_unicode() {
         // 😀 = U+1F600
-        assert_eq!(unescape(r#""smile: \u{1F600}""#), "smile: 😀");
+        assert_eq!(unescape(r"smile: \u{1F600}"), "smile: 😀");
     }
 }

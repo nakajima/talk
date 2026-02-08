@@ -14,10 +14,11 @@ use crate::{
         symbol::{ProtocolId, Symbol, Symbols, TypeParameterId},
     },
     node_id::NodeID,
+    span::Span,
     types::{
         builtins::builtin_scope,
         call_tree::CallTree,
-        conformance::{Conformance, ConformanceKey},
+        conformance::{Conformance, ConformanceKey, Witnesses},
         constraints::{constraint::Constraint, store::ConstraintStore},
         infer_row::{Row, RowMetaId, RowParamId},
         infer_ty::{Level, Meta, MetaVarId, SkolemId, Ty},
@@ -77,6 +78,12 @@ pub struct TypeSession {
 
     meta_vars: InPlaceUnificationTable<MetaVarId>,
     row_vars: InPlaceUnificationTable<RowMetaId>,
+
+    /// Set of protocol IDs that can be auto-derived for structs/enums.
+    auto_derivable_protocols: Vec<ProtocolId>,
+
+    /// Records of completed auto-derivations: (nominal, protocol) → [(label, method_sym, self_param_sym)]
+    pub(crate) auto_derived: IndexMap<(Symbol, ProtocolId), Vec<(Label, Symbol, Symbol)>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -182,6 +189,9 @@ impl TypeSession {
 
             symbols,
             resolved_names,
+
+            auto_derivable_protocols: Default::default(),
+            auto_derived: Default::default(),
         }
     }
 
@@ -1139,5 +1149,205 @@ impl TypeSession {
         let id = self.row_vars.new_key(level);
         self.meta_levels.borrow_mut().insert(Meta::Row(id), level);
         Row::Var(id)
+    }
+
+    /// Find a protocol's ProtocolId by name.
+    pub(crate) fn find_protocol_id(&self, protocol_name: &str) -> Option<ProtocolId> {
+        for (sym, name) in &self.resolved_names.symbol_names {
+            if name == protocol_name {
+                if let Symbol::Protocol(id) = sym {
+                    return Some(*id);
+                }
+            }
+        }
+        // Also check imported modules
+        for (sym, name) in self.modules.imported_symbol_names() {
+            if name == protocol_name {
+                if let Symbol::Protocol(id) = sym {
+                    return Some(id);
+                }
+            }
+        }
+        None
+    }
+
+    /// Lazily initialize the set of auto-derivable protocols.
+    fn init_auto_derivable_protocols(&mut self) {
+        if !self.auto_derivable_protocols.is_empty() {
+            return;
+        }
+        if let Some(id) = self.find_protocol_id("Showable") {
+            self.auto_derivable_protocols.push(id);
+        }
+    }
+
+    /// Check whether a protocol can be auto-derived.
+    pub(crate) fn is_auto_derivable(&mut self, protocol_id: ProtocolId) -> bool {
+        self.init_auto_derivable_protocols();
+        self.auto_derivable_protocols.contains(&protocol_id)
+    }
+
+    /// Given a method label, return which auto-derivable protocol it belongs to (if any).
+    pub(crate) fn auto_derivable_method_protocol(&mut self, label: &Label) -> Option<ProtocolId> {
+        self.init_auto_derivable_protocols();
+        for &protocol_id in &self.auto_derivable_protocols.clone() {
+            if let Some(reqs) = self.lookup_method_requirements(protocol_id.into()) {
+                if reqs.contains_key(label) {
+                    return Some(protocol_id);
+                }
+            }
+        }
+        None
+    }
+
+    /// Look up a protocol method witness for a conforming type.
+    pub(crate) fn find_witness(
+        &mut self,
+        conforming_sym: Symbol,
+        protocol_id: ProtocolId,
+        method_label: &Label,
+    ) -> Option<Symbol> {
+        let key = ConformanceKey {
+            protocol_id,
+            conforming_id: conforming_sym,
+        };
+        let conformance = self.lookup_conformance(&key)?;
+        conformance.witnesses.methods.get(method_label).copied()
+    }
+
+    /// Register a symbol with a monomorphic type in the term environment.
+    pub(crate) fn register_mono(&mut self, sym: Symbol, ty: Ty) {
+        self.term_env.insert(sym, EnvEntry::Mono(ty));
+    }
+
+    /// Auto-derive a protocol for a nominal type on demand.
+    /// Returns the first method symbol if successful, None if the type can't be auto-derived.
+    pub(crate) fn auto_derive_protocol(
+        &mut self,
+        nominal_sym: Symbol,
+        protocol_id: ProtocolId,
+        constraints: &mut ConstraintStore,
+    ) -> Option<Symbol> {
+        let derive_key = (nominal_sym, protocol_id);
+
+        // Already derived?
+        if let Some(methods) = self.auto_derived.get(&derive_key) {
+            return methods.first().map(|(_, method_sym, _)| *method_sym);
+        }
+
+        // Must be a struct or enum
+        if !matches!(nominal_sym, Symbol::Struct(..) | Symbol::Enum(..)) {
+            return None;
+        }
+
+        // Must not already have an explicit conformance
+        let key = ConformanceKey {
+            protocol_id,
+            conforming_id: nominal_sym,
+        };
+        if self.lookup_conformance(&key).is_some() {
+            return None;
+        }
+
+        // Look up protocol Self param
+        let protocol_symbol: Symbol = protocol_id.into();
+        let Some(EnvEntry::Scheme(Scheme {
+            ty: Ty::Param(self_id, _),
+            ..
+        })) = self.lookup(&protocol_symbol)
+        else {
+            return None;
+        };
+
+        let nominal = self.lookup_nominal(&nominal_sym)?;
+        let nominal_ty = Ty::Nominal {
+            symbol: nominal_sym,
+            type_args: nominal.type_params.clone(),
+        };
+
+        // Build substitution: Self → nominal_ty
+        let mut subs = FxHashMap::default();
+        subs.insert(Ty::Param(self_id, vec![]), nominal_ty.clone());
+
+        // Look up method requirements
+        let Some(requirements) = self.lookup_method_requirements(protocol_symbol) else {
+            return None;
+        };
+
+        let mut witnesses = Witnesses::default();
+        let mut derived_methods = Vec::new();
+        let mut first_method_sym = None;
+
+        let type_name = self
+            .resolved_names
+            .symbol_names
+            .get(&nominal_sym)
+            .cloned()
+            .or_else(|| {
+                self.modules
+                    .imported_symbol_names()
+                    .get(&nominal_sym)
+                    .cloned()
+            })
+            .unwrap_or_default();
+
+        for (label, req_sym) in &requirements {
+            let Some(entry) = self.lookup(req_sym) else {
+                continue;
+            };
+
+            // Get the requirement type and substitute Self → nominal_ty
+            let req_ty = substitute(&entry._as_ty(), &subs);
+
+            // Allocate symbols for this method
+            let method_sym =
+                Symbol::InstanceMethod(self.symbols.next_instance_method(self.current_module_id));
+            let self_param_sym = Symbol::ParamLocal(self.symbols.next_param());
+
+            if first_method_sym.is_none() {
+                first_method_sym = Some(method_sym);
+            }
+
+            // Register in term_env
+            self.insert(method_sym, req_ty, constraints);
+            self.term_env
+                .insert(self_param_sym, EnvEntry::Mono(nominal_ty.clone()));
+
+            // Register as instance method
+            self.type_catalog
+                .instance_methods
+                .entry(nominal_sym)
+                .or_default()
+                .insert(label.clone(), method_sym);
+
+            witnesses.methods.insert(label.clone(), method_sym);
+            witnesses.requirements.insert(*req_sym, method_sym);
+
+            derived_methods.push((label.clone(), method_sym, self_param_sym));
+
+            // Register symbol names for debugging
+            self.resolved_names
+                .symbol_names
+                .insert(method_sym, format!("{type_name}.{label}"));
+            self.resolved_names
+                .symbol_names
+                .insert(self_param_sym, "self".into());
+        }
+
+        self.type_catalog.conformances.insert(
+            key,
+            Conformance {
+                node_id: NodeID::SYNTHESIZED,
+                conforming_id: nominal_sym,
+                protocol_id,
+                witnesses,
+                span: Span::SYNTHESIZED,
+            },
+        );
+
+        // Record for later body synthesis
+        self.auto_derived.insert(derive_key, derived_methods);
+
+        first_method_sym
     }
 }

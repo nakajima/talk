@@ -92,6 +92,11 @@ impl Conforms {
             }
         };
 
+        // Auto-derive if this protocol supports it
+        if session.is_auto_derivable(self.protocol_id) {
+            session.auto_derive_protocol(conforming_ty_sym, self.protocol_id, constraints);
+        }
+
         match self.check_conformance(
             conforming_ty_sym,
             &conforming_type_args,

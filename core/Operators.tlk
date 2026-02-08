@@ -130,7 +130,7 @@ extend Int: Negatable {
 
 extend Float: Negatable {
 	func negated() -> Float {
-		@_ir { %? = sub Float 0 %0 }
+		@_ir { %? = sub Float 0.0 %0 }
 	}
 }
 
@@ -155,5 +155,11 @@ public protocol Comparable: Equatable {
 extend Int: Comparable {
 	func gt(rhs: Int) -> Bool {
 		@_ir { %? = cmp Int %0 > %1 }
+	}
+}
+
+extend Float: Comparable {
+	func gt(rhs: Float) -> Bool {
+		@_ir { %? = cmp Float %0 > %1 }
 	}
 }

@@ -1,0 +1,15 @@
+func printy<T: Showable>(showable: T) {
+	print_raw(showable.show())
+	print_raw("\n")
+}
+
+struct Fizz {
+	let a: Int
+	let b: Float
+}
+
+printy(123)
+printy(1.23)
+printy("a string")
+printy(Fizz(a: 123, b: 1.23))
+printy([1, 2, 3])

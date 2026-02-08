@@ -81,6 +81,33 @@ impl Value {
     }
 }
 
+impl Addr {
+    pub fn offset(self, offset: usize) -> Self {
+        Addr(self.0 + offset)
+    }
+}
+
+impl Value {
+    /// Offset all RawPtr addresses by the given amount.
+    /// Used when merging static memory from imported modules.
+    pub fn offset_ptrs(&mut self, offset: usize) {
+        match self {
+            Value::RawPtr(addr) => *addr = addr.offset(offset),
+            Value::Record(_, fields) => {
+                for field in fields {
+                    field.offset_ptrs(offset);
+                }
+            }
+            Value::Closure { env, .. } => {
+                for val in &mut env.items {
+                    val.offset_ptrs(offset);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 impl FromStr for Value {
     type Err = IRError;
 

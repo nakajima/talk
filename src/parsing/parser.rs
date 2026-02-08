@@ -4,7 +4,6 @@ use crate::ast::{AST, NewAST, Parsed};
 use crate::diagnostic::{AnyDiagnostic, Diagnostic, Severity};
 use crate::label::Label;
 use crate::lexer::Lexer;
-use crate::lexing::unescape;
 use crate::name::Name;
 use crate::node::Node;
 use crate::node_id::{FileID, NodeID};
@@ -1490,6 +1489,26 @@ impl<'a> Parser<'a> {
                         kind: InlineIRInstructionKind::IoSleep { dest, ms },
                     })
                 }
+                "trunc" => {
+                    let val = self.ir_value()?;
+                    self.save_meta(tok, |id, span| InlineIRInstruction {
+                        id,
+                        span,
+                        binds,
+                        instr_name_span: instr_span,
+                        kind: InlineIRInstructionKind::Trunc { dest, val },
+                    })
+                }
+                "itof" => {
+                    let val = self.ir_value()?;
+                    self.save_meta(tok, |id, span| InlineIRInstruction {
+                        id,
+                        span,
+                        binds,
+                        instr_name_span: instr_span,
+                        kind: InlineIRInstructionKind::IntToFloat { dest, val },
+                    })
+                }
                 _ => {
                     return Err(ParserError::UnexpectedToken {
                         expected: "ir instr".into(),
@@ -2074,9 +2093,9 @@ impl<'a> Parser<'a> {
             TokenKind::True => self.add_expr(ExprKind::LiteralTrue, tok),
             TokenKind::False => self.add_expr(ExprKind::LiteralFalse, tok),
             TokenKind::StringLiteral => {
-                // Unescape the string literal (raw lexeme includes quotes)
-                let unescaped = unescape(lexeme);
-                self.add_expr(ExprKind::LiteralString(unescaped), tok)
+                // Strip surrounding quotes but keep escape sequences intact
+                let inner = &lexeme[1..lexeme.len() - 1];
+                self.add_expr(ExprKind::LiteralString(inner.to_string()), tok)
             }
             _ => unreachable!(),
         };

@@ -1,0 +1,96 @@
+// no-core
+import { String } from ./String.tlk
+import { Add, Subtract, Multiply, Divide, Comparable, Equatable, Negatable } from ./Operators.tlk
+
+public protocol Showable {
+	func show() -> String
+}
+
+func _digit(d: Int) -> String {
+	match d {
+		0 -> "0",
+		1 -> "1",
+		2 -> "2",
+		3 -> "3",
+		4 -> "4",
+		5 -> "5",
+		6 -> "6",
+		7 -> "7",
+		8 -> "8",
+		_ -> "9"
+	}
+}
+
+extend Float {
+	func _trunc() -> Int {
+		@_ir { %? = trunc %0 }
+	}
+
+	func _frac() -> Float {
+		let truncated = self._trunc()
+		return self - truncated._toFloat()
+	}
+}
+
+extend Int {
+	func _toFloat() -> Float {
+		@_ir { %? = itof %0 }
+	}
+}
+
+extend Int: Showable {
+	func show() -> String {
+		if self == 0 { return "0" }
+		let n = self
+		if self < 0 { n = -self }
+		let result = ""
+		loop n > 0 {
+			let digit = n - (n / 10) * 10
+			result = _digit(digit) + result
+			n = n / 10
+		}
+		if self < 0 { return "-" + result }
+		return result
+	}
+}
+
+extend Float: Showable {
+	func show() -> String {
+		if self == 0.0 { return "0.0" }
+		if self < 0.0 {
+			let pos = -self
+			return "-" + pos.show()
+		}
+		let int_part = self._trunc()
+		let int_str = int_part.show()
+		let frac = self._frac()
+		if frac < 0.0000000000001 { return int_str + ".0" }
+		let frac_str = ""
+		let i = 0
+		loop i < 15 {
+			frac = frac * 10.0
+			let d = frac._trunc()
+			frac = frac._frac()
+			frac_str = frac_str + _digit(d)
+			i = i + 1
+			if frac < 0.0000000000001 { break }
+		}
+		return int_str + "." + frac_str
+	}
+}
+
+extend Bool: Showable {
+	func show() -> String {
+		if self { "true" } else {
+			"false"
+		}
+	}
+}
+
+extend String: Showable {
+	func show() -> String { self }
+}
+
+extend RawPtr: Showable {
+	func show() -> String { "<ptr>" }
+}

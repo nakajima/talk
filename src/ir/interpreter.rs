@@ -946,6 +946,22 @@ impl<IO: super::io::IO> Interpreter<IO> {
                 let result = self.io.io_sleep(ms_int);
                 self.write_register(&dest, Value::Int(result));
             }
+            IR::Instr(Instruction::Trunc { dest, val, .. }) => {
+                let val = self.val(val);
+                let result = match val {
+                    Value::Float(f) => Value::Int(f as i64),
+                    other => panic!("Trunc expects Float, got {other:?}"),
+                };
+                self.write_register(&dest, result);
+            }
+            IR::Instr(Instruction::IntToFloat { dest, val, .. }) => {
+                let val = self.val(val);
+                let result = match val {
+                    Value::Int(i) => Value::Float(i as f64),
+                    other => panic!("IntToFloat expects Int, got {other:?}"),
+                };
+                self.write_register(&dest, result);
+            }
         }
     }
 
@@ -2413,5 +2429,244 @@ Dog().handleDSTChange()
         );
 
         assert_eq!(String::from_utf8(interpreter.io.stdout).unwrap(), "oh hi\n");
+    }
+
+    #[test]
+    fn interprets_int_show_inline() {
+        // Test the digit+loop logic directly in user code to isolate from core module
+        let (val, interpreter) = interpret_with(r#"
+            func digit(d: Int) -> String {
+                match d {
+                    0 -> "0", 1 -> "1", 2 -> "2", 3 -> "3", 4 -> "4",
+                    5 -> "5", 6 -> "6", 7 -> "7", 8 -> "8", _ -> "9"
+                }
+            }
+            let n = 42
+            let result = ""
+            loop n > 0 {
+                let d = n - (n / 10) * 10
+                result = digit(d) + result
+                n = n / 10
+            }
+            result
+        "#);
+        assert_eq!(interpreter.display(val, false), "42");
+    }
+
+    #[test]
+    fn interprets_int_show() {
+        let (val, interpreter) = interpret_with("let x = 42; x.show()");
+        assert_eq!(interpreter.display(val, false), "42");
+    }
+
+    #[test]
+    fn interprets_int_show_zero() {
+        let (val, interpreter) = interpret_with("let x = 0; x.show()");
+        assert_eq!(interpreter.display(val, false), "0");
+    }
+
+    #[test]
+    fn interprets_int_show_negative() {
+        let (val, interpreter) = interpret_with("let x = -42; x.show()");
+        assert_eq!(interpreter.display(val, false), "-42");
+    }
+
+    #[test]
+    fn interprets_float_show() {
+        let (val, interpreter) = interpret_with("let x = 1.5; x.show()");
+        assert_eq!(interpreter.display(val, false), "1.5");
+    }
+
+    #[test]
+    fn interprets_float_show_zero() {
+        let (val, interpreter) = interpret_with("let x = 0.0; x.show()");
+        assert_eq!(interpreter.display(val, false), "0.0");
+    }
+
+    #[test]
+    fn interprets_float_show_negative() {
+        let (val, interpreter) = interpret_with("let x = -3.14; x.show()");
+        assert_eq!(interpreter.display(val, false), "-3.14");
+    }
+
+    #[test]
+    fn interprets_bool_show_true() {
+        let (val, interpreter) = interpret_with("true.show()");
+        assert_eq!(interpreter.display(val, false), "true");
+    }
+
+    #[test]
+    fn interprets_bool_show_false() {
+        let (val, interpreter) = interpret_with("false.show()");
+        assert_eq!(interpreter.display(val, false), "false");
+    }
+
+    #[test]
+    fn interprets_string_show() {
+        let (val, interpreter) = interpret_with(r#""hello".show()"#);
+        assert_eq!(interpreter.display(val, false), "hello");
+    }
+
+    #[test]
+    fn interprets_struct_auto_show() {
+        let (val, interpreter) = interpret_with(
+            "
+            struct Point {
+                let x: Int
+                let y: Int
+            }
+            Point(x: 1, y: 2).show()
+            ",
+        );
+        assert_eq!(interpreter.display(val, false), "Point(x: 1, y: 2)");
+    }
+
+    #[test]
+    fn interprets_struct_auto_show_empty() {
+        let (val, interpreter) = interpret_with(
+            "
+            struct Empty {}
+            Empty().show()
+            ",
+        );
+        assert_eq!(interpreter.display(val, false), "Empty {}");
+    }
+
+    #[test]
+    fn interprets_enum_auto_show_no_payload() {
+        let (val, interpreter) = interpret_with(
+            "
+            enum Color { case red, blue }
+            Color.red.show()
+            ",
+        );
+        assert_eq!(interpreter.display(val, false), "Color.red");
+    }
+
+    #[test]
+    fn interprets_enum_auto_show_with_payload() {
+        let (val, interpreter) = interpret_with(
+            "
+            enum Shape { case rect(Int, Int) }
+            Shape.rect(3, 4).show()
+            ",
+        );
+        assert_eq!(interpreter.display(val, false), "Shape.rect(3, 4)");
+    }
+
+    #[test]
+    fn interprets_struct_auto_show_user_override() {
+        let (val, interpreter) = interpret_with(
+            r#"
+            struct Foo { let x: Int }
+            extend Foo: Showable { func show() -> String { "custom" } }
+            Foo(x: 1).show()
+            "#,
+        );
+        assert_eq!(interpreter.display(val, false), "custom");
+    }
+
+    #[test]
+    fn interprets_struct_with_unshowable_field_no_error() {
+        // Laziness: struct with un-Showable field doesn't error unless .show() is called
+        assert_eq!(
+            interpret(
+                "
+                struct Wrapper { let f: () -> Int }
+                Wrapper(f: func() -> Int { 42 }).f()
+                "
+            ),
+            Value::Int(42),
+        );
+    }
+
+    #[test]
+    fn interprets_struct_auto_show_via_generic() {
+        let (val, interpreter) = interpret_with(
+            r#"
+            func show_it<T: Showable>(x: T) -> String { x.show() }
+            struct Pair {
+                let a: Int
+                let b: Int
+            }
+            show_it(Pair(a: 1, b: 2))
+            "#,
+        );
+        assert_eq!(interpreter.display(val, false), "Pair(a: 1, b: 2)");
+    }
+
+    #[test]
+    fn interprets_binding_survives_early_return_branch() {
+        // Regression: save-copy bindings in an early-return branch leaked to continuation,
+        // causing an SSA dominance violation (register defined only in branch block was
+        // referenced in continuation block).
+        let (val, interpreter) = interpret_with(
+            r#"
+            func test(x: Float) -> String {
+                let s = x.show()
+                if x == 0.0 { return s + "!" }
+                s + "?"
+            }
+            test(1.5)
+            "#,
+        );
+        assert_eq!(interpreter.display(val, false), "1.5?");
+    }
+
+    #[test]
+    fn interprets_float_trunc_then_show() {
+        // Test calling Int.show() on the result of Float._trunc()
+        let (val, interpreter) = interpret_with("let x = 1.5; let i = x._trunc(); i.show()");
+        assert_eq!(interpreter.display(val, false), "1");
+    }
+
+    #[test]
+    fn interprets_float_show_int_part_only() {
+        // Test that Float.show() produces correct integer part for whole numbers
+        let (val, interpreter) = interpret_with("let x = 3.0; x.show()");
+        assert_eq!(interpreter.display(val, false), "3.0");
+    }
+
+    #[test]
+    fn interprets_trunc() {
+        assert_eq!(
+            interpret(
+                "
+                func trunc(f: Float) -> Int {
+                    @_ir(f) { %? = trunc $0 }
+                }
+                trunc(3.7)
+                "
+            ),
+            Value::Int(3)
+        );
+    }
+
+    #[test]
+    fn interprets_generic_struct_auto_show() {
+        let (val, interpreter) = interpret_with(
+            "
+            struct Wrapper<T> {
+                let value: Int
+            }
+            Wrapper<String>(value: 42).show()
+            ",
+        );
+        assert_eq!(interpreter.display(val, false), "Wrapper(value: 42)");
+    }
+
+    #[test]
+    fn interprets_itof() {
+        assert_eq!(
+            interpret(
+                "
+                func itof(i: Int) -> Float {
+                    @_ir(i) { %? = itof $0 }
+                }
+                itof(42)
+                "
+            ),
+            Value::Float(42.0)
+        );
     }
 }

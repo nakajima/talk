@@ -2041,6 +2041,28 @@ impl<'a> Lowerer<'a> {
                 self.push_instr(Instruction::IoSleep { dest, ms });
                 Ok((dest.into(), Ty::Int))
             }
+            InlineIRInstructionKind::Trunc { dest, val } => {
+                let val = self.parsed_value(val, &binds);
+                let ret = self.ret(bind);
+                let dest = self.parsed_register(dest, ret);
+                self.push_instr(Instruction::Trunc {
+                    dest,
+                    val,
+                    meta: vec![InstructionMeta::Source(instr.id)].into(),
+                });
+                Ok((dest.into(), Ty::Int))
+            }
+            InlineIRInstructionKind::IntToFloat { dest, val } => {
+                let val = self.parsed_value(val, &binds);
+                let ret = self.ret(bind);
+                let dest = self.parsed_register(dest, ret);
+                self.push_instr(Instruction::IntToFloat {
+                    dest,
+                    val,
+                    meta: vec![InstructionMeta::Source(instr.id)].into(),
+                });
+                Ok((dest.into(), Ty::Float))
+            }
         }
     }
 
@@ -2138,7 +2160,8 @@ impl<'a> Lowerer<'a> {
         bind: Bind,
     ) -> Result<(Value, Ty), IRError> {
         let ret = self.ret(bind);
-        let bytes = string.bytes().collect_vec();
+        let unescaped = crate::parsing::lexing::unescape(string);
+        let bytes = unescaped.bytes().collect_vec();
         let bytes_len = bytes.len() as i64;
         let ptr = self.static_memory.write(Value::RawBuffer(bytes));
 
@@ -4132,7 +4155,20 @@ impl<'a> Lowerer<'a> {
         // be re-established after all branches are processed.
         let saved_cont_idx = self.current_continuation_idx.take();
 
+        // Save bindings so that method-call save-copy updates (set_binding in
+        // lower_call/lower_method_call) don't leak across block boundaries.
+        // Without this, a save-copy register defined only in one branch of an
+        // if-expression would be referenced in the continuation block — an SSA
+        // dominance violation.
+        let saved_bindings = self.current_function_stack[stack_idx].bindings.clone();
+
         let ret = f(self);
+
+        // Restore bindings. Mutable variables use Pointer bindings (alloc/store/load)
+        // which are unaffected by this restore. Only Register bindings (for immutable
+        // values) are affected, and their save-copies are just redundant copies of the
+        // same value, so restoring the original binding is correct.
+        self.current_function_stack[stack_idx].bindings = saved_bindings;
 
         // Merge continuation state: if a continuation was created in this block,
         // propagate it. Otherwise restore the saved state.

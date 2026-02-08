@@ -29,6 +29,7 @@ pub fn core_sources() -> Vec<(&'static str, &'static str)> {
         ("Async.tlk", include_str!("../../core/Async.tlk")),
         ("IO.tlk", include_str!("../../core/IO.tlk")),
         ("File.tlk", include_str!("../../core/File.tlk")),
+        ("Showable.tlk", include_str!("../../core/Showable.tlk")),
     ]
 }
 
