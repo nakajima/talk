@@ -917,6 +917,10 @@ impl<'a> InferencePass<'a> {
             }
         }
 
+        // Retry deferred constraints now that all extend blocks (stragglers)
+        // have been processed and their methods are available.
+        self.constraints.retry_all_deferred();
+
         self.solve(&mut context, Default::default(), Default::default());
 
         // Apply substitutions to types_by_node for top-level expressions
@@ -1903,7 +1907,14 @@ impl<'a> InferencePass<'a> {
             }
 
             let id = self.register_generic(generic, context);
-            type_params.push(Ty::Param(id, vec![]));
+            let bounds = match self.session.lookup(&sym) {
+                Some(entry) => match entry._as_ty() {
+                    Ty::Param(_, bounds) => bounds,
+                    _ => vec![],
+                },
+                None => vec![],
+            };
+            type_params.push(Ty::Param(id, bounds));
             self.session
                 .type_catalog
                 .child_types

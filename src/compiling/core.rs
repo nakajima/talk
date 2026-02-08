@@ -116,7 +116,7 @@ fn _compile() -> Module {
     let driver = Driver::new_bare(sources, config);
 
     #[allow(clippy::unwrap_used)]
-    let module = driver
+    let lowered = driver
         .parse()
         .unwrap()
         .resolve_names()
@@ -124,10 +124,15 @@ fn _compile() -> Module {
         .typecheck()
         .unwrap()
         .lower()
-        .unwrap()
-        .module("Core");
+        .unwrap();
 
-    module
+    assert!(
+        !lowered.has_errors(),
+        "Core module compiled with errors: {:#?}",
+        lowered.diagnostics()
+    );
+
+    lowered.module("Core")
 }
 
 #[cfg(test)]
@@ -162,5 +167,47 @@ mod tests {
         let h1 = source_hash();
         let h2 = source_hash();
         assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn core_compiles_without_errors() {
+        use crate::common::diagnostic::{AnyDiagnostic, Severity};
+
+        let config = {
+            let mut c = DriverConfig::new("Core");
+            c.module_id = ModuleId::Core;
+            c.mode = CompilationMode::Library;
+            c
+        };
+        let sources = core_sources()
+            .into_iter()
+            .map(|(name, content)| Source::in_memory(name.into(), content))
+            .collect();
+        let driver = Driver::new_bare(sources, config);
+        let lowered = driver
+            .parse()
+            .unwrap()
+            .resolve_names()
+            .unwrap()
+            .typecheck()
+            .unwrap()
+            .lower()
+            .unwrap();
+
+        let critical_errors: Vec<_> = lowered
+            .diagnostics()
+            .iter()
+            .filter(|d| match d {
+                AnyDiagnostic::Parsing(d) => d.severity == Severity::Error,
+                AnyDiagnostic::NameResolution(d) => d.severity == Severity::Error,
+                AnyDiagnostic::Typing(d) => d.severity == Severity::Error,
+            })
+            .collect();
+
+        assert!(
+            critical_errors.is_empty(),
+            "Core compiled with critical errors: {:#?}",
+            critical_errors
+        );
     }
 }

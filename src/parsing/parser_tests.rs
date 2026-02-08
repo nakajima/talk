@@ -3849,4 +3849,15 @@ pub mod tests {
             panic!("expected match expression, got {:?}", stmt.kind);
         }
     }
+
+    #[test]
+    fn assignment_in_if_condition_does_not_panic() {
+        // Previously panicked with `Node.as_expr() failed for Stmt(Assignment(...))`
+        // because the parser treated `=` as assignment in condition position.
+        // Now it should return a parse error instead of panicking.
+        let lexer = Lexer::new("if x = 1 {}");
+        let parser = Parser::new("-", FileID(0), lexer);
+        let result = parser.parse();
+        assert!(result.is_err(), "expected parse error for assignment in if condition");
+    }
 }

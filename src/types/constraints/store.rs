@@ -135,6 +135,15 @@ impl ConstraintStore {
         self.wants.is_empty()
     }
 
+    /// Move all deferred constraints back to the worklist for a final retry.
+    pub fn retry_all_deferred(&mut self) {
+        for id in std::mem::take(&mut self.deferred) {
+            if !self.solved.contains(&id) {
+                self.wants.push(id, ConstraintPriority::Equals);
+            }
+        }
+    }
+
     #[instrument(skip(self))]
     pub fn defer(&mut self, id: ConstraintId, reason: DeferralReason) {
         self.deferred.insert(id);

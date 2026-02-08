@@ -3420,6 +3420,16 @@ impl<'a> Lowerer<'a> {
                     name: Name::Resolved(sym, ..),
                     ..
                 } => self.typed.types.catalog.lookup_static_member(sym, label),
+                Ty::Param(_, protocol_ids) => {
+                    let mut found = None;
+                    for pid in protocol_ids {
+                        if let Some((sym, _)) = self.typed.types.catalog.lookup_member(&Symbol::Protocol(*pid), label) {
+                            found = Some(sym);
+                            break;
+                        }
+                    }
+                    found
+                },
                 _ => {
                     return Err(IRError::WitnessNotFound(format!(
                         "could not determine callee sym for {:?}.{label:?}",

@@ -2,6 +2,7 @@
 import { _io_open, _io_read, _io_write, _io_close, O_RDONLY, O_WRONLY, O_RDWR, O_CREAT, O_TRUNC, O_APPEND, S_IRUSR, S_IWUSR, EAGAIN, POLLIN, POLLOUT } from ./IO.tlk
 import { _alloc } from ./Memory.tlk
 import { Poll } from ./Async.tlk
+import { Add, Comparable } from ./Operators.tlk
 
 public enum FileMode {
 	case read

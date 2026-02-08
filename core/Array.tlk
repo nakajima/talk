@@ -1,5 +1,8 @@
 // no-core
 import { _alloc, _load } from ./Memory.tlk
+import { String } from ./String.tlk
+import { Add, Subtract, Comparable } from ./Operators.tlk
+import { Showable } from ./Showable.tlk
 
 public struct Array<Element> {
 	let storage: RawPtr
@@ -15,5 +18,17 @@ public struct Array<Element> {
 	func get(index: Int) -> Element {
 		let ptr: RawPtr = @_ir(self.storage, index) { %? = gep Element $0 $1 }
 		_load(ptr)
+	}
+}
+
+extend Array<Element: Showable>: Showable {
+	func show() -> String {
+		let result = "["
+		let i = 0
+		loop i < self.count {
+			result = result + self.get(i).show()
+			if i < self.count - 1 { result = result + ", " }
+		}
+		result
 	}
 }

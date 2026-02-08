@@ -837,7 +837,7 @@ impl<'a> Parser<'a> {
             return self.if_let_match(tok, true);
         }
 
-        let cond = self.expr()?;
+        let cond = self.expr_with_precedence(Precedence::Or)?;
         let body = self.block(BlockContext::If, true)?;
         self.consume(TokenKind::Else)?;
         let alt = self.block(BlockContext::If, true)?;
@@ -887,7 +887,7 @@ impl<'a> Parser<'a> {
         }
 
         self.push_context(ParseContext::If);
-        let cond = self.expr()?;
+        let cond = self.expr_with_precedence(Precedence::Or)?;
         self.pop_context();
         let body = self.block(BlockContext::If, true)?;
 
@@ -1092,7 +1092,7 @@ impl<'a> Parser<'a> {
 
         let cond = if !self.peek_is(TokenKind::LeftBrace) {
             self.push_context(ParseContext::Loop);
-            let result = Some(self.expr()?);
+            let result = Some(self.expr_with_precedence(Precedence::Or)?);
             self.pop_context();
             result
         } else {
