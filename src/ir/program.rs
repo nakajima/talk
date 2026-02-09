@@ -2,6 +2,7 @@ use indexmap::IndexMap;
 use rustc_hash::FxHashMap;
 
 use crate::{
+    compiling::module::ModuleId,
     ir::{
         function::Function,
         ir_ty::IrTy,
@@ -17,6 +18,10 @@ pub struct Program {
     pub polyfunctions: IndexMap<Symbol, PolyFunction>,
     pub static_memory: StaticMemory,
     pub record_labels: FxHashMap<RecordId, Vec<String>>,
+    /// Maps synthesized symbols to the external module whose static memory they reference.
+    /// Used by merge_static_memory to adjust rawptrs in these monomorphizer-generated functions.
+    #[serde(default)]
+    pub extern_synth_origins: FxHashMap<Symbol, ModuleId>,
 }
 
 impl Program {

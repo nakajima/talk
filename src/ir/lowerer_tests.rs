@@ -2250,4 +2250,50 @@ pub mod tests {
         // that aren't constants are treated as functions
         assert!(module.program.functions.contains_key(&Symbol::Main));
     }
+
+    #[test]
+    fn conditional_conformance_witness_is_specialized() {
+        // Array<Element> conforms to Showable when Element: Showable.
+        // When printy<Array<Int>> calls showable.show(), the witness Array.show is generic
+        // over Element and must be specialized with Element=Int. Without this, Element
+        // becomes IrTy::Void and the interpreter panics at runtime.
+        let (module, _names) = lower_module(
+            r#"
+            func printy<T: Showable>(showable: T) {
+                print_raw(showable.show())
+                print_raw("\n")
+            }
+
+            printy([1, 2, 3])
+            "#,
+        );
+
+        assert!(module.program.functions.contains_key(&Symbol::Main));
+
+        // The witness for Array.show should have been specialized with Element=Int.
+        // Verify no function uses IrTy::Void inside a Record type, which would indicate
+        // an unsubstituted type parameter (Void as a standalone call return is fine for
+        // print_raw etc, but Void inside a Record means an unresolved generic).
+        for (_sym, func) in &module.program.functions {
+            for block in &func.blocks {
+                for instr in &block.instructions {
+                    let ty = match instr {
+                        Instruction::Load { ty, .. } => Some(ty),
+                        Instruction::Nominal { ty, .. } => Some(ty),
+                        _ => None,
+                    };
+                    if let Some(IrTy::Record(_, values)) = ty {
+                        for v in values {
+                            assert_ne!(
+                                *v,
+                                IrTy::Void,
+                                "Record field is Void in {:?}, indicating unsubstituted type param",
+                                func.name
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
 }

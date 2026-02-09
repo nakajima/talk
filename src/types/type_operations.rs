@@ -560,12 +560,37 @@ pub(super) fn substitute_mult(ty: &[Ty], substitutions: &FxHashMap<Ty, Ty>) -> V
     ty.iter().map(|t| substitute(t, substitutions)).collect()
 }
 
+/// Find a substitution for a Ty::Param using subtype checking:
+/// a key Ty::Param(sym, key_bounds) matches a lookup Ty::Param(sym, lookup_bounds)
+/// when lookup_bounds ⊇ key_bounds (the lookup is equally or more constrained).
+fn lookup_param_subst<'a>(
+    sym: &Symbol,
+    bounds: &[crate::name_resolution::symbol::ProtocolId],
+    map: &'a FxHashMap<Ty, Ty>,
+) -> Option<&'a Ty> {
+    map.iter().find_map(|(key, value)| {
+        if let Ty::Param(key_sym, key_bounds) = key {
+            if key_sym == sym && key_bounds.iter().all(|b| bounds.contains(b)) {
+                return Some(value);
+            }
+        }
+        None
+    })
+}
+
 pub(super) fn substitute(ty: &Ty, substitutions: &FxHashMap<Ty, Ty>) -> Ty {
     if let Some(subst) = substitutions.get(ty) {
         return subst.clone();
     }
     ty.clone().mapping(
-        &mut |t| substitutions.get(&t).cloned().unwrap_or(t),
+        &mut |t| {
+            if let Ty::Param(sym, bounds) = &t {
+                if let Some(subst) = lookup_param_subst(sym, bounds, substitutions) {
+                    return subst.clone();
+                }
+            }
+            substitutions.get(&t).cloned().unwrap_or(t)
+        },
         &mut |r| r,
     )
 }
@@ -574,6 +599,11 @@ pub(super) fn substitute(ty: &Ty, substitutions: &FxHashMap<Ty, Ty>) -> Ty {
 pub(super) fn substitute_with_subs(ty: Ty, substitutions: &Substitutions) -> Ty {
     ty.mapping(
         &mut |t| {
+            if let Ty::Param(sym, bounds) = &t {
+                if let Some(subst) = lookup_param_subst(sym, bounds, &substitutions.ty) {
+                    return subst.clone();
+                }
+            }
             if let Some(subst) = substitutions.ty.get(&t) {
                 return subst.clone();
             }

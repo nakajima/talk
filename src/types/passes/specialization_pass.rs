@@ -12,6 +12,7 @@ use crate::{
     node_id::NodeID,
     types::{
         call_tree::CalleeInfo,
+        conformance::ConformanceKey,
         infer_row::{Row, RowParamId, Specializations},
         infer_ty::Ty,
         scheme::ForAll,
@@ -848,20 +849,51 @@ impl<'a> SpecializationPass<'a> {
                         continue;
                     };
 
-                    let callee_specs = self.compute_callee_specializations(
+                    let mut callee_specs = self.compute_callee_specializations(
                         &original_caller,
                         &call_id,
                         specializations,
                     );
+
+                    // For conformance witness methods (e.g., Array.show from
+                    // extend Array<Element: Showable>: Showable), the inference pass
+                    // doesn't record instantiation data mapping the witness's forall
+                    // params (e.g., Element) to concrete types. Map them from the
+                    // concrete receiver type's type_args.
+                    if callee_specs.ty.is_empty() {
+                        let concrete_ty = specializations.apply(ty.as_mono_ty().clone());
+                        if let Ty::Nominal { type_args, .. } = &concrete_ty
+                            && !type_args.is_empty()
+                        {
+                            if let Some(TypeEntry::Poly(scheme)) =
+                                self.get_type_for(&member_sym)
+                            {
+                                for (forall, arg) in
+                                    scheme.foralls.iter().zip(type_args.iter())
+                                {
+                                    if let ForAll::Ty(param) = forall {
+                                        callee_specs.ty.insert(*param, arg.clone());
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     (member_sym, callee_specs, call_id)
                 }
             };
 
-            // Skip MethodRequirement symbols - they're resolved at monomorphization time
-            // via resolve_method_requirement based on the concrete receiver type
-            if matches!(callee_sym, Symbol::MethodRequirement(_)) {
-                continue;
-            }
+            // If the callee is a MethodRequirement (protocol method stub), resolve it to the
+            // concrete witness. This happens when lookup_member goes through a conformance
+            // and returns the protocol's method requirement instead of the witness.
+            let callee_sym = if let Symbol::MethodRequirement(_) = callee_sym {
+                match self.resolve_method_req_to_witness(&callee_sym, &callee_specializations) {
+                    Some(witness) => witness,
+                    None => continue,
+                }
+            } else {
+                callee_sym
+            };
 
             // Specialize this callee and record the resolution
             let specialized_callee = self.specialize(&callee_sym, &callee_specializations);
@@ -1072,6 +1104,48 @@ impl<'a> SpecializationPass<'a> {
             .insert(new_sym.into(), new_name);
 
         new_sym.into()
+    }
+
+    /// Resolve a MethodRequirement to its concrete witness by looking up the conformance.
+    /// Checks both local and imported module conformances.
+    fn resolve_method_req_to_witness(
+        &self,
+        method_req: &Symbol,
+        callee_specs: &Specializations,
+    ) -> Option<Symbol> {
+        let protocol_sym = self.types.catalog.protocol_for_method_requirement(method_req)?;
+        let Symbol::Protocol(protocol_id) = protocol_sym else {
+            return None;
+        };
+        let method_reqs = self.types.catalog.method_requirements.get(&protocol_sym)?;
+        let label = method_reqs
+            .iter()
+            .find_map(|(l, s)| if s == method_req { Some(l.clone()) } else { None })?;
+
+        for concrete_ty in callee_specs.ty.values() {
+            let conforming_sym = match concrete_ty {
+                Ty::Nominal { symbol, .. } => *symbol,
+                Ty::Primitive(sym) => *sym,
+                _ => continue,
+            };
+            let key = ConformanceKey {
+                conforming_id: conforming_sym,
+                protocol_id,
+            };
+            // Check local catalog first, then imported modules
+            let conformance = self
+                .types
+                .catalog
+                .conformances
+                .get(&key)
+                .or_else(|| self.modules.lookup_conformance(&key));
+            if let Some(conf) = conformance
+                && let Some(witness) = conf.witnesses.get_witness(&label, method_req)
+            {
+                return Some(witness);
+            }
+        }
+        None
     }
 
     fn collect_specializations(&self) -> Specializations {

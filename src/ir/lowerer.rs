@@ -280,11 +280,15 @@ impl<'a> Lowerer<'a> {
             &self.typed.call_resolutions,
         );
 
+        let mono_functions = monomorphizer.monomorphize();
+        let extern_synth_origins = std::mem::take(&mut monomorphizer.extern_synth_origins);
+
         Ok(Program {
-            functions: monomorphizer.monomorphize(),
+            functions: mono_functions,
             polyfunctions: monomorphizer.functions,
             static_memory,
             record_labels,
+            extern_synth_origins,
         })
     }
 

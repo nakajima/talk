@@ -8,8 +8,14 @@ struct Fizz {
 	let b: Float
 }
 
+struct Buzz {
+	let fizz: Fizz
+	let b: Int
+}
+
 printy(123)
 printy(1.23)
 printy("a string")
 printy(Fizz(a: 123, b: 1.23))
 printy([1, 2, 3])
+printy(Buzz(fizz: Fizz(a: 123, 1.23), b: 456))

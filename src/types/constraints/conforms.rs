@@ -377,6 +377,27 @@ impl Conforms {
             // Substitute required type with type and row substitutions
             let required_ty = substitute_with_subs(required_entry._as_ty(), &substitutions);
 
+            // Map the witness's forall type params (from the extend block) to the
+            // corresponding substitutions. The extend block may declare its own type
+            // param symbols (e.g., C:48) that are distinct from the struct's (e.g., C:46).
+            // Match them positionally with the nominal's type params.
+            if let Some(nominal) = session.lookup_nominal(conforming_ty_sym) {
+                let witness_forall_params: Vec<Symbol> = witness
+                    .foralls()
+                    .iter()
+                    .filter_map(|f| if let ForAll::Ty(sym) = f { Some(*sym) } else { None })
+                    .collect();
+                for (witness_param, nominal_param) in
+                    witness_forall_params.iter().zip(nominal.type_params.iter())
+                {
+                    if let Some(arg) = substitutions.ty.get(nominal_param).cloned() {
+                        substitutions
+                            .ty
+                            .insert(Ty::Param(*witness_param, vec![]), arg);
+                    }
+                }
+            }
+
             // Also substitute the witness type with the struct's type params
             // e.g., for Person<Float>, substitute A -> Float in getAge's type
             let witness_ty = substitute_with_subs(witness._as_ty(), &substitutions);

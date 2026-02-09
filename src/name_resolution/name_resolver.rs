@@ -385,18 +385,29 @@ impl NameResolver {
 
                     let target_scope_id = NodeID(target_file_id, 0);
 
-                    // Get symbols from the target scope
-                    let target_symbols: Vec<(String, Symbol, bool)> = {
+                    // Get symbols from the target scope. If the target is a core file
+                    // and we have the pre-compiled Core module, use its exports instead
+                    // to avoid type identity conflicts from re-compiling core sources.
+                    let use_core = is_core_source_path(&target_path)
+                        && self.modules.get_module_by_name("Core").is_some();
+                    let target_symbols: Vec<(String, Symbol, bool)> = if use_core {
+                        let core = self.modules.get_module_by_name("Core").unwrap();
+                        core.exports
+                            .iter()
+                            .map(|(name, &symbol)| {
+                                (name.clone(), symbol, is_type_symbol(&symbol))
+                            })
+                            .collect()
+                    } else {
                         let Some(target_scope) = self.scopes.get(&target_scope_id) else {
                             continue;
                         };
-                        // Collect all value and type symbols
                         let mut symbols = Vec::new();
                         for (name, &symbol) in &target_scope.values {
-                            symbols.push((name.clone(), symbol, false)); // false = value
+                            symbols.push((name.clone(), symbol, false));
                         }
                         for (name, &symbol) in &target_scope.types {
-                            symbols.push((name.clone(), symbol, true)); // true = type
+                            symbols.push((name.clone(), symbol, true));
                         }
                         symbols
                     };
@@ -410,10 +421,11 @@ impl NameResolver {
                             };
                             for (name, symbol, is_type) in target_symbols {
                                 // Skip builtins and private symbols
+                                // (core exports are public by definition)
                                 if matches!(symbol, Symbol::Builtin(..)) {
                                     continue;
                                 }
-                                if !self.phase.public_symbols.contains(&symbol) {
+                                if !use_core && !self.phase.public_symbols.contains(&symbol) {
                                     continue;
                                 }
                                 if is_type {
@@ -435,7 +447,10 @@ impl NameResolver {
                                 match found {
                                     Some((_, symbol, is_type)) => {
                                         // Check if the symbol is public
-                                        if !self.phase.public_symbols.contains(symbol) {
+                                        // (core exports are public by definition)
+                                        if !use_core
+                                            && !self.phase.public_symbols.contains(symbol)
+                                        {
                                             self.diagnostic(
                                                 decl_id,
                                                 NameResolverError::SymbolNotPublic(
@@ -1388,4 +1403,17 @@ fn is_type_symbol(symbol: &Symbol) -> bool {
         symbol,
         Symbol::Struct(_) | Symbol::Enum(_) | Symbol::Protocol(_) | Symbol::TypeAlias(_)
     )
+}
+
+/// Check if a file path refers to a core source file.
+fn is_core_source_path(path: &str) -> bool {
+    let file_name = std::path::Path::new(path)
+        .file_name()
+        .and_then(|n| n.to_str());
+    let Some(name) = file_name else {
+        return false;
+    };
+    crate::compiling::core::core_sources()
+        .iter()
+        .any(|(core_name, _)| *core_name == name)
 }

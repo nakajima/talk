@@ -3,7 +3,7 @@ use rustc_hash::FxHashMap;
 use tracing::instrument;
 
 use crate::{
-    compiling::driver::DriverConfig,
+    compiling::{driver::DriverConfig, module::ModuleId},
     ir::{
         basic_block::{BasicBlock, Phi},
         function::Function,
@@ -17,8 +17,11 @@ use crate::{
     name_resolution::symbol::Symbol,
     node_id::NodeID,
     types::{
-        conformance::ConformanceKey, infer_row::Specializations, infer_ty::Ty,
-        passes::specialization_pass::SpecializedCallee, types::Types,
+        conformance::ConformanceKey,
+        infer_row::Specializations,
+        infer_ty::Ty,
+        passes::specialization_pass::SpecializedCallee,
+        types::Types,
     },
 };
 
@@ -31,6 +34,9 @@ pub struct Monomorphizer<'a> {
     /// Maps (specialized_caller, call_site_id) -> specialized_callee.
     /// Aligns with the paper's model: each call site is a dimension, resolution maps to the callee.
     call_resolutions: &'a FxHashMap<(Symbol, NodeID), Symbol>,
+    /// Maps synthesized symbols to the external module they originated from.
+    /// Used by merge_static_memory to adjust rawptrs in these functions.
+    pub extern_synth_origins: FxHashMap<Symbol, ModuleId>,
 }
 
 #[allow(clippy::expect_used)]
@@ -50,6 +56,7 @@ impl<'a> Monomorphizer<'a> {
             specializations,
             specialized_callees,
             call_resolutions,
+            extern_synth_origins: FxHashMap::default(),
         }
     }
 
@@ -108,6 +115,7 @@ impl<'a> Monomorphizer<'a> {
                     && let Some(program) = self.config.modules.program_for(module_id)
                     && let Some(poly_func) = program.polyfunctions.get(&original).cloned()
                 {
+                    self.extern_synth_origins.insert(*callee, module_id);
                     self.generate_specialized_function(
                         &poly_func,
                         *callee,
@@ -283,8 +291,28 @@ impl<'a> Monomorphizer<'a> {
         {
             let new_callee = match &callee {
                 Value::Func(sym @ Symbol::MethodRequirement(_)) => {
-                    // Resolve MethodRequirement to concrete witness when monomorphizing
-                    if let Some(witness) =
+                    // Check if the specialization pass already resolved this
+                    if let Some(caller) = specialized_caller {
+                        let call_id = meta.items.iter().find_map(|m| {
+                            if let InstructionMeta::Source(id) = m {
+                                Some(id)
+                            } else {
+                                None
+                            }
+                        });
+                        if let Some(call_id) = call_id
+                            && let Some(specialized_sym) =
+                                self.call_resolutions.get(&(caller, *call_id))
+                        {
+                            Value::Func(*specialized_sym)
+                        } else if let Some(witness) =
+                            self.resolve_method_requirement(sym, substitutions, receiver_ty)
+                        {
+                            Value::Func(witness)
+                        } else {
+                            callee
+                        }
+                    } else if let Some(witness) =
                         self.resolve_method_requirement(sym, substitutions, receiver_ty)
                     {
                         Value::Func(witness)
@@ -292,7 +320,7 @@ impl<'a> Monomorphizer<'a> {
                         callee
                     }
                 }
-                Value::Func(_sym) => {
+                Value::Func(_callee_sym) => {
                     // Only substitute if the call's return type has type params
                     // For concrete return types (like protocol default methods returning Int),
                     // no substitution is needed
@@ -361,14 +389,13 @@ impl<'a> Monomorphizer<'a> {
         instruction.map_type(|ty| self.monomorphize_ty(ty, substitutions))
     }
 
-    /// Resolve a method requirement to a concrete witness implementation
+    /// Resolve a method requirement to a concrete witness implementation.
     fn resolve_method_requirement(
         &self,
         method_req: &Symbol,
         substitutions: &Specializations,
         receiver_ty: Option<&Ty>,
     ) -> Option<Symbol> {
-        // Find the protocol for this method requirement
         let protocol_sym = self
             .types
             .catalog
@@ -377,7 +404,6 @@ impl<'a> Monomorphizer<'a> {
             return None;
         };
 
-        // Find the label for this method requirement
         let method_reqs = self.types.catalog.method_requirements.get(&protocol_sym)?;
         let label = method_reqs.iter().find_map(|(label, sym)| {
             if sym == method_req {
@@ -387,14 +413,12 @@ impl<'a> Monomorphizer<'a> {
             }
         })?;
 
-        // Collect candidate types: from substitutions plus explicit receiver type
-        let mut candidates: Vec<&Ty> = substitutions.ty.values().collect();
+        let mut candidates: Vec<Ty> = substitutions.ty.values().cloned().collect();
         if let Some(recv) = receiver_ty {
-            candidates.push(recv);
+            candidates.push(recv.clone());
         }
 
-        // Look through candidates to find a conforming type
-        for concrete_ty in candidates {
+        for concrete_ty in &candidates {
             let conforming_sym = match concrete_ty {
                 Ty::Nominal { symbol, .. } => *symbol,
                 Ty::Primitive(sym) => *sym,

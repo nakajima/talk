@@ -2863,4 +2863,24 @@ pub mod tests {
             "Expected type error for return type mismatch in let else body"
         );
     }
+
+    #[test]
+    fn bounded_param_substitution_in_conditional_conformance() {
+        // Exercises the case where a bounded Ty::Param (e.g. Element: Showable)
+        // from an extend block needs to match an unbounded Ty::Param during
+        // conformance witness substitution (e.g. printy([1, 2, 3])).
+        let (_, _, diagnostics) = typecheck_core_err(
+            r#"
+            func printy<T: Showable>(showable: T) {
+                print_raw(showable.show())
+            }
+            printy([1, 2, 3])
+            "#,
+        );
+        assert!(
+            diagnostics.is_empty(),
+            "Expected no diagnostics for bounded param substitution, got: {:?}",
+            diagnostics
+        );
+    }
 }

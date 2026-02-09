@@ -28,7 +28,9 @@ extend Array<Element: Showable>: Showable {
 		loop i < self.count {
 			result = result + self.get(i).show()
 			if i < self.count - 1 { result = result + ", " }
+			i = i + 1
 		}
+		result = result + "]"
 		result
 	}
 }

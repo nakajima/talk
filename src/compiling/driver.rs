@@ -545,19 +545,34 @@ impl Driver<Lowered> {
         // Merge static memory from imported modules so string literals in
         // imported functions (e.g. core's Showable.show()) resolve correctly.
         let mut merged_module_ids = FxHashSet::default();
+        let extern_synth_origins = std::mem::take(&mut program.extern_synth_origins);
         let all_fn_symbols: Vec<Symbol> = program.functions.keys().copied().collect();
+        // Collect all external module IDs: from function symbols and from synthesized witnesses
+        let mut module_ids_to_merge: FxHashSet<ModuleId> = FxHashSet::default();
         for sym in &all_fn_symbols {
             if let Some(module_id) = sym.external_module_id() {
-                if merged_module_ids.insert(module_id)
-                    && let Some(imported_prog) = self.config.modules.program_for(module_id)
-                {
-                    let module_symbols: Vec<Symbol> = all_fn_symbols
-                        .iter()
-                        .filter(|s| s.external_module_id() == Some(module_id))
-                        .copied()
-                        .collect();
-                    program.merge_static_memory(imported_prog, &module_symbols);
+                module_ids_to_merge.insert(module_id);
+            }
+        }
+        for module_id in extern_synth_origins.values() {
+            module_ids_to_merge.insert(*module_id);
+        }
+        for module_id in module_ids_to_merge {
+            if merged_module_ids.insert(module_id)
+                && let Some(imported_prog) = self.config.modules.program_for(module_id)
+            {
+                let mut module_symbols: Vec<Symbol> = all_fn_symbols
+                    .iter()
+                    .filter(|s| s.external_module_id() == Some(module_id))
+                    .copied()
+                    .collect();
+                // Include synthesized symbols that originated from this module
+                for (sym, mid) in &extern_synth_origins {
+                    if *mid == module_id {
+                        module_symbols.push(*sym);
+                    }
                 }
+                program.merge_static_memory(imported_prog, &module_symbols);
             }
         }
 

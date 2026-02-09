@@ -2669,4 +2669,22 @@ Dog().handleDSTChange()
             Value::Float(42.0)
         );
     }
+
+    #[test]
+    fn conditional_conformance_array_show() {
+        let (module, display_names) = crate::ir::lowerer_tests::tests::lower_module(
+            r#"
+            func printy<T: Showable>(showable: T) {
+                print_raw(showable.show())
+                print_raw("\n")
+            }
+            printy([1, 2, 3])
+            "#,
+        );
+        let mut interpreter =
+            Interpreter::new(module.program, Some(display_names), CaptureIO::default());
+        interpreter.run();
+        let output = String::from_utf8(interpreter.io.stdout).unwrap();
+        assert_eq!(output, "[1, 2, 3]\n");
+    }
 }
