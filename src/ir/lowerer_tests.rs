@@ -2296,4 +2296,109 @@ pub mod tests {
             }
         }
     }
+
+    #[test]
+    fn core_struct_instance_method_call() {
+        // Calling an instance method on a core struct (Array.get) exercises
+        // cross-module lookup: the method is defined in core, not the local module.
+        let program = lower(
+            r#"
+            func main() {
+                let arr = [1, 2, 3]
+                arr.get(0)
+            }
+            "#,
+        );
+
+        assert!(
+            !program.functions.is_empty(),
+            "Should lower successfully with cross-module method call"
+        );
+    }
+
+    #[test]
+    fn core_struct_field_access() {
+        // Accessing a field on a core struct (Array.count) exercises cross-module
+        // nominal lookup in field_index.
+        let program = lower(
+            r#"
+            func main() {
+                let arr = [1, 2, 3]
+                arr.count
+            }
+            "#,
+        );
+
+        assert!(
+            !program.functions.is_empty(),
+            "Should lower successfully with cross-module field access"
+        );
+    }
+
+    #[test]
+    fn loop_body_let_not_in_entry_block() {
+        // Regression: let declarations inside loop bodies had their initializers
+        // duplicated in the pre-loop entry block (#0), causing side effects to
+        // execute an extra time before the loop starts.
+        let program = lower(
+            "
+            let i = 0
+            loop {
+                if i >= 2 { break }
+                let x = i + 1
+                i = i + 1
+            }
+            ",
+        );
+
+        let main = program
+            .functions
+            .get(&Symbol::Main)
+            .expect("main function");
+
+        // Block #0 should only contain: alloc for i, const 0, store i, jump to loop header.
+        // It should NOT contain the loop body's `let x = i + 1` computation.
+        let block0 = &main.blocks[0];
+        let has_call_in_block0 = block0.instructions.iter().any(|instr| {
+            matches!(instr, Instruction::Call { .. })
+        });
+        assert!(
+            !has_call_in_block0,
+            "Block #0 should not contain Call instructions from the loop body.\n\
+             Block #0 instructions: {block0:?}"
+        );
+    }
+
+    #[test]
+    fn loop_body_let_call_not_in_entry_block_synthesized_main() {
+        // Regression: let declarations inside loop bodies had their initializers
+        // duplicated in the pre-loop entry block (#0) when using synthesized main,
+        // because nested decls were treated as Global symbols and added to root_decls.
+        let module = lower_bare(
+            "
+            func side() -> Int { 42 }
+            loop {
+                let x = side()
+                break
+            }
+            ",
+        );
+
+        let (_func_sym, main) = module
+            .program
+            .functions
+            .iter()
+            .find(|(_, f)| f.blocks.len() > 1)
+            .expect("function with loop blocks");
+
+        let block0 = &main.blocks[0];
+        let has_call_in_block0 = block0
+            .instructions
+            .iter()
+            .any(|instr| matches!(instr, Instruction::Call { .. }));
+        assert!(
+            !has_call_in_block0,
+            "Block #0 should not contain Call instructions from the loop body"
+        );
+    }
 }

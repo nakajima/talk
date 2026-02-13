@@ -340,10 +340,6 @@ impl ModuleEnvironment {
         let module = self.modules.get(stable_id)?;
         Some(&module.program)
     }
-
-    pub fn imported_programs(&self) -> Vec<&Program> {
-        self.modules.values().map(|m| &m.program).collect()
-    }
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

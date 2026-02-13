@@ -223,7 +223,12 @@ impl Source {
 
     pub fn read(&self) -> Result<String, CompileError> {
         match &self.kind {
-            SourceKind::File(path) => std::fs::read_to_string(path).map_err(CompileError::IO),
+            SourceKind::File(path) => std::fs::read_to_string(path).map_err(|e| {
+                CompileError::IO(std::io::Error::new(
+                    e.kind(),
+                    format!("{}: {e}", path.display()),
+                ))
+            }),
             SourceKind::String(string) => Ok(string.to_string()),
             SourceKind::InMemory { text, .. } => Ok(text.clone()),
         }

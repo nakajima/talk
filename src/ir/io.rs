@@ -37,6 +37,21 @@ pub trait IO {
     /// Returns number of ready fds on success, negative errno on failure.
     fn io_poll(&mut self, fds: &mut [(i32, i16, i16)], timeout: i64) -> i64;
 
+    /// Create a socket. Returns fd on success, negative errno on failure.
+    fn io_socket(&mut self, domain: i64, socktype: i64, protocol: i64) -> i64;
+
+    /// Bind a socket to an address and port. Returns 0 on success, negative errno on failure.
+    fn io_bind(&mut self, fd: i64, addr: i64, port: i64) -> i64;
+
+    /// Listen on a socket. Returns 0 on success, negative errno on failure.
+    fn io_listen(&mut self, fd: i64, backlog: i64) -> i64;
+
+    /// Connect a socket to an address and port. Returns 0 on success, negative errno on failure.
+    fn io_connect(&mut self, fd: i64, addr: i64, port: i64) -> i64;
+
+    /// Accept a connection on a socket. Returns new fd on success, negative errno on failure.
+    fn io_accept(&mut self, fd: i64) -> i64;
+
     /// Sleep for ms milliseconds. Returns 0 on success.
     fn io_sleep(&mut self, ms: i64) -> i64;
 }
@@ -202,6 +217,114 @@ impl IO for StdioIO {
         }
     }
 
+    fn io_socket(&mut self, domain: i64, socktype: i64, protocol: i64) -> i64 {
+        #[cfg(unix)]
+        {
+            let fd = unsafe { libc::socket(domain as i32, socktype as i32, protocol as i32) };
+            if fd < 0 { -errno() as i64 } else { fd as i64 }
+        }
+
+        #[cfg(not(unix))]
+        {
+            let _ = (domain, socktype, protocol);
+            -1 // EPERM
+        }
+    }
+
+    fn io_bind(&mut self, fd: i64, addr: i64, port: i64) -> i64 {
+        #[cfg(unix)]
+        {
+            // Set SO_REUSEADDR
+            let optval: i32 = 1;
+            unsafe {
+                libc::setsockopt(
+                    fd as i32,
+                    libc::SOL_SOCKET,
+                    libc::SO_REUSEADDR,
+                    &optval as *const i32 as *const _,
+                    std::mem::size_of::<i32>() as u32,
+                );
+            }
+
+            let mut sockaddr: libc::sockaddr_in = unsafe { std::mem::zeroed() };
+            sockaddr.sin_family = libc::AF_INET as u16;
+            sockaddr.sin_port = (port as u16).to_be();
+            sockaddr.sin_addr.s_addr = (addr as u32).to_be();
+
+            let result = unsafe {
+                libc::bind(
+                    fd as i32,
+                    &sockaddr as *const libc::sockaddr_in as *const libc::sockaddr,
+                    std::mem::size_of::<libc::sockaddr_in>() as u32,
+                )
+            };
+
+            if result < 0 { -errno() as i64 } else { 0 }
+        }
+
+        #[cfg(not(unix))]
+        {
+            let _ = (fd, addr, port);
+            -1 // EPERM
+        }
+    }
+
+    fn io_listen(&mut self, fd: i64, backlog: i64) -> i64 {
+        #[cfg(unix)]
+        {
+            let result = unsafe { libc::listen(fd as i32, backlog as i32) };
+            if result < 0 { -errno() as i64 } else { 0 }
+        }
+
+        #[cfg(not(unix))]
+        {
+            let _ = (fd, backlog);
+            -1 // EPERM
+        }
+    }
+
+    fn io_connect(&mut self, fd: i64, addr: i64, port: i64) -> i64 {
+        #[cfg(unix)]
+        {
+            let mut sockaddr: libc::sockaddr_in = unsafe { std::mem::zeroed() };
+            sockaddr.sin_family = libc::AF_INET as u16;
+            sockaddr.sin_port = (port as u16).to_be();
+            sockaddr.sin_addr.s_addr = (addr as u32).to_be();
+
+            let result = unsafe {
+                libc::connect(
+                    fd as i32,
+                    &sockaddr as *const libc::sockaddr_in as *const libc::sockaddr,
+                    std::mem::size_of::<libc::sockaddr_in>() as u32,
+                )
+            };
+
+            if result < 0 { -errno() as i64 } else { 0 }
+        }
+
+        #[cfg(not(unix))]
+        {
+            let _ = (fd, addr, port);
+            -1 // EPERM
+        }
+    }
+
+    fn io_accept(&mut self, fd: i64) -> i64 {
+        #[cfg(unix)]
+        {
+            let result = unsafe {
+                libc::accept(fd as i32, std::ptr::null_mut(), std::ptr::null_mut())
+            };
+            if result < 0 { -errno() as i64 } else { result as i64 }
+        }
+
+        #[cfg(not(unix))]
+        {
+            let _ = fd;
+            -1 // EPERM
+        }
+    }
+
     fn io_sleep(&mut self, ms: i64) -> i64 {
         std::thread::sleep(std::time::Duration::from_millis(ms as u64));
         0
@@ -324,6 +447,36 @@ impl IO for CaptureIO {
         ready
     }
 
+    fn io_socket(&mut self, _domain: i64, _socktype: i64, _protocol: i64) -> i64 {
+        // For testing, return a simulated fd
+        let fd = self.next_fd + 3;
+        self.next_fd += 1;
+        self.files.insert(fd, Vec::new());
+        self.file_positions.insert(fd, 0);
+        fd
+    }
+
+    fn io_bind(&mut self, _fd: i64, _addr: i64, _port: i64) -> i64 {
+        0 // Success
+    }
+
+    fn io_listen(&mut self, _fd: i64, _backlog: i64) -> i64 {
+        0 // Success
+    }
+
+    fn io_connect(&mut self, _fd: i64, _addr: i64, _port: i64) -> i64 {
+        0 // Success
+    }
+
+    fn io_accept(&mut self, _fd: i64) -> i64 {
+        // For testing, return a simulated client fd
+        let fd = self.next_fd + 3;
+        self.next_fd += 1;
+        self.files.insert(fd, Vec::new());
+        self.file_positions.insert(fd, 0);
+        fd
+    }
+
     fn io_sleep(&mut self, _ms: i64) -> i64 {
         // No-op for testing
         0
@@ -375,6 +528,26 @@ impl<'a> IO for MultiWriteIO<'a> {
     }
 
     fn io_poll(&mut self, _fds: &mut [(i32, i16, i16)], _timeout: i64) -> i64 {
+        -1 // EPERM
+    }
+
+    fn io_socket(&mut self, _domain: i64, _socktype: i64, _protocol: i64) -> i64 {
+        -1 // EPERM
+    }
+
+    fn io_bind(&mut self, _fd: i64, _addr: i64, _port: i64) -> i64 {
+        -1 // EPERM
+    }
+
+    fn io_listen(&mut self, _fd: i64, _backlog: i64) -> i64 {
+        -1 // EPERM
+    }
+
+    fn io_connect(&mut self, _fd: i64, _addr: i64, _port: i64) -> i64 {
+        -1 // EPERM
+    }
+
+    fn io_accept(&mut self, _fd: i64) -> i64 {
         -1 // EPERM
     }
 

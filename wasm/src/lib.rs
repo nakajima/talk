@@ -62,6 +62,26 @@ impl IO for ConsoleIO {
         -1 // EPERM
     }
 
+    fn io_socket(&mut self, _domain: i64, _socktype: i64, _protocol: i64) -> i64 {
+        -1 // EPERM
+    }
+
+    fn io_bind(&mut self, _fd: i64, _addr: i64, _port: i64) -> i64 {
+        -1 // EPERM
+    }
+
+    fn io_listen(&mut self, _fd: i64, _backlog: i64) -> i64 {
+        -1 // EPERM
+    }
+
+    fn io_connect(&mut self, _fd: i64, _addr: i64, _port: i64) -> i64 {
+        -1 // EPERM
+    }
+
+    fn io_accept(&mut self, _fd: i64) -> i64 {
+        -1 // EPERM
+    }
+
     fn io_sleep(&mut self, _ms: i64) -> i64 {
         // In WASM, we can't block, so this is a no-op
         0

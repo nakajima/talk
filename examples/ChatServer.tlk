@@ -1,0 +1,34 @@
+// Chat echo server
+//
+// Listens on port 9900, accepts connections, echoes messages back.
+// Test with: nc localhost 9900
+//
+// Usage: talk run examples/ChatServer.tlk
+
+let server = _io_socket(AF_INET, SOCK_STREAM, 0)
+_io_bind(server, INADDR_ANY, 9900)
+_io_listen(server, 128)
+print("Listening on port 9900")
+
+loop {
+	print("waiting for accept...")
+	let client = _io_accept(server)
+
+	let greeting = "Welcome! Send a message:\n"
+	_io_write(client, greeting.base, greeting.length)
+
+	loop {
+		let buf = _alloc(1024)
+		let n = _io_read(client, buf, 1024)
+		if n <= 0 { break }
+
+		let response = _alloc(1030)
+		let prefix = "echo: "
+		_copy(prefix.base, response, prefix.length)
+		let dest = _ptr_add(response, prefix.length)
+		_copy(buf, dest, n)
+		_io_write(client, response, prefix.length + n)
+	}
+
+	_io_close(client)
+}

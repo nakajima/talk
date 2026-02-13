@@ -1,0 +1,29 @@
+// Chat client
+//
+// Connects to a server on localhost:9900, sends a message, and prints the response.
+// Run the ChatServer example first, then run this.
+//
+// Usage: talk run examples/ChatClient.tlk
+
+let sock = _io_socket(AF_INET, SOCK_STREAM, 0)
+_io_connect(sock, LOCALHOST, 9900)
+
+// Read and print welcome message
+let welcome_buf = _alloc(1024)
+let welcome_n = _io_read(sock, welcome_buf, 1024)
+_io_write(STDOUT_FD, welcome_buf, welcome_n)
+
+loop {
+	// Read a message from stdin and send it
+	let msg_buf = _alloc(1024)
+	let msg_n = _io_read(STDIN_FD, msg_buf, 1024)
+	_io_write(sock, msg_buf, msg_n)
+
+	// Read and print echo response
+	let buf = _alloc(1024)
+	let n = _io_read(sock, buf, 1024)
+	if n <= 0 { break }
+	_io_write(STDOUT_FD, buf, n)
+}
+
+_io_close(sock)

@@ -1479,6 +1479,78 @@ impl<'a> Parser<'a> {
                         },
                     })
                 }
+                "io_socket" => {
+                    let domain = self.ir_value()?;
+                    let socktype = self.ir_value()?;
+                    let protocol = self.ir_value()?;
+                    self.save_meta(tok, |id, span| InlineIRInstruction {
+                        id,
+                        span,
+                        binds,
+                        instr_name_span: instr_span,
+                        kind: InlineIRInstructionKind::IoSocket {
+                            dest,
+                            domain,
+                            socktype,
+                            protocol,
+                        },
+                    })
+                }
+                "io_bind" => {
+                    let fd = self.ir_value()?;
+                    let addr = self.ir_value()?;
+                    let port = self.ir_value()?;
+                    self.save_meta(tok, |id, span| InlineIRInstruction {
+                        id,
+                        span,
+                        binds,
+                        instr_name_span: instr_span,
+                        kind: InlineIRInstructionKind::IoBind {
+                            dest,
+                            fd,
+                            addr,
+                            port,
+                        },
+                    })
+                }
+                "io_listen" => {
+                    let fd = self.ir_value()?;
+                    let backlog = self.ir_value()?;
+                    self.save_meta(tok, |id, span| InlineIRInstruction {
+                        id,
+                        span,
+                        binds,
+                        instr_name_span: instr_span,
+                        kind: InlineIRInstructionKind::IoListen { dest, fd, backlog },
+                    })
+                }
+                "io_connect" => {
+                    let fd = self.ir_value()?;
+                    let addr = self.ir_value()?;
+                    let port = self.ir_value()?;
+                    self.save_meta(tok, |id, span| InlineIRInstruction {
+                        id,
+                        span,
+                        binds,
+                        instr_name_span: instr_span,
+                        kind: InlineIRInstructionKind::IoConnect {
+                            dest,
+                            fd,
+                            addr,
+                            port,
+                        },
+                    })
+                }
+                "io_accept" => {
+                    let fd = self.ir_value()?;
+                    self.save_meta(tok, |id, span| InlineIRInstruction {
+                        id,
+                        span,
+                        binds,
+                        instr_name_span: instr_span,
+                        kind: InlineIRInstructionKind::IoAccept { dest, fd },
+                    })
+                }
                 "io_sleep" => {
                     let ms = self.ir_value()?;
                     self.save_meta(tok, |id, span| InlineIRInstruction {

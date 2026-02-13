@@ -17,6 +17,7 @@ use crate::types::typed_ast::{
     TypedNode, TypedParameter, TypedPattern, TypedPatternKind, TypedRecordField, TypedStmt,
     TypedStmtKind,
 };
+use crate::types::type_catalog::Nominal;
 use crate::types::types::TypeEntry;
 use crate::{
     ir::{
@@ -2038,6 +2039,78 @@ impl<'a> Lowerer<'a> {
                 });
                 Ok((dest.into(), Ty::Int))
             }
+            InlineIRInstructionKind::IoSocket {
+                dest,
+                domain,
+                socktype,
+                protocol,
+            } => {
+                let domain = self.parsed_value(domain, &binds);
+                let socktype = self.parsed_value(socktype, &binds);
+                let protocol = self.parsed_value(protocol, &binds);
+                let ret = self.ret(bind);
+                let dest = self.parsed_register(dest, ret);
+                self.push_instr(Instruction::IoSocket {
+                    dest,
+                    domain,
+                    socktype,
+                    protocol,
+                });
+                Ok((dest.into(), Ty::Int))
+            }
+            InlineIRInstructionKind::IoBind {
+                dest,
+                fd,
+                addr,
+                port,
+            } => {
+                let fd = self.parsed_value(fd, &binds);
+                let addr = self.parsed_value(addr, &binds);
+                let port = self.parsed_value(port, &binds);
+                let ret = self.ret(bind);
+                let dest = self.parsed_register(dest, ret);
+                self.push_instr(Instruction::IoBind {
+                    dest,
+                    fd,
+                    addr,
+                    port,
+                });
+                Ok((dest.into(), Ty::Int))
+            }
+            InlineIRInstructionKind::IoListen { dest, fd, backlog } => {
+                let fd = self.parsed_value(fd, &binds);
+                let backlog = self.parsed_value(backlog, &binds);
+                let ret = self.ret(bind);
+                let dest = self.parsed_register(dest, ret);
+                self.push_instr(Instruction::IoListen { dest, fd, backlog });
+                Ok((dest.into(), Ty::Int))
+            }
+            InlineIRInstructionKind::IoConnect {
+                dest,
+                fd,
+                addr,
+                port,
+            } => {
+                let fd = self.parsed_value(fd, &binds);
+                let addr = self.parsed_value(addr, &binds);
+                let port = self.parsed_value(port, &binds);
+                let ret = self.ret(bind);
+                let dest = self.parsed_register(dest, ret);
+                self.push_instr(Instruction::IoConnect {
+                    dest,
+                    fd,
+                    addr,
+                    port,
+                });
+                Ok((dest.into(), Ty::Int))
+            }
+            InlineIRInstructionKind::IoAccept { dest, fd } => {
+                let fd = self.parsed_value(fd, &binds);
+                let ret = self.ret(bind);
+                let dest = self.parsed_register(dest, ret);
+                self.push_instr(Instruction::IoAccept { dest, fd });
+                Ok((dest.into(), Ty::Int))
+            }
             InlineIRInstructionKind::IoSleep { dest, ms } => {
                 let ms = self.parsed_value(ms, &binds);
                 let ret = self.ret(bind);
@@ -2702,23 +2775,10 @@ impl<'a> Lowerer<'a> {
 
         // Check if this record literal is typed as a nominal struct
         if let Ty::Nominal { symbol, type_args } = &ty {
-            let nominal = if let Some(module_id) = symbol.module_id()
-                && module_id != self.config.module_id
-            {
-                self.config
-                    .modules
-                    .lookup_nominal(symbol)
-                    .cloned()
-                    .expect("didn't get external nominal")
-            } else {
-                self.typed
-                    .types
-                    .catalog
-                    .nominals
-                    .get(symbol)
-                    .cloned()
-                    .unwrap_or_else(|| unreachable!("didn't get nominal: {symbol:?}"))
-            };
+            let nominal = self
+                .lookup_nominal(symbol)
+                .cloned()
+                .unwrap_or_else(|| unreachable!("didn't get nominal: {symbol:?}"));
             let properties = nominal.substitute_properties(type_args);
             let record_vals = properties
                 .keys()
@@ -2924,8 +2984,7 @@ impl<'a> Lowerer<'a> {
             let receiver_ty = receiver.ty.clone();
 
             if let Ty::Nominal { symbol, .. } = &receiver_ty
-                && let Some(methods) = self.typed.types.catalog.instance_methods.get(symbol)
-                && let Some(method) = methods.get(label).cloned()
+                && let Some(method) = self.lookup_instance_method(symbol, label)
             {
                 tracing::debug!("lowering method: {label} {method:?}");
 
@@ -3408,26 +3467,16 @@ impl<'a> Lowerer<'a> {
             specialized_sym
         } else {
             let callee_sym = match &receiver.ty {
-                Ty::Primitive(sym) => self
-                    .typed
-                    .types
-                    .catalog
-                    .lookup_member(sym, label)
-                    .map(|s| s.0),
-                Ty::Nominal { symbol, .. } => self
-                    .typed
-                    .types
-                    .catalog
-                    .lookup_member(symbol, label)
-                    .map(|s| s.0),
+                Ty::Primitive(sym) => self.lookup_member(sym, label),
+                Ty::Nominal { symbol, .. } => self.lookup_member(symbol, label),
                 Ty::Constructor {
                     name: Name::Resolved(sym, ..),
                     ..
-                } => self.typed.types.catalog.lookup_static_member(sym, label),
+                } => self.lookup_static_member(sym, label),
                 Ty::Param(_, protocol_ids) => {
                     let mut found = None;
                     for pid in protocol_ids {
-                        if let Some((sym, _)) = self.typed.types.catalog.lookup_member(&Symbol::Protocol(*pid), label) {
+                        if let Some(sym) = self.lookup_member(&Symbol::Protocol(*pid), label) {
                             found = Some(sym);
                             break;
                         }
@@ -4438,11 +4487,7 @@ impl<'a> Lowerer<'a> {
             }
             Ty::Nominal { symbol, .. }
                 if let Some(idx) = self
-                    .typed
-                    .types
-                    .catalog
-                    .nominals
-                    .get(symbol)
+                    .lookup_nominal(symbol)
                     .expect("didn't find nominal")
                     .properties
                     .get_index_of(label) =>
@@ -4451,6 +4496,51 @@ impl<'a> Lowerer<'a> {
             }
             _ => panic!("unable to determine field index of {receiver_ty:?}.{label}"),
         }
+    }
+
+    /// Look up instance/conformance methods — checks local catalog, then external modules
+    fn lookup_member(&self, receiver: &Symbol, label: &Label) -> Option<Symbol> {
+        self.typed
+            .types
+            .catalog
+            .lookup_member(receiver, label)
+            .map(|s| s.0)
+            .or_else(|| self.config.modules.lookup_member(receiver, label))
+    }
+
+    /// Look up static methods — checks local catalog, then external modules
+    fn lookup_static_member(&self, receiver: &Symbol, label: &Label) -> Option<Symbol> {
+        self.typed
+            .types
+            .catalog
+            .lookup_static_member(receiver, label)
+            .or_else(|| self.config.modules.lookup_static_member(receiver, label))
+    }
+
+    /// Look up nominal type info — checks local catalog, then external modules
+    fn lookup_nominal(&self, symbol: &Symbol) -> Option<&Nominal> {
+        self.typed
+            .types
+            .catalog
+            .nominals
+            .get(symbol)
+            .or_else(|| self.config.modules.lookup_nominal(symbol))
+    }
+
+    /// Look up an instance method by name — checks local catalog, then external modules
+    fn lookup_instance_method(&self, symbol: &Symbol, label: &Label) -> Option<Symbol> {
+        self.typed
+            .types
+            .catalog
+            .instance_methods
+            .get(symbol)
+            .and_then(|methods| methods.get(label).copied())
+            .or_else(|| {
+                self.config
+                    .modules
+                    .lookup_instance_methods(symbol)
+                    .and_then(|methods| methods.get(label).copied())
+            })
     }
 
     fn label_from_name(&self, name: &str) -> Label {

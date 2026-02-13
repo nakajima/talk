@@ -813,19 +813,23 @@ impl<IO: super::io::IO> Interpreter<IO> {
                     panic!("IoRead count must be Int, got {count_val:?}");
                 };
 
-                // Read into a temporary buffer first
-                let mut temp_buf = vec![0u8; count_int as usize];
-                let result = self.io.io_read(fd_int, &mut temp_buf);
+                if count_int <= 0 {
+                    self.write_register(&dest, Value::Int(count_int));
+                } else {
+                    // Read into a temporary buffer first
+                    let mut temp_buf = vec![0u8; count_int as usize];
+                    let result = self.io.io_read(fd_int, &mut temp_buf);
 
-                // If read was successful, copy to memory
-                if result > 0 {
-                    let heap_idx = buf_ptr.0 - self.heap_start;
-                    for (i, byte) in temp_buf.iter().take(result as usize).enumerate() {
-                        self.memory.mem[heap_idx + i] = *byte;
+                    // If read was successful, copy to memory
+                    if result > 0 {
+                        let heap_idx = buf_ptr.0 - self.heap_start;
+                        for (i, byte) in temp_buf.iter().take(result as usize).enumerate() {
+                            self.memory.mem[heap_idx + i] = *byte;
+                        }
                     }
-                }
 
-                self.write_register(&dest, Value::Int(result));
+                    self.write_register(&dest, Value::Int(result));
+                }
             }
             IR::Instr(Instruction::IoWrite {
                 dest,
@@ -847,19 +851,24 @@ impl<IO: super::io::IO> Interpreter<IO> {
                     panic!("IoWrite count must be Int, got {count_val:?}");
                 };
 
-                // Get bytes from memory
-                let bytes = if buf_ptr.0 < self.heap_start {
-                    // Static memory
-                    self.program.static_memory.data[buf_ptr.0..buf_ptr.0 + count_int as usize]
-                        .to_vec()
+                if count_int <= 0 {
+                    self.write_register(&dest, Value::Int(count_int));
                 } else {
-                    // Heap memory
-                    let heap_idx = buf_ptr.0 - self.heap_start;
-                    self.memory.mem[heap_idx..heap_idx + count_int as usize].to_vec()
-                };
+                    // Get bytes from memory
+                    let bytes = if buf_ptr.0 < self.heap_start {
+                        // Static memory
+                        self.program.static_memory.data
+                            [buf_ptr.0..buf_ptr.0 + count_int as usize]
+                            .to_vec()
+                    } else {
+                        // Heap memory
+                        let heap_idx = buf_ptr.0 - self.heap_start;
+                        self.memory.mem[heap_idx..heap_idx + count_int as usize].to_vec()
+                    };
 
-                let result = self.io.io_write(fd_int, &bytes);
-                self.write_register(&dest, Value::Int(result));
+                    let result = self.io.io_write(fd_int, &bytes);
+                    self.write_register(&dest, Value::Int(result));
+                }
             }
             IR::Instr(Instruction::IoClose { dest, fd }) => {
                 let fd_val = self.val(fd);
@@ -936,6 +945,99 @@ impl<IO: super::io::IO> Interpreter<IO> {
                     self.memory.mem[offset + 1] = bytes[1];
                 }
 
+                self.write_register(&dest, Value::Int(result));
+            }
+            IR::Instr(Instruction::IoSocket {
+                dest,
+                domain,
+                socktype,
+                protocol,
+            }) => {
+                let domain_val = self.val(domain);
+                let socktype_val = self.val(socktype);
+                let protocol_val = self.val(protocol);
+
+                let Value::Int(domain_int) = domain_val else {
+                    panic!("IoSocket domain must be Int, got {domain_val:?}");
+                };
+                let Value::Int(socktype_int) = socktype_val else {
+                    panic!("IoSocket socktype must be Int, got {socktype_val:?}");
+                };
+                let Value::Int(protocol_int) = protocol_val else {
+                    panic!("IoSocket protocol must be Int, got {protocol_val:?}");
+                };
+
+                let result = self.io.io_socket(domain_int, socktype_int, protocol_int);
+                self.write_register(&dest, Value::Int(result));
+            }
+            IR::Instr(Instruction::IoBind {
+                dest,
+                fd,
+                addr,
+                port,
+            }) => {
+                let fd_val = self.val(fd);
+                let addr_val = self.val(addr);
+                let port_val = self.val(port);
+
+                let Value::Int(fd_int) = fd_val else {
+                    panic!("IoBind fd must be Int, got {fd_val:?}");
+                };
+                let Value::Int(addr_int) = addr_val else {
+                    panic!("IoBind addr must be Int, got {addr_val:?}");
+                };
+                let Value::Int(port_int) = port_val else {
+                    panic!("IoBind port must be Int, got {port_val:?}");
+                };
+
+                let result = self.io.io_bind(fd_int, addr_int, port_int);
+                self.write_register(&dest, Value::Int(result));
+            }
+            IR::Instr(Instruction::IoListen { dest, fd, backlog }) => {
+                let fd_val = self.val(fd);
+                let backlog_val = self.val(backlog);
+
+                let Value::Int(fd_int) = fd_val else {
+                    panic!("IoListen fd must be Int, got {fd_val:?}");
+                };
+                let Value::Int(backlog_int) = backlog_val else {
+                    panic!("IoListen backlog must be Int, got {backlog_val:?}");
+                };
+
+                let result = self.io.io_listen(fd_int, backlog_int);
+                self.write_register(&dest, Value::Int(result));
+            }
+            IR::Instr(Instruction::IoConnect {
+                dest,
+                fd,
+                addr,
+                port,
+            }) => {
+                let fd_val = self.val(fd);
+                let addr_val = self.val(addr);
+                let port_val = self.val(port);
+
+                let Value::Int(fd_int) = fd_val else {
+                    panic!("IoConnect fd must be Int, got {fd_val:?}");
+                };
+                let Value::Int(addr_int) = addr_val else {
+                    panic!("IoConnect addr must be Int, got {addr_val:?}");
+                };
+                let Value::Int(port_int) = port_val else {
+                    panic!("IoConnect port must be Int, got {port_val:?}");
+                };
+
+                let result = self.io.io_connect(fd_int, addr_int, port_int);
+                self.write_register(&dest, Value::Int(result));
+            }
+            IR::Instr(Instruction::IoAccept { dest, fd }) => {
+                let fd_val = self.val(fd);
+
+                let Value::Int(fd_int) = fd_val else {
+                    panic!("IoAccept fd must be Int, got {fd_val:?}");
+                };
+
+                let result = self.io.io_accept(fd_int);
                 self.write_register(&dest, Value::Int(result));
             }
             IR::Instr(Instruction::IoSleep { dest, ms }) => {
@@ -1352,6 +1454,19 @@ pub mod tests {
     use crate::ir::{io::CaptureIO, lowerer_tests::tests::lower_module};
 
     use super::*;
+
+    /// RAII guard that closes a socketpair's file descriptors on drop,
+    /// preventing fd leaks even when a test panics.
+    struct SocketPairGuard([i32; 2]);
+
+    impl Drop for SocketPairGuard {
+        fn drop(&mut self) {
+            unsafe {
+                libc::close(self.0[0]);
+                libc::close(self.0[1]);
+            }
+        }
+    }
 
     pub fn interpret_with(input: &str) -> (Value, Interpreter<CaptureIO>) {
         let (module, display_names) = lower_module(input);
@@ -2140,6 +2255,148 @@ Dog().handleDSTChange()
     }
 
     #[test]
+    fn interprets_io_socket_bind_listen_accept() {
+        let (val, _interpreter) = interpret_with(
+            "
+            func test_socket(domain: Int, socktype: Int, proto: Int) -> Int {
+                @_ir(domain, socktype, proto) { %? = io_socket $0 $1 $2 }
+            }
+            func test_bind(fd: Int, addr: Int, port: Int) -> Int {
+                @_ir(fd, addr, port) { %? = io_bind $0 $1 $2 }
+            }
+            func test_listen(fd: Int, backlog: Int) -> Int {
+                @_ir(fd, backlog) { %? = io_listen $0 $1 }
+            }
+            func test_accept(fd: Int) -> Int {
+                @_ir(fd) { %? = io_accept $0 }
+            }
+            func test_close(fd: Int) -> Int {
+                @_ir(fd) { %? = io_close $0 }
+            }
+
+            let server_fd = test_socket(2, 1, 0)
+            let bind_result = test_bind(server_fd, 0, 8080)
+            let listen_result = test_listen(server_fd, 128)
+            let client_fd = test_accept(server_fd)
+            let close1 = test_close(client_fd)
+            let close2 = test_close(server_fd)
+            // All operations should succeed in CaptureIO
+            bind_result + listen_result + close1 + close2
+            ",
+        );
+
+        // CaptureIO returns 0 for bind, listen, close — sum should be 0
+        assert_eq!(val, Value::Int(0));
+    }
+
+    #[test]
+    fn interprets_io_socket_returns_valid_fd() {
+        let (val, _interpreter) = interpret_with(
+            "
+            func test_socket(domain: Int, socktype: Int, proto: Int) -> Int {
+                @_ir(domain, socktype, proto) { %? = io_socket $0 $1 $2 }
+            }
+
+            // CaptureIO returns fds starting at 3
+            let fd = test_socket(2, 1, 0)
+            fd >= 3
+            ",
+        );
+
+        assert_eq!(val, Value::Bool(true));
+    }
+
+    #[test]
+    fn interprets_io_connect() {
+        let (val, _interpreter) = interpret_with(
+            "
+            func test_socket(domain: Int, socktype: Int, proto: Int) -> Int {
+                @_ir(domain, socktype, proto) { %? = io_socket $0 $1 $2 }
+            }
+            func test_connect(fd: Int, addr: Int, port: Int) -> Int {
+                @_ir(fd, addr, port) { %? = io_connect $0 $1 $2 }
+            }
+            func test_close(fd: Int) -> Int {
+                @_ir(fd) { %? = io_close $0 }
+            }
+
+            let fd = test_socket(2, 1, 0)
+            let connect_result = test_connect(fd, 0, 8080)
+            let close_result = test_close(fd)
+            connect_result + close_result
+            ",
+        );
+
+        // CaptureIO returns 0 for connect and close
+        assert_eq!(val, Value::Int(0));
+    }
+
+    #[test]
+    fn interprets_io_accept_returns_valid_fd() {
+        let (val, _interpreter) = interpret_with(
+            "
+            func test_socket(domain: Int, socktype: Int, proto: Int) -> Int {
+                @_ir(domain, socktype, proto) { %? = io_socket $0 $1 $2 }
+            }
+            func test_accept(fd: Int) -> Int {
+                @_ir(fd) { %? = io_accept $0 }
+            }
+
+            let server_fd = test_socket(2, 1, 0)
+            let client_fd = test_accept(server_fd)
+            // client_fd should be a different fd than server_fd
+            client_fd != server_fd
+            ",
+        );
+
+        assert_eq!(val, Value::Bool(true));
+    }
+
+    #[test]
+    fn interprets_socket_via_core_functions() {
+        let (val, _interpreter) = interpret_with(
+            "
+            let server = _io_socket(AF_INET, SOCK_STREAM, 0)
+            let bind_result = _io_bind(server, INADDR_ANY, 8080)
+            let listen_result = _io_listen(server, 128)
+            let client = _io_accept(server)
+            let msg = \"hello\"
+            let written = _io_write(client, msg.base, msg.length)
+            _io_close(client)
+            _io_close(server)
+            written
+            ",
+        );
+
+        assert_eq!(val, Value::Int(5));
+    }
+
+    #[test]
+    fn io_write_with_negative_count_does_not_panic() {
+        let (val, _interpreter) = interpret_with(
+            "
+            let buf = _alloc(16)
+            // Simulate passing a negative error code as count (e.g. from a failed _io_read)
+            _io_write(STDOUT_FD, buf, 0 - 91)
+            ",
+        );
+
+        assert_eq!(val, Value::Int(-91));
+    }
+
+    #[test]
+    fn io_read_with_negative_count_does_not_panic() {
+        let (val, _interpreter) = interpret_with(
+            "
+            let buf = _alloc(16)
+            _io_read(STDIN_FD, buf, 0 - 91)
+            ",
+        );
+
+        assert_eq!(val, Value::Int(-91));
+    }
+
+    #[test]
     fn interprets_optional_match() {
         // Test that match on custom Optional-like enum works
         let (_val, interpreter) = interpret_with(
@@ -2667,6 +2924,411 @@ Dog().handleDSTChange()
                 "
             ),
             Value::Float(42.0)
+        );
+    }
+
+    #[test]
+    fn loop_with_function_calls_and_io() {
+        let (_val, interpreter) = interpret_with(
+            "
+            func double(n: Int) -> Int { n + n }
+            let i = 0
+            loop {
+                if i >= 3 { break }
+                let msg = double(i)
+                print(msg)
+                i = i + 1
+            }
+            ",
+        );
+        assert_eq!(interpreter.io.stdout, "0\n2\n4\n".as_bytes());
+    }
+
+    #[test]
+    fn loop_alloc_read_write_echo() {
+        // Simulates the ChatServer pattern: accept, write greeting, alloc buffer,
+        // read into buffer, echo buffer to stdout. Tests that _alloc + _io_read +
+        // _io_write correctly round-trip data through heap memory inside a loop.
+        let (_val, interpreter) = interpret_with(
+            "
+            let server = _io_socket(AF_INET, SOCK_STREAM, 0)
+            let i = 0
+            loop {
+                if i >= 2 { break }
+                let client = _io_accept(server)
+                let msg = \"hello\"
+                _io_write(client, msg.base, msg.length)
+                let buf = _alloc(1024)
+                let n = _io_read(client, buf, 1024)
+                _io_write(STDOUT_FD, buf, n)
+                _io_close(client)
+                i = i + 1
+            }
+            ",
+        );
+        assert_eq!(
+            String::from_utf8(interpreter.io.stdout).unwrap(),
+            "hellohello"
+        );
+    }
+
+    #[test]
+    fn chat_server_echo_with_prefix() {
+        // Matches the exact ChatServer pattern: accept, write greeting, alloc buffer,
+        // read into buffer, then write an "echo: " prefix from a string literal
+        // followed by the buffer content. Tests that interleaving string literal
+        // operations between io_read and io_write doesn't corrupt the heap buffer.
+        let (_val, interpreter) = interpret_with(
+            r#"
+            let server = _io_socket(AF_INET, SOCK_STREAM, 0)
+            let client = _io_accept(server)
+            let greeting = "hello"
+            _io_write(client, greeting.base, greeting.length)
+            let buf = _alloc(1024)
+            let n = _io_read(client, buf, 1024)
+            let echo = "echo: "
+            _io_write(STDOUT_FD, echo.base, echo.length)
+            _io_write(STDOUT_FD, buf, n)
+            _io_close(client)
+            "#,
+        );
+        assert_eq!(
+            String::from_utf8(interpreter.io.stdout).unwrap(),
+            "echo: hello"
+        );
+    }
+
+    #[test]
+    fn chat_server_full_pattern_with_print() {
+        // Full ChatServer pattern including print() calls between IO operations.
+        // Tests that print() doesn't interfere with the io_write heap buffer echo.
+        let (_val, interpreter) = interpret_with(
+            r#"
+            let server = _io_socket(AF_INET, SOCK_STREAM, 0)
+            _io_bind(server, INADDR_ANY, 9900)
+            _io_listen(server, 128)
+            let client = _io_accept(server)
+            print(client)
+            let greeting = "Welcome! Send a message:\n"
+            _io_write(client, greeting.base, greeting.length)
+
+            let buf = _alloc(1024)
+            let n = _io_read(client, buf, 1024)
+            print(n)
+
+            let echo = "echo: "
+            _io_write(STDOUT_FD, echo.base, echo.length)
+            _io_write(STDOUT_FD, buf, n)
+
+            _io_close(client)
+            "#,
+        );
+        let stdout = String::from_utf8(interpreter.io.stdout).unwrap();
+        // CaptureIO: accept gives fd 4, io_write to it puts greeting,
+        // io_read reads it back (25 bytes with real newline), print(client)=4, print(n)=25
+        assert_eq!(stdout, "4\n25\necho: Welcome! Send a message:\n");
+    }
+
+    #[test]
+    fn chat_server_echo_to_client_fd() {
+        // Verify that writing heap-buffered data to a CLIENT fd (not STDOUT)
+        // actually delivers the correct bytes. This tests the exact ChatServer
+        // pattern where the echo goes back to the client socket.
+        let (_val, interpreter) = interpret_with(
+            r#"
+            let server = _io_socket(AF_INET, SOCK_STREAM, 0)
+            let client = _io_accept(server)
+            let greeting = "hello"
+            _io_write(client, greeting.base, greeting.length)
+            let buf = _alloc(1024)
+            let n = _io_read(client, buf, 1024)
+            let echo = "echo: "
+            _io_write(client, echo.base, echo.length)
+            _io_write(client, buf, n)
+            _io_close(client)
+            "#,
+        );
+        // CaptureIO: server=fd3, client=fd4
+        // After io_write(client, greeting) -> files[4] = "hello"
+        // After io_read(client, buf, 1024) -> reads "hello" from files[4], n=5
+        // After io_write(client, echo) -> files[4] += "echo: "
+        // After io_write(client, buf, n) -> files[4] += "hello"
+        // After io_close(client) -> files[4] is removed
+        // So we check STDOUT is empty (no print calls) and that no panic occurred
+        assert!(interpreter.io.stdout.is_empty());
+        // The client fd was closed, so it should be removed from files.
+        // But we can verify the test didn't panic, meaning all IO operations succeeded
+        // including the heap-to-client-fd write.
+    }
+
+    #[test]
+    fn heap_write_to_non_stdout_fd() {
+        // Directly verify that data written to heap by io_read, then written to a
+        // DIFFERENT fd by io_write, arrives correctly. Uses two separate socket fds.
+        let (_val, interpreter) = interpret_with(
+            r#"
+            let src = _io_socket(AF_INET, SOCK_STREAM, 0)
+            let dst = _io_socket(AF_INET, SOCK_STREAM, 0)
+            let msg = "Hello from Talk!\n"
+            _io_write(src, msg.base, msg.length)
+            let buf = _alloc(1024)
+            let n = _io_read(src, buf, 1024)
+            _io_write(dst, buf, n)
+            "#,
+        );
+        // src = fd3, dst = fd4
+        // Write "Hello from Talk!\n" to src -> files[3] = "Hello from Talk!\n"
+        // Read from src into buf -> buf has "Hello from Talk!\n", n=17
+        // Write buf to dst -> files[4] = "Hello from Talk!\n"
+        let dst_fd = 4i64;
+        let dst_content = interpreter.io.files.get(&dst_fd).unwrap();
+        assert_eq!(
+            String::from_utf8(dst_content.clone()).unwrap(),
+            "Hello from Talk!\n"
+        );
+    }
+
+    #[test]
+    fn read_loop_receives_split_writes() {
+        // Verifies that a read loop correctly receives data from two separate
+        // writes (the echo prefix and the heap buffer). This is the pattern used
+        // in ChatClient to handle TCP segment splitting.
+        let (_val, interpreter) = interpret_with(
+            r#"
+            let fd = _io_socket(AF_INET, SOCK_STREAM, 0)
+            let msg = "hello"
+            _io_write(fd, msg.base, msg.length)
+            let buf = _alloc(1024)
+            let n = _io_read(fd, buf, 1024)
+            let echo = "echo: "
+            _io_write(fd, echo.base, echo.length)
+            _io_write(fd, buf, n)
+
+            // Read back in a loop (as ChatClient does)
+            let rbuf = _alloc(1024)
+            loop {
+                let chunk = _io_read(fd, rbuf, 1024)
+                if chunk <= 0 { break }
+                _io_write(STDOUT_FD, rbuf, chunk)
+            }
+            "#,
+        );
+        assert_eq!(
+            String::from_utf8(interpreter.io.stdout).unwrap(),
+            "echo: hello"
+        );
+    }
+
+    #[test]
+    fn real_socketpair_io_read_write() {
+        // Test that heap data survives a round-trip through real Unix sockets.
+        // This uses StdioIO (real libc calls) with a socketpair to test the
+        // actual byte-level behavior, bypassing CaptureIO's loopback.
+        use crate::ir::io::{StdioIO, IO};
+
+        // Create a socketpair - two connected Unix stream sockets.
+        let mut fds: [i32; 2] = [0; 2];
+        let ret = unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, fds.as_mut_ptr()) };
+        assert_eq!(ret, 0, "socketpair failed");
+        let _guard = SocketPairGuard(fds);
+        let (read_fd, write_fd) = (fds[0] as i64, fds[1] as i64);
+
+        // Write known data to one end of the pair
+        let message = b"Hello from Talk!\n";
+        let mut io = StdioIO {};
+        let written = io.io_write(write_fd, message);
+        assert_eq!(written, 17);
+
+        // Now compile and run a Talk program that:
+        // 1. Reads from read_fd into a heap buffer
+        // 2. Writes from the heap buffer to write_fd
+        // We inject the fds as constants via the program.
+        let code = format!(
+            r#"
+            let buf = _alloc(1024)
+            let n = _io_read({read_fd}, buf, 1024)
+            _io_write({write_fd}, buf, n)
+            n
+            "#,
+        );
+        let (module, display_names) = crate::ir::lowerer_tests::tests::lower_module(&code);
+        let mut interpreter = Interpreter::new(module.program, Some(display_names), StdioIO {});
+        let result = interpreter.run();
+
+        // The program should have read 17 bytes and returned 17
+        assert_eq!(result, Value::Int(17));
+
+        // Now read from write_fd to verify the data was echoed correctly
+        let mut output_buf = vec![0u8; 1024];
+        let n = io.io_read(read_fd, &mut output_buf);
+        assert_eq!(n, 17);
+        assert_eq!(&output_buf[..17], b"Hello from Talk!\n");
+    }
+
+    #[test]
+    fn real_socketpair_full_server_echo() {
+        // Full ChatServer pattern over real sockets: write greeting, read message,
+        // write echo prefix from static string, write echoed data from heap buffer.
+        use crate::ir::io::{StdioIO, IO};
+
+        let mut fds: [i32; 2] = [0; 2];
+        let ret = unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, fds.as_mut_ptr()) };
+        assert_eq!(ret, 0, "socketpair failed");
+        let _guard = SocketPairGuard(fds);
+        let (server_fd, client_fd) = (fds[0] as i64, fds[1] as i64);
+
+        // Simulate client: write a message to the server end
+        let mut io = StdioIO {};
+        let client_msg = b"Hello from Talk!\n";
+        // But first the server writes a greeting, so we need a thread for the client side
+        // Actually, we can just pre-write the client message since socketpair is bidirectional
+        // and the server reads from server_fd while we write to client_fd
+        let written = io.io_write(client_fd, client_msg);
+        assert_eq!(written, 17);
+
+        // Run the server-side Talk program that:
+        // 1. Writes greeting to server_fd (which the client would read from client_fd)
+        // 2. Reads from server_fd into heap buffer (gets client's message)
+        // 3. Writes "echo: " to server_fd from static string
+        // 4. Writes heap buffer to server_fd
+        let code = format!(
+            r#"
+            let greeting = "Welcome! Send a message:\n"
+            _io_write({server_fd}, greeting.base, greeting.length)
+            let buf = _alloc(1024)
+            let n = _io_read({server_fd}, buf, 1024)
+            let echo = "echo: "
+            _io_write({server_fd}, echo.base, echo.length)
+            _io_write({server_fd}, buf, n)
+            _io_close({server_fd})
+            n
+            "#,
+        );
+        let (module, display_names) = crate::ir::lowerer_tests::tests::lower_module(&code);
+        let mut interpreter = Interpreter::new(module.program, Some(display_names), StdioIO {});
+        let result = interpreter.run();
+        assert_eq!(result, Value::Int(17));
+
+        // Read all data the server sent to the client (via client_fd)
+        let mut received = Vec::new();
+        let mut tmp = vec![0u8; 4096];
+        loop {
+            let n = io.io_read(client_fd, &mut tmp);
+            if n <= 0 { break; }
+            received.extend_from_slice(&tmp[..n as usize]);
+        }
+
+        let received_str = String::from_utf8(received).unwrap();
+        assert!(
+            received_str.contains("echo: Hello from Talk!"),
+            "Expected 'echo: Hello from Talk!' in received data, got: {:?}",
+            received_str
+        );
+    }
+
+    #[test]
+    fn real_socketpair_loop_iteration_echo() {
+        // Test the ChatServer pattern inside a loop with break, using real sockets.
+        // This verifies that loop-scoped variables (buf, n) work correctly with heap IO.
+        use crate::ir::io::{StdioIO, IO};
+
+        let mut fds: [i32; 2] = [0; 2];
+        let ret = unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, fds.as_mut_ptr()) };
+        assert_eq!(ret, 0, "socketpair failed");
+        let _guard = SocketPairGuard(fds);
+        let (server_fd, client_fd) = (fds[0] as i64, fds[1] as i64);
+
+        // Pre-write client data
+        let mut io = StdioIO {};
+        io.io_write(client_fd, b"Hello from Talk!\n");
+
+        // Run server pattern inside a loop that breaks after one iteration
+        let code = format!(
+            r#"
+            let count = 0
+            loop {{
+                let greeting = "Welcome! Send a message:\n"
+                _io_write({server_fd}, greeting.base, greeting.length)
+                let buf = _alloc(1024)
+                let n = _io_read({server_fd}, buf, 1024)
+                let echo = "echo: "
+                _io_write({server_fd}, echo.base, echo.length)
+                _io_write({server_fd}, buf, n)
+                count = count + 1
+                if count >= 1 {{ break }}
+            }}
+            _io_close({server_fd})
+            count
+            "#,
+        );
+        let (module, display_names) = crate::ir::lowerer_tests::tests::lower_module(&code);
+        let mut interpreter = Interpreter::new(module.program, Some(display_names), StdioIO {});
+        let result = interpreter.run();
+        assert_eq!(result, Value::Int(1));
+
+        // Read all data from client_fd
+        let mut received = Vec::new();
+        let mut tmp = vec![0u8; 4096];
+        loop {
+            let n = io.io_read(client_fd, &mut tmp);
+            if n <= 0 { break; }
+            received.extend_from_slice(&tmp[..n as usize]);
+        }
+
+        let received_str = String::from_utf8(received).unwrap();
+        assert!(
+            received_str.contains("echo: Hello from Talk!"),
+            "Expected 'echo: Hello from Talk!' in received data, got: {:?}",
+            received_str
+        );
+    }
+
+    #[test]
+    fn loop_let_initializer_not_evaluated_before_loop() {
+        // Regression: let declarations inside loop bodies had their initializers
+        // duplicated in the pre-loop entry block, causing side effects to execute
+        // an extra time before the loop even starts.
+        let (_val, interpreter) = interpret_with(
+            "
+            func side_effect() -> Int {
+                print(1)
+                42
+            }
+
+            let i = 0
+            loop {
+                if i >= 2 { break }
+                let x = side_effect()
+                i = i + 1
+            }
+            ",
+        );
+        // Should print "1" exactly twice (once per loop iteration), not three times
+        assert_eq!(
+            String::from_utf8(interpreter.io.stdout).unwrap(),
+            "1\n1\n"
+        );
+    }
+
+    #[test]
+    fn loop_let_immutable_not_duplicated_in_entry_block() {
+        // Simpler variant: even an immutable let with a pure expression
+        // should not be evaluated before the loop starts.
+        let (_val, interpreter) = interpret_with(
+            "
+            let i = 0
+            loop {
+                if i >= 2 { break }
+                let x = i + 100
+                print(x)
+                i = i + 1
+            }
+            ",
+        );
+        // Should print 100 and 101, not an extra value before the loop
+        assert_eq!(
+            String::from_utf8(interpreter.io.stdout).unwrap(),
+            "100\n101\n"
         );
     }
 

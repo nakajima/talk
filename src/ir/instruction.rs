@@ -283,6 +283,35 @@ pub enum Instruction<T> {
         count: Value,
         timeout: Value,
     },
+    #[doc = "$dest = io_socket $domain $socktype $protocol"]
+    IoSocket {
+        dest: Register,
+        domain: Value,
+        socktype: Value,
+        protocol: Value,
+    },
+    #[doc = "$dest = io_bind $fd $addr $port"]
+    IoBind {
+        dest: Register,
+        fd: Value,
+        addr: Value,
+        port: Value,
+    },
+    #[doc = "$dest = io_listen $fd $backlog"]
+    IoListen {
+        dest: Register,
+        fd: Value,
+        backlog: Value,
+    },
+    #[doc = "$dest = io_connect $fd $addr $port"]
+    IoConnect {
+        dest: Register,
+        fd: Value,
+        addr: Value,
+        port: Value,
+    },
+    #[doc = "$dest = io_accept $fd"]
+    IoAccept { dest: Register, fd: Value },
     #[doc = "$dest = io_sleep $ms"]
     IoSleep { dest: Register, ms: Value },
     #[doc = "$dest = trunc $val $meta"]
@@ -547,6 +576,49 @@ impl<T> Instruction<T> {
                 count,
                 timeout,
             },
+            Instruction::IoSocket {
+                dest,
+                domain,
+                socktype,
+                protocol,
+            } => Instruction::IoSocket {
+                dest,
+                domain,
+                socktype,
+                protocol,
+            },
+            Instruction::IoBind {
+                dest,
+                fd,
+                addr,
+                port,
+            } => Instruction::IoBind {
+                dest,
+                fd,
+                addr,
+                port,
+            },
+            Instruction::IoListen {
+                dest,
+                fd,
+                backlog,
+            } => Instruction::IoListen {
+                dest,
+                fd,
+                backlog,
+            },
+            Instruction::IoConnect {
+                dest,
+                fd,
+                addr,
+                port,
+            } => Instruction::IoConnect {
+                dest,
+                fd,
+                addr,
+                port,
+            },
+            Instruction::IoAccept { dest, fd } => Instruction::IoAccept { dest, fd },
             Instruction::IoSleep { dest, ms } => Instruction::IoSleep { dest, ms },
             Instruction::Trunc { dest, val, meta } => Instruction::Trunc { dest, val, meta },
             Instruction::IntToFloat { dest, val, meta } => {
@@ -557,16 +629,73 @@ impl<T> Instruction<T> {
 }
 
 impl<T> Instruction<T> {
+    /// Returns mutable references to all `Value` fields in this instruction.
+    /// Exhaustive match ensures new variants are handled at compile time.
+    pub fn values_mut(&mut self) -> Vec<&mut Value> {
+        match self {
+            Instruction::Constant { val, .. } => vec![val],
+            Instruction::Cmp { lhs, rhs, .. } => vec![lhs, rhs],
+            Instruction::Add { a, b, .. }
+            | Instruction::Sub { a, b, .. }
+            | Instruction::Mul { a, b, .. }
+            | Instruction::Div { a, b, .. } => vec![a, b],
+            Instruction::Ref { val, .. } => vec![val],
+            Instruction::Call { callee, args, .. } => {
+                let mut v = vec![callee];
+                v.extend(args.items.iter_mut());
+                v
+            }
+            Instruction::Nominal { record, .. } | Instruction::Record { record, .. } => {
+                record.items.iter_mut().collect()
+            }
+            Instruction::GetField { .. } => vec![],
+            Instruction::SetField { val, .. } => vec![val],
+            Instruction::_Print { val } => vec![val],
+            Instruction::Alloc { count, .. } => vec![count],
+            Instruction::Free { addr } => vec![addr],
+            Instruction::Load { addr, .. } => vec![addr],
+            Instruction::Store { value, addr, .. } => vec![value, addr],
+            Instruction::Move { from, to, .. } => vec![from, to],
+            Instruction::Copy {
+                from, to, length, ..
+            } => vec![from, to, length],
+            Instruction::Gep {
+                addr, offset_index, ..
+            } => vec![addr, offset_index],
+            Instruction::IoOpen {
+                path, flags, mode, ..
+            } => vec![path, flags, mode],
+            Instruction::IoRead {
+                fd, buf, count, ..
+            } => vec![fd, buf, count],
+            Instruction::IoWrite {
+                fd, buf, count, ..
+            } => vec![fd, buf, count],
+            Instruction::IoClose { fd, .. } => vec![fd],
+            Instruction::IoCtl { fd, op, arg, .. } => vec![fd, op, arg],
+            Instruction::IoPoll {
+                fds, count, timeout, ..
+            } => vec![fds, count, timeout],
+            Instruction::IoSocket {
+                domain,
+                socktype,
+                protocol,
+                ..
+            } => vec![domain, socktype, protocol],
+            Instruction::IoBind { fd, addr, port, .. } => vec![fd, addr, port],
+            Instruction::IoListen { fd, backlog, .. } => vec![fd, backlog],
+            Instruction::IoConnect { fd, addr, port, .. } => vec![fd, addr, port],
+            Instruction::IoAccept { fd, .. } => vec![fd],
+            Instruction::IoSleep { ms, .. } => vec![ms],
+            Instruction::Trunc { val, .. } => vec![val],
+            Instruction::IntToFloat { val, .. } => vec![val],
+        }
+    }
+
     /// Offset all RawPtr addresses in this instruction's values.
     pub fn offset_ptrs(&mut self, offset: usize) {
-        match self {
-            Instruction::Constant { val, .. } => val.offset_ptrs(offset),
-            Instruction::Nominal { record, .. } | Instruction::Record { record, .. } => {
-                for val in &mut record.items {
-                    val.offset_ptrs(offset);
-                }
-            }
-            _ => {}
+        for val in self.values_mut() {
+            val.offset_ptrs(offset);
         }
     }
 }

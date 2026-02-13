@@ -469,22 +469,32 @@ impl<'a> DeclDeclarer<'a> {
     ///////////////////////////////////////////////////////////////////////////
     #[instrument(level = tracing::Level::TRACE, skip(self, stmt))]
     fn enter_stmt(&mut self, stmt: &mut Stmt) {
-        if let StmtKind::Expr(Expr {
-            kind: ExprKind::Block(block),
-            ..
-        }) = &mut stmt.kind
-        {
-            self.start_scope(None, block.id, false);
+        match &mut stmt.kind {
+            StmtKind::Expr(Expr {
+                kind: ExprKind::Block(block),
+                ..
+            }) => {
+                self.start_scope(None, block.id, false);
+            }
+            StmtKind::Loop(_, block) => {
+                self.start_scope(None, block.id, false);
+            }
+            _ => {}
         }
     }
 
     fn exit_stmt(&mut self, stmt: &mut Stmt) {
-        if let StmtKind::Expr(Expr {
-            kind: ExprKind::Block(..),
-            ..
-        }) = &mut stmt.kind
-        {
-            self.end_scope();
+        match &stmt.kind {
+            StmtKind::Expr(Expr {
+                kind: ExprKind::Block(..),
+                ..
+            }) => {
+                self.end_scope();
+            }
+            StmtKind::Loop(_, _) => {
+                self.end_scope();
+            }
+            _ => {}
         }
     }
 

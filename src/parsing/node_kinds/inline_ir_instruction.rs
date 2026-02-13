@@ -211,6 +211,35 @@ pub enum InlineIRInstructionKind {
         count: Value,
         timeout: Value,
     },
+    #[doc = "$dest = io_socket $domain $socktype $protocol"]
+    IoSocket {
+        dest: Register,
+        domain: Value,
+        socktype: Value,
+        protocol: Value,
+    },
+    #[doc = "$dest = io_bind $fd $addr $port"]
+    IoBind {
+        dest: Register,
+        fd: Value,
+        addr: Value,
+        port: Value,
+    },
+    #[doc = "$dest = io_listen $fd $backlog"]
+    IoListen {
+        dest: Register,
+        fd: Value,
+        backlog: Value,
+    },
+    #[doc = "$dest = io_connect $fd $addr $port"]
+    IoConnect {
+        dest: Register,
+        fd: Value,
+        addr: Value,
+        port: Value,
+    },
+    #[doc = "$dest = io_accept $fd"]
+    IoAccept { dest: Register, fd: Value },
     #[doc = "$dest = io_sleep $ms"]
     IoSleep { dest: Register, ms: Value },
     #[doc = "$dest = trunc $val"]
@@ -448,6 +477,30 @@ impl Display for InlineIRInstruction {
                 count,
                 timeout,
             } => write!(f, "{dest} = io_poll {} {} {}", fds, count, timeout),
+            InlineIRInstructionKind::IoSocket {
+                dest,
+                domain,
+                socktype,
+                protocol,
+            } => write!(f, "{dest} = io_socket {} {} {}", domain, socktype, protocol),
+            InlineIRInstructionKind::IoBind {
+                dest,
+                fd,
+                addr,
+                port,
+            } => write!(f, "{dest} = io_bind {} {} {}", fd, addr, port),
+            InlineIRInstructionKind::IoListen { dest, fd, backlog } => {
+                write!(f, "{dest} = io_listen {} {}", fd, backlog)
+            }
+            InlineIRInstructionKind::IoConnect {
+                dest,
+                fd,
+                addr,
+                port,
+            } => write!(f, "{dest} = io_connect {} {} {}", fd, addr, port),
+            InlineIRInstructionKind::IoAccept { dest, fd } => {
+                write!(f, "{dest} = io_accept {}", fd)
+            }
             InlineIRInstructionKind::IoSleep { dest, ms } => {
                 write!(f, "{dest} = io_sleep {}", ms)
             }

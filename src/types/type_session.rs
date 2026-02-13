@@ -1190,7 +1190,9 @@ impl TypeSession {
     /// Given a method label, return which auto-derivable protocol it belongs to (if any).
     pub(crate) fn auto_derivable_method_protocol(&mut self, label: &Label) -> Option<ProtocolId> {
         self.init_auto_derivable_protocols();
-        for &protocol_id in &self.auto_derivable_protocols.clone() {
+        // Index-based iteration to avoid cloning the Vec (lookup_method_requirements takes &mut self).
+        for i in 0..self.auto_derivable_protocols.len() {
+            let protocol_id = self.auto_derivable_protocols[i];
             if let Some(reqs) = self.lookup_method_requirements(protocol_id.into()) {
                 if reqs.contains_key(label) {
                     return Some(protocol_id);

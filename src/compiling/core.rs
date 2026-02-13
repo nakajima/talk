@@ -16,6 +16,22 @@ pub fn compile() -> Arc<Module> {
     CORE_MODULE.clone()
 }
 
+/// The filenames of all core source files.
+pub const CORE_SOURCE_NAMES: &[&str] = &[
+    "Optional.tlk",
+    "Operators.tlk",
+    "String.tlk",
+    "Memory.tlk",
+    "Array.tlk",
+    "Iterable.tlk",
+    "Generator.tlk",
+    "Async.tlk",
+    "IO.tlk",
+    "Net.tlk",
+    "File.tlk",
+    "Showable.tlk",
+];
+
 /// All core source strings, in a fixed order for hashing.
 pub fn core_sources() -> Vec<(&'static str, &'static str)> {
     vec![
@@ -28,6 +44,7 @@ pub fn core_sources() -> Vec<(&'static str, &'static str)> {
         ("Generator.tlk", include_str!("../../core/Generator.tlk")),
         ("Async.tlk", include_str!("../../core/Async.tlk")),
         ("IO.tlk", include_str!("../../core/IO.tlk")),
+        ("Net.tlk", include_str!("../../core/Net.tlk")),
         ("File.tlk", include_str!("../../core/File.tlk")),
         ("Showable.tlk", include_str!("../../core/Showable.tlk")),
     ]

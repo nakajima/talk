@@ -138,7 +138,6 @@ impl Conforms {
             protocol_id,
         };
 
-
         let conformance = if let Some(conformance) = session.lookup_conformance(&key) {
             conformance
         } else {

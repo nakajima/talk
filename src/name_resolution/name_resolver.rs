@@ -1216,6 +1216,11 @@ impl NameResolver {
                 InlineIRInstructionKind::IoClose { .. } => (),
                 InlineIRInstructionKind::IoCtl { .. } => (),
                 InlineIRInstructionKind::IoPoll { .. } => (),
+                InlineIRInstructionKind::IoSocket { .. } => (),
+                InlineIRInstructionKind::IoBind { .. } => (),
+                InlineIRInstructionKind::IoListen { .. } => (),
+                InlineIRInstructionKind::IoConnect { .. } => (),
+                InlineIRInstructionKind::IoAccept { .. } => (),
                 InlineIRInstructionKind::IoSleep { .. } => (),
                 InlineIRInstructionKind::Trunc { .. } => (),
                 InlineIRInstructionKind::IntToFloat { .. } => (),
@@ -1413,7 +1418,5 @@ fn is_core_source_path(path: &str) -> bool {
     let Some(name) = file_name else {
         return false;
     };
-    crate::compiling::core::core_sources()
-        .iter()
-        .any(|(core_name, _)| *core_name == name)
+    crate::compiling::core::CORE_SOURCE_NAMES.contains(&name)
 }
