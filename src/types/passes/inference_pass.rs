@@ -4196,8 +4196,12 @@ impl<'a> InferencePass<'a> {
                 },
             };
 
-            let show_witness = self.find_show_witness_for_ty(field_ty, showable_id);
-            parts.push(self.synth_show_call(field_access, show_witness));
+            if matches!(**field_ty, Ty::Func(..)) {
+                parts.push(self.synth_func_type_literal(field_ty));
+            } else {
+                let show_witness = self.find_show_witness_for_ty(field_ty, showable_id);
+                parts.push(self.synth_show_call(field_access, show_witness));
+            }
         }
         parts.push(self.synth_string_literal(")"));
 
@@ -4293,8 +4297,12 @@ impl<'a> InferencePass<'a> {
                         kind: TypedExprKind::Variable(*bind_sym),
                     };
 
-                    let show_witness = self.find_show_witness_for_ty(payload_ty, showable_id);
-                    parts.push(self.synth_show_call(var, show_witness));
+                    if matches!(payload_ty, Ty::Func(..)) {
+                        parts.push(self.synth_func_type_literal(payload_ty));
+                    } else {
+                        let show_witness = self.find_show_witness_for_ty(payload_ty, showable_id);
+                        parts.push(self.synth_show_call(var, show_witness));
+                    }
                 }
                 parts.push(self.synth_string_literal(")"));
 
@@ -4323,6 +4331,16 @@ impl<'a> InferencePass<'a> {
             ty: Ty::String(),
             kind: TypedExprKind::LiteralString(s.into()),
         }
+    }
+
+    fn synth_func_type_literal(&self, ty: &Ty) -> TypedExpr {
+        use crate::types::format::{SymbolNames, TypeFormatter};
+        let imported = self.session.modules.imported_symbol_names();
+        let formatter = TypeFormatter::new(SymbolNames::new(
+            Some(&self.session.resolved_names.symbol_names),
+            Some(&imported),
+        ));
+        self.synth_string_literal(&formatter.format_ty_for_show(ty))
     }
 
     /// Generate a `.show()` call on `receiver`, using the resolved witness symbol if available.

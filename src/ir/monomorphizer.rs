@@ -9,15 +9,16 @@ use crate::{
         function::Function,
         instruction::{Instruction, InstructionMeta},
         ir_ty::IrTy,
-        lowerer::PolyFunction,
+        lowerer::{PolyFunction, StaticMemory},
         terminator::Terminator,
-        value::{Reference, Value},
+        value::{Addr, Reference, Value},
     },
     name::Name,
     name_resolution::symbol::Symbol,
     node_id::NodeID,
     types::{
         conformance::ConformanceKey,
+        format::{SymbolNames, TypeFormatter},
         infer_row::Specializations,
         infer_ty::Ty,
         passes::specialization_pass::SpecializedCallee,
@@ -37,6 +38,8 @@ pub struct Monomorphizer<'a> {
     /// Maps synthesized symbols to the external module they originated from.
     /// Used by merge_static_memory to adjust rawptrs in these functions.
     pub extern_synth_origins: FxHashMap<Symbol, ModuleId>,
+    static_memory: &'a mut StaticMemory,
+    symbol_names: &'a FxHashMap<Symbol, String>,
 }
 
 #[allow(clippy::expect_used)]
@@ -48,6 +51,8 @@ impl<'a> Monomorphizer<'a> {
         specializations: &'a FxHashMap<Symbol, Vec<Symbol>>,
         specialized_callees: &'a FxHashMap<Symbol, SpecializedCallee>,
         call_resolutions: &'a FxHashMap<(Symbol, NodeID), Symbol>,
+        static_memory: &'a mut StaticMemory,
+        symbol_names: &'a FxHashMap<Symbol, String>,
     ) -> Self {
         Monomorphizer {
             types,
@@ -57,6 +62,8 @@ impl<'a> Monomorphizer<'a> {
             specialized_callees,
             call_resolutions,
             extern_synth_origins: FxHashMap::default(),
+            static_memory,
+            symbol_names,
         }
     }
 
@@ -292,7 +299,7 @@ impl<'a> Monomorphizer<'a> {
             let new_callee = match &callee {
                 Value::Func(sym @ Symbol::MethodRequirement(_)) => {
                     // Check if the specialization pass already resolved this
-                    if let Some(caller) = specialized_caller {
+                    let resolved = if let Some(caller) = specialized_caller {
                         let call_id = meta.items.iter().find_map(|m| {
                             if let InstructionMeta::Source(id) = m {
                                 Some(id)
@@ -304,18 +311,22 @@ impl<'a> Monomorphizer<'a> {
                             && let Some(specialized_sym) =
                                 self.call_resolutions.get(&(caller, *call_id))
                         {
-                            Value::Func(*specialized_sym)
-                        } else if let Some(witness) =
-                            self.resolve_method_requirement(sym, substitutions, receiver_ty)
-                        {
-                            Value::Func(witness)
+                            Some(Value::Func(*specialized_sym))
                         } else {
-                            callee
+                            self.resolve_method_requirement(sym, substitutions, receiver_ty)
+                                .map(Value::Func)
                         }
-                    } else if let Some(witness) =
+                    } else {
                         self.resolve_method_requirement(sym, substitutions, receiver_ty)
+                            .map(Value::Func)
+                    };
+
+                    if let Some(resolved_callee) = resolved {
+                        resolved_callee
+                    } else if let Some(instr) =
+                        self.try_emit_func_show(sym, substitutions, dest, &meta)
                     {
-                        Value::Func(witness)
+                        return instr;
                     } else {
                         callee
                     }
@@ -438,6 +449,65 @@ impl<'a> Monomorphizer<'a> {
         }
 
         None
+    }
+
+    /// For function types conforming to Showable via generic constraints, emit a string
+    /// literal of the formatted type signature instead of calling a witness function.
+    fn try_emit_func_show(
+        &mut self,
+        method_req: &Symbol,
+        substitutions: &Specializations,
+        dest: crate::ir::register::Register,
+        meta: &crate::ir::list::List<InstructionMeta>,
+    ) -> Option<Instruction<IrTy>> {
+        // Check if this method requirement is for `show`
+        let protocol_sym = self.types.catalog.protocol_for_method_requirement(method_req)?;
+        let method_reqs = self.types.catalog.method_requirements.get(&protocol_sym)?;
+        let label = method_reqs.iter().find_map(|(l, s)| {
+            if s == method_req { Some(l.clone()) } else { None }
+        })?;
+        if label.to_string() != "show" {
+            return None;
+        }
+
+        // Find the Ty::Func in the substitutions
+        let func_ty = substitutions.ty.values().find(|ty| matches!(ty, Ty::Func(..)))?;
+
+        // Clean the type: replace Row::Var (unresolved effect vars) with Row::Empty
+        // so the formatter doesn't panic on inference-phase artifacts
+        let clean_ty = func_ty.clone().mapping(
+            &mut |t| t,
+            &mut |r| {
+                if matches!(r, crate::types::infer_row::Row::Var(_)) {
+                    crate::types::infer_row::Row::Empty
+                } else {
+                    r
+                }
+            },
+        );
+
+        // Format the type signature as a string
+        let formatter = TypeFormatter::new(SymbolNames::new(Some(self.symbol_names), None));
+        let sig = formatter.format_ty_for_show(&clean_ty);
+        let bytes: Vec<u8> = sig.bytes().collect();
+        let bytes_len = bytes.len() as i64;
+        let ptr = self.static_memory.write(Value::RawBuffer(bytes));
+
+        Some(Instruction::Nominal {
+            dest,
+            sym: Symbol::String,
+            ty: IrTy::Record(
+                Some(Symbol::String),
+                vec![IrTy::RawPtr, IrTy::Int, IrTy::Int],
+            ),
+            record: vec![
+                Value::RawPtr(Addr(ptr)),
+                Value::Int(bytes_len),
+                Value::Int(bytes_len),
+            ]
+            .into(),
+            meta: meta.clone(),
+        })
     }
 
     #[allow(clippy::only_used_in_recursion)]

@@ -84,6 +84,15 @@ impl Conforms {
                     protocol_id: self.protocol_id,
                 });
             }
+            Ty::Func(..) => {
+                if session.is_auto_derivable(self.protocol_id) {
+                    return SolveResult::Solved(Default::default());
+                }
+                return SolveResult::Err(TypeError::TypeCannotConform {
+                    ty: self.ty.clone(),
+                    protocol_id: self.protocol_id,
+                });
+            }
             _ => {
                 return SolveResult::Err(TypeError::TypeCannotConform {
                     ty: self.ty.clone(),

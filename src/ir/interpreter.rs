@@ -2913,6 +2913,42 @@ Dog().handleDSTChange()
     }
 
     #[test]
+    fn interprets_func_show() {
+        let (val, interpreter) = interpret_with(
+            "(func(x: Int) -> Int { x }).show()",
+        );
+        assert_eq!(interpreter.display(val, false), "(Int) -> Int");
+    }
+
+    #[test]
+    fn interprets_struct_with_func_field_show() {
+        let (val, interpreter) = interpret_with(
+            r#"
+            struct Handler {
+                let name: String
+                let action: (Int) -> String
+            }
+            Handler(name: "test", action: func(x: Int) -> String { "hi" }).show()
+            "#,
+        );
+        assert_eq!(
+            interpreter.display(val, false),
+            "Handler(name: test, action: (Int) -> String)"
+        );
+    }
+
+    #[test]
+    fn interprets_func_show_via_generic() {
+        let (val, interpreter) = interpret_with(
+            r#"
+            func show_it<T: Showable>(x: T) -> String { x.show() }
+            show_it(func() -> Int { 1 })
+            "#,
+        );
+        assert_eq!(interpreter.display(val, false), "() -> Int");
+    }
+
+    #[test]
     fn interprets_itof() {
         assert_eq!(
             interpret(

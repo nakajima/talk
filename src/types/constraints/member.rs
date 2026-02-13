@@ -126,6 +126,15 @@ impl Member {
                     type_args,
                 );
             }
+            Ty::Func(..) => {
+                if let Some(_protocol_id) = session.auto_derivable_method_protocol(&self.label) {
+                    let method_ty =
+                        Ty::Func(Ty::Void.into(), Ty::String().into(), Row::Empty.into());
+                    if let Ok(metas) = unify(&method_ty, &ty, context, session) {
+                        return SolveResult::Solved(metas);
+                    }
+                }
+            }
             _ => {}
         }
 

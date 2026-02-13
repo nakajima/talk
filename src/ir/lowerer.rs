@@ -269,7 +269,7 @@ impl<'a> Lowerer<'a> {
             self.lower_node(&root)?;
         }
 
-        let static_memory = std::mem::take(&mut self.static_memory);
+        let mut static_memory = std::mem::take(&mut self.static_memory);
         let record_labels = std::mem::take(&mut self.record_labels);
         let functions = std::mem::take(&mut self.functions);
         let mut monomorphizer = Monomorphizer::new(
@@ -279,6 +279,8 @@ impl<'a> Lowerer<'a> {
             &self.typed.specializations,
             &self.typed.specialized_callees,
             &self.typed.call_resolutions,
+            &mut static_memory,
+            &self.typed.resolved_names.symbol_names,
         );
 
         let mono_functions = monomorphizer.monomorphize();
@@ -3441,6 +3443,23 @@ impl<'a> Lowerer<'a> {
                 args,
                 Bind::Assigned(dest),
             );
+        }
+
+        // Function types are Showable at compile time -- emit their signature as a string literal
+        if matches!(&receiver.ty, Ty::Func(..)) && label.to_string() == "show" {
+            let formatter = crate::types::format::TypeFormatter::new(
+                crate::types::format::SymbolNames::new(
+                    Some(&self.typed.resolved_names.symbol_names),
+                    None,
+                ),
+            );
+            let sig = formatter.format_ty_for_show(&receiver.ty);
+            let string_expr = TypedExpr {
+                id: call_expr.id,
+                ty: Ty::String(),
+                kind: TypedExprKind::LiteralString(sig.clone()),
+            };
+            return self.lower_string(&string_expr, &sig, Bind::Assigned(dest));
         }
 
         // Capture the receiver variable symbol before any modification
