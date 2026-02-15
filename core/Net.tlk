@@ -1,5 +1,5 @@
 // no-core
-import { _io_read, _io_write, _io_close } from ./IO.tlk
+import { _io_read, _io_write, _io_close, io } from ./IO.tlk
 import { _alloc } from ./Memory.tlk
 import { String } from ./String.tlk
 import { Comparable } from ./Operators.tlk
@@ -9,23 +9,23 @@ public let SOCK_STREAM: Int = 1
 public let INADDR_ANY: Int = 0
 public let LOCALHOST: Int = 2130706433
 
-public func _io_socket(domain: Int, socktype: Int, proto: Int) -> Int {
+public func _io_socket(domain: Int, socktype: Int, proto: Int) 'io -> Int {
 	@_ir(domain, socktype, proto) { %? = io_socket $0 $1 $2 }
 }
 
-public func _io_bind(fd: Int, addr: Int, port: Int) -> Int {
+public func _io_bind(fd: Int, addr: Int, port: Int) 'io -> Int {
 	@_ir(fd, addr, port) { %? = io_bind $0 $1 $2 }
 }
 
-public func _io_listen(fd: Int, backlog: Int) -> Int {
+public func _io_listen(fd: Int, backlog: Int) 'io -> Int {
 	@_ir(fd, backlog) { %? = io_listen $0 $1 }
 }
 
-public func _io_connect(fd: Int, addr: Int, port: Int) -> Int {
+public func _io_connect(fd: Int, addr: Int, port: Int) 'io -> Int {
 	@_ir(fd, addr, port) { %? = io_connect $0 $1 $2 }
 }
 
-public func _io_accept(fd: Int) -> Int {
+public func _io_accept(fd: Int) 'io -> Int {
 	@_ir(fd) { %? = io_accept $0 }
 }
 
@@ -37,23 +37,29 @@ public struct TcpStream {
 		_io_connect(fd, addr, port)
 		TcpStream(fd: fd)
 	}
+
 	public func read(buf: RawPtr, count: Int) -> Int {
 		_io_read(self.fd, buf, count)
 	}
+
 	public func read_string(max: Int) -> String {
 		let buf = _alloc(max)
 		let n = _io_read(self.fd, buf, max)
 		String(buf, n, max)
 	}
+
 	public func write(buf: RawPtr, count: Int) -> Int {
 		_io_write(self.fd, buf, count)
 	}
+
 	public func write_string(s: String) -> Int {
 		_io_write(self.fd, s.base, s.length)
 	}
+
 	public func close() -> Int {
 		_io_close(self.fd)
 	}
+
 	public func is_valid() -> Bool { self.fd >= 0 }
 }
 

@@ -624,15 +624,6 @@ impl<IO: super::io::IO> Interpreter<IO> {
 
                 self.write_register(&dest, val);
             }
-            IR::Instr(Instruction::_Print { val }) => {
-                let val = self.val(val.clone());
-                let val = self.display(val, false);
-                let val = format!("{val}\n");
-                let bytes = val.as_bytes();
-                self.io
-                    .write_stdout(bytes)
-                    .expect("unable to write to stdout");
-            }
             IR::Instr(Instruction::Alloc { dest, ty, count }) => {
                 let count = match self.val(count) {
                     Value::Int(n) => n as usize,
@@ -2563,6 +2554,29 @@ Dog().handleDSTChange()
         assert_eq!(
             interpreter.io.stdout,
             "Optional.some(30)\nOptional.some(200)\nOptional.none\n".as_bytes()
+        );
+    }
+
+    #[test]
+    fn auto_derives_show_for_generic_enum() {
+        // Auto-derived Showable should work for generic enums with type parameter payloads
+        let (_val, interpreter) = interpret_with(
+            "
+            enum Result<T> {
+                case ok(T)
+                case err(Int)
+            }
+
+            let r = Result.ok(42)
+            print(r)
+            let e = Result.err(99)
+            print(e)
+            ",
+        );
+
+        assert_eq!(
+            String::from_utf8(interpreter.io.stdout).unwrap(),
+            "Result.ok(42)\nResult.err(99)\n"
         );
     }
 

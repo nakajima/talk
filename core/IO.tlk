@@ -3,6 +3,7 @@ import { _alloc } from ./Memory.tlk
 import { Poll, Context, Waker } from ./Async.tlk
 import { Comparable, Equatable } from ./Operators.tlk
 import { String } from ./String.tlk
+import { Showable } from ./Showable.tlk
 
 public effect 'io(fd: Int,events: Int) -> ()
 
@@ -87,6 +88,17 @@ public func write_string(fd: Int, s: String) -> Int {
 
 public func print_raw(s: String) -> Int {
 	write_string(STDOUT_FD, s)
+}
+
+func _print_line(s: String) -> () {
+	@_ir(s.base, s.length) { %? = io_write 1 $0 $1 }
+	let nl = "\n"
+	@_ir(nl.base, nl.length) { %? = io_write 1 $0 $1 }
+	()
+}
+
+public func print<T: Showable>(value: T) -> () {
+	_print_line(value.show())
 }
 
 public func async_read(fd: Int, buf: RawPtr, count: Int, cx: Context) -> Poll<Int, ()> {

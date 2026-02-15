@@ -160,7 +160,13 @@ impl<'a> SpecializationPass<'a> {
                 TypedStmtKind::Loop(self.visit_expr(cond)?, self.visit_block(body)?)
             }
             TypedStmtKind::Break => TypedStmtKind::Break,
-            kind => kind,
+            TypedStmtKind::Handler { effect, func } => {
+                let body = self.visit_block(func.body)?;
+                TypedStmtKind::Handler {
+                    effect,
+                    func: TypedFunc { body, ..func },
+                }
+            }
         };
 
         Ok(stmt)

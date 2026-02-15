@@ -278,7 +278,9 @@ impl NameResolver {
         }
 
         // Predeclare module-scope nominals across all ASTs first, so `extend` resolution
-        // doesn't depend on file order.
+        // doesn't depend on file order. Nominals (structs, enums, protocols) must be
+        // predeclared before effects because they share the decl ID counter and Core
+        // types like String and Array have hardcoded IDs.
         for ast in asts.iter_mut() {
             let file_scope_id = NodeID(ast.file_id, 0);
             self.current_scope_id = Some(file_scope_id);
@@ -296,6 +298,26 @@ impl NameResolver {
                 .collect();
             declarer.predeclare_nominals(&decls);
             declarer.predeclare_values(&decls);
+        }
+
+        // Predeclare effects in a separate pass after all nominals, so that
+        // effect IDs don't shift the hardcoded Core struct/enum IDs.
+        for ast in asts.iter_mut() {
+            let file_scope_id = NodeID(ast.file_id, 0);
+            self.current_scope_id = Some(file_scope_id);
+            let mut declarer = DeclDeclarer::new(self, &mut ast.node_ids);
+            let decls: Vec<&Decl> = ast
+                .roots
+                .iter()
+                .filter_map(|r| {
+                    if let Node::Decl(decl) = r {
+                        Some(decl)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            declarer.predeclare_effects(&decls);
         }
 
         // Process imports (before full declaration phase so extends can see imported types)
@@ -1201,7 +1223,6 @@ impl NameResolver {
                 InlineIRInstructionKind::Record { ty, .. } => self.enter_type_annotation(ty),
                 InlineIRInstructionKind::GetField { ty, .. } => self.enter_type_annotation(ty),
                 InlineIRInstructionKind::SetField { ty, .. } => self.enter_type_annotation(ty),
-                InlineIRInstructionKind::_Print { .. } => (),
                 InlineIRInstructionKind::Alloc { ty, .. } => self.enter_type_annotation(ty),
                 InlineIRInstructionKind::Free { .. } => (),
                 InlineIRInstructionKind::Load { ty, .. } => self.enter_type_annotation(ty),

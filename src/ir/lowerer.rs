@@ -1855,11 +1855,6 @@ impl<'a> Lowerer<'a> {
                 });
                 Ok((Value::Void, Ty::Void))
             }
-            InlineIRInstructionKind::_Print { val } => {
-                let val = self.parsed_value(val, &binds);
-                self.push_instr(Instruction::_Print { val });
-                Ok((Value::Void, Ty::Void))
-            }
             InlineIRInstructionKind::Alloc { dest, ty, count } => {
                 let ty = self.parsed_ty(ty);
                 let ret = self.ret(bind);
@@ -3242,15 +3237,6 @@ impl<'a> Lowerer<'a> {
             && name == &Symbol::YIELD
         {
             return self.lower_yield_call(call_expr, args, bind);
-        }
-
-        // Handle print builtin
-        if let TypedExprKind::Variable(name) = &callee.kind
-            && name == &Symbol::PRINT
-        {
-            let arg = self.lower_expr(&args[0], Bind::Fresh)?;
-            self.push_instr(Instruction::_Print { val: arg.0 });
-            return Ok((Value::Void, Ty::Void));
         }
 
         let dest = self.ret(bind);

@@ -8,7 +8,6 @@ pub fn import_builtins(scope: &mut Scope) {
     scope.types.insert("Never".into(), Symbol::Never);
     scope.types.insert("RawPtr".into(), Symbol::RawPtr);
     scope.types.insert("__IR".into(), Symbol::IR);
-    scope.types.insert("print".into(), Symbol::PRINT);
     scope.types.insert("Byte".into(), Symbol::Byte);
     scope.types.insert("yield".into(), Symbol::YIELD);
 }

@@ -286,11 +286,20 @@ pub async fn start() {
 
                     let result = hover_at_lsp(&workspace, core.as_deref(), &uri, byte_offset);
                     if result.is_none() {
+                        let document_id = document_id_for_uri(&uri);
+                        let node_descriptions = workspace.ast_for(&document_id)
+                            .map(|ast| {
+                                crate::analysis::node_ids_at_offset(ast, byte_offset).iter()
+                                    .filter_map(|id| ast.find(*id))
+                                    .map(|n| crate::lsp::goto_definition::describe_node(&n))
+                                    .collect::<Vec<_>>()
+                            })
+                            .unwrap_or_default();
                         crate::lsp::goto_definition::log_miss(
                             "hover",
                             &uri,
                             byte_offset,
-                            &[],
+                            &node_descriptions,
                         );
                     }
                     Ok(result)
@@ -452,6 +461,7 @@ pub async fn start() {
                     .collect();
 
                 let mut diagnostics_workspaces: FxHashMap<PathBuf, Url> = FxHashMap::default();
+                let mut needs_refresh = false;
 
                 for document_url in ready {
                     if is_tlk_uri(&document_url)
@@ -469,14 +479,7 @@ pub async fn start() {
                                 data: collect(document.text.clone()),
                             }));
 
-                        let client = state.client.clone();
-                        spawn(async move {
-                            client
-                                .request::<request::SemanticTokensRefresh>(())
-                                .await
-                                .ok();
-                        });
-
+                        needs_refresh = true;
                         document.analysis = None;
                     }
                     state.dirty_documents.remove(&document_url);
@@ -486,6 +489,16 @@ pub async fn start() {
                     if let Some(workspace) = workspace_analysis(state, focus_uri) {
                         publish_workspace_diagnostics(state, &workspace);
                     }
+                }
+
+                if needs_refresh {
+                    let client = state.client.clone();
+                    spawn(async move {
+                        client
+                            .request::<request::SemanticTokensRefresh>(())
+                            .await
+                            .ok();
+                    });
                 }
 
                 std::ops::ControlFlow::Continue(())
@@ -509,7 +522,7 @@ pub async fn start() {
         .expect("Could not create LSP server log");
 
     tracing_subscriber::fmt()
-        .with_max_level(Level::TRACE)
+        .with_max_level(Level::WARN)
         .with_ansi(false)
         .with_writer(file)
         .with_target(false)
@@ -1599,6 +1612,26 @@ func foo() 'fizz -> Int {
             target.is_some(),
             "should find core function definition"
         );
+    }
+
+    #[test]
+    fn goto_def_on_call_callee() {
+        let code = "func foo() -> Int { 1 }\nfoo()\n";
+        let uri = Url::from_file_path(std::env::temp_dir().join("goto_def_call_callee.tlk"))
+            .expect("file uri");
+
+        let module = workspace_for_docs(vec![(uri.clone(), code)]);
+
+        // Find "foo" in the call expression "foo()" (second occurrence)
+        let byte_offset = code.rfind("foo").expect("foo call") as u32;
+        let target = super::goto_definition(&module, None, &uri, byte_offset);
+        assert!(
+            target.is_some(),
+            "should find function definition from call callee"
+        );
+        let target = target.expect("target");
+        // Should point to the function definition on line 0
+        assert_eq!(target.range.start.line, 0);
     }
 
     #[test]

@@ -150,6 +150,9 @@ impl Workspace {
             }
         }
 
+        // Try to typecheck for hover support; gracefully degrade if it fails
+        let types = resolved.typecheck().ok().map(|typed| typed.phase.types);
+
         Some(Self {
             versions: FxHashMap::default(),
             file_id_to_document,
@@ -157,7 +160,7 @@ impl Workspace {
             texts,
             asts,
             resolved_names,
-            types: None,
+            types,
             diagnostics: FxHashMap::default(),
         })
     }

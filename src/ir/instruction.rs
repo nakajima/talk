@@ -219,8 +219,6 @@ pub enum Instruction<T> {
         field: Label,
         meta: List<InstructionMeta>,
     },
-    #[doc = "_print $val"]
-    _Print { val: Value },
     #[doc = "$dest = alloc $ty $count"]
     Alloc { dest: Register, ty: T, count: Value },
     #[doc = "free $addr"]
@@ -528,7 +526,6 @@ impl<T> Instruction<T> {
                 meta,
                 ty: map(ty),
             },
-            Instruction::_Print { val } => Instruction::_Print { val },
             // I/O instructions have no type parameter to map
             Instruction::IoOpen {
                 dest,
@@ -650,7 +647,6 @@ impl<T> Instruction<T> {
             }
             Instruction::GetField { .. } => vec![],
             Instruction::SetField { val, .. } => vec![val],
-            Instruction::_Print { val } => vec![val],
             Instruction::Alloc { count, .. } => vec![count],
             Instruction::Free { addr } => vec![addr],
             Instruction::Load { addr, .. } => vec![addr],

@@ -194,7 +194,6 @@ impl<'a> Higlighter<'a> {
         }
 
         for tok in lexer.comments.iter() {
-            tracing::info!("Got a comment token: {tok:?}");
             self.make(tok, Kind::COMMENT, &mut tokens)
         }
 

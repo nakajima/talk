@@ -252,10 +252,6 @@ impl Symbol {
         module_id: ModuleId::Core,
         local_id: 5,
     });
-    pub const PRINT: Symbol = Symbol::Builtin(BuiltinId {
-        module_id: ModuleId::Core,
-        local_id: 6,
-    });
     pub const RawPtr: Symbol = Symbol::Builtin(BuiltinId {
         module_id: ModuleId::Core,
         local_id: 7,
@@ -278,7 +274,7 @@ impl Symbol {
         local_id: 3,
     });
 
-    /// Special type parameter used for the IR and PRINT builtins
+    /// Special type parameter used for the IR builtin
     pub const IR_TYPE_PARAM: Symbol = Symbol::TypeParameter(TypeParameterId {
         module_id: ModuleId::Core,
         local_id: u32::MAX - 1,
@@ -868,7 +864,6 @@ mod tests {
             Symbol::Void,
             Symbol::Never,
             Symbol::IR,
-            Symbol::PRINT,
             Symbol::RawPtr,
             Symbol::Byte,
             Symbol::String,

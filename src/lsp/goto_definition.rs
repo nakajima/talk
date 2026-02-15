@@ -228,6 +228,9 @@ fn goto_definition_symbol_from_expr(
 
             resolve_member_symbol(types, receiver, label)
         }
+        ExprKind::Call { callee, .. } => {
+            goto_definition_symbol_from_expr(types, callee, byte_offset)
+        }
         ExprKind::CallEffect {
             effect_name,
             effect_name_span,
@@ -417,7 +420,7 @@ pub(crate) fn log_miss(kind: &str, uri: &Url, byte_offset: u32, node_description
     }
 }
 
-fn describe_node(node: &crate::node::Node) -> String {
+pub(crate) fn describe_node(node: &crate::node::Node) -> String {
     match node {
         crate::node::Node::Expr(e) => format!("Expr({:?})", std::mem::discriminant(&e.kind)),
         crate::node::Node::Stmt(s) => format!("Stmt({:?})", std::mem::discriminant(&s.kind)),

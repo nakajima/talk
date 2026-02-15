@@ -1592,16 +1592,6 @@ impl<'a> Parser<'a> {
         } else {
             let (instr, instr_span) = self.identifier()?;
             match instr.as_str() {
-                "_print" => {
-                    let val = self.ir_value()?;
-                    self.save_meta(tok, |id, span| InlineIRInstruction {
-                        id,
-                        span,
-                        binds,
-                        instr_name_span: instr_span,
-                        kind: InlineIRInstructionKind::_Print { val },
-                    })
-                }
                 "store" => {
                     let ty = self.type_annotation()?;
                     let value = self.ir_value()?;

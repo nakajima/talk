@@ -31,11 +31,6 @@ pub fn resolve_builtin_type(id: &Symbol) -> (Ty, Vec<Predicate>, IndexSet<ForAll
             Ty::Param(Symbol::IR_TYPE_PARAM, vec![]).into(),
             Row::Empty.into(),
         ),
-        Symbol::PRINT => Ty::Func(
-            Ty::String().into(),
-            Ty::Param(Symbol::IR_TYPE_PARAM, vec![]).into(),
-            Row::Empty.into(),
-        ),
         // yield<T>(value: T) -> R
         // When called, suspends execution and returns the value to the executor.
         // When resumed, returns the value passed by the executor.
@@ -71,18 +66,6 @@ pub fn builtin_scope() -> FxHashMap<Symbol, EnvEntry> {
             Ty::Func(
                 Ty::String().into(),
                 Ty::Param(Symbol::IR_TYPE_PARAM, vec![]).into(),
-                Row::Empty.into(),
-            ),
-        )),
-    );
-    res.insert(
-        Symbol::PRINT,
-        EnvEntry::Scheme(Scheme::new(
-            indexset!(ForAll::Ty(Symbol::IR_TYPE_PARAM)),
-            vec![],
-            Ty::Func(
-                Ty::Param(Symbol::IR_TYPE_PARAM, vec![]).into(),
-                Ty::Void.into(),
                 Row::Empty.into(),
             ),
         )),

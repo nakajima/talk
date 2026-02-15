@@ -131,8 +131,6 @@ pub enum InlineIRInstructionKind {
         record: Register,
         field: Value,
     },
-    #[doc = "_print $val"]
-    _Print { val: Value },
     #[doc = "$dest = alloc $ty $count"]
     Alloc {
         dest: Register,
@@ -410,7 +408,6 @@ impl Display for InlineIRInstruction {
                 field,
                 val
             ),
-            InlineIRInstructionKind::_Print { val } => write!(f, "_print {}", val),
             InlineIRInstructionKind::Alloc { dest, ty, count } => {
                 write!(f, "{dest} = alloc {} {}", ty.simple_display(), count)
             }

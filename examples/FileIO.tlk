@@ -5,3 +5,4 @@
 print_raw("Hello from print_raw!")
 
 write_string(STDOUT_FD, "Hello from write_string!")
+write_string(STDOUT_FD, "sup")

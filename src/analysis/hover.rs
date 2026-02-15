@@ -251,6 +251,7 @@ fn hover_for_expr(ctx: &HoverCtx<'_>, expr: &crate::node_kinds::expr::Expr) -> O
                 range: Some(range),
             })
         }
+        ExprKind::Call { callee, .. } => hover_for_expr(ctx, callee),
         _ => {
             let types = ctx.types?;
             let entry = types.get(&expr.id)?;
@@ -785,6 +786,23 @@ effect 'fizz() -> Int
         let byte_offset = byte_offset_for(code, "fizz", 0);
         let hover = hover_at(&workspace, None, &doc_id, byte_offset);
         assert!(hover.is_some(), "expected hover info for effect decl");
+    }
+
+    #[test]
+    fn hover_on_call_expr() {
+        let code = "func foo() -> Int { 1 }\nfoo()\n";
+        let workspace = analyze(code);
+        let doc_id = "test.tlk".to_string();
+        // Find "foo" in the call expression (second occurrence)
+        let byte_offset = byte_offset_for(code, "foo", 1);
+        let hover = hover_at(&workspace, None, &doc_id, byte_offset);
+        assert!(hover.is_some(), "expected hover info for call callee");
+        let hover = hover.expect("hover");
+        assert!(
+            hover.contents.contains("foo"),
+            "expected 'foo' in hover: {}",
+            hover.contents
+        );
     }
 
     #[test]

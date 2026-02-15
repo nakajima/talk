@@ -271,9 +271,6 @@ impl<'a> DeclDeclarer<'a> {
 
     pub(super) fn predeclare_nominals(&mut self, decls: &[&Decl]) {
         for decl in decls.iter() {
-            // Note: Effects are NOT predeclared here to maintain ID stability for Core types
-            // (Array, String, etc. have hardcoded IDs). Effects get their IDs during
-            // the full declaration phase.
             match &decl.kind {
                 DeclKind::Struct {
                     name, name_span, ..
@@ -301,6 +298,29 @@ impl<'a> DeclDeclarer<'a> {
                     }
                 }
                 _ => {}
+            }
+        }
+    }
+
+    /// Predeclare effects across all ASTs so they're available for import resolution
+    /// and cross-file effect references in function signatures.
+    /// Called after `predeclare_nominals` to preserve ID stability for Core types
+    /// (Array, String, etc. have hardcoded struct IDs that share the decl counter).
+    pub(super) fn predeclare_effects(&mut self, decls: &[&Decl]) {
+        for decl in decls.iter() {
+            if let DeclKind::Effect {
+                name, name_span, ..
+            } = &decl.kind
+            {
+                let resolved =
+                    self.resolver
+                        .declare(name, some!(Effect), decl.id, *name_span);
+
+                if decl.visibility == Visibility::Public
+                    && let Ok(sym) = resolved.symbol()
+                {
+                    self.resolver.mark_public(sym);
+                }
             }
         }
     }

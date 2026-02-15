@@ -4200,7 +4200,7 @@ impl<'a> InferencePass<'a> {
                 parts.push(self.synth_func_type_literal(field_ty));
             } else {
                 let show_witness = self.find_show_witness_for_ty(field_ty, showable_id);
-                parts.push(self.synth_show_call(field_access, show_witness));
+                parts.push(self.synth_show_call(field_access, show_witness, showable_id));
             }
         }
         parts.push(self.synth_string_literal(")"));
@@ -4301,7 +4301,7 @@ impl<'a> InferencePass<'a> {
                         parts.push(self.synth_func_type_literal(payload_ty));
                     } else {
                         let show_witness = self.find_show_witness_for_ty(payload_ty, showable_id);
-                        parts.push(self.synth_show_call(var, show_witness));
+                        parts.push(self.synth_show_call(var, show_witness, showable_id));
                     }
                 }
                 parts.push(self.synth_string_literal(")"));
@@ -4344,7 +4344,12 @@ impl<'a> InferencePass<'a> {
     }
 
     /// Generate a `.show()` call on `receiver`, using the resolved witness symbol if available.
-    fn synth_show_call(&self, receiver: TypedExpr, show_witness: Option<Symbol>) -> TypedExpr {
+    fn synth_show_call(
+        &self,
+        mut receiver: TypedExpr,
+        show_witness: Option<Symbol>,
+        showable_id: Option<ProtocolId>,
+    ) -> TypedExpr {
         match show_witness {
             Some(witness_sym) => {
                 // Pre-resolved: emit Call { callee: Variable(witness), args: [receiver] }
@@ -4372,6 +4377,16 @@ impl<'a> InferencePass<'a> {
                 }
             }
             None => {
+                // For type parameters, add Showable bound so the lowerer emits a
+                // MethodRequirement that the monomorphizer resolves at instantiation time.
+                if let Ty::Param(_, ref mut bounds) = receiver.ty {
+                    if let Some(sid) = showable_id {
+                        if !bounds.contains(&sid) {
+                            bounds.push(sid);
+                        }
+                    }
+                }
+
                 // Fallback: emit Member + Call (for types we can't resolve yet)
                 let show_method = TypedExpr {
                     id: NodeID::SYNTHESIZED,

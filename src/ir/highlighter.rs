@@ -157,7 +157,6 @@ fn is_keyword(ident: &str) -> bool {
             | "record"
             | "getfield"
             | "setfield"
-            | "_print"
             | "alloc"
             | "free"
             | "load"
