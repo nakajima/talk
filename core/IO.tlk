@@ -5,7 +5,22 @@ import { Comparable, Equatable } from ./Operators.tlk
 import { String } from ./String.tlk
 import { Showable } from ./Showable.tlk
 
-public effect 'io(fd: Int,events: Int) -> ()
+public enum IORequest {
+	case read(Int, RawPtr, Int)
+	case write(Int, RawPtr, Int)
+	case open(RawPtr, Int, Int)
+	case close(Int)
+	case sleep(Int)
+	case poll(RawPtr, Int, Int)
+	case ctl(Int, Int, Int)
+	case socket(Int, Int, Int)
+	case bind(Int, Int, Int)
+	case listen(Int, Int)
+	case connect(Int, Int, Int)
+	case accept(Int)
+}
+
+public effect 'io(request: IORequest) -> Int
 
 public let EPERM: Int = -1
 public let ENOENT: Int = -2
@@ -51,65 +66,65 @@ public let STDOUT_FD: Int = 1
 public let STDERR_FD: Int = 2
 
 public func sleep(ms: Int) 'io -> Int {
-	@_ir(ms) { %? = io_sleep $0 }
+	'io(.sleep(ms))
 }
 
 public func _io_open(path: RawPtr, flags: Int, mode: Int) 'io -> Int {
-	@_ir(path, flags, mode) { %? = io_open $0 $1 $2 }
+	'io(.open(path, flags, mode))
 }
 
 public func _io_read(fd: Int, buf: RawPtr, count: Int) 'io -> Int {
-	@_ir(fd, buf, count) { %? = io_read $0 $1 $2 }
+	'io(.read(fd, buf, count))
 }
 
 public func _io_write(fd: Int, buf: RawPtr, count: Int) 'io -> Int {
-	@_ir(fd, buf, count) { %? = io_write $0 $1 $2 }
+	'io(.write(fd, buf, count))
 }
 
 public func _io_close(fd: Int) 'io -> Int {
-	@_ir(fd) { %? = io_close $0 }
+	'io(.close(fd))
 }
 
 public func _io_ctl(fd: Int, op: Int, arg: Int) 'io -> Int {
-	@_ir(fd, op, arg) { %? = io_ctl $0 $1 $2 }
+	'io(.ctl(fd, op, arg))
 }
 
 public func _io_poll(fds: RawPtr, count: Int, timeout: Int) 'io -> Int {
-	@_ir(fds, count, timeout) { %? = io_poll $0 $1 $2 }
+	'io(.poll(fds, count, timeout))
 }
 
 public func is_error(result: Int) -> Bool {
 	result < 0
 }
 
-public func write_string(fd: Int, s: String) -> Int {
+public func write_string(fd: Int, s: String) 'io -> Int {
 	_io_write(fd, s.base, s.length)
 }
 
-public func print_raw(s: String) -> Int {
+public func print_raw(s: String) 'io -> Int {
 	write_string(STDOUT_FD, s)
 }
 
-func _print_line(s: String) -> () {
-	@_ir(s.base, s.length) { %? = io_write 1 $0 $1 }
+func _print_line(s: String) 'io -> () {
+	_io_write(STDOUT_FD, s.base, s.length)
 	let nl = "\n"
-	@_ir(nl.base, nl.length) { %? = io_write 1 $0 $1 }
+	_io_write(STDOUT_FD, nl.base, nl.length)
 	()
 }
 
-public func print<T: Showable>(value: T) -> () {
+public func print<T: Showable>(value: T) 'io -> () {
 	_print_line(value.show())
 }
 
 public func async_read(fd: Int, buf: RawPtr, count: Int, cx: Context) -> Poll<Int, ()> {
-	let result = _io_read(fd, buf, count)
+	let result = @_ir(fd, buf, count) { %? = io_read $0 $1 $2 }
 	if result != EAGAIN { return Poll.ready(result) }
 	yield(())
 	Poll.pending(())
 }
 
 public func async_write(fd: Int, buf: RawPtr, count: Int, cx: Context) -> Poll<Int, ()> {
-	let result = _io_write(fd, buf, count)
+	let result = @_ir(fd, buf, count) { %? = io_write $0 $1 $2 }
 	if result != EAGAIN { return Poll.ready(result) }
 	yield(())
 	Poll.pending(())

@@ -1,5 +1,5 @@
 // no-core
-import { _io_read, _io_write, _io_close, io } from ./IO.tlk
+import { _io_read, _io_write, _io_close, IORequest, io } from ./IO.tlk
 import { _alloc } from ./Memory.tlk
 import { String } from ./String.tlk
 import { Comparable } from ./Operators.tlk
@@ -10,23 +10,23 @@ public let INADDR_ANY: Int = 0
 public let LOCALHOST: Int = 2130706433
 
 public func _io_socket(domain: Int, socktype: Int, proto: Int) 'io -> Int {
-	@_ir(domain, socktype, proto) { %? = io_socket $0 $1 $2 }
+	'io(.socket(domain, socktype, proto))
 }
 
 public func _io_bind(fd: Int, addr: Int, port: Int) 'io -> Int {
-	@_ir(fd, addr, port) { %? = io_bind $0 $1 $2 }
+	'io(.bind(fd, addr, port))
 }
 
 public func _io_listen(fd: Int, backlog: Int) 'io -> Int {
-	@_ir(fd, backlog) { %? = io_listen $0 $1 }
+	'io(.listen(fd, backlog))
 }
 
 public func _io_connect(fd: Int, addr: Int, port: Int) 'io -> Int {
-	@_ir(fd, addr, port) { %? = io_connect $0 $1 $2 }
+	'io(.connect(fd, addr, port))
 }
 
 public func _io_accept(fd: Int) 'io -> Int {
-	@_ir(fd) { %? = io_accept $0 }
+	'io(.accept(fd))
 }
 
 public struct TcpStream {

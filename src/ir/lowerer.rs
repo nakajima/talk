@@ -1137,10 +1137,39 @@ impl<'a> Lowerer<'a> {
     fn lower_effect_call_closure(
         &mut self,
         expr: &TypedExpr,
-        _effect: &Symbol,
+        effect: &Symbol,
         args: &[TypedExpr],
         bind: Bind,
     ) -> Result<(Value, Ty), IRError> {
+        // Check for handler before lowering args — if no handler and this is 'io,
+        // we need the raw typed AST to extract the IORequest variant.
+        let handler_sym = self
+            .typed
+            .resolved_names
+            .effect_handlers
+            .get(&expr.id)
+            .copied();
+
+        if handler_sym.is_none() {
+            let is_io = self
+                .typed
+                .resolved_names
+                .symbol_names
+                .get(effect)
+                .is_some_and(|name| name == "io");
+
+            if is_io {
+                return self.lower_io_default(expr, args, bind);
+            }
+
+            return Err(IRError::TypeNotFound(format!(
+                "No handler found for {:?}",
+                expr
+            )));
+        }
+
+        let handler_sym = handler_sym.unwrap();
+
         let mut arg_vals = Vec::with_capacity(args.len());
         for arg in args {
             let (val, _ty) = self.lower_expr(arg, Bind::Fresh)?;
@@ -1148,19 +1177,6 @@ impl<'a> Lowerer<'a> {
         }
 
         let dest = self.ret(bind);
-
-        let Some(handler_sym) = self
-            .typed
-            .resolved_names
-            .effect_handlers
-            .get(&expr.id)
-            .copied()
-        else {
-            return Err(IRError::TypeNotFound(format!(
-                "No handler found for {:?}",
-                expr
-            )));
-        };
 
         let mut env = vec![];
         let mut env_ty = vec![];
@@ -1223,6 +1239,132 @@ impl<'a> Lowerer<'a> {
 
         // Return the continuation's resumed value register, not the parent's dest
         Ok((Value::Reg(resumed_value_reg.0), expr.ty.clone()))
+    }
+
+    /// Default IO inlining: when no handler is found for the 'io effect,
+    /// inspect the IORequest enum variant and emit the corresponding IO instruction directly.
+    fn lower_io_default(
+        &mut self,
+        expr: &TypedExpr,
+        args: &[TypedExpr],
+        bind: Bind,
+    ) -> Result<(Value, Ty), IRError> {
+        let request_expr = &args[0];
+
+        // The argument is an IORequest enum constructor call:
+        //   IORequest.variant(arg1, arg2, ...)
+        // In the typed AST this is Call { callee: Member { receiver, label }, args }
+        // where receiver is either Hole (with Nominal type) or Constructor (with Constructor type)
+        let (variant_name, inner_args) = match &request_expr.kind {
+            TypedExprKind::Call {
+                callee,
+                args: inner_args,
+                ..
+            } => match &callee.kind {
+                TypedExprKind::Member {
+                    receiver, label, ..
+                } if matches!(
+                    receiver.kind,
+                    TypedExprKind::Hole | TypedExprKind::Constructor(..)
+                ) =>
+                {
+                    (label.to_string(), inner_args.as_slice())
+                }
+                _ => {
+                    return Err(IRError::TypeNotFound(
+                        "Expected IORequest variant constructor in 'io effect call".into(),
+                    ))
+                }
+            },
+            _ => {
+                return Err(IRError::TypeNotFound(
+                    "Expected IORequest constructor call in 'io effect call".into(),
+                ))
+            }
+        };
+
+        let mut vals = Vec::with_capacity(inner_args.len());
+        for arg in inner_args {
+            let (val, _) = self.lower_expr(arg, Bind::Fresh)?;
+            vals.push(val);
+        }
+
+        let dest = self.ret(bind);
+
+        match variant_name.as_str() {
+            "read" => self.push_instr(Instruction::IoRead {
+                dest,
+                fd: vals[0].clone(),
+                buf: vals[1].clone(),
+                count: vals[2].clone(),
+            }),
+            "write" => self.push_instr(Instruction::IoWrite {
+                dest,
+                fd: vals[0].clone(),
+                buf: vals[1].clone(),
+                count: vals[2].clone(),
+            }),
+            "open" => self.push_instr(Instruction::IoOpen {
+                dest,
+                path: vals[0].clone(),
+                flags: vals[1].clone(),
+                mode: vals[2].clone(),
+            }),
+            "close" => self.push_instr(Instruction::IoClose {
+                dest,
+                fd: vals[0].clone(),
+            }),
+            "sleep" => self.push_instr(Instruction::IoSleep {
+                dest,
+                ms: vals[0].clone(),
+            }),
+            "poll" => self.push_instr(Instruction::IoPoll {
+                dest,
+                fds: vals[0].clone(),
+                count: vals[1].clone(),
+                timeout: vals[2].clone(),
+            }),
+            "ctl" => self.push_instr(Instruction::IoCtl {
+                dest,
+                fd: vals[0].clone(),
+                op: vals[1].clone(),
+                arg: vals[2].clone(),
+            }),
+            "socket" => self.push_instr(Instruction::IoSocket {
+                dest,
+                domain: vals[0].clone(),
+                socktype: vals[1].clone(),
+                protocol: vals[2].clone(),
+            }),
+            "bind" => self.push_instr(Instruction::IoBind {
+                dest,
+                fd: vals[0].clone(),
+                addr: vals[1].clone(),
+                port: vals[2].clone(),
+            }),
+            "listen" => self.push_instr(Instruction::IoListen {
+                dest,
+                fd: vals[0].clone(),
+                backlog: vals[1].clone(),
+            }),
+            "connect" => self.push_instr(Instruction::IoConnect {
+                dest,
+                fd: vals[0].clone(),
+                addr: vals[1].clone(),
+                port: vals[2].clone(),
+            }),
+            "accept" => self.push_instr(Instruction::IoAccept {
+                dest,
+                fd: vals[0].clone(),
+            }),
+            _ => {
+                return Err(IRError::TypeNotFound(format!(
+                    "Unknown IORequest variant: {variant_name}"
+                )))
+            }
+        }
+
+        Ok((dest.into(), expr.ty.clone()))
     }
 
     /// Lower an effect call in state machine mode.
