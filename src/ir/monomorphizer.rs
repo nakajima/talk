@@ -461,30 +461,37 @@ impl<'a> Monomorphizer<'a> {
         meta: &crate::ir::list::List<InstructionMeta>,
     ) -> Option<Instruction<IrTy>> {
         // Check if this method requirement is for `show`
-        let protocol_sym = self.types.catalog.protocol_for_method_requirement(method_req)?;
+        let protocol_sym = self
+            .types
+            .catalog
+            .protocol_for_method_requirement(method_req)?;
         let method_reqs = self.types.catalog.method_requirements.get(&protocol_sym)?;
         let label = method_reqs.iter().find_map(|(l, s)| {
-            if s == method_req { Some(l.clone()) } else { None }
+            if s == method_req {
+                Some(l.clone())
+            } else {
+                None
+            }
         })?;
         if label.to_string() != "show" {
             return None;
         }
 
         // Find the Ty::Func in the substitutions
-        let func_ty = substitutions.ty.values().find(|ty| matches!(ty, Ty::Func(..)))?;
+        let func_ty = substitutions
+            .ty
+            .values()
+            .find(|ty| matches!(ty, Ty::Func(..)))?;
 
         // Clean the type: replace Row::Var (unresolved effect vars) with Row::Empty
         // so the formatter doesn't panic on inference-phase artifacts
-        let clean_ty = func_ty.clone().mapping(
-            &mut |t| t,
-            &mut |r| {
-                if matches!(r, crate::types::infer_row::Row::Var(_)) {
-                    crate::types::infer_row::Row::Empty
-                } else {
-                    r
-                }
-            },
-        );
+        let clean_ty = func_ty.clone().mapping(&mut |t| t, &mut |r| {
+            if matches!(r, crate::types::infer_row::Row::Var(_)) {
+                crate::types::infer_row::Row::Empty
+            } else {
+                r
+            }
+        });
 
         // Format the type signature as a string
         let formatter = TypeFormatter::new(SymbolNames::new(Some(self.symbol_names), None));
@@ -597,14 +604,15 @@ impl<'a> Monomorphizer<'a> {
                         .modules
                         .lookup_nominal(&symbol)
                         .cloned()
-                        .expect("didn't get external nominal")
+                        .or_else(|| self.types.catalog.nominals.get(&symbol).cloned())
                 } else {
-                    self.types
-                        .catalog
-                        .nominals
-                        .get(&symbol)
-                        .cloned()
-                        .unwrap_or_else(|| unreachable!("didn't get nominal: {symbol:?}"))
+                    self.types.catalog.nominals.get(&symbol).cloned()
+                };
+
+                // Some imported child types may not currently carry nominal metadata.
+                // Represent them as empty nominal records to preserve lowering.
+                let Some(nominal) = nominal else {
+                    return IrTy::Record(Some(symbol), vec![]);
                 };
 
                 // First monomorphize type_args to resolve any type parameters

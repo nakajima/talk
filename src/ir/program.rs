@@ -38,11 +38,7 @@ impl Program {
     /// Merge static memory from an imported module's program.
     /// Appends the imported static memory after the current static memory
     /// and offsets all RawPtr values in imported functions.
-    pub fn merge_static_memory(
-        &mut self,
-        imported: &Program,
-        imported_symbols: &[Symbol],
-    ) {
+    pub fn merge_static_memory(&mut self, imported: &Program, imported_symbols: &[Symbol]) {
         if imported.static_memory.data.is_empty() {
             return;
         }

@@ -87,12 +87,66 @@ pub struct ModuleEnvironment {
     modules: FxHashMap<StableModuleId, Arc<Module>>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NamedSymbolKind {
+    Struct,
+    Enum,
+    Protocol,
+}
+
+impl NamedSymbolKind {
+    fn matches(self, symbol: Symbol) -> bool {
+        matches!(
+            (self, symbol),
+            (Self::Struct, Symbol::Struct(..))
+                | (Self::Enum, Symbol::Enum(..))
+                | (Self::Protocol, Symbol::Protocol(..))
+        )
+    }
+}
+
 impl ModuleEnvironment {
     pub fn lookup_name(&self, name: &str) -> Vec<Symbol> {
-        self.modules
+        let mut matches: Vec<_> = self
+            .modules
             .iter()
             .filter_map(|m| m.1.exports.get(name).copied())
-            .collect()
+            .collect();
+        matches.sort();
+        matches
+    }
+
+    pub fn lookup_named_symbol_in_module(
+        &self,
+        module_id: ModuleId,
+        name: &str,
+        kind: NamedSymbolKind,
+    ) -> Option<Symbol> {
+        let module = self.get_module(module_id)?;
+        let mut matches: Vec<_> = module
+            .symbol_names
+            .iter()
+            .filter_map(|(symbol, symbol_name)| {
+                (symbol_name == name && kind.matches(*symbol)).then_some(*symbol)
+            })
+            .collect();
+        matches.sort();
+        matches.dedup();
+
+        match matches.as_slice() {
+            [symbol] => Some(*symbol),
+            [] => None,
+            _ => {
+                tracing::warn!(
+                    ?module_id,
+                    ?kind,
+                    name,
+                    ?matches,
+                    "ambiguous named symbol lookup"
+                );
+                None
+            }
+        }
     }
 
     pub fn resolve_name(&self, sym: &Symbol) -> Option<&String> {

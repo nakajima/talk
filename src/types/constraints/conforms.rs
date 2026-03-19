@@ -393,7 +393,13 @@ impl Conforms {
                 let witness_forall_params: Vec<Symbol> = witness
                     .foralls()
                     .iter()
-                    .filter_map(|f| if let ForAll::Ty(sym) = f { Some(*sym) } else { None })
+                    .filter_map(|f| {
+                        if let ForAll::Ty(sym) = f {
+                            Some(*sym)
+                        } else {
+                            None
+                        }
+                    })
                     .collect();
                 for (witness_param, nominal_param) in
                     witness_forall_params.iter().zip(nominal.type_params.iter())

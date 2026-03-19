@@ -5,6 +5,7 @@ use tracing::instrument;
 
 use crate::{
     ast::{AST, NameResolved},
+    compiling::module::{ModuleId, NamedSymbolKind},
     diagnostic::{AnyDiagnostic, Diagnostic, Severity},
     formatter,
     label::Label,
@@ -89,6 +90,15 @@ impl ProtocolAssociatedTypeRequirements {
 
 pub type PendingTypeInstances =
     FxHashMap<MetaVarId, (NodeID, Span, Level, Symbol, Vec<(Ty, NodeID)>)>;
+
+#[derive(Clone, Debug)]
+struct DeferredBinder {
+    binder: Symbol,
+    rhs_id: NodeID,
+    level: Level,
+    group_id: GroupId,
+    is_top_level: bool,
+}
 
 pub struct InferencePass<'a> {
     asts: &'a mut [&'a mut AST<NameResolved>],
@@ -847,6 +857,7 @@ impl<'a> InferencePass<'a> {
 
         let mut groups = self.session.resolved_names.scc_graph.groups();
         groups.sort_by_key(|group| group.id.0);
+        let mut deferred = vec![];
 
         for group in groups {
             let is_top_level = group.is_top_level;
@@ -875,13 +886,29 @@ impl<'a> InferencePass<'a> {
                 continue;
             }
 
-            let (new_decls, new_stmts) = self.generate_for_group(group.clone());
+            let nominal_member_group = !is_top_level
+                && group.binders.iter().all(|binder| {
+                    matches!(
+                        binder,
+                        Symbol::InstanceMethod(..)
+                            | Symbol::StaticMethod(..)
+                            | Symbol::Initializer(..)
+                    )
+                });
+            if nominal_member_group {
+                continue;
+            }
+
+            let (new_decls, new_stmts, mut group_deferred) = self.generate_for_group(group);
+            deferred.append(&mut group_deferred);
 
             if is_top_level {
                 self.root_decls.extend(new_decls);
                 self.root_stmts.extend(new_stmts);
             }
         }
+
+        self.process_deferred_binders(deferred);
 
         let mut context = SolveContext::new(
             self.substitutions.clone(),
@@ -927,10 +954,151 @@ impl<'a> InferencePass<'a> {
         self.session.apply_all(&mut context.substitutions_mut());
     }
 
+    fn should_defer_missing_global(&self, binder: &Symbol, error: &TypeError) -> bool {
+        matches!(binder, Symbol::Global(..))
+            && matches!(
+                error,
+                TypeError::TypeNotFound(message)
+                if message.starts_with("Entry not found for variable ")
+            )
+    }
+
+    fn is_missing_variable_entry_error(&self, error: &TypeError) -> bool {
+        matches!(
+            error,
+            TypeError::TypeNotFound(message)
+            if message.starts_with("Entry not found for variable ")
+        )
+    }
+
+    fn skip_redundant_member_binder(&self, binder: &Symbol, group_has_nominal: bool) -> bool {
+        group_has_nominal
+            && matches!(
+                binder,
+                Symbol::InstanceMethod(..) | Symbol::StaticMethod(..) | Symbol::Initializer(..)
+            )
+    }
+
+    fn process_deferred_binders(&mut self, mut deferred: Vec<DeferredBinder>) {
+        while !deferred.is_empty() {
+            let mut next = vec![];
+            let mut progressed = false;
+
+            for binder in deferred {
+                let Some(rhs) = self.asts.iter().find_map(|ast| ast.find(binder.rhs_id)) else {
+                    continue;
+                };
+
+                let mut context = SolveContext::new(
+                    self.substitutions.clone(),
+                    binder.level,
+                    binder.group_id,
+                    SolveContextKind::Normal,
+                );
+
+                let node = match self.visit_node(&rhs, &mut context) {
+                    Ok(node) => node,
+                    Err(e) => {
+                        if self.should_defer_missing_global(&binder.binder, &e) {
+                            next.push(binder);
+                        } else {
+                            tracing::error!("{e:?}");
+                            self.diagnostics.insert(AnyDiagnostic::Typing(Diagnostic {
+                                id: rhs.node_id(),
+                                severity: Severity::Error,
+                                kind: e,
+                            }));
+                        }
+                        continue;
+                    }
+                };
+
+                progressed = true;
+
+                if binder.is_top_level {
+                    match &node {
+                        TypedNode::Decl(decl) => self.root_decls.push(decl.clone()),
+                        TypedNode::Stmt(stmt) => self.root_stmts.push(stmt.clone()),
+                        TypedNode::Expr(_) => {}
+                    }
+                }
+
+                let Some(existing) = self.session.lookup(&binder.binder) else {
+                    continue;
+                };
+                let placeholder = existing._as_ty();
+
+                self.constraints.wants_equals_at(
+                    binder.rhs_id,
+                    node.ty(),
+                    placeholder.clone(),
+                    &context.group_info(),
+                );
+
+                self.solve(&mut context, vec![binder.binder], vec![placeholder]);
+            }
+
+            if !progressed {
+                for binder in next {
+                    let Some(rhs) = self.asts.iter().find_map(|ast| ast.find(binder.rhs_id)) else {
+                        continue;
+                    };
+
+                    let mut context = SolveContext::new(
+                        self.substitutions.clone(),
+                        binder.level,
+                        binder.group_id,
+                        SolveContextKind::Normal,
+                    );
+
+                    match self.visit_node(&rhs, &mut context) {
+                        Ok(node) => {
+                            if binder.is_top_level {
+                                match &node {
+                                    TypedNode::Decl(decl) => self.root_decls.push(decl.clone()),
+                                    TypedNode::Stmt(stmt) => self.root_stmts.push(stmt.clone()),
+                                    TypedNode::Expr(_) => {}
+                                }
+                            }
+
+                            if let Some(existing) = self.session.lookup(&binder.binder) {
+                                let placeholder = existing._as_ty();
+                                self.constraints.wants_equals_at(
+                                    binder.rhs_id,
+                                    node.ty(),
+                                    placeholder.clone(),
+                                    &context.group_info(),
+                                );
+                                self.solve(&mut context, vec![binder.binder], vec![placeholder]);
+                            }
+                        }
+                        Err(e) => {
+                            tracing::error!("{e:?}");
+                            self.diagnostics.insert(AnyDiagnostic::Typing(Diagnostic {
+                                id: rhs.node_id(),
+                                severity: Severity::Error,
+                                kind: e,
+                            }));
+                        }
+                    }
+                }
+                return;
+            }
+
+            deferred = next;
+        }
+    }
+
     #[instrument(skip(self))]
-    fn generate_for_group(&mut self, group: BindingGroup) -> (Vec<TypedDecl>, Vec<TypedStmt>) {
+    fn generate_for_group(
+        &mut self,
+        group: BindingGroup,
+    ) -> (Vec<TypedDecl>, Vec<TypedStmt>, Vec<DeferredBinder>) {
         let mut decls = vec![];
         let mut stmts = vec![];
+        let mut deferred = vec![];
+        let mut solved_binders = vec![];
+        let mut solved_placeholders = vec![];
 
         let mut context = SolveContext::new(
             self.substitutions.clone(),
@@ -939,11 +1107,22 @@ impl<'a> InferencePass<'a> {
             SolveContextKind::Normal,
         );
 
-        // Create placeholders
-        let placeholders = group
+        let group_has_nominal = group.binders.iter().any(|binder| {
+            matches!(
+                binder,
+                Symbol::Struct(..) | Symbol::Enum(..) | Symbol::Protocol(..)
+            )
+        });
+
+        // Create placeholders for binders that are actively solved in this pass.
+        let placeholders: Vec<Option<Ty>> = group
             .binders
             .iter()
             .map(|sym| {
+                if self.skip_redundant_member_binder(sym, group_has_nominal) {
+                    return None;
+                }
+
                 let placeholder_id = self.session.new_ty_meta_var_id(group.level);
                 let placeholder = Ty::Var {
                     id: placeholder_id,
@@ -952,12 +1131,16 @@ impl<'a> InferencePass<'a> {
                 tracing::trace!("placeholder {sym:?} = {placeholder:?}");
                 self.session
                     .insert_term(*sym, placeholder.to_entry(), &mut self.constraints);
-                placeholder
+                Some(placeholder)
             })
-            .collect_vec();
+            .collect();
 
         // Visit each binder
         for (i, binder) in group.binders.iter().enumerate() {
+            let Some(placeholder) = placeholders[i].clone() else {
+                continue;
+            };
+
             if let Some(captures) = self.session.resolved_names.captures.get(binder).cloned() {
                 for capture in captures {
                     if self.session.lookup(&capture.symbol).is_none()
@@ -986,17 +1169,33 @@ impl<'a> InferencePass<'a> {
                 .copied()
             else {
                 tracing::error!("did not find rhs_id for binder: {binder:?}");
-                return (decls, stmts);
+                return (decls, stmts, deferred);
             };
 
             let Some(rhs) = self.asts.iter().find_map(|ast| ast.find(rhs_id)) else {
                 tracing::error!("did not find rhs for id: {rhs_id:?}, binder: {binder:?}");
-                return (decls, stmts);
+                return (decls, stmts, deferred);
             };
 
             let node = match self.visit_node(&rhs, &mut context) {
                 Ok(node) => node,
                 Err(e) => {
+                    if self.should_defer_missing_global(binder, &e) {
+                        deferred.push(DeferredBinder {
+                            binder: *binder,
+                            rhs_id,
+                            level: group.level,
+                            group_id: group.id,
+                            is_top_level: group.is_top_level,
+                        });
+                        continue;
+                    }
+
+                    if self.is_missing_variable_entry_error(&e) {
+                        tracing::debug!("{e:?}");
+                        continue;
+                    }
+
                     tracing::error!("{e:?}");
                     continue;
                 }
@@ -1009,27 +1208,33 @@ impl<'a> InferencePass<'a> {
             }
 
             if let Some(existing) = self.session.lookup(binder) {
-                if existing == EnvEntry::Mono(placeholders[i].clone()) {
+                if existing == EnvEntry::Mono(placeholder.clone()) {
                     self.constraints.wants_equals_at(
                         rhs_id,
                         node.ty(),
-                        placeholders[i].clone(),
+                        placeholder.clone(),
                         &context.group_info(),
                     );
                 } else {
                     self.constraints.wants_equals_at(
                         rhs_id,
-                        placeholders[i].clone(),
+                        placeholder.clone(),
                         existing._as_ty(),
                         &context.group_info(),
                     );
                 }
             }
+
+            solved_binders.push(*binder);
+            solved_placeholders.push(placeholder);
         }
 
         // Solve this group
-        self.solve(&mut context, group.binders.clone(), placeholders);
-        (decls, stmts)
+        if !solved_binders.is_empty() {
+            self.solve(&mut context, solved_binders, solved_placeholders);
+        }
+
+        (decls, stmts, deferred)
     }
 
     fn apply_protocol_associated_type_requirements(
@@ -2154,6 +2359,12 @@ impl<'a> InferencePass<'a> {
                                 );
                         }
                     }
+                }
+                DeclKind::Struct { .. } | DeclKind::Enum { .. } | DeclKind::Protocol { .. } => {
+                    // Nested nominal declarations must be fully typechecked so their
+                    // constructors/methods are available from child-type access
+                    // (for example `HTTP.Server()`).
+                    self.visit_decl(decl, &mut context.next())?;
                 }
                 _ => tracing::warn!("Unhandled nominal decl: {:?}", decl.kind),
             }
@@ -3916,9 +4127,13 @@ impl<'a> InferencePass<'a> {
         _body_ret: &Ty,
         context: &mut SolveContext,
     ) -> Ty {
-        // Lookup the Generator symbol from Core module
-        let generator_symbols = self.session.modules.lookup_name("Generator");
-        let Some(&generator_sym) = generator_symbols.first() else {
+        // Resolve the concrete core Generator struct explicitly. Core also
+        // defines an async Generator protocol, so name-only lookup is ambiguous.
+        let Some(generator_sym) = self.session.modules.lookup_named_symbol_in_module(
+            ModuleId::Core,
+            "Generator",
+            NamedSymbolKind::Struct,
+        ) else {
             // If Generator is not available, fall back to body return type
             tracing::warn!("Generator type not found in Core, falling back to body return type");
             return substitute(_body_ret, &self.session.skolem_map);
@@ -4062,10 +4277,10 @@ impl<'a> InferencePass<'a> {
 
         // Look up the String.add witness (for string concatenation)
         let add_label: Label = "add".into();
-        let string_add_witness = self
-            .session
-            .find_protocol_id("Add")
-            .and_then(|add_id| self.session.find_witness(Symbol::String, add_id, &add_label));
+        let string_add_witness = self.session.find_protocol_id("Add").and_then(|add_id| {
+            self.session
+                .find_witness(Symbol::String, add_id, &add_label)
+        });
 
         // Look up the Showable protocol ID for finding show witnesses
         let showable_id = self.session.find_protocol_id("Showable");
@@ -4239,8 +4454,7 @@ impl<'a> InferencePass<'a> {
                         fields: vec![],
                     },
                 };
-                let body_expr =
-                    self.synth_string_literal(&format!("{type_name}.{variant_label}"));
+                let body_expr = self.synth_string_literal(&format!("{type_name}.{variant_label}"));
                 arms.push(TypedMatchArm {
                     pattern,
                     body: TypedBlock {
@@ -4254,9 +4468,8 @@ impl<'a> InferencePass<'a> {
                 let mut bind_syms = vec![];
                 let mut bind_patterns = vec![];
                 for (j, payload_ty) in payload_tys.iter().enumerate() {
-                    let bind_sym = Symbol::PatternBindLocal(
-                        self.session.symbols.next_pattern_bind(),
-                    );
+                    let bind_sym =
+                        Symbol::PatternBindLocal(self.session.symbols.next_pattern_bind());
                     self.session
                         .resolved_names
                         .symbol_names
@@ -4283,9 +4496,7 @@ impl<'a> InferencePass<'a> {
 
                 // Build "TypeName.variant(" + v0.show() + ", " + v1.show() + ... + ")"
                 let mut parts: Vec<TypedExpr> = vec![];
-                parts.push(self.synth_string_literal(&format!(
-                    "{type_name}.{variant_label}("
-                )));
+                parts.push(self.synth_string_literal(&format!("{type_name}.{variant_label}(")));
 
                 for (j, (bind_sym, payload_ty)) in bind_syms.iter().enumerate() {
                     if j > 0 {
@@ -4417,7 +4628,11 @@ impl<'a> InferencePass<'a> {
     }
 
     /// Find the Showable.show witness symbol for a given type.
-    fn find_show_witness_for_ty(&mut self, ty: &Ty, showable_id: Option<ProtocolId>) -> Option<Symbol> {
+    fn find_show_witness_for_ty(
+        &mut self,
+        ty: &Ty,
+        showable_id: Option<ProtocolId>,
+    ) -> Option<Symbol> {
         let showable_id = showable_id?;
         let show_label: Label = "show".into();
         let conforming_sym = match ty {
@@ -4425,12 +4640,15 @@ impl<'a> InferencePass<'a> {
             Ty::Nominal { symbol, .. } => *symbol,
             _ => return None,
         };
-        self.session.find_witness(conforming_sym, showable_id, &show_label)
+        self.session
+            .find_witness(conforming_sym, showable_id, &show_label)
     }
 
     fn synth_string_concat(&self, parts: Vec<TypedExpr>, add_witness: Option<Symbol>) -> TypedExpr {
         let mut result = parts.into_iter();
-        let mut acc = result.next().unwrap_or_else(|| self.synth_string_literal(""));
+        let mut acc = result
+            .next()
+            .unwrap_or_else(|| self.synth_string_literal(""));
         for part in result {
             match add_witness {
                 Some(witness_sym) => {
@@ -4438,7 +4656,8 @@ impl<'a> InferencePass<'a> {
                     // Full method type: Func(Self=String, Func(RHS=String, Ret=String, Empty), Empty)
                     let method_ty = Ty::Func(
                         Ty::String().into(),
-                        Ty::Func(Ty::String().into(), Ty::String().into(), Row::Empty.into()).into(),
+                        Ty::Func(Ty::String().into(), Ty::String().into(), Row::Empty.into())
+                            .into(),
                         Row::Empty.into(),
                     );
                     let callee = TypedExpr {

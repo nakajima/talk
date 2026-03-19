@@ -86,6 +86,7 @@ impl Value {
             (Self::Int(lhs), Self::Int(rhs)) => Self::Bool(lhs == rhs),
             (Self::Float(lhs), Self::Float(rhs)) => Self::Bool(lhs == rhs),
             (Self::Bool(lhs), Self::Bool(rhs)) => Self::Bool(lhs == rhs),
+            (Self::RawBuffer(lhs), Self::RawBuffer(rhs)) => Self::Bool(lhs == rhs),
             _ => panic!("can't compare {self:?} == {other:?}"),
         }
     }
@@ -94,6 +95,7 @@ impl Value {
             (Self::Int(lhs), Self::Int(rhs)) => Self::Bool(lhs != rhs),
             (Self::Float(lhs), Self::Float(rhs)) => Self::Bool(lhs != rhs),
             (Self::Bool(lhs), Self::Bool(rhs)) => Self::Bool(lhs != rhs),
+            (Self::RawBuffer(lhs), Self::RawBuffer(rhs)) => Self::Bool(lhs != rhs),
             _ => panic!("can't compare {self:?} > {other:?}"),
         }
     }
@@ -848,8 +850,7 @@ impl<IO: super::io::IO> Interpreter<IO> {
                     // Get bytes from memory
                     let bytes = if buf_ptr.0 < self.heap_start {
                         // Static memory
-                        self.program.static_memory.data
-                            [buf_ptr.0..buf_ptr.0 + count_int as usize]
+                        self.program.static_memory.data[buf_ptr.0..buf_ptr.0 + count_int as usize]
                             .to_vec()
                     } else {
                         // Heap memory
@@ -1442,7 +1443,12 @@ impl<IO: super::io::IO> Interpreter<IO> {
 
 #[cfg(test)]
 pub mod tests {
-    use crate::ir::{io::CaptureIO, lowerer_tests::tests::lower_module};
+    use std::path::PathBuf;
+
+    use crate::{
+        compiling::driver::{Driver, DriverConfig, Source},
+        ir::{io::CaptureIO, lowerer_tests::tests::lower_module},
+    };
 
     use super::*;
 
@@ -1473,6 +1479,26 @@ pub mod tests {
             Interpreter::new(module.program, Some(display_names), CaptureIO::default());
 
         interpreter.run()
+    }
+
+    pub fn interpret_with_imports(path: &str, input: &str) -> (Value, Interpreter<CaptureIO>) {
+        let source = Source::in_memory(PathBuf::from(path), input);
+        let driver = Driver::new(vec![source], DriverConfig::new("TestModule").executable());
+        let lowered = driver
+            .parse()
+            .unwrap()
+            .resolve_names()
+            .unwrap()
+            .typecheck()
+            .unwrap()
+            .lower()
+            .unwrap();
+        let display_names = lowered.display_symbol_names();
+        let module = lowered.module("TestModule");
+        let mut interpreter =
+            Interpreter::new(module.program, Some(display_names), CaptureIO::default());
+
+        (interpreter.run(), interpreter)
     }
 
     #[test]
@@ -2705,7 +2731,8 @@ Dog().handleDSTChange()
     #[test]
     fn interprets_int_show_inline() {
         // Test the digit+loop logic directly in user code to isolate from core module
-        let (val, interpreter) = interpret_with(r#"
+        let (val, interpreter) = interpret_with(
+            r#"
             func digit(d: Int) -> String {
                 match d {
                     0 -> "0", 1 -> "1", 2 -> "2", 3 -> "3", 4 -> "4",
@@ -2720,7 +2747,8 @@ Dog().handleDSTChange()
                 n = n / 10
             }
             result
-        "#);
+        "#,
+        );
         assert_eq!(interpreter.display(val, false), "42");
     }
 
@@ -2776,6 +2804,34 @@ Dog().handleDSTChange()
     fn interprets_string_show() {
         let (val, interpreter) = interpret_with(r#""hello".show()"#);
         assert_eq!(interpreter.display(val, false), "hello");
+    }
+
+    #[test]
+    fn interprets_string_equals() {
+        assert_eq!(interpret(r#""hello" == "hello""#), Value::Bool(true));
+        assert_eq!(interpret(r#""hello" == "world""#), Value::Bool(false));
+    }
+
+    #[test]
+    fn interprets_string_slice() {
+        let (val, interpreter) = interpret_with(r#""hello".slice(1, 3)"#);
+        assert_eq!(interpreter.display(val, false), "ell");
+    }
+
+    #[test]
+    fn interprets_string_find() {
+        assert_eq!(interpret(r#""hello world".find("world")"#), Value::Int(6));
+        assert_eq!(
+            interpret(r#""hello world".find("missing")"#),
+            Value::Int(-1)
+        );
+    }
+
+    #[test]
+    fn interprets_string_find_from() {
+        assert_eq!(interpret(r#""banana".find_from("na", 0)"#), Value::Int(2));
+        assert_eq!(interpret(r#""banana".find_from("na", 3)"#), Value::Int(4));
+        assert_eq!(interpret(r#""banana".find_from("na", 5)"#), Value::Int(-1));
     }
 
     #[test]
@@ -2928,9 +2984,7 @@ Dog().handleDSTChange()
 
     #[test]
     fn interprets_func_show() {
-        let (val, interpreter) = interpret_with(
-            "(func(x: Int) -> Int { x }).show()",
-        );
+        let (val, interpreter) = interpret_with("(func(x: Int) -> Int { x }).show()");
         assert_eq!(interpreter.display(val, false), "(Int) -> Int");
     }
 
@@ -3170,15 +3224,135 @@ Dog().handleDSTChange()
     }
 
     #[test]
+    fn http_server_handles_registered_route() {
+        let (_val, interpreter) = interpret_with(
+            r#"
+            let http = HTTP.Server()
+            http.get("/", func() { "root" })
+            let wire = http.handle("GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            print(wire)
+            "#,
+        );
+
+        let output = String::from_utf8(interpreter.io.stdout).unwrap();
+        assert!(
+            output.contains("HTTP/1.1 200 OK\r\n"),
+            "missing status line in {output:?}"
+        );
+        assert!(
+            output.contains("Content-Type: text/plain; charset=utf-8\r\n"),
+            "missing content-type in {output:?}"
+        );
+        assert!(
+            output.contains("Content-Length: 4\r\n"),
+            "missing content-length in {output:?}"
+        );
+        assert!(
+            output.contains("\r\n\r\nroot"),
+            "missing response body delimiter/payload in {output:?}"
+        );
+    }
+
+    #[test]
+    fn http_server_returns_404_for_unknown_route() {
+        let (_val, interpreter) = interpret_with(
+            r#"
+            let http = HTTP.Server()
+            http.get("/", func() { "root" })
+            let wire = http.handle("GET /missing HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            print(wire)
+            "#,
+        );
+
+        let output = String::from_utf8(interpreter.io.stdout).unwrap();
+        assert!(
+            output.contains("HTTP/1.1 404 Not Found\r\n"),
+            "missing status line in {output:?}"
+        );
+        assert!(
+            output.contains("Content-Length: 9\r\n"),
+            "missing content-length in {output:?}"
+        );
+        assert!(
+            output.contains("\r\n\r\nNot Found"),
+            "missing response body delimiter/payload in {output:?}"
+        );
+    }
+
+    #[test]
+    fn http_server_rejects_non_get_methods() {
+        let (_val, interpreter) = interpret_with(
+            r#"
+            let http = HTTP.Server()
+            http.get("/", func() { "root" })
+            let wire = http.handle("POST / HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            print(wire)
+            "#,
+        );
+
+        let output = String::from_utf8(interpreter.io.stdout).unwrap();
+        assert!(
+            output.contains("HTTP/1.1 404 Not Found\r\n"),
+            "missing status line in {output:?}"
+        );
+    }
+
+    #[test]
+    fn http_server_executes_handler_per_request() {
+        let (_val, interpreter) = interpret_with(
+            r#"
+            let http = HTTP.Server()
+            http.get("/", func() {
+                print("HIT")
+                "root"
+            })
+            http.handle("GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            http.handle("GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            "#,
+        );
+
+        let output = String::from_utf8(interpreter.io.stdout).unwrap();
+        assert_eq!(output, "HIT\nHIT\n");
+    }
+
+    #[test]
+    fn http_server_handles_multiple_registered_routes() {
+        let (_val, interpreter) = interpret_with(
+            r#"
+            let http = HTTP.Server()
+            http.get("/", func() { "root" })
+            http.get("/health", func() { "ok" })
+            let wire = http.handle("GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            print(wire)
+            "#,
+        );
+
+        let output = String::from_utf8(interpreter.io.stdout).unwrap();
+        assert!(
+            output.contains("HTTP/1.1 200 OK\r\n"),
+            "missing status line in {output:?}"
+        );
+        assert!(
+            output.contains("Content-Length: 2\r\n"),
+            "missing content-length in {output:?}"
+        );
+        assert!(
+            output.contains("\r\n\r\nok"),
+            "missing response body delimiter/payload in {output:?}"
+        );
+    }
+
+    #[test]
     fn real_socketpair_io_read_write() {
         // Test that heap data survives a round-trip through real Unix sockets.
         // This uses StdioIO (real libc calls) with a socketpair to test the
         // actual byte-level behavior, bypassing CaptureIO's loopback.
-        use crate::ir::io::{StdioIO, IO};
+        use crate::ir::io::{IO, StdioIO};
 
         // Create a socketpair - two connected Unix stream sockets.
         let mut fds: [i32; 2] = [0; 2];
-        let ret = unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, fds.as_mut_ptr()) };
+        let ret =
+            unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, fds.as_mut_ptr()) };
         assert_eq!(ret, 0, "socketpair failed");
         let _guard = SocketPairGuard(fds);
         let (read_fd, write_fd) = (fds[0] as i64, fds[1] as i64);
@@ -3219,10 +3393,11 @@ Dog().handleDSTChange()
     fn real_socketpair_full_server_echo() {
         // Full ChatServer pattern over real sockets: write greeting, read message,
         // write echo prefix from static string, write echoed data from heap buffer.
-        use crate::ir::io::{StdioIO, IO};
+        use crate::ir::io::{IO, StdioIO};
 
         let mut fds: [i32; 2] = [0; 2];
-        let ret = unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, fds.as_mut_ptr()) };
+        let ret =
+            unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, fds.as_mut_ptr()) };
         assert_eq!(ret, 0, "socketpair failed");
         let _guard = SocketPairGuard(fds);
         let (server_fd, client_fd) = (fds[0] as i64, fds[1] as i64);
@@ -3264,7 +3439,9 @@ Dog().handleDSTChange()
         let mut tmp = vec![0u8; 4096];
         loop {
             let n = io.io_read(client_fd, &mut tmp);
-            if n <= 0 { break; }
+            if n <= 0 {
+                break;
+            }
             received.extend_from_slice(&tmp[..n as usize]);
         }
 
@@ -3280,10 +3457,11 @@ Dog().handleDSTChange()
     fn real_socketpair_loop_iteration_echo() {
         // Test the ChatServer pattern inside a loop with break, using real sockets.
         // This verifies that loop-scoped variables (buf, n) work correctly with heap IO.
-        use crate::ir::io::{StdioIO, IO};
+        use crate::ir::io::{IO, StdioIO};
 
         let mut fds: [i32; 2] = [0; 2];
-        let ret = unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, fds.as_mut_ptr()) };
+        let ret =
+            unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, fds.as_mut_ptr()) };
         assert_eq!(ret, 0, "socketpair failed");
         let _guard = SocketPairGuard(fds);
         let (server_fd, client_fd) = (fds[0] as i64, fds[1] as i64);
@@ -3321,7 +3499,9 @@ Dog().handleDSTChange()
         let mut tmp = vec![0u8; 4096];
         loop {
             let n = io.io_read(client_fd, &mut tmp);
-            if n <= 0 { break; }
+            if n <= 0 {
+                break;
+            }
             received.extend_from_slice(&tmp[..n as usize]);
         }
 
@@ -3354,10 +3534,7 @@ Dog().handleDSTChange()
             ",
         );
         // Should print "1" exactly twice (once per loop iteration), not three times
-        assert_eq!(
-            String::from_utf8(interpreter.io.stdout).unwrap(),
-            "1\n1\n"
-        );
+        assert_eq!(String::from_utf8(interpreter.io.stdout).unwrap(), "1\n1\n");
     }
 
     #[test]

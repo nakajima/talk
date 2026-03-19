@@ -312,9 +312,9 @@ impl<'a> DeclDeclarer<'a> {
                 name, name_span, ..
             } = &decl.kind
             {
-                let resolved =
-                    self.resolver
-                        .declare(name, some!(Effect), decl.id, *name_span);
+                let resolved = self
+                    .resolver
+                    .declare(name, some!(Effect), decl.id, *name_span);
 
                 if decl.visibility == Visibility::Public
                     && let Ok(sym) = resolved.symbol()

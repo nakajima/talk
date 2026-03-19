@@ -287,9 +287,11 @@ pub async fn start() {
                     let result = hover_at_lsp(&workspace, core.as_deref(), &uri, byte_offset);
                     if result.is_none() {
                         let document_id = document_id_for_uri(&uri);
-                        let node_descriptions = workspace.ast_for(&document_id)
+                        let node_descriptions = workspace
+                            .ast_for(&document_id)
                             .map(|ast| {
-                                crate::analysis::node_ids_at_offset(ast, byte_offset).iter()
+                                crate::analysis::node_ids_at_offset(ast, byte_offset)
+                                    .iter()
                                     .filter_map(|id| ast.find(*id))
                                     .map(|n| crate::lsp::goto_definition::describe_node(&n))
                                     .collect::<Vec<_>>()
@@ -1481,16 +1483,9 @@ match Opt.some(123) {
             .expect("file uri");
         let module = workspace_for_docs(vec![(uri.clone(), code)]);
         // Effect name span excludes the leading ', so find "fizz" in the call (third occurrence)
-        let byte_offset = code
-            .match_indices("fizz")
-            .nth(2)
-            .expect("effect call")
-            .0 as u32;
+        let byte_offset = code.match_indices("fizz").nth(2).expect("effect call").0 as u32;
         let target = super::goto_definition(&module, None, &uri, byte_offset);
-        assert!(
-            target.is_some(),
-            "should find effect definition from call"
-        );
+        assert!(target.is_some(), "should find effect definition from call");
     }
 
     #[test]
@@ -1503,11 +1498,7 @@ match Opt.some(123) {
             .expect("file uri");
         let module = workspace_for_docs(vec![(uri.clone(), code)]);
         // Effect name span excludes the leading ', so find "fizz" in the handler (second occurrence)
-        let byte_offset = code
-            .match_indices("fizz")
-            .nth(1)
-            .expect("handler")
-            .0 as u32;
+        let byte_offset = code.match_indices("fizz").nth(1).expect("handler").0 as u32;
         let target = super::goto_definition(&module, None, &uri, byte_offset);
         assert!(
             target.is_some(),
@@ -1560,9 +1551,8 @@ func foo() 'fizz -> Int {
     'fizz()
 }
 "#;
-        let uri =
-            Url::from_file_path(std::env::temp_dir().join("goto_def_effect_in_func_sig.tlk"))
-                .expect("file uri");
+        let uri = Url::from_file_path(std::env::temp_dir().join("goto_def_effect_in_func_sig.tlk"))
+            .expect("file uri");
         let module = workspace_for_docs(vec![(uri.clone(), code)]);
         // Find "fizz" in the function signature (second occurrence)
         let byte_offset = code
@@ -1606,12 +1596,8 @@ func foo() 'fizz -> Int {
         let core = super::AnalysisWorkspace::core();
 
         let byte_offset = code.find("print_raw").expect("print_raw") as u32;
-        let target =
-            super::goto_definition(&module, core.as_ref(), &uri, byte_offset);
-        assert!(
-            target.is_some(),
-            "should find core function definition"
-        );
+        let target = super::goto_definition(&module, core.as_ref(), &uri, byte_offset);
+        assert!(target.is_some(), "should find core function definition");
     }
 
     #[test]
@@ -1641,16 +1627,11 @@ func foo() 'fizz -> Int {
 
 @handle 'fizz { 0 }
 "#;
-        let uri =
-            Url::from_file_path(std::env::temp_dir().join("goto_def_handler_tick.tlk"))
-                .expect("file uri");
+        let uri = Url::from_file_path(std::env::temp_dir().join("goto_def_handler_tick.tlk"))
+            .expect("file uri");
         let module = workspace_for_docs(vec![(uri.clone(), code)]);
         // Find the ' before "fizz" in the handler (the second ' in the code)
-        let tick_offset = code
-            .match_indices("'")
-            .nth(1)
-            .expect("handler tick")
-            .0;
+        let tick_offset = code.match_indices("'").nth(1).expect("handler tick").0;
         assert_eq!(&code[tick_offset..tick_offset + 1], "'");
         let target = super::goto_definition(&module, None, &uri, tick_offset as u32);
         assert!(

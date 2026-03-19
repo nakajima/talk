@@ -17,7 +17,9 @@ print("Using manual indexing:")
 let arr = [10, 20, 30, 40, 50]
 let i = 0
 loop {
-	if i >= arr.count { break }
+	if i >= arr.count {
+		break
+	}
 	print(arr.get(i))
 	i = i + 1
 }
@@ -26,7 +28,9 @@ loop {
 let sum = 0
 let j = 0
 loop {
-	if j >= arr.count { break }
+	if j >= arr.count {
+		break
+	}
 	sum = sum + arr.get(j)
 	j = j + 1
 }

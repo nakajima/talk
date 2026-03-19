@@ -159,6 +159,12 @@ impl TypeCatalog {
     }
 
     pub fn lookup_static_member(&self, receiver: &Symbol, label: &Label) -> Option<Symbol> {
+        if let Some(entries) = self.child_types.get(receiver)
+            && let Some(sym) = entries.get(label)
+        {
+            return Some(*sym);
+        }
+
         if let Some(entries) = self.static_methods.get(receiver)
             && let Some(sym) = entries.get(label)
         {

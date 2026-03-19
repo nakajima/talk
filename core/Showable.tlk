@@ -73,7 +73,9 @@ extend Float: Showable {
 			frac = frac._frac()
 			frac_str = frac_str + _digit(d)
 			i = i + 1
-			if frac < 0.0000000000001 { break }
+			if frac < 0.0000000000001 {
+				break
+			}
 		}
 		return int_str + "." + frac_str
 	}

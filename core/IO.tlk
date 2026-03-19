@@ -97,22 +97,22 @@ public func is_error(result: Int) -> Bool {
 	result < 0
 }
 
-public func write_string(fd: Int, s: String) 'io -> Int {
-	_io_write(fd, s.base, s.length)
+public func write_string(fd: Int, s: String) -> Int {
+	@_ir(fd, s.base, s.length) { %? = io_write $0 $1 $2 }
 }
 
-public func print_raw(s: String) 'io -> Int {
+public func print_raw(s: String) -> Int {
 	write_string(STDOUT_FD, s)
 }
 
-func _print_line(s: String) 'io -> () {
-	_io_write(STDOUT_FD, s.base, s.length)
+func _print_line(s: String) -> () {
+	@_ir(STDOUT_FD, s.base, s.length) { %? = io_write $0 $1 $2 }
 	let nl = "\n"
-	_io_write(STDOUT_FD, nl.base, nl.length)
+	@_ir(STDOUT_FD, nl.base, nl.length) { %? = io_write $0 $1 $2 }
 	()
 }
 
-public func print<T: Showable>(value: T) 'io -> () {
+public func print<T: Showable>(value: T) -> () {
 	_print_line(value.show())
 }
 

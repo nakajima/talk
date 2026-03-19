@@ -1,7 +1,9 @@
 use async_lsp::lsp_types::{Location, Position, Range, Url};
 
 use crate::analysis::workspace::Workspace as AnalysisWorkspace;
-use crate::analysis::{node_ids_at_offset, resolve_member_symbol, resolve_variant_symbol, span_contains};
+use crate::analysis::{
+    node_ids_at_offset, resolve_member_symbol, resolve_variant_symbol, span_contains,
+};
 use crate::compiling::module::ModuleId;
 use crate::name_resolution::symbol::Symbol;
 
@@ -96,11 +98,7 @@ pub fn goto_definition(
                     ..
                 } => {
                     if span_contains(*variant_name_span, byte_offset) {
-                        resolve_variant_symbol(
-                            module.types.as_ref(),
-                            pattern.id,
-                            variant_name,
-                        )
+                        resolve_variant_symbol(module.types.as_ref(), pattern.id, variant_name)
                     } else {
                         None
                     }
@@ -463,7 +461,10 @@ pub(crate) fn definition_location_in_module(
     Some(Location { uri, range })
 }
 
-fn node_span(ast: &crate::ast::AST<crate::ast::NameResolved>, node_id: crate::node_id::NodeID) -> Option<(u32, u32)> {
+fn node_span(
+    ast: &crate::ast::AST<crate::ast::NameResolved>,
+    node_id: crate::node_id::NodeID,
+) -> Option<(u32, u32)> {
     let node = ast.find(node_id)?;
     match node {
         crate::node::Node::Pattern(p) => Some((p.span.start, p.span.end)),

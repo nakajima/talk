@@ -150,11 +150,15 @@ pub struct ResolvedNames {
 impl ResolvedNames {
     pub fn exports(&self) -> Exports {
         let mut res = Exports::default();
-        for (&scope_id, scope) in &self.scopes {
+        let mut file_scopes = self
+            .scopes
+            .iter()
+            .filter(|(scope_id, _)| scope_id.1 == 0)
+            .collect_vec();
+        file_scopes.sort_by_key(|(scope_id, _)| **scope_id);
+
+        for (_, scope) in file_scopes {
             // Only file-level scopes (node index 0)
-            if scope_id.1 != 0 {
-                continue;
-            }
 
             for (name, &symbol) in &scope.types {
                 if self.public_symbols.contains(&symbol) && !matches!(symbol, Symbol::Builtin(..)) {
@@ -416,9 +420,7 @@ impl NameResolver {
                         let core = self.modules.get_module_by_name("Core").unwrap();
                         core.exports
                             .iter()
-                            .map(|(name, &symbol)| {
-                                (name.clone(), symbol, is_type_symbol(&symbol))
-                            })
+                            .map(|(name, &symbol)| (name.clone(), symbol, is_type_symbol(&symbol)))
                             .collect()
                     } else {
                         let Some(target_scope) = self.scopes.get(&target_scope_id) else {
@@ -470,8 +472,7 @@ impl NameResolver {
                                     Some((_, symbol, is_type)) => {
                                         // Check if the symbol is public
                                         // (core exports are public by definition)
-                                        if !use_core
-                                            && !self.phase.public_symbols.contains(symbol)
+                                        if !use_core && !self.phase.public_symbols.contains(symbol)
                                         {
                                             self.diagnostic(
                                                 decl_id,

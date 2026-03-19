@@ -130,6 +130,19 @@ pub mod tests {
     }
 
     #[test]
+    fn types_string_slice() {
+        let (ast, types) = typecheck_core("\"hello\".slice(1, 3)");
+        assert_eq!(ty(0, &ast, &types), Ty::String());
+    }
+
+    #[test]
+    fn types_string_find() {
+        let (ast, types) = typecheck_core("\"hello\".find(\"ll\"); \"hello\".find_from(\"l\", 3)");
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
+        assert_eq!(ty(1, &ast, &types), Ty::Int);
+    }
+
+    #[test]
     fn types_equals_int() {
         let (ast, types) = typecheck_core("1 == 2; 1 != 2");
         assert_eq!(ty(0, &ast, &types), Ty::Bool);
@@ -2590,17 +2603,9 @@ pub mod tests {
         let g_ty = ty(0, &ast, &types);
         match g_ty {
             Ty::Nominal { symbol, type_args } => {
-                // Check it's a Generator
-                let name = types
-                    .catalog
-                    .nominals
-                    .keys()
-                    .find(|k| *k == &symbol)
-                    .map(|_| true)
-                    .unwrap_or(false);
                 assert!(
-                    name || symbol.to_string().contains("Struct"),
-                    "Expected Generator type, got {:?}",
+                    matches!(symbol, Symbol::Struct(_)),
+                    "Expected concrete Generator struct, got {:?}",
                     symbol
                 );
 

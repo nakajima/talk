@@ -1,4 +1,7 @@
-use crate::analysis::{Hover, TextRange, node_ids_at_offset, resolve_member_symbol, resolve_variant_symbol, span_contains};
+use crate::analysis::{
+    Hover, TextRange, node_ids_at_offset, resolve_member_symbol, resolve_variant_symbol,
+    span_contains,
+};
 use crate::name_resolution::symbol::Symbol;
 use crate::node::Node;
 use crate::node_kinds::{
@@ -301,8 +304,7 @@ fn hover_for_pattern(ctx: &HoverCtx<'_>, pattern: &Pattern) -> Option<Hover> {
             if !span_contains(*variant_name_span, ctx.byte_offset) {
                 return None;
             }
-            let symbol =
-                resolve_variant_symbol(ctx.types, pattern.id, variant_name);
+            let symbol = resolve_variant_symbol(ctx.types, pattern.id, variant_name);
             let node_ty = ctx
                 .types
                 .and_then(|t| t.get(&pattern.id))
@@ -316,7 +318,10 @@ fn hover_for_pattern(ctx: &HoverCtx<'_>, pattern: &Pattern) -> Option<Hover> {
             )?;
             Some(Hover {
                 contents: line,
-                range: Some(TextRange::new(variant_name_span.start, variant_name_span.end)),
+                range: Some(TextRange::new(
+                    variant_name_span.start,
+                    variant_name_span.end,
+                )),
             })
         }
         _ => None,

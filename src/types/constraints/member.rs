@@ -417,6 +417,14 @@ impl Member {
             };
         }
 
+        if let Symbol::Struct(..) = member_sym {
+            member_ty = Ty::Constructor {
+                name: crate::name::Name::Resolved(member_sym, self.label.to_string()),
+                params: vec![],
+                ret: session.new_ty_meta_var(context.level()).into(),
+            };
+        }
+
         match unify(&member_ty, &self.ty, context, session).map_err(|e| e.with_cause(cause)) {
             Ok(vars) => SolveResult::Solved(vars),
             Err(e) => SolveResult::Err(e),

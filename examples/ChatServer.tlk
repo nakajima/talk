@@ -20,7 +20,9 @@ loop {
 	loop {
 		let buf = _alloc(1024)
 		let n = _io_read(client, buf, 1024)
-		if n <= 0 { break }
+		if n <= 0 {
+			break
+		}
 
 		let response = _alloc(1030)
 		let prefix = "echo: "

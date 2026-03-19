@@ -12,12 +12,12 @@ use crate::label::Label;
 use crate::node_kinds::inline_ir_instruction::{InlineIRInstructionKind, TypedInlineIRInstruction};
 use crate::node_kinds::type_annotation::TypeAnnotation;
 use crate::types::infer_row::Row;
+use crate::types::type_catalog::Nominal;
 use crate::types::typed_ast::{
     TypedBlock, TypedDecl, TypedDeclKind, TypedExpr, TypedExprKind, TypedFunc, TypedMatchArm,
     TypedNode, TypedParameter, TypedPattern, TypedPatternKind, TypedRecordField, TypedStmt,
     TypedStmtKind,
 };
-use crate::types::type_catalog::Nominal;
 use crate::types::types::TypeEntry;
 use crate::{
     ir::{
@@ -1273,13 +1273,13 @@ impl<'a> Lowerer<'a> {
                 _ => {
                     return Err(IRError::TypeNotFound(
                         "Expected IORequest variant constructor in 'io effect call".into(),
-                    ))
+                    ));
                 }
             },
             _ => {
                 return Err(IRError::TypeNotFound(
                     "Expected IORequest constructor call in 'io effect call".into(),
-                ))
+                ));
             }
         };
 
@@ -1360,7 +1360,7 @@ impl<'a> Lowerer<'a> {
             _ => {
                 return Err(IRError::TypeNotFound(format!(
                     "Unknown IORequest variant: {variant_name}"
-                )))
+                )));
             }
         }
 
@@ -2979,14 +2979,16 @@ impl<'a> Lowerer<'a> {
         expr: &TypedExpr,
         bind: Bind,
     ) -> Result<(Value, Ty), IRError> {
-        let constructor_sym = *self
+        let init_label = Label::Named("init".into());
+        let constructor_sym = self
             .typed
             .types
             .catalog
             .initializers
             .get(name)
-            .unwrap_or_else(|| unreachable!("did not get inits for {name:?}"))
-            .get(&Label::Named("init".into()))
+            .cloned()
+            .or_else(|| self.config.modules.lookup_initializers(name))
+            .and_then(|inits| inits.get(&init_label).copied())
             .unwrap_or_else(|| unreachable!("did not get init for {name:?}"));
 
         let init_entry = self
@@ -2994,6 +2996,7 @@ impl<'a> Lowerer<'a> {
             .types
             .get_symbol(&constructor_sym)
             .cloned()
+            .or_else(|| self.config.modules.lookup(&constructor_sym))
             .expect("did not get init entry");
 
         let dest = self.ret(bind);
@@ -3296,24 +3299,21 @@ impl<'a> Lowerer<'a> {
         let record_dest = self.next_register();
 
         // Look up the initializer - use provided callee_sym (specialized) if available
+        let init_label = Label::Named("init".into());
         let init_sym = callee_sym.unwrap_or_else(|| {
             self.typed
                 .types
                 .catalog
                 .initializers
                 .get(name)
-                .unwrap_or_else(|| panic!("didn't get initializers for {name:?}"))
-                .get(&Label::Named("init".into()))
-                .copied()
-                .unwrap_or_else(|| {
+                .and_then(|inits| inits.get(&init_label).copied())
+                .or_else(|| {
                     self.config
                         .modules
                         .lookup_initializers(name)
-                        .unwrap_or_else(|| panic!("did not get initializers for {name:?}"))
-                        .get(&Label::Named("init".into()))
-                        .copied()
-                        .expect("did not get init")
+                        .and_then(|inits| inits.get(&init_label).copied())
                 })
+                .unwrap_or_else(|| panic!("did not get init for {name:?}"))
         });
 
         let init_entry = self
@@ -3321,6 +3321,7 @@ impl<'a> Lowerer<'a> {
             .types
             .get_symbol(&init_sym)
             .cloned()
+            .or_else(|| self.config.modules.lookup(&init_sym))
             .expect("did not get init entry");
 
         let properties = self
@@ -3332,13 +3333,11 @@ impl<'a> Lowerer<'a> {
             .cloned()
             .unwrap_or_default();
 
-        // Extract return type from the initializer function
+        // Extract return type directly from the initializer function. This is
+        // more robust than relying on callee.ty, which may be rewritten during
+        // specialization (e.g. nested child-type constructor calls).
         let mut params = init_entry.as_mono_ty().clone().uncurry_params();
-        let _ret = params.pop().expect("did not get init ret");
-
-        let Ty::Constructor { box ret, .. } = &callee.ty else {
-            unreachable!()
-        };
+        let ret = params.pop().expect("did not get init ret");
 
         self.push_instr(Instruction::Nominal {
             sym: *name,
@@ -3362,7 +3361,49 @@ impl<'a> Lowerer<'a> {
             meta: vec![InstructionMeta::Source(id)].into(),
         });
 
-        Ok((dest.into(), ret.clone()))
+        Ok((dest.into(), ret))
+    }
+
+    fn begin_method_self_tracking(
+        &mut self,
+        var_sym: Symbol,
+        receiver_ty: &Ty,
+        receiver_val: Value,
+    ) -> Option<(Register, Binding<Ty>)> {
+        let binding = self.current_func().bindings.get(&var_sym).cloned()?;
+        let self_dest_reg = self.next_register();
+
+        // Seed the writeback register with the current receiver in case the
+        // callee returns without mutating self.
+        self.push_instr(Instruction::Constant {
+            dest: self_dest_reg,
+            ty: receiver_ty.clone(),
+            val: receiver_val,
+            meta: Default::default(),
+        });
+
+        // Keep non-pointer bindings in sync eagerly. Pointer-backed bindings are
+        // written back after the call so the callee's final self wins.
+        if !matches!(binding, Binding::Pointer(_)) {
+            self.set_binding(&var_sym, self_dest_reg);
+        }
+
+        Some((self_dest_reg, binding))
+    }
+
+    fn finish_method_self_tracking(
+        &mut self,
+        self_dest: Option<Register>,
+        receiver_binding: Option<Binding<Ty>>,
+        receiver_ty: &Ty,
+    ) {
+        if let (Some(self_dest_reg), Some(Binding::Pointer(addr))) = (self_dest, receiver_binding) {
+            self.push_instr(Instruction::Store {
+                value: self_dest_reg.into(),
+                ty: receiver_ty.clone(),
+                addr,
+            });
+        }
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self, call_expr, callee, args))]
@@ -3395,6 +3436,19 @@ impl<'a> Lowerer<'a> {
             return self.lower_constructor_call(
                 call_expr.id,
                 name,
+                callee,
+                arg_vals,
+                dest,
+                callee_sym.copied(),
+            );
+        }
+
+        // Some nested child-type calls are specialized into a direct variable
+        // reference to the child struct symbol (e.g. Outer.Inner()).
+        if let TypedExprKind::Variable(sym @ Symbol::Struct(..)) = &callee.kind {
+            return self.lower_constructor_call(
+                call_expr.id,
+                sym,
                 callee,
                 arg_vals,
                 dest,
@@ -3470,33 +3524,19 @@ impl<'a> Lowerer<'a> {
             callee_sym,
             Some(Symbol::InstanceMethod(_)) | Some(Symbol::Synthesized(_))
         );
-        let (self_dest, receiver_binding, first_arg_var_sym) = if is_method_like
+        let tracked_self = if is_method_like
             && !arg_vals.is_empty()
             && let Some(first_arg) = args.first()
             && let TypedExprKind::Variable(var_sym) = &first_arg.kind
         {
-            let self_dest_reg = self.next_register();
-            let binding = self.current_func().bindings.get(var_sym).cloned();
-            // Initialize self_dest_reg with current self value (in case method doesn't mutate)
-            self.push_instr(Instruction::Constant {
-                dest: self_dest_reg,
-                ty: first_arg.ty.clone(),
-                val: arg_vals[0].clone(),
-                meta: Default::default(),
-            });
-            // For non-Pointer bindings, update the binding now
-            // For Pointer bindings, we'll emit a Store after the Call
-            if !matches!(binding, Some(Binding::Pointer(_))) && binding.is_some() {
-                self.set_binding(var_sym, self_dest_reg);
-            }
-            (
-                Some(self_dest_reg),
-                binding,
-                Some((var_sym, first_arg.ty.clone())),
-            )
+            self.begin_method_self_tracking(*var_sym, &first_arg.ty, arg_vals[0].clone())
+                .map(|(self_dest_reg, binding)| (self_dest_reg, binding, first_arg.ty.clone()))
         } else {
-            (None, None, None)
+            None
         };
+        let self_dest = tracked_self
+            .as_ref()
+            .map(|(self_dest_reg, _, _)| *self_dest_reg);
 
         let callee_ir = self.lower_expr(callee, Bind::Fresh)?.0;
 
@@ -3509,15 +3549,12 @@ impl<'a> Lowerer<'a> {
             meta: vec![InstructionMeta::Source(callee.id)].into(),
         });
 
-        // For Pointer bindings, emit Store AFTER the Call
-        if let (Some(self_dest_reg), Some(Binding::Pointer(addr)), Some((_, first_arg_ty))) =
-            (self_dest, receiver_binding, first_arg_var_sym)
-        {
-            self.push_instr(Instruction::Store {
-                value: self_dest_reg.into(),
-                ty: first_arg_ty,
-                addr,
-            });
+        if let Some((self_dest_reg, receiver_binding, first_arg_ty)) = tracked_self {
+            self.finish_method_self_tracking(
+                Some(self_dest_reg),
+                Some(receiver_binding),
+                &first_arg_ty,
+            );
         }
 
         Ok((dest.into(), ty))
@@ -3575,12 +3612,11 @@ impl<'a> Lowerer<'a> {
 
         // Function types are Showable at compile time -- emit their signature as a string literal
         if matches!(&receiver.ty, Ty::Func(..)) && label.to_string() == "show" {
-            let formatter = crate::types::format::TypeFormatter::new(
-                crate::types::format::SymbolNames::new(
+            let formatter =
+                crate::types::format::TypeFormatter::new(crate::types::format::SymbolNames::new(
                     Some(&self.typed.resolved_names.symbol_names),
                     None,
-                ),
-            );
+                ));
             let sig = formatter.format_ty_for_show(&receiver.ty);
             let string_expr = TypedExpr {
                 id: call_expr.id,
@@ -3598,10 +3634,27 @@ impl<'a> Lowerer<'a> {
             None
         };
 
+        // Static calls on constructors (e.g. HTTP.Server()) should not prepend a
+        // receiver argument. Keep that path separate from the explicit-self legacy
+        // constructor call shape (Foo.bar(fizz)).
+        let constructor_static_sym = if let Ty::Constructor {
+            name: Name::Resolved(sym, ..),
+            ..
+        } = &receiver.ty
+        {
+            self.lookup_static_member(sym, label)
+        } else {
+            None
+        };
+
         // Is this an instance method call on a constructor? If so we don't need
-        // to prepend a self arg because it's passed explicitly (like Foo.bar(fizz) where
-        // fizz == self)
-        if let TypedExprKind::Constructor(_name, ..) = &receiver.kind {
+        // to prepend a self arg because it's passed explicitly (like Foo.bar(fizz)
+        // where fizz == self). Do not apply this to true static constructor calls.
+        if constructor_static_sym.is_some() {
+            // no-op: static member call on a constructor
+        } else if let TypedExprKind::Constructor(_name, ..) = &receiver.kind
+            && !arg_exprs.is_empty()
+        {
             receiver = arg_exprs[0].clone();
         } else {
             let (receiver_ir, _) = self.lower_expr(&receiver, Bind::Fresh)?;
@@ -3619,7 +3672,7 @@ impl<'a> Lowerer<'a> {
                 Ty::Constructor {
                     name: Name::Resolved(sym, ..),
                     ..
-                } => self.lookup_static_member(sym, label),
+                } => constructor_static_sym.or_else(|| self.lookup_static_member(sym, label)),
                 Ty::Param(_, protocol_ids) => {
                     let mut found = None;
                     for pid in protocol_ids {
@@ -3629,7 +3682,7 @@ impl<'a> Lowerer<'a> {
                         }
                     }
                     found
-                },
+                }
                 _ => {
                     return Err(IRError::WitnessNotFound(format!(
                         "could not determine callee sym for {:?}.{label:?}",
@@ -3645,45 +3698,24 @@ impl<'a> Lowerer<'a> {
             })?
         };
 
-        // Determine self_dest: if receiver is a variable, allocate a register
-        // to receive the mutated self
-        let (self_dest, receiver_binding) = if let Some(var_sym) = receiver_var_sym {
-            let self_dest_reg = self.next_register();
-            let binding = self.current_func().bindings.get(&var_sym).cloned();
-            tracing::trace!(
-                ?var_sym,
-                ?binding,
-                ?self_dest_reg,
-                "lower_method_call: checking receiver binding"
-            );
-            // Initialize self_dest_reg with current self value (in case method doesn't mutate)
-            self.push_instr(Instruction::Constant {
-                dest: self_dest_reg,
-                ty: receiver.ty.clone(),
-                val: args[0].clone(),
-                meta: Default::default(),
-            });
-            // For non-Pointer bindings, update the binding now
-            // For Pointer bindings, we'll emit a Store after the Call
-            if !matches!(binding, Some(Binding::Pointer(_))) {
-                if binding.is_some() {
-                    tracing::trace!(
-                        ?var_sym,
-                        ?self_dest_reg,
-                        "lower_method_call: updating binding"
-                    );
-                    self.set_binding(&var_sym, self_dest_reg);
-                } else {
-                    tracing::trace!(
-                        ?var_sym,
-                        "lower_method_call: no binding found, skipping set_binding"
-                    );
-                }
-            }
-            (Some(self_dest_reg), binding)
+        // Child type access through a constructor receiver (e.g. Outer.Inner())
+        // resolves to a struct symbol, not a callable method symbol. Lower that
+        // directly as a constructor call.
+        if matches!(sym, Symbol::Struct(..)) {
+            return self.lower_constructor_call(call_expr.id, &sym, callee_expr, args, dest, None);
+        }
+
+        // Track receiver writeback for method calls independently of the method
+        // return type. Stateful methods like Iterator.next() and Generator.send()
+        // both mutate self while returning a value.
+        let tracked_self = if let Some(var_sym) = receiver_var_sym {
+            self.begin_method_self_tracking(var_sym, &receiver.ty, args[0].clone())
         } else {
-            (None, None)
+            None
         };
+        let self_dest = tracked_self
+            .as_ref()
+            .map(|(self_dest_reg, _)| *self_dest_reg);
 
         self.push_instr(Instruction::Call {
             dest,
@@ -3694,15 +3726,12 @@ impl<'a> Lowerer<'a> {
             meta: vec![InstructionMeta::Source(callee_expr.id)].into(),
         });
 
-        // For Pointer bindings, emit Store AFTER the Call so that self_dest_reg
-        // has the mutated value from the callee
-        if let (Some(self_dest_reg), Some(Binding::Pointer(addr))) = (self_dest, receiver_binding) {
-            let ty = receiver.ty.clone();
-            self.push_instr(Instruction::Store {
-                value: self_dest_reg.into(),
-                ty,
-                addr,
-            });
+        if let Some((self_dest_reg, receiver_binding)) = tracked_self {
+            self.finish_method_self_tracking(
+                Some(self_dest_reg),
+                Some(receiver_binding),
+                &receiver.ty,
+            );
         }
 
         Ok((dest.into(), ty))

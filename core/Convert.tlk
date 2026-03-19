@@ -1,0 +1,10 @@
+// no-core
+public protocol From {
+	associated Source
+	func from(value: Source) -> Self
+}
+
+public protocol Into {
+	associated Target
+	func into() -> Target
+}

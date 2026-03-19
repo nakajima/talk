@@ -75,23 +75,27 @@ impl Call {
                     return SolveResult::Err(TypeError::NameNotResolved(name.clone()));
                 };
 
-                let Some(nominal) = session.lookup_nominal(&sym) else {
-                    return SolveResult::Defer(DeferralReason::WaitingOnSymbol(sym));
-                };
+                let nominal = session.lookup_nominal(&sym);
 
-                let type_args = if nominal.type_params.is_empty() {
-                    vec![]
+                let type_args = if let Some(nominal) = nominal.as_ref() {
+                    if nominal.type_params.is_empty() {
+                        vec![]
+                    } else if self.type_args.is_empty() {
+                        nominal
+                            .type_params
+                            .iter()
+                            .map(|_| session.new_ty_meta_var(context.level().next()))
+                            .collect()
+                    } else if self.type_args.len() != nominal.type_params.len() {
+                        return SolveResult::Err(TypeError::GenericArgCount {
+                            expected: nominal.type_params.len() as u8,
+                            actual: self.type_args.len() as u8,
+                        });
+                    } else {
+                        self.type_args.clone()
+                    }
                 } else if self.type_args.is_empty() {
-                    nominal
-                        .type_params
-                        .iter()
-                        .map(|_| session.new_ty_meta_var(context.level().next()))
-                        .collect()
-                } else if self.type_args.len() != nominal.type_params.len() {
-                    return SolveResult::Err(TypeError::GenericArgCount {
-                        expected: nominal.type_params.len() as u8,
-                        actual: self.type_args.len() as u8,
-                    });
+                    vec![]
                 } else {
                     self.type_args.clone()
                 };
@@ -144,7 +148,11 @@ impl Call {
                     match session.lookup(&sym) {
                         Some(EnvEntry::Mono(ty)) => ty,
                         Some(EnvEntry::Scheme(s)) => s.ty.clone(),
-                        _ => Ty::Error(TypeError::TypeNotFound(format!("Missing {name:?}")).into()),
+                        // Some symbols (for example imported child constructor-like symbols)
+                        // may be callable even when an env entry is unavailable at this point.
+                        // Fall back to a zero-arg constructor shape and let unification enforce
+                        // argument compatibility.
+                        _ => curry(vec![], returns_type.clone(), Row::Empty.into()),
                     }
                 };
 

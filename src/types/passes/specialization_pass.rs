@@ -871,12 +871,8 @@ impl<'a> SpecializationPass<'a> {
                         if let Ty::Nominal { type_args, .. } = &concrete_ty
                             && !type_args.is_empty()
                         {
-                            if let Some(TypeEntry::Poly(scheme)) =
-                                self.get_type_for(&member_sym)
-                            {
-                                for (forall, arg) in
-                                    scheme.foralls.iter().zip(type_args.iter())
-                                {
+                            if let Some(TypeEntry::Poly(scheme)) = self.get_type_for(&member_sym) {
+                                for (forall, arg) in scheme.foralls.iter().zip(type_args.iter()) {
                                     if let ForAll::Ty(param) = forall {
                                         callee_specs.ty.insert(*param, arg.clone());
                                     }
@@ -1119,14 +1115,21 @@ impl<'a> SpecializationPass<'a> {
         method_req: &Symbol,
         callee_specs: &Specializations,
     ) -> Option<Symbol> {
-        let protocol_sym = self.types.catalog.protocol_for_method_requirement(method_req)?;
+        let protocol_sym = self
+            .types
+            .catalog
+            .protocol_for_method_requirement(method_req)?;
         let Symbol::Protocol(protocol_id) = protocol_sym else {
             return None;
         };
         let method_reqs = self.types.catalog.method_requirements.get(&protocol_sym)?;
-        let label = method_reqs
-            .iter()
-            .find_map(|(l, s)| if s == method_req { Some(l.clone()) } else { None })?;
+        let label = method_reqs.iter().find_map(|(l, s)| {
+            if s == method_req {
+                Some(l.clone())
+            } else {
+                None
+            }
+        })?;
 
         for concrete_ty in callee_specs.ty.values() {
             let conforming_sym = match concrete_ty {

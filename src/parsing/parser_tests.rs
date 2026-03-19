@@ -3849,6 +3849,9 @@ pub mod tests {
         let lexer = Lexer::new("if x = 1 {}");
         let parser = Parser::new("-", FileID(0), lexer);
         let result = parser.parse();
-        assert!(result.is_err(), "expected parse error for assignment in if condition");
+        assert!(
+            result.is_err(),
+            "expected parse error for assignment in if condition"
+        );
     }
 }

@@ -2351,17 +2351,15 @@ pub mod tests {
             ",
         );
 
-        let main = program
-            .functions
-            .get(&Symbol::Main)
-            .expect("main function");
+        let main = program.functions.get(&Symbol::Main).expect("main function");
 
         // Block #0 should only contain: alloc for i, const 0, store i, jump to loop header.
         // It should NOT contain the loop body's `let x = i + 1` computation.
         let block0 = &main.blocks[0];
-        let has_call_in_block0 = block0.instructions.iter().any(|instr| {
-            matches!(instr, Instruction::Call { .. })
-        });
+        let has_call_in_block0 = block0
+            .instructions
+            .iter()
+            .any(|instr| matches!(instr, Instruction::Call { .. }));
         assert!(
             !has_call_in_block0,
             "Block #0 should not contain Call instructions from the loop body.\n\
@@ -2399,6 +2397,29 @@ pub mod tests {
         assert!(
             !has_call_in_block0,
             "Block #0 should not contain Call instructions from the loop body"
+        );
+    }
+
+    #[test]
+    fn nested_constructor_static_member_call_does_not_panic() {
+        let program = lower(
+            r#"
+            struct Outer {
+                struct Inner {}
+            }
+
+            func main() {
+                let inner = Outer.Inner()
+                inner
+            }
+            "#,
+        );
+
+        assert!(
+            program
+                .functions
+                .contains_key(&Symbol::Global(GlobalId::from(1))),
+            "expected lowered main function"
         );
     }
 }

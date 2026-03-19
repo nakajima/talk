@@ -312,10 +312,13 @@ impl IO for StdioIO {
     fn io_accept(&mut self, fd: i64) -> i64 {
         #[cfg(unix)]
         {
-            let result = unsafe {
-                libc::accept(fd as i32, std::ptr::null_mut(), std::ptr::null_mut())
-            };
-            if result < 0 { -errno() as i64 } else { result as i64 }
+            let result =
+                unsafe { libc::accept(fd as i32, std::ptr::null_mut(), std::ptr::null_mut()) };
+            if result < 0 {
+                -errno() as i64
+            } else {
+                result as i64
+            }
         }
 
         #[cfg(not(unix))]

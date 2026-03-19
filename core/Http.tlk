@@ -1,0 +1,222 @@
+// no-core
+import { _alloc } from ./Memory.tlk
+import { _io_read, _io_write, _io_close } from ./IO.tlk
+import { _io_socket, _io_bind, _io_listen, _io_accept, AF_INET, SOCK_STREAM } from ./Net.tlk
+import { From, Into } from ./Convert.tlk
+import { Add, Comparable, Equatable, Subtract } from ./Operators.tlk
+import { Showable } from ./Showable.tlk
+import { String } from ./String.tlk
+
+public struct Request {
+	let raw: String
+	let verb: String
+	let path: String
+
+	init(raw: String, verb: String, path: String) {
+		self.raw = raw
+		self.verb = verb
+		self.path = path
+		self
+	}
+}
+
+public struct Response {
+	let status: Int
+	let body: String
+
+	init(status: Int, body: String) {
+		self.status = status
+		self.body = body
+		self
+	}
+}
+
+extend Response: Into {
+	typealias Target=Response
+
+	func into() -> Response { self }
+}
+
+extend String: Into {
+	typealias Target=Response
+
+	func into() -> Response {
+		Response(200, self)
+	}
+}
+
+struct RouteHandler {
+	let invoke: () -> String
+}
+
+public struct HttpServer {
+	let route_count: Int
+	let route_path0: String
+	let route_path1: String
+	let route_path2: String
+	let route_path3: String
+	let route_handler0: RouteHandler
+	let route_handler1: RouteHandler
+	let route_handler2: RouteHandler
+	let route_handler3: RouteHandler
+
+	init() {
+		let missing: RouteHandler = RouteHandler(
+			invoke: func() -> String { "Not Found" }
+		)
+
+		self.route_count = 0
+		self.route_path0 = ""
+		self.route_path1 = ""
+		self.route_path2 = ""
+		self.route_path3 = ""
+		self.route_handler0 = missing
+		self.route_handler1 = missing
+		self.route_handler2 = missing
+		self.route_handler3 = missing
+		self
+	}
+
+	public func get(path: String, handler: () -> String) -> () {
+		let rc: Int = self.route_count
+
+		if rc == 0 {
+			self.route_path0 = path
+			self.route_handler0 = RouteHandler(invoke: handler)
+			self.route_count = self.route_count + 1
+		}
+		if rc == 1 {
+			self.route_path1 = path
+			self.route_handler1 = RouteHandler(invoke: handler)
+			self.route_count = self.route_count + 1
+		}
+		if rc == 2 {
+			self.route_path2 = path
+			self.route_handler2 = RouteHandler(invoke: handler)
+			self.route_count = self.route_count + 1
+		}
+		if rc == 3 {
+			self.route_path3 = path
+			self.route_handler3 = RouteHandler(invoke: handler)
+			self.route_count = self.route_count + 1
+		}
+		()
+	}
+
+	func extract_method(raw_request: String) -> String {
+		let first_space: Int = raw_request.find(" ")
+		if first_space < 0 { return "" }
+
+		raw_request.slice(0, first_space)
+	}
+
+	func extract_path(raw_request: String) -> String {
+		let first_space: Int = raw_request.find(" ")
+		if first_space < 0 { return "" }
+
+		let rest_start: Int = first_space + 1
+		let rest_len: Int = raw_request.length - rest_start
+		if rest_len <= 0 { return "" }
+
+		let rest: String = raw_request.slice(rest_start, rest_len)
+		let second_space: Int = rest.find(" ")
+		if second_space < 0 { return rest }
+
+		rest.slice(0, second_space)
+	}
+
+	func route_matches(index: Int, path: String) -> Bool {
+		match index {
+			0 -> self.route_path0.equals(path),
+			1 -> self.route_path1.equals(path),
+			2 -> self.route_path2.equals(path),
+			3 -> self.route_path3.equals(path),
+			_ -> false
+		}
+	}
+
+	func route_call(index: Int) -> String {
+		match index {
+			0 -> self.route_handler0.invoke(),
+			1 -> self.route_handler1.invoke(),
+			2 -> self.route_handler2.invoke(),
+			3 -> self.route_handler3.invoke(),
+			_ -> "Not Found"
+		}
+	}
+
+	func dispatch(path: String) -> Response {
+		let i = 0
+		loop i < self.route_count {
+			if self.route_matches(i, path) { return Response(200, self.route_call(i)) }
+			i = i + 1
+		}
+		Response(404, "Not Found")
+	}
+
+	func render(response: Response) -> String {
+		let text: String = match response.status {
+			200 -> "OK",
+			404 -> "Not Found",
+			_ -> "Error"
+		}
+		let status_line_a: String = "HTTP/1.1 ".add(response.status.show())
+		let status_line_b: String = status_line_a.add(" ")
+		let status_line_c: String = status_line_b.add(text)
+		let status_line: String = status_line_c.add("\r\n")
+		let content_type = "Content-Type: text/plain; charset=utf-8\r\n"
+		let content_length_a: String = "Content-Length: ".add(
+			response.body.length.show()
+		)
+		let content_length: String = content_length_a.add("\r\n")
+		let connection = "Connection: close\r\n"
+		let wire_a: String = status_line.add(content_type)
+		let wire_b: String = wire_a.add(content_length)
+		let wire_c: String = wire_b.add(connection)
+		let wire_d: String = wire_c.add("\r\n")
+		wire_d.add(response.body)
+	}
+
+	public func handle(raw_request: String) -> String {
+		let method: String = self.extract_method(raw_request)
+		if method.equals("GET") == false { return self.render(
+			Response(404, "Not Found")
+		) }
+
+		let path: String = self.extract_path(raw_request)
+		self.render(self.dispatch(path))
+	}
+
+	public func run(port: Int) -> () {
+		let listener_fd = _io_socket(AF_INET, SOCK_STREAM, 0)
+		_io_bind(listener_fd, 0, port)
+		_io_listen(listener_fd, 128)
+
+		loop {
+			let client_fd = _io_accept(listener_fd)
+			if client_fd < 0 {
+				continue
+			}
+
+			let max_request_size = 8192
+			let buf = _alloc(max_request_size)
+			let n = _io_read(client_fd, buf, max_request_size)
+
+			if n <= 0 {
+				_io_close(client_fd)
+				continue
+			}
+
+			let raw_request = String(buf, n, max_request_size)
+			let wire = self.handle(raw_request)
+			_io_write(client_fd, wire.base, wire.length)
+			_io_close(client_fd)
+		}
+	}
+}
+
+public struct HTTP {
+	public static func Server() -> HttpServer {
+		HttpServer()
+	}
+}

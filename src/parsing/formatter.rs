@@ -605,7 +605,7 @@ impl<'a> Formatter<'a> {
 
     fn format_type_alias(&self, lhs: &Name, rhs: &TypeAnnotation) -> Doc {
         concat_space(
-            text("type"),
+            text("typealias"),
             join(
                 vec![self.format_name(lhs), self.format_type_annotation(rhs)],
                 text("="),
@@ -1350,11 +1350,18 @@ impl<'a> Formatter<'a> {
     fn format_property(
         &self,
         name: &Name,
-        _is_static: bool,
+        is_static: bool,
         type_annotation: Option<&TypeAnnotation>,
         default_value: Option<&Expr>,
     ) -> Doc {
-        let mut result = concat_space(text("let"), self.format_name(name));
+        let mut result = if is_static {
+            concat_space(
+                text("static"),
+                concat_space(text("let"), self.format_name(name)),
+            )
+        } else {
+            concat_space(text("let"), self.format_name(name))
+        };
 
         if let Some(ty) = type_annotation {
             result = concat(
@@ -1807,8 +1814,12 @@ impl<'a> Formatter<'a> {
         ))
     }
 
-    fn format_method(&self, func: &Func, _is_static: bool) -> Doc {
-        self.format_func(func)
+    fn format_method(&self, func: &Func, is_static: bool) -> Doc {
+        if is_static {
+            concat_space(text("static"), self.format_func(func))
+        } else {
+            self.format_func(func)
+        }
     }
 
     fn format_associated(&self, generic: &GenericDecl) -> Doc {
@@ -1907,7 +1918,10 @@ impl<'a> Formatter<'a> {
                 &expr.kind,
                 ExprKind::Func { .. } | ExprKind::If(..) | ExprKind::Match(..)
             ),
-            Node::Stmt(stmt) => matches!(&stmt.kind, StmtKind::If(..) | StmtKind::Loop(..)),
+            Node::Stmt(stmt) => matches!(
+                &stmt.kind,
+                StmtKind::If(..) | StmtKind::Loop(..) | StmtKind::Continue(..) | StmtKind::Break
+            ),
             Node::Block(block) => block.body.iter().any(Self::contains_control_flow),
             _ => false,
         }
@@ -2289,6 +2303,16 @@ mod formatter_tests {
             format_code("if true {\nif false { 1 }\n}", 80),
             "if true {\n\tif false { 1 }\n}"
         );
+
+        // Keep continue/break blocks multiline; parser rejects inline forms.
+        assert_eq!(
+            format_code("loop {\nif true {\ncontinue\n}\n}", 80),
+            "loop {\n\tif true {\n\t\tcontinue\n\t}\n}"
+        );
+        assert_eq!(
+            format_code("loop {\nif true {\nbreak\n}\n}", 80),
+            "loop {\n\tif true {\n\t\tbreak\n\t}\n}"
+        );
     }
 
     #[test]
@@ -2342,6 +2366,17 @@ mod formatter_tests {
 
         let expected = "struct Person {\n\tlet name: String\n\tlet age: Int\n}";
         assert_eq!(format_code(struct_with_fields, 80), expected);
+
+        let struct_with_static_members = r#"struct Cache {
+            static let version: Int = 1
+            static func create() { Cache() }
+        }"#;
+        let expected_static_members =
+            "struct Cache {\n\tstatic let version: Int = 1\n\tstatic func create() { Cache() }\n}";
+        assert_eq!(
+            format_code(struct_with_static_members, 80),
+            expected_static_members
+        );
     }
 
     #[test]
@@ -2558,7 +2593,12 @@ mod formatter_tests {
         for path in std::fs::read_dir("./examples").unwrap() {
             let path = path.unwrap().path();
             let code = std::fs::read_to_string(&path).unwrap();
-            assert_eq!(code, format_string(&code), "formatter changed {}", path.display());
+            assert_eq!(
+                code,
+                format_string(&code),
+                "formatter changed {}",
+                path.display()
+            );
         }
     }
 }

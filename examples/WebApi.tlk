@@ -1,0 +1,14 @@
+// Sinatra-esque API demo in pure Talk.
+//
+// Run:
+//   talk run examples/WebApi.tlk
+//
+// Try:
+//   curl http://localhost:3000/
+//   curl http://localhost:3000/health
+let http = HTTP.Server()
+http.get("/", func() { "hello from talk" })
+http.get("/health", func() { "ok" })
+
+print("Listening on http://localhost:3000")
+http.run(3000)

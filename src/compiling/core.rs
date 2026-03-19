@@ -20,6 +20,7 @@ pub fn compile() -> Arc<Module> {
 pub const CORE_SOURCE_NAMES: &[&str] = &[
     "Optional.tlk",
     "Operators.tlk",
+    "Convert.tlk",
     "String.tlk",
     "Memory.tlk",
     "Array.tlk",
@@ -30,6 +31,7 @@ pub const CORE_SOURCE_NAMES: &[&str] = &[
     "Net.tlk",
     "File.tlk",
     "Showable.tlk",
+    "Http.tlk",
 ];
 
 /// All core source strings, in a fixed order for hashing.
@@ -37,6 +39,7 @@ pub fn core_sources() -> Vec<(&'static str, &'static str)> {
     vec![
         ("Optional.tlk", include_str!("../../core/Optional.tlk")),
         ("Operators.tlk", include_str!("../../core/Operators.tlk")),
+        ("Convert.tlk", include_str!("../../core/Convert.tlk")),
         ("String.tlk", include_str!("../../core/String.tlk")),
         ("Memory.tlk", include_str!("../../core/Memory.tlk")),
         ("Array.tlk", include_str!("../../core/Array.tlk")),
@@ -47,6 +50,7 @@ pub fn core_sources() -> Vec<(&'static str, &'static str)> {
         ("Net.tlk", include_str!("../../core/Net.tlk")),
         ("File.tlk", include_str!("../../core/File.tlk")),
         ("Showable.tlk", include_str!("../../core/Showable.tlk")),
+        ("Http.tlk", include_str!("../../core/Http.tlk")),
     ]
 }
 

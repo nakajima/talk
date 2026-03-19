@@ -595,15 +595,9 @@ impl<T> Instruction<T> {
                 addr,
                 port,
             },
-            Instruction::IoListen {
-                dest,
-                fd,
-                backlog,
-            } => Instruction::IoListen {
-                dest,
-                fd,
-                backlog,
-            },
+            Instruction::IoListen { dest, fd, backlog } => {
+                Instruction::IoListen { dest, fd, backlog }
+            }
             Instruction::IoConnect {
                 dest,
                 fd,
@@ -661,16 +655,15 @@ impl<T> Instruction<T> {
             Instruction::IoOpen {
                 path, flags, mode, ..
             } => vec![path, flags, mode],
-            Instruction::IoRead {
-                fd, buf, count, ..
-            } => vec![fd, buf, count],
-            Instruction::IoWrite {
-                fd, buf, count, ..
-            } => vec![fd, buf, count],
+            Instruction::IoRead { fd, buf, count, .. } => vec![fd, buf, count],
+            Instruction::IoWrite { fd, buf, count, .. } => vec![fd, buf, count],
             Instruction::IoClose { fd, .. } => vec![fd],
             Instruction::IoCtl { fd, op, arg, .. } => vec![fd, op, arg],
             Instruction::IoPoll {
-                fds, count, timeout, ..
+                fds,
+                count,
+                timeout,
+                ..
             } => vec![fds, count, timeout],
             Instruction::IoSocket {
                 domain,

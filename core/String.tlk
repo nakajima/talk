@@ -1,6 +1,6 @@
 // no-core
-import { Add, Equatable } from ./Operators.tlk
-import { _alloc, _copy, _ptr_add } from ./Memory.tlk
+import { Add, Comparable, Equatable, Subtract } from ./Operators.tlk
+import { _alloc, _copy, _load, _ptr_add } from ./Memory.tlk
 
 public struct String {
 	let base: RawPtr
@@ -12,6 +12,47 @@ public struct String {
 		self.length = length
 		self.capacity = capacity
 		self
+	}
+}
+
+public protocol StringMethods {
+	func byte_at(index: Int) -> Byte
+	func slice(start: Int, length: Int) -> String
+	func find(needle: String) -> Int
+	func find_from(needle: String, start: Int) -> Int
+}
+
+extend String: StringMethods {
+	func byte_at(index: Int) -> Byte {
+		let ptr: RawPtr = _ptr_add(self.base, index)
+		_load<Byte>(ptr)
+	}
+
+	func slice(start: Int, length: Int) -> String {
+		let new_base: RawPtr = _ptr_add(self.base, start)
+		String(new_base, length, length)
+	}
+
+	func find(needle: String) -> Int {
+		self.find_from(needle, 0)
+	}
+
+	func find_from(needle: String, start: Int) -> Int {
+		if start < 0 { return -1 }
+		if self.length < start { return -1 }
+		if needle.length == 0 { return start }
+		if self.length < needle.length { return -1 }
+
+		let last: Int = self.length - needle.length
+		let i: Int = start
+		loop {
+			if last < i {
+				break
+			}
+			if self.slice(i, needle.length).equals(needle) { return i }
+			i = i + 1
+		}
+		-1
 	}
 }
 
@@ -31,6 +72,16 @@ extend String: Add {
 
 extend String: Equatable {
 	func equals(rhs: String) -> Bool {
-		false
+		if self.length != rhs.length { return false }
+
+		let i = 0
+		loop i < self.length {
+			let lhs_byte: Byte = self.byte_at(i)
+			let rhs_byte: Byte = rhs.byte_at(i)
+			let same: Bool = @_ir(lhs_byte, rhs_byte) { %? = cmp Byte $0 == $1 }
+			if same == false { return false }
+			i = i + 1
+		}
+		true
 	}
 }

@@ -22,7 +22,9 @@ loop {
 	// Read and print echo response
 	let buf = _alloc(1024)
 	let n = _io_read(sock, buf, 1024)
-	if n <= 0 { break }
+	if n <= 0 {
+		break
+	}
 	_io_write(STDOUT_FD, buf, n)
 }
 
