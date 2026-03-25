@@ -472,7 +472,7 @@ impl Driver<NameResolved> {
         // Always run the matcher to build match plans, even when there are error
         // diagnostics elsewhere. Match plan generation is independent of unrelated
         // type errors, and skipping it causes match expressions to silently compile
-        // to void (e.g., Core module's Generator.send match on GeneratorState).
+        // to void.
         {
             let matcher_result = matcher::check_ast(&ast, &types, &resolved_names.symbol_names);
             if !has_error_diagnostics(&self.phase.diagnostics) {

@@ -1,6 +1,5 @@
 // no-core
 import { _alloc } from ./Memory.tlk
-import { Poll, Context, Waker } from ./Async.tlk
 import { Comparable, Equatable } from ./Operators.tlk
 import { String } from ./String.tlk
 import { Showable } from ./Showable.tlk
@@ -114,18 +113,4 @@ func _print_line(s: String) -> () {
 
 public func print<T: Showable>(value: T) -> () {
 	_print_line(value.show())
-}
-
-public func async_read(fd: Int, buf: RawPtr, count: Int, cx: Context) -> Poll<Int, ()> {
-	let result = @_ir(fd, buf, count) { %? = io_read $0 $1 $2 }
-	if result != EAGAIN { return Poll.ready(result) }
-	yield(())
-	Poll.pending(())
-}
-
-public func async_write(fd: Int, buf: RawPtr, count: Int, cx: Context) -> Poll<Int, ()> {
-	let result = @_ir(fd, buf, count) { %? = io_write $0 $1 $2 }
-	if result != EAGAIN { return Poll.ready(result) }
-	yield(())
-	Poll.pending(())
 }

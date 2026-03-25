@@ -9,8 +9,11 @@ pub mod tests {
         diagnostic::{AnyDiagnostic, Diagnostic},
         ir::monomorphizer::uncurry_function,
         label::Label,
-        name_resolution::symbol::{
-            EnumId, GlobalId, ProtocolId, StructId, Symbol, SynthesizedId, TypeParameterId,
+        name_resolution::{
+            name_resolver::NameResolverError,
+            symbol::{
+                EnumId, GlobalId, ProtocolId, StructId, Symbol, SynthesizedId, TypeParameterId,
+            },
         },
         types::{
             conformance::ConformanceKey,
@@ -2587,72 +2590,24 @@ pub mod tests {
         }));
     }
 
-    #[test]
-    fn generator_return_type_inferred() {
-        // Test that a function containing yield() gets Generator<Y, R> return type
-        let (ast, types) = typecheck_core(
-            r#"
-            func gen() { yield(1); yield(2); 0 }
-            let g = gen()
-            g
-            "#,
-        );
-
-        // The return type of gen() should be Generator<Int, Void>
-        // The variable g should have that type
-        let g_ty = ty(0, &ast, &types);
-        match g_ty {
-            Ty::Nominal { symbol, type_args } => {
-                assert!(
-                    matches!(symbol, Symbol::Struct(_)),
-                    "Expected concrete Generator struct, got {:?}",
-                    symbol
-                );
-
-                // Check type args
-                assert_eq!(type_args.len(), 2, "Generator should have 2 type args");
-                assert_eq!(type_args[0], Ty::Int, "Yield type should be Int");
-                assert_eq!(type_args[1], Ty::Void, "Resume type should be Void");
-            }
-            _ => panic!("Expected Nominal type for generator, got {:?}", g_ty),
-        }
-    }
 
     #[test]
-    fn generator_yield_type_unified() {
-        // Test that multiple yields with compatible types are unified
-        let (ast, types) = typecheck_core(
-            r#"
-            func gen(x: Int) { yield(x); yield(0); 0 }
-            let g = gen(5)
-            g
-            "#,
-        );
-
-        let g_ty = ty(0, &ast, &types);
-        match g_ty {
-            Ty::Nominal { type_args, .. } => {
-                assert_eq!(type_args.len(), 2, "Generator should have 2 type args");
-                assert_eq!(type_args[0], Ty::Int, "Yield type should be Int");
-            }
-            _ => panic!("Expected Nominal type for generator, got {:?}", g_ty),
-        }
-    }
-
-    #[test]
-    fn generator_send_method_available() {
-        // Test that .send() method is available on Generator
+    fn yield_is_not_available_as_a_builtin_anymore() {
         let (_ast, _types, diagnostics) = typecheck_core_err(
             r#"
-            func gen() { yield(42); 0 }
-            let g = gen()
-            g.send(())
+            yield(42)
             "#,
         );
 
         assert!(
-            diagnostics.is_empty(),
-            "Expected no errors calling .send() on generator, got: {:?}",
+            diagnostics.iter().any(|diag| matches!(
+                diag,
+                AnyDiagnostic::NameResolution(Diagnostic {
+                    kind: NameResolverError::UndefinedName(name),
+                    ..
+                }) if name == "yield"
+            )),
+            "Expected yield to be unresolved after generator removal, got: {:?}",
             diagnostics
         );
     }

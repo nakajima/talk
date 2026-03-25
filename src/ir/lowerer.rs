@@ -185,24 +185,6 @@ pub enum FuncTermination {
     Continuation(Symbol),
 }
 
-/// Context for state machine compilation mode
-#[derive(Debug)]
-pub struct StateMachineContext {
-    /// The analysis results for this effectful function
-    pub analysis: super::effect_analysis::EffectAnalysis,
-    /// Current state index being generated
-    pub current_state: usize,
-    /// Register holding the state index parameter
-    pub state_var: Register,
-    /// Register holding the state data parameter
-    pub state_data: Register,
-    /// Register holding the resumed value parameter
-    pub resumed_var: Register,
-    /// The original function name being compiled
-    pub func_name: Symbol,
-    /// Entry block IDs for each state (state 0 = initial, state N = continuation after yield N-1)
-    pub state_entries: Vec<BasicBlockId>,
-}
 
 // Lowers an AST with Types to a monomorphized IR
 pub struct Lowerer<'a> {
@@ -216,8 +198,6 @@ pub struct Lowerer<'a> {
     flow_context_stack: Vec<FlowContext>,
     pending_continuations: Vec<(CurrentFunction, Symbol, Register)>,
     current_continuation_idx: Option<usize>,
-    /// When set, we're compiling in state machine mode for effectful functions
-    state_machine_context: Option<StateMachineContext>,
 }
 
 #[allow(clippy::panic)]
@@ -235,7 +215,6 @@ impl<'a> Lowerer<'a> {
             flow_context_stack: Default::default(),
             pending_continuations: Default::default(),
             current_continuation_idx: None,
-            state_machine_context: None,
         }
     }
 
@@ -1124,12 +1103,6 @@ impl<'a> Lowerer<'a> {
         args: &[TypedExpr],
         bind: Bind,
     ) -> Result<(Value, Ty), IRError> {
-        // Check if we're in state machine mode
-        if self.state_machine_context.is_some() {
-            return self.lower_effect_call_state_machine(expr, effect, args, bind);
-        }
-
-        // Original closure-based implementation
         self.lower_effect_call_closure(expr, effect, args, bind)
     }
 
@@ -1367,441 +1340,6 @@ impl<'a> Lowerer<'a> {
         Ok((dest.into(), expr.ty.clone()))
     }
 
-    /// Lower an effect call in state machine mode.
-    /// Instead of creating a closure continuation, we:
-    /// 1. Build the state_data record with live variables
-    /// 2. Return (next_state, state_data, Pending(effect, args))
-    fn lower_effect_call_state_machine(
-        &mut self,
-        expr: &TypedExpr,
-        _effect: &Symbol,
-        args: &[TypedExpr],
-        bind: Bind,
-    ) -> Result<(Value, Ty), IRError> {
-        // Lower effect arguments
-        let mut arg_vals = Vec::with_capacity(args.len());
-        for arg in args {
-            let (val, _ty) = self.lower_expr(arg, Bind::Fresh)?;
-            arg_vals.push(val);
-        }
-
-        // Get the yield point info for this expression
-        let yield_point_idx = self
-            .state_machine_context
-            .as_ref()
-            .and_then(|ctx| ctx.analysis.yield_point_for_expr(expr.id))
-            .ok_or_else(|| {
-                IRError::TypeNotFound(format!(
-                    "No yield point found for effect call {:?}",
-                    expr.id
-                ))
-            })?;
-
-        let (next_state, live_vars) = {
-            let ctx = self
-                .state_machine_context
-                .as_ref()
-                .expect("did not get state machine context");
-            let yield_point = &ctx.analysis.yield_points[yield_point_idx];
-            (yield_point.resume_state, yield_point.live_vars.clone())
-        };
-
-        // Build state_data as a RawPtr. When live_vars is empty, use a null pointer.
-        // When non-empty, store the record to memory and return the pointer.
-        let state_data_reg = if live_vars.is_empty() {
-            let reg = self.next_register();
-            self.push_instr(Instruction::Constant {
-                dest: reg,
-                val: Value::Int(0),
-                ty: Ty::RawPtr,
-                meta: Default::default(),
-            });
-            reg
-        } else {
-            let mut state_data_fields = Vec::with_capacity(live_vars.len());
-            for (sym, _ty) in &live_vars {
-                let reg = self.get_binding(sym);
-                state_data_fields.push(reg.into());
-            }
-
-            let record_ty = Ty::Record(
-                None,
-                live_vars
-                    .iter()
-                    .enumerate()
-                    .fold(Row::Empty, |row, (i, (_, ty))| Row::Extend {
-                        row: row.into(),
-                        label: Label::Positional(i),
-                        ty: ty.clone(),
-                    })
-                    .into(),
-            );
-
-            let record_reg = self.next_register();
-            self.push_instr(Instruction::Record {
-                dest: record_reg,
-                ty: record_ty.clone(),
-                record: state_data_fields.into(),
-                meta: Default::default(),
-            });
-
-            let addr_reg = self.next_register();
-            self.push_instr(Instruction::Alloc {
-                dest: addr_reg,
-                ty: record_ty.clone(),
-                count: Value::Int(1),
-            });
-            self.push_instr(Instruction::Store {
-                value: record_reg.into(),
-                ty: record_ty,
-                addr: addr_reg.into(),
-            });
-
-            addr_reg
-        };
-
-        // Build the next state value
-        let next_state_reg = self.next_register();
-        self.push_instr(Instruction::Constant {
-            dest: next_state_reg,
-            val: Value::Int(next_state as i64),
-            ty: Ty::Int,
-            meta: Default::default(),
-        });
-
-        // Build the effect args tuple
-        let effect_args_reg = self.next_register();
-        self.push_instr(Instruction::Record {
-            dest: effect_args_reg,
-            ty: Ty::Tuple(args.iter().map(|a| a.ty.clone()).collect()),
-            record: arg_vals.into(),
-            meta: Default::default(),
-        });
-
-        // Build the Pending result: (effect_symbol, args)
-        // For now, we'll use a simple record to represent this
-        // In a full implementation, this would be a proper Poll::Pending enum variant
-        let pending_reg = self.next_register();
-        self.push_instr(Instruction::Record {
-            dest: pending_reg,
-            ty: Ty::Tuple(vec![Ty::Int, Ty::RawPtr]), // Simplified
-            record: vec![
-                Value::Int(0), // 0 = Pending tag
-                effect_args_reg.into(),
-            ]
-            .into(),
-            meta: Default::default(),
-        });
-
-        // Return tuple: (next_state, state_data, Pending)
-        let return_tuple_reg = self.next_register();
-        self.push_instr(Instruction::Record {
-            dest: return_tuple_reg,
-            ty: Ty::Tuple(vec![Ty::Int, Ty::RawPtr, expr.ty.clone()]),
-            record: vec![
-                next_state_reg.into(),
-                state_data_reg.into(),
-                pending_reg.into(),
-            ]
-            .into(),
-            meta: vec![InstructionMeta::Source(expr.id)].into(),
-        });
-
-        // Emit return terminator with the pending result
-        self.push_terminator(Terminator::Ret {
-            val: return_tuple_reg.into(),
-            ty: Ty::Tuple(vec![Ty::Int, Ty::RawPtr, expr.ty.clone()]),
-        });
-
-        // Update state machine context for next state
-        if let Some(ref mut ctx) = self.state_machine_context {
-            ctx.current_state = next_state;
-        }
-
-        // Create a new basic block for the continuation (code after the effect call)
-        let continuation_block = self.new_basic_block();
-        self.set_current_block(continuation_block);
-
-        // Record this continuation block as the entry for the next state
-        if let Some(ref mut ctx) = self.state_machine_context {
-            ctx.state_entries.push(continuation_block);
-        }
-
-        // In the continuation, the resumed value comes from the resumed_var parameter
-        // We need to restore live variables from state_data
-        let context = self
-            .state_machine_context
-            .as_ref()
-            .expect("didn't get state machine context");
-        let resumed_var = context.resumed_var;
-        let state_data = context.state_data;
-
-        // Restore live variables from state_data (which is a RawPtr)
-        if !live_vars.is_empty() {
-            let record_ty = Ty::Record(
-                None,
-                live_vars
-                    .iter()
-                    .enumerate()
-                    .fold(Row::Empty, |row, (i, (_, ty))| Row::Extend {
-                        row: row.into(),
-                        label: Label::Positional(i),
-                        ty: ty.clone(),
-                    })
-                    .into(),
-            );
-
-            let loaded_reg = self.next_register();
-            self.push_instr(Instruction::Load {
-                dest: loaded_reg,
-                ty: record_ty,
-                addr: state_data.into(),
-            });
-
-            for (i, (sym, ty)) in live_vars.iter().enumerate() {
-                let dest = self.next_register();
-                self.push_instr(Instruction::GetField {
-                    dest,
-                    ty: ty.clone(),
-                    record: loaded_reg,
-                    field: Label::Positional(i),
-                    meta: Default::default(),
-                });
-                self.insert_binding(*sym, Binding::Register(dest.0));
-            }
-        }
-
-        // The effect call result comes from the resumed value
-        let dest = self.ret(bind);
-        self.push_instr(Instruction::Constant {
-            dest,
-            val: Value::Reg(resumed_var.0),
-            ty: expr.ty.clone(),
-            meta: Default::default(),
-        });
-
-        Ok((dest.into(), expr.ty.clone()))
-    }
-
-    /// Lower a yield builtin call.
-    /// In state machine mode, this saves state and returns Poll::pending.
-    /// Outside state machine mode, this is an error (yield should only be used in functions
-    /// that compile to state machines).
-    fn lower_yield_call(
-        &mut self,
-        expr: &TypedExpr,
-        args: &[TypedExpr],
-        bind: Bind,
-    ) -> Result<(Value, Ty), IRError> {
-        // yield should only be called inside a function that compiles to a state machine
-        if self.state_machine_context.is_none() {
-            return Err(IRError::TypeNotFound(
-                "yield can only be called inside a function that compiles to a state machine"
-                    .into(),
-            ));
-        }
-
-        // Lower the yielded value (first argument)
-        let yielded_value = if !args.is_empty() {
-            let (val, _ty) = self.lower_expr(&args[0], Bind::Fresh)?;
-            val
-        } else {
-            Value::Void
-        };
-
-        // Get the yield point info for this expression
-        let yield_point_idx = self
-            .state_machine_context
-            .as_ref()
-            .and_then(|ctx| ctx.analysis.yield_point_for_expr(expr.id))
-            .ok_or_else(|| {
-                IRError::TypeNotFound(format!("No yield point found for yield call {:?}", expr.id))
-            })?;
-
-        let (next_state, live_vars) = {
-            let ctx = self
-                .state_machine_context
-                .as_ref()
-                .expect("state machine context");
-            let yield_point = &ctx.analysis.yield_points[yield_point_idx];
-            (yield_point.resume_state, yield_point.live_vars.clone())
-        };
-
-        // Build state_data as a RawPtr. When live_vars is empty, use a null pointer.
-        // When non-empty, store the record to memory and return the pointer.
-        let state_data_reg = if live_vars.is_empty() {
-            let reg = self.next_register();
-            self.push_instr(Instruction::Constant {
-                dest: reg,
-                val: Value::Int(0),
-                ty: Ty::RawPtr,
-                meta: Default::default(),
-            });
-            reg
-        } else {
-            let mut state_data_fields = Vec::with_capacity(live_vars.len());
-            for (sym, _ty) in &live_vars {
-                let reg = self.get_binding(sym);
-                state_data_fields.push(reg.into());
-            }
-
-            let record_ty = Ty::Record(
-                None,
-                live_vars
-                    .iter()
-                    .enumerate()
-                    .fold(Row::Empty, |row, (i, (_, ty))| Row::Extend {
-                        row: row.into(),
-                        label: Label::Positional(i),
-                        ty: ty.clone(),
-                    })
-                    .into(),
-            );
-
-            let record_reg = self.next_register();
-            self.push_instr(Instruction::Record {
-                dest: record_reg,
-                ty: record_ty.clone(),
-                record: state_data_fields.into(),
-                meta: Default::default(),
-            });
-
-            let addr_reg = self.next_register();
-            self.push_instr(Instruction::Alloc {
-                dest: addr_reg,
-                ty: record_ty.clone(),
-                count: Value::Int(1),
-            });
-            self.push_instr(Instruction::Store {
-                value: record_reg.into(),
-                ty: record_ty,
-                addr: addr_reg.into(),
-            });
-
-            addr_reg
-        };
-
-        // Build the next state value
-        let next_state_reg = self.next_register();
-        self.push_instr(Instruction::Constant {
-            dest: next_state_reg,
-            val: Value::Int(next_state as i64),
-            ty: Ty::Int,
-            meta: Default::default(),
-        });
-
-        // Build GeneratorState::yielded(value)
-        // Using structural representation: (tag: Int, value: Y) where 0 = yielded, 1 = done
-        // yielded = Record(0, yielded_value) where 0 = yielded tag
-        let yielded_ty = args.first().map(|a| a.ty.clone()).unwrap_or(Ty::Void);
-        let generator_state_ty = Ty::Tuple(vec![Ty::Int, yielded_ty.clone()]);
-        let yielded_state_reg = self.next_register();
-        self.push_instr(Instruction::Record {
-            dest: yielded_state_reg,
-            ty: generator_state_ty.clone(),
-            record: vec![
-                Value::Int(0), // 0 = yielded tag
-                yielded_value,
-            ]
-            .into(),
-            meta: Default::default(),
-        });
-
-        // Return tuple: (next_state, state_data, GeneratorState::yielded(value))
-        let return_tuple_reg = self.next_register();
-        self.push_instr(Instruction::Record {
-            dest: return_tuple_reg,
-            ty: Ty::Tuple(vec![Ty::Int, Ty::RawPtr, generator_state_ty.clone()]),
-            record: vec![
-                next_state_reg.into(),
-                state_data_reg.into(),
-                yielded_state_reg.into(),
-            ]
-            .into(),
-            meta: vec![InstructionMeta::Source(expr.id)].into(),
-        });
-
-        // Emit return terminator with the yielded result
-        self.push_terminator(Terminator::Ret {
-            val: return_tuple_reg.into(),
-            ty: Ty::Tuple(vec![Ty::Int, Ty::RawPtr, generator_state_ty]),
-        });
-
-        // Update state machine context for next state
-        if let Some(ref mut ctx) = self.state_machine_context {
-            ctx.current_state = next_state;
-        }
-
-        // Create a new basic block for the continuation (code after the yield)
-        let continuation_block = self.new_basic_block();
-        self.set_current_block(continuation_block);
-
-        // Record this continuation block as the entry for the next state
-        if let Some(ref mut ctx) = self.state_machine_context {
-            ctx.state_entries.push(continuation_block);
-        }
-
-        // In the continuation, the resumed value comes from the resumed_var parameter
-        let resumed_var = self
-            .state_machine_context
-            .as_ref()
-            .expect("state machine context")
-            .resumed_var;
-        let state_data = self
-            .state_machine_context
-            .as_ref()
-            .expect("state machine context")
-            .state_data;
-
-        // Restore live variables from state_data (which is a RawPtr)
-        if !live_vars.is_empty() {
-            let record_ty = Ty::Record(
-                None,
-                live_vars
-                    .iter()
-                    .enumerate()
-                    .fold(Row::Empty, |row, (i, (_, ty))| Row::Extend {
-                        row: row.into(),
-                        label: Label::Positional(i),
-                        ty: ty.clone(),
-                    })
-                    .into(),
-            );
-
-            let loaded_reg = self.next_register();
-            self.push_instr(Instruction::Load {
-                dest: loaded_reg,
-                ty: record_ty,
-                addr: state_data.into(),
-            });
-
-            for (i, (sym, ty)) in live_vars.iter().enumerate() {
-                let dest = self.next_register();
-                self.push_instr(Instruction::GetField {
-                    dest,
-                    ty: ty.clone(),
-                    record: loaded_reg,
-                    field: Label::Positional(i),
-                    meta: Default::default(),
-                });
-                self.insert_binding(*sym, Binding::Register(dest.0));
-            }
-        }
-
-        // The yield call result comes from the resumed value
-        let dest = self.ret(bind);
-        self.push_instr(Instruction::Constant {
-            dest,
-            val: Value::Reg(resumed_var.0),
-            ty: expr.ty.clone(),
-            meta: Default::default(),
-        });
-
-        Ok((dest.into(), expr.ty.clone()))
-    }
-
-    #[allow(clippy::todo)]
-    #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn lower_inline_ir(
         &mut self,
         instr: &TypedInlineIRInstruction,
@@ -3159,6 +2697,81 @@ impl<'a> Lowerer<'a> {
             || self.typed.types.catalog.global_constants.contains_key(sym)
     }
 
+    fn lookup_typed_func(&self, symbol: Symbol) -> Option<&TypedFunc> {
+        for decl in &self.typed.ast.decls {
+            match &decl.kind {
+                TypedDeclKind::StructDef {
+                    initializers,
+                    instance_methods,
+                    ..
+                } => {
+                    if let Some(func) = initializers.values().find(|func| func.name == symbol) {
+                        return Some(func);
+                    }
+                    if let Some(func) = instance_methods.values().find(|func| func.name == symbol) {
+                        return Some(func);
+                    }
+                }
+                TypedDeclKind::Extend {
+                    instance_methods,
+                    ..
+                }
+                | TypedDeclKind::EnumDef {
+                    instance_methods,
+                    ..
+                }
+                | TypedDeclKind::ProtocolDef {
+                    instance_methods,
+                    ..
+                } => {
+                    if let Some(func) = instance_methods.values().find(|func| func.name == symbol) {
+                        return Some(func);
+                    }
+                }
+                TypedDeclKind::Let { .. } | TypedDeclKind::Import => {}
+            }
+        }
+
+        None
+    }
+
+    fn method_mutates_self(&self, symbol: Symbol) -> bool {
+        let original_symbol = self
+            .typed
+            .specialized_callees
+            .get(&symbol)
+            .map(|callee| callee.original_symbol)
+            .unwrap_or(symbol);
+
+        if let Some(self_param) = self
+            .lookup_typed_func(original_symbol)
+            .and_then(|func| func.params.first())
+        {
+            return self
+                .typed
+                .resolved_names
+                .mutated_symbols
+                .contains(&self_param.name);
+        }
+
+        original_symbol
+            .module_id()
+            .and_then(|module_id| self.config.modules.program_for(module_id))
+            .and_then(|program| {
+                program
+                    .polyfunctions
+                    .get(&original_symbol)
+                    .map(|func| func.self_out.is_some())
+                    .or_else(|| {
+                        program
+                            .functions
+                            .get(&original_symbol)
+                            .map(|func| func.self_out.is_some())
+                    })
+            })
+            .unwrap_or(false)
+    }
+
     #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn lower_variable(&mut self, name: &Symbol, expr: &TypedExpr) -> Result<(Value, Ty), IRError> {
         let ty = expr.ty.clone();
@@ -3415,13 +3028,6 @@ impl<'a> Lowerer<'a> {
         callee_sym: Option<&Symbol>,
         bind: Bind,
     ) -> Result<(Value, Ty), IRError> {
-        // Handle yield builtin call before consuming bind - this has its own control flow
-        if let TypedExprKind::Variable(name) = &callee.kind
-            && name == &Symbol::YIELD
-        {
-            return self.lower_yield_call(call_expr, args, bind);
-        }
-
         let dest = self.ret(bind);
         let ty = call_expr.ty.clone();
         let mut arg_vals = vec![];
@@ -3525,6 +3131,8 @@ impl<'a> Lowerer<'a> {
             Some(Symbol::InstanceMethod(_)) | Some(Symbol::Synthesized(_))
         );
         let tracked_self = if is_method_like
+            && let Some(sym) = callee_sym
+            && self.method_mutates_self(*sym)
             && !arg_vals.is_empty()
             && let Some(first_arg) = args.first()
             && let TypedExprKind::Variable(var_sym) = &first_arg.kind
@@ -3706,9 +3314,10 @@ impl<'a> Lowerer<'a> {
         }
 
         // Track receiver writeback for method calls independently of the method
-        // return type. Stateful methods like Iterator.next() and Generator.send()
-        // both mutate self while returning a value.
-        let tracked_self = if let Some(var_sym) = receiver_var_sym {
+        // return type. Stateful methods can mutate self while also returning a value.
+        let tracked_self = if let Some(var_sym) = receiver_var_sym
+            && self.method_mutates_self(sym)
+        {
             self.begin_method_self_tracking(var_sym, &receiver.ty, args[0].clone())
         } else {
             None
@@ -3746,22 +3355,6 @@ impl<'a> Lowerer<'a> {
         terminates_with: FuncTermination,
     ) -> Result<(Value, Ty), IRError> {
         let ty = self.ty_from_symbol(&func.name)?;
-
-        // Check if this function contains yield builtin calls - if so, compile as state machine
-        // Note: Only explicit yield calls trigger state machine compilation, not effect calls.
-        // Effect calls continue to use the closure-based continuation approach.
-        let get_ty = |sym: &Symbol| {
-            self.typed.types.get_symbol(sym).map(|entry| match entry {
-                TypeEntry::Mono(ty) => ty.clone(),
-                TypeEntry::Poly(scheme) => scheme.ty.clone(),
-            })
-        };
-        if let Some(analysis) =
-            super::effect_analysis::EffectAnalysis::analyze_yield_only(func, get_ty)
-        {
-            // Function contains yield builtin calls - compile as state machine
-            return self.lower_func_as_state_machine(func, analysis, bind);
-        }
 
         let (mut param_tys, mut ret_ty) = uncurry_function(ty);
 
@@ -3904,9 +3497,13 @@ impl<'a> Lowerer<'a> {
             // Keep the same ret_ty since handler returns the same type
         }
 
-        // For methods, get the final self register (after any mutations).
-        // This must be done before the terminator because get_binding may emit Load instructions.
-        let self_out = func.params.first().map(|p| self.get_binding(&p.name));
+        // For methods that actually mutate self, get the final self register before
+        // emitting the terminator. get_binding may emit Load instructions.
+        let self_out = func
+            .params
+            .first()
+            .filter(|p| self.typed.resolved_names.mutated_symbols.contains(&p.name))
+            .map(|p| self.get_binding(&p.name));
 
         if ret == Value::Poison {
             self.push_terminator(Terminator::Unreachable);
@@ -4017,315 +3614,6 @@ impl<'a> Lowerer<'a> {
         Ok((func_val, func_ty))
     }
 
-    /// Lower an effectful function as a state machine.
-    /// The generated function has signature:
-    ///   (state: Int, state_data: Record, resumed: T) -> (Int, Record, Poll<R>)
-    fn lower_func_as_state_machine(
-        &mut self,
-        func: &TypedFunc,
-        analysis: super::effect_analysis::EffectAnalysis,
-        bind: Bind,
-    ) -> Result<(Value, Ty), IRError> {
-        let func_ty = self.ty_from_symbol(&func.name)?;
-        let (param_tys, ret_ty) = uncurry_function(func_ty.clone());
-
-        // Generate a poll function name
-        let poll_func_sym =
-            Symbol::Synthesized(self.typed.symbols.next_synthesized(self.config.module_id));
-        self.typed.resolved_names.symbol_names.insert(
-            poll_func_sym,
-            format!(
-                "{}_poll",
-                self.typed
-                    .resolved_names
-                    .symbol_names
-                    .get(&func.name)
-                    .cloned()
-                    .unwrap_or_else(|| format!("{:?}", func.name))
-            ),
-        );
-
-        // Create the poll function
-        self.current_function_stack
-            .push(CurrentFunction::new(poll_func_sym));
-
-        // Parameters for poll function: state: Int, state_data: Record, resumed: T
-        let state_var = self.next_register();
-        let state_data = self.next_register();
-        let resumed_var = self.next_register();
-
-        let poll_params = vec![
-            Value::Reg(state_var.0),
-            Value::Reg(state_data.0),
-            Value::Reg(resumed_var.0),
-        ];
-
-        // Block 0 is reserved for the dispatch block (will be filled in later).
-        // Create block 1 for the initial state (state 0 code).
-        let dispatch_block_id = self.current_block_id(); // block 0
-        let initial_state_block = self.new_basic_block(); // block 1
-        self.set_current_block(initial_state_block);
-
-        // Set up state machine context
-        self.state_machine_context = Some(StateMachineContext {
-            analysis: analysis.clone(),
-            current_state: 0,
-            state_var,
-            state_data,
-            resumed_var,
-            func_name: func.name,
-            state_entries: vec![initial_state_block],
-        });
-
-        // Build parameter bindings for the original function parameters.
-        for (i, param) in func.params.iter().enumerate() {
-            self.insert_binding(
-                param.name,
-                Binding::Continued {
-                    index: i,
-                    ty: param.ty.clone(),
-                },
-            );
-        }
-
-        // Lower the function body - the state machine context will cause
-        // yield calls to emit state transitions
-        let mut _ret = Value::Void;
-        let mut ret_ty_local = ret_ty.clone();
-        for node in func.body.body.iter() {
-            (_ret, ret_ty_local) = self.lower_node(node)?;
-        }
-
-        // Build GeneratorState::done to return when the generator finishes
-        let done_state_ty = Ty::Tuple(vec![Ty::Int]);
-        let done_reg = self.next_register();
-        self.push_instr(Instruction::Record {
-            dest: done_reg,
-            ty: done_state_ty.clone(),
-            record: vec![Value::Int(1)].into(), // 1 = done tag
-            meta: Default::default(),
-        });
-
-        let final_state_reg = self.next_register();
-        self.push_instr(Instruction::Constant {
-            dest: final_state_reg,
-            val: Value::Int(
-                self.state_machine_context
-                    .as_ref()
-                    .map_or(0, |ctx| ctx.analysis.state_count() as i64),
-            ),
-            ty: Ty::Int,
-            meta: Default::default(),
-        });
-
-        let return_val = self.next_register();
-        self.push_instr(Instruction::Record {
-            dest: return_val,
-            ty: Ty::Tuple(vec![Ty::Int, Ty::RawPtr, done_state_ty.clone()]),
-            record: vec![final_state_reg.into(), state_data.into(), done_reg.into()].into(),
-            meta: Default::default(),
-        });
-
-        self.push_terminator(Terminator::Ret {
-            val: return_val.into(),
-            ty: Ty::Tuple(vec![Ty::Int, Ty::RawPtr, done_state_ty.clone()]),
-        });
-
-        // The "done" block we just finished is the fallback for unknown states
-        let done_block_id = self.current_block_id();
-
-        // Build the dispatch block (block 0). It checks state_var and branches
-        // to the appropriate state entry block.
-        let state_entries = self
-            .state_machine_context
-            .as_ref()
-            .map(|ctx| ctx.state_entries.clone())
-            .unwrap_or_default();
-
-        self.set_current_block(dispatch_block_id);
-
-        // Chain of comparisons: if state == 0 goto state_0, elif state == 1 goto state_1, ...
-        // For the last state, fall through to "done"
-        let mut current_check_block = dispatch_block_id;
-        for (i, &entry_block) in state_entries.iter().enumerate() {
-            self.set_current_block(current_check_block);
-
-            let cmp_reg = self.next_register();
-            self.push_instr(Instruction::Cmp {
-                dest: cmp_reg,
-                op: CmpOperator::Equals,
-                lhs: state_var.into(),
-                rhs: Value::Int(i as i64),
-                ty: Ty::Int,
-                meta: Default::default(),
-            });
-
-            if i + 1 < state_entries.len() {
-                // More states to check — create a new block for the next comparison
-                let next_check_block = self.new_basic_block();
-                self.push_terminator(Terminator::Branch {
-                    cond: cmp_reg.into(),
-                    conseq: entry_block,
-                    alt: next_check_block,
-                });
-                current_check_block = next_check_block;
-            } else {
-                // Last state — else goes to "done" block
-                self.push_terminator(Terminator::Branch {
-                    cond: cmp_reg.into(),
-                    conseq: entry_block,
-                    alt: done_block_id,
-                });
-            }
-        }
-
-        // If there are no state entries (shouldn't happen), just jump to done
-        if state_entries.is_empty() {
-            self.set_current_block(dispatch_block_id);
-            self.push_terminator(Terminator::Jump { to: done_block_id });
-        }
-
-        // Clear state machine context
-        self.state_machine_context = None;
-
-        let poll_func = self
-            .current_function_stack
-            .pop()
-            .expect("no current function");
-
-        // Poll function type: (Int, RawPtr, R) -> (Int, RawPtr, GeneratorState<Y>)
-        let poll_ret_ty = Ty::Tuple(vec![
-            Ty::Int,
-            Ty::RawPtr,
-            Ty::Tuple(vec![Ty::Int, ret_ty_local.clone()]),
-        ]);
-        let poll_func_ty = Ty::Func(
-            Ty::Tuple(vec![Ty::Int, Ty::RawPtr, Ty::Void]).into(),
-            poll_ret_ty.clone().into(),
-            Row::Empty.into(),
-        );
-
-        self.functions.insert(
-            poll_func_sym,
-            PolyFunction {
-                name: poll_func_sym,
-                params: poll_params,
-                blocks: poll_func.blocks,
-                ty: poll_func_ty.clone(),
-                register_count: poll_func.registers.next as usize,
-                self_out: None,
-            },
-        );
-
-        // Now create the wrapper function (gen itself) that returns a Generator record.
-        // This is a proper function that can be called: it creates the Generator and returns it.
-        self.current_function_stack
-            .push(CurrentFunction::new(func.name));
-
-        // Burn registers for any parameters the original function had
-        let mut wrapper_params = vec![];
-        for _param in func.params.iter() {
-            let reg = self.next_register();
-            wrapper_params.push(Value::Reg(reg.0));
-        }
-
-        // Create reference to poll function
-        let poll_ref_reg = self.next_register();
-        self.push_instr(Instruction::Ref {
-            dest: poll_ref_reg,
-            ty: poll_func_ty.clone(),
-            val: Value::Func(poll_func_sym),
-        });
-
-        // Initial state is 0
-        let initial_state_reg = self.next_register();
-        self.push_instr(Instruction::Constant {
-            dest: initial_state_reg,
-            val: Value::Int(0),
-            ty: Ty::Int,
-            meta: Default::default(),
-        });
-
-        // Initial state_data is a null pointer
-        let initial_state_data_reg = self.next_register();
-        self.push_instr(Instruction::Constant {
-            dest: initial_state_data_reg,
-            val: Value::Int(0),
-            ty: Ty::RawPtr,
-            meta: Default::default(),
-        });
-
-        // Create the Generator record: { poll, state, state_data }
-        // Row::Extend nesting: outermost label is first in closed row
-        let generator_ty = Ty::Record(
-            None,
-            Row::Extend {
-                row: Row::Extend {
-                    row: Row::Extend {
-                        row: Row::Empty.into(),
-                        label: Label::Positional(2),
-                        ty: Ty::RawPtr,
-                    }
-                    .into(),
-                    label: Label::Positional(1),
-                    ty: Ty::Int,
-                }
-                .into(),
-                label: Label::Positional(0),
-                ty: poll_func_ty.clone(),
-            }
-            .into(),
-        );
-
-        let gen_result_reg = self.next_register();
-        self.push_instr(Instruction::Record {
-            dest: gen_result_reg,
-            ty: generator_ty.clone(),
-            record: vec![
-                poll_ref_reg.into(),
-                initial_state_reg.into(),
-                initial_state_data_reg.into(),
-            ]
-            .into(),
-            meta: Default::default(),
-        });
-
-        self.push_terminator(Terminator::Ret {
-            val: gen_result_reg.into(),
-            ty: generator_ty.clone(),
-        });
-
-        let wrapper_func = self
-            .current_function_stack
-            .pop()
-            .expect("no current function");
-
-        let wrapper_func_ty = curry_ty(param_tys.iter(), generator_ty.clone());
-        self.functions.insert(
-            func.name,
-            PolyFunction {
-                name: func.name,
-                params: wrapper_params,
-                blocks: wrapper_func.blocks,
-                ty: wrapper_func_ty.clone(),
-                register_count: wrapper_func.registers.next as usize,
-                self_out: None,
-            },
-        );
-
-        // Return Value::Func so callers can call this function normally
-        let dest = self.ret(bind);
-        self.push_instr(Instruction::Constant {
-            dest,
-            val: Value::Func(func.name),
-            ty: wrapper_func_ty.clone(),
-            meta: Default::default(),
-        });
-
-        Ok((dest.into(), wrapper_func_ty))
-    }
-
-    #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn push_instr(&mut self, instruction: Instruction<Ty>) {
         let current_function = self.current_func_mut();
         let current_block_idx = current_function

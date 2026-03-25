@@ -32,8 +32,4 @@ public protocol Future {
 	func poll(cx: Context) -> FuturePoll<Output>
 }
 
-public protocol Generator<Y, R> {
-	func resume(value: R) -> Poll<R, Y>
-}
-
 public effect 'async() -> ()

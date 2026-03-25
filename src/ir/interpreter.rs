@@ -300,118 +300,6 @@ impl<IO: super::io::IO> Interpreter<IO> {
         tracing::trace!("{:?}", self.frames.last().unwrap());
     }
 
-    /// Call an effectful function compiled as a state machine.
-    /// This drives the poll loop until the function completes.
-    ///
-    /// The poll function has signature:
-    ///   (state: Int, state_data: Record, resumed: T) -> (Int, Record, Poll<R>)
-    ///
-    /// Where Poll is either:
-    ///   - Ready(result)
-    ///   - Pending(effect, args)
-    #[allow(dead_code)]
-    pub fn call_effectful(
-        &mut self,
-        poll_func: Symbol,
-        _initial_args: Vec<Value>,
-        effect_handler: impl Fn(&mut Self, Symbol, Vec<Value>) -> Value,
-    ) -> Value {
-        let mut state = 0i64;
-        let mut state_data = Value::Record(RecordId::Anon, vec![]);
-        let mut resumed = Value::Void;
-
-        loop {
-            // Build the poll function arguments: (state, state_data, resumed)
-            let poll_args = vec![Value::Int(state), state_data.clone(), resumed];
-
-            // Call the poll function
-            let dest_reg = self.current_func.as_ref().map_or(Register(0), |_| {
-                Register(self.frames.last().map_or(0, |f| f.registers.len() as u32))
-            });
-            self.call(poll_func, poll_args, dest_reg, None);
-
-            // Run until the call returns
-            while !self.frames.is_empty() {
-                self.next();
-            }
-
-            // The result is a tuple: (next_state, state_data, poll_result)
-            let result = self.main_result.take().unwrap_or(Value::Void);
-
-            let Value::Record(_, fields) = result else {
-                // Not a valid state machine result, return as-is
-                return result;
-            };
-
-            if fields.len() < 3 {
-                // Not a valid state machine result
-                return Value::Record(RecordId::Anon, fields);
-            }
-
-            // Extract components
-            let new_state = match &fields[0] {
-                Value::Int(s) => *s,
-                _ => return Value::Record(RecordId::Anon, fields),
-            };
-
-            state_data = fields[1].clone();
-            let poll_result = fields[2].clone();
-
-            // Check if we have Ready or Pending
-            // For now, we use a simple convention:
-            // - If poll_result is a Record with tag 0, it's Pending(effect, args)
-            // - If poll_result is a Record with tag 1, it's Ready(value)
-            // - Otherwise, it's the final result (simplified)
-
-            match &poll_result {
-                Value::Record(_, inner_fields) if !inner_fields.is_empty() => {
-                    match &inner_fields[0] {
-                        Value::Int(0) => {
-                            // Pending - extract effect and args, call handler
-                            let effect_sym = if inner_fields.len() > 1 {
-                                match &inner_fields[1] {
-                                    Value::Func(s) => *s,
-                                    _ => Symbol::Main, // Placeholder
-                                }
-                            } else {
-                                Symbol::Main
-                            };
-
-                            let effect_args = if inner_fields.len() > 2 {
-                                match &inner_fields[2] {
-                                    Value::Record(_, args) => args.clone(),
-                                    v => vec![v.clone()],
-                                }
-                            } else {
-                                vec![]
-                            };
-
-                            // Call the effect handler to get the resumed value
-                            resumed = effect_handler(self, effect_sym, effect_args);
-                            state = new_state;
-                        }
-                        Value::Int(1) => {
-                            // Ready - return the value
-                            return if inner_fields.len() > 1 {
-                                inner_fields[1].clone()
-                            } else {
-                                Value::Void
-                            };
-                        }
-                        _ => {
-                            // Unknown poll result format, assume it's the final value
-                            return poll_result;
-                        }
-                    }
-                }
-                _ => {
-                    // Not a Poll enum, assume it's the final result
-                    return poll_result;
-                }
-            }
-        }
-    }
-
     pub fn next(&mut self) {
         let next_instruction = self.next_instr();
 
@@ -2027,6 +1915,27 @@ Dog().handleDSTChange()
     }
 
     #[test]
+    fn interprets_effect_handler_resume_value() {
+        let (_val, interpreter) = interpret_with(
+            "
+            effect 'fizz(x: Int) -> Int
+
+            @handle 'fizz { x in
+                continue x + 1
+            }
+
+            func fizzes(x) '[fizz] {
+                'fizz(x)
+            }
+
+            print(fizzes(2))
+            ",
+        );
+
+        assert_eq!(interpreter.io.stdout, "3\n".as_bytes());
+    }
+
+    #[test]
     fn interprets_throw_with_effect_handler() {
         let (val, interpreter) = interpret_with(
             "
@@ -2491,97 +2400,6 @@ Dog().handleDSTChange()
         assert_eq!(interpreter.io.stdout, "42\n".as_bytes());
     }
 
-    #[test]
-    fn interprets_generator_creation() {
-        // Test that gen() returns a Generator without crashing
-        let (_val, interpreter) = interpret_with(
-            "
-            func gen() {
-                yield(42)
-            }
-
-            let g = gen()
-            print(\"created generator\")
-            ",
-        );
-
-        assert_eq!(interpreter.io.stdout, "created generator\n".as_bytes());
-    }
-
-    #[test]
-    fn interprets_generator_send() {
-        // Test Generator.send() returning Optional.some(42) on first send
-        let (_val, interpreter) = interpret_with(
-            "
-            func gen() {
-                yield(42)
-            }
-
-            let g = gen()
-            let result = g.send(())
-            print(result)
-            ",
-        );
-
-        assert_eq!(interpreter.io.stdout, "Optional.some(42)\n".as_bytes());
-    }
-
-    #[test]
-    fn interprets_generator_multiple_yields() {
-        // Test generator that yields 1, 2, 3 then finishes
-        let (_val, interpreter) = interpret_with(
-            "
-            func gen() {
-                yield(1)
-                yield(2)
-                yield(3)
-            }
-
-            let g = gen()
-            let r1 = g.send(())
-            print(r1)
-            let r2 = g.send(())
-            print(r2)
-            let r3 = g.send(())
-            print(r3)
-            let r4 = g.send(())
-            print(r4)
-            ",
-        );
-
-        assert_eq!(
-            interpreter.io.stdout,
-            "Optional.some(1)\nOptional.some(2)\nOptional.some(3)\nOptional.none\n".as_bytes()
-        );
-    }
-
-    #[test]
-    fn interprets_generator_with_live_vars() {
-        // Test that variables defined before yield are correctly saved and restored
-        let (_val, interpreter) = interpret_with(
-            "
-            func gen() {
-                let x = 10
-                let y = 20
-                yield(x + y)
-                yield(x * y)
-            }
-
-            let g = gen()
-            let r1 = g.send(())
-            print(r1)
-            let r2 = g.send(())
-            print(r2)
-            let r3 = g.send(())
-            print(r3)
-            ",
-        );
-
-        assert_eq!(
-            interpreter.io.stdout,
-            "Optional.some(30)\nOptional.some(200)\nOptional.none\n".as_bytes()
-        );
-    }
 
     #[test]
     fn auto_derives_show_for_generic_enum() {
@@ -3220,6 +3038,24 @@ Dog().handleDSTChange()
         assert_eq!(
             String::from_utf8(interpreter.io.stdout).unwrap(),
             "echo: hello"
+        );
+    }
+
+    #[test]
+    fn pure_method_calls_do_not_clobber_receiver_bindings() {
+        let (_val, interpreter) = interpret_with(
+            r#"
+            let raw = "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n"
+            let idx = raw.find(" ")
+            print(raw.length)
+            print(idx)
+            print(raw.length - (idx + 1))
+            "#,
+        );
+
+        assert_eq!(
+            String::from_utf8(interpreter.io.stdout).unwrap(),
+            "35\n3\n31\n"
         );
     }
 

@@ -454,7 +454,7 @@ pub mod tests {
                         ty: IrTy::Int
                     }
                 }],
-                self_out: Some(Register(0)),
+                self_out: None,
             }
         );
     }
@@ -1018,7 +1018,7 @@ pub mod tests {
                         ty: IrTy::Int
                     }
                 }],
-                self_out: Some(Register(0)),
+                self_out: None,
             }
         );
 
@@ -1041,7 +1041,7 @@ pub mod tests {
                         ty: IrTy::Float
                     }
                 }],
-                self_out: Some(Register(0)),
+                self_out: None,
             }
         );
     }
@@ -1646,32 +1646,24 @@ pub mod tests {
                 name: Symbol::Synthesized(SynthesizedId::from(1)),
                 params: vec![Value::Reg(0)].into(),
                 ty: IrTy::Func(vec![IrTy::Int], IrTy::Int.into()),
-                register_count: 3,
+                register_count: 2,
                 blocks: vec![BasicBlock {
                     id: BasicBlockId(0),
                     phis: Default::default(),
-                    instructions: vec![
-                        Instruction::Constant {
-                            dest: 2.into(),
-                            ty: IrTy::Int,
-                            val: Register(0).into(),
-                            meta: Default::default(),
-                        },
-                        Instruction::Call {
-                            dest: 1.into(),
-                            ty: IrTy::Int,
-                            callee: Value::Func(InstanceMethodId::from(1).into()),
-                            args: vec![Register(0).into()].into(),
-                            self_dest: Some(Register(2)),
-                            meta: meta(),
-                        },
-                    ],
+                    instructions: vec![Instruction::Call {
+                        dest: 1.into(),
+                        ty: IrTy::Int,
+                        callee: Value::Func(InstanceMethodId::from(1).into()),
+                        args: vec![Register(0).into()].into(),
+                        self_dest: None,
+                        meta: meta(),
+                    },],
                     terminator: Terminator::Ret {
                         val: Value::Reg(1),
                         ty: IrTy::Int,
                     },
                 }],
-                self_out: Some(Register(2)),
+                self_out: None,
             }
         );
     }
@@ -1754,72 +1746,7 @@ pub mod tests {
     }
 
     #[test]
-    fn yield_builtin_triggers_state_machine() {
-        // Test that a function with yield compiles to a state machine (poll function)
-        let (module, names) = lower_module(
-            "
-            func gen() {
-                let x = 1
-                yield(x)
-                let y = 2
-                (x, y)
-            }
-            ",
-        );
-
-        let _guard = set_symbol_names(names.clone());
-        println!("{}", module.program);
-
-        // The gen function should have been transformed - there should be a synthesized poll function
-        let has_poll_func = module
-            .program
-            .functions
-            .keys()
-            .any(|k| matches!(k, Symbol::Synthesized(_)));
-
-        assert!(
-            has_poll_func,
-            "Expected a synthesized poll function for yield-containing function"
-        );
-    }
-
-    #[test]
-    fn yield_creates_multiple_states() {
-        // Test that multiple yields create multiple states
-        let (module, names) = lower_module(
-            "
-            func gen() {
-                yield(1)
-                yield(2)
-                yield(3)
-                0
-            }
-            ",
-        );
-
-        let _guard = set_symbol_names(names.clone());
-        println!("{}", module.program);
-
-        // Find the poll function and check it has multiple blocks (one per state)
-        for (sym, func) in &module.program.functions {
-            if let Symbol::Synthesized(_) = sym {
-                // State machine poll functions should have multiple blocks
-                // One for each state (initial + number of yields)
-                assert!(
-                    func.blocks.len() >= 3,
-                    "Expected at least 3 blocks for 3 yield points, got {}",
-                    func.blocks.len()
-                );
-                return;
-            }
-        }
-
-        panic!("No synthesized poll function found");
-    }
-
-    #[test]
     fn function_without_yield_uses_normal_lowering() {
-        // Test that functions without yield use normal lowering
         let (module, _names) = lower_module(
             "
             func normal() {
@@ -1830,7 +1757,6 @@ pub mod tests {
             ",
         );
 
-        // Check that the main function has a simple structure (normal lowering)
         let main = module
             .program
             .functions
@@ -1838,187 +1764,7 @@ pub mod tests {
         assert!(main.is_some(), "Expected a main function");
 
         let main_func = main.unwrap();
-        // A normal function has a single block with a return
-        assert_eq!(
-            main_func.blocks.len(),
-            1,
-            "Normal function should have 1 block"
-        );
-    }
-
-    #[test]
-    fn yield_state_machine_preserves_live_variables() {
-        // Test that live variables are correctly saved and restored across yields
-        let (module, _names) = lower_module(
-            "
-            func gen() {
-                let x = 10
-                let y = 20
-                yield(x)
-                let z = 30
-                yield(y)
-                x + y + z
-            }
-            ",
-        );
-
-        // Find the synthesized poll function
-        let poll_func = module
-            .program
-            .functions
-            .iter()
-            .find(|(sym, _)| matches!(sym, Symbol::Synthesized(_)));
-
-        assert!(poll_func.is_some(), "Expected a synthesized poll function");
-
-        let (_, func) = poll_func.unwrap();
-
-        // Should have blocks for: initial state, after first yield, after second yield
-        assert!(
-            func.blocks.len() >= 3,
-            "Expected at least 3 blocks for state machine with 2 yields"
-        );
-
-        // Check that the poll function has params for state and state_data
-        // The state machine poll function takes: (state: Int, state_data: Record, resumed: T)
-        assert!(
-            func.params.items.len() >= 2,
-            "Poll function should have at least 2 params (state, state_data)"
-        );
-    }
-
-    #[test]
-    fn yield_returns_correct_poll_variant() {
-        // Test that yield compiles to return Poll::pending
-        // Using inline enum definition since imports don't work in bare test context
-        let (module, names) = lower_module(
-            "
-            enum Poll<T, Y> {
-                case ready(T)
-                case pending(Y)
-            }
-
-            func gen() -> Poll<Int, Int> {
-                yield(42)
-                Poll.ready(100)
-            }
-            ",
-        );
-
-        let _guard = set_symbol_names(names.clone());
-
-        // Find the synthesized poll function
-        let poll_func = module
-            .program
-            .functions
-            .iter()
-            .find(|(sym, _)| matches!(sym, Symbol::Synthesized(_)));
-
-        assert!(poll_func.is_some(), "Expected a synthesized poll function");
-    }
-
-    #[test]
-    fn yield_function_returns_generator_record() {
-        // Test that a yield-containing function produces a wrapper that returns
-        // a Generator record, not the raw poll function
-        let (module, names) = lower_module(
-            "
-            func gen() {
-                yield(1)
-                yield(2)
-                0
-            }
-
-            let g = gen()
-            ",
-        );
-
-        let _guard = set_symbol_names(names.clone());
-
-        // The gen wrapper function should create a Generator record
-        let gen_func = module
-            .program
-            .functions
-            .iter()
-            .find(|(_, f)| {
-                f.blocks.iter().any(|block| {
-                    block
-                        .instructions
-                        .iter()
-                        .any(|instr| matches!(instr, Instruction::Record { record, .. } if record.items.len() == 3))
-                })
-            });
-
-        assert!(
-            gen_func.is_some(),
-            "Expected a wrapper function that creates a Generator record"
-        );
-    }
-
-    #[test]
-    fn generator_contains_poll_state_and_data() {
-        // Test that the Generator wrapper contains poll function ref, state (0), and state_data
-        let (module, names) = lower_module(
-            "
-            func gen() {
-                yield(42)
-                0
-            }
-
-            gen()
-            ",
-        );
-
-        let _guard = set_symbol_names(names.clone());
-
-        // Find the wrapper function that creates the Generator record.
-        // It must have both a Ref (for the poll function) and a 3-field Record.
-        let gen_func = module
-            .program
-            .functions
-            .iter()
-            .find(|(_, f)| {
-                let instrs: Vec<_> = f.blocks.iter().flat_map(|b| &b.instructions).collect();
-                let has_ref = instrs.iter().any(|i| matches!(i, Instruction::Ref { .. }));
-                let has_record = instrs.iter().any(
-                    |i| matches!(i, Instruction::Record { record, .. } if record.items.len() == 3),
-                );
-                has_ref && has_record
-            })
-            .map(|(_, f)| f)
-            .expect("Expected a wrapper function with Ref and 3-field Generator record");
-
-        // Verify it has the expected structure
-        assert!(!gen_func.blocks.is_empty());
-    }
-
-    #[test]
-    fn generator_ir_dump() {
-        // Dump the IR for a simple generator to understand its structure
-        let (module, names) = lower_module(
-            "
-            func gen() {
-                yield(42)
-            }
-
-            let g = gen()
-            let result = g.send(())
-            ",
-        );
-
-        let _guard = set_symbol_names(names.clone());
-        // Print monomorphized functions
-        println!("=== Monomorphized Functions ===");
-        for (sym, func) in &module.program.functions {
-            println!("func {sym}: {} blocks", func.blocks.len());
-            for block in &func.blocks {
-                println!("  Block {}:", block.id);
-                for instr in &block.instructions {
-                    println!("    {instr}");
-                }
-                println!("    {}", block.terminator);
-            }
-        }
+        assert_eq!(main_func.blocks.len(), 1, "Normal function should have 1 block");
     }
 
     #[test]

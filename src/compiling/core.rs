@@ -12,6 +12,10 @@ lazy_static! {
     static ref CORE_MODULE: Arc<Module> = Arc::new(load_or_compile());
 }
 
+// Bump this whenever compiler/lowering changes invalidate serialized core modules
+// even if the core source text itself is unchanged.
+const CORE_CACHE_VERSION: &str = "2026-03-20-generator-removal-2";
+
 pub fn compile() -> Arc<Module> {
     CORE_MODULE.clone()
 }
@@ -25,7 +29,6 @@ pub const CORE_SOURCE_NAMES: &[&str] = &[
     "Memory.tlk",
     "Array.tlk",
     "Iterable.tlk",
-    "Generator.tlk",
     "Async.tlk",
     "IO.tlk",
     "Net.tlk",
@@ -44,7 +47,6 @@ pub fn core_sources() -> Vec<(&'static str, &'static str)> {
         ("Memory.tlk", include_str!("../../core/Memory.tlk")),
         ("Array.tlk", include_str!("../../core/Array.tlk")),
         ("Iterable.tlk", include_str!("../../core/Iterable.tlk")),
-        ("Generator.tlk", include_str!("../../core/Generator.tlk")),
         ("Async.tlk", include_str!("../../core/Async.tlk")),
         ("IO.tlk", include_str!("../../core/IO.tlk")),
         ("Net.tlk", include_str!("../../core/Net.tlk")),
@@ -56,6 +58,7 @@ pub fn core_sources() -> Vec<(&'static str, &'static str)> {
 
 fn source_hash() -> [u8; 32] {
     let mut hasher = Sha256::new();
+    hasher.update(CORE_CACHE_VERSION.as_bytes());
     for (name, content) in core_sources() {
         hasher.update(name.as_bytes());
         hasher.update(content.as_bytes());
