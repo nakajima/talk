@@ -4,7 +4,7 @@ use rustc_hash::FxHashMap;
 
 use super::{
     interpreter::Interpreter,
-    io::IO,
+    io::{IO, IO_POLLIN, IO_POLLOUT},
     value::{RecordId, Value},
 };
 use crate::name_resolution::symbol::Symbol;
@@ -173,7 +173,7 @@ impl RuntimeExecutor {
         let mut poll_fds: Vec<(i32, i16, i16)> = self
             .io_interests
             .keys()
-            .map(|&fd| (fd, libc::POLLIN | libc::POLLOUT, 0))
+            .map(|&fd| (fd, IO_POLLIN | IO_POLLOUT, 0))
             .collect();
 
         let result = io.io_poll(&mut poll_fds, timeout_ms);

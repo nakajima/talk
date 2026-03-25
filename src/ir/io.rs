@@ -10,6 +10,16 @@ pub enum IOError {
     Unsupported,
 }
 
+#[cfg(unix)]
+pub const IO_POLLIN: i16 = libc::POLLIN;
+#[cfg(unix)]
+pub const IO_POLLOUT: i16 = libc::POLLOUT;
+
+#[cfg(not(unix))]
+pub const IO_POLLIN: i16 = 0x001;
+#[cfg(not(unix))]
+pub const IO_POLLOUT: i16 = 0x004;
+
 pub trait IO {
     fn write_stdout(&mut self, bytes: &[u8]) -> Result<(), IOError>;
     fn write_stderr(&mut self, bytes: &[u8]) -> Result<(), IOError>;

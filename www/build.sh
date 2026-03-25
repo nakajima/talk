@@ -1,3 +1,6 @@
+#!/bin/bash
+set -euo pipefail
+
 pushd ..
 cargo build
 popd
