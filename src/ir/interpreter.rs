@@ -1159,6 +1159,10 @@ impl<IO: super::io::IO> Interpreter<IO> {
                     return self.wrap_record(None, &fields);
                 }
 
+                if matches!(record_id, RecordId::Anon) && values.is_empty() {
+                    return "()".to_string();
+                }
+
                 let values = values
                     .into_iter()
                     .map(|v| self.display(v, quoted))
@@ -1402,6 +1406,16 @@ pub mod tests {
         ",
         );
         assert_eq!("sup\n".as_bytes(), interpreter.io.stdout);
+    }
+
+    #[test]
+    pub fn print_displays_unit() {
+        let (value, interpreter) = interpret_with(
+            "
+        print(\"sup\")
+        ",
+        );
+        assert_eq!("()", interpreter.display(value, false));
     }
 
     #[test]
@@ -2399,7 +2413,6 @@ Dog().handleDSTChange()
         );
         assert_eq!(interpreter.io.stdout, "42\n".as_bytes());
     }
-
 
     #[test]
     fn auto_derives_show_for_generic_enum() {
@@ -3411,5 +3424,28 @@ Dog().handleDSTChange()
         interpreter.run();
         let output = String::from_utf8(interpreter.io.stdout).unwrap();
         assert_eq!(output, "[1, 2, 3]\n");
+    }
+
+    #[test]
+    fn struct_print_example() {
+        let (module, names) = lower_module(
+            "
+        struct Person {
+            let firstName: String
+            let lastName: String
+
+            func greet() {
+                // Strings can be concat'd
+                print(\"hi i'm \" + self.firstName + \" \" + self.lastName)
+            }
+        }
+
+        Person(firstName: \"Pat\", lastName: \"N\").greet()
+        ",
+        );
+        let mut interpreter = Interpreter::new(module.program, Some(names), CaptureIO::default());
+        interpreter.run();
+        let output = String::from_utf8(interpreter.io.stdout).unwrap();
+        assert_eq!(output, "hi i'm Pat N\n");
     }
 }

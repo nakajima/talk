@@ -451,6 +451,67 @@ function initRunnable(el) {
   });
 }
 
+function setEditorValue(el, value, selectionStart, selectionEnd = selectionStart) {
+  el.value = value;
+  el.setSelectionRange(selectionStart, selectionEnd);
+  el.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+function indentSelection(el) {
+  let { value, selectionStart, selectionEnd } = el;
+
+  if (selectionStart === selectionEnd) {
+    el.setRangeText("\t", selectionStart, selectionEnd, "end");
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    return;
+  }
+
+  let lineStart = value.lastIndexOf("\n", Math.max(0, selectionStart - 1)) + 1;
+  let lineEndIndex = value.indexOf("\n", selectionEnd);
+  let lineEnd = lineEndIndex === -1 ? value.length : lineEndIndex;
+  let selectedBlock = value.slice(lineStart, lineEnd);
+  let indentedBlock = `\t${selectedBlock.replace(/\n/g, "\n\t")}`;
+  let indentedLineCount = selectedBlock.split("\n").length;
+
+  setEditorValue(
+    el,
+    `${value.slice(0, lineStart)}${indentedBlock}${value.slice(lineEnd)}`,
+    selectionStart + 1,
+    selectionEnd + indentedLineCount,
+  );
+}
+
+function unindentSelection(el) {
+  let { value, selectionStart, selectionEnd } = el;
+  let lineStart = value.lastIndexOf("\n", Math.max(0, selectionStart - 1)) + 1;
+  let lineEndIndex = value.indexOf("\n", selectionEnd);
+  let lineEnd = lineEndIndex === -1 ? value.length : lineEndIndex;
+  let selectedBlock = value.slice(lineStart, lineEnd);
+  let lines = selectedBlock.split("\n");
+  let removedBeforeSelectionStart = 0;
+  let removedBeforeSelectionEnd = 0;
+
+  let unindentedBlock = lines
+    .map((line, index) => {
+      if (!line.startsWith("\t")) return line;
+      if (index === 0 && selectionStart > lineStart) {
+        removedBeforeSelectionStart = 1;
+      }
+      removedBeforeSelectionEnd += 1;
+      return line.slice(1);
+    })
+    .join("\n");
+
+  if (unindentedBlock === selectedBlock) return;
+
+  setEditorValue(
+    el,
+    `${value.slice(0, lineStart)}${unindentedBlock}${value.slice(lineEnd)}`,
+    Math.max(lineStart, selectionStart - removedBeforeSelectionStart),
+    Math.max(lineStart, selectionEnd - removedBeforeSelectionEnd),
+  );
+}
+
 function initEditable(el) {
   let container = el.closest(".runnable");
   if (!container) return;
@@ -497,6 +558,18 @@ function initEditable(el) {
 
   el.addEventListener("input", handleInput);
   el.addEventListener("scroll", syncScroll);
+  el.addEventListener("keydown", (event) => {
+    if (event.key !== "Tab" || event.ctrlKey || event.metaKey || event.altKey) {
+      return;
+    }
+
+    event.preventDefault();
+    if (event.shiftKey) {
+      unindentSelection(el);
+    } else {
+      indentSelection(el);
+    }
+  });
   el.addEventListener("compositionstart", () => {
     isComposing = true;
   });

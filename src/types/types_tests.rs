@@ -2590,7 +2590,6 @@ pub mod tests {
         }));
     }
 
-
     #[test]
     fn yield_is_not_available_as_a_builtin_anymore() {
         let (_ast, _types, diagnostics) = typecheck_core_err(

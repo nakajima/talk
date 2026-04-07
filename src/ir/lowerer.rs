@@ -185,7 +185,6 @@ pub enum FuncTermination {
     Continuation(Symbol),
 }
 
-
 // Lowers an AST with Types to a monomorphized IR
 pub struct Lowerer<'a> {
     pub(super) typed: &'a mut Typed,
@@ -2713,16 +2712,13 @@ impl<'a> Lowerer<'a> {
                     }
                 }
                 TypedDeclKind::Extend {
-                    instance_methods,
-                    ..
+                    instance_methods, ..
                 }
                 | TypedDeclKind::EnumDef {
-                    instance_methods,
-                    ..
+                    instance_methods, ..
                 }
                 | TypedDeclKind::ProtocolDef {
-                    instance_methods,
-                    ..
+                    instance_methods, ..
                 } => {
                     if let Some(func) = instance_methods.values().find(|func| func.name == symbol) {
                         return Some(func);

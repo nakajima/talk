@@ -516,55 +516,142 @@ impl<'a> IO for MultiWriteIO<'a> {
         Ok(())
     }
 
-    fn read_stdio(&mut self, _bytes: &mut [u8]) -> Result<usize, IOError> {
-        Err(IOError::Unsupported)
+    fn read_stdio(&mut self, bytes: &mut [u8]) -> Result<usize, IOError> {
+        let Some(io) = self.adapters.first_mut() else {
+            return Err(IOError::Unsupported);
+        };
+        io.read_stdio(bytes)
     }
 
-    fn io_open(&mut self, _path: &[u8], _flags: i64, _mode: i64) -> i64 {
-        -1 // EPERM - not supported for multi-write
+    fn io_open(&mut self, path: &[u8], flags: i64, mode: i64) -> i64 {
+        let Some(io) = self.adapters.first_mut() else {
+            return -1;
+        };
+        io.io_open(path, flags, mode)
     }
 
-    fn io_read(&mut self, _fd: i64, _buf: &mut [u8]) -> i64 {
-        -1 // EPERM
+    fn io_read(&mut self, fd: i64, buf: &mut [u8]) -> i64 {
+        let Some(io) = self.adapters.first_mut() else {
+            return -1;
+        };
+        io.io_read(fd, buf)
     }
 
-    fn io_write(&mut self, _fd: i64, _buf: &[u8]) -> i64 {
-        -1 // EPERM
+    fn io_write(&mut self, fd: i64, buf: &[u8]) -> i64 {
+        match fd {
+            1 => match self.write_stdout(buf) {
+                Ok(()) => buf.len() as i64,
+                Err(_) => -1,
+            },
+            2 => match self.write_stderr(buf) {
+                Ok(()) => buf.len() as i64,
+                Err(_) => -1,
+            },
+            _ => {
+                let Some(io) = self.adapters.first_mut() else {
+                    return -1;
+                };
+                io.io_write(fd, buf)
+            }
+        }
     }
 
-    fn io_close(&mut self, _fd: i64) -> i64 {
-        -1 // EPERM
+    fn io_close(&mut self, fd: i64) -> i64 {
+        let Some(io) = self.adapters.first_mut() else {
+            return -1;
+        };
+        io.io_close(fd)
     }
 
-    fn io_ctl(&mut self, _fd: i64, _op: i64, _arg: i64) -> i64 {
-        -1 // EPERM
+    fn io_ctl(&mut self, fd: i64, op: i64, arg: i64) -> i64 {
+        let Some(io) = self.adapters.first_mut() else {
+            return -1;
+        };
+        io.io_ctl(fd, op, arg)
     }
 
-    fn io_poll(&mut self, _fds: &mut [(i32, i16, i16)], _timeout: i64) -> i64 {
-        -1 // EPERM
+    fn io_poll(&mut self, fds: &mut [(i32, i16, i16)], timeout: i64) -> i64 {
+        let Some(io) = self.adapters.first_mut() else {
+            return -1;
+        };
+        io.io_poll(fds, timeout)
     }
 
-    fn io_socket(&mut self, _domain: i64, _socktype: i64, _protocol: i64) -> i64 {
-        -1 // EPERM
+    fn io_socket(&mut self, domain: i64, socktype: i64, protocol: i64) -> i64 {
+        let Some(io) = self.adapters.first_mut() else {
+            return -1;
+        };
+        io.io_socket(domain, socktype, protocol)
     }
 
-    fn io_bind(&mut self, _fd: i64, _addr: i64, _port: i64) -> i64 {
-        -1 // EPERM
+    fn io_bind(&mut self, fd: i64, addr: i64, port: i64) -> i64 {
+        let Some(io) = self.adapters.first_mut() else {
+            return -1;
+        };
+        io.io_bind(fd, addr, port)
     }
 
-    fn io_listen(&mut self, _fd: i64, _backlog: i64) -> i64 {
-        -1 // EPERM
+    fn io_listen(&mut self, fd: i64, backlog: i64) -> i64 {
+        let Some(io) = self.adapters.first_mut() else {
+            return -1;
+        };
+        io.io_listen(fd, backlog)
     }
 
-    fn io_connect(&mut self, _fd: i64, _addr: i64, _port: i64) -> i64 {
-        -1 // EPERM
+    fn io_connect(&mut self, fd: i64, addr: i64, port: i64) -> i64 {
+        let Some(io) = self.adapters.first_mut() else {
+            return -1;
+        };
+        io.io_connect(fd, addr, port)
     }
 
-    fn io_accept(&mut self, _fd: i64) -> i64 {
-        -1 // EPERM
+    fn io_accept(&mut self, fd: i64) -> i64 {
+        let Some(io) = self.adapters.first_mut() else {
+            return -1;
+        };
+        io.io_accept(fd)
     }
 
-    fn io_sleep(&mut self, _ms: i64) -> i64 {
-        -1 // EPERM - not supported for multi-write
+    fn io_sleep(&mut self, ms: i64) -> i64 {
+        let Some(io) = self.adapters.first_mut() else {
+            return -1;
+        };
+        io.io_sleep(ms)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CaptureIO, IO, MultiWriteIO};
+
+    #[test]
+    fn multi_write_io_fans_out_stdout_writes() {
+        let mut primary = CaptureIO::default();
+        let mut mirror = CaptureIO::default();
+        let mut io = MultiWriteIO {
+            adapters: vec![Box::new(&mut primary), Box::new(&mut mirror)],
+        };
+
+        let written = io.io_write(1, b"hi");
+
+        assert_eq!(written, 2);
+        assert_eq!(primary.stdout, b"hi");
+        assert_eq!(mirror.stdout, b"hi");
+    }
+
+    #[test]
+    fn multi_write_io_delegates_non_stdio_writes_to_primary() {
+        let mut primary = CaptureIO::default();
+        let fd = primary.create_file(Vec::new());
+        let mut mirror = CaptureIO::default();
+        let mut io = MultiWriteIO {
+            adapters: vec![Box::new(&mut primary), Box::new(&mut mirror)],
+        };
+
+        let written = io.io_write(fd, b"file");
+
+        assert_eq!(written, 4);
+        assert_eq!(primary.files.get(&fd), Some(&b"file".to_vec()));
+        assert!(mirror.files.is_empty());
     }
 }

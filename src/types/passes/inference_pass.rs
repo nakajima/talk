@@ -4076,7 +4076,6 @@ impl<'a> InferencePass<'a> {
         }
     }
 
-
     fn ensure_row_record(
         &mut self,
         expected: &Ty,

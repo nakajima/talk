@@ -1764,7 +1764,11 @@ pub mod tests {
         assert!(main.is_some(), "Expected a main function");
 
         let main_func = main.unwrap();
-        assert_eq!(main_func.blocks.len(), 1, "Normal function should have 1 block");
+        assert_eq!(
+            main_func.blocks.len(),
+            1,
+            "Normal function should have 1 block"
+        );
     }
 
     #[test]

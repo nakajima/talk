@@ -27,7 +27,7 @@ First we lex the code into tokens. Then we parse the tokens into an AST. Then we
 At this point you’re cracking your knuckles saying "nice try, wise guy, but you’ll have to do better than that if you want me to adopt this at my fortune 500 company where I do a very good job and that is why they pay me the BIG bucks." Ok ok, call off your goons. Here’s some more detail[^2].
 
 ##### Lexing
-It's a pretty standard lexer as far as lexers go. It takes a string and turns it into tokens. Tokens have start/end positions and types like `StringLiteral`, `Comma` and more. _Side note: I made token types a Rust enum with associated String values for things like string/int literals and I regret it. Should have just used the positions to get the lexeme content but live and learn and laugh and love and all of that._
+It's a pretty standard lexer as far as lexers go. It takes a string and turns it into tokens. Tokens have start/end positions and types like `StringLiteral`, `Comma` and more.
 
 ##### Parsing
 talktalk takes the tokens from lexing and uses a handwritten recursive descent parser (I think? I'm not good at genres) with some chris pratt precedence for expressions. Nothing too exciting here. At the end of this we have an AST.
