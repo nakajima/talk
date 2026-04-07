@@ -99,6 +99,7 @@ pub struct Scope {
     pub depth: u32,
     pub binder: Option<Symbol>,
     pub level: Level,
+    pub capture_boundary: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -115,6 +116,7 @@ impl Scope {
         node_id: NodeID,
         parent_id: Option<NodeID>,
         depth: u32,
+        capture_boundary: bool,
     ) -> Self {
         Scope {
             node_id,
@@ -125,6 +127,7 @@ impl Scope {
             types: Default::default(),
             handlers: Default::default(),
             binder,
+            capture_boundary,
         }
     }
 }
@@ -239,7 +242,7 @@ impl NameResolver {
     fn init_file_scope(&mut self, file_id: FileID, skip_core_prelude: bool) {
         let scope_id = NodeID(file_id, 0);
         // Always create fresh scope with builtins
-        let mut scope = Scope::new(None, self.current_level, scope_id, None, 1);
+        let mut scope = Scope::new(None, self.current_level, scope_id, None, 1, false);
         builtins::import_builtins(&mut scope);
 
         // Import Core module exports as prelude (unless the file opts out)
@@ -603,7 +606,7 @@ impl NameResolver {
     fn lookup_in_scope(&mut self, name: &Name, scope_id: NodeID) -> Option<Symbol> {
         let scope = self
             .scopes
-            .get_mut(&scope_id)
+            .get(&scope_id)
             .unwrap_or_else(|| unreachable!("scope not found: {scope_id:?}, {:?}", name));
 
         if let Some(symbol) = scope.types.get(&name.name_str()) {
@@ -615,33 +618,41 @@ impl NameResolver {
         }
 
         if let Some(parent) = scope.parent_id
-            && let Some(captured) = self.lookup_in_scope(name, parent)
+            && let Some(resolved) = self.lookup_in_scope(name, parent)
             && parent != scope_id
         {
-            let scope = self.scopes.get(&scope_id).expect("did not find scope");
-
-            if scope.binder == Some(captured) {
-                return Some(captured);
-            }
-
-            let Some(current_scope_binder) = scope.binder else {
-                return Some(captured);
+            let Some(current_scope_binder) = self.nearest_capture_binder_from(Some(scope_id), None)
+            else {
+                return Some(resolved);
             };
 
-            if !matches!(
-                captured,
-                Symbol::DeclaredLocal(..) | Symbol::ParamLocal(..) | Symbol::Global(..)
-            ) {
-                return Some(captured);
+            if current_scope_binder == resolved {
+                return Some(resolved);
             }
 
+            let resolved_owner = self.nearest_capture_binder_from(Some(parent), None);
+            if resolved_owner == Some(current_scope_binder) {
+                return Some(resolved);
+            }
+
+            if !matches!(
+                resolved,
+                Symbol::DeclaredLocal(..) | Symbol::ParamLocal(..) | Symbol::Global(..)
+            ) {
+                return Some(resolved);
+            }
+
+            let scope = self.scopes.get(&scope_id).expect("did not find scope");
             let parent_binder =
-                self.nearest_enclosing_binder_from(Some(parent), current_scope_binder);
+                self.nearest_capture_binder_from(Some(parent), Some(current_scope_binder));
+            let capture_level = resolved_owner
+                .and_then(|owner| self.capture_binder_level(owner))
+                .unwrap_or(scope.level);
 
             let capture = Capture {
-                symbol: captured,
+                symbol: resolved,
                 parent_binder,
-                level: scope.level,
+                level: capture_level,
             };
 
             self.phase
@@ -649,9 +660,9 @@ impl NameResolver {
                 .entry(current_scope_binder)
                 .or_default()
                 .insert(capture);
-            self.phase.captured.insert(captured);
+            self.phase.captured.insert(resolved);
 
-            return Some(captured);
+            return Some(resolved);
         }
 
         let matching_imported_names = self.modules.lookup_name(&name.name_str());
@@ -683,36 +694,44 @@ impl NameResolver {
 
         let parent = self.scopes.get(&scope_id).and_then(|scope| scope.parent_id);
         if let Some(parent) = parent
-            && let Some(captured) = self.lookup_handler_in_scope(effect, parent)
+            && let Some(resolved) = self.lookup_handler_in_scope(effect, parent)
             && parent != scope_id
         {
+            let Some(current_scope_binder) = self.nearest_capture_binder_from(Some(scope_id), None)
+            else {
+                return Some(resolved);
+            };
+
+            if current_scope_binder == resolved {
+                return Some(resolved);
+            }
+
+            let resolved_owner = self.nearest_capture_binder_from(Some(parent), None);
+            if resolved_owner == Some(current_scope_binder) {
+                return Some(resolved);
+            }
+
+            if !matches!(
+                resolved,
+                Symbol::DeclaredLocal(..) | Symbol::ParamLocal(..) | Symbol::Global(..)
+            ) {
+                return Some(resolved);
+            }
+
             let scope = self
                 .scopes
                 .get(&scope_id)
                 .unwrap_or_else(|| unreachable!("scope not found: {scope_id:?}"));
-
-            if scope.binder == Some(captured) {
-                return Some(captured);
-            }
-
-            let Some(current_scope_binder) = scope.binder else {
-                return Some(captured);
-            };
-
-            if !matches!(
-                captured,
-                Symbol::DeclaredLocal(..) | Symbol::ParamLocal(..) | Symbol::Global(..)
-            ) {
-                return Some(captured);
-            }
-
             let parent_binder =
-                self.nearest_enclosing_binder_from(Some(parent), current_scope_binder);
+                self.nearest_capture_binder_from(Some(parent), Some(current_scope_binder));
+            let capture_level = resolved_owner
+                .and_then(|owner| self.capture_binder_level(owner))
+                .unwrap_or(scope.level);
 
             let capture = Capture {
-                symbol: captured,
+                symbol: resolved,
                 parent_binder,
-                level: scope.level,
+                level: capture_level,
             };
 
             self.phase
@@ -720,9 +739,9 @@ impl NameResolver {
                 .entry(current_scope_binder)
                 .or_default()
                 .insert(capture);
-            self.phase.captured.insert(captured);
+            self.phase.captured.insert(resolved);
 
-            return Some(captured);
+            return Some(resolved);
         }
 
         None
@@ -965,10 +984,10 @@ impl NameResolver {
         self.phase.public_symbols.insert(symbol);
     }
 
-    fn nearest_enclosing_binder_from(
+    fn nearest_capture_binder_from(
         &self,
         mut scope_id: Option<NodeID>,
-        skip: Symbol,
+        skip: Option<Symbol>,
     ) -> Option<Symbol> {
         while let Some(id) = scope_id {
             let scope = self
@@ -976,8 +995,9 @@ impl NameResolver {
                 .get(&id)
                 .unwrap_or_else(|| unreachable!("scope not found: {id:?}"));
 
-            if let Some(binder) = scope.binder
-                && binder != skip
+            if scope.capture_boundary
+                && let Some(binder) = scope.binder
+                && Some(binder) != skip
             {
                 return Some(binder);
             }
@@ -985,6 +1005,16 @@ impl NameResolver {
             scope_id = scope.parent_id;
         }
         None
+    }
+
+    fn capture_binder_level(&self, binder: Symbol) -> Option<Level> {
+        self.scopes.values().find_map(|scope| {
+            if scope.capture_boundary && scope.binder == Some(binder) {
+                Some(scope.level)
+            } else {
+                None
+            }
+        })
     }
 
     fn enter_pattern(&mut self, pattern: &mut Pattern) {

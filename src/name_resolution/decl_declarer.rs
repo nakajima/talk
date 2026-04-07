@@ -215,14 +215,25 @@ impl<'a> DeclDeclarer<'a> {
     }
 
     #[instrument(skip(self), fields(level = ?self.resolver.current_level))]
-    pub fn start_scope(&mut self, binder: Option<Symbol>, id: NodeID, bump_level: bool) {
+    pub fn start_scope(
+        &mut self,
+        binder: Option<Symbol>,
+        id: NodeID,
+        bump_level: bool,
+        capture_boundary: bool,
+    ) {
         let parent_id = self.resolver.current_scope_id;
+        let parent_level = self
+            .resolver
+            .current_scope()
+            .map(|s| s.level)
+            .unwrap_or(self.resolver.current_level);
         let scope = Scope::new(
             binder,
             if bump_level {
-                self.resolver.current_level.next()
+                parent_level.next()
             } else {
-                self.resolver.current_level
+                parent_level
             },
             id,
             parent_id,
@@ -230,6 +241,7 @@ impl<'a> DeclDeclarer<'a> {
                 .current_scope()
                 .map(|s| s.depth + 1)
                 .unwrap_or(1),
+            capture_boundary,
         );
         tracing::trace!("start_scope: {:?}", scope);
         self.resolver.scopes.insert(id, scope);
@@ -472,7 +484,7 @@ impl<'a> DeclDeclarer<'a> {
         self.resolver.nominal_stack.push((sym, id));
         self.type_members.insert(id, TypeMembers::default());
 
-        self.start_scope(Some(sym), id, false);
+        self.start_scope(Some(sym), id, false, false);
         self.resolver
             .current_scope_mut()
             .expect("didn't get current scope")
@@ -494,10 +506,10 @@ impl<'a> DeclDeclarer<'a> {
                 kind: ExprKind::Block(block),
                 ..
             }) => {
-                self.start_scope(None, block.id, false);
+                self.start_scope(None, block.id, false, false);
             }
             StmtKind::Loop(_, block) => {
-                self.start_scope(None, block.id, false);
+                self.start_scope(None, block.id, false, false);
             }
             _ => {}
         }
@@ -523,7 +535,7 @@ impl<'a> DeclDeclarer<'a> {
     ///////////////////////////////////////////////////////////////////////////
     #[instrument(level = tracing::Level::TRACE, skip(self, arm))]
     fn enter_match_arm(&mut self, arm: &mut MatchArm) {
-        self.start_scope(None, arm.id, false);
+        self.start_scope(None, arm.id, false, false);
         self.declare_pattern(&mut arm.pattern, some!(PatternBindLocal));
     }
 
@@ -577,11 +589,7 @@ impl<'a> DeclDeclarer<'a> {
                 let func_sym = name
                     .symbol()
                     .unwrap_or_else(|_| unreachable!("did not resolve func name"));
-                let binder = match self.resolver.current_scope().and_then(|scope| scope.binder) {
-                    Some(parent) if parent == func_sym => None,
-                    _ => Some(func_sym),
-                };
-                self.start_scope(binder, *id, false);
+                self.start_scope(Some(func_sym), *id, false, true);
 
                 self.declare_generics(generics, false);
 
@@ -622,6 +630,7 @@ impl<'a> DeclDeclarer<'a> {
                     Some(name.symbol().unwrap_or_else(|_| unreachable!())),
                     func.id,
                     false,
+                    true,
                 );
 
                 self.declare_generics(generics, false);
@@ -851,13 +860,13 @@ impl<'a> DeclDeclarer<'a> {
                 .resolver
                 .declare(name, some!(Initializer), decl.id, decl.span);
 
-            self.start_scope(None, decl.id, false);
+            self.start_scope(None, decl.id, false, false);
         });
 
         on!(&mut decl.kind, DeclKind::Let { lhs, .. }, {
             self.declare_pattern(lhs, some!(DeclaredLocal));
             for (id, binder) in lhs.collect_binders() {
-                self.start_scope(Some(binder), id, true);
+                self.start_scope(Some(binder), id, true, false);
             }
         });
 
@@ -876,7 +885,7 @@ impl<'a> DeclDeclarer<'a> {
                     .declare(name, some!(Effect), decl.id, *name_span);
 
                 // Start a scope for the effect's generics and params
-                self.start_scope(None, decl.id, false);
+                self.start_scope(None, decl.id, false, false);
 
                 self.declare_generics(generics, false);
 
@@ -1072,7 +1081,7 @@ impl<'a> DeclDeclarer<'a> {
             Span::SYNTHESIZED,
         );
 
-        self.start_scope(None, init_id, false);
+        self.start_scope(None, init_id, false, false);
 
         // Need to synthesize an init
         let self_param_name = self.resolver.declare(

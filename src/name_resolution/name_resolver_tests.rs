@@ -476,6 +476,24 @@ pub mod tests {
     }
 
     #[test]
+    fn let_scopes_do_not_create_spurious_captures() {
+        let resolved = resolve(
+            "
+        func f(x) {
+            let y = x
+            y
+        }
+        ",
+        );
+
+        assert!(
+            !resolved.1.captures.contains_key(&GlobalId::from(1).into()),
+            "captures: {:?}",
+            resolved.1.captures
+        );
+    }
+
+    #[test]
     fn resolves_nested_captures() {
         let resolved = resolve(
             "

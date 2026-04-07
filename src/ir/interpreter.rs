@@ -2415,6 +2415,51 @@ Dog().handleDSTChange()
     }
 
     #[test]
+    fn interprets_let_binding_of_enum_param() {
+        let (_val, interpreter) = interpret_with(
+            "
+            enum Maybe<T> {
+                case some(T)
+                case none
+            }
+
+            func f(value: Maybe<Int>) -> Int {
+                let y = value
+                match y {
+                    .some(x) -> x,
+                    .none -> 0
+                }
+            }
+
+            print(f(Maybe.some(42)))
+            ",
+        );
+
+        assert_eq!(String::from_utf8(interpreter.io.stdout).unwrap(), "42\n");
+    }
+
+    #[test]
+    fn interprets_let_else() {
+        let (_val, interpreter) = interpret_with(
+            "
+            enum Maybe<T> {
+                case some(T)
+                case none
+            }
+
+            func unwrapOrZero(value: Maybe<Int>) -> Int {
+                let .some(x) = value else { return 0 }
+                x
+            }
+
+            print(unwrapOrZero(Maybe.some(42)))
+            ",
+        );
+
+        assert_eq!(String::from_utf8(interpreter.io.stdout).unwrap(), "42\n");
+    }
+
+    #[test]
     fn auto_derives_show_for_generic_enum() {
         // Auto-derived Showable should work for generic enums with type parameter payloads
         let (_val, interpreter) = interpret_with(

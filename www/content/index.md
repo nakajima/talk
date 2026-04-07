@@ -65,6 +65,37 @@ You could write the function above explicitly too.
 func identity<T>(x: T) { x }
 ```
 
+Closures are values too, and they can capture state.
+
+```tlk
+func makeCounter() {
+	let i = 0
+
+	return func() {
+		i = i + 1
+		i
+	}
+}
+
+let counter = makeCounter()
+counter()
+counter()
+counter()
+```
+
+You can also use trailing blocks for callback-y stuff.
+
+```tlk
+func twice(callback) {
+	callback()
+	callback()
+}
+
+twice {
+	print("oh hi")
+}
+```
+
 Maybe you like product types.
 
 ```tlk
@@ -82,7 +113,23 @@ struct Person {
 Person(firstName: "Pat", lastName: "N").greet()
 ```
 
-  
+You can also define custom initializers.
+
+```tlk
+struct Dog {
+	let age: Int
+	let count: Int
+
+	init(age: Int) {
+		self.age = age
+		self.count = 0
+		self
+	}
+}
+
+let dog = Dog(age: 3)
+dog.age
+```
 
 We've got sum types too:
 
@@ -101,6 +148,50 @@ match Response.ok("success!") {
     .ok(string) -> string,
     .redirect(message) -> message,
     .other(code) -> "uh oh"
+}
+```
+
+Pattern matching is good for more than one big `match`, too.
+
+```tlk
+enum Maybe<T> {
+	case some(T)
+	case none
+}
+
+let value = Maybe.some(42)
+
+if let .some(x) = value {
+	x
+} else {
+	0
+}
+```
+
+And `let else` is handy when you want to bail out early.
+
+```tlk
+enum Maybe<T> {
+	case some(T)
+	case none
+}
+
+func unwrapOrZero(value: Maybe<Int>) -> Int {
+	let .some(x) = value else { return 0 }
+	x
+}
+
+unwrapOrZero(Maybe.some(42))
+```
+
+Records can be matched structurally too.
+
+```tlk
+let point = { x: 10, y: 20 }
+
+match point {
+	{ x, y: 20 } -> x,
+	{ x, y } -> y
 }
 ```
 
@@ -204,4 +295,33 @@ func boom(x) {
 }
 
 boom(0)
+```
+
+There are modules too. This one isn't runnable in the browser because it spans multiple files, but it works from the CLI.
+
+```tlk norun
+// Exports.tlk
+public let a = "we can export this string"
+
+// Main.tlk
+import { a } from ./Exports.tlk
+
+print(a)
+```
+
+And yes, there is already some rough little HTTP stuff.
+
+```tlk norun
+let http = HTTP.Server()
+
+http.get("/", func() {
+	"hello from talk"
+})
+
+http.get("/health", func() {
+	"ok"
+})
+
+print("Listening on http://localhost:3000")
+http.run(3000)
 ```
