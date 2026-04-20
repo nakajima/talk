@@ -1,22 +1,60 @@
-<html>
+<!doctype html>
+<html lang="en">
+<head>
   <meta charset="utf-8">
-  <meta content="text/html" charset="UTF-8" http-equiv="Content-Type">
+  <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <head>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@300..700&display=swap" rel="stylesheet">
-    <link href="/reset.css" rel="stylesheet">
-   	<link href="/style.css" rel="stylesheet">
-		<link href="https://unpkg.com/tippy.js@6.3.7/dist/tippy.css" rel="stylesheet">
-  </head>
-  <body>
-    <main>
-			<h1>talktalk</h1>
-      {CONTENT_GOES_HERE}
-			<script src="https://unpkg.com/@popperjs/core@2"></script>
-			<script src="https://unpkg.com/tippy.js@6"></script>
-      <script type="module" src="/page.js"></script>
-    </main>
-  </body>
+  <title>talktalk — a programming language</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@300..700&display=swap" rel="stylesheet">
+  <link href="/reset.css" rel="stylesheet">
+  <link href="/style.css" rel="stylesheet">
+  <link href="https://unpkg.com/tippy.js@6.3.7/dist/tippy.css" rel="stylesheet">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="shell topbar__inner">
+    <a href="#top" class="wordmark">
+      <span class="owl">🦉</span>talktalk<span class="dot">.</span>
+      <span class="ver">v0.1.1</span>
+    </a>
+    <nav class="topnav">
+      <a href="#tour">Tour</a>
+      <span class="sep">·</span>
+      <a href="#pipeline">How it works</a>
+      <span class="sep">·</span>
+      <a href="#roadmap">Roadmap</a>
+      <span class="sep">·</span>
+      <a href="#install">Install</a>
+      <a class="github-pill" href="https://github.com/pat-nakajima/talk">GitHub ↗</a>
+    </nav>
+  </div>
+</header>
+
+<div class="masthead">
+  <div class="shell">
+    <div class="masthead__row">
+      <div class="masthead__left"></div>
+      <div>A bi-annual review of one person's compiler</div>
+      <div class="masthead__right"></div>
+    </div>
+    <h1 class="masthead__title">talktalk<span class="dot">.</span></h1>
+  </div>
+</div>
+
+<main id="top">
+  <div class="shell">{HERO}</div>
+  {GOALS}
+  {TOUR}
+  {PIPELINE}
+  {ROADMAP}
+  {INSTALL}
+</main>
+
+<script src="https://unpkg.com/@popperjs/core@2"></script>
+<script src="https://unpkg.com/tippy.js@6"></script>
+<script type="module" src="/page.js"></script>
+</body>
 </html>

@@ -1,0 +1,512 @@
+- generic [active] [ref=e1]:
+  - banner [ref=e2]:
+    - generic [ref=e3]:
+      - link "🦉 talktalk . v0.1.1" [ref=e4] [cursor=pointer]:
+        - /url: "#top"
+        - generic [ref=e5]: 🦉
+        - text: talktalk
+        - generic [ref=e6]: .
+        - generic [ref=e7]: v0.1.1
+      - navigation [ref=e8]:
+        - link "Tour" [ref=e9] [cursor=pointer]:
+          - /url: "#tour"
+        - generic [ref=e10]: ·
+        - link "How it works" [ref=e11] [cursor=pointer]:
+          - /url: "#pipeline"
+        - generic [ref=e12]: ·
+        - link "Roadmap" [ref=e13] [cursor=pointer]:
+          - /url: "#roadmap"
+        - generic [ref=e14]: ·
+        - link "Install" [ref=e15] [cursor=pointer]:
+          - /url: "#install"
+        - link "GitHub ↗" [ref=e16] [cursor=pointer]:
+          - /url: https://github.com/pat-nakajima/talk
+  - generic [ref=e18]:
+    - generic [ref=e20]: A bi-annual review of one person's compiler
+    - heading "talktalk." [level=1] [ref=e21]
+  - main [ref=e22]:
+    - generic [ref=e24]:
+      - generic [ref=e25]:
+        - heading "talktalk is a small, fully-typed language that kind of looks like Swift or Rust or Go if you squint really hard." [level=2] [ref=e26]:
+          - text: talktalk is a small, fully-typed language that kind of looks like Swift or Rust or Go
+          - deletion [ref=e27]: if you squint really hard
+          - text: .
+        - generic [ref=e28]:
+          - paragraph [ref=e29]:
+            - text: It wants to feel familiar and cozy, but still pack modern power — type inference, sum types, protocols, algebraic effects, and a little IR it gets lowered into before a
+            - emphasis [ref=e30]: very
+            - text: little interpreter runs it.
+          - paragraph [ref=e31]: It's mostly a way for me to understand compilers. You shouldn't use talktalk. But you might enjoy perusing it.
+        - generic [ref=e32]:
+          - link "▸ Take the tour" [ref=e33] [cursor=pointer]:
+            - /url: "#tour"
+          - link "How it works →" [ref=e34] [cursor=pointer]:
+            - /url: "#pipeline"
+          - link "Install ⌘" [ref=e35] [cursor=pointer]:
+            - /url: "#install"
+            - text: Install
+            - generic [ref=e36]: ⌘
+        - generic [ref=e37]:
+          - generic [ref=e38]:
+            - text: Version
+            - strong [ref=e39]: 0.1.1
+          - generic [ref=e40]:
+            - text: License
+            - strong [ref=e41]: MIT
+          - generic [ref=e42]:
+            - text: Stability
+            - strong [ref=e43]: ha. no.
+      - generic [ref=e45]:
+        - generic [ref=e46]:
+          - generic [ref=e51]: hello.tlk
+          - generic [ref=e52]: talktalk
+        - generic [ref=e53]:
+          - generic [ref=e54]:
+            - generic [ref=e55]: 1 2 3 4 5 6 7 8 9 10 11 12
+            - generic [ref=e56]:
+              - generic: "// hello.tlk — a little tour struct Owl { let name: String let greeting: String func hoot() { print(self.greeting + \", i'm \" + self.name) } } let hoo = Owl(name: \"hoo\", greeting: \"hi 🦉\") hoo.hoot()"
+              - textbox [ref=e57]: "// hello.tlk — a little tour struct Owl { let name: String let greeting: String func hoot() { print(self.greeting + \", i'm \" + self.name) } } let hoo = Owl(name: \"hoo\", greeting: \"hi 🦉\") hoo.hoot()"
+          - generic [ref=e58]:
+            - button "▸ Run" [ref=e59] [cursor=pointer]
+            - button "▽ Lower" [ref=e60] [cursor=pointer]
+            - button "↺ Format" [ref=e61] [cursor=pointer]
+    - generic [ref=e64]:
+      - generic [ref=e65]:
+        - generic [ref=e66]: "01"
+        - heading "Goals & non-goalswhat this thing is trying to be, and isn't" [level=2] [ref=e67]
+      - generic [ref=e68]:
+        - generic [ref=e69]:
+          - generic [ref=e70]: Goal
+          - heading "01 Learning stuff" [level=3] [ref=e71]:
+            - generic [ref=e72]: "01"
+            - text: Learning stuff
+          - paragraph [ref=e74]: This is by far the biggest goal. I didn't super understand all the ins and outs of compilers. I still don't, but at least I have a way to learn now.
+        - generic [ref=e75]:
+          - generic [ref=e76]: Goal
+          - heading "02 Fully typed everything" [level=3] [ref=e77]:
+            - generic [ref=e78]: "02"
+            - text: Fully typed everything
+          - paragraph [ref=e80]: Types are cool. You can add them when you want and leave them off when you don't.
+        - generic [ref=e81]:
+          - generic [ref=e82]: Goal
+          - heading "03 As much type inference as possible" [level=3] [ref=e83]:
+            - generic [ref=e84]: "03"
+            - text: As much type inference as possible
+          - paragraph [ref=e86]: I don't know if it's a good idea. It's probably not. I just think it's neat.
+        - generic [ref=e87]:
+          - generic [ref=e88]: Goal
+          - heading "04 Familiar-ish syntax" [level=3] [ref=e89]:
+            - generic [ref=e90]: "04"
+            - text: Familiar-ish syntax
+          - paragraph [ref=e92]: Haskell/ML-y syntax is beautiful. I hate it. This one has braces.
+        - generic [ref=e93]:
+          - generic [ref=e94]: Goal
+          - heading "05 Algebraic effects" [level=3] [ref=e95]:
+            - generic [ref=e96]: "05"
+            - text: Algebraic effects
+          - paragraph [ref=e98]: Effects are like exceptions, but also like coroutines, but also like dependency injection. I'll explain later. Maybe.
+        - generic [ref=e99]:
+          - generic [ref=e100]: Goal
+          - heading "06 Syntax highlighting color schemes" [level=3] [ref=e101]:
+            - generic [ref=e102]: "06"
+            - text: Syntax highlighting color schemes
+          - paragraph [ref=e104]: I feel like making a full programming language is the only way to do this. Right? Right? Don't answer.
+        - generic [ref=e105]:
+          - generic [ref=e106]: Non-goal
+          - heading "01 Blazingly fast performance" [level=3] [ref=e107]:
+            - generic [ref=e108]: "01"
+            - text: Blazingly fast performance
+          - paragraph [ref=e110]: I'm probably not gonna litter the codebase with sleeps. But I'm allowed to if I want.
+        - generic [ref=e111]:
+          - generic [ref=e112]: Non-goal
+          - heading "02 Soundness & decidability" [level=3] [ref=e113]:
+            - generic [ref=e114]: "02"
+            - text: Soundness & decidability
+          - paragraph [ref=e116]: Is this even possible? I saw a YouTube video that said it's not.
+        - generic [ref=e117]:
+          - generic [ref=e118]: Non-goal
+          - heading "03 Getting anyone to use it" [level=3] [ref=e119]:
+            - generic [ref=e120]: "03"
+            - text: Getting anyone to use it
+          - paragraph [ref=e122]: Why would I? PHP exists. Use that.
+    - generic [ref=e124]:
+      - generic [ref=e125]:
+        - generic [ref=e126]: "02"
+        - heading "The language tourwhat you can actually write in it" [level=2] [ref=e127]
+      - generic [ref=e128]:
+        - complementary [ref=e129]:
+          - list [ref=e130]:
+            - listitem [ref=e131] [cursor=pointer]:
+              - generic [ref=e132]: "01"
+              - generic [ref=e133]: Primitives
+            - listitem [ref=e134] [cursor=pointer]:
+              - generic [ref=e135]: "02"
+              - generic [ref=e136]: Variables & expressions
+            - listitem [ref=e137] [cursor=pointer]:
+              - generic [ref=e138]: "03"
+              - generic [ref=e139]: Functions
+            - listitem [ref=e140] [cursor=pointer]:
+              - generic [ref=e141]: "04"
+              - generic [ref=e142]: Type annotations
+            - listitem [ref=e143] [cursor=pointer]:
+              - generic [ref=e144]: "05"
+              - generic [ref=e145]: Generics & inference
+            - listitem [ref=e146] [cursor=pointer]:
+              - generic [ref=e147]: "06"
+              - generic [ref=e148]: Closures
+            - listitem [ref=e149] [cursor=pointer]:
+              - generic [ref=e150]: "07"
+              - generic [ref=e151]: Structs
+            - listitem [ref=e152] [cursor=pointer]:
+              - generic [ref=e153]: "08"
+              - generic [ref=e154]: Enums & pattern matching
+            - listitem [ref=e155] [cursor=pointer]:
+              - generic [ref=e156]: "09"
+              - generic [ref=e157]: Protocols & associated types
+            - listitem [ref=e158] [cursor=pointer]:
+              - generic [ref=e159]: "10"
+              - generic [ref=e160]: Algebraic effects
+        - generic [ref=e161]:
+          - generic [ref=e162]:
+            - heading "Primitives" [level=3] [ref=e163]
+            - paragraph [ref=e164]: Some types you've probably seen before. Tuples and records are maybe a little less common but we've got 'em.
+            - generic [ref=e165]:
+              - generic [ref=e166]:
+                - generic [ref=e171]: primitives.tlk
+                - generic [ref=e172]: talktalk
+              - generic [ref=e173]:
+                - generic [ref=e174]: 1 2 3 4 5 6 7
+                - generic [ref=e175]:
+                  - generic: "123 // Ints 1.23 // Floats true // Booleans \"Hello 🦉\" // Strings [1, 2, 3] // Arrays (true, 123) // Tuples? { fizz: \"buzz\" } // Records??"
+                  - textbox [ref=e176]: "123 // Ints 1.23 // Floats true // Booleans \"Hello 🦉\" // Strings [1, 2, 3] // Arrays (true, 123) // Tuples? { fizz: \"buzz\" } // Records??"
+              - generic [ref=e177]:
+                - button "▸ Run" [ref=e178] [cursor=pointer]
+                - button "▽ Lower" [ref=e179] [cursor=pointer]
+                - button "↺ Format" [ref=e180] [cursor=pointer]
+          - generic [ref=e182]:
+            - heading "Variables & expressions" [level=3] [ref=e183]
+            - paragraph [ref=e184]: The last expression in a block is its value. No semicolons required; no semicolons denied either.
+            - generic [ref=e185]:
+              - generic [ref=e186]:
+                - generic [ref=e191]: variables-expressions.tlk
+                - generic [ref=e192]: talktalk
+              - generic [ref=e193]:
+                - generic [ref=e194]: 1 2 3 4
+                - generic [ref=e195]:
+                  - generic: let a = 1 let b = 2 let c = a + b c // => 3
+                  - textbox [ref=e196]: let a = 1 let b = 2 let c = a + b c // => 3
+              - generic [ref=e197]:
+                - button "▸ Run" [ref=e198] [cursor=pointer]
+                - button "▽ Lower" [ref=e199] [cursor=pointer]
+                - button "↺ Format" [ref=e200] [cursor=pointer]
+          - generic [ref=e202]:
+            - heading "Functions" [level=3] [ref=e203]
+            - paragraph [ref=e204]: Plain, boring, good. Trailing blocks work for callback-y things too.
+            - generic [ref=e205]:
+              - generic [ref=e206]:
+                - generic [ref=e211]: functions.tlk
+                - generic [ref=e212]: talktalk
+              - generic [ref=e213]:
+                - generic [ref=e214]: 1 2 3 4 5
+                - generic [ref=e215]:
+                  - generic: "func add(x) { x + 1 } add(1) // => 2. Imagine that."
+                  - textbox [ref=e216]: "func add(x) { x + 1 } add(1) // => 2. Imagine that."
+              - generic [ref=e217]:
+                - button "▸ Run" [ref=e218] [cursor=pointer]
+                - button "▽ Lower" [ref=e219] [cursor=pointer]
+                - button "↺ Format" [ref=e220] [cursor=pointer]
+          - generic [ref=e222]:
+            - heading "Type annotations" [level=3] [ref=e223]
+            - paragraph [ref=e224]: Annotate when you like. Everything gets checked either way.
+            - generic [ref=e225]:
+              - generic [ref=e226]:
+                - generic [ref=e231]: type-annotations.tlk
+                - generic [ref=e232]: talktalk
+              - generic [ref=e233]:
+                - generic [ref=e234]: 1 2 3
+                - generic [ref=e235]:
+                  - generic: "let a: Int = 1 let b: Float = 2.0 let c = a + b // uh oh, type error"
+                  - textbox [ref=e236]: "let a: Int = 1 let b: Float = 2.0 let c = a + b // uh oh, type error"
+              - generic [ref=e239]: "Type mismatch: Float vs Int"
+              - generic [ref=e240]:
+                - button "▸ Run" [ref=e241] [cursor=pointer]
+                - button "▽ Lower" [ref=e242] [cursor=pointer]
+                - button "↺ Format" [ref=e243] [cursor=pointer]
+          - generic [ref=e245]:
+            - heading "Generics & inference" [level=3] [ref=e246]
+            - paragraph [ref=e247]: Polymorphic by default. Spell things out if you want.
+            - generic [ref=e248]:
+              - generic [ref=e249]:
+                - generic [ref=e254]: generics-inference.tlk
+                - generic [ref=e255]: talktalk
+              - generic [ref=e256]:
+                - generic [ref=e257]: 1 2 3 4
+                - generic [ref=e258]:
+                  - generic: "func identity(x) { x } identity(1.23) // => 1.23 (Float) identity(true) // => true (Bool)"
+                  - textbox [ref=e259]: "func identity(x) { x } identity(1.23) // => 1.23 (Float) identity(true) // => true (Bool)"
+              - generic [ref=e260]:
+                - button "▸ Run" [ref=e261] [cursor=pointer]
+                - button "▽ Lower" [ref=e262] [cursor=pointer]
+                - button "↺ Format" [ref=e263] [cursor=pointer]
+            - generic [ref=e265]:
+              - generic [ref=e266]:
+                - generic [ref=e271]: generics-inference.tlk
+                - generic [ref=e272]: talktalk
+              - generic [ref=e273]:
+                - generic [ref=e274]: 1 2
+                - generic [ref=e275]: "// Or be explicit: func identity<T>(x: T) -> T { x }"
+          - generic [ref=e276]:
+            - heading "Closures" [level=3] [ref=e277]
+            - paragraph [ref=e278]: Closures capture their environment. They're values, so you can pass them around.
+            - generic [ref=e279]:
+              - generic [ref=e280]:
+                - generic [ref=e285]: closures.tlk
+                - generic [ref=e286]: talktalk
+              - generic [ref=e287]:
+                - generic [ref=e288]: 1 2 3 4 5 6 7 8 9 10
+                - generic [ref=e289]:
+                  - generic: "func makeCounter() { let i = 0 return func() { i = i + 1 i } } let counter = makeCounter() counter(); counter(); counter() // => 3"
+                  - textbox [ref=e290]: "func makeCounter() { let i = 0 return func() { i = i + 1 i } } let counter = makeCounter() counter(); counter(); counter() // => 3"
+              - generic [ref=e291]:
+                - button "▸ Run" [ref=e292] [cursor=pointer]
+                - button "▽ Lower" [ref=e293] [cursor=pointer]
+                - button "↺ Format" [ref=e294] [cursor=pointer]
+          - generic [ref=e296]:
+            - heading "Structs" [level=3] [ref=e297]
+            - paragraph [ref=e298]: Structs are fields plus methods. init blocks let you customize construction.
+            - generic [ref=e299]:
+              - generic [ref=e300]:
+                - generic [ref=e305]: structs.tlk
+                - generic [ref=e306]: talktalk
+              - generic [ref=e307]:
+                - generic [ref=e308]: 1 2 3 4 5 6 7 8 9 10
+                - generic [ref=e309]:
+                  - generic: "struct Person { let firstName: String let lastName: String func greet() { print(\"hi i'm \" + self.firstName + \" \" + self.lastName) } } Person(firstName: \"Pat\", lastName: \"N\").greet()"
+                  - textbox [ref=e310]: "struct Person { let firstName: String let lastName: String func greet() { print(\"hi i'm \" + self.firstName + \" \" + self.lastName) } } Person(firstName: \"Pat\", lastName: \"N\").greet()"
+              - generic [ref=e311]:
+                - button "▸ Run" [ref=e312] [cursor=pointer]
+                - button "▽ Lower" [ref=e313] [cursor=pointer]
+                - button "↺ Format" [ref=e314] [cursor=pointer]
+          - generic [ref=e316]:
+            - heading "Enums & pattern matching" [level=3] [ref=e317]
+            - paragraph [ref=e318]: Sum types with associated values. Match on them with if-let, let-else, or full match expressions.
+            - generic [ref=e319]:
+              - generic [ref=e320]:
+                - generic [ref=e325]: enums-pattern-matching.tlk
+                - generic [ref=e326]: talktalk
+              - generic [ref=e327]:
+                - generic [ref=e328]: 1 2 3 4 5 6 7 8 9
+                - generic [ref=e329]:
+                  - generic: "enum Response { case ok(String), redirect(String), other(Int) } match Response.ok(\"success!\") { .ok(string) -> string, .redirect(msg) -> msg, .other(code) -> \"uh oh\" }"
+                  - textbox [ref=e330]: "enum Response { case ok(String), redirect(String), other(Int) } match Response.ok(\"success!\") { .ok(string) -> string, .redirect(msg) -> msg, .other(code) -> \"uh oh\" }"
+              - generic [ref=e331]:
+                - button "▸ Run" [ref=e332] [cursor=pointer]
+                - button "▽ Lower" [ref=e333] [cursor=pointer]
+                - button "↺ Format" [ref=e334] [cursor=pointer]
+          - generic [ref=e336]:
+            - heading "Protocols & associated types" [level=3] [ref=e337]
+            - paragraph [ref=e338]: Protocols can have required methods, default methods, and associated types with their own bounds.
+            - generic [ref=e339]:
+              - generic [ref=e340]:
+                - generic [ref=e345]: protocols-associated-types.tlk
+                - generic [ref=e346]: talktalk
+              - generic [ref=e347]:
+                - generic [ref=e348]: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24
+                - generic [ref=e349]:
+                  - generic: "protocol Named { func name() -> String } struct CatFood {} extend CatFood: Named { func name() { \"tasty cat food\" } } protocol Pet { associated Food: Named func favoriteFood() -> Food func handleDSTChange() { print(\"where is my \" + self.favoriteFood().name()) } } struct Cat {} extend Cat: Pet { func favoriteFood() { CatFood() } } Cat().handleDSTChange()"
+                  - textbox [ref=e350]: "protocol Named { func name() -> String } struct CatFood {} extend CatFood: Named { func name() { \"tasty cat food\" } } protocol Pet { associated Food: Named func favoriteFood() -> Food func handleDSTChange() { print(\"where is my \" + self.favoriteFood().name()) } } struct Cat {} extend Cat: Pet { func favoriteFood() { CatFood() } } Cat().handleDSTChange()"
+              - generic [ref=e351]:
+                - button "▸ Run" [ref=e352] [cursor=pointer]
+                - button "▽ Lower" [ref=e353] [cursor=pointer]
+                - button "↺ Format" [ref=e354] [cursor=pointer]
+          - generic [ref=e356]:
+            - heading "Algebraic effects" [level=3] [ref=e357]
+            - paragraph [ref=e358]:
+              - text: Effects are declared with a leading
+              - code [ref=e359]: "'"
+              - text: and handled by
+              - code [ref=e360]: "@handle"
+              - text: blocks. Useful for exceptions, async, DI — pick your poison.
+            - generic [ref=e361]:
+              - generic [ref=e362]:
+                - generic [ref=e367]: algebraic-effects.tlk
+                - generic [ref=e368]: talktalk
+              - generic [ref=e369]:
+                - generic [ref=e370]: 1 2 3 4 5 6 7 8 9 10 11
+                - generic [ref=e371]:
+                  - generic: "effect 'fizz(x: Int) -> Int @handle 'fizz { x in continue x } func fizzes(x) '[fizz] { 'fizz(x) } print(fizzes(123))"
+                  - textbox [ref=e372]: "effect 'fizz(x: Int) -> Int @handle 'fizz { x in continue x } func fizzes(x) '[fizz] { 'fizz(x) } print(fizzes(123))"
+              - generic [ref=e373]:
+                - button "▸ Run" [ref=e374] [cursor=pointer]
+                - button "▽ Lower" [ref=e375] [cursor=pointer]
+                - button "↺ Format" [ref=e376] [cursor=pointer]
+          - generic [ref=e378]:
+            - heading "Effects as exceptions" [level=3] [ref=e379]
+            - paragraph [ref=e380]: Are effects just weird functions? Kind of. But you can also use them as exceptions.
+            - generic [ref=e381]:
+              - generic [ref=e382]:
+                - generic [ref=e387]: effects-as-exceptions.tlk
+                - generic [ref=e388]: talktalk
+              - generic [ref=e389]:
+                - generic [ref=e390]: 1 2 3 4 5 6 7 8 9 10 11 12 13
+                - generic [ref=e391]:
+                  - generic: "effect 'throw(msg: String) -> Never func boom(x) { @handle 'throw { msg in print(\"caught: \" + msg) return true } if x == 0 { 'throw(\"boom\") } false // does not run } boom(0)"
+                  - textbox [ref=e392]: "effect 'throw(msg: String) -> Never func boom(x) { @handle 'throw { msg in print(\"caught: \" + msg) return true } if x == 0 { 'throw(\"boom\") } false // does not run } boom(0)"
+              - generic [ref=e393]:
+                - button "▸ Run" [ref=e394] [cursor=pointer]
+                - button "▽ Lower" [ref=e395] [cursor=pointer]
+                - button "↺ Format" [ref=e396] [cursor=pointer]
+          - generic [ref=e398]:
+            - heading "Modules" [level=3] [ref=e399]
+            - paragraph [ref=e400]: Modules span files. This one isn't runnable in the browser, but the CLI handles it fine.
+            - generic [ref=e401]:
+              - generic [ref=e402]:
+                - generic [ref=e407]: modules.tlk
+                - generic [ref=e408]: talktalk
+              - generic [ref=e409]:
+                - generic [ref=e410]: 1 2 3 4 5 6
+                - generic [ref=e411]: "// Exports.tlk public let a = \"we can export this string\" // Main.tlk import { a } from ./Exports.tlk print(a)"
+          - generic [ref=e412]:
+            - heading "A rough little HTTP server" [level=3] [ref=e413]
+            - paragraph [ref=e414]: There's already some rough HTTP stuff. Don't look at it too hard.
+            - generic [ref=e415]:
+              - generic [ref=e416]:
+                - generic [ref=e421]: a-rough-little-http-server.tlk
+                - generic [ref=e422]: talktalk
+              - generic [ref=e423]:
+                - generic [ref=e424]: 1 2 3 4 5 6 7
+                - generic [ref=e425]: "let http = HTTP.Server() http.get(\"/\", func() { \"hello from talk\" }) http.get(\"/health\", func() { \"ok\" }) print(\"Listening on http://localhost:3000\") http.run(3000)"
+    - generic [ref=e427]:
+      - generic [ref=e428]:
+        - generic [ref=e429]: "03"
+        - heading "How it worksa compiler in six polite movements" [level=2] [ref=e430]
+      - generic [ref=e431]:
+        - generic [ref=e432] [cursor=pointer]:
+          - generic [ref=e433]: Step 01
+          - generic [ref=e434]: Lex
+          - generic [ref=e435]: source → tokens with start/end positions and kinds (Ident, StringLit, Comma…).
+          - generic [ref=e436]: →
+        - generic [ref=e437] [cursor=pointer]:
+          - generic [ref=e438]: Step 02
+          - generic [ref=e439]: Parse
+          - generic [ref=e440]: tokens → AST. Recursive descent, Pratt precedence for expressions.
+          - generic [ref=e441]: →
+        - generic [ref=e442] [cursor=pointer]:
+          - generic [ref=e443]: Step 03
+          - generic [ref=e444]: Resolve
+          - generic [ref=e445]:
+            - text: names → symbols. Replace
+            - code [ref=e446]: Name::Raw(string)
+            - text: with
+            - code [ref=e447]: Name::Resolved(symbol, string)
+            - text: .
+          - generic [ref=e448]: →
+        - generic [ref=e449] [cursor=pointer]:
+          - generic [ref=e450]: Step 04
+          - generic [ref=e451]: Check
+          - generic [ref=e452]: the big one. infer + check types. constraint generation, unification.
+          - generic [ref=e453]: →
+        - generic [ref=e454] [cursor=pointer]:
+          - generic [ref=e455]: Step 05
+          - generic [ref=e456]: Lower
+          - generic [ref=e457]: TypedAST → lil IR. basic blocks, SSA-ish, explicit allocs.
+          - generic [ref=e458]: →
+        - generic [ref=e459] [cursor=pointer]:
+          - generic [ref=e460]: Step 06
+          - generic [ref=e461]: Interp
+          - generic [ref=e462]: lil IR → lil interpreter. we just walk it. blazing? no. legible? yeah.
+      - generic [ref=e463]:
+        - generic [ref=e464]:
+          - heading "In · source" [level=4] [ref=e465]
+          - generic [ref=e466]: let a = 1 + 2
+        - generic [ref=e467]:
+          - heading "Out · Lex" [level=4] [ref=e468]
+          - generic [ref=e469]: Let@0..3 Ident("a")@4..5 Eq@6..7 Int(1)@8..9 Plus@10..11 Int(2)@12..13 Eof@13..13
+    - generic [ref=e471]:
+      - generic [ref=e472]:
+        - generic [ref=e473]: "04"
+        - heading "What's missinga short and honest list" [level=2] [ref=e474]
+      - generic [ref=e475]:
+        - generic [ref=e476]:
+          - generic [ref=e477]: MISSING
+          - heading "Real I/O" [level=4] [ref=e478]
+          - paragraph [ref=e480]: You can print to stdout. That is, uh, literally it. Seems like something one might want more of.
+        - generic [ref=e481]:
+          - generic [ref=e482]: MISSING
+          - heading "Standard library" [level=4] [ref=e483]
+          - paragraph [ref=e485]: No hashmaps, no sort, no JSON. There also isn't an un-standard library, so I'm not sure why I put that in quotes.
+        - generic [ref=e486]:
+          - generic [ref=e487]: MISSING
+          - heading "Explicit mutation" [level=4] [ref=e488]
+          - paragraph [ref=e490]: Everything is mutable right now. It's chaos. The sky is crumbling. I have a Looney Tunes umbrella.
+        - generic [ref=e491]:
+          - generic [ref=e492]: MISSING
+          - heading "Mutable arrays" [level=4] [ref=e493]
+          - paragraph [ref=e495]: No push yet. If you are a functional programmer with a cool leather jacket, please enjoy this page.
+        - generic [ref=e496]:
+          - generic [ref=e497]: MISSING
+          - heading "Concurrency" [level=4] [ref=e498]
+          - paragraph [ref=e500]: But concurrency isn't parallelism! So parallelism? Also no.
+        - generic [ref=e501]:
+          - generic [ref=e502]: PARTIAL
+          - heading "Visibility modifiers" [level=4] [ref=e503]
+          - paragraph [ref=e505]:
+            - text: Everything public, all the time, baby.
+            - code [ref=e506]: public
+            - text: exists as a keyword, mostly for vibes.
+        - generic [ref=e507]:
+          - generic [ref=e508]: PARTIAL
+          - heading "Real docs" [level=4] [ref=e509]
+          - paragraph [ref=e511]: You are looking at it. Kind of. (Hi.)
+        - generic [ref=e512]:
+          - generic [ref=e513]: MISSING
+          - heading "LSP & tooling" [level=4] [ref=e514]
+          - paragraph [ref=e516]: Syntax highlighting in a browser is fun. Real tooling is hard. Someday.
+        - generic [ref=e517]:
+          - generic [ref=e518]: NON-GOAL
+          - heading "A better name" [level=4] [ref=e519]
+          - paragraph [ref=e521]: It's fine. I think it's fine. I'll stop saying it now.
+    - generic [ref=e523]:
+      - generic [ref=e524]:
+        - generic [ref=e525]: "05"
+        - heading "Install & getting startedthree minutes, tops" [level=2] [ref=e526]
+      - generic [ref=e527]:
+        - generic [ref=e528]:
+          - generic [ref=e529]:
+            - generic [ref=e530]: ~/code
+            - generic [ref=e531]: zsh
+          - generic [ref=e532]:
+            - generic [ref=e533]: $ brew install talktalk/tap/talk
+            - generic [ref=e534]: $ talk --version
+            - generic [ref=e535]: talktalk 0.1.1 (interpreter, debug)
+            - generic [ref=e537]: $ echo 'print("hi")' > hi.tlk
+            - generic [ref=e538]: $ talk run hi.tlk
+            - generic [ref=e539]: hi
+            - generic [ref=e541]: $ talk --help
+            - generic [ref=e542]: run <file> run a .tlk file
+            - generic [ref=e543]: lower <file> print the lowered IR
+            - generic [ref=e544]: fmt <file> format in place
+            - generic [ref=e545]: repl a friend you can talk to
+        - generic [ref=e546]:
+          - generic [ref=e547]:
+            - generic [ref=e548]: first steps
+            - generic [ref=e549]: do these in order
+          - list [ref=e550]:
+            - listitem [ref=e551]:
+              - strong [ref=e552]: Install the binary.
+              - text: Homebrew on macOS, a prebuilt binary for Linux, or build from source with
+              - code [ref=e553]: cargo install --path .
+            - listitem [ref=e554]:
+              - strong [ref=e555]: Run the REPL.
+              - code [ref=e556]: talk repl
+              - text: . It's low-key my favorite part.
+            - listitem [ref=e557]:
+              - strong [ref=e558]: Read the tour
+              - text: above. Most of what the language does is covered in under five minutes.
+            - listitem [ref=e559]:
+              - strong [ref=e560]: Open the docs
+              - text: "for reference: language spec, pipeline internals, effects, and (eventually) a standard library."
+            - listitem [ref=e561]:
+              - strong [ref=e562]: File a bug
+              - text: when something breaks. It will. That's how learning happens.
+  - generic: "Token: (none)"

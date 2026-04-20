@@ -583,3 +583,32 @@ function initEditable(el) {
 }
 
 console.log(await talk.runProgram("1 + 2 + 3"));
+
+// ── Tour scrollspy ──────────────────────────────────────────────────
+(function () {
+  const items = Array.from(document.querySelectorAll(".tour__nav li[data-target]"));
+  if (items.length === 0) return;
+  const entries = items
+    .map((li) => ({ li, el: document.getElementById(li.dataset.target) }))
+    .filter((e) => e.el);
+
+  function updateActive() {
+    let activeIdx = 0;
+    for (let i = 0; i < entries.length; i++) {
+      if (entries[i].el.getBoundingClientRect().top < 180) activeIdx = i;
+    }
+    entries.forEach((e, i) => e.li.classList.toggle("is-active", i === activeIdx));
+  }
+
+  for (const { li, el } of entries) {
+    li.addEventListener("click", () => {
+      window.scrollTo({
+        top: el.getBoundingClientRect().top + window.scrollY - 72,
+        behavior: "smooth",
+      });
+    });
+  }
+
+  window.addEventListener("scroll", updateActive, { passive: true });
+  updateActive();
+})();
