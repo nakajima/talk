@@ -395,6 +395,7 @@ nav.topnav .sep { color: var(--hair-2); user-select: none; }
   font-size: 15px;
   font-weight: 600;
   margin: 0 0 6px;
+  padding-right: 68px;
   letter-spacing: 0;
 }
 .goal__title .idx {
@@ -447,6 +448,19 @@ nav.topnav .sep { color: var(--hair-2); user-select: none; }
 .tour__item > p {
   font-size: 13.5px; color: var(--ink-2); max-width: 70ch; margin: 0 0 14px;
 }
+.tour__item > ul,
+.tour__item > ol {
+  font-size: 13px;
+  color: var(--ink-2);
+  max-width: 70ch;
+  margin: 0 0 14px;
+  padding-left: 18px;
+  line-height: 1.55;
+}
+.tour__item > ul > li,
+.tour__item > ol > li { margin: 2px 0; }
+.tour__item > ul > li::marker { color: var(--ink-mute); }
+.tour__item > ul > li strong { color: var(--ink); font-weight: 600; }
 
 /* ─── snippet / runnable code block ────────────────────────────── */
 .snippet,
@@ -896,4 +910,74 @@ code.inline, p code, li code {
   .pipeline-view { grid-template-columns: 1fr; }
   .section__head { grid-template-columns: 60px 1fr; }
   .section__meta { display: none; }
+}
+
+@media (max-width: 640px) {
+  .shell { padding: 0 16px; }
+
+  /* Topbar: show wordmark + GitHub pill only; hide nav links */
+  .topbar__inner { gap: 12px; height: 48px; }
+  nav.topnav a:not(.github-pill),
+  nav.topnav .sep { display: none; }
+  .wordmark .ver { display: none; }
+
+  /* Token HUD: hide (no hover on touch) */
+  .token-hud { display: none; }
+
+  /* Masthead: smaller title, simpler row */
+  .masthead { padding: 12px 0 10px; }
+  .masthead__row { grid-template-columns: 1fr; text-align: center; }
+  .masthead__left, .masthead__right { display: none; }
+  .masthead__title { font-size: clamp(48px, 16vw, 88px); letter-spacing: -0.03em; }
+
+  /* Hero: tighter, smaller headline */
+  .hero__head { font-size: 26px; line-height: 1.12; }
+  .hero__pitch { padding: 22px 0; gap: 14px; }
+  .hero__lede { font-size: 14px; max-width: none; }
+  .hero__cta { gap: 8px; }
+  .btn { padding: 8px 12px; font-size: 12.5px; }
+  .hero__meta { grid-template-columns: repeat(3, 1fr); }
+  .hero__meta > div { padding-right: 6px; }
+
+  /* Sections: stack number above title */
+  .section { padding: calc(var(--tick) * 2.2) 0 calc(var(--tick) * 2); }
+  .section__head {
+    grid-template-columns: 1fr;
+    gap: 6px;
+    margin-bottom: calc(var(--tick) * 1.2);
+  }
+  .section__num { font-size: 32px; }
+  .section__title { font-size: 22px; }
+  .section__title .small {
+    display: block;
+    margin-left: 0;
+    margin-top: 4px;
+    font-size: 12.5px;
+  }
+
+  /* Pipeline: 1 col strip */
+  .pipeline { grid-template-columns: 1fr; }
+  .pipeline__stage { border-right: 0; border-bottom: 1px solid var(--hair-2); min-height: auto; padding: 12px 14px; }
+  .pipeline__stage:last-child { border-bottom: 0; }
+  .pipeline__arrow { display: none; }
+  .pipeline__stage.is-active::after { height: 2px; }
+
+  /* Snippet chrome: tighter, narrower gutter */
+  .snippet__head { padding: 0 8px; height: 26px; font-size: 10px; }
+  .snippet__body { grid-template-columns: 26px 1fr; font-size: 12px; }
+  .snippet__gutter { font-size: 10px; padding-left: 0; padding-right: 4px; }
+  .runnable .code-highlight,
+  .runnable .code-editable,
+  .snippet .code-highlight,
+  .snippet .code-editable { font-size: 12px; padding: 8px 10px; }
+  .snippet__tray button,
+  .runnable .actions button { padding: 6px 10px; font-size: 10.5px; }
+
+  /* Goal + roadmap cards: tighten */
+  .goal { padding: 14px; min-height: 0; }
+  .roadmap__item { padding: 14px; }
+
+  /* Install */
+  .install { gap: 16px; }
+  .install-card__body, .install-steps { font-size: 12.5px; }
 }

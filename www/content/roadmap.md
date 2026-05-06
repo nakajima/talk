@@ -1,30 +1,27 @@
 # What's missing
 
-a short and honest list
+things not yet implemented, or implemented poorly
 
 ### Real I/O [missing]
-You can print to stdout. That is, uh, literally it. Seems like something one might want more of.
+`print` writes to stdout. That's the only I/O primitive. No file system access, no network (except the experimental HTTP server), no stdin.
 
 ### Standard library [missing]
-No hashmaps, no sort, no JSON. There also isn't an un-standard library, so I'm not sure why I put that in quotes.
+No hashmaps, no sort, no JSON, no regex. The set of built-in operations is small on purpose for now, but it will need to grow.
 
 ### Explicit mutation [missing]
-Everything is mutable right now. It's chaos. The sky is crumbling. I have a Looney Tunes umbrella.
+Everything is currently mutable without a keyword. The plan is to require `var` for mutable bindings and leave `let` as the immutable default, matching most modern languages.
 
 ### Mutable arrays [missing]
-No push yet. If you are a functional programmer with a cool leather jacket, please enjoy this page.
+Arrays exist but don't have `push`, `pop`, or in-place mutation. You can construct new arrays by concatenation for now.
 
 ### Concurrency [missing]
-But concurrency isn't parallelism! So parallelism? Also no.
+No threads, no async, no fibers. The effect system is the intended foundation for async — once non-termination handling settles, effects for cooperative scheduling become a natural fit.
 
 ### Visibility modifiers [partial]
-Everything public, all the time, baby. `public` exists as a keyword, mostly for vibes.
+`public` is a keyword and is accepted by the parser, but nothing is private yet — all top-level declarations are exported.
 
 ### Real docs [partial]
-You are looking at it. Kind of. (Hi.)
+You're looking at the beginning of them. The reference docs (a full language spec, stdlib reference) are not written.
 
 ### LSP & tooling [missing]
-Syntax highlighting in a browser is fun. Real tooling is hard. Someday.
-
-### A better name [non-goal]
-It's fine. I think it's fine. I'll stop saying it now.
+Syntax highlighting in the browser is fine for a demo; real editor integration (hover types, go-to-definition, diagnostics) is not built.

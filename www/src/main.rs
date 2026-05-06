@@ -426,6 +426,11 @@ fn render_tour(md: &str) -> String {
                     subtitle = render_inline(child);
                 }
             }
+            NodeValue::List(_) => {
+                if let Some(it) = current.as_mut() {
+                    it.prose.push_str(&render_block(child));
+                }
+            }
             NodeValue::CodeBlock(block) => {
                 let is_norun = block.info.contains("norun");
                 if let Some(it) = current.as_mut() {
