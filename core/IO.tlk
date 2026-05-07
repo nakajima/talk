@@ -68,8 +68,17 @@ public func sleep(ms: Int) 'io -> Int {
 	'io(.sleep(ms))
 }
 
+// Low-level open for raw pointers. `path` is expected to point to a
+// NUL-terminated C string.
 public func _io_open(path: RawPtr, flags: Int, mode: Int) 'io -> Int {
 	'io(.open(path, flags, mode))
+}
+
+// High-level open for Talk strings. This passes the full String value to the
+// interpreter so it can use the string's explicit length instead of scanning
+// memory for a terminator.
+public func open_path(path: String, flags: Int, mode: Int) -> Int {
+	@_ir(path, flags, mode) { %? = io_open $0 $1 $2 }
 }
 
 public func _io_read(fd: Int, buf: RawPtr, count: Int) 'io -> Int {

@@ -1,7 +1,8 @@
 // no-core
-import { _io_open, _io_read, _io_write, _io_close, O_RDONLY, O_WRONLY, O_RDWR, O_CREAT, O_TRUNC, O_APPEND, S_IRUSR, S_IWUSR, EAGAIN, POLLIN, POLLOUT } from ./IO.tlk
+import { open_path, _io_read, _io_write, _io_close, O_RDONLY, O_WRONLY, O_RDWR, O_CREAT, O_TRUNC, O_APPEND, S_IRUSR, S_IWUSR, EAGAIN, POLLIN, POLLOUT } from ./IO.tlk
 import { _alloc } from ./Memory.tlk
 import { Add, Comparable } from ./Operators.tlk
+import { String } from ./String.tlk
 
 public enum FileMode {
 	case read
@@ -12,20 +13,20 @@ public enum FileMode {
 public struct File {
 	let fd: Int
 
-	public func open_read(path: RawPtr) -> File {
-		let fd = _io_open(path, O_RDONLY, 0)
+	public func open_read(path: String) -> File {
+		let fd = open_path(path, O_RDONLY, 0)
 		File(fd: fd)
 	}
 
-	public func open_write(path: RawPtr) -> File {
+	public func open_write(path: String) -> File {
 		let mode = S_IRUSR + S_IWUSR
-		let fd = _io_open(path, O_WRONLY + O_CREAT + O_TRUNC, mode)
+		let fd = open_path(path, O_WRONLY + O_CREAT + O_TRUNC, mode)
 		File(fd: fd)
 	}
 
-	public func open_append(path: RawPtr) -> File {
+	public func open_append(path: String) -> File {
 		let mode = S_IRUSR + S_IWUSR
-		let fd = _io_open(path, O_WRONLY + O_CREAT + O_APPEND, mode)
+		let fd = open_path(path, O_WRONLY + O_CREAT + O_APPEND, mode)
 		File(fd: fd)
 	}
 
