@@ -1,0 +1,39 @@
+[project]
+name = "talk"
+auto-tag = true  # detect Cargo.toml version, create/push git tag v<version> before releasing to git
+# binary = "talk"  # defaults to project name
+# package = "talk"  # optional workspace package override; auto-detected from binary when unique
+# binaries = ["talk", "talk-cli"]  # optional extra release assets
+repo = "nakajima/talk"
+# version-command = "git describe --tags --abbrev=0"
+
+[build]
+command = "cargo build --release --target {target}"
+artifact = "target/{target}/release/{binary}"
+targets = [
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+]
+
+[git]
+# type = "gitea"                  # defaults to "github"
+# base-url = "https://git.example.com"
+# api-base-url = "https://git.example.com/api/v1"  # defaults from type/base-url
+# token-env = "GITEA_TOKEN"       # defaults: GITHUB_TOKEN or GITEA_TOKEN
+
+[channels.git]
+enabled = true
+
+[channels.homebrew]
+tap = "nakajima/homebrew-tap"
+formula-name = "talktalk"
+
+# [channels.cargo]
+# crate-name = "talk"
+
+[channels.curl]
+
+# [channels.nix]
+# flake-repo = "owner/nix-repo"  # defaults to project repo

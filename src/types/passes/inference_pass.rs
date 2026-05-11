@@ -126,6 +126,178 @@ pub struct InferencePass<'a> {
     root_stmts: Vec<TypedStmt>,
 }
 
+// Transitional phase wrapper: keeps signature discovery named and isolated
+// before it is ready to move out of InferencePass entirely.
+struct SignatureDiscovery<'pass, 'ast> {
+    pass: &'pass mut InferencePass<'ast>,
+}
+
+impl<'pass, 'ast> SignatureDiscovery<'pass, 'ast> {
+    fn new(pass: &'pass mut InferencePass<'ast>) -> Self {
+        Self { pass }
+    }
+
+    fn run(&mut self) {
+        // Register extension conformances first, so they're available when processing protocol default methods
+        for i in 0..self.pass.asts.len() {
+            self.pass.discover_conformances(i);
+        }
+
+        for i in 0..self.pass.asts.len() {
+            self.pass.discover_protocols(i, Level::default());
+
+            let conformances: Vec<_> = self
+                .pass
+                .session
+                .type_catalog
+                .conformances
+                .values()
+                .cloned()
+                .collect();
+            for conformance in conformances {
+                let protocol_symbol = Symbol::Protocol(conformance.protocol_id);
+                let protocol_methods = self.pass.session.lookup_instance_methods(&protocol_symbol);
+                if !protocol_methods.is_empty() {
+                    self.pass
+                        .session
+                        .type_catalog
+                        .instance_methods
+                        .entry(conformance.conforming_id)
+                        .or_default()
+                        .extend(protocol_methods);
+                }
+            }
+
+            self.pass.session.apply_all(&mut self.pass.substitutions);
+        }
+
+        for i in 0..self.pass.asts.len() {
+            self.pass.discover_effects(i, Level::default());
+            self.pass.session.apply_all(&mut self.pass.substitutions);
+        }
+    }
+}
+
+// Transitional phase wrapper: names body inference before the visitor state is
+// ready to move out of InferencePass entirely.
+struct BodyInference<'pass, 'ast> {
+    pass: &'pass mut InferencePass<'ast>,
+}
+
+impl<'pass, 'ast> BodyInference<'pass, 'ast> {
+    fn new(pass: &'pass mut InferencePass<'ast>) -> Self {
+        Self { pass }
+    }
+
+    fn run(&mut self) {
+        self.pass.generate();
+        self.pass.session.apply_all(&mut self.pass.substitutions);
+    }
+}
+
+// Transitional phase wrapper: names post-inference finalization before
+// finalization state is ready to move out of InferencePass entirely.
+struct FinalizeTypes<'pass, 'ast> {
+    pass: &'pass mut InferencePass<'ast>,
+}
+
+impl<'pass, 'ast> FinalizeTypes<'pass, 'ast> {
+    fn new(pass: &'pass mut InferencePass<'ast>) -> Self {
+        Self { pass }
+    }
+
+    fn run(&mut self) {
+        self.export_child_types();
+        self.report_unsolved();
+        self.pass.synthesize_auto_derived_bodies();
+    }
+
+    fn export_child_types(&mut self) {
+        let child_types = self
+            .pass
+            .session
+            .resolved_names
+            .child_types
+            .iter()
+            .map(|(sym, entries)| (*sym, entries.clone()))
+            .collect_vec();
+
+        for (sym, entries) in child_types {
+            self.pass
+                .session
+                .type_catalog
+                .child_types
+                .entry(sym)
+                .or_default()
+                .extend(entries);
+        }
+    }
+
+    fn report_unsolved(&mut self) {
+        let unresolved = self
+            .pass
+            .constraints
+            .unsolved()
+            .into_iter()
+            .cloned()
+            .collect_vec();
+
+        for constraint in unresolved {
+            match constraint {
+                Constraint::Call(..) => (),
+                Constraint::DefaultTy(..) => (),
+                Constraint::Equals(..) => (),
+                Constraint::HasField(..) => (),
+                Constraint::Member(..) => (),
+                Constraint::RowSubset(..) => (),
+                Constraint::Conforms(conforms) => match &conforms.ty {
+                    Ty::Nominal { symbol, .. } | Ty::Primitive(symbol) => {
+                        self.pass
+                            .diagnostics
+                            .insert(AnyDiagnostic::Typing(Diagnostic {
+                                id: conforms.conformance_node_id,
+                                severity: Severity::Error,
+                                kind: TypeError::TypeDoesNotConform {
+                                    symbol: *symbol,
+                                    protocol_id: conforms.protocol_id,
+                                },
+                            }));
+                    }
+                    Ty::Constructor { name, .. } => {
+                        self.pass
+                            .diagnostics
+                            .insert(AnyDiagnostic::Typing(Diagnostic {
+                                id: conforms.conformance_node_id,
+                                severity: Severity::Error,
+                                kind: TypeError::TypeDoesNotConform {
+                                    symbol: name
+                                        .symbol()
+                                        .unwrap_or_else(|_| unreachable!("did not resolve name")),
+                                    protocol_id: conforms.protocol_id,
+                                },
+                            }));
+                    }
+                    ty => {
+                        tracing::error!("did not solve {conforms:?}");
+                        self.pass
+                            .diagnostics
+                            .insert(AnyDiagnostic::Typing(Diagnostic {
+                                id: conforms.conformance_node_id,
+                                severity: Severity::Error,
+                                kind: TypeError::TypeCannotConform {
+                                    ty: ty.clone(),
+                                    protocol_id: conforms.protocol_id,
+                                },
+                            }));
+                    }
+                },
+                Constraint::TypeMember(..) => (),
+                Constraint::Projection(..) => (),
+            }
+        }
+    }
+}
+
 impl<'a> InferencePass<'a> {
     pub fn drive(
         asts: &'a mut [&'a mut AST<NameResolved>],
@@ -158,107 +330,23 @@ impl<'a> InferencePass<'a> {
     fn drive_all(mut self) -> (TypedAST, Vec<AnyDiagnostic>) {
         let _s = set_symbol_names(self.session.resolved_names.symbol_names.clone());
 
-        // Register extension conformances first, so they're available when processing protocol default methods
-        for i in 0..self.asts.len() {
-            self.discover_conformances(i);
+        self.discover_signatures();
+        self.infer_bodies();
+        self.finalize_inference()
+    }
+
+    fn discover_signatures(&mut self) {
+        SignatureDiscovery::new(self).run();
+    }
+
+    fn infer_bodies(&mut self) {
+        BodyInference::new(self).run();
+    }
+
+    fn finalize_inference(mut self) -> (TypedAST, Vec<AnyDiagnostic>) {
+        {
+            FinalizeTypes::new(&mut self).run();
         }
-
-        for i in 0..self.asts.len() {
-            self.discover_protocols(i, Level::default());
-
-            let conformances: Vec<_> = self
-                .session
-                .type_catalog
-                .conformances
-                .values()
-                .cloned()
-                .collect();
-            for conformance in conformances {
-                let protocol_symbol = Symbol::Protocol(conformance.protocol_id);
-                let protocol_methods = self.session.lookup_instance_methods(&protocol_symbol);
-                if !protocol_methods.is_empty() {
-                    self.session
-                        .type_catalog
-                        .instance_methods
-                        .entry(conformance.conforming_id)
-                        .or_default()
-                        .extend(protocol_methods);
-                }
-            }
-
-            self.session.apply_all(&mut self.substitutions);
-        }
-
-        for i in 0..self.asts.len() {
-            self.discover_effects(i, Level::default());
-            self.session.apply_all(&mut self.substitutions);
-        }
-
-        self.generate();
-        self.session.apply_all(&mut self.substitutions);
-
-        // Transfer child_types from AST phases to the catalog for module export
-        for (sym, entries) in self.session.resolved_names.child_types.iter() {
-            self.session
-                .type_catalog
-                .child_types
-                .entry(*sym)
-                .or_default()
-                .extend(entries.iter().map(|(k, v)| (k.clone(), *v)));
-        }
-
-        // At this point, any unsolved constraints are errors
-        for constraint in self.constraints.unsolved() {
-            match constraint {
-                Constraint::Call(..) => (),
-                Constraint::DefaultTy(..) => (),
-                Constraint::Equals(..) => (),
-                Constraint::HasField(..) => (),
-                Constraint::Member(..) => (),
-                Constraint::RowSubset(..) => (),
-                Constraint::Conforms(conforms) => {
-                    match &conforms.ty {
-                        Ty::Nominal { symbol, .. } | Ty::Primitive(symbol) => {
-                            self.diagnostics.insert(AnyDiagnostic::Typing(Diagnostic {
-                                id: conforms.conformance_node_id,
-                                severity: Severity::Error,
-                                kind: TypeError::TypeDoesNotConform {
-                                    symbol: *symbol,
-                                    protocol_id: conforms.protocol_id,
-                                },
-                            }));
-                        }
-                        Ty::Constructor { name, .. } => {
-                            self.diagnostics.insert(AnyDiagnostic::Typing(Diagnostic {
-                                id: conforms.conformance_node_id,
-                                severity: Severity::Error,
-                                kind: TypeError::TypeDoesNotConform {
-                                    symbol: name
-                                        .symbol()
-                                        .unwrap_or_else(|_| unreachable!("did not resolve name")),
-                                    protocol_id: conforms.protocol_id,
-                                },
-                            }));
-                        }
-                        ty => {
-                            tracing::error!("did not solve {conforms:?}");
-                            self.diagnostics.insert(AnyDiagnostic::Typing(Diagnostic {
-                                id: conforms.conformance_node_id,
-                                severity: Severity::Error,
-                                kind: TypeError::TypeCannotConform {
-                                    ty: ty.clone(),
-                                    protocol_id: conforms.protocol_id,
-                                },
-                            }));
-                        }
-                    };
-                }
-                Constraint::TypeMember(..) => (),
-                Constraint::Projection(..) => (),
-            }
-        }
-
-        self.synthesize_auto_derived_bodies();
 
         let typed_ast = TypedAST {
             decls: self.root_decls,
@@ -580,80 +668,18 @@ impl<'a> InferencePass<'a> {
         Ok(ret)
     }
 
-    #[instrument(level = tracing::Level::TRACE, skip(self, decl, _generics, conformances, body, context))]
-    fn visit_protocol(
+    fn collect_assoc_requirements(
         &mut self,
-        decl: &Decl,
-        name: &Name,
-        _generics: &[GenericDecl],
-        conformances: &[TypeAnnotation],
         body: &Body,
+        protocol_self_id: Symbol,
+        protocol_symbol: Symbol,
+        protocol_id: ProtocolId,
         context: &mut SolveContext,
-    ) -> TypedRet<(TypedDecl, IndexMap<Symbol, Ty>)> {
-        let Ok(protocol_symbol @ Symbol::Protocol(protocol_id)) = name.symbol() else {
-            return Err(TypeError::NameNotResolved(name.clone()));
-        };
-
-        let Some(Ty::Param(protocol_self_id, _)) =
-            self.session.lookup(&protocol_symbol).map(|s| s._as_ty())
-        else {
-            return Err(TypeError::TypeNotFound(
-                "Didn't get self id for {protocol_symbol:?}".into(),
-            ));
-        };
-
-        let mut binders: IndexMap<Symbol, Ty> = IndexMap::default();
-
-        for conformance in conformances {
-            let Ok(Symbol::Protocol(conforms_to_id)) = conformance.symbol() else {
-                tracing::error!("did not get protocol for conforms_to");
-                continue;
-            };
-
-            let key = ConformanceKey {
-                protocol_id: conforms_to_id,
-                conforming_id: protocol_symbol,
-            };
-
-            self.register_conformance(
-                protocol_symbol,
-                conforms_to_id.into(),
-                conformance.id,
-                conformance.span,
-                context,
-            )
-            .ok();
-
-            self.session.type_catalog.conformances.insert(
-                key,
-                Conformance {
-                    node_id: conformance.id,
-                    conforming_id: protocol_symbol,
-                    protocol_id: conforms_to_id,
-                    witnesses: Default::default(),
-                    span: conformance.span,
-                },
-            );
-        }
-
-        context.givens_mut().insert(Predicate::Conforms {
-            param: protocol_self_id,
-            protocol_id,
-        });
-
-        self.session.insert(
-            protocol_symbol,
-            Ty::Param(protocol_self_id, vec![protocol_id]),
-            &mut self.constraints,
-        );
-
-        let mut instance_methods = IndexMap::default();
-        let mut instance_method_requirements = IndexMap::default();
-        let mut associated_types = IndexMap::default();
-
-        // First pass: collect protocol-level associated type requirements.
+    ) -> (IndexMap<Label, Ty>, ProtocolAssociatedTypeRequirements) {
+        let mut associated_types: IndexMap<Label, Ty> = IndexMap::default();
         let mut assoc_type_params: IndexSet<Symbol> = IndexSet::default();
         let mut assoc_type_predicates: IndexSet<Predicate> = IndexSet::default();
+
         for decl in &body.decls {
             if let DeclKind::Associated { generic } = &decl.kind
                 && let Ok(ty) =
@@ -712,21 +738,77 @@ impl<'a> InferencePass<'a> {
             }
         }
 
-        let protocol_associated_type_requirements = ProtocolAssociatedTypeRequirements {
-            assoc_params: assoc_type_params.clone(),
-            predicates: assoc_type_predicates.clone(),
+        let requirements = ProtocolAssociatedTypeRequirements {
+            assoc_params: assoc_type_params,
+            predicates: assoc_type_predicates,
         };
-        if !protocol_associated_type_requirements.is_empty() {
+        if !requirements.is_empty() {
             tracing::debug!(
                 "Inserting protocol_associated_type_requirements for {:?}: {:?}",
                 protocol_id,
-                protocol_associated_type_requirements
+                requirements
             );
             self.protocol_associated_type_requirements
-                .insert(protocol_id, protocol_associated_type_requirements.clone());
+                .insert(protocol_id, requirements.clone());
         }
 
-        // Second pass: process methods and method requirements
+        (associated_types, requirements)
+    }
+
+    fn register_superprotocols(
+        &mut self,
+        protocol_symbol: Symbol,
+        conformances: &[TypeAnnotation],
+        context: &mut SolveContext,
+    ) {
+        for conformance in conformances {
+            let Ok(Symbol::Protocol(conforms_to_id)) = conformance.symbol() else {
+                tracing::error!("did not get protocol for conforms_to");
+                continue;
+            };
+
+            let key = ConformanceKey {
+                protocol_id: conforms_to_id,
+                conforming_id: protocol_symbol,
+            };
+
+            self.register_conformance(
+                protocol_symbol,
+                conforms_to_id.into(),
+                conformance.id,
+                conformance.span,
+                context,
+            )
+            .ok();
+
+            self.session.type_catalog.conformances.insert(
+                key,
+                Conformance {
+                    node_id: conformance.id,
+                    conforming_id: protocol_symbol,
+                    protocol_id: conforms_to_id,
+                    witnesses: Default::default(),
+                    span: conformance.span,
+                },
+            );
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn process_members(
+        &mut self,
+        body: &Body,
+        name: &Name,
+        protocol_self_id: Symbol,
+        protocol_id: ProtocolId,
+        protocol_symbol: Symbol,
+        associated_type_requirements: &ProtocolAssociatedTypeRequirements,
+        context: &mut SolveContext,
+        binders: &mut IndexMap<Symbol, Ty>,
+    ) -> TypedRet<(IndexMap<Label, TypedFunc>, IndexMap<Label, Ty>)> {
+        let mut instance_methods = IndexMap::default();
+        let mut instance_method_requirements = IndexMap::default();
+
         for decl in &body.decls {
             match &decl.kind {
                 DeclKind::Method {
@@ -771,7 +853,7 @@ impl<'a> InferencePass<'a> {
                     });
                     let entry = self.apply_protocol_associated_type_requirements(
                         entry,
-                        &protocol_associated_type_requirements,
+                        associated_type_requirements,
                     );
 
                     self.session.promote(func_sym, entry, &mut self.constraints);
@@ -795,7 +877,7 @@ impl<'a> InferencePass<'a> {
                     if let Some(entry) = self.session.lookup(&func_sym) {
                         let entry = self.apply_protocol_associated_type_requirements(
                             entry,
-                            &protocol_associated_type_requirements,
+                            associated_type_requirements,
                         );
                         self.session.promote(func_sym, entry, &mut self.constraints);
                     }
@@ -811,6 +893,65 @@ impl<'a> InferencePass<'a> {
                 }
             }
         }
+
+        Ok((instance_methods, instance_method_requirements))
+    }
+
+    #[instrument(level = tracing::Level::TRACE, skip(self, decl, _generics, conformances, body, context))]
+    fn visit_protocol(
+        &mut self,
+        decl: &Decl,
+        name: &Name,
+        _generics: &[GenericDecl],
+        conformances: &[TypeAnnotation],
+        body: &Body,
+        context: &mut SolveContext,
+    ) -> TypedRet<(TypedDecl, IndexMap<Symbol, Ty>)> {
+        let Ok(protocol_symbol @ Symbol::Protocol(protocol_id)) = name.symbol() else {
+            return Err(TypeError::NameNotResolved(name.clone()));
+        };
+
+        let Some(Ty::Param(protocol_self_id, _)) =
+            self.session.lookup(&protocol_symbol).map(|s| s._as_ty())
+        else {
+            return Err(TypeError::TypeNotFound(
+                "Didn't get self id for {protocol_symbol:?}".into(),
+            ));
+        };
+
+        let mut binders: IndexMap<Symbol, Ty> = IndexMap::default();
+
+        self.register_superprotocols(protocol_symbol, conformances, context);
+
+        context.givens_mut().insert(Predicate::Conforms {
+            param: protocol_self_id,
+            protocol_id,
+        });
+
+        self.session.insert(
+            protocol_symbol,
+            Ty::Param(protocol_self_id, vec![protocol_id]),
+            &mut self.constraints,
+        );
+
+        let (associated_types, protocol_associated_type_requirements) = self
+            .collect_assoc_requirements(
+                body,
+                protocol_self_id,
+                protocol_symbol,
+                protocol_id,
+                context,
+            );
+        let (instance_methods, instance_method_requirements) = self.process_members(
+            body,
+            name,
+            protocol_self_id,
+            protocol_id,
+            protocol_symbol,
+            &protocol_associated_type_requirements,
+            context,
+            &mut binders,
+        )?;
 
         if let Some(child_types) = self
             .session
