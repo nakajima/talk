@@ -1,6 +1,5 @@
 use crate::node_id::NodeID;
-use crate::span::Span;
-use crate::types::conformance::{Conformance, ConformanceKey, Witnesses};
+use crate::types::conformance::{Conformance, ConformanceKey};
 use crate::types::constraints::store::ConstraintStore;
 use crate::types::scheme::ForAll;
 use crate::types::type_operations::{Substitutions, substitute_with_subs};
@@ -150,13 +149,11 @@ impl Conforms {
         let conformance = if let Some(conformance) = session.lookup_conformance(&key) {
             conformance
         } else {
-            let conformance = Conformance {
-                node_id: self.conformance_node_id,
-                conforming_id: conforming_ty_sym,
+            let conformance = Conformance::missing_decl_placeholder(
+                self.conformance_node_id,
+                conforming_ty_sym,
                 protocol_id,
-                witnesses: Witnesses::default(),
-                span: Span::SYNTHESIZED,
-            };
+            );
             session
                 .type_catalog
                 .conformances
@@ -426,12 +423,12 @@ impl Conforms {
                 .type_catalog
                 .conformances
                 .entry(key)
-                .or_insert(Conformance {
-                    node_id: self.conformance_node_id,
-                    conforming_id: *conforming_ty_sym,
-                    protocol_id: self.protocol_id,
-                    witnesses: Witnesses::default(),
-                    span: Span::SYNTHESIZED,
+                .or_insert_with(|| {
+                    Conformance::missing_decl_placeholder(
+                        self.conformance_node_id,
+                        *conforming_ty_sym,
+                        self.protocol_id,
+                    )
                 });
 
             entry.witnesses.methods.insert(label.clone(), witness_sym);

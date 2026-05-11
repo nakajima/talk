@@ -14,11 +14,10 @@ use crate::{
         symbol::{ProtocolId, Symbol, Symbols, TypeParameterId},
     },
     node_id::NodeID,
-    span::Span,
     types::{
         builtins::builtin_scope,
         call_tree::CallTree,
-        conformance::{Conformance, ConformanceKey, Witnesses},
+        conformance::{Conformance, ConformanceKey, WitnessTable},
         constraints::{constraint::Constraint, store::ConstraintStore},
         infer_row::{Row, RowMetaId, RowParamId},
         infer_ty::{Level, Meta, MetaVarId, SkolemId, Ty},
@@ -1276,7 +1275,7 @@ impl TypeSession {
             return None;
         };
 
-        let mut witnesses = Witnesses::default();
+        let mut witnesses = WitnessTable::default();
         let mut derived_methods = Vec::new();
         let mut first_method_sym = None;
 
@@ -1338,13 +1337,7 @@ impl TypeSession {
 
         self.type_catalog.conformances.insert(
             key,
-            Conformance {
-                node_id: NodeID::SYNTHESIZED,
-                conforming_id: nominal_sym,
-                protocol_id,
-                witnesses,
-                span: Span::SYNTHESIZED,
-            },
+            Conformance::auto_derived(nominal_sym, protocol_id, witnesses),
         );
 
         // Record for later body synthesis

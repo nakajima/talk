@@ -7,7 +7,7 @@ use crate::{
     name_resolution::symbol::Symbol,
     node_id::NodeID,
     types::{
-        conformance::{Conformance, ConformanceKey, Witnesses},
+        conformance::{Conformance, ConformanceKey, WitnessTable},
         infer_row::{Row, RowParamId},
         infer_ty::Ty,
         type_operations::UnificationSubstitutions,
@@ -312,7 +312,7 @@ impl TypeCatalog {
                             node_id: v.node_id,
                             conforming_id: v.conforming_id.import(module_id),
                             protocol_id: v.protocol_id.import(module_id),
-                            witnesses: Witnesses {
+                            witnesses: WitnessTable {
                                 methods: import_mapped(v.witnesses.methods, module_id),
                                 associated_types: v
                                     .witnesses

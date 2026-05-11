@@ -17,13 +17,13 @@ pub struct ConformanceKey {
 }
 
 #[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
-pub struct Witnesses {
+pub struct WitnessTable {
     pub methods: FxHashMap<Label, Symbol>,
     pub associated_types: FxHashMap<Label, Ty>,
     pub requirements: FxHashMap<Symbol, Symbol>,
 }
 
-impl Witnesses {
+impl WitnessTable {
     /// Look up a witness by label, falling back to lookup by method requirement symbol.
     pub fn get_witness(&self, label: &Label, method_req: &Symbol) -> Option<Symbol> {
         self.methods
@@ -38,6 +38,51 @@ pub struct Conformance {
     pub node_id: NodeID,
     pub conforming_id: Symbol,
     pub protocol_id: ProtocolId,
-    pub witnesses: Witnesses,
+    pub witnesses: WitnessTable,
     pub span: Span,
+}
+
+impl Conformance {
+    pub fn declared(
+        node_id: NodeID,
+        conforming_id: Symbol,
+        protocol_id: ProtocolId,
+        span: Span,
+    ) -> Self {
+        Self {
+            node_id,
+            conforming_id,
+            protocol_id,
+            witnesses: WitnessTable::default(),
+            span,
+        }
+    }
+
+    pub fn missing_decl_placeholder(
+        node_id: NodeID,
+        conforming_id: Symbol,
+        protocol_id: ProtocolId,
+    ) -> Self {
+        Self {
+            node_id,
+            conforming_id,
+            protocol_id,
+            witnesses: WitnessTable::default(),
+            span: Span::SYNTHESIZED,
+        }
+    }
+
+    pub fn auto_derived(
+        conforming_id: Symbol,
+        protocol_id: ProtocolId,
+        witnesses: WitnessTable,
+    ) -> Self {
+        Self {
+            node_id: NodeID::SYNTHESIZED,
+            conforming_id,
+            protocol_id,
+            witnesses,
+            span: Span::SYNTHESIZED,
+        }
+    }
 }

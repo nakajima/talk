@@ -36,7 +36,7 @@ use crate::{
     types::{
         builtins::resolve_builtin_type,
         call_tree::CalleeInfo,
-        conformance::{Conformance, ConformanceKey, Witnesses},
+        conformance::{Conformance, ConformanceKey},
         constraint_solver::ConstraintSolver,
         constraints::{
             constraint::{Constraint, ConstraintCause},
@@ -453,12 +453,13 @@ impl<'a> InferencePass<'a> {
                     .type_catalog
                     .conformances
                     .entry(key)
-                    .or_insert_with(|| Conformance {
-                        node_id: conformance.id,
-                        conforming_id: nominal_symbol,
-                        protocol_id,
-                        witnesses: Default::default(),
-                        span: conformance.span,
+                    .or_insert_with(|| {
+                        Conformance::declared(
+                            conformance.id,
+                            nominal_symbol,
+                            protocol_id,
+                            conformance.span,
+                        )
                     });
             }
         }
@@ -805,13 +806,12 @@ impl<'a> InferencePass<'a> {
 
             self.session.type_catalog.conformances.insert(
                 key,
-                Conformance {
-                    node_id: conformance.id,
-                    conforming_id: protocol.symbol,
-                    protocol_id: conforms_to_id,
-                    witnesses: Default::default(),
-                    span: conformance.span,
-                },
+                Conformance::declared(
+                    conformance.id,
+                    protocol.symbol,
+                    conforms_to_id,
+                    conformance.span,
+                ),
             );
         }
     }
@@ -2474,12 +2474,13 @@ impl<'a> InferencePass<'a> {
                             .type_catalog
                             .conformances
                             .entry(key)
-                            .or_insert_with(|| Conformance {
-                                node_id: conformance.id,
-                                conforming_id: nominal_symbol,
-                                protocol_id,
-                                witnesses: Default::default(),
-                                span: conformance.span,
+                            .or_insert_with(|| {
+                                Conformance::declared(
+                                    conformance.id,
+                                    nominal_symbol,
+                                    protocol_id,
+                                    conformance.span,
+                                )
                             });
 
                         self.constraints.wants_conforms(
@@ -2703,12 +2704,13 @@ impl<'a> InferencePass<'a> {
             .type_catalog
             .conformances
             .swap_remove(&key)
-            .unwrap_or_else(|| Conformance {
-                node_id: conformance_node_id,
-                conforming_id: conforming_symbol,
-                protocol_id,
-                witnesses: Witnesses::default(),
-                span: conformance_span,
+            .unwrap_or_else(|| {
+                Conformance::declared(
+                    conformance_node_id,
+                    conforming_symbol,
+                    protocol_id,
+                    conformance_span,
+                )
             });
 
         conformance
