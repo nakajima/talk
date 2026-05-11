@@ -87,6 +87,26 @@ impl ProtocolAssociatedTypeRequirements {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+struct ProtocolScope {
+    symbol: Symbol,
+    id: ProtocolId,
+    self_param: Symbol,
+}
+
+impl ProtocolScope {
+    fn self_ty(self) -> Ty {
+        Ty::Param(self.self_param, vec![self.id])
+    }
+
+    fn self_conformance(self) -> Predicate {
+        Predicate::Conforms {
+            param: self.self_param,
+            protocol_id: self.id,
+        }
+    }
+}
+
 pub type PendingTypeInstances =
     FxHashMap<MetaVarId, (NodeID, Span, Level, Symbol, Vec<(Ty, NodeID)>)>;
 
@@ -671,9 +691,7 @@ impl<'a> InferencePass<'a> {
     fn collect_assoc_requirements(
         &mut self,
         body: &Body,
-        protocol_self_id: Symbol,
-        protocol_symbol: Symbol,
-        protocol_id: ProtocolId,
+        protocol: ProtocolScope,
         context: &mut SolveContext,
     ) -> (IndexMap<Label, Ty>, ProtocolAssociatedTypeRequirements) {
         let mut associated_types: IndexMap<Label, Ty> = IndexMap::default();
@@ -682,8 +700,12 @@ impl<'a> InferencePass<'a> {
 
         for decl in &body.decls {
             if let DeclKind::Associated { generic } = &decl.kind
-                && let Ok(ty) =
-                    self.visit_associated_type(generic, protocol_self_id, protocol_symbol, context)
+                && let Ok(ty) = self.visit_associated_type(
+                    generic,
+                    protocol.self_param,
+                    protocol.symbol,
+                    context,
+                )
             {
                 let label: Label = generic.name.name_str().into();
                 let assoc_param_id = match &ty {
@@ -700,10 +722,10 @@ impl<'a> InferencePass<'a> {
                     // Use ty.clone() here instead of creating a new Param with empty bounds,
                     // because ty already has the correct protocol bounds from visit_associated_type
                     assoc_type_predicates.insert(Predicate::Projection {
-                        base: Ty::Param(protocol_self_id, vec![protocol_id]),
+                        base: protocol.self_ty(),
                         label: label.clone(),
                         returns: ty.clone(),
-                        protocol_id: Some(protocol_id),
+                        protocol_id: Some(protocol.id),
                     });
                 }
 
@@ -717,7 +739,7 @@ impl<'a> InferencePass<'a> {
                             let entry = self.session.lookup(&generic_sym)?;
                             entry.foralls().iter().find_map(|fa| {
                                 if let ForAll::Ty(param_id) = fa
-                                    && *param_id != protocol_self_id
+                                    && *param_id != protocol.self_param
                                 {
                                     Some(*param_id)
                                 } else {
@@ -745,11 +767,11 @@ impl<'a> InferencePass<'a> {
         if !requirements.is_empty() {
             tracing::debug!(
                 "Inserting protocol_associated_type_requirements for {:?}: {:?}",
-                protocol_id,
+                protocol.id,
                 requirements
             );
             self.protocol_associated_type_requirements
-                .insert(protocol_id, requirements.clone());
+                .insert(protocol.id, requirements.clone());
         }
 
         (associated_types, requirements)
@@ -757,7 +779,7 @@ impl<'a> InferencePass<'a> {
 
     fn register_superprotocols(
         &mut self,
-        protocol_symbol: Symbol,
+        protocol: ProtocolScope,
         conformances: &[TypeAnnotation],
         context: &mut SolveContext,
     ) {
@@ -769,11 +791,11 @@ impl<'a> InferencePass<'a> {
 
             let key = ConformanceKey {
                 protocol_id: conforms_to_id,
-                conforming_id: protocol_symbol,
+                conforming_id: protocol.symbol,
             };
 
             self.register_conformance(
-                protocol_symbol,
+                protocol.symbol,
                 conforms_to_id.into(),
                 conformance.id,
                 conformance.span,
@@ -785,7 +807,7 @@ impl<'a> InferencePass<'a> {
                 key,
                 Conformance {
                     node_id: conformance.id,
-                    conforming_id: protocol_symbol,
+                    conforming_id: protocol.symbol,
                     protocol_id: conforms_to_id,
                     witnesses: Default::default(),
                     span: conformance.span,
@@ -794,20 +816,56 @@ impl<'a> InferencePass<'a> {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn process_members(
+    fn collect_method_requirements(
         &mut self,
         body: &Body,
-        name: &Name,
-        protocol_self_id: Symbol,
-        protocol_id: ProtocolId,
-        protocol_symbol: Symbol,
+        protocol: ProtocolScope,
         associated_type_requirements: &ProtocolAssociatedTypeRequirements,
         context: &mut SolveContext,
         binders: &mut IndexMap<Symbol, Ty>,
-    ) -> TypedRet<(IndexMap<Label, TypedFunc>, IndexMap<Label, Ty>)> {
-        let mut instance_methods = IndexMap::default();
-        let mut instance_method_requirements = IndexMap::default();
+    ) -> TypedRet<IndexMap<Label, Ty>> {
+        let mut requirements = IndexMap::default();
+
+        for decl in &body.decls {
+            let (DeclKind::MethodRequirement(func_signature)
+            | DeclKind::FuncSignature(func_signature)) = &decl.kind
+            else {
+                continue;
+            };
+
+            let ty = self.visit_func_signature(
+                protocol.self_param,
+                protocol.id,
+                func_signature,
+                context,
+            )?;
+            let func_sym = func_signature
+                .name
+                .symbol()
+                .map_err(|_| TypeError::NameNotResolved(func_signature.name.clone()))?;
+            if let Some(entry) = self.session.lookup(&func_sym) {
+                let entry = self.apply_protocol_associated_type_requirements(
+                    entry,
+                    associated_type_requirements,
+                );
+                self.session.promote(func_sym, entry, &mut self.constraints);
+            }
+            binders.insert(func_sym, ty.clone());
+            requirements.insert(func_signature.name.name_str().into(), ty);
+        }
+
+        Ok(requirements)
+    }
+
+    fn infer_default_methods(
+        &mut self,
+        body: &Body,
+        protocol: ProtocolScope,
+        associated_type_requirements: &ProtocolAssociatedTypeRequirements,
+        context: &mut SolveContext,
+        binders: &mut IndexMap<Symbol, Ty>,
+    ) -> TypedRet<IndexMap<Label, TypedFunc>> {
+        let mut methods = IndexMap::default();
 
         for decl in &body.decls {
             match &decl.kind {
@@ -823,14 +881,9 @@ impl<'a> InferencePass<'a> {
                     self.session
                         .type_catalog
                         .instance_methods
-                        .entry(protocol_symbol)
+                        .entry(protocol.symbol)
                         .or_default()
-                        .insert(
-                            func.name.name_str().into(),
-                            func.name
-                                .symbol()
-                                .map_err(|_| TypeError::NameNotResolved(name.clone()))?,
-                        );
+                        .insert(func.name.name_str().into(), func_sym);
 
                     let typed_func = self.visit_func(func, context)?;
                     let func_ty = curry(
@@ -839,16 +892,9 @@ impl<'a> InferencePass<'a> {
                         typed_func.effects_row.clone().into(),
                     );
 
-                    // Include self predicate for protocol self.
-                    let foralls = func_ty.collect_foralls();
-                    let predicates = vec![Predicate::Conforms {
-                        param: protocol_self_id,
-                        protocol_id,
-                    }];
-
                     let entry = EnvEntry::Scheme(Scheme {
-                        foralls,
-                        predicates,
+                        foralls: func_ty.collect_foralls(),
+                        predicates: vec![protocol.self_conformance()],
                         ty: func_ty.clone(),
                     });
                     let entry = self.apply_protocol_associated_type_requirements(
@@ -858,35 +904,12 @@ impl<'a> InferencePass<'a> {
 
                     self.session.promote(func_sym, entry, &mut self.constraints);
 
-                    instance_methods.insert(func.name.name_str().into(), typed_func.clone());
-
+                    methods.insert(func.name.name_str().into(), typed_func.clone());
                     binders.insert(func_sym, func_ty);
                 }
-                DeclKind::MethodRequirement(func_signature)
-                | DeclKind::FuncSignature(func_signature) => {
-                    let ty = self.visit_func_signature(
-                        protocol_self_id,
-                        protocol_id,
-                        func_signature,
-                        context,
-                    )?;
-                    let func_sym = func_signature
-                        .name
-                        .symbol()
-                        .map_err(|_| TypeError::NameNotResolved(func_signature.name.clone()))?;
-                    if let Some(entry) = self.session.lookup(&func_sym) {
-                        let entry = self.apply_protocol_associated_type_requirements(
-                            entry,
-                            associated_type_requirements,
-                        );
-                        self.session.promote(func_sym, entry, &mut self.constraints);
-                    }
-                    binders.insert(func_sym, ty.clone());
-                    instance_method_requirements.insert(func_signature.name.name_str().into(), ty);
-                }
-                DeclKind::Associated { .. } => {
-                    // Already processed in first pass
-                }
+                DeclKind::Associated { .. }
+                | DeclKind::MethodRequirement(_)
+                | DeclKind::FuncSignature(_) => {}
                 _ => {
                     tracing::error!("unhandled decl: {decl:?}");
                     continue;
@@ -894,7 +917,7 @@ impl<'a> InferencePass<'a> {
             }
         }
 
-        Ok((instance_methods, instance_method_requirements))
+        Ok(methods)
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self, decl, _generics, conformances, body, context))]
@@ -919,35 +942,32 @@ impl<'a> InferencePass<'a> {
             ));
         };
 
+        let protocol = ProtocolScope {
+            symbol: protocol_symbol,
+            id: protocol_id,
+            self_param: protocol_self_id,
+        };
         let mut binders: IndexMap<Symbol, Ty> = IndexMap::default();
 
-        self.register_superprotocols(protocol_symbol, conformances, context);
+        self.register_superprotocols(protocol, conformances, context);
 
-        context.givens_mut().insert(Predicate::Conforms {
-            param: protocol_self_id,
-            protocol_id,
-        });
+        context.givens_mut().insert(protocol.self_conformance());
 
-        self.session.insert(
-            protocol_symbol,
-            Ty::Param(protocol_self_id, vec![protocol_id]),
-            &mut self.constraints,
-        );
+        self.session
+            .insert(protocol.symbol, protocol.self_ty(), &mut self.constraints);
 
-        let (associated_types, protocol_associated_type_requirements) = self
-            .collect_assoc_requirements(
-                body,
-                protocol_self_id,
-                protocol_symbol,
-                protocol_id,
-                context,
-            );
-        let (instance_methods, instance_method_requirements) = self.process_members(
+        let (associated_types, protocol_associated_type_requirements) =
+            self.collect_assoc_requirements(body, protocol, context);
+        let instance_method_requirements = self.collect_method_requirements(
             body,
-            name,
-            protocol_self_id,
-            protocol_id,
-            protocol_symbol,
+            protocol,
+            &protocol_associated_type_requirements,
+            context,
+            &mut binders,
+        )?;
+        let instance_methods = self.infer_default_methods(
+            body,
+            protocol,
             &protocol_associated_type_requirements,
             context,
             &mut binders,
