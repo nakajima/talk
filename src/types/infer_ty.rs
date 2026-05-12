@@ -402,6 +402,39 @@ impl Ty {
         result
     }
 
+    pub(crate) fn protocol_bounds_for_param(&self, param: Symbol) -> Vec<ProtocolId> {
+        let mut bounds: IndexSet<ProtocolId> = IndexSet::default();
+
+        match self {
+            Self::Param(symbol, param_bounds) if *symbol == param => {
+                bounds.extend(param_bounds.iter().copied());
+            }
+            Self::Nominal { type_args, .. } | Self::Tuple(type_args) => {
+                for arg in type_args {
+                    bounds.extend(arg.protocol_bounds_for_param(param));
+                }
+            }
+            Self::Projection { base, .. } => {
+                bounds.extend(base.protocol_bounds_for_param(param));
+            }
+            Self::Constructor { params, .. } => {
+                for item in params {
+                    bounds.extend(item.protocol_bounds_for_param(param));
+                }
+            }
+            Self::Func(arg, ret, _) => {
+                bounds.extend(arg.protocol_bounds_for_param(param));
+                bounds.extend(ret.protocol_bounds_for_param(param));
+            }
+            Self::Record(_, box row) => {
+                bounds.extend(row.protocol_bounds_for_param(param));
+            }
+            _ => {}
+        }
+
+        bounds.into_iter().collect()
+    }
+
     /// Collects Conforms predicates from bounds embedded in Ty::Param nodes
     pub fn collect_param_predicates(&self) -> Vec<Predicate> {
         let mut result = vec![];

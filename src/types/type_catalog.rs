@@ -154,6 +154,50 @@ pub struct TypeCatalog {
 }
 
 impl TypeCatalog {
+    pub(crate) fn inherit_conformances(&mut self) -> Vec<ConformanceKey> {
+        let mut inserted = vec![];
+
+        loop {
+            let existing_keys = self.conformances.keys().copied().collect::<Vec<_>>();
+            let conformances = self.conformances.values().cloned().collect::<Vec<_>>();
+            let mut changed = false;
+
+            for conformance in &conformances {
+                let protocol_symbol = Symbol::Protocol(conformance.protocol_id);
+                for super_key in existing_keys
+                    .iter()
+                    .filter(|key| key.conforming_id == protocol_symbol)
+                {
+                    let inherited_key = ConformanceKey {
+                        protocol_id: super_key.protocol_id,
+                        conforming_id: conformance.conforming_id,
+                    };
+                    if self.conformances.contains_key(&inherited_key) {
+                        continue;
+                    }
+
+                    self.conformances.insert(
+                        inherited_key,
+                        Conformance::from_superprotocol(
+                            conformance.node_id,
+                            conformance.conforming_id,
+                            super_key.protocol_id,
+                            conformance.span,
+                        ),
+                    );
+                    inserted.push(inherited_key);
+                    changed = true;
+                }
+            }
+
+            if !changed {
+                break;
+            }
+        }
+
+        inserted
+    }
+
     pub fn lookup_initializers(&self, receiver: &Symbol) -> Option<IndexMap<Label, Symbol>> {
         self.initializers.get(receiver).cloned()
     }

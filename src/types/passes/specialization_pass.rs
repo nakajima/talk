@@ -7,7 +7,7 @@ use crate::{
     label::Label,
     name_resolution::{
         name_resolver::ResolvedNames,
-        symbol::{ProtocolId, Symbol, Symbols, set_symbol_names},
+        symbol::{Symbol, Symbols, set_symbol_names},
     },
     node_id::NodeID,
     types::{
@@ -639,7 +639,7 @@ impl<'a> SpecializationPass<'a> {
     ) {
         let current_ty_specializations = specializations.ty.clone();
         for (param, concrete_ty) in current_ty_specializations {
-            let bounds = Self::bounds_for_param(callee_ty, param);
+            let bounds = callee_ty.protocol_bounds_for_param(param);
             if bounds.is_empty() {
                 continue;
             }
@@ -692,22 +692,6 @@ impl<'a> SpecializationPass<'a> {
                         .insert(*associated_param, applied_witness);
                 }
             }
-        }
-    }
-
-    fn bounds_for_param(ty: &Ty, param: Symbol) -> Vec<ProtocolId> {
-        match ty {
-            Ty::Param(symbol, bounds) if *symbol == param => bounds.clone(),
-            Ty::Func(arg, ret, _) => {
-                let mut bounds = Self::bounds_for_param(arg, param);
-                bounds.extend(Self::bounds_for_param(ret, param));
-                bounds
-            }
-            Ty::Nominal { type_args, .. } | Ty::Tuple(type_args) => type_args
-                .iter()
-                .flat_map(|ty| Self::bounds_for_param(ty, param))
-                .collect(),
-            _ => vec![],
         }
     }
 
@@ -792,44 +776,18 @@ impl<'a> SpecializationPass<'a> {
                 // If receiver is a type param that wasn't specialized, this is likely a protocol
                 // method call inside a generic function. Return a MethodRequirement placeholder
                 // that the monomorphizer will resolve at instantiation time.
-                if let Ty::Param(_param_id, protocol_bounds) =
-                    specializations.apply(receiver_ty.as_mono_ty().clone())
-                {
-                    // Look up the method requirement from the protocol bounds
-                    for protocol_id in &protocol_bounds {
-                        if let Some((req_sym, _)) = self
-                            .types
-                            .catalog
-                            .lookup_member(&(*protocol_id).into(), label)
-                        {
-                            return Ok(req_sym);
-                        }
-                    }
-
-                    // For type params without protocol bounds (for example associated type
-                    // bounds that have been erased from this expression type), fall back to a
-                    // unique protocol requirement with the same label. The typechecker has
-                    // already accepted this member access, so this only preserves the symbol
-                    // needed by downstream specialization/lowering.
-                    if let Some(req_sym) = self.unique_protocol_member(label) {
-                        return Ok(req_sym);
-                    }
+                if let Some(req_sym) = self.protocol_member_from_bounds(
+                    specializations.apply(receiver_ty.as_mono_ty().clone()),
+                    label,
+                ) {
+                    return Ok(req_sym);
                 }
 
-                if let Ty::Param(_param_id, protocol_bounds) = receiver.ty.clone() {
-                    for protocol_id in &protocol_bounds {
-                        if let Some((req_sym, _)) = self
-                            .types
-                            .catalog
-                            .lookup_member(&(*protocol_id).into(), label)
-                        {
-                            return Ok(req_sym);
-                        }
-                    }
-
-                    if let Some(req_sym) = self.unique_protocol_member(label) {
-                        return Ok(req_sym);
-                    }
+                // The finalized expression type can lose bounds that are still present on the
+                // typed receiver. Use those bounds as a non-guessing fallback.
+                if let Some(req_sym) = self.protocol_member_from_bounds(receiver.ty.clone(), label)
+                {
+                    return Ok(req_sym);
                 }
 
                 Err(TypeError::MemberNotFound(
@@ -841,20 +799,17 @@ impl<'a> SpecializationPass<'a> {
         }
     }
 
-    fn unique_protocol_member(&self, label: &Label) -> Option<Symbol> {
-        let mut matches = self
-            .types
-            .catalog
-            .method_requirements
-            .values()
-            .chain(self.types.catalog.instance_methods.values())
-            .filter_map(|requirements| requirements.get(label).copied());
-        let first = matches.next()?;
-        if matches.next().is_none() {
-            Some(first)
-        } else {
-            None
-        }
+    fn protocol_member_from_bounds(&self, receiver_ty: Ty, label: &Label) -> Option<Symbol> {
+        let Ty::Param(_, protocol_bounds) = receiver_ty else {
+            return None;
+        };
+
+        protocol_bounds.iter().find_map(|protocol_id| {
+            self.types
+                .catalog
+                .lookup_member(&(*protocol_id).into(), label)
+                .map(|(req_sym, _)| req_sym)
+        })
     }
 
     fn symbol_from_ty(

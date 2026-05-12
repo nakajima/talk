@@ -58,7 +58,7 @@ impl Conformance {
         }
     }
 
-    pub fn inherited(
+    pub(crate) fn from_superprotocol(
         node_id: NodeID,
         conforming_id: Symbol,
         protocol_id: ProtocolId,

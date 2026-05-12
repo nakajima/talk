@@ -165,7 +165,8 @@ impl<'pass, 'ast> SignatureDiscovery<'pass, 'ast> {
 
         for i in 0..self.pass.asts.len() {
             self.pass.discover_protocols(i, Level::default());
-            self.pass.propagate_inherited_conformances();
+            let inherited = self.pass.session.type_catalog.inherit_conformances();
+            self.pass.constraints.wake_conformances(&inherited);
 
             let conformances: Vec<_> = self
                 .pass
@@ -471,67 +472,6 @@ impl<'a> InferencePass<'a> {
             }
         }
         _ = std::mem::replace(&mut self.asts[idx].roots, roots);
-    }
-
-    fn propagate_inherited_conformances(&mut self) {
-        let mut inserted = vec![];
-
-        loop {
-            let existing_keys: IndexSet<_> = self
-                .session
-                .type_catalog
-                .conformances
-                .keys()
-                .copied()
-                .collect();
-            let conformances = self
-                .session
-                .type_catalog
-                .conformances
-                .values()
-                .cloned()
-                .collect_vec();
-            let mut changed = false;
-
-            for conformance in &conformances {
-                let protocol_symbol = Symbol::Protocol(conformance.protocol_id);
-                for super_key in existing_keys
-                    .iter()
-                    .filter(|key| key.conforming_id == protocol_symbol)
-                {
-                    let inherited_key = ConformanceKey {
-                        protocol_id: super_key.protocol_id,
-                        conforming_id: conformance.conforming_id,
-                    };
-                    if self
-                        .session
-                        .type_catalog
-                        .conformances
-                        .contains_key(&inherited_key)
-                    {
-                        continue;
-                    }
-
-                    self.session.type_catalog.conformances.insert(
-                        inherited_key,
-                        Conformance::inherited(
-                            conformance.node_id,
-                            conformance.conforming_id,
-                            super_key.protocol_id,
-                            conformance.span,
-                        ),
-                    );
-                    inserted.push(inherited_key);
-                    changed = true;
-                }
-            }
-
-            if !changed {
-                break;
-            }
-        }
-
-        self.constraints.wake_conformances(&inserted);
     }
 
     fn discover_effects(&mut self, idx: usize, level: Level) {
