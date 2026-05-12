@@ -1,5 +1,5 @@
 use crate::node_id::NodeID;
-use crate::types::conformance::ConformanceKey;
+use crate::types::conformance::{ConformanceDecl, ConformanceKey};
 use crate::types::constraints::store::ConstraintStore;
 use crate::types::scheme::ForAll;
 use crate::types::type_operations::{Substitutions, substitute_with_subs};
@@ -288,6 +288,7 @@ impl Conforms {
             &protocol_self_id,
             &protocol_self_bounds,
             &conforming_ty_sym,
+            conformance_decl.as_ref(),
             protocol_projections,
             substitutions,
         ) {
@@ -319,6 +320,7 @@ impl Conforms {
         protocol_self: &Symbol,
         protocol_self_bounds: &[ProtocolId],
         conforming_ty_sym: &Symbol,
+        conformance_decl: Option<&ConformanceDecl>,
         projections: FxHashMap<Label, Ty>,
         ty_substitutions: FxHashMap<Ty, Ty>,
     ) -> Result<CheckWitnessResult, TypeError> {
@@ -356,8 +358,10 @@ impl Conforms {
                 }
             }
 
-            let Some(witness_sym) = session.lookup_concrete_member(conforming_ty_sym, &label)
-            else {
+            let declared_witness_sym =
+                conformance_decl.and_then(|decl| decl.method_candidates.get(&label).copied());
+            let concrete_witness_sym = session.lookup_concrete_member(conforming_ty_sym, &label);
+            let Some(witness_sym) = declared_witness_sym.or(concrete_witness_sym) else {
                 missing_witnesses.push((label, required_sym));
                 continue;
             };
