@@ -1864,6 +1864,31 @@ pub mod tests {
     }
 
     #[test]
+    fn rejects_unknown_nominal_type_member() {
+        let (_ast, _types, diagnostics) = typecheck_err(
+            "
+            struct Box {}
+
+            func bad() -> Box.Item {
+                1
+            }
+            ",
+        );
+
+        assert!(
+            diagnostics.iter().any(|diag| matches!(
+                diag,
+                AnyDiagnostic::Typing(Diagnostic {
+                    kind: TypeError::UnknownTypeMember { member, .. },
+                    ..
+                }) if *member == Label::Named("Item".into())
+            )),
+            "expected unknown type member diagnostic, got: {:?}",
+            diagnostics
+        );
+    }
+
+    #[test]
     fn types_simple_conformance() {
         let (_ast, types) = typecheck(
             "

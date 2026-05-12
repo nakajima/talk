@@ -95,16 +95,16 @@ impl TypeMember {
                     }
                     self.solve_for(&ty._as_ty(), constraints, context, session)
                 } else {
-                    SolveResult::Err(TypeError::TypeNotFound(format!(
-                        "Did not find child type {symbol:?}.{}",
-                        self.name
-                    )))
+                    SolveResult::Err(TypeError::UnknownTypeMember {
+                        base: self.base.clone(),
+                        member: self.name.clone(),
+                    })
                 }
             }
-            _ => SolveResult::Err(TypeError::TypeNotFound(format!(
-                "Could not find child type {:?} for {:?}",
-                self.name, self.base
-            ))),
+            _ => SolveResult::Err(TypeError::UnknownTypeMember {
+                base: self.base.clone(),
+                member: self.name.clone(),
+            }),
         }
     }
 
@@ -151,9 +151,9 @@ impl TypeMember {
             };
         }
 
-        SolveResult::Err(TypeError::TypeNotFound(format!(
-            "{:?}.{:?}",
-            self.base, self.name
-        )))
+        SolveResult::Err(TypeError::UnknownTypeMember {
+            base: self.base.clone(),
+            member: self.name.clone(),
+        })
     }
 }
