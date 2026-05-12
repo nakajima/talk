@@ -1,5 +1,5 @@
 use crate::node_id::NodeID;
-use crate::types::conformance::{Conformance, ConformanceKey};
+use crate::types::conformance::ConformanceKey;
 use crate::types::constraints::store::ConstraintStore;
 use crate::types::scheme::ForAll;
 use crate::types::type_operations::{Substitutions, substitute_with_subs};
@@ -146,22 +146,8 @@ impl Conforms {
             protocol_id,
         };
 
-        let conformance = if let Some(conformance) = session.lookup_conformance(&key) {
-            conformance
-        } else {
-            let conformance = Conformance::missing_decl_placeholder(
-                self.conformance_node_id,
-                conforming_ty_sym,
-                protocol_id,
-            );
-            session
-                .type_catalog
-                .conformances
-                .entry(key)
-                .or_insert(conformance.clone());
-            // Wake any constraints waiting on this conformance
-            constraints.wake_conformances(&[key]);
-            conformance
+        let Some(conformance) = session.lookup_conformance(&key) else {
+            return CheckWitnessResult::Defer(vec![DeferralReason::WaitingOnConformance(key)]);
         };
 
         let Some(EnvEntry::Scheme(Scheme {
@@ -253,6 +239,13 @@ impl Conforms {
                     .cloned()
                     .unwrap_or_else(|| session.new_ty_meta_var(context.level()))
             };
+
+            if let Some(entry) = session.type_catalog.conformances.get_mut(&key) {
+                entry
+                    .witnesses
+                    .associated_types
+                    .insert(label.clone(), associated_witness_ty.clone());
+            }
 
             substitutions.insert(associated_entry._as_ty(), associated_witness_ty);
         }
@@ -415,21 +408,15 @@ impl Conforms {
 
             // Update witnesses
             let key = ConformanceKey {
-                protocol_id: self.protocol_id,
+                protocol_id,
                 conforming_id: *conforming_ty_sym,
             };
 
-            let entry = session
-                .type_catalog
-                .conformances
-                .entry(key)
-                .or_insert_with(|| {
-                    Conformance::missing_decl_placeholder(
-                        self.conformance_node_id,
-                        *conforming_ty_sym,
-                        self.protocol_id,
-                    )
-                });
+            let Some(entry) = session.type_catalog.conformances.get_mut(&key) else {
+                return Ok(CheckWitnessResult::Defer(vec![
+                    DeferralReason::WaitingOnConformance(key),
+                ]));
+            };
 
             entry.witnesses.methods.insert(label.clone(), witness_sym);
             entry

@@ -58,17 +58,18 @@ impl Conformance {
         }
     }
 
-    pub fn missing_decl_placeholder(
+    pub fn inherited(
         node_id: NodeID,
         conforming_id: Symbol,
         protocol_id: ProtocolId,
+        span: Span,
     ) -> Self {
         Self {
             node_id,
             conforming_id,
             protocol_id,
             witnesses: WitnessTable::default(),
-            span: Span::SYNTHESIZED,
+            span,
         }
     }
 

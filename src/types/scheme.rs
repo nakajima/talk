@@ -5,7 +5,7 @@ use tracing::instrument;
 
 use crate::{
     compiling::module::ModuleId,
-    name_resolution::symbol::Symbol,
+    name_resolution::symbol::{ProtocolId, Symbol},
     node_id::NodeID,
     types::{
         constraints::store::ConstraintStore,
@@ -43,6 +43,34 @@ impl std::hash::Hash for Scheme {
 }
 
 impl Scheme {
+    fn bounds_for(&self, param: &Symbol) -> Vec<ProtocolId> {
+        let mut bounds: IndexSet<ProtocolId> = IndexSet::default();
+
+        for predicate in &self.predicates {
+            if let Predicate::Conforms {
+                param: predicate_param,
+                protocol_id,
+            } = predicate
+                && predicate_param == param
+            {
+                bounds.insert(*protocol_id);
+            }
+        }
+
+        for predicate in self.ty.collect_param_predicates() {
+            if let Predicate::Conforms {
+                param: predicate_param,
+                protocol_id,
+            } = predicate
+                && &predicate_param == param
+            {
+                bounds.insert(protocol_id);
+            }
+        }
+
+        bounds.into_iter().collect()
+    }
+
     pub fn import(self, module_id: ModuleId) -> Self {
         Self {
             foralls: self.foralls,
@@ -98,23 +126,7 @@ impl Scheme {
                         unreachable!()
                     };
 
-                    // Collect protocol bounds for this param from the scheme's predicates
-                    let bounds: Vec<_> = self
-                        .predicates
-                        .iter()
-                        .filter_map(|pred| {
-                            if let Predicate::Conforms {
-                                param: p,
-                                protocol_id,
-                                ..
-                            } = pred
-                            {
-                                if p == param { Some(*protocol_id) } else { None }
-                            } else {
-                                None
-                            }
-                        })
-                        .collect();
+                    let bounds = self.bounds_for(param);
 
                     tracing::debug!("instantiating {param:?} with {meta:?}, bounds: {bounds:?}");
                     session
@@ -188,23 +200,7 @@ impl Scheme {
                 unreachable!();
             };
 
-            // Collect protocol bounds for this param from the scheme's predicates
-            let bounds: Vec<_> = self
-                .predicates
-                .iter()
-                .filter_map(|pred| {
-                    if let Predicate::Conforms {
-                        param: p,
-                        protocol_id,
-                        ..
-                    } = pred
-                    {
-                        if p == param { Some(*protocol_id) } else { None }
-                    } else {
-                        None
-                    }
-                })
-                .collect();
+            let bounds = self.bounds_for(param);
 
             session
                 .reverse_instantiations

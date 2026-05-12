@@ -62,9 +62,15 @@ impl Member {
             Ty::Var { id, .. } => {
                 // Use lookup_reverse_instantiation to find the type param through the union-find.
                 // This handles the case where the meta was unified with another that has the mapping.
-                if let Some(Ty::Param(param_id, _)) = session.lookup_reverse_instantiation(*id)
-                    && let SolveResult::Solved(metas) =
-                        self.lookup_type_param_member(constraints, context, session, &ty, param_id)
+                if let Some(Ty::Param(param_id, bounds)) = session.lookup_reverse_instantiation(*id)
+                    && let SolveResult::Solved(metas) = self.lookup_type_param_member(
+                        constraints,
+                        context,
+                        session,
+                        &ty,
+                        param_id,
+                        &bounds,
+                    )
                 {
                     return SolveResult::Solved(metas);
                 }
@@ -74,21 +80,32 @@ impl Member {
                 return SolveResult::Defer(DeferralReason::WaitingOnMeta(Meta::Ty(*id)));
             }
             Ty::Rigid(id) => {
-                let Some(Ty::Param(type_param_id, _)) = session.skolem_map.get(&Ty::Rigid(*id))
+                let Some(Ty::Param(type_param_id, bounds)) =
+                    session.skolem_map.get(&Ty::Rigid(*id))
                 else {
                     unreachable!();
                 };
+                let type_param_id = *type_param_id;
+                let bounds = bounds.clone();
 
                 return self.lookup_type_param_member(
                     constraints,
                     context,
                     session,
                     &ty,
-                    *type_param_id,
+                    type_param_id,
+                    &bounds,
                 );
             }
-            Ty::Param(id, _) => {
-                return self.lookup_type_param_member(constraints, context, session, &ty, *id);
+            Ty::Param(id, bounds) => {
+                return self.lookup_type_param_member(
+                    constraints,
+                    context,
+                    session,
+                    &ty,
+                    *id,
+                    bounds,
+                );
             }
             Ty::Constructor { name, .. } => {
                 return self.lookup_static_member(
@@ -150,26 +167,23 @@ impl Member {
         session: &mut TypeSession,
         ty: &Ty,
         type_param: Symbol,
+        bounds: &[ProtocolId],
     ) -> SolveResult {
         let mut solved_metas: Vec<Meta> = Default::default();
         let cause = ConstraintCause::Member(self.node_id);
 
-        // Collect protocol_ids by value to avoid borrowing context.givens
-        let candidates: Vec<ProtocolId> = context
-            .givens_mut()
-            .iter()
-            .filter_map(|given| {
-                if let Predicate::Conforms {
-                    param, protocol_id, ..
-                } = given
-                    && param == &type_param
-                {
-                    Some(*protocol_id)
-                } else {
-                    None
-                }
-            })
-            .collect();
+        // Collect protocol_ids by value to avoid borrowing context.givens.
+        let mut candidates: Vec<ProtocolId> = bounds.to_vec();
+        for given in context.givens_mut().iter() {
+            if let Predicate::Conforms {
+                param, protocol_id, ..
+            } = given
+                && param == &type_param
+                && !candidates.contains(protocol_id)
+            {
+                candidates.push(*protocol_id);
+            }
+        }
 
         // Collect all matching protocol methods
         let matching_methods: Vec<(ProtocolId, Symbol)> = candidates

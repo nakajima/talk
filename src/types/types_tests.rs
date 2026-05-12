@@ -1838,6 +1838,70 @@ pub mod tests {
     }
 
     #[test]
+    fn rejects_missing_concrete_conformance_for_generic_bound() {
+        let (_ast, _types, diagnostics) = typecheck_err(
+            "
+            protocol Marker {
+                func mark() -> Int
+            }
+
+            struct Foo {}
+
+            func takes<T: Marker>(x: T) {}
+
+            takes(Foo())
+            ",
+        );
+
+        assert!(
+            diagnostics.iter().any(|diag| matches!(
+                diag,
+                AnyDiagnostic::Typing(Diagnostic {
+                    kind: TypeError::TypeDoesNotConform {
+                        symbol,
+                        protocol_id,
+                    },
+                    ..
+                }) if *symbol == StructId::from(1).into()
+                    && *protocol_id == ProtocolId::from(1)
+            )),
+            "expected missing conformance diagnostic, got: {:?}",
+            diagnostics
+        );
+    }
+
+    #[test]
+    fn rejects_missing_marker_conformance_without_requirements() {
+        let (_ast, _types, diagnostics) = typecheck_err(
+            "
+            protocol Marker {}
+
+            struct Foo {}
+
+            func takes<T: Marker>(x: T) {}
+
+            takes(Foo())
+            ",
+        );
+
+        assert!(
+            diagnostics.iter().any(|diag| matches!(
+                diag,
+                AnyDiagnostic::Typing(Diagnostic {
+                    kind: TypeError::TypeDoesNotConform {
+                        symbol,
+                        protocol_id,
+                    },
+                    ..
+                }) if *symbol == StructId::from(1).into()
+                    && *protocol_id == ProtocolId::from(1)
+            )),
+            "expected missing marker conformance diagnostic, got: {:?}",
+            diagnostics
+        );
+    }
+
+    #[test]
     fn generic_constructor_in_extension_block() {
         let (_ast, _types) = typecheck(
             "

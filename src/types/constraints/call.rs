@@ -1,6 +1,7 @@
 use tracing::instrument;
 
 use crate::{
+    name_resolution::symbol::ProtocolId,
     node_id::NodeID,
     types::{
         constraint_solver::{DeferralReason, SolveResult},
@@ -198,6 +199,14 @@ impl Call {
 
                 unify(&reversed, &self.callee_type, context, session).ok();
 
+                self.require_bounded_arg_conformances(
+                    &callee,
+                    &args,
+                    constraints,
+                    context,
+                    session,
+                );
+
                 let res = if args.is_empty() {
                     unify(
                         &self.callee,
@@ -231,6 +240,54 @@ impl Call {
                 }
             }
             ty => SolveResult::Err(TypeError::CalleeNotCallable(ty.clone())),
+        }
+    }
+
+    fn require_bounded_arg_conformances(
+        &self,
+        callee: &Ty,
+        args: &[Ty],
+        constraints: &mut ConstraintStore,
+        context: &mut SolveContext,
+        session: &mut TypeSession,
+    ) {
+        let mut params = vec![];
+        Self::collect_func_params(callee, &mut params);
+
+        for (param, arg) in params.iter().zip(args.iter()) {
+            for protocol_id in Self::protocol_bounds_for(param, context, session) {
+                constraints.wants_conforms(
+                    self.call_node_id,
+                    arg.clone(),
+                    protocol_id,
+                    &context.group_info(),
+                );
+            }
+        }
+    }
+
+    fn collect_func_params(ty: &Ty, params: &mut Vec<Ty>) {
+        if let Ty::Func(param, ret, _) = ty {
+            params.push((**param).clone());
+            Self::collect_func_params(ret, params);
+        }
+    }
+
+    fn protocol_bounds_for(
+        ty: &Ty,
+        context: &mut SolveContext,
+        session: &mut TypeSession,
+    ) -> Vec<ProtocolId> {
+        match session.apply(ty, &mut context.substitutions_mut()) {
+            Ty::Param(_, bounds) => bounds,
+            Ty::Var { id, .. } => {
+                if let Some(Ty::Param(_, bounds)) = session.lookup_reverse_instantiation(id) {
+                    bounds
+                } else {
+                    vec![]
+                }
+            }
+            _ => vec![],
         }
     }
 }

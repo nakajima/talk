@@ -7,7 +7,7 @@ use crate::{
     label::Label,
     name_resolution::{
         name_resolver::ResolvedNames,
-        symbol::{Symbol, Symbols, set_symbol_names},
+        symbol::{ProtocolId, Symbol, Symbols, set_symbol_names},
     },
     node_id::NodeID,
     types::{
@@ -146,7 +146,11 @@ impl<'a> SpecializationPass<'a> {
 
     fn visit_stmt(&mut self, mut stmt: TypedStmt) -> Result<TypedStmt, TypeError> {
         stmt.kind = match stmt.kind {
-            TypedStmtKind::Expr(expr) => TypedStmtKind::Expr(self.visit_expr(expr)?),
+            TypedStmtKind::Expr(expr) => {
+                let expr = self.visit_expr(expr)?;
+                stmt.ty = expr.ty.clone();
+                TypedStmtKind::Expr(expr)
+            }
             TypedStmtKind::Assignment(lhs, rhs) => {
                 TypedStmtKind::Assignment(self.visit_expr(lhs)?, self.visit_expr(rhs)?)
             }
@@ -463,6 +467,7 @@ impl<'a> SpecializationPass<'a> {
         }
 
         self.apply_explicit_type_args(&callee, &expr.ty, &type_args, &mut specializations)?;
+        self.add_associated_type_specializations(&callee_ty, &mut specializations);
 
         if is_constructor
             && let TypedExprKind::Constructor(symbol, ..) = &callee.kind
@@ -623,7 +628,87 @@ impl<'a> SpecializationPass<'a> {
             };
         }
 
+        expr.ty = specializations.apply(expr.ty);
         Ok(expr)
+    }
+
+    fn add_associated_type_specializations(
+        &self,
+        callee_ty: &Ty,
+        specializations: &mut Specializations,
+    ) {
+        let current_ty_specializations = specializations.ty.clone();
+        for (param, concrete_ty) in current_ty_specializations {
+            let bounds = Self::bounds_for_param(callee_ty, param);
+            if bounds.is_empty() {
+                continue;
+            }
+
+            let Ok(conforming_id) = self.symbol_from_ty(&concrete_ty, specializations) else {
+                continue;
+            };
+
+            let mut witness_specializations = specializations.clone();
+            if let Ty::Nominal { symbol, type_args } = &concrete_ty
+                && let Some(nominal) = self.types.catalog.nominals.get(symbol)
+            {
+                for (param, arg) in nominal.type_params.iter().zip(type_args) {
+                    if let Ty::Param(param_id, _) = param {
+                        witness_specializations.ty.insert(*param_id, arg.clone());
+                    }
+                }
+            }
+
+            for protocol_id in bounds {
+                let key = ConformanceKey {
+                    protocol_id,
+                    conforming_id,
+                };
+                let Some(conformance) = self.types.catalog.conformances.get(&key) else {
+                    continue;
+                };
+                let Some(associated_types) = self
+                    .types
+                    .catalog
+                    .associated_types
+                    .get(&Symbol::Protocol(protocol_id))
+                else {
+                    continue;
+                };
+
+                for (label, witness_ty) in &conformance.witnesses.associated_types {
+                    let Some(associated_sym) = associated_types.get(label) else {
+                        continue;
+                    };
+                    let Some(associated_entry) = self.types.get_symbol(associated_sym) else {
+                        continue;
+                    };
+                    let Ty::Param(associated_param, _) = associated_entry.as_mono_ty() else {
+                        continue;
+                    };
+                    let applied_witness = witness_specializations.apply(witness_ty.clone());
+                    specializations
+                        .ty
+                        .insert(*associated_param, applied_witness);
+                }
+            }
+        }
+    }
+
+    fn bounds_for_param(ty: &Ty, param: Symbol) -> Vec<ProtocolId> {
+        match ty {
+            Ty::Param(symbol, bounds) if *symbol == param => bounds.clone(),
+            Ty::Func(arg, ret, _) => {
+                let mut bounds = Self::bounds_for_param(arg, param);
+                bounds.extend(Self::bounds_for_param(ret, param));
+                bounds
+            }
+            Ty::Nominal { type_args, .. } | Ty::Tuple(type_args) => type_args
+                .iter()
+                .flat_map(|ty| Self::bounds_for_param(ty, param))
+                .collect(),
+            _ => vec![],
+        }
     }
 
     fn constructor_specializations(&self, callee: &TypedExpr, call_ty: &Ty) -> Specializations {
@@ -711,20 +796,40 @@ impl<'a> SpecializationPass<'a> {
                     specializations.apply(receiver_ty.as_mono_ty().clone())
                 {
                     // Look up the method requirement from the protocol bounds
-                    for protocol_id in protocol_bounds {
-                        if let Some((req_sym, _)) =
-                            self.types.catalog.lookup_member(&protocol_id.into(), label)
+                    for protocol_id in &protocol_bounds {
+                        if let Some((req_sym, _)) = self
+                            .types
+                            .catalog
+                            .lookup_member(&(*protocol_id).into(), label)
                         {
                             return Ok(req_sym);
                         }
                     }
 
-                    // For type params without protocol bounds (duck typing),
-                    // we can't resolve the method at specialization time.
-                    // Return an error that will be handled by returning a placeholder.
-                    // The monomorphizer will resolve this when the function is instantiated.
-                    // For now, we look up if there's a predicate member and use that.
-                    // This is a fallback for structural polymorphism.
+                    // For type params without protocol bounds (for example associated type
+                    // bounds that have been erased from this expression type), fall back to a
+                    // unique protocol requirement with the same label. The typechecker has
+                    // already accepted this member access, so this only preserves the symbol
+                    // needed by downstream specialization/lowering.
+                    if let Some(req_sym) = self.unique_protocol_member(label) {
+                        return Ok(req_sym);
+                    }
+                }
+
+                if let Ty::Param(_param_id, protocol_bounds) = receiver.ty.clone() {
+                    for protocol_id in &protocol_bounds {
+                        if let Some((req_sym, _)) = self
+                            .types
+                            .catalog
+                            .lookup_member(&(*protocol_id).into(), label)
+                        {
+                            return Ok(req_sym);
+                        }
+                    }
+
+                    if let Some(req_sym) = self.unique_protocol_member(label) {
+                        return Ok(req_sym);
+                    }
                 }
 
                 Err(TypeError::MemberNotFound(
@@ -733,6 +838,22 @@ impl<'a> SpecializationPass<'a> {
                 ))
             }
             _ => Err(TypeError::CalleeNotCallable(callee.ty.clone())),
+        }
+    }
+
+    fn unique_protocol_member(&self, label: &Label) -> Option<Symbol> {
+        let mut matches = self
+            .types
+            .catalog
+            .method_requirements
+            .values()
+            .chain(self.types.catalog.instance_methods.values())
+            .filter_map(|requirements| requirements.get(label).copied());
+        let first = matches.next()?;
+        if matches.next().is_none() {
+            Some(first)
+        } else {
+            None
         }
     }
 
