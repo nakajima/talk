@@ -1,6 +1,8 @@
+use indexmap::IndexMap;
 use rustc_hash::FxHashMap;
 
 use crate::{
+    compiling::module::ModuleId,
     label::Label,
     name_resolution::symbol::{ProtocolId, Symbol},
     node_id::NodeID,
@@ -14,6 +16,66 @@ use crate::{
 pub struct ConformanceKey {
     pub protocol_id: ProtocolId,
     pub conforming_id: Symbol,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ConformanceDecl {
+    pub node_id: NodeID,
+    pub conforming_id: Symbol,
+    pub protocol_id: ProtocolId,
+    pub span: Span,
+    pub associated_type_candidates: IndexMap<Label, Symbol>,
+    pub method_candidates: IndexMap<Label, Symbol>,
+}
+
+impl ConformanceDecl {
+    pub fn new(
+        node_id: NodeID,
+        conforming_id: Symbol,
+        protocol_id: ProtocolId,
+        span: Span,
+    ) -> Self {
+        Self {
+            node_id,
+            conforming_id,
+            protocol_id,
+            span,
+            associated_type_candidates: Default::default(),
+            method_candidates: Default::default(),
+        }
+    }
+
+    pub fn key(&self) -> ConformanceKey {
+        ConformanceKey {
+            protocol_id: self.protocol_id,
+            conforming_id: self.conforming_id,
+        }
+    }
+
+    pub fn merge_candidates(&mut self, other: ConformanceDecl) {
+        self.associated_type_candidates
+            .extend(other.associated_type_candidates);
+        self.method_candidates.extend(other.method_candidates);
+    }
+
+    pub fn import_as(self, module_id: ModuleId) -> Self {
+        Self {
+            node_id: self.node_id,
+            conforming_id: self.conforming_id.import(module_id),
+            protocol_id: self.protocol_id.import(module_id),
+            span: self.span,
+            associated_type_candidates: self
+                .associated_type_candidates
+                .into_iter()
+                .map(|(label, sym)| (label, sym.import(module_id)))
+                .collect(),
+            method_candidates: self
+                .method_candidates
+                .into_iter()
+                .map(|(label, sym)| (label, sym.import(module_id)))
+                .collect(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
@@ -55,6 +117,16 @@ impl Conformance {
             protocol_id,
             witnesses: WitnessTable::default(),
             span,
+        }
+    }
+
+    pub fn from_decl(decl: &ConformanceDecl) -> Self {
+        Self {
+            node_id: decl.node_id,
+            conforming_id: decl.conforming_id,
+            protocol_id: decl.protocol_id,
+            witnesses: WitnessTable::default(),
+            span: decl.span,
         }
     }
 

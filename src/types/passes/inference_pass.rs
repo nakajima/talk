@@ -36,7 +36,7 @@ use crate::{
     types::{
         builtins::resolve_builtin_type,
         call_tree::CalleeInfo,
-        conformance::{Conformance, ConformanceKey},
+        conformance::{Conformance, ConformanceDecl, ConformanceKey},
         constraint_solver::ConstraintSolver,
         constraints::{
             constraint::{Constraint, ConstraintCause},
@@ -479,6 +479,15 @@ impl<'a> InferencePass<'a> {
                     continue;
                 };
 
+                self.session
+                    .declare_conformance(Self::conformance_decl_from_body(
+                        conforming_id,
+                        protocol_id,
+                        conformance.id,
+                        conformance.span,
+                        body,
+                    ));
+
                 self.register_conformance(
                     conforming_id,
                     protocol_symbol,
@@ -493,7 +502,7 @@ impl<'a> InferencePass<'a> {
                 )
                 .ok();
 
-                // Only insert if not already present (e.g. from imports)
+                // Only insert if not already present (e.g. from imports).
                 self.session
                     .type_catalog
                     .conformances
@@ -2501,6 +2510,15 @@ impl<'a> InferencePass<'a> {
                             continue;
                         };
 
+                        self.session
+                            .declare_conformance(Self::conformance_decl_from_body(
+                                nominal_symbol,
+                                protocol_id,
+                                conformance.id,
+                                conformance.span,
+                                nested_body,
+                            ));
+
                         self.register_conformance(
                             nominal_symbol,
                             sym,
@@ -2652,6 +2670,36 @@ impl<'a> InferencePass<'a> {
         })
     }
 
+    fn conformance_decl_from_body(
+        conforming_symbol: Symbol,
+        protocol_id: ProtocolId,
+        node_id: NodeID,
+        span: Span,
+        body: &Body,
+    ) -> ConformanceDecl {
+        let mut decl = ConformanceDecl::new(node_id, conforming_symbol, protocol_id, span);
+
+        for member in &body.decls {
+            match &member.kind {
+                DeclKind::TypeAlias(lhs, ..) => {
+                    if let Ok(sym) = lhs.symbol() {
+                        decl.associated_type_candidates
+                            .insert(lhs.name_str().into(), sym);
+                    }
+                }
+                DeclKind::Method { func, is_static } if !*is_static => {
+                    if let Ok(sym) = func.name.symbol() {
+                        decl.method_candidates
+                            .insert(func.name.name_str().into(), sym);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        decl
+    }
+
     fn register_conformance(
         &mut self,
         conforming_symbol: Symbol,
@@ -2743,6 +2791,13 @@ impl<'a> InferencePass<'a> {
             protocol_id,
             conforming_id: conforming_symbol,
         };
+
+        self.session.declare_conformance(ConformanceDecl::new(
+            conformance_node_id,
+            conforming_symbol,
+            protocol_id,
+            conformance_span,
+        ));
 
         let mut conformance = self
             .session

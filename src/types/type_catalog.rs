@@ -7,7 +7,7 @@ use crate::{
     name_resolution::symbol::Symbol,
     node_id::NodeID,
     types::{
-        conformance::{Conformance, ConformanceKey, WitnessTable},
+        conformance::{Conformance, ConformanceDecl, ConformanceKey, WitnessTable},
         infer_row::{Row, RowParamId},
         infer_ty::Ty,
         type_operations::UnificationSubstitutions,
@@ -137,6 +137,7 @@ pub enum GlobalConstant {
 #[derive(Debug, PartialEq, Clone, serde::Serialize, serde::Deserialize, Default)]
 pub struct TypeCatalog {
     pub nominals: IndexMap<Symbol, Nominal>,
+    pub conformance_decls: IndexMap<ConformanceKey, ConformanceDecl>,
     pub conformances: IndexMap<ConformanceKey, Conformance>,
     pub associated_types: IndexMap<Symbol, IndexMap<Label, Symbol>>,
     pub extensions: IndexMap<Symbol, IndexMap<Label, Symbol>>,
@@ -154,6 +155,28 @@ pub struct TypeCatalog {
 }
 
 impl TypeCatalog {
+    pub fn declare_conformance(&mut self, decl: ConformanceDecl) {
+        let key = decl.key();
+        if let Some(existing) = self.conformance_decls.get_mut(&key) {
+            existing.merge_candidates(decl);
+        } else {
+            self.conformance_decls.insert(key, decl);
+        }
+    }
+
+    pub fn ensure_conformance(&mut self, key: ConformanceKey) -> Option<&mut Conformance> {
+        if !self.conformances.contains_key(&key) {
+            let decl = self.conformance_decls.get(&key)?.clone();
+            self.conformances.insert(key, Conformance::from_decl(&decl));
+        }
+
+        self.conformances.get_mut(&key)
+    }
+
+    pub fn has_conformance_decl(&self, key: &ConformanceKey) -> bool {
+        self.conformance_decls.contains_key(key) || self.conformances.contains_key(key)
+    }
+
     pub(crate) fn inherit_conformances(&mut self) -> Vec<ConformanceKey> {
         let mut inserted = vec![];
 
@@ -342,6 +365,19 @@ impl TypeCatalog {
                 .nominals
                 .into_iter()
                 .map(|(k, v)| (k.import(module_id), v.import_as(module_id)))
+                .collect(),
+            conformance_decls: self
+                .conformance_decls
+                .into_iter()
+                .map(|(k, v)| {
+                    (
+                        ConformanceKey {
+                            protocol_id: k.protocol_id.import(module_id),
+                            conforming_id: k.conforming_id.import(module_id),
+                        },
+                        v.import_as(module_id),
+                    )
+                })
                 .collect(),
             conformances: self
                 .conformances

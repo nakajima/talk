@@ -1952,10 +1952,60 @@ pub mod tests {
             ",
         );
 
-        assert!(types.catalog.conformances.contains_key(&ConformanceKey {
+        let key = ConformanceKey {
             protocol_id: ProtocolId::from(1),
             conforming_id: StructId::from(1).into(),
-        }));
+        };
+        let decl = types
+            .catalog
+            .conformance_decls
+            .get(&key)
+            .expect("conformance declaration");
+        assert!(
+            decl.method_candidates
+                .get(&Label::Named("getCount".into()))
+                .is_some_and(|sym| matches!(*sym, Symbol::InstanceMethod(_)))
+        );
+        assert!(types.catalog.conformances.contains_key(&key));
+    }
+
+    #[test]
+    fn records_conformance_decl_associated_type_candidates() {
+        let (_ast, types) = typecheck(
+            "
+            protocol HasItem {
+                associated Item
+                func getItem() -> Int
+            }
+
+            struct Box {}
+
+            extend Box: HasItem {
+                typealias Item = Int
+                func getItem() { 1 }
+            }
+            ",
+        );
+
+        let key = ConformanceKey {
+            protocol_id: ProtocolId::from(1),
+            conforming_id: StructId::from(1).into(),
+        };
+        let decl = types
+            .catalog
+            .conformance_decls
+            .get(&key)
+            .expect("conformance declaration");
+        assert!(
+            decl.associated_type_candidates
+                .get(&Label::Named("Item".into()))
+                .is_some_and(|sym| matches!(*sym, Symbol::TypeAlias(_)))
+        );
+        assert!(
+            decl.method_candidates
+                .get(&Label::Named("getItem".into()))
+                .is_some_and(|sym| matches!(*sym, Symbol::InstanceMethod(_)))
+        );
     }
 
     #[test]

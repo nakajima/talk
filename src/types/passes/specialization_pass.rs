@@ -695,6 +695,62 @@ impl<'a> SpecializationPass<'a> {
         resolved
     }
 
+    fn resolve_bounded_witness(
+        &self,
+        receiver_ty: &Ty,
+        label: &Label,
+        specializations: &Specializations,
+    ) -> Option<(Symbol, Ty)> {
+        let Ty::Param(_, bounds) = receiver_ty else {
+            return None;
+        };
+
+        let mut resolved = None;
+        for ty in specializations.ty.values() {
+            let concrete_ty = specializations.apply(ty.clone());
+            let Ok(conforming_id) = self.symbol_from_ty(&concrete_ty, specializations) else {
+                continue;
+            };
+
+            for protocol_id in bounds {
+                let protocol_sym = Symbol::Protocol(*protocol_id);
+                let method_req = self
+                    .types
+                    .catalog
+                    .method_requirements
+                    .get(&protocol_sym)
+                    .cloned()
+                    .or_else(|| self.modules.lookup_method_requirements(&protocol_sym))
+                    .and_then(|requirements| requirements.get(label).copied());
+                let Some(method_req) = method_req else {
+                    continue;
+                };
+
+                let key = ConformanceKey {
+                    protocol_id: *protocol_id,
+                    conforming_id,
+                };
+                let witness = self
+                    .types
+                    .catalog
+                    .conformances
+                    .get(&key)
+                    .or_else(|| self.modules.lookup_conformance(&key))
+                    .and_then(|conformance| conformance.witnesses.get_witness(label, &method_req));
+                let Some(witness) = witness else {
+                    continue;
+                };
+
+                if resolved.is_some() {
+                    return None;
+                }
+                resolved = Some((witness, concrete_ty.clone()));
+            }
+        }
+
+        resolved
+    }
+
     fn add_receiver_type_args(
         &self,
         member_sym: &Symbol,
@@ -840,12 +896,11 @@ impl<'a> SpecializationPass<'a> {
             TypedExprKind::Member {
                 receiver, label, ..
             } => {
-                let Some(receiver_ty) = self.types.get(&receiver.id) else {
-                    return Err(TypeError::TypeNotFound(format!(
-                        "could not find type for id: {:?}",
-                        receiver.id
-                    )));
-                };
+                let receiver_ty = self
+                    .types
+                    .get(&receiver.id)
+                    .map(|entry| entry.as_mono_ty().clone())
+                    .unwrap_or_else(|| receiver.ty.clone());
 
                 // Try to get the receiver symbol, applying specializations
                 let receiver_sym_result = if matches!(receiver.kind, TypedExprKind::Hole) {
@@ -853,7 +908,7 @@ impl<'a> SpecializationPass<'a> {
                     // Hole so we just take the type of the call (since enum constructors always return the enum)
                     self.symbol_from_ty(call_ty, specializations)
                 } else {
-                    self.symbol_from_ty(receiver_ty.as_mono_ty(), specializations)
+                    self.symbol_from_ty(&receiver_ty, specializations)
                 };
 
                 // If we got a concrete receiver symbol, try normal member lookup
@@ -872,10 +927,9 @@ impl<'a> SpecializationPass<'a> {
                 // If receiver is a type param that wasn't specialized, this is likely a protocol
                 // method call inside a generic function. Return a MethodRequirement placeholder
                 // that the monomorphizer will resolve at instantiation time.
-                if let Some(req_sym) = self.protocol_member_from_bounds(
-                    specializations.apply(receiver_ty.as_mono_ty().clone()),
-                    label,
-                ) {
+                if let Some(req_sym) = self
+                    .protocol_member_from_bounds(specializations.apply(receiver_ty.clone()), label)
+                {
                     return Ok(req_sym);
                 }
 
@@ -1004,7 +1058,10 @@ impl<'a> SpecializationPass<'a> {
                         .ok()
                         .and_then(|receiver_sym| self.lookup_member(&receiver_sym, &label))
                         .map(|member_sym| (member_sym, concrete_receiver_ty.clone()))
-                        .or_else(|| self.resolve_choice(DimensionId(call_id), specializations));
+                        .or_else(|| self.resolve_choice(DimensionId(call_id), specializations))
+                        .or_else(|| {
+                            self.resolve_bounded_witness(ty.as_mono_ty(), &label, specializations)
+                        });
 
                     let Some((member_sym, receiver_ty)) = resolved_member else {
                         continue;

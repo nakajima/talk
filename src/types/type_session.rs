@@ -17,7 +17,7 @@ use crate::{
     types::{
         builtins::builtin_scope,
         call_tree::CallTree,
-        conformance::{Conformance, ConformanceKey, WitnessTable},
+        conformance::{Conformance, ConformanceDecl, ConformanceKey, WitnessTable},
         constraints::{constraint::Constraint, store::ConstraintStore},
         infer_row::{Row, RowMetaId, RowParamId},
         infer_ty::{Level, Meta, MetaVarId, SkolemId, Ty},
@@ -159,7 +159,10 @@ impl TypeSession {
             },
         );
 
-        // Import conformances from all modules
+        // Import conformance declarations and validated witness tables from all modules.
+        for (key, decl) in modules.all_conformance_decls() {
+            catalog.conformance_decls.entry(key).or_insert(decl);
+        }
         for (key, conformance) in modules.all_conformances() {
             catalog
                 .conformances
@@ -822,6 +825,39 @@ impl TypeSession {
         constraints.wake_symbols(&[sym]);
 
         self.term_env.insert(sym, EnvEntry::Mono(ty));
+    }
+
+    pub fn declare_conformance(&mut self, decl: ConformanceDecl) {
+        self.type_catalog.declare_conformance(decl);
+    }
+
+    pub fn lookup_conformance_decl(&mut self, key: &ConformanceKey) -> Option<ConformanceDecl> {
+        if let Some(decl) = self.type_catalog.conformance_decls.get(key) {
+            return Some(decl.clone());
+        }
+
+        if let Some(decl) = self.modules.lookup_conformance_decl(key) {
+            self.type_catalog
+                .conformance_decls
+                .insert(*key, decl.clone());
+            return Some(decl.clone());
+        }
+
+        None
+    }
+
+    pub fn ensure_conformance(&mut self, key: ConformanceKey) -> Option<&mut Conformance> {
+        if self.type_catalog.conformances.contains_key(&key) {
+            return self.type_catalog.conformances.get_mut(&key);
+        }
+
+        if let Some(conformance) = self.modules.lookup_conformance(&key).cloned() {
+            self.type_catalog.conformances.insert(key, conformance);
+            return self.type_catalog.conformances.get_mut(&key);
+        }
+
+        self.lookup_conformance_decl(&key)?;
+        self.type_catalog.ensure_conformance(key)
     }
 
     pub fn lookup_conformance(&mut self, key: &ConformanceKey) -> Option<Conformance> {

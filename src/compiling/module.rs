@@ -13,7 +13,7 @@ use crate::{
     label::Label,
     name_resolution::symbol::{ProtocolId, Symbol},
     types::{
-        conformance::{Conformance, ConformanceKey},
+        conformance::{Conformance, ConformanceDecl, ConformanceKey},
         infer_ty::Ty,
         type_catalog::Nominal,
         types::{TypeEntry, Types},
@@ -290,6 +290,27 @@ impl ModuleEnvironment {
     }
 
     #[instrument(skip(self))]
+    pub fn lookup_conformance_decl(&self, key: &ConformanceKey) -> Option<ConformanceDecl> {
+        if let Some(module_id) = key.conforming_id.external_module_id()
+            && let Some(stable_id) = self.modules_by_local.get(&module_id)
+            && let Some(module) = self.modules.get(stable_id)
+            && let Some(decl) = module.types.catalog.conformance_decls.get(key)
+        {
+            return Some(decl.clone());
+        }
+
+        if let Some(module_id) = Symbol::Protocol(key.protocol_id).external_module_id()
+            && let Some(stable_id) = self.modules_by_local.get(&module_id)
+            && let Some(module) = self.modules.get(stable_id)
+            && let Some(decl) = module.types.catalog.conformance_decls.get(key)
+        {
+            return Some(decl.clone());
+        }
+
+        None
+    }
+
+    #[instrument(skip(self))]
     pub fn lookup_conformance(&self, key: &ConformanceKey) -> Option<&Conformance> {
         if let Some(module_id) = key.conforming_id.external_module_id()
             && let Some(stable_id) = self.modules_by_local.get(&module_id)
@@ -323,7 +344,22 @@ impl ModuleEnvironment {
         })
     }
 
-    /// Returns all conformances from all imported modules
+    /// Returns all conformance declarations from all imported modules.
+    pub fn all_conformance_decls(&self) -> Vec<(ConformanceKey, ConformanceDecl)> {
+        self.modules
+            .iter()
+            .flat_map(|(_, module)| {
+                module
+                    .types
+                    .catalog
+                    .conformance_decls
+                    .iter()
+                    .map(|(k, v)| (*k, v.clone()))
+            })
+            .collect()
+    }
+
+    /// Returns all validated conformances from all imported modules.
     pub fn all_conformances(&self) -> Vec<(ConformanceKey, Conformance)> {
         self.modules
             .iter()
