@@ -40,7 +40,9 @@ use crate::{
         constraint_solver::ConstraintSolver,
         constraints::{
             constraint::{Constraint, ConstraintCause},
+            projection::Projection,
             store::{ConstraintStore, GroupId},
+            type_member::TypeMember,
         },
         infer_row::Row,
         infer_ty::{Level, Meta, MetaVarId, Ty},
@@ -319,10 +321,45 @@ impl<'pass, 'ast> FinalizeTypes<'pass, 'ast> {
                             }));
                     }
                 },
-                Constraint::TypeMember(..) => (),
-                Constraint::Projection(..) => (),
+                Constraint::TypeMember(type_member) => self.report_type_member(type_member),
+                Constraint::Projection(projection) => self.report_projection(projection),
             }
         }
+    }
+
+    fn report_projection(&mut self, projection: Projection) {
+        if self.pass.session.can_generalize_projection(
+            projection.protocol_id,
+            &projection.base,
+            &projection.label,
+            &mut self.pass.substitutions,
+        ) {
+            return;
+        }
+
+        self.pass
+            .diagnostics
+            .insert(AnyDiagnostic::Typing(Diagnostic {
+                id: projection.node_id,
+                severity: Severity::Error,
+                kind: TypeError::UnknownAssociatedType {
+                    base: projection.base,
+                    label: projection.label,
+                },
+            }));
+    }
+
+    fn report_type_member(&mut self, type_member: TypeMember) {
+        self.pass
+            .diagnostics
+            .insert(AnyDiagnostic::Typing(Diagnostic {
+                id: type_member.node_id,
+                severity: Severity::Error,
+                kind: TypeError::UnknownTypeMember {
+                    base: type_member.base,
+                    member: type_member.name,
+                },
+            }));
     }
 }
 

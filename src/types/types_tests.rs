@@ -1814,6 +1814,56 @@ pub mod tests {
     }
 
     #[test]
+    fn rejects_unbounded_associated_type_projection() {
+        let (_ast, _types, diagnostics) = typecheck_err(
+            "
+            func bad<T>(x: T) -> T.Item {
+                x
+            }
+            ",
+        );
+
+        assert!(
+            diagnostics.iter().any(|diag| matches!(
+                diag,
+                AnyDiagnostic::Typing(Diagnostic {
+                    kind: TypeError::UnknownAssociatedType { label, .. },
+                    ..
+                }) if *label == Label::Named("Item".into())
+            )),
+            "expected unknown associated type diagnostic, got: {:?}",
+            diagnostics
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_associated_type_projection_on_protocol_bound() {
+        let (_ast, _types, diagnostics) = typecheck_err(
+            "
+            protocol Aged {
+                associated T
+            }
+
+            func bad<A: Aged>(x: A) -> A.U {
+                x
+            }
+            ",
+        );
+
+        assert!(
+            diagnostics.iter().any(|diag| matches!(
+                diag,
+                AnyDiagnostic::Typing(Diagnostic {
+                    kind: TypeError::UnknownAssociatedType { label, .. },
+                    ..
+                }) if *label == Label::Named("U".into())
+            )),
+            "expected unknown associated type diagnostic, got: {:?}",
+            diagnostics
+        );
+    }
+
+    #[test]
     fn types_simple_conformance() {
         let (_ast, types) = typecheck(
             "

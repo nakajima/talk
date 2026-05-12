@@ -740,10 +740,13 @@ impl TypeSession {
                 }
             }
 
-            constraints.solve(c.id());
-
-            c.substitute(&self.skolem_map)
-                .into_predicate(&mut substitutions, self)
+            let predicate = c
+                .substitute(&self.skolem_map)
+                .into_predicate(&mut substitutions, self);
+            if predicate.is_some() {
+                constraints.solve(c.id());
+            }
+            predicate
         }));
 
         if foralls.is_empty() && predicates.is_empty() {
@@ -834,6 +837,53 @@ impl TypeSession {
         }
 
         None
+    }
+
+    pub(crate) fn can_generalize_projection(
+        &mut self,
+        protocol_id: Option<ProtocolId>,
+        base: &Ty,
+        label: &Label,
+        substitutions: &mut UnificationSubstitutions,
+    ) -> bool {
+        if let Some(protocol_id) = protocol_id {
+            return self.protocol_has_associated_type(protocol_id, label);
+        }
+
+        self.projection_base_bounds(base, substitutions)
+            .into_iter()
+            .any(|protocol_id| self.protocol_has_associated_type(protocol_id, label))
+    }
+
+    fn projection_base_bounds(
+        &mut self,
+        base: &Ty,
+        substitutions: &mut UnificationSubstitutions,
+    ) -> Vec<ProtocolId> {
+        match self.apply(base, substitutions) {
+            Ty::Param(_, bounds) => bounds,
+            Ty::Var { id, .. } => {
+                if let Some(Ty::Param(_, bounds)) = self.lookup_reverse_instantiation(id) {
+                    bounds
+                } else {
+                    vec![]
+                }
+            }
+            Ty::Rigid(id) => {
+                if let Some(Ty::Param(_, bounds)) = self.skolem_map.get(&Ty::Rigid(id)) {
+                    bounds.clone()
+                } else {
+                    vec![]
+                }
+            }
+            _ => vec![],
+        }
+    }
+
+    fn protocol_has_associated_type(&mut self, protocol_id: ProtocolId, label: &Label) -> bool {
+        self.lookup_associated_types(Symbol::Protocol(protocol_id))
+            .map(|entries| entries.contains_key(label))
+            .unwrap_or(false)
     }
 
     pub fn lookup_associated_types(

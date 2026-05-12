@@ -1,6 +1,7 @@
 use std::{error::Error, fmt::Display};
 
 use crate::{
+    label::Label,
     name::Name,
     name_resolution::symbol::{ProtocolId, Symbol},
     types::{
@@ -35,6 +36,14 @@ pub enum TypeError {
     TypeCannotConform {
         ty: Ty,
         protocol_id: ProtocolId,
+    },
+    UnknownAssociatedType {
+        base: Ty,
+        label: Label,
+    },
+    UnknownTypeMember {
+        base: Ty,
+        member: Label,
     },
     NonExhaustiveMatch(Vec<RequiredConstructor>),
     UselessMatchArm,
@@ -95,6 +104,12 @@ impl Display for TypeError {
             }
             Self::NameNotResolved(name) => {
                 write!(f, "Name not resolved: {name:?}")
+            }
+            Self::UnknownAssociatedType { base, label } => {
+                write!(f, "Unknown associated type {base:?}.{label}")
+            }
+            Self::UnknownTypeMember { base, member } => {
+                write!(f, "Unknown type member {base:?}.{member}")
             }
             Self::NonExhaustiveMatch(cases) => {
                 write!(f, "Match not exhaustive: {cases:?}")

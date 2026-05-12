@@ -514,7 +514,7 @@ impl<'a> SpecializationPass<'a> {
             self.current_specializations.push(specializations.clone());
 
             // Use accumulated specializations for resolving type params in nested calls
-            let accumulated_specs = self.collect_specializations();
+            let mut accumulated_specs = self.collect_specializations();
             let caller_result = self.symbol_for_callee(&callee, &expr.ty, &accumulated_specs);
 
             // If we can't resolve the callee (e.g., method on unspecialized type param),
@@ -560,6 +560,11 @@ impl<'a> SpecializationPass<'a> {
                                     conformance.witnesses.get_witness(label, &caller)
                             {
                                 caller = witness;
+                                self.add_receiver_type_args(
+                                    &caller,
+                                    &arg_ty,
+                                    &mut accumulated_specs,
+                                );
                             }
                         }
                     }
@@ -573,6 +578,12 @@ impl<'a> SpecializationPass<'a> {
                             self.types.choices.get_alternative(dimension, resolved_alt)
                         {
                             caller = alt.witness_sym;
+                            let receiver_ty = accumulated_specs.apply(receiver.ty.clone());
+                            self.add_receiver_type_args(
+                                &caller,
+                                &receiver_ty,
+                                &mut accumulated_specs,
+                            );
                         }
                     } else if self.types.choices.dimension_size(&dimension) > 0 {
                         // Monomorphization: resolve based on concrete receiver type
@@ -583,6 +594,25 @@ impl<'a> SpecializationPass<'a> {
                                 self.types.choices.resolve_for_type(dimension, receiver_sym)
                         {
                             caller = witness_sym;
+                            self.add_receiver_type_args(
+                                &caller,
+                                &receiver_ty,
+                                &mut accumulated_specs,
+                            );
+                        }
+                    }
+
+                    if let Symbol::MethodRequirement(_) = caller {
+                        let receiver_ty = accumulated_specs.apply(receiver.ty.clone());
+                        if let Some(witness_sym) =
+                            self.resolve_witness_for_type(&caller, &receiver_ty)
+                        {
+                            caller = witness_sym;
+                            self.add_receiver_type_args(
+                                &caller,
+                                &receiver_ty,
+                                &mut accumulated_specs,
+                            );
                         }
                     }
                 }
@@ -630,6 +660,72 @@ impl<'a> SpecializationPass<'a> {
 
         expr.ty = specializations.apply(expr.ty);
         Ok(expr)
+    }
+
+    fn lookup_member(&self, receiver_sym: &Symbol, label: &Label) -> Option<Symbol> {
+        self.types
+            .catalog
+            .lookup_member(receiver_sym, label)
+            .map(|(member_sym, _)| member_sym)
+            .or_else(|| self.types.catalog.lookup_static_member(receiver_sym, label))
+            .or_else(|| self.modules.lookup_member(receiver_sym, label))
+            .or_else(|| self.modules.lookup_static_member(receiver_sym, label))
+    }
+
+    fn resolve_choice(
+        &self,
+        dimension: DimensionId,
+        specializations: &Specializations,
+    ) -> Option<(Symbol, Ty)> {
+        let mut resolved = None;
+        for ty in specializations.ty.values() {
+            let concrete_ty = specializations.apply(ty.clone());
+            let Ok(receiver_sym) = self.symbol_from_ty(&concrete_ty, specializations) else {
+                continue;
+            };
+            let Some(witness) = self.types.choices.resolve_for_type(dimension, receiver_sym) else {
+                continue;
+            };
+
+            if resolved.is_some() {
+                return None;
+            }
+            resolved = Some((witness, concrete_ty));
+        }
+        resolved
+    }
+
+    fn add_receiver_type_args(
+        &self,
+        member_sym: &Symbol,
+        receiver_ty: &Ty,
+        specializations: &mut Specializations,
+    ) {
+        let Ty::Nominal { type_args, .. } = receiver_ty else {
+            return;
+        };
+        if type_args.is_empty() {
+            return;
+        }
+
+        let Some(TypeEntry::Poly(scheme)) = self.get_type_for(member_sym) else {
+            return;
+        };
+
+        for (forall, arg) in scheme
+            .foralls
+            .iter()
+            .filter_map(|forall| {
+                if let ForAll::Ty(param) = forall {
+                    Some(*param)
+                } else {
+                    None
+                }
+            })
+            .zip(type_args.iter())
+        {
+            specializations.ty.insert(forall, arg.clone());
+        }
     }
 
     fn add_associated_type_specializations(
@@ -890,7 +986,7 @@ impl<'a> SpecializationPass<'a> {
                     label,
                     call_id,
                 } => {
-                    // Try local types first, then fall back to the caller's module
+                    // Try local types first, then fall back to the caller's module.
                     let ty = if let Some(ty) = self.types.get(&receiver_id) {
                         ty.clone()
                     } else if let Some(module_id) = original_caller.external_module_id()
@@ -902,32 +998,15 @@ impl<'a> SpecializationPass<'a> {
                         continue;
                     };
 
-                    // If the receiver is still a type parameter, skip
-                    let receiver_sym = match self.symbol_from_ty(ty.as_mono_ty(), specializations) {
-                        Ok(sym) => sym,
-                        Err(..) => continue,
-                    };
+                    let concrete_receiver_ty = specializations.apply(ty.as_mono_ty().clone());
+                    let resolved_member = self
+                        .symbol_from_ty(&concrete_receiver_ty, specializations)
+                        .ok()
+                        .and_then(|receiver_sym| self.lookup_member(&receiver_sym, &label))
+                        .map(|member_sym| (member_sym, concrete_receiver_ty.clone()))
+                        .or_else(|| self.resolve_choice(DimensionId(call_id), specializations));
 
-                    // Look up the actual member symbol on the receiver
-                    let member_sym = if let Some((member_sym, _)) =
-                        self.types.catalog.lookup_member(&receiver_sym, &label)
-                    {
-                        member_sym
-                    } else if let Some(member_sym) = self
-                        .types
-                        .catalog
-                        .lookup_static_member(&receiver_sym, &label)
-                    {
-                        member_sym
-                    } else if let Some(member_sym) =
-                        self.modules.lookup_member(&receiver_sym, &label)
-                    {
-                        member_sym
-                    } else if let Some(member_sym) =
-                        self.modules.lookup_static_member(&receiver_sym, &label)
-                    {
-                        member_sym
-                    } else {
+                    let Some((member_sym, receiver_ty)) = resolved_member else {
                         continue;
                     };
 
@@ -943,18 +1022,7 @@ impl<'a> SpecializationPass<'a> {
                     // params (e.g., Element) to concrete types. Map them from the
                     // concrete receiver type's type_args.
                     if callee_specs.ty.is_empty() {
-                        let concrete_ty = specializations.apply(ty.as_mono_ty().clone());
-                        if let Ty::Nominal { type_args, .. } = &concrete_ty
-                            && !type_args.is_empty()
-                        {
-                            if let Some(TypeEntry::Poly(scheme)) = self.get_type_for(&member_sym) {
-                                for (forall, arg) in scheme.foralls.iter().zip(type_args.iter()) {
-                                    if let ForAll::Ty(param) = forall {
-                                        callee_specs.ty.insert(*param, arg.clone());
-                                    }
-                                }
-                            }
-                        }
+                        self.add_receiver_type_args(&member_sym, &receiver_ty, &mut callee_specs);
                     }
 
                     (member_sym, callee_specs, call_id)
@@ -1182,6 +1250,40 @@ impl<'a> SpecializationPass<'a> {
             .insert(new_sym.into(), new_name);
 
         new_sym.into()
+    }
+
+    fn resolve_witness_for_type(&self, method_req: &Symbol, receiver_ty: &Ty) -> Option<Symbol> {
+        let protocol_sym = self
+            .types
+            .catalog
+            .protocol_for_method_requirement(method_req)?;
+        let Symbol::Protocol(protocol_id) = protocol_sym else {
+            return None;
+        };
+        let method_reqs = self.types.catalog.method_requirements.get(&protocol_sym)?;
+        let label = method_reqs.iter().find_map(|(label, sym)| {
+            if sym == method_req {
+                Some(label.clone())
+            } else {
+                None
+            }
+        })?;
+
+        let conforming_sym = match receiver_ty {
+            Ty::Nominal { symbol, .. } => *symbol,
+            Ty::Primitive(sym) => *sym,
+            _ => return None,
+        };
+        let key = ConformanceKey {
+            conforming_id: conforming_sym,
+            protocol_id,
+        };
+        self.types
+            .catalog
+            .conformances
+            .get(&key)
+            .or_else(|| self.modules.lookup_conformance(&key))
+            .and_then(|conformance| conformance.witnesses.get_witness(&label, method_req))
     }
 
     /// Resolve a MethodRequirement to its concrete witness by looking up the conformance.
