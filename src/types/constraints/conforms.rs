@@ -149,6 +149,7 @@ impl Conforms {
         let Some(conformance) = session.lookup_conformance(&key) else {
             return CheckWitnessResult::Defer(vec![DeferralReason::WaitingOnConformance(key)]);
         };
+        let conformance_decl = session.lookup_conformance_decl(&key);
 
         let Some(EnvEntry::Scheme(Scheme {
             ty: Ty::Param(protocol_self_id, protocol_self_bounds),
@@ -203,42 +204,45 @@ impl Conforms {
                 }
             }
 
-            let associated_witness_ty = if let Some(witness_type_sym) = session
+            let declared_witness_sym = conformance_decl
+                .as_ref()
+                .and_then(|decl| decl.associated_type_candidates.get(&label).copied());
+            let child_witness_sym = session
                 .type_catalog
                 .child_types
                 .get(&conforming_ty_sym)
-                .cloned()
-                .unwrap_or_default()
-                .get(&label)
-            {
-                let Some(entry) = session.lookup(witness_type_sym) else {
-                    deferral_reasons.push(DeferralReason::WaitingOnSymbol(*witness_type_sym));
-                    continue;
-                };
+                .and_then(|child_types| child_types.get(&label).copied());
 
-                entry._as_ty()
-            } else if let Some(projection) = protocol_projections.get(&label) {
-                substitutions
-                    .entry(projection.clone())
-                    .or_insert_with(|| {
-                        #[allow(clippy::expect_used)]
-                        conformance
-                            .witnesses
-                            .associated_types
-                            .get(&label)
-                            .cloned()
-                            .unwrap_or_else(|| session.new_ty_meta_var(context.level()))
-                    })
-                    .clone()
-            } else {
-                #[allow(clippy::expect_used)]
-                conformance
-                    .witnesses
-                    .associated_types
-                    .get(&label)
-                    .cloned()
-                    .unwrap_or_else(|| session.new_ty_meta_var(context.level()))
-            };
+            let associated_witness_ty =
+                if let Some(witness_type_sym) = declared_witness_sym.or(child_witness_sym) {
+                    let Some(entry) = session.lookup(&witness_type_sym) else {
+                        deferral_reasons.push(DeferralReason::WaitingOnSymbol(witness_type_sym));
+                        continue;
+                    };
+
+                    entry._as_ty()
+                } else if let Some(projection) = protocol_projections.get(&label) {
+                    substitutions
+                        .entry(projection.clone())
+                        .or_insert_with(|| {
+                            #[allow(clippy::expect_used)]
+                            conformance
+                                .witnesses
+                                .associated_types
+                                .get(&label)
+                                .cloned()
+                                .unwrap_or_else(|| session.new_ty_meta_var(context.level()))
+                        })
+                        .clone()
+                } else {
+                    #[allow(clippy::expect_used)]
+                    conformance
+                        .witnesses
+                        .associated_types
+                        .get(&label)
+                        .cloned()
+                        .unwrap_or_else(|| session.new_ty_meta_var(context.level()))
+                };
 
             if let Some(entry) = session.type_catalog.conformances.get_mut(&key) {
                 entry
