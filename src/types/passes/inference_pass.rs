@@ -4137,7 +4137,7 @@ impl<'a> InferencePass<'a> {
                     .try_collect()?;
                 let ret = self.session.new_ty_meta_var(context.level());
 
-                if matches!(base.symbol(), Ok(Symbol::TypeParameter(..))) {
+                if matches!(&base_ty, Ty::Param(..) | Ty::Rigid(..)) {
                     self.constraints.wants_projection(
                         type_annotation.id,
                         base_ty,

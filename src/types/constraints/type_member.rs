@@ -66,34 +66,30 @@ impl TypeMember {
             }
             #[allow(clippy::todo)]
             Ty::Constructor { .. } => todo!(),
-            #[allow(clippy::todo)]
             Ty::Nominal { symbol, type_args } => {
                 if let Some(children) = session.type_catalog.child_types.get(symbol)
                     && let Some(child_sym) = children.get(&self.name).copied()
-                    && let Some(ty) = session.lookup(&child_sym)
+                    && let Some(child_entry) = session.lookup(&child_sym)
                 {
-                    if !type_args.is_empty() {
-                        let ty = ty
-                            .instantiate_with_args(
-                                self.node_id,
-                                type_args
-                                    .iter()
-                                    .map(|a| (a.clone(), NodeID::SYNTHESIZED))
-                                    .collect_vec()
-                                    .as_slice(),
-                                session,
-                                context,
-                                constraints,
-                            )
-                            .0;
-                        match unify(&ty, &self.result, context, session)
-                            .map_err(|e| e.with_cause(cause))
-                        {
-                            Ok(vars) => return SolveResult::Solved(vars),
-                            Err(e) => return SolveResult::Err(e),
-                        }
+                    let args = if self.generics.is_empty() {
+                        type_args
+                    } else {
+                        &self.generics
+                    };
+                    let args = args
+                        .iter()
+                        .map(|arg| (arg.clone(), NodeID::SYNTHESIZED))
+                        .collect_vec();
+                    let ty = child_entry
+                        .instantiate_with_args(self.node_id, &args, session, context, constraints)
+                        .0;
+
+                    match unify(&ty, &self.result, context, session)
+                        .map_err(|e| e.with_cause(cause))
+                    {
+                        Ok(vars) => SolveResult::Solved(vars),
+                        Err(e) => SolveResult::Err(e),
                     }
-                    self.solve_for(&ty._as_ty(), constraints, context, session)
                 } else {
                     SolveResult::Err(TypeError::UnknownTypeMember {
                         base: self.base.clone(),

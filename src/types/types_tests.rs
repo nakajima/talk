@@ -1889,6 +1889,52 @@ pub mod tests {
     }
 
     #[test]
+    fn resolves_nominal_type_member_alias() {
+        let (ast, types) = typecheck(
+            "
+            struct A {
+                typealias B = Int
+            }
+
+            func f() -> A.B {
+                1
+            }
+
+            f()
+            ",
+        );
+
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
+    }
+
+    #[test]
+    fn rejects_nested_unknown_nominal_type_member() {
+        let (_ast, _types, diagnostics) = typecheck_err(
+            "
+            struct A {
+                typealias B = Int
+            }
+
+            func f() -> A.B.C {
+                1
+            }
+            ",
+        );
+
+        assert!(
+            diagnostics.iter().any(|diag| matches!(
+                diag,
+                AnyDiagnostic::Typing(Diagnostic {
+                    kind: TypeError::UnknownTypeMember { member, .. },
+                    ..
+                }) if *member == Label::Named("C".into())
+            )),
+            "expected unknown nested type member diagnostic, got: {:?}",
+            diagnostics
+        );
+    }
+
+    #[test]
     fn types_simple_conformance() {
         let (_ast, types) = typecheck(
             "
