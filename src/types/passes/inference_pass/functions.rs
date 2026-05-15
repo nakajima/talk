@@ -1,0 +1,91 @@
+use indexmap::IndexSet;
+use itertools::Itertools;
+use tracing::instrument;
+
+use super::{InferencePass, TypedRet};
+use crate::{
+    node_kinds::func::Func,
+    types::{
+        solve_context::SolveContext,
+        type_error::TypeError,
+        type_operations::{curry, substitute},
+        typed_ast::{TypedFunc, TypedParameter},
+    },
+};
+
+impl InferencePass<'_> {
+    #[instrument(level = tracing::Level::TRACE, skip(self, context, func), fields(func.name = ?func.name))]
+    pub(super) fn visit_func(
+        &mut self,
+        func: &Func,
+        context: &mut SolveContext,
+    ) -> TypedRet<TypedFunc> {
+        let func_sym = func
+            .name
+            .symbol()
+            .map_err(|_| TypeError::NameNotResolved(func.name.clone()))?;
+
+        // Track which function we're in for building the call tree
+        let prev_function = self.current_function.replace(func_sym);
+
+        tracing::debug!("visit_func: {:?}, generics: {:?}", func.name, func.generics);
+
+        for generic in func.generics.iter() {
+            self.register_generic(generic, context);
+        }
+
+        let params = self.visit_params(&func.params, context)?;
+
+        let (_effects_guard, effects) = self.tracking_effects(&func.effects, context)?;
+
+        let mut foralls = IndexSet::default();
+
+        let body = if let Some(ret) = &func.ret {
+            let ret = self.visit_type_annotation(ret, context)?;
+            self.check_block(&func.body, ret.clone(), &mut context.next())?
+        } else {
+            self.infer_block_with_returns(&func.body, &mut context.next())?
+        };
+
+        let effects_row = self
+            .tracked_effect_rows
+            .pop()
+            .unwrap_or_else(|| unreachable!("we just pushed it pal"));
+
+        foralls.extend(body.ret.collect_foralls());
+
+        let params = params
+            .iter()
+            .map(|t| {
+                let ty = substitute(&t.ty, &self.session.skolem_map);
+                foralls.extend(ty.collect_foralls());
+                TypedParameter { name: t.name, ty }
+            })
+            .collect_vec();
+
+        let ret = substitute(&body.ret, &self.session.skolem_map);
+
+        self.session.insert(
+            func_sym,
+            curry(
+                params.iter().map(|t| t.ty.clone()),
+                ret.clone(),
+                effects_row.clone().into(),
+            ),
+            &mut Default::default(),
+        );
+
+        // Restore previous function context
+        self.current_function = prev_function;
+
+        Ok(TypedFunc {
+            name: func_sym,
+            params,
+            effects,
+            effects_row,
+            foralls,
+            body,
+            ret,
+        })
+    }
+}
