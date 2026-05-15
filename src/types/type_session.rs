@@ -17,7 +17,11 @@ use crate::{
     types::{
         builtins::builtin_scope,
         call_tree::CallTree,
-        conformance::{ConformanceClaim, ConformanceEvidence, ConformanceKey, WitnessTable},
+        conformance::{
+            ConformanceClaim, ConformanceEvidence, ConformanceKey, ConformanceObligation,
+            ConformanceOrigin, WitnessTable,
+        },
+        conformance_context::{ConformanceContext, ProjectionResolution},
         constraints::{constraint::Constraint, store::ConstraintStore},
         infer_row::{Row, RowMetaId, RowParamId},
         infer_ty::{Level, Meta, MetaVarId, SkolemId, Ty},
@@ -53,6 +57,7 @@ pub struct TypeSession {
 
     pub typealiases: FxHashMap<Symbol, Scheme>,
     pub(super) type_catalog: TypeCatalog,
+    conformance: ConformanceContext,
     pub(super) modules: Rc<ModuleEnvironment>,
     pub aliases: FxHashMap<Symbol, Scheme>,
     pub(super) reverse_instantiations: ReverseInstantiations,
@@ -89,6 +94,12 @@ pub struct TypeSession {
 pub enum MemberSource {
     SelfMember,
     Protocol(ProtocolId),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum AssociatedTypeResolution {
+    Alias(Symbol),
+    Witness(Ty),
 }
 
 #[derive(Debug, Default)]
@@ -180,6 +191,7 @@ impl TypeSession {
             types_by_node: Default::default(),
             typealiases: Default::default(),
             type_catalog: catalog,
+            conformance: Default::default(),
             modules,
             aliases: Default::default(),
             choices: ChoiceStore::new(),
@@ -831,34 +843,155 @@ impl TypeSession {
         self.type_catalog.declare_conformance(claim);
     }
 
-    pub fn lookup_conformance_claim(&mut self, key: &ConformanceKey) -> Option<ConformanceClaim> {
-        if let Some(claim) = self.type_catalog.conformance_claims.get(key) {
-            return Some(claim.clone());
+    pub fn declare_conformance_obligation(&mut self, obligation: ConformanceObligation) {
+        self.conformance.declare_obligation(obligation);
+    }
+
+    pub fn associated_type_slot(&mut self, key: ConformanceKey, label: &Label, level: Level) -> Ty {
+        if let Some(existing) = self.lookup_associated_type_slot(&key, label) {
+            return existing;
         }
 
-        if let Some(claim) = self.modules.lookup_conformance_claim(key) {
-            self.type_catalog
-                .conformance_claims
-                .insert(*key, claim.clone());
-            return Some(claim.clone());
+        let ty = self.new_ty_meta_var(level);
+        self.conformance.associated_type_slot(
+            &mut self.type_catalog,
+            self.modules.as_ref(),
+            key,
+            label,
+            ty,
+        )
+    }
+
+    pub fn lookup_associated_type_slot(&self, key: &ConformanceKey, label: &Label) -> Option<Ty> {
+        self.conformance.lookup_associated_type_slot(key, label)
+    }
+
+    pub fn lookup_conformance_claim(&mut self, key: &ConformanceKey) -> Option<ConformanceClaim> {
+        self.conformance
+            .lookup_claim(&mut self.type_catalog, self.modules.as_ref(), key)
+    }
+
+    pub fn lookup_conformance(&mut self, key: &ConformanceKey) -> Option<ConformanceEvidence> {
+        self.conformance
+            .lookup_evidence(&mut self.type_catalog, self.modules.as_ref(), key)
+    }
+
+    pub fn conformance_seed(
+        &mut self,
+        key: ConformanceKey,
+        seed: Option<ConformanceEvidence>,
+    ) -> Option<ConformanceEvidence> {
+        self.conformance
+            .conformance_seed(&mut self.type_catalog, self.modules.as_ref(), key, seed)
+    }
+
+    pub fn protocol_implies(
+        &mut self,
+        source_protocol_id: ProtocolId,
+        target_protocol_id: ProtocolId,
+    ) -> bool {
+        self.conformance.protocol_implies(
+            &mut self.type_catalog,
+            self.modules.as_ref(),
+            source_protocol_id,
+            target_protocol_id,
+        )
+    }
+
+    pub fn superprotocol_keys_for(&self, protocol_id: ProtocolId) -> Vec<ConformanceKey> {
+        self.conformance
+            .superprotocol_keys_for(&self.type_catalog, protocol_id)
+    }
+
+    pub fn claimed_protocol_member(
+        &mut self,
+        symbol: Symbol,
+        label: &Label,
+    ) -> Option<(ProtocolId, Symbol)> {
+        for protocol_id in self
+            .conformance
+            .claimed_protocols_for(&self.type_catalog, symbol)
+        {
+            let protocol_symbol = Symbol::Protocol(protocol_id);
+            let Some((member_sym, _source)) = self.lookup_member(&protocol_symbol, label) else {
+                continue;
+            };
+
+            if matches!(
+                member_sym,
+                Symbol::InstanceMethod(..) | Symbol::MethodRequirement(..)
+            ) {
+                return Some((protocol_id, member_sym));
+            }
         }
 
         None
     }
 
-    pub fn lookup_conformance(&mut self, key: &ConformanceKey) -> Option<ConformanceEvidence> {
-        if let Some(conformance) = self.type_catalog.conformance_evidence.get(key) {
-            return Some(conformance.clone());
+    pub fn associated_type_candidate(
+        &mut self,
+        key: ConformanceKey,
+        label: &Label,
+        origin: ConformanceOrigin,
+    ) -> Option<Symbol> {
+        self.conformance.associated_type_candidate(
+            &mut self.type_catalog,
+            self.modules.as_ref(),
+            &self.resolved_names,
+            key,
+            label,
+            origin,
+        )
+    }
+
+    pub fn method_witness_candidate(
+        &mut self,
+        key: ConformanceKey,
+        label: &Label,
+        required_sym: &Symbol,
+        origin: ConformanceOrigin,
+        witness_table: &WitnessTable,
+    ) -> Option<Symbol> {
+        if let Some(sym) = self.conformance.method_candidate(
+            &mut self.type_catalog,
+            self.modules.as_ref(),
+            key,
+            label,
+        ) {
+            return Some(sym);
         }
 
-        if let Some(conformance) = self.modules.lookup_conformance(key) {
-            self.type_catalog
-                .conformance_evidence
-                .insert(*key, conformance.clone());
-            return Some(conformance.clone());
-        }
+        witness_table
+            .get_witness(label, required_sym)
+            .or_else(|| match origin {
+                ConformanceOrigin::Declared => None,
+                ConformanceOrigin::AutoDerived | ConformanceOrigin::Inherited => {
+                    self.lookup_concrete_member(&key.conforming_id, label)
+                }
+            })
+    }
 
-        None
+    pub fn resolve_associated_projection(
+        &mut self,
+        protocol_id: Option<ProtocolId>,
+        base_sym: Symbol,
+        label: &Label,
+        level: Level,
+    ) -> Option<AssociatedTypeResolution> {
+        match self.conformance.resolve_associated_projection(
+            &mut self.type_catalog,
+            self.modules.as_ref(),
+            &self.resolved_names,
+            protocol_id,
+            base_sym,
+            label,
+        )? {
+            ProjectionResolution::Alias(symbol) => Some(AssociatedTypeResolution::Alias(symbol)),
+            ProjectionResolution::Witness(ty) => Some(AssociatedTypeResolution::Witness(ty)),
+            ProjectionResolution::PendingSlot(key) => Some(AssociatedTypeResolution::Witness(
+                self.associated_type_slot(key, label, level),
+            )),
+        }
     }
 
     pub(crate) fn can_generalize_projection(
@@ -1313,12 +1446,13 @@ impl TypeSession {
             return None;
         }
 
-        // Must not already have an explicit conformance
+        // Must not already have an explicit conformance claim or validated evidence.
         let key = ConformanceKey {
             protocol_id,
             conforming_id: nominal_sym,
         };
-        if self.lookup_conformance(&key).is_some() {
+        if self.lookup_conformance_claim(&key).is_some() || self.lookup_conformance(&key).is_some()
+        {
             return None;
         }
 

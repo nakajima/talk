@@ -78,6 +78,52 @@ impl ConformanceClaim {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConformanceObligation {
+    pub node_id: NodeID,
+    pub conforming_id: Symbol,
+    pub protocol_id: ProtocolId,
+    pub span: Span,
+    pub associated_types: FxHashMap<Label, Ty>,
+}
+
+impl ConformanceObligation {
+    pub fn new(
+        node_id: NodeID,
+        conforming_id: Symbol,
+        protocol_id: ProtocolId,
+        span: Span,
+    ) -> Self {
+        Self {
+            node_id,
+            conforming_id,
+            protocol_id,
+            span,
+            associated_types: Default::default(),
+        }
+    }
+
+    pub fn key(&self) -> ConformanceKey {
+        ConformanceKey {
+            protocol_id: self.protocol_id,
+            conforming_id: self.conforming_id,
+        }
+    }
+
+    pub fn from_claim(claim: &ConformanceClaim) -> Self {
+        Self::new(
+            claim.node_id,
+            claim.conforming_id,
+            claim.protocol_id,
+            claim.span,
+        )
+    }
+
+    pub fn merge(&mut self, other: ConformanceObligation) {
+        self.associated_types.extend(other.associated_types);
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
 pub struct WitnessTable {
     pub methods: FxHashMap<Label, Symbol>,
@@ -113,22 +159,6 @@ pub struct ConformanceEvidence {
 }
 
 impl ConformanceEvidence {
-    pub fn declared(
-        node_id: NodeID,
-        conforming_id: Symbol,
-        protocol_id: ProtocolId,
-        span: Span,
-    ) -> Self {
-        Self {
-            node_id,
-            conforming_id,
-            protocol_id,
-            origin: ConformanceOrigin::Declared,
-            witnesses: WitnessTable::default(),
-            span,
-        }
-    }
-
     pub fn from_claim(claim: &ConformanceClaim) -> Self {
         Self {
             node_id: claim.node_id,

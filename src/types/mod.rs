@@ -1,6 +1,7 @@
 pub mod builtins;
 pub mod call_tree;
 pub mod conformance;
+pub(crate) mod conformance_context;
 pub mod constraint_solver;
 pub mod constraints;
 pub mod format;

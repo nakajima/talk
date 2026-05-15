@@ -36,13 +36,11 @@ use crate::{
     types::{
         builtins::resolve_builtin_type,
         call_tree::CalleeInfo,
-        conformance::{ConformanceClaim, ConformanceEvidence, ConformanceKey},
+        conformance::{ConformanceClaim, ConformanceObligation},
         constraint_solver::ConstraintSolver,
         constraints::{
-            constraint::{Constraint, ConstraintCause},
-            projection::Projection,
+            constraint::ConstraintCause,
             store::{ConstraintStore, GroupId},
-            type_member::TypeMember,
         },
         infer_row::Row,
         infer_ty::{Level, Meta, MetaVarId, Ty},
@@ -65,6 +63,12 @@ use crate::{
         },
     },
 };
+
+mod finalize_types_pass;
+mod signature_discovery_pass;
+
+use finalize_types_pass::FinalizeTypes;
+use signature_discovery_pass::SignatureDiscovery;
 
 type TypedRet<T> = Result<T, TypeError>;
 
@@ -148,62 +152,8 @@ pub struct InferencePass<'a> {
     root_stmts: Vec<TypedStmt>,
 }
 
-// Transitional phase wrapper: keeps signature discovery named and isolated
-// before it is ready to move out of InferencePass entirely.
-struct SignatureDiscovery<'pass, 'ast> {
-    pass: &'pass mut InferencePass<'ast>,
-}
-
-impl<'pass, 'ast> SignatureDiscovery<'pass, 'ast> {
-    fn new(pass: &'pass mut InferencePass<'ast>) -> Self {
-        Self { pass }
-    }
-
-    fn run(&mut self) {
-        // Register extension conformances first, so they're available when processing protocol default methods
-        for i in 0..self.pass.asts.len() {
-            self.pass.discover_conformances(i);
-        }
-
-        for i in 0..self.pass.asts.len() {
-            self.pass.discover_protocols(i, Level::default());
-            let inherited = self.pass.session.type_catalog.inherit_conformances();
-            self.pass.constraints.wake_conformances(&inherited);
-
-            let evidence: Vec<_> = self
-                .pass
-                .session
-                .type_catalog
-                .conformance_evidence
-                .values()
-                .cloned()
-                .collect();
-            for conformance in evidence {
-                let protocol_symbol = Symbol::Protocol(conformance.protocol_id);
-                let protocol_methods = self.pass.session.lookup_instance_methods(&protocol_symbol);
-                if !protocol_methods.is_empty() {
-                    self.pass
-                        .session
-                        .type_catalog
-                        .instance_methods
-                        .entry(conformance.conforming_id)
-                        .or_default()
-                        .extend(protocol_methods);
-                }
-            }
-
-            self.pass.session.apply_all(&mut self.pass.substitutions);
-        }
-
-        for i in 0..self.pass.asts.len() {
-            self.pass.discover_effects(i, Level::default());
-            self.pass.session.apply_all(&mut self.pass.substitutions);
-        }
-    }
-}
-
-// Transitional phase wrapper: names body inference before the visitor state is
-// ready to move out of InferencePass entirely.
+// Keep this phase wrapper local until there is enough body-inference structure
+// to justify a real module extraction.
 struct BodyInference<'pass, 'ast> {
     pass: &'pass mut InferencePass<'ast>,
 }
@@ -216,150 +166,6 @@ impl<'pass, 'ast> BodyInference<'pass, 'ast> {
     fn run(&mut self) {
         self.pass.generate();
         self.pass.session.apply_all(&mut self.pass.substitutions);
-    }
-}
-
-// Transitional phase wrapper: names post-inference finalization before
-// finalization state is ready to move out of InferencePass entirely.
-struct FinalizeTypes<'pass, 'ast> {
-    pass: &'pass mut InferencePass<'ast>,
-}
-
-impl<'pass, 'ast> FinalizeTypes<'pass, 'ast> {
-    fn new(pass: &'pass mut InferencePass<'ast>) -> Self {
-        Self { pass }
-    }
-
-    fn run(&mut self) {
-        self.export_child_types();
-        self.report_unsolved();
-        self.pass.synthesize_auto_derived_bodies();
-    }
-
-    fn export_child_types(&mut self) {
-        let child_types = self
-            .pass
-            .session
-            .resolved_names
-            .child_types
-            .iter()
-            .map(|(sym, entries)| (*sym, entries.clone()))
-            .collect_vec();
-
-        for (sym, entries) in child_types {
-            self.pass
-                .session
-                .type_catalog
-                .child_types
-                .entry(sym)
-                .or_default()
-                .extend(entries);
-        }
-    }
-
-    fn report_unsolved(&mut self) {
-        let unresolved = self
-            .pass
-            .constraints
-            .unsolved()
-            .into_iter()
-            .cloned()
-            .collect_vec();
-
-        for constraint in unresolved {
-            let constraint = constraint.apply(&mut self.pass.substitutions, self.pass.session);
-            match constraint {
-                Constraint::Call(..) => (),
-                Constraint::DefaultTy(..) => (),
-                Constraint::Equals(..) => (),
-                Constraint::HasField(..) => (),
-                Constraint::Member(..) => (),
-                Constraint::RowSubset(..) => (),
-                Constraint::Conforms(conforms) => match &conforms.ty {
-                    Ty::Nominal { symbol, .. } | Ty::Primitive(symbol) => {
-                        self.pass
-                            .diagnostics
-                            .insert(AnyDiagnostic::Typing(Diagnostic {
-                                id: conforms.conformance_node_id,
-                                severity: Severity::Error,
-                                kind: TypeError::TypeDoesNotConform {
-                                    symbol: *symbol,
-                                    protocol_id: conforms.protocol_id,
-                                },
-                            }));
-                    }
-                    Ty::Constructor { name, .. } => {
-                        self.pass
-                            .diagnostics
-                            .insert(AnyDiagnostic::Typing(Diagnostic {
-                                id: conforms.conformance_node_id,
-                                severity: Severity::Error,
-                                kind: TypeError::TypeDoesNotConform {
-                                    symbol: name
-                                        .symbol()
-                                        .unwrap_or_else(|_| unreachable!("did not resolve name")),
-                                    protocol_id: conforms.protocol_id,
-                                },
-                            }));
-                    }
-                    Ty::Var { id, .. }
-                        if matches!(
-                            self.pass.session.lookup_reverse_instantiation(*id),
-                            Some(Ty::Param(_, bounds)) if bounds.contains(&conforms.protocol_id)
-                        ) => {}
-                    ty => {
-                        tracing::error!("did not solve {conforms:?}");
-                        self.pass
-                            .diagnostics
-                            .insert(AnyDiagnostic::Typing(Diagnostic {
-                                id: conforms.conformance_node_id,
-                                severity: Severity::Error,
-                                kind: TypeError::TypeCannotConform {
-                                    ty: ty.clone(),
-                                    protocol_id: conforms.protocol_id,
-                                },
-                            }));
-                    }
-                },
-                Constraint::TypeMember(type_member) => self.report_type_member(type_member),
-                Constraint::Projection(projection) => self.report_projection(projection),
-            }
-        }
-    }
-
-    fn report_projection(&mut self, projection: Projection) {
-        if self.pass.session.can_generalize_projection(
-            projection.protocol_id,
-            &projection.base,
-            &projection.label,
-            &mut self.pass.substitutions,
-        ) {
-            return;
-        }
-
-        self.pass
-            .diagnostics
-            .insert(AnyDiagnostic::Typing(Diagnostic {
-                id: projection.node_id,
-                severity: Severity::Error,
-                kind: TypeError::UnknownAssociatedType {
-                    base: projection.base,
-                    label: projection.label,
-                },
-            }));
-    }
-
-    fn report_type_member(&mut self, type_member: TypeMember) {
-        self.pass
-            .diagnostics
-            .insert(AnyDiagnostic::Typing(Diagnostic {
-                id: type_member.node_id,
-                severity: Severity::Error,
-                kind: TypeError::UnknownTypeMember {
-                    base: type_member.base,
-                    member: type_member.name,
-                },
-            }));
     }
 }
 
@@ -421,253 +227,6 @@ impl<'a> InferencePass<'a> {
         let ast = typed_ast.apply(&mut self.substitutions, self.session);
 
         (ast, self.diagnostics.into_iter().collect())
-    }
-
-    fn discover_conformances(&mut self, idx: usize) {
-        let roots = std::mem::take(&mut self.asts[idx].roots);
-        for root in roots.iter() {
-            let Node::Decl(Decl {
-                kind:
-                    DeclKind::Extend {
-                        name,
-                        conformances,
-                        body,
-                        ..
-                    },
-                ..
-            }) = root
-            else {
-                continue;
-            };
-
-            let Ok(nominal_symbol) = name.symbol() else {
-                continue;
-            };
-
-            // Process typealiases first so they're available for register_conformance
-            for decl in &body.decls {
-                if let DeclKind::TypeAlias(lhs, _, rhs) = &decl.kind {
-                    let Ok(lhs_sym) = lhs.symbol() else {
-                        continue;
-                    };
-
-                    let mut context = SolveContext::new(
-                        UnificationSubstitutions::new(self.session.meta_levels.clone()),
-                        Level::default(),
-                        GroupId(u32::MAX),
-                        SolveContextKind::Nominal,
-                    );
-                    if let Ok(rhs_ty) = self.visit_type_annotation(rhs, &mut context) {
-                        self.session.insert(lhs_sym, rhs_ty, &mut self.constraints);
-                    }
-                }
-            }
-
-            for conformance in conformances {
-                let Ok(Symbol::Protocol(protocol_id)) = conformance.symbol() else {
-                    continue;
-                };
-
-                let key = ConformanceKey {
-                    protocol_id,
-                    conforming_id: nominal_symbol,
-                };
-
-                let protocol_symbol = Symbol::Protocol(protocol_id);
-                let Some(conforming_id) = name.symbol().ok() else {
-                    tracing::error!("did not resolve {name:?}");
-                    continue;
-                };
-
-                self.session
-                    .declare_conformance(Self::conformance_claim_from_body(
-                        conforming_id,
-                        protocol_id,
-                        conformance.id,
-                        conformance.span,
-                        body,
-                    ));
-
-                self.register_conformance(
-                    conforming_id,
-                    protocol_symbol,
-                    conformance.id,
-                    conformance.span,
-                    &mut SolveContext::new(
-                        UnificationSubstitutions::new(self.session.meta_levels.clone()),
-                        Level::default(),
-                        GroupId(u32::MAX),
-                        SolveContextKind::Nominal,
-                    ),
-                )
-                .ok();
-
-                // Only insert if not already present (e.g. from imports).
-                self.session
-                    .type_catalog
-                    .conformance_evidence
-                    .entry(key)
-                    .or_insert_with(|| {
-                        ConformanceEvidence::declared(
-                            conformance.id,
-                            nominal_symbol,
-                            protocol_id,
-                            conformance.span,
-                        )
-                    });
-            }
-        }
-        _ = std::mem::replace(&mut self.asts[idx].roots, roots);
-    }
-
-    fn discover_effects(&mut self, idx: usize, level: Level) {
-        let mut context = SolveContext::new(
-            self.substitutions.clone(),
-            level,
-            Default::default(),
-            SolveContextKind::Normal,
-        );
-        let roots = std::mem::take(&mut self.asts[idx].roots);
-        for root in roots.iter() {
-            let Node::Decl(Decl {
-                kind:
-                    DeclKind::Effect {
-                        name: Name::Resolved(symbol, ..),
-                        generics,
-                        params,
-                        ret,
-                        ..
-                    },
-                ..
-            }) = &root
-            else {
-                continue;
-            };
-
-            // Register generic type parameters for the effect
-            for generic in generics.iter() {
-                self.register_generic(generic, &mut context);
-            }
-
-            let params = match self.visit_params(params, &mut context) {
-                Ok(params) => params,
-                Err(e) => {
-                    self.diagnostics.insert(AnyDiagnostic::Typing(Diagnostic {
-                        id: root.node_id(),
-                        severity: Severity::Error,
-                        kind: e,
-                    }));
-                    continue;
-                }
-            };
-
-            let ret = match self.visit_type_annotation(ret, &mut context) {
-                Ok(ret) => ret,
-                Err(e) => {
-                    self.diagnostics.insert(AnyDiagnostic::Typing(Diagnostic {
-                        id: root.node_id(),
-                        severity: Severity::Error,
-                        kind: e,
-                    }));
-                    continue;
-                }
-            };
-
-            let effect_signature =
-                curry(params.iter().map(|p| p.ty.clone()), ret, Row::Empty.into());
-            self.session
-                .type_catalog
-                .effects
-                .insert(*symbol, effect_signature.clone());
-
-            // Also insert into term_env so effect types are available in types_by_symbol for IR lowerer
-            self.session
-                .insert(*symbol, effect_signature, &mut self.constraints);
-        }
-        _ = std::mem::replace(&mut self.asts[idx].roots, roots);
-    }
-
-    fn discover_protocols(&mut self, idx: usize, level: Level) {
-        let mut result = vec![];
-        let roots = std::mem::take(&mut self.asts[idx].roots);
-        for root in roots.iter() {
-            let Node::Decl(
-                decl @ Decl {
-                    kind:
-                        DeclKind::Protocol {
-                            name: protocol_name @ Name::Resolved(Symbol::Protocol(protocol_id), ..),
-                            generics,
-                            conformances,
-                            body,
-                            ..
-                        },
-                    ..
-                },
-            ) = root
-            else {
-                continue;
-            };
-
-            let Ok(protocol_sym) = protocol_name.symbol() else {
-                self.diagnostics.insert(AnyDiagnostic::Typing(Diagnostic {
-                    id: root.node_id(),
-                    severity: Severity::Error,
-                    kind: TypeError::NameNotResolved(protocol_name.clone()),
-                }));
-                continue;
-            };
-
-            let protocol_self_id = self.session.new_type_param_id(None);
-            self.session.insert(
-                protocol_sym,
-                Ty::Param(protocol_self_id, vec![*protocol_id]),
-                &mut self.constraints,
-            );
-
-            let mut context = SolveContext::new(
-                self.substitutions.clone(),
-                level,
-                Default::default(),
-                SolveContextKind::Protocol {
-                    protocol_id: *protocol_id,
-                    protocol_self: protocol_self_id,
-                },
-            );
-
-            context.givens_mut().insert(Predicate::Conforms {
-                param: protocol_self_id,
-                protocol_id: *protocol_id,
-            });
-
-            let mut binders = IndexMap::<Symbol, Ty>::default();
-
-            match self.visit_protocol(
-                decl,
-                protocol_name,
-                generics,
-                conformances,
-                body,
-                &mut context,
-            ) {
-                Ok((decl, new_binders)) => {
-                    result.push(decl);
-                    binders.extend(new_binders)
-                }
-                Err(e) => {
-                    self.diagnostics.insert(AnyDiagnostic::Typing(Diagnostic {
-                        id: decl.id,
-                        severity: Severity::Error,
-                        kind: e,
-                    }));
-                }
-            }
-
-            let (binders, placeholders) = binders.into_iter().unzip();
-            self.solve(&mut context, binders, placeholders)
-        }
-        _ = std::mem::replace(&mut self.asts[idx].roots, roots);
-
-        self.root_decls.extend(result);
     }
 
     fn visit_associated_type(
@@ -844,11 +403,6 @@ impl<'a> InferencePass<'a> {
                 continue;
             };
 
-            let key = ConformanceKey {
-                protocol_id: conforms_to_id,
-                conforming_id: protocol.symbol,
-            };
-
             self.register_conformance(
                 protocol.symbol,
                 conforms_to_id.into(),
@@ -858,15 +412,15 @@ impl<'a> InferencePass<'a> {
             )
             .ok();
 
-            self.session.type_catalog.conformance_evidence.insert(
-                key,
-                ConformanceEvidence::declared(
-                    conformance.id,
-                    protocol.symbol,
-                    conforms_to_id,
-                    conformance.span,
-                ),
-            );
+            let inherited_methods = self.session.lookup_instance_methods(&conforms_to_id.into());
+            if !inherited_methods.is_empty() {
+                self.session
+                    .type_catalog
+                    .instance_methods
+                    .entry(protocol.symbol)
+                    .or_default()
+                    .extend(inherited_methods);
+            }
         }
     }
 
@@ -2528,24 +2082,6 @@ impl<'a> InferencePass<'a> {
                         )
                         .ok();
 
-                        // Add to conformances catalog (matching discover_conformances behavior)
-                        let key = ConformanceKey {
-                            protocol_id,
-                            conforming_id: nominal_symbol,
-                        };
-                        self.session
-                            .type_catalog
-                            .conformance_evidence
-                            .entry(key)
-                            .or_insert_with(|| {
-                                ConformanceEvidence::declared(
-                                    conformance.id,
-                                    nominal_symbol,
-                                    protocol_id,
-                                    conformance.span,
-                                )
-                            });
-
                         self.constraints.wants_conforms(
                             conformance.id,
                             ty.clone(),
@@ -2758,42 +2294,6 @@ impl<'a> InferencePass<'a> {
             .or_else(|| self.session.lookup_associated_types(protocol_symbol))
             .unwrap_or_default();
 
-        let associated_types =
-            protocol_associated_types
-                .iter()
-                .fold(FxHashMap::default(), |mut acc, (label, _)| {
-                    let child_types = self
-                        .session
-                        .resolved_names
-                        .child_types
-                        .get(&conforming_symbol)
-                        .cloned();
-                    let associated_ty = if let Some(child_types) = &child_types
-                        && let Some(child_sym) = child_types.get(label)
-                        && let Some(entry) = self.session.lookup(child_sym)
-                    {
-                        entry._as_ty()
-                    } else {
-                        self.session.new_ty_meta_var(context.level())
-                    };
-
-                    tracing::debug!(
-                        "  label={:?}, child_types={:?}, associated_ty={:?}",
-                        label,
-                        child_types,
-                        associated_ty
-                    );
-                    acc.insert(label.clone(), associated_ty);
-                    acc
-                });
-
-        tracing::debug!("  final associated_types={:?}", associated_types);
-
-        let key = ConformanceKey {
-            protocol_id,
-            conforming_id: conforming_symbol,
-        };
-
         self.session.declare_conformance(ConformanceClaim::new(
             conformance_node_id,
             conforming_symbol,
@@ -2801,31 +2301,21 @@ impl<'a> InferencePass<'a> {
             conformance_span,
         ));
 
-        let mut conformance = self
-            .session
-            .type_catalog
-            .conformance_evidence
-            .swap_remove(&key)
-            .unwrap_or_else(|| {
-                ConformanceEvidence::declared(
-                    conformance_node_id,
-                    conforming_symbol,
-                    protocol_id,
-                    conformance_span,
-                )
-            });
+        let mut obligation = ConformanceObligation::new(
+            conformance_node_id,
+            conforming_symbol,
+            protocol_id,
+            conformance_span,
+        );
 
-        conformance
-            .witnesses
-            .associated_types
-            .extend(associated_types);
+        for (label, _) in protocol_associated_types {
+            let associated_ty =
+                self.session
+                    .associated_type_slot(obligation.key(), &label, context.level());
+            obligation.associated_types.insert(label, associated_ty);
+        }
 
-        self.session
-            .type_catalog
-            .conformance_evidence
-            .insert(key, conformance.clone());
-
-        self.constraints.wake_conformances(&[key]);
+        self.session.declare_conformance_obligation(obligation);
 
         Ok(())
     }

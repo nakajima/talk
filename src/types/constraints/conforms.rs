@@ -1,6 +1,6 @@
 use crate::node_id::NodeID;
 use crate::types::conformance::{
-    ConformanceClaim, ConformanceEvidence, ConformanceKey, ConformanceOrigin, WitnessTable,
+    ConformanceEvidence, ConformanceKey, ConformanceOrigin, WitnessTable,
 };
 use crate::types::constraints::store::ConstraintStore;
 use crate::types::scheme::ForAll;
@@ -21,7 +21,6 @@ use crate::{
         type_session::TypeSession,
     },
 };
-use itertools::Itertools;
 use rustc_hash::FxHashMap;
 use tracing::instrument;
 
@@ -69,12 +68,7 @@ impl Conforms {
 
                         // Transitive conformance: param conforms to a protocol that
                         // itself conforms to the target protocol
-                        let key = ConformanceKey {
-                            conforming_id: Symbol::Protocol(*given_protocol_id),
-                            protocol_id: self.protocol_id,
-                        };
-
-                        if session.type_catalog.conformance_evidence.contains_key(&key) {
+                        if session.protocol_implies(*given_protocol_id, self.protocol_id) {
                             return SolveResult::Solved(Default::default());
                         }
                     }
@@ -111,6 +105,7 @@ impl Conforms {
             conforming_ty_sym,
             &conforming_type_args,
             self.protocol_id,
+            None,
             constraints,
             context,
             session,
@@ -135,6 +130,7 @@ impl Conforms {
         conforming_ty_sym: Symbol,
         conforming_type_args: &[Ty],
         protocol_id: ProtocolId,
+        seed: Option<ConformanceEvidence>,
         constraints: &mut ConstraintStore,
         context: &mut SolveContext,
         session: &mut TypeSession,
@@ -148,12 +144,7 @@ impl Conforms {
             protocol_id,
         };
 
-        let conformance_claim = session.lookup_conformance_claim(&key);
-        let mut conformance = if let Some(conformance) = session.lookup_conformance(&key) {
-            conformance
-        } else if let Some(claim) = conformance_claim.as_ref() {
-            ConformanceEvidence::from_claim(claim)
-        } else {
+        let Some(mut conformance) = session.conformance_seed(key, seed) else {
             return CheckWitnessResult::Defer(vec![DeferralReason::WaitingOnConformance(key)]);
         };
         let mut witnesses = conformance.witnesses.clone();
@@ -211,49 +202,33 @@ impl Conforms {
                 }
             }
 
-            let declared_witness_sym = conformance_claim
-                .as_ref()
-                .and_then(|claim| claim.associated_type_candidates.get(&label).copied());
-            let child_witness_sym = if conformance_claim.is_none()
-                && !matches!(conformance.origin, ConformanceOrigin::Declared)
-            {
-                session
-                    .type_catalog
-                    .child_types
-                    .get(&conforming_ty_sym)
-                    .and_then(|child_types| child_types.get(&label).copied())
+            let associated_type_candidate =
+                session.associated_type_candidate(key, &label, conformance.origin);
+
+            let associated_witness_ty = if let Some(witness_type_sym) = associated_type_candidate {
+                let Some(entry) = session.lookup(&witness_type_sym) else {
+                    deferral_reasons.push(DeferralReason::WaitingOnSymbol(witness_type_sym));
+                    continue;
+                };
+
+                entry._as_ty()
             } else {
-                None
-            };
+                let pending_ty = witnesses
+                    .associated_types
+                    .get(&label)
+                    .cloned()
+                    .or_else(|| session.lookup_associated_type_slot(&key, &label))
+                    .unwrap_or_else(|| session.associated_type_slot(key, &label, context.level()));
 
-            let associated_witness_ty =
-                if let Some(witness_type_sym) = declared_witness_sym.or(child_witness_sym) {
-                    let Some(entry) = session.lookup(&witness_type_sym) else {
-                        deferral_reasons.push(DeferralReason::WaitingOnSymbol(witness_type_sym));
-                        continue;
-                    };
-
-                    entry._as_ty()
-                } else if let Some(projection) = protocol_projections.get(&label) {
+                if let Some(projection) = protocol_projections.get(&label) {
                     substitutions
                         .entry(projection.clone())
-                        .or_insert_with(|| {
-                            #[allow(clippy::expect_used)]
-                            witnesses
-                                .associated_types
-                                .get(&label)
-                                .cloned()
-                                .unwrap_or_else(|| session.new_ty_meta_var(context.level()))
-                        })
+                        .or_insert_with(|| pending_ty.clone())
                         .clone()
                 } else {
-                    #[allow(clippy::expect_used)]
-                    witnesses
-                        .associated_types
-                        .get(&label)
-                        .cloned()
-                        .unwrap_or_else(|| session.new_ty_meta_var(context.level()))
-                };
+                    pending_ty
+                }
+            };
 
             witnesses
                 .associated_types
@@ -263,22 +238,18 @@ impl Conforms {
         }
 
         // Check super protocols
-        let mut super_conformance_keys = session
-            .type_catalog
-            .conformance_evidence
-            .keys()
-            .chain(session.type_catalog.conformance_claims.keys())
-            .filter(|conformance| conformance.conforming_id == protocol_id.into())
-            .copied()
-            .collect_vec();
-        super_conformance_keys.sort();
-        super_conformance_keys.dedup();
-
-        for conformance in super_conformance_keys {
+        for super_key in session.superprotocol_keys_for(protocol_id) {
+            let inherited = ConformanceEvidence::from_superprotocol(
+                conformance.node_id,
+                conforming_ty_sym,
+                super_key.protocol_id,
+                conformance.span,
+            );
             match self.check_conformance(
                 conforming_ty_sym,
                 conforming_type_args,
-                conformance.protocol_id,
+                super_key.protocol_id,
+                Some(inherited),
                 constraints,
                 context,
                 session,
@@ -299,7 +270,7 @@ impl Conforms {
             &protocol_self_id,
             &protocol_self_bounds,
             &conforming_ty_sym,
-            conformance_claim.as_ref(),
+            key,
             conformance.origin,
             &mut witnesses,
             protocol_projections,
@@ -342,7 +313,7 @@ impl Conforms {
         protocol_self: &Symbol,
         protocol_self_bounds: &[ProtocolId],
         conforming_ty_sym: &Symbol,
-        conformance_claim: Option<&ConformanceClaim>,
+        conformance_key: ConformanceKey,
         conformance_origin: ConformanceOrigin,
         witness_table: &mut WitnessTable,
         projections: FxHashMap<Label, Ty>,
@@ -382,18 +353,13 @@ impl Conforms {
                 }
             }
 
-            let witness_sym = if let Some(claim) = conformance_claim {
-                claim.method_candidates.get(&label).copied()
-            } else {
-                witness_table.get_witness(&label, &required_sym).or_else(
-                    || match conformance_origin {
-                        ConformanceOrigin::Declared => None,
-                        ConformanceOrigin::AutoDerived | ConformanceOrigin::Inherited => {
-                            session.lookup_concrete_member(conforming_ty_sym, &label)
-                        }
-                    },
-                )
-            };
+            let witness_sym = session.method_witness_candidate(
+                conformance_key,
+                &label,
+                &required_sym,
+                conformance_origin,
+                witness_table,
+            );
             let Some(witness_sym) = witness_sym else {
                 missing_witnesses.push((label, required_sym));
                 continue;

@@ -299,6 +299,22 @@ impl TypeCatalog {
             }
         }
 
+        if matches!(receiver, Symbol::Protocol(_)) {
+            for ConformanceKey {
+                protocol_id,
+                conforming_id,
+            } in self.conformance_claims.keys()
+            {
+                if conforming_id != receiver {
+                    continue;
+                }
+
+                if let Some((member, _)) = self.lookup_member(&protocol_id.into(), label) {
+                    return Some((member, MemberSource::Protocol(*protocol_id)));
+                }
+            }
+        }
+
         None
     }
 
