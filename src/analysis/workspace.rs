@@ -187,9 +187,11 @@ fn parser_error_range(text: &str, err: &ParserError) -> TextRange {
         ParserError::UnexpectedToken {
             token: Some(token), ..
         } => TextRange::new(token.start, token.end),
-        ParserError::InfiniteLoop(Some(token)) | ParserError::ExpectedIdentifier(Some(token)) => {
-            TextRange::new(token.start, token.end)
-        }
+        ParserError::InfiniteLoop(Some(token))
+        | ParserError::ExpectedIdentifier(Some(token))
+        | ParserError::ConformanceListNotAllowed {
+            token: Some(token), ..
+        } => TextRange::new(token.start, token.end),
         ParserError::UnexpectedEndOfInput(..) => TextRange::new(eof, eof),
         _ => TextRange::new(0, 0),
     }

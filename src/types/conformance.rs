@@ -19,7 +19,7 @@ pub struct ConformanceKey {
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct ConformanceDecl {
+pub struct ConformanceClaim {
     pub node_id: NodeID,
     pub conforming_id: Symbol,
     pub protocol_id: ProtocolId,
@@ -28,7 +28,7 @@ pub struct ConformanceDecl {
     pub method_candidates: IndexMap<Label, Symbol>,
 }
 
-impl ConformanceDecl {
+impl ConformanceClaim {
     pub fn new(
         node_id: NodeID,
         conforming_id: Symbol,
@@ -52,7 +52,7 @@ impl ConformanceDecl {
         }
     }
 
-    pub fn merge_candidates(&mut self, other: ConformanceDecl) {
+    pub fn merge_candidates(&mut self, other: ConformanceClaim) {
         self.associated_type_candidates
             .extend(other.associated_type_candidates);
         self.method_candidates.extend(other.method_candidates);
@@ -95,16 +95,24 @@ impl WitnessTable {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum ConformanceOrigin {
+    Declared,
+    AutoDerived,
+    Inherited,
+}
+
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct Conformance {
+pub struct ConformanceEvidence {
     pub node_id: NodeID,
     pub conforming_id: Symbol,
     pub protocol_id: ProtocolId,
+    pub origin: ConformanceOrigin,
     pub witnesses: WitnessTable,
     pub span: Span,
 }
 
-impl Conformance {
+impl ConformanceEvidence {
     pub fn declared(
         node_id: NodeID,
         conforming_id: Symbol,
@@ -115,18 +123,20 @@ impl Conformance {
             node_id,
             conforming_id,
             protocol_id,
+            origin: ConformanceOrigin::Declared,
             witnesses: WitnessTable::default(),
             span,
         }
     }
 
-    pub fn from_decl(decl: &ConformanceDecl) -> Self {
+    pub fn from_claim(claim: &ConformanceClaim) -> Self {
         Self {
-            node_id: decl.node_id,
-            conforming_id: decl.conforming_id,
-            protocol_id: decl.protocol_id,
+            node_id: claim.node_id,
+            conforming_id: claim.conforming_id,
+            protocol_id: claim.protocol_id,
+            origin: ConformanceOrigin::Declared,
             witnesses: WitnessTable::default(),
-            span: decl.span,
+            span: claim.span,
         }
     }
 
@@ -140,6 +150,7 @@ impl Conformance {
             node_id,
             conforming_id,
             protocol_id,
+            origin: ConformanceOrigin::Inherited,
             witnesses: WitnessTable::default(),
             span,
         }
@@ -154,6 +165,7 @@ impl Conformance {
             node_id: NodeID::SYNTHESIZED,
             conforming_id,
             protocol_id,
+            origin: ConformanceOrigin::AutoDerived,
             witnesses,
             span: Span::SYNTHESIZED,
         }

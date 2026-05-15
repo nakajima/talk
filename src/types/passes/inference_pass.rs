@@ -36,7 +36,7 @@ use crate::{
     types::{
         builtins::resolve_builtin_type,
         call_tree::CalleeInfo,
-        conformance::{Conformance, ConformanceDecl, ConformanceKey},
+        conformance::{ConformanceClaim, ConformanceEvidence, ConformanceKey},
         constraint_solver::ConstraintSolver,
         constraints::{
             constraint::{Constraint, ConstraintCause},
@@ -170,15 +170,15 @@ impl<'pass, 'ast> SignatureDiscovery<'pass, 'ast> {
             let inherited = self.pass.session.type_catalog.inherit_conformances();
             self.pass.constraints.wake_conformances(&inherited);
 
-            let conformances: Vec<_> = self
+            let evidence: Vec<_> = self
                 .pass
                 .session
                 .type_catalog
-                .conformances
+                .conformance_evidence
                 .values()
                 .cloned()
                 .collect();
-            for conformance in conformances {
+            for conformance in evidence {
                 let protocol_symbol = Symbol::Protocol(conformance.protocol_id);
                 let protocol_methods = self.pass.session.lookup_instance_methods(&protocol_symbol);
                 if !protocol_methods.is_empty() {
@@ -480,7 +480,7 @@ impl<'a> InferencePass<'a> {
                 };
 
                 self.session
-                    .declare_conformance(Self::conformance_decl_from_body(
+                    .declare_conformance(Self::conformance_claim_from_body(
                         conforming_id,
                         protocol_id,
                         conformance.id,
@@ -505,10 +505,10 @@ impl<'a> InferencePass<'a> {
                 // Only insert if not already present (e.g. from imports).
                 self.session
                     .type_catalog
-                    .conformances
+                    .conformance_evidence
                     .entry(key)
                     .or_insert_with(|| {
-                        Conformance::declared(
+                        ConformanceEvidence::declared(
                             conformance.id,
                             nominal_symbol,
                             protocol_id,
@@ -858,9 +858,9 @@ impl<'a> InferencePass<'a> {
             )
             .ok();
 
-            self.session.type_catalog.conformances.insert(
+            self.session.type_catalog.conformance_evidence.insert(
                 key,
-                Conformance::declared(
+                ConformanceEvidence::declared(
                     conformance.id,
                     protocol.symbol,
                     conforms_to_id,
@@ -2511,7 +2511,7 @@ impl<'a> InferencePass<'a> {
                         };
 
                         self.session
-                            .declare_conformance(Self::conformance_decl_from_body(
+                            .declare_conformance(Self::conformance_claim_from_body(
                                 nominal_symbol,
                                 protocol_id,
                                 conformance.id,
@@ -2535,10 +2535,10 @@ impl<'a> InferencePass<'a> {
                         };
                         self.session
                             .type_catalog
-                            .conformances
+                            .conformance_evidence
                             .entry(key)
                             .or_insert_with(|| {
-                                Conformance::declared(
+                                ConformanceEvidence::declared(
                                     conformance.id,
                                     nominal_symbol,
                                     protocol_id,
@@ -2670,26 +2670,28 @@ impl<'a> InferencePass<'a> {
         })
     }
 
-    fn conformance_decl_from_body(
+    fn conformance_claim_from_body(
         conforming_symbol: Symbol,
         protocol_id: ProtocolId,
         node_id: NodeID,
         span: Span,
         body: &Body,
-    ) -> ConformanceDecl {
-        let mut decl = ConformanceDecl::new(node_id, conforming_symbol, protocol_id, span);
+    ) -> ConformanceClaim {
+        let mut claim = ConformanceClaim::new(node_id, conforming_symbol, protocol_id, span);
 
         for member in &body.decls {
             match &member.kind {
                 DeclKind::TypeAlias(lhs, ..) => {
                     if let Ok(sym) = lhs.symbol() {
-                        decl.associated_type_candidates
+                        claim
+                            .associated_type_candidates
                             .insert(lhs.name_str().into(), sym);
                     }
                 }
                 DeclKind::Method { func, is_static } if !*is_static => {
                     if let Ok(sym) = func.name.symbol() {
-                        decl.method_candidates
+                        claim
+                            .method_candidates
                             .insert(func.name.name_str().into(), sym);
                     }
                 }
@@ -2697,7 +2699,7 @@ impl<'a> InferencePass<'a> {
             }
         }
 
-        decl
+        claim
     }
 
     fn register_conformance(
@@ -2721,7 +2723,7 @@ impl<'a> InferencePass<'a> {
         let transitive_conformance_keys = self
             .session
             .type_catalog
-            .conformances
+            .conformance_evidence
             .keys()
             .filter(|c| c.conforming_id == protocol_symbol)
             .copied()
@@ -2732,7 +2734,7 @@ impl<'a> InferencePass<'a> {
                 let indirect = self
                     .session
                     .type_catalog
-                    .conformances
+                    .conformance_evidence
                     .get(&indirect_conformance)
                     .unwrap_or_else(|| unreachable!());
                 (
@@ -2792,7 +2794,7 @@ impl<'a> InferencePass<'a> {
             conforming_id: conforming_symbol,
         };
 
-        self.session.declare_conformance(ConformanceDecl::new(
+        self.session.declare_conformance(ConformanceClaim::new(
             conformance_node_id,
             conforming_symbol,
             protocol_id,
@@ -2802,10 +2804,10 @@ impl<'a> InferencePass<'a> {
         let mut conformance = self
             .session
             .type_catalog
-            .conformances
+            .conformance_evidence
             .swap_remove(&key)
             .unwrap_or_else(|| {
-                Conformance::declared(
+                ConformanceEvidence::declared(
                     conformance_node_id,
                     conforming_symbol,
                     protocol_id,
@@ -2820,7 +2822,7 @@ impl<'a> InferencePass<'a> {
 
         self.session
             .type_catalog
-            .conformances
+            .conformance_evidence
             .insert(key, conformance.clone());
 
         self.constraints.wake_conformances(&[key]);

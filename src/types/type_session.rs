@@ -17,7 +17,7 @@ use crate::{
     types::{
         builtins::builtin_scope,
         call_tree::CallTree,
-        conformance::{Conformance, ConformanceDecl, ConformanceKey, WitnessTable},
+        conformance::{ConformanceClaim, ConformanceEvidence, ConformanceKey, WitnessTable},
         constraints::{constraint::Constraint, store::ConstraintStore},
         infer_row::{Row, RowMetaId, RowParamId},
         infer_ty::{Level, Meta, MetaVarId, SkolemId, Ty},
@@ -159,13 +159,13 @@ impl TypeSession {
             },
         );
 
-        // Import conformance declarations and validated witness tables from all modules.
-        for (key, decl) in modules.all_conformance_decls() {
-            catalog.conformance_decls.entry(key).or_insert(decl);
+        // Import conformance claims and validated evidence from all modules.
+        for (key, claim) in modules.all_conformance_claims() {
+            catalog.conformance_claims.entry(key).or_insert(claim);
         }
-        for (key, conformance) in modules.all_conformances() {
+        for (key, conformance) in modules.all_conformance_evidence() {
             catalog
-                .conformances
+                .conformance_evidence
                 .entry(key)
                 .or_insert_with(|| conformance.clone());
         }
@@ -496,13 +496,13 @@ impl TypeSession {
         let instantiations = std::mem::take(&mut self.type_catalog.instantiations);
         self.type_catalog.instantiations = instantiations.apply(self, substitutions);
 
-        let mut conformances = std::mem::take(&mut self.type_catalog.conformances);
+        let mut conformances = std::mem::take(&mut self.type_catalog.conformance_evidence);
         for conformance in conformances.values_mut() {
             for ty in conformance.witnesses.associated_types.values_mut() {
                 *ty = self.apply(ty, substitutions);
             }
         }
-        _ = std::mem::replace(&mut self.type_catalog.conformances, conformances);
+        _ = std::mem::replace(&mut self.type_catalog.conformance_evidence, conformances);
     }
 
     pub fn get_term_env(&self) -> &TermEnv {
@@ -827,47 +827,33 @@ impl TypeSession {
         self.term_env.insert(sym, EnvEntry::Mono(ty));
     }
 
-    pub fn declare_conformance(&mut self, decl: ConformanceDecl) {
-        self.type_catalog.declare_conformance(decl);
+    pub fn declare_conformance(&mut self, claim: ConformanceClaim) {
+        self.type_catalog.declare_conformance(claim);
     }
 
-    pub fn lookup_conformance_decl(&mut self, key: &ConformanceKey) -> Option<ConformanceDecl> {
-        if let Some(decl) = self.type_catalog.conformance_decls.get(key) {
-            return Some(decl.clone());
+    pub fn lookup_conformance_claim(&mut self, key: &ConformanceKey) -> Option<ConformanceClaim> {
+        if let Some(claim) = self.type_catalog.conformance_claims.get(key) {
+            return Some(claim.clone());
         }
 
-        if let Some(decl) = self.modules.lookup_conformance_decl(key) {
+        if let Some(claim) = self.modules.lookup_conformance_claim(key) {
             self.type_catalog
-                .conformance_decls
-                .insert(*key, decl.clone());
-            return Some(decl.clone());
+                .conformance_claims
+                .insert(*key, claim.clone());
+            return Some(claim.clone());
         }
 
         None
     }
 
-    pub fn ensure_conformance(&mut self, key: ConformanceKey) -> Option<&mut Conformance> {
-        if self.type_catalog.conformances.contains_key(&key) {
-            return self.type_catalog.conformances.get_mut(&key);
-        }
-
-        if let Some(conformance) = self.modules.lookup_conformance(&key).cloned() {
-            self.type_catalog.conformances.insert(key, conformance);
-            return self.type_catalog.conformances.get_mut(&key);
-        }
-
-        self.lookup_conformance_decl(&key)?;
-        self.type_catalog.ensure_conformance(key)
-    }
-
-    pub fn lookup_conformance(&mut self, key: &ConformanceKey) -> Option<Conformance> {
-        if let Some(conformance) = self.type_catalog.conformances.get(key) {
+    pub fn lookup_conformance(&mut self, key: &ConformanceKey) -> Option<ConformanceEvidence> {
+        if let Some(conformance) = self.type_catalog.conformance_evidence.get(key) {
             return Some(conformance.clone());
         }
 
         if let Some(conformance) = self.modules.lookup_conformance(key) {
             self.type_catalog
-                .conformances
+                .conformance_evidence
                 .insert(*key, conformance.clone());
             return Some(conformance.clone());
         }
@@ -1001,7 +987,7 @@ impl TypeSession {
     ) -> Vec<ConformanceKey> {
         let mut result = vec![];
 
-        for key in self.type_catalog.conformances.keys() {
+        for key in self.type_catalog.conformance_evidence.keys() {
             if key.protocol_id == *protocol_id {
                 result.push(*key);
             }
@@ -1421,9 +1407,9 @@ impl TypeSession {
                 .insert(self_param_sym, "self".into());
         }
 
-        self.type_catalog.conformances.insert(
+        self.type_catalog.conformance_evidence.insert(
             key,
-            Conformance::auto_derived(nominal_sym, protocol_id, witnesses),
+            ConformanceEvidence::auto_derived(nominal_sym, protocol_id, witnesses),
         );
 
         // Record for later body synthesis

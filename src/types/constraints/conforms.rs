@@ -1,5 +1,7 @@
 use crate::node_id::NodeID;
-use crate::types::conformance::{ConformanceDecl, ConformanceKey};
+use crate::types::conformance::{
+    ConformanceClaim, ConformanceEvidence, ConformanceKey, ConformanceOrigin, WitnessTable,
+};
 use crate::types::constraints::store::ConstraintStore;
 use crate::types::scheme::ForAll;
 use crate::types::type_operations::{Substitutions, substitute_with_subs};
@@ -72,7 +74,7 @@ impl Conforms {
                             protocol_id: self.protocol_id,
                         };
 
-                        if session.type_catalog.conformances.contains_key(&key) {
+                        if session.type_catalog.conformance_evidence.contains_key(&key) {
                             return SolveResult::Solved(Default::default());
                         }
                     }
@@ -146,10 +148,15 @@ impl Conforms {
             protocol_id,
         };
 
-        let Some(conformance) = session.lookup_conformance(&key) else {
+        let conformance_claim = session.lookup_conformance_claim(&key);
+        let mut conformance = if let Some(conformance) = session.lookup_conformance(&key) {
+            conformance
+        } else if let Some(claim) = conformance_claim.as_ref() {
+            ConformanceEvidence::from_claim(claim)
+        } else {
             return CheckWitnessResult::Defer(vec![DeferralReason::WaitingOnConformance(key)]);
         };
-        let conformance_decl = session.lookup_conformance_decl(&key);
+        let mut witnesses = conformance.witnesses.clone();
 
         let Some(EnvEntry::Scheme(Scheme {
             ty: Ty::Param(protocol_self_id, protocol_self_bounds),
@@ -204,14 +211,20 @@ impl Conforms {
                 }
             }
 
-            let declared_witness_sym = conformance_decl
+            let declared_witness_sym = conformance_claim
                 .as_ref()
-                .and_then(|decl| decl.associated_type_candidates.get(&label).copied());
-            let child_witness_sym = session
-                .type_catalog
-                .child_types
-                .get(&conforming_ty_sym)
-                .and_then(|child_types| child_types.get(&label).copied());
+                .and_then(|claim| claim.associated_type_candidates.get(&label).copied());
+            let child_witness_sym = if conformance_claim.is_none()
+                && !matches!(conformance.origin, ConformanceOrigin::Declared)
+            {
+                session
+                    .type_catalog
+                    .child_types
+                    .get(&conforming_ty_sym)
+                    .and_then(|child_types| child_types.get(&label).copied())
+            } else {
+                None
+            };
 
             let associated_witness_ty =
                 if let Some(witness_type_sym) = declared_witness_sym.or(child_witness_sym) {
@@ -226,8 +239,7 @@ impl Conforms {
                         .entry(projection.clone())
                         .or_insert_with(|| {
                             #[allow(clippy::expect_used)]
-                            conformance
-                                .witnesses
+                            witnesses
                                 .associated_types
                                 .get(&label)
                                 .cloned()
@@ -236,49 +248,48 @@ impl Conforms {
                         .clone()
                 } else {
                     #[allow(clippy::expect_used)]
-                    conformance
-                        .witnesses
+                    witnesses
                         .associated_types
                         .get(&label)
                         .cloned()
                         .unwrap_or_else(|| session.new_ty_meta_var(context.level()))
                 };
 
-            if let Some(entry) = session.type_catalog.conformances.get_mut(&key) {
-                entry
-                    .witnesses
-                    .associated_types
-                    .insert(label.clone(), associated_witness_ty.clone());
-            }
+            witnesses
+                .associated_types
+                .insert(label.clone(), associated_witness_ty.clone());
 
             substitutions.insert(associated_entry._as_ty(), associated_witness_ty);
         }
 
         // Check super protocols
-        for conformance in session
+        let mut super_conformance_keys = session
             .type_catalog
-            .conformances
+            .conformance_evidence
             .keys()
+            .chain(session.type_catalog.conformance_claims.keys())
+            .filter(|conformance| conformance.conforming_id == protocol_id.into())
             .copied()
-            .collect_vec()
-        {
-            if conformance.conforming_id == protocol_id.into() {
-                match self.check_conformance(
-                    conforming_ty_sym,
-                    conforming_type_args,
-                    conformance.protocol_id,
-                    constraints,
-                    context,
-                    session,
-                ) {
-                    CheckWitnessResult::Ok(missing, vars) => {
-                        missing_conformances.extend(missing);
-                        solved_vars.extend(vars);
-                    }
-                    CheckWitnessResult::Defer(reasons) => deferral_reasons.extend(reasons),
-                    CheckWitnessResult::Err(e) => return CheckWitnessResult::Err(e),
-                };
-            }
+            .collect_vec();
+        super_conformance_keys.sort();
+        super_conformance_keys.dedup();
+
+        for conformance in super_conformance_keys {
+            match self.check_conformance(
+                conforming_ty_sym,
+                conforming_type_args,
+                conformance.protocol_id,
+                constraints,
+                context,
+                session,
+            ) {
+                CheckWitnessResult::Ok(missing, vars) => {
+                    missing_conformances.extend(missing);
+                    solved_vars.extend(vars);
+                }
+                CheckWitnessResult::Defer(reasons) => deferral_reasons.extend(reasons),
+                CheckWitnessResult::Err(e) => return CheckWitnessResult::Err(e),
+            };
         }
 
         match self.check_witnesses(
@@ -288,7 +299,9 @@ impl Conforms {
             &protocol_self_id,
             &protocol_self_bounds,
             &conforming_ty_sym,
-            conformance_decl.as_ref(),
+            conformance_claim.as_ref(),
+            conformance.origin,
+            &mut witnesses,
             protocol_projections,
             substitutions,
         ) {
@@ -305,6 +318,15 @@ impl Conforms {
         }
 
         if deferral_reasons.is_empty() {
+            if missing_conformances.is_empty() {
+                conformance.witnesses = witnesses;
+                session
+                    .type_catalog
+                    .conformance_evidence
+                    .insert(key, conformance);
+                constraints.wake_conformances(&[key]);
+            }
+
             CheckWitnessResult::Ok(missing_conformances, solved_vars)
         } else {
             CheckWitnessResult::Defer(deferral_reasons)
@@ -320,7 +342,9 @@ impl Conforms {
         protocol_self: &Symbol,
         protocol_self_bounds: &[ProtocolId],
         conforming_ty_sym: &Symbol,
-        conformance_decl: Option<&ConformanceDecl>,
+        conformance_claim: Option<&ConformanceClaim>,
+        conformance_origin: ConformanceOrigin,
+        witness_table: &mut WitnessTable,
         projections: FxHashMap<Label, Ty>,
         ty_substitutions: FxHashMap<Ty, Ty>,
     ) -> Result<CheckWitnessResult, TypeError> {
@@ -358,10 +382,19 @@ impl Conforms {
                 }
             }
 
-            let declared_witness_sym =
-                conformance_decl.and_then(|decl| decl.method_candidates.get(&label).copied());
-            let concrete_witness_sym = session.lookup_concrete_member(conforming_ty_sym, &label);
-            let Some(witness_sym) = declared_witness_sym.or(concrete_witness_sym) else {
+            let witness_sym = if let Some(claim) = conformance_claim {
+                claim.method_candidates.get(&label).copied()
+            } else {
+                witness_table.get_witness(&label, &required_sym).or_else(
+                    || match conformance_origin {
+                        ConformanceOrigin::Declared => None,
+                        ConformanceOrigin::AutoDerived | ConformanceOrigin::Inherited => {
+                            session.lookup_concrete_member(conforming_ty_sym, &label)
+                        }
+                    },
+                )
+            };
+            let Some(witness_sym) = witness_sym else {
                 missing_witnesses.push((label, required_sym));
                 continue;
             };
@@ -414,31 +447,17 @@ impl Conforms {
             // e.g., for Person<Float>, substitute A -> Float in getAge's type
             let witness_ty = substitute_with_subs(witness._as_ty(), &substitutions);
 
-            // Update witnesses
-            let key = ConformanceKey {
-                protocol_id,
-                conforming_id: *conforming_ty_sym,
-            };
-
-            let Some(entry) = session.type_catalog.conformances.get_mut(&key) else {
-                return Ok(CheckWitnessResult::Defer(vec![
-                    DeferralReason::WaitingOnConformance(key),
-                ]));
-            };
-
-            entry.witnesses.methods.insert(label.clone(), witness_sym);
-            entry
-                .witnesses
-                .requirements
-                .insert(required_sym, witness_sym);
-
             tracing::debug!(
                 "Checking witness {label:?}: required_ty={:?}, witness_ty={:?}",
                 required_ty,
                 witness_ty,
             );
             match unify(&required_ty, &witness_ty, context, session) {
-                Ok(vars) => solved_metas.extend(vars),
+                Ok(vars) => {
+                    solved_metas.extend(vars);
+                    witness_table.methods.insert(label.clone(), witness_sym);
+                    witness_table.requirements.insert(required_sym, witness_sym);
+                }
                 Err(e) => {
                     tracing::error!("Error checking witness {label:?}: {e:?}");
                     missing_witnesses.push((label, required_sym))

@@ -27,7 +27,8 @@ pub mod tests {
             stmt::{Stmt, StmtKind},
             type_annotation::{TypeAnnotation, TypeAnnotationKind},
         },
-        parser::Parser,
+        parser::{BlockContext, Parser},
+        parser_error::ParserError,
         span::Span,
         token_kind::TokenKind,
     };
@@ -224,6 +225,36 @@ pub mod tests {
                 body: any_body!(vec![])
             })
         );
+    }
+
+    #[test]
+    fn rejects_struct_conformance_list() {
+        let lexer = Lexer::new("struct Person: Named {}");
+        let parser = Parser::new("-", FileID(0), lexer);
+        let result = parser.parse();
+
+        assert!(matches!(
+            result,
+            Err(ParserError::ConformanceListNotAllowed {
+                context: BlockContext::Struct,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn rejects_enum_conformance_list() {
+        let lexer = Lexer::new("enum Result: Showable {}");
+        let parser = Parser::new("-", FileID(0), lexer);
+        let result = parser.parse();
+
+        assert!(matches!(
+            result,
+            Err(ParserError::ConformanceListNotAllowed {
+                context: BlockContext::Enum,
+                ..
+            })
+        ));
     }
 
     // #[test]

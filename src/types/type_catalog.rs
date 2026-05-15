@@ -7,7 +7,7 @@ use crate::{
     name_resolution::symbol::Symbol,
     node_id::NodeID,
     types::{
-        conformance::{Conformance, ConformanceDecl, ConformanceKey, WitnessTable},
+        conformance::{ConformanceClaim, ConformanceEvidence, ConformanceKey, WitnessTable},
         infer_row::{Row, RowParamId},
         infer_ty::Ty,
         type_operations::UnificationSubstitutions,
@@ -137,8 +137,10 @@ pub enum GlobalConstant {
 #[derive(Debug, PartialEq, Clone, serde::Serialize, serde::Deserialize, Default)]
 pub struct TypeCatalog {
     pub nominals: IndexMap<Symbol, Nominal>,
-    pub conformance_decls: IndexMap<ConformanceKey, ConformanceDecl>,
-    pub conformances: IndexMap<ConformanceKey, Conformance>,
+    /// Declared conformance claims plus candidate witnesses from their bodies.
+    pub conformance_claims: IndexMap<ConformanceKey, ConformanceClaim>,
+    /// Validated conformance evidence consumed by projection, member, and specialization logic.
+    pub conformance_evidence: IndexMap<ConformanceKey, ConformanceEvidence>,
     pub associated_types: IndexMap<Symbol, IndexMap<Label, Symbol>>,
     pub extensions: IndexMap<Symbol, IndexMap<Label, Symbol>>,
     pub child_types: IndexMap<Symbol, IndexMap<Label, Symbol>>,
@@ -155,34 +157,29 @@ pub struct TypeCatalog {
 }
 
 impl TypeCatalog {
-    pub fn declare_conformance(&mut self, decl: ConformanceDecl) {
-        let key = decl.key();
-        if let Some(existing) = self.conformance_decls.get_mut(&key) {
-            existing.merge_candidates(decl);
+    pub fn declare_conformance(&mut self, claim: ConformanceClaim) {
+        let key = claim.key();
+        if let Some(existing) = self.conformance_claims.get_mut(&key) {
+            existing.merge_candidates(claim);
         } else {
-            self.conformance_decls.insert(key, decl);
+            self.conformance_claims.insert(key, claim);
         }
-    }
-
-    pub fn ensure_conformance(&mut self, key: ConformanceKey) -> Option<&mut Conformance> {
-        if !self.conformances.contains_key(&key) {
-            let decl = self.conformance_decls.get(&key)?.clone();
-            self.conformances.insert(key, Conformance::from_decl(&decl));
-        }
-
-        self.conformances.get_mut(&key)
-    }
-
-    pub fn has_conformance_decl(&self, key: &ConformanceKey) -> bool {
-        self.conformance_decls.contains_key(key) || self.conformances.contains_key(key)
     }
 
     pub(crate) fn inherit_conformances(&mut self) -> Vec<ConformanceKey> {
         let mut inserted = vec![];
 
         loop {
-            let existing_keys = self.conformances.keys().copied().collect::<Vec<_>>();
-            let conformances = self.conformances.values().cloned().collect::<Vec<_>>();
+            let existing_keys = self
+                .conformance_evidence
+                .keys()
+                .copied()
+                .collect::<Vec<_>>();
+            let conformances = self
+                .conformance_evidence
+                .values()
+                .cloned()
+                .collect::<Vec<_>>();
             let mut changed = false;
 
             for conformance in &conformances {
@@ -195,13 +192,13 @@ impl TypeCatalog {
                         protocol_id: super_key.protocol_id,
                         conforming_id: conformance.conforming_id,
                     };
-                    if self.conformances.contains_key(&inherited_key) {
+                    if self.conformance_evidence.contains_key(&inherited_key) {
                         continue;
                     }
 
-                    self.conformances.insert(
+                    self.conformance_evidence.insert(
                         inherited_key,
-                        Conformance::from_superprotocol(
+                        ConformanceEvidence::from_superprotocol(
                             conformance.node_id,
                             conformance.conforming_id,
                             super_key.protocol_id,
@@ -291,7 +288,7 @@ impl TypeCatalog {
         for ConformanceKey {
             protocol_id,
             conforming_id,
-        } in self.conformances.keys()
+        } in self.conformance_evidence.keys()
         {
             if conforming_id != receiver {
                 continue;
@@ -366,8 +363,8 @@ impl TypeCatalog {
                 .into_iter()
                 .map(|(k, v)| (k.import(module_id), v.import_as(module_id)))
                 .collect(),
-            conformance_decls: self
-                .conformance_decls
+            conformance_claims: self
+                .conformance_claims
                 .into_iter()
                 .map(|(k, v)| {
                     (
@@ -379,8 +376,8 @@ impl TypeCatalog {
                     )
                 })
                 .collect(),
-            conformances: self
-                .conformances
+            conformance_evidence: self
+                .conformance_evidence
                 .into_iter()
                 .map(|(k, v)| {
                     (
@@ -388,10 +385,11 @@ impl TypeCatalog {
                             protocol_id: k.protocol_id.import(module_id),
                             conforming_id: k.conforming_id.import(module_id),
                         },
-                        Conformance {
+                        ConformanceEvidence {
                             node_id: v.node_id,
                             conforming_id: v.conforming_id.import(module_id),
                             protocol_id: v.protocol_id.import(module_id),
+                            origin: v.origin,
                             witnesses: WitnessTable {
                                 methods: import_mapped(v.witnesses.methods, module_id),
                                 associated_types: v

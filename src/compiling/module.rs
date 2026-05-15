@@ -13,7 +13,7 @@ use crate::{
     label::Label,
     name_resolution::symbol::{ProtocolId, Symbol},
     types::{
-        conformance::{Conformance, ConformanceDecl, ConformanceKey},
+        conformance::{ConformanceClaim, ConformanceEvidence, ConformanceKey},
         infer_ty::Ty,
         type_catalog::Nominal,
         types::{TypeEntry, Types},
@@ -290,40 +290,40 @@ impl ModuleEnvironment {
     }
 
     #[instrument(skip(self))]
-    pub fn lookup_conformance_decl(&self, key: &ConformanceKey) -> Option<ConformanceDecl> {
+    pub fn lookup_conformance_claim(&self, key: &ConformanceKey) -> Option<ConformanceClaim> {
         if let Some(module_id) = key.conforming_id.external_module_id()
             && let Some(stable_id) = self.modules_by_local.get(&module_id)
             && let Some(module) = self.modules.get(stable_id)
-            && let Some(decl) = module.types.catalog.conformance_decls.get(key)
+            && let Some(claim) = module.types.catalog.conformance_claims.get(key)
         {
-            return Some(decl.clone());
+            return Some(claim.clone());
         }
 
         if let Some(module_id) = Symbol::Protocol(key.protocol_id).external_module_id()
             && let Some(stable_id) = self.modules_by_local.get(&module_id)
             && let Some(module) = self.modules.get(stable_id)
-            && let Some(decl) = module.types.catalog.conformance_decls.get(key)
+            && let Some(claim) = module.types.catalog.conformance_claims.get(key)
         {
-            return Some(decl.clone());
+            return Some(claim.clone());
         }
 
         None
     }
 
     #[instrument(skip(self))]
-    pub fn lookup_conformance(&self, key: &ConformanceKey) -> Option<&Conformance> {
+    pub fn lookup_conformance(&self, key: &ConformanceKey) -> Option<&ConformanceEvidence> {
         if let Some(module_id) = key.conforming_id.external_module_id()
             && let Some(stable_id) = self.modules_by_local.get(&module_id)
             && let Some(module) = self.modules.get(stable_id)
         {
-            return module.types.catalog.conformances.get(key);
+            return module.types.catalog.conformance_evidence.get(key);
         }
 
         if let Some(module_id) = Symbol::Protocol(key.protocol_id).external_module_id()
             && let Some(stable_id) = self.modules_by_local.get(&module_id)
             && let Some(module) = self.modules.get(stable_id)
         {
-            return module.types.catalog.conformances.get(key);
+            return module.types.catalog.conformance_evidence.get(key);
         }
 
         None
@@ -336,7 +336,7 @@ impl ModuleEnvironment {
                     .1
                     .types
                     .catalog
-                    .conformances
+                    .conformance_evidence
                     .keys()
                     .filter(|k| k.protocol_id == *protocol_id),
             );
@@ -344,30 +344,30 @@ impl ModuleEnvironment {
         })
     }
 
-    /// Returns all conformance declarations from all imported modules.
-    pub fn all_conformance_decls(&self) -> Vec<(ConformanceKey, ConformanceDecl)> {
+    /// Returns all conformance claims from all imported modules.
+    pub fn all_conformance_claims(&self) -> Vec<(ConformanceKey, ConformanceClaim)> {
         self.modules
             .iter()
             .flat_map(|(_, module)| {
                 module
                     .types
                     .catalog
-                    .conformance_decls
+                    .conformance_claims
                     .iter()
                     .map(|(k, v)| (*k, v.clone()))
             })
             .collect()
     }
 
-    /// Returns all validated conformances from all imported modules.
-    pub fn all_conformances(&self) -> Vec<(ConformanceKey, Conformance)> {
+    /// Returns all validated conformance evidence from all imported modules.
+    pub fn all_conformance_evidence(&self) -> Vec<(ConformanceKey, ConformanceEvidence)> {
         self.modules
             .iter()
             .flat_map(|(_, module)| {
                 module
                     .types
                     .catalog
-                    .conformances
+                    .conformance_evidence
                     .iter()
                     .map(|(k, v)| (*k, v.clone()))
             })

@@ -209,15 +209,15 @@ impl Member {
 
         for (protocol_id, req) in matching_methods.iter() {
             // For each conformance to this protocol, register a choice alternative
-            let conformances: Vec<_> = session
+            let candidates: Vec<_> = session
                 .type_catalog
-                .conformances
+                .conformance_evidence
                 .iter()
                 .filter(|(key, _)| key.protocol_id == *protocol_id)
                 .map(|(key, conf)| (key.conforming_id, conf.witnesses.clone()))
                 .collect();
 
-            for (conforming_id, witnesses) in conformances {
+            for (conforming_id, witnesses) in candidates {
                 if let Some(witness) = witnesses.get_witness(&self.label, req) {
                     let alternative = ChoiceAlternative {
                         conforming_type: conforming_id,

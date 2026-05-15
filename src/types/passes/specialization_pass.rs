@@ -555,7 +555,8 @@ impl<'a> SpecializationPass<'a> {
                                 protocol_id: *protocol_id,
                                 conforming_id: conforming_sym,
                             };
-                            if let Some(conformance) = self.types.catalog.conformances.get(&key)
+                            if let Some(conformance) =
+                                self.types.catalog.conformance_evidence.get(&key)
                                 && let Some(witness) =
                                     conformance.witnesses.get_witness(label, &caller)
                             {
@@ -733,7 +734,7 @@ impl<'a> SpecializationPass<'a> {
                 let witness = self
                     .types
                     .catalog
-                    .conformances
+                    .conformance_evidence
                     .get(&key)
                     .or_else(|| self.modules.lookup_conformance(&key))
                     .and_then(|conformance| conformance.witnesses.get_witness(label, &method_req));
@@ -816,7 +817,7 @@ impl<'a> SpecializationPass<'a> {
                     protocol_id,
                     conforming_id,
                 };
-                let Some(conformance) = self.types.catalog.conformances.get(&key) else {
+                let Some(conformance) = self.types.catalog.conformance_evidence.get(&key) else {
                     continue;
                 };
                 let Some(associated_types) = self
@@ -1337,7 +1338,7 @@ impl<'a> SpecializationPass<'a> {
         };
         self.types
             .catalog
-            .conformances
+            .conformance_evidence
             .get(&key)
             .or_else(|| self.modules.lookup_conformance(&key))
             .and_then(|conformance| conformance.witnesses.get_witness(&label, method_req))
@@ -1380,7 +1381,7 @@ impl<'a> SpecializationPass<'a> {
             let conformance = self
                 .types
                 .catalog
-                .conformances
+                .conformance_evidence
                 .get(&key)
                 .or_else(|| self.modules.lookup_conformance(&key));
             if let Some(conf) = conformance

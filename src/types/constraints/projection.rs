@@ -47,14 +47,17 @@ impl Projection {
 
         if let Some(base_sym) = base_sym {
             let conformance = if let Some(protocol_id) = self.protocol_id {
-                session.type_catalog.conformances.get(&ConformanceKey {
-                    protocol_id, // add this field to Projection (see below)
-                    conforming_id: base_sym,
-                })
+                session
+                    .type_catalog
+                    .conformance_evidence
+                    .get(&ConformanceKey {
+                        protocol_id, // add this field to Projection (see below)
+                        conforming_id: base_sym,
+                    })
             } else {
                 session
                     .type_catalog
-                    .conformances
+                    .conformance_evidence
                     .values()
                     .find(|c| c.conforming_id == base_sym)
             };
