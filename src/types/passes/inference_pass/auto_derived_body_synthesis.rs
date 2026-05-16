@@ -342,13 +342,11 @@ impl InferencePass<'_> {
             None => {
                 // For type parameters, add Showable bound so the lowerer emits a
                 // MethodRequirement that the monomorphizer resolves at instantiation time.
-                if let Ty::Param(_, ref mut bounds) = receiver.ty {
-                    if let Some(sid) = showable_id {
-                        if !bounds.contains(&sid) {
+                if let Ty::Param(_, ref mut bounds) = receiver.ty
+                    && let Some(sid) = showable_id
+                        && !bounds.contains(&sid) {
                             bounds.push(sid);
                         }
-                    }
-                }
 
                 // Fallback: emit Member + Call (for types we can't resolve yet)
                 let show_method = TypedExpr {

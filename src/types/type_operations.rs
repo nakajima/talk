@@ -569,11 +569,10 @@ fn lookup_param_subst<'a>(
     map: &'a FxHashMap<Ty, Ty>,
 ) -> Option<&'a Ty> {
     map.iter().find_map(|(key, value)| {
-        if let Ty::Param(key_sym, key_bounds) = key {
-            if key_sym == sym && key_bounds.iter().all(|b| bounds.contains(b)) {
+        if let Ty::Param(key_sym, key_bounds) = key
+            && key_sym == sym && key_bounds.iter().all(|b| bounds.contains(b)) {
                 return Some(value);
             }
-        }
         None
     })
 }
@@ -584,11 +583,10 @@ pub(super) fn substitute(ty: &Ty, substitutions: &FxHashMap<Ty, Ty>) -> Ty {
     }
     ty.clone().mapping(
         &mut |t| {
-            if let Ty::Param(sym, bounds) = &t {
-                if let Some(subst) = lookup_param_subst(sym, bounds, substitutions) {
+            if let Ty::Param(sym, bounds) = &t
+                && let Some(subst) = lookup_param_subst(sym, bounds, substitutions) {
                     return subst.clone();
                 }
-            }
             substitutions.get(&t).cloned().unwrap_or(t)
         },
         &mut |r| r,
@@ -599,11 +597,10 @@ pub(super) fn substitute(ty: &Ty, substitutions: &FxHashMap<Ty, Ty>) -> Ty {
 pub(super) fn substitute_with_subs(ty: Ty, substitutions: &Substitutions) -> Ty {
     ty.mapping(
         &mut |t| {
-            if let Ty::Param(sym, bounds) = &t {
-                if let Some(subst) = lookup_param_subst(sym, bounds, &substitutions.ty) {
+            if let Ty::Param(sym, bounds) = &t
+                && let Some(subst) = lookup_param_subst(sym, bounds, &substitutions.ty) {
                     return subst.clone();
                 }
-            }
             if let Some(subst) = substitutions.ty.get(&t) {
                 return subst.clone();
             }

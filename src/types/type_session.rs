@@ -1480,19 +1480,17 @@ impl TypeSession {
     /// Find a protocol's ProtocolId by name.
     pub(crate) fn find_protocol_id(&self, protocol_name: &str) -> Option<ProtocolId> {
         for (sym, name) in &self.resolved_names.symbol_names {
-            if name == protocol_name {
-                if let Symbol::Protocol(id) = sym {
+            if name == protocol_name
+                && let Symbol::Protocol(id) = sym {
                     return Some(*id);
                 }
-            }
         }
         // Also check imported modules
         for (sym, name) in self.modules.imported_symbol_names() {
-            if name == protocol_name {
-                if let Symbol::Protocol(id) = sym {
+            if name == protocol_name
+                && let Symbol::Protocol(id) = sym {
                     return Some(id);
                 }
-            }
         }
         None
     }
@@ -1519,11 +1517,10 @@ impl TypeSession {
         // Index-based iteration to avoid cloning the Vec (lookup_method_requirements takes &mut self).
         for i in 0..self.auto_derivable_protocols.len() {
             let protocol_id = self.auto_derivable_protocols[i];
-            if let Some(reqs) = self.lookup_method_requirements(protocol_id.into()) {
-                if reqs.contains_key(label) {
+            if let Some(reqs) = self.lookup_method_requirements(protocol_id.into())
+                && reqs.contains_key(label) {
                     return Some(protocol_id);
                 }
-            }
         }
         None
     }
