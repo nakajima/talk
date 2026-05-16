@@ -3241,21 +3241,20 @@ impl<'a> Lowerer<'a> {
         // Static calls on constructors (e.g. HTTP.Server()) should not prepend a
         // receiver argument. Keep that path separate from the explicit-self legacy
         // constructor call shape (Foo.bar(fizz)).
-        let constructor_static_sym = if let Ty::Constructor {
+        let constructor_member_sym = if let Ty::Constructor {
             name: Name::Resolved(sym, ..),
             ..
         } = &receiver.ty
         {
-            self.lookup_static_member(sym, label)
+            self.lookup_constructor_member(sym, label)
         } else {
             None
         };
 
-        // Is this an instance method call on a constructor? If so we don't need
-        // to prepend a self arg because it's passed explicitly (like Foo.bar(fizz)
-        // where fizz == self). Do not apply this to true static constructor calls.
-        if constructor_static_sym.is_some() {
-            // no-op: static member call on a constructor
+        // Constructor/type member calls already carry their explicit receiver shape.
+        // Do not prepend an instance receiver for those calls.
+        if constructor_member_sym.is_some() {
+            // no-op: constructor/type member call
         } else if let TypedExprKind::Constructor(_name, ..) = &receiver.kind
             && !arg_exprs.is_empty()
         {
@@ -3276,7 +3275,7 @@ impl<'a> Lowerer<'a> {
                 Ty::Constructor {
                     name: Name::Resolved(sym, ..),
                     ..
-                } => constructor_static_sym.or_else(|| self.lookup_static_member(sym, label)),
+                } => constructor_member_sym.or_else(|| self.lookup_constructor_member(sym, label)),
                 Ty::Param(_, protocol_ids) => {
                     let mut found = None;
                     for pid in protocol_ids {
@@ -3958,23 +3957,18 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    /// Look up instance/conformance methods — checks local catalog, then external modules
+    /// Look up instance/protocol-visible methods.
     fn lookup_member(&self, receiver: &Symbol, label: &Label) -> Option<Symbol> {
         self.typed
             .types
-            .catalog
-            .lookup_member(receiver, label)
-            .map(|s| s.0)
-            .or_else(|| self.config.modules.lookup_member(receiver, label))
+            .lookup_member(self.config.modules.as_ref(), receiver, label)
     }
 
-    /// Look up static methods — checks local catalog, then external modules
-    fn lookup_static_member(&self, receiver: &Symbol, label: &Label) -> Option<Symbol> {
+    /// Look up members available on a constructor/type receiver.
+    fn lookup_constructor_member(&self, receiver: &Symbol, label: &Label) -> Option<Symbol> {
         self.typed
             .types
-            .catalog
-            .lookup_static_member(receiver, label)
-            .or_else(|| self.config.modules.lookup_static_member(receiver, label))
+            .lookup_constructor_member(self.config.modules.as_ref(), receiver, label)
     }
 
     /// Look up nominal type info — checks local catalog, then external modules
@@ -3987,19 +3981,17 @@ impl<'a> Lowerer<'a> {
             .or_else(|| self.config.modules.lookup_nominal(symbol))
     }
 
-    /// Look up an instance method by name — checks local catalog, then external modules
+    /// Look up a callable instance/protocol-visible member.
     fn lookup_instance_method(&self, symbol: &Symbol, label: &Label) -> Option<Symbol> {
         self.typed
             .types
-            .catalog
-            .instance_methods
-            .get(symbol)
-            .and_then(|methods| methods.get(label).copied())
-            .or_else(|| {
-                self.config
-                    .modules
-                    .lookup_instance_methods(symbol)
-                    .and_then(|methods| methods.get(label).copied())
+            .lookup_member_binding(self.config.modules.as_ref(), symbol, label)
+            .map(|binding| binding.symbol)
+            .filter(|symbol| {
+                matches!(
+                    symbol,
+                    Symbol::InstanceMethod(..) | Symbol::MethodRequirement(..)
+                )
             })
     }
 

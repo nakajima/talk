@@ -138,6 +138,15 @@ impl ConformanceContext {
         })
     }
 
+    pub(crate) fn record_evidence(
+        &mut self,
+        catalog: &mut TypeCatalog,
+        key: ConformanceKey,
+        evidence: ConformanceEvidence,
+    ) {
+        catalog.conformance_evidence.insert(key, evidence);
+    }
+
     pub(crate) fn protocol_implies(
         &mut self,
         catalog: &mut TypeCatalog,

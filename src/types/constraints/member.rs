@@ -108,7 +108,7 @@ impl Member {
                 );
             }
             Ty::Constructor { name, .. } => {
-                return self.lookup_static_member(
+                return self.lookup_constructor_member(
                     constraints,
                     context,
                     session,
@@ -208,30 +208,20 @@ impl Member {
         let mut alt_index = 0;
 
         for (protocol_id, req) in matching_methods.iter() {
-            // For each conformance to this protocol, register a choice alternative
-            let candidates: Vec<_> = session
-                .type_catalog
-                .conformance_evidence
-                .iter()
-                .filter(|(key, _)| key.protocol_id == *protocol_id)
-                .map(|(key, conf)| (key.conforming_id, conf.witnesses.clone()))
-                .collect();
+            for (conforming_id, witness) in session.method_witnesses(*protocol_id, &self.label, req)
+            {
+                let alternative = ChoiceAlternative {
+                    conforming_type: conforming_id,
+                    witness_sym: witness,
+                    protocol_id: *protocol_id,
+                };
 
-            for (conforming_id, witnesses) in candidates {
-                if let Some(witness) = witnesses.get_witness(&self.label, req) {
-                    let alternative = ChoiceAlternative {
-                        conforming_type: conforming_id,
-                        witness_sym: witness,
-                        protocol_id: *protocol_id,
-                    };
-
-                    session.choices.register_alternative(
-                        dimension,
-                        AlternativeIndex(alt_index),
-                        alternative,
-                    );
-                    alt_index += 1;
-                }
+                session.choices.register_alternative(
+                    dimension,
+                    AlternativeIndex(alt_index),
+                    alternative,
+                );
+                alt_index += 1;
             }
         }
 
@@ -323,7 +313,7 @@ impl Member {
     }
 
     #[instrument(skip(self, context, session, constraints))]
-    fn lookup_static_member(
+    fn lookup_constructor_member(
         &self,
         constraints: &mut ConstraintStore,
         context: &mut SolveContext,
@@ -331,7 +321,8 @@ impl Member {
         nominal_symbol: &Symbol,
     ) -> SolveResult {
         let cause = ConstraintCause::Member(self.node_id);
-        let Some(member_sym) = session.lookup_static_member(nominal_symbol, &self.label) else {
+        let Some(member_sym) = session.lookup_constructor_member(nominal_symbol, &self.label)
+        else {
             return SolveResult::Defer(DeferralReason::WaitingOnSymbol(*nominal_symbol));
         };
 
@@ -423,7 +414,7 @@ impl Member {
             } else {
                 Ty::Error(
                     TypeError::TypeNotFound(format!(
-                        "{nominal_symbol:?} while looking up static member {:?}",
+                        "{nominal_symbol:?} while looking up constructor member {:?}",
                         self.label
                     ))
                     .into(),
@@ -521,7 +512,7 @@ impl Member {
                     return SolveResult::Solved(Default::default());
                 }
                 Symbol::StaticMethod(..) => {
-                    return self.lookup_static_member(constraints, context, session, symbol);
+                    return self.lookup_constructor_member(constraints, context, session, symbol);
                 }
                 _ => (),
             }

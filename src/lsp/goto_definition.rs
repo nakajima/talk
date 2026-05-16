@@ -303,7 +303,11 @@ fn goto_definition_symbol_from_type_annotation(
                 return None;
             }
             let base_symbol = base.symbol().ok()?;
-            types?.catalog.lookup_static_member(&base_symbol, member)
+            types?
+                .catalog
+                .child_types
+                .get(&base_symbol)
+                .and_then(|members| members.get(member).copied())
         }
         _ => None,
     }

@@ -38,8 +38,8 @@ mod signature_discovery_pass;
 mod solving;
 mod type_annotations;
 
-use finalize_types_pass::FinalizeTypes;
-use signature_discovery_pass::SignatureDiscovery;
+use finalize_types_pass::FinalizeTypesPass;
+use signature_discovery_pass::SignatureDiscoveryPass;
 
 type TypedRet<T> = Result<T, TypeError>;
 
@@ -146,7 +146,7 @@ impl<'a> InferencePass<'a> {
     }
 
     fn discover_signatures(&mut self) {
-        SignatureDiscovery::new(self).run();
+        SignatureDiscoveryPass::new(self).run();
     }
 
     fn infer_bodies(&mut self) {
@@ -155,7 +155,7 @@ impl<'a> InferencePass<'a> {
 
     fn finalize_inference(mut self) -> (TypedAST, Vec<AnyDiagnostic>) {
         {
-            FinalizeTypes::new(&mut self).run();
+            FinalizeTypesPass::new(&mut self).run();
         }
 
         let typed_ast = TypedAST {

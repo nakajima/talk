@@ -18,7 +18,7 @@ use crate::{
 };
 
 #[must_use]
-pub(super) struct ReturnToken {}
+struct ReturnToken {}
 
 impl InferencePass<'_> {
     #[instrument(level = tracing::Level::TRACE, skip(self, block, context))]
@@ -127,7 +127,7 @@ impl InferencePass<'_> {
         &mut self,
         effect_set: &EffectSet,
         context: &mut SolveContext,
-    ) -> Result<(ReturnToken, Vec<TypedEffect>), TypeError> {
+    ) -> Result<Vec<TypedEffect>, TypeError> {
         let mut effects = vec![];
         for effect in effect_set.names.iter() {
             let Ok(symbol) = effect.symbol() else {
@@ -159,7 +159,7 @@ impl InferencePass<'_> {
 
         self.tracked_effect_rows.push(effects_row);
 
-        Ok((ReturnToken {}, effects))
+        Ok(effects)
     }
 
     fn verify_returns(&mut self, _tok: ReturnToken, ret: Ty, context: &mut SolveContext) {

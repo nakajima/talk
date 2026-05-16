@@ -20,6 +20,7 @@ pub mod tests {
             infer_row::{Row, RowParamId},
             infer_ty::Ty,
             scheme::{ForAll, Scheme},
+            type_catalog::MemberSource,
             type_error::TypeError,
             typed_ast::{TypedAST, TypedExpr, TypedExprKind, TypedStmt, TypedStmtKind},
             types::{TypeEntry, Types},
@@ -2660,21 +2661,18 @@ pub mod tests {
                 .is_some()
         );
 
-        println!("{:?}", types.catalog.instance_methods.get(&Symbol::Int));
-
-        // Int's instance_methods should have the `default` method from protocol A
-        let member_sym = types
+        // Int's completed member index should have the `default` method from protocol A.
+        let member = types
             .catalog
-            .instance_methods
-            .get(&Symbol::Int)
-            .unwrap()
-            .get(&Label::Named("default".into()))
+            .lookup_member_binding(&Symbol::Int, &Label::Named("default".into()))
             .unwrap();
+
+        assert_eq!(member.source, MemberSource::Protocol(ProtocolId::from(1)));
 
         // The entry is polymorphic (Self -> Int), with actual monomorphization
         // happening during lowering. The important thing is that the method is
         // available on Int through the transitive conformance.
-        assert!(types.get_symbol(member_sym).is_some());
+        assert!(types.get_symbol(&member.symbol).is_some());
     }
 
     #[test]

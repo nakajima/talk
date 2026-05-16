@@ -538,7 +538,7 @@ impl InferencePass<'_> {
         // Handle self param directly with struct_ty - don't instantiate!
         let params = self.visit_params(params, context)?;
 
-        let (_effects_guard, effects) = self.tracking_effects(&EffectSet::default(), context)?;
+        let effects = self.tracking_effects(&EffectSet::default(), context)?;
 
         // Init blocks always return self
         let block = self.infer_block(body, context)?;

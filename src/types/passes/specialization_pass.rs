@@ -555,11 +555,7 @@ impl<'a> SpecializationPass<'a> {
                                 protocol_id: *protocol_id,
                                 conforming_id: conforming_sym,
                             };
-                            if let Some(conformance) =
-                                self.types.catalog.conformance_evidence.get(&key)
-                                && let Some(witness) =
-                                    conformance.witnesses.get_witness(label, &caller)
-                            {
+                            if let Some(witness) = self.lookup_witness(&key, label, &caller) {
                                 caller = witness;
                                 self.add_receiver_type_args(
                                     &caller,
@@ -665,12 +661,35 @@ impl<'a> SpecializationPass<'a> {
 
     fn lookup_member(&self, receiver_sym: &Symbol, label: &Label) -> Option<Symbol> {
         self.types
-            .catalog
-            .lookup_member(receiver_sym, label)
-            .map(|(member_sym, _)| member_sym)
-            .or_else(|| self.types.catalog.lookup_static_member(receiver_sym, label))
-            .or_else(|| self.modules.lookup_member(receiver_sym, label))
-            .or_else(|| self.modules.lookup_static_member(receiver_sym, label))
+            .lookup_member(self.modules, receiver_sym, label)
+            .or_else(|| {
+                self.types
+                    .lookup_constructor_member(self.modules, receiver_sym, label)
+            })
+    }
+
+    fn lookup_witness(
+        &self,
+        key: &ConformanceKey,
+        label: &Label,
+        method_req: &Symbol,
+    ) -> Option<Symbol> {
+        self.types
+            .lookup_witness(self.modules, key, label, method_req)
+    }
+
+    fn lookup_method_requirement(&self, protocol_sym: &Symbol, label: &Label) -> Option<Symbol> {
+        self.types
+            .lookup_method_requirement(self.modules, protocol_sym, label)
+    }
+
+    fn method_requirement_label(&self, method_req: &Symbol) -> Option<(Symbol, Label)> {
+        self.types
+            .method_requirement_label(self.modules, method_req)
+    }
+
+    fn associated_type_witnesses(&self, key: &ConformanceKey) -> Option<FxHashMap<Label, Ty>> {
+        self.types.associated_type_witnesses(self.modules, key)
     }
 
     fn resolve_choice(
@@ -715,15 +734,7 @@ impl<'a> SpecializationPass<'a> {
 
             for protocol_id in bounds {
                 let protocol_sym = Symbol::Protocol(*protocol_id);
-                let method_req = self
-                    .types
-                    .catalog
-                    .method_requirements
-                    .get(&protocol_sym)
-                    .cloned()
-                    .or_else(|| self.modules.lookup_method_requirements(&protocol_sym))
-                    .and_then(|requirements| requirements.get(label).copied());
-                let Some(method_req) = method_req else {
+                let Some(method_req) = self.lookup_method_requirement(&protocol_sym, label) else {
                     continue;
                 };
 
@@ -731,14 +742,7 @@ impl<'a> SpecializationPass<'a> {
                     protocol_id: *protocol_id,
                     conforming_id,
                 };
-                let witness = self
-                    .types
-                    .catalog
-                    .conformance_evidence
-                    .get(&key)
-                    .or_else(|| self.modules.lookup_conformance(&key))
-                    .and_then(|conformance| conformance.witnesses.get_witness(label, &method_req));
-                let Some(witness) = witness else {
+                let Some(witness) = self.lookup_witness(&key, label, &method_req) else {
                     continue;
                 };
 
@@ -817,7 +821,7 @@ impl<'a> SpecializationPass<'a> {
                     protocol_id,
                     conforming_id,
                 };
-                let Some(conformance) = self.types.catalog.conformance_evidence.get(&key) else {
+                let Some(associated_type_witnesses) = self.associated_type_witnesses(&key) else {
                     continue;
                 };
                 let Some(associated_types) = self
@@ -829,7 +833,7 @@ impl<'a> SpecializationPass<'a> {
                     continue;
                 };
 
-                for (label, witness_ty) in &conformance.witnesses.associated_types {
+                for (label, witness_ty) in &associated_type_witnesses {
                     let Some(associated_sym) = associated_types.get(label) else {
                         continue;
                     };
@@ -913,16 +917,10 @@ impl<'a> SpecializationPass<'a> {
                 };
 
                 // If we got a concrete receiver symbol, try normal member lookup
-                if let Ok(receiver_sym) = receiver_sym_result {
-                    if let Some((sym, _)) = self.types.catalog.lookup_member(&receiver_sym, label) {
-                        return Ok(sym);
-                    } else if let Some(sym) = self
-                        .types
-                        .catalog
-                        .lookup_static_member(&receiver_sym, label)
-                    {
-                        return Ok(sym);
-                    }
+                if let Ok(receiver_sym) = receiver_sym_result
+                    && let Some(sym) = self.lookup_member(&receiver_sym, label)
+                {
+                    return Ok(sym);
                 }
 
                 // If receiver is a type param that wasn't specialized, this is likely a protocol
@@ -955,12 +953,9 @@ impl<'a> SpecializationPass<'a> {
             return None;
         };
 
-        protocol_bounds.iter().find_map(|protocol_id| {
-            self.types
-                .catalog
-                .lookup_member(&(*protocol_id).into(), label)
-                .map(|(req_sym, _)| req_sym)
-        })
+        protocol_bounds
+            .iter()
+            .find_map(|protocol_id| self.lookup_member(&Symbol::Protocol(*protocol_id), label))
     }
 
     fn symbol_from_ty(
@@ -1311,21 +1306,10 @@ impl<'a> SpecializationPass<'a> {
     }
 
     fn resolve_witness_for_type(&self, method_req: &Symbol, receiver_ty: &Ty) -> Option<Symbol> {
-        let protocol_sym = self
-            .types
-            .catalog
-            .protocol_for_method_requirement(method_req)?;
+        let (protocol_sym, label) = self.method_requirement_label(method_req)?;
         let Symbol::Protocol(protocol_id) = protocol_sym else {
             return None;
         };
-        let method_reqs = self.types.catalog.method_requirements.get(&protocol_sym)?;
-        let label = method_reqs.iter().find_map(|(label, sym)| {
-            if sym == method_req {
-                Some(label.clone())
-            } else {
-                None
-            }
-        })?;
 
         let conforming_sym = match receiver_ty {
             Ty::Nominal { symbol, .. } => *symbol,
@@ -1336,12 +1320,7 @@ impl<'a> SpecializationPass<'a> {
             conforming_id: conforming_sym,
             protocol_id,
         };
-        self.types
-            .catalog
-            .conformance_evidence
-            .get(&key)
-            .or_else(|| self.modules.lookup_conformance(&key))
-            .and_then(|conformance| conformance.witnesses.get_witness(&label, method_req))
+        self.lookup_witness(&key, &label, method_req)
     }
 
     /// Resolve a MethodRequirement to its concrete witness by looking up the conformance.
@@ -1351,21 +1330,10 @@ impl<'a> SpecializationPass<'a> {
         method_req: &Symbol,
         callee_specs: &Specializations,
     ) -> Option<Symbol> {
-        let protocol_sym = self
-            .types
-            .catalog
-            .protocol_for_method_requirement(method_req)?;
+        let (protocol_sym, label) = self.method_requirement_label(method_req)?;
         let Symbol::Protocol(protocol_id) = protocol_sym else {
             return None;
         };
-        let method_reqs = self.types.catalog.method_requirements.get(&protocol_sym)?;
-        let label = method_reqs.iter().find_map(|(l, s)| {
-            if s == method_req {
-                Some(l.clone())
-            } else {
-                None
-            }
-        })?;
 
         for concrete_ty in callee_specs.ty.values() {
             let conforming_sym = match concrete_ty {
@@ -1377,16 +1345,7 @@ impl<'a> SpecializationPass<'a> {
                 conforming_id: conforming_sym,
                 protocol_id,
             };
-            // Check local catalog first, then imported modules
-            let conformance = self
-                .types
-                .catalog
-                .conformance_evidence
-                .get(&key)
-                .or_else(|| self.modules.lookup_conformance(&key));
-            if let Some(conf) = conformance
-                && let Some(witness) = conf.witnesses.get_witness(&label, method_req)
-            {
+            if let Some(witness) = self.lookup_witness(&key, &label, method_req) {
                 return Some(witness);
             }
         }

@@ -144,7 +144,7 @@ impl Conforms {
             protocol_id,
         };
 
-        let Some(mut conformance) = session.conformance_seed(key, seed) else {
+        let Some(conformance) = session.conformance_seed(key, seed) else {
             return CheckWitnessResult::Defer(vec![DeferralReason::WaitingOnConformance(key)]);
         };
         let mut witnesses = conformance.witnesses.clone();
@@ -239,12 +239,8 @@ impl Conforms {
 
         // Check super protocols
         for super_key in session.superprotocol_keys_for(protocol_id) {
-            let inherited = ConformanceEvidence::from_superprotocol(
-                conformance.node_id,
-                conforming_ty_sym,
-                super_key.protocol_id,
-                conformance.span,
-            );
+            let inherited =
+                session.inherited_evidence(&conformance, conforming_ty_sym, super_key.protocol_id);
             match self.check_conformance(
                 conforming_ty_sym,
                 conforming_type_args,
@@ -290,11 +286,7 @@ impl Conforms {
 
         if deferral_reasons.is_empty() {
             if missing_conformances.is_empty() {
-                conformance.witnesses = witnesses;
-                session
-                    .type_catalog
-                    .conformance_evidence
-                    .insert(key, conformance);
+                session.record_witnesses(key, conformance, witnesses);
                 constraints.wake_conformances(&[key]);
             }
 

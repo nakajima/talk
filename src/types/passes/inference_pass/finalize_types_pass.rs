@@ -12,11 +12,11 @@ use crate::{
 
 // Transitional phase wrapper: names post-inference finalization before
 // finalization state is ready to move out of InferencePass entirely.
-pub(super) struct FinalizeTypes<'pass, 'ast> {
+pub(super) struct FinalizeTypesPass<'pass, 'ast> {
     pass: &'pass mut InferencePass<'ast>,
 }
 
-impl<'pass, 'ast> FinalizeTypes<'pass, 'ast> {
+impl<'pass, 'ast> FinalizeTypesPass<'pass, 'ast> {
     pub(super) fn new(pass: &'pass mut InferencePass<'ast>) -> Self {
         Self { pass }
     }

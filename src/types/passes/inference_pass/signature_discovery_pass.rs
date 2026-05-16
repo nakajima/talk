@@ -1,6 +1,3 @@
-use indexmap::IndexMap;
-use itertools::Itertools;
-
 use super::InferencePass;
 use crate::types::constraints::store::GroupId;
 use crate::{
@@ -18,14 +15,15 @@ use crate::{
         type_operations::{UnificationSubstitutions, curry},
     },
 };
+use indexmap::IndexMap;
 
 // Transitional phase wrapper: keeps signature discovery named and isolated
 // before it is ready to move out of InferencePass entirely.
-pub(super) struct SignatureDiscovery<'pass, 'ast> {
+pub(super) struct SignatureDiscoveryPass<'pass, 'ast> {
     pass: &'pass mut InferencePass<'ast>,
 }
 
-impl<'pass, 'ast> SignatureDiscovery<'pass, 'ast> {
+impl<'pass, 'ast> SignatureDiscoveryPass<'pass, 'ast> {
     pub(super) fn new(pass: &'pass mut InferencePass<'ast>) -> Self {
         Self { pass }
     }
@@ -40,32 +38,6 @@ impl<'pass, 'ast> SignatureDiscovery<'pass, 'ast> {
             self.discover_protocols(i, Level::default());
             let inherited = self.pass.session.type_catalog.inherit_conformances();
             self.pass.constraints.wake_conformances(&inherited);
-
-            let mut conformance_keys = self
-                .pass
-                .session
-                .type_catalog
-                .conformance_claims
-                .keys()
-                .chain(self.pass.session.type_catalog.conformance_evidence.keys())
-                .copied()
-                .collect_vec();
-            conformance_keys.sort();
-            conformance_keys.dedup();
-
-            for conformance in conformance_keys {
-                let protocol_symbol = Symbol::Protocol(conformance.protocol_id);
-                let protocol_methods = self.pass.session.lookup_instance_methods(&protocol_symbol);
-                if !protocol_methods.is_empty() {
-                    self.pass
-                        .session
-                        .type_catalog
-                        .instance_methods
-                        .entry(conformance.conforming_id)
-                        .or_default()
-                        .extend(protocol_methods);
-                }
-            }
 
             self.pass.session.apply_all(&mut self.pass.substitutions);
         }

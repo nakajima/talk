@@ -400,6 +400,24 @@ impl<'a> Monomorphizer<'a> {
         instruction.map_type(|ty| self.monomorphize_ty(ty, substitutions))
     }
 
+    fn lookup_witness(
+        &self,
+        key: &ConformanceKey,
+        label: &crate::label::Label,
+        method_req: &Symbol,
+    ) -> Option<Symbol> {
+        self.types
+            .lookup_witness(self.config.modules.as_ref(), key, label, method_req)
+    }
+
+    fn method_requirement_label(
+        &self,
+        method_req: &Symbol,
+    ) -> Option<(Symbol, crate::label::Label)> {
+        self.types
+            .method_requirement_label(self.config.modules.as_ref(), method_req)
+    }
+
     /// Resolve a method requirement to a concrete witness implementation.
     fn resolve_method_requirement(
         &self,
@@ -407,22 +425,10 @@ impl<'a> Monomorphizer<'a> {
         substitutions: &Specializations,
         receiver_ty: Option<&Ty>,
     ) -> Option<Symbol> {
-        let protocol_sym = self
-            .types
-            .catalog
-            .protocol_for_method_requirement(method_req)?;
+        let (protocol_sym, label) = self.method_requirement_label(method_req)?;
         let Symbol::Protocol(protocol_id) = protocol_sym else {
             return None;
         };
-
-        let method_reqs = self.types.catalog.method_requirements.get(&protocol_sym)?;
-        let label = method_reqs.iter().find_map(|(label, sym)| {
-            if sym == method_req {
-                Some(label.clone())
-            } else {
-                None
-            }
-        })?;
 
         let mut candidates: Vec<Ty> = substitutions.ty.values().cloned().collect();
         if let Some(recv) = receiver_ty {
@@ -441,9 +447,7 @@ impl<'a> Monomorphizer<'a> {
                 protocol_id,
             };
 
-            if let Some(conformance) = self.types.catalog.conformance_evidence.get(&key)
-                && let Some(witness) = conformance.witnesses.get_witness(&label, method_req)
-            {
+            if let Some(witness) = self.lookup_witness(&key, &label, method_req) {
                 return Some(witness);
             }
         }
@@ -461,18 +465,7 @@ impl<'a> Monomorphizer<'a> {
         meta: &crate::ir::list::List<InstructionMeta>,
     ) -> Option<Instruction<IrTy>> {
         // Check if this method requirement is for `show`
-        let protocol_sym = self
-            .types
-            .catalog
-            .protocol_for_method_requirement(method_req)?;
-        let method_reqs = self.types.catalog.method_requirements.get(&protocol_sym)?;
-        let label = method_reqs.iter().find_map(|(l, s)| {
-            if s == method_req {
-                Some(l.clone())
-            } else {
-                None
-            }
-        })?;
+        let (_protocol_sym, label) = self.method_requirement_label(method_req)?;
         if label.to_string() != "show" {
             return None;
         }

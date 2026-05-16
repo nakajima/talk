@@ -36,7 +36,7 @@ impl InferencePass<'_> {
 
         let params = self.visit_params(&func.params, context)?;
 
-        let (_effects_guard, effects) = self.tracking_effects(&func.effects, context)?;
+        let effects = self.tracking_effects(&func.effects, context)?;
 
         let mut foralls = IndexSet::default();
 

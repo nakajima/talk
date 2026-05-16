@@ -108,7 +108,7 @@ pub(crate) fn resolve_variant_symbol(
     match entry.as_mono_ty() {
         Ty::Nominal { symbol, .. } => types
             .catalog
-            .lookup_static_member(symbol, &variant_name.into()),
+            .lookup_constructor_member(symbol, &variant_name.into()),
         _ => None,
     }
 }
@@ -124,7 +124,9 @@ pub(crate) fn resolve_member_symbol(
     if let ExprKind::Constructor(name) = &receiver.kind {
         let receiver_symbol = name.symbol().ok()?;
         let types = types?;
-        return types.catalog.lookup_static_member(&receiver_symbol, label);
+        return types
+            .catalog
+            .lookup_constructor_member(&receiver_symbol, label);
     }
 
     let types = types?;
@@ -132,7 +134,7 @@ pub(crate) fn resolve_member_symbol(
     let ty = entry.as_mono_ty();
 
     match ty {
-        Ty::Nominal { symbol, .. } => types.catalog.lookup_member(symbol, label).map(|m| m.0),
+        Ty::Nominal { symbol, .. } => types.catalog.lookup_member(symbol, label),
         _ => None,
     }
 }
