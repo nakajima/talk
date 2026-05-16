@@ -78,7 +78,12 @@ impl From<TypeEntry> for EnvEntry {
     }
 }
 
-// the Types object is the final result of the type checking phase
+// The final result of type checking.
+//
+// Completed post-typecheck consumers should ask `Types` for member, witness,
+// and method-requirement lookup. `TypeCatalog` remains the local storage for
+// raw tables and materialized indexes, while `TypeSession` owns solver-time
+// mutable lookup.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct Types {
     pub types_by_node: FxHashMap<NodeID, TypeEntry>,
@@ -105,6 +110,18 @@ impl Types {
 
     pub fn get_symbol(&self, sym: &Symbol) -> Option<&TypeEntry> {
         self.types_by_symbol.get(sym)
+    }
+
+    pub(crate) fn lookup_local_member(&self, receiver: &Symbol, label: &Label) -> Option<Symbol> {
+        self.catalog.lookup_member(receiver, label)
+    }
+
+    pub(crate) fn lookup_local_constructor_member(
+        &self,
+        receiver: &Symbol,
+        label: &Label,
+    ) -> Option<Symbol> {
+        self.catalog.lookup_constructor_member(receiver, label)
     }
 
     pub fn lookup_member(

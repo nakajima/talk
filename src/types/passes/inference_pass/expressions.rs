@@ -381,8 +381,12 @@ impl InferencePass<'_> {
             ExprKind::RecordLiteral { fields, spread } => {
                 self.infer_record_literal(expr.id, fields, spread, context)?
             }
-            #[allow(clippy::todo)]
-            ExprKind::RowVariable(..) => todo!(),
+            ExprKind::RowVariable(name) => {
+                return Err(TypeError::UnsupportedFeature(format!(
+                    "row variable expression `{}` outside of a row context",
+                    name.name_str()
+                )));
+            }
             ExprKind::As(box lhs, rhs) => self.visit_as(lhs, rhs, context)?,
             ExprKind::InlineIR(instr) => self.visit_inline_ir(instr, context)?,
         };

@@ -206,6 +206,11 @@ impl ConstructorMemberBinding {
     }
 }
 
+/// Local type storage for one completed module.
+///
+/// Cross-module completed lookup is exposed by `Types`; solver-time raw lookup is
+/// exposed by `TypeSession`. This catalog owns the local raw tables and the
+/// materialized completed indexes they produce.
 #[derive(Debug, PartialEq, Clone, serde::Serialize, serde::Deserialize, Default)]
 pub struct TypeCatalog {
     pub nominals: IndexMap<Symbol, Nominal>,
@@ -235,7 +240,7 @@ pub struct TypeCatalog {
 }
 
 impl TypeCatalog {
-    pub fn declare_conformance(&mut self, claim: ConformanceClaim) {
+    pub(crate) fn declare_conformance(&mut self, claim: ConformanceClaim) {
         let key = claim.key();
         if let Some(existing) = self.conformance_claims.get_mut(&key) {
             existing.merge_candidates(claim);
@@ -296,7 +301,7 @@ impl TypeCatalog {
         inserted
     }
 
-    pub fn rebuild_member_index(&mut self, modules: &ModuleEnvironment) {
+    pub(crate) fn rebuild_member_index(&mut self, modules: &ModuleEnvironment) {
         self.member_index.clear();
         self.constructor_member_index.clear();
         self.materialize_direct_members();
@@ -495,16 +500,20 @@ impl TypeCatalog {
         true
     }
 
-    pub fn lookup_initializers(&self, receiver: &Symbol) -> Option<IndexMap<Label, Symbol>> {
+    pub(crate) fn lookup_initializers(&self, receiver: &Symbol) -> Option<IndexMap<Label, Symbol>> {
         self.initializers.get(receiver).cloned()
     }
 
-    pub fn lookup_constructor_member(&self, receiver: &Symbol, label: &Label) -> Option<Symbol> {
+    pub(crate) fn lookup_constructor_member(
+        &self,
+        receiver: &Symbol,
+        label: &Label,
+    ) -> Option<Symbol> {
         self.lookup_constructor_member_binding(receiver, label)
             .map(|binding| binding.symbol)
     }
 
-    pub fn lookup_constructor_member_binding(
+    fn lookup_constructor_member_binding(
         &self,
         receiver: &Symbol,
         label: &Label,
@@ -515,7 +524,7 @@ impl TypeCatalog {
             .copied()
     }
 
-    pub fn lookup_direct_constructor_member(
+    pub(crate) fn lookup_direct_constructor_member(
         &self,
         receiver: &Symbol,
         label: &Label,
@@ -553,12 +562,7 @@ impl TypeCatalog {
         None
     }
 
-    pub fn lookup_direct_member(&self, receiver: &Symbol, label: &Label) -> Option<Symbol> {
-        self.lookup_direct_member_binding(receiver, label)
-            .map(|binding| binding.symbol)
-    }
-
-    pub fn lookup_direct_member_binding(
+    pub(crate) fn lookup_direct_member_binding(
         &self,
         receiver: &Symbol,
         label: &Label,
@@ -603,19 +607,23 @@ impl TypeCatalog {
     }
 
     /// Looks up completed member visibility from the materialized index.
-    pub fn lookup_member(&self, receiver: &Symbol, label: &Label) -> Option<Symbol> {
+    pub(crate) fn lookup_member(&self, receiver: &Symbol, label: &Label) -> Option<Symbol> {
         self.lookup_member_binding(receiver, label)
             .map(|binding| binding.symbol)
     }
 
-    pub fn lookup_member_binding(&self, receiver: &Symbol, label: &Label) -> Option<MemberBinding> {
+    pub(crate) fn lookup_member_binding(
+        &self,
+        receiver: &Symbol,
+        label: &Label,
+    ) -> Option<MemberBinding> {
         self.member_index
             .get(receiver)
             .and_then(|entries| entries.get(label))
             .copied()
     }
 
-    pub fn lookup_method_requirement(
+    pub(crate) fn lookup_method_requirement(
         &self,
         protocol_sym: &Symbol,
         label: &Label,
@@ -626,7 +634,7 @@ impl TypeCatalog {
             .copied()
     }
 
-    pub fn method_requirement_label(&self, method_req: &Symbol) -> Option<(Symbol, Label)> {
+    pub(crate) fn method_requirement_label(&self, method_req: &Symbol) -> Option<(Symbol, Label)> {
         for (protocol_sym, entries) in &self.method_requirements {
             for (label, sym) in entries {
                 if sym == method_req {
@@ -637,12 +645,7 @@ impl TypeCatalog {
         None
     }
 
-    pub fn protocol_for_method_requirement(&self, method_req: &Symbol) -> Option<Symbol> {
-        self.method_requirement_label(method_req)
-            .map(|(protocol_sym, _)| protocol_sym)
-    }
-
-    pub fn lookup_witness(
+    pub(crate) fn lookup_witness(
         &self,
         key: &ConformanceKey,
         label: &Label,
@@ -653,24 +656,20 @@ impl TypeCatalog {
             .and_then(|conformance| conformance.witnesses.get_witness(label, method_req))
     }
 
-    pub fn associated_type_witnesses(&self, key: &ConformanceKey) -> Option<FxHashMap<Label, Ty>> {
+    pub(crate) fn associated_type_witnesses(
+        &self,
+        key: &ConformanceKey,
+    ) -> Option<FxHashMap<Label, Ty>> {
         self.conformance_evidence
             .get(key)
             .map(|conformance| conformance.witnesses.associated_types.clone())
     }
 
-    pub fn lookup_effect(&self, id: &Symbol) -> Option<Ty> {
+    pub(crate) fn lookup_effect(&self, id: &Symbol) -> Option<Ty> {
         self.effects.get(id).cloned()
     }
 
-    pub fn instance_methods_for(&self, receiver: &Symbol) -> IndexMap<Label, Symbol> {
-        self.instance_methods
-            .get(receiver)
-            .cloned()
-            .unwrap_or_default()
-    }
-
-    pub fn import_as(self, module_id: ModuleId) -> TypeCatalog {
+    pub(crate) fn import_as(self, module_id: ModuleId) -> TypeCatalog {
         TypeCatalog {
             nominals: self
                 .nominals

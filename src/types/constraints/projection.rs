@@ -144,9 +144,11 @@ impl Projection {
                             );
                             return SolveResult::Solved(vec![Meta::Ty(*id)]);
                         }
-                        _ => {
-                            unimplemented!("ambiguous: {matching:?}");
-                        }
+                        _ => SolveResult::Err(TypeError::AmbiguousAssociatedTypeProjection {
+                            protocol_id,
+                            label: self.label.clone(),
+                            result,
+                        }),
                     };
                 }
             }

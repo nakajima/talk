@@ -450,8 +450,11 @@ impl InferencePass<'_> {
                 }
             }
             PatternKind::Wildcard => TypedPatternKind::Wildcard,
-            #[allow(clippy::todo)]
-            PatternKind::Struct { .. } => todo!(),
+            PatternKind::Struct { .. } => {
+                return Err(TypeError::UnsupportedFeature(
+                    "struct patterns are not implemented".into(),
+                ));
+            }
         };
 
         // Store pattern type for symbol index resolution (variant patterns, etc.)

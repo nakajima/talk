@@ -22,6 +22,11 @@ pub enum TypeError {
         conformance_key: ConformanceKey,
         label: String,
     },
+    AmbiguousAssociatedTypeProjection {
+        protocol_id: ProtocolId,
+        label: Label,
+        result: Ty,
+    },
     InvalidUnification(Box<Ty>, Box<Ty>, Option<ConstraintCause>),
     OccursCheck(Ty),
     CalleeNotCallable(Ty),
@@ -55,6 +60,7 @@ pub enum TypeError {
     HandlerMustBeBound,
     ContinueOutsideHandler,
     SpecializationMismatch,
+    UnsupportedFeature(String),
 }
 
 impl Error for TypeError {}
@@ -66,6 +72,14 @@ impl Display for TypeError {
                 label,
             } => write!(f, "Ambiguous witness for {conformance_key:?}.{label}"),
             Self::TypeConstructorNotFound(id) => write!(f, "Type constructor not found: {id:?}"),
+            Self::AmbiguousAssociatedTypeProjection {
+                protocol_id,
+                label,
+                result,
+            } => write!(
+                f,
+                "Ambiguous associated type projection for protocol {protocol_id:?}.{label} = {result:?}"
+            ),
             Self::GenericArgCount { expected, actual } => {
                 write!(f, "Expected {expected} type arguments, got {actual}")
             }
@@ -146,6 +160,9 @@ impl Display for TypeError {
             }
             Self::SpecializationMismatch => {
                 write!(f, "cannot determine specializations")
+            }
+            Self::UnsupportedFeature(feature) => {
+                write!(f, "Unsupported feature: {feature}")
             }
         }
     }
