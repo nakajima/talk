@@ -15,13 +15,12 @@ use crate::{
     },
     name::Name,
     name_resolution::symbol::Symbol,
-    node_id::NodeID,
     types::{
         conformance::ConformanceKey,
         format::{SymbolNames, TypeFormatter},
         infer_row::Specializations,
         infer_ty::Ty,
-        passes::specialization_pass::SpecializedCallee,
+        passes::specialization_pass::{SpecializationPlan, SpecializedCallee},
         types::Types,
     },
 };
@@ -30,11 +29,7 @@ pub struct Monomorphizer<'a> {
     types: &'a Types,
     config: &'a DriverConfig,
     pub(super) functions: IndexMap<Symbol, PolyFunction>,
-    specializations: &'a FxHashMap<Symbol, Vec<Symbol>>,
-    specialized_callees: &'a FxHashMap<Symbol, SpecializedCallee>,
-    /// Maps (specialized_caller, call_site_id) -> specialized_callee.
-    /// Aligns with the paper's model: each call site is a dimension, resolution maps to the callee.
-    call_resolutions: &'a FxHashMap<(Symbol, NodeID), Symbol>,
+    specialization_plan: &'a SpecializationPlan,
     /// Maps synthesized symbols to the external module they originated from.
     /// Used by merge_static_memory to adjust rawptrs in these functions.
     pub extern_synth_origins: FxHashMap<Symbol, ModuleId>,
@@ -48,9 +43,7 @@ impl<'a> Monomorphizer<'a> {
         types: &'a Types,
         functions: IndexMap<Symbol, PolyFunction>,
         config: &'a DriverConfig,
-        specializations: &'a FxHashMap<Symbol, Vec<Symbol>>,
-        specialized_callees: &'a FxHashMap<Symbol, SpecializedCallee>,
-        call_resolutions: &'a FxHashMap<(Symbol, NodeID), Symbol>,
+        specialization_plan: &'a SpecializationPlan,
         static_memory: &'a mut StaticMemory,
         symbol_names: &'a FxHashMap<Symbol, String>,
     ) -> Self {
@@ -58,9 +51,7 @@ impl<'a> Monomorphizer<'a> {
             types,
             functions,
             config,
-            specializations,
-            specialized_callees,
-            call_resolutions,
+            specialization_plan,
             extern_synth_origins: FxHashMap::default(),
             static_memory,
             symbol_names,
@@ -94,38 +85,41 @@ impl<'a> Monomorphizer<'a> {
         if !checked.insert(*sym) {
             return; // Already checked
         }
-        let mut callees: IndexSet<&Symbol> = IndexSet::default();
+        let mut callees: IndexSet<Symbol> = IndexSet::default();
         let Some(func) = result.get(sym).cloned() else {
             return;
         };
         for block in func.blocks.iter() {
             for instruction in block.instructions.iter() {
-                if let Instruction::Call {
-                    callee:
-                        Value::Func(sym)
-                        | Value::Ref(Reference::Func(sym))
-                        | Value::Ref(Reference::Closure(sym, ..)),
-                    ..
-                } = instruction
-                {
-                    callees.insert(sym);
+                let mut instruction = instruction.clone();
+                for value in instruction.values_mut() {
+                    Self::collect_func_symbols(value, &mut callees);
                 }
+            }
+            if let Terminator::Ret { val, .. } = &block.terminator {
+                let mut val = val.clone();
+                Self::collect_func_symbols(&mut val, &mut callees);
             }
         }
 
         for callee in callees {
             // Check if this is a synthesized callee pointing to an external function
-            if let Some(specialized_callee) = self.specialized_callees.get(callee).cloned() {
+            if let Some(specialized_callee) = self
+                .specialization_plan
+                .specialized_callees()
+                .get(&callee)
+                .cloned()
+            {
                 let original = specialized_callee.original_symbol;
                 if let Some(module_id) = original.module_id()
                     && module_id != self.config.module_id
                     && let Some(program) = self.config.modules.program_for(module_id)
                     && let Some(poly_func) = program.polyfunctions.get(&original).cloned()
                 {
-                    self.extern_synth_origins.insert(*callee, module_id);
+                    self.extern_synth_origins.insert(callee, module_id);
                     self.generate_specialized_function(
                         &poly_func,
-                        *callee,
+                        callee,
                         &specialized_callee,
                         result,
                     );
@@ -140,13 +134,21 @@ impl<'a> Monomorphizer<'a> {
             // Check if this callee has specializations that need to be generated
             // This handles the case where the IR has the original symbol but we need
             // a specialized version
-            if let Some(specialization_syms) = self.specializations.get(callee).cloned() {
+            if let Some(specialization_syms) = self
+                .specialization_plan
+                .specializations()
+                .get(&callee)
+                .cloned()
+            {
                 for specialized_sym in specialization_syms {
                     if result.contains_key(&specialized_sym) {
                         continue; // Already generated
                     }
-                    let Some(specialized_callee) =
-                        self.specialized_callees.get(&specialized_sym).cloned()
+                    let Some(specialized_callee) = self
+                        .specialization_plan
+                        .specialized_callees()
+                        .get(&specialized_sym)
+                        .cloned()
                     else {
                         continue;
                     };
@@ -154,7 +156,7 @@ impl<'a> Monomorphizer<'a> {
                     if let Some(module_id) = callee.module_id()
                         && module_id != self.config.module_id
                         && let Some(program) = self.config.modules.program_for(module_id)
-                        && let Some(poly_func) = program.polyfunctions.get(callee).cloned()
+                        && let Some(poly_func) = program.polyfunctions.get(&callee).cloned()
                     {
                         self.generate_specialized_function(
                             &poly_func,
@@ -173,12 +175,41 @@ impl<'a> Monomorphizer<'a> {
 
             if module_id != self.config.module_id
                 && let Some(program) = self.config.modules.program_for(module_id)
-                && let Some(imported) = program.functions.get(callee).cloned()
+                && let Some(imported) = program.functions.get(&callee).cloned()
             {
-                result.insert(*callee, imported);
+                result.insert(callee, imported);
             };
 
-            self.check_imports(callee, result, checked);
+            self.check_imports(&callee, result, checked);
+        }
+    }
+
+    fn collect_func_symbols(value: &mut Value, out: &mut IndexSet<Symbol>) {
+        match value {
+            Value::Func(sym) => {
+                out.insert(*sym);
+            }
+            Value::Closure { func, env } => {
+                out.insert(*func);
+                for value in &mut env.items {
+                    Self::collect_func_symbols(value, out);
+                }
+            }
+            Value::Ref(Reference::Func(sym)) => {
+                out.insert(*sym);
+            }
+            Value::Ref(Reference::Closure(sym, env)) => {
+                out.insert(*sym);
+                for value in &mut env.items {
+                    Self::collect_func_symbols(value, out);
+                }
+            }
+            Value::Record(_, values) => {
+                for value in values {
+                    Self::collect_func_symbols(value, out);
+                }
+            }
+            _ => {}
         }
     }
 
@@ -189,12 +220,17 @@ impl<'a> Monomorphizer<'a> {
         result: &mut IndexMap<Symbol, Function<IrTy>>,
     ) {
         for specialization in self
-            .specializations
+            .specialization_plan
+            .specializations()
             .get(&func.name)
             .cloned()
             .unwrap_or_default()
         {
-            let Some(specialized_callee) = self.specialized_callees.get(&specialization).cloned()
+            let Some(specialized_callee) = self
+                .specialization_plan
+                .specialized_callees()
+                .get(&specialization)
+                .cloned()
             else {
                 tracing::error!("did not find specialization for {specialization:?}");
                 continue;
@@ -308,8 +344,10 @@ impl<'a> Monomorphizer<'a> {
                             }
                         });
                         if let Some(call_id) = call_id
-                            && let Some(specialized_sym) =
-                                self.call_resolutions.get(&(caller, *call_id))
+                            && let Some(specialized_sym) = self
+                                .specialization_plan
+                                .call_resolutions()
+                                .get(&(caller, *call_id))
                         {
                             Some(Value::Func(*specialized_sym))
                         } else {
@@ -332,13 +370,7 @@ impl<'a> Monomorphizer<'a> {
                     }
                 }
                 Value::Func(_callee_sym) => {
-                    // Only substitute if the call's return type has type params
-                    // For concrete return types (like protocol default methods returning Int),
-                    // no substitution is needed
-                    if !ty.contains_type_params() {
-                        callee
-                    } else if let Some(caller) = specialized_caller {
-                        // Extract call site ID from instruction meta
+                    if let Some(caller) = specialized_caller {
                         let call_id = meta.items.iter().find_map(|m| {
                             if let InstructionMeta::Source(id) = m {
                                 Some(id)
@@ -346,10 +378,11 @@ impl<'a> Monomorphizer<'a> {
                                 None
                             }
                         });
-                        // Look up by (caller, call_site) - aligns with paper's dimension model
                         if let Some(call_id) = call_id
-                            && let Some(specialized_sym) =
-                                self.call_resolutions.get(&(caller, *call_id))
+                            && let Some(specialized_sym) = self
+                                .specialization_plan
+                                .call_resolutions()
+                                .get(&(caller, *call_id))
                         {
                             Value::Func(*specialized_sym)
                         } else {
@@ -528,8 +561,10 @@ impl<'a> Monomorphizer<'a> {
                 if let Some(replaced) = substitutions.ty.get(&param).cloned() {
                     self.monomorphize_ty(replaced, substitutions)
                 } else {
-                    // Type parameter wasn't substituted - this happens for top-level generic struct access
-                    // where the type should have been resolved during type inference but wasn't
+                    tracing::warn!(
+                        ?param,
+                        "unsubstituted type parameter during monomorphization"
+                    );
                     IrTy::Void
                 }
             }

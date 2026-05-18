@@ -32,6 +32,29 @@ pub struct SpecializedCallee {
     pub specializations: Specializations,
 }
 
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SpecializationPlan {
+    specializations: FxHashMap<Symbol, Vec<Symbol>>,
+    specialized_callees: FxHashMap<Symbol, SpecializedCallee>,
+    /// Maps (specialized_caller, call_site_id) -> specialized_callee.
+    /// Aligns with the paper's model: each call site is a dimension, resolution maps to the callee.
+    call_resolutions: FxHashMap<(Symbol, NodeID), Symbol>,
+}
+
+impl SpecializationPlan {
+    pub fn specializations(&self) -> &FxHashMap<Symbol, Vec<Symbol>> {
+        &self.specializations
+    }
+
+    pub fn specialized_callees(&self) -> &FxHashMap<Symbol, SpecializedCallee> {
+        &self.specialized_callees
+    }
+
+    pub fn call_resolutions(&self) -> &FxHashMap<(Symbol, NodeID), Symbol> {
+        &self.call_resolutions
+    }
+}
+
 pub struct SpecializationPass<'a> {
     ast: TypedAST,
     symbols: Symbols,
@@ -39,11 +62,7 @@ pub struct SpecializationPass<'a> {
     types: Types,
     modules: &'a ModuleEnvironment,
     module_id: ModuleId,
-    pub(crate) specialized_callees: FxHashMap<Symbol, SpecializedCallee>,
-    pub(crate) specializations: FxHashMap<Symbol, Vec<Symbol>>,
-    /// Maps (specialized_caller, call_site_id) -> specialized_callee.
-    /// Aligns with the paper's model: each call site is a dimension, resolution maps to the callee.
-    pub(crate) call_resolutions: FxHashMap<(Symbol, NodeID), Symbol>,
+    plan: SpecializationPlan,
     current_specializations: Vec<Specializations>,
     /// Resolved overloads computed from choices and error constraints.
     resolution: Resolution,
@@ -95,29 +114,15 @@ impl<'a> SpecializationPass<'a> {
             types,
             modules,
             module_id,
-            specialized_callees: Default::default(),
-            specializations: Default::default(),
-            call_resolutions: Default::default(),
+            plan: Default::default(),
             current_specializations: Default::default(),
             resolution,
         }
     }
 
-    #[allow(clippy::type_complexity)]
     pub fn drive(
         mut self,
-    ) -> Result<
-        (
-            TypedAST,
-            Symbols,
-            ResolvedNames,
-            Types,
-            FxHashMap<Symbol, Vec<Symbol>>,
-            FxHashMap<Symbol, SpecializedCallee>,
-            FxHashMap<(Symbol, NodeID), Symbol>,
-        ),
-        TypeError,
-    > {
+    ) -> Result<(TypedAST, Symbols, ResolvedNames, Types, SpecializationPlan), TypeError> {
         let stmts = std::mem::take(&mut self.ast.stmts);
         let mut specialized_stmts = vec![];
         for stmt in stmts {
@@ -138,9 +143,7 @@ impl<'a> SpecializationPass<'a> {
             self.symbols,
             self.resolved_names,
             self.types,
-            self.specializations,
-            self.specialized_callees,
-            self.call_resolutions,
+            self.plan,
         ))
     }
 
@@ -1100,7 +1103,8 @@ impl<'a> SpecializationPass<'a> {
             // Record: for this call site within specialized_caller, use specialized_callee
             // This aligns with the paper's model: each call site is a dimension
             if specialized_callee != callee_sym {
-                self.call_resolutions
+                self.plan
+                    .call_resolutions
                     .insert((specialized_caller, call_id), specialized_callee);
             }
 
@@ -1251,9 +1255,9 @@ impl<'a> SpecializationPass<'a> {
         let specializations = &filtered_specs;
 
         // Check if we already have a specialization for this callee + specializations
-        if let Some(existing) = self.specializations.get(callee_sym) {
+        if let Some(existing) = self.plan.specializations.get(callee_sym) {
             for &sym in existing {
-                if let Some(callee) = self.specialized_callees.get(&sym)
+                if let Some(callee) = self.plan.specialized_callees.get(&sym)
                     && &callee.specializations == specializations
                 {
                     return sym;
@@ -1270,11 +1274,12 @@ impl<'a> SpecializationPass<'a> {
         );
 
         // Record the specialization
-        self.specializations
+        self.plan
+            .specializations
             .entry(*callee_sym)
             .or_default()
             .push(new_sym.into());
-        self.specialized_callees.insert(
+        self.plan.specialized_callees.insert(
             new_sym.into(),
             SpecializedCallee {
                 original_symbol: *callee_sym,
@@ -1412,13 +1417,14 @@ pub mod tests {
         // concrete types.
         set_symbol_names(typed.resolved_names.symbol_names.clone());
         assert_eq!(
-            typed.specializations,
-            fxhashmap!( GlobalId::from(2).into() => vec![SynthesizedId::from(1).into()] )
+            typed.specialization_plan.specializations(),
+            &fxhashmap!( GlobalId::from(2).into() => vec![SynthesizedId::from(1).into()] )
         );
 
         // Synthesized(1) is id[Int]
         let callee1 = typed
-            .specialized_callees
+            .specialization_plan
+            .specialized_callees()
             .get(&SynthesizedId::from(1).into())
             .unwrap();
         assert_eq!(callee1.original_symbol, GlobalId::from(2).into());

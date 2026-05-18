@@ -228,12 +228,23 @@ impl<IO: super::io::IO> Interpreter<IO> {
         }
 
         #[allow(clippy::expect_used)]
-        let entrypoint = self
+        let entrypoint_name = self
             .program
             .entrypoint()
+            .map(|entrypoint| entrypoint.name)
+            .or_else(|| {
+                self.symbol_names.as_ref().and_then(|symbol_names| {
+                    symbol_names
+                        .iter()
+                        .find(|(symbol, name)| {
+                            name.as_str() == "main" && self.program.functions.contains_key(*symbol)
+                        })
+                        .map(|(symbol, _)| *symbol)
+                })
+            })
             .expect("No entrypoint found for program.");
 
-        self.call(entrypoint.name, vec![], Register::MAIN, None);
+        self.call(entrypoint_name, vec![], Register::MAIN, None);
 
         while !self.frames.is_empty() {
             self.next();
@@ -1656,6 +1667,62 @@ pub mod tests {
     }
 
     #[test]
+    fn early_return_skips_following_side_effects() {
+        let (value, interpreter) = interpret_with(
+            r#"
+            func foo() {
+                return 1
+                print_raw("after")
+                2
+            }
+            foo()
+            "#,
+        );
+
+        assert_eq!(value, Value::Int(1));
+        assert_eq!(String::from_utf8(interpreter.io.stdout).unwrap(), "");
+    }
+
+    #[test]
+    fn interprets_nested_lvalue_assignment() {
+        assert_eq!(
+            interpret(
+                "
+                let a = { b: { c: 1 } }
+                a.b.c = 2
+                a.b.c
+                ",
+            ),
+            Value::Int(2)
+        );
+    }
+
+    #[test]
+    fn imports_first_class_external_function_references() {
+        let (_value, interpreter) = interpret_with(
+            r#"
+            let f = print_raw
+            f("hi")
+            "#,
+        );
+
+        assert_eq!(String::from_utf8(interpreter.io.stdout).unwrap(), "hi");
+    }
+
+    #[test]
+    fn explicit_main_function_is_entrypoint() {
+        let (_value, interpreter) = interpret_with(
+            r#"
+            func main() {
+                print_raw("ok")
+            }
+            "#,
+        );
+
+        assert_eq!(String::from_utf8(interpreter.io.stdout).unwrap(), "ok");
+    }
+
+    #[test]
     fn interprets_counter() {
         assert_eq!(
             interpret(
@@ -1924,6 +1991,30 @@ Dog().handleDSTChange()
         );
 
         assert_eq!(interpreter.io.stdout, "123\n".as_bytes());
+    }
+
+    #[test]
+    fn effect_handlers_for_same_effect_have_unique_symbols() {
+        let (_val, interpreter) = interpret_with(
+            "
+            effect 'fizz() -> Int
+
+            func a() -> Int {
+                @handle 'fizz { continue 1 }
+                'fizz()
+            }
+
+            func b() -> Int {
+                @handle 'fizz { continue 2 }
+                'fizz()
+            }
+
+            print_raw(a().show())
+            print_raw(b().show())
+            ",
+        );
+
+        assert_eq!(String::from_utf8(interpreter.io.stdout).unwrap(), "12");
     }
 
     #[test]

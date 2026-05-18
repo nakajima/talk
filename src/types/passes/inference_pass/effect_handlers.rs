@@ -29,6 +29,19 @@ impl InferencePass<'_> {
             return Err(TypeError::EffectNotFound(effect_name.name_str()));
         };
 
+        let handler_symbol = self
+            .session
+            .resolved_names
+            .effect_handler_definitions
+            .get(&expr.id)
+            .copied()
+            .ok_or_else(|| {
+                TypeError::TypeNotFound(format!(
+                    "Effect handler symbol not found for {:?}",
+                    effect_name
+                ))
+            })?;
+
         let typed_params = self.visit_params(&body.args, context)?;
         let (_, effect_ret, _effects_row) = uncurry_function(effect.clone());
 
@@ -56,7 +69,7 @@ impl InferencePass<'_> {
         );
 
         self.session.insert(
-            effect_symbol,
+            handler_symbol,
             curry(
                 typed_params.iter().map(|p| p.ty.clone()),
                 typed_body.ret.clone(),
@@ -71,7 +84,7 @@ impl InferencePass<'_> {
             kind: TypedStmtKind::Handler {
                 effect: effect_symbol,
                 func: TypedFunc {
-                    name: effect_symbol,
+                    name: handler_symbol,
                     foralls: Default::default(),
                     params: typed_params,
                     effects: Default::default(),

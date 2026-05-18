@@ -14,7 +14,7 @@ lazy_static! {
 
 // Bump this whenever compiler/lowering changes invalidate serialized core modules
 // even if the core source text itself is unchanged.
-const CORE_CACHE_VERSION: &str = "2026-03-20-generator-removal-2";
+const CORE_CACHE_VERSION: &str = "2026-05-15-lowerer-monomorphizer-correctness";
 
 pub fn compile() -> Arc<Module> {
     CORE_MODULE.clone()

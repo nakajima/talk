@@ -17,7 +17,7 @@ use crate::{
         matcher,
         passes::{
             inference_pass::InferencePass,
-            specialization_pass::{SpecializationPass, SpecializedCallee},
+            specialization_pass::{SpecializationPass, SpecializationPlan},
         },
         type_error::TypeError,
         type_session::TypeSession,
@@ -60,11 +60,8 @@ pub struct Typed {
     pub symbols: Symbols,
     pub resolved_names: ResolvedNames,
     pub diagnostics: Vec<AnyDiagnostic>,
-    pub specialized_callees: FxHashMap<Symbol, SpecializedCallee>,
-    pub specializations: FxHashMap<Symbol, Vec<Symbol>>,
-    /// Maps (specialized_caller, call_site_id) -> specialized_callee.
-    /// Aligns with the paper's model: each call site is a dimension, resolution maps to the callee.
-    pub call_resolutions: FxHashMap<(Symbol, NodeID), Symbol>,
+    /// Facts produced by specialization and consumed by lowering/monomorphization.
+    pub specialization_plan: SpecializationPlan,
 }
 
 impl DriverPhase for Lowered {}
@@ -435,28 +432,13 @@ fn has_error_diagnostics(diagnostics: &[AnyDiagnostic]) -> bool {
 
 type CoreTypingOutput = (TypedAST, Symbols, ResolvedNames, Types);
 
-type SpecializedTypingOutput = (
-    TypedAST,
-    Symbols,
-    ResolvedNames,
-    Types,
-    FxHashMap<Symbol, Vec<Symbol>>,
-    FxHashMap<Symbol, SpecializedCallee>,
-    FxHashMap<(Symbol, NodeID), Symbol>,
-);
+type SpecializedTypingOutput = (TypedAST, Symbols, ResolvedNames, Types, SpecializationPlan);
 
 impl Driver<NameResolved> {
     pub fn typecheck(mut self) -> Result<Driver<Typed>, CompileError> {
         let (ast, symbols, resolved_names, types) = self.core_typecheck()?;
-        let (
-            ast,
-            symbols,
-            resolved_names,
-            mut types,
-            specializations,
-            specialized_callees,
-            call_resolutions,
-        ) = self.specialize(ast, symbols, resolved_names, types)?;
+        let (ast, symbols, resolved_names, mut types, specialization_plan) =
+            self.specialize(ast, symbols, resolved_names, types)?;
 
         self.build_match_plans(&ast, &mut types, &resolved_names);
 
@@ -470,9 +452,7 @@ impl Driver<NameResolved> {
                 symbols,
                 resolved_names,
                 diagnostics: self.phase.diagnostics,
-                specializations,
-                specialized_callees,
-                call_resolutions,
+                specialization_plan,
             },
         })
     }
