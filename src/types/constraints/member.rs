@@ -5,6 +5,7 @@ use crate::{
     name_resolution::symbol::{ProtocolId, Symbol},
     node_id::NodeID,
     types::{
+        call_tree::CallTarget,
         constraint_solver::{DeferralReason, SolveResult},
         constraints::{
             constraint::ConstraintCause,
@@ -158,6 +159,25 @@ impl Member {
         SolveResult::Defer(DeferralReason::Unknown)
     }
 
+    fn record_member_target(
+        &self,
+        constraints: &ConstraintStore,
+        session: &mut TypeSession,
+        member: Symbol,
+    ) {
+        if !constraints.copy_group(self.id).config.is_universal() {
+            return;
+        }
+
+        session.record_call_target(
+            self.node_id,
+            CallTarget::Member {
+                member,
+                label: self.label.clone(),
+            },
+        );
+    }
+
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip(self, context, session, constraints))]
     fn lookup_type_param_member(
@@ -282,6 +302,7 @@ impl Member {
 
         // Unify with first method universally (for single alternative, or as optimistic solution)
         let (protocol_id, req) = &matching_methods[0];
+        self.record_member_target(constraints, session, *req);
         let Some(entry) = session.lookup(req) else {
             return SolveResult::Err(TypeError::MemberNotFound(
                 self.receiver.clone(),
@@ -325,6 +346,7 @@ impl Member {
         else {
             return SolveResult::Defer(DeferralReason::WaitingOnSymbol(*nominal_symbol));
         };
+        self.record_member_target(constraints, session, member_sym);
 
         let mut member_ty = if let Some(entry) = session.lookup(&member_sym) {
             entry.instantiate(self.node_id, constraints, context, session)
@@ -455,6 +477,7 @@ impl Member {
 
         // Try to find a method/variant via lookup_member
         if let Some((member_sym, _source)) = session.lookup_member(symbol, &self.label) {
+            self.record_member_target(constraints, session, member_sym);
             match member_sym {
                 Symbol::InstanceMethod(..) | Symbol::MethodRequirement(..) => {
                     let Some(entry) = session.lookup(&member_sym) else {
@@ -521,6 +544,7 @@ impl Member {
         if let Some((_protocol_id, member_sym)) =
             session.claimed_protocol_member(*symbol, &self.label)
         {
+            self.record_member_target(constraints, session, member_sym);
             let Some(entry) = session.lookup(&member_sym) else {
                 return SolveResult::Defer(DeferralReason::WaitingOnSymbol(member_sym));
             };
@@ -550,6 +574,7 @@ impl Member {
                 session.auto_derive_protocol(*symbol, protocol_id, constraints)
             && let Some(entry) = session.lookup(&method_sym)
         {
+            self.record_member_target(constraints, session, method_sym);
             let method = entry.instantiate(self.node_id, constraints, context, session);
             let method = session.apply(&method, &mut context.substitutions_mut());
             let (method_receiver, method_fn) = consume_self(&method);

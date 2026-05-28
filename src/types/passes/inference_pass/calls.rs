@@ -10,7 +10,7 @@ use crate::{
     node_kinds::{block::Block, call_arg::CallArg, expr::Expr, type_annotation::TypeAnnotation},
     span::Span,
     types::{
-        call_tree::CalleeInfo,
+        call_tree::{CallReceiver, CallReceiverKind, CallShape, CallTarget, CalleeInfo},
         constraints::constraint::ConstraintCause,
         infer_row::Row,
         infer_ty::{Meta, Ty},
@@ -24,6 +24,19 @@ use crate::{
 };
 
 impl InferencePass<'_> {
+    fn call_receiver_info(&mut self, expr: &TypedExpr) -> (Ty, Option<Symbol>) {
+        let TypedExprKind::Variable(symbol) = &expr.kind else {
+            return (expr.ty.clone(), None);
+        };
+
+        let ty = self
+            .session
+            .lookup(symbol)
+            .map(|entry| entry._as_ty())
+            .unwrap_or_else(|| expr.ty.clone());
+        (ty, Some(*symbol))
+    }
+
     pub(super) fn visit_call_effect(
         &mut self,
         expr: &Expr,
@@ -107,6 +120,54 @@ impl InferencePass<'_> {
         })
     }
 
+    fn resolved_call_shape_for(
+        &mut self,
+        callee_ty: &TypedExpr,
+        arg_tys: &[TypedExpr],
+        context: &SolveContext,
+    ) -> CallShape {
+        let TypedExprKind::Member { receiver, .. } = &callee_ty.kind else {
+            return CallShape::as_written(None);
+        };
+
+        if let TypedExprKind::Constructor(Symbol::Protocol(protocol_id), ..) = &receiver.kind {
+            return match arg_tys {
+                [receiver_arg, ..] => {
+                    self.constraints.wants_conforms(
+                        receiver.id,
+                        receiver_arg.ty.clone(),
+                        *protocol_id,
+                        &context.group_info(),
+                    );
+                    let (ty, symbol) = self.call_receiver_info(receiver_arg);
+                    CallShape::as_written(Some(CallReceiver {
+                        kind: CallReceiverKind::Argument { index: 0 },
+                        id: receiver_arg.id,
+                        ty,
+                        symbol,
+                    }))
+                }
+                [] => CallShape::as_written(None),
+            };
+        }
+
+        let (ty, symbol) = self.call_receiver_info(receiver);
+        let receiver_source = CallReceiver {
+            kind: CallReceiverKind::CalleeReceiver,
+            id: receiver.id,
+            ty,
+            symbol,
+        };
+        if matches!(
+            &receiver.kind,
+            TypedExprKind::Constructor(..) | TypedExprKind::Hole
+        ) {
+            CallShape::as_written(Some(receiver_source))
+        } else {
+            CallShape::prepend_receiver(receiver_source, receiver.id)
+        }
+    }
+
     #[instrument(level = tracing::Level::TRACE, skip(self, context, ))]
     pub(super) fn visit_call(
         &mut self,
@@ -119,27 +180,26 @@ impl InferencePass<'_> {
     ) -> TypedRet<TypedExpr> {
         let callee_ty = self.visit_expr(callee, context)?;
 
-        // Record callee info for the call tree
-        // call_id is the callee expression ID, which uniquely identifies call sites
-        if let Some(caller) = self.current_function {
-            let callee_info = match &callee_ty.kind {
-                TypedExprKind::Variable(sym) => Some(CalleeInfo::Direct {
+        let direct_callee_info = match &callee_ty.kind {
+            TypedExprKind::Variable(sym) => {
+                self.session
+                    .record_call_target(callee.id, CallTarget::Direct { sym: *sym });
+                Some(CalleeInfo::Direct {
                     sym: *sym,
                     call_id: callee.id,
-                }),
-                TypedExprKind::Member {
-                    receiver, label, ..
-                } => Some(CalleeInfo::Member {
-                    receiver_id: receiver.id,
-                    label: label.clone(),
-                    call_id: callee.id,
-                }),
-                _ => None,
-            };
-            if let Some(info) = callee_info {
-                self.session.call_tree.entry(caller).or_default().push(info);
+                })
             }
-        }
+            TypedExprKind::Constructor(sym, _) => {
+                self.session
+                    .record_call_target(callee.id, CallTarget::Constructor { constructor: *sym });
+                Some(CalleeInfo::Direct {
+                    sym: *sym,
+                    call_id: callee.id,
+                })
+            }
+            TypedExprKind::Member { .. } => None,
+            _ => None,
+        };
 
         let mut arg_tys: Vec<_> = args
             .iter()
@@ -197,6 +257,23 @@ impl InferencePass<'_> {
             });
         }
 
+        let resolved_call_shape = self.resolved_call_shape_for(&callee_ty, &arg_tys, context);
+        self.session
+            .record_call_shape(callee.id, resolved_call_shape.clone());
+
+        // Record callee info for the call tree.
+        // call_id is the callee expression ID, which uniquely identifies call sites.
+        let callee_info = match &callee_ty.kind {
+            TypedExprKind::Member { label, .. } => Some(CalleeInfo::Member {
+                label: label.clone(),
+                call_id: callee.id,
+            }),
+            _ => direct_callee_info,
+        };
+        if let (Some(caller), Some(info)) = (self.current_function, callee_info) {
+            self.session.call_tree.entry(caller).or_default().push(info);
+        }
+
         // Record call arg label spans immediately for Constructor callees
         // The struct symbol is available now, so we can resolve directly
         if let TypedExprKind::Constructor(struct_sym, _) = &callee_ty.kind {
@@ -221,21 +298,7 @@ impl InferencePass<'_> {
             .try_collect()?;
 
         let receiver = match &callee_ty.kind {
-            TypedExprKind::Member { receiver, .. } => {
-                // Special handling for protocol method calls
-                if let TypedExprKind::Constructor(Symbol::Protocol(protocol_id), ..) =
-                    &receiver.kind
-                    && let Some(first_arg) = arg_tys.first()
-                {
-                    self.constraints.wants_conforms(
-                        receiver.id,
-                        first_arg.ty.clone(),
-                        *protocol_id,
-                        &context.group_info(),
-                    );
-                }
-                Some(receiver.as_ref().clone())
-            }
+            TypedExprKind::Member { receiver, .. } => Some(receiver.as_ref().clone()),
             _ => None,
         };
 

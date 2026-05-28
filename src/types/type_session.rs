@@ -16,7 +16,10 @@ use crate::{
     node_id::NodeID,
     types::{
         builtins::builtin_scope,
-        call_tree::CallTree,
+        call_tree::{
+            CallReceiver, CallReceiverKind, CallShape, CallTarget, CallTree, PendingResolvedCall,
+            PendingResolvedCalls, ResolvedCall,
+        },
         conformance::{
             ConformanceClaim, ConformanceEvidence, ConformanceKey, ConformanceObligation,
             ConformanceOrigin, WitnessTable,
@@ -76,6 +79,9 @@ pub struct TypeSession {
     /// Call tree mapping each function to the callees in its body.
     /// Built during inference and used by specialization pass.
     pub call_tree: CallTree,
+
+    /// Solver-time pending call facts keyed by callee expression ID.
+    pending_resolved_calls: PendingResolvedCalls,
 
     pub(crate) symbols: Symbols,
     pub(crate) resolved_names: ResolvedNames,
@@ -191,6 +197,7 @@ impl TypeSession {
             choices: ChoiceStore::new(),
             error_constraints: ErrorConstraintStore::new(),
             call_tree: Default::default(),
+            pending_resolved_calls: Default::default(),
 
             meta_vars: Default::default(),
             row_vars: Default::default(),
@@ -257,6 +264,13 @@ impl TypeSession {
         let choices = std::mem::take(&mut self.choices);
         let error_constraints = std::mem::take(&mut self.error_constraints);
         let call_tree = std::mem::take(&mut self.call_tree);
+        let resolved_calls = std::mem::take(&mut self.pending_resolved_calls)
+            .into_iter()
+            .filter_map(|(id, pending)| {
+                self.finalize_pending_resolved_call(&entries, &types_by_symbol, pending)
+                    .map(|call| (id, call))
+            })
+            .collect();
 
         let types = Types {
             catalog,
@@ -266,10 +280,183 @@ impl TypeSession {
             choices,
             error_constraints,
             call_tree,
+            resolved_calls,
         };
 
         let resolved_names = std::mem::take(&mut self.resolved_names);
         Ok((types, resolved_names))
+    }
+
+    fn finalize_pending_resolved_call(
+        &mut self,
+        entries: &FxHashMap<NodeID, TypeEntry>,
+        types_by_symbol: &FxHashMap<Symbol, TypeEntry>,
+        pending: PendingResolvedCall,
+    ) -> Option<ResolvedCall> {
+        let shape = pending.shape?;
+        let target = self.select_call_target(pending.target_candidates, shape.receiver.as_ref())?;
+        let shape = self.finalize_call_shape(entries, types_by_symbol, &target, shape);
+        Some(ResolvedCall::new(target, shape))
+    }
+
+    fn select_call_target(
+        &mut self,
+        candidates: Vec<CallTarget>,
+        receiver: Option<&CallReceiver>,
+    ) -> Option<CallTarget> {
+        let mut concrete_members = Vec::new();
+        let mut method_requirements = Vec::new();
+        let mut direct_or_constructor = None;
+
+        for candidate in candidates {
+            match &candidate {
+                CallTarget::Member {
+                    member: Symbol::MethodRequirement(_),
+                    ..
+                } => {
+                    if !method_requirements.contains(&candidate) {
+                        method_requirements.push(candidate);
+                    }
+                }
+                CallTarget::Member { .. } => {
+                    if !concrete_members.contains(&candidate) {
+                        concrete_members.push(candidate);
+                    }
+                }
+                CallTarget::Direct { .. } | CallTarget::Constructor { .. } => {
+                    assert!(
+                        direct_or_constructor
+                            .as_ref()
+                            .is_none_or(|existing| existing == &candidate),
+                        "conflicting direct call targets: {:?} vs {:?}",
+                        direct_or_constructor,
+                        candidate
+                    );
+                    direct_or_constructor = Some(candidate);
+                }
+            }
+        }
+
+        if concrete_members.len() == 1 {
+            return concrete_members.pop();
+        }
+        if concrete_members.len() > 1 {
+            if let Some(target) = self.requirement_target_for_receiver(receiver, &concrete_members)
+            {
+                return Some(target);
+            }
+            if method_requirements.len() == 1 {
+                return method_requirements.pop();
+            }
+            concrete_members.sort_by_key(|target| target.symbol());
+            tracing::warn!(
+                ?receiver,
+                ?concrete_members,
+                "conflicting concrete member call targets without a unique requirement; choosing deterministically"
+            );
+            return concrete_members.into_iter().next();
+        }
+        if method_requirements.len() == 1 {
+            return method_requirements.pop();
+        }
+        assert!(
+            method_requirements.is_empty(),
+            "conflicting method-requirement call targets: {:?}",
+            method_requirements
+        );
+        direct_or_constructor
+    }
+
+    fn requirement_target_for_receiver(
+        &mut self,
+        receiver: Option<&CallReceiver>,
+        concrete_members: &[CallTarget],
+    ) -> Option<CallTarget> {
+        let receiver = receiver?;
+        let Ty::Param(_, bounds) = &receiver.ty else {
+            return None;
+        };
+        let label = concrete_members.iter().find_map(|target| match target {
+            CallTarget::Member { label, .. } => Some(label.clone()),
+            _ => None,
+        })?;
+
+        let mut requirement = None;
+        for protocol_id in bounds {
+            let protocol = Symbol::Protocol(*protocol_id);
+            let Some(requirements) = self.lookup_method_requirements(protocol) else {
+                continue;
+            };
+            let Some(method_req) = requirements.get(&label).copied() else {
+                continue;
+            };
+            assert!(
+                requirement.is_none_or(|existing| existing == method_req),
+                "conflicting method requirements for receiver-bound call target"
+            );
+            requirement = Some(method_req);
+        }
+
+        requirement.map(|member| CallTarget::Member { member, label })
+    }
+
+    fn finalize_call_shape(
+        &mut self,
+        entries: &FxHashMap<NodeID, TypeEntry>,
+        types_by_symbol: &FxHashMap<Symbol, TypeEntry>,
+        target: &CallTarget,
+        mut shape: CallShape,
+    ) -> CallShape {
+        let target_receiver_ty = self.target_method_receiver_ty(types_by_symbol, target);
+        shape.receiver = shape.receiver.map(|receiver| {
+            let stored_ty = self.finalize_infer_ty(receiver.ty);
+            let ty = if matches!(receiver.kind, CallReceiverKind::Argument { .. }) {
+                target_receiver_ty.clone().unwrap_or(stored_ty)
+            } else if receiver.symbol.is_some() {
+                stored_ty
+            } else {
+                entries
+                    .get(&receiver.id)
+                    .map(|entry| entry.as_mono_ty().clone())
+                    .unwrap_or(stored_ty)
+            };
+            CallReceiver { ty, ..receiver }
+        });
+        shape
+    }
+
+    fn target_method_receiver_ty(
+        &self,
+        types_by_symbol: &FxHashMap<Symbol, TypeEntry>,
+        target: &CallTarget,
+    ) -> Option<Ty> {
+        let CallTarget::Member {
+            member: method @ Symbol::MethodRequirement(_),
+            ..
+        } = target
+        else {
+            return None;
+        };
+        let entry = types_by_symbol
+            .get(method)
+            .cloned()
+            .or_else(|| self.modules.lookup(method))?;
+        let (params, _, _) = crate::types::passes::uncurry_function(entry.as_mono_ty().clone());
+        params.into_iter().next()
+    }
+
+    pub(crate) fn record_call_shape(&mut self, callee_id: NodeID, shape: CallShape) {
+        self.pending_resolved_calls
+            .entry(callee_id)
+            .or_default()
+            .record_shape(shape);
+    }
+
+    pub(crate) fn record_call_target(&mut self, callee_id: NodeID, target: CallTarget) {
+        self.pending_resolved_calls
+            .entry(callee_id)
+            .or_default()
+            .record_target(target);
     }
 
     pub fn shallow_generalize_row(&mut self, row: Row) -> Row {

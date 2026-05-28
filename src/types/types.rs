@@ -7,7 +7,7 @@ use crate::{
     name_resolution::symbol::Symbol,
     node_id::NodeID,
     types::{
-        call_tree::CallTree,
+        call_tree::{CallTree, ResolvedCalls},
         conformance::ConformanceKey,
         infer_row::Row,
         infer_ty::Ty,
@@ -97,6 +97,8 @@ pub struct Types {
     pub error_constraints: ErrorConstraintStore,
     /// Call tree mapping each function to the callees in its body.
     pub call_tree: CallTree,
+    /// Type-checker-resolved call facts keyed by callee expression ID.
+    pub resolved_calls: ResolvedCalls,
 }
 
 impl Types {
@@ -225,6 +227,11 @@ impl Types {
                         v.into_iter().map(|c| c.import(module_id)).collect(),
                     )
                 })
+                .collect(),
+            resolved_calls: self
+                .resolved_calls
+                .into_iter()
+                .map(|(k, v)| (k, v.import(module_id)))
                 .collect(),
         }
     }

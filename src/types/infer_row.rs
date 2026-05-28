@@ -278,8 +278,8 @@ impl std::fmt::Debug for Row {
 // Specializations moved from ty.rs since it's needed here
 #[derive(Default, Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Specializations {
-    pub ty: IndexMap<Symbol, Ty>,
-    pub row: IndexMap<RowParamId, Row>,
+    pub ty: std::collections::BTreeMap<Symbol, Ty>,
+    pub row: std::collections::BTreeMap<RowParamId, Row>,
 }
 
 impl Specializations {

@@ -11,6 +11,7 @@ use crate::ir::value::{Addr, RecordId};
 use crate::label::Label;
 use crate::node_kinds::inline_ir_instruction::{InlineIRInstructionKind, TypedInlineIRInstruction};
 use crate::node_kinds::type_annotation::TypeAnnotation;
+use crate::types::call_tree::{CallArgumentPlan, CallReceiverKind};
 use crate::types::infer_row::Row;
 use crate::types::type_catalog::{MemberSource, Nominal};
 use crate::types::typed_ast::{
@@ -3035,6 +3036,40 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    fn method_self_arg<'b>(
+        &self,
+        call_id: NodeID,
+        args: &'b [TypedExpr],
+        arg_vals: &'b [Value],
+    ) -> Option<(&'b TypedExpr, Value)> {
+        let site = self.typed.types.resolved_calls.get(&call_id)?;
+        let receiver_id = match &site.argument_plan {
+            CallArgumentPlan::PrependReceiver { id } => *id,
+            CallArgumentPlan::AsWritten => match site.receiver.as_ref()? {
+                receiver @ crate::types::call_tree::CallReceiver {
+                    kind: CallReceiverKind::Argument { index },
+                    ..
+                } => {
+                    if let Some((arg, value)) = args.get(*index).zip(arg_vals.get(*index))
+                        && arg.id == receiver.id
+                    {
+                        return Some((arg, value.clone()));
+                    }
+                    receiver.id
+                }
+                crate::types::call_tree::CallReceiver {
+                    kind: CallReceiverKind::CalleeReceiver,
+                    ..
+                } => return None,
+            },
+        };
+
+        args.iter()
+            .zip(arg_vals.iter())
+            .find(|(arg, _)| arg.id == receiver_id)
+            .map(|(arg, value)| (arg, value.clone()))
+    }
+
     #[instrument(level = tracing::Level::TRACE, skip(self, call_expr, callee, args))]
     fn lower_call(
         &mut self,
@@ -3149,12 +3184,11 @@ impl<'a> Lowerer<'a> {
         let tracked_self = if is_method_like
             && let Some(sym) = callee_sym
             && self.method_mutates_self(*sym)
-            && !arg_vals.is_empty()
-            && let Some(first_arg) = args.first()
-            && let TypedExprKind::Variable(var_sym) = &first_arg.kind
+            && let Some((self_arg, self_value)) = self.method_self_arg(callee.id, args, &arg_vals)
+            && let TypedExprKind::Variable(var_sym) = &self_arg.kind
         {
-            self.begin_method_self_tracking(*var_sym, &first_arg.ty, arg_vals[0].clone())
-                .map(|(self_dest_reg, binding)| (self_dest_reg, binding, first_arg.ty.clone()))
+            self.begin_method_self_tracking(*var_sym, &self_arg.ty, self_value)
+                .map(|(self_dest_reg, binding)| (self_dest_reg, binding, self_arg.ty.clone()))
         } else {
             None
         };
@@ -3173,11 +3207,11 @@ impl<'a> Lowerer<'a> {
             meta: vec![InstructionMeta::Source(callee.id)].into(),
         });
 
-        if let Some((self_dest_reg, receiver_binding, first_arg_ty)) = tracked_self {
+        if let Some((self_dest_reg, receiver_binding, self_arg_ty)) = tracked_self {
             self.finish_method_self_tracking(
                 Some(self_dest_reg),
                 Some(receiver_binding),
-                &first_arg_ty,
+                &self_arg_ty,
             );
         }
 
@@ -3250,17 +3284,9 @@ impl<'a> Lowerer<'a> {
             return self.lower_string(&string_expr, &sig, Bind::Assigned(dest));
         }
 
-        // Capture the receiver variable symbol before any modification
-        // This is needed to write back mutated self after the method call
-        let receiver_var_sym = if let TypedExprKind::Variable(sym) = &receiver.kind {
-            Some(*sym)
-        } else {
-            None
-        };
-
-        // Static calls on constructors (e.g. HTTP.Server()) should not prepend a
-        // receiver argument. Keep that path separate from the explicit-self legacy
-        // constructor call shape (Foo.bar(fizz)).
+        // Static calls on constructors (e.g. HTTP.Server()) do not prepend a
+        // receiver argument. Instance and protocol calls use the ResolvedCall recorded
+        // during type checking to identify the semantic receiver.
         let constructor_member_sym = if let Ty::Constructor {
             name: Name::Resolved(sym, ..),
             ..
@@ -3271,18 +3297,46 @@ impl<'a> Lowerer<'a> {
             None
         };
 
-        // Constructor/type member calls already carry their explicit receiver shape.
-        // Do not prepend an instance receiver for those calls.
-        if constructor_member_sym.is_some() {
-            // no-op: constructor/type member call
-        } else if let TypedExprKind::Constructor(_name, ..) = &receiver.kind
-            && !arg_exprs.is_empty()
-        {
-            receiver = arg_exprs[0].clone();
-        } else {
-            let (receiver_ir, _) = self.lower_expr(&receiver, Bind::Fresh)?;
-            args.insert(0, receiver_ir);
+        let mut receiver_self_value = None;
+        let call_site = self
+            .typed
+            .types
+            .resolved_calls
+            .get(&callee_expr.id)
+            .cloned();
+        match call_site {
+            Some(site) => match site.argument_plan {
+                CallArgumentPlan::PrependReceiver { id } if receiver.id == id => {
+                    let (receiver_ir, _) = self.lower_expr(&receiver, Bind::Fresh)?;
+                    args.insert(0, receiver_ir.clone());
+                    receiver_self_value = Some(receiver_ir);
+                }
+                CallArgumentPlan::AsWritten => {
+                    if let Some(receiver_fact) = site.receiver
+                        && let CallReceiverKind::Argument { index } = receiver_fact.kind
+                        && let Some(arg_expr) = arg_exprs.get(index)
+                        && arg_expr.id == receiver_fact.id
+                    {
+                        receiver = arg_expr.clone();
+                        receiver_self_value = args.get(index).cloned();
+                    }
+                }
+                CallArgumentPlan::PrependReceiver { .. } => {}
+            },
+            None if constructor_member_sym.is_none() => {
+                let (receiver_ir, _) = self.lower_expr(&receiver, Bind::Fresh)?;
+                args.insert(0, receiver_ir.clone());
+                receiver_self_value = Some(receiver_ir);
+            }
+            None => {}
         }
+
+        // Capture the semantic receiver variable symbol for mutated-self writeback.
+        let receiver_var_sym = if let TypedExprKind::Variable(sym) = &receiver.kind {
+            Some(*sym)
+        } else {
+            None
+        };
 
         // Use the provided callee_sym if available (from specialization pass),
         // otherwise look it up from the receiver type
@@ -3332,8 +3386,9 @@ impl<'a> Lowerer<'a> {
         // return type. Stateful methods can mutate self while also returning a value.
         let tracked_self = if let Some(var_sym) = receiver_var_sym
             && self.method_mutates_self(sym)
+            && let Some(self_value) = receiver_self_value
         {
-            self.begin_method_self_tracking(var_sym, &receiver.ty, args[0].clone())
+            self.begin_method_self_tracking(var_sym, &receiver.ty, self_value)
         } else {
             None
         };
