@@ -20,6 +20,8 @@ use crate::{
     name_resolution::symbol::{Symbol, set_symbol_names},
 };
 
+const IO_EINVAL: i64 = -22;
+
 #[allow(clippy::panic)]
 #[allow(clippy::should_implement_trait)]
 impl Value {
@@ -675,7 +677,7 @@ impl<IO: super::io::IO> Interpreter<IO> {
                 let mode_val = self.val(mode);
 
                 let Some(path_bytes) = self.get_bytes_from_value(path_val) else {
-                    self.write_register(&dest, Value::Int(-libc::EINVAL as i64));
+                    self.write_register(&dest, Value::Int(IO_EINVAL));
                     return;
                 };
                 let Value::Int(flags_int) = flags_val else {
@@ -2262,7 +2264,7 @@ Dog().handleDSTChange()
             ",
         );
 
-        assert_eq!(val, Value::Int(-libc::EINVAL as i64));
+        assert_eq!(val, Value::Int(IO_EINVAL));
     }
 
     #[test]
