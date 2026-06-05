@@ -30,6 +30,10 @@ impl Workspace {
         }
 
         docs.sort_by(|a, b| a.id.cmp(&b.id));
+        let typecheck_as_core = Self::should_typecheck_as_core(&docs);
+        if typecheck_as_core {
+            docs = Self::core_documents_with_overrides(&docs);
+        }
 
         let file_id_to_document: Vec<DocumentId> = docs.iter().map(|doc| doc.id.clone()).collect();
         let file_count = file_id_to_document.len();
@@ -55,10 +59,23 @@ impl Workspace {
             .map(|doc| Source::in_memory(PathBuf::from(&doc.path), doc.text.clone()))
             .collect();
 
-        let config = DriverConfig::new("Workspace")
-            .lenient_parsing()
-            .preserve_comments(true);
-        let parsed = Driver::new(sources, config).parse().ok()?;
+        let mut config = DriverConfig::new(if typecheck_as_core {
+            "Core"
+        } else {
+            "Workspace"
+        })
+        .lenient_parsing()
+        .preserve_comments(true);
+        if typecheck_as_core {
+            config.module_id = ModuleId::Core;
+        }
+
+        let driver = if typecheck_as_core {
+            Driver::new_bare(sources, config)
+        } else {
+            Driver::new(sources, config)
+        };
+        let parsed = driver.parse().ok()?;
         let resolved = parsed.resolve_names().ok()?;
         let asts_by_source = resolved.phase.asts.clone();
         let typed = resolved.typecheck().ok()?;
@@ -99,6 +116,68 @@ impl Workspace {
             types,
             diagnostics,
         })
+    }
+
+    fn should_typecheck_as_core(docs: &[DocumentInput]) -> bool {
+        let Some(first_doc) = docs.first() else {
+            return false;
+        };
+        let first_path = PathBuf::from(&first_doc.path);
+        let Some(core_dir) = first_path.parent().map(|path| path.to_path_buf()) else {
+            return false;
+        };
+
+        if core_dir.file_name().and_then(|name| name.to_str()) != Some("core") {
+            return false;
+        }
+
+        docs.iter().all(|doc| {
+            let path = PathBuf::from(&doc.path);
+            let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+                return false;
+            };
+
+            path.parent() == Some(core_dir.as_path())
+                && crate::compiling::core::CORE_SOURCE_NAMES.contains(&file_name)
+                && doc.text.trim_start().starts_with("// no-core")
+        })
+    }
+
+    fn core_documents_with_overrides(docs: &[DocumentInput]) -> Vec<DocumentInput> {
+        let core_dir = docs
+            .first()
+            .and_then(|doc| {
+                PathBuf::from(&doc.path)
+                    .parent()
+                    .map(|path| path.to_path_buf())
+            })
+            .unwrap_or_else(|| PathBuf::from("core"));
+
+        crate::compiling::core::core_sources()
+            .into_iter()
+            .map(|(name, bundled_text)| {
+                if let Some(doc) = docs.iter().find(|doc| {
+                    PathBuf::from(&doc.path)
+                        .file_name()
+                        .and_then(|file_name| file_name.to_str())
+                        == Some(name)
+                }) {
+                    return doc.clone();
+                }
+
+                let path = core_dir.join(name);
+                let text =
+                    std::fs::read_to_string(&path).unwrap_or_else(|_| bundled_text.to_string());
+                let path = path.to_string_lossy().into_owned();
+
+                DocumentInput {
+                    id: path.clone(),
+                    path,
+                    version: 0,
+                    text,
+                }
+            })
+            .collect()
     }
 
     pub fn core() -> Option<Self> {
@@ -274,4 +353,37 @@ fn range_for_node(
     }
 
     TextRange::new(0, 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn core_sources_do_not_report_workspace_diagnostics() {
+        let docs = crate::compiling::core::core_sources()
+            .into_iter()
+            .map(|(name, text)| {
+                let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("core")
+                    .join(name)
+                    .to_string_lossy()
+                    .into_owned();
+
+                DocumentInput {
+                    id: path.clone(),
+                    path,
+                    version: 0,
+                    text: text.to_string(),
+                }
+            })
+            .collect();
+
+        let workspace = Workspace::new(docs).expect("workspace");
+        assert!(
+            workspace.diagnostics.is_empty(),
+            "expected no core diagnostics, got {:?}",
+            workspace.diagnostics
+        );
+    }
 }
