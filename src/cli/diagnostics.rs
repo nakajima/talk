@@ -45,6 +45,7 @@ pub fn render_text(
 
     let gutter = style("|", "2", use_color);
     let line_no = style(&format!("{line:>4}"), "2", use_color);
+    let blank_line_no = style("    ", "2", use_color);
     let underline = style(&underline, severity_style, use_color);
 
     let mut output = String::new();
@@ -52,9 +53,9 @@ pub fn render_text(
         "{doc_id}:{line}:{col}: {severity}: {}\n",
         diagnostic.message
     ));
-    output.push_str(&format!("  {gutter}\n"));
+    output.push_str(&format!("{blank_line_no} {gutter}\n"));
     output.push_str(&format!("{line_no} {gutter} {line_text}\n"));
-    output.push_str(&format!("  {gutter} {prefix}{underline}\n"));
+    output.push_str(&format!("{blank_line_no} {gutter} {prefix}{underline}\n"));
 
     if diagnostic.range.end as usize > line_end {
         output.push_str("  = note: spans multiple lines\n");
@@ -156,4 +157,26 @@ fn json_string(value: &str) -> String {
     }
     out.push('"');
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::analysis::{Diagnostic, DiagnosticSeverity, TextRange};
+
+    use super::{ColorMode, render_text};
+
+    #[test]
+    fn text_diagnostic_caret_aligns_with_source_column() {
+        let text = "func fizz() { buzz() }";
+        let diagnostic = Diagnostic {
+            range: TextRange::new(14, 18),
+            severity: DiagnosticSeverity::Error,
+            message: "Undefined name: buzz".to_string(),
+        };
+
+        assert_eq!(
+            render_text("<repl>", text, &diagnostic, ColorMode::Never),
+            "<repl>:1:15: error: Undefined name: buzz\n     |\n   1 | func fizz() { buzz() }\n     |               ^^^^\n\n"
+        );
+    }
 }

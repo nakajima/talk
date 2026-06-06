@@ -141,6 +141,18 @@ impl<'a> TypeFormatter<'a> {
         self.format_ty_in_context(ty, &ctx)
     }
 
+    pub fn format_ty_with_effects_for_show(&self, ty: &Ty, effects: &Row) -> String {
+        let display_ty = Ty::Func(ty.clone().into(), Ty::Void.into(), effects.clone().into());
+        let ctx = TyFormatContext::from_ty_without_row_params(&display_ty);
+        let ty = self.format_ty_in_context(ty, &ctx);
+        let effects = self.format_row_in_context(effects, &ctx);
+        if effects.is_empty() {
+            ty
+        } else {
+            format!("{ty} {effects}")
+        }
+    }
+
     /// Format a method type, omitting the implicit self parameter and uncurrying
     fn format_method_ty_in_context(&self, ty: &Ty, ctx: &TyFormatContext) -> String {
         // For a method type like: (Self) effects -> (param1) effects -> ... -> ret

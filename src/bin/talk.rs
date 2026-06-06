@@ -61,6 +61,7 @@ async fn main() {
             #[arg(value_hint = ValueHint::FilePath)]
             filenames: Vec<String>,
         },
+        Repl,
         // Run { filename: PathBuf },
         Completions {
             #[arg(value_enum)]
@@ -94,6 +95,9 @@ async fn main() {
             let mut cmd = Cli::command();
             let bin_name = cmd.get_name().to_string();
             generate(*shell, &mut cmd, bin_name, &mut std::io::stdout());
+        }
+        Commands::Repl => {
+            talk::cli::repl::run();
         }
         Commands::Ir { filename } => {
             use talk::compiling::driver::Driver;
