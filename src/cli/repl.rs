@@ -15,33 +15,14 @@ use rustyline::{
 };
 
 use crate::{
-    analysis::{DocumentInput, Workspace, completion::complete_in_workspace},
     cli::diagnostics::{ColorMode, render_text},
-    compiling::driver::{Driver, DriverConfig, Lowered, Source, Typed},
     highlighter::{Higlighter as TalkHighlighter, Kind as HighlightKind},
-    ir::{
-        interpreter::Interpreter,
-        io::CaptureIO,
-        value::{RecordId, Value},
-    },
-    lexer::Lexer,
-    node_id::FileID,
-    parser::Parser,
-    parser_error::ParserError,
-    token_kind::TokenKind,
-    types::{
-        format::{SymbolNames, TypeFormatter},
-        infer_ty::Ty,
-    },
+    repl::{ReplEvalResult, ReplSession},
 };
 
-const REPL_DOCUMENT_ID: &str = "<repl>";
 const PRIMARY_PROMPT: &[u8] = b"talk> ";
 const CONTINUATION_PROMPT: &[u8] = b"....> ";
 const HISTORY_FILE_NAME: &str = ".talk_history";
-
-type LoweredDriver = Driver<Lowered>;
-type TypedDriver = Driver<Typed>;
 
 pub fn run() {
     let mut repl = Repl::new(ReplSession::new());
@@ -228,7 +209,7 @@ impl Repl {
             }
 
             buffer.push_str(&line);
-            if buffer.trim().is_empty() || !ReplInput::new(&buffer).needs_more_input() {
+            if buffer.trim().is_empty() || !crate::repl::needs_more_input(&buffer) {
                 return Ok(Some(buffer));
             }
 
@@ -260,8 +241,25 @@ impl Repl {
                     writeln!(output, "{value}")?;
                 }
             }
-            ReplEvalResult::Diagnostics(diagnostics) => {
-                error.write_all(diagnostics.as_bytes())?;
+            ReplEvalResult::Diagnostics {
+                source,
+                diagnostics,
+                message,
+            } => {
+                for diagnostic in diagnostics {
+                    error.write_all(
+                        render_text(
+                            crate::repl::REPL_DOCUMENT_ID,
+                            &source,
+                            &diagnostic,
+                            ColorMode::Auto,
+                        )
+                        .as_bytes(),
+                    )?;
+                }
+                if let Some(message) = message {
+                    error.write_all(message.as_bytes())?;
+                }
             }
             ReplEvalResult::Error(message) => {
                 writeln!(error, "error: {message}")?;
@@ -273,34 +271,21 @@ impl Repl {
 }
 
 struct ReplHelper {
-    persistent_source: String,
-    source_path: PathBuf,
+    session: ReplSession,
     use_color: bool,
 }
 
 impl ReplHelper {
     fn new(session: &ReplSession, use_color: bool) -> Self {
         Self {
-            persistent_source: session.persistent_source.clone(),
-            source_path: session.source_path.clone(),
+            session: session.clone(),
             use_color,
         }
     }
 
     fn set_session(&mut self, session: &ReplSession, use_color: bool) {
-        self.persistent_source = session.persistent_source.clone();
-        self.source_path = session.source_path.clone();
+        self.session = session.clone();
         self.use_color = use_color;
-    }
-
-    fn source_for_completion(&self, line: &str, pos: usize) -> (String, usize) {
-        let mut source = self.persistent_source.clone();
-        if !source.is_empty() && !source.ends_with('\n') {
-            source.push('\n');
-        }
-        let offset_base = source.len();
-        source.push_str(line);
-        (source, offset_base + pos)
     }
 
     fn complete_source(
@@ -309,41 +294,18 @@ impl ReplHelper {
         pos: usize,
         original_line_offset: usize,
     ) -> rustyline::Result<(usize, Vec<Pair>)> {
-        let pos = pos.min(line.len());
-        let start = identifier_start(line, pos);
-        let prefix = &line[start..pos];
-        let (source, byte_offset) = self.source_for_completion(line, pos);
-        let doc_id = REPL_DOCUMENT_ID.to_string();
-        let doc = DocumentInput {
-            id: doc_id.clone(),
-            path: self.source_path.to_string_lossy().into_owned(),
-            version: 0,
-            text: source,
-        };
-
-        let Some(workspace) = Workspace::new(vec![doc]) else {
-            return Ok((original_line_offset + start, vec![]));
-        };
-
-        let byte_offset = u32::try_from(byte_offset).unwrap_or(u32::MAX);
-        let mut candidates: Vec<Pair> = complete_in_workspace(&workspace, &doc_id, byte_offset)
+        let completions = self
+            .session
+            .complete_source(line, pos, original_line_offset);
+        let candidates = completions
+            .items
             .into_iter()
-            .filter(|item| prefix.is_empty() || item.label.starts_with(prefix))
-            .map(|item| {
-                let display = match item.detail {
-                    Some(detail) => format!("{:<24} {detail}", item.label),
-                    None => item.label.clone(),
-                };
-                Pair {
-                    display,
-                    replacement: item.label,
-                }
+            .map(|item| Pair {
+                display: item.display,
+                replacement: item.replacement,
             })
             .collect();
-        candidates.sort_by(|a, b| a.replacement.cmp(&b.replacement));
-        candidates.dedup_by(|a, b| a.replacement == b.replacement);
-
-        Ok((original_line_offset + start, candidates))
+        Ok((completions.start, candidates))
     }
 
     fn complete_command(&self, line: &str, pos: usize) -> rustyline::Result<(usize, Vec<Pair>)> {
@@ -498,7 +460,7 @@ impl Validator for ReplHelper {
             return Ok(ValidationResult::Valid(None));
         }
 
-        if ReplInput::new(input).needs_more_input() {
+        if self.session.needs_more_input(input) {
             return Ok(ValidationResult::Incomplete);
         }
 
@@ -537,19 +499,6 @@ fn readline_to_io_error(err: ReadlineError) -> io::Error {
     io::Error::other(err.to_string())
 }
 
-fn identifier_start(line: &str, pos: usize) -> usize {
-    let bytes = line.as_bytes();
-    let mut start = pos.min(bytes.len());
-    while start > 0 && is_identifier_byte(bytes[start - 1]) {
-        start -= 1;
-    }
-    start
-}
-
-fn is_identifier_byte(byte: u8) -> bool {
-    byte.is_ascii_alphanumeric() || byte == b'_'
-}
-
 fn style_for_highlight(kind: HighlightKind) -> &'static str {
     match kind {
         HighlightKind::KEYWORD | HighlightKind::MODIFIER => "\x1b[1;35m",
@@ -570,328 +519,6 @@ fn style_for_highlight(kind: HighlightKind) -> &'static str {
         HighlightKind::OPERATOR | HighlightKind::EFFECT => "\x1b[35m",
         HighlightKind::DECORATOR | HighlightKind::MACRO => "\x1b[35m",
         HighlightKind::NAMESPACE | HighlightKind::EVENT | HighlightKind::REGEXP => "\x1b[0m",
-    }
-}
-
-pub struct ReplSession {
-    persistent_source: String,
-    source_path: PathBuf,
-}
-
-impl Default for ReplSession {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl ReplSession {
-    pub fn new() -> Self {
-        let source_path = std::env::current_dir()
-            .map(|dir| dir.join("repl.tlk"))
-            .unwrap_or_else(|_| PathBuf::from("repl.tlk"));
-        Self::with_source_path(source_path)
-    }
-
-    fn with_source_path(source_path: PathBuf) -> Self {
-        Self {
-            persistent_source: String::new(),
-            source_path,
-        }
-    }
-
-    pub fn clear(&mut self) {
-        self.persistent_source.clear();
-    }
-
-    pub fn eval(&mut self, input: &str) -> ReplEvalResult {
-        let repl_input = ReplInput::new(input);
-        if repl_input.is_empty() {
-            return ReplEvalResult::Output {
-                stdout: String::new(),
-                stderr: String::new(),
-                value: None,
-            };
-        }
-
-        let source = self.combined_source(input);
-        if let Some(diagnostics) = self.diagnostics_for_source(&source) {
-            return ReplEvalResult::Diagnostics(diagnostics);
-        }
-
-        let lowered = match self.lower_source(&source) {
-            Ok(lowered) => lowered,
-            Err(message) => return ReplEvalResult::Error(message),
-        };
-
-        if lowered.has_errors() {
-            let diagnostics = self
-                .diagnostics_for_source(&source)
-                .unwrap_or_else(|| self.basic_diagnostics(lowered.diagnostics()));
-            return ReplEvalResult::Diagnostics(diagnostics);
-        }
-
-        let result = self.run_lowered(lowered);
-        if repl_input.should_persist() && matches!(result, ReplEvalResult::Output { .. }) {
-            self.persist(input);
-        }
-
-        result
-    }
-
-    pub fn type_of(&self, input: &str) -> ReplEvalResult {
-        let repl_input = ReplInput::new(input);
-        if repl_input.is_empty() {
-            return ReplEvalResult::Error("/type requires an expression".to_string());
-        }
-
-        let source = self.combined_source(input);
-        if let Some(diagnostics) = self.diagnostics_for_source(&source) {
-            return ReplEvalResult::Diagnostics(diagnostics);
-        }
-
-        let typed = match self.typecheck_source(&source) {
-            Ok(typed) => typed,
-            Err(message) => return ReplEvalResult::Error(message),
-        };
-
-        if !typed.phase.diagnostics.is_empty() {
-            let diagnostics = self
-                .diagnostics_for_source(&source)
-                .unwrap_or_else(|| self.basic_diagnostics(&typed.phase.diagnostics));
-            return ReplEvalResult::Diagnostics(diagnostics);
-        }
-
-        if repl_input.should_persist() {
-            return self.type_of_typed_root(typed);
-        }
-
-        let probe_source = self.type_probe_source(input);
-        let typed = match self.typecheck_source(&probe_source) {
-            Ok(typed) => typed,
-            Err(message) => return ReplEvalResult::Error(message),
-        };
-
-        if !typed.phase.diagnostics.is_empty() {
-            let diagnostics = self
-                .diagnostics_for_source(&source)
-                .unwrap_or_else(|| self.basic_diagnostics(&typed.phase.diagnostics));
-            return ReplEvalResult::Diagnostics(diagnostics);
-        }
-
-        self.type_of_probe(typed)
-    }
-
-    fn type_of_typed_root(&self, typed: TypedDriver) -> ReplEvalResult {
-        let Some(root) = typed.phase.ast.roots().last().cloned() else {
-            return ReplEvalResult::Error("/type requires an expression".to_string());
-        };
-
-        let mut symbol_names = typed.phase.resolved_names.symbol_names.clone();
-        symbol_names.extend(typed.config.modules.imported_symbol_names());
-        let formatter = TypeFormatter::new(SymbolNames::single(&symbol_names));
-        ReplEvalResult::Output {
-            stdout: String::new(),
-            stderr: String::new(),
-            value: Some(formatter.format_ty_for_show(&root.ty())),
-        }
-    }
-
-    fn type_of_probe(&self, typed: TypedDriver) -> ReplEvalResult {
-        let Some(root) = typed.phase.ast.roots().last().cloned() else {
-            return ReplEvalResult::Error("/type requires an expression".to_string());
-        };
-        let Ty::Func(_param, ret, effects) = root.ty() else {
-            return ReplEvalResult::Error("failed to build /type probe".to_string());
-        };
-        let mut symbol_names = typed.phase.resolved_names.symbol_names.clone();
-        symbol_names.extend(typed.config.modules.imported_symbol_names());
-        let formatter = TypeFormatter::new(SymbolNames::single(&symbol_names));
-
-        ReplEvalResult::Output {
-            stdout: String::new(),
-            stderr: String::new(),
-            value: Some(formatter.format_ty_with_effects_for_show(&ret, &effects)),
-        }
-    }
-
-    fn combined_source(&self, input: &str) -> String {
-        let mut source = self.persistent_source.clone();
-        if !source.is_empty() && !source.ends_with('\n') {
-            source.push('\n');
-        }
-        source.push_str(input);
-        source
-    }
-
-    fn type_probe_source(&self, input: &str) -> String {
-        let mut source = self.persistent_source.clone();
-        if !source.is_empty() && !source.ends_with('\n') {
-            source.push('\n');
-        }
-        source.push_str("func __talk_repl_type_probe() {\n");
-        source.push_str(input);
-        if !input.ends_with('\n') {
-            source.push('\n');
-        }
-        source.push_str("}\n");
-        source
-    }
-
-    fn persist(&mut self, input: &str) {
-        if !self.persistent_source.is_empty() && !self.persistent_source.ends_with('\n') {
-            self.persistent_source.push('\n');
-        }
-        self.persistent_source.push_str(input);
-        if !self.persistent_source.ends_with('\n') {
-            self.persistent_source.push('\n');
-        }
-    }
-
-    fn diagnostics_for_source(&self, source: &str) -> Option<String> {
-        let doc = DocumentInput {
-            id: REPL_DOCUMENT_ID.to_string(),
-            path: self.source_path.to_string_lossy().into_owned(),
-            version: 0,
-            text: source.to_string(),
-        };
-        let workspace = Workspace::new(vec![doc])?;
-        let diagnostics = workspace.diagnostics.get(REPL_DOCUMENT_ID)?;
-        if diagnostics.is_empty() {
-            return None;
-        }
-
-        let mut rendered = String::new();
-        for diagnostic in diagnostics {
-            rendered.push_str(&render_text(
-                REPL_DOCUMENT_ID,
-                source,
-                diagnostic,
-                ColorMode::Auto,
-            ));
-        }
-
-        Some(rendered)
-    }
-
-    fn typecheck_source(&self, source: &str) -> Result<TypedDriver, String> {
-        let driver = Driver::new(
-            vec![Source::in_memory(
-                self.source_path.clone(),
-                source.to_string(),
-            )],
-            DriverConfig::new("repl").executable(),
-        );
-
-        driver
-            .parse()
-            .map_err(|err| format!("{err:?}"))?
-            .resolve_names()
-            .map_err(|err| format!("{err:?}"))?
-            .typecheck()
-            .map_err(|err| format!("{err:?}"))
-    }
-
-    fn lower_source(&self, source: &str) -> Result<LoweredDriver, String> {
-        self.typecheck_source(source)?
-            .lower()
-            .map_err(|err| format!("{err:?}"))
-    }
-
-    fn run_lowered(&self, lowered: LoweredDriver) -> ReplEvalResult {
-        let display_names = lowered.display_symbol_names();
-        let module = lowered.module("repl");
-        let mut interpreter =
-            Interpreter::new(module.program, Some(display_names), CaptureIO::default());
-        let result = interpreter.run();
-        let value = if Self::is_unit_value(&result) {
-            None
-        } else {
-            Some(interpreter.display(result, false))
-        };
-        let stdout = String::from_utf8_lossy(&interpreter.io.stdout).into_owned();
-        let stderr = String::from_utf8_lossy(&interpreter.io.stderr).into_owned();
-
-        ReplEvalResult::Output {
-            stdout,
-            stderr,
-            value,
-        }
-    }
-
-    fn basic_diagnostics(&self, diagnostics: &[crate::diagnostic::AnyDiagnostic]) -> String {
-        let mut rendered = String::new();
-        for diagnostic in diagnostics {
-            rendered.push_str("error: ");
-            rendered.push_str(&diagnostic.to_string());
-            rendered.push('\n');
-        }
-        rendered
-    }
-
-    fn is_unit_value(value: &Value) -> bool {
-        match value {
-            Value::Void => true,
-            Value::Record(RecordId::Anon, fields) => fields.is_empty(),
-            _ => false,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ReplEvalResult {
-    Output {
-        stdout: String,
-        stderr: String,
-        value: Option<String>,
-    },
-    Diagnostics(String),
-    Error(String),
-}
-
-struct ReplInput<'a> {
-    source: &'a str,
-}
-
-impl<'a> ReplInput<'a> {
-    fn new(source: &'a str) -> Self {
-        Self { source }
-    }
-
-    fn is_empty(&self) -> bool {
-        self.source.trim().is_empty()
-    }
-
-    fn needs_more_input(&self) -> bool {
-        let lexer = Lexer::new(self.source);
-        let parser = Parser::new(REPL_DOCUMENT_ID, FileID(0), lexer);
-        matches!(parser.parse(), Err(ParserError::UnexpectedEndOfInput(_)))
-    }
-
-    fn should_persist(&self) -> bool {
-        let mut lexer = Lexer::new(self.source);
-        let mut saw_public = false;
-
-        loop {
-            let Ok(token) = lexer.next() else {
-                return false;
-            };
-
-            match token.kind {
-                TokenKind::Newline | TokenKind::Semicolon => {}
-                TokenKind::Public => saw_public = true,
-                TokenKind::Let
-                | TokenKind::Func
-                | TokenKind::Struct
-                | TokenKind::Enum
-                | TokenKind::Extend
-                | TokenKind::Typealias
-                | TokenKind::Effect
-                | TokenKind::Import
-                | TokenKind::Protocol => return true,
-                TokenKind::Static if saw_public => {}
-                _ => return false,
-            }
-        }
     }
 }
 
@@ -951,60 +578,6 @@ mod tests {
         ReplSession::with_source_path(PathBuf::from("repl.tlk"))
     }
 
-    fn value(result: ReplEvalResult) -> String {
-        match result {
-            ReplEvalResult::Output {
-                value: Some(value), ..
-            } => value,
-            other => panic!("expected value, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn expression_evaluates() {
-        let mut session = session();
-        assert_eq!(value(session.eval("1 + 1")), "2");
-    }
-
-    #[test]
-    fn declaration_persists() {
-        let mut session = session();
-        let result = session.eval("let x = 2");
-        assert!(matches!(result, ReplEvalResult::Output { value: None, .. }));
-        assert_eq!(value(session.eval("x + 3")), "5");
-    }
-
-    #[test]
-    fn bad_input_does_not_persist() {
-        let mut session = session();
-        let result = session.eval("let x =");
-        assert!(matches!(result, ReplEvalResult::Diagnostics(_)));
-        let result = session.eval("x");
-        assert!(matches!(result, ReplEvalResult::Diagnostics(_)));
-    }
-
-    #[test]
-    fn multiline_function_persists() {
-        let mut session = session();
-        let result = session.eval("func add_one(x) {\n  x + 1\n}");
-        assert!(matches!(result, ReplEvalResult::Output { value: None, .. }));
-        assert_eq!(value(session.eval("add_one(41)")), "42");
-    }
-
-    #[test]
-    fn type_command_uses_persisted_declarations() {
-        let mut session = session();
-        let result = session.eval("let x = 2");
-        assert!(matches!(result, ReplEvalResult::Output { value: None, .. }));
-        assert_eq!(value(session.type_of("x + 3")), "Int");
-    }
-
-    #[test]
-    fn type_command_includes_expression_effects() {
-        let session = session();
-        assert_eq!(value(session.type_of("sleep(1)")), "Int '[io, ..]");
-    }
-
     #[test]
     fn slash_commands_complete() {
         let session = session();
@@ -1035,23 +608,5 @@ mod tests {
                 .iter()
                 .any(|candidate| candidate.replacement == "longName")
         );
-    }
-
-    #[test]
-    fn print_output_is_captured() {
-        let mut session = session();
-        let result = session.eval("print(\"hi\")");
-        match result {
-            ReplEvalResult::Output {
-                stdout,
-                stderr,
-                value,
-            } => {
-                assert_eq!(stdout, "hi\n");
-                assert_eq!(stderr, "");
-                assert_eq!(value, None);
-            }
-            other => panic!("expected output, got {other:?}"),
-        }
     }
 }
