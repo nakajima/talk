@@ -20,6 +20,7 @@ pub mod tests {
             infer_row::{Row, RowParamId},
             infer_ty::Ty,
             scheme::{ForAll, Scheme},
+            type_catalog::MemberSource,
             type_error::TypeError,
             typed_ast::{TypedAST, TypedExpr, TypedExprKind, TypedStmt, TypedStmtKind},
             types::{TypeEntry, Types},
@@ -1814,6 +1815,127 @@ pub mod tests {
     }
 
     #[test]
+    fn rejects_unbounded_associated_type_projection() {
+        let (_ast, _types, diagnostics) = typecheck_err(
+            "
+            func bad<T>(x: T) -> T.Item {
+                x
+            }
+            ",
+        );
+
+        assert!(
+            diagnostics.iter().any(|diag| matches!(
+                diag,
+                AnyDiagnostic::Typing(Diagnostic {
+                    kind: TypeError::UnknownAssociatedType { label, .. },
+                    ..
+                }) if *label == Label::Named("Item".into())
+            )),
+            "expected unknown associated type diagnostic, got: {:?}",
+            diagnostics
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_associated_type_projection_on_protocol_bound() {
+        let (_ast, _types, diagnostics) = typecheck_err(
+            "
+            protocol Aged {
+                associated T
+            }
+
+            func bad<A: Aged>(x: A) -> A.U {
+                x
+            }
+            ",
+        );
+
+        assert!(
+            diagnostics.iter().any(|diag| matches!(
+                diag,
+                AnyDiagnostic::Typing(Diagnostic {
+                    kind: TypeError::UnknownAssociatedType { label, .. },
+                    ..
+                }) if *label == Label::Named("U".into())
+            )),
+            "expected unknown associated type diagnostic, got: {:?}",
+            diagnostics
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_nominal_type_member() {
+        let (_ast, _types, diagnostics) = typecheck_err(
+            "
+            struct Box {}
+
+            func bad() -> Box.Item {
+                1
+            }
+            ",
+        );
+
+        assert!(
+            diagnostics.iter().any(|diag| matches!(
+                diag,
+                AnyDiagnostic::Typing(Diagnostic {
+                    kind: TypeError::UnknownTypeMember { member, .. },
+                    ..
+                }) if *member == Label::Named("Item".into())
+            )),
+            "expected unknown type member diagnostic, got: {:?}",
+            diagnostics
+        );
+    }
+
+    #[test]
+    fn resolves_nominal_type_member_alias() {
+        let (ast, types) = typecheck(
+            "
+            struct A {
+                typealias B = Int
+            }
+
+            func f() -> A.B {
+                1
+            }
+
+            f()
+            ",
+        );
+
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
+    }
+
+    #[test]
+    fn rejects_nested_unknown_nominal_type_member() {
+        let (_ast, _types, diagnostics) = typecheck_err(
+            "
+            struct A {
+                typealias B = Int
+            }
+
+            func f() -> A.B.C {
+                1
+            }
+            ",
+        );
+
+        assert!(
+            diagnostics.iter().any(|diag| matches!(
+                diag,
+                AnyDiagnostic::Typing(Diagnostic {
+                    kind: TypeError::UnknownTypeMember { member, .. },
+                    ..
+                }) if *member == Label::Named("C".into())
+            )),
+            "expected unknown nested type member diagnostic, got: {:?}",
+            diagnostics
+        );
+    }
+
+    #[test]
     fn types_simple_conformance() {
         let (_ast, types) = typecheck(
             "
@@ -1831,10 +1953,124 @@ pub mod tests {
             ",
         );
 
-        assert!(types.catalog.conformances.contains_key(&ConformanceKey {
+        let key = ConformanceKey {
             protocol_id: ProtocolId::from(1),
             conforming_id: StructId::from(1).into(),
-        }));
+        };
+        let decl = types
+            .catalog
+            .conformance_claims
+            .get(&key)
+            .expect("conformance declaration");
+        assert!(
+            decl.method_candidates
+                .get(&Label::Named("getCount".into()))
+                .is_some_and(|sym| matches!(*sym, Symbol::InstanceMethod(_)))
+        );
+        assert!(types.catalog.conformance_evidence.contains_key(&key));
+    }
+
+    #[test]
+    fn records_conformance_claim_associated_type_candidates() {
+        let (_ast, types) = typecheck(
+            "
+            protocol HasItem {
+                associated Item
+                func getItem() -> Int
+            }
+
+            struct Box {}
+
+            extend Box: HasItem {
+                typealias Item = Int
+                func getItem() { 1 }
+            }
+            ",
+        );
+
+        let key = ConformanceKey {
+            protocol_id: ProtocolId::from(1),
+            conforming_id: StructId::from(1).into(),
+        };
+        let decl = types
+            .catalog
+            .conformance_claims
+            .get(&key)
+            .expect("conformance declaration");
+        assert!(
+            decl.associated_type_candidates
+                .get(&Label::Named("Item".into()))
+                .is_some_and(|sym| matches!(*sym, Symbol::TypeAlias(_)))
+        );
+        assert!(
+            decl.method_candidates
+                .get(&Label::Named("getItem".into()))
+                .is_some_and(|sym| matches!(*sym, Symbol::InstanceMethod(_)))
+        );
+    }
+
+    #[test]
+    fn rejects_missing_concrete_conformance_for_generic_bound() {
+        let (_ast, _types, diagnostics) = typecheck_err(
+            "
+            protocol Marker {
+                func mark() -> Int
+            }
+
+            struct Foo {}
+
+            func takes<T: Marker>(x: T) {}
+
+            takes(Foo())
+            ",
+        );
+
+        assert!(
+            diagnostics.iter().any(|diag| matches!(
+                diag,
+                AnyDiagnostic::Typing(Diagnostic {
+                    kind: TypeError::TypeDoesNotConform {
+                        symbol,
+                        protocol_id,
+                    },
+                    ..
+                }) if *symbol == StructId::from(1).into()
+                    && *protocol_id == ProtocolId::from(1)
+            )),
+            "expected missing conformance diagnostic, got: {:?}",
+            diagnostics
+        );
+    }
+
+    #[test]
+    fn rejects_missing_marker_conformance_without_requirements() {
+        let (_ast, _types, diagnostics) = typecheck_err(
+            "
+            protocol Marker {}
+
+            struct Foo {}
+
+            func takes<T: Marker>(x: T) {}
+
+            takes(Foo())
+            ",
+        );
+
+        assert!(
+            diagnostics.iter().any(|diag| matches!(
+                diag,
+                AnyDiagnostic::Typing(Diagnostic {
+                    kind: TypeError::TypeDoesNotConform {
+                        symbol,
+                        protocol_id,
+                    },
+                    ..
+                }) if *symbol == StructId::from(1).into()
+                    && *protocol_id == ProtocolId::from(1)
+            )),
+            "expected missing marker conformance diagnostic, got: {:?}",
+            diagnostics
+        );
     }
 
     #[test]
@@ -2417,7 +2653,7 @@ pub mod tests {
         assert!(
             types
                 .catalog
-                .conformances
+                .conformance_evidence
                 .get(&ConformanceKey {
                     protocol_id: ProtocolId::from(1),
                     conforming_id: Symbol::Int,
@@ -2425,21 +2661,18 @@ pub mod tests {
                 .is_some()
         );
 
-        println!("{:?}", types.catalog.instance_methods.get(&Symbol::Int));
-
-        // Int's instance_methods should have the `default` method from protocol A
-        let member_sym = types
+        // Int's completed member index should have the `default` method from protocol A.
+        let member = types
             .catalog
-            .instance_methods
-            .get(&Symbol::Int)
-            .unwrap()
-            .get(&Label::Named("default".into()))
+            .lookup_member_binding(&Symbol::Int, &Label::Named("default".into()))
             .unwrap();
+
+        assert_eq!(member.source, MemberSource::Protocol(ProtocolId::from(1)));
 
         // The entry is polymorphic (Self -> Int), with actual monomorphization
         // happening during lowering. The important thing is that the method is
         // available on Int through the transitive conformance.
-        assert!(types.get_symbol(member_sym).is_some());
+        assert!(types.get_symbol(&member.symbol).is_some());
     }
 
     #[test]
@@ -2513,10 +2746,77 @@ pub mod tests {
         );
 
         // Verify the conformance is registered
-        assert!(types.catalog.conformances.contains_key(&ConformanceKey {
-            protocol_id: ProtocolId::from(1),
-            conforming_id: StructId::from(1).into(),
-        }));
+        assert!(
+            types
+                .catalog
+                .conformance_evidence
+                .contains_key(&ConformanceKey {
+                    protocol_id: ProtocolId::from(1),
+                    conforming_id: StructId::from(1).into(),
+                })
+        );
+    }
+
+    #[test]
+    fn nested_self_extend_can_use_protocol_default_method() {
+        let (ast, types) = typecheck(
+            "
+            protocol P {
+                func f() { 1 }
+            }
+
+            struct S {
+                extend Self: P {}
+            }
+
+            func call<T: P>(x: T) -> Int {
+                x.f()
+            }
+
+            call(S())
+            ",
+        );
+
+        assert_eq!(ty(0, &ast, &types), Ty::Int);
+    }
+
+    #[test]
+    fn nested_self_extend_does_not_use_outer_method_as_witness() {
+        let (_ast, _types, diagnostics) = typecheck_err(
+            "
+            protocol P {
+                func f() -> Int
+            }
+
+            struct S {
+                func f() -> Int { 1 }
+
+                extend Self: P {}
+            }
+
+            func call<T: P>(x: T) -> Int {
+                x.f()
+            }
+
+            call(S())
+            ",
+        );
+
+        assert!(
+            diagnostics.iter().any(|diag| matches!(
+                diag,
+                AnyDiagnostic::Typing(Diagnostic {
+                    kind: TypeError::TypeDoesNotConform {
+                        symbol,
+                        protocol_id,
+                    },
+                    ..
+                }) if *symbol == StructId::from(1).into()
+                    && *protocol_id == ProtocolId::from(1)
+            )),
+            "expected missing conformance diagnostic, got: {:?}",
+            diagnostics
+        );
     }
 
     #[test]
@@ -2548,10 +2848,15 @@ pub mod tests {
         );
 
         // Verify the conformance is registered (MyGetter is struct 2 due to internal ID assignment)
-        assert!(types.catalog.conformances.contains_key(&ConformanceKey {
-            protocol_id: ProtocolId::from(1),
-            conforming_id: StructId::from(2).into(),
-        }));
+        assert!(
+            types
+                .catalog
+                .conformance_evidence
+                .contains_key(&ConformanceKey {
+                    protocol_id: ProtocolId::from(1),
+                    conforming_id: StructId::from(2).into(),
+                })
+        );
     }
 
     #[test]
@@ -2584,10 +2889,15 @@ pub mod tests {
         );
 
         // Verify the conformance is registered
-        assert!(types.catalog.conformances.contains_key(&ConformanceKey {
-            protocol_id: ProtocolId::from(1),
-            conforming_id: StructId::from(2).into(),
-        }));
+        assert!(
+            types
+                .catalog
+                .conformance_evidence
+                .contains_key(&ConformanceKey {
+                    protocol_id: ProtocolId::from(1),
+                    conforming_id: StructId::from(2).into(),
+                })
+        );
     }
 
     #[test]

@@ -12,7 +12,7 @@ use crate::{
         infer_ty::{Level, Meta, Ty},
         solve_context::SolveContext,
         type_error::TypeError,
-        type_session::TypeSession,
+        type_session::{AssociatedTypeResolution, TypeSession},
     },
 };
 
@@ -45,71 +45,31 @@ impl Projection {
             _ => None,
         };
 
-        if let Some(base_sym) = base_sym {
-            let conformance = if let Some(protocol_id) = self.protocol_id {
-                session.type_catalog.conformances.get(&ConformanceKey {
-                    protocol_id, // add this field to Projection (see below)
-                    conforming_id: base_sym,
-                })
-            } else {
-                session
-                    .type_catalog
-                    .conformances
-                    .values()
-                    .find(|c| c.conforming_id == base_sym)
-            };
-
-            // Find a conformance for the nominal base that mentions this associated label
-            if let Some(conf) = conformance {
-                // Prefer the alias symbol (if the nominal actually provided `typealias T = ...`)
-                if let Some(alias_sym) = session
-                    .resolved_names
-                    .child_types
-                    .get(&base_sym)
-                    .and_then(|t| t.get(&self.label))
-                    .cloned()
-                {
-                    // Instantiate the nominal TYPE scheme at this projection node id.
-                    // This yields Type(@Struct(base_sym), row metas_for_A, ...)
-                    let Some(nominal_entry) = session.lookup(&base_sym) else {
-                        return SolveResult::Err(TypeError::TypeNotFound(format!(
-                            "Projection {:?} not found for {:?}",
-                            self.label, self.base
-                        )));
-                    };
-
-                    let nominal_inst =
-                        nominal_entry.instantiate(self.node_id, constraints, context, session);
-
-                    // Force the base we're projecting from to be "this" instantiation,
-                    // so the metas_for_A unify with the actual arguments (Float/Int).
-                    let group = constraints.copy_group(self.id);
-                    constraints.wants_equals_at(self.node_id, base.clone(), nominal_inst, &group);
-
-                    let Some(alias_entry) = session.lookup(&alias_sym) else {
-                        return SolveResult::Err(TypeError::TypeNotFound(format!(
-                            "Type alias {:?} not found for projection {alias_sym:?}",
-                            self.label
-                        )));
-                    };
-
-                    let alias_inst =
-                        alias_entry.instantiate(self.node_id, constraints, context, session);
-
-                    // Self.T must equal the instantiated alias.
-                    let group = constraints.copy_group(self.id);
-                    constraints.wants_equals_at(self.node_id, result.clone(), alias_inst, &group);
-
-                    return SolveResult::Solved(Default::default());
+        if let Some(base_sym) = base_sym
+            && let Some(resolution) = session.resolve_associated_projection(
+                self.protocol_id,
+                base_sym,
+                &self.label,
+                level,
+            )
+        {
+            match resolution {
+                AssociatedTypeResolution::Alias(alias_sym) => {
+                    return self.solve_alias_projection(
+                        base_sym,
+                        alias_sym,
+                        &base,
+                        &result,
+                        constraints,
+                        context,
+                        session,
+                    );
                 }
-
-                // Fallback: no alias symbol recorded; if a concrete (non-param) witness
-                // was recorded for this conformance, equate to it. Otherwise leave unsolved.
-                if let Some(witness) = conf.witnesses.associated_types.get(&self.label).cloned() {
-                    let witness_applied = session.apply(&witness, &mut context.substitutions_mut());
-                    if !matches!(witness_applied, Ty::Param(..)) {
+                AssociatedTypeResolution::Witness(witness) => {
+                    let witness = session.apply(&witness, &mut context.substitutions_mut());
+                    if !matches!(witness, Ty::Param(..)) {
                         let group = constraints.copy_group(self.id);
-                        constraints.wants_equals_at(self.node_id, result, witness_applied, &group);
+                        constraints.wants_equals_at(self.node_id, result, witness, &group);
                         return SolveResult::Solved(Default::default());
                     }
                 }
@@ -184,9 +144,11 @@ impl Projection {
                             );
                             return SolveResult::Solved(vec![Meta::Ty(*id)]);
                         }
-                        _ => {
-                            unimplemented!("ambiguous: {matching:?}");
-                        }
+                        _ => SolveResult::Err(TypeError::AmbiguousAssociatedTypeProjection {
+                            protocol_id,
+                            label: self.label.clone(),
+                            result,
+                        }),
                     };
                 }
             }
@@ -209,5 +171,41 @@ impl Projection {
         }
 
         SolveResult::Defer(DeferralReason::Unknown)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn solve_alias_projection(
+        &self,
+        base_sym: Symbol,
+        alias_sym: Symbol,
+        base: &Ty,
+        result: &Ty,
+        constraints: &mut ConstraintStore,
+        context: &mut SolveContext,
+        session: &mut TypeSession,
+    ) -> SolveResult {
+        let Some(nominal_entry) = session.lookup(&base_sym) else {
+            return SolveResult::Err(TypeError::TypeNotFound(format!(
+                "Projection {:?} not found for {:?}",
+                self.label, self.base
+            )));
+        };
+
+        let nominal_inst = nominal_entry.instantiate(self.node_id, constraints, context, session);
+        let group = constraints.copy_group(self.id);
+        constraints.wants_equals_at(self.node_id, base.clone(), nominal_inst, &group);
+
+        let Some(alias_entry) = session.lookup(&alias_sym) else {
+            return SolveResult::Err(TypeError::TypeNotFound(format!(
+                "Type alias {:?} not found for projection {alias_sym:?}",
+                self.label
+            )));
+        };
+
+        let alias_inst = alias_entry.instantiate(self.node_id, constraints, context, session);
+        let group = constraints.copy_group(self.id);
+        constraints.wants_equals_at(self.node_id, result.clone(), alias_inst, &group);
+
+        SolveResult::Solved(Default::default())
     }
 }

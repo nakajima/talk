@@ -107,6 +107,7 @@ impl ConstraintStore {
         std::mem::take(&mut self.wants)
             .into_sorted_iter()
             .map(|w| w.0)
+            .filter(|id| !self.solved.contains(id))
             .collect()
     }
 

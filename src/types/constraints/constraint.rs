@@ -280,12 +280,23 @@ impl Constraint {
                     protocol_id: conforms.protocol_id,
                 }
             }
-            Self::Projection(projection) => Predicate::Projection {
-                protocol_id: projection.protocol_id,
-                base: session.apply(&projection.base, substitutions),
-                label: projection.label.clone(),
-                returns: session.apply(&projection.result, substitutions),
-            },
+            Self::Projection(projection) => {
+                if !session.can_generalize_projection(
+                    projection.protocol_id,
+                    &projection.base,
+                    &projection.label,
+                    substitutions,
+                ) {
+                    return None;
+                }
+
+                Predicate::Projection {
+                    protocol_id: projection.protocol_id,
+                    base: session.apply(&projection.base, substitutions),
+                    label: projection.label.clone(),
+                    returns: session.apply(&projection.result, substitutions),
+                }
+            }
             _ => return None,
         };
 

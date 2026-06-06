@@ -13,9 +13,9 @@ use crate::{
     label::Label,
     name_resolution::symbol::{ProtocolId, Symbol},
     types::{
-        conformance::{Conformance, ConformanceKey},
+        conformance::{ConformanceClaim, ConformanceEvidence, ConformanceKey},
         infer_ty::Ty,
-        type_catalog::Nominal,
+        type_catalog::{MemberBinding, Nominal},
         types::{TypeEntry, Types},
     },
 };
@@ -177,7 +177,19 @@ impl ModuleEnvironment {
         self.get_module(*module_id)
     }
 
+    pub fn lookup_member_index(&self, receiver: &Symbol) -> Option<IndexMap<Label, MemberBinding>> {
+        let module_id = receiver.external_module_id()?;
+        let stable_id = self.modules_by_local.get(&module_id)?;
+        let module = self.modules.get(stable_id)?;
+        module.types.catalog.member_index.get(receiver).cloned()
+    }
+
     pub fn lookup_member(&self, receiver: &Symbol, label: &Label) -> Option<Symbol> {
+        self.lookup_member_binding(receiver, label)
+            .map(|binding| binding.symbol)
+    }
+
+    pub fn lookup_member_binding(&self, receiver: &Symbol, label: &Label) -> Option<MemberBinding> {
         let module_id = receiver.external_module_id()?;
         let stable_id = self.modules_by_local.get(&module_id)?;
         let module = self.modules.get(stable_id)?;
@@ -187,24 +199,63 @@ impl ModuleEnvironment {
             label,
             module.name
         );
-        module
-            .types
-            .catalog
-            .lookup_member(receiver, label)
-            .map(|m| m.0)
+        module.types.catalog.lookup_member_binding(receiver, label)
     }
 
-    pub fn lookup_static_member(&self, receiver: &Symbol, label: &Label) -> Option<Symbol> {
+    pub fn lookup_direct_member_binding(
+        &self,
+        receiver: &Symbol,
+        label: &Label,
+    ) -> Option<MemberBinding> {
         let module_id = receiver.external_module_id()?;
         let stable_id = self.modules_by_local.get(&module_id)?;
         let module = self.modules.get(stable_id)?;
         tracing::trace!(
-            "lookup_static_member \"{:?}.{}\" in {}",
+            "lookup_direct_member \"{:?}.{}\" in {}",
             receiver,
             label,
             module.name
         );
-        module.types.catalog.lookup_static_member(receiver, label)
+        module
+            .types
+            .catalog
+            .lookup_direct_member_binding(receiver, label)
+    }
+
+    pub fn lookup_constructor_member(&self, receiver: &Symbol, label: &Label) -> Option<Symbol> {
+        let module_id = receiver.external_module_id()?;
+        let stable_id = self.modules_by_local.get(&module_id)?;
+        let module = self.modules.get(stable_id)?;
+        tracing::trace!(
+            "lookup_constructor_member \"{:?}.{}\" in {}",
+            receiver,
+            label,
+            module.name
+        );
+        module
+            .types
+            .catalog
+            .lookup_constructor_member(receiver, label)
+    }
+
+    pub fn lookup_direct_constructor_member(
+        &self,
+        receiver: &Symbol,
+        label: &Label,
+    ) -> Option<Symbol> {
+        let module_id = receiver.external_module_id()?;
+        let stable_id = self.modules_by_local.get(&module_id)?;
+        let module = self.modules.get(stable_id)?;
+        tracing::trace!(
+            "lookup_direct_constructor_member \"{:?}.{}\" in {}",
+            receiver,
+            label,
+            module.name
+        );
+        module
+            .types
+            .catalog
+            .lookup_direct_constructor_member(receiver, label)
     }
 
     pub fn lookup_initializers(&self, receiver: &Symbol) -> Option<IndexMap<Label, Symbol>> {
@@ -260,6 +311,27 @@ impl ModuleEnvironment {
             .cloned()
     }
 
+    pub fn lookup_method_requirement(&self, protocol_id: &Symbol, label: &Label) -> Option<Symbol> {
+        let module_id = protocol_id.external_module_id()?;
+        let stable_id = self.modules_by_local.get(&module_id)?;
+        let module = self.modules.get(stable_id)?;
+        module
+            .types
+            .catalog
+            .lookup_method_requirement(protocol_id, label)
+    }
+
+    pub fn method_requirement_label(&self, method_req: &Symbol) -> Option<(Symbol, Label)> {
+        if let Some(module_id) = method_req.external_module_id()
+            && let Some(stable_id) = self.modules_by_local.get(&module_id)
+            && let Some(module) = self.modules.get(stable_id)
+        {
+            return module.types.catalog.method_requirement_label(method_req);
+        }
+
+        None
+    }
+
     pub fn lookup_instance_methods(&self, symbol: &Symbol) -> Option<IndexMap<Label, Symbol>> {
         let module_id = symbol.external_module_id()?;
         let stable_id = self.modules_by_local.get(&module_id)?;
@@ -272,37 +344,89 @@ impl ModuleEnvironment {
         module.types.catalog.instance_methods.get(symbol).cloned()
     }
 
-    pub fn lookup_concrete_member(&self, receiver: &Symbol, label: &Label) -> Option<Symbol> {
-        let module_id = receiver.external_module_id()?;
-        let stable_id = self.modules_by_local.get(&module_id)?;
-        let module = self.modules.get(stable_id)?;
-        tracing::trace!(
-            "lookup_concrete_member \"{:?}.{}\" in {}",
-            receiver,
-            label,
-            module.name
-        );
-        module
-            .types
-            .catalog
-            .lookup_concrete_member(receiver, label)
-            .map(|m| m.0)
+    #[instrument(skip(self))]
+    pub fn lookup_conformance_claim(&self, key: &ConformanceKey) -> Option<ConformanceClaim> {
+        if let Some(module_id) = key.conforming_id.external_module_id()
+            && let Some(stable_id) = self.modules_by_local.get(&module_id)
+            && let Some(module) = self.modules.get(stable_id)
+            && let Some(claim) = module.types.catalog.conformance_claims.get(key)
+        {
+            return Some(claim.clone());
+        }
+
+        if let Some(module_id) = Symbol::Protocol(key.protocol_id).external_module_id()
+            && let Some(stable_id) = self.modules_by_local.get(&module_id)
+            && let Some(module) = self.modules.get(stable_id)
+            && let Some(claim) = module.types.catalog.conformance_claims.get(key)
+        {
+            return Some(claim.clone());
+        }
+
+        None
     }
 
     #[instrument(skip(self))]
-    pub fn lookup_conformance(&self, key: &ConformanceKey) -> Option<&Conformance> {
+    pub fn lookup_conformance(&self, key: &ConformanceKey) -> Option<&ConformanceEvidence> {
         if let Some(module_id) = key.conforming_id.external_module_id()
             && let Some(stable_id) = self.modules_by_local.get(&module_id)
             && let Some(module) = self.modules.get(stable_id)
         {
-            return module.types.catalog.conformances.get(key);
+            return module.types.catalog.conformance_evidence.get(key);
         }
 
         if let Some(module_id) = Symbol::Protocol(key.protocol_id).external_module_id()
             && let Some(stable_id) = self.modules_by_local.get(&module_id)
             && let Some(module) = self.modules.get(stable_id)
         {
-            return module.types.catalog.conformances.get(key);
+            return module.types.catalog.conformance_evidence.get(key);
+        }
+
+        None
+    }
+
+    pub fn lookup_witness(
+        &self,
+        key: &ConformanceKey,
+        label: &Label,
+        method_req: &Symbol,
+    ) -> Option<Symbol> {
+        if let Some(module_id) = key.conforming_id.external_module_id()
+            && let Some(stable_id) = self.modules_by_local.get(&module_id)
+            && let Some(module) = self.modules.get(stable_id)
+            && let Some(witness) = module.types.catalog.lookup_witness(key, label, method_req)
+        {
+            return Some(witness);
+        }
+
+        if let Some(module_id) = Symbol::Protocol(key.protocol_id).external_module_id()
+            && let Some(stable_id) = self.modules_by_local.get(&module_id)
+            && let Some(module) = self.modules.get(stable_id)
+            && let Some(witness) = module.types.catalog.lookup_witness(key, label, method_req)
+        {
+            return Some(witness);
+        }
+
+        None
+    }
+
+    pub fn lookup_associated_type_witnesses(
+        &self,
+        key: &ConformanceKey,
+    ) -> Option<FxHashMap<Label, Ty>> {
+        if let Some(module_id) = key.conforming_id.external_module_id()
+            && let Some(stable_id) = self.modules_by_local.get(&module_id)
+            && let Some(module) = self.modules.get(stable_id)
+            && let Some(witnesses) = module.types.catalog.associated_type_witnesses(key)
+        {
+            return Some(witnesses);
+        }
+
+        if let Some(module_id) = Symbol::Protocol(key.protocol_id).external_module_id()
+            && let Some(stable_id) = self.modules_by_local.get(&module_id)
+            && let Some(module) = self.modules.get(stable_id)
+            && let Some(witnesses) = module.types.catalog.associated_type_witnesses(key)
+        {
+            return Some(witnesses);
         }
 
         None
@@ -315,7 +439,7 @@ impl ModuleEnvironment {
                     .1
                     .types
                     .catalog
-                    .conformances
+                    .conformance_evidence
                     .keys()
                     .filter(|k| k.protocol_id == *protocol_id),
             );
@@ -323,15 +447,30 @@ impl ModuleEnvironment {
         })
     }
 
-    /// Returns all conformances from all imported modules
-    pub fn all_conformances(&self) -> Vec<(ConformanceKey, Conformance)> {
+    /// Returns all conformance claims from all imported modules.
+    pub fn all_conformance_claims(&self) -> Vec<(ConformanceKey, ConformanceClaim)> {
         self.modules
             .iter()
             .flat_map(|(_, module)| {
                 module
                     .types
                     .catalog
-                    .conformances
+                    .conformance_claims
+                    .iter()
+                    .map(|(k, v)| (*k, v.clone()))
+            })
+            .collect()
+    }
+
+    /// Returns all validated conformance evidence from all imported modules.
+    pub fn all_conformance_evidence(&self) -> Vec<(ConformanceKey, ConformanceEvidence)> {
+        self.modules
+            .iter()
+            .flat_map(|(_, module)| {
+                module
+                    .types
+                    .catalog
+                    .conformance_evidence
                     .iter()
                     .map(|(k, v)| (*k, v.clone()))
             })

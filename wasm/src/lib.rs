@@ -15,6 +15,7 @@ use talk::{
         io::{CaptureIO, IO, IOError, MultiWriteIO},
     },
     name_resolution::symbol::set_symbol_names,
+    repl::{ReplEvalResult, ReplSession},
 };
 use wasm_bindgen::prelude::*;
 
@@ -219,12 +220,114 @@ pub fn hover(
 }
 
 #[wasm_bindgen]
+pub struct Repl {
+    session: ReplSession,
+}
+
+#[wasm_bindgen]
+impl Repl {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Self {
+        init();
+        Self {
+            session: ReplSession::new(),
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.session.clear();
+    }
+
+    pub fn eval(&mut self, input: &str) -> Result<Object, JsValue> {
+        repl_result_to_js(self.session.eval(input))
+    }
+
+    pub fn type_of(&self, input: &str) -> Result<Object, JsValue> {
+        repl_result_to_js(self.session.type_of(input))
+    }
+
+    pub fn needs_more_input(&self, input: &str) -> bool {
+        self.session.needs_more_input(input)
+    }
+
+    pub fn complete(&self, input: &str, byte_offset: u32) -> Result<Object, JsValue> {
+        let completions = self.session.complete_input(input, byte_offset as usize);
+        let root = Object::new();
+        set_num(
+            &root,
+            "start",
+            u32::try_from(completions.start).unwrap_or(u32::MAX),
+        )?;
+        let items = Array::new();
+        for item in completions.items {
+            let obj = Object::new();
+            set_str(&obj, "display", &item.display)?;
+            set_str(&obj, "replacement", &item.replacement)?;
+            items.push(&obj);
+        }
+        Reflect::set(&root, &JsValue::from_str("items"), &items)?;
+        Ok(root)
+    }
+}
+
+impl Default for Repl {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[wasm_bindgen]
 pub fn version() -> String {
     init();
     env!("CARGO_PKG_VERSION").to_string()
 }
 
 type LoweredDriver = Driver<Lowered>;
+
+fn repl_result_to_js(result: ReplEvalResult) -> Result<Object, JsValue> {
+    let obj = Object::new();
+    match result {
+        ReplEvalResult::Output {
+            stdout,
+            stderr,
+            value,
+        } => {
+            set_str(&obj, "kind", "output")?;
+            set_str(&obj, "stdout", &stdout)?;
+            set_str(&obj, "stderr", &stderr)?;
+            if let Some(value) = value {
+                let highlighted_value = highlight_source_html(&value);
+                set_str(&obj, "value", &value)?;
+                set_str(&obj, "highlightedValue", &highlighted_value)?;
+            } else {
+                Reflect::set(&obj, &JsValue::from_str("value"), &JsValue::NULL)?;
+                Reflect::set(&obj, &JsValue::from_str("highlightedValue"), &JsValue::NULL)?;
+            }
+        }
+        ReplEvalResult::Diagnostics {
+            source,
+            diagnostics,
+            message,
+        } => {
+            set_str(&obj, "kind", "diagnostics")?;
+            set_str(&obj, "source", &source)?;
+            if let Some(message) = message {
+                set_str(&obj, "message", &message)?;
+            } else {
+                Reflect::set(&obj, &JsValue::from_str("message"), &JsValue::NULL)?;
+            }
+            let entries =
+                diagnostics_array_to_js(talk::repl::REPL_DOCUMENT_ID, &source, &diagnostics)?;
+            Reflect::set(&obj, &JsValue::from_str("diagnostics"), &entries)?;
+        }
+        ReplEvalResult::Error(message) => {
+            set_str(&obj, "kind", "error")?;
+            set_str(&obj, "message", &message)?;
+        }
+    }
+
+    Ok(obj)
+}
 
 fn compile_source(source: &str) -> Result<LoweredDriver, JsValue> {
     let driver = Driver::new(
@@ -256,6 +359,17 @@ fn diagnostics_to_js(
     text: &str,
     diagnostics: &[Diagnostic],
 ) -> Result<JsValue, JsValue> {
+    let entries = diagnostics_array_to_js(doc_id, text, diagnostics)?;
+    let root = Object::new();
+    Reflect::set(&root, &JsValue::from_str("diagnostics"), &entries)?;
+    Ok(root.into())
+}
+
+fn diagnostics_array_to_js(
+    doc_id: &str,
+    text: &str,
+    diagnostics: &[Diagnostic],
+) -> Result<Array, JsValue> {
     let entries = Array::new();
     for diagnostic in diagnostics {
         let (line, col, line_start, line_end) =
@@ -294,9 +408,7 @@ fn diagnostics_to_js(
         entries.push(&obj);
     }
 
-    let root = Object::new();
-    Reflect::set(&root, &JsValue::from_str("diagnostics"), &entries)?;
-    Ok(root.into())
+    Ok(entries)
 }
 
 enum HoverQuery {

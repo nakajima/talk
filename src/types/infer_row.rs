@@ -7,6 +7,7 @@ use indexmap::IndexMap;
 use crate::{
     compiling::module::ModuleId,
     label::Label,
+    name_resolution::symbol::{ProtocolId, Symbol},
     types::{
         infer_ty::{Level, Ty},
         predicate::Predicate,
@@ -158,6 +159,18 @@ impl Row {
         result
     }
 
+    pub(crate) fn protocol_bounds_for_param(&self, param: Symbol) -> Vec<ProtocolId> {
+        let mut result = vec![];
+        match self {
+            Self::Empty | Self::Var(..) | Self::Param(..) => (),
+            Self::Extend { row, ty, .. } => {
+                result.extend(ty.protocol_bounds_for_param(param));
+                result.extend(row.protocol_bounds_for_param(param));
+            }
+        }
+        result
+    }
+
     pub fn import(self, module_id: ModuleId) -> Self {
         if let Row::Extend { row, label, ty } = self {
             Row::Extend {
@@ -263,12 +276,10 @@ impl std::fmt::Debug for Row {
 }
 
 // Specializations moved from ty.rs since it's needed here
-use crate::name_resolution::symbol::Symbol;
-
 #[derive(Default, Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Specializations {
-    pub ty: IndexMap<Symbol, Ty>,
-    pub row: IndexMap<RowParamId, Row>,
+    pub ty: std::collections::BTreeMap<Symbol, Ty>,
+    pub row: std::collections::BTreeMap<RowParamId, Row>,
 }
 
 impl Specializations {

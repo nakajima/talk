@@ -548,8 +548,16 @@ impl<'a> Parser<'a> {
         let (name, name_span) = self.identifier()?;
         let generics = self.generics()?;
 
-        let conformances = if context.allows_conformances() && self.did_match(TokenKind::Colon)? {
-            self.conformances()?
+        let conformance_colon = self.current.clone();
+        let conformances = if self.did_match(TokenKind::Colon)? {
+            if context.allows_conformances() {
+                self.conformances()?
+            } else {
+                return Err(ParserError::ConformanceListNotAllowed {
+                    context,
+                    token: conformance_colon,
+                });
+            }
         } else {
             vec![]
         };

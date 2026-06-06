@@ -20,6 +20,8 @@ use crate::{
     name_resolution::symbol::{Symbol, set_symbol_names},
 };
 
+const IO_EINVAL: i64 = -22;
+
 #[allow(clippy::panic)]
 #[allow(clippy::should_implement_trait)]
 impl Value {
@@ -228,12 +230,23 @@ impl<IO: super::io::IO> Interpreter<IO> {
         }
 
         #[allow(clippy::expect_used)]
-        let entrypoint = self
+        let entrypoint_name = self
             .program
             .entrypoint()
+            .map(|entrypoint| entrypoint.name)
+            .or_else(|| {
+                self.symbol_names.as_ref().and_then(|symbol_names| {
+                    symbol_names
+                        .iter()
+                        .find(|(symbol, name)| {
+                            name.as_str() == "main" && self.program.functions.contains_key(*symbol)
+                        })
+                        .map(|(symbol, _)| *symbol)
+                })
+            })
             .expect("No entrypoint found for program.");
 
-        self.call(entrypoint.name, vec![], Register::MAIN, None);
+        self.call(entrypoint_name, vec![], Register::MAIN, None);
 
         while !self.frames.is_empty() {
             self.next();
@@ -663,7 +676,10 @@ impl<IO: super::io::IO> Interpreter<IO> {
                 let flags_val = self.val(flags);
                 let mode_val = self.val(mode);
 
-                let path_bytes = self.get_bytes_from_value(path_val);
+                let Some(path_bytes) = self.get_bytes_from_value(path_val) else {
+                    self.write_register(&dest, Value::Int(IO_EINVAL));
+                    return;
+                };
                 let Value::Int(flags_int) = flags_val else {
                     panic!("IoOpen flags must be Int, got {flags_val:?}");
                 };
@@ -947,45 +963,40 @@ impl<IO: super::io::IO> Interpreter<IO> {
         }
     }
 
+    fn get_c_string_bytes(&self, ptr: Addr) -> Option<Vec<u8>> {
+        let bytes = if ptr.0 < self.heap_start {
+            self.program.static_memory.data.get(ptr.0..)?
+        } else {
+            let heap_idx = ptr.0.checked_sub(self.heap_start)?;
+            self.memory.mem.get(heap_idx..)?
+        };
+
+        let nul_idx = bytes.iter().position(|byte| *byte == 0)?;
+        Some(bytes[..nul_idx].to_vec())
+    }
+
     /// Helper to extract bytes from a value (for paths, etc.)
-    fn get_bytes_from_value(&self, val: Value) -> Vec<u8> {
+    fn get_bytes_from_value(&self, val: Value) -> Option<Vec<u8>> {
         match val {
-            Value::RawPtr(ptr) => {
-                // Read null-terminated string from memory
-                let mut bytes = Vec::new();
-                let mut addr = ptr.0;
-                loop {
-                    let byte = if addr < self.heap_start {
-                        self.program.static_memory.data[addr]
-                    } else {
-                        self.memory.mem[addr - self.heap_start]
-                    };
-                    if byte == 0 {
-                        break;
-                    }
-                    bytes.push(byte);
-                    addr += 1;
-                }
-                bytes
-            }
-            Value::RawBuffer(bytes) => bytes,
+            // RawPtr paths are treated as C strings and must be NUL-terminated
+            // within the memory region they point into.
+            Value::RawPtr(ptr) => self.get_c_string_bytes(ptr),
+            Value::RawBuffer(bytes) => Some(bytes),
             Value::Record(RecordId::Nominal(sym), fields) if sym == Symbol::String => {
-                // String struct: (ptr, len)
-                let Value::RawPtr(ptr) = &fields[0] else {
-                    panic!("String.ptr must be RawPtr");
+                let [Value::RawPtr(ptr), Value::Int(len), ..] = fields.as_slice() else {
+                    return None;
                 };
-                let Value::Int(len) = &fields[1] else {
-                    panic!("String.len must be Int");
-                };
-                let len = *len as usize;
+                let len = usize::try_from(*len).ok()?;
                 if ptr.0 < self.heap_start {
-                    self.program.static_memory.data[ptr.0..ptr.0 + len].to_vec()
+                    let end = ptr.0.checked_add(len)?;
+                    Some(self.program.static_memory.data.get(ptr.0..end)?.to_vec())
                 } else {
-                    let heap_idx = ptr.0 - self.heap_start;
-                    self.memory.mem[heap_idx..heap_idx + len].to_vec()
+                    let heap_idx = ptr.0.checked_sub(self.heap_start)?;
+                    let end = heap_idx.checked_add(len)?;
+                    Some(self.memory.mem.get(heap_idx..end)?.to_vec())
                 }
             }
-            other => panic!("Cannot get bytes from {other:?}"),
+            _ => None,
         }
     }
 
@@ -1658,6 +1669,62 @@ pub mod tests {
     }
 
     #[test]
+    fn early_return_skips_following_side_effects() {
+        let (value, interpreter) = interpret_with(
+            r#"
+            func foo() {
+                return 1
+                print_raw("after")
+                2
+            }
+            foo()
+            "#,
+        );
+
+        assert_eq!(value, Value::Int(1));
+        assert_eq!(String::from_utf8(interpreter.io.stdout).unwrap(), "");
+    }
+
+    #[test]
+    fn interprets_nested_lvalue_assignment() {
+        assert_eq!(
+            interpret(
+                "
+                let a = { b: { c: 1 } }
+                a.b.c = 2
+                a.b.c
+                ",
+            ),
+            Value::Int(2)
+        );
+    }
+
+    #[test]
+    fn imports_first_class_external_function_references() {
+        let (_value, interpreter) = interpret_with(
+            r#"
+            let f = print_raw
+            f("hi")
+            "#,
+        );
+
+        assert_eq!(String::from_utf8(interpreter.io.stdout).unwrap(), "hi");
+    }
+
+    #[test]
+    fn explicit_main_function_is_entrypoint() {
+        let (_value, interpreter) = interpret_with(
+            r#"
+            func main() {
+                print_raw("ok")
+            }
+            "#,
+        );
+
+        assert_eq!(String::from_utf8(interpreter.io.stdout).unwrap(), "ok");
+    }
+
+    #[test]
     fn interprets_counter() {
         assert_eq!(
             interpret(
@@ -1929,6 +1996,30 @@ Dog().handleDSTChange()
     }
 
     #[test]
+    fn effect_handlers_for_same_effect_have_unique_symbols() {
+        let (_val, interpreter) = interpret_with(
+            "
+            effect 'fizz() -> Int
+
+            func a() -> Int {
+                @handle 'fizz { continue 1 }
+                'fizz()
+            }
+
+            func b() -> Int {
+                @handle 'fizz { continue 2 }
+                'fizz()
+            }
+
+            print_raw(a().show())
+            print_raw(b().show())
+            ",
+        );
+
+        assert_eq!(String::from_utf8(interpreter.io.stdout).unwrap(), "12");
+    }
+
+    #[test]
     fn interprets_effect_handler_resume_value() {
         let (_val, interpreter) = interpret_with(
             "
@@ -2138,10 +2229,10 @@ Dog().handleDSTChange()
 
     #[test]
     fn interprets_io_open_and_close() {
-        // Test io_open and io_close via inline IR
+        // Test io_open and io_close via inline IR using a Talk String path.
         let (val, _interpreter) = interpret_with(
             "
-            func test_io_open(path: RawPtr, flags: Int, mode: Int) -> Int {
+            func test_io_open(path: String, flags: Int, mode: Int) -> Int {
                 @_ir(path, flags, mode) { %? = io_open $0 $1 $2 }
             }
 
@@ -2150,7 +2241,7 @@ Dog().handleDSTChange()
             }
 
             // Open returns a simulated fd >= 3
-            let fd = test_io_open(\"test.txt\".base, 0, 0)
+            let fd = test_io_open(\"test.txt\", 0, 0)
             // Close should succeed (return 0)
             let result = test_io_close(fd)
             result
@@ -2159,6 +2250,21 @@ Dog().handleDSTChange()
 
         // CaptureIO.io_close returns 0 on success
         assert_eq!(val, Value::Int(0));
+    }
+
+    #[test]
+    fn io_open_with_unterminated_rawptr_returns_einval() {
+        let (val, _interpreter) = interpret_with(
+            "
+            func raw_open(path: RawPtr, flags: Int, mode: Int) -> Int {
+                @_ir(path, flags, mode) { %? = io_open $0 $1 $2 }
+            }
+
+            raw_open(\"test.txt\".base, 0, 0)
+            ",
+        );
+
+        assert_eq!(val, Value::Int(IO_EINVAL));
     }
 
     #[test]
@@ -2507,7 +2613,7 @@ Dog().handleDSTChange()
         // Test opening a file, writing to it, then reading back
         let (val, _interpreter) = interpret_with(
             "
-            func raw_open(path: RawPtr, flags: Int, mode: Int) -> Int {
+            func raw_open(path: String, flags: Int, mode: Int) -> Int {
                 @_ir(path, flags, mode) { %? = io_open $0 $1 $2 }
             }
             func raw_write(fd: Int, buf: RawPtr, count: Int) -> Int {
@@ -2520,7 +2626,7 @@ Dog().handleDSTChange()
                 @_ir(fd) { %? = io_close $0 }
             }
 
-            let fd = raw_open(\"test.txt\".base, 1, 0)
+            let fd = raw_open(\"test.txt\", 1, 0)
             let msg = \"file content\"
             let written = raw_write(fd, msg.base, msg.length)
             written

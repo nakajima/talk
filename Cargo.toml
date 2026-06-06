@@ -5,7 +5,7 @@ resolver = "2"
 
 [package]
 name = "talk"
-version = "0.1.1"
+version = "0.1.7"
 edition = "2024"
 
 [build-dependencies]
@@ -25,6 +25,7 @@ color-eyre = "0.6"
 [dependencies]
 clap = { version = "4.5.39", features = ["derive"], optional = true }
 clap_complete = { version = "4.5.39", optional = true }
+rustyline = { version = "18.0.0", optional = true }
 lazy_static = "1.5.0"
 env_logger = "0.11.8"
 regex = "1"
@@ -69,6 +70,7 @@ default = ["cli"]
 cli = [
   "dep:clap",
   "dep:clap_complete",
+  "dep:rustyline",
   "dep:async-lsp",
   "dep:futures",
   "dep:tower",

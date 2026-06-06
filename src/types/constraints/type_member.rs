@@ -64,47 +64,83 @@ impl TypeMember {
 
                 self.lookup_for_type_param(constraints, context, session, *type_param_id)
             }
-            #[allow(clippy::todo)]
-            Ty::Constructor { .. } => todo!(),
-            #[allow(clippy::todo)]
-            Ty::Nominal { symbol, type_args } => {
-                if let Some(children) = session.type_catalog.child_types.get(symbol)
-                    && let Some(child_sym) = children.get(&self.name).copied()
-                    && let Some(ty) = session.lookup(&child_sym)
-                {
-                    if !type_args.is_empty() {
-                        let ty = ty
-                            .instantiate_with_args(
-                                self.node_id,
-                                type_args
-                                    .iter()
-                                    .map(|a| (a.clone(), NodeID::SYNTHESIZED))
-                                    .collect_vec()
-                                    .as_slice(),
-                                session,
-                                context,
-                                constraints,
-                            )
-                            .0;
-                        match unify(&ty, &self.result, context, session)
-                            .map_err(|e| e.with_cause(cause))
-                        {
-                            Ok(vars) => return SolveResult::Solved(vars),
-                            Err(e) => return SolveResult::Err(e),
-                        }
+            Ty::Constructor { name, ret, .. } => {
+                let owner = match ret.as_ref() {
+                    Ty::Nominal { symbol, type_args } => {
+                        return self.lookup_for_owner(
+                            *symbol,
+                            type_args,
+                            constraints,
+                            context,
+                            session,
+                            cause,
+                        );
                     }
-                    self.solve_for(&ty._as_ty(), constraints, context, session)
-                } else {
-                    SolveResult::Err(TypeError::TypeNotFound(format!(
-                        "Did not find child type {symbol:?}.{}",
-                        self.name
-                    )))
-                }
+                    Ty::Primitive(symbol) => *symbol,
+                    _ => match name.symbol() {
+                        Ok(symbol) => symbol,
+                        Err(_) => {
+                            return SolveResult::Err(TypeError::NameNotResolved(name.clone()));
+                        }
+                    },
+                };
+                self.lookup_for_owner(owner, &[], constraints, context, session, cause)
             }
-            _ => SolveResult::Err(TypeError::TypeNotFound(format!(
-                "Could not find child type {:?} for {:?}",
-                self.name, self.base
-            ))),
+            Ty::Nominal { symbol, type_args } => {
+                self.lookup_for_owner(*symbol, type_args, constraints, context, session, cause)
+            }
+            _ => SolveResult::Err(TypeError::UnknownTypeMember {
+                base: self.base.clone(),
+                member: self.name.clone(),
+            }),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn lookup_for_owner(
+        &self,
+        owner: Symbol,
+        type_args: &[Ty],
+        constraints: &mut ConstraintStore,
+        context: &mut SolveContext,
+        session: &mut TypeSession,
+        cause: ConstraintCause,
+    ) -> SolveResult {
+        let child_sym = session
+            .type_catalog
+            .child_types
+            .get(&owner)
+            .and_then(|children| children.get(&self.name))
+            .copied();
+        let Some(child_sym) = child_sym else {
+            return SolveResult::Err(TypeError::UnknownTypeMember {
+                base: self.base.clone(),
+                member: self.name.clone(),
+            });
+        };
+
+        let Some(child_entry) = session.lookup(&child_sym) else {
+            return SolveResult::Err(TypeError::TypeNotFound(format!(
+                "Child entry not found for type member {child_sym:?}"
+            )));
+        };
+
+        let args = if self.generics.is_empty() {
+            type_args
+        } else {
+            &self.generics
+        };
+        let args = args
+            .iter()
+            .map(|arg| (arg.clone(), NodeID::SYNTHESIZED))
+            .collect_vec();
+        let ty = child_entry
+            .instantiate_with_args(self.node_id, &args, session, context, constraints)
+            .0;
+
+        match unify(&ty, &self.result, context, session).map_err(|e| e.with_cause(cause)) {
+            Ok(vars) => SolveResult::Solved(vars),
+            Err(e) => SolveResult::Err(e),
         }
     }
 
@@ -151,9 +187,9 @@ impl TypeMember {
             };
         }
 
-        SolveResult::Err(TypeError::TypeNotFound(format!(
-            "{:?}.{:?}",
-            self.base, self.name
-        )))
+        SolveResult::Err(TypeError::UnknownTypeMember {
+            base: self.base.clone(),
+            member: self.name.clone(),
+        })
     }
 }

@@ -1,4 +1,5 @@
 import init, {
+  Repl,
   highlight,
   format,
   run_program,
@@ -374,6 +375,7 @@ export async function loadTalk() {
   await init();
 
   return {
+    newRepl: () => new Repl(),
     runProgram: (source) => run_program(source),
     highlight: (source) => highlight(source),
     format: (source) => format(source),

@@ -25,8 +25,7 @@ pub mod tests {
         },
         label::Label,
         name_resolution::symbol::{
-            EffectId, EnumId, GlobalId, InstanceMethodId, StructId, Symbol, SynthesizedId,
-            set_symbol_names,
+            EnumId, GlobalId, InstanceMethodId, StructId, Symbol, SynthesizedId, set_symbol_names,
         },
         node_id::NodeID,
     };
@@ -754,29 +753,11 @@ pub mod tests {
         let _s = set_symbol_names(display_names.clone());
         let program = module.program;
 
-        // The original lte method should still be imported
-        assert!(
-            program
-                .functions
-                .get(&Symbol::InstanceMethod(InstanceMethodId {
-                    module_id: ModuleId::Core,
-                    local_id: 18
-                }))
-                .is_some(),
-            "did not find {:?} in {:?}",
-            Symbol::InstanceMethod(InstanceMethodId {
-                module_id: ModuleId::Core,
-                local_id: 18
-            }),
-            program.functions.keys().collect_vec()
-        );
-
-        // There should be a specialized function for lte with witnesses
-        let _s = set_symbol_names(display_names.clone());
-        let has_specialization = program
-            .functions
-            .values()
-            .any(|f| format!("{f}").contains("lte"));
+        // There should be a specialized function for lte with witnesses.
+        let has_specialization = program.functions.values().any(|f| {
+            matches!(f.name, Symbol::Synthesized(_))
+                && f.ty == IrTy::Func(vec![IrTy::Int, IrTy::Int], IrTy::Bool.into())
+        });
         assert!(has_specialization, "expected specialized lte function");
     }
 
@@ -1653,7 +1634,7 @@ pub mod tests {
                     instructions: vec![Instruction::Call {
                         dest: 1.into(),
                         ty: IrTy::Int,
-                        callee: Value::Func(InstanceMethodId::from(1).into()),
+                        callee: Value::Func(SynthesizedId::from(2).into()),
                         args: vec![Register(0).into()].into(),
                         self_dest: None,
                         meta: meta(),
@@ -1717,14 +1698,14 @@ pub mod tests {
                             dest: 3.into(),
                             ty: IrTy::Record(None, vec![IrTy::Int, IrTy::Int]),
                             val: Value::Closure {
-                                func: Symbol::Synthesized(SynthesizedId::from(2)),
+                                func: Symbol::Synthesized(SynthesizedId::from(3)),
                                 env: vec![Value::Reg(0), Value::Reg(1)].into()
                             },
                         },
                         Instruction::Call {
                             dest: 1.into(),
                             ty: IrTy::Func(vec![IrTy::Int], IrTy::Void.into()),
-                            callee: Value::Func(Symbol::Effect(EffectId::from(1))),
+                            callee: Value::Func(Symbol::Synthesized(SynthesizedId::from(1))),
                             args: vec![Value::Reg(3), Value::Reg(2)].into(),
                             self_dest: None,
                             meta: meta()

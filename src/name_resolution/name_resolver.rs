@@ -140,6 +140,7 @@ pub struct ResolvedNames {
     pub symbol_names: FxHashMap<Symbol, String>,
     pub symbols_to_node: FxHashMap<Symbol, NodeID>,
     pub effect_handlers: FxHashMap<NodeID, Symbol>,
+    pub effect_handler_definitions: FxHashMap<NodeID, Symbol>,
     pub handler_symbols: FxHashSet<Symbol>,
     pub scc_graph: SCCGraph,
     pub unbound_nodes: Vec<NodeID>,
@@ -417,10 +418,13 @@ impl NameResolver {
                     // Get symbols from the target scope. If the target is a core file
                     // and we have the pre-compiled Core module, use its exports instead
                     // to avoid type identity conflicts from re-compiling core sources.
-                    let use_core = is_core_source_path(&target_path)
-                        && self.modules.get_module_by_name("Core").is_some();
-                    let target_symbols: Vec<(String, Symbol, bool)> = if use_core {
-                        let core = self.modules.get_module_by_name("Core").unwrap();
+                    let core_module = is_core_source_path(&target_path)
+                        .then(|| self.modules.get_module_by_name("Core"))
+                        .flatten();
+                    let use_core = core_module.is_some();
+                    let target_symbols: Vec<(String, Symbol, bool)> = if let Some(core) =
+                        core_module
+                    {
                         core.exports
                             .iter()
                             .map(|(name, &symbol)| (name.clone(), symbol, is_type_symbol(&symbol)))
@@ -1171,6 +1175,18 @@ impl NameResolver {
                     );
                 }
 
+                let handler_sym =
+                    Symbol::Synthesized(self.symbols.next_synthesized(self.current_module_id));
+                self.phase
+                    .effect_handler_definitions
+                    .insert(stmt.id, handler_sym);
+                self.phase.handler_symbols.insert(handler_sym);
+                self.phase.symbols_to_node.insert(handler_sym, stmt.id);
+                self.phase.symbol_names.insert(
+                    handler_sym,
+                    format!("handler('{}')", effect_name.name_str()),
+                );
+
                 let Some(scope) = self.current_scope_mut() else {
                     self.diagnostic(
                         stmt.id,
@@ -1180,7 +1196,7 @@ impl NameResolver {
                     return;
                 };
 
-                scope.handlers.insert(effect_sym, (effect_sym, stmt.id));
+                scope.handlers.insert(effect_sym, (handler_sym, stmt.id));
             }
         );
 

@@ -14,11 +14,17 @@ use crate::{
         symbol::{ProtocolId, Symbol, Symbols, TypeParameterId},
     },
     node_id::NodeID,
-    span::Span,
     types::{
         builtins::builtin_scope,
-        call_tree::CallTree,
-        conformance::{Conformance, ConformanceKey, Witnesses},
+        call_tree::{
+            CallReceiver, CallReceiverKind, CallShape, CallTarget, CallTree, PendingResolvedCall,
+            PendingResolvedCalls, ResolvedCall,
+        },
+        conformance::{
+            ConformanceClaim, ConformanceEvidence, ConformanceKey, ConformanceObligation,
+            ConformanceOrigin, WitnessTable,
+        },
+        conformance_context::{ConformanceContext, ProjectionResolution},
         constraints::{constraint::Constraint, store::ConstraintStore},
         infer_row::{Row, RowMetaId, RowParamId},
         infer_ty::{Level, Meta, MetaVarId, SkolemId, Ty},
@@ -26,7 +32,7 @@ use crate::{
         scheme::{ForAll, Scheme},
         solve_context::SolveContext,
         term_environment::{EnvEntry, TermEnv},
-        type_catalog::{Nominal, TypeCatalog},
+        type_catalog::{MemberBinding, MemberSource, Nominal, TypeCatalog},
         type_error::TypeError,
         type_operations::{UnificationSubstitutions, substitute},
         types::{TypeEntry, Types},
@@ -54,6 +60,7 @@ pub struct TypeSession {
 
     pub typealiases: FxHashMap<Symbol, Scheme>,
     pub(super) type_catalog: TypeCatalog,
+    conformance: ConformanceContext,
     pub(super) modules: Rc<ModuleEnvironment>,
     pub aliases: FxHashMap<Symbol, Scheme>,
     pub(super) reverse_instantiations: ReverseInstantiations,
@@ -73,6 +80,9 @@ pub struct TypeSession {
     /// Built during inference and used by specialization pass.
     pub call_tree: CallTree,
 
+    /// Solver-time pending call facts keyed by callee expression ID.
+    pending_resolved_calls: PendingResolvedCalls,
+
     pub(crate) symbols: Symbols,
     pub(crate) resolved_names: ResolvedNames,
 
@@ -87,9 +97,9 @@ pub struct TypeSession {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum MemberSource {
-    SelfMember,
-    Protocol(ProtocolId),
+pub enum AssociatedTypeResolution {
+    Alias(Symbol),
+    Witness(Ty),
 }
 
 #[derive(Debug, Default)]
@@ -160,10 +170,13 @@ impl TypeSession {
             },
         );
 
-        // Import conformances from all modules
-        for (key, conformance) in modules.all_conformances() {
+        // Import conformance claims and validated evidence from all modules.
+        for (key, claim) in modules.all_conformance_claims() {
+            catalog.conformance_claims.entry(key).or_insert(claim);
+        }
+        for (key, conformance) in modules.all_conformance_evidence() {
             catalog
-                .conformances
+                .conformance_evidence
                 .entry(key)
                 .or_insert_with(|| conformance.clone());
         }
@@ -178,11 +191,13 @@ impl TypeSession {
             types_by_node: Default::default(),
             typealiases: Default::default(),
             type_catalog: catalog,
+            conformance: Default::default(),
             modules,
             aliases: Default::default(),
             choices: ChoiceStore::new(),
             error_constraints: ErrorConstraintStore::new(),
             call_tree: Default::default(),
+            pending_resolved_calls: Default::default(),
 
             meta_vars: Default::default(),
             row_vars: Default::default(),
@@ -244,10 +259,18 @@ impl TypeSession {
             })
             .collect();
 
-        let catalog = std::mem::take(&mut self.type_catalog);
+        let mut catalog = std::mem::take(&mut self.type_catalog);
+        catalog.rebuild_member_index(self.modules.as_ref());
         let choices = std::mem::take(&mut self.choices);
         let error_constraints = std::mem::take(&mut self.error_constraints);
         let call_tree = std::mem::take(&mut self.call_tree);
+        let resolved_calls = std::mem::take(&mut self.pending_resolved_calls)
+            .into_iter()
+            .filter_map(|(id, pending)| {
+                self.finalize_pending_resolved_call(&entries, &types_by_symbol, pending)
+                    .map(|call| (id, call))
+            })
+            .collect();
 
         let types = Types {
             catalog,
@@ -257,10 +280,183 @@ impl TypeSession {
             choices,
             error_constraints,
             call_tree,
+            resolved_calls,
         };
 
         let resolved_names = std::mem::take(&mut self.resolved_names);
         Ok((types, resolved_names))
+    }
+
+    fn finalize_pending_resolved_call(
+        &mut self,
+        entries: &FxHashMap<NodeID, TypeEntry>,
+        types_by_symbol: &FxHashMap<Symbol, TypeEntry>,
+        pending: PendingResolvedCall,
+    ) -> Option<ResolvedCall> {
+        let shape = pending.shape?;
+        let target = self.select_call_target(pending.target_candidates, shape.receiver.as_ref())?;
+        let shape = self.finalize_call_shape(entries, types_by_symbol, &target, shape);
+        Some(ResolvedCall::new(target, shape))
+    }
+
+    fn select_call_target(
+        &mut self,
+        candidates: Vec<CallTarget>,
+        receiver: Option<&CallReceiver>,
+    ) -> Option<CallTarget> {
+        let mut concrete_members = Vec::new();
+        let mut method_requirements = Vec::new();
+        let mut direct_or_constructor = None;
+
+        for candidate in candidates {
+            match &candidate {
+                CallTarget::Member {
+                    member: Symbol::MethodRequirement(_),
+                    ..
+                } => {
+                    if !method_requirements.contains(&candidate) {
+                        method_requirements.push(candidate);
+                    }
+                }
+                CallTarget::Member { .. } => {
+                    if !concrete_members.contains(&candidate) {
+                        concrete_members.push(candidate);
+                    }
+                }
+                CallTarget::Direct { .. } | CallTarget::Constructor { .. } => {
+                    assert!(
+                        direct_or_constructor
+                            .as_ref()
+                            .is_none_or(|existing| existing == &candidate),
+                        "conflicting direct call targets: {:?} vs {:?}",
+                        direct_or_constructor,
+                        candidate
+                    );
+                    direct_or_constructor = Some(candidate);
+                }
+            }
+        }
+
+        if concrete_members.len() == 1 {
+            return concrete_members.pop();
+        }
+        if concrete_members.len() > 1 {
+            if let Some(target) = self.requirement_target_for_receiver(receiver, &concrete_members)
+            {
+                return Some(target);
+            }
+            if method_requirements.len() == 1 {
+                return method_requirements.pop();
+            }
+            concrete_members.sort_by_key(|target| target.symbol());
+            tracing::warn!(
+                ?receiver,
+                ?concrete_members,
+                "conflicting concrete member call targets without a unique requirement; choosing deterministically"
+            );
+            return concrete_members.into_iter().next();
+        }
+        if method_requirements.len() == 1 {
+            return method_requirements.pop();
+        }
+        assert!(
+            method_requirements.is_empty(),
+            "conflicting method-requirement call targets: {:?}",
+            method_requirements
+        );
+        direct_or_constructor
+    }
+
+    fn requirement_target_for_receiver(
+        &mut self,
+        receiver: Option<&CallReceiver>,
+        concrete_members: &[CallTarget],
+    ) -> Option<CallTarget> {
+        let receiver = receiver?;
+        let Ty::Param(_, bounds) = &receiver.ty else {
+            return None;
+        };
+        let label = concrete_members.iter().find_map(|target| match target {
+            CallTarget::Member { label, .. } => Some(label.clone()),
+            _ => None,
+        })?;
+
+        let mut requirement = None;
+        for protocol_id in bounds {
+            let protocol = Symbol::Protocol(*protocol_id);
+            let Some(requirements) = self.lookup_method_requirements(protocol) else {
+                continue;
+            };
+            let Some(method_req) = requirements.get(&label).copied() else {
+                continue;
+            };
+            assert!(
+                requirement.is_none_or(|existing| existing == method_req),
+                "conflicting method requirements for receiver-bound call target"
+            );
+            requirement = Some(method_req);
+        }
+
+        requirement.map(|member| CallTarget::Member { member, label })
+    }
+
+    fn finalize_call_shape(
+        &mut self,
+        entries: &FxHashMap<NodeID, TypeEntry>,
+        types_by_symbol: &FxHashMap<Symbol, TypeEntry>,
+        target: &CallTarget,
+        mut shape: CallShape,
+    ) -> CallShape {
+        let target_receiver_ty = self.target_method_receiver_ty(types_by_symbol, target);
+        shape.receiver = shape.receiver.map(|receiver| {
+            let stored_ty = self.finalize_infer_ty(receiver.ty);
+            let ty = if matches!(receiver.kind, CallReceiverKind::Argument { .. }) {
+                target_receiver_ty.clone().unwrap_or(stored_ty)
+            } else if receiver.symbol.is_some() {
+                stored_ty
+            } else {
+                entries
+                    .get(&receiver.id)
+                    .map(|entry| entry.as_mono_ty().clone())
+                    .unwrap_or(stored_ty)
+            };
+            CallReceiver { ty, ..receiver }
+        });
+        shape
+    }
+
+    fn target_method_receiver_ty(
+        &self,
+        types_by_symbol: &FxHashMap<Symbol, TypeEntry>,
+        target: &CallTarget,
+    ) -> Option<Ty> {
+        let CallTarget::Member {
+            member: method @ Symbol::MethodRequirement(_),
+            ..
+        } = target
+        else {
+            return None;
+        };
+        let entry = types_by_symbol
+            .get(method)
+            .cloned()
+            .or_else(|| self.modules.lookup(method))?;
+        let (params, _, _) = crate::types::passes::uncurry_function(entry.as_mono_ty().clone());
+        params.into_iter().next()
+    }
+
+    pub(crate) fn record_call_shape(&mut self, callee_id: NodeID, shape: CallShape) {
+        self.pending_resolved_calls
+            .entry(callee_id)
+            .or_default()
+            .record_shape(shape);
+    }
+
+    pub(crate) fn record_call_target(&mut self, callee_id: NodeID, target: CallTarget) {
+        self.pending_resolved_calls
+            .entry(callee_id)
+            .or_default()
+            .record_target(target);
     }
 
     pub fn shallow_generalize_row(&mut self, row: Row) -> Row {
@@ -494,13 +690,13 @@ impl TypeSession {
         let instantiations = std::mem::take(&mut self.type_catalog.instantiations);
         self.type_catalog.instantiations = instantiations.apply(self, substitutions);
 
-        let mut conformances = std::mem::take(&mut self.type_catalog.conformances);
+        let mut conformances = std::mem::take(&mut self.type_catalog.conformance_evidence);
         for conformance in conformances.values_mut() {
             for ty in conformance.witnesses.associated_types.values_mut() {
                 *ty = self.apply(ty, substitutions);
             }
         }
-        _ = std::mem::replace(&mut self.type_catalog.conformances, conformances);
+        _ = std::mem::replace(&mut self.type_catalog.conformance_evidence, conformances);
     }
 
     pub fn get_term_env(&self) -> &TermEnv {
@@ -741,10 +937,13 @@ impl TypeSession {
                 }
             }
 
-            constraints.solve(c.id());
-
-            c.substitute(&self.skolem_map)
-                .into_predicate(&mut substitutions, self)
+            let predicate = c
+                .substitute(&self.skolem_map)
+                .into_predicate(&mut substitutions, self);
+            if predicate.is_some() {
+                constraints.solve(c.id());
+            }
+            predicate
         }));
 
         if foralls.is_empty() && predicates.is_empty() {
@@ -822,19 +1021,271 @@ impl TypeSession {
         self.term_env.insert(sym, EnvEntry::Mono(ty));
     }
 
-    pub fn lookup_conformance(&mut self, key: &ConformanceKey) -> Option<Conformance> {
-        if let Some(conformance) = self.type_catalog.conformances.get(key) {
-            return Some(conformance.clone());
+    pub fn declare_conformance(&mut self, claim: ConformanceClaim) {
+        self.type_catalog.declare_conformance(claim);
+    }
+
+    pub fn declare_conformance_obligation(&mut self, obligation: ConformanceObligation) {
+        self.conformance.declare_obligation(obligation);
+    }
+
+    pub fn associated_type_slot(&mut self, key: ConformanceKey, label: &Label, level: Level) -> Ty {
+        if let Some(existing) = self.lookup_associated_type_slot(&key, label) {
+            return existing;
         }
 
-        if let Some(conformance) = self.modules.lookup_conformance(key) {
-            self.type_catalog
-                .conformances
-                .insert(*key, conformance.clone());
-            return Some(conformance.clone());
+        let ty = self.new_ty_meta_var(level);
+        self.conformance.associated_type_slot(
+            &mut self.type_catalog,
+            self.modules.as_ref(),
+            key,
+            label,
+            ty,
+        )
+    }
+
+    pub fn lookup_associated_type_slot(&self, key: &ConformanceKey, label: &Label) -> Option<Ty> {
+        self.conformance.lookup_associated_type_slot(key, label)
+    }
+
+    pub fn lookup_conformance_claim(&mut self, key: &ConformanceKey) -> Option<ConformanceClaim> {
+        self.conformance
+            .lookup_claim(&mut self.type_catalog, self.modules.as_ref(), key)
+    }
+
+    pub fn lookup_conformance(&mut self, key: &ConformanceKey) -> Option<ConformanceEvidence> {
+        self.conformance
+            .lookup_evidence(&mut self.type_catalog, self.modules.as_ref(), key)
+    }
+
+    pub(crate) fn lookup_witness(
+        &self,
+        key: &ConformanceKey,
+        label: &Label,
+        required_sym: &Symbol,
+    ) -> Option<Symbol> {
+        self.type_catalog
+            .lookup_witness(key, label, required_sym)
+            .or_else(|| self.modules.lookup_witness(key, label, required_sym))
+    }
+
+    pub(crate) fn record_evidence(&mut self, key: ConformanceKey, evidence: ConformanceEvidence) {
+        self.conformance
+            .record_evidence(&mut self.type_catalog, key, evidence);
+    }
+
+    pub(crate) fn record_witnesses(
+        &mut self,
+        key: ConformanceKey,
+        mut evidence: ConformanceEvidence,
+        witnesses: WitnessTable,
+    ) {
+        evidence.witnesses = witnesses;
+        self.record_evidence(key, evidence);
+    }
+
+    pub(crate) fn inherited_evidence(
+        &self,
+        evidence: &ConformanceEvidence,
+        conforming_id: Symbol,
+        protocol_id: ProtocolId,
+    ) -> ConformanceEvidence {
+        ConformanceEvidence::from_superprotocol(
+            evidence.node_id,
+            conforming_id,
+            protocol_id,
+            evidence.span,
+        )
+    }
+
+    pub(crate) fn method_witnesses(
+        &self,
+        protocol_id: ProtocolId,
+        label: &Label,
+        required_sym: &Symbol,
+    ) -> Vec<(Symbol, Symbol)> {
+        let mut keys = self
+            .type_catalog
+            .conformance_evidence
+            .keys()
+            .filter(|key| key.protocol_id == protocol_id)
+            .copied()
+            .collect_vec();
+        keys.extend(self.modules.lookup_protocol_conformances(&protocol_id));
+        keys.sort();
+        keys.dedup();
+
+        keys.into_iter()
+            .filter_map(|key| {
+                self.lookup_witness(&key, label, required_sym)
+                    .map(|witness| (key.conforming_id, witness))
+            })
+            .collect()
+    }
+
+    pub fn conformance_seed(
+        &mut self,
+        key: ConformanceKey,
+        seed: Option<ConformanceEvidence>,
+    ) -> Option<ConformanceEvidence> {
+        self.conformance
+            .conformance_seed(&mut self.type_catalog, self.modules.as_ref(), key, seed)
+    }
+
+    pub fn protocol_implies(
+        &mut self,
+        source_protocol_id: ProtocolId,
+        target_protocol_id: ProtocolId,
+    ) -> bool {
+        self.conformance.protocol_implies(
+            &mut self.type_catalog,
+            self.modules.as_ref(),
+            source_protocol_id,
+            target_protocol_id,
+        )
+    }
+
+    pub fn superprotocol_keys_for(&self, protocol_id: ProtocolId) -> Vec<ConformanceKey> {
+        self.conformance
+            .superprotocol_keys_for(&self.type_catalog, protocol_id)
+    }
+
+    pub fn claimed_protocol_member(
+        &mut self,
+        symbol: Symbol,
+        label: &Label,
+    ) -> Option<(ProtocolId, Symbol)> {
+        for protocol_id in self
+            .conformance
+            .claimed_protocols_for(&self.type_catalog, symbol)
+        {
+            let protocol_symbol = Symbol::Protocol(protocol_id);
+            let Some((member_sym, _source)) = self.lookup_member(&protocol_symbol, label) else {
+                continue;
+            };
+
+            if matches!(
+                member_sym,
+                Symbol::InstanceMethod(..) | Symbol::MethodRequirement(..)
+            ) {
+                return Some((protocol_id, member_sym));
+            }
         }
 
         None
+    }
+
+    pub fn associated_type_candidate(
+        &mut self,
+        key: ConformanceKey,
+        label: &Label,
+        origin: ConformanceOrigin,
+    ) -> Option<Symbol> {
+        self.conformance.associated_type_candidate(
+            &mut self.type_catalog,
+            self.modules.as_ref(),
+            &self.resolved_names,
+            key,
+            label,
+            origin,
+        )
+    }
+
+    pub fn method_witness_candidate(
+        &mut self,
+        key: ConformanceKey,
+        label: &Label,
+        required_sym: &Symbol,
+        origin: ConformanceOrigin,
+        witness_table: &WitnessTable,
+    ) -> Option<Symbol> {
+        if let Some(sym) = self.conformance.method_candidate(
+            &mut self.type_catalog,
+            self.modules.as_ref(),
+            key,
+            label,
+        ) {
+            return Some(sym);
+        }
+
+        witness_table
+            .get_witness(label, required_sym)
+            .or_else(|| match origin {
+                ConformanceOrigin::Declared => None,
+                ConformanceOrigin::AutoDerived | ConformanceOrigin::Inherited => {
+                    self.direct_member_symbol(&key.conforming_id, label)
+                }
+            })
+    }
+
+    pub fn resolve_associated_projection(
+        &mut self,
+        protocol_id: Option<ProtocolId>,
+        base_sym: Symbol,
+        label: &Label,
+        level: Level,
+    ) -> Option<AssociatedTypeResolution> {
+        match self.conformance.resolve_associated_projection(
+            &mut self.type_catalog,
+            self.modules.as_ref(),
+            &self.resolved_names,
+            protocol_id,
+            base_sym,
+            label,
+        )? {
+            ProjectionResolution::Alias(symbol) => Some(AssociatedTypeResolution::Alias(symbol)),
+            ProjectionResolution::Witness(ty) => Some(AssociatedTypeResolution::Witness(ty)),
+            ProjectionResolution::PendingSlot(key) => Some(AssociatedTypeResolution::Witness(
+                self.associated_type_slot(key, label, level),
+            )),
+        }
+    }
+
+    pub(crate) fn can_generalize_projection(
+        &mut self,
+        protocol_id: Option<ProtocolId>,
+        base: &Ty,
+        label: &Label,
+        substitutions: &mut UnificationSubstitutions,
+    ) -> bool {
+        if let Some(protocol_id) = protocol_id {
+            return self.protocol_has_associated_type(protocol_id, label);
+        }
+
+        self.projection_base_bounds(base, substitutions)
+            .into_iter()
+            .any(|protocol_id| self.protocol_has_associated_type(protocol_id, label))
+    }
+
+    fn projection_base_bounds(
+        &mut self,
+        base: &Ty,
+        substitutions: &mut UnificationSubstitutions,
+    ) -> Vec<ProtocolId> {
+        match self.apply(base, substitutions) {
+            Ty::Param(_, bounds) => bounds,
+            Ty::Var { id, .. } => {
+                if let Some(Ty::Param(_, bounds)) = self.lookup_reverse_instantiation(id) {
+                    bounds
+                } else {
+                    vec![]
+                }
+            }
+            Ty::Rigid(id) => {
+                if let Some(Ty::Param(_, bounds)) = self.skolem_map.get(&Ty::Rigid(id)) {
+                    bounds.clone()
+                } else {
+                    vec![]
+                }
+            }
+            _ => vec![],
+        }
+    }
+
+    fn protocol_has_associated_type(&mut self, protocol_id: ProtocolId, label: &Label) -> bool {
+        self.lookup_associated_types(Symbol::Protocol(protocol_id))
+            .map(|entries| entries.contains_key(label))
+            .unwrap_or(false)
     }
 
     pub fn lookup_associated_types(
@@ -916,7 +1367,7 @@ impl TypeSession {
     ) -> Vec<ConformanceKey> {
         let mut result = vec![];
 
-        for key in self.type_catalog.conformances.keys() {
+        for key in self.type_catalog.conformance_evidence.keys() {
             if key.protocol_id == *protocol_id {
                 result.push(*key);
             }
@@ -939,34 +1390,52 @@ impl TypeSession {
         None
     }
 
-    #[instrument(skip(self))]
-    pub(super) fn lookup_concrete_member(
-        &mut self,
-        receiver: &Symbol,
-        label: &Label,
-    ) -> Option<Symbol> {
-        if let Some((sym, _)) = self.type_catalog.lookup_concrete_member(receiver, label) {
-            if matches!(sym, Symbol::InstanceMethod(..))
-                && !self
-                    .type_catalog
-                    .instance_methods
-                    .entry(*receiver)
-                    .or_default()
-                    .contains_key(label)
-            {
-                self.type_catalog
-                    .instance_methods
-                    .entry(*receiver)
-                    .or_default()
-                    .insert(label.clone(), sym);
-            }
-
-            return Some(sym);
+    fn direct_member(&mut self, receiver: &Symbol, label: &Label) -> Option<MemberBinding> {
+        if let Some(binding) = self
+            .type_catalog
+            .lookup_direct_member_binding(receiver, label)
+        {
+            return Some(binding);
         }
 
-        if let Some(sym) = self.modules.lookup_concrete_member(receiver, label) {
-            self.cache_member(sym, receiver, label);
-            return Some(sym);
+        if let Some(binding) = self.modules.lookup_direct_member_binding(receiver, label) {
+            self.cache_member(binding.symbol, receiver, label);
+            return Some(binding);
+        }
+
+        None
+    }
+
+    fn direct_member_symbol(&mut self, receiver: &Symbol, label: &Label) -> Option<Symbol> {
+        self.direct_member(receiver, label)
+            .map(|binding| binding.symbol)
+    }
+
+    fn validated_protocol_member(
+        &mut self,
+        receiver: Symbol,
+        label: &Label,
+    ) -> Option<(Symbol, MemberSource)> {
+        for protocol_id in self.validated_protocols_for(receiver) {
+            let protocol_symbol = Symbol::Protocol(protocol_id);
+            if let Some(member) = self.direct_member_symbol(&protocol_symbol, label) {
+                return Some((member, MemberSource::Protocol(protocol_id)));
+            }
+        }
+
+        None
+    }
+
+    fn claimed_superprotocol_member(
+        &mut self,
+        receiver: Symbol,
+        label: &Label,
+    ) -> Option<(Symbol, MemberSource)> {
+        for protocol_id in self.claimed_superprotocols_for(receiver) {
+            let protocol_symbol = Symbol::Protocol(protocol_id);
+            if let Some(member) = self.direct_member_symbol(&protocol_symbol, label) {
+                return Some((member, MemberSource::Protocol(protocol_id)));
+            }
         }
 
         None
@@ -978,43 +1447,77 @@ impl TypeSession {
         receiver: &Symbol,
         label: &Label,
     ) -> Option<(Symbol, MemberSource)> {
-        if let Some(sym) = self.type_catalog.lookup_member(receiver, label) {
-            if matches!(sym.0, Symbol::InstanceMethod(..))
-                && !self
-                    .type_catalog
-                    .instance_methods
-                    .entry(*receiver)
-                    .or_default()
-                    .contains_key(label)
-            {
-                self.type_catalog
-                    .instance_methods
-                    .entry(*receiver)
-                    .or_default()
-                    .insert(label.clone(), sym.0);
-            }
-
-            return Some(sym);
+        if let Some(binding) = self.direct_member(receiver, label) {
+            return Some((binding.symbol, binding.source));
         }
 
-        if let Some(sym) = self.modules.lookup_member(receiver, label) {
-            self.cache_member(sym, receiver, label);
-            return Some((sym, MemberSource::SelfMember));
+        if let Some(member) = self.validated_protocol_member(*receiver, label) {
+            return Some(member);
+        }
+
+        if matches!(receiver, Symbol::Protocol(_)) {
+            return self.claimed_superprotocol_member(*receiver, label);
         }
 
         None
     }
 
-    pub(super) fn lookup_static_member(
+    fn validated_protocols_for(&self, receiver: Symbol) -> Vec<ProtocolId> {
+        let mut protocols = self
+            .type_catalog
+            .conformance_evidence
+            .keys()
+            .filter(|key| key.conforming_id == receiver)
+            .map(|key| key.protocol_id)
+            .collect_vec();
+
+        protocols.extend(
+            self.modules
+                .all_conformance_evidence()
+                .into_iter()
+                .filter(|(key, _)| key.conforming_id == receiver)
+                .map(|(key, _)| key.protocol_id),
+        );
+
+        protocols.sort();
+        protocols.dedup();
+        protocols
+    }
+
+    fn claimed_superprotocols_for(&self, receiver: Symbol) -> Vec<ProtocolId> {
+        let mut protocols = self
+            .conformance
+            .claimed_protocols_for(&self.type_catalog, receiver);
+
+        protocols.extend(
+            self.modules
+                .all_conformance_claims()
+                .into_iter()
+                .filter(|(key, _)| key.conforming_id == receiver)
+                .map(|(key, _)| key.protocol_id),
+        );
+
+        protocols.sort();
+        protocols.dedup();
+        protocols
+    }
+
+    pub(super) fn lookup_constructor_member(
         &mut self,
         receiver: &Symbol,
         label: &Label,
     ) -> Option<Symbol> {
-        if let Some(sym) = self.type_catalog.lookup_static_member(receiver, label) {
+        if let Some(sym) = self
+            .type_catalog
+            .lookup_direct_constructor_member(receiver, label)
+        {
             return Some(sym);
         }
 
-        if let Some(sym) = self.modules.lookup_static_member(receiver, label) {
+        if let Some(sym) = self
+            .modules
+            .lookup_direct_constructor_member(receiver, label)
+        {
             self.cache_member(sym, receiver, label);
             return Some(sym);
         }
@@ -1074,6 +1577,16 @@ impl TypeSession {
             Symbol::Variant(..) => {
                 self.type_catalog
                     .variants
+                    .entry(*receiver)
+                    .or_default()
+                    .insert(label.clone(), sym);
+            }
+            Symbol::Struct(..)
+            | Symbol::Enum(..)
+            | Symbol::TypeAlias(..)
+            | Symbol::Protocol(..) => {
+                self.type_catalog
+                    .child_types
                     .entry(*receiver)
                     .or_default()
                     .insert(label.clone(), sym);
@@ -1154,18 +1667,18 @@ impl TypeSession {
     /// Find a protocol's ProtocolId by name.
     pub(crate) fn find_protocol_id(&self, protocol_name: &str) -> Option<ProtocolId> {
         for (sym, name) in &self.resolved_names.symbol_names {
-            if name == protocol_name {
-                if let Symbol::Protocol(id) = sym {
-                    return Some(*id);
-                }
+            if name == protocol_name
+                && let Symbol::Protocol(id) = sym
+            {
+                return Some(*id);
             }
         }
         // Also check imported modules
         for (sym, name) in self.modules.imported_symbol_names() {
-            if name == protocol_name {
-                if let Symbol::Protocol(id) = sym {
-                    return Some(id);
-                }
+            if name == protocol_name
+                && let Symbol::Protocol(id) = sym
+            {
+                return Some(id);
             }
         }
         None
@@ -1193,10 +1706,10 @@ impl TypeSession {
         // Index-based iteration to avoid cloning the Vec (lookup_method_requirements takes &mut self).
         for i in 0..self.auto_derivable_protocols.len() {
             let protocol_id = self.auto_derivable_protocols[i];
-            if let Some(reqs) = self.lookup_method_requirements(protocol_id.into()) {
-                if reqs.contains_key(label) {
-                    return Some(protocol_id);
-                }
+            if let Some(reqs) = self.lookup_method_requirements(protocol_id.into())
+                && reqs.contains_key(label)
+            {
+                return Some(protocol_id);
             }
         }
         None
@@ -1213,8 +1726,11 @@ impl TypeSession {
             protocol_id,
             conforming_id: conforming_sym,
         };
-        let conformance = self.lookup_conformance(&key)?;
-        conformance.witnesses.methods.get(method_label).copied()
+        let required_sym = self
+            .lookup_method_requirements(Symbol::Protocol(protocol_id))?
+            .get(method_label)
+            .copied()?;
+        self.lookup_witness(&key, method_label, &required_sym)
     }
 
     /// Register a symbol with a monomorphic type in the term environment.
@@ -1242,12 +1758,13 @@ impl TypeSession {
             return None;
         }
 
-        // Must not already have an explicit conformance
+        // Must not already have an explicit conformance claim or validated evidence.
         let key = ConformanceKey {
             protocol_id,
             conforming_id: nominal_sym,
         };
-        if self.lookup_conformance(&key).is_some() {
+        if self.lookup_conformance_claim(&key).is_some() || self.lookup_conformance(&key).is_some()
+        {
             return None;
         }
 
@@ -1276,7 +1793,7 @@ impl TypeSession {
             return None;
         };
 
-        let mut witnesses = Witnesses::default();
+        let mut witnesses = WitnessTable::default();
         let mut derived_methods = Vec::new();
         let mut first_method_sym = None;
 
@@ -1336,15 +1853,9 @@ impl TypeSession {
                 .insert(self_param_sym, "self".into());
         }
 
-        self.type_catalog.conformances.insert(
+        self.record_evidence(
             key,
-            Conformance {
-                node_id: NodeID::SYNTHESIZED,
-                conforming_id: nominal_sym,
-                protocol_id,
-                witnesses,
-                span: Span::SYNTHESIZED,
-            },
+            ConformanceEvidence::auto_derived(nominal_sym, protocol_id, witnesses),
         );
 
         // Record for later body synthesis

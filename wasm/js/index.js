@@ -1,4 +1,5 @@
 import init, {
+  Repl,
   debug_html,
   hover as wasmHover,
   run_program,
@@ -12,6 +13,8 @@ export async function loadTalk() {
   await init();
 
   return {
+    /** Creates a persistent REPL session. */
+    newRepl: () => new Repl(),
     /** Runs a talk program and returns the interpreter result as a string. */
     runProgram: (source) => run_program(source),
     /** Formats the parsed program with debug HTML decorations. */

@@ -25,6 +25,7 @@ pub mod compiling;
 pub use common::*;
 pub mod ir;
 pub mod name_resolution;
+pub mod repl;
 pub mod types;
 
 #[cfg(feature = "cli")]

@@ -17,6 +17,10 @@ pub enum ParserError {
     ExpectedDecl(TokenKind),
     LetNotAllowed(BlockContext),
     InitNotAllowed(BlockContext),
+    ConformanceListNotAllowed {
+        context: BlockContext,
+        token: Option<Token>,
+    },
     IncompleteFuncSignature(String),
     ConversionError(String),
 }
@@ -53,6 +57,10 @@ impl Display for ParserError {
             Self::ExpectedDecl(actual) => write!(f, "Expected declaration, got {actual:?}"),
             Self::LetNotAllowed(context) => write!(f, "Cannot use `let` in {context:?} body"),
             Self::InitNotAllowed(_context) => write!(f, "Cannot use `init` in this context"),
+            Self::ConformanceListNotAllowed { context, .. } => write!(
+                f,
+                "Cannot declare conformances on {context:?}; use an `extend` block instead"
+            ),
             Self::IncompleteFuncSignature(msg) => write!(f, "{}", msg),
             Self::ConversionError(msg) => write!(f, "{}", msg),
         }

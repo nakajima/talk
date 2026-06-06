@@ -17,7 +17,7 @@ use crate::{
         matcher,
         passes::{
             inference_pass::InferencePass,
-            specialization_pass::{SpecializationPass, SpecializedCallee},
+            specialization_pass::{SpecializationPass, SpecializationPlan},
         },
         type_error::TypeError,
         type_session::TypeSession,
@@ -60,11 +60,8 @@ pub struct Typed {
     pub symbols: Symbols,
     pub resolved_names: ResolvedNames,
     pub diagnostics: Vec<AnyDiagnostic>,
-    pub specialized_callees: FxHashMap<Symbol, SpecializedCallee>,
-    pub specializations: FxHashMap<Symbol, Vec<Symbol>>,
-    /// Maps (specialized_caller, call_site_id) -> specialized_callee.
-    /// Aligns with the paper's model: each call site is a dimension, resolution maps to the callee.
-    pub call_resolutions: FxHashMap<(Symbol, NodeID), Symbol>,
+    /// Facts produced by specialization and consumed by lowering/monomorphization.
+    pub specialization_plan: SpecializationPlan,
 }
 
 impl DriverPhase for Lowered {}
@@ -433,58 +430,17 @@ fn has_error_diagnostics(diagnostics: &[AnyDiagnostic]) -> bool {
     })
 }
 
+type CoreTypingOutput = (TypedAST, Symbols, ResolvedNames, Types);
+
+type SpecializedTypingOutput = (TypedAST, Symbols, ResolvedNames, Types, SpecializationPlan);
+
 impl Driver<NameResolved> {
     pub fn typecheck(mut self) -> Result<Driver<Typed>, CompileError> {
-        let mut session = TypeSession::new(
-            self.config.module_id,
-            self.config.modules.clone(),
-            std::mem::take(&mut self.phase.symbols),
-            std::mem::take(&mut self.phase.resolved_names),
-        );
+        let (ast, symbols, resolved_names, types) = self.core_typecheck()?;
+        let (ast, symbols, resolved_names, mut types, specialization_plan) =
+            self.specialize(ast, symbols, resolved_names, types)?;
 
-        let (_paths, mut asts): (Vec<_>, Vec<_>) = self.phase.asts.iter_mut().unzip();
-
-        let (ast, diagnostics) = InferencePass::drive(&mut asts, &mut session);
-
-        self.phase.diagnostics.extend(diagnostics);
-        let symbols = std::mem::take(&mut session.symbols);
-        let (types, resolved_names) = session.finalize().map_err(CompileError::Typing)?;
-
-        let specialization_pass = SpecializationPass::new(
-            ast,
-            symbols,
-            resolved_names,
-            types,
-            &self.config.modules,
-            self.config.module_id,
-        );
-
-        let (
-            ast,
-            symbols,
-            resolved_names,
-            mut types,
-            specializations,
-            specialized_callees,
-            call_resolutions,
-        ) = specialization_pass.drive().map_err(CompileError::Typing)?;
-
-        // Always run the matcher to build match plans, even when there are error
-        // diagnostics elsewhere. Match plan generation is independent of unrelated
-        // type errors, and skipping it causes match expressions to silently compile
-        // to void.
-        {
-            let matcher_result = matcher::check_ast(&ast, &types, &resolved_names.symbol_names);
-            if !has_error_diagnostics(&self.phase.diagnostics) {
-                self.phase.diagnostics.extend(
-                    matcher_result
-                        .diagnostics
-                        .into_iter()
-                        .map(AnyDiagnostic::Typing),
-                );
-            }
-            types.match_plans = matcher_result.plans;
-        }
+        self.build_match_plans(&ast, &mut types, &resolved_names);
 
         Ok(Driver {
             files: self.files,
@@ -496,11 +452,68 @@ impl Driver<NameResolved> {
                 symbols,
                 resolved_names,
                 diagnostics: self.phase.diagnostics,
-                specializations,
-                specialized_callees,
-                call_resolutions,
+                specialization_plan,
             },
         })
+    }
+
+    fn core_typecheck(&mut self) -> Result<CoreTypingOutput, CompileError> {
+        let mut session = TypeSession::new(
+            self.config.module_id,
+            self.config.modules.clone(),
+            std::mem::take(&mut self.phase.symbols),
+            std::mem::take(&mut self.phase.resolved_names),
+        );
+
+        let (_paths, mut asts): (Vec<_>, Vec<_>) = self.phase.asts.iter_mut().unzip();
+        let (ast, diagnostics) = InferencePass::drive(&mut asts, &mut session);
+
+        self.phase.diagnostics.extend(diagnostics);
+        let symbols = std::mem::take(&mut session.symbols);
+        let (types, resolved_names) = session.finalize().map_err(CompileError::Typing)?;
+
+        Ok((ast, symbols, resolved_names, types))
+    }
+
+    fn specialize(
+        &self,
+        ast: TypedAST,
+        symbols: Symbols,
+        resolved_names: ResolvedNames,
+        types: Types,
+    ) -> Result<SpecializedTypingOutput, CompileError> {
+        let specialization_pass = SpecializationPass::new(
+            ast,
+            symbols,
+            resolved_names,
+            types,
+            &self.config.modules,
+            self.config.module_id,
+        );
+
+        specialization_pass.drive().map_err(CompileError::Typing)
+    }
+
+    fn build_match_plans(
+        &mut self,
+        ast: &TypedAST,
+        types: &mut Types,
+        resolved_names: &ResolvedNames,
+    ) {
+        // Always run the matcher to build match plans, even when there are error
+        // diagnostics elsewhere. Match plan generation is independent of unrelated
+        // type errors, and skipping it causes match expressions to silently compile
+        // to void.
+        let matcher_result = matcher::check_ast(ast, types, &resolved_names.symbol_names);
+        if !has_error_diagnostics(&self.phase.diagnostics) {
+            self.phase.diagnostics.extend(
+                matcher_result
+                    .diagnostics
+                    .into_iter()
+                    .map(AnyDiagnostic::Typing),
+            );
+        }
+        types.match_plans = matcher_result.plans;
     }
 }
 

@@ -1,6 +1,7 @@
 use std::{error::Error, fmt::Display};
 
 use crate::{
+    label::Label,
     name::Name,
     name_resolution::symbol::{ProtocolId, Symbol},
     types::{
@@ -21,6 +22,11 @@ pub enum TypeError {
         conformance_key: ConformanceKey,
         label: String,
     },
+    AmbiguousAssociatedTypeProjection {
+        protocol_id: ProtocolId,
+        label: Label,
+        result: Ty,
+    },
     InvalidUnification(Box<Ty>, Box<Ty>, Option<ConstraintCause>),
     OccursCheck(Ty),
     CalleeNotCallable(Ty),
@@ -36,6 +42,14 @@ pub enum TypeError {
         ty: Ty,
         protocol_id: ProtocolId,
     },
+    UnknownAssociatedType {
+        base: Ty,
+        label: Label,
+    },
+    UnknownTypeMember {
+        base: Ty,
+        member: Label,
+    },
     NonExhaustiveMatch(Vec<RequiredConstructor>),
     UselessMatchArm,
     OrPatternBinderMismatch,
@@ -46,6 +60,7 @@ pub enum TypeError {
     HandlerMustBeBound,
     ContinueOutsideHandler,
     SpecializationMismatch,
+    UnsupportedFeature(String),
 }
 
 impl Error for TypeError {}
@@ -57,6 +72,14 @@ impl Display for TypeError {
                 label,
             } => write!(f, "Ambiguous witness for {conformance_key:?}.{label}"),
             Self::TypeConstructorNotFound(id) => write!(f, "Type constructor not found: {id:?}"),
+            Self::AmbiguousAssociatedTypeProjection {
+                protocol_id,
+                label,
+                result,
+            } => write!(
+                f,
+                "Ambiguous associated type projection for protocol {protocol_id:?}.{label} = {result:?}"
+            ),
             Self::GenericArgCount { expected, actual } => {
                 write!(f, "Expected {expected} type arguments, got {actual}")
             }
@@ -96,6 +119,12 @@ impl Display for TypeError {
             Self::NameNotResolved(name) => {
                 write!(f, "Name not resolved: {name:?}")
             }
+            Self::UnknownAssociatedType { base, label } => {
+                write!(f, "Unknown associated type {base:?}.{label}")
+            }
+            Self::UnknownTypeMember { base, member } => {
+                write!(f, "Unknown type member {base:?}.{member}")
+            }
             Self::NonExhaustiveMatch(cases) => {
                 write!(f, "Match not exhaustive: {cases:?}")
             }
@@ -131,6 +160,9 @@ impl Display for TypeError {
             }
             Self::SpecializationMismatch => {
                 write!(f, "cannot determine specializations")
+            }
+            Self::UnsupportedFeature(feature) => {
+                write!(f, "Unsupported feature: {feature}")
             }
         }
     }
