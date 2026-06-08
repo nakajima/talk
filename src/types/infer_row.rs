@@ -9,6 +9,7 @@ use crate::{
     label::Label,
     name_resolution::symbol::{ProtocolId, Symbol},
     types::{
+        call_substitutions::CallSubstitutions,
         infer_ty::{Level, Ty},
         predicate::Predicate,
         scheme::ForAll,
@@ -186,8 +187,8 @@ impl Row {
     pub fn collect_specializations(
         &self,
         concrete: &Row,
-    ) -> Result<Specializations, crate::types::type_error::TypeError> {
-        let mut result = Specializations::default();
+    ) -> Result<CallSubstitutions, crate::types::type_error::TypeError> {
+        let mut result = CallSubstitutions::default();
         match (self, concrete) {
             (Row::Empty, Row::Empty) => (),
             (Row::Param(id), other) => {
@@ -275,63 +276,12 @@ impl std::fmt::Debug for Row {
     }
 }
 
-// Specializations moved from ty.rs since it's needed here
-#[derive(Default, Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct Specializations {
-    pub ty: std::collections::BTreeMap<Symbol, Ty>,
-    pub row: std::collections::BTreeMap<RowParamId, Row>,
-}
-
-impl Specializations {
-    pub fn is_empty(&self) -> bool {
-        self.ty.is_empty() && self.row.is_empty()
-    }
-
-    pub fn extend(&mut self, other: Specializations) {
-        self.ty.extend(
-            other
-                .ty
-                .into_iter()
-                .filter(|(_, v)| !matches!(v, Ty::Param(..))),
-        );
-        self.row.extend(
-            other
-                .row
-                .into_iter()
-                .filter(|(_, v)| !matches!(v, Row::Param(..))),
-        );
-    }
-
-    pub fn apply(&self, ty: Ty) -> Ty {
-        ty.mapping(
-            &mut |t| {
-                if let Ty::Param(id, _) = t
-                    && let Some(replacement) = self.ty.get(&id)
-                {
-                    replacement.clone()
-                } else {
-                    t
-                }
-            },
-            &mut |r| {
-                if let Row::Param(id) = r
-                    && let Some(replacement) = self.row.get(&id)
-                {
-                    replacement.clone()
-                } else {
-                    r
-                }
-            },
-        )
-    }
-}
-
 impl Ty {
     pub fn collect_specializations(
         &self,
         concrete: &Self,
-    ) -> Result<Specializations, crate::types::type_error::TypeError> {
-        let mut result = Specializations::default();
+    ) -> Result<CallSubstitutions, crate::types::type_error::TypeError> {
+        let mut result = CallSubstitutions::default();
         match (self, concrete) {
             (Self::Primitive(..), Self::Primitive(..)) => (),
             (Self::Param(id, _), other) => {

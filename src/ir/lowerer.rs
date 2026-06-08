@@ -11,7 +11,9 @@ use crate::ir::value::{Addr, RecordId};
 use crate::label::Label;
 use crate::node_kinds::inline_ir_instruction::{InlineIRInstructionKind, TypedInlineIRInstruction};
 use crate::node_kinds::type_annotation::TypeAnnotation;
-use crate::types::call_tree::{CallArgumentPlan, CallReceiverKind};
+use crate::types::call_site::{
+    CallArgumentPlan, CallReceiverKind, CallSiteId, ResolvedCallSiteKind,
+};
 use crate::types::infer_row::Row;
 use crate::types::type_catalog::{MemberSource, Nominal};
 use crate::types::typed_ast::{
@@ -1082,14 +1084,6 @@ impl<'a> Lowerer<'a> {
             TypedExprKind::Match(scrutinee, arms) => self.lower_match(expr, scrutinee, arms, bind),
             TypedExprKind::RecordLiteral { fields } => {
                 self.lower_record_literal(expr, fields, bind)
-            }
-            TypedExprKind::Choice { dimension, .. } => {
-                // Choice nodes should be resolved before lowering.
-                // If we reach here, resolution failed.
-                Err(IRError::TypeNotFound(format!(
-                    "Unresolved choice at dimension {:?}",
-                    dimension
-                )))
             }
         }?;
 
@@ -2809,7 +2803,7 @@ impl<'a> Lowerer<'a> {
         let original_symbol = specialized_callee.map(|s| s.original_symbol);
         if let Some(callee) = specialized_callee {
             // Only use original binding if no type specializations were applied
-            if callee.specializations.ty.is_empty() {
+            if callee.substitutions.ty.is_empty() {
                 let original = callee.original_symbol;
                 if self.current_func_mut().bindings.contains_key(&original) {
                     return Ok((self.get_binding(&original).into(), ty));
@@ -3042,14 +3036,23 @@ impl<'a> Lowerer<'a> {
         args: &'b [TypedExpr],
         arg_vals: &'b [Value],
     ) -> Option<(&'b TypedExpr, Value)> {
-        let site = self.typed.types.resolved_calls.get(&call_id)?;
-        let receiver_id = match &site.argument_plan {
+        let site = self
+            .typed
+            .types
+            .resolved_call_sites
+            .get(&CallSiteId::from_lowered_source(call_id))?;
+        let ResolvedCallSiteKind::MethodCall {
+            receiver,
+            argument_plan,
+            ..
+        } = &site.kind
+        else {
+            return None;
+        };
+        let receiver_id = match argument_plan {
             CallArgumentPlan::PrependReceiver { id } => *id,
-            CallArgumentPlan::AsWritten => match site.receiver.as_ref()? {
-                receiver @ crate::types::call_tree::CallReceiver {
-                    kind: CallReceiverKind::Argument { index },
-                    ..
-                } => {
+            CallArgumentPlan::AsWritten => match &receiver.kind {
+                CallReceiverKind::Argument { index } => {
                     if let Some((arg, value)) = args.get(*index).zip(arg_vals.get(*index))
                         && arg.id == receiver.id
                     {
@@ -3057,10 +3060,7 @@ impl<'a> Lowerer<'a> {
                     }
                     receiver.id
                 }
-                crate::types::call_tree::CallReceiver {
-                    kind: CallReceiverKind::CalleeReceiver,
-                    ..
-                } => return None,
+                CallReceiverKind::CalleeReceiver => return None,
             },
         };
 
@@ -3285,7 +3285,7 @@ impl<'a> Lowerer<'a> {
         }
 
         // Static calls on constructors (e.g. HTTP.Server()) do not prepend a
-        // receiver argument. Instance and protocol calls use the ResolvedCall recorded
+        // receiver argument. Instance and protocol calls use the ResolvedCallSite recorded
         // during type checking to identify the semantic receiver.
         let constructor_member_sym = if let Ty::Constructor {
             name: Name::Resolved(sym, ..),
@@ -3301,28 +3301,36 @@ impl<'a> Lowerer<'a> {
         let call_site = self
             .typed
             .types
-            .resolved_calls
-            .get(&callee_expr.id)
+            .resolved_call_sites
+            .get(&CallSiteId::from_lowered_source(callee_expr.id))
             .cloned();
         match call_site {
-            Some(site) => match site.argument_plan {
-                CallArgumentPlan::PrependReceiver { id } if receiver.id == id => {
-                    let (receiver_ir, _) = self.lower_expr(&receiver, Bind::Fresh)?;
-                    args.insert(0, receiver_ir.clone());
-                    receiver_self_value = Some(receiver_ir);
-                }
-                CallArgumentPlan::AsWritten => {
-                    if let Some(receiver_fact) = site.receiver
-                        && let CallReceiverKind::Argument { index } = receiver_fact.kind
-                        && let Some(arg_expr) = arg_exprs.get(index)
-                        && arg_expr.id == receiver_fact.id
-                    {
-                        receiver = arg_expr.clone();
-                        receiver_self_value = args.get(index).cloned();
+            Some(site) => {
+                if let ResolvedCallSiteKind::MethodCall {
+                    receiver: receiver_fact,
+                    argument_plan,
+                    ..
+                } = site.kind
+                {
+                    match argument_plan {
+                        CallArgumentPlan::PrependReceiver { id } if receiver.id == id => {
+                            let (receiver_ir, _) = self.lower_expr(&receiver, Bind::Fresh)?;
+                            args.insert(0, receiver_ir.clone());
+                            receiver_self_value = Some(receiver_ir);
+                        }
+                        CallArgumentPlan::AsWritten => {
+                            if let CallReceiverKind::Argument { index } = receiver_fact.kind
+                                && let Some(arg_expr) = arg_exprs.get(index)
+                                && arg_expr.id == receiver_fact.id
+                            {
+                                receiver = arg_expr.clone();
+                                receiver_self_value = args.get(index).cloned();
+                            }
+                        }
+                        CallArgumentPlan::PrependReceiver { .. } => {}
                     }
                 }
-                CallArgumentPlan::PrependReceiver { .. } => {}
-            },
+            }
             None if constructor_member_sym.is_none() => {
                 let (receiver_ir, _) = self.lower_expr(&receiver, Bind::Fresh)?;
                 args.insert(0, receiver_ir.clone());

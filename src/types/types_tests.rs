@@ -16,6 +16,7 @@ pub mod tests {
             },
         },
         types::{
+            call_site::{CallSiteId, ResolvedCallSiteKind},
             conformance::ConformanceKey,
             infer_row::{Row, RowParamId},
             infer_ty::Ty,
@@ -296,28 +297,32 @@ pub mod tests {
             panic!("didn't get func type param");
         };
 
-        assert_eq!(
-            *types
-                .catalog
-                .instantiations
-                .ty
-                .get(&root_1.id)
-                .unwrap()
-                .get(type_param)
-                .unwrap(),
-            Ty::Int
-        );
-        assert_eq!(
-            *types
-                .catalog
-                .instantiations
-                .ty
-                .get(&root_2.id)
-                .unwrap()
-                .get(type_param)
-                .unwrap(),
-            Ty::Bool
-        );
+        let site_1 = types
+            .resolved_call_sites
+            .get(&CallSiteId::from_callee_node(root_1.id))
+            .unwrap();
+        let site_2 = types
+            .resolved_call_sites
+            .get(&CallSiteId::from_callee_node(root_2.id))
+            .unwrap();
+
+        let ResolvedCallSiteKind::DirectCall {
+            substitutions: substitutions_1,
+            ..
+        } = &site_1.kind
+        else {
+            panic!("expected direct call site");
+        };
+        let ResolvedCallSiteKind::DirectCall {
+            substitutions: substitutions_2,
+            ..
+        } = &site_2.kind
+        else {
+            panic!("expected direct call site");
+        };
+
+        assert_eq!(substitutions_1.ty.get(type_param), Some(&Ty::Int));
+        assert_eq!(substitutions_2.ty.get(type_param), Some(&Ty::Bool));
     }
 
     #[test]
@@ -391,29 +396,32 @@ pub mod tests {
             unreachable!()
         };
 
-        // Check instantiations are stored
-        assert_eq!(
-            *types
-                .catalog
-                .instantiations
-                .ty
-                .get(constructor_1_id)
-                .unwrap()
-                .get(type_param)
-                .unwrap(),
-            Ty::Int
-        );
-        assert_eq!(
-            *types
-                .catalog
-                .instantiations
-                .ty
-                .get(constructor_2_id)
-                .unwrap()
-                .get(type_param)
-                .unwrap(),
-            Ty::Bool
-        );
+        let site_1 = types
+            .resolved_call_sites
+            .get(&CallSiteId::from_callee_node(*constructor_1_id))
+            .unwrap();
+        let site_2 = types
+            .resolved_call_sites
+            .get(&CallSiteId::from_callee_node(*constructor_2_id))
+            .unwrap();
+
+        let ResolvedCallSiteKind::InitializerCall {
+            substitutions: substitutions_1,
+            ..
+        } = &site_1.kind
+        else {
+            panic!("expected initializer call site");
+        };
+        let ResolvedCallSiteKind::InitializerCall {
+            substitutions: substitutions_2,
+            ..
+        } = &site_2.kind
+        else {
+            panic!("expected initializer call site");
+        };
+
+        assert_eq!(substitutions_1.ty.get(type_param), Some(&Ty::Int));
+        assert_eq!(substitutions_2.ty.get(type_param), Some(&Ty::Bool));
     }
 
     #[test]

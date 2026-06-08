@@ -5,13 +5,9 @@ use crate::{
     compiling::module::{ModuleEnvironment, ModuleId},
     label::Label,
     name_resolution::symbol::{ProtocolId, Symbol},
-    node_id::NodeID,
     types::{
         conformance::{ConformanceClaim, ConformanceEvidence, ConformanceKey, WitnessTable},
-        infer_row::{Row, RowParamId},
         infer_ty::Ty,
-        type_operations::UnificationSubstitutions,
-        type_session::TypeSession,
     },
 };
 
@@ -76,53 +72,6 @@ impl Nominal {
                 acc
             },
         )
-    }
-}
-
-#[derive(Debug, PartialEq, Clone, serde::Serialize, serde::Deserialize, Default)]
-pub struct TrackedInstantiations {
-    pub ty: FxHashMap<NodeID, FxHashMap<Symbol, Ty>>,
-    pub row: FxHashMap<NodeID, FxHashMap<RowParamId, Row>>,
-}
-
-impl TrackedInstantiations {
-    pub fn apply(
-        mut self,
-        session: &mut TypeSession,
-        substitutions: &mut UnificationSubstitutions,
-    ) -> Self {
-        let ty = std::mem::take(&mut self.ty);
-        let row = std::mem::take(&mut self.row);
-
-        let mut instantiations = TrackedInstantiations::default();
-        for (id, entries) in ty {
-            for (param, ty) in entries {
-                instantiations
-                    .ty
-                    .entry(id)
-                    .or_default()
-                    .insert(param, session.apply(&ty, substitutions));
-            }
-        }
-        for (id, entries) in row {
-            for (param, row) in entries {
-                instantiations
-                    .row
-                    .entry(id)
-                    .or_default()
-                    .insert(param, session.apply_row(&row, substitutions));
-            }
-        }
-
-        instantiations
-    }
-
-    pub fn insert_ty(&mut self, id: NodeID, param: Symbol, ty: Ty) {
-        self.ty.entry(id).or_default().insert(param, ty);
-    }
-
-    pub fn insert_row(&mut self, id: NodeID, param: RowParamId, ty: Row) {
-        self.row.entry(id).or_default().insert(param, ty);
     }
 }
 
@@ -233,7 +182,6 @@ pub struct TypeCatalog {
     /// Materialized completed type/constructor-receiver lookup.
     #[serde(default)]
     pub constructor_member_index: IndexMap<Symbol, IndexMap<Label, ConstructorMemberBinding>>,
-    pub instantiations: TrackedInstantiations,
     pub effects: IndexMap<Symbol, Ty>,
     /// Global constants (Int, Float, Bool) that can be inlined from external modules
     pub global_constants: FxHashMap<Symbol, GlobalConstant>,
@@ -735,34 +683,6 @@ impl TypeCatalog {
                 self.constructor_member_index,
                 module_id,
             ),
-            instantiations: TrackedInstantiations {
-                ty: self
-                    .instantiations
-                    .ty
-                    .into_iter()
-                    .map(|(k, v)| {
-                        (
-                            k,
-                            v.into_iter()
-                                .map(|(k, v)| (k, v.import(module_id)))
-                                .collect(),
-                        )
-                    })
-                    .collect(),
-                row: self
-                    .instantiations
-                    .row
-                    .into_iter()
-                    .map(|(k, v)| {
-                        (
-                            k,
-                            v.into_iter()
-                                .map(|(k, v)| (k, v.import(module_id)))
-                                .collect(),
-                        )
-                    })
-                    .collect(),
-            },
             effects: self
                 .effects
                 .into_iter()

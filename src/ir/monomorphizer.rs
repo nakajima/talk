@@ -16,9 +16,10 @@ use crate::{
     name::Name,
     name_resolution::symbol::Symbol,
     types::{
+        call_site::CallSiteId,
+        call_substitutions::CallSubstitutions,
         conformance::ConformanceKey,
         format::{SymbolNames, TypeFormatter},
-        infer_row::Specializations,
         infer_ty::Ty,
         passes::specialization_pass::{SpecializationPlan, SpecializedCallee},
         types::Types,
@@ -271,7 +272,7 @@ impl<'a> Monomorphizer<'a> {
     fn monomorphize_block(
         &mut self,
         block: BasicBlock<Ty>,
-        substitutions: &Specializations,
+        substitutions: &CallSubstitutions,
         receiver_ty: Option<&Ty>,
         specialized_caller: Option<Symbol>,
     ) -> BasicBlock<IrTy> {
@@ -301,7 +302,7 @@ impl<'a> Monomorphizer<'a> {
     fn monomorphize_terminator(
         &mut self,
         terminator: Terminator<Ty>,
-        substitutions: &Specializations,
+        substitutions: &CallSubstitutions,
     ) -> Terminator<IrTy> {
         match terminator {
             Terminator::Ret { val, ty } => Terminator::Ret {
@@ -318,7 +319,7 @@ impl<'a> Monomorphizer<'a> {
     fn monomorphize_instruction(
         &mut self,
         instruction: Instruction<Ty>,
-        substitutions: &Specializations,
+        substitutions: &CallSubstitutions,
         receiver_ty: Option<&Ty>,
         specialized_caller: Option<Symbol>,
     ) -> Instruction<IrTy> {
@@ -346,8 +347,8 @@ impl<'a> Monomorphizer<'a> {
                         if let Some(call_id) = call_id
                             && let Some(specialized_sym) = self
                                 .specialization_plan
-                                .call_resolutions()
-                                .get(&(caller, *call_id))
+                                .specialized_call_targets()
+                                .get(&(caller, CallSiteId::from_lowered_source(*call_id)))
                         {
                             Some(Value::Func(*specialized_sym))
                         } else {
@@ -381,8 +382,8 @@ impl<'a> Monomorphizer<'a> {
                         if let Some(call_id) = call_id
                             && let Some(specialized_sym) = self
                                 .specialization_plan
-                                .call_resolutions()
-                                .get(&(caller, *call_id))
+                                .specialized_call_targets()
+                                .get(&(caller, CallSiteId::from_lowered_source(*call_id)))
                         {
                             Value::Func(*specialized_sym)
                         } else {
@@ -455,7 +456,7 @@ impl<'a> Monomorphizer<'a> {
     fn resolve_method_requirement(
         &self,
         method_req: &Symbol,
-        substitutions: &Specializations,
+        substitutions: &CallSubstitutions,
         receiver_ty: Option<&Ty>,
     ) -> Option<Symbol> {
         let (protocol_sym, label) = self.method_requirement_label(method_req)?;
@@ -493,7 +494,7 @@ impl<'a> Monomorphizer<'a> {
     fn try_emit_func_show(
         &mut self,
         method_req: &Symbol,
-        substitutions: &Specializations,
+        substitutions: &CallSubstitutions,
         dest: crate::ir::register::Register,
         meta: &crate::ir::list::List<InstructionMeta>,
     ) -> Option<Instruction<IrTy>> {
@@ -545,7 +546,7 @@ impl<'a> Monomorphizer<'a> {
 
     #[allow(clippy::only_used_in_recursion)]
     #[instrument(skip(self))]
-    fn monomorphize_ty(&mut self, ty: Ty, substitutions: &Specializations) -> IrTy {
+    fn monomorphize_ty(&mut self, ty: Ty, substitutions: &CallSubstitutions) -> IrTy {
         match ty {
             Ty::Primitive(symbol) => match symbol {
                 Symbol::Int => IrTy::Int,
@@ -674,7 +675,7 @@ impl<'a> Monomorphizer<'a> {
     ) {
         // Get receiver type from substitutions (first concrete type substitution)
         let receiver_ty = specialization
-            .specializations
+            .substitutions
             .ty
             .values()
             .find(|ty| matches!(ty, Ty::Primitive(_) | Ty::Nominal { .. }))
@@ -682,7 +683,7 @@ impl<'a> Monomorphizer<'a> {
 
         let specialized_func = Function {
             name: specialized_name,
-            ty: self.monomorphize_ty(func.ty.clone(), &specialization.specializations),
+            ty: self.monomorphize_ty(func.ty.clone(), &specialization.substitutions),
             params: func.params.clone().into(),
             register_count: func.register_count,
             blocks: func
@@ -692,7 +693,7 @@ impl<'a> Monomorphizer<'a> {
                 .map(|b| {
                     self.monomorphize_block(
                         b,
-                        &specialization.specializations,
+                        &specialization.substitutions,
                         receiver_ty.as_ref(),
                         Some(specialized_name),
                     )

@@ -11,10 +11,14 @@ use crate::{
     },
     node_id::NodeID,
     types::{
-        call_tree::{CallArgumentPlan, CallTarget, CalleeInfo, ResolvedCall},
+        call_site::{
+            CallArgumentPlan, CallEvidence, CallSiteId, CallerContext, MethodTarget,
+            ResolvedCallSite, ResolvedCallSiteKind,
+        },
+        call_substitutions::CallSubstitutions,
         conformance::ConformanceKey,
         constraints::member::consume_self,
-        infer_row::{Row, RowParamId, Specializations},
+        infer_row::Row,
         infer_ty::Ty,
         scheme::ForAll,
         type_error::TypeError,
@@ -23,14 +27,13 @@ use crate::{
             TypedMatchArm, TypedNode, TypedRecordField, TypedStmt, TypedStmtKind,
         },
         types::{TypeEntry, Types},
-        variational::{DimensionId, Resolution, resolve_overloads},
     },
 };
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct SpecializedCallee {
     pub original_symbol: Symbol,
-    pub specializations: Specializations,
+    pub substitutions: CallSubstitutions,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -39,7 +42,7 @@ pub struct SpecializationPlan {
     specialized_callees: FxHashMap<Symbol, SpecializedCallee>,
     /// Maps (specialized_caller, call_site_id) -> specialized_callee.
     /// Aligns with the paper's model: each call site is a dimension, resolution maps to the callee.
-    call_resolutions: FxHashMap<(Symbol, NodeID), Symbol>,
+    specialized_call_targets: FxHashMap<(Symbol, CallSiteId), Symbol>,
 }
 
 impl SpecializationPlan {
@@ -51,8 +54,8 @@ impl SpecializationPlan {
         &self.specialized_callees
     }
 
-    pub fn call_resolutions(&self) -> &FxHashMap<(Symbol, NodeID), Symbol> {
-        &self.call_resolutions
+    pub fn specialized_call_targets(&self) -> &FxHashMap<(Symbol, CallSiteId), Symbol> {
+        &self.specialized_call_targets
     }
 }
 
@@ -75,8 +78,6 @@ pub struct SpecializationPass<'a> {
     modules: &'a ModuleEnvironment,
     module_id: ModuleId,
     plan: SpecializationPlan,
-    /// Resolved overloads computed from choices and error constraints.
-    resolution: Resolution,
 }
 
 impl<'a> SpecializationPass<'a> {
@@ -88,15 +89,6 @@ impl<'a> SpecializationPass<'a> {
         modules: &'a ModuleEnvironment,
         module_id: ModuleId,
     ) -> Self {
-        // Resolve overloads using the variational type checking results
-        let resolution = resolve_overloads(&types.choices, &types.error_constraints)
-            .unwrap_or_else(|errors| {
-                for error in &errors {
-                    tracing::warn!("Resolution error: {:?}", error);
-                }
-                Default::default()
-            });
-
         Self {
             ast,
             symbols,
@@ -105,7 +97,6 @@ impl<'a> SpecializationPass<'a> {
             modules,
             module_id,
             plan: Default::default(),
-            resolution,
         }
     }
 
@@ -401,25 +392,17 @@ impl<'a> SpecializationPass<'a> {
         };
 
         let is_constructor = matches!(callee.kind, TypedExprKind::Constructor(..));
-        let mut specializations = if is_constructor {
+        let fallback_specializations = if is_constructor {
             self.constructor_specializations(&callee, &expr.ty)
         } else {
             callee_ty.collect_specializations(&callee.ty)?
         };
-
-        if let Some(ty_instantiations) = self.types.catalog.instantiations.ty.get(&callee.id) {
-            for (param, ty) in ty_instantiations {
-                if !matches!(ty, Ty::Param(..)) {
-                    specializations.ty.insert(*param, ty.clone());
-                }
-            }
-        }
-        if let Some(row_instantiations) = self.types.catalog.instantiations.row.get(&callee.id) {
-            for (param, row) in row_instantiations {
-                if !matches!(row, Row::Param(..)) {
-                    specializations.row.insert(*param, row.clone());
-                }
-            }
+        let mut specializations = self
+            .resolved_call_site_for(callee.id)
+            .map(|site| site.substitutions().clone())
+            .unwrap_or_default();
+        if specializations.is_empty() {
+            specializations.extend(fallback_specializations);
         }
 
         self.apply_explicit_type_args(&callee, &expr.ty, &type_args, &mut specializations)?;
@@ -496,7 +479,7 @@ impl<'a> SpecializationPass<'a> {
     fn specialized_constructor_initializer(
         &mut self,
         constructor: &Symbol,
-        specializations: &Specializations,
+        specializations: &CallSubstitutions,
     ) -> Option<Symbol> {
         let init_label = Label::Named("init".into());
         self.types
@@ -512,46 +495,53 @@ impl<'a> SpecializationPass<'a> {
             .map(|init_sym| self.specialize(&init_sym, specializations))
     }
 
-    fn resolved_call_for(&self, callee_id: NodeID) -> Option<ResolvedCall> {
-        self.types.resolved_calls.get(&callee_id).cloned()
+    fn resolved_call_site_for(&self, callee_id: NodeID) -> Option<ResolvedCallSite> {
+        self.types
+            .resolved_call_sites
+            .get(&CallSiteId::from_callee_node(callee_id))
+            .cloned()
     }
 
-    fn imported_resolved_call_for(
+    fn imported_resolved_call_site_for(
         &self,
         caller: &Symbol,
-        callee_id: NodeID,
-    ) -> Option<ResolvedCall> {
+        call_site_id: CallSiteId,
+    ) -> Option<ResolvedCallSite> {
         if let Some(module_id) = caller.external_module_id() {
             return self
                 .modules
                 .get_module(module_id)
-                .and_then(|module| module.types.resolved_calls.get(&callee_id).cloned());
+                .and_then(|module| module.types.resolved_call_sites.get(&call_site_id).cloned());
         }
 
-        self.resolved_call_for(callee_id)
+        self.types.resolved_call_sites.get(&call_site_id).cloned()
     }
 
     fn call_receiver_tys(
         &self,
         caller: Option<&Symbol>,
-        callee_id: NodeID,
-        specializations: &Specializations,
+        call_site_id: CallSiteId,
+        specializations: &CallSubstitutions,
     ) -> Option<(Ty, Ty)> {
         let call = caller
-            .and_then(|caller| self.imported_resolved_call_for(caller, callee_id))
-            .or_else(|| self.resolved_call_for(callee_id))?;
-        let receiver = call.receiver?;
+            .and_then(|caller| self.imported_resolved_call_site_for(caller, call_site_id))
+            .or_else(|| self.types.resolved_call_sites.get(&call_site_id).cloned())?;
+        let receiver = call.receiver()?.clone();
         let raw_ty = receiver.ty;
         let concrete_ty = specializations.apply(raw_ty.clone());
         Some((raw_ty, concrete_ty))
     }
 
-    fn inferred_type_args(&self, callee: &TypedExpr, specializations: &Specializations) -> Vec<Ty> {
+    fn inferred_type_args(
+        &self,
+        callee: &TypedExpr,
+        specializations: &CallSubstitutions,
+    ) -> Vec<Ty> {
         if specializations.ty.is_empty() {
             return vec![];
         }
 
-        let Some(resolved_call) = self.resolved_call_for(callee.id) else {
+        let Some(resolved_call) = self.resolved_call_site_for(callee.id) else {
             tracing::warn!(
                 callee_id = ?callee.id,
                 "missing resolved call target while inferring type args"
@@ -559,13 +549,13 @@ impl<'a> SpecializationPass<'a> {
             return vec![];
         };
 
-        self.type_args_for_callee_scheme(&resolved_call.symbol(), specializations)
+        self.type_args_for_callee_scheme(&resolved_call.target_symbol(), specializations)
     }
 
     fn type_args_for_callee_scheme(
         &self,
         callee_sym: &Symbol,
-        specializations: &Specializations,
+        specializations: &CallSubstitutions,
     ) -> Vec<Ty> {
         if let Some(TypeEntry::Poly(scheme)) = self.get_type_for(callee_sym) {
             return scheme
@@ -632,16 +622,17 @@ impl<'a> SpecializationPass<'a> {
         &mut self,
         callee: &TypedExpr,
         _call_ty: &Ty,
-        specializations: &Specializations,
+        specializations: &CallSubstitutions,
     ) -> Result<Option<CallSpecialization>, TypeError> {
         let mut accumulated_specs = specializations.clone();
-        let Some(resolved_call) = self.resolved_call_for(callee.id) else {
+        let call_site_id = CallSiteId::from_callee_node(callee.id);
+        let Some(resolved_call) = self.resolved_call_site_for(callee.id) else {
             return Ok(None);
         };
-        let argument_plan = resolved_call.argument_plan.clone();
-        let mut caller = resolved_call.symbol();
+        let argument_plan = resolved_call.argument_plan();
+        let mut caller = resolved_call.target_symbol();
 
-        caller = self.resolve_member_call_callee(caller, callee.id, &mut accumulated_specs);
+        caller = self.resolve_member_call_callee(caller, call_site_id, &mut accumulated_specs);
 
         let callee_sym = self.specialize(&caller, &accumulated_specs);
         self.specialize_callees(callee_sym, caller, &accumulated_specs)?;
@@ -675,8 +666,8 @@ impl<'a> SpecializationPass<'a> {
     fn resolve_member_call_callee(
         &self,
         mut caller: Symbol,
-        call_id: NodeID,
-        accumulated_specs: &mut Specializations,
+        call_id: CallSiteId,
+        accumulated_specs: &mut CallSubstitutions,
     ) -> Symbol {
         if !matches!(caller, Symbol::MethodRequirement(_)) {
             return caller;
@@ -691,20 +682,6 @@ impl<'a> SpecializationPass<'a> {
         if let Some(witness_sym) = self.resolve_witness_for_type(&caller, &receiver_ty) {
             self.add_receiver_type_args(&witness_sym, &receiver_ty, accumulated_specs);
             return witness_sym;
-        }
-
-        let dimension = DimensionId(call_id);
-        if let Some(resolved_alt) = self.resolution.get(&dimension) {
-            if let Some(alt) = self.types.choices.get_alternative(dimension, resolved_alt) {
-                caller = alt.witness_sym;
-                self.add_receiver_type_args(&caller, &receiver_ty, accumulated_specs);
-            }
-        } else if self.types.choices.dimension_size(&dimension) > 0
-            && let Ok(receiver_sym) = self.symbol_from_ty(&receiver_ty, accumulated_specs)
-            && let Some(witness_sym) = self.types.choices.resolve_for_type(dimension, receiver_sym)
-        {
-            caller = witness_sym;
-            self.add_receiver_type_args(&caller, &receiver_ty, accumulated_specs);
         }
 
         if let Symbol::MethodRequirement(_) = caller
@@ -743,24 +720,11 @@ impl<'a> SpecializationPass<'a> {
         self.types.associated_type_witnesses(self.modules, key)
     }
 
-    fn resolve_choice_for_receiver(
-        &self,
-        dimension: DimensionId,
-        receiver_ty: &Ty,
-        specializations: &Specializations,
-    ) -> Option<(Symbol, Ty)> {
-        let receiver_sym = self.symbol_from_ty(receiver_ty, specializations).ok()?;
-        self.types
-            .choices
-            .resolve_for_type(dimension, receiver_sym)
-            .map(|witness| (witness, receiver_ty.clone()))
-    }
-
     fn resolve_bounded_witness(
         &self,
         receiver_ty: &Ty,
         label: &Label,
-        specializations: &Specializations,
+        specializations: &CallSubstitutions,
     ) -> Option<(Symbol, Ty)> {
         let Ty::Param(_, bounds) = receiver_ty else {
             return None;
@@ -797,7 +761,7 @@ impl<'a> SpecializationPass<'a> {
         &self,
         member_sym: &Symbol,
         receiver_ty: &Ty,
-        specializations: &mut Specializations,
+        specializations: &mut CallSubstitutions,
     ) {
         let Ty::Nominal { type_args, .. } = receiver_ty else {
             return;
@@ -829,7 +793,7 @@ impl<'a> SpecializationPass<'a> {
     fn add_associated_type_specializations(
         &self,
         callee_ty: &Ty,
-        specializations: &mut Specializations,
+        specializations: &mut CallSubstitutions,
     ) {
         let current_ty_specializations = specializations.ty.clone();
         for (param, concrete_ty) in current_ty_specializations {
@@ -889,8 +853,8 @@ impl<'a> SpecializationPass<'a> {
         }
     }
 
-    fn constructor_specializations(&self, callee: &TypedExpr, call_ty: &Ty) -> Specializations {
-        let mut specializations = Specializations::default();
+    fn constructor_specializations(&self, callee: &TypedExpr, call_ty: &Ty) -> CallSubstitutions {
+        let mut specializations = CallSubstitutions::default();
         let TypedExprKind::Constructor(symbol, ..) = &callee.kind else {
             return specializations;
         };
@@ -923,7 +887,7 @@ impl<'a> SpecializationPass<'a> {
     fn symbol_from_ty(
         &self,
         ty: &Ty,
-        specializations: &Specializations,
+        specializations: &CallSubstitutions,
     ) -> Result<Symbol, TypeError> {
         let ty = specializations.apply(ty.clone());
         match ty {
@@ -941,13 +905,16 @@ impl<'a> SpecializationPass<'a> {
         callee: &TypedExpr,
         _call_ty: &Ty,
         type_args: &[Ty],
-        specializations: &mut Specializations,
+        specializations: &mut CallSubstitutions,
     ) -> Result<(), TypeError> {
         if type_args.is_empty() {
             return Ok(());
         }
 
-        let Some(callee_sym) = self.resolved_call_for(callee.id).map(|call| call.symbol()) else {
+        let Some(callee_sym) = self
+            .resolved_call_site_for(callee.id)
+            .map(|call| call.target_symbol())
+        else {
             return Ok(());
         };
         let Some(TypeEntry::Poly(scheme)) = self.get_type_for(&callee_sym) else {
@@ -966,224 +933,132 @@ impl<'a> SpecializationPass<'a> {
         Ok(())
     }
 
-    /// Compute specializations for callees of a function and propagate.
+    /// Compute substitutions for callees of a function and propagate.
     /// `specialized_caller` is the specialized symbol (e.g., `Array.get[Int]`)
     /// `original_caller` is the original symbol (e.g., `Array.get`)
     fn specialize_callees(
         &mut self,
         specialized_caller: Symbol,
         original_caller: Symbol,
-        specializations: &Specializations,
+        specializations: &CallSubstitutions,
     ) -> Result<(), TypeError> {
-        // Skip if specializations are empty
         if specializations.is_empty() {
             return Ok(());
         }
 
-        // Get callees from call tree - look up in imported module if needed
-        let callees = self.get_call_tree_for(&original_caller);
+        let call_sites = self.call_sites_for_caller(&original_caller);
 
-        for callee_info in callees {
-            // call_id is the callee expression ID, used for both instantiation lookup
-            // and call_resolutions key (matches IR instruction meta)
-            let (callee_sym, callee_specializations, call_id) = match callee_info {
-                CalleeInfo::Direct { sym, call_id } => {
-                    let callee_specs = self.compute_callee_specializations(
-                        &original_caller,
-                        &call_id,
-                        specializations,
-                    );
-                    (sym, callee_specs, call_id)
-                }
-                CalleeInfo::Member { label, call_id } => {
-                    let resolved_call = self.imported_resolved_call_for(&original_caller, call_id);
-                    let receiver_tys =
-                        self.call_receiver_tys(Some(&original_caller), call_id, specializations);
-                    let target_member =
-                        resolved_call.as_ref().and_then(|call| match &call.target {
-                            CallTarget::Member { member, .. } => Some(*member),
-                            _ => None,
-                        });
-                    let receiver_ty = receiver_tys
-                        .as_ref()
-                        .map(|(_, concrete_receiver_ty)| concrete_receiver_ty.clone());
-                    let resolved_target = target_member.and_then(|member_sym| {
-                        if let Symbol::MethodRequirement(_) = member_sym {
-                            let concrete_receiver_ty = receiver_ty.as_ref()?;
-                            self.resolve_witness_for_type(&member_sym, concrete_receiver_ty)
-                                .map(|witness| (witness, receiver_ty.clone()))
-                        } else {
-                            Some((member_sym, receiver_ty.clone()))
-                        }
-                    });
-
-                    let resolved_member = resolved_target
-                        .or_else(|| {
-                            receiver_tys.as_ref().and_then(|(_, concrete_receiver_ty)| {
-                                self.resolve_choice_for_receiver(
-                                    DimensionId(call_id),
-                                    concrete_receiver_ty,
-                                    specializations,
-                                )
-                                .map(|(witness, concrete_ty)| (witness, Some(concrete_ty)))
-                            })
-                        })
-                        .or_else(|| {
-                            receiver_tys.as_ref().and_then(|(raw_receiver_ty, _)| {
-                                self.resolve_bounded_witness(
-                                    raw_receiver_ty,
-                                    &label,
-                                    specializations,
-                                )
-                                .map(|(witness, concrete_ty)| (witness, Some(concrete_ty)))
-                            })
-                        })
-                        .or_else(|| {
-                            target_member.map(|member_sym| (member_sym, receiver_ty.clone()))
-                        });
-
-                    let Some((member_sym, receiver_ty)) = resolved_member else {
-                        continue;
-                    };
-
-                    let mut callee_specs = self.compute_callee_specializations(
-                        &original_caller,
-                        &call_id,
-                        specializations,
-                    );
-
-                    // For conformance witness methods (e.g., Array.show from
-                    // extend Array<Element: Showable>: Showable), the inference pass
-                    // doesn't record instantiation data mapping the witness's forall
-                    // params (e.g., Element) to concrete types. Map them from the
-                    // concrete receiver type's type_args.
-                    if callee_specs.ty.is_empty()
-                        && let Some(receiver_ty) = &receiver_ty
-                    {
-                        self.add_receiver_type_args(&member_sym, receiver_ty, &mut callee_specs);
-                    }
-
-                    (member_sym, callee_specs, call_id)
-                }
-            };
-
-            // If the callee is a MethodRequirement (protocol method stub), resolve it to the
-            // concrete witness. This happens when lookup_member goes through a conformance
-            // and returns the protocol's method requirement instead of the witness.
+        for (call_id, site) in call_sites {
+            let mut callee_specs =
+                self.compute_callee_substitutions(&original_caller, call_id, specializations);
+            let mut callee_sym = site.target_symbol();
             let original_callee_sym = callee_sym;
-            let callee_sym = if let Symbol::MethodRequirement(_) = callee_sym {
-                match self.resolve_method_req_to_witness(&callee_sym, &callee_specializations) {
-                    Some(witness) => witness,
+
+            if let ResolvedCallSiteKind::MethodCall {
+                target,
+                receiver,
+                evidence,
+                ..
+            } = &site.kind
+            {
+                let receiver_ty = specializations.apply(receiver.ty.clone());
+                match target {
+                    MethodTarget::Concrete(symbol) => {
+                        callee_sym = *symbol;
+                    }
+                    MethodTarget::Requirement {
+                        requirement, label, ..
+                    } => {
+                        callee_sym = match evidence {
+                            CallEvidence::ConcreteWitness { witness, .. } => *witness,
+                            CallEvidence::None | CallEvidence::Deferred => self
+                                .resolve_witness_for_type(requirement, &receiver_ty)
+                                .or_else(|| {
+                                    self.resolve_bounded_witness(
+                                        &receiver.ty,
+                                        label,
+                                        specializations,
+                                    )
+                                    .map(|(witness, _)| witness)
+                                })
+                                .unwrap_or(*requirement),
+                        };
+                    }
+                }
+
+                if callee_specs.ty.is_empty() {
+                    self.add_receiver_type_args(&callee_sym, &receiver_ty, &mut callee_specs);
+                }
+            }
+
+            if let Symbol::MethodRequirement(_) = callee_sym {
+                match self.resolve_method_req_to_witness(&callee_sym, &callee_specs) {
+                    Some(witness) => callee_sym = witness,
                     None => continue,
                 }
-            } else {
-                callee_sym
-            };
+            }
 
-            // Specialize this callee and record the resolution
-            let specialized_callee = self.specialize(&callee_sym, &callee_specializations);
+            let specialized_callee = self.specialize(&callee_sym, &callee_specs);
 
-            // Record: for this call site within specialized_caller, use specialized_callee.
-            // This also records MethodRequirement -> witness rewrites where no new
-            // specialized wrapper is needed.
             if specialized_callee != original_callee_sym {
                 self.plan
-                    .call_resolutions
+                    .specialized_call_targets
                     .insert((specialized_caller, call_id), specialized_callee);
             }
 
-            // Recursively propagate to callees
-            self.specialize_callees(specialized_callee, callee_sym, &callee_specializations)?;
+            self.specialize_callees(specialized_callee, callee_sym, &callee_specs)?;
         }
 
         Ok(())
     }
 
-    /// Get call tree entries for a function, looking in imported modules if needed
-    fn get_call_tree_for(&self, caller: &Symbol) -> Vec<CalleeInfo> {
-        // First check local types
-        if let Some(callees) = self.types.call_tree.get(caller) {
-            return callees.clone();
-        }
-        // Then check imported modules
+    fn call_sites_for_caller(&self, caller: &Symbol) -> Vec<(CallSiteId, ResolvedCallSite)> {
         if let Some(module_id) = caller.external_module_id()
             && let Some(module) = self.modules.get_module(module_id)
-            && let Some(callees) = module.types.call_tree.get(caller)
         {
-            return callees.clone();
+            return module
+                .types
+                .resolved_call_sites
+                .iter()
+                .filter(|(_, site)| site.caller == CallerContext::Callable(*caller))
+                .map(|(id, site)| (*id, site.clone()))
+                .collect();
         }
-        vec![]
+
+        self.types
+            .resolved_call_sites
+            .iter()
+            .filter(|(_, site)| site.caller == CallerContext::Callable(*caller))
+            .map(|(id, site)| (*id, site.clone()))
+            .collect()
     }
 
-    /// Compute specializations for a callee based on instantiations at the call site.
-    fn compute_callee_specializations(
+    fn compute_callee_substitutions(
         &self,
         caller: &Symbol,
-        call_id: &NodeID,
-        specializations: &Specializations,
-    ) -> Specializations {
-        let mut callee_specs = Specializations::default();
+        call_id: CallSiteId,
+        specializations: &CallSubstitutions,
+    ) -> CallSubstitutions {
+        let Some(site) = self.imported_resolved_call_site_for(caller, call_id) else {
+            return CallSubstitutions::default();
+        };
+        let mut callee_specs = CallSubstitutions::default();
 
-        // Look up instantiations - in imported module if caller is from there
-        let (ty_insts, row_insts) = self.get_instantiations_for(caller, call_id);
-
-        if let Some(ty_instantiations) = ty_insts {
-            for (param, ty) in ty_instantiations {
-                let specialized_ty = specializations.apply(ty.clone());
-                // Skip type parameters (polymorphic) and metavariables (unresolved)
-                if !matches!(specialized_ty, Ty::Param(..) | Ty::Var { .. }) {
-                    callee_specs.ty.insert(*param, specialized_ty);
-                }
+        for (param, ty) in &site.substitutions().ty {
+            let specialized_ty = specializations.apply(ty.clone());
+            if !matches!(specialized_ty, Ty::Param(..) | Ty::Var { .. }) {
+                callee_specs.ty.insert(*param, specialized_ty);
             }
         }
 
-        if let Some(row_instantiations) = row_insts {
-            for (param, row) in row_instantiations {
-                let specialized_row = if let Row::Param(row_id) = row
-                    && let Some(replacement) = specializations.row.get(row_id)
-                {
-                    replacement.clone()
-                } else {
-                    row.clone()
-                };
-                // Skip row parameters (polymorphic) and row variables (unresolved)
-                if !matches!(specialized_row, Row::Param(..) | Row::Var(..)) {
-                    callee_specs.row.insert(*param, specialized_row);
-                }
+        for (param, row) in &site.substitutions().row {
+            let specialized_row = specializations.apply_row(row.clone());
+            if !matches!(specialized_row, Row::Param(..) | Row::Var(..)) {
+                callee_specs.row.insert(*param, specialized_row);
             }
         }
 
         callee_specs
-    }
-
-    /// Get instantiations for a call site, looking in imported modules if needed
-    #[allow(clippy::type_complexity)]
-    fn get_instantiations_for(
-        &self,
-        caller: &Symbol,
-        call_id: &NodeID,
-    ) -> (
-        Option<&FxHashMap<Symbol, Ty>>,
-        Option<&FxHashMap<RowParamId, Row>>,
-    ) {
-        // First check local catalog
-        let local_ty = self.types.catalog.instantiations.ty.get(call_id);
-        let local_row = self.types.catalog.instantiations.row.get(call_id);
-        if local_ty.is_some() || local_row.is_some() {
-            return (local_ty, local_row);
-        }
-
-        // Then check imported module based on caller's module
-        if let Some(module_id) = caller.external_module_id()
-            && let Some(module) = self.modules.get_module(module_id)
-        {
-            return (
-                module.types.catalog.instantiations.ty.get(call_id),
-                module.types.catalog.instantiations.row.get(call_id),
-            );
-        }
-
-        (None, None)
     }
 
     /// Get type entry for a symbol, looking in imported modules if needed
@@ -1196,24 +1071,24 @@ impl<'a> SpecializationPass<'a> {
         self.modules.lookup(sym)
     }
 
-    fn specialize(&mut self, callee_sym: &Symbol, specializations: &Specializations) -> Symbol {
+    fn specialize(&mut self, callee_sym: &Symbol, specializations: &CallSubstitutions) -> Symbol {
         if specializations.is_empty() {
             return *callee_sym;
         }
 
         // Single-pass filter: remove metavars (Ty::Var and Row::Var) from specializations
         // These represent unresolved types that shouldn't be specialized
-        let filtered_specs = Specializations {
+        let filtered_specs = CallSubstitutions {
             ty: specializations
                 .ty
                 .iter()
-                .filter(|(_, v)| !matches!(v, Ty::Var { .. }))
+                .filter(|(_, v)| !matches!(v, Ty::Param(..) | Ty::Var { .. }))
                 .map(|(k, v)| (*k, v.clone()))
                 .collect(),
             row: specializations
                 .row
                 .iter()
-                .filter(|(_, v)| !matches!(v, Row::Var(..)))
+                .filter(|(_, v)| !matches!(v, Row::Param(..) | Row::Var(..)))
                 .map(|(k, v)| (*k, v.clone()))
                 .collect(),
         };
@@ -1242,7 +1117,7 @@ impl<'a> SpecializationPass<'a> {
         if let Some(existing) = self.plan.specializations.get(callee_sym) {
             for &sym in existing {
                 if let Some(callee) = self.plan.specialized_callees.get(&sym)
-                    && &callee.specializations == specializations
+                    && &callee.substitutions == specializations
                 {
                     return sym;
                 }
@@ -1267,7 +1142,7 @@ impl<'a> SpecializationPass<'a> {
             new_sym.into(),
             SpecializedCallee {
                 original_symbol: *callee_sym,
-                specializations: specializations.clone(),
+                substitutions: specializations.clone(),
             },
         );
 
@@ -1316,7 +1191,7 @@ impl<'a> SpecializationPass<'a> {
     fn resolve_method_req_to_witness(
         &self,
         method_req: &Symbol,
-        callee_specs: &Specializations,
+        callee_specs: &CallSubstitutions,
     ) -> Option<Symbol> {
         let (protocol_sym, label) = self.method_requirement_label(method_req)?;
         let Symbol::Protocol(protocol_id) = protocol_sym else {
@@ -1382,14 +1257,14 @@ pub mod tests {
       ",
         );
 
-        // Make sure we have specializations (deduplicated - one per unique function+specialization)
-        // Note: inner doesn't get a specialization because its type arg inside id's body is a
-        // metavar that gets filtered out. This is correct - we only specialize when we have
-        // concrete types.
+        // Make sure we have propagated specializations through the resolved call-site table.
         set_symbol_names(typed.resolved_names.symbol_names.clone());
         assert_eq!(
             typed.specialization_plan.specializations(),
-            &fxhashmap!( GlobalId::from(2).into() => vec![SynthesizedId::from(1).into()] )
+            &fxhashmap!(
+                GlobalId::from(2).into() => vec![SynthesizedId::from(1).into()],
+                GlobalId::from(1).into() => vec![SynthesizedId::from(2).into()],
+            )
         );
 
         // Synthesized(1) is id[Int]
@@ -1401,9 +1276,17 @@ pub mod tests {
         assert_eq!(callee1.original_symbol, GlobalId::from(2).into());
         // id is called with Int, so its type param should specialize to Int
         assert_eq!(
-            callee1.specializations.ty.get(&test_type_param(1)),
+            callee1.substitutions.ty.get(&test_type_param(1)),
             Some(&Ty::Int)
         );
+
+        let callee2 = typed
+            .specialization_plan
+            .specialized_callees()
+            .get(&SynthesizedId::from(2).into())
+            .unwrap();
+        assert_eq!(callee2.original_symbol, GlobalId::from(1).into());
+        assert!(callee2.substitutions.ty.values().any(|ty| ty == &Ty::Int));
 
         // Make sure we're calling the specialized version
         let TypedStmtKind::Expr(expr) = &typed.ast.stmts[0].kind else {

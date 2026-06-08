@@ -91,6 +91,80 @@ impl Scheme {
         }
     }
 
+    fn track_existing_ty_instantiation(
+        &self,
+        id: NodeID,
+        param: Symbol,
+        meta: crate::types::infer_ty::MetaVarId,
+        session: &mut TypeSession,
+    ) {
+        session.track_ty_instantiation(
+            id,
+            param,
+            Ty::Var {
+                id: meta,
+                level: Level(1),
+            },
+        );
+    }
+
+    fn fresh_ty_instantiation(
+        &self,
+        id: NodeID,
+        param: Symbol,
+        level: Level,
+        tracked_level: Level,
+        session: &mut TypeSession,
+        substitutions: &mut InstantiationSubstitutions,
+    ) -> Ty {
+        let Ty::Var { id: meta, .. } = session.new_ty_meta_var(level) else {
+            unreachable!()
+        };
+
+        let bounds = self.bounds_for(&param);
+        tracing::debug!("instantiating {param:?} with {meta:?}, bounds: {bounds:?}");
+        session
+            .reverse_instantiations
+            .ty
+            .insert(meta, Ty::Param(param, bounds));
+        substitutions.insert_ty(id, param, meta);
+
+        let ty = Ty::Var {
+            id: meta,
+            level: tracked_level,
+        };
+        session.track_ty_instantiation(id, param, ty.clone());
+        ty
+    }
+
+    fn fresh_row_instantiation(
+        &self,
+        id: NodeID,
+        param: RowParamId,
+        level: Level,
+        session: &mut TypeSession,
+        substitutions: &mut InstantiationSubstitutions,
+    ) {
+        let Row::Var(meta) = session.new_row_meta_var(level) else {
+            unreachable!()
+        };
+        tracing::trace!("instantiating {param:?} with {meta:?}");
+        substitutions.insert_row(id, param, meta);
+        session.reverse_instantiations.row.insert(meta, param);
+        session.track_row_instantiation(id, param, Row::Var(meta));
+    }
+
+    fn instantiate_predicates(
+        &self,
+        id: NodeID,
+        constraints: &mut ConstraintStore,
+        context: &mut SolveContext,
+    ) {
+        for predicate in &self.predicates {
+            predicate.instantiate(id, constraints, context);
+        }
+    }
+
     #[instrument(skip(self, session, context, constraints), ret)]
     pub(super) fn instantiate(
         &self,
@@ -109,60 +183,34 @@ impl Scheme {
         for forall in &self.foralls {
             match forall {
                 ForAll::Ty(param) => {
-                    if let Some(meta) = context.instantiations_mut().get_ty(&id, param) {
-                        session.type_catalog.instantiations.insert_ty(
+                    if let Some(meta) = context.instantiations_mut().get_ty(&id, param).copied() {
+                        self.track_existing_ty_instantiation(id, *param, meta, session);
+                    } else {
+                        self.fresh_ty_instantiation(
                             id,
                             *param,
-                            Ty::Var {
-                                id: *meta,
-                                level: Level(1),
-                            },
+                            level,
+                            level,
+                            session,
+                            context.instantiations_mut(),
                         );
-
-                        continue;
                     }
-
-                    let Ty::Var { id: meta, .. } = session.new_ty_meta_var(level) else {
-                        unreachable!()
-                    };
-
-                    let bounds = self.bounds_for(param);
-
-                    tracing::debug!("instantiating {param:?} with {meta:?}, bounds: {bounds:?}");
-                    session
-                        .reverse_instantiations
-                        .ty
-                        .insert(meta, Ty::Param(*param, bounds));
-                    context.instantiations_mut().insert_ty(id, *param, meta);
-
-                    session.type_catalog.instantiations.insert_ty(
-                        id,
-                        *param,
-                        Ty::Var { id: meta, level },
-                    );
                 }
                 ForAll::Row(param) => {
-                    if context.instantiations_mut().get_row(&id, param).is_some() {
-                        continue;
+                    if context.instantiations_mut().get_row(&id, param).is_none() {
+                        self.fresh_row_instantiation(
+                            id,
+                            *param,
+                            level,
+                            session,
+                            context.instantiations_mut(),
+                        );
                     }
-
-                    let Row::Var(meta) = session.new_row_meta_var(level) else {
-                        unreachable!()
-                    };
-                    tracing::trace!("instantiating {param:?} with {meta:?}");
-                    context.instantiations_mut().insert_row(id, *param, meta);
-                    session.reverse_instantiations.row.insert(meta, *param);
-                    session
-                        .type_catalog
-                        .instantiations
-                        .insert_row(id, *param, Row::Var(meta));
                 }
             };
         }
 
-        for predicate in &self.predicates {
-            predicate.instantiate(id, constraints, context);
-        }
+        self.instantiate_predicates(id, constraints, context);
 
         tracing::trace!(
             "solver_instantiate ret subs: {:?}",
@@ -181,7 +229,6 @@ impl Scheme {
         context: &mut SolveContext,
         constraints: &mut ConstraintStore,
     ) -> (Ty, InstantiationSubstitutions) {
-        // Map each quantified meta id to a fresh meta at this use-site level
         let mut substitutions = InstantiationSubstitutions::default();
         let (ty_foralls, row_foralls): (Vec<ForAll>, Vec<ForAll>) = self
             .foralls
@@ -190,41 +237,25 @@ impl Scheme {
 
         // We used to zip these with ty_foralls but that failed when the counts were different.
         let mut args = args.iter().rev().collect_vec();
+        let group = context.group_info();
 
         for param in ty_foralls.iter() {
             let ForAll::Ty(param) = param else {
                 unreachable!()
             };
 
-            let ty @ Ty::Var { id: meta_var, .. } = session.new_ty_meta_var(context.level()) else {
-                unreachable!();
-            };
-
-            let bounds = self.bounds_for(param);
-
-            session
-                .reverse_instantiations
-                .ty
-                .insert(meta_var, Ty::Param(*param, bounds));
-
-            if let Some((arg_ty, arg_id)) = args.pop() {
-                constraints.wants_equals_at(
-                    *arg_id,
-                    ty.clone(),
-                    arg_ty.clone(),
-                    &context.group_info(),
-                );
-            };
-
-            substitutions.insert_ty(id, *param, meta_var);
-            session.type_catalog.instantiations.insert_ty(
+            let ty = self.fresh_ty_instantiation(
                 id,
                 *param,
-                Ty::Var {
-                    id: meta_var,
-                    level: Level(1),
-                },
+                context.level(),
+                Level(1),
+                session,
+                &mut substitutions,
             );
+
+            if let Some((arg_ty, arg_id)) = args.pop() {
+                constraints.wants_equals_at(*arg_id, ty, arg_ty.clone(), &group);
+            };
         }
 
         for row_forall in row_foralls {
@@ -232,23 +263,16 @@ impl Scheme {
                 unreachable!();
             };
 
-            let Row::Var(row_meta) = session.new_row_meta_var(context.level()) else {
-                unreachable!()
-            };
-            substitutions.insert_row(id, row_param, row_meta);
-            session
-                .reverse_instantiations
-                .row
-                .insert(row_meta, row_param);
-            session
-                .type_catalog
-                .instantiations
-                .insert_row(id, row_param, Row::Var(row_meta));
+            self.fresh_row_instantiation(
+                id,
+                row_param,
+                context.level(),
+                session,
+                &mut substitutions,
+            );
         }
 
-        for predicate in &self.predicates {
-            predicate.instantiate(id, constraints, context);
-        }
+        self.instantiate_predicates(id, constraints, context);
 
         (
             instantiate_ty(id, self.ty.clone(), &substitutions, context.level()),

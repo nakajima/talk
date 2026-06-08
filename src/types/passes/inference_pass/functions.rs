@@ -6,6 +6,7 @@ use super::{InferencePass, TypedRet};
 use crate::{
     node_kinds::func::Func,
     types::{
+        call_site::CallerContext,
         solve_context::SolveContext,
         type_error::TypeError,
         type_operations::{curry, substitute},
@@ -25,9 +26,6 @@ impl InferencePass<'_> {
             .symbol()
             .map_err(|_| TypeError::NameNotResolved(func.name.clone()))?;
 
-        // Track which function we're in for building the call tree
-        let prev_function = self.current_function.replace(func_sym);
-
         tracing::debug!("visit_func: {:?}, generics: {:?}", func.name, func.generics);
 
         for generic in func.generics.iter() {
@@ -40,12 +38,14 @@ impl InferencePass<'_> {
 
         let mut foralls = IndexSet::default();
 
-        let body = if let Some(ret) = &func.ret {
-            let ret = self.visit_type_annotation(ret, context)?;
-            self.check_block(&func.body, ret.clone(), &mut context.next())?
-        } else {
-            self.infer_block_with_returns(&func.body, &mut context.next())?
-        };
+        let body = self.with_current_caller(CallerContext::Callable(func_sym), |this| {
+            if let Some(ret) = &func.ret {
+                let ret = this.visit_type_annotation(ret, context)?;
+                this.check_block(&func.body, ret.clone(), &mut context.next())
+            } else {
+                this.infer_block_with_returns(&func.body, &mut context.next())
+            }
+        })?;
 
         let effects_row = self
             .tracked_effect_rows
@@ -74,9 +74,6 @@ impl InferencePass<'_> {
             ),
             &mut Default::default(),
         );
-
-        // Restore previous function context
-        self.current_function = prev_function;
 
         Ok(TypedFunc {
             name: func_sym,

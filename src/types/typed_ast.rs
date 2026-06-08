@@ -10,7 +10,7 @@ use crate::{
     node_kinds::inline_ir_instruction::TypedInlineIRInstruction,
     types::{
         infer_row::Row, infer_ty::Ty, scheme::ForAll, type_operations::UnificationSubstitutions,
-        type_session::TypeSession, variational::DimensionId,
+        type_session::TypeSession,
     },
 };
 
@@ -750,16 +750,6 @@ pub enum TypedExprKind {
     RecordLiteral {
         fields: Vec<TypedRecordField>,
     },
-
-    /// Variational choice: alternatives for overloaded calls.
-    /// During constraint solving, we create Choice nodes when we can't
-    /// immediately determine which implementation to use. After resolution,
-    /// these are specialized to the selected alternative.
-    Choice {
-        #[drive(skip)]
-        dimension: DimensionId,
-        alternatives: Vec<TypedExpr>,
-    },
 }
 
 impl TypedExprKind {
@@ -832,13 +822,6 @@ impl TypedExprKind {
                         value: f.value.mapping(m, r),
                     })
                     .collect(),
-            },
-            Choice {
-                dimension,
-                alternatives,
-            } => Choice {
-                dimension,
-                alternatives: alternatives.into_iter().map(|e| e.mapping(m, r)).collect(),
             },
         }
     }

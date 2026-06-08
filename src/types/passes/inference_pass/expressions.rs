@@ -16,6 +16,7 @@ use crate::{
     },
     span::Span,
     types::{
+        call_site::CallSiteId,
         constraints::constraint::ConstraintCause,
         infer_row::Row,
         infer_ty::{Level, Ty},
@@ -162,6 +163,12 @@ impl InferencePass<'_> {
         };
 
         let ret = self.session.new_ty_meta_var(context.level().next());
+
+        self.session.record_member_access_site(
+            CallSiteId::from_resolved_member_constraint(expr.id),
+            self.current_caller,
+            label.clone(),
+        );
 
         self.constraints.wants_member(
             expr.id,

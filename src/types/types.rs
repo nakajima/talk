@@ -7,7 +7,7 @@ use crate::{
     name_resolution::symbol::Symbol,
     node_id::NodeID,
     types::{
-        call_tree::{CallTree, ResolvedCalls},
+        call_site::ResolvedCallSites,
         conformance::ConformanceKey,
         infer_row::Row,
         infer_ty::Ty,
@@ -15,7 +15,6 @@ use crate::{
         scheme::Scheme,
         term_environment::EnvEntry,
         type_catalog::{MemberBinding, TypeCatalog},
-        variational::{ChoiceStore, ErrorConstraintStore},
     },
 };
 
@@ -90,15 +89,8 @@ pub struct Types {
     pub types_by_symbol: FxHashMap<Symbol, TypeEntry>,
     pub catalog: TypeCatalog,
     pub(crate) match_plans: FxHashMap<NodeID, MatchPlan>,
-    /// Variational choices for protocol method resolution.
-    /// Maps call sites to alternatives with witness symbols.
-    pub choices: ChoiceStore,
-    /// Error constraints from type checking - used to resolve overloads.
-    pub error_constraints: ErrorConstraintStore,
-    /// Call tree mapping each function to the callees in its body.
-    pub call_tree: CallTree,
-    /// Type-checker-resolved call facts keyed by callee expression ID.
-    pub resolved_calls: ResolvedCalls,
+    /// Type-checker-resolved call facts keyed by semantic call-site ID.
+    pub resolved_call_sites: ResolvedCallSites,
 }
 
 impl Types {
@@ -215,21 +207,8 @@ impl Types {
                 .collect(),
             catalog: self.catalog.import_as(module_id),
             match_plans: self.match_plans,
-            choices: self.choices,
-            error_constraints: self.error_constraints,
-            // Import call tree so specialization can propagate to callees in imported modules
-            call_tree: self
-                .call_tree
-                .into_iter()
-                .map(|(k, v)| {
-                    (
-                        k.import(module_id),
-                        v.into_iter().map(|c| c.import(module_id)).collect(),
-                    )
-                })
-                .collect(),
-            resolved_calls: self
-                .resolved_calls
+            resolved_call_sites: self
+                .resolved_call_sites
                 .into_iter()
                 .map(|(k, v)| (k, v.import(module_id)))
                 .collect(),

@@ -8,6 +8,7 @@ use crate::{
     node_id::NodeID,
     span::Span,
     types::{
+        call_site::CallerContext,
         constraints::store::ConstraintStore,
         infer_row::Row,
         infer_ty::{Level, MetaVarId, Ty},
@@ -80,8 +81,8 @@ pub struct InferencePass<'a> {
     protocol_associated_type_requirements:
         FxHashMap<ProtocolId, ProtocolAssociatedTypeRequirements>,
 
-    /// Tracks which function we're currently inside, for building the call tree.
-    current_function: Option<Symbol>,
+    /// Tracks which callable or top-level context contains newly discovered call sites.
+    current_caller: CallerContext,
 
     /// Tracks the current nominal self type (for resolving SelfType annotations in extensions)
     current_self_ty: Option<Ty>,
@@ -128,7 +129,7 @@ impl<'a> InferencePass<'a> {
             handler_contexts: Default::default(),
             or_binders: Default::default(),
             protocol_associated_type_requirements: Default::default(),
-            current_function: None,
+            current_caller: CallerContext::TopLevel,
             current_self_ty: None,
             root_decls: Default::default(),
             root_stmts: Default::default(),
@@ -151,6 +152,17 @@ impl<'a> InferencePass<'a> {
 
     fn infer_bodies(&mut self) {
         BodyInference::new(self).run();
+    }
+
+    fn with_current_caller<T>(
+        &mut self,
+        caller: CallerContext,
+        f: impl FnOnce(&mut Self) -> T,
+    ) -> T {
+        let previous = std::mem::replace(&mut self.current_caller, caller);
+        let result = f(self);
+        self.current_caller = previous;
+        result
     }
 
     fn finalize_inference(mut self) -> (TypedAST, Vec<AnyDiagnostic>) {

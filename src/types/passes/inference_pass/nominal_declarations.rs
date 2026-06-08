@@ -18,6 +18,7 @@ use crate::{
         type_annotation::TypeAnnotation,
     },
     types::{
+        call_site::CallerContext,
         constraints::constraint::ConstraintCause,
         infer_row::Row,
         infer_ty::Ty,
@@ -541,7 +542,9 @@ impl InferencePass<'_> {
         let effects = self.tracking_effects(&EffectSet::default(), context)?;
 
         // Init blocks always return self
-        let block = self.infer_block(body, context)?;
+        let block = self.with_current_caller(CallerContext::Callable(sym), |this| {
+            this.infer_block(body, context)
+        })?;
 
         let ty = curry(
             params.iter().map(|p| p.ty.clone()),

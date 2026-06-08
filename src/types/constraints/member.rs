@@ -5,7 +5,7 @@ use crate::{
     name_resolution::symbol::{ProtocolId, Symbol},
     node_id::NodeID,
     types::{
-        call_tree::CallTarget,
+        call_site::CallTarget,
         constraint_solver::{DeferralReason, SolveResult},
         constraints::{
             constraint::ConstraintCause,
@@ -19,7 +19,6 @@ use crate::{
         type_error::TypeError,
         type_operations::{curry, instantiate_ty, unify},
         type_session::TypeSession,
-        variational::{AlternativeIndex, ChoiceAlternative, Configuration, DimensionId},
     },
 };
 
@@ -159,16 +158,7 @@ impl Member {
         SolveResult::Defer(DeferralReason::Unknown)
     }
 
-    fn record_member_target(
-        &self,
-        constraints: &ConstraintStore,
-        session: &mut TypeSession,
-        member: Symbol,
-    ) {
-        if !constraints.copy_group(self.id).config.is_universal() {
-            return;
-        }
-
+    fn record_member_target(&self, session: &mut TypeSession, member: Symbol) {
         session.record_call_target(
             self.node_id,
             CallTarget::Member {
@@ -222,87 +212,10 @@ impl Member {
             ));
         }
 
-        // Register variational choices for ALL type param member accesses.
-        // This allows SpecializationPass to resolve the concrete witness.
-        let dimension = DimensionId(self.node_id);
-        let mut alt_index = 0;
-
-        for (protocol_id, req) in matching_methods.iter() {
-            for (conforming_id, witness) in session.method_witnesses(*protocol_id, &self.label, req)
-            {
-                let alternative = ChoiceAlternative {
-                    conforming_type: conforming_id,
-                    witness_sym: witness,
-                    protocol_id: *protocol_id,
-                };
-
-                session.choices.register_alternative(
-                    dimension,
-                    AlternativeIndex(alt_index),
-                    alternative,
-                );
-                alt_index += 1;
-            }
-        }
-
-        if alt_index > 0 {
-            tracing::debug!(
-                "Registered {} variational choices for member {} at {:?}",
-                alt_index,
-                self.label,
-                self.node_id
-            );
-        }
-
-        // For multiple alternatives, create variational constraints for each one
-        // so the resolution phase can eliminate invalid alternatives based on type errors.
-        if alt_index > 1 {
-            for alt_idx in 0..alt_index {
-                let Some(alternative) = session
-                    .choices
-                    .get_alternative(DimensionId(self.node_id), AlternativeIndex(alt_idx))
-                else {
-                    continue;
-                };
-
-                let Some((_, req)) = matching_methods
-                    .iter()
-                    .find(|(pid, _)| *pid == alternative.protocol_id)
-                else {
-                    continue;
-                };
-
-                let Some(entry) = session.lookup(req) else {
-                    continue;
-                };
-
-                let config = Configuration::single(dimension, AlternativeIndex(alt_idx));
-                let mut group = constraints.copy_group(self.id);
-                group.config = config;
-
-                let req_ty = entry.instantiate(self.node_id, constraints, context, session);
-                let (req_self, req_func) = consume_self(&req_ty);
-
-                constraints.wants_equals_at_with_cause(
-                    self.node_id,
-                    req_self,
-                    self.receiver.clone(),
-                    &group,
-                    Some(cause),
-                );
-                constraints.wants_equals_at_with_cause(
-                    self.node_id,
-                    req_func,
-                    ty.clone(),
-                    &group,
-                    Some(cause),
-                );
-            }
-        }
-
-        // Unify with first method universally (for single alternative, or as optimistic solution)
+        // Generic requirement calls stay deferred in ResolvedCallSite evidence and are
+        // resolved from the specialized receiver type instead of a parallel choice table.
         let (protocol_id, req) = &matching_methods[0];
-        self.record_member_target(constraints, session, *req);
+        self.record_member_target(session, *req);
         let Some(entry) = session.lookup(req) else {
             return SolveResult::Err(TypeError::MemberNotFound(
                 self.receiver.clone(),
@@ -346,7 +259,7 @@ impl Member {
         else {
             return SolveResult::Defer(DeferralReason::WaitingOnSymbol(*nominal_symbol));
         };
-        self.record_member_target(constraints, session, member_sym);
+        self.record_member_target(session, member_sym);
 
         let mut member_ty = if let Some(entry) = session.lookup(&member_sym) {
             entry.instantiate(self.node_id, constraints, context, session)
@@ -387,7 +300,7 @@ impl Member {
                 context
                     .instantiations_mut()
                     .insert_ty(self.node_id, *param_id, meta);
-                session.type_catalog.instantiations.insert_ty(
+                session.track_ty_instantiation(
                     self.node_id,
                     *param_id,
                     Ty::Var {
@@ -477,7 +390,7 @@ impl Member {
 
         // Try to find a method/variant via lookup_member
         if let Some((member_sym, _source)) = session.lookup_member(symbol, &self.label) {
-            self.record_member_target(constraints, session, member_sym);
+            self.record_member_target(session, member_sym);
             match member_sym {
                 Symbol::InstanceMethod(..) | Symbol::MethodRequirement(..) => {
                     let Some(entry) = session.lookup(&member_sym) else {
@@ -544,7 +457,7 @@ impl Member {
         if let Some((_protocol_id, member_sym)) =
             session.claimed_protocol_member(*symbol, &self.label)
         {
-            self.record_member_target(constraints, session, member_sym);
+            self.record_member_target(session, member_sym);
             let Some(entry) = session.lookup(&member_sym) else {
                 return SolveResult::Defer(DeferralReason::WaitingOnSymbol(member_sym));
             };
@@ -574,7 +487,7 @@ impl Member {
                 session.auto_derive_protocol(*symbol, protocol_id, constraints)
             && let Some(entry) = session.lookup(&method_sym)
         {
-            self.record_member_target(constraints, session, method_sym);
+            self.record_member_target(session, method_sym);
             let method = entry.instantiate(self.node_id, constraints, context, session);
             let method = session.apply(&method, &mut context.substitutions_mut());
             let (method_receiver, method_fn) = consume_self(&method);
