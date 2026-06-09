@@ -9,10 +9,10 @@ use crate::{
     label::Label,
     name_resolution::symbol::{ProtocolId, Symbol},
     types::{
-        call_substitutions::CallSubstitutions,
         infer_ty::{Level, Ty},
         predicate::Predicate,
         scheme::ForAll,
+        type_args::TypeArgs,
         type_operations::UnificationSubstitutions,
         type_session::TypeSession,
     },
@@ -107,14 +107,6 @@ impl Row {
         result
     }
 
-    pub fn contains_var(&self) -> bool {
-        match self {
-            Self::Param(..) | Self::Empty => false,
-            Self::Var(..) => true,
-            Self::Extend { row, ty, .. } => row.contains_var() || ty.contains_var(),
-        }
-    }
-
     /// Visit all types and rows in this row, returning early if the visitor returns true.
     pub fn visit_ty(
         &self,
@@ -187,8 +179,8 @@ impl Row {
     pub fn collect_specializations(
         &self,
         concrete: &Row,
-    ) -> Result<CallSubstitutions, crate::types::type_error::TypeError> {
-        let mut result = CallSubstitutions::default();
+    ) -> Result<TypeArgs, crate::types::type_error::TypeError> {
+        let mut result = TypeArgs::default();
         match (self, concrete) {
             (Row::Empty, Row::Empty) => (),
             (Row::Param(id), other) => {
@@ -280,8 +272,8 @@ impl Ty {
     pub fn collect_specializations(
         &self,
         concrete: &Self,
-    ) -> Result<CallSubstitutions, crate::types::type_error::TypeError> {
-        let mut result = CallSubstitutions::default();
+    ) -> Result<TypeArgs, crate::types::type_error::TypeError> {
+        let mut result = TypeArgs::default();
         match (self, concrete) {
             (Self::Primitive(..), Self::Primitive(..)) => (),
             (Self::Param(id, _), other) => {

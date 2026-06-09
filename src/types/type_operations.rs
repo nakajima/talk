@@ -1,6 +1,5 @@
 use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
-use indexmap::IndexMap;
 use itertools::Itertools;
 use rustc_hash::FxHashMap;
 use tracing::instrument;
@@ -8,7 +7,6 @@ use tracing::instrument;
 use crate::{
     label::Label,
     name_resolution::symbol::Symbol,
-    node_id::NodeID,
     types::{
         infer_row::{Row, RowMetaId, RowParamId, RowTail, normalize_row},
         infer_ty::{Level, Meta, MetaVarId, Ty},
@@ -32,46 +30,6 @@ impl UnificationSubstitutions {
     }
 }
 
-#[derive(Clone, Debug, Default)]
-pub struct InstantiationSubstitutions {
-    pub row: FxHashMap<NodeID, IndexMap<RowParamId, RowMetaId>>,
-    pub ty: FxHashMap<NodeID, IndexMap<Symbol, MetaVarId>>,
-}
-
-impl InstantiationSubstitutions {
-    pub(super) fn ty_mappings(&self, id: &NodeID) -> IndexMap<Symbol, MetaVarId> {
-        self.ty.get(id).cloned().unwrap_or_default()
-    }
-
-    pub(super) fn get_ty(&mut self, node_id: &NodeID, type_param: &Symbol) -> Option<&MetaVarId> {
-        self.ty.entry(*node_id).or_default().get(type_param)
-    }
-
-    pub(super) fn get_row(
-        &mut self,
-        node_id: &NodeID,
-        type_param_id: &RowParamId,
-    ) -> Option<&RowMetaId> {
-        self.row.entry(*node_id).or_default().get(type_param_id)
-    }
-
-    pub(super) fn insert_ty(&mut self, node_id: NodeID, type_param: Symbol, meta: MetaVarId) {
-        self.ty.entry(node_id).or_default().insert(type_param, meta);
-    }
-
-    pub(super) fn insert_row(
-        &mut self,
-        node_id: NodeID,
-        row_param_id: RowParamId,
-        meta: RowMetaId,
-    ) {
-        self.row
-            .entry(node_id)
-            .or_default()
-            .insert(row_param_id, meta);
-    }
-}
-
 /// Unified substitution for both types and row parameters.
 /// Used when we need to substitute both Ty->Ty mappings
 /// AND RowParamId->Row mappings in a single operation.
@@ -84,10 +42,6 @@ pub struct Substitutions {
 impl Substitutions {
     pub fn new() -> Self {
         Self::default()
-    }
-
-    pub fn insert_ty(&mut self, from: Ty, to: Ty) {
-        self.ty.insert(from, to);
     }
 
     pub fn insert_row(&mut self, from: RowParamId, to: Row) {
@@ -384,6 +338,13 @@ pub(super) fn unify(
             }
         }
         (Ty::Tuple(lhs), Ty::Tuple(rhs)) => {
+            if lhs.len() != rhs.len() {
+                return Err(TypeError::invalid_unification(
+                    Ty::Tuple(lhs.clone()),
+                    Ty::Tuple(rhs.clone()),
+                ));
+            }
+
             for (lhs, rhs) in lhs.iter().zip(rhs) {
                 result.extend(unify(lhs, rhs, context, session)?);
             }
@@ -619,66 +580,6 @@ pub(super) fn substitute_with_subs(ty: Ty, substitutions: &Substitutions) -> Ty 
             }
 
             r
-        },
-    )
-}
-
-pub(super) fn instantiate_row(
-    node_id: NodeID,
-    row: Row,
-    substitutions: &InstantiationSubstitutions,
-    level: Level,
-) -> Row {
-    match row {
-        Row::Empty => row,
-        Row::Var(..) => row,
-        Row::Param(id) => {
-            if let Some(row_metas) = substitutions.row.get(&node_id)
-                && let Some(row_meta) = row_metas.get(&id)
-            {
-                Row::Var(*row_meta)
-            } else {
-                row
-            }
-        }
-        Row::Extend { row, label, ty } => Row::Extend {
-            row: Box::new(instantiate_row(node_id, *row, substitutions, level)),
-            label,
-            ty: instantiate_ty(node_id, ty, substitutions, level),
-        },
-    }
-}
-
-pub(super) fn instantiate_ty(
-    node_id: NodeID,
-    ty: Ty,
-    substitutions: &InstantiationSubstitutions,
-    level: Level,
-) -> Ty {
-    if substitutions.row.is_empty() && substitutions.ty.is_empty() {
-        return ty;
-    }
-
-    ty.mapping(
-        &mut |t| {
-            if let Ty::Param(param, _) = t
-                && let Some(metas) = substitutions.ty.get(&node_id)
-                && let Some(meta) = metas.get(&param)
-            {
-                return Ty::Var { id: *meta, level };
-            };
-
-            t
-        },
-        &mut |r| {
-            if let Row::Param(id) = r
-                && let Some(metas) = substitutions.row.get(&node_id)
-                && let Some(meta) = metas.get(&id)
-            {
-                return Row::Var(*meta);
-            };
-
-            instantiate_row(node_id, r, substitutions, level)
         },
     )
 }

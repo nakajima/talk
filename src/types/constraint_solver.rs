@@ -70,6 +70,9 @@ impl<'a> ConstraintSolver<'a> {
                     Constraint::Member(ref member) => {
                         member.solve(constraints, self.context, session)
                     }
+                    Constraint::MemberCall(ref member_call) => {
+                        member_call.solve(constraints, self.context, session)
+                    }
                     Constraint::Conforms(ref conforms) => {
                         conforms.solve(constraints, self.context, session)
                     }

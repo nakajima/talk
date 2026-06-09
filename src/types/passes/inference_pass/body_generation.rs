@@ -119,6 +119,11 @@ impl InferencePass<'_> {
             }
         }
 
+        let derivations = self
+            .session
+            .derive_showable_for_nominals(&mut self.constraints);
+        self.synthesize_show_derived_bodies(derivations, &mut context);
+
         // Retry deferred constraints now that all extend blocks (stragglers)
         // have been processed and their methods are available.
         self.constraints.retry_all_deferred();

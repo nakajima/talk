@@ -136,7 +136,7 @@ impl TypeMember {
             .collect_vec();
         let ty = child_entry
             .instantiate_with_args(self.node_id, &args, session, context, constraints)
-            .0;
+            .value;
 
         match unify(&ty, &self.result, context, session).map_err(|e| e.with_cause(cause)) {
             Ok(vars) => SolveResult::Solved(vars),
@@ -177,7 +177,9 @@ impl TypeMember {
                     )));
                 };
 
-                let child_ty = child_entry.instantiate(self.node_id, constraints, context, session);
+                let child_ty = child_entry
+                    .instantiate(self.node_id, constraints, context, session)
+                    .value;
                 return match unify(&child_ty, &self.result, context, session)
                     .map_err(|e| e.with_cause(self.cause))
                 {

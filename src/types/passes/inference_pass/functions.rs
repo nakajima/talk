@@ -6,7 +6,6 @@ use super::{InferencePass, TypedRet};
 use crate::{
     node_kinds::func::Func,
     types::{
-        call_site::CallerContext,
         solve_context::SolveContext,
         type_error::TypeError,
         type_operations::{curry, substitute},
@@ -38,7 +37,7 @@ impl InferencePass<'_> {
 
         let mut foralls = IndexSet::default();
 
-        let body = self.with_current_caller(CallerContext::Callable(func_sym), |this| {
+        let body = self.with_current_callable(func_sym, |this| {
             if let Some(ret) = &func.ret {
                 let ret = this.visit_type_annotation(ret, context)?;
                 this.check_block(&func.body, ret.clone(), &mut context.next())

@@ -8,6 +8,7 @@ use crate::{
     types::{
         conformance::{ConformanceClaim, ConformanceEvidence, ConformanceKey, WitnessTable},
         infer_ty::Ty,
+        type_operations::substitute,
     },
 };
 
@@ -54,7 +55,7 @@ impl Nominal {
             |mut acc, (label, tys)| {
                 let values = tys
                     .into_iter()
-                    .map(|t| substitutions.get(&t).unwrap_or(&t).clone())
+                    .map(|ty| substitute(&ty, &substitutions))
                     .collect();
                 acc.insert(label, values);
                 acc
@@ -67,8 +68,7 @@ impl Nominal {
         self.properties.clone().into_iter().fold(
             IndexMap::<Label, Ty>::default(),
             |mut acc, (label, ty)| {
-                let t = substitutions.get(&ty);
-                acc.insert(label, t.unwrap_or(&ty).clone());
+                acc.insert(label, substitute(&ty, &substitutions));
                 acc
             },
         )

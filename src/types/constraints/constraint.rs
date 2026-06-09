@@ -2,9 +2,16 @@ use crate::{
     node_id::NodeID,
     types::{
         constraints::{
-            call::Call, conforms::Conforms, default_ty::DefaultTy, equals::Equals,
-            has_field::HasField, member::Member, projection::Projection, row_subset::RowSubset,
-            store::ConstraintId, type_member::TypeMember,
+            call::Call,
+            conforms::Conforms,
+            default_ty::DefaultTy,
+            equals::Equals,
+            has_field::HasField,
+            member::{Member, MemberCall},
+            projection::Projection,
+            row_subset::RowSubset,
+            store::ConstraintId,
+            type_member::TypeMember,
         },
         infer_row::Row,
         infer_ty::Ty,
@@ -59,6 +66,7 @@ pub enum Constraint {
     Equals(Equals),
     HasField(HasField),
     Member(Member),
+    MemberCall(MemberCall),
     Conforms(Conforms),
     TypeMember(TypeMember),
     Projection(Projection),
@@ -73,6 +81,7 @@ impl Constraint {
             Constraint::Equals(c) => c.id,
             Constraint::HasField(c) => c.id,
             Constraint::Member(c) => c.id,
+            Constraint::MemberCall(c) => c.id,
             Constraint::Conforms(c) => c.id,
             Constraint::TypeMember(c) => c.id,
             Constraint::Projection(c) => c.id,
@@ -86,26 +95,13 @@ impl Constraint {
             Constraint::Call(call) => Some(call.call_node_id),
             Constraint::Equals(equals) => equals.node_id,
             Constraint::Member(member) => Some(member.node_id),
+            Constraint::MemberCall(member_call) => Some(member_call.member_node_id),
             Constraint::Conforms(conforms) => Some(conforms.conformance_node_id),
             Constraint::TypeMember(type_member) => Some(type_member.node_id),
             Constraint::Projection(projection) => Some(projection.node_id),
             Constraint::HasField(has_field) => has_field.node_id,
             Constraint::RowSubset(c) => c.node_id,
             Constraint::DefaultTy(c) => Some(c.node_id),
-        }
-    }
-
-    pub fn is_generalizable(&self) -> bool {
-        match self {
-            Constraint::Call(..) => false,
-            Constraint::Equals(..) => true,
-            Constraint::HasField(..) => true,
-            Constraint::Member(..) => false,
-            Constraint::Conforms(..) => true,
-            Constraint::TypeMember(..) => true,
-            Constraint::Projection(..) => true,
-            Constraint::RowSubset(..) => false,
-            Constraint::DefaultTy(..) => false,
         }
     }
 
@@ -116,10 +112,6 @@ impl Constraint {
     ) -> Constraint {
         match &mut self {
             Constraint::Call(call) => {
-                call.receiver = call
-                    .receiver
-                    .as_ref()
-                    .map(|r| session.apply(r, substitutions));
                 call.callee = session.apply(&call.callee, substitutions);
                 call.args = call
                     .args
@@ -156,6 +148,11 @@ impl Constraint {
                 member.ty = session.apply(&member.ty, substitutions);
                 member.receiver = session.apply(&member.receiver, substitutions)
             }
+            Constraint::MemberCall(member_call) => {
+                member_call.ty = session.apply(&member_call.ty, substitutions);
+                member_call.receiver = session.apply(&member_call.receiver, substitutions);
+                member_call.returns = session.apply(&member_call.returns, substitutions);
+            }
             Constraint::TypeMember(c) => {
                 c.base = session.apply(&c.base, substitutions);
                 c.result = session.apply(&c.result, substitutions);
@@ -174,7 +171,6 @@ impl Constraint {
 
         match &mut copy {
             Constraint::Call(call) => {
-                call.receiver = call.receiver.as_ref().map(|r| substitute(r, substitutions));
                 call.callee = substitute(&call.callee, substitutions);
                 call.args = call
                     .args
@@ -208,6 +204,11 @@ impl Constraint {
             Constraint::Member(member) => {
                 member.ty = substitute(&member.ty, substitutions);
                 member.receiver = substitute(&member.receiver, substitutions)
+            }
+            Constraint::MemberCall(member_call) => {
+                member_call.ty = substitute(&member_call.ty, substitutions);
+                member_call.receiver = substitute(&member_call.receiver, substitutions);
+                member_call.returns = substitute(&member_call.returns, substitutions);
             }
             Constraint::TypeMember(c) => {
                 c.base = substitute(&c.base, substitutions);
@@ -244,12 +245,68 @@ impl Constraint {
                     ty: session.apply(&has_field.ty, substitutions),
                 }
             }
-            Self::Member(member) => Predicate::Member {
-                receiver: session.apply(&member.receiver, substitutions),
-                label: member.label.clone(),
-                ty: session.apply(&member.ty, substitutions),
-                node_id: member.node_id,
-            },
+            Self::Member(member) => {
+                let receiver = session.apply(&member.receiver, substitutions);
+                let bounds = match &receiver {
+                    Ty::Param(_, bounds) => bounds.clone(),
+                    Ty::Var { id, .. } => match session.lookup_type_param_origin(*id) {
+                        Some(Ty::Param(_, bounds)) => bounds,
+                        _ => vec![],
+                    },
+                    _ => vec![],
+                };
+
+                let mut candidates = vec![];
+                for protocol_id in bounds {
+                    if let Some((requirement, _source)) =
+                        session.lookup_member(&protocol_id.into(), &member.label)
+                        && !candidates.contains(&requirement)
+                    {
+                        candidates.push(requirement);
+                    }
+                }
+                if candidates.len() > 1 {
+                    return None;
+                }
+
+                Predicate::Member {
+                    receiver,
+                    label: member.label.clone(),
+                    ty: session.apply(&member.ty, substitutions),
+                    node_id: member.node_id,
+                }
+            }
+            Self::MemberCall(member_call) => {
+                let receiver = session.apply(&member_call.receiver, substitutions);
+                let bounds = match &receiver {
+                    Ty::Param(_, bounds) => bounds.clone(),
+                    Ty::Var { id, .. } => match session.lookup_type_param_origin(*id) {
+                        Some(Ty::Param(_, bounds)) => bounds,
+                        _ => vec![],
+                    },
+                    _ => vec![],
+                };
+
+                let mut candidates = vec![];
+                for protocol_id in bounds {
+                    if let Some((requirement, _source)) =
+                        session.lookup_member(&protocol_id.into(), &member_call.label)
+                        && !candidates.contains(&requirement)
+                    {
+                        candidates.push(requirement);
+                    }
+                }
+                if candidates.len() > 1 {
+                    return None;
+                }
+
+                Predicate::Member {
+                    receiver,
+                    label: member_call.label.clone(),
+                    ty: session.apply(&member_call.ty, substitutions),
+                    node_id: member_call.member_node_id,
+                }
+            }
             Self::Call(call) => Predicate::Call {
                 callee: session.apply(&call.callee, substitutions),
                 args: call
@@ -258,10 +315,6 @@ impl Constraint {
                     .map(|f| session.apply(f, substitutions))
                     .collect(),
                 returns: session.apply(&call.returns, substitutions),
-                receiver: call
-                    .receiver
-                    .as_ref()
-                    .map(|r| session.apply(r, substitutions)),
             },
             Self::Equals(equals) => Predicate::Equals {
                 lhs: session.apply(&equals.lhs, substitutions),
@@ -323,13 +376,16 @@ impl Constraint {
                 out.extend(member.receiver.collect_metas());
                 out.extend(member.ty.collect_metas());
             }
+            Constraint::MemberCall(member_call) => {
+                out.extend(member_call.receiver.collect_metas());
+                out.extend(member_call.self_ty.collect_metas());
+                out.extend(member_call.ty.collect_metas());
+                out.extend(member_call.returns.collect_metas());
+            }
             Constraint::Call(call) => {
                 out.extend(call.callee.collect_metas());
                 for argument in &call.args {
                     out.extend(argument.collect_metas());
-                }
-                if let Some(receiver) = &call.receiver {
-                    out.extend(receiver.collect_metas());
                 }
                 out.extend(call.returns.collect_metas());
             }

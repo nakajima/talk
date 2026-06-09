@@ -261,12 +261,6 @@ impl Ty {
         }
     }
 
-    pub fn contains_var(&self) -> bool {
-        self.visit(&mut |t| matches!(t, Ty::Var { .. }), &mut |r| {
-            matches!(r, Row::Var(..))
-        })
-    }
-
     pub fn import(self, module_id: ModuleId) -> Self {
         match self {
             Self::Primitive(symbol) => Self::Primitive(symbol),

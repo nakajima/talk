@@ -1,116 +1,81 @@
 use indexmap::IndexMap;
 
-use super::InferencePass;
+use super::{InferencePass, TypedRet};
 use crate::{
+    diagnostic::{AnyDiagnostic, Diagnostic, Severity},
     label::Label,
-    name_resolution::symbol::{ProtocolId, Symbol},
-    node_id::NodeID,
+    name::Name,
+    name_resolution::symbol::Symbol,
+    node::Node,
+    node_id::{FileID, NodeID},
+    node_kinds::{
+        block::Block,
+        call_arg::CallArg,
+        expr::{Expr, ExprKind},
+        func::{EffectSet, Func},
+        match_arm::MatchArm,
+        parameter::Parameter,
+        pattern::{Pattern, PatternKind},
+    },
     span::Span,
     types::{
-        infer_row::Row,
+        conformance::{ConformanceEvidence, ConformanceKey},
         infer_ty::Ty,
+        solve_context::SolveContext,
         type_catalog::Nominal,
-        typed_ast::{
-            TypedBlock, TypedDecl, TypedDeclKind, TypedExpr, TypedExprKind, TypedFunc,
-            TypedMatchArm, TypedNode, TypedParameter, TypedPattern, TypedPatternKind,
-        },
+        type_session::ShowDerivation,
+        typed_ast::{TypedDecl, TypedDeclKind, TypedFunc},
     },
 };
 
 impl InferencePass<'_> {
-    /// Build synthesized TypedFunc bodies for auto-derived protocol methods.
-    pub(super) fn synthesize_auto_derived_bodies(&mut self) {
-        let derivations: Vec<_> = self
-            .session
-            .auto_derived
-            .iter()
-            .map(|(k, v)| (*k, v.clone()))
-            .collect();
-
-        // Look up the String.add witness (for string concatenation)
-        let add_label: Label = "add".into();
-        let string_add_witness = self.session.find_protocol_id("Add").and_then(|add_id| {
-            self.session
-                .find_witness(Symbol::String, add_id, &add_label)
-        });
-
-        // Look up the Showable protocol ID for finding show witnesses
-        let showable_id = self.session.find_protocol_id("Showable");
-
-        for ((nominal_sym, _protocol_id), methods) in derivations {
+    pub(super) fn synthesize_show_derived_bodies(
+        &mut self,
+        derivations: Vec<ShowDerivation>,
+        context: &mut SolveContext,
+    ) {
+        for derivation in derivations {
+            let nominal_sym = derivation.nominal;
             let Some(nominal) = self.session.lookup_nominal(&nominal_sym) else {
                 continue;
             };
 
-            let type_name = self
+            let type_name = self.type_name(nominal_sym);
+            let nominal_ty = self
                 .session
-                .resolved_names
-                .symbol_names
-                .get(&nominal_sym)
-                .cloned()
-                .or_else(|| {
-                    self.session
-                        .modules
-                        .imported_symbol_names()
-                        .get(&nominal_sym)
-                        .cloned()
-                })
-                .unwrap_or_else(|| format!("{nominal_sym:?}"));
+                .lookup(&derivation.self_param)
+                .map(|entry| entry._as_ty())
+                .unwrap_or_else(|| Ty::Nominal {
+                    symbol: nominal_sym,
+                    type_args: nominal.type_params.clone(),
+                });
+            let show_label = Label::Named("show".into());
+            let func = self.synth_show_func(
+                &nominal,
+                &type_name,
+                nominal_sym,
+                show_label.clone(),
+                derivation.method,
+                derivation.self_param,
+            );
 
-            let nominal_ty = Ty::Nominal {
-                symbol: nominal_sym,
-                type_args: nominal.type_params.clone(),
-            };
-
-            let mut instance_methods = IndexMap::new();
-
-            for (label, method_sym, self_param_sym) in methods {
-                let body_expr = if !nominal.variants.is_empty() {
-                    self.synthesize_enum_show_body(
-                        &nominal,
-                        &type_name,
-                        self_param_sym,
-                        nominal_sym,
-                        &nominal_ty,
-                        string_add_witness,
-                        showable_id,
-                    )
-                } else {
-                    self.synthesize_struct_show_body(
-                        &nominal,
-                        &type_name,
-                        self_param_sym,
-                        &nominal_ty,
-                        string_add_witness,
-                        showable_id,
-                    )
-                };
-
-                let typed_func = TypedFunc {
-                    name: method_sym,
-                    foralls: Default::default(),
-                    params: vec![TypedParameter {
-                        name: self_param_sym,
-                        ty: nominal_ty.clone(),
-                    }],
-                    effects: vec![],
-                    effects_row: Row::Empty,
-                    body: TypedBlock {
-                        id: NodeID::SYNTHESIZED,
-                        body: vec![TypedNode::Expr(body_expr)],
-                        ret: Ty::String(),
-                    },
-                    ret: Ty::String(),
-                };
-
-                instance_methods.insert(label, typed_func);
+            let mut instance_methods = IndexMap::<Label, TypedFunc>::new();
+            match self.visit_auto_derived_method(nominal_sym, nominal_ty.clone(), &func, context) {
+                Ok(typed_func) => {
+                    instance_methods.insert(show_label, typed_func);
+                }
+                Err(kind) => {
+                    self.diagnostics.insert(AnyDiagnostic::Typing(Diagnostic {
+                        id: func.id,
+                        severity: Severity::Error,
+                        kind,
+                    }));
+                    continue;
+                }
             }
 
-            // Use a low node ID so auto-derived extends sort before user code
-            // in TypedAST::roots(). Otherwise they'd be the last node in the
-            // synthesized main function body and override the return value.
             self.root_decls.push(TypedDecl {
-                id: NodeID(crate::node_id::FileID::SYNTHESIZED, 0),
+                id: NodeID(FileID::SYNTHESIZED, 0),
                 ty: nominal_ty,
                 kind: TypedDeclKind::Extend {
                     symbol: nominal_sym,
@@ -118,345 +83,259 @@ impl InferencePass<'_> {
                     typealiases: Default::default(),
                 },
             });
+
+            let key = ConformanceKey {
+                conforming_id: nominal_sym,
+                protocol_id: derivation.protocol_id,
+            };
+            self.session.record_evidence(
+                key,
+                ConformanceEvidence::synthetic(
+                    nominal_sym,
+                    derivation.protocol_id,
+                    derivation.witnesses,
+                ),
+            );
+            self.constraints.wake_symbols(&[nominal_sym]);
+            self.constraints.wake_conformances(&[key]);
         }
     }
 
-    fn synthesize_struct_show_body(
+    fn visit_auto_derived_method(
+        &mut self,
+        nominal_sym: Symbol,
+        nominal_ty: Ty,
+        func: &Func,
+        context: &mut SolveContext,
+    ) -> TypedRet<TypedFunc> {
+        let mut method_context = context.next();
+        for predicate in nominal_ty.collect_param_predicates() {
+            method_context.givens_mut().insert(predicate);
+        }
+
+        let previous_self = self.current_self_ty.replace(nominal_ty);
+        let result = self.visit_method(nominal_sym, func, false, &mut method_context);
+        self.current_self_ty = previous_self;
+        result
+    }
+
+    fn synth_show_func(
+        &mut self,
+        nominal: &Nominal,
+        type_name: &str,
+        nominal_sym: Symbol,
+        label: Label,
+        method_sym: Symbol,
+        self_param_sym: Symbol,
+    ) -> Func {
+        let body_expr = if nominal.variants.is_empty() {
+            self.synthesize_struct_show_expr(nominal, type_name, self_param_sym)
+        } else {
+            self.synthesize_enum_show_expr(nominal, type_name, self_param_sym, nominal_sym)
+        };
+
+        Func {
+            id: self.next_synth_node(),
+            name: Name::Resolved(method_sym, label.to_string()),
+            name_span: Span::SYNTHESIZED,
+            effects: EffectSet::default(),
+            generics: vec![],
+            params: vec![Parameter {
+                id: self.next_synth_node(),
+                name: Name::Resolved(self_param_sym, "self".into()),
+                name_span: Span::SYNTHESIZED,
+                type_annotation: None,
+                span: Span::SYNTHESIZED,
+            }],
+            body: Block {
+                id: self.next_synth_node(),
+                args: vec![],
+                body: vec![Node::Expr(body_expr)],
+                span: Span::SYNTHESIZED,
+            },
+            ret: None,
+            attributes: vec![],
+        }
+    }
+
+    fn synthesize_struct_show_expr(
         &mut self,
         nominal: &Nominal,
         type_name: &str,
         self_param_sym: Symbol,
-        nominal_ty: &Ty,
-        string_add_witness: Option<Symbol>,
-        showable_id: Option<ProtocolId>,
-    ) -> TypedExpr {
+    ) -> Expr {
         if nominal.properties.is_empty() {
-            // Empty struct: "TypeName {}"
             return self.synth_string_literal(&format!("{type_name} {{}}"));
         }
 
-        // Build: "TypeName(field1: " + self.field1.show() + ", field2: " + self.field2.show() + ")"
-        let fields: Vec<_> = nominal.properties.iter().collect();
-        let mut parts: Vec<TypedExpr> = vec![];
-
-        for (i, (label, field_ty)) in fields.iter().enumerate() {
-            let prefix = if i == 0 {
+        let mut parts = vec![];
+        for (index, (label, _)) in nominal.properties.iter().enumerate() {
+            let prefix = if index == 0 {
                 format!("{type_name}({label}: ")
             } else {
                 format!(", {label}: ")
             };
             parts.push(self.synth_string_literal(&prefix));
 
-            // self.field.show()
-            let self_var = TypedExpr {
-                id: NodeID::SYNTHESIZED,
-                ty: nominal_ty.clone(),
-                kind: TypedExprKind::Variable(self_param_sym),
-            };
-            let field_access = TypedExpr {
-                id: NodeID::SYNTHESIZED,
-                ty: (*field_ty).clone(),
-                kind: TypedExprKind::Member {
-                    receiver: self_var.into(),
-                    label: (*label).clone(),
-                    label_span: Span::SYNTHESIZED,
-                },
-            };
-
-            if matches!(**field_ty, Ty::Func(..)) {
-                parts.push(self.synth_func_type_literal(field_ty));
-            } else {
-                let show_witness = self.find_show_witness_for_ty(field_ty, showable_id);
-                parts.push(self.synth_show_call(field_access, show_witness, showable_id));
-            }
+            let self_var = self.synth_variable(self_param_sym, "self");
+            let field_access = self.synth_member(self_var, label.clone());
+            parts.push(self.synth_show_call(field_access));
         }
         parts.push(self.synth_string_literal(")"));
 
-        self.synth_string_concat(parts, string_add_witness)
+        self.synth_string_concat(parts)
     }
 
-    fn synthesize_enum_show_body(
+    fn synthesize_enum_show_expr(
         &mut self,
         nominal: &Nominal,
         type_name: &str,
         self_param_sym: Symbol,
         nominal_sym: Symbol,
-        nominal_ty: &Ty,
-        string_add_witness: Option<Symbol>,
-        showable_id: Option<ProtocolId>,
-    ) -> TypedExpr {
-        let self_var = TypedExpr {
-            id: NodeID::SYNTHESIZED,
-            ty: nominal_ty.clone(),
-            kind: TypedExprKind::Variable(self_param_sym),
-        };
-
+    ) -> Expr {
+        let scrutinee = self.synth_variable(self_param_sym, "self");
         let mut arms = vec![];
 
         for (variant_label, payload_tys) in &nominal.variants {
-            if payload_tys.is_empty() {
-                // No payload: "TypeName.variant"
-                let pattern = TypedPattern {
-                    id: NodeID::SYNTHESIZED,
-                    ty: nominal_ty.clone(),
-                    kind: TypedPatternKind::Variant {
-                        enum_name: Some(nominal_sym),
-                        variant_name: variant_label.to_string(),
-                        variant_name_span: Span::SYNTHESIZED,
-                        fields: vec![],
-                    },
-                };
-                let body_expr = self.synth_string_literal(&format!("{type_name}.{variant_label}"));
-                arms.push(TypedMatchArm {
-                    pattern,
-                    body: TypedBlock {
-                        id: NodeID::SYNTHESIZED,
-                        body: vec![TypedNode::Expr(body_expr)],
-                        ret: Ty::String(),
-                    },
+            let mut fields = vec![];
+            let mut bindings = vec![];
+            for index in 0..payload_tys.len() {
+                let name = format!("v{index}");
+                let bind_sym = Symbol::PatternBindLocal(self.session.symbols.next_pattern_bind());
+                self.session
+                    .resolved_names
+                    .symbol_names
+                    .insert(bind_sym, name.clone());
+                bindings.push((bind_sym, name));
+                fields.push(Pattern {
+                    id: self.next_synth_node(),
+                    kind: PatternKind::Bind(Name::Resolved(bind_sym, format!("v{index}"))),
+                    span: Span::SYNTHESIZED,
                 });
+            }
+
+            let pattern = Pattern {
+                id: self.next_synth_node(),
+                kind: PatternKind::Variant {
+                    enum_name: Some(Name::Resolved(nominal_sym, type_name.into())),
+                    variant_name: variant_label.to_string(),
+                    variant_name_span: Span::SYNTHESIZED,
+                    fields,
+                },
+                span: Span::SYNTHESIZED,
+            };
+
+            let body_expr = if payload_tys.is_empty() {
+                self.synth_string_literal(&format!("{type_name}.{variant_label}"))
             } else {
-                // With payload: bind values and show them
-                let mut bind_syms = vec![];
-                let mut bind_patterns = vec![];
-                for (j, payload_ty) in payload_tys.iter().enumerate() {
-                    let bind_sym =
-                        Symbol::PatternBindLocal(self.session.symbols.next_pattern_bind());
-                    self.session
-                        .resolved_names
-                        .symbol_names
-                        .insert(bind_sym, format!("v{j}"));
-                    self.session.register_mono(bind_sym, payload_ty.clone());
-                    bind_syms.push((bind_sym, payload_ty.clone()));
-                    bind_patterns.push(TypedPattern {
-                        id: NodeID::SYNTHESIZED,
-                        ty: payload_ty.clone(),
-                        kind: TypedPatternKind::Bind(bind_sym),
-                    });
-                }
-
-                let pattern = TypedPattern {
-                    id: NodeID::SYNTHESIZED,
-                    ty: nominal_ty.clone(),
-                    kind: TypedPatternKind::Variant {
-                        enum_name: Some(nominal_sym),
-                        variant_name: variant_label.to_string(),
-                        variant_name_span: Span::SYNTHESIZED,
-                        fields: bind_patterns,
-                    },
-                };
-
-                // Build "TypeName.variant(" + v0.show() + ", " + v1.show() + ... + ")"
-                let mut parts: Vec<TypedExpr> = vec![];
-                parts.push(self.synth_string_literal(&format!("{type_name}.{variant_label}(")));
-
-                for (j, (bind_sym, payload_ty)) in bind_syms.iter().enumerate() {
-                    if j > 0 {
+                let mut parts =
+                    vec![self.synth_string_literal(&format!("{type_name}.{variant_label}("))];
+                for (index, (bind_sym, bind_name)) in bindings.iter().enumerate() {
+                    if index > 0 {
                         parts.push(self.synth_string_literal(", "));
                     }
-                    let var = TypedExpr {
-                        id: NodeID::SYNTHESIZED,
-                        ty: payload_ty.clone(),
-                        kind: TypedExprKind::Variable(*bind_sym),
-                    };
-
-                    if matches!(payload_ty, Ty::Func(..)) {
-                        parts.push(self.synth_func_type_literal(payload_ty));
-                    } else {
-                        let show_witness = self.find_show_witness_for_ty(payload_ty, showable_id);
-                        parts.push(self.synth_show_call(var, show_witness, showable_id));
-                    }
+                    let var = self.synth_variable(*bind_sym, bind_name);
+                    parts.push(self.synth_show_call(var));
                 }
                 parts.push(self.synth_string_literal(")"));
+                self.synth_string_concat(parts)
+            };
 
-                let body_expr = self.synth_string_concat(parts, string_add_witness);
-                arms.push(TypedMatchArm {
-                    pattern,
-                    body: TypedBlock {
-                        id: NodeID::SYNTHESIZED,
-                        body: vec![TypedNode::Expr(body_expr)],
-                        ret: Ty::String(),
-                    },
-                });
-            }
+            arms.push(MatchArm {
+                id: self.next_synth_node(),
+                pattern,
+                body: Block {
+                    id: self.next_synth_node(),
+                    args: vec![],
+                    body: vec![Node::Expr(body_expr)],
+                    span: Span::SYNTHESIZED,
+                },
+                span: Span::SYNTHESIZED,
+            });
         }
 
-        TypedExpr {
-            id: NodeID::SYNTHESIZED,
-            ty: Ty::String(),
-            kind: TypedExprKind::Match(self_var.into(), arms),
-        }
-    }
-
-    fn synth_string_literal(&self, s: &str) -> TypedExpr {
-        TypedExpr {
-            id: NodeID::SYNTHESIZED,
-            ty: Ty::String(),
-            kind: TypedExprKind::LiteralString(s.into()),
+        Expr {
+            id: self.next_synth_node(),
+            kind: ExprKind::Match(scrutinee.into(), arms),
+            span: Span::SYNTHESIZED,
         }
     }
 
-    fn synth_func_type_literal(&self, ty: &Ty) -> TypedExpr {
-        use crate::types::format::{SymbolNames, TypeFormatter};
-        let imported = self.session.modules.imported_symbol_names();
-        let formatter = TypeFormatter::new(SymbolNames::new(
-            Some(&self.session.resolved_names.symbol_names),
-            Some(&imported),
-        ));
-        self.synth_string_literal(&formatter.format_ty_for_show(ty))
-    }
-
-    /// Generate a `.show()` call on `receiver`, using the resolved witness symbol if available.
-    fn synth_show_call(
-        &self,
-        mut receiver: TypedExpr,
-        show_witness: Option<Symbol>,
-        showable_id: Option<ProtocolId>,
-    ) -> TypedExpr {
-        match show_witness {
-            Some(witness_sym) => {
-                // Pre-resolved: emit Call { callee: Variable(witness), args: [receiver] }
-                // Full method type: Func(Self, Func(Void, String, Empty), Empty)
-                let method_ty = Ty::Func(
-                    receiver.ty.clone().into(),
-                    Ty::Func(Ty::Void.into(), Ty::String().into(), Row::Empty.into()).into(),
-                    Row::Empty.into(),
-                );
-                let callee = TypedExpr {
-                    id: NodeID::SYNTHESIZED,
-                    ty: method_ty.clone(),
-                    kind: TypedExprKind::Variable(witness_sym),
-                };
-                TypedExpr {
-                    id: NodeID::SYNTHESIZED,
-                    ty: Ty::String(),
-                    kind: TypedExprKind::Call {
-                        callee: callee.into(),
-                        callee_ty: method_ty,
-                        type_args: vec![],
-                        args: vec![receiver],
-                        callee_sym: Some(witness_sym),
-                    },
-                }
-            }
-            None => {
-                // For type parameters, add Showable bound so the lowerer emits a
-                // MethodRequirement that the monomorphizer resolves at instantiation time.
-                if let Ty::Param(_, ref mut bounds) = receiver.ty
-                    && let Some(sid) = showable_id
-                    && !bounds.contains(&sid)
-                {
-                    bounds.push(sid);
-                }
-
-                // Fallback: emit Member + Call (for types we can't resolve yet)
-                let show_method = TypedExpr {
-                    id: NodeID::SYNTHESIZED,
-                    ty: Ty::Func(Ty::Void.into(), Ty::String().into(), Row::Empty.into()),
-                    kind: TypedExprKind::Member {
-                        receiver: receiver.into(),
-                        label: "show".into(),
-                        label_span: Span::SYNTHESIZED,
-                    },
-                };
-                TypedExpr {
-                    id: NodeID::SYNTHESIZED,
-                    ty: Ty::String(),
-                    kind: TypedExprKind::Call {
-                        callee: show_method.into(),
-                        callee_ty: Ty::Func(
-                            Ty::Void.into(),
-                            Ty::String().into(),
-                            Row::Empty.into(),
-                        ),
-                        type_args: vec![],
-                        args: vec![],
-                        callee_sym: None,
-                    },
-                }
-            }
-        }
-    }
-
-    /// Find the Showable.show witness symbol for a given type.
-    fn find_show_witness_for_ty(
-        &mut self,
-        ty: &Ty,
-        showable_id: Option<ProtocolId>,
-    ) -> Option<Symbol> {
-        let showable_id = showable_id?;
-        let show_label: Label = "show".into();
-        let conforming_sym = match ty {
-            Ty::Primitive(sym) => *sym,
-            Ty::Nominal { symbol, .. } => *symbol,
-            _ => return None,
-        };
-        self.session
-            .find_witness(conforming_sym, showable_id, &show_label)
-    }
-
-    fn synth_string_concat(&self, parts: Vec<TypedExpr>, add_witness: Option<Symbol>) -> TypedExpr {
-        let mut result = parts.into_iter();
-        let mut acc = result
-            .next()
-            .unwrap_or_else(|| self.synth_string_literal(""));
-        for part in result {
-            match add_witness {
-                Some(witness_sym) => {
-                    // Pre-resolved: emit Call { callee: Variable(witness), args: [acc, part] }
-                    // Full method type: Func(Self=String, Func(RHS=String, Ret=String, Empty), Empty)
-                    let method_ty = Ty::Func(
-                        Ty::String().into(),
-                        Ty::Func(Ty::String().into(), Ty::String().into(), Row::Empty.into())
-                            .into(),
-                        Row::Empty.into(),
-                    );
-                    let callee = TypedExpr {
-                        id: NodeID::SYNTHESIZED,
-                        ty: method_ty.clone(),
-                        kind: TypedExprKind::Variable(witness_sym),
-                    };
-                    acc = TypedExpr {
-                        id: NodeID::SYNTHESIZED,
-                        ty: Ty::String(),
-                        kind: TypedExprKind::Call {
-                            callee: callee.into(),
-                            callee_ty: method_ty,
-                            type_args: vec![],
-                            args: vec![acc, part],
-                            callee_sym: Some(witness_sym),
-                        },
-                    };
-                }
-                None => {
-                    // Fallback
-                    let add_method = TypedExpr {
-                        id: NodeID::SYNTHESIZED,
-                        ty: Ty::Func(Ty::String().into(), Ty::String().into(), Row::Empty.into()),
-                        kind: TypedExprKind::Member {
-                            receiver: acc.into(),
-                            label: "add".into(),
-                            label_span: Span::SYNTHESIZED,
-                        },
-                    };
-                    acc = TypedExpr {
-                        id: NodeID::SYNTHESIZED,
-                        ty: Ty::String(),
-                        kind: TypedExprKind::Call {
-                            callee: add_method.into(),
-                            callee_ty: Ty::Func(
-                                Ty::String().into(),
-                                Ty::String().into(),
-                                Row::Empty.into(),
-                            ),
-                            type_args: vec![],
-                            args: vec![part],
-                            callee_sym: None,
-                        },
-                    };
-                }
-            }
+    fn synth_string_concat(&mut self, parts: Vec<Expr>) -> Expr {
+        let mut iter = parts.into_iter();
+        let mut acc = iter.next().unwrap_or_else(|| self.synth_string_literal(""));
+        for part in iter {
+            let add_member = self.synth_member(acc, "add".into());
+            acc = self.synth_call(add_member, vec![part]);
         }
         acc
+    }
+
+    fn synth_show_call(&mut self, receiver: Expr) -> Expr {
+        let show_member = self.synth_member(receiver, "show".into());
+        self.synth_call(show_member, vec![])
+    }
+
+    fn synth_call(&mut self, callee: Expr, args: Vec<Expr>) -> Expr {
+        Expr {
+            id: self.next_synth_node(),
+            kind: ExprKind::Call {
+                callee: callee.into(),
+                type_args: vec![],
+                args: args
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, value)| CallArg {
+                        id: self.next_synth_node(),
+                        label: Label::Positional(index),
+                        label_span: Span::SYNTHESIZED,
+                        value,
+                        span: Span::SYNTHESIZED,
+                    })
+                    .collect(),
+                trailing_block: None,
+            },
+            span: Span::SYNTHESIZED,
+        }
+    }
+
+    fn synth_member(&mut self, receiver: Expr, label: Label) -> Expr {
+        Expr {
+            id: self.next_synth_node(),
+            kind: ExprKind::Member(Some(receiver.into()), label, Span::SYNTHESIZED),
+            span: Span::SYNTHESIZED,
+        }
+    }
+
+    fn synth_variable(&mut self, symbol: Symbol, name: &str) -> Expr {
+        Expr {
+            id: self.next_synth_node(),
+            kind: ExprKind::Variable(Name::Resolved(symbol, name.into())),
+            span: Span::SYNTHESIZED,
+        }
+    }
+
+    fn synth_string_literal(&mut self, value: &str) -> Expr {
+        Expr {
+            id: self.next_synth_node(),
+            kind: ExprKind::LiteralString(value.into()),
+            span: Span::SYNTHESIZED,
+        }
+    }
+
+    fn type_name(&self, nominal_sym: Symbol) -> String {
+        self.session
+            .resolved_names
+            .symbol_names
+            .get(&nominal_sym)
+            .cloned()
+            .or_else(|| {
+                self.session
+                    .modules
+                    .imported_symbol_names()
+                    .get(&nominal_sym)
+                    .cloned()
+            })
+            .unwrap_or_else(|| format!("{nominal_sym:?}"))
     }
 }

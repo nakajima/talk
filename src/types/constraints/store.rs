@@ -21,7 +21,7 @@ use crate::{
             default_ty::DefaultTy,
             equals::Equals,
             has_field::HasField,
-            member::Member,
+            member::{Member, MemberCall},
             projection::Projection,
             row_subset::RowSubset,
             type_member::TypeMember,
@@ -39,6 +39,7 @@ pub enum ConstraintPriority {
     Conforms,
     Call,
     Member,
+    MemberCall,
     TypeMember,
     Projection,
     HasField,
@@ -55,6 +56,7 @@ impl Constraint {
             Constraint::Equals(..) => ConstraintPriority::Equals,
             Constraint::HasField(..) => ConstraintPriority::HasField,
             Constraint::Member(..) => ConstraintPriority::Member,
+            Constraint::MemberCall(..) => ConstraintPriority::MemberCall,
             Constraint::Conforms(..) => ConstraintPriority::Conforms,
             Constraint::TypeMember(..) => ConstraintPriority::TypeMember,
             Constraint::Projection(..) => ConstraintPriority::Projection,
@@ -458,6 +460,37 @@ impl ConstraintStore {
     }
 
     #[allow(clippy::too_many_arguments)]
+    pub fn wants_member_call(
+        &mut self,
+        call_node_id: NodeID,
+        member_node_id: NodeID,
+        receiver: Ty,
+        self_ty: Ty,
+        label: Label,
+        ty: Ty,
+        returns: Ty,
+        infer_receiver_from_return: bool,
+        group: &BindingGroup,
+    ) -> &Constraint {
+        let id = self.ids.next_id();
+        self.wants(
+            id,
+            Constraint::MemberCall(MemberCall {
+                id,
+                member_node_id,
+                call_node_id,
+                receiver,
+                self_ty,
+                label,
+                ty,
+                returns,
+                infer_receiver_from_return,
+            }),
+            group,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub fn wants_type_member(
         &mut self,
         base: Ty,
@@ -494,7 +527,6 @@ impl ConstraintStore {
         type_args: Vec<Ty>,
         returns: Ty,
         callee_type: Ty,
-        receiver: Option<Ty>,
         group: &BindingGroup,
         effect_context_row: Row,
     ) -> &Constraint {
@@ -510,7 +542,6 @@ impl ConstraintStore {
                 type_args,
                 returns,
                 callee_type,
-                receiver,
                 effect_context_row,
             }),
             group,

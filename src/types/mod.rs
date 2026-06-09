@@ -1,6 +1,5 @@
 pub mod builtins;
-pub mod call_site;
-pub mod call_substitutions;
+pub mod callee;
 pub mod conformance;
 pub(crate) mod conformance_context;
 pub mod constraint_solver;
@@ -14,6 +13,7 @@ pub mod predicate;
 pub mod scheme;
 pub mod solve_context;
 pub mod term_environment;
+pub mod type_args;
 pub mod type_catalog;
 pub mod type_error;
 pub mod type_operations;

@@ -16,7 +16,6 @@ use crate::{
     },
     span::Span,
     types::{
-        call_site::CallSiteId,
         constraints::constraint::ConstraintCause,
         infer_row::Row,
         infer_ty::{Level, Ty},
@@ -164,12 +163,6 @@ impl InferencePass<'_> {
 
         let ret = self.session.new_ty_meta_var(context.level().next());
 
-        self.session.record_member_access_site(
-            CallSiteId::from_resolved_member_constraint(expr.id),
-            self.current_caller,
-            label.clone(),
-        );
-
         self.constraints.wants_member(
             expr.id,
             receiver_ty.ty.clone(),
@@ -243,14 +236,14 @@ impl InferencePass<'_> {
             )));
         };
 
-        let ty = entry.instantiate(expr.id, &mut self.constraints, context, self.session);
+        let instantiated = entry.instantiate(expr.id, &mut self.constraints, context, self.session);
 
         self.instantiations
-            .insert(expr.id, context.instantiations_mut().clone());
+            .insert(expr.id, instantiated.type_args.clone());
 
         Ok(TypedExpr {
             id: expr.id,
-            ty,
+            ty: instantiated.value,
             kind: TypedExprKind::Variable(sym),
         })
     }

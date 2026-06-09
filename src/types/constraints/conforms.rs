@@ -53,7 +53,15 @@ impl Conforms {
             }
             Ty::Primitive(symbol) => (*symbol, vec![]),
             Ty::Nominal { symbol, type_args } => (*symbol, type_args.clone()),
-            Ty::Param(param_id, _) => {
+            Ty::Param(param_id, bounds) => {
+                for bound in bounds {
+                    if *bound == self.protocol_id
+                        || session.protocol_implies(*bound, self.protocol_id)
+                    {
+                        return SolveResult::Solved(Default::default());
+                    }
+                }
+
                 for given in context.givens_mut().iter() {
                     if let Predicate::Conforms {
                         param,
@@ -80,7 +88,7 @@ impl Conforms {
                 });
             }
             Ty::Func(..) => {
-                if session.is_auto_derivable(self.protocol_id) {
+                if session.is_showable_protocol(self.protocol_id) {
                     return SolveResult::Solved(Default::default());
                 }
                 return SolveResult::Err(TypeError::TypeCannotConform {
@@ -95,11 +103,6 @@ impl Conforms {
                 });
             }
         };
-
-        // Auto-derive if this protocol supports it
-        if session.is_auto_derivable(self.protocol_id) {
-            session.auto_derive_protocol(conforming_ty_sym, self.protocol_id, constraints);
-        }
 
         match self.check_conformance(
             conforming_ty_sym,
@@ -124,6 +127,7 @@ impl Conforms {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     #[instrument(level = tracing::Level::TRACE, skip(context, session, constraints))]
     fn check_conformance(
         &self,
