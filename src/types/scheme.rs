@@ -130,18 +130,6 @@ impl Scheme {
         }
     }
 
-    fn instantiate_predicates(
-        &self,
-        id: NodeID,
-        type_args: &TypeArgs,
-        constraints: &mut ConstraintStore,
-        context: &mut SolveContext,
-    ) {
-        for predicate in &self.predicates {
-            predicate.instantiate(id, type_args, constraints, context);
-        }
-    }
-
     #[instrument(skip(self, session, context, constraints), ret)]
     pub(super) fn instantiate(
         &self,
@@ -169,7 +157,9 @@ impl Scheme {
             };
         }
 
-        self.instantiate_predicates(id, &type_args, constraints, context);
+        for predicate in &self.predicates {
+            predicate.instantiate(id, &type_args, constraints, context);
+        }
 
         tracing::trace!("solver_instantiate ret type args: {:?}", type_args);
 
@@ -253,7 +243,9 @@ impl Scheme {
             self.fresh_row_instantiation(row_param, context.level(), session, &mut type_args);
         }
 
-        self.instantiate_predicates(id, &type_args, constraints, context);
+        for predicate in &self.predicates {
+            predicate.instantiate(id, &type_args, constraints, context);
+        }
 
         Instantiated::new(type_args.apply(self.ty.clone()), type_args)
     }
