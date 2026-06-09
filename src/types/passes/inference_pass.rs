@@ -3,18 +3,17 @@ use rustc_hash::FxHashMap;
 
 use crate::{
     ast::{AST, NameResolved},
-    diagnostic::AnyDiagnostic,
+    diagnostic::{AnyDiagnostic, Diagnostic, Severity},
     name_resolution::symbol::{ProtocolId, Symbol, set_symbol_names},
-    node_id::NodeID,
-    span::Span,
+    node_id::{FileID, NodeID},
     types::{
-        call_site::CallerContext,
         constraints::store::ConstraintStore,
         infer_row::Row,
         infer_ty::{Level, MetaVarId, Ty},
         predicate::Predicate,
+        type_args::TypeArgs,
         type_error::TypeError,
-        type_operations::{InstantiationSubstitutions, UnificationSubstitutions},
+        type_operations::UnificationSubstitutions,
         type_session::TypeSession,
         typed_ast::{TypedAST, TypedDecl, TypedStmt},
     },
@@ -62,14 +61,11 @@ impl ProtocolAssociatedTypeRequirements {
     }
 }
 
-pub type PendingTypeInstances =
-    FxHashMap<MetaVarId, (NodeID, Span, Level, Symbol, Vec<(Ty, NodeID)>)>;
-
 pub struct InferencePass<'a> {
     asts: &'a mut [&'a mut AST<NameResolved>],
     session: &'a mut TypeSession,
     constraints: ConstraintStore,
-    instantiations: FxHashMap<NodeID, InstantiationSubstitutions>,
+    instantiations: FxHashMap<NodeID, TypeArgs>,
     substitutions: UnificationSubstitutions,
     tracked_returns: Vec<IndexSet<(NodeID, Ty)>>,
     tracked_effect_rows: Vec<Row>,
@@ -80,9 +76,8 @@ pub struct InferencePass<'a> {
     diagnostics: IndexSet<AnyDiagnostic>,
     protocol_associated_type_requirements:
         FxHashMap<ProtocolId, ProtocolAssociatedTypeRequirements>,
-
-    /// Tracks which callable or top-level context contains newly discovered call sites.
-    current_caller: CallerContext,
+    current_callable: Option<Symbol>,
+    next_synthesized_node: u32,
 
     /// Tracks the current nominal self type (for resolving SelfType annotations in extensions)
     current_self_ty: Option<Ty>,
@@ -110,6 +105,12 @@ impl<'pass, 'ast> BodyInference<'pass, 'ast> {
 }
 
 impl<'a> InferencePass<'a> {
+    fn next_synth_node(&mut self) -> NodeID {
+        let id = NodeID(FileID::SYNTHESIZED, self.next_synthesized_node);
+        self.next_synthesized_node = self.next_synthesized_node.saturating_add(1);
+        id
+    }
+
     pub fn drive(
         asts: &'a mut [&'a mut AST<NameResolved>],
         session: &'a mut TypeSession,
@@ -129,7 +130,8 @@ impl<'a> InferencePass<'a> {
             handler_contexts: Default::default(),
             or_binders: Default::default(),
             protocol_associated_type_requirements: Default::default(),
-            current_caller: CallerContext::TopLevel,
+            current_callable: None,
+            next_synthesized_node: 1,
             current_self_ty: None,
             root_decls: Default::default(),
             root_stmts: Default::default(),
@@ -154,15 +156,20 @@ impl<'a> InferencePass<'a> {
         BodyInference::new(self).run();
     }
 
-    fn with_current_caller<T>(
-        &mut self,
-        caller: CallerContext,
-        f: impl FnOnce(&mut Self) -> T,
-    ) -> T {
-        let previous = std::mem::replace(&mut self.current_caller, caller);
+    fn with_current_callable<T>(&mut self, callable: Symbol, f: impl FnOnce(&mut Self) -> T) -> T {
+        let previous = self.current_callable.replace(callable);
         let result = f(self);
-        self.current_caller = previous;
+        self.current_callable = previous;
         result
+    }
+
+    fn report_error(&mut self, id: NodeID, kind: TypeError) -> TypeError {
+        self.diagnostics.insert(AnyDiagnostic::Typing(Diagnostic {
+            id,
+            severity: Severity::Error,
+            kind: kind.clone(),
+        }));
+        kind
     }
 
     fn finalize_inference(mut self) -> (TypedAST, Vec<AnyDiagnostic>) {

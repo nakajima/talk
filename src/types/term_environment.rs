@@ -13,9 +13,8 @@ use crate::{
         predicate::Predicate,
         scheme::{ForAll, Scheme},
         solve_context::SolveContext,
-        type_operations::{
-            InstantiationSubstitutions, UnificationSubstitutions, substitute, substitute_row,
-        },
+        type_args::{Instantiated, TypeArgs},
+        type_operations::{UnificationSubstitutions, substitute, substitute_row},
         type_session::TypeSession,
     },
 };
@@ -162,9 +161,9 @@ impl EnvEntry {
         session: &mut TypeSession,
         context: &mut SolveContext,
         constraints: &mut ConstraintStore,
-    ) -> (Ty, InstantiationSubstitutions) {
+    ) -> Instantiated<Ty> {
         match self {
-            EnvEntry::Mono(ty) => (ty.clone(), Default::default()),
+            EnvEntry::Mono(ty) => Instantiated::new(ty.clone(), TypeArgs::default()),
             EnvEntry::Scheme(scheme) => {
                 scheme.instantiate_with_args(id, args, session, context, constraints)
             }
@@ -177,10 +176,10 @@ impl EnvEntry {
         constraints: &mut ConstraintStore,
         context: &mut SolveContext,
         session: &mut TypeSession,
-    ) -> Ty {
+    ) -> Instantiated<Ty> {
         tracing::debug!("inference instantiate (id: {id:?})");
         match self {
-            EnvEntry::Mono(ty) => ty.clone(),
+            EnvEntry::Mono(ty) => Instantiated::new(ty.clone(), TypeArgs::default()),
             EnvEntry::Scheme(scheme) => scheme.instantiate(id, constraints, context, session),
         }
     }
@@ -204,10 +203,6 @@ impl TermEnv {
 
     pub fn lookup(&self, sym: &Symbol) -> Option<&EnvEntry> {
         self.symbols.get(sym)
-    }
-
-    pub fn lookup_mut(&mut self, sym: &Symbol) -> Option<&mut EnvEntry> {
-        self.symbols.get_mut(sym)
     }
 
     pub fn insert(&mut self, sym: Symbol, entry: EnvEntry) {

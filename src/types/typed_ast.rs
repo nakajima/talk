@@ -9,8 +9,8 @@ use crate::{
     node_id::NodeID,
     node_kinds::inline_ir_instruction::TypedInlineIRInstruction,
     types::{
-        infer_row::Row, infer_ty::Ty, scheme::ForAll, type_operations::UnificationSubstitutions,
-        type_session::TypeSession,
+        callee::Callee, infer_row::Row, infer_ty::Ty, scheme::ForAll,
+        type_operations::UnificationSubstitutions, type_session::TypeSession,
     },
 };
 
@@ -719,6 +719,8 @@ pub enum TypedExprKind {
         type_args: Vec<Ty>,
         args: Vec<TypedExpr>,
         #[drive(skip)]
+        resolved_callee: Option<Callee>,
+        #[drive(skip)]
         callee_sym: Option<Symbol>,
     },
     // A member access on a concrete type (property, instance method, etc.)
@@ -782,12 +784,14 @@ impl TypedExprKind {
                 callee_ty,
                 type_args,
                 args,
+                resolved_callee,
                 callee_sym,
             } => Call {
                 callee: callee.mapping(m, r).into(),
                 callee_ty: m(callee_ty),
                 type_args: type_args.into_iter().map(&mut *m).collect(),
                 args: args.into_iter().map(|e| e.mapping(m, r)).collect(),
+                resolved_callee: resolved_callee.map(|callee| callee.mapping(m, r)),
                 callee_sym,
             },
             Member {

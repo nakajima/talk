@@ -1,5 +1,6 @@
 use std::{cell::RefCell, rc::Rc};
 
+use derive_visitor::{DriveMut, VisitorMut};
 use ena::unify::{InPlaceUnificationTable, UnifyKey};
 use indexmap::{IndexMap, IndexSet};
 use itertools::Itertools;
@@ -16,13 +17,7 @@ use crate::{
     node_id::NodeID,
     types::{
         builtins::builtin_scope,
-        call_site::{
-            CallArgumentPlan, CallEvidence, CallReceiver, CallReceiverKind, CallShape, CallSiteId,
-            CallTarget, CallerContext, MethodTarget, PendingResolvedCallSite,
-            PendingResolvedCallSiteKind, PendingResolvedCallSites, ResolvedCallSite,
-            ResolvedCallSiteKind,
-        },
-        call_substitutions::{CallSubstitutions, TrackedInstantiations},
+        callee::{Callee, Callees},
         conformance::{
             ConformanceClaim, ConformanceEvidence, ConformanceKey, ConformanceObligation,
             ConformanceOrigin, WitnessTable,
@@ -35,13 +30,46 @@ use crate::{
         scheme::{ForAll, Scheme},
         solve_context::SolveContext,
         term_environment::{EnvEntry, TermEnv},
+        type_args::TypeArgs,
         type_catalog::{MemberBinding, MemberSource, Nominal, TypeCatalog},
         type_error::TypeError,
         type_operations::{UnificationSubstitutions, substitute},
+        typed_ast::{TypedAST, TypedExpr, TypedExprKind},
         types::{TypeEntry, Types},
         vars::Vars,
     },
 };
+
+#[derive(VisitorMut)]
+#[visitor(TypedExpr(enter))]
+struct FinalizeCallMetadata<'a, 'session> {
+    session: &'session mut TypeSession,
+    entries: &'a FxHashMap<NodeID, TypeEntry>,
+    types_by_symbol: &'a FxHashMap<Symbol, TypeEntry>,
+}
+
+impl FinalizeCallMetadata<'_, '_> {
+    fn enter_typed_expr(&mut self, expr: &mut TypedExpr) {
+        let TypedExprKind::Call {
+            resolved_callee, ..
+        } = &mut expr.kind
+        else {
+            return;
+        };
+
+        let callee = resolved_callee
+            .take()
+            .or_else(|| self.session.callees.remove(&expr.id));
+        if let Some(callee) = callee {
+            *resolved_callee = Some(self.session.finalize_callee(
+                expr.id,
+                self.entries,
+                self.types_by_symbol,
+                callee,
+            ));
+        }
+    }
+}
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum TypeDefKind {
@@ -65,25 +93,15 @@ pub struct TypeSession {
     conformance: ConformanceContext,
     pub(super) modules: Rc<ModuleEnvironment>,
     pub aliases: FxHashMap<Symbol, Scheme>,
-    pub(super) reverse_instantiations: ReverseInstantiations,
+    meta_origins: Rc<RefCell<FxHashMap<Meta, MetaOrigin>>>,
 
-    /// Broad transient instantiation facts used only to finalize resolved call sites.
-    tracked_instantiations: TrackedInstantiations,
-
-    /// Solver-time pending call facts keyed by semantic call-site ID.
-    pending_resolved_call_sites: PendingResolvedCallSites,
+    callees: Callees,
 
     pub(crate) symbols: Symbols,
     pub(crate) resolved_names: ResolvedNames,
 
     meta_vars: InPlaceUnificationTable<MetaVarId>,
     row_vars: InPlaceUnificationTable<RowMetaId>,
-
-    /// Set of protocol IDs that can be auto-derived for structs/enums.
-    auto_derivable_protocols: Vec<ProtocolId>,
-
-    /// Records of completed auto-derivations: (nominal, protocol) → [(label, method_sym, self_param_sym)]
-    pub(crate) auto_derived: IndexMap<(Symbol, ProtocolId), Vec<(Label, Symbol, Symbol)>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -92,12 +110,24 @@ pub enum AssociatedTypeResolution {
     Witness(Ty),
 }
 
-#[derive(Debug, Default)]
-pub struct ReverseInstantiations {
-    /// Maps meta vars back to the type param they were instantiated from.
-    /// Stores the full Ty::Param with bounds so we don't need a separate lookup.
-    pub ty: FxHashMap<MetaVarId, Ty>,
-    pub row: FxHashMap<RowMetaId, RowParamId>,
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ShowDerivation {
+    pub nominal: Symbol,
+    pub protocol_id: ProtocolId,
+    pub method: Symbol,
+    pub self_param: Symbol,
+    pub witnesses: WitnessTable,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MetaOrigin {
+    TypeParam {
+        param: Symbol,
+        bounds: Vec<ProtocolId>,
+    },
+    RowParam {
+        param: RowParamId,
+    },
 }
 
 #[allow(clippy::expect_used)]
@@ -177,24 +207,20 @@ impl TypeSession {
             skolem_map: Default::default(),
             meta_levels: Default::default(),
             term_env,
-            reverse_instantiations: Default::default(),
+            meta_origins: Default::default(),
             types_by_node: Default::default(),
             typealiases: Default::default(),
             type_catalog: catalog,
             conformance: Default::default(),
             modules,
             aliases: Default::default(),
-            tracked_instantiations: Default::default(),
-            pending_resolved_call_sites: Default::default(),
+            callees: Default::default(),
 
             meta_vars: Default::default(),
             row_vars: Default::default(),
 
             symbols,
             resolved_names,
-
-            auto_derivable_protocols: Default::default(),
-            auto_derived: Default::default(),
         }
     }
 
@@ -220,7 +246,7 @@ impl TypeSession {
         constraints.wake_symbols(&[symbol]);
     }
 
-    pub fn finalize(mut self) -> Result<(Types, ResolvedNames), TypeError> {
+    pub fn finalize(mut self, ast: &mut TypedAST) -> Result<(Types, ResolvedNames), TypeError> {
         let types_by_node = std::mem::take(&mut self.types_by_node);
         let entries: FxHashMap<NodeID, TypeEntry> = types_by_node
             .into_iter()
@@ -249,184 +275,107 @@ impl TypeSession {
 
         let mut catalog = std::mem::take(&mut self.type_catalog);
         catalog.rebuild_member_index(self.modules.as_ref());
-        let pending_call_sites = std::mem::take(&mut self.pending_resolved_call_sites);
-        let resolved_call_sites = pending_call_sites
-            .into_iter()
-            .filter_map(|(id, pending)| {
-                self.finalize_pending_call_site(id, &entries, &types_by_symbol, pending)
-                    .map(|site| (id, site))
-            })
-            .collect();
+        self.type_catalog = catalog;
+
+        let mut call_metadata = FinalizeCallMetadata {
+            session: &mut self,
+            entries: &entries,
+            types_by_symbol: &types_by_symbol,
+        };
+        ast.drive_mut(&mut call_metadata);
+        let catalog = std::mem::take(&mut self.type_catalog);
 
         let types = Types {
             catalog,
             types_by_node: entries,
             types_by_symbol,
             match_plans: Default::default(),
-            resolved_call_sites,
         };
 
         let resolved_names = std::mem::take(&mut self.resolved_names);
         Ok((types, resolved_names))
     }
 
-    fn finalize_pending_call_site(
+    fn finalize_callee(
         &mut self,
-        site_id: CallSiteId,
+        id: NodeID,
         entries: &FxHashMap<NodeID, TypeEntry>,
         types_by_symbol: &FxHashMap<Symbol, TypeEntry>,
-        pending: PendingResolvedCallSite,
-    ) -> Option<ResolvedCallSite> {
-        let caller = pending.caller;
-        let kind = match pending.kind {
-            PendingResolvedCallSiteKind::DirectCall { target } => {
-                ResolvedCallSiteKind::DirectCall {
-                    target,
-                    substitutions: self.call_substitutions_for_symbol(
-                        site_id,
-                        target,
-                        &[],
-                        types_by_symbol,
-                    ),
-                }
-            }
-            PendingResolvedCallSiteKind::InitializerCall { nominal } => {
-                let Some(initializer) = self.initializer_for_nominal(&nominal) else {
-                    tracing::warn!(
-                        ?nominal,
-                        ?site_id,
-                        "constructor call did not resolve to an initializer"
-                    );
-                    return None;
-                };
-                ResolvedCallSiteKind::InitializerCall {
-                    nominal,
-                    initializer,
-                    substitutions: self.call_substitutions_for_symbol(
-                        site_id,
-                        initializer,
-                        &self.nominal_type_foralls(&nominal),
-                        types_by_symbol,
-                    ),
-                }
-            }
-            PendingResolvedCallSiteKind::EffectCall { effect } => {
-                ResolvedCallSiteKind::EffectCall {
-                    effect,
-                    substitutions: self.call_substitutions_for_effect(site_id, effect),
-                }
-            }
-            PendingResolvedCallSiteKind::MethodCall {
-                label,
-                target_candidates,
-                receiver,
-                argument_plan,
-            } => {
-                let receiver = self.finalize_call_receiver(
-                    entries,
-                    types_by_symbol,
-                    target_candidates.as_slice(),
-                    receiver,
-                );
-                let target = self.select_call_target(target_candidates, Some(&receiver))?;
-                self.resolved_member_site_kind(
-                    site_id,
-                    types_by_symbol,
-                    label,
-                    target,
-                    Some((receiver, argument_plan)),
-                )?
-            }
-            PendingResolvedCallSiteKind::MemberAccess {
-                label,
-                target_candidates,
-            } => {
-                let target = self.select_call_target(target_candidates, None)?;
-                self.resolved_member_site_kind(site_id, types_by_symbol, label, target, None)?
-            }
-        };
-
-        Some(ResolvedCallSite { caller, kind })
-    }
-
-    fn resolved_member_site_kind(
-        &mut self,
-        site_id: CallSiteId,
-        types_by_symbol: &FxHashMap<Symbol, TypeEntry>,
-        label: Label,
-        target: CallTarget,
-        call_shape: Option<(CallReceiver, CallArgumentPlan)>,
-    ) -> Option<ResolvedCallSiteKind> {
-        match target {
-            CallTarget::Member {
-                member: variant @ Symbol::Variant(_),
-                ..
-            } => {
-                let Some(enum_symbol) = self.enum_for_variant(&variant) else {
-                    tracing::warn!(?variant, ?site_id, "variant call site without enum owner");
-                    return None;
-                };
-                Some(ResolvedCallSiteKind::VariantConstructor {
-                    enum_symbol,
-                    variant,
-                    substitutions: self.call_substitutions_for_symbol(
-                        site_id,
-                        variant,
-                        &self.nominal_type_foralls(&enum_symbol),
-                        types_by_symbol,
-                    ),
-                })
-            }
-            CallTarget::Member { member, .. } => {
-                let (receiver, argument_plan) = call_shape?;
-                let target = self.method_target_for(member, label.clone());
-                let mut substitutions = self.call_substitutions_for_symbol(
-                    site_id,
-                    target.symbol(),
+        callee: Callee,
+    ) -> Callee {
+        match callee {
+            Callee::Function { symbol, type_args } => Callee::Function {
+                symbol,
+                type_args: self.finalize_type_args_for_symbol(
+                    symbol,
                     &[],
-                    types_by_symbol,
-                );
-                self.add_receiver_type_args(
-                    target.symbol(),
-                    &receiver.ty,
-                    &mut substitutions,
-                    types_by_symbol,
-                );
-                let evidence = self.call_evidence_for_method(&target, &receiver.ty);
-                Some(ResolvedCallSiteKind::MethodCall {
-                    target,
-                    receiver,
-                    argument_plan,
-                    substitutions,
-                    evidence,
-                })
-            }
-            CallTarget::Direct { sym } => Some(ResolvedCallSiteKind::DirectCall {
-                target: sym,
-                substitutions: self.call_substitutions_for_symbol(
-                    site_id,
-                    sym,
-                    &[],
+                    type_args,
                     types_by_symbol,
                 ),
-            }),
-            CallTarget::Constructor { constructor } => {
-                let initializer = self.initializer_for_nominal(&constructor)?;
-                Some(ResolvedCallSiteKind::InitializerCall {
-                    nominal: constructor,
+            },
+            Callee::Initializer {
+                nominal,
+                initializer: _,
+                type_args,
+            } => {
+                let initializer = self.initializer_for_nominal(&nominal);
+                let mut type_args = type_args;
+                type_args.extend(self.nominal_type_args_from_entry(id, nominal, entries));
+                Callee::Initializer {
+                    nominal,
                     initializer,
-                    substitutions: self.call_substitutions_for_symbol(
-                        site_id,
+                    type_args: self.finalize_type_args_for_symbol(
                         initializer,
-                        &self.nominal_type_foralls(&constructor),
+                        &self.nominal_type_foralls(&nominal),
+                        type_args,
                         types_by_symbol,
                     ),
-                })
+                }
             }
+            Callee::Method {
+                symbol,
+                self_ty,
+                type_args,
+            } => {
+                let self_ty = self.finalize_infer_ty(self_ty);
+                let mut type_args =
+                    self.finalize_type_args_for_symbol(symbol, &[], type_args, types_by_symbol);
+                self.add_receiver_type_args(symbol, &self_ty, &mut type_args, types_by_symbol);
+                Callee::Method {
+                    symbol,
+                    self_ty,
+                    type_args,
+                }
+            }
+            Callee::Variant {
+                enum_symbol,
+                variant,
+                type_args,
+            } => {
+                let mut type_args = type_args;
+                type_args.extend(self.nominal_type_args_from_entry(id, enum_symbol, entries));
+                Callee::Variant {
+                    enum_symbol,
+                    variant,
+                    type_args: self.finalize_type_args_for_foralls(
+                        id,
+                        type_args,
+                        &self.nominal_type_foralls(&enum_symbol),
+                    ),
+                }
+            }
+            Callee::Effect { symbol, type_args } => Callee::Effect {
+                symbol,
+                type_args: self.finalize_type_args_for_foralls(
+                    id,
+                    type_args,
+                    &self.effect_foralls(symbol),
+                ),
+            },
         }
     }
 
-    fn initializer_for_nominal(&self, nominal: &Symbol) -> Option<Symbol> {
+    fn initializer_for_nominal(&self, nominal: &Symbol) -> Symbol {
         let init_label = Label::Named("init".into());
         self.type_catalog
             .initializers
@@ -448,32 +397,39 @@ impl TypeSession {
                     .lookup_initializers(nominal)
                     .and_then(|initializers| initializers.values().next().copied())
             })
-            // Structural constructors currently lower through the nominal symbol when no
-            // initializer function is synthesized. Keep the durable variant non-optional
-            // while preserving that existing path.
-            .or(Some(*nominal))
+            .unwrap_or(*nominal)
     }
 
-    fn enum_for_variant(&self, variant: &Symbol) -> Option<Symbol> {
-        for (enum_symbol, variants) in &self.type_catalog.variants {
-            if variants.values().any(|candidate| candidate == variant) {
-                return Some(*enum_symbol);
+    fn nominal_type_args_from_entry(
+        &self,
+        id: NodeID,
+        nominal: Symbol,
+        entries: &FxHashMap<NodeID, TypeEntry>,
+    ) -> TypeArgs {
+        let mut result = TypeArgs::default();
+        let Some(TypeEntry::Mono(Ty::Nominal { symbol, type_args })) = entries.get(&id) else {
+            return result;
+        };
+        if *symbol != nominal {
+            return result;
+        }
+
+        let Some(nominal_def) = self
+            .type_catalog
+            .nominals
+            .get(&nominal)
+            .or_else(|| self.modules.lookup_nominal(&nominal))
+        else {
+            return result;
+        };
+
+        for (param, arg) in nominal_def.type_params.iter().zip(type_args.iter()) {
+            if let Ty::Param(param_id, _) = param {
+                result.ty.insert(*param_id, arg.clone());
             }
         }
 
-        let module_id = variant.external_module_id()?;
-        let module = self.modules.get_module(module_id)?;
-        module
-            .types
-            .catalog
-            .variants
-            .iter()
-            .find_map(|(enum_symbol, variants)| {
-                variants
-                    .values()
-                    .any(|candidate| candidate == variant)
-                    .then_some(*enum_symbol)
-            })
+        result
     }
 
     fn nominal_type_foralls(&self, nominal: &Symbol) -> Vec<ForAll> {
@@ -494,45 +450,39 @@ impl TypeSession {
             .unwrap_or_default()
     }
 
-    fn call_substitutions_for_effect(
-        &mut self,
-        site_id: CallSiteId,
-        effect: Symbol,
-    ) -> CallSubstitutions {
-        let foralls = self
-            .type_catalog
+    fn effect_foralls(&self, effect: Symbol) -> Vec<ForAll> {
+        self.type_catalog
             .effects
             .get(&effect)
             .cloned()
             .or_else(|| self.modules.lookup_effect(&effect))
             .map(|ty| ty.collect_foralls().into_iter().collect_vec())
-            .unwrap_or_default();
-        self.call_substitutions_for_foralls(site_id, &foralls)
+            .unwrap_or_default()
     }
 
-    fn call_substitutions_for_symbol(
+    fn finalize_type_args_for_symbol(
         &mut self,
-        site_id: CallSiteId,
         target: Symbol,
         extra_foralls: &[ForAll],
+        type_args: TypeArgs,
         types_by_symbol: &FxHashMap<Symbol, TypeEntry>,
-    ) -> CallSubstitutions {
+    ) -> TypeArgs {
         let mut foralls = self.foralls_for_symbol(target, types_by_symbol);
         for forall in extra_foralls {
             if !foralls.contains(forall) {
                 foralls.push(*forall);
             }
         }
-        self.call_substitutions_for_foralls(site_id, &foralls)
+        self.finalize_type_args_for_foralls(NodeID::SYNTHESIZED, type_args, &foralls)
     }
 
-    fn call_substitutions_for_foralls(
+    fn finalize_type_args_for_foralls(
         &mut self,
-        site_id: CallSiteId,
+        site_id: NodeID,
+        type_args: TypeArgs,
         foralls: &[ForAll],
-    ) -> CallSubstitutions {
-        let node_id = site_id.node_id();
-        let mut substitutions = CallSubstitutions::default();
+    ) -> TypeArgs {
+        let mut result = TypeArgs::default();
         let ty_foralls: FxHashSet<Symbol> = foralls
             .iter()
             .filter_map(|forall| match forall {
@@ -548,25 +498,19 @@ impl TypeSession {
             })
             .collect();
 
-        if let Some(instantiations) = self.tracked_instantiations.ty.get(&node_id).cloned() {
-            for (param, ty) in instantiations {
-                if ty_foralls.contains(&param) {
-                    substitutions.ty.insert(param, self.finalize_infer_ty(ty));
-                }
+        for (param, ty) in type_args.ty {
+            if ty_foralls.contains(&param) {
+                result.ty.insert(param, self.finalize_infer_ty(ty));
             }
         }
-        if let Some(instantiations) = self.tracked_instantiations.row.get(&node_id).cloned() {
-            for (param, row) in instantiations {
-                if row_foralls.contains(&param) {
-                    substitutions
-                        .row
-                        .insert(param, self.shallow_generalize_row(row));
-                }
+        for (param, row) in type_args.row {
+            if row_foralls.contains(&param) {
+                result.row.insert(param, self.shallow_generalize_row(row));
             }
         }
 
-        self.validate_call_substitutions(site_id, &substitutions);
-        substitutions
+        self.validate_type_args(site_id, &result);
+        result
     }
 
     fn foralls_for_symbol(
@@ -585,88 +529,26 @@ impl TypeSession {
         }
     }
 
-    fn validate_call_substitutions(&self, site_id: CallSiteId, substitutions: &CallSubstitutions) {
-        for (param, ty) in &substitutions.ty {
+    fn validate_type_args(&self, site_id: NodeID, type_args: &TypeArgs) {
+        for (param, ty) in &type_args.ty {
             if matches!(ty, Ty::Var { .. }) {
                 tracing::debug!(
                     ?site_id,
                     ?param,
                     ?ty,
-                    "unresolved type var in call substitutions"
+                    "unresolved type var in callee type args"
                 );
             }
         }
-        for (param, row) in &substitutions.row {
+        for (param, row) in &type_args.row {
             if matches!(row, Row::Var(..)) {
                 tracing::debug!(
                     ?site_id,
                     ?param,
                     ?row,
-                    "unresolved row var in call substitutions"
+                    "unresolved row var in callee type args"
                 );
             }
-        }
-    }
-
-    fn method_target_for(&self, member: Symbol, label: Label) -> MethodTarget {
-        if matches!(member, Symbol::MethodRequirement(_)) {
-            if let Some((protocol, requirement_label)) = self
-                .type_catalog
-                .method_requirement_label(&member)
-                .or_else(|| self.modules.method_requirement_label(&member))
-            {
-                MethodTarget::Requirement {
-                    protocol,
-                    requirement: member,
-                    label: requirement_label,
-                }
-            } else {
-                MethodTarget::Requirement {
-                    protocol: Symbol::Void,
-                    requirement: member,
-                    label,
-                }
-            }
-        } else {
-            MethodTarget::Concrete(member)
-        }
-    }
-
-    fn call_evidence_for_method(&self, target: &MethodTarget, receiver_ty: &Ty) -> CallEvidence {
-        let MethodTarget::Requirement {
-            protocol,
-            requirement,
-            label,
-        } = target
-        else {
-            return CallEvidence::None;
-        };
-        let Symbol::Protocol(protocol_id) = protocol else {
-            return CallEvidence::Deferred;
-        };
-        let Some(conforming_id) = self.symbol_from_receiver_ty(receiver_ty) else {
-            return CallEvidence::Deferred;
-        };
-        let key = ConformanceKey {
-            protocol_id: *protocol_id,
-            conforming_id,
-        };
-        if let Some(witness) = self.lookup_witness(&key, label, requirement) {
-            CallEvidence::ConcreteWitness {
-                conformance_key: key,
-                witness,
-            }
-        } else {
-            CallEvidence::Deferred
-        }
-    }
-
-    fn symbol_from_receiver_ty(&self, ty: &Ty) -> Option<Symbol> {
-        match ty {
-            Ty::Primitive(symbol) => Some(*symbol),
-            Ty::Nominal { symbol, .. } => Some(*symbol),
-            Ty::Constructor { name, .. } => name.symbol().ok(),
-            _ => None,
         }
     }
 
@@ -674,13 +556,16 @@ impl TypeSession {
         &self,
         member_sym: Symbol,
         receiver_ty: &Ty,
-        substitutions: &mut CallSubstitutions,
+        type_args: &mut TypeArgs,
         types_by_symbol: &FxHashMap<Symbol, TypeEntry>,
     ) {
-        let Ty::Nominal { type_args, .. } = receiver_ty else {
+        let Ty::Nominal {
+            type_args: args, ..
+        } = receiver_ty
+        else {
             return;
         };
-        if type_args.is_empty() {
+        if args.is_empty() {
             return;
         }
 
@@ -699,285 +584,95 @@ impl TypeSession {
                 ForAll::Ty(param) => Some(*param),
                 ForAll::Row(_) => None,
             })
-            .zip(type_args.iter())
+            .zip(args.iter())
         {
-            substitutions
-                .ty
-                .entry(forall)
-                .or_insert_with(|| arg.clone());
+            type_args.ty.entry(forall).or_insert_with(|| arg.clone());
         }
     }
 
-    fn finalize_call_receiver(
+    pub(crate) fn record_function_callee(
         &mut self,
-        entries: &FxHashMap<NodeID, TypeEntry>,
-        types_by_symbol: &FxHashMap<Symbol, TypeEntry>,
-        candidates: &[CallTarget],
-        receiver: CallReceiver,
-    ) -> CallReceiver {
-        let target = self.select_call_target(candidates.to_vec(), Some(&receiver));
-        let target_receiver_ty = target
-            .as_ref()
-            .and_then(|target| self.target_method_receiver_ty(types_by_symbol, target));
-        let stored_ty = self.finalize_infer_ty(receiver.ty);
-        let ty = if matches!(receiver.kind, CallReceiverKind::Argument { .. }) {
-            target_receiver_ty.unwrap_or(stored_ty)
-        } else if receiver.symbol.is_some() {
-            stored_ty
-        } else {
-            entries
-                .get(&receiver.id)
-                .map(|entry| entry.as_mono_ty().clone())
-                .unwrap_or(stored_ty)
-        };
-        CallReceiver { ty, ..receiver }
-    }
-
-    fn select_call_target(
-        &mut self,
-        candidates: Vec<CallTarget>,
-        receiver: Option<&CallReceiver>,
-    ) -> Option<CallTarget> {
-        let mut concrete_members = Vec::new();
-        let mut method_requirements = Vec::new();
-        let mut direct_or_constructor = None;
-
-        for candidate in candidates {
-            match &candidate {
-                CallTarget::Member {
-                    member: Symbol::MethodRequirement(_),
-                    ..
-                } => {
-                    if !method_requirements.contains(&candidate) {
-                        method_requirements.push(candidate);
-                    }
-                }
-                CallTarget::Member { .. } => {
-                    if !concrete_members.contains(&candidate) {
-                        concrete_members.push(candidate);
-                    }
-                }
-                CallTarget::Direct { .. } | CallTarget::Constructor { .. } => {
-                    assert!(
-                        direct_or_constructor
-                            .as_ref()
-                            .is_none_or(|existing| existing == &candidate),
-                        "conflicting direct call targets: {:?} vs {:?}",
-                        direct_or_constructor,
-                        candidate
-                    );
-                    direct_or_constructor = Some(candidate);
-                }
-            }
-        }
-
-        if concrete_members.len() == 1 {
-            return concrete_members.pop();
-        }
-        if concrete_members.len() > 1 {
-            if let Some(target) = self.requirement_target_for_receiver(receiver, &concrete_members)
-            {
-                return Some(target);
-            }
-            if method_requirements.len() == 1 {
-                return method_requirements.pop();
-            }
-            concrete_members.sort_by_key(|target| target.symbol());
-            tracing::warn!(
-                ?receiver,
-                ?concrete_members,
-                "conflicting concrete member call targets without a unique requirement; choosing deterministically"
-            );
-            return concrete_members.into_iter().next();
-        }
-        if method_requirements.len() == 1 {
-            return method_requirements.pop();
-        }
-        assert!(
-            method_requirements.is_empty(),
-            "conflicting method-requirement call targets: {:?}",
-            method_requirements
-        );
-        direct_or_constructor
-    }
-
-    fn requirement_target_for_receiver(
-        &mut self,
-        receiver: Option<&CallReceiver>,
-        concrete_members: &[CallTarget],
-    ) -> Option<CallTarget> {
-        let receiver = receiver?;
-        let Ty::Param(_, bounds) = &receiver.ty else {
-            return None;
-        };
-        let label = concrete_members.iter().find_map(|target| match target {
-            CallTarget::Member { label, .. } => Some(label.clone()),
-            _ => None,
-        })?;
-
-        let mut requirement = None;
-        for protocol_id in bounds {
-            let protocol = Symbol::Protocol(*protocol_id);
-            let Some(requirements) = self.lookup_method_requirements(protocol) else {
-                continue;
-            };
-            let Some(method_req) = requirements.get(&label).copied() else {
-                continue;
-            };
-            assert!(
-                requirement.is_none_or(|existing| existing == method_req),
-                "conflicting method requirements for receiver-bound call target"
-            );
-            requirement = Some(method_req);
-        }
-
-        requirement.map(|member| CallTarget::Member { member, label })
-    }
-
-    fn target_method_receiver_ty(
-        &self,
-        types_by_symbol: &FxHashMap<Symbol, TypeEntry>,
-        target: &CallTarget,
-    ) -> Option<Ty> {
-        let CallTarget::Member {
-            member: method @ Symbol::MethodRequirement(_),
-            ..
-        } = target
-        else {
-            return None;
-        };
-        let entry = types_by_symbol
-            .get(method)
-            .cloned()
-            .or_else(|| self.modules.lookup(method))?;
-        let (params, _, _) = crate::types::passes::uncurry_function(entry.as_mono_ty().clone());
-        params.into_iter().next()
-    }
-
-    pub(crate) fn record_direct_call_site(
-        &mut self,
-        site_id: CallSiteId,
-        caller: CallerContext,
-        target: Symbol,
+        call_id: NodeID,
+        symbol: Symbol,
+        type_args: TypeArgs,
     ) {
-        self.pending_resolved_call_sites.insert(
-            site_id,
-            PendingResolvedCallSite {
-                caller,
-                kind: PendingResolvedCallSiteKind::DirectCall { target },
+        if call_id == NodeID::SYNTHESIZED {
+            return;
+        }
+        self.callees
+            .insert(call_id, Callee::Function { symbol, type_args });
+    }
+
+    pub(crate) fn record_initializer_callee(&mut self, call_id: NodeID, nominal: Symbol) {
+        if call_id == NodeID::SYNTHESIZED {
+            return;
+        }
+        let initializer = self.initializer_for_nominal(&nominal);
+        self.callees.insert(
+            call_id,
+            Callee::Initializer {
+                nominal,
+                initializer,
+                type_args: TypeArgs::default(),
             },
         );
     }
 
-    pub(crate) fn record_initializer_call_site(
+    pub(crate) fn record_effect_callee(
         &mut self,
-        site_id: CallSiteId,
-        caller: CallerContext,
-        nominal: Symbol,
+        call_id: NodeID,
+        symbol: Symbol,
+        type_args: TypeArgs,
     ) {
-        self.pending_resolved_call_sites.insert(
-            site_id,
-            PendingResolvedCallSite {
-                caller,
-                kind: PendingResolvedCallSiteKind::InitializerCall { nominal },
+        if call_id == NodeID::SYNTHESIZED {
+            return;
+        }
+        self.callees
+            .insert(call_id, Callee::Effect { symbol, type_args });
+    }
+
+    pub(crate) fn record_method_callee(
+        &mut self,
+        call_id: NodeID,
+        symbol: Symbol,
+        self_ty: Ty,
+        type_args: TypeArgs,
+    ) {
+        if call_id == NodeID::SYNTHESIZED {
+            return;
+        }
+        self.callees.insert(
+            call_id,
+            Callee::Method {
+                symbol,
+                self_ty,
+                type_args,
             },
         );
     }
 
-    pub(crate) fn record_method_call_shape(
+    pub(crate) fn record_variant_callee(
         &mut self,
-        site_id: CallSiteId,
-        caller: CallerContext,
-        label: Label,
-        shape: CallShape,
+        call_id: NodeID,
+        enum_symbol: Symbol,
+        variant: Symbol,
+        type_args: TypeArgs,
     ) {
-        let entry = self
-            .pending_resolved_call_sites
-            .entry(site_id)
-            .or_insert_with(|| PendingResolvedCallSite {
-                caller,
-                kind: PendingResolvedCallSiteKind::MemberAccess {
-                    label: label.clone(),
-                    target_candidates: vec![],
-                },
-            });
-        if entry.caller == CallerContext::TopLevel && caller != CallerContext::TopLevel {
-            entry.caller = caller;
-        } else {
-            assert_eq!(
-                entry.caller, caller,
-                "conflicting callers for call site {site_id:?}"
-            );
+        if call_id == NodeID::SYNTHESIZED {
+            return;
         }
-        entry.record_method_shape(shape);
-    }
-
-    pub(crate) fn record_member_access_site(
-        &mut self,
-        site_id: CallSiteId,
-        caller: CallerContext,
-        label: Label,
-    ) {
-        let entry = self
-            .pending_resolved_call_sites
-            .entry(site_id)
-            .or_insert_with(|| PendingResolvedCallSite {
-                caller,
-                kind: PendingResolvedCallSiteKind::MemberAccess {
-                    label,
-                    target_candidates: vec![],
-                },
-            });
-        if entry.caller == CallerContext::TopLevel && caller != CallerContext::TopLevel {
-            entry.caller = caller;
-        }
-    }
-
-    pub(crate) fn record_effect_call_site(
-        &mut self,
-        site_id: CallSiteId,
-        caller: CallerContext,
-        effect: Symbol,
-    ) {
-        self.pending_resolved_call_sites.insert(
-            site_id,
-            PendingResolvedCallSite {
-                caller,
-                kind: PendingResolvedCallSiteKind::EffectCall { effect },
+        self.callees.insert(
+            call_id,
+            Callee::Variant {
+                enum_symbol,
+                variant,
+                type_args,
             },
         );
     }
 
-    pub(crate) fn record_call_target(&mut self, callee_id: NodeID, target: CallTarget) {
-        let site_id = CallSiteId::from_resolved_member_constraint(callee_id);
-        let entry = self
-            .pending_resolved_call_sites
-            .entry(site_id)
-            .or_insert_with(|| {
-                let label = match &target {
-                    CallTarget::Member { label, .. } => label.clone(),
-                    CallTarget::Direct { sym } => Label::Named(sym.to_string()),
-                    CallTarget::Constructor { constructor } => {
-                        Label::Named(constructor.to_string())
-                    }
-                };
-                PendingResolvedCallSite {
-                    caller: CallerContext::TopLevel,
-                    kind: PendingResolvedCallSiteKind::MemberAccess {
-                        label,
-                        target_candidates: vec![],
-                    },
-                }
-            });
-        entry.record_target(target);
-    }
-
-    pub fn track_ty_instantiation(&mut self, id: NodeID, param: Symbol, ty: Ty) {
-        self.tracked_instantiations.insert_ty(id, param, ty);
-    }
-
-    pub fn track_row_instantiation(&mut self, id: NodeID, param: RowParamId, row: Row) {
-        self.tracked_instantiations.insert_row(id, param, row);
+    pub(crate) fn callees_snapshot(&self) -> Callees {
+        self.callees.clone()
     }
 
     pub fn shallow_generalize_row(&mut self, row: Row) -> Row {
@@ -990,20 +685,12 @@ impl TypeSession {
             },
             Row::Param(..) => row,
             Row::Var(meta) => {
-                let id = self
-                    .reverse_instantiations
-                    .row
-                    .get(&meta)
-                    .cloned()
-                    .unwrap_or_else(|| {
-                        let Row::Param(id) = self.new_row_type_param(Some(meta)) else {
-                            unreachable!()
-                        };
-
-                        self.reverse_instantiations.row.insert(meta, id);
-
-                        id
-                    });
+                let id = self.lookup_row_param_origin(meta).unwrap_or_else(|| {
+                    let Row::Param(id) = self.new_row_type_param(Some(meta)) else {
+                        unreachable!()
+                    };
+                    id
+                });
 
                 Row::Param(id)
             }
@@ -1019,10 +706,7 @@ impl TypeSession {
                     return ty;
                 }
 
-                // Use lookup_reverse_instantiation to find the type param through union-find.
-                // This handles the case where the meta was unified with another that has the mapping.
-                // The returned Ty::Param already includes the bounds.
-                self.lookup_reverse_instantiation(meta).unwrap_or_else(|| {
+                self.lookup_type_param_origin(meta).unwrap_or_else(|| {
                     let param = self.new_type_param(Some(meta));
                     tracing::warn!("did not solve {meta:?}, generating a type param even tho that's probably not what we want.");
                     param
@@ -1187,19 +871,66 @@ impl TypeSession {
         tys.iter().map(|ty| self.apply(ty, substitutions)).collect()
     }
 
-    fn apply_tracked_instantiations(&mut self, substitutions: &mut UnificationSubstitutions) {
-        let tracked = std::mem::take(&mut self.tracked_instantiations);
-        for (id, entries) in tracked.ty {
-            for (param, ty) in entries {
-                let ty = self.apply(&ty, substitutions);
-                self.tracked_instantiations.insert_ty(id, param, ty);
-            }
+    fn apply_type_args(
+        &mut self,
+        type_args: TypeArgs,
+        substitutions: &mut UnificationSubstitutions,
+    ) -> TypeArgs {
+        TypeArgs {
+            ty: type_args
+                .ty
+                .into_iter()
+                .map(|(param, ty)| (param, self.apply(&ty, substitutions)))
+                .collect(),
+            row: type_args
+                .row
+                .into_iter()
+                .map(|(param, row)| (param, self.apply_row(&row, substitutions)))
+                .collect(),
         }
-        for (id, entries) in tracked.row {
-            for (param, row) in entries {
-                let row = self.apply_row(&row, substitutions);
-                self.tracked_instantiations.insert_row(id, param, row);
-            }
+    }
+
+    fn apply_callees(&mut self, substitutions: &mut UnificationSubstitutions) {
+        let callees = std::mem::take(&mut self.callees);
+        for (id, callee) in callees {
+            let callee = match callee {
+                Callee::Function { symbol, type_args } => Callee::Function {
+                    symbol,
+                    type_args: self.apply_type_args(type_args, substitutions),
+                },
+                Callee::Initializer {
+                    nominal,
+                    initializer,
+                    type_args,
+                } => Callee::Initializer {
+                    nominal,
+                    initializer,
+                    type_args: self.apply_type_args(type_args, substitutions),
+                },
+                Callee::Method {
+                    symbol,
+                    self_ty,
+                    type_args,
+                } => Callee::Method {
+                    symbol,
+                    self_ty: self.apply(&self_ty, substitutions),
+                    type_args: self.apply_type_args(type_args, substitutions),
+                },
+                Callee::Variant {
+                    enum_symbol,
+                    variant,
+                    type_args,
+                } => Callee::Variant {
+                    enum_symbol,
+                    variant,
+                    type_args: self.apply_type_args(type_args, substitutions),
+                },
+                Callee::Effect { symbol, type_args } => Callee::Effect {
+                    symbol,
+                    type_args: self.apply_type_args(type_args, substitutions),
+                },
+            };
+            self.callees.insert(id, callee);
         }
     }
 
@@ -1224,7 +955,20 @@ impl TypeSession {
             self.term_env.insert(key, entry);
         }
 
-        self.apply_tracked_instantiations(substitutions);
+        self.apply_callees(substitutions);
+
+        let mut nominals = std::mem::take(&mut self.type_catalog.nominals);
+        for nominal in nominals.values_mut() {
+            for ty in nominal.properties.values_mut() {
+                *ty = self.apply(ty, substitutions);
+            }
+            for values in nominal.variants.values_mut() {
+                for ty in values.iter_mut() {
+                    *ty = self.apply(ty, substitutions);
+                }
+            }
+        }
+        _ = std::mem::replace(&mut self.type_catalog.nominals, nominals);
 
         let mut conformances = std::mem::take(&mut self.type_catalog.conformance_evidence);
         for conformance in conformances.values_mut() {
@@ -1233,10 +977,6 @@ impl TypeSession {
             }
         }
         _ = std::mem::replace(&mut self.type_catalog.conformance_evidence, conformances);
-    }
-
-    pub fn get_term_env(&self) -> &TermEnv {
-        &self.term_env
     }
 
     pub fn skolemize(&mut self, entry: &EnvEntry) -> Ty {
@@ -1259,9 +999,19 @@ impl TypeSession {
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
     pub fn link_row(&mut self, a: RowMetaId, b: RowMetaId) {
+        let origin = self.choose_origin(
+            self.meta_origins.borrow().get(&Meta::Row(a)).cloned(),
+            self.meta_origins.borrow().get(&Meta::Row(b)).cloned(),
+        );
         self.row_vars
             .unify_var_var(a, b)
             .unwrap_or_else(|_| unreachable!());
+        if let Some(origin) = origin {
+            let canon = self.row_vars.find(a);
+            self.meta_origins
+                .borrow_mut()
+                .insert(Meta::Row(canon), origin);
+        }
     }
 
     pub fn canon_meta(&mut self, id: MetaVarId) -> MetaVarId {
@@ -1287,69 +1037,57 @@ impl TypeSession {
         }
     }
 
-    pub fn lookup_reverse_instantiation(&mut self, id: MetaVarId) -> Option<Ty> {
-        // First try direct lookup
-        if let Some(param) = self.reverse_instantiations.ty.get(&id).cloned() {
-            return Some(param);
+    fn choose_origin(
+        &self,
+        lhs: Option<MetaOrigin>,
+        rhs: Option<MetaOrigin>,
+    ) -> Option<MetaOrigin> {
+        fn has_bounds(origin: &MetaOrigin) -> bool {
+            matches!(origin, MetaOrigin::TypeParam { bounds, .. } if !bounds.is_empty())
         }
 
-        // Try to find canonical representative - if the id doesn't exist in our table,
-        // return None (this var is from an imported module)
+        match (lhs, rhs) {
+            (Some(lhs), Some(rhs)) if has_bounds(&rhs) && !has_bounds(&lhs) => Some(rhs),
+            (Some(lhs), Some(_)) => Some(lhs),
+            (Some(origin), None) | (None, Some(origin)) => Some(origin),
+            (None, None) => None,
+        }
+    }
+
+    fn set_meta_origin(&mut self, meta: Meta, origin: MetaOrigin) {
+        self.meta_origins.borrow_mut().insert(meta, origin);
+    }
+
+    pub fn lookup_type_param_origin(&mut self, id: MetaVarId) -> Option<Ty> {
         let canon = self.try_canon_meta(id)?;
-
-        // Check if canonical representative has a mapping
-        if canon != id
-            && let Some(param) = self.reverse_instantiations.ty.get(&canon).cloned()
-        {
-            return Some(param);
+        match self.meta_origins.borrow().get(&Meta::Ty(canon)).cloned()? {
+            MetaOrigin::TypeParam { param, bounds } => Some(Ty::Param(param, bounds)),
+            MetaOrigin::RowParam { .. } => None,
         }
+    }
 
-        // Search all entries for one with the same canonical representative
-        // This handles the case where another meta in the equivalence class has the mapping
-        for (&meta_id, param) in &self.reverse_instantiations.ty.clone() {
-            if let Some(meta_canon) = self.try_canon_meta(meta_id)
-                && meta_canon == canon
-            {
-                return Some(param.clone());
-            }
+    fn lookup_row_param_origin(&mut self, id: RowMetaId) -> Option<RowParamId> {
+        let canon = self.try_canon_row(id)?;
+        match self.meta_origins.borrow().get(&Meta::Row(canon)).cloned()? {
+            MetaOrigin::RowParam { param } => Some(param),
+            MetaOrigin::TypeParam { .. } => None,
         }
-
-        None
     }
 
     #[instrument(level = tracing::Level::TRACE, skip(self))]
     pub fn link_meta(&mut self, a: MetaVarId, b: MetaVarId) {
-        let entry_a = self.reverse_instantiations.ty.get(&a).cloned();
-        let entry_b = self.reverse_instantiations.ty.get(&b).cloned();
-
+        let origin = self.choose_origin(
+            self.meta_origins.borrow().get(&Meta::Ty(a)).cloned(),
+            self.meta_origins.borrow().get(&Meta::Ty(b)).cloned(),
+        );
         self.meta_vars
             .unify_var_var(a, b)
             .unwrap_or_else(|_| unreachable!());
-
-        // Choose the entry with bounds if available
-        let chosen = match (&entry_a, &entry_b) {
-            (Some(Ty::Param(_, bounds_a)), Some(Ty::Param(_, bounds_b))) => {
-                // Prefer the one with non-empty bounds
-                if !bounds_a.is_empty() {
-                    entry_a
-                } else if !bounds_b.is_empty() {
-                    entry_b
-                } else {
-                    entry_a // Both empty, doesn't matter
-                }
-            }
-            (Some(_), None) => entry_a,
-            (None, Some(_)) => entry_b,
-            (None, None) => None,
-            // For non-Param entries (shouldn't happen but be safe)
-            _ => entry_a.or(entry_b),
-        };
-
-        // Propagate reverse_instantiation entry to both meta vars
-        // so that lookup from either will find it
-        if let Some(param) = chosen {
-            self.reverse_instantiations.ty.insert(a, param.clone());
-            self.reverse_instantiations.ty.insert(b, param);
+        if let Some(origin) = origin {
+            let canon = self.meta_vars.find(a);
+            self.meta_origins
+                .borrow_mut()
+                .insert(Meta::Ty(canon), origin);
         }
     }
 
@@ -1390,17 +1128,20 @@ impl TypeSession {
                         continue;
                     }
 
-                    // Use lookup_reverse_instantiation to find the param through union-find.
-                    // This handles the case where this meta var was unified with another
-                    // that has the mapping (e.g., return type of a call unified with scheme's param).
-                    let param = self.lookup_reverse_instantiation(*id).unwrap_or_else(|| {
+                    let param = self.lookup_type_param_origin(*id).unwrap_or_else(|| {
                         let local_id: u32 = self.vars.type_params.next_id();
                         let sym = Symbol::TypeParameter(TypeParameterId::new(
                             self.current_module_id,
                             local_id,
                         ));
                         let param = Ty::Param(sym, vec![]);
-                        self.reverse_instantiations.ty.insert(*id, param.clone());
+                        self.set_meta_origin(
+                            Meta::Ty(*id),
+                            MetaOrigin::TypeParam {
+                                param: sym,
+                                bounds: vec![],
+                            },
+                        );
                         tracing::trace!("generalizing {m:?} to {sym:?}");
                         foralls.insert(ForAll::Ty(sym));
                         param
@@ -1418,8 +1159,12 @@ impl TypeSession {
                     substitutions.ty.insert(*id, param);
                 }
                 Ty::Record(_, box Row::Var(id)) => {
-                    let levels = self.meta_levels.borrow();
-                    let level = levels.get(&Meta::Row(*id)).copied().unwrap_or_default();
+                    let level = self
+                        .meta_levels
+                        .borrow()
+                        .get(&Meta::Row(*id))
+                        .copied()
+                        .unwrap_or_default();
                     if level < context.level() {
                         tracing::trace!(
                             "discarding {m:?} due to level ({level:?} < {:?})",
@@ -1428,18 +1173,16 @@ impl TypeSession {
                         continue;
                     }
 
-                    let param_id = self
-                        .reverse_instantiations
-                        .row
-                        .get(id)
-                        .copied()
-                        .unwrap_or_else(|| {
-                            let param_id = self.vars.row_params.next_id();
-                            self.reverse_instantiations.row.insert(*id, param_id);
-                            tracing::trace!("generalizing {m:?} to {param_id:?}");
-                            foralls.insert(ForAll::Row(param_id));
-                            param_id
-                        });
+                    let param_id = self.lookup_row_param_origin(*id).unwrap_or_else(|| {
+                        let param_id = self.vars.row_params.next_id();
+                        self.set_meta_origin(
+                            Meta::Row(*id),
+                            MetaOrigin::RowParam { param: param_id },
+                        );
+                        tracing::trace!("generalizing {m:?} to {param_id:?}");
+                        foralls.insert(ForAll::Row(param_id));
+                        param_id
+                    });
 
                     foralls.insert(ForAll::Row(param_id));
                     substitutions.row.insert(*id, Row::Param(param_id));
@@ -1594,17 +1337,6 @@ impl TypeSession {
             .lookup_evidence(&mut self.type_catalog, self.modules.as_ref(), key)
     }
 
-    pub(crate) fn lookup_witness(
-        &self,
-        key: &ConformanceKey,
-        label: &Label,
-        required_sym: &Symbol,
-    ) -> Option<Symbol> {
-        self.type_catalog
-            .lookup_witness(key, label, required_sym)
-            .or_else(|| self.modules.lookup_witness(key, label, required_sym))
-    }
-
     pub(crate) fn record_evidence(&mut self, key: ConformanceKey, evidence: ConformanceEvidence) {
         self.conformance
             .record_evidence(&mut self.type_catalog, key, evidence);
@@ -1723,7 +1455,7 @@ impl TypeSession {
             .get_witness(label, required_sym)
             .or_else(|| match origin {
                 ConformanceOrigin::Declared => None,
-                ConformanceOrigin::AutoDerived | ConformanceOrigin::Inherited => {
+                ConformanceOrigin::Inherited => {
                     self.direct_member_symbol(&key.conforming_id, label)
                 }
             })
@@ -1776,7 +1508,7 @@ impl TypeSession {
         match self.apply(base, substitutions) {
             Ty::Param(_, bounds) => bounds,
             Ty::Var { id, .. } => {
-                if let Some(Ty::Param(_, bounds)) = self.lookup_reverse_instantiation(id) {
+                if let Some(Ty::Param(_, bounds)) = self.lookup_type_param_origin(id) {
                     bounds
                 } else {
                     vec![]
@@ -2113,7 +1845,13 @@ impl TypeSession {
         let sym = Symbol::TypeParameter(TypeParameterId::new(self.current_module_id, local_id));
         let param = Ty::Param(sym, vec![]);
         if let Some(meta) = meta {
-            self.reverse_instantiations.ty.insert(meta, param.clone());
+            self.set_meta_origin(
+                Meta::Ty(meta),
+                MetaOrigin::TypeParam {
+                    param: sym,
+                    bounds: vec![],
+                },
+            );
         }
 
         tracing::trace!("Fresh type param {sym:?}");
@@ -2124,9 +1862,13 @@ impl TypeSession {
         let local_id: u32 = self.vars.type_params.next_id();
         let sym = Symbol::TypeParameter(TypeParameterId::new(self.current_module_id, local_id));
         if let Some(meta) = meta {
-            self.reverse_instantiations
-                .ty
-                .insert(meta, Ty::Param(sym, vec![]));
+            self.set_meta_origin(
+                Meta::Ty(meta),
+                MetaOrigin::TypeParam {
+                    param: sym,
+                    bounds: vec![],
+                },
+            );
         }
 
         tracing::trace!("Fresh type param {sym:?}");
@@ -2137,7 +1879,7 @@ impl TypeSession {
         let id = self.vars.row_params.next_id();
 
         if let Some(meta) = meta {
-            self.reverse_instantiations.row.insert(meta, id);
+            self.set_meta_origin(Meta::Row(meta), MetaOrigin::RowParam { param: id });
         }
 
         tracing::trace!("Fresh type param {id:?}");
@@ -2158,8 +1900,19 @@ impl TypeSession {
     }
 
     pub(crate) fn new_ty_meta_var(&mut self, level: Level) -> Ty {
+        self.new_ty_meta_var_with_origin(level, None)
+    }
+
+    pub(crate) fn new_ty_meta_var_with_origin(
+        &mut self,
+        level: Level,
+        origin: Option<MetaOrigin>,
+    ) -> Ty {
         let id = self.meta_vars.new_key(level);
         self.meta_levels.borrow_mut().insert(Meta::Ty(id), level);
+        if let Some(origin) = origin {
+            self.set_meta_origin(Meta::Ty(id), origin);
+        }
         Ty::Var { id, level }
     }
 
@@ -2170,23 +1923,32 @@ impl TypeSession {
     }
 
     pub(crate) fn new_row_meta_var(&mut self, level: Level) -> Row {
+        self.new_row_meta_var_with_origin(level, None)
+    }
+
+    pub(crate) fn new_row_meta_var_with_origin(
+        &mut self,
+        level: Level,
+        origin: Option<MetaOrigin>,
+    ) -> Row {
         let id = self.row_vars.new_key(level);
         self.meta_levels.borrow_mut().insert(Meta::Row(id), level);
+        if let Some(origin) = origin {
+            self.set_meta_origin(Meta::Row(id), origin);
+        }
         Row::Var(id)
     }
 
-    /// Find a protocol's ProtocolId by name.
-    pub(crate) fn find_protocol_id(&self, protocol_name: &str) -> Option<ProtocolId> {
+    fn showable_protocol_id(&self) -> Option<ProtocolId> {
         for (sym, name) in &self.resolved_names.symbol_names {
-            if name == protocol_name
+            if name == "Showable"
                 && let Symbol::Protocol(id) = sym
             {
                 return Some(*id);
             }
         }
-        // Also check imported modules
         for (sym, name) in self.modules.imported_symbol_names() {
-            if name == protocol_name
+            if name == "Showable"
                 && let Symbol::Protocol(id) = sym
             {
                 return Some(id);
@@ -2195,81 +1957,114 @@ impl TypeSession {
         None
     }
 
-    /// Lazily initialize the set of auto-derivable protocols.
-    fn init_auto_derivable_protocols(&mut self) {
-        if !self.auto_derivable_protocols.is_empty() {
-            return;
-        }
-        if let Some(id) = self.find_protocol_id("Showable") {
-            self.auto_derivable_protocols.push(id);
+    pub(crate) fn is_showable_protocol(&self, protocol_id: ProtocolId) -> bool {
+        self.showable_protocol_id() == Some(protocol_id)
+    }
+
+    pub(crate) fn derive_showable_for_nominals(
+        &mut self,
+        constraints: &mut ConstraintStore,
+    ) -> Vec<ShowDerivation> {
+        let Some(protocol_id) = self.showable_protocol_id() else {
+            return vec![];
+        };
+        let nominals: Vec<_> = self
+            .type_catalog
+            .nominals
+            .keys()
+            .copied()
+            .filter(|symbol| matches!(symbol, Symbol::Struct(..) | Symbol::Enum(..)))
+            .filter(|symbol| symbol.module_id() == Some(self.current_module_id))
+            .collect();
+
+        nominals
+            .into_iter()
+            .filter_map(|nominal| {
+                self.derive_showable_for_nominal(nominal, protocol_id, constraints)
+            })
+            .collect()
+    }
+
+    fn show_required_type_params(ty: &Ty, required: &mut FxHashSet<Symbol>) {
+        match ty {
+            Ty::Param(param, _) => {
+                required.insert(*param);
+            }
+            Ty::Nominal { type_args, .. } | Ty::Tuple(type_args) => {
+                for arg in type_args {
+                    Self::show_required_type_params(arg, required);
+                }
+            }
+            Ty::Constructor { params, ret, .. } => {
+                for param in params {
+                    Self::show_required_type_params(param, required);
+                }
+                Self::show_required_type_params(ret, required);
+            }
+            Ty::Record(_, row) => Self::show_required_row_params(row, required),
+            Ty::Func(..) => {}
+            Ty::Projection { base, .. } => Self::show_required_type_params(base, required),
+            Ty::Primitive(..) | Ty::Rigid(..) | Ty::Var { .. } | Ty::Error(..) => {}
         }
     }
 
-    /// Check whether a protocol can be auto-derived.
-    pub(crate) fn is_auto_derivable(&mut self, protocol_id: ProtocolId) -> bool {
-        self.init_auto_derivable_protocols();
-        self.auto_derivable_protocols.contains(&protocol_id)
+    fn show_required_row_params(row: &Row, required: &mut FxHashSet<Symbol>) {
+        match row {
+            Row::Extend { row, ty, .. } => {
+                Self::show_required_row_params(row, required);
+                Self::show_required_type_params(ty, required);
+            }
+            Row::Empty | Row::Param(..) | Row::Var(..) => {}
+        }
     }
 
-    /// Given a method label, return which auto-derivable protocol it belongs to (if any).
-    pub(crate) fn auto_derivable_method_protocol(&mut self, label: &Label) -> Option<ProtocolId> {
-        self.init_auto_derivable_protocols();
-        // Index-based iteration to avoid cloning the Vec (lookup_method_requirements takes &mut self).
-        for i in 0..self.auto_derivable_protocols.len() {
-            let protocol_id = self.auto_derivable_protocols[i];
-            if let Some(reqs) = self.lookup_method_requirements(protocol_id.into())
-                && reqs.contains_key(label)
-            {
-                return Some(protocol_id);
+    fn showable_nominal_ty(
+        &self,
+        nominal_sym: Symbol,
+        nominal: &Nominal,
+        protocol_id: ProtocolId,
+    ) -> Ty {
+        let mut required = FxHashSet::default();
+        for ty in nominal.properties.values() {
+            Self::show_required_type_params(ty, &mut required);
+        }
+        for tys in nominal.variants.values() {
+            for ty in tys {
+                Self::show_required_type_params(ty, &mut required);
             }
         }
-        None
+
+        let type_args = nominal
+            .type_params
+            .iter()
+            .map(|ty| match ty {
+                Ty::Param(param, bounds) if required.contains(param) => {
+                    let mut bounds = bounds.clone();
+                    if !bounds.contains(&protocol_id) {
+                        bounds.push(protocol_id);
+                    }
+                    Ty::Param(*param, bounds)
+                }
+                _ => ty.clone(),
+            })
+            .collect();
+
+        Ty::Nominal {
+            symbol: nominal_sym,
+            type_args,
+        }
     }
 
-    /// Look up a protocol method witness for a conforming type.
-    pub(crate) fn find_witness(
-        &mut self,
-        conforming_sym: Symbol,
-        protocol_id: ProtocolId,
-        method_label: &Label,
-    ) -> Option<Symbol> {
-        let key = ConformanceKey {
-            protocol_id,
-            conforming_id: conforming_sym,
-        };
-        let required_sym = self
-            .lookup_method_requirements(Symbol::Protocol(protocol_id))?
-            .get(method_label)
-            .copied()?;
-        self.lookup_witness(&key, method_label, &required_sym)
-    }
-
-    /// Register a symbol with a monomorphic type in the term environment.
-    pub(crate) fn register_mono(&mut self, sym: Symbol, ty: Ty) {
-        self.term_env.insert(sym, EnvEntry::Mono(ty));
-    }
-
-    /// Auto-derive a protocol for a nominal type on demand.
-    /// Returns the first method symbol if successful, None if the type can't be auto-derived.
-    pub(crate) fn auto_derive_protocol(
+    fn derive_showable_for_nominal(
         &mut self,
         nominal_sym: Symbol,
         protocol_id: ProtocolId,
         constraints: &mut ConstraintStore,
-    ) -> Option<Symbol> {
-        let derive_key = (nominal_sym, protocol_id);
-
-        // Already derived?
-        if let Some(methods) = self.auto_derived.get(&derive_key) {
-            return methods.first().map(|(_, method_sym, _)| *method_sym);
-        }
-
-        // Must be a struct or enum
+    ) -> Option<ShowDerivation> {
         if !matches!(nominal_sym, Symbol::Struct(..) | Symbol::Enum(..)) {
             return None;
         }
 
-        // Must not already have an explicit conformance claim or validated evidence.
         let key = ConformanceKey {
             protocol_id,
             conforming_id: nominal_sym,
@@ -2279,7 +2074,6 @@ impl TypeSession {
             return None;
         }
 
-        // Look up protocol Self param
         let protocol_symbol: Symbol = protocol_id.into();
         let Some(EnvEntry::Scheme(Scheme {
             ty: Ty::Param(self_id, _),
@@ -2290,23 +2084,34 @@ impl TypeSession {
         };
 
         let nominal = self.lookup_nominal(&nominal_sym)?;
-        let nominal_ty = Ty::Nominal {
-            symbol: nominal_sym,
-            type_args: nominal.type_params.clone(),
-        };
+        let nominal_ty = self.showable_nominal_ty(nominal_sym, &nominal, protocol_id);
 
-        // Build substitution: Self → nominal_ty
         let mut subs = FxHashMap::default();
         subs.insert(Ty::Param(self_id, vec![]), nominal_ty.clone());
 
-        // Look up method requirements
-        let Some(requirements) = self.lookup_method_requirements(protocol_symbol) else {
-            return None;
-        };
+        let show_label = Label::Named("show".into());
+        let requirements = self.lookup_method_requirements(protocol_symbol)?;
+        let req_sym = *requirements.get(&show_label)?;
+        let entry = self.lookup(&req_sym)?;
+        let req_ty = substitute(&entry._as_ty(), &subs);
+
+        let method_sym =
+            Symbol::InstanceMethod(self.symbols.next_instance_method(self.current_module_id));
+        let self_param_sym = Symbol::ParamLocal(self.symbols.next_param());
+
+        self.insert(method_sym, req_ty, constraints);
+        self.term_env
+            .insert(self_param_sym, EnvEntry::Mono(nominal_ty));
+
+        self.type_catalog
+            .instance_methods
+            .entry(nominal_sym)
+            .or_default()
+            .insert(show_label.clone(), method_sym);
 
         let mut witnesses = WitnessTable::default();
-        let mut derived_methods = Vec::new();
-        let mut first_method_sym = None;
+        witnesses.methods.insert(show_label.clone(), method_sym);
+        witnesses.requirements.insert(req_sym, method_sym);
 
         let type_name = self
             .resolved_names
@@ -2320,58 +2125,19 @@ impl TypeSession {
                     .cloned()
             })
             .unwrap_or_default();
+        self.resolved_names
+            .symbol_names
+            .insert(method_sym, format!("{type_name}.show"));
+        self.resolved_names
+            .symbol_names
+            .insert(self_param_sym, "self".into());
 
-        for (label, req_sym) in &requirements {
-            let Some(entry) = self.lookup(req_sym) else {
-                continue;
-            };
-
-            // Get the requirement type and substitute Self → nominal_ty
-            let req_ty = substitute(&entry._as_ty(), &subs);
-
-            // Allocate symbols for this method
-            let method_sym =
-                Symbol::InstanceMethod(self.symbols.next_instance_method(self.current_module_id));
-            let self_param_sym = Symbol::ParamLocal(self.symbols.next_param());
-
-            if first_method_sym.is_none() {
-                first_method_sym = Some(method_sym);
-            }
-
-            // Register in term_env
-            self.insert(method_sym, req_ty, constraints);
-            self.term_env
-                .insert(self_param_sym, EnvEntry::Mono(nominal_ty.clone()));
-
-            // Register as instance method
-            self.type_catalog
-                .instance_methods
-                .entry(nominal_sym)
-                .or_default()
-                .insert(label.clone(), method_sym);
-
-            witnesses.methods.insert(label.clone(), method_sym);
-            witnesses.requirements.insert(*req_sym, method_sym);
-
-            derived_methods.push((label.clone(), method_sym, self_param_sym));
-
-            // Register symbol names for debugging
-            self.resolved_names
-                .symbol_names
-                .insert(method_sym, format!("{type_name}.{label}"));
-            self.resolved_names
-                .symbol_names
-                .insert(self_param_sym, "self".into());
-        }
-
-        self.record_evidence(
-            key,
-            ConformanceEvidence::auto_derived(nominal_sym, protocol_id, witnesses),
-        );
-
-        // Record for later body synthesis
-        self.auto_derived.insert(derive_key, derived_methods);
-
-        first_method_sym
+        Some(ShowDerivation {
+            nominal: nominal_sym,
+            protocol_id,
+            method: method_sym,
+            self_param: self_param_sym,
+            witnesses,
+        })
     }
 }

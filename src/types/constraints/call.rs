@@ -29,7 +29,6 @@ pub struct Call {
     pub args: Vec<Ty>,
     pub type_args: Vec<Ty>,
     pub returns: Ty,
-    pub receiver: Option<Ty>, // If it's a method
     pub effect_context_row: Row,
 }
 
@@ -51,19 +50,6 @@ impl Call {
                 self.callee
             );
 
-            // For unqualified variant calls like `.foo(123)`, if we know the return type
-            // is a Nominal and we have an unknown receiver, unify them since the receiver
-            // of a variant constructor is the same type as its return value.
-            if let Some(receiver_ty) = &self.receiver {
-                let applied_receiver = session.apply(receiver_ty, &mut context.substitutions_mut());
-                if let Ty::Var { .. } = applied_receiver
-                    && let Ty::Nominal { .. } = &returns
-                    && let Ok(metas) = unify(receiver_ty, &returns, context, session)
-                {
-                    return SolveResult::Solved(metas);
-                }
-            }
-
             // We don't know the callee yet, defer
             return SolveResult::Defer(DeferralReason::WaitingOnMeta(Meta::Ty(*id)));
         }
@@ -80,6 +66,12 @@ impl Call {
 
                 let type_args = if let Some(nominal) = nominal.as_ref() {
                     if nominal.type_params.is_empty() {
+                        if !self.type_args.is_empty() {
+                            return SolveResult::Err(TypeError::GenericArgCount {
+                                expected: 0,
+                                actual: self.type_args.len() as u8,
+                            });
+                        }
                         vec![]
                     } else if self.type_args.is_empty() {
                         nominal
@@ -126,16 +118,19 @@ impl Call {
                                 .cloned()
                                 .map(|ty| (ty, self.callee_id))
                                 .collect();
-                            let (ty, _) = entry.instantiate_with_args(
-                                self.callee_id,
-                                &type_arg_pairs,
-                                session,
-                                context,
-                                constraints,
-                            );
-                            ty
+                            entry
+                                .instantiate_with_args(
+                                    self.callee_id,
+                                    &type_arg_pairs,
+                                    session,
+                                    context,
+                                    constraints,
+                                )
+                                .value
                         } else {
-                            entry.instantiate(self.callee_id, constraints, context, session)
+                            entry
+                                .instantiate(self.callee_id, constraints, context, session)
+                                .value
                         }
                     } else {
                         Ty::Error(
@@ -187,9 +182,9 @@ impl Call {
                 let reversed = self.callee.clone().mapping(
                     &mut |t| {
                         if let Ty::Var { id, .. } = t
-                            && let Some(param) = session.reverse_instantiations.ty.get(&id)
+                            && let Some(param) = session.lookup_type_param_origin(id)
                         {
-                            return param.clone();
+                            return param;
                         }
 
                         t
@@ -281,7 +276,7 @@ impl Call {
         match session.apply(ty, &mut context.substitutions_mut()) {
             Ty::Param(_, bounds) => bounds,
             Ty::Var { id, .. } => {
-                if let Some(Ty::Param(_, bounds)) = session.lookup_reverse_instantiation(id) {
+                if let Some(Ty::Param(_, bounds)) = session.lookup_type_param_origin(id) {
                     bounds
                 } else {
                     vec![]

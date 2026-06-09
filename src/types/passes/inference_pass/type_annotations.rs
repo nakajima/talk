@@ -146,6 +146,16 @@ impl InferencePass<'_> {
                 }
 
                 if matches!(name.symbol(), Ok(Symbol::Builtin(..))) {
+                    if !generic_args.is_empty() {
+                        return Err(self.report_error(
+                            type_annotation.id,
+                            TypeError::GenericArgCount {
+                                expected: 0,
+                                actual: generic_args.len() as u8,
+                            },
+                        ));
+                    }
+
                     return Ok(resolve_builtin_type(
                         &name
                             .symbol()
@@ -154,9 +164,22 @@ impl InferencePass<'_> {
                     .0);
                 }
 
+                if let Some(nominal) = self.session.lookup_nominal(&sym)
+                    && !generic_args.is_empty()
+                    && generic_args.len() != nominal.type_params.len()
+                {
+                    return Err(self.report_error(
+                        type_annotation.id,
+                        TypeError::GenericArgCount {
+                            expected: nominal.type_params.len() as u8,
+                            actual: generic_args.len() as u8,
+                        },
+                    ));
+                }
+
                 // Do we know about this already? Cool.
                 if let Some(entry) = self.session.lookup(&sym) {
-                    let (ty, subsitutions) = entry.instantiate_with_args(
+                    let instantiated = entry.instantiate_with_args(
                         type_annotation.id,
                         &generic_args,
                         self.session,
@@ -164,9 +187,10 @@ impl InferencePass<'_> {
                         &mut self.constraints,
                     );
 
-                    self.instantiations.insert(type_annotation.id, subsitutions);
+                    self.instantiations
+                        .insert(type_annotation.id, instantiated.type_args.clone());
 
-                    return Ok(ty);
+                    return Ok(instantiated.value);
                 } else {
                     tracing::warn!("nope, did not find anything in the env for {name:?}");
                 }

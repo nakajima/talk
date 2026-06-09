@@ -15,7 +15,7 @@ use crate::{
         constraints::store::GroupId,
         infer_ty::{Level, Ty},
         predicate::Predicate,
-        type_operations::{InstantiationSubstitutions, UnificationSubstitutions},
+        type_operations::UnificationSubstitutions,
         type_session::TypeSession,
     },
 };
@@ -33,7 +33,6 @@ pub struct SolveContext {
     kind: SolveContextKind,
     level: Level,
     group: GroupId,
-    instantiations: InstantiationSubstitutions,
     shared: Rc<RefCell<SharedSolveState>>,
 }
 
@@ -68,7 +67,6 @@ impl SolveContext {
             kind,
             level,
             group,
-            instantiations: Default::default(),
             shared: Rc::new(RefCell::new(SharedSolveState {
                 projection_placeholders: Default::default(),
                 substitutions,
@@ -84,7 +82,6 @@ impl SolveContext {
             kind: self.kind,
             level: self.level.next(),
             group: self.group,
-            instantiations: Default::default(),
             shared: Rc::clone(&self.shared),
         }
     }
@@ -116,10 +113,6 @@ impl SolveContext {
 
     pub fn substitutions_mut(&self) -> RefMut<'_, UnificationSubstitutions> {
         RefMut::map(self.shared.borrow_mut(), |s| &mut s.substitutions)
-    }
-
-    pub fn instantiations_mut(&mut self) -> &mut InstantiationSubstitutions {
-        &mut self.instantiations
     }
 
     pub fn normalize(&self, ty: Ty, session: &mut TypeSession) -> Ty {

@@ -466,11 +466,11 @@ impl Driver<NameResolved> {
         );
 
         let (_paths, mut asts): (Vec<_>, Vec<_>) = self.phase.asts.iter_mut().unzip();
-        let (ast, diagnostics) = InferencePass::drive(&mut asts, &mut session);
+        let (mut ast, diagnostics) = InferencePass::drive(&mut asts, &mut session);
 
         self.phase.diagnostics.extend(diagnostics);
         let symbols = std::mem::take(&mut session.symbols);
-        let (types, resolved_names) = session.finalize().map_err(CompileError::Typing)?;
+        let (types, resolved_names) = session.finalize(&mut ast).map_err(CompileError::Typing)?;
 
         Ok((ast, symbols, resolved_names, types))
     }

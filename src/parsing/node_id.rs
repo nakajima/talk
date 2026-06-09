@@ -14,6 +14,7 @@
 pub struct FileID(pub u32);
 
 impl FileID {
+    pub const SPECIALIZED: FileID = FileID(u32::MAX - 2);
     pub const SYNTHESIZED: FileID = FileID(u32::MAX - 1);
 }
 

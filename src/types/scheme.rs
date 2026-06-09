@@ -13,8 +13,8 @@ use crate::{
         infer_ty::{Level, Ty},
         predicate::Predicate,
         solve_context::SolveContext,
-        type_operations::{InstantiationSubstitutions, instantiate_ty},
-        type_session::TypeSession,
+        type_args::{Instantiated, TypeArgs},
+        type_session::{MetaOrigin, TypeSession},
     },
 };
 
@@ -91,77 +91,42 @@ impl Scheme {
         }
     }
 
-    fn track_existing_ty_instantiation(
-        &self,
-        id: NodeID,
-        param: Symbol,
-        meta: crate::types::infer_ty::MetaVarId,
-        session: &mut TypeSession,
-    ) {
-        session.track_ty_instantiation(
-            id,
-            param,
-            Ty::Var {
-                id: meta,
-                level: Level(1),
-            },
-        );
-    }
-
     fn fresh_ty_instantiation(
         &self,
-        id: NodeID,
         param: Symbol,
         level: Level,
-        tracked_level: Level,
         session: &mut TypeSession,
-        substitutions: &mut InstantiationSubstitutions,
+        type_args: &mut TypeArgs,
     ) -> Ty {
-        let Ty::Var { id: meta, .. } = session.new_ty_meta_var(level) else {
+        let bounds = self.bounds_for(&param);
+        let Ty::Var { id: meta, .. } = session.new_ty_meta_var_with_origin(
+            level,
+            Some(MetaOrigin::TypeParam {
+                param,
+                bounds: bounds.clone(),
+            }),
+        ) else {
             unreachable!()
         };
 
-        let bounds = self.bounds_for(&param);
         tracing::debug!("instantiating {param:?} with {meta:?}, bounds: {bounds:?}");
-        session
-            .reverse_instantiations
-            .ty
-            .insert(meta, Ty::Param(param, bounds));
-        substitutions.insert_ty(id, param, meta);
 
-        let ty = Ty::Var {
-            id: meta,
-            level: tracked_level,
-        };
-        session.track_ty_instantiation(id, param, ty.clone());
+        let ty = Ty::Var { id: meta, level };
+        type_args.ty.insert(param, ty.clone());
         ty
     }
 
     fn fresh_row_instantiation(
         &self,
-        id: NodeID,
         param: RowParamId,
         level: Level,
         session: &mut TypeSession,
-        substitutions: &mut InstantiationSubstitutions,
+        type_args: &mut TypeArgs,
     ) {
-        let Row::Var(meta) = session.new_row_meta_var(level) else {
-            unreachable!()
-        };
-        tracing::trace!("instantiating {param:?} with {meta:?}");
-        substitutions.insert_row(id, param, meta);
-        session.reverse_instantiations.row.insert(meta, param);
-        session.track_row_instantiation(id, param, Row::Var(meta));
-    }
-
-    fn instantiate_predicates(
-        &self,
-        id: NodeID,
-        constraints: &mut ConstraintStore,
-        context: &mut SolveContext,
-    ) {
-        for predicate in &self.predicates {
-            predicate.instantiate(id, constraints, context);
+        let row = session.new_row_meta_var_with_origin(level, Some(MetaOrigin::RowParam { param }));
+        tracing::trace!("instantiating {param:?} with {row:?}");
+        if let Row::Var(meta) = row {
+            type_args.row.insert(param, Row::Var(meta));
         }
     }
 
@@ -172,7 +137,7 @@ impl Scheme {
         constraints: &mut ConstraintStore,
         context: &mut SolveContext,
         session: &mut TypeSession,
-    ) -> Ty {
+    ) -> Instantiated<Ty> {
         tracing::debug!(
             "Scheme::instantiate - foralls: {:?}, predicates: {:?}, ty: {:?}",
             self.foralls,
@@ -180,44 +145,64 @@ impl Scheme {
             self.ty
         );
         let level = context.level();
+        let mut type_args = TypeArgs::default();
         for forall in &self.foralls {
             match forall {
                 ForAll::Ty(param) => {
-                    if let Some(meta) = context.instantiations_mut().get_ty(&id, param).copied() {
-                        self.track_existing_ty_instantiation(id, *param, meta, session);
-                    } else {
-                        self.fresh_ty_instantiation(
-                            id,
-                            *param,
-                            level,
-                            level,
-                            session,
-                            context.instantiations_mut(),
-                        );
-                    }
+                    self.fresh_ty_instantiation(*param, level, session, &mut type_args);
                 }
                 ForAll::Row(param) => {
-                    if context.instantiations_mut().get_row(&id, param).is_none() {
-                        self.fresh_row_instantiation(
-                            id,
-                            *param,
-                            level,
-                            session,
-                            context.instantiations_mut(),
-                        );
-                    }
+                    self.fresh_row_instantiation(*param, level, session, &mut type_args);
                 }
             };
         }
 
-        self.instantiate_predicates(id, constraints, context);
+        for predicate in &self.predicates {
+            predicate.instantiate(id, &type_args, constraints, context);
+        }
 
-        tracing::trace!(
-            "solver_instantiate ret subs: {:?}",
-            context.instantiations_mut()
-        );
+        tracing::trace!("solver_instantiate ret type args: {:?}", type_args);
 
-        instantiate_ty(id, self.ty.clone(), context.instantiations_mut(), level)
+        Instantiated::new(type_args.apply(self.ty.clone()), type_args)
+    }
+
+    fn explicit_ty_arg_count(&self) -> usize {
+        self.foralls
+            .iter()
+            .filter(|forall| matches!(forall, ForAll::Ty(_)))
+            .count()
+    }
+
+    fn validate_explicit_type_args(
+        &self,
+        args: &[(Ty, NodeID)],
+    ) -> Result<(), crate::types::type_error::TypeError> {
+        if args.is_empty() {
+            return Ok(());
+        }
+
+        let expected = self.explicit_ty_arg_count();
+        if args.len() != expected {
+            return Err(crate::types::type_error::TypeError::GenericArgCount {
+                expected: expected as u8,
+                actual: args.len() as u8,
+            });
+        }
+
+        Ok(())
+    }
+
+    #[instrument(skip(self, session, context, constraints,))]
+    pub fn instantiate_with_checked_args(
+        &self,
+        id: NodeID,
+        args: &[(Ty, NodeID)],
+        session: &mut TypeSession,
+        context: &mut SolveContext,
+        constraints: &mut ConstraintStore,
+    ) -> Result<Instantiated<Ty>, crate::types::type_error::TypeError> {
+        self.validate_explicit_type_args(args)?;
+        Ok(self.instantiate_with_args(id, args, session, context, constraints))
     }
 
     #[instrument(skip(self, session, context, constraints,))]
@@ -228,14 +213,13 @@ impl Scheme {
         session: &mut TypeSession,
         context: &mut SolveContext,
         constraints: &mut ConstraintStore,
-    ) -> (Ty, InstantiationSubstitutions) {
-        let mut substitutions = InstantiationSubstitutions::default();
+    ) -> Instantiated<Ty> {
+        let mut type_args = TypeArgs::default();
         let (ty_foralls, row_foralls): (Vec<ForAll>, Vec<ForAll>) = self
             .foralls
             .iter()
             .partition(|fa| matches!(fa, ForAll::Ty(_)));
 
-        // We used to zip these with ty_foralls but that failed when the counts were different.
         let mut args = args.iter().rev().collect_vec();
         let group = context.group_info();
 
@@ -244,14 +228,7 @@ impl Scheme {
                 unreachable!()
             };
 
-            let ty = self.fresh_ty_instantiation(
-                id,
-                *param,
-                context.level(),
-                Level(1),
-                session,
-                &mut substitutions,
-            );
+            let ty = self.fresh_ty_instantiation(*param, context.level(), session, &mut type_args);
 
             if let Some((arg_ty, arg_id)) = args.pop() {
                 constraints.wants_equals_at(*arg_id, ty, arg_ty.clone(), &group);
@@ -263,20 +240,13 @@ impl Scheme {
                 unreachable!();
             };
 
-            self.fresh_row_instantiation(
-                id,
-                row_param,
-                context.level(),
-                session,
-                &mut substitutions,
-            );
+            self.fresh_row_instantiation(row_param, context.level(), session, &mut type_args);
         }
 
-        self.instantiate_predicates(id, constraints, context);
+        for predicate in &self.predicates {
+            predicate.instantiate(id, &type_args, constraints, context);
+        }
 
-        (
-            instantiate_ty(id, self.ty.clone(), &substitutions, context.level()),
-            substitutions,
-        )
+        Instantiated::new(type_args.apply(self.ty.clone()), type_args)
     }
 }

@@ -16,7 +16,7 @@ pub mod tests {
             },
         },
         types::{
-            call_site::{CallSiteId, ResolvedCallSiteKind},
+            callee::Callee,
             conformance::ConformanceKey,
             infer_row::{Row, RowParamId},
             infer_ty::Ty,
@@ -262,7 +262,9 @@ pub mod tests {
                 TypedStmtKind::Expr(TypedExpr {
                     kind:
                         TypedExprKind::Call {
-                            callee: box root_1, ..
+                            callee: box _root_1,
+                            resolved_callee: Some(callee_1),
+                            ..
                         },
                     ..
                 }),
@@ -277,7 +279,9 @@ pub mod tests {
                 TypedStmtKind::Expr(TypedExpr {
                     kind:
                         TypedExprKind::Call {
-                            callee: box root_2, ..
+                            callee: box _root_2,
+                            resolved_callee: Some(callee_2),
+                            ..
                         },
                     ..
                 }),
@@ -297,32 +301,23 @@ pub mod tests {
             panic!("didn't get func type param");
         };
 
-        let site_1 = types
-            .resolved_call_sites
-            .get(&CallSiteId::from_callee_node(root_1.id))
-            .unwrap();
-        let site_2 = types
-            .resolved_call_sites
-            .get(&CallSiteId::from_callee_node(root_2.id))
-            .unwrap();
-
-        let ResolvedCallSiteKind::DirectCall {
-            substitutions: substitutions_1,
+        let Callee::Function {
+            type_args: type_args_1,
             ..
-        } = &site_1.kind
+        } = callee_1
         else {
-            panic!("expected direct call site");
+            panic!("expected function callee");
         };
-        let ResolvedCallSiteKind::DirectCall {
-            substitutions: substitutions_2,
+        let Callee::Function {
+            type_args: type_args_2,
             ..
-        } = &site_2.kind
+        } = callee_2
         else {
-            panic!("expected direct call site");
+            panic!("expected function callee");
         };
 
-        assert_eq!(substitutions_1.ty.get(type_param), Some(&Ty::Int));
-        assert_eq!(substitutions_2.ty.get(type_param), Some(&Ty::Bool));
+        assert_eq!(type_args_1.ty.get(type_param), Some(&Ty::Int));
+        assert_eq!(type_args_2.ty.get(type_param), Some(&Ty::Bool));
     }
 
     #[test]
@@ -346,9 +341,9 @@ pub mod tests {
                             callee:
                                 box TypedExpr {
                                     kind: TypedExprKind::Constructor(..),
-                                    id: constructor_1_id,
                                     ..
                                 },
+                            resolved_callee: Some(callee_1),
                             ..
                         },
                     ..
@@ -367,9 +362,9 @@ pub mod tests {
                             callee:
                                 box TypedExpr {
                                     kind: TypedExprKind::Constructor(..),
-                                    id: constructor_2_id,
                                     ..
                                 },
+                            resolved_callee: Some(callee_2),
                             ..
                         },
                     ..
@@ -396,32 +391,23 @@ pub mod tests {
             unreachable!()
         };
 
-        let site_1 = types
-            .resolved_call_sites
-            .get(&CallSiteId::from_callee_node(*constructor_1_id))
-            .unwrap();
-        let site_2 = types
-            .resolved_call_sites
-            .get(&CallSiteId::from_callee_node(*constructor_2_id))
-            .unwrap();
-
-        let ResolvedCallSiteKind::InitializerCall {
-            substitutions: substitutions_1,
+        let Callee::Initializer {
+            type_args: type_args_1,
             ..
-        } = &site_1.kind
+        } = callee_1
         else {
-            panic!("expected initializer call site");
+            panic!("expected initializer callee");
         };
-        let ResolvedCallSiteKind::InitializerCall {
-            substitutions: substitutions_2,
+        let Callee::Initializer {
+            type_args: type_args_2,
             ..
-        } = &site_2.kind
+        } = callee_2
         else {
-            panic!("expected initializer call site");
+            panic!("expected initializer callee");
         };
 
-        assert_eq!(substitutions_1.ty.get(type_param), Some(&Ty::Int));
-        assert_eq!(substitutions_2.ty.get(type_param), Some(&Ty::Bool));
+        assert_eq!(type_args_1.ty.get(type_param), Some(&Ty::Int));
+        assert_eq!(type_args_2.ty.get(type_param), Some(&Ty::Bool));
     }
 
     #[test]
@@ -2954,6 +2940,53 @@ pub mod tests {
     }
 
     #[test]
+    fn types_func_literal_call_arg_with_contextual_param_type() {
+        let (ast, _types) = typecheck(
+            "
+            func transform(x: Int, f: (Int) -> Int) -> Int {
+                f(x)
+            }
+            transform(1, func(n) { n })
+            ",
+        );
+
+        let TypedStmtKind::Expr(TypedExpr {
+            kind: TypedExprKind::Call { args, .. },
+            ..
+        }) = &ast.stmts[0].kind
+        else {
+            panic!("expected top-level call, got {:?}", ast.stmts[0]);
+        };
+        let TypedExprKind::Func(func) = &args[1].kind else {
+            panic!("expected function literal argument, got {:?}", args[1]);
+        };
+
+        assert_eq!(func.params[0].ty, Ty::Int);
+        assert_eq!(func.ret, Ty::Int);
+        assert_eq!(
+            args[1].ty,
+            Ty::Func(Ty::Int.into(), Ty::Int.into(), Row::Empty.into())
+        );
+    }
+
+    #[test]
+    fn types_func_literal_call_arg_return_mismatch_returns_error() {
+        let (_, _, diagnostics) = typecheck_err(
+            "
+            func apply(f: () -> Int) -> Int {
+                f()
+            }
+            apply(func() { true })
+            ",
+        );
+
+        assert!(
+            !diagnostics.is_empty(),
+            "Expected type error for function literal returning Bool when Int expected"
+        );
+    }
+
+    #[test]
     fn types_trailing_block_as_function_arg() {
         // Trailing block should be typed as a function and matched against the expected type
         let (ast, types) = typecheck(
@@ -3158,6 +3191,112 @@ pub mod tests {
             diagnostics.is_empty(),
             "Expected no diagnostics for bounded param substitution, got: {:?}",
             diagnostics
+        );
+    }
+
+    #[test]
+    fn rejects_tuple_annotation_with_extra_elements() {
+        let (_, _, diagnostics) = typecheck_err(
+            r#"
+            let x: (Int, Bool) = (1, true, 1.2)
+            x
+            "#,
+        );
+
+        assert!(
+            !diagnostics.is_empty(),
+            "expected tuple arity mismatch diagnostic"
+        );
+    }
+
+    #[test]
+    fn rejects_extra_explicit_function_type_args() {
+        let (_, _, diagnostics) = typecheck_err(
+            r#"
+            func id<T>(x: T) -> T { x }
+            id<Int, Bool>(1)
+            "#,
+        );
+
+        assert!(
+            !diagnostics.is_empty(),
+            "expected explicit function type-arg arity diagnostic"
+        );
+    }
+
+    #[test]
+    fn rejects_extra_explicit_nominal_type_args() {
+        let (_, _, diagnostics) = typecheck_err(
+            r#"
+            struct Box<T> { let value: T }
+            let x: Box<Int, Bool> = Box(value: 1)
+            x
+            "#,
+        );
+
+        assert!(
+            !diagnostics.is_empty(),
+            "expected explicit nominal type-arg arity diagnostic"
+        );
+    }
+
+    #[test]
+    fn substitutes_nested_generic_property_types() {
+        let (ast, types) = typecheck_core(
+            r#"
+            struct Box<T> { let xs: Array<T> }
+            let b = Box(xs: [1, 2])
+            b.xs
+            "#,
+        );
+
+        assert_eq!(ty(0, &ast, &types), Ty::Array(Ty::Int));
+    }
+
+    #[test]
+    fn substitutes_nested_generic_variant_payload_types() {
+        let (ast, types) = typecheck_core(
+            r#"
+            enum E<T> { case arr(Array<T>) }
+            E.arr([1])
+            "#,
+        );
+
+        assert_eq!(
+            ty(0, &ast, &types),
+            Ty::Nominal {
+                symbol: EnumId::from(1).into(),
+                type_args: vec![Ty::Int],
+            }
+        );
+    }
+
+    #[test]
+    fn reports_unresolved_top_level_member_access() {
+        let (_, _, diagnostics) = typecheck_err(".foo");
+
+        assert!(
+            !diagnostics.is_empty(),
+            "expected unresolved member access diagnostic"
+        );
+    }
+
+    #[test]
+    fn rejects_ambiguous_protocol_member_requirement() {
+        let (_, _, diagnostics) = typecheck_err(
+            r#"
+            protocol A { func f() -> Int }
+            protocol B { func f() -> Bool }
+
+            func g<T: A, B>(x: T) {
+                x.f()
+            }
+            "#,
+        );
+
+        assert!(
+            !diagnostics.is_empty(),
+            "expected ambiguous protocol member diagnostic"
         );
     }
 }

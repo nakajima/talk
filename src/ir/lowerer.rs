@@ -11,9 +11,7 @@ use crate::ir::value::{Addr, RecordId};
 use crate::label::Label;
 use crate::node_kinds::inline_ir_instruction::{InlineIRInstructionKind, TypedInlineIRInstruction};
 use crate::node_kinds::type_annotation::TypeAnnotation;
-use crate::types::call_site::{
-    CallArgumentPlan, CallReceiverKind, CallSiteId, ResolvedCallSiteKind,
-};
+use crate::types::callee::Callee;
 use crate::types::infer_row::Row;
 use crate::types::type_catalog::{MemberSource, Nominal};
 use crate::types::typed_ast::{
@@ -605,6 +603,7 @@ impl<'a> Lowerer<'a> {
             callee: Value::Reg(0),
             args: vec![val].into(),
             self_dest: None,
+            resolved_callee: None,
             meta: vec![].into(),
         });
 
@@ -1052,8 +1051,16 @@ impl<'a> Lowerer<'a> {
                 callee,
                 args,
                 callee_sym,
+                resolved_callee,
                 ..
-            } => self.lower_call(expr, callee, args, callee_sym.as_ref(), bind),
+            } => self.lower_call(
+                expr,
+                callee,
+                args,
+                callee_sym.as_ref(),
+                resolved_callee.as_ref(),
+                bind,
+            ),
             TypedExprKind::Member {
                 receiver, label, ..
             } => self.lower_member(expr, &Some(receiver.clone()), label, None, bind),
@@ -1206,6 +1213,7 @@ impl<'a> Lowerer<'a> {
             callee: Value::Func(handler_sym),
             args: arg_vals.into(),
             self_dest: None,
+            resolved_callee: None,
             meta: vec![InstructionMeta::Source(expr.id)].into(),
         });
 
@@ -1478,6 +1486,7 @@ impl<'a> Lowerer<'a> {
                     callee,
                     args,
                     self_dest: None,
+                    resolved_callee: None,
                     meta: vec![InstructionMeta::Source(instr.id)].into(),
                 });
                 Ok((dest.into(), ty))
@@ -2784,6 +2793,16 @@ impl<'a> Lowerer<'a> {
             .unwrap_or(false)
     }
 
+    fn is_method_like(&self, symbol: Symbol) -> bool {
+        matches!(symbol, Symbol::InstanceMethod(_))
+            || self
+                .typed
+                .specialization_plan
+                .specialized_callees()
+                .get(&symbol)
+                .is_some_and(|callee| matches!(callee.original_symbol, Symbol::InstanceMethod(_)))
+    }
+
     #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn lower_variable(&mut self, name: &Symbol, expr: &TypedExpr) -> Result<(Value, Ty), IRError> {
         let ty = expr.ty.clone();
@@ -2924,6 +2943,7 @@ impl<'a> Lowerer<'a> {
         mut args: Vec<Value>,
         dest: Register,
         callee_sym: Option<Symbol>,
+        resolved_callee: Option<Callee>,
     ) -> Result<(Value, Ty), IRError> {
         let record_dest = self.next_register();
 
@@ -2982,6 +3002,7 @@ impl<'a> Lowerer<'a> {
             callee: Value::Func(init_sym),
             args: args.into(),
             self_dest: None,
+            resolved_callee,
             meta: vec![InstructionMeta::Source(id)].into(),
         });
 
@@ -3030,43 +3051,13 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    fn method_self_arg<'b>(
+    fn first_self_arg<'b>(
         &self,
-        call_id: NodeID,
         args: &'b [TypedExpr],
         arg_vals: &'b [Value],
     ) -> Option<(&'b TypedExpr, Value)> {
-        let site = self
-            .typed
-            .types
-            .resolved_call_sites
-            .get(&CallSiteId::from_lowered_source(call_id))?;
-        let ResolvedCallSiteKind::MethodCall {
-            receiver,
-            argument_plan,
-            ..
-        } = &site.kind
-        else {
-            return None;
-        };
-        let receiver_id = match argument_plan {
-            CallArgumentPlan::PrependReceiver { id } => *id,
-            CallArgumentPlan::AsWritten => match &receiver.kind {
-                CallReceiverKind::Argument { index } => {
-                    if let Some((arg, value)) = args.get(*index).zip(arg_vals.get(*index))
-                        && arg.id == receiver.id
-                    {
-                        return Some((arg, value.clone()));
-                    }
-                    receiver.id
-                }
-                CallReceiverKind::CalleeReceiver => return None,
-            },
-        };
-
-        args.iter()
-            .zip(arg_vals.iter())
-            .find(|(arg, _)| arg.id == receiver_id)
+        args.first()
+            .zip(arg_vals.first())
             .map(|(arg, value)| (arg, value.clone()))
     }
 
@@ -3077,6 +3068,7 @@ impl<'a> Lowerer<'a> {
         callee: &TypedExpr,
         args: &[TypedExpr],
         callee_sym: Option<&Symbol>,
+        resolved_callee: Option<&Callee>,
         bind: Bind,
     ) -> Result<(Value, Ty), IRError> {
         let dest = self.ret(bind);
@@ -3097,6 +3089,7 @@ impl<'a> Lowerer<'a> {
                 arg_vals,
                 dest,
                 callee_sym.copied(),
+                resolved_callee.cloned(),
             );
         }
 
@@ -3110,6 +3103,7 @@ impl<'a> Lowerer<'a> {
                 arg_vals,
                 dest,
                 callee_sym.copied(),
+                resolved_callee.cloned(),
             );
         }
 
@@ -3128,21 +3122,27 @@ impl<'a> Lowerer<'a> {
                 args,
                 arg_vals,
                 dest,
+                resolved_callee.cloned(),
             );
         }
+
+        let raw_callee_sym = callee_sym.copied().or(match &callee.kind {
+            TypedExprKind::Variable(sym) => Some(*sym),
+            _ => None,
+        });
 
         // Handle Property (function-typed struct field) calls.
         // The specialization pass transforms `self.poll(args)` into Variable(property_sym)
         // with the receiver prepended as the first arg. We need to extract the field value
         // from the receiver and call it indirectly.
-        if let Some(sym @ Symbol::Property(..)) = callee_sym {
+        if let Some(sym @ Symbol::Property(..)) = raw_callee_sym {
             let receiver_ty = &arg_tys[0];
             let property_name = self
                 .typed
                 .resolved_names
                 .symbol_names
-                .get(sym)
-                .or_else(|| self.config.modules.resolve_name(sym))
+                .get(&sym)
+                .or_else(|| self.config.modules.resolve_name(&sym))
                 .ok_or_else(|| IRError::TypeNotFound(format!("no name for property symbol {sym}")))?
                 .clone();
             let label = self.label_from_name(&property_name);
@@ -3168,7 +3168,8 @@ impl<'a> Lowerer<'a> {
                 callee: field_reg.into(),
                 args: field_args.into(),
                 self_dest: None,
-                meta: vec![InstructionMeta::Source(callee.id)].into(),
+                resolved_callee: None,
+                meta: vec![InstructionMeta::Source(call_expr.id)].into(),
             });
 
             return Ok((dest.into(), ty));
@@ -3177,14 +3178,11 @@ impl<'a> Lowerer<'a> {
         // For specialized method calls (callee is Variable but was originally a method),
         // the first arg is `self`. Check if it's a variable and set up self_dest.
         // This applies to InstanceMethod calls and Synthesized calls (which are specialized methods).
-        let is_method_like = matches!(
-            callee_sym,
-            Some(Symbol::InstanceMethod(_)) | Some(Symbol::Synthesized(_))
-        );
+        let is_method_like = raw_callee_sym.is_some_and(|sym| self.is_method_like(sym));
         let tracked_self = if is_method_like
-            && let Some(sym) = callee_sym
-            && self.method_mutates_self(*sym)
-            && let Some((self_arg, self_value)) = self.method_self_arg(callee.id, args, &arg_vals)
+            && let Some(sym) = raw_callee_sym
+            && self.method_mutates_self(sym)
+            && let Some((self_arg, self_value)) = self.first_self_arg(args, &arg_vals)
             && let TypedExprKind::Variable(var_sym) = &self_arg.kind
         {
             self.begin_method_self_tracking(*var_sym, &self_arg.ty, self_value)
@@ -3204,7 +3202,8 @@ impl<'a> Lowerer<'a> {
             callee: callee_ir,
             args: arg_vals.into(),
             self_dest,
-            meta: vec![InstructionMeta::Source(callee.id)].into(),
+            resolved_callee: resolved_callee.cloned(),
+            meta: vec![InstructionMeta::Source(call_expr.id)].into(),
         });
 
         if let Some((self_dest_reg, receiver_binding, self_arg_ty)) = tracked_self {
@@ -3224,12 +3223,13 @@ impl<'a> Lowerer<'a> {
         &mut self,
         call_expr: &TypedExpr,
         callee_expr: &TypedExpr,
-        mut receiver: TypedExpr,
+        receiver: TypedExpr,
         label: &Label,
         witness: Option<Symbol>,
         arg_exprs: &[TypedExpr],
         mut args: Vec<Value>,
         dest: Register,
+        resolved_callee: Option<Callee>,
     ) -> Result<(Value, Ty), IRError> {
         let ty = call_expr.ty.clone();
 
@@ -3285,7 +3285,7 @@ impl<'a> Lowerer<'a> {
         }
 
         // Static calls on constructors (e.g. HTTP.Server()) do not prepend a
-        // receiver argument. Instance and protocol calls use the ResolvedCallSite recorded
+        // receiver argument. Specialized method calls arrive in explicit-self form.
         // during type checking to identify the semantic receiver.
         let constructor_member_sym = if let Ty::Constructor {
             name: Name::Resolved(sym, ..),
@@ -3298,45 +3298,10 @@ impl<'a> Lowerer<'a> {
         };
 
         let mut receiver_self_value = None;
-        let call_site = self
-            .typed
-            .types
-            .resolved_call_sites
-            .get(&CallSiteId::from_lowered_source(callee_expr.id))
-            .cloned();
-        match call_site {
-            Some(site) => {
-                if let ResolvedCallSiteKind::MethodCall {
-                    receiver: receiver_fact,
-                    argument_plan,
-                    ..
-                } = site.kind
-                {
-                    match argument_plan {
-                        CallArgumentPlan::PrependReceiver { id } if receiver.id == id => {
-                            let (receiver_ir, _) = self.lower_expr(&receiver, Bind::Fresh)?;
-                            args.insert(0, receiver_ir.clone());
-                            receiver_self_value = Some(receiver_ir);
-                        }
-                        CallArgumentPlan::AsWritten => {
-                            if let CallReceiverKind::Argument { index } = receiver_fact.kind
-                                && let Some(arg_expr) = arg_exprs.get(index)
-                                && arg_expr.id == receiver_fact.id
-                            {
-                                receiver = arg_expr.clone();
-                                receiver_self_value = args.get(index).cloned();
-                            }
-                        }
-                        CallArgumentPlan::PrependReceiver { .. } => {}
-                    }
-                }
-            }
-            None if constructor_member_sym.is_none() => {
-                let (receiver_ir, _) = self.lower_expr(&receiver, Bind::Fresh)?;
-                args.insert(0, receiver_ir.clone());
-                receiver_self_value = Some(receiver_ir);
-            }
-            None => {}
+        if constructor_member_sym.is_none() {
+            let (receiver_ir, _) = self.lower_expr(&receiver, Bind::Fresh)?;
+            args.insert(0, receiver_ir.clone());
+            receiver_self_value = Some(receiver_ir);
         }
 
         // Capture the semantic receiver variable symbol for mutated-self writeback.
@@ -3346,48 +3311,29 @@ impl<'a> Lowerer<'a> {
             None
         };
 
-        // Use the provided callee_sym if available (from specialization pass),
-        // otherwise look it up from the receiver type
-        let sym = if let Some(specialized_sym) = witness {
-            specialized_sym
-        } else {
-            let callee_sym = match &receiver.ty {
-                Ty::Primitive(sym) => self.lookup_member(sym, label),
-                Ty::Nominal { symbol, .. } => self.lookup_member(symbol, label),
-                Ty::Constructor {
-                    name: Name::Resolved(sym, ..),
-                    ..
-                } => constructor_member_sym.or_else(|| self.lookup_constructor_member(sym, label)),
-                Ty::Param(_, protocol_ids) => {
-                    let mut found = None;
-                    for pid in protocol_ids {
-                        if let Some(sym) = self.lookup_member(&Symbol::Protocol(*pid), label) {
-                            found = Some(sym);
-                            break;
-                        }
-                    }
-                    found
-                }
-                _ => {
-                    return Err(IRError::WitnessNotFound(format!(
-                        "could not determine callee sym for {:?}.{label:?}",
-                        receiver.ty
-                    )));
-                }
-            };
-
-            callee_sym.ok_or_else(|| {
+        let sym = witness
+            .or_else(|| resolved_callee.as_ref().map(Callee::target_symbol))
+            .or(constructor_member_sym)
+            .ok_or_else(|| {
                 IRError::WitnessNotFound(format!(
-                    "could not determine callee sym for {receiver:?}.{label:?}"
+                    "missing callee fact for {receiver:?}.{label:?} at {:?}",
+                    call_expr.id
                 ))
-            })?
-        };
+            })?;
 
         // Child type access through a constructor receiver (e.g. Outer.Inner())
         // resolves to a struct symbol, not a callable method symbol. Lower that
         // directly as a constructor call.
         if matches!(sym, Symbol::Struct(..)) {
-            return self.lower_constructor_call(call_expr.id, &sym, callee_expr, args, dest, None);
+            return self.lower_constructor_call(
+                call_expr.id,
+                &sym,
+                callee_expr,
+                args,
+                dest,
+                None,
+                resolved_callee,
+            );
         }
 
         // Track receiver writeback for method calls independently of the method
@@ -3410,7 +3356,8 @@ impl<'a> Lowerer<'a> {
             callee: Value::Func(sym),
             args: args.into(),
             self_dest,
-            meta: vec![InstructionMeta::Source(callee_expr.id)].into(),
+            resolved_callee,
+            meta: vec![InstructionMeta::Source(call_expr.id)].into(),
         });
 
         if let Some((self_dest_reg, receiver_binding)) = tracked_self {
@@ -4081,13 +4028,6 @@ impl<'a> Lowerer<'a> {
                     })
                     .collect(),
             })
-    }
-
-    /// Look up instance/protocol-visible methods.
-    fn lookup_member(&self, receiver: &Symbol, label: &Label) -> Option<Symbol> {
-        self.typed
-            .types
-            .lookup_member(self.config.modules.as_ref(), receiver, label)
     }
 
     /// Look up members available on a constructor/type receiver.

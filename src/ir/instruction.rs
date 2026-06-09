@@ -12,7 +12,7 @@ use crate::{
     name_resolution::symbol::Symbol,
     node_id::{FileID, NodeID},
     token_kind::TokenKind,
-    types::infer_ty::Ty,
+    types::{callee::Callee, infer_ty::Ty},
 };
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -185,6 +185,7 @@ pub enum Instruction<T> {
         callee: Value,
         args: List<Value>,
         self_dest: Option<Register>,
+        resolved_callee: Option<Callee>,
         meta: List<InstructionMeta>,
     },
     #[doc = "$dest = nominal $sym $ty $record $meta"]
@@ -502,6 +503,7 @@ impl<T> Instruction<T> {
                 callee,
                 args,
                 self_dest,
+                resolved_callee,
                 meta,
             } => Instruction::Call {
                 dest,
@@ -509,6 +511,7 @@ impl<T> Instruction<T> {
                 callee,
                 args,
                 self_dest,
+                resolved_callee,
                 meta,
             },
             Instruction::Cmp {

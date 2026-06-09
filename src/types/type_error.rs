@@ -30,6 +30,7 @@ pub enum TypeError {
     InvalidUnification(Box<Ty>, Box<Ty>, Option<ConstraintCause>),
     OccursCheck(Ty),
     CalleeNotCallable(Ty),
+    AmbiguousMember(Ty, Label),
     MemberNotFound(Ty, String),
     NameNotResolved(Name),
     MissingConformanceRequirement(String),
@@ -101,6 +102,9 @@ impl Display for TypeError {
             }
             Self::ExpectedRow(ty) => {
                 write!(f, "Expected row, got {ty:?}")
+            }
+            Self::AmbiguousMember(ty, label) => {
+                write!(f, "Ambiguous member access: {ty:?}.{label}")
             }
             Self::MemberNotFound(ty, name) => {
                 write!(f, "{ty:?} has no member: {name}")

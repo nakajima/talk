@@ -1,45 +1,26 @@
-use std::collections::BTreeMap;
-
-use rustc_hash::FxHashMap;
+use indexmap::IndexMap;
 
 use crate::{
     compiling::module::ModuleId,
     name_resolution::symbol::Symbol,
-    node_id::NodeID,
     types::{
         infer_row::{Row, RowParamId},
         infer_ty::Ty,
     },
 };
 
-#[derive(Debug, PartialEq, Clone, serde::Serialize, serde::Deserialize, Default)]
-pub struct TrackedInstantiations {
-    pub ty: FxHashMap<NodeID, FxHashMap<Symbol, Ty>>,
-    pub row: FxHashMap<NodeID, FxHashMap<RowParamId, Row>>,
-}
-
-impl TrackedInstantiations {
-    pub fn insert_ty(&mut self, id: NodeID, param: Symbol, ty: Ty) {
-        self.ty.entry(id).or_default().insert(param, ty);
-    }
-
-    pub fn insert_row(&mut self, id: NodeID, param: RowParamId, row: Row) {
-        self.row.entry(id).or_default().insert(param, row);
-    }
-}
-
 #[derive(Default, Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct CallSubstitutions {
-    pub ty: BTreeMap<Symbol, Ty>,
-    pub row: BTreeMap<RowParamId, Row>,
+pub struct TypeArgs {
+    pub ty: IndexMap<Symbol, Ty>,
+    pub row: IndexMap<RowParamId, Row>,
 }
 
-impl CallSubstitutions {
+impl TypeArgs {
     pub fn is_empty(&self) -> bool {
         self.ty.is_empty() && self.row.is_empty()
     }
 
-    pub fn extend(&mut self, other: CallSubstitutions) {
+    pub fn extend(&mut self, other: TypeArgs) {
         self.ty.extend(other.ty);
         self.row.extend(other.row);
     }
@@ -55,15 +36,7 @@ impl CallSubstitutions {
                     t
                 }
             },
-            &mut |r| {
-                if let Row::Param(id) = r
-                    && let Some(replacement) = self.row.get(&id)
-                {
-                    replacement.clone()
-                } else {
-                    r
-                }
-            },
+            &mut |r| self.apply_row(r),
         )
     }
 
@@ -80,6 +53,25 @@ impl CallSubstitutions {
         }
     }
 
+    pub fn mapping(
+        self,
+        ty_map: &mut impl FnMut(Ty) -> Ty,
+        row_map: &mut impl FnMut(Row) -> Row,
+    ) -> Self {
+        TypeArgs {
+            ty: self
+                .ty
+                .into_iter()
+                .map(|(param, ty)| (param, ty.mapping(ty_map, row_map)))
+                .collect(),
+            row: self
+                .row
+                .into_iter()
+                .map(|(param, row)| (param, row_map(row)))
+                .collect(),
+        }
+    }
+
     pub fn import(self, module_id: ModuleId) -> Self {
         Self {
             ty: self
@@ -93,5 +85,17 @@ impl CallSubstitutions {
                 .map(|(param, row)| (param, row.import(module_id)))
                 .collect(),
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Instantiated<T> {
+    pub value: T,
+    pub type_args: TypeArgs,
+}
+
+impl<T> Instantiated<T> {
+    pub fn new(value: T, type_args: TypeArgs) -> Self {
+        Self { value, type_args }
     }
 }

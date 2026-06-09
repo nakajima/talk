@@ -34,6 +34,65 @@ pub mod tests {
         vec![InstructionMeta::Source(NodeID::ANY)].into()
     }
 
+    fn normalize_meta(meta: &mut List<InstructionMeta>) {
+        for item in &mut meta.items {
+            if matches!(item, InstructionMeta::Source(_)) {
+                *item = InstructionMeta::Source(NodeID::ANY);
+            }
+        }
+    }
+
+    fn normalize_instruction<T>(instruction: &mut Instruction<T>) {
+        match instruction {
+            Instruction::Constant { meta, .. }
+            | Instruction::Cmp { meta, .. }
+            | Instruction::Add { meta, .. }
+            | Instruction::Sub { meta, .. }
+            | Instruction::Mul { meta, .. }
+            | Instruction::Div { meta, .. }
+            | Instruction::Nominal { meta, .. }
+            | Instruction::Record { meta, .. }
+            | Instruction::GetField { meta, .. }
+            | Instruction::SetField { meta, .. }
+            | Instruction::Trunc { meta, .. }
+            | Instruction::IntToFloat { meta, .. } => normalize_meta(meta),
+            Instruction::Call {
+                meta,
+                resolved_callee,
+                ..
+            } => {
+                *resolved_callee = None;
+                normalize_meta(meta);
+            }
+            _ => {}
+        }
+    }
+
+    fn normalize_blocks<T>(blocks: &mut [BasicBlock<T>]) {
+        for block in blocks {
+            for instruction in &mut block.instructions {
+                normalize_instruction(instruction);
+            }
+        }
+    }
+
+    fn normalize_function<T: std::fmt::Debug + std::fmt::Display>(function: &mut Function<T>) {
+        normalize_blocks(&mut function.blocks);
+    }
+
+    fn normalize_program(program: &mut Program) {
+        for function in program.functions.values_mut() {
+            normalize_function(function);
+        }
+        for function in program.polyfunctions.values_mut() {
+            normalize_blocks(&mut function.blocks);
+        }
+    }
+
+    fn normalize_module(module: &mut Module) {
+        normalize_program(&mut module.program);
+    }
+
     pub fn lower_bare(input: &str) -> Module {
         let driver = Driver::new_bare(
             vec![Source::from(input)],
@@ -47,7 +106,9 @@ pub mod tests {
             .typecheck()
             .unwrap();
 
-        typed.lower().unwrap().module("TestModule")
+        let mut module = typed.lower().unwrap().module("TestModule");
+        normalize_module(&mut module);
+        module
     }
 
     pub fn lower(input: &str) -> Program {
@@ -64,7 +125,9 @@ pub mod tests {
             .unwrap();
 
         let lowerer = Lowerer::new(&mut typed.phase, &typed.config);
-        lowerer.lower().unwrap()
+        let mut program = lowerer.lower().unwrap();
+        normalize_program(&mut program);
+        program
     }
 
     pub fn lower_module(input: &str) -> (Module, FxHashMap<Symbol, String>) {
@@ -82,7 +145,8 @@ pub mod tests {
             .lower()
             .unwrap();
         let display_names = lowered.display_symbol_names();
-        let module = lowered.module("TestModule");
+        let mut module = lowered.module("TestModule");
+        normalize_module(&mut module);
         (module, display_names)
     }
 
@@ -423,6 +487,7 @@ pub mod tests {
                             callee: Value::Reg(0),
                             args: vec![Value::Reg(2)].into(),
                             self_dest: None,
+                            resolved_callee: None,
                             meta: meta()
                         }
                     ],
@@ -511,6 +576,7 @@ pub mod tests {
                             callee: Value::Func(Symbol::from(SynthesizedId::from(1))),
                             args: vec![Register(2).into(), Register(1).into()].into(),
                             self_dest: None,
+                            resolved_callee: None,
                             meta: meta(),
                         },
                         Instruction::GetField {
@@ -576,6 +642,7 @@ pub mod tests {
                             callee: Value::Func(Symbol::from(SynthesizedId::from(2))),
                             args: vec![Register(2).into(), Register(1).into()].into(),
                             self_dest: None,
+                            resolved_callee: None,
                             meta: meta(),
                         },
                         Instruction::GetField {
@@ -725,6 +792,7 @@ pub mod tests {
                             })),
                             args: vec![Register(1).into(), Register(2).into()].into(),
                             self_dest: None,
+                            resolved_callee: None,
                             meta: meta()
                         },
                     ],
@@ -813,6 +881,7 @@ pub mod tests {
                             callee: Value::Func(Symbol::from(SynthesizedId::from(1))),
                             args: vec![Register(3).into(), Register(2).into()].into(),
                             self_dest: None,
+                            resolved_callee: None,
                             meta: meta(),
                         },
                         Instruction::Call {
@@ -821,6 +890,7 @@ pub mod tests {
                             callee: Value::Func(InstanceMethodId::from(1).into()),
                             args: vec![Register(1).into()].into(),
                             self_dest: None,
+                            resolved_callee: None,
                             meta: meta(),
                         },
                     ],
@@ -954,6 +1024,7 @@ pub mod tests {
                             callee: Value::Func(SynthesizedId::from(1).into()),
                             args: vec![Value::Reg(2)].into(),
                             self_dest: None,
+                            resolved_callee: None,
                             meta: meta(),
                         },
                         Instruction::Constant {
@@ -968,6 +1039,7 @@ pub mod tests {
                             callee: Value::Func(SynthesizedId::from(2).into()),
                             args: vec![Value::Reg(4)].into(),
                             self_dest: None,
+                            resolved_callee: None,
                             meta: meta(),
                         },
                     ],
@@ -1496,6 +1568,7 @@ pub mod tests {
                         callee: Value::Reg(2),
                         args: vec![].into(),
                         self_dest: None,
+                        resolved_callee: None,
                         meta: meta(),
                     },
                     Instruction::Load {
@@ -1605,6 +1678,7 @@ pub mod tests {
                             callee: Value::Func(SynthesizedId::from(1).into()),
                             args: vec![Register(1).into()].into(),
                             self_dest: None,
+                            resolved_callee: None,
                             meta: meta(),
                         },
                     ],
@@ -1637,6 +1711,7 @@ pub mod tests {
                         callee: Value::Func(SynthesizedId::from(2).into()),
                         args: vec![Register(0).into()].into(),
                         self_dest: None,
+                        resolved_callee: None,
                         meta: meta(),
                     },],
                     terminator: Terminator::Ret {
@@ -1708,6 +1783,7 @@ pub mod tests {
                             callee: Value::Func(Symbol::Synthesized(SynthesizedId::from(1))),
                             args: vec![Value::Reg(3), Value::Reg(2)].into(),
                             self_dest: None,
+                            resolved_callee: None,
                             meta: meta()
                         }
                     ],

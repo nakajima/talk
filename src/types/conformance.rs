@@ -144,7 +144,6 @@ impl WitnessTable {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ConformanceOrigin {
     Declared,
-    AutoDerived,
     Inherited,
 }
 
@@ -186,7 +185,7 @@ impl ConformanceEvidence {
         }
     }
 
-    pub fn auto_derived(
+    pub fn synthetic(
         conforming_id: Symbol,
         protocol_id: ProtocolId,
         witnesses: WitnessTable,
@@ -195,7 +194,7 @@ impl ConformanceEvidence {
             node_id: NodeID::SYNTHESIZED,
             conforming_id,
             protocol_id,
-            origin: ConformanceOrigin::AutoDerived,
+            origin: ConformanceOrigin::Declared,
             witnesses,
             span: Span::SYNTHESIZED,
         }

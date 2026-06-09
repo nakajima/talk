@@ -191,7 +191,9 @@ impl Projection {
             )));
         };
 
-        let nominal_inst = nominal_entry.instantiate(self.node_id, constraints, context, session);
+        let nominal_inst = nominal_entry
+            .instantiate(self.node_id, constraints, context, session)
+            .value;
         let group = constraints.copy_group(self.id);
         constraints.wants_equals_at(self.node_id, base.clone(), nominal_inst, &group);
 
@@ -202,7 +204,9 @@ impl Projection {
             )));
         };
 
-        let alias_inst = alias_entry.instantiate(self.node_id, constraints, context, session);
+        let alias_inst = alias_entry
+            .instantiate(self.node_id, constraints, context, session)
+            .value;
         let group = constraints.copy_group(self.id);
         constraints.wants_equals_at(self.node_id, result.clone(), alias_inst, &group);
 

@@ -11,7 +11,8 @@ use crate::{
         infer_row::{Row, RowParamId},
         infer_ty::Ty,
         solve_context::SolveContext,
-        type_operations::{UnificationSubstitutions, curry, instantiate_row, instantiate_ty},
+        type_args::TypeArgs,
+        type_operations::{UnificationSubstitutions, curry},
         type_session::TypeSession,
     },
 };
@@ -49,7 +50,6 @@ pub enum Predicate {
         callee: Ty,
         args: Vec<Ty>,
         returns: Ty,
-        receiver: Option<Ty>,
     },
     TypeMember {
         base: Ty,
@@ -111,12 +111,10 @@ impl Predicate {
                 callee,
                 args,
                 returns,
-                receiver,
             } => Predicate::Call {
                 callee: ty_map(callee),
                 args: args.into_iter().map(&mut *ty_map).collect(),
                 returns: ty_map(returns),
-                receiver: receiver.map(ty_map),
             },
             Predicate::Equals { lhs, rhs } => Predicate::Equals {
                 lhs: ty_map(lhs),
@@ -143,10 +141,10 @@ impl Predicate {
     pub fn instantiate<'a>(
         &self,
         id: NodeID,
+        type_args: &TypeArgs,
         constraints: &'a mut ConstraintStore,
         context: &mut SolveContext,
     ) -> &'a Constraint {
-        let level = context.level();
         match self.clone() {
             Self::Projection {
                 base,
@@ -155,31 +153,25 @@ impl Predicate {
                 protocol_id,
             } => constraints.wants_projection(
                 id,
-                instantiate_ty(id, base, context.instantiations_mut(), level),
+                type_args.apply(base),
                 label,
                 protocol_id,
-                instantiate_ty(id, returns, context.instantiations_mut(), level),
+                type_args.apply(returns),
                 &context.group_info(),
             ),
             Self::Conforms { param, protocol_id } => constraints.wants_conforms(
                 id,
-                instantiate_ty(
-                    id,
-                    Ty::Param(param, vec![protocol_id]),
-                    context.instantiations_mut(),
-                    level,
-                ),
+                type_args.apply(Ty::Param(param, vec![protocol_id])),
                 protocol_id,
                 &context.group_info(),
             ),
-            Self::Equals { lhs, rhs } => constraints.wants_equals(
-                instantiate_ty(id, lhs, context.instantiations_mut(), level),
-                instantiate_ty(id, rhs, context.instantiations_mut(), level),
-            ),
+            Self::Equals { lhs, rhs } => {
+                constraints.wants_equals(type_args.apply(lhs), type_args.apply(rhs))
+            }
             Self::HasField { row, label, ty } => constraints._has_field(
-                instantiate_row(id, Row::Param(row), context.instantiations_mut(), level),
+                type_args.apply_row(Row::Param(row)),
                 label,
-                instantiate_ty(id, ty, context.instantiations_mut(), level),
+                type_args.apply(ty),
                 None,
                 &context.group_info(),
             ),
@@ -190,9 +182,9 @@ impl Predicate {
                 node_id,
             } => constraints.wants_member(
                 node_id,
-                instantiate_ty(id, receiver, context.instantiations_mut(), level),
+                type_args.apply(receiver),
                 label,
-                instantiate_ty(id, ty, context.instantiations_mut(), level),
+                type_args.apply(ty),
                 &context.group_info(),
             ),
             Self::TypeMember {
@@ -201,13 +193,10 @@ impl Predicate {
                 returns,
                 generics,
             } => constraints.wants_type_member(
-                instantiate_ty(id, base, context.instantiations_mut(), level),
+                type_args.apply(base),
                 member,
-                generics
-                    .iter()
-                    .map(|g| instantiate_ty(id, g.clone(), context.instantiations_mut(), level))
-                    .collect(),
-                instantiate_ty(id, returns, context.instantiations_mut(), level),
+                generics.into_iter().map(|g| type_args.apply(g)).collect(),
+                type_args.apply(returns),
                 id,
                 &context.group_info(),
                 ConstraintCause::Internal,
@@ -216,21 +205,26 @@ impl Predicate {
                 callee,
                 args,
                 returns,
-                receiver,
-            } => constraints.wants_call(
-                id,
-                id,
-                instantiate_ty(id, callee, context.instantiations_mut(), level),
-                args.iter()
-                    .map(|f| instantiate_ty(id, f.clone(), context.instantiations_mut(), level))
-                    .collect(),
-                Default::default(),
-                instantiate_ty(id, returns.clone(), context.instantiations_mut(), level),
-                curry(args, returns, Row::Var(0.into()).into()),
-                receiver.map(|r| instantiate_ty(id, r, context.instantiations_mut(), level)),
-                &context.group_info(),
-                Row::Var(0.into()),
-            ),
+            } => {
+                let callee = type_args.apply(callee);
+                let args = args
+                    .into_iter()
+                    .map(|arg| type_args.apply(arg))
+                    .collect::<Vec<_>>();
+                let returns = type_args.apply(returns);
+                let callee_type = curry(args.clone(), returns.clone(), Row::Var(0.into()).into());
+                constraints.wants_call(
+                    id,
+                    id,
+                    callee,
+                    args,
+                    Default::default(),
+                    returns,
+                    callee_type,
+                    &context.group_info(),
+                    Row::Var(0.into()),
+                )
+            }
         }
     }
 }
@@ -272,16 +266,7 @@ impl std::fmt::Debug for Predicate {
                 callee,
                 args,
                 returns,
-                receiver,
-            } => write!(
-                f,
-                "*call({}{callee:?}({args:?}) = {returns:?})",
-                if let Some(rec) = receiver {
-                    format!("{rec:?}")
-                } else {
-                    "".to_string()
-                },
-            ),
+            } => write!(f, "*call({callee:?}({args:?}) = {returns:?})"),
             Predicate::TypeMember {
                 base,
                 member,

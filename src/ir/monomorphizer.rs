@@ -16,13 +16,15 @@ use crate::{
     name::Name,
     name_resolution::symbol::Symbol,
     types::{
-        call_site::CallSiteId,
-        call_substitutions::CallSubstitutions,
+        callee::Callee,
         conformance::ConformanceKey,
         format::{SymbolNames, TypeFormatter},
+        infer_row::Row,
         infer_ty::Ty,
         passes::specialization_pass::{SpecializationPlan, SpecializedCallee},
-        types::Types,
+        scheme::ForAll,
+        type_args::TypeArgs,
+        types::{TypeEntry, Types},
     },
 };
 
@@ -174,6 +176,15 @@ impl<'a> Monomorphizer<'a> {
                 continue;
             };
 
+            if module_id == self.config.module_id
+                && !result.contains_key(&callee)
+                && let Some(poly_func) = self.functions.get(&callee).cloned()
+            {
+                self.monomorphize_func(poly_func, result);
+                self.check_imports(&callee, result, checked);
+                continue;
+            }
+
             if module_id != self.config.module_id
                 && let Some(program) = self.config.modules.program_for(module_id)
                 && let Some(imported) = program.functions.get(&callee).cloned()
@@ -272,7 +283,7 @@ impl<'a> Monomorphizer<'a> {
     fn monomorphize_block(
         &mut self,
         block: BasicBlock<Ty>,
-        substitutions: &CallSubstitutions,
+        substitutions: &TypeArgs,
         receiver_ty: Option<&Ty>,
         specialized_caller: Option<Symbol>,
     ) -> BasicBlock<IrTy> {
@@ -302,7 +313,7 @@ impl<'a> Monomorphizer<'a> {
     fn monomorphize_terminator(
         &mut self,
         terminator: Terminator<Ty>,
-        substitutions: &CallSubstitutions,
+        substitutions: &TypeArgs,
     ) -> Terminator<IrTy> {
         match terminator {
             Terminator::Ret { val, ty } => Terminator::Ret {
@@ -319,9 +330,9 @@ impl<'a> Monomorphizer<'a> {
     fn monomorphize_instruction(
         &mut self,
         instruction: Instruction<Ty>,
-        substitutions: &CallSubstitutions,
+        substitutions: &TypeArgs,
         receiver_ty: Option<&Ty>,
-        specialized_caller: Option<Symbol>,
+        _specialized_caller: Option<Symbol>,
     ) -> Instruction<IrTy> {
         // Handle Call instructions specially to substitute callees
         if let Instruction::Call {
@@ -330,65 +341,26 @@ impl<'a> Monomorphizer<'a> {
             callee,
             args,
             self_dest,
+            resolved_callee,
             meta,
         } = instruction
         {
             let new_callee = match &callee {
-                Value::Func(sym @ Symbol::MethodRequirement(_)) => {
-                    // Check if the specialization pass already resolved this
-                    let resolved = if let Some(caller) = specialized_caller {
-                        let call_id = meta.items.iter().find_map(|m| {
-                            if let InstructionMeta::Source(id) = m {
-                                Some(id)
-                            } else {
-                                None
-                            }
-                        });
-                        if let Some(call_id) = call_id
-                            && let Some(specialized_sym) = self
-                                .specialization_plan
-                                .specialized_call_targets()
-                                .get(&(caller, CallSiteId::from_lowered_source(*call_id)))
-                        {
-                            Some(Value::Func(*specialized_sym))
-                        } else {
+                Value::Func(sym) => {
+                    if let Some(resolved) = resolved_callee.as_ref().and_then(|callee| {
+                        self.resolve_call_target(*sym, substitutions, receiver_ty, callee)
+                    }) {
+                        Value::Func(resolved)
+                    } else if let Symbol::MethodRequirement(_) = sym
+                        && let Some(resolved) =
                             self.resolve_method_requirement(sym, substitutions, receiver_ty)
-                                .map(Value::Func)
-                        }
-                    } else {
-                        self.resolve_method_requirement(sym, substitutions, receiver_ty)
-                            .map(Value::Func)
-                    };
-
-                    if let Some(resolved_callee) = resolved {
-                        resolved_callee
-                    } else if let Some(instr) =
-                        self.try_emit_func_show(sym, substitutions, dest, &meta)
+                    {
+                        Value::Func(resolved)
+                    } else if let Symbol::MethodRequirement(_) = sym
+                        && let Some(instr) =
+                            self.try_emit_func_show(sym, substitutions, dest, &meta)
                     {
                         return instr;
-                    } else {
-                        callee
-                    }
-                }
-                Value::Func(_callee_sym) => {
-                    if let Some(caller) = specialized_caller {
-                        let call_id = meta.items.iter().find_map(|m| {
-                            if let InstructionMeta::Source(id) = m {
-                                Some(id)
-                            } else {
-                                None
-                            }
-                        });
-                        if let Some(call_id) = call_id
-                            && let Some(specialized_sym) = self
-                                .specialization_plan
-                                .specialized_call_targets()
-                                .get(&(caller, CallSiteId::from_lowered_source(*call_id)))
-                        {
-                            Value::Func(*specialized_sym)
-                        } else {
-                            callee
-                        }
                     } else {
                         callee
                     }
@@ -402,6 +374,7 @@ impl<'a> Monomorphizer<'a> {
                 callee: new_callee,
                 args,
                 self_dest,
+                resolved_callee,
                 meta,
             };
         }
@@ -434,6 +407,217 @@ impl<'a> Monomorphizer<'a> {
         instruction.map_type(|ty| self.monomorphize_ty(ty, substitutions))
     }
 
+    fn resolve_call_target(
+        &self,
+        lowered_symbol: Symbol,
+        substitutions: &TypeArgs,
+        receiver_ty: Option<&Ty>,
+        callee: &Callee,
+    ) -> Option<Symbol> {
+        if matches!(callee, Callee::Effect { .. }) {
+            return None;
+        }
+        let mut target = callee.target_symbol();
+        let mut type_args = self.specialized_type_args(callee.type_args(), substitutions);
+
+        if let Callee::Method {
+            symbol, self_ty, ..
+        } = callee
+        {
+            target = *symbol;
+            let concrete_self = substitutions.apply(self_ty.clone());
+            if let Symbol::MethodRequirement(_) = symbol {
+                target = self
+                    .resolve_method_requirement(symbol, &type_args, Some(&concrete_self))
+                    .or_else(|| self.resolve_method_requirement(symbol, substitutions, receiver_ty))
+                    .unwrap_or(*symbol);
+                let mut target_type_args = self.type_args_for_symbol_from(target, substitutions);
+                let receiver_for_args =
+                    if matches!(concrete_self, Ty::Primitive(..) | Ty::Nominal { .. }) {
+                        concrete_self
+                    } else {
+                        self.concrete_receiver_for_witness(symbol, target, substitutions)
+                            .unwrap_or(concrete_self)
+                    };
+                self.add_receiver_type_args(target, &receiver_for_args, &mut target_type_args);
+                if !target_type_args.is_empty() {
+                    type_args = target_type_args;
+                }
+            }
+        }
+
+        self.matching_specialization(target, &type_args)
+            .or_else(|| (target != lowered_symbol).then_some(target))
+    }
+
+    fn concrete_receiver_for_witness(
+        &self,
+        method_req: &Symbol,
+        target: Symbol,
+        substitutions: &TypeArgs,
+    ) -> Option<Ty> {
+        let (protocol_sym, label) = self.method_requirement_label(method_req)?;
+        let Symbol::Protocol(protocol_id) = protocol_sym else {
+            return None;
+        };
+
+        for candidate in substitutions
+            .ty
+            .values()
+            .filter(|ty| matches!(**ty, Ty::Primitive(..) | Ty::Nominal { .. }))
+        {
+            let conforming_id = match candidate {
+                Ty::Nominal { symbol, .. } => *symbol,
+                Ty::Primitive(symbol) => *symbol,
+                _ => continue,
+            };
+            let key = ConformanceKey {
+                conforming_id,
+                protocol_id,
+            };
+            let witness = self.lookup_witness(&key, &label, method_req).or_else(|| {
+                self.types
+                    .lookup_member(self.config.modules.as_ref(), &conforming_id, &label)
+            });
+            if witness == Some(target) {
+                return Some(candidate.clone());
+            }
+        }
+
+        None
+    }
+
+    fn type_args_for_symbol_from(&self, symbol: Symbol, source: &TypeArgs) -> TypeArgs {
+        let mut result = TypeArgs::default();
+        let Some(entry) = self
+            .types
+            .get_symbol(&symbol)
+            .cloned()
+            .or_else(|| self.config.modules.lookup(&symbol))
+        else {
+            return result;
+        };
+
+        let foralls: Vec<ForAll> = match entry {
+            TypeEntry::Poly(scheme) => scheme.foralls.into_iter().collect(),
+            TypeEntry::Mono(ty) => ty.collect_foralls().into_iter().collect(),
+        };
+
+        for forall in foralls {
+            match forall {
+                ForAll::Ty(param) => {
+                    if let Some(ty) = source.ty.get(&param).cloned() {
+                        result.ty.insert(param, ty);
+                    }
+                }
+                ForAll::Row(param) => {
+                    if let Some(row) = source.row.get(&param).cloned() {
+                        result.row.insert(param, row);
+                    }
+                }
+            }
+        }
+
+        result
+    }
+
+    fn add_receiver_type_args(
+        &self,
+        member_sym: Symbol,
+        receiver_ty: &Ty,
+        type_args: &mut TypeArgs,
+    ) {
+        let Ty::Nominal {
+            symbol,
+            type_args: args,
+        } = receiver_ty
+        else {
+            return;
+        };
+        if args.is_empty() {
+            return;
+        }
+
+        if let Some(TypeEntry::Poly(scheme)) = self
+            .types
+            .get_symbol(&member_sym)
+            .cloned()
+            .or_else(|| self.config.modules.lookup(&member_sym))
+        {
+            for (forall, arg) in scheme
+                .foralls
+                .iter()
+                .filter_map(|forall| match forall {
+                    ForAll::Ty(param) => Some(*param),
+                    ForAll::Row(_) => None,
+                })
+                .zip(args.iter())
+            {
+                type_args.ty.insert(forall, arg.clone());
+            }
+        }
+
+        if let Some(nominal) = self
+            .types
+            .catalog
+            .nominals
+            .get(symbol)
+            .or_else(|| self.config.modules.lookup_nominal(symbol))
+        {
+            for (param, arg) in nominal.type_params.iter().zip(args.iter()) {
+                if let Ty::Param(param, _) = param {
+                    type_args.ty.insert(*param, arg.clone());
+                }
+            }
+        }
+    }
+
+    fn specialized_type_args(&self, type_args: &TypeArgs, substitutions: &TypeArgs) -> TypeArgs {
+        let mut result = TypeArgs::default();
+        for (param, ty) in &type_args.ty {
+            let ty = substitutions.apply(ty.clone());
+            if !matches!(ty, Ty::Param(..) | Ty::Var { .. }) {
+                result.ty.insert(*param, ty);
+            }
+        }
+        for (param, row) in &type_args.row {
+            let row = substitutions.apply_row(row.clone());
+            if !matches!(row, Row::Param(..) | Row::Var(..)) {
+                result.row.insert(*param, row);
+            }
+        }
+        result
+    }
+
+    fn matching_specialization(&self, original: Symbol, type_args: &TypeArgs) -> Option<Symbol> {
+        if type_args.is_empty() {
+            return None;
+        }
+
+        self.specialization_plan
+            .specializations()
+            .get(&original)?
+            .iter()
+            .copied()
+            .find(|candidate| {
+                self.specialization_plan
+                    .specialized_callees()
+                    .get(candidate)
+                    .is_some_and(|callee| Self::type_args_satisfy(type_args, &callee.substitutions))
+            })
+    }
+
+    fn type_args_satisfy(actual: &TypeArgs, expected: &TypeArgs) -> bool {
+        expected
+            .ty
+            .iter()
+            .all(|(param, ty)| actual.ty.get(param) == Some(ty))
+            && expected
+                .row
+                .iter()
+                .all(|(param, row)| actual.row.get(param) == Some(row))
+    }
+
     fn lookup_witness(
         &self,
         key: &ConformanceKey,
@@ -456,7 +640,7 @@ impl<'a> Monomorphizer<'a> {
     fn resolve_method_requirement(
         &self,
         method_req: &Symbol,
-        substitutions: &CallSubstitutions,
+        substitutions: &TypeArgs,
         receiver_ty: Option<&Ty>,
     ) -> Option<Symbol> {
         let (protocol_sym, label) = self.method_requirement_label(method_req)?;
@@ -494,7 +678,7 @@ impl<'a> Monomorphizer<'a> {
     fn try_emit_func_show(
         &mut self,
         method_req: &Symbol,
-        substitutions: &CallSubstitutions,
+        substitutions: &TypeArgs,
         dest: crate::ir::register::Register,
         meta: &crate::ir::list::List<InstructionMeta>,
     ) -> Option<Instruction<IrTy>> {
@@ -546,7 +730,7 @@ impl<'a> Monomorphizer<'a> {
 
     #[allow(clippy::only_used_in_recursion)]
     #[instrument(skip(self))]
-    fn monomorphize_ty(&mut self, ty: Ty, substitutions: &CallSubstitutions) -> IrTy {
+    fn monomorphize_ty(&mut self, ty: Ty, substitutions: &TypeArgs) -> IrTy {
         match ty {
             Ty::Primitive(symbol) => match symbol {
                 Symbol::Int => IrTy::Int,
@@ -678,7 +862,7 @@ impl<'a> Monomorphizer<'a> {
             .substitutions
             .ty
             .values()
-            .find(|ty| matches!(ty, Ty::Primitive(_) | Ty::Nominal { .. }))
+            .find(|ty| matches!(**ty, Ty::Primitive(_) | Ty::Nominal { .. }))
             .cloned();
 
         let specialized_func = Function {

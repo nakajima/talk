@@ -3,7 +3,6 @@ use crate::{
     name::Name,
     node_kinds::{block::Block, stmt::Stmt},
     types::{
-        call_site::CallerContext,
         constraints::constraint::ConstraintCause,
         infer_row::Row,
         passes::uncurry_function,
@@ -48,10 +47,9 @@ impl InferencePass<'_> {
 
         self.handler_contexts
             .push(HandlerContext { ret: effect_ret });
-        let typed_body = self
-            .with_current_caller(CallerContext::Callable(handler_symbol), |this| {
-                this.infer_block_with_returns(body, context)
-            });
+        let typed_body = self.with_current_callable(handler_symbol, |this| {
+            this.infer_block_with_returns(body, context)
+        });
         self.handler_contexts.pop();
         let typed_body = typed_body?;
 

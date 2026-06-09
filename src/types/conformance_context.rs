@@ -264,9 +264,7 @@ impl ConformanceContext {
             .find(|(_, conformance)| conformance.conforming_id == base_sym)
             .map(|(key, conformance)| (*key, conformance.clone()));
 
-        let Some((key, conformance)) = conformance else {
-            return None;
-        };
+        let (key, conformance) = conformance?;
 
         if let Some(alias) = self.projection_alias_for(catalog, modules, resolved_names, key, label)
         {
