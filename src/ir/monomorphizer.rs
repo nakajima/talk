@@ -15,15 +15,16 @@ use crate::{
     },
     name::Name,
     name_resolution::symbol::Symbol,
-    node_id::NodeID,
     types::{
         callee::Callee,
         conformance::ConformanceKey,
         format::{SymbolNames, TypeFormatter},
+        infer_row::Row,
         infer_ty::Ty,
         passes::specialization_pass::{SpecializationPlan, SpecializedCallee},
+        scheme::ForAll,
         type_args::TypeArgs,
-        types::Types,
+        types::{TypeEntry, Types},
     },
 };
 
@@ -331,7 +332,7 @@ impl<'a> Monomorphizer<'a> {
         instruction: Instruction<Ty>,
         substitutions: &TypeArgs,
         receiver_ty: Option<&Ty>,
-        specialized_caller: Option<Symbol>,
+        _specialized_caller: Option<Symbol>,
     ) -> Instruction<IrTy> {
         // Handle Call instructions specially to substitute callees
         if let Instruction::Call {
@@ -340,19 +341,15 @@ impl<'a> Monomorphizer<'a> {
             callee,
             args,
             self_dest,
+            resolved_callee,
             meta,
         } = instruction
         {
-            let meta = self.remap_call_meta(meta, specialized_caller);
             let new_callee = match &callee {
                 Value::Func(sym) => {
-                    if let Some(resolved) = self.resolve_call_target(
-                        *sym,
-                        substitutions,
-                        receiver_ty,
-                        specialized_caller,
-                        &meta,
-                    ) {
+                    if let Some(resolved) = resolved_callee.as_ref().and_then(|callee| {
+                        self.resolve_call_target(*sym, substitutions, receiver_ty, callee)
+                    }) {
                         Value::Func(resolved)
                     } else if let Symbol::MethodRequirement(_) = sym
                         && let Some(resolved) =
@@ -377,6 +374,7 @@ impl<'a> Monomorphizer<'a> {
                 callee: new_callee,
                 args,
                 self_dest,
+                resolved_callee,
                 meta,
             };
         }
@@ -409,55 +407,22 @@ impl<'a> Monomorphizer<'a> {
         instruction.map_type(|ty| self.monomorphize_ty(ty, substitutions))
     }
 
-    fn remap_call_meta(
-        &self,
-        mut meta: crate::ir::list::List<InstructionMeta>,
-        specialized_caller: Option<Symbol>,
-    ) -> crate::ir::list::List<InstructionMeta> {
-        let Some(specialized_caller) = specialized_caller else {
-            return meta;
-        };
-        let Some(specialized) = self
-            .specialization_plan
-            .specialized_callees()
-            .get(&specialized_caller)
-        else {
-            return meta;
-        };
-
-        for item in &mut meta.items {
-            if let InstructionMeta::Source(id) = item
-                && let Some(cloned_id) = specialized.call_sites.get(id).copied()
-            {
-                *id = cloned_id;
-            }
-        }
-
-        meta
-    }
-
     fn resolve_call_target(
         &self,
         lowered_symbol: Symbol,
         substitutions: &TypeArgs,
         receiver_ty: Option<&Ty>,
-        specialized_caller: Option<Symbol>,
-        meta: &crate::ir::list::List<InstructionMeta>,
+        callee: &Callee,
     ) -> Option<Symbol> {
-        let call_id = meta.items.iter().find_map(|item| match item {
-            InstructionMeta::Source(id) => Some(*id),
-            _ => None,
-        })?;
-        let callee = self.callee_for_call(specialized_caller, call_id)?;
         if matches!(callee, Callee::Effect { .. }) {
             return None;
         }
         let mut target = callee.target_symbol();
-        let type_args = self.specialized_type_args(callee.type_args(), substitutions);
+        let mut type_args = self.specialized_type_args(callee.type_args(), substitutions);
 
         if let Callee::Method {
             symbol, self_ty, ..
-        } = &callee
+        } = callee
         {
             target = *symbol;
             let concrete_self = substitutions.apply(self_ty.clone());
@@ -466,6 +431,18 @@ impl<'a> Monomorphizer<'a> {
                     .resolve_method_requirement(symbol, &type_args, Some(&concrete_self))
                     .or_else(|| self.resolve_method_requirement(symbol, substitutions, receiver_ty))
                     .unwrap_or(*symbol);
+                let mut target_type_args = self.type_args_for_symbol_from(target, substitutions);
+                let receiver_for_args =
+                    if matches!(concrete_self, Ty::Primitive(..) | Ty::Nominal { .. }) {
+                        concrete_self
+                    } else {
+                        self.concrete_receiver_for_witness(symbol, target, substitutions)
+                            .unwrap_or(concrete_self)
+                    };
+                self.add_receiver_type_args(target, &receiver_for_args, &mut target_type_args);
+                if !target_type_args.is_empty() {
+                    type_args = target_type_args;
+                }
             }
         }
 
@@ -473,30 +450,126 @@ impl<'a> Monomorphizer<'a> {
             .or_else(|| (target != lowered_symbol).then_some(target))
     }
 
-    fn callee_for_call(
+    fn concrete_receiver_for_witness(
         &self,
-        specialized_caller: Option<Symbol>,
-        call_id: NodeID,
-    ) -> Option<Callee> {
-        if let Some(callee) = self.types.callees.get(&call_id).cloned() {
-            return Some(callee);
-        }
+        method_req: &Symbol,
+        target: Symbol,
+        substitutions: &TypeArgs,
+    ) -> Option<Ty> {
+        let (protocol_sym, label) = self.method_requirement_label(method_req)?;
+        let Symbol::Protocol(protocol_id) = protocol_sym else {
+            return None;
+        };
 
-        let original_caller = specialized_caller
-            .and_then(|caller| self.specialization_plan.specialized_callees().get(&caller))
-            .map(|callee| callee.original_symbol);
-
-        if let Some(original) = original_caller
-            && let Some(module_id) = original.external_module_id()
+        for candidate in substitutions
+            .ty
+            .values()
+            .filter(|ty| matches!(**ty, Ty::Primitive(..) | Ty::Nominal { .. }))
         {
-            return self
-                .config
-                .modules
-                .get_module(module_id)
-                .and_then(|module| module.types.callees.get(&call_id).cloned());
+            let conforming_id = match candidate {
+                Ty::Nominal { symbol, .. } => *symbol,
+                Ty::Primitive(symbol) => *symbol,
+                _ => continue,
+            };
+            let key = ConformanceKey {
+                conforming_id,
+                protocol_id,
+            };
+            let witness = self.lookup_witness(&key, &label, method_req).or_else(|| {
+                self.types
+                    .lookup_member(self.config.modules.as_ref(), &conforming_id, &label)
+            });
+            if witness == Some(target) {
+                return Some(candidate.clone());
+            }
         }
 
         None
+    }
+
+    fn type_args_for_symbol_from(&self, symbol: Symbol, source: &TypeArgs) -> TypeArgs {
+        let mut result = TypeArgs::default();
+        let Some(entry) = self
+            .types
+            .get_symbol(&symbol)
+            .cloned()
+            .or_else(|| self.config.modules.lookup(&symbol))
+        else {
+            return result;
+        };
+
+        let foralls: Vec<ForAll> = match entry {
+            TypeEntry::Poly(scheme) => scheme.foralls.into_iter().collect(),
+            TypeEntry::Mono(ty) => ty.collect_foralls().into_iter().collect(),
+        };
+
+        for forall in foralls {
+            match forall {
+                ForAll::Ty(param) => {
+                    if let Some(ty) = source.ty.get(&param).cloned() {
+                        result.ty.insert(param, ty);
+                    }
+                }
+                ForAll::Row(param) => {
+                    if let Some(row) = source.row.get(&param).cloned() {
+                        result.row.insert(param, row);
+                    }
+                }
+            }
+        }
+
+        result
+    }
+
+    fn add_receiver_type_args(
+        &self,
+        member_sym: Symbol,
+        receiver_ty: &Ty,
+        type_args: &mut TypeArgs,
+    ) {
+        let Ty::Nominal {
+            symbol,
+            type_args: args,
+        } = receiver_ty
+        else {
+            return;
+        };
+        if args.is_empty() {
+            return;
+        }
+
+        if let Some(TypeEntry::Poly(scheme)) = self
+            .types
+            .get_symbol(&member_sym)
+            .cloned()
+            .or_else(|| self.config.modules.lookup(&member_sym))
+        {
+            for (forall, arg) in scheme
+                .foralls
+                .iter()
+                .filter_map(|forall| match forall {
+                    ForAll::Ty(param) => Some(*param),
+                    ForAll::Row(_) => None,
+                })
+                .zip(args.iter())
+            {
+                type_args.ty.insert(forall, arg.clone());
+            }
+        }
+
+        if let Some(nominal) = self
+            .types
+            .catalog
+            .nominals
+            .get(symbol)
+            .or_else(|| self.config.modules.lookup_nominal(symbol))
+        {
+            for (param, arg) in nominal.type_params.iter().zip(args.iter()) {
+                if let Ty::Param(param, _) = param {
+                    type_args.ty.insert(*param, arg.clone());
+                }
+            }
+        }
     }
 
     fn specialized_type_args(&self, type_args: &TypeArgs, substitutions: &TypeArgs) -> TypeArgs {
@@ -509,10 +582,7 @@ impl<'a> Monomorphizer<'a> {
         }
         for (param, row) in &type_args.row {
             let row = substitutions.apply_row(row.clone());
-            if !matches!(
-                row,
-                crate::types::infer_row::Row::Param(..) | crate::types::infer_row::Row::Var(..)
-            ) {
+            if !matches!(row, Row::Param(..) | Row::Var(..)) {
                 result.row.insert(*param, row);
             }
         }
@@ -533,8 +603,19 @@ impl<'a> Monomorphizer<'a> {
                 self.specialization_plan
                     .specialized_callees()
                     .get(candidate)
-                    .is_some_and(|callee| callee.substitutions == *type_args)
+                    .is_some_and(|callee| Self::type_args_satisfy(type_args, &callee.substitutions))
             })
+    }
+
+    fn type_args_satisfy(actual: &TypeArgs, expected: &TypeArgs) -> bool {
+        expected
+            .ty
+            .iter()
+            .all(|(param, ty)| actual.ty.get(param) == Some(ty))
+            && expected
+                .row
+                .iter()
+                .all(|(param, row)| actual.row.get(param) == Some(row))
     }
 
     fn lookup_witness(
@@ -781,7 +862,7 @@ impl<'a> Monomorphizer<'a> {
             .substitutions
             .ty
             .values()
-            .find(|ty| matches!(ty, Ty::Primitive(_) | Ty::Nominal { .. }))
+            .find(|ty| matches!(**ty, Ty::Primitive(_) | Ty::Nominal { .. }))
             .cloned();
 
         let specialized_func = Function {

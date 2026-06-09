@@ -53,6 +53,25 @@ impl TypeArgs {
         }
     }
 
+    pub fn mapping(
+        self,
+        ty_map: &mut impl FnMut(Ty) -> Ty,
+        row_map: &mut impl FnMut(Row) -> Row,
+    ) -> Self {
+        TypeArgs {
+            ty: self
+                .ty
+                .into_iter()
+                .map(|(param, ty)| (param, ty.mapping(ty_map, row_map)))
+                .collect(),
+            row: self
+                .row
+                .into_iter()
+                .map(|(param, row)| (param, row_map(row)))
+                .collect(),
+        }
+    }
+
     pub fn import(self, module_id: ModuleId) -> Self {
         Self {
             ty: self

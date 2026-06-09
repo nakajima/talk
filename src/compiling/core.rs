@@ -225,6 +225,34 @@ mod tests {
             .collect()
     }
 
+    fn resolved_callees_for_source(module: &Module, source: NodeID) -> Vec<Callee> {
+        module
+            .program
+            .functions
+            .values()
+            .flat_map(|function| &function.blocks)
+            .flat_map(|block| &block.instructions)
+            .filter_map(|instruction| {
+                let Instruction::Call {
+                    resolved_callee,
+                    meta,
+                    ..
+                } = instruction
+                else {
+                    return None;
+                };
+                if !meta
+                    .items
+                    .iter()
+                    .any(|item| matches!(item, InstructionMeta::Source(id) if *id == source))
+                {
+                    return None;
+                }
+                resolved_callee.clone()
+            })
+            .collect()
+    }
+
     #[test]
     fn core_module_roundtrips_through_cache() {
         // Compile from scratch
@@ -280,8 +308,8 @@ mod tests {
 
     #[test]
     fn core_concrete_method_callees_match_receiver_type() {
-        let typed = typecheck_core();
-        let types = &typed.phase.types;
+        let module = typecheck_core().lower().unwrap().module("Core");
+        let types = &module.types;
 
         let method_owners: FxHashMap<Symbol, Symbol> = types
             .catalog
@@ -291,34 +319,48 @@ mod tests {
             .collect();
 
         let mut mismatches = vec![];
-        for (call_id, callee) in &types.callees {
-            let Callee::Method {
-                symbol, self_ty, ..
-            } = callee
-            else {
-                continue;
-            };
-            let Some(expected_owner) = method_owners.get(symbol).copied() else {
-                continue;
-            };
-            if matches!(expected_owner, Symbol::Protocol(_)) {
-                continue;
-            }
-            let Some(actual_owner) = concrete_receiver_symbol(self_ty) else {
-                continue;
-            };
+        for function in module.program.functions.values() {
+            for block in &function.blocks {
+                for instruction in &block.instructions {
+                    let Instruction::Call {
+                        resolved_callee: Some(callee),
+                        meta,
+                        ..
+                    } = instruction
+                    else {
+                        continue;
+                    };
+                    let Callee::Method {
+                        symbol, self_ty, ..
+                    } = callee
+                    else {
+                        continue;
+                    };
+                    let Some(expected_owner) = method_owners.get(symbol).copied() else {
+                        continue;
+                    };
+                    if matches!(expected_owner, Symbol::Protocol(_)) {
+                        continue;
+                    }
+                    let Some(actual_owner) = concrete_receiver_symbol(self_ty) else {
+                        continue;
+                    };
 
-            if actual_owner != expected_owner {
-                let target_name = typed
-                    .phase
-                    .resolved_names
-                    .symbol_names
-                    .get(symbol)
-                    .map(String::as_str)
-                    .unwrap_or("<unknown>");
-                mismatches.push(format!(
+                    if actual_owner != expected_owner {
+                        let call_id = meta.items.iter().find_map(|item| match item {
+                            InstructionMeta::Source(id) => Some(*id),
+                            _ => None,
+                        });
+                        let target_name = module
+                            .symbol_names
+                            .get(symbol)
+                            .map(String::as_str)
+                            .unwrap_or("<unknown>");
+                        mismatches.push(format!(
                     "{call_id:?}: target {symbol:?} ({target_name}) belongs to {expected_owner:?}, but receiver type is {self_ty:?}"
                 ));
+                    }
+                }
             }
         }
 
@@ -342,7 +384,8 @@ mod tests {
 
     fn assert_float_show_int_part_uses_callee_fact(module: &Module) {
         let int_part_show = NodeID(FileID(11), 186);
-        let Some(Callee::Method { symbol, .. }) = module.types.callees.get(&int_part_show) else {
+        let resolved = resolved_callees_for_source(module, int_part_show);
+        let [Callee::Method { symbol, .. }] = resolved.as_slice() else {
             panic!("missing callee metadata for Float.show int_part.show()");
         };
 
@@ -358,7 +401,8 @@ mod tests {
         let module = compile();
         for node in [174, 198, 233, 250, 252] {
             let call_id = NodeID(FileID(11), node);
-            let Some(Callee::Method { self_ty, .. }) = module.types.callees.get(&call_id) else {
+            let resolved = resolved_callees_for_source(&module, call_id);
+            let [Callee::Method { self_ty, .. }] = resolved.as_slice() else {
                 panic!("missing String.add callee metadata at {call_id:?}");
             };
             assert_eq!(

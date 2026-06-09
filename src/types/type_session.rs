@@ -1,5 +1,6 @@
 use std::{cell::RefCell, rc::Rc};
 
+use derive_visitor::{DriveMut, VisitorMut};
 use ena::unify::{InPlaceUnificationTable, UnifyKey};
 use indexmap::{IndexMap, IndexSet};
 use itertools::Itertools;
@@ -33,10 +34,42 @@ use crate::{
         type_catalog::{MemberBinding, MemberSource, Nominal, TypeCatalog},
         type_error::TypeError,
         type_operations::{UnificationSubstitutions, substitute},
+        typed_ast::{TypedAST, TypedExpr, TypedExprKind},
         types::{TypeEntry, Types},
         vars::Vars,
     },
 };
+
+#[derive(VisitorMut)]
+#[visitor(TypedExpr(enter))]
+struct FinalizeCallMetadata<'a, 'session> {
+    session: &'session mut TypeSession,
+    entries: &'a FxHashMap<NodeID, TypeEntry>,
+    types_by_symbol: &'a FxHashMap<Symbol, TypeEntry>,
+}
+
+impl FinalizeCallMetadata<'_, '_> {
+    fn enter_typed_expr(&mut self, expr: &mut TypedExpr) {
+        let TypedExprKind::Call {
+            resolved_callee, ..
+        } = &mut expr.kind
+        else {
+            return;
+        };
+
+        let callee = resolved_callee
+            .take()
+            .or_else(|| self.session.callees.remove(&expr.id));
+        if let Some(callee) = callee {
+            *resolved_callee = Some(self.session.finalize_callee(
+                expr.id,
+                self.entries,
+                self.types_by_symbol,
+                callee,
+            ));
+        }
+    }
+}
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum TypeDefKind {
@@ -63,7 +96,6 @@ pub struct TypeSession {
     meta_origins: Rc<RefCell<FxHashMap<Meta, MetaOrigin>>>,
 
     callees: Callees,
-    callee_owners: FxHashMap<NodeID, Symbol>,
 
     pub(crate) symbols: Symbols,
     pub(crate) resolved_names: ResolvedNames,
@@ -183,7 +215,6 @@ impl TypeSession {
             modules,
             aliases: Default::default(),
             callees: Default::default(),
-            callee_owners: Default::default(),
 
             meta_vars: Default::default(),
             row_vars: Default::default(),
@@ -215,7 +246,7 @@ impl TypeSession {
         constraints.wake_symbols(&[symbol]);
     }
 
-    pub fn finalize(mut self) -> Result<(Types, ResolvedNames), TypeError> {
+    pub fn finalize(mut self, ast: &mut TypedAST) -> Result<(Types, ResolvedNames), TypeError> {
         let types_by_node = std::mem::take(&mut self.types_by_node);
         let entries: FxHashMap<NodeID, TypeEntry> = types_by_node
             .into_iter()
@@ -246,8 +277,12 @@ impl TypeSession {
         catalog.rebuild_member_index(self.modules.as_ref());
         self.type_catalog = catalog;
 
-        let callees = self.finalize_callees(&entries, &types_by_symbol);
-        let callee_owners = std::mem::take(&mut self.callee_owners);
+        let mut call_metadata = FinalizeCallMetadata {
+            session: &mut self,
+            entries: &entries,
+            types_by_symbol: &types_by_symbol,
+        };
+        ast.drive_mut(&mut call_metadata);
         let catalog = std::mem::take(&mut self.type_catalog);
 
         let types = Types {
@@ -255,27 +290,10 @@ impl TypeSession {
             types_by_node: entries,
             types_by_symbol,
             match_plans: Default::default(),
-            callees,
-            callee_owners,
         };
 
         let resolved_names = std::mem::take(&mut self.resolved_names);
         Ok((types, resolved_names))
-    }
-
-    fn finalize_callees(
-        &mut self,
-        entries: &FxHashMap<NodeID, TypeEntry>,
-        types_by_symbol: &FxHashMap<Symbol, TypeEntry>,
-    ) -> Callees {
-        let mut result = Callees::default();
-        let callees = std::mem::take(&mut self.callees);
-        for (id, callee) in callees {
-            let callee = self.finalize_callee(id, entries, types_by_symbol, callee);
-            result.insert(id, callee);
-        }
-
-        result
     }
 
     fn finalize_callee(
@@ -653,11 +671,8 @@ impl TypeSession {
         );
     }
 
-    pub(crate) fn record_callee_owner(&mut self, call_id: NodeID, owner: Symbol) {
-        if call_id == NodeID::SYNTHESIZED {
-            return;
-        }
-        self.callee_owners.insert(call_id, owner);
+    pub(crate) fn callees_snapshot(&self) -> Callees {
+        self.callees.clone()
     }
 
     pub fn shallow_generalize_row(&mut self, row: Row) -> Row {

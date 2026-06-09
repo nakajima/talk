@@ -7,7 +7,6 @@ use crate::{
     name_resolution::symbol::Symbol,
     node_id::NodeID,
     types::{
-        callee::Callees,
         conformance::ConformanceKey,
         infer_row::Row,
         infer_ty::Ty,
@@ -89,9 +88,6 @@ pub struct Types {
     pub types_by_symbol: FxHashMap<Symbol, TypeEntry>,
     pub catalog: TypeCatalog,
     pub(crate) match_plans: FxHashMap<NodeID, MatchPlan>,
-    /// Type-checker-resolved callees keyed by call/effect expression ID.
-    pub callees: Callees,
-    pub(crate) callee_owners: FxHashMap<NodeID, Symbol>,
 }
 
 impl Types {
@@ -208,16 +204,6 @@ impl Types {
                 .collect(),
             catalog: self.catalog.import_as(module_id),
             match_plans: self.match_plans,
-            callees: self
-                .callees
-                .into_iter()
-                .map(|(k, v)| (k, v.import(module_id)))
-                .collect(),
-            callee_owners: self
-                .callee_owners
-                .into_iter()
-                .map(|(id, owner)| (id, owner.import(module_id)))
-                .collect(),
         }
     }
 }

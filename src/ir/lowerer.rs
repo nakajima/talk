@@ -603,6 +603,7 @@ impl<'a> Lowerer<'a> {
             callee: Value::Reg(0),
             args: vec![val].into(),
             self_dest: None,
+            resolved_callee: None,
             meta: vec![].into(),
         });
 
@@ -1050,8 +1051,16 @@ impl<'a> Lowerer<'a> {
                 callee,
                 args,
                 callee_sym,
+                resolved_callee,
                 ..
-            } => self.lower_call(expr, callee, args, callee_sym.as_ref(), bind),
+            } => self.lower_call(
+                expr,
+                callee,
+                args,
+                callee_sym.as_ref(),
+                resolved_callee.as_ref(),
+                bind,
+            ),
             TypedExprKind::Member {
                 receiver, label, ..
             } => self.lower_member(expr, &Some(receiver.clone()), label, None, bind),
@@ -1204,6 +1213,7 @@ impl<'a> Lowerer<'a> {
             callee: Value::Func(handler_sym),
             args: arg_vals.into(),
             self_dest: None,
+            resolved_callee: None,
             meta: vec![InstructionMeta::Source(expr.id)].into(),
         });
 
@@ -1476,6 +1486,7 @@ impl<'a> Lowerer<'a> {
                     callee,
                     args,
                     self_dest: None,
+                    resolved_callee: None,
                     meta: vec![InstructionMeta::Source(instr.id)].into(),
                 });
                 Ok((dest.into(), ty))
@@ -2782,6 +2793,16 @@ impl<'a> Lowerer<'a> {
             .unwrap_or(false)
     }
 
+    fn is_method_like(&self, symbol: Symbol) -> bool {
+        matches!(symbol, Symbol::InstanceMethod(_))
+            || self
+                .typed
+                .specialization_plan
+                .specialized_callees()
+                .get(&symbol)
+                .is_some_and(|callee| matches!(callee.original_symbol, Symbol::InstanceMethod(_)))
+    }
+
     #[instrument(level = tracing::Level::TRACE, skip(self))]
     fn lower_variable(&mut self, name: &Symbol, expr: &TypedExpr) -> Result<(Value, Ty), IRError> {
         let ty = expr.ty.clone();
@@ -2922,6 +2943,7 @@ impl<'a> Lowerer<'a> {
         mut args: Vec<Value>,
         dest: Register,
         callee_sym: Option<Symbol>,
+        resolved_callee: Option<Callee>,
     ) -> Result<(Value, Ty), IRError> {
         let record_dest = self.next_register();
 
@@ -2980,6 +3002,7 @@ impl<'a> Lowerer<'a> {
             callee: Value::Func(init_sym),
             args: args.into(),
             self_dest: None,
+            resolved_callee,
             meta: vec![InstructionMeta::Source(id)].into(),
         });
 
@@ -3028,15 +3051,11 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    fn method_self_arg<'b>(
+    fn first_self_arg<'b>(
         &self,
-        call_id: NodeID,
         args: &'b [TypedExpr],
         arg_vals: &'b [Value],
     ) -> Option<(&'b TypedExpr, Value)> {
-        let Some(Callee::Method { .. }) = self.typed.types.callees.get(&call_id) else {
-            return None;
-        };
         args.first()
             .zip(arg_vals.first())
             .map(|(arg, value)| (arg, value.clone()))
@@ -3049,6 +3068,7 @@ impl<'a> Lowerer<'a> {
         callee: &TypedExpr,
         args: &[TypedExpr],
         callee_sym: Option<&Symbol>,
+        resolved_callee: Option<&Callee>,
         bind: Bind,
     ) -> Result<(Value, Ty), IRError> {
         let dest = self.ret(bind);
@@ -3069,6 +3089,7 @@ impl<'a> Lowerer<'a> {
                 arg_vals,
                 dest,
                 callee_sym.copied(),
+                resolved_callee.cloned(),
             );
         }
 
@@ -3082,6 +3103,7 @@ impl<'a> Lowerer<'a> {
                 arg_vals,
                 dest,
                 callee_sym.copied(),
+                resolved_callee.cloned(),
             );
         }
 
@@ -3100,6 +3122,7 @@ impl<'a> Lowerer<'a> {
                 args,
                 arg_vals,
                 dest,
+                resolved_callee.cloned(),
             );
         }
 
@@ -3145,6 +3168,7 @@ impl<'a> Lowerer<'a> {
                 callee: field_reg.into(),
                 args: field_args.into(),
                 self_dest: None,
+                resolved_callee: None,
                 meta: vec![InstructionMeta::Source(call_expr.id)].into(),
             });
 
@@ -3154,15 +3178,11 @@ impl<'a> Lowerer<'a> {
         // For specialized method calls (callee is Variable but was originally a method),
         // the first arg is `self`. Check if it's a variable and set up self_dest.
         // This applies to InstanceMethod calls and Synthesized calls (which are specialized methods).
-        let is_method_like = matches!(
-            raw_callee_sym,
-            Some(Symbol::InstanceMethod(_)) | Some(Symbol::Synthesized(_))
-        );
+        let is_method_like = raw_callee_sym.is_some_and(|sym| self.is_method_like(sym));
         let tracked_self = if is_method_like
             && let Some(sym) = raw_callee_sym
             && self.method_mutates_self(sym)
-            && let Some((self_arg, self_value)) =
-                self.method_self_arg(call_expr.id, args, &arg_vals)
+            && let Some((self_arg, self_value)) = self.first_self_arg(args, &arg_vals)
             && let TypedExprKind::Variable(var_sym) = &self_arg.kind
         {
             self.begin_method_self_tracking(*var_sym, &self_arg.ty, self_value)
@@ -3182,6 +3202,7 @@ impl<'a> Lowerer<'a> {
             callee: callee_ir,
             args: arg_vals.into(),
             self_dest,
+            resolved_callee: resolved_callee.cloned(),
             meta: vec![InstructionMeta::Source(call_expr.id)].into(),
         });
 
@@ -3208,6 +3229,7 @@ impl<'a> Lowerer<'a> {
         arg_exprs: &[TypedExpr],
         mut args: Vec<Value>,
         dest: Register,
+        resolved_callee: Option<Callee>,
     ) -> Result<(Value, Ty), IRError> {
         let ty = call_expr.ty.clone();
 
@@ -3290,13 +3312,7 @@ impl<'a> Lowerer<'a> {
         };
 
         let sym = witness
-            .or_else(|| {
-                self.typed
-                    .types
-                    .callees
-                    .get(&call_expr.id)
-                    .map(Callee::target_symbol)
-            })
+            .or_else(|| resolved_callee.as_ref().map(Callee::target_symbol))
             .or(constructor_member_sym)
             .ok_or_else(|| {
                 IRError::WitnessNotFound(format!(
@@ -3309,7 +3325,15 @@ impl<'a> Lowerer<'a> {
         // resolves to a struct symbol, not a callable method symbol. Lower that
         // directly as a constructor call.
         if matches!(sym, Symbol::Struct(..)) {
-            return self.lower_constructor_call(call_expr.id, &sym, callee_expr, args, dest, None);
+            return self.lower_constructor_call(
+                call_expr.id,
+                &sym,
+                callee_expr,
+                args,
+                dest,
+                None,
+                resolved_callee,
+            );
         }
 
         // Track receiver writeback for method calls independently of the method
@@ -3332,6 +3356,7 @@ impl<'a> Lowerer<'a> {
             callee: Value::Func(sym),
             args: args.into(),
             self_dest,
+            resolved_callee,
             meta: vec![InstructionMeta::Source(call_expr.id)].into(),
         });
 

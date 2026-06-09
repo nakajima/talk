@@ -123,9 +123,6 @@ impl InferencePass<'_> {
                 .cloned()
                 .unwrap_or_default(),
         );
-        if let Some(owner) = self.current_callable {
-            self.session.record_callee_owner(expr.id, owner);
-        }
         Ok(typed)
     }
 
@@ -323,10 +320,6 @@ impl InferencePass<'_> {
         } else {
             self.record_callee_for_call(id, &callee_ty, &arg_tys);
         }
-        if let Some(owner) = self.current_callable {
-            self.session.record_callee_owner(id, owner);
-        }
-
         // Record call arg label spans immediately for Constructor callees
         // The struct symbol is available now, so we can resolve directly
         if let TypedExprKind::Constructor(struct_sym, _) = &callee_ty.kind {
@@ -408,6 +401,7 @@ impl InferencePass<'_> {
                 callee_ty: callee_ty_var,
                 type_args: type_arg_tys,
                 args: arg_tys,
+                resolved_callee: None,
                 callee_sym: None,
             },
         })

@@ -260,10 +260,10 @@ pub mod tests {
         let TypedStmt {
             kind:
                 TypedStmtKind::Expr(TypedExpr {
-                    id: call_1_id,
                     kind:
                         TypedExprKind::Call {
                             callee: box _root_1,
+                            resolved_callee: Some(callee_1),
                             ..
                         },
                     ..
@@ -277,10 +277,10 @@ pub mod tests {
         let TypedStmt {
             kind:
                 TypedStmtKind::Expr(TypedExpr {
-                    id: call_2_id,
                     kind:
                         TypedExprKind::Call {
                             callee: box _root_2,
+                            resolved_callee: Some(callee_2),
                             ..
                         },
                     ..
@@ -300,9 +300,6 @@ pub mod tests {
         else {
             panic!("didn't get func type param");
         };
-
-        let callee_1 = types.callees.get(call_1_id).unwrap();
-        let callee_2 = types.callees.get(call_2_id).unwrap();
 
         let Callee::Function {
             type_args: type_args_1,
@@ -339,7 +336,6 @@ pub mod tests {
         let TypedStmt {
             kind:
                 TypedStmtKind::Expr(TypedExpr {
-                    id: call_1_id,
                     kind:
                         TypedExprKind::Call {
                             callee:
@@ -347,6 +343,7 @@ pub mod tests {
                                     kind: TypedExprKind::Constructor(..),
                                     ..
                                 },
+                            resolved_callee: Some(callee_1),
                             ..
                         },
                     ..
@@ -360,7 +357,6 @@ pub mod tests {
         let TypedStmt {
             kind:
                 TypedStmtKind::Expr(TypedExpr {
-                    id: call_2_id,
                     kind:
                         TypedExprKind::Call {
                             callee:
@@ -368,6 +364,7 @@ pub mod tests {
                                     kind: TypedExprKind::Constructor(..),
                                     ..
                                 },
+                            resolved_callee: Some(callee_2),
                             ..
                         },
                     ..
@@ -393,9 +390,6 @@ pub mod tests {
         else {
             unreachable!()
         };
-
-        let callee_1 = types.callees.get(call_1_id).unwrap();
-        let callee_2 = types.callees.get(call_2_id).unwrap();
 
         let Callee::Initializer {
             type_args: type_args_1,

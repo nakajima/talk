@@ -57,6 +57,50 @@ impl Callee {
         }
     }
 
+    pub fn mapping(
+        self,
+        ty_map: &mut impl FnMut(Ty) -> Ty,
+        row_map: &mut impl FnMut(crate::types::infer_row::Row) -> crate::types::infer_row::Row,
+    ) -> Self {
+        match self {
+            Callee::Function { symbol, type_args } => Callee::Function {
+                symbol,
+                type_args: type_args.mapping(ty_map, row_map),
+            },
+            Callee::Initializer {
+                nominal,
+                initializer,
+                type_args,
+            } => Callee::Initializer {
+                nominal,
+                initializer,
+                type_args: type_args.mapping(ty_map, row_map),
+            },
+            Callee::Method {
+                symbol,
+                self_ty,
+                type_args,
+            } => Callee::Method {
+                symbol,
+                self_ty: self_ty.mapping(ty_map, row_map),
+                type_args: type_args.mapping(ty_map, row_map),
+            },
+            Callee::Variant {
+                enum_symbol,
+                variant,
+                type_args,
+            } => Callee::Variant {
+                enum_symbol,
+                variant,
+                type_args: type_args.mapping(ty_map, row_map),
+            },
+            Callee::Effect { symbol, type_args } => Callee::Effect {
+                symbol,
+                type_args: type_args.mapping(ty_map, row_map),
+            },
+        }
+    }
+
     pub fn import(self, module_id: ModuleId) -> Self {
         match self {
             Callee::Function { symbol, type_args } => Callee::Function {

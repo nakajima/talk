@@ -1,15 +1,78 @@
+use derive_visitor::{DriveMut, VisitorMut};
 use itertools::Itertools;
 
 use super::InferencePass;
 use crate::{
     diagnostic::{AnyDiagnostic, Diagnostic, Severity},
+    name_resolution::symbol::Symbol,
     types::{
+        callee::{Callee, Callees},
         constraints::{constraint::Constraint, projection::Projection, type_member::TypeMember},
         infer_ty::Ty,
         type_error::TypeError,
         typed_ast::{TypedBlock, TypedExpr, TypedExprKind, TypedStmt, TypedStmtKind},
     },
 };
+
+#[derive(Debug, VisitorMut)]
+#[visitor(TypedExpr(enter))]
+struct CanonicalizeCalls<'a> {
+    callees: &'a Callees,
+}
+
+impl CanonicalizeCalls<'_> {
+    fn enter_typed_expr(&mut self, expr: &mut TypedExpr) {
+        let Some(callee_info) = self.callees.get(&expr.id).cloned() else {
+            return;
+        };
+
+        let TypedExprKind::Call {
+            callee,
+            callee_ty,
+            args,
+            resolved_callee,
+            callee_sym,
+            ..
+        } = &mut expr.kind
+        else {
+            return;
+        };
+
+        *resolved_callee = Some(callee_info.clone());
+        let Callee::Method { symbol, .. } = callee_info else {
+            return;
+        };
+
+        let TypedExprKind::Member { receiver, .. } = &callee.kind else {
+            *callee_sym = Some(symbol);
+            return;
+        };
+
+        let receiver_is_argument = matches!(
+            receiver.kind,
+            TypedExprKind::Constructor(Symbol::Protocol(_), ..)
+                | TypedExprKind::Constructor(..)
+                | TypedExprKind::Hole
+        );
+
+        let mut direct_args = Vec::with_capacity(args.len() + usize::from(!receiver_is_argument));
+        if !receiver_is_argument {
+            direct_args.push(receiver.as_ref().clone());
+        }
+        direct_args.append(args);
+
+        let callee_id = callee.id;
+        let callee_type = callee.ty.clone();
+        *callee = Box::new(TypedExpr {
+            id: callee_id,
+            ty: callee_type,
+            kind: TypedExprKind::Variable(symbol),
+        });
+        *callee_ty = callee.ty.clone();
+        *args = direct_args;
+        *callee_sym = Some(symbol);
+    }
+}
 
 // Transitional phase wrapper: names post-inference finalization before
 // finalization state is ready to move out of InferencePass entirely.
@@ -25,6 +88,7 @@ impl<'pass, 'ast> FinalizeTypesPass<'pass, 'ast> {
     pub(super) fn run(&mut self) {
         self.export_child_types();
         self.report_unsolved();
+        self.canonicalize_calls();
     }
 
     fn export_child_types(&mut self) {
@@ -152,6 +216,17 @@ impl<'pass, 'ast> FinalizeTypesPass<'pass, 'ast> {
                 Constraint::TypeMember(type_member) => self.report_type_member(type_member),
                 Constraint::Projection(projection) => self.report_projection(projection),
             }
+        }
+    }
+
+    fn canonicalize_calls(&mut self) {
+        let callees = self.pass.session.callees_snapshot();
+        let mut canonicalizer = CanonicalizeCalls { callees: &callees };
+        for decl in &mut self.pass.root_decls {
+            decl.drive_mut(&mut canonicalizer);
+        }
+        for stmt in &mut self.pass.root_stmts {
+            stmt.drive_mut(&mut canonicalizer);
         }
     }
 
