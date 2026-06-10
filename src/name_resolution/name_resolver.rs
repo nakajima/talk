@@ -40,9 +40,9 @@ use crate::{
         stmt::{Stmt, StmtKind},
         type_annotation::{TypeAnnotation, TypeAnnotationKind},
     },
+    name_resolution::scc_graph::Level,
     on, some,
     span::Span,
-    types::infer_ty::Level,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

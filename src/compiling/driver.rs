@@ -2,7 +2,6 @@ use crate::{
     ast::{self, AST},
     compiling::module::{Module, ModuleEnvironment, ModuleId, StableModuleId},
     diagnostic::{AnyDiagnostic, Diagnostic, Severity},
-    ir::{ir_error::IRError, lowerer::Lowerer, program::Program},
     lexer::Lexer,
     name_resolution::{
         name_resolver::{NameResolver, ResolvedNames},
@@ -13,20 +12,9 @@ use crate::{
     node_kinds::decl::{DeclKind, ImportPath},
     parser::Parser,
     parser_error::ParserError,
-    types::{
-        matcher,
-        passes::{
-            inference_pass::InferencePass,
-            specialization_pass::{SpecializationPass, SpecializationPlan},
-        },
-        type_error::TypeError,
-        type_session::TypeSession,
-        typed_ast::TypedAST,
-        types::Types,
-    },
 };
 use indexmap::IndexMap;
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashSet;
 use std::collections::VecDeque;
 use std::{hash::Hash, hash::Hasher};
 use std::{io, path::PathBuf, rc::Rc};
@@ -52,33 +40,10 @@ pub struct NameResolved {
     pub diagnostics: Vec<AnyDiagnostic>,
 }
 
-impl DriverPhase for Typed {}
-pub struct Typed {
-    pub ast: TypedAST,
-    pub types: Types,
-    pub exports: Exports,
-    pub symbols: Symbols,
-    pub resolved_names: ResolvedNames,
-    pub diagnostics: Vec<AnyDiagnostic>,
-    /// Facts produced by specialization and consumed by lowering/monomorphization.
-    pub specialization_plan: SpecializationPlan,
-}
-
-impl DriverPhase for Lowered {}
-pub struct Lowered {
-    pub types: Types,
-    pub exports: Exports,
-    pub symbol_names: FxHashMap<Symbol, String>,
-    pub program: Program,
-    pub diagnostics: Vec<AnyDiagnostic>,
-}
-
 #[derive(Debug)]
 pub enum CompileError {
     IO(io::Error),
     Parsing(ParserError),
-    Typing(TypeError),
-    Lowering(IRError),
 }
 
 #[derive(Debug, Default, PartialEq)]
@@ -426,117 +391,10 @@ fn has_error_diagnostics(diagnostics: &[AnyDiagnostic]) -> bool {
     diagnostics.iter().any(|diag| match diag {
         AnyDiagnostic::Parsing(diagnostic) => diagnostic.severity == Severity::Error,
         AnyDiagnostic::NameResolution(diagnostic) => diagnostic.severity == Severity::Error,
-        AnyDiagnostic::Typing(diagnostic) => diagnostic.severity == Severity::Error,
     })
 }
 
-type CoreTypingOutput = (TypedAST, Symbols, ResolvedNames, Types);
-
-type SpecializedTypingOutput = (TypedAST, Symbols, ResolvedNames, Types, SpecializationPlan);
-
 impl Driver<NameResolved> {
-    pub fn typecheck(mut self) -> Result<Driver<Typed>, CompileError> {
-        let (ast, symbols, resolved_names, types) = self.core_typecheck()?;
-        let (ast, symbols, resolved_names, mut types, specialization_plan) =
-            self.specialize(ast, symbols, resolved_names, types)?;
-
-        self.build_match_plans(&ast, &mut types, &resolved_names);
-
-        Ok(Driver {
-            files: self.files,
-            config: self.config,
-            phase: Typed {
-                ast,
-                types,
-                exports: resolved_names.exports(),
-                symbols,
-                resolved_names,
-                diagnostics: self.phase.diagnostics,
-                specialization_plan,
-            },
-        })
-    }
-
-    fn core_typecheck(&mut self) -> Result<CoreTypingOutput, CompileError> {
-        let mut session = TypeSession::new(
-            self.config.module_id,
-            self.config.modules.clone(),
-            std::mem::take(&mut self.phase.symbols),
-            std::mem::take(&mut self.phase.resolved_names),
-        );
-
-        let (_paths, mut asts): (Vec<_>, Vec<_>) = self.phase.asts.iter_mut().unzip();
-        let (ast, diagnostics) = InferencePass::drive(&mut asts, &mut session);
-
-        self.phase.diagnostics.extend(diagnostics);
-        let symbols = std::mem::take(&mut session.symbols);
-        let (types, resolved_names) = session.finalize().map_err(CompileError::Typing)?;
-
-        Ok((ast, symbols, resolved_names, types))
-    }
-
-    fn specialize(
-        &self,
-        ast: TypedAST,
-        symbols: Symbols,
-        resolved_names: ResolvedNames,
-        types: Types,
-    ) -> Result<SpecializedTypingOutput, CompileError> {
-        let specialization_pass = SpecializationPass::new(
-            ast,
-            symbols,
-            resolved_names,
-            types,
-            &self.config.modules,
-            self.config.module_id,
-        );
-
-        specialization_pass.drive().map_err(CompileError::Typing)
-    }
-
-    fn build_match_plans(
-        &mut self,
-        ast: &TypedAST,
-        types: &mut Types,
-        resolved_names: &ResolvedNames,
-    ) {
-        // Always run the matcher to build match plans, even when there are error
-        // diagnostics elsewhere. Match plan generation is independent of unrelated
-        // type errors, and skipping it causes match expressions to silently compile
-        // to void.
-        let matcher_result = matcher::check_ast(ast, types, &resolved_names.symbol_names);
-        if !has_error_diagnostics(&self.phase.diagnostics) {
-            self.phase.diagnostics.extend(
-                matcher_result
-                    .diagnostics
-                    .into_iter()
-                    .map(AnyDiagnostic::Typing),
-            );
-        }
-        types.match_plans = matcher_result.plans;
-    }
-}
-
-impl Driver<Typed> {
-    pub fn lower(mut self) -> Result<Driver<Lowered>, CompileError> {
-        let lowerer = Lowerer::new(&mut self.phase, &self.config);
-        let program = lowerer.lower().map_err(CompileError::Lowering)?;
-
-        Ok(Driver {
-            files: self.files,
-            config: self.config,
-            phase: Lowered {
-                symbol_names: self.phase.resolved_names.symbol_names,
-                types: self.phase.types,
-                exports: self.phase.exports,
-                program,
-                diagnostics: self.phase.diagnostics,
-            },
-        })
-    }
-}
-
-impl Driver<Lowered> {
     pub fn has_errors(&self) -> bool {
         has_error_diagnostics(&self.phase.diagnostics)
     }
@@ -545,62 +403,13 @@ impl Driver<Lowered> {
         &self.phase.diagnostics
     }
 
-    pub fn display_symbol_names(&self) -> FxHashMap<Symbol, String> {
-        let mut names = self.phase.symbol_names.clone();
-        for (sym, name) in self.config.modules.imported_symbol_names() {
-            names.entry(sym).or_insert(name);
-        }
-        names
-    }
-
     pub fn module<T: Into<String>>(self, name: T) -> Module {
-        let mut program = self.phase.program;
-        // Merge record_labels from imported modules (e.g., Core) for proper enum display
-        for (record_id, labels) in self.config.modules.imported_record_labels() {
-            program.record_labels.entry(record_id).or_insert(labels);
-        }
-
-        // Merge static memory from imported modules so string literals in
-        // imported functions (e.g. core's Showable.show()) resolve correctly.
-        let mut merged_module_ids = FxHashSet::default();
-        let extern_synth_origins = std::mem::take(&mut program.extern_synth_origins);
-        let all_fn_symbols: Vec<Symbol> = program.functions.keys().copied().collect();
-        // Collect all external module IDs: from function symbols and from synthesized witnesses
-        let mut module_ids_to_merge: FxHashSet<ModuleId> = FxHashSet::default();
-        for sym in &all_fn_symbols {
-            if let Some(module_id) = sym.external_module_id() {
-                module_ids_to_merge.insert(module_id);
-            }
-        }
-        for module_id in extern_synth_origins.values() {
-            module_ids_to_merge.insert(*module_id);
-        }
-        for module_id in module_ids_to_merge {
-            if merged_module_ids.insert(module_id)
-                && let Some(imported_prog) = self.config.modules.program_for(module_id)
-            {
-                let mut module_symbols: Vec<Symbol> = all_fn_symbols
-                    .iter()
-                    .filter(|s| s.external_module_id() == Some(module_id))
-                    .copied()
-                    .collect();
-                // Include synthesized symbols that originated from this module
-                for (sym, mid) in &extern_synth_origins {
-                    if *mid == module_id {
-                        module_symbols.push(*sym);
-                    }
-                }
-                program.merge_static_memory(imported_prog, &module_symbols);
-            }
-        }
-
+        let exports = self.phase.resolved_names.exports();
         Module {
-            id: StableModuleId::generate(&self.phase.exports),
+            id: StableModuleId::generate(&exports),
             name: name.into(),
-            types: self.phase.types,
-            exports: self.phase.exports,
-            program,
-            symbol_names: self.phase.symbol_names,
+            symbol_names: self.phase.resolved_names.symbol_names,
+            exports,
         }
     }
 }
@@ -608,14 +417,11 @@ impl Driver<Lowered> {
 #[cfg(test)]
 pub mod tests {
     use super::*;
-    use crate::{
-        compiling::module::ModuleId,
-        types::{infer_ty::Ty, types_tests},
-    };
+    use crate::compiling::module::ModuleId;
     use std::path::PathBuf;
 
     #[test]
-    fn typechecks_multiple_files() {
+    fn resolves_multiple_files() {
         let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let paths = vec![
             Source::from(current_dir.join("dev/fixtures/a.tlk")),
@@ -623,92 +429,31 @@ pub mod tests {
         ];
 
         let driver = Driver::new(paths, DriverConfig::new("TestDriver"));
-        let typed = driver
-            .parse()
-            .unwrap()
-            .resolve_names()
-            .unwrap()
-            .typecheck()
-            .unwrap();
-
-        let ast = typed.phase.ast;
-        assert!(typed.phase.diagnostics.is_empty());
-        assert_eq!(types_tests::tests::ty(0, &ast, &typed.phase.types), Ty::Int);
-    }
-
-    #[test]
-    fn typechecks_multiple_files_out_of_order() {
-        let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        let paths = vec![
-            Source::from(current_dir.join("dev/fixtures/b.tlk")),
-            Source::from(current_dir.join("dev/fixtures/a.tlk")),
-        ];
-
-        let driver = Driver::new(paths, DriverConfig::new("TestDriver"));
-        let typed = driver
-            .parse()
-            .unwrap()
-            .resolve_names()
-            .unwrap()
-            .typecheck()
-            .unwrap();
-
-        let ast = typed.phase.ast;
+        let resolved = driver.parse().unwrap().resolve_names().unwrap();
 
         assert!(
-            typed.phase.diagnostics.is_empty(),
+            !resolved.has_errors(),
             "{:?}",
-            typed.phase.diagnostics
+            resolved.phase.diagnostics
         );
-        assert_eq!(types_tests::tests::ty(0, &ast, &typed.phase.types), Ty::Int);
     }
 
     #[test]
-    fn conformances_across_modules() {
+    fn resolves_multiple_files_out_of_order() {
         let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let paths = vec![
+            Source::from(current_dir.join("dev/fixtures/b.tlk")),
+            Source::from(current_dir.join("dev/fixtures/a.tlk")),
+        ];
 
-        let driver_a = Driver::new(
-            vec![Source::from(current_dir.join("dev/fixtures/protocol.tlk"))],
-            DriverConfig::new("TestDriver"),
+        let driver = Driver::new(paths, DriverConfig::new("TestDriver"));
+        let resolved = driver.parse().unwrap().resolve_names().unwrap();
+
+        assert!(
+            !resolved.has_errors(),
+            "{:?}",
+            resolved.phase.diagnostics
         );
-
-        let typed_a = driver_a
-            .parse()
-            .unwrap()
-            .resolve_names()
-            .unwrap()
-            .typecheck()
-            .unwrap();
-
-        let module_a = typed_a.lower().unwrap().module("A");
-        let mut module_environment = ModuleEnvironment::default();
-        module_environment.import(module_a);
-        let config = DriverConfig {
-            module_id: ModuleId::Current,
-            modules: Rc::new(module_environment),
-            mode: CompilationMode::Library,
-            module_name: "Test".to_string(),
-            parse_mode: ParseMode::Strict,
-            preserve_comments: false,
-        };
-
-        let driver_b = Driver::new(
-            vec![Source::from(
-                current_dir.join("dev/fixtures/conformance.tlk"),
-            )],
-            config,
-        );
-
-        let typed = driver_b
-            .parse()
-            .unwrap()
-            .resolve_names()
-            .unwrap()
-            .typecheck()
-            .unwrap();
-        let ast = typed.phase.ast;
-
-        assert_eq!(types_tests::tests::ty(0, &ast, &typed.phase.types), Ty::Int);
     }
 
     #[test]
@@ -719,15 +464,10 @@ pub mod tests {
             vec![Source::from(current_dir.join("dev/fixtures/a.tlk"))],
             DriverConfig::new("TestDriver"),
         );
-        let typed_a = driver_a
-            .parse()
-            .unwrap()
-            .resolve_names()
-            .unwrap()
-            .typecheck()
-            .unwrap();
+        let resolved_a = driver_a.parse().unwrap().resolve_names().unwrap();
+        assert!(!resolved_a.has_errors());
 
-        let module_a = typed_a.lower().unwrap().module("A");
+        let module_a = resolved_a.module("A");
         let mut module_environment = ModuleEnvironment::default();
         module_environment.import(module_a);
         let config = DriverConfig {
@@ -744,16 +484,12 @@ pub mod tests {
             config,
         );
 
-        let typed = driver_b
-            .parse()
-            .unwrap()
-            .resolve_names()
-            .unwrap()
-            .typecheck()
-            .unwrap();
-        let ast = typed.phase.ast;
-
-        assert_eq!(types_tests::tests::ty(0, &ast, &typed.phase.types), Ty::Int);
+        let resolved_b = driver_b.parse().unwrap().resolve_names().unwrap();
+        assert!(
+            !resolved_b.has_errors(),
+            "{:?}",
+            resolved_b.phase.diagnostics
+        );
     }
 
     #[test]
@@ -774,11 +510,9 @@ pub mod tests {
             .unwrap()
             .resolve_names()
             .unwrap()
-            .typecheck()
-            .unwrap()
-            .lower()
-            .unwrap()
             .module("A");
+
+        assert!(module_a.exports.contains_key("Hello"));
 
         let mut module_environment = ModuleEnvironment::default();
         module_environment.import(module_a);
@@ -793,16 +527,12 @@ pub mod tests {
 
         let driver_b = Driver::new(vec![Source::from("Hello(x: 123).x")], config);
 
-        let typed = driver_b
-            .parse()
-            .unwrap()
-            .resolve_names()
-            .unwrap()
-            .typecheck()
-            .unwrap();
-        let ast = typed.phase.ast;
-
-        assert_eq!(types_tests::tests::ty(0, &ast, &typed.phase.types), Ty::Int);
+        let resolved_b = driver_b.parse().unwrap().resolve_names().unwrap();
+        assert!(
+            !resolved_b.has_errors(),
+            "{:?}",
+            resolved_b.phase.diagnostics
+        );
     }
 
     #[test]
@@ -833,12 +563,12 @@ pub mod tests {
             "should auto-discover imported file"
         );
 
-        // Verify the files can be compiled without errors
-        let typed = parsed.resolve_names().unwrap().typecheck().unwrap();
+        // Verify the files resolve without errors
+        let resolved = parsed.resolve_names().unwrap();
         assert!(
-            typed.phase.diagnostics.is_empty(),
+            !resolved.has_errors(),
             "no diagnostics: {:?}",
-            typed.phase.diagnostics
+            resolved.phase.diagnostics
         );
 
         // Cleanup

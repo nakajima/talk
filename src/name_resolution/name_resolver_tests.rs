@@ -37,9 +37,9 @@ pub mod tests {
             stmt::{Stmt, StmtKind},
             type_annotation::{TypeAnnotation, TypeAnnotationKind},
         },
+        name_resolution::scc_graph::Level,
         parsing::parser_tests::tests::parse,
         span::Span,
-        types::infer_ty::Level,
     };
 
     /// Helper to create a test TypeParameterId using ModuleId::Current

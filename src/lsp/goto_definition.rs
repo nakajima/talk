@@ -1,9 +1,7 @@
 use async_lsp::lsp_types::{Location, Position, Range, Url};
 
 use crate::analysis::workspace::Workspace as AnalysisWorkspace;
-use crate::analysis::{
-    node_ids_at_offset, resolve_member_symbol, resolve_variant_symbol, span_contains,
-};
+use crate::analysis::{node_ids_at_offset, span_contains};
 use crate::compiling::module::ModuleId;
 use crate::name_resolution::symbol::Symbol;
 
@@ -43,13 +41,13 @@ pub fn goto_definition(
 
         let symbol = match node {
             crate::node::Node::Expr(expr) => {
-                goto_definition_symbol_from_expr(module.types.as_ref(), &expr, byte_offset)
+                goto_definition_symbol_from_expr(&expr, byte_offset)
             }
             crate::node::Node::Stmt(stmt) => {
-                goto_definition_symbol_from_stmt(module.types.as_ref(), &stmt, byte_offset)
+                goto_definition_symbol_from_stmt(&stmt, byte_offset)
             }
             crate::node::Node::TypeAnnotation(ty) => {
-                goto_definition_symbol_from_type_annotation(module.types.as_ref(), &ty, byte_offset)
+                goto_definition_symbol_from_type_annotation(&ty, byte_offset)
             }
             crate::node::Node::Decl(decl) => goto_definition_symbol_from_decl(&decl, byte_offset),
             crate::node::Node::Parameter(param) => {
@@ -92,17 +90,8 @@ pub fn goto_definition(
                         None
                     }
                 }
-                crate::node_kinds::pattern::PatternKind::Variant {
-                    variant_name,
-                    variant_name_span,
-                    ..
-                } => {
-                    if span_contains(*variant_name_span, byte_offset) {
-                        resolve_variant_symbol(module.types.as_ref(), pattern.id, variant_name)
-                    } else {
-                        None
-                    }
-                }
+                // Variant patterns need type information to resolve their
+                // enum, which is unavailable until the type checker is rebuilt.
                 _ => None,
             },
             _ => None,
@@ -209,7 +198,6 @@ fn resolve_import_path(
 }
 
 fn goto_definition_symbol_from_expr(
-    types: Option<&crate::types::types::Types>,
     expr: &crate::node_kinds::expr::Expr,
     byte_offset: u32,
 ) -> Option<Symbol> {
@@ -217,18 +205,7 @@ fn goto_definition_symbol_from_expr(
 
     match &expr.kind {
         ExprKind::Variable(name) | ExprKind::Constructor(name) => name.symbol().ok(),
-        ExprKind::Member(receiver, label, name_span) => {
-            if !span_contains(*name_span, byte_offset) {
-                return None;
-            }
-
-            let receiver = receiver.as_ref()?;
-
-            resolve_member_symbol(types, receiver, label)
-        }
-        ExprKind::Call { callee, .. } => {
-            goto_definition_symbol_from_expr(types, callee, byte_offset)
-        }
+        ExprKind::Call { callee, .. } => goto_definition_symbol_from_expr(callee, byte_offset),
         ExprKind::CallEffect {
             effect_name,
             effect_name_span,
@@ -244,21 +221,18 @@ fn goto_definition_symbol_from_expr(
 }
 
 fn goto_definition_symbol_from_stmt(
-    types: Option<&crate::types::types::Types>,
     stmt: &crate::node_kinds::stmt::Stmt,
     byte_offset: u32,
 ) -> Option<Symbol> {
     use crate::node_kinds::stmt::StmtKind;
 
     match &stmt.kind {
-        StmtKind::Expr(expr) => goto_definition_symbol_from_expr(types, expr, byte_offset),
-        StmtKind::Return(Some(expr)) => goto_definition_symbol_from_expr(types, expr, byte_offset),
-        StmtKind::If(cond, ..) => goto_definition_symbol_from_expr(types, cond, byte_offset),
-        StmtKind::Loop(Some(cond), ..) => {
-            goto_definition_symbol_from_expr(types, cond, byte_offset)
-        }
-        StmtKind::Assignment(lhs, rhs) => goto_definition_symbol_from_expr(types, lhs, byte_offset)
-            .or_else(|| goto_definition_symbol_from_expr(types, rhs, byte_offset)),
+        StmtKind::Expr(expr) => goto_definition_symbol_from_expr(expr, byte_offset),
+        StmtKind::Return(Some(expr)) => goto_definition_symbol_from_expr(expr, byte_offset),
+        StmtKind::If(cond, ..) => goto_definition_symbol_from_expr(cond, byte_offset),
+        StmtKind::Loop(Some(cond), ..) => goto_definition_symbol_from_expr(cond, byte_offset),
+        StmtKind::Assignment(lhs, rhs) => goto_definition_symbol_from_expr(lhs, byte_offset)
+            .or_else(|| goto_definition_symbol_from_expr(rhs, byte_offset)),
         StmtKind::Handling {
             effect_name,
             effect_name_span,
@@ -269,15 +243,12 @@ fn goto_definition_symbol_from_stmt(
             }
             effect_name.symbol().ok()
         }
-        StmtKind::Continue(Some(expr)) => {
-            goto_definition_symbol_from_expr(types, expr, byte_offset)
-        }
+        StmtKind::Continue(Some(expr)) => goto_definition_symbol_from_expr(expr, byte_offset),
         _ => None,
     }
 }
 
 fn goto_definition_symbol_from_type_annotation(
-    types: Option<&crate::types::types::Types>,
     ty: &crate::node_kinds::type_annotation::TypeAnnotation,
     byte_offset: u32,
 ) -> Option<Symbol> {
@@ -293,22 +264,8 @@ fn goto_definition_symbol_from_type_annotation(
             name.symbol().ok()
         }
         TypeAnnotationKind::SelfType(name) => name.symbol().ok(),
-        TypeAnnotationKind::NominalPath {
-            base,
-            member,
-            member_span,
-            ..
-        } => {
-            if !span_contains(*member_span, byte_offset) {
-                return None;
-            }
-            let base_symbol = base.symbol().ok()?;
-            types?
-                .catalog
-                .child_types
-                .get(&base_symbol)
-                .and_then(|members| members.get(member).copied())
-        }
+        // NominalPath member resolution needs the type catalog, which is
+        // unavailable until the type checker is rebuilt.
         _ => None,
     }
 }

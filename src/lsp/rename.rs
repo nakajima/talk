@@ -3,7 +3,7 @@ use derive_visitor::{Drive, Visitor};
 use rustc_hash::FxHashSet;
 
 use crate::analysis::workspace::Workspace as AnalysisWorkspace;
-use crate::analysis::{node_ids_at_offset, resolve_member_symbol, span_contains};
+use crate::analysis::{node_ids_at_offset, span_contains};
 use crate::compiling::module::ModuleId;
 use crate::lexer::Lexer;
 use crate::name_resolution::symbol::{EffectId, Symbol};
@@ -88,7 +88,7 @@ pub fn rename_at(
         let Some(ast) = module.asts.get(idx).and_then(|a| a.as_ref()) else {
             continue;
         };
-        let spans = rename_spans_in_ast(ast, module.types.as_ref(), symbol);
+        let spans = rename_spans_in_ast(ast, symbol);
 
         let mut edits: Vec<TextEdit> = spans
             .into_iter()
@@ -137,10 +137,10 @@ fn rename_symbol_at_offset(
 
         let symbol = match node {
             crate::node::Node::Expr(expr) => {
-                goto_definition_symbol_from_expr(module.types.as_ref(), &expr, byte_offset)
+                goto_definition_symbol_from_expr(&expr, byte_offset)
             }
             crate::node::Node::Stmt(stmt) => {
-                goto_definition_symbol_from_stmt(module.types.as_ref(), &stmt, byte_offset)
+                goto_definition_symbol_from_stmt(&stmt, byte_offset)
             }
             crate::node::Node::TypeAnnotation(ty) => {
                 goto_definition_symbol_from_type_annotation(&ty, byte_offset)
@@ -200,43 +200,30 @@ fn rename_symbol_at_offset(
 }
 
 fn goto_definition_symbol_from_expr(
-    types: Option<&crate::types::types::Types>,
     expr: &crate::node_kinds::expr::Expr,
-    byte_offset: u32,
+    _byte_offset: u32,
 ) -> Option<Symbol> {
     use crate::node_kinds::expr::ExprKind;
 
     match &expr.kind {
         ExprKind::Variable(name) | ExprKind::Constructor(name) => name.symbol().ok(),
-        ExprKind::Member(receiver, label, name_span) => {
-            if !span_contains(*name_span, byte_offset) {
-                return None;
-            }
-
-            let receiver = receiver.as_ref()?;
-
-            resolve_member_symbol(types, receiver, label)
-        }
         _ => None,
     }
 }
 
 fn goto_definition_symbol_from_stmt(
-    types: Option<&crate::types::types::Types>,
     stmt: &crate::node_kinds::stmt::Stmt,
     byte_offset: u32,
 ) -> Option<Symbol> {
     use crate::node_kinds::stmt::StmtKind;
 
     match &stmt.kind {
-        StmtKind::Expr(expr) => goto_definition_symbol_from_expr(types, expr, byte_offset),
-        StmtKind::Return(Some(expr)) => goto_definition_symbol_from_expr(types, expr, byte_offset),
-        StmtKind::If(cond, ..) => goto_definition_symbol_from_expr(types, cond, byte_offset),
-        StmtKind::Loop(Some(cond), ..) => {
-            goto_definition_symbol_from_expr(types, cond, byte_offset)
-        }
-        StmtKind::Assignment(lhs, rhs) => goto_definition_symbol_from_expr(types, lhs, byte_offset)
-            .or_else(|| goto_definition_symbol_from_expr(types, rhs, byte_offset)),
+        StmtKind::Expr(expr) => goto_definition_symbol_from_expr(expr, byte_offset),
+        StmtKind::Return(Some(expr)) => goto_definition_symbol_from_expr(expr, byte_offset),
+        StmtKind::If(cond, ..) => goto_definition_symbol_from_expr(cond, byte_offset),
+        StmtKind::Loop(Some(cond), ..) => goto_definition_symbol_from_expr(cond, byte_offset),
+        StmtKind::Assignment(lhs, rhs) => goto_definition_symbol_from_expr(lhs, byte_offset)
+            .or_else(|| goto_definition_symbol_from_expr(rhs, byte_offset)),
         _ => None,
     }
 }
@@ -315,12 +302,10 @@ fn identifier_span_at_offset(
 
 fn rename_spans_in_ast(
     ast: &crate::ast::AST<crate::ast::NameResolved>,
-    types: Option<&crate::types::types::Types>,
     symbol: Symbol,
 ) -> Vec<(u32, u32)> {
     let mut collector = RenameCollector {
         ast,
-        types,
         target: symbol,
         spans: FxHashSet::default(),
     };
@@ -348,7 +333,6 @@ fn rename_spans_in_ast(
 )]
 struct RenameCollector<'a> {
     ast: &'a crate::ast::AST<crate::ast::NameResolved>,
-    types: Option<&'a crate::types::types::Types>,
     target: Symbol,
     spans: FxHashSet<(u32, u32)>,
 }
@@ -484,15 +468,6 @@ impl RenameCollector<'_> {
             ExprKind::Variable(name) | ExprKind::Constructor(name) => {
                 if name.symbol().ok() == Some(self.target) {
                     self.push_span(expr.span);
-                }
-            }
-            ExprKind::Member(receiver, label, name_span) => {
-                let Some(receiver) = receiver.as_ref() else {
-                    return;
-                };
-                let member_sym = resolve_member_symbol(self.types, receiver, label);
-                if member_sym == Some(self.target) {
-                    self.push_span(*name_span);
                 }
             }
             _ => {}

@@ -1,5 +1,4 @@
 pub mod completion;
-pub mod hover;
 pub mod workspace;
 
 pub type DocumentId = String;
@@ -38,12 +37,6 @@ pub struct Diagnostic {
     pub message: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Hover {
-    pub contents: String,
-    pub range: Option<TextRange>,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CompletionItemKind {
     Struct,
@@ -70,6 +63,7 @@ pub struct CompletionItem {
 
 pub use workspace::Workspace;
 
+#[cfg(feature = "cli")]
 pub(crate) fn node_ids_at_offset(
     ast: &crate::ast::AST<crate::ast::NameResolved>,
     byte_offset: u32,
@@ -92,47 +86,7 @@ pub(crate) fn node_ids_at_offset(
     candidates.into_iter().map(|(id, _)| id).collect()
 }
 
+#[cfg(feature = "cli")]
 pub(crate) fn span_contains(span: crate::span::Span, byte_offset: u32) -> bool {
     span.start <= byte_offset && byte_offset <= span.end
-}
-
-pub(crate) fn resolve_variant_symbol(
-    types: Option<&crate::types::types::Types>,
-    pattern_id: crate::node_id::NodeID,
-    variant_name: &str,
-) -> Option<crate::name_resolution::symbol::Symbol> {
-    use crate::types::infer_ty::Ty;
-
-    let types = types?;
-    let entry = types.get(&pattern_id)?;
-    match entry.as_mono_ty() {
-        Ty::Nominal { symbol, .. } => {
-            types.lookup_local_constructor_member(symbol, &variant_name.into())
-        }
-        _ => None,
-    }
-}
-
-pub(crate) fn resolve_member_symbol(
-    types: Option<&crate::types::types::Types>,
-    receiver: &crate::node_kinds::expr::Expr,
-    label: &crate::label::Label,
-) -> Option<crate::name_resolution::symbol::Symbol> {
-    use crate::node_kinds::expr::ExprKind;
-    use crate::types::infer_ty::Ty;
-
-    if let ExprKind::Constructor(name) = &receiver.kind {
-        let receiver_symbol = name.symbol().ok()?;
-        let types = types?;
-        return types.lookup_local_constructor_member(&receiver_symbol, label);
-    }
-
-    let types = types?;
-    let entry = types.get(&receiver.id)?;
-    let ty = entry.as_mono_ty();
-
-    match ty {
-        Ty::Nominal { symbol, .. } => types.lookup_local_member(symbol, label),
-        _ => None,
-    }
 }

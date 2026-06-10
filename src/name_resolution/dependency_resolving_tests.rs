@@ -4,10 +4,9 @@ pub mod tests {
         compiling::driver::{Driver, DriverConfig, Source},
         name_resolution::{
             name_resolver_tests::tests::resolve,
-            scc_graph::SCCGraph,
+            scc_graph::{Level, SCCGraph},
             symbol::{DeclaredLocalId, Symbol},
         },
-        types::infer_ty::Level,
     };
 
     impl SCCGraph {

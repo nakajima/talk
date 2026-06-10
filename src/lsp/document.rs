@@ -1,25 +1,10 @@
 use async_lsp::lsp_types::{Position, Range, SemanticTokensResult, TextDocumentContentChangeEvent};
-use std::sync::Arc;
-
-use crate::{
-    ast::{AST, NameResolved},
-    name_resolution::name_resolver::ResolvedNames,
-    types::types::Types,
-};
-
-pub struct DocumentAnalysis {
-    pub version: i32,
-    pub ast: AST<NameResolved>,
-    pub resolved_names: ResolvedNames,
-    pub types: Option<Types>,
-}
 
 pub struct Document {
     pub version: i32,
     pub text: String,
     pub last_edited_tick: i32,
     pub semantic_tokens: Option<SemanticTokensResult>,
-    pub analysis: Option<Arc<DocumentAnalysis>>,
 }
 
 impl Document {

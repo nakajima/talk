@@ -1,6 +1,6 @@
-use crate::{compiling::module::ModuleId, id_generator::IDGenerator, ir::ir_error::IRError};
+use crate::{compiling::module::ModuleId, id_generator::IDGenerator};
 use rustc_hash::FxHashMap;
-use std::{cell::RefCell, fmt::Display, str::FromStr};
+use std::{cell::RefCell, fmt::Display};
 
 thread_local! {
     static SYMBOL_NAMES: RefCell<Option<FxHashMap<Symbol, String>>> = const { RefCell::new(None) };
@@ -598,13 +598,6 @@ impl Display for Symbol {
             Symbol::MethodRequirement(id) => write!(f, "{}", id),
             Symbol::Effect(id) => write!(f, "{}", id),
         }
-    }
-}
-
-impl FromStr for Symbol {
-    type Err = IRError;
-    fn from_str(_s: &str) -> Result<Self, Self::Err> {
-        Err(IRError::CouldNotParse("todo".into()))
     }
 }
 

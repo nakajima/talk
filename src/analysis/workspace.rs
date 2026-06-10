@@ -9,7 +9,6 @@ use crate::diagnostic::AnyDiagnostic;
 use crate::name_resolution::symbol::set_symbol_names;
 use crate::node_id::FileID;
 use crate::parser_error::ParserError;
-use crate::types::types::Types;
 
 #[derive(Clone)]
 pub struct Workspace {
@@ -19,7 +18,6 @@ pub struct Workspace {
     pub texts: Vec<String>,
     pub asts: Vec<Option<AST<NameResolved>>>,
     pub resolved_names: crate::name_resolution::name_resolver::ResolvedNames,
-    pub types: Option<Types>,
     pub diagnostics: FxHashMap<DocumentId, Vec<Diagnostic>>,
 }
 
@@ -77,11 +75,9 @@ impl Workspace {
         };
         let parsed = driver.parse().ok()?;
         let resolved = parsed.resolve_names().ok()?;
-        let asts_by_source = resolved.phase.asts.clone();
-        let typed = resolved.typecheck().ok()?;
-        let Driver { phase, .. } = typed;
+        let Driver { phase, .. } = resolved;
+        let asts_by_source = phase.asts;
         let resolved_names = phase.resolved_names;
-        let types = Some(phase.types);
         let diagnostics_any = phase.diagnostics;
 
         let _symbol_guard = set_symbol_names(resolved_names.symbol_names.clone());
@@ -113,7 +109,6 @@ impl Workspace {
             texts,
             asts,
             resolved_names,
-            types,
             diagnostics,
         })
     }
@@ -229,9 +224,6 @@ impl Workspace {
             }
         }
 
-        // Try to typecheck for hover support; gracefully degrade if it fails
-        let types = resolved.typecheck().ok().map(|typed| typed.phase.types);
-
         Some(Self {
             versions: FxHashMap::default(),
             file_id_to_document,
@@ -239,7 +231,6 @@ impl Workspace {
             texts,
             asts,
             resolved_names,
-            types,
             diagnostics: FxHashMap::default(),
         })
     }
@@ -291,9 +282,6 @@ fn diagnostic_for_any(
         ),
         AnyDiagnostic::NameResolution(diagnostic) => {
             (diagnostic.id, diagnostic.kind.to_string(), None, true)
-        }
-        AnyDiagnostic::Typing(diagnostic) => {
-            (diagnostic.id, diagnostic.kind.to_string(), None, false)
         }
     };
 

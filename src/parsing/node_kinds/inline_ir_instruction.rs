@@ -2,7 +2,7 @@ use derive_visitor::{Drive, DriveMut};
 
 use crate::{
     impl_into_node,
-    ir::value::RecordId,
+    name_resolution::symbol::Symbol,
     node_id::NodeID,
     node_kinds::{
         expr::Expr,
@@ -10,9 +10,15 @@ use crate::{
     },
     span::Span,
     token_kind::TokenKind,
-    types::{infer_row::Row, infer_ty::Ty, typed_ast::TypedExpr},
 };
 use std::fmt::Display;
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum RecordId {
+    Nominal(Symbol),
+    Record(u32),
+    Anon,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Register(pub String);
@@ -257,27 +263,6 @@ pub struct InlineIRInstruction {
     pub instr_name_span: Span,
     #[drive(skip)]
     pub kind: InlineIRInstructionKind,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct TypedInlineIRInstruction {
-    pub id: NodeID,
-    pub span: Span,
-    pub binds: Vec<TypedExpr>,
-    pub instr_name_span: Span,
-    pub kind: InlineIRInstructionKind,
-}
-
-impl TypedInlineIRInstruction {
-    pub fn mapping(self, m: &mut impl FnMut(Ty) -> Ty, r: &mut impl FnMut(Row) -> Row) -> Self {
-        TypedInlineIRInstruction {
-            id: self.id,
-            span: self.span,
-            binds: self.binds.into_iter().map(|b| b.mapping(m, r)).collect(),
-            instr_name_span: self.instr_name_span,
-            kind: self.kind,
-        }
-    }
 }
 
 impl Display for Register {

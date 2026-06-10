@@ -2,27 +2,19 @@ use std::path::PathBuf;
 
 use crate::{
     analysis::{Diagnostic, DocumentInput, Workspace, completion::complete_in_workspace},
-    compiling::driver::{Driver, DriverConfig, Lowered, Source, Typed},
-    ir::{
-        interpreter::Interpreter,
-        io::CaptureIO,
-        value::{RecordId, Value},
-    },
     lexer::Lexer,
     node_id::FileID,
     parser::Parser,
     parser_error::ParserError,
     token_kind::TokenKind,
-    types::{
-        format::{SymbolNames, TypeFormatter},
-        infer_ty::Ty,
-    },
 };
 
 pub const REPL_DOCUMENT_ID: &str = "<repl>";
 
-type LoweredDriver = Driver<Lowered>;
-type TypedDriver = Driver<Typed>;
+const EVAL_UNIMPLEMENTED: &str =
+    "evaluation is not implemented: the interpreter has been removed pending rewrite";
+const TYPE_UNIMPLEMENTED: &str =
+    "/type is not implemented: the type checker has been removed pending rewrite";
 
 #[derive(Clone, Debug)]
 pub struct ReplSession {
@@ -82,29 +74,16 @@ impl ReplSession {
             };
         }
 
-        let lowered = match self.lower_source(&source) {
-            Ok(lowered) => lowered,
-            Err(message) => return ReplEvalResult::Error(message),
-        };
-
-        if lowered.has_errors() {
-            let diagnostics = self.diagnostics_for_source(&source).unwrap_or_default();
-            let message = diagnostics
-                .is_empty()
-                .then(|| self.basic_diagnostics(lowered.diagnostics()));
-            return ReplEvalResult::Diagnostics {
-                source,
-                diagnostics,
-                message,
+        if repl_input.should_persist() {
+            self.persist(input);
+            return ReplEvalResult::Output {
+                stdout: String::new(),
+                stderr: String::new(),
+                value: None,
             };
         }
 
-        let result = self.run_lowered(lowered);
-        if repl_input.should_persist() && matches!(result, ReplEvalResult::Output { .. }) {
-            self.persist(input);
-        }
-
-        result
+        ReplEvalResult::Error(EVAL_UNIMPLEMENTED.to_string())
     }
 
     pub fn type_of(&self, input: &str) -> ReplEvalResult {
@@ -113,55 +92,7 @@ impl ReplSession {
             return ReplEvalResult::Error("/type requires an expression".to_string());
         }
 
-        let source = self.combined_source(input);
-        if let Some(diagnostics) = self.diagnostics_for_source(&source) {
-            return ReplEvalResult::Diagnostics {
-                source,
-                diagnostics,
-                message: None,
-            };
-        }
-
-        let typed = match self.typecheck_source(&source) {
-            Ok(typed) => typed,
-            Err(message) => return ReplEvalResult::Error(message),
-        };
-
-        if !typed.phase.diagnostics.is_empty() {
-            let diagnostics = self.diagnostics_for_source(&source).unwrap_or_default();
-            let message = diagnostics
-                .is_empty()
-                .then(|| self.basic_diagnostics(&typed.phase.diagnostics));
-            return ReplEvalResult::Diagnostics {
-                source,
-                diagnostics,
-                message,
-            };
-        }
-
-        if repl_input.should_persist() {
-            return self.type_of_typed_root(typed);
-        }
-
-        let probe_source = self.type_probe_source(input);
-        let typed = match self.typecheck_source(&probe_source) {
-            Ok(typed) => typed,
-            Err(message) => return ReplEvalResult::Error(message),
-        };
-
-        if !typed.phase.diagnostics.is_empty() {
-            let diagnostics = self.diagnostics_for_source(&source).unwrap_or_default();
-            let message = diagnostics
-                .is_empty()
-                .then(|| self.basic_diagnostics(&typed.phase.diagnostics));
-            return ReplEvalResult::Diagnostics {
-                source,
-                diagnostics,
-                message,
-            };
-        }
-
-        self.type_of_probe(typed)
+        ReplEvalResult::Error(TYPE_UNIMPLEMENTED.to_string())
     }
 
     pub fn needs_more_input(&self, input: &str) -> bool {
@@ -228,39 +159,6 @@ impl ReplSession {
         self.complete_source(line, pos, 0)
     }
 
-    fn type_of_typed_root(&self, typed: TypedDriver) -> ReplEvalResult {
-        let Some(root) = typed.phase.ast.roots().last().cloned() else {
-            return ReplEvalResult::Error("/type requires an expression".to_string());
-        };
-
-        let mut symbol_names = typed.phase.resolved_names.symbol_names.clone();
-        symbol_names.extend(typed.config.modules.imported_symbol_names());
-        let formatter = TypeFormatter::new(SymbolNames::single(&symbol_names));
-        ReplEvalResult::Output {
-            stdout: String::new(),
-            stderr: String::new(),
-            value: Some(formatter.format_ty_for_show(&root.ty())),
-        }
-    }
-
-    fn type_of_probe(&self, typed: TypedDriver) -> ReplEvalResult {
-        let Some(root) = typed.phase.ast.roots().last().cloned() else {
-            return ReplEvalResult::Error("/type requires an expression".to_string());
-        };
-        let Ty::Func(_param, ret, effects) = root.ty() else {
-            return ReplEvalResult::Error("failed to build /type probe".to_string());
-        };
-        let mut symbol_names = typed.phase.resolved_names.symbol_names.clone();
-        symbol_names.extend(typed.config.modules.imported_symbol_names());
-        let formatter = TypeFormatter::new(SymbolNames::single(&symbol_names));
-
-        ReplEvalResult::Output {
-            stdout: String::new(),
-            stderr: String::new(),
-            value: Some(formatter.format_ty_with_effects_for_show(&ret, &effects)),
-        }
-    }
-
     fn source_for_completion(&self, line: &str, pos: usize) -> (String, usize) {
         let mut source = self.persistent_source.clone();
         if !source.is_empty() && !source.ends_with('\n') {
@@ -277,20 +175,6 @@ impl ReplSession {
             source.push('\n');
         }
         source.push_str(input);
-        source
-    }
-
-    fn type_probe_source(&self, input: &str) -> String {
-        let mut source = self.persistent_source.clone();
-        if !source.is_empty() && !source.ends_with('\n') {
-            source.push('\n');
-        }
-        source.push_str("func __talk_repl_type_probe() {\n");
-        source.push_str(input);
-        if !input.ends_with('\n') {
-            source.push('\n');
-        }
-        source.push_str("}\n");
         source
     }
 
@@ -314,69 +198,6 @@ impl ReplSession {
         let workspace = Workspace::new(vec![doc])?;
         let diagnostics = workspace.diagnostics.get(REPL_DOCUMENT_ID)?.clone();
         (!diagnostics.is_empty()).then_some(diagnostics)
-    }
-
-    fn typecheck_source(&self, source: &str) -> Result<TypedDriver, String> {
-        let driver = Driver::new(
-            vec![Source::in_memory(
-                self.source_path.clone(),
-                source.to_string(),
-            )],
-            DriverConfig::new("repl").executable(),
-        );
-
-        driver
-            .parse()
-            .map_err(|err| format!("{err:?}"))?
-            .resolve_names()
-            .map_err(|err| format!("{err:?}"))?
-            .typecheck()
-            .map_err(|err| format!("{err:?}"))
-    }
-
-    fn lower_source(&self, source: &str) -> Result<LoweredDriver, String> {
-        self.typecheck_source(source)?
-            .lower()
-            .map_err(|err| format!("{err:?}"))
-    }
-
-    fn run_lowered(&self, lowered: LoweredDriver) -> ReplEvalResult {
-        let display_names = lowered.display_symbol_names();
-        let module = lowered.module("repl");
-        let mut interpreter =
-            Interpreter::new(module.program, Some(display_names), CaptureIO::default());
-        let result = interpreter.run();
-        let value = if Self::is_unit_value(&result) {
-            None
-        } else {
-            Some(interpreter.display(result, false))
-        };
-        let stdout = String::from_utf8_lossy(&interpreter.io.stdout).into_owned();
-        let stderr = String::from_utf8_lossy(&interpreter.io.stderr).into_owned();
-
-        ReplEvalResult::Output {
-            stdout,
-            stderr,
-            value,
-        }
-    }
-
-    fn basic_diagnostics(&self, diagnostics: &[crate::diagnostic::AnyDiagnostic]) -> String {
-        let mut rendered = String::new();
-        for diagnostic in diagnostics {
-            rendered.push_str("error: ");
-            rendered.push_str(&diagnostic.to_string());
-            rendered.push('\n');
-        }
-        rendered
-    }
-
-    fn is_unit_value(value: &Value) -> bool {
-        match value {
-            Value::Void => true,
-            Value::Record(RecordId::Anon, fields) => fields.is_empty(),
-            _ => false,
-        }
     }
 }
 
@@ -479,19 +300,11 @@ mod tests {
         ReplSession::with_source_path(PathBuf::from("repl.tlk"))
     }
 
-    fn value(result: ReplEvalResult) -> String {
-        match result {
-            ReplEvalResult::Output {
-                value: Some(value), ..
-            } => value,
-            other => panic!("expected value, got {other:?}"),
-        }
-    }
-
     #[test]
-    fn expression_evaluates() {
+    fn expression_reports_unimplemented_evaluation() {
         let mut session = session();
-        assert_eq!(value(session.eval("1 + 1")), "2");
+        let result = session.eval("1 + 1");
+        assert_eq!(result, ReplEvalResult::Error(EVAL_UNIMPLEMENTED.into()));
     }
 
     #[test]
@@ -499,7 +312,12 @@ mod tests {
         let mut session = session();
         let result = session.eval("let x = 2");
         assert!(matches!(result, ReplEvalResult::Output { value: None, .. }));
-        assert_eq!(value(session.eval("x + 3")), "5");
+        assert!(session.persistent_source().contains("let x = 2"));
+
+        // The persisted declaration makes `x` resolve; without it this would
+        // be a name-resolution diagnostic instead of the unimplemented error.
+        let result = session.eval("x + 3");
+        assert_eq!(result, ReplEvalResult::Error(EVAL_UNIMPLEMENTED.into()));
     }
 
     #[test]
@@ -516,21 +334,14 @@ mod tests {
         let mut session = session();
         let result = session.eval("func add_one(x) {\n  x + 1\n}");
         assert!(matches!(result, ReplEvalResult::Output { value: None, .. }));
-        assert_eq!(value(session.eval("add_one(41)")), "42");
+        assert!(session.persistent_source().contains("add_one"));
     }
 
     #[test]
-    fn type_command_uses_persisted_declarations() {
-        let mut session = session();
-        let result = session.eval("let x = 2");
-        assert!(matches!(result, ReplEvalResult::Output { value: None, .. }));
-        assert_eq!(value(session.type_of("x + 3")), "Int");
-    }
-
-    #[test]
-    fn type_command_includes_expression_effects() {
+    fn type_command_reports_unimplemented() {
         let session = session();
-        assert_eq!(value(session.type_of("sleep(1)")), "Int '[io, ..]");
+        let result = session.type_of("1 + 1");
+        assert_eq!(result, ReplEvalResult::Error(TYPE_UNIMPLEMENTED.into()));
     }
 
     #[test]
@@ -546,23 +357,5 @@ mod tests {
                 .iter()
                 .any(|candidate| candidate.replacement == "longName")
         );
-    }
-
-    #[test]
-    fn print_output_is_captured() {
-        let mut session = session();
-        let result = session.eval("print(\"hi\")");
-        match result {
-            ReplEvalResult::Output {
-                stdout,
-                stderr,
-                value,
-            } => {
-                assert_eq!(stdout, "hi\n");
-                assert_eq!(stderr, "");
-                assert_eq!(value, None);
-            }
-            other => panic!("expected output, got {other:?}"),
-        }
     }
 }

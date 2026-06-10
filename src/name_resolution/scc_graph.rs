@@ -5,11 +5,34 @@ use petgraph::{
 use rustc_hash::FxHashMap;
 use tracing::instrument;
 
-use crate::{
-    name_resolution::symbol::Symbol,
-    node_id::NodeID,
-    types::{constraints::store::GroupId, infer_ty::Level},
-};
+use crate::{name_resolution::symbol::Symbol, node_id::NodeID};
+
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct GroupId(pub u32);
+
+#[derive(
+    Default,
+    PartialEq,
+    PartialOrd,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    serde::Serialize,
+    serde::Deserialize,
+)]
+pub struct Level(pub u32);
+
+impl Level {
+    pub fn next(&self) -> Level {
+        Level(self.0 + 1)
+    }
+
+    pub fn prev(&self) -> Level {
+        Level(self.0.saturating_sub(1))
+    }
+}
 
 #[derive(Default, Debug, Clone, PartialEq)]
 pub struct BindingGroup {

@@ -12,8 +12,7 @@ use async_lsp::{
     client_monitor::ClientProcessMonitorLayer,
     concurrency::ConcurrencyLayer,
     lsp_types::{
-        CompletionResponse, GotoDefinitionResponse, Hover, HoverContents, HoverProviderCapability,
-        InitializeParams, InitializeResult, MarkupContent, MarkupKind, OneOf,
+        CompletionResponse, GotoDefinitionResponse, InitializeParams, InitializeResult, OneOf,
         PublishDiagnosticsParams, SemanticTokensFullOptions, SemanticTokensLegend,
         SemanticTokensOptions, SemanticTokensServerCapabilities, ServerCapabilities,
         TextDocumentItem, Url, WorkspaceEdit, WorkspaceFolder, notification, request,
@@ -34,8 +33,7 @@ use tracing::Level;
 
 use crate::analysis::{
     Diagnostic as AnalysisDiagnostic, DiagnosticSeverity as AnalysisSeverity, DocumentId,
-    DocumentInput, Hover as AnalysisHover, Workspace as AnalysisWorkspace,
-    completion as analysis_completion, hover as analysis_hover,
+    DocumentInput, Workspace as AnalysisWorkspace, completion as analysis_completion,
 };
 use crate::lsp::goto_definition::goto_definition;
 use crate::lsp::rename::rename_at;
@@ -116,7 +114,6 @@ pub async fn start() {
                 async move {
                     Ok(InitializeResult {
                         capabilities: ServerCapabilities {
-                            hover_provider: Some(HoverProviderCapability::Simple(true)),
                             definition_provider: Some(OneOf::Left(true)),
                             rename_provider: Some(OneOf::Left(true)),
                             completion_provider: Some(CompletionOptions {
@@ -170,7 +167,6 @@ pub async fn start() {
                         text,
                         last_edited_tick: state.counter,
                         semantic_tokens: None,
-                        analysis: None,
                     },
                 );
                 state.dirty_documents.insert(document_url);
@@ -188,7 +184,6 @@ pub async fn start() {
                     document.version = version;
                     document.last_edited_tick = state.counter;
                     state.dirty_documents.insert(uri);
-                    document.analysis = None;
                     state.workspaces.clear();
                 }
 
@@ -258,54 +253,6 @@ pub async fn start() {
                 };
 
                 async move { result }
-            })
-            .request::<request::HoverRequest, _>(|st, params| {
-                let uri = params
-                    .text_document_position_params
-                    .text_document
-                    .uri
-                    .clone();
-                let position = params.text_document_position_params.position;
-
-                let byte_offset = st
-                    .documents
-                    .get(&uri)
-                    .and_then(|document| document.byte_offset(position).map(|o| o as u32));
-
-                let workspace = workspace_analysis(st, &uri);
-                let core = core_analysis(st);
-
-                async move {
-                    let Some(byte_offset) = byte_offset else {
-                        return Ok(None);
-                    };
-
-                    let Some(workspace) = workspace else {
-                        return Ok(None);
-                    };
-
-                    let result = hover_at_lsp(&workspace, core.as_deref(), &uri, byte_offset);
-                    if result.is_none() {
-                        let document_id = document_id_for_uri(&uri);
-                        let node_descriptions = workspace
-                            .ast_for(&document_id)
-                            .map(|ast| {
-                                crate::analysis::node_ids_at_offset(ast, byte_offset)
-                                    .iter()
-                                    .filter_map(|id| ast.find(*id))
-                                    .map(|n| crate::lsp::goto_definition::describe_node(&n))
-                                    .collect::<Vec<_>>()
-                            })
-                            .unwrap_or_default();
-                        crate::lsp::goto_definition::log_miss(
-                            "hover",
-                            &uri,
-                            byte_offset,
-                            &node_descriptions,
-                        );
-                    }
-                    Ok(result)
-                }
             })
             .request::<request::Rename, _>(|st, params| {
                 let uri = params.text_document_position.text_document.uri.clone();
@@ -482,7 +429,6 @@ pub async fn start() {
                             }));
 
                         needs_refresh = true;
-                        document.analysis = None;
                     }
                     state.dirty_documents.remove(&document_url);
                 }
@@ -798,31 +744,6 @@ fn lsp_diagnostic_for_analysis(text: &str, diagnostic: &AnalysisDiagnostic) -> O
     })
 }
 
-fn hover_at_lsp(
-    workspace: &AnalysisWorkspace,
-    core: Option<&AnalysisWorkspace>,
-    uri: &Url,
-    byte_offset: u32,
-) -> Option<Hover> {
-    let document_id = document_id_for_uri(uri);
-    let hover = analysis_hover::hover_at(workspace, core, &document_id, byte_offset)?;
-    let text = workspace.text_for(&document_id)?;
-    Some(hover_to_lsp(text, hover))
-}
-
-fn hover_to_lsp(text: &str, hover: AnalysisHover) -> Hover {
-    let range = hover
-        .range
-        .and_then(|range| byte_span_to_range_utf16(text, range.start, range.end));
-    Hover {
-        contents: HoverContents::Markup(MarkupContent {
-            kind: MarkupKind::Markdown,
-            value: format!("```talk\n{}\n```", hover.contents),
-        }),
-        range,
-    }
-}
-
 pub(crate) fn byte_span_to_range_utf16(text: &str, start: u32, end: u32) -> Option<Range> {
     let start = byte_offset_to_utf16_position(text, start)?;
     let end = byte_offset_to_utf16_position(text, end)?;
@@ -992,7 +913,6 @@ mod tests {
     use super::{AnalysisWorkspace, DocumentInput};
     use crate::lsp::document::Document;
     use async_lsp::ClientSocket;
-    use async_lsp::lsp_types::HoverContents;
     use async_lsp::lsp_types::Range;
     use async_lsp::lsp_types::Url;
     use async_lsp::lsp_types::WorkspaceEdit;
@@ -1043,72 +963,6 @@ mod tests {
         counter += 1;
         let should_process = !pending_diagnostics.is_empty() && counter > last_change_tick;
         assert!(should_process, "Should process after tick");
-    }
-
-    #[test]
-    fn hover_shows_local_type() {
-        let code = "let foo = 1\nfoo\n";
-        let uri = Url::from_file_path(std::env::temp_dir().join("hover_shows_local_type.tlk"))
-            .expect("file uri");
-
-        let module = workspace_for_docs(vec![(uri.clone(), code)]);
-
-        let byte_offset = code.match_indices("foo").nth(1).expect("second foo").0 as u32;
-
-        let hover = super::hover_at_lsp(&module, None, &uri, byte_offset).expect("hover");
-        let HoverContents::Markup(markup) = hover.contents else {
-            panic!("unexpected hover: {hover:?}");
-        };
-        assert!(markup.value.contains("foo: Int"), "{markup:?}");
-    }
-
-    #[test]
-    fn hover_shows_member_type() {
-        let code = r#"struct Foo {
-    let bar: Int
-}
-
-let foo = Foo(bar: 1)
-foo.bar
-"#;
-        let uri = Url::from_file_path(std::env::temp_dir().join("hover_shows_member_type.tlk"))
-            .expect("file uri");
-
-        let module = workspace_for_docs(vec![(uri.clone(), code)]);
-
-        let byte_offset = code.match_indices("bar").last().expect("last bar").0 as u32;
-
-        let hover = super::hover_at_lsp(&module, None, &uri, byte_offset).expect("hover");
-        let HoverContents::Markup(markup) = hover.contents else {
-            panic!("unexpected hover: {hover:?}");
-        };
-        assert!(markup.value.contains("bar: Int"), "{markup:?}");
-    }
-
-    #[test]
-    fn hover_shows_generic_function_type_not_instantiation() {
-        let code = "func id(x) { x }\nid(123)\nid(1.23)\n";
-        let uri =
-            Url::from_file_path(std::env::temp_dir().join("hover_shows_generic_function_type.tlk"))
-                .expect("file uri");
-
-        let module = workspace_for_docs(vec![(uri.clone(), code)]);
-
-        let id_offsets: Vec<usize> = code.match_indices("id").map(|(i, _)| i).collect();
-        assert_eq!(id_offsets.len(), 3, "expected 3 `id` occurrences");
-
-        for offset in [id_offsets[0], id_offsets[1], id_offsets[2]] {
-            let hover = super::hover_at_lsp(&module, None, &uri, offset as u32).expect("hover");
-            let HoverContents::Markup(markup) = hover.contents else {
-                panic!("unexpected hover: {hover:?}");
-            };
-
-            // Row params are hidden for cleaner display
-            assert!(markup.value.contains("id: <T>(T) -> T"), "{markup:?}");
-            assert!(!markup.value.contains("TypeParamId"), "{markup:?}");
-            assert!(!markup.value.contains("Int"), "{markup:?}");
-            assert!(!markup.value.contains("Float"), "{markup:?}");
-        }
     }
 
     #[test]
@@ -1211,7 +1065,6 @@ foo.bar
                 text: code_a.to_string(),
                 last_edited_tick: 0,
                 semantic_tokens: None,
-                analysis: None,
             },
         );
 
@@ -1446,29 +1299,6 @@ extend Person {
         assert_eq!(apply_format("let x = 1\n\n\n"), "let x = 1\n");
         assert_eq!(apply_format("let x=1\n"), "let x = 1\n");
         assert_eq!(apply_format("let x=1\n\n"), "let x = 1\n");
-    }
-
-    #[test]
-    fn goto_definition_on_variant_pattern() {
-        let code = r#"enum Opt<T> {
-    case some(T), none
-}
-
-match Opt.some(123) {
-    .some(x) -> x,
-    .none -> 0,
-}
-"#;
-        let uri = Url::from_file_path(std::env::temp_dir().join("goto_def_variant_pattern.tlk"))
-            .expect("file uri");
-        let module = workspace_for_docs(vec![(uri.clone(), code)]);
-        // Find "some" in the pattern ".some(x)"
-        let byte_offset = code.find(".some(x)").expect("variant pattern") as u32 + 1;
-        let target = super::goto_definition(&module, None, &uri, byte_offset);
-        assert!(
-            target.is_some(),
-            "should find variant definition from pattern"
-        );
     }
 
     #[test]
