@@ -1,6 +1,6 @@
 use crate::{
     ast::{self, AST},
-    compiling::module::{Module, ModuleEnvironment, ModuleId, StableModuleId},
+    compiling::module::{Module, ModuleEnvironment, ModuleId, ModuleTypes, StableModuleId},
     diagnostic::{AnyDiagnostic, Diagnostic, Severity},
     lexer::Lexer,
     name_resolution::{
@@ -12,6 +12,7 @@ use crate::{
     node_kinds::decl::{DeclKind, ImportPath},
     parser::Parser,
     parser_error::ParserError,
+    types::TypeOutput,
 };
 use indexmap::IndexMap;
 use rustc_hash::FxHashSet;
@@ -37,6 +38,28 @@ pub struct NameResolved {
     pub asts: IndexMap<Source, AST<crate::parsing::ast::NameResolved>>,
     pub symbols: Symbols,
     pub resolved_names: ResolvedNames,
+    pub diagnostics: Vec<AnyDiagnostic>,
+}
+
+impl DriverPhase for Lowered {}
+pub struct Lowered {
+    pub program: crate::lambda_g::Program,
+    pub main: crate::lambda_g::Label,
+    pub result_ty: crate::lambda_g::expr::TyId,
+    /// Chunk-forming function labels (demanded specializations + main);
+    /// the scheduler turns everything else into blocks.
+    pub entry_funcs: rustc_hash::FxHashSet<crate::lambda_g::Label>,
+    /// Lowering issues (constructs the backend does not support yet).
+    pub diagnostics: Vec<String>,
+    pub prior_diagnostics: Vec<AnyDiagnostic>,
+}
+
+impl DriverPhase for Typed {}
+pub struct Typed {
+    pub asts: IndexMap<Source, AST<crate::parsing::ast::NameResolved>>,
+    pub symbols: Symbols,
+    pub resolved_names: ResolvedNames,
+    pub types: TypeOutput,
     pub diagnostics: Vec<AnyDiagnostic>,
 }
 
@@ -391,6 +414,7 @@ fn has_error_diagnostics(diagnostics: &[AnyDiagnostic]) -> bool {
     diagnostics.iter().any(|diag| match diag {
         AnyDiagnostic::Parsing(diagnostic) => diagnostic.severity == Severity::Error,
         AnyDiagnostic::NameResolution(diagnostic) => diagnostic.severity == Severity::Error,
+        AnyDiagnostic::Types(diagnostic) => diagnostic.severity == Severity::Error,
     })
 }
 
@@ -410,7 +434,174 @@ impl Driver<NameResolved> {
             name: name.into(),
             symbol_names: self.phase.resolved_names.symbol_names,
             exports,
+            types: ModuleTypes::default(),
         }
+    }
+
+    /// Type check: generate constraints and solve them per SCC binding group
+    /// (see src/types). Infallible — failures surface as diagnostics.
+    pub fn type_check(self) -> Driver<Typed> {
+        let NameResolved {
+            asts,
+            mut symbols,
+            resolved_names,
+            mut diagnostics,
+        } = self.phase;
+
+        let (types, type_diagnostics) = crate::types::generate::check_types(
+            &asts,
+            &mut symbols,
+            &resolved_names,
+            &self.config.modules,
+            self.config.module_id,
+        );
+        diagnostics.extend(type_diagnostics);
+
+        Driver {
+            files: self.files,
+            config: self.config,
+            phase: Typed {
+                asts,
+                symbols,
+                resolved_names,
+                types,
+                diagnostics,
+            },
+        }
+    }
+}
+
+impl Driver<Typed> {
+    /// Lower to λ_G (whole-program, with core's typed artifacts — see
+    /// src/lower). Infallible; unsupported constructs surface as lowering
+    /// diagnostics.
+    pub fn lower(self) -> Driver<Lowered> {
+        use crate::lower::{LowerUnit, lower_program};
+
+        let Typed {
+            asts,
+            symbols: _,
+            resolved_names,
+            types,
+            diagnostics,
+        } = self.phase;
+
+        let core = if self.config.module_id == ModuleId::Core {
+            None
+        } else {
+            Some(crate::compiling::core::typed())
+        };
+        let mut units = vec![];
+        if let Some(core) = core.as_ref() {
+            units.push(LowerUnit {
+                asts: &core.asts,
+                types: &core.types,
+                resolved: &core.resolved_names,
+            });
+        }
+        units.push(LowerUnit {
+            asts: &asts,
+            types: &types,
+            resolved: &resolved_names,
+        });
+        let entry = units.len() - 1;
+        let lowered = lower_program(units, entry);
+
+        Driver {
+            files: self.files,
+            config: self.config,
+            phase: Lowered {
+                program: lowered.program,
+                main: lowered.main,
+                result_ty: lowered.result_ty,
+                entry_funcs: lowered.entry_funcs,
+                diagnostics: lowered.diagnostics,
+                prior_diagnostics: diagnostics,
+            },
+        }
+    }
+
+    pub fn has_errors(&self) -> bool {
+        has_error_diagnostics(&self.phase.diagnostics)
+    }
+
+    pub fn diagnostics(&self) -> &[AnyDiagnostic] {
+        &self.phase.diagnostics
+    }
+
+    /// Build a module carrying its type payload: every binder's scheme
+    /// (sanitized for export — solver variables don't travel) plus this
+    /// module's slice of the type catalog.
+    pub fn module<T: Into<String>>(self, name: T) -> Module {
+        let exports = self.phase.resolved_names.exports();
+        let schemes = self
+            .phase
+            .types
+            .schemes
+            .into_iter()
+            .map(|(symbol, scheme)| {
+                let ty = scheme.ty.sanitize_for_export(symbol);
+                (symbol, crate::types::ty::Scheme { ty, ..scheme })
+            })
+            .collect();
+        Module {
+            id: StableModuleId::generate(&exports),
+            name: name.into(),
+            symbol_names: self.phase.resolved_names.symbol_names,
+            exports,
+            types: ModuleTypes {
+                schemes,
+                catalog: self.phase.types.catalog,
+            },
+        }
+    }
+}
+
+impl Driver<Lowered> {
+    /// Execute on the reference evaluator (the trusted baseline the
+    /// bytecode VM is tested against). Mutates the program (substitution
+    /// adds functions), so schedule for the VM *before* running the
+    /// evaluator.
+    pub fn eval_for_tests(
+        &mut self,
+    ) -> Result<crate::lambda_g::eval::EvalValue, crate::lambda_g::eval::EvalError> {
+        Ok(self.eval_with_output()?.0)
+    }
+
+    /// Reference-evaluator run returning (value, captured stdout).
+    pub fn eval_with_output(
+        &mut self,
+    ) -> Result<(crate::lambda_g::eval::EvalValue, String), crate::lambda_g::eval::EvalError> {
+        let mut evaluator = crate::lambda_g::eval::Evaluator::new();
+        let value = evaluator.run_main(
+            &mut self.phase.program,
+            self.phase.main,
+            self.phase.result_ty,
+        )?;
+        Ok((value, String::from_utf8_lossy(&evaluator.out).into_owned()))
+    }
+
+    /// Schedule to bytecode and execute on the VM against host stdio.
+    pub fn run_vm(&self) -> Result<crate::vm::interp::Value, String> {
+        let module = self.schedule()?;
+        let mut io = crate::vm::io::StdioIO;
+        crate::vm::interp::run(&module, &mut io)
+    }
+
+    /// VM run returning (value, captured stdout) — tests and the REPL.
+    pub fn run_vm_with_output(&self) -> Result<(crate::vm::interp::Value, String), String> {
+        let module = self.schedule()?;
+        let mut io = crate::vm::io::CaptureIO::default();
+        let value = crate::vm::interp::run(&module, &mut io)?;
+        Ok((value, String::from_utf8_lossy(&io.out).into_owned()))
+    }
+
+    fn schedule(&self) -> Result<crate::vm::Module, String> {
+        crate::vm::schedule::schedule(
+            &self.phase.program,
+            self.phase.main,
+            &self.phase.entry_funcs,
+        )
     }
 }
 

@@ -107,6 +107,12 @@ impl ModuleEnvironment {
             })
     }
 
+    /// Iterate every imported module (Phase 0 of type checking seeds its
+    /// catalog and schemes from these).
+    pub fn all_modules(&self) -> impl Iterator<Item = &Module> {
+        self.modules.values().map(|arc| arc.as_ref())
+    }
+
     pub fn import_core(&mut self, module: Arc<Module>) {
         self.modules_by_local.insert(ModuleId::Core, module.id);
         self.modules_by_name.insert("Core".into(), ModuleId::Core);
@@ -123,12 +129,23 @@ impl ModuleEnvironment {
     }
 }
 
+/// The type-system payload a compiled module carries: finished schemes for
+/// its binders and its slice of the type catalog (nominals, protocols,
+/// conformances, effects). The importing checker merges these in Phase 0.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct ModuleTypes {
+    pub schemes: FxHashMap<Symbol, crate::types::ty::Scheme>,
+    pub catalog: crate::types::catalog::TypeCatalog,
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Module {
     pub id: StableModuleId,
     pub name: String,
     pub symbol_names: FxHashMap<Symbol, String>,
     pub exports: IndexMap<String, Symbol>,
+    #[serde(default)]
+    pub types: ModuleTypes,
 }
 
 impl Module {
@@ -146,6 +163,20 @@ impl Module {
                 .into_iter()
                 .map(|(k, v)| (k, v.import(module_id)))
                 .collect(),
+            types: ModuleTypes {
+                schemes: self
+                    .types
+                    .schemes
+                    .into_iter()
+                    .map(|(symbol, scheme)| {
+                        (
+                            symbol.import(module_id),
+                            scheme.import_symbols(module_id),
+                        )
+                    })
+                    .collect(),
+                catalog: self.types.catalog.import_as(module_id),
+            },
         }
     }
 }

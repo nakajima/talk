@@ -14,6 +14,7 @@ pub struct GroupId(pub u32);
     Default,
     PartialEq,
     PartialOrd,
+    Ord,
     Clone,
     Copy,
     Debug,

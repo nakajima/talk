@@ -75,7 +75,8 @@ impl Workspace {
         };
         let parsed = driver.parse().ok()?;
         let resolved = parsed.resolve_names().ok()?;
-        let Driver { phase, .. } = resolved;
+        let typed = resolved.type_check();
+        let Driver { phase, .. } = typed;
         let asts_by_source = phase.asts;
         let resolved_names = phase.resolved_names;
         let diagnostics_any = phase.diagnostics;
@@ -282,6 +283,9 @@ fn diagnostic_for_any(
         ),
         AnyDiagnostic::NameResolution(diagnostic) => {
             (diagnostic.id, diagnostic.kind.to_string(), None, true)
+        }
+        AnyDiagnostic::Types(diagnostic) => {
+            (diagnostic.id, diagnostic.kind.to_string(), None, false)
         }
     };
 

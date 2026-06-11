@@ -83,11 +83,50 @@ async fn main() {
             talk::cli::repl::run();
         }
         Commands::Run { filenames } => {
-            let _ = filenames;
-            eprintln!(
-                "error: `talk run` is not implemented: the compiler backend has been removed pending rewrite"
-            );
-            std::process::exit(1);
+            use talk::compiling::driver::Driver;
+
+            let module_name = filenames
+                .first()
+                .cloned()
+                .unwrap_or_else(|| STDIN_NAME.to_string());
+            let sources = sources_for_filenames(filenames);
+            let driver = Driver::new(sources, DriverConfig::new(module_name));
+            let parsed = match driver.parse() {
+                Ok(parsed) => parsed,
+                Err(err) => {
+                    eprintln!("error: {err:?}");
+                    std::process::exit(1);
+                }
+            };
+            let resolved = match parsed.resolve_names() {
+                Ok(resolved) => resolved,
+                Err(err) => {
+                    eprintln!("error: {err:?}");
+                    std::process::exit(1);
+                }
+            };
+            let typed = resolved.type_check();
+            if typed.has_errors() {
+                for diagnostic in typed.diagnostics() {
+                    eprintln!("{diagnostic:?}");
+                }
+                std::process::exit(1);
+            }
+            let lowered = typed.lower();
+            if !lowered.phase.diagnostics.is_empty() {
+                for diagnostic in &lowered.phase.diagnostics {
+                    eprintln!("{diagnostic}");
+                }
+                std::process::exit(1);
+            }
+            match lowered.run_vm() {
+                Ok(talk::vm::interp::Value::Void) => {}
+                Ok(value) => println!("{value:?}"),
+                Err(err) => {
+                    eprintln!("{err}");
+                    std::process::exit(1);
+                }
+            }
         }
         Commands::Check { filenames, json } => {
             use talk::{

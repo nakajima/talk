@@ -11,11 +11,6 @@ use crate::{
 
 pub const REPL_DOCUMENT_ID: &str = "<repl>";
 
-const EVAL_UNIMPLEMENTED: &str =
-    "evaluation is not implemented: the interpreter has been removed pending rewrite";
-const TYPE_UNIMPLEMENTED: &str =
-    "/type is not implemented: the type checker has been removed pending rewrite";
-
 #[derive(Clone, Debug)]
 pub struct ReplSession {
     persistent_source: String,
@@ -83,16 +78,123 @@ impl ReplSession {
             };
         }
 
-        ReplEvalResult::Error(EVAL_UNIMPLEMENTED.to_string())
+        // Evaluate on the λ_G reference evaluator (the slow path; the
+        // bytecode VM replaces this in the backend's M2).
+        use crate::compiling::driver::{Driver, DriverConfig, Source};
+        let driver = Driver::new(
+            vec![Source::from(source.as_str())],
+            DriverConfig::new("Repl"),
+        );
+        let typed = match driver.parse() {
+            Ok(parsed) => match parsed.resolve_names() {
+                Ok(resolved) => resolved.type_check(),
+                Err(err) => return ReplEvalResult::Error(format!("{err:?}")),
+            },
+            Err(err) => return ReplEvalResult::Error(format!("{err:?}")),
+        };
+        if typed.has_errors() {
+            let message = typed
+                .diagnostics()
+                .iter()
+                .map(|d| d.to_string())
+                .collect::<Vec<_>>()
+                .join("\n");
+            return ReplEvalResult::Error(message);
+        }
+        let lowered = typed.lower();
+        if !lowered.phase.diagnostics.is_empty() {
+            return ReplEvalResult::Error(format!(
+                "not yet supported by the backend: {}",
+                lowered.phase.diagnostics.join("; ")
+            ));
+        }
+        match lowered.run_vm_with_output() {
+            Ok((value, stdout)) => ReplEvalResult::Output {
+                stdout,
+                stderr: String::new(),
+                value: Some(format!("{value:?}")),
+            },
+            Err(err) => ReplEvalResult::Error(format!("evaluation failed: {err}")),
+        }
     }
 
     pub fn type_of(&self, input: &str) -> ReplEvalResult {
+        use crate::compiling::driver::{Driver, DriverConfig, Source};
+
         let repl_input = ReplInput::new(input);
         if repl_input.is_empty() {
             return ReplEvalResult::Error("/type requires an expression".to_string());
         }
 
-        ReplEvalResult::Error(TYPE_UNIMPLEMENTED.to_string())
+        let source = self.combined_source(input);
+        let driver = Driver::new(
+            vec![Source::from(source.as_str())],
+            DriverConfig::new("Repl"),
+        );
+        let typed = match driver.parse() {
+            Ok(parsed) => match parsed.resolve_names() {
+                Ok(resolved) => resolved.type_check(),
+                Err(err) => return ReplEvalResult::Error(format!("{err:?}")),
+            },
+            Err(err) => return ReplEvalResult::Error(format!("{err:?}")),
+        };
+        if typed.has_errors() {
+            let message = typed
+                .diagnostics()
+                .iter()
+                .map(|d| d.to_string())
+                .collect::<Vec<_>>()
+                .join("\n");
+            return ReplEvalResult::Error(message);
+        }
+
+        let resolved_names = &typed.phase.resolved_names;
+        let _names = crate::name_resolution::symbol::set_symbol_names(
+            resolved_names.symbol_names.clone(),
+        );
+
+        // A bare identifier shows its (possibly polymorphic) scheme; any
+        // other expression shows the type of the final statement.
+        let trimmed = input.trim();
+        if trimmed.chars().all(|c| c.is_alphanumeric() || c == '_') {
+            let scheme = resolved_names
+                .symbol_names
+                .iter()
+                .find(|(sym, name)| {
+                    name.as_str() == trimmed && typed.phase.types.schemes.contains_key(sym)
+                })
+                .map(|(sym, _)| typed.phase.types.schemes[sym].render());
+            if let Some(rendered) = scheme {
+                return ReplEvalResult::Output {
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    value: Some(rendered),
+                };
+            }
+        }
+
+        let last_expr_ty = typed
+            .phase
+            .asts
+            .values()
+            .flat_map(|ast| ast.roots.iter())
+            .filter_map(|root| match root {
+                crate::node::Node::Stmt(crate::node_kinds::stmt::Stmt {
+                    kind: crate::node_kinds::stmt::StmtKind::Expr(expr),
+                    ..
+                }) => typed.phase.types.node_types.get(&expr.id),
+                _ => None,
+            })
+            .next_back();
+
+        match last_expr_ty {
+            Some(ty) => ReplEvalResult::Output {
+                stdout: String::new(),
+                stderr: String::new(),
+                value: Some(ty.render_mono()),
+            },
+            None => ReplEvalResult::Error("/type requires an expression".to_string()),
+        }
     }
 
     pub fn needs_more_input(&self, input: &str) -> bool {
@@ -301,10 +403,17 @@ mod tests {
     }
 
     #[test]
-    fn expression_reports_unimplemented_evaluation() {
+    fn expression_evaluates() {
         let mut session = session();
         let result = session.eval("1 + 1");
-        assert_eq!(result, ReplEvalResult::Error(EVAL_UNIMPLEMENTED.into()));
+        assert_eq!(
+            result,
+            ReplEvalResult::Output {
+                stdout: String::new(),
+                stderr: String::new(),
+                value: Some("I64(2)".to_string()),
+            }
+        );
     }
 
     #[test]
@@ -314,10 +423,16 @@ mod tests {
         assert!(matches!(result, ReplEvalResult::Output { value: None, .. }));
         assert!(session.persistent_source().contains("let x = 2"));
 
-        // The persisted declaration makes `x` resolve; without it this would
-        // be a name-resolution diagnostic instead of the unimplemented error.
+        // The persisted declaration makes `x` resolve and evaluate.
         let result = session.eval("x + 3");
-        assert_eq!(result, ReplEvalResult::Error(EVAL_UNIMPLEMENTED.into()));
+        assert_eq!(
+            result,
+            ReplEvalResult::Output {
+                stdout: String::new(),
+                stderr: String::new(),
+                value: Some("I64(5)".to_string()),
+            }
+        );
     }
 
     #[test]
@@ -338,10 +453,33 @@ mod tests {
     }
 
     #[test]
-    fn type_command_reports_unimplemented() {
+    fn type_command_reports_types() {
         let session = session();
         let result = session.type_of("1 + 1");
-        assert_eq!(result, ReplEvalResult::Error(TYPE_UNIMPLEMENTED.into()));
+        assert_eq!(
+            result,
+            ReplEvalResult::Output {
+                stdout: String::new(),
+                stderr: String::new(),
+                value: Some("Int".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn type_command_shows_schemes_for_identifiers() {
+        let mut session = session();
+        let result = session.eval("func identity(x) { x }");
+        assert!(matches!(result, ReplEvalResult::Output { value: None, .. }));
+        let result = session.type_of("identity");
+        assert_eq!(
+            result,
+            ReplEvalResult::Output {
+                stdout: String::new(),
+                stderr: String::new(),
+                value: Some("<T0>(T0) -> T0".to_string()),
+            }
+        );
     }
 
     #[test]

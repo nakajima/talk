@@ -1,18 +1,36 @@
 use std::sync::Arc;
 
+use indexmap::IndexMap;
 use lazy_static::lazy_static;
 
+use crate::ast::{AST, NameResolved};
 use crate::compiling::{
     driver::{CompilationMode, Driver, DriverConfig, Source},
     module::{Module, ModuleId},
 };
+use crate::name_resolution::name_resolver::ResolvedNames;
+use crate::types::TypeOutput;
+
+/// Core's typed artifacts, retained for whole-program lowering: lazy
+/// monomorphization needs core's *bodies* (witnesses, protocol defaults,
+/// @_ir splices) at user-program lower time — the MLton whole-program
+/// model rather than polymorphic IR in modules.
+pub struct CoreTyped {
+    pub asts: IndexMap<Source, AST<NameResolved>>,
+    pub types: TypeOutput,
+    pub resolved_names: ResolvedNames,
+}
 
 lazy_static! {
-    static ref CORE_MODULE: Arc<Module> = Arc::new(_compile());
+    static ref CORE: (Arc<Module>, Arc<CoreTyped>) = _compile();
 }
 
 pub fn compile() -> Arc<Module> {
-    CORE_MODULE.clone()
+    CORE.0.clone()
+}
+
+pub fn typed() -> Arc<CoreTyped> {
+    CORE.1.clone()
 }
 
 /// The filenames of all core source files.
@@ -51,7 +69,7 @@ pub fn core_sources() -> Vec<(&'static str, &'static str)> {
     ]
 }
 
-fn _compile() -> Module {
+fn _compile() -> (Arc<Module>, Arc<CoreTyped>) {
     let _s = tracing::trace_span!("compile_prelude", prelude = true).entered();
     let mut config = DriverConfig::new("Core");
     config.module_id = ModuleId::Core;
@@ -63,15 +81,25 @@ fn _compile() -> Module {
     let driver = Driver::new_bare(sources, config);
 
     #[allow(clippy::unwrap_used)]
-    let resolved = driver.parse().unwrap().resolve_names().unwrap();
+    let typed = driver
+        .parse()
+        .unwrap()
+        .resolve_names()
+        .unwrap()
+        .type_check();
 
     assert!(
-        !resolved.has_errors(),
+        !typed.has_errors(),
         "Core module compiled with errors: {:#?}",
-        resolved.diagnostics()
+        typed.diagnostics()
     );
 
-    resolved.module("Core")
+    let core_typed = CoreTyped {
+        asts: typed.phase.asts.clone(),
+        types: typed.phase.types.clone(),
+        resolved_names: typed.phase.resolved_names.clone(),
+    };
+    (Arc::new(typed.module("Core")), Arc::new(core_typed))
 }
 
 #[cfg(test)]
@@ -81,8 +109,9 @@ mod tests {
     #[test]
     fn core_resolves_without_errors() {
         // _compile() asserts there are no error diagnostics.
-        let module = _compile();
+        let (module, typed) = _compile();
         assert_eq!(module.name, "Core");
         assert!(!module.exports.is_empty());
+        assert!(!typed.types.schemes.is_empty());
     }
 }

@@ -23,8 +23,12 @@ pub mod analysis;
 pub mod common;
 pub mod compiling;
 pub use common::*;
+pub mod lambda_g;
+pub mod lower;
 pub mod name_resolution;
 pub mod repl;
+pub mod types;
+pub mod vm;
 
 #[cfg(feature = "cli")]
 pub mod cli;

@@ -3,6 +3,7 @@ use std::fmt;
 
 use crate::{
     name_resolution::name_resolver::NameResolverError, node_id::NodeID, parser_error::ParserError,
+    types::TypeError,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -22,6 +23,7 @@ pub struct Diagnostic<E: Error + std::hash::Hash> {
 pub enum AnyDiagnostic {
     Parsing(Diagnostic<ParserError>),
     NameResolution(Diagnostic<NameResolverError>),
+    Types(Diagnostic<TypeError>),
 }
 
 impl From<Diagnostic<ParserError>> for AnyDiagnostic {
@@ -36,11 +38,18 @@ impl From<Diagnostic<NameResolverError>> for AnyDiagnostic {
     }
 }
 
+impl From<Diagnostic<TypeError>> for AnyDiagnostic {
+    fn from(value: Diagnostic<TypeError>) -> Self {
+        Self::Types(value)
+    }
+}
+
 impl fmt::Display for AnyDiagnostic {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             AnyDiagnostic::Parsing(d) => write!(f, "{}", d.kind),
             AnyDiagnostic::NameResolution(d) => write!(f, "{}", d.kind),
+            AnyDiagnostic::Types(d) => write!(f, "{}", d.kind),
         }
     }
 }

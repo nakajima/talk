@@ -2590,8 +2590,12 @@ mod formatter_tests {
     #[test]
     fn examples_smoke_test() {
         // Make sure examples are the same before and after formatting
+        // (skipping examples/expected/, the runtime stdout goldens).
         for path in std::fs::read_dir("./examples").unwrap() {
             let path = path.unwrap().path();
+            if path.extension().and_then(|e| e.to_str()) != Some("tlk") {
+                continue;
+            }
             let code = std::fs::read_to_string(&path).unwrap();
             assert_eq!(
                 code,
