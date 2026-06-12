@@ -12,10 +12,12 @@ use async_lsp::{
     client_monitor::ClientProcessMonitorLayer,
     concurrency::ConcurrencyLayer,
     lsp_types::{
-        CompletionResponse, GotoDefinitionResponse, InitializeParams, InitializeResult, OneOf,
-        PublishDiagnosticsParams, SemanticTokensFullOptions, SemanticTokensLegend,
-        SemanticTokensOptions, SemanticTokensServerCapabilities, ServerCapabilities,
-        TextDocumentItem, Url, WorkspaceEdit, WorkspaceFolder, notification, request,
+        CompletionResponse, GotoDefinitionResponse, HoverContents, HoverProviderCapability,
+        InitializeParams, InitializeResult, MarkupContent, MarkupKind, OneOf,
+        PublishDiagnosticsParams, Range as LspRange, SemanticTokensFullOptions,
+        SemanticTokensLegend, SemanticTokensOptions, SemanticTokensServerCapabilities,
+        ServerCapabilities, TextDocumentItem, Url, WorkspaceEdit, WorkspaceFolder,
+        notification, request,
     },
     panic::CatchUnwindLayer,
     router::Router,
@@ -115,6 +117,7 @@ pub async fn start() {
                     Ok(InitializeResult {
                         capabilities: ServerCapabilities {
                             definition_provider: Some(OneOf::Left(true)),
+                            hover_provider: Some(HoverProviderCapability::Simple(true)),
                             rename_provider: Some(OneOf::Left(true)),
                             completion_provider: Some(CompletionOptions {
                                 trigger_characters: Some(vec![".".to_string()]),
@@ -276,6 +279,25 @@ pub async fn start() {
                     };
 
                     Ok(rename_at(&workspace, &uri, byte_offset, &new_name))
+                }
+            })
+            .request::<request::HoverRequest, _>(|st, params| {
+                let uri = params
+                    .text_document_position_params
+                    .text_document
+                    .uri
+                    .clone();
+                let position = params.text_document_position_params.position;
+                let byte_offset = st
+                    .documents
+                    .get(&uri)
+                    .and_then(|document| document.byte_offset(position).map(|o| o as u32));
+                let workspace = workspace_analysis(st, &uri);
+                async move {
+                    let (Some(byte_offset), Some(workspace)) = (byte_offset, workspace) else {
+                        return Ok(None);
+                    };
+                    Ok(hover_at_lsp(&workspace, &uri, byte_offset))
                 }
             })
             .request::<request::GotoDefinition, _>(|st, params| {
@@ -717,6 +739,40 @@ pub(crate) fn document_id_for_uri(uri: &Url) -> DocumentId {
     uri.as_str().to_string()
 }
 
+/// The analysis hover as an LSP hover: markdown contents plus the
+/// source range as UTF-16 positions.
+pub(crate) fn hover_at_lsp(
+    workspace: &AnalysisWorkspace,
+    uri: &Url,
+    byte_offset: u32,
+) -> Option<async_lsp::lsp_types::Hover> {
+    let document_id = document_id_for_uri(uri);
+    let hover = crate::analysis::hover_at(workspace, &document_id, byte_offset)?;
+    let range = workspace.text_for(&document_id).map(|text| {
+        let (start_line, start_col, _, _) =
+            crate::common::text::line_info_for_offset_utf16(text, hover.range.start);
+        let (end_line, end_col, _, _) =
+            crate::common::text::line_info_for_offset_utf16(text, hover.range.end);
+        LspRange {
+            start: Position {
+                line: start_line - 1,
+                character: start_col - 1,
+            },
+            end: Position {
+                line: end_line - 1,
+                character: end_col - 1,
+            },
+        }
+    });
+    Some(async_lsp::lsp_types::Hover {
+        contents: HoverContents::Markup(MarkupContent {
+            kind: MarkupKind::Markdown,
+            value: format!("```talk\n{}\n```", hover.contents),
+        }),
+        range,
+    })
+}
+
 fn document_path_for_uri(uri: &Url) -> String {
     uri.to_file_path()
         .map(|p| p.display().to_string())
@@ -837,6 +893,21 @@ fn compute_code_actions(
             continue;
         }
 
+        // Ambiguous member: one rewrite per candidate protocol,
+        // `x.m(args)` -> `P.m(x, args)` (the explicit protocol-static
+        // form the checker's message suggests).
+        if diagnostic.message.starts_with("Ambiguous member '") {
+            actions.extend(ambiguous_member_quick_fixes(
+                text,
+                uri,
+                diagnostic.range.start as usize,
+                diagnostic.range.end as usize,
+                &diagnostic.message,
+                diag_range,
+            ));
+            continue;
+        }
+
         // Check if this is an "undefined name" diagnostic
         if !diagnostic.message.starts_with("Undefined name:") {
             continue;
@@ -908,11 +979,107 @@ fn compute_code_actions(
     actions
 }
 
+/// Build the quick-fixes for one ambiguous-member diagnostic. The message
+/// carries the candidate protocols ("provided by Aa, Bb"); the diagnostic
+/// span covers the member use, whose text ends in `.label` followed by the
+/// argument list. Each fix rewrites the receiver-dot form into the
+/// protocol-static call with the receiver as first argument.
+fn ambiguous_member_quick_fixes(
+    text: &str,
+    uri: &Url,
+    diag_start: usize,
+    diag_end: usize,
+    message: &str,
+    diag_range: Range,
+) -> Vec<CodeActionOrCommand> {
+    let Some(rest) = message.strip_prefix("Ambiguous member '") else {
+        return vec![];
+    };
+    let Some((label, rest)) = rest.split_once('\'') else {
+        return vec![];
+    };
+    let Some((_, rest)) = rest.split_once("provided by ") else {
+        return vec![];
+    };
+    let Some((providers, _)) = rest.split_once(". Name one explicitly") else {
+        return vec![];
+    };
+    let Some(snippet) = text.get(diag_start..diag_end) else {
+        return vec![];
+    };
+    // The span must actually be a `receiver.label(...)` use: a discharge
+    // site for a scheme-carried constraint points at the caller instead,
+    // where no textual rewrite applies (the diagnostic alone serves there).
+    let needle = format!(".{label}");
+    let Some(dot) = snippet.rfind(&needle) else {
+        return vec![];
+    };
+    let receiver = snippet[..dot].trim();
+    if receiver.is_empty() {
+        return vec![];
+    }
+    let receiver_start = diag_start + snippet[..dot].len() - snippet[..dot].trim_start().len();
+    let label_end = diag_start + dot + needle.len();
+    if text.as_bytes().get(label_end) != Some(&b'(') {
+        return vec![];
+    }
+    let after_paren = label_end + 1;
+    let empty_args = text[after_paren..].trim_start().starts_with(')');
+    let insertion = if empty_args {
+        receiver.to_string()
+    } else {
+        format!("{receiver}, ")
+    };
+
+    let mut actions = vec![];
+    for candidate in providers.split(", ") {
+        let Some(callee_range) =
+            byte_span_to_range_utf16(text, receiver_start as u32, label_end as u32)
+        else {
+            continue;
+        };
+        let Some(insert_range) =
+            byte_span_to_range_utf16(text, after_paren as u32, after_paren as u32)
+        else {
+            continue;
+        };
+        let edits = vec![
+            TextEdit::new(callee_range, format!("{candidate}.{label}")),
+            TextEdit::new(insert_range, insertion.clone()),
+        ];
+        let mut changes: std::collections::HashMap<Url, Vec<TextEdit>> =
+            std::collections::HashMap::new();
+        changes.insert(uri.clone(), edits);
+        actions.push(CodeActionOrCommand::CodeAction(CodeAction {
+            title: format!("Use '{candidate}.{label}({receiver}…)'"),
+            kind: Some(CodeActionKind::QUICKFIX),
+            diagnostics: Some(vec![Diagnostic {
+                range: diag_range,
+                severity: Some(DiagnosticSeverity::ERROR),
+                source: Some("talk".to_string()),
+                message: message.to_string(),
+                ..Default::default()
+            }]),
+            edit: Some(WorkspaceEdit {
+                changes: Some(changes),
+                document_changes: None,
+                change_annotations: None,
+            }),
+            command: None,
+            is_preferred: None,
+            disabled: None,
+            data: None,
+        }));
+    }
+    actions
+}
+
 #[cfg(test)]
 mod tests {
     use super::{AnalysisWorkspace, DocumentInput};
     use crate::lsp::document::Document;
     use async_lsp::ClientSocket;
+    use async_lsp::lsp_types::HoverContents;
     use async_lsp::lsp_types::Range;
     use async_lsp::lsp_types::Url;
     use async_lsp::lsp_types::WorkspaceEdit;
@@ -945,6 +1112,81 @@ mod tests {
     }
 
     #[test]
+    fn ambiguous_member_quick_fix_offers_each_protocol() {
+        let code = "protocol Aa {\n\tfunc m() -> Int\n}\nprotocol Bb {\n\tfunc m() -> Int\n}\nextend Int: Aa {\n\tfunc m() -> Int { 1 }\n}\nextend Int: Bb {\n\tfunc m() -> Int { 2 }\n}\nlet n = 5\nlet x = n.m()\n";
+        let uri = Url::from_file_path(std::env::temp_dir().join("ambiguous_member_quick_fix.tlk"))
+            .expect("file uri");
+        let module = workspace_for_docs(vec![(uri.clone(), code)]);
+        let document_id = super::document_id_for_uri(&uri);
+        let everywhere = Range::new(
+            async_lsp::lsp_types::Position::new(0, 0),
+            async_lsp::lsp_types::Position::new(999, 0),
+        );
+        let actions = super::compute_code_actions(&module, &document_id, &uri, everywhere);
+        let titles: Vec<String> = actions
+            .iter()
+            .map(|a| match a {
+                async_lsp::lsp_types::CodeActionOrCommand::CodeAction(action) => {
+                    action.title.clone()
+                }
+                other => panic!("unexpected action: {other:?}"),
+            })
+            .collect();
+        assert!(
+            titles.iter().any(|t| t.contains("Aa.m"))
+                && titles.iter().any(|t| t.contains("Bb.m")),
+            "one quick-fix per candidate protocol: {titles:?}"
+        );
+        // Applying the Aa fix rewrites `n.m()` into `Aa.m(n)`.
+        let async_lsp::lsp_types::CodeActionOrCommand::CodeAction(aa) = actions
+            .iter()
+            .find(|a| match a {
+                async_lsp::lsp_types::CodeActionOrCommand::CodeAction(action) => {
+                    action.title.contains("Aa.m")
+                }
+                _ => false,
+            })
+            .expect("Aa quick-fix")
+        else {
+            panic!("not a code action");
+        };
+        let rewritten = apply_edits(
+            code,
+            aa.edit.as_ref().expect("edit"),
+            &uri,
+        );
+        assert!(
+            rewritten.contains("let x = Aa.m(n)"),
+            "rewritten source: {rewritten}"
+        );
+    }
+
+    /// Apply a WorkspaceEdit's text edits to source (test-only; assumes
+    /// ASCII so UTF-16 columns equal byte columns).
+    fn apply_edits(text: &str, edit: &WorkspaceEdit, uri: &Url) -> String {
+        let mut edits: Vec<&async_lsp::lsp_types::TextEdit> = edit
+            .changes
+            .as_ref()
+            .and_then(|c| c.get(uri))
+            .expect("missing edits for uri")
+            .iter()
+            .collect();
+        let line_starts: Vec<usize> = std::iter::once(0)
+            .chain(text.match_indices('\n').map(|(i, _)| i + 1))
+            .collect();
+        let to_byte = |p: &async_lsp::lsp_types::Position| {
+            line_starts[p.line as usize] + p.character as usize
+        };
+        edits.sort_by_key(|e| std::cmp::Reverse((e.range.start.line, e.range.start.character)));
+        let mut out = text.to_string();
+        for e in edits {
+            let (start, end) = (to_byte(&e.range.start), to_byte(&e.range.end));
+            out.replace_range(start..end, &e.new_text);
+        }
+        out
+    }
+
+    #[test]
     #[allow(clippy::vec_init_then_push)]
     fn test_debouncing_logic() {
         // Test the debouncing counter logic
@@ -963,6 +1205,70 @@ mod tests {
         counter += 1;
         let should_process = !pending_diagnostics.is_empty() && counter > last_change_tick;
         assert!(should_process, "Should process after tick");
+    }
+
+    #[test]
+    fn hover_shows_local_type() {
+        let code = "let foo = 1\nfoo\n";
+        let uri = Url::from_file_path(std::env::temp_dir().join("hover_shows_local_type.tlk"))
+            .expect("file uri");
+        let module = workspace_for_docs(vec![(uri.clone(), code)]);
+        let byte_offset = code.match_indices("foo").nth(1).expect("second foo").0 as u32;
+        let hover = super::hover_at_lsp(&module, &uri, byte_offset).expect("hover");
+        let HoverContents::Markup(markup) = hover.contents else {
+            panic!("unexpected hover: {hover:?}");
+        };
+        assert!(markup.value.contains("foo: Int"), "{markup:?}");
+    }
+
+    #[test]
+    fn hover_shows_member_type() {
+        let code = "struct Foo {\n\tlet bar: Int\n}\n\nlet foo = Foo(bar: 1)\nfoo.bar\n";
+        let uri = Url::from_file_path(std::env::temp_dir().join("hover_shows_member_type.tlk"))
+            .expect("file uri");
+        let module = workspace_for_docs(vec![(uri.clone(), code)]);
+        let byte_offset = code.match_indices("bar").last().expect("last bar").0 as u32;
+        let hover = super::hover_at_lsp(&module, &uri, byte_offset).expect("hover");
+        let HoverContents::Markup(markup) = hover.contents else {
+            panic!("unexpected hover: {hover:?}");
+        };
+        assert!(markup.value.contains("Int"), "{markup:?}");
+    }
+
+    #[test]
+    fn hover_shows_generic_function_type_not_instantiation() {
+        let code = "func id(x) { x }\nid(123)\nid(1.23)\n";
+        let uri =
+            Url::from_file_path(std::env::temp_dir().join("hover_shows_generic_function_type.tlk"))
+                .expect("file uri");
+        let module = workspace_for_docs(vec![(uri.clone(), code)]);
+        let id_offsets: Vec<usize> = code.match_indices("id").map(|(i, _)| i).collect();
+        assert_eq!(id_offsets.len(), 3, "expected 3 `id` occurrences");
+        for offset in id_offsets {
+            let hover = super::hover_at_lsp(&module, &uri, offset as u32).expect("hover");
+            let HoverContents::Markup(markup) = hover.contents else {
+                panic!("unexpected hover: {hover:?}");
+            };
+            // The scheme, not a use site's instantiation.
+            assert!(markup.value.contains("id: <T0>(T0) -> T0"), "{markup:?}");
+            assert!(!markup.value.contains("Int"), "{markup:?}");
+            assert!(!markup.value.contains("Float"), "{markup:?}");
+        }
+    }
+
+    #[test]
+    fn goto_definition_on_variant_pattern() {
+        let code = "enum Opt<T> {\n\tcase some(T)\n\tcase none\n}\n\nlet r = match Opt.some(123) {\n\t.some(x) -> x,\n\t.none -> 0\n}\n";
+        let uri = Url::from_file_path(std::env::temp_dir().join("goto_def_variant_pattern.tlk"))
+            .expect("file uri");
+        let module = workspace_for_docs(vec![(uri.clone(), code)]);
+        // Inside "some" of the pattern ".some(x)"
+        let byte_offset = code.find(".some(x)").expect("variant pattern") as u32 + 1;
+        let target = super::goto_definition(&module, None, &uri, byte_offset);
+        assert!(
+            target.is_some(),
+            "should find the variant definition from the pattern"
+        );
     }
 
     #[test]

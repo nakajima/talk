@@ -8,9 +8,6 @@ use talk::{
 };
 use wasm_bindgen::prelude::*;
 
-const BACKEND_UNIMPLEMENTED: &str =
-    "not implemented: the compiler backend has been removed pending rewrite";
-
 fn init() {
     install_panic_hook();
 }
@@ -24,15 +21,29 @@ pub fn format(source: &str) -> String {
 #[wasm_bindgen]
 pub fn run_program(source: &str) -> Result<Object, JsValue> {
     init();
-    let _ = source;
-    Err(JsValue::from_str(BACKEND_UNIMPLEMENTED))
+    let session = ReplSession::with_source_path(std::path::PathBuf::from("playground.tlk"));
+    match session.eval_program(source) {
+        ReplEvalResult::Output { stdout, value, .. } => {
+            let obj = Object::new();
+            let value = value.unwrap_or_default();
+            set_str(&obj, "value", &value)?;
+            set_str(&obj, "highlightedValue", &highlight_source_html(&value))?;
+            set_str(&obj, "output", &stdout)?;
+            Ok(obj)
+        }
+        failure => Err(repl_result_to_js(failure)?.into()),
+    }
 }
 
 #[wasm_bindgen]
 pub fn show_ir(source: &str) -> Result<Object, JsValue> {
     init();
-    let _ = source;
-    Err(JsValue::from_str(BACKEND_UNIMPLEMENTED))
+    let ir = talk::compiling::driver::render_ir("Playground", source)
+        .map_err(|message| JsValue::from_str(&message))?;
+    let obj = Object::new();
+    set_str(&obj, "ir", &ir)?;
+    set_str(&obj, "highlightedIr", &highlight_source_html(&ir))?;
+    Ok(obj)
 }
 
 #[wasm_bindgen]
@@ -72,8 +83,81 @@ pub fn hover(
     node_id: Option<String>,
 ) -> Result<JsValue, JsValue> {
     init();
-    let _ = (source, byte_offset, line, column, node_id);
-    Err(JsValue::from_str(BACKEND_UNIMPLEMENTED))
+    let doc_id = "<stdin>".to_string();
+    let docs = vec![DocumentInput {
+        id: doc_id.clone(),
+        path: doc_id.clone(),
+        version: 0,
+        text: source.to_string(),
+    }];
+    let workspace =
+        Workspace::new(docs).ok_or_else(|| JsValue::from_str("failed to build workspace"))?;
+
+    let hover = match (byte_offset, line, column, node_id) {
+        (_, _, _, Some(node_id)) => {
+            let node_id = talk::analysis::hover::parse_node_id(&node_id)
+                .ok_or_else(|| JsValue::from_str("node id must be \"index\" or \"file:index\""))?;
+            talk::analysis::hover::hover_for_node_id(&workspace, &doc_id, node_id)
+        }
+        (Some(offset), None, None, None) => {
+            if offset as usize > source.len() {
+                return Err(JsValue::from_str("byte offset is past end of document"));
+            }
+            let offset = clamp_to_char_boundary(source, offset as usize) as u32;
+            talk::analysis::hover_at(&workspace, &doc_id, offset)
+        }
+        (None, Some(line), Some(column), None) => {
+            let offset =
+                talk::common::text::byte_offset_for_line_column_utf8(source, line, column)
+                    .ok_or_else(|| JsValue::from_str("line/column is past end of document"))?;
+            talk::analysis::hover_at(&workspace, &doc_id, offset)
+        }
+        _ => {
+            return Err(JsValue::from_str(
+                "provide byte_offset, line and column, or node_id",
+            ));
+        }
+    };
+    hover_to_js(&doc_id, source, hover)
+}
+
+
+fn hover_to_js(
+    doc_id: &str,
+    text: &str,
+    hover: Option<talk::analysis::Hover>,
+) -> Result<JsValue, JsValue> {
+    use talk::common::text::line_info_for_offset;
+
+    let root = Object::new();
+    set_str(&root, "path", doc_id)?;
+    let Some(hover) = hover else {
+        Reflect::set(&root, &JsValue::from_str("hover"), &JsValue::NULL)?;
+        return Ok(root.into());
+    };
+
+    let hover_obj = Object::new();
+    set_str(&hover_obj, "contents", &hover.contents)?;
+    let contents_markdown = format!("```talk\n{}\n```", hover.contents);
+    set_str(&hover_obj, "contents_markdown", &contents_markdown)?;
+
+    let (start_line, start_col, _, _) = line_info_for_offset(text, hover.range.start);
+    let (end_line, end_col, _, _) = line_info_for_offset(text, hover.range.end);
+    let range_obj = Object::new();
+    let start_obj = Object::new();
+    set_num(&start_obj, "byte", hover.range.start)?;
+    set_num(&start_obj, "line", start_line)?;
+    set_num(&start_obj, "column", start_col)?;
+    let end_obj = Object::new();
+    set_num(&end_obj, "byte", hover.range.end)?;
+    set_num(&end_obj, "line", end_line)?;
+    set_num(&end_obj, "column", end_col)?;
+    Reflect::set(&range_obj, &JsValue::from_str("start"), &start_obj)?;
+    Reflect::set(&range_obj, &JsValue::from_str("end"), &end_obj)?;
+    Reflect::set(&hover_obj, &JsValue::from_str("range"), &range_obj)?;
+
+    Reflect::set(&root, &JsValue::from_str("hover"), &hover_obj)?;
+    Ok(root.into())
 }
 
 #[wasm_bindgen]

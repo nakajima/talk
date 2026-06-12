@@ -109,7 +109,9 @@ pub fn check_types(
         performs_into: FxHashMap::default(),
         binder_refs: FxHashMap::default(),
         handler_payload_tys: FxHashMap::default(),
+        handlers_defined: FxHashMap::default(),
         handler_ret_stack: vec![],
+        display_names: FxHashMap::default(),
         wanteds: vec![],
         ret_stack: vec![],
         eff_stack: vec![],
@@ -141,7 +143,9 @@ enum TopEntry<'a> {
     Struct {
         decl: &'a Decl,
     },
-    Enum,
+    Enum {
+        decl: &'a Decl,
+    },
 }
 
 /// A nominal member body waiting to be checked with its group.
@@ -184,10 +188,16 @@ struct Checker<'a> {
     /// `@handle` payload types (zonked at finalize): handler symbol →
     /// the effect's parameter types as this module solved them.
     handler_payload_tys: FxHashMap<Symbol, Vec<Ty>>,
+    /// Handlers defined inside each binder's body: a perform that routes
+    /// to a handler in the SAME function never escapes it, so the
+    /// function does not need the abort-capable calling convention.
+    handlers_defined: FxHashMap<Symbol, FxHashSet<Symbol>>,
     /// The effect return type of the handler block being checked:
     /// `continue v` resumes the perform, so v checks against it. Cleared
     /// inside nested function literals (they cannot resume).
     handler_ret_stack: Vec<Ty>,
+    /// Imported + local symbol names, merged — exported for renderers.
+    display_names: FxHashMap<Symbol, String>,
     wanteds: Vec<Constraint>,
     ret_stack: Vec<Ty>,
     eff_stack: Vec<EffectRow>,
@@ -218,9 +228,12 @@ impl<'a> Checker<'a> {
         asts: &'a IndexMap<Source, AST<NameResolved>>,
     ) -> (TypeOutput, Vec<AnyDiagnostic>) {
         // Symbols render with their source names in diagnostics — including
-        // names imported from other modules.
+        // names imported from other modules. The merged map is exported
+        // (`TypeOutput::display_names`) so later renderers (hover, the
+        // REPL) show the same names.
         let mut display_names = self.modules.imported_symbol_names();
         display_names.extend(self.resolved.symbol_names.clone());
+        self.display_names = display_names.clone();
         let _names = crate::name_resolution::symbol::set_symbol_names(display_names);
 
         // Phase 1 — declaration collection (signatures only, no bodies).
@@ -258,7 +271,7 @@ impl<'a> Checker<'a> {
                 DeclKind::Enum { name, .. } => {
                     if let Ok(symbol) = name.symbol() {
                         self.register_enum(symbol, decl);
-                        decls.insert(symbol, TopEntry::Enum);
+                        decls.insert(symbol, TopEntry::Enum { decl });
                     }
                 }
                 DeclKind::Protocol { name, .. } => {
@@ -267,10 +280,14 @@ impl<'a> Checker<'a> {
                     }
                 }
                 DeclKind::Effect {
-                    name, params, ret, ..
+                    name,
+                    generics,
+                    params,
+                    ret,
+                    ..
                 } => {
                     if let Ok(symbol) = name.symbol() {
-                        self.register_effect(symbol, params, ret);
+                        self.register_effect(symbol, generics, params, ret);
                     }
                 }
                 _ => {}
@@ -486,6 +503,14 @@ impl<'a> Checker<'a> {
                         },
                     );
                 }
+                DeclKind::Method {
+                    func,
+                    is_static: false,
+                } => {
+                    if let Ok(method) = func.name.symbol() {
+                        info.methods.insert(func.name.name_str(), method);
+                    }
+                }
                 other => self.unsupported(member.id, decl_kind_name(other)),
             }
         }
@@ -624,7 +649,17 @@ impl<'a> Checker<'a> {
         })
     }
 
-    fn register_effect(&mut self, symbol: Symbol, params: &[Parameter], ret: &TypeAnnotation) {
+    fn register_effect(
+        &mut self,
+        symbol: Symbol,
+        generics: &[crate::node_kinds::generic_decl::GenericDecl],
+        params: &[Parameter],
+        ret: &TypeAnnotation,
+    ) {
+        let generics: Vec<Symbol> = generics
+            .iter()
+            .filter_map(|generic| generic.name.symbol().ok())
+            .collect();
         let params = params
             .iter()
             .map(|p| match &p.type_annotation {
@@ -636,9 +671,14 @@ impl<'a> Checker<'a> {
             })
             .collect();
         let ret = self.lower_annotation(ret);
-        self.catalog
-            .effects
-            .insert(symbol, crate::types::catalog::EffectSig { params, ret });
+        self.catalog.effects.insert(
+            symbol,
+            crate::types::catalog::EffectSig {
+                generics,
+                params,
+                ret,
+            },
+        );
     }
 
     /// Register an `extend`: conformance rows (witness map + associated-type
@@ -877,7 +917,12 @@ impl<'a> Checker<'a> {
         self.ret_stack.push(group_ret);
         self.self_types.push(work.self_ty.clone());
 
-        let mut outputs: Vec<(Symbol, Ty)> = vec![];
+        let mut outputs: Vec<(Symbol, Ty, Vec<SchemeParam>)> = vec![];
+        // Associated types without a declared binding are inferred from
+        // the member bodies: remember the fresh variables so the solved
+        // bindings can be written back into the conformance row (the
+        // lowerer specializes default bodies from it).
+        let mut inferred_assoc: Vec<((Symbol, Symbol), Symbol, Ty)> = vec![];
         for member in &body.decls {
             let DeclKind::Method { func, .. } = &member.kind else {
                 continue;
@@ -885,6 +930,7 @@ impl<'a> Checker<'a> {
             let Ok(method) = func.name.symbol() else {
                 continue;
             };
+            let declared = self.declared_scheme_params(&func.generics);
             let ty = self.with_binder(method, |this| this.infer_func(func));
 
             // Witness ~ requirement (substituting Self and the conformance's
@@ -912,10 +958,18 @@ impl<'a> Checker<'a> {
                 let mut tys: FxHashMap<Symbol, Ty> = FxHashMap::default();
                 tys.insert(owner, work.self_ty.clone());
                 for assoc in assoc_symbols {
-                    let binding = bindings
-                        .get(&assoc)
-                        .cloned()
-                        .unwrap_or_else(|| Ty::Var(self.store.fresh_ty(self.level, member.id)));
+                    let binding = match bindings.get(&assoc) {
+                        Some(bound) => bound.clone(),
+                        None => {
+                            let var = Ty::Var(self.store.fresh_ty(self.level, member.id));
+                            inferred_assoc.push((
+                                (head_symbol(&work.self_ty), owner),
+                                assoc,
+                                var.clone(),
+                            ));
+                            var
+                        }
+                    };
                     tys.insert(assoc, binding);
                 }
                 let mut effs = FxHashMap::default();
@@ -928,7 +982,7 @@ impl<'a> Checker<'a> {
                 break;
             }
 
-            outputs.push((method, ty));
+            outputs.push((method, ty, declared));
         }
 
         self.self_types.pop();
@@ -939,9 +993,22 @@ impl<'a> Checker<'a> {
         let residuals = self.run_solver(wanteds);
         self.report_unresolved_residuals(residuals);
 
-        for (symbol, ty) in outputs {
+        for (symbol, ty, declared) in outputs {
             let zonked = self.store.zonk_ty(&ty);
-            self.schemes.insert(symbol, Scheme::mono(zonked));
+            let mut scheme = Scheme::mono(zonked);
+            // The witness's own generics quantify its scheme.
+            scheme.params = declared;
+            self.schemes.insert(symbol, scheme);
+        }
+        // Write the solved associated-type bindings back into the row.
+        for (key, assoc, var) in inferred_assoc {
+            let solved = self.store.zonk_ty(&var);
+            if matches!(solved, Ty::Var(_)) {
+                continue;
+            }
+            if let Some(conformance) = self.catalog.conformances.get_mut(&key) {
+                conformance.assoc.entry(assoc).or_insert(solved);
+            }
         }
     }
 
@@ -996,6 +1063,10 @@ impl<'a> Checker<'a> {
     }
 
     fn run_solver(&mut self, wanteds: Vec<Constraint>) -> Vec<Constraint> {
+        self.run_solver_with(wanteds, false)
+    }
+
+    fn run_solver_with(&mut self, wanteds: Vec<Constraint>, defaulting: bool) -> Vec<Constraint> {
         let mut solver = Solver {
             store: &mut self.store,
             errors: &mut self.errors,
@@ -1005,6 +1076,7 @@ impl<'a> Checker<'a> {
             instantiations: &mut self.instantiations,
             member_resolutions: &mut self.member_resolutions,
             level: self.level,
+            defaulting,
             derived_seen: Default::default(),
         };
         solver.solve(wanteds)
@@ -1025,7 +1097,7 @@ impl<'a> Checker<'a> {
             return;
         }
         self.level = OUTER_LEVEL;
-        let leftover = self.run_solver(deferred);
+        let leftover = self.run_solver_with(deferred, true);
         self.level = GROUP_LEVEL;
         for constraint in leftover {
             match constraint {
@@ -1108,11 +1180,10 @@ impl<'a> Checker<'a> {
                         self.mono.insert(*binder, skeleton);
                     }
                 }
-                TopEntry::Struct { decl } => {
-                    let work = self.prepare_struct_members(*binder, decl);
+                TopEntry::Struct { decl } | TopEntry::Enum { decl } => {
+                    let work = self.prepare_nominal_members(*binder, decl);
                     member_queue.push(work);
                 }
-                TopEntry::Enum => {}
             }
         }
 
@@ -1171,6 +1242,13 @@ impl<'a> Checker<'a> {
         for (self_ty, members) in member_queue {
             self.self_types.push(self_ty);
             for (symbol, work) in members {
+                // A method's own declared generics quantify its scheme
+                // (instantiated fresh at each call site, like any other
+                // polymorphic binder).
+                let declared = match &work {
+                    MemberWork::Method(func) => self.declared_scheme_params(&func.generics),
+                    MemberWork::Init { .. } => vec![],
+                };
                 let ty = self.with_binder(symbol, |this| match work {
                     MemberWork::Method(func) => this.infer_func(func),
                     MemberWork::Init { params, body, node } => {
@@ -1180,7 +1258,7 @@ impl<'a> Checker<'a> {
                 let skeleton = self.mono[&symbol].clone();
                 self.emit_eq(skeleton.clone(), ty, NodeID::SYNTHESIZED, CtReason::Recursion);
                 // Member bodies are function literals: always values.
-                outputs.push((symbol, skeleton, true, false, vec![]));
+                outputs.push((symbol, skeleton, true, false, declared));
             }
             self.self_types.pop();
         }
@@ -1224,6 +1302,7 @@ impl<'a> Checker<'a> {
         // about to be quantified (THIH §11.6.2 context splitting); in a
         // monomorphic group they are inference failures.
         let mut var_bounds: FxHashMap<u32, Vec<Bound>> = FxHashMap::default();
+        let mut held_members: Vec<(Ty, crate::label::Label, Ty, CtOrigin)> = vec![];
         for residual in residuals {
             match &residual {
                 Constraint::Conforms {
@@ -1255,9 +1334,30 @@ impl<'a> Checker<'a> {
                         bounds.push(bound);
                     }
                 }
-                Constraint::HasMember { .. } | Constraint::Eq(..) => {
-                    self.deferred.push(residual)
+                Constraint::HasMember {
+                    receiver,
+                    label,
+                    member,
+                    origin,
+                } => {
+                    // A member use stuck on a variable this group owns
+                    // qualifies the binder's scheme (held here, attached
+                    // after generalization — Jones, *Qualified Types*,
+                    // 1994); anything else may be solved later and floats.
+                    let group_owned = match self.store.shallow(receiver) {
+                        Ty::Var(v) => {
+                            let root = self.store.find(v.0);
+                            self.store.level(root) > OUTER_LEVEL
+                        }
+                        _ => false,
+                    };
+                    if generalizable && group_owned {
+                        held_members.push((receiver.clone(), label.clone(), member.clone(), *origin));
+                    } else {
+                        self.deferred.push(residual)
+                    }
                 }
+                Constraint::Eq(..) => self.deferred.push(residual),
                 _ => {}
             }
         }
@@ -1277,6 +1377,45 @@ impl<'a> Checker<'a> {
                     generalizer.generalize(ty, declared)
                 };
                 self.schemes.insert(*symbol, scheme);
+            }
+            // Held member uses: quantification turned their receivers'
+            // variables into scheme parameters — attach each constraint
+            // to every scheme of this group that mentions one of them;
+            // constraints over nothing quantified float instead.
+            for (receiver, label, member, origin) in held_members {
+                let receiver = self.store.zonk_ty(&receiver);
+                let member = self.store.zonk_ty(&member);
+                let mut attached = false;
+                for (symbol, ..) in &outputs {
+                    let Some(scheme) = self.schemes.get(symbol) else {
+                        continue;
+                    };
+                    let mentions = scheme.params.iter().any(|p| {
+                        ty_mentions_param(&receiver, p.symbol)
+                            || ty_mentions_param(&member, p.symbol)
+                    });
+                    if mentions {
+                        let constraint = crate::types::ty::MemberConstraint {
+                            receiver: receiver.clone(),
+                            label: label.clone(),
+                            member: member.clone(),
+                        };
+                        if let Some(scheme) = self.schemes.get_mut(symbol)
+                            && !scheme.member_constraints.contains(&constraint)
+                        {
+                            scheme.member_constraints.push(constraint);
+                            attached = true;
+                        }
+                    }
+                }
+                if !attached {
+                    self.deferred.push(Constraint::HasMember {
+                        receiver,
+                        label,
+                        member,
+                        origin,
+                    });
+                }
             }
         } else {
             for (symbol, ty, ..) in &outputs {
@@ -1311,7 +1450,7 @@ impl<'a> Checker<'a> {
 
     /// Create member skeletons for a struct's methods and initializers and
     /// queue their bodies. Returns (Self type, member work list).
-    fn prepare_struct_members(
+    fn prepare_nominal_members(
         &mut self,
         symbol: Symbol,
         decl: &'a Decl,
@@ -1321,11 +1460,12 @@ impl<'a> Checker<'a> {
             .structs
             .get(&symbol)
             .map(|info| info.params.clone())
+            .or_else(|| self.catalog.enums.get(&symbol).map(|info| info.params.clone()))
             .unwrap_or_default();
         let self_ty = Ty::Nominal(symbol, params.iter().map(|p| Ty::Param(*p)).collect());
 
         let mut work = vec![];
-        let DeclKind::Struct { body, .. } = &decl.kind else {
+        let (DeclKind::Struct { body, .. } | DeclKind::Enum { body, .. }) = &decl.kind else {
             return (self_ty, work);
         };
         for member in &body.decls {
@@ -1363,8 +1503,12 @@ impl<'a> Checker<'a> {
         // Re-zonk everything: schemes stored mid-run may share variables that
         // a later group solved.
         let mut schemes = FxHashMap::default();
-        for (symbol, scheme) in std::mem::take(&mut self.schemes) {
+        for (symbol, mut scheme) in std::mem::take(&mut self.schemes) {
             let ty = self.store.zonk_ty(&scheme.ty);
+            for constraint in &mut scheme.member_constraints {
+                constraint.receiver = self.store.zonk_ty(&constraint.receiver);
+                constraint.member = self.store.zonk_ty(&constraint.member);
+            }
             schemes.insert(symbol, Scheme { ty, ..scheme });
         }
         let mut node_types = FxHashMap::default();
@@ -1409,6 +1553,8 @@ impl<'a> Checker<'a> {
                 performs_into: self.performs_into,
                 binder_refs: self.binder_refs,
                 handler_payload_tys,
+                handlers_defined: self.handlers_defined,
+                display_names: self.display_names,
             },
             diagnostics,
         )
@@ -1673,7 +1819,10 @@ impl<'a> Checker<'a> {
                 Ty::Error
             }
             ExprKind::CallEffect {
-                effect_name, args, ..
+                effect_name,
+                type_args,
+                args,
+                ..
             } => {
                 // Performing an operation: arguments check against the
                 // declared signature, the effect joins the ambient row
@@ -1687,9 +1836,42 @@ impl<'a> Checker<'a> {
                     self.unsupported(expr.id, "calling an undeclared effect");
                     return Ty::Error;
                 };
+                // A generic effect instantiates fresh at each perform
+                // (Damas-Milner instantiation, exactly like schemes);
+                // explicit type arguments equate positionally. The
+                // handler sees the rigid parameters instead — it must be
+                // generic over them.
+                let mut tys: FxHashMap<Symbol, Ty> = FxHashMap::default();
+                for param in &sig.generics {
+                    let var = Ty::Var(self.store.fresh_ty(self.level, expr.id));
+                    tys.insert(*param, var);
+                }
+                if !tys.is_empty() {
+                    self.instantiations
+                        .entry(expr.id)
+                        .or_default()
+                        .extend(sig.generics.iter().map(|g| (*g, tys[g].clone())));
+                }
+                if type_args.len() > sig.generics.len() {
+                    self.unsupported(
+                        expr.id,
+                        "more type arguments than the effect declares",
+                    );
+                }
+                for (annotation, param) in type_args.iter().zip(&sig.generics) {
+                    let annotated = self.lower_annotation(annotation);
+                    self.emit_eq(
+                        tys[param].clone(),
+                        annotated,
+                        expr.id,
+                        CtReason::Annotation,
+                    );
+                }
+                let instantiate =
+                    |ty: &Ty| ty.substitute(&tys, &Default::default(), &Default::default());
                 if args.len() == sig.params.len() {
                     for (arg, param) in args.iter().zip(&sig.params) {
-                        self.check_expr(&arg.value, param, CtReason::Apply);
+                        self.check_expr(&arg.value, &instantiate(param), CtReason::Apply);
                     }
                 } else {
                     self.errors.push((
@@ -1723,7 +1905,7 @@ impl<'a> Checker<'a> {
                         self.emit_eff_eq(performed, self.ambient_eff(), expr.id);
                     }
                 }
-                sig.ret
+                instantiate(&sig.ret)
             }
             ExprKind::InlineIR(_) => {
                 // Inline IR is trusted: it takes whatever type its context
@@ -2347,6 +2529,17 @@ impl<'a> Checker<'a> {
                     .and_then(|symbol| self.catalog.effects.get(&symbol))
                     .cloned();
                 let params = sig.as_ref().map(|sig| sig.params.clone()).unwrap_or_default();
+                // A handler block either ignores every payload (no
+                // arguments) or names all of them.
+                if !body.args.is_empty() && body.args.len() != params.len() {
+                    self.errors.push((
+                        TypeError::ArityMismatch {
+                            expected: params.len(),
+                            found: body.args.len(),
+                        },
+                        stmt.id,
+                    ));
+                }
                 for (arg, param) in body.args.iter().zip(&params) {
                     if let Ok(symbol) = arg.name.symbol() {
                         self.mono.insert(symbol, param.clone());
@@ -2358,6 +2551,9 @@ impl<'a> Checker<'a> {
                 // capability closure.
                 if let Some(&handler) = self.resolved.effect_handler_definitions.get(&stmt.id) {
                     self.handler_payload_tys.insert(handler, params.clone());
+                    if let Some(&binder) = self.binder_stack.last() {
+                        self.handlers_defined.entry(binder).or_default().insert(handler);
+                    }
                 }
                 // `continue v` inside this block resumes the perform: v
                 // checks against the effect's return type.
@@ -2379,13 +2575,21 @@ impl<'a> Checker<'a> {
                 type_annotation,
                 rhs,
             } => {
-                let ty = match type_annotation {
-                    Some(annotation) => self.lower_annotation(annotation),
-                    None => Ty::Var(self.store.fresh_ty(self.level, decl.id)),
+                // Unannotated lets take the rhs's inferred type directly —
+                // value-directed, so a variant pattern (or a later match on
+                // the binder) sees a concrete head instead of a constraint
+                // variable the solver has not run on yet.
+                let ty = match (type_annotation, rhs) {
+                    (Some(annotation), _) => {
+                        let ty = self.lower_annotation(annotation);
+                        if let Some(rhs) = rhs {
+                            self.check_expr(rhs, &ty, CtReason::Annotation);
+                        }
+                        ty
+                    }
+                    (None, Some(rhs)) => self.infer_expr(rhs),
+                    (None, None) => Ty::Var(self.store.fresh_ty(self.level, decl.id)),
                 };
-                if let Some(rhs) = rhs {
-                    self.check_expr(rhs, &ty, CtReason::Annotation);
-                }
                 match &lhs.kind {
                     PatternKind::Bind(name) => {
                         if let Ok(symbol) = name.symbol() {
@@ -2410,7 +2614,17 @@ impl<'a> Checker<'a> {
             PatternKind::Wildcard => {}
             PatternKind::Bind(name) => {
                 if let Ok(symbol) = name.symbol() {
-                    self.mono.insert(symbol, expected.clone());
+                    // Or-pattern alternatives share their binder symbols
+                    // (the resolver unifies them), so a re-bind must agree
+                    // with the earlier alternative's type.
+                    match self.mono.get(&symbol).cloned() {
+                        Some(existing) => {
+                            self.emit_eq(existing, expected.clone(), pattern.id, CtReason::Pattern);
+                        }
+                        None => {
+                            self.mono.insert(symbol, expected.clone());
+                        }
+                    }
                 }
             }
             PatternKind::LiteralInt(_) => {
@@ -2551,6 +2765,10 @@ impl<'a> Checker<'a> {
             ));
             return;
         };
+        // Record the resolution for tooling (go-to-definition on the
+        // pattern's variant name).
+        self.member_resolutions
+            .insert(pattern.id, MemberResolution::Direct(variant.symbol));
 
         // Bind the scrutinee to this enum, reusing its arguments when the
         // head is already concrete.
@@ -2659,10 +2877,18 @@ impl<'a> Checker<'a> {
         }
         let mut rows = FxHashMap::default();
         for param in &scheme.row_params {
-            rows.insert(
+            let var = self.store.fresh_row(self.level, node);
+            // Recorded as an empty open record over the fresh variable:
+            // zonking at finalize resolves it to the call's concrete row
+            // (what monomorphization splices into the signature).
+            recorded.push((
                 *param,
-                crate::types::ty::RowTail::Var(self.store.fresh_row(self.level, node)),
-            );
+                Ty::Record(crate::types::ty::Row {
+                    fields: vec![],
+                    tail: Some(crate::types::ty::RowTail::Var(var)),
+                }),
+            ));
+            rows.insert(*param, crate::types::ty::RowTail::Var(var));
         }
 
         // Each bound becomes a wanted Conforms on the fresh variable, with
@@ -2688,6 +2914,16 @@ impl<'a> Checker<'a> {
             .entry(node)
             .or_default()
             .extend(recorded);
+        // Scheme-carried member uses become fresh wanteds, discharged
+        // against this call's concrete receiver.
+        for constraint in &scheme.member_constraints {
+            self.wanteds.push(Constraint::HasMember {
+                receiver: constraint.receiver.substitute(&tys, &effs, &rows),
+                label: constraint.label.clone(),
+                member: constraint.member.substitute(&tys, &effs, &rows),
+                origin: CtOrigin::new(node, CtReason::Apply),
+            });
+        }
         scheme.ty.substitute(&tys, &effs, &rows)
     }
 
@@ -2707,6 +2943,18 @@ impl<'a> Checker<'a> {
             .get(&callee_node)
             .map(|subst| subst.iter().map(|(_, ty)| ty.clone()).collect())
             .unwrap_or_default();
+        // More explicit type arguments than the callee declares is an
+        // error — but only when an instantiation was recorded (builtins
+        // and trusted splices manage their own type arguments).
+        if !recorded.is_empty() && type_args.len() > recorded.len() {
+            self.errors.push((
+                TypeError::ArityMismatch {
+                    expected: recorded.len(),
+                    found: type_args.len(),
+                },
+                callee_node,
+            ));
+        }
         for (annotation, target) in type_args.iter().zip(recorded) {
             let ty = self.lower_annotation(annotation);
             self.emit_eq(target, ty, annotation.id, CtReason::Annotation);
@@ -2929,6 +3177,26 @@ fn collect_assoc_bindings(pattern: &Ty, witness: &Ty, bindings: &mut FxHashMap<S
             }
         }
         _ => {}
+    }
+}
+
+/// Does the type mention the rigid parameter anywhere (including row
+/// tails)? Used to attach held member constraints to the schemes that
+/// quantify their receivers.
+fn ty_mentions_param(ty: &Ty, param: Symbol) -> bool {
+    match ty {
+        Ty::Param(sym) => *sym == param,
+        Ty::Var(_) | Ty::Error => false,
+        Ty::Nominal(_, args) => args.iter().any(|a| ty_mentions_param(a, param)),
+        Ty::Func(params, ret, _) => {
+            params.iter().any(|p| ty_mentions_param(p, param)) || ty_mentions_param(ret, param)
+        }
+        Ty::Tuple(items) => items.iter().any(|i| ty_mentions_param(i, param)),
+        Ty::Record(row) => {
+            row.fields.iter().any(|(_, t)| ty_mentions_param(t, param))
+                || matches!(&row.tail, Some(crate::types::ty::RowTail::Param(sym)) if *sym == param)
+        }
+        Ty::Proj(base, ..) => ty_mentions_param(base, param),
     }
 }
 

@@ -513,12 +513,23 @@ impl Evaluator {
         let oob = || EvalError::Unsupported("io access out of bounds".into());
         Ok(match op {
             Op::IoWrite => {
-                let (fd, start, len) = (int(0)?, ptr(1)?, int(2)? as usize);
+                let (fd, count) = (int(0)?, int(2)?);
+                // A negative count passes through untouched (a failed
+                // read's errno fed into the next write — the chat
+                // client's loop); mirrors the VM.
+                if count < 0 {
+                    return Ok(count);
+                }
+                let (start, len) = (ptr(1)?, count as usize);
                 let bytes = self.mem.get(start..start + len).ok_or_else(oob)?;
                 self.io.write(fd, bytes)
             }
             Op::IoRead => {
-                let (fd, start, len) = (int(0)?, ptr(1)?, int(2)? as usize);
+                let (fd, count) = (int(0)?, int(2)?);
+                if count < 0 {
+                    return Ok(count);
+                }
+                let (start, len) = (ptr(1)?, count as usize);
                 let buf = self.mem.get_mut(start..start + len).ok_or_else(oob)?;
                 self.io.read(fd, buf)
             }

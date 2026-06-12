@@ -18,6 +18,9 @@ pub struct Workspace {
     pub texts: Vec<String>,
     pub asts: Vec<Option<AST<NameResolved>>>,
     pub resolved_names: crate::name_resolution::name_resolver::ResolvedNames,
+    /// The checker's output tables (node types, schemes) — hover reads
+    /// them.
+    pub types: crate::types::TypeOutput,
     pub diagnostics: FxHashMap<DocumentId, Vec<Diagnostic>>,
 }
 
@@ -79,6 +82,7 @@ impl Workspace {
         let Driver { phase, .. } = typed;
         let asts_by_source = phase.asts;
         let resolved_names = phase.resolved_names;
+        let types = phase.types;
         let diagnostics_any = phase.diagnostics;
 
         let _symbol_guard = set_symbol_names(resolved_names.symbol_names.clone());
@@ -110,6 +114,7 @@ impl Workspace {
             texts,
             asts,
             resolved_names,
+            types,
             diagnostics,
         })
     }
@@ -232,6 +237,9 @@ impl Workspace {
             texts,
             asts,
             resolved_names,
+            // Name resolution only: the core workspace exists for symbol
+            // rendering, not hover.
+            types: Default::default(),
             diagnostics: FxHashMap::default(),
         })
     }

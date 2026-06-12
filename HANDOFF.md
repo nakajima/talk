@@ -67,7 +67,8 @@ cargo build --features cli
 | B-M7 abort effects (lexical handlers, capability-passing CPS) | **Done** |
 | B-M8 full io dialect (files, sockets, poll; servers run for real) | **Done** |
 | B-M9 resumable handlers (`continue v`; one-shot by construction) | **Done** |
-| Type-system GADTs; tail-resumptive fast path; deferred odds (wasm bindings, dynamic io_perform, computed globals, multi-shot) | **Next** (§7) |
+| Feature parity with the previous backend (playground wasm, `talk ir`/`hover`, open_path, hover) | **Done** (see below) |
+| Type-system GADTs; tail-resumptive fast path; dynamic io_perform; computed globals; multi-shot | **Next** (§7) |
 
 **Examples running today** (both engines; stdout frozen or value asserted):
 HelloWorld, Strings, Struct, Identity, Loop, Imports(+Exports), Fib,
@@ -76,8 +77,123 @@ Show, AnonFunc, Capture, TrailingBlock, Sleep, Effects, FileIO,
 ChatClient — 22 of 27. The other four (ChatServer, Http, WebApi,
 Website) are servers that loop forever: they lower and verify under
 test, and serve real sockets under `talk run` (curl/nc them). Test
-counts: 470 lib tests + 23 example tests, 0 failures (5 pre-existing
+counts: 478 lib tests + 23 example tests, 0 failures (5 pre-existing
 ignores).
+
+### Parity with the previous backend (audited against the pre-rewrite tree)
+
+Everything the old system *shipped* works again. Restored this pass:
+the playground's wasm `run_program` (a non-persisting `ReplSession::
+eval_program` — the REPL's persist shortcut would have swallowed
+programs that begin with a declaration) and `show_ir`
+(`driver::render_ir`; both were stubbed "pending rewrite" and
+www/assets/page.js calls them); `talk ir` and `talk hover`; wasm
+`hover` (new `analysis/hover.rs` over `TypeOutput.node_types`/
+`schemes`; the Workspace now keeps the checker's tables); and
+`open_path`/File.tlk (rewritten in pure Talk — copy the path with a NUL
+into fresh zeroed memory, then `_io_open`; verified against a real file
+through libc). The wasm crate builds for wasm32-unknown-unknown.
+
+The deltas found in the first audit are closed: the REPL and
+playground render values Talk-style (`2`, `1.5`, `"hi"`,
+`Point(x: 1, y: 2)`, `Optional.some(5)` — `interp::run_displayed`
+renders while the machine is alive, since strings point into its byte
+memory, with names from the checker's catalog via `value_names`);
+hover renders imported names (`Showable`, not a raw symbol — the
+checker's merged display map is exported as
+`TypeOutput::display_names`); and hover-by-node-id works in both the
+playground and `talk hover --node-id` ("index" or "file:index").
+
+Two non-deltas, for the record: the old async executor (tasks/wakers)
+was unfinished work no example or test ever exercised — resumable
+handlers (M9) are the foundation its replacement will build on; and
+the old `benches/` files were already disabled (renamed `.rs.txt`) in
+the old tree, so there is no benchmark harness to restore.
+
+### Test-coverage parity (docs/parity-test-audit.md)
+
+Every test of the old tree is dispositioned in
+`docs/parity-test-audit.md`: the 127 interpreter tests are each
+covered/ported/adapted (45 new two-engine tests, including the five
+scripted HTTP `handle()` tests and a real-socketpair StdioIO check),
+and 164 of the 183 old type-checker cases replay verbatim in
+`previous_checker_suite_behaviors_hold`. The audit drove a round of
+real fixes — every one was silent or a compiler panic before:
+
+- **Explicit `func main`** runs as the entrypoint (top-level
+  statements first, main's value is the program's).
+- **Anonymous-record member access** (reads, assignment, and *nested*
+  assignment `a.b.c = 2`): records are λ_G tuples, so members are
+  extracts and functional updates rebuild the tuple (`field_get`/
+  `field_set`); struct paths keep GetField/SetField.
+- **Functions mutating top-level bindings** (`top_level_cells`: the
+  cell is a free variable of main; closure conversion carries it,
+  exactly like handler capabilities).
+- **Block/main value types come from the FINAL node only** — a
+  trailing loop or assignment yields Void (the old rev-scan typed
+  main's return from an earlier expression and panicked the IR
+  builder).
+- **Unannotated lets take the rhs's inferred type** (value-directed),
+  so variant patterns on the binder see a concrete enum.
+- **Self-contained handlers** (`@handle` + performs inside one
+  function) no longer force the abort-capable convention on the
+  function or its callers (`handlers_defined` subtraction +
+  `Ctx::local_handlers`).
+- **Solver-inferred associated-type bindings are written back** to
+  conformance rows, so protocol defaults specialize correctly when the
+  witness has no return annotation (the pet-food example).
+- **Parametered trailing blocks** (`transform(10) { n in n * 2 }`) —
+  the closure's shape comes from the callee's declared parameter.
+- **Negative io counts pass through** (the chat client's
+  errno-into-write loop) instead of trapping.
+- **let-else / if-let / or-patterns pinned**; or-pattern lets desugar
+  through the match machinery, and or-alternatives' binders must agree
+  in type; generic effects instantiate per perform site; extra
+  explicit type args and handler-block arity mismatches are errors
+  again.
+
+Four of the audit's gaps were since promoted to features and built:
+**generic methods** (declared generics ride member schemes,
+instantiated per call and monomorphized per instantiation), **methods
+on enums** (registered like struct methods, dispatched in the solver's
+member lookup, owner-θ'd in the lowerer), and **row-polymorphic record
+projections** (`func f(r) { r.a }`): a member constraint that no
+nominal or protocol owns defaults its receiver to an open record row
+at the solver's improvement step (presence constraints as row
+unification — Gaster & Jones, POPL 1996; Leijen, Trends in FP 2005);
+the row tail generalizes into the scheme's row parameters, row
+instantiations are recorded per call site, and `Ty::substitute`
+splices each concrete row into the signature so monomorphization
+computes field indices per specialization. And **scheme-carried
+member constraints** (true qualified types — Jones 1994):
+`func g(x) { x.someMethod() }` generalizes; a member use stuck on a
+group-owned receiver is held through generalization and attached to
+every scheme quantifying it (`Scheme.member_constraints`), each
+instantiation re-emits it as a fresh wanted against the call's
+receiver, and the lowerer resolves the member per specialization by
+label (struct/enum methods, then protocol witnesses). Unique-owner
+improvement no longer commits inside binding groups — it survives
+only as last-resort defaulting in the final solve (`Solver::
+defaulting`), so a receiver owned by one struct stays polymorphic and
+a record with the same field also discharges the constraint. Schemes
+render the qualification (`<T0, T1>(T0) -> T1 where T0.val: T1`). All
+four run on both engines. When two conformed protocols (or two
+bounds) both provide a label, plain `x.m()` is an **ambiguity error**
+— committing to either would make meaning depend on table order
+(overlapping instances, Jones 1994 §2.4) — and the message names the
+explicit protocol-static forms (`Aa.m(…)` or `Bb.m(…)`), which is the
+disambiguation syntax (the shape operators already desugar to). The
+LSP additionally offers one quick-fix per candidate rewriting
+`x.m(args)` into `P.m(x, args)`. Pinned by `ambiguous_member_*` and
+`protocol_static_call_steers_an_ambiguous_member` in types_tests,
+`ambiguous_member_quick_fix_offers_each_protocol` in lsp tests, and
+the matching vm test. `(x as P).m()` does not steer resolution: `as`
+with a protocol annotation is part of the existentials gap below.
+
+Known gaps still documented rather than fixed (each loud, none silent
+— see the audit doc): Showable for function values, `typealias`
+outside extends, protocol-typed values (existentials), super-protocol
+conformance completeness, and partially-concrete inherent extends.
 
 ---
 

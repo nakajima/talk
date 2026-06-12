@@ -1405,38 +1405,47 @@ pub mod tests {
 
     #[test]
     fn or_patterns_resolve_binds() {
+        // An or-pattern let desugars (in the parser) to
+        // `let x = match … { .a(x) | .b(x) -> x }`; both alternatives
+        // must bind the same symbol, and the outer binder carries the
+        // name into the enclosing scope.
         let resolved = resolve(
             "
         let .a(x) | .b(x)
         ",
         );
 
-        assert_eq_diff!(
-            *resolved.0.roots[0].as_decl(),
-            any_decl!(DeclKind::Let {
-                lhs: any_pattern!(PatternKind::Or(vec![
-                    any_pattern!(PatternKind::Variant {
-                        enum_name: None,
-                        variant_name: "a".into(),
-                        variant_name_span: Span::ANY,
-                        fields: vec![any_pattern!(PatternKind::Bind(Name::Resolved(
-                            Symbol::Global(1u32.into()),
-                            "x".into()
-                        )))]
-                    }),
-                    any_pattern!(PatternKind::Variant {
-                        enum_name: None,
-                        variant_name: "b".into(),
-                        variant_name_span: Span::ANY,
-                        fields: vec![any_pattern!(PatternKind::Bind(Name::Resolved(
-                            Symbol::Global(1u32.into()), // This should be the same symbol as above.
-                            "x".into()
-                        )))]
-                    })
-                ])),
-                type_annotation: None,
-                rhs: None,
-            })
+        let decl = resolved.0.roots[0].as_decl().clone();
+        let DeclKind::Let {
+            lhs,
+            rhs: Some(rhs),
+            ..
+        } = &decl.kind
+        else {
+            panic!("expected a desugared let, got {decl:?}");
+        };
+        assert!(
+            matches!(&lhs.kind, PatternKind::Bind(name) if name.name_str() == "x"),
+            "outer binder: {lhs:?}"
+        );
+        let ExprKind::Match(_, arms) = &rhs.kind else {
+            panic!("expected a match rhs, got {rhs:?}");
+        };
+        assert_eq!(arms.len(), 1, "no else: a miss is the match machinery's");
+        let PatternKind::Or(alternatives) = &arms[0].pattern.kind else {
+            panic!("expected the or-pattern in the arm: {:?}", arms[0].pattern);
+        };
+        let binder_symbol = |pattern: &Pattern| match &pattern.kind {
+            PatternKind::Variant { fields, .. } => match &fields[0].kind {
+                PatternKind::Bind(name) => name.symbol().expect("resolved"),
+                other => panic!("expected a bind, got {other:?}"),
+            },
+            other => panic!("expected a variant alternative, got {other:?}"),
+        };
+        assert_eq!(
+            binder_symbol(&alternatives[0]),
+            binder_symbol(&alternatives[1]),
+            "both alternatives bind the same symbol"
         );
     }
 

@@ -33,10 +33,13 @@ pub enum TypeError {
         ty: String,
         protocol: String,
     },
-    /// The unique-owner improvement rule found multiple candidate owners —
-    /// never guess; ask for an annotation (Jones FPCA 1995 improvement must
-    /// be justified by uniqueness).
+    /// Several protocols the receiver conforms to provide the member;
+    /// committing to any would make the program's meaning depend on
+    /// conformance-table order (the overlapping-instances coherence
+    /// problem — Jones, *Qualified Types*, 1994, §2.4). The message names
+    /// the protocol-static forms that pick one.
     AmbiguousMember {
+        receiver: String,
         label: String,
         candidates: Vec<String>,
     },
@@ -81,11 +84,20 @@ impl Display for TypeError {
             TypeError::NotConforming { ty, protocol } => {
                 write!(f, "{ty} does not conform to {protocol}")
             }
-            TypeError::AmbiguousMember { label, candidates } => {
+            TypeError::AmbiguousMember {
+                receiver,
+                label,
+                candidates,
+            } => {
+                let forms: Vec<String> = candidates
+                    .iter()
+                    .map(|p| format!("{p}.{label}(…)"))
+                    .collect();
                 write!(
                     f,
-                    "Cannot infer the type providing '{label}'; candidates: {}. Add an annotation",
-                    candidates.join(", ")
+                    "Ambiguous member '{label}' on {receiver}: provided by {}. Name one explicitly: {}",
+                    candidates.join(", "),
+                    forms.join(" or ")
                 )
             }
             TypeError::MissingWitness {

@@ -1,4 +1,5 @@
 pub mod completion;
+pub mod hover;
 pub mod workspace;
 
 pub type DocumentId = String;
@@ -61,9 +62,9 @@ pub struct CompletionItem {
     pub detail: Option<String>,
 }
 
+pub use hover::{Hover, hover_at};
 pub use workspace::Workspace;
 
-#[cfg(feature = "cli")]
 pub(crate) fn node_ids_at_offset(
     ast: &crate::ast::AST<crate::ast::NameResolved>,
     byte_offset: u32,
@@ -86,7 +87,7 @@ pub(crate) fn node_ids_at_offset(
     candidates.into_iter().map(|(id, _)| id).collect()
 }
 
-#[cfg(feature = "cli")]
+#[allow(dead_code)]
 pub(crate) fn span_contains(span: crate::span::Span, byte_offset: u32) -> bool {
     span.start <= byte_offset && byte_offset <= span.end
 }

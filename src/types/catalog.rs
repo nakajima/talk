@@ -42,6 +42,9 @@ pub struct VariantInfo {
 pub struct EnumInfo {
     pub params: Vec<Symbol>,
     pub variants: IndexMap<String, VariantInfo>,
+    /// Instance method name → method symbol (methods on enums dispatch
+    /// exactly like struct methods).
+    pub methods: IndexMap<String, Symbol>,
 }
 
 /// A protocol method requirement. The signature is self-prepended and ranges
@@ -100,6 +103,9 @@ pub struct InherentMember {
 /// rows the same way).
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct EffectSig {
+    /// Declared generic parameters (`effect 'state<T>(value: T) -> T`),
+    /// instantiated fresh at each perform site; rigid in the handler.
+    pub generics: Vec<Symbol>,
     pub params: Vec<Ty>,
     pub ret: Ty,
 }
@@ -192,6 +198,11 @@ impl TypeCatalog {
                                         },
                                     )
                                 })
+                                .collect(),
+                            methods: v
+                                .methods
+                                .into_iter()
+                                .map(|(l, s)| (l, imp(s, target)))
                                 .collect(),
                         },
                     )
@@ -329,6 +340,7 @@ impl TypeCatalog {
                     (
                         imp(s, target),
                         EffectSig {
+                            generics: sig.generics.iter().map(|g| imp(*g, target)).collect(),
                             params: sig.params.iter().map(&imp_ty).collect(),
                             ret: imp_ty(&sig.ret),
                         },

@@ -90,8 +90,16 @@ pub fn goto_definition(
                         None
                     }
                 }
-                // Variant patterns need type information to resolve their
-                // enum, which is unavailable until the type checker is rebuilt.
+                // The checker records each variant pattern's resolution
+                // (member_resolutions, keyed by the pattern node).
+                crate::node_kinds::pattern::PatternKind::Variant { .. } => {
+                    match module.types.member_resolutions.get(&pattern.id) {
+                        Some(crate::types::output::MemberResolution::Direct(symbol)) => {
+                            Some(*symbol)
+                        }
+                        _ => None,
+                    }
+                }
                 _ => None,
             },
             _ => None,

@@ -598,6 +598,18 @@ impl Driver<Lowered> {
         Ok((value, String::from_utf8_lossy(&io.out).into_owned()))
     }
 
+    /// VM run returning (value, captured stdout, Talk-style rendering of
+    /// the value) — the REPL and the playground display the rendering.
+    pub fn run_vm_displayed(
+        &mut self,
+        names: &crate::vm::interp::ValueNames,
+    ) -> Result<(crate::vm::interp::Value, String, String), String> {
+        let module = self.schedule()?;
+        let mut io = crate::vm::io::CaptureIO::default();
+        let (value, display) = crate::vm::interp::run_displayed(&module, &mut io, names)?;
+        Ok((value, String::from_utf8_lossy(&io.out).into_owned(), display))
+    }
+
     fn schedule(&mut self) -> Result<crate::vm::Module, String> {
         crate::vm::schedule::schedule(
             &mut self.phase.program,
@@ -607,11 +619,55 @@ impl Driver<Lowered> {
     }
 }
 
+/// Compile a source string through the whole pipeline and render its
+/// λ_G program — the playground's show_ir.
+pub fn render_ir(name: &str, source: &str) -> Result<String, String> {
+    render_ir_from(name, Source::from(source))
+}
+
+/// `render_ir` over any Source (`talk ir <file>` reads from disk or stdin).
+pub fn render_ir_from(name: &str, source: Source) -> Result<String, String> {
+    let driver = Driver::new(vec![source], DriverConfig::new(name));
+    let parsed = driver.parse().map_err(|err| format!("{err:?}"))?;
+    let resolved = parsed.resolve_names().map_err(|err| format!("{err:?}"))?;
+    let typed = resolved.type_check();
+    if typed.has_errors() {
+        return Err(typed
+            .diagnostics()
+            .iter()
+            .map(|d| d.to_string())
+            .collect::<Vec<_>>()
+            .join("\n"));
+    }
+    let lowered = typed.lower();
+    if !lowered.phase.diagnostics.is_empty() {
+        return Err(format!(
+            "not yet supported by the backend: {}",
+            lowered.phase.diagnostics.join("; ")
+        ));
+    }
+    Ok(lowered.phase.program.render())
+}
+
 #[cfg(test)]
 pub mod tests {
     use super::*;
     use crate::compiling::module::ModuleId;
     use std::path::PathBuf;
+
+    #[test]
+    fn render_ir_shows_the_lowered_program() {
+        let ir = render_ir("IrTest", "func double(x: Int) -> Int { x * 2 }\ndouble(21)")
+            .expect("ir");
+        assert!(ir.contains("main"), "{ir}");
+        assert!(ir.contains("double"), "{ir}");
+    }
+
+    #[test]
+    fn render_ir_reports_type_errors() {
+        let result = render_ir("IrTest", "let x: Int = \"nope\"\nx");
+        assert!(result.is_err());
+    }
 
     #[test]
     fn resolves_multiple_files() {

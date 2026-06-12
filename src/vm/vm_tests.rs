@@ -130,6 +130,7 @@ pub mod tests {
             (EvalValue::Void, Value::Void) => true,
             // Aggregates: stdout agreement is the assertion that matters.
             (EvalValue::Record(..), Value::Record(..)) => true,
+            (EvalValue::Tuple(..), Value::Tuple(..)) => true,
             _ => false,
         };
         assert!(
@@ -482,6 +483,65 @@ pub mod tests {
         assert_eq!(out, "caught: \nbang\n");
     }
 
+    // ----- Pattern-binding statements: if-let and let-else ----------------
+
+    #[test]
+    fn vm_matches_evaluator_on_if_let() {
+        let (_, out) = run_on_both_engines_io(
+            "let x: Optional<Int> = Optional.some(41)\nif let .some(v) = x {\n\tprint(v + 1)\n}\nlet y: Optional<Int> = Optional.none\nif let .some(v) = y {\n\tprint(v)\n}",
+        );
+        assert_eq!(out, "42\n");
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_let_else() {
+        // The success path binds x; the failure path diverges through the
+        // else (returning the default).
+        let (_, out) = run_on_both_engines_io(
+            "func unwrap_or_zero(val: Optional<Int>) -> Int {\n\tlet .some(x) = val else { return 0 }\n\tx\n}\nprint(unwrap_or_zero(Optional.some(41)))\nprint(unwrap_or_zero(Optional.none))",
+        );
+        assert_eq!(out, "41\n0\n");
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_or_pattern_in_a_let() {
+        // The parser desugars an or-pattern let to a single-arm match;
+        // both alternatives bind the same name.
+        let (_, out) = run_on_both_engines_io(
+            "enum E {\n\tcase a(Int)\n\tcase b(Int)\n}\nfunc pick(e: E) -> Int {\n\tlet .a(v) | .b(v) = e\n\tv\n}\nprint(pick(E.a(1)))\nprint(pick(E.b(2)))",
+        );
+        assert_eq!(out, "1\n2\n");
+    }
+
+    // ----- Entrypoints: an explicit `func main` runs as the program;
+    // otherwise the top-level statements are the program ------------------
+
+    #[test]
+    fn vm_matches_evaluator_on_explicit_main_entrypoint() {
+        let (_, out) = run_on_both_engines_io("func main() {\n\tprint(\"hi from main\")\n}");
+        assert_eq!(out, "hi from main\n");
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_main_with_top_level_bindings() {
+        // Top-level lets initialize before main runs; main's value is the
+        // program's value.
+        let (value, _) = run_on_both_engines_io(
+            "let base = 40\nfunc main() -> Int {\n\tbase + 2\n}",
+        );
+        assert_eq!(value, Value::I64(42));
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_main_after_top_level_statements() {
+        // Top-level statements still run, in source order, before main.
+        let (value, out) = run_on_both_engines_io(
+            "print(\"setup\")\nfunc main() -> Int {\n\tprint(\"main\")\n\t7\n}",
+        );
+        assert_eq!(out, "setup\nmain\n");
+        assert_eq!(value, Value::I64(7));
+    }
+
     // ----- M9: resumable handlers (`continue v` resumes the perform; a
     // handler completing without continue aborts the scope — one-shot by
     // construction since continue is a tail transfer) ---------------------
@@ -573,6 +633,17 @@ pub mod tests {
     }
 
     #[test]
+    fn vm_matches_evaluator_on_open_path() {
+        // open_path takes a Talk String (copied with a NUL terminator
+        // into fresh memory); the simulated fd then round-trips bytes.
+        let (value, out) = run_on_both_engines_io(
+            "let fd = open_path(\"scratch.txt\", 65, 384)\nlet data = \"file data\"\n_io_write(fd, data.base, data.length)\nlet buf = _alloc<Byte>(16)\nlet n = _io_read(fd, buf, 16)\n_io_write(STDOUT_FD, buf, n)\n_io_close(fd)",
+        );
+        assert_eq!(out, "file data");
+        assert_eq!(value, Value::I64(0));
+    }
+
+    #[test]
     fn vm_matches_evaluator_on_socket_loopback() {
         // CaptureIO sockets are buffers: what a test writes to a
         // connection it can read back — the scripted-client loop.
@@ -611,6 +682,555 @@ pub mod tests {
             "let fds = _alloc<Byte>(8)\n_io_poll(fds, 0, 0)",
         );
         assert_eq!(value, Value::I64(0));
+    }
+
+
+    // ----- Ports from the previous backend's interpreter suite (each old
+    // test's behavior pinned here or noted in docs/parity-test-audit.md) --
+
+    #[test]
+    fn vm_matches_evaluator_on_empty_program() {
+        let (value, out) = run_on_both_engines_io("");
+        assert_eq!(value, Value::Void);
+        assert_eq!(out, "");
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_comparisons_and_logic() {
+        let (value, _) = run_on_both_engines_io(
+            "let a = 1 < 2\nlet b = 2 <= 2\nlet c = 2 > 1\nlet d = 1 >= 2\nlet e = !false\nlet f = true && false\nlet g = false || true\na && b && c && e && g && !d && !f",
+        );
+        assert_eq!(value, Value::Bool(true));
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_record_literal_members() {
+        let (value, _) =
+            run_on_both_engines_io("let r = { fizz: 123, buzz: 1.23 }\nr.fizz");
+        assert_eq!(value, Value::I64(123));
+        let (value, _) =
+            run_on_both_engines_io("let r = { fizz: 123, buzz: 1.23 }\nr.buzz");
+        assert_eq!(value, Value::F64(1.23));
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_record_field_assignment() {
+        let (value, _) = run_on_both_engines_io("let a = { b: 1 }\na.b = 2\na.b");
+        assert_eq!(value, Value::I64(2));
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_nested_record_field_assignment() {
+        // a.b.c = 2 rebuilds b with c replaced, then a with b replaced
+        // (value semantics, one store).
+        let (value, _) =
+            run_on_both_engines_io("let a = { b: { c: 1 } }\na.b.c = 2\na.b.c");
+        assert_eq!(value, Value::I64(2));
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_generic_struct_field() {
+        let (value, _) = run_on_both_engines_io(
+            "struct Fizz<T> {\n\tlet buzz: T\n}\nFizz(buzz: 123).buzz",
+        );
+        assert_eq!(value, Value::I64(123));
+        let (value, _) = run_on_both_engines_io(
+            "struct Fizz<T> {\n\tlet buzz: T\n}\nFizz(buzz: 1.23).buzz",
+        );
+        assert_eq!(value, Value::F64(1.23));
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_literal_match() {
+        let (value, _) = run_on_both_engines_io(
+            "match 789 {\n\t123 -> 1,\n\t456 -> 2,\n\t789 -> 3\n}",
+        );
+        assert_eq!(value, Value::I64(3));
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_nested_closure_returned_as_value() {
+        let (value, _) = run_on_both_engines_io(
+            "let a = 123\nfunc b() {\n\tfunc c() {\n\t\ta\n\t}\n\tc\n}\nlet inner = b()\ninner()",
+        );
+        assert_eq!(value, Value::I64(123));
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_independent_counters() {
+        // Two counters from one factory keep separate cells.
+        let (value, _) = run_on_both_engines_io(
+            "func makeCounter() {\n\tlet a = 0\n\treturn func() {\n\t\ta = a + 1\n\t\ta\n\t}\n}\nlet a = makeCounter()\nlet b = makeCounter()\na()\na()\n(a(), b())",
+        );
+        assert_eq!(
+            value,
+            Value::Tuple(std::rc::Rc::new(vec![Value::I64(3), Value::I64(1)]))
+        );
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_top_level_mut_closure() {
+        // The closure mutates the top-level binding; the change is
+        // visible after the call.
+        let (value, _) = run_on_both_engines_io(
+            "let a = 123\nfunc b() {\n\ta = a + 1\n\ta\n}\nb()\na",
+        );
+        assert_eq!(value, Value::I64(124));
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_early_return_skipping_side_effects() {
+        let (value, out) = run_on_both_engines_io(
+            "func foo() -> Int {\n\treturn 1\n\tprint(\"after\")\n\t2\n}\nfoo()",
+        );
+        assert_eq!(value, Value::I64(1));
+        assert_eq!(out, "");
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_core_function_as_value() {
+        let (_, out) = run_on_both_engines_io("let f = print_raw\nf(\"hi\")");
+        assert_eq!(out, "hi");
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_unqualified_variant_argument() {
+        let (value, _) = run_on_both_engines_io(
+            "enum AB {\n\tcase a(Int)\n\tcase b(Int)\n}\nfunc callMe(param: AB) -> Int {\n\tmatch param {\n\t\t.a(x) -> x,\n\t\t.b(x) -> x\n\t}\n}\ncallMe(.a(123))",
+        );
+        assert_eq!(value, Value::I64(123));
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_or_pattern_falling_through_arms() {
+        let (value, _) = run_on_both_engines_io(
+            "enum ABC {\n\tcase a\n\tcase b\n\tcase c\n}\nfunc toInt(x: ABC) -> Int {\n\tmatch x {\n\t\t.a | .b -> 1,\n\t\t.c -> 2\n\t}\n}\ntoInt(.c)",
+        );
+        assert_eq!(value, Value::I64(2));
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_protocol_defaults_with_associated_types() {
+        // A protocol default body dispatching through an associated
+        // type's own protocol bound (the old pet-food example).
+        let (_, out) = run_on_both_engines_io(
+            "struct CatFood {}\nstruct DogFood {}\nprotocol Named {\n\tfunc name() -> String\n}\nextend CatFood: Named {\n\tfunc name() { \"tasty cat food\" }\n}\nextend DogFood: Named {\n\tfunc name() { \"tasty dog food\" }\n}\nprotocol Pet {\n\tassociated Food: Named\n\tfunc favoriteFood() -> Food\n\tfunc handleDSTChange() {\n\t\tprint(\"what the heck where is my \" + self.favoriteFood().name())\n\t}\n}\nstruct Cat {}\nextend Cat: Pet {\n\tfunc favoriteFood() {\n\t\tCatFood()\n\t}\n}\nstruct Dog {}\nextend Dog: Pet {\n\tfunc favoriteFood() {\n\t\tDogFood()\n\t}\n}\nCat().handleDSTChange()\nDog().handleDSTChange()",
+        );
+        assert_eq!(
+            out,
+            "what the heck where is my tasty cat food\nwhat the heck where is my tasty dog food\n"
+        );
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_handlers_in_two_functions() {
+        // Each function's @handle mints its own capability for the same
+        // effect.
+        let (_, out) = run_on_both_engines_io(
+            "effect 'fizz() -> Int\nfunc a() -> Int {\n\t@handle 'fizz {\n\t\tcontinue 1\n\t}\n\t'fizz()\n}\nfunc b() -> Int {\n\t@handle 'fizz {\n\t\tcontinue 2\n\t}\n\t'fizz()\n}\nprint_raw(a().show())\nprint_raw(b().show())",
+        );
+        assert_eq!(out, "12");
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_nested_extend_with_generics() {
+        // The old test used a generic protocol (`Getter<T>`); the new
+        // type system expresses this with an associated type.
+        let (_, out) = run_on_both_engines_io(
+            "protocol Getter {\n\tassociated T\n\tfunc get() -> T\n}\nstruct Container<Element> {\n\tlet item: Element\n\n\textend Self: Getter {\n\t\tfunc get() -> Element {\n\t\t\tself.item\n\t\t}\n\t}\n}\nlet c = Container<Int>(item: 42)\nprint(c.get())",
+        );
+        assert_eq!(out, "42\n");
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_nested_extend_with_self_access() {
+        let (_, out) = run_on_both_engines_io(
+            "protocol Doubler {\n\tfunc doubled() -> Int\n}\nstruct Wrapper {\n\tlet value: Int\n\n\textend Self: Doubler {\n\t\tfunc doubled() -> Int {\n\t\t\tself.value + self.value\n\t\t}\n\t}\n}\nlet w = Wrapper(value: 21)\nprint(w.doubled())",
+        );
+        assert_eq!(out, "42\n");
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_string_operations() {
+        let (value, _) = run_on_both_engines_io("\"hello\" == \"hello\"");
+        assert_eq!(value, Value::Bool(true));
+        let (value, _) = run_on_both_engines_io("\"hello\" == \"world\"");
+        assert_eq!(value, Value::Bool(false));
+        let (_, out) = run_on_both_engines_io("print(\"hello\".slice(1, 3))");
+        assert_eq!(out, "ell\n");
+        let (value, _) = run_on_both_engines_io("\"hello world\".find(\"world\")");
+        assert_eq!(value, Value::I64(6));
+        let (value, _) = run_on_both_engines_io("\"hello world\".find(\"missing\")");
+        assert_eq!(value, Value::I64(0 - 1));
+        let (value, _) = run_on_both_engines_io("\"banana\".find_from(\"na\", 3)");
+        assert_eq!(value, Value::I64(4));
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_pure_method_calls_not_clobbering_receivers() {
+        let (_, out) = run_on_both_engines_io(
+            "let raw = \"GET / HTTP/1.1\\r\\nHost: localhost\\r\\n\\r\\n\"\nlet idx = raw.find(\" \")\nprint(raw.length)\nprint(idx)\nprint(raw.length - (idx + 1))",
+        );
+        assert_eq!(out, "35\n3\n31\n");
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_show_for_scalars() {
+        let (_, out) = run_on_both_engines_io(
+            "print_raw(42.show())\nprint_raw(0.show())\nprint_raw((0 - 42).show())\nprint_raw(true.show())\nprint_raw(false.show())\nprint_raw(\"hello\".show())",
+        );
+        assert_eq!(out, "420-42truefalsehello");
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_show_for_empty_and_payloadless() {
+        let (_, out) = run_on_both_engines_io(
+            "struct Empty {}\nenum Color {\n\tcase red\n\tcase blue\n}\nprint_raw(Empty().show())\nprint_raw(Color.red.show())",
+        );
+        assert_eq!(out, "Empty {}Color.red");
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_show_with_multiple_payloads() {
+        let (_, out) = run_on_both_engines_io(
+            "enum Shape {\n\tcase rect(Int, Int)\n}\nprint_raw(Shape.rect(3, 4).show())",
+        );
+        assert_eq!(out, "Shape.rect(3, 4)");
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_show_override() {
+        let (_, out) = run_on_both_engines_io(
+            "struct Foo {\n\tlet x: Int\n}\nextend Foo: Showable {\n\tfunc show() -> String { \"custom\" }\n}\nprint_raw(Foo(x: 1).show())",
+        );
+        assert_eq!(out, "custom");
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_show_through_a_generic_bound() {
+        let (_, out) = run_on_both_engines_io(
+            "func show_it<T: Showable>(x: T) -> String { x.show() }\nstruct Pair {\n\tlet a: Int\n\tlet b: Int\n}\nprint_raw(show_it(Pair(a: 1, b: 2)))",
+        );
+        assert_eq!(out, "Pair(a: 1, b: 2)");
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_generic_struct_show_erases_arguments() {
+        let (_, out) = run_on_both_engines_io(
+            "struct Wrapper<T> {\n\tlet value: Int\n}\nprint_raw(Wrapper<String>(value: 42).show())",
+        );
+        assert_eq!(out, "Wrapper(value: 42)");
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_unshowable_fields_stay_lazy() {
+        // A struct with a function-typed field is fine until something
+        // demands show.
+        let (value, _) = run_on_both_engines_io(
+            "struct Wrapper {\n\tlet f: () -> Int\n}\nlet w = Wrapper(f: func() -> Int { 42 })\nw.f()",
+        );
+        assert_eq!(value, Value::I64(42));
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_trunc_and_itof_splices() {
+        let (value, _) = run_on_both_engines_io(
+            "func trunc(f: Float) -> Int {\n\t@_ir(f) { %? = trunc $0 }\n}\ntrunc(3.7)",
+        );
+        assert_eq!(value, Value::I64(3));
+        let (value, _) = run_on_both_engines_io(
+            "func itof(i: Int) -> Float {\n\t@_ir(i) { %? = itof $0 }\n}\nitof(42)",
+        );
+        assert_eq!(value, Value::F64(42.0));
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_float_trunc_then_show() {
+        let (_, out) = run_on_both_engines_io(
+            "let x = 1.5\nlet i = x._trunc()\nprint_raw(i.show())",
+        );
+        assert_eq!(out, "1");
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_parametered_trailing_blocks() {
+        let (value, _) = run_on_both_engines_io(
+            "func transform(x: Int, f: (Int) -> Int) -> Int {\n\tf(x)\n}\ntransform(10) { n in n * 2 }",
+        );
+        assert_eq!(value, Value::I64(20));
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_loop_lets_not_evaluated_before_loop() {
+        // Regression from the old backend: loop-body let initializers
+        // must not run an extra time before the loop starts.
+        let (_, out) = run_on_both_engines_io(
+            "func side_effect() -> Int {\n\tprint(1)\n\t42\n}\nlet i = 0\nloop {\n\tif i >= 2 { break }\n\tlet x = side_effect()\n\ti = i + 1\n}",
+        );
+        assert_eq!(out, "1\n1\n");
+        let (_, out) = run_on_both_engines_io(
+            "let i = 0\nloop {\n\tif i >= 2 { break }\n\tlet x = i + 100\n\tprint(x)\n\ti = i + 1\n}",
+        );
+        assert_eq!(out, "100\n101\n");
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_loop_with_calls_and_io() {
+        let (_, out) = run_on_both_engines_io(
+            "func double(n: Int) -> Int { n + n }\nlet i = 0\nloop {\n\tif i >= 3 { break }\n\tlet msg = double(i)\n\tprint(msg)\n\ti = i + 1\n}",
+        );
+        assert_eq!(out, "0\n2\n4\n");
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_match_with_break_in_an_arm() {
+        let (_, out) = run_on_both_engines_io(
+            "enum Opt {\n\tcase yes(Int)\n\tcase no\n}\nlet i = 0\nloop {\n\tlet opt = if i < 3 { Opt.yes(i) } else { Opt.no }\n\tmatch opt {\n\t\t.yes(x) -> {\n\t\t\tprint(x)\n\t\t\ti = i + 1\n\t\t\t()\n\t\t},\n\t\t.no -> break\n\t}\n}",
+        );
+        assert_eq!(out, "0\n1\n2\n");
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_match_on_an_unannotated_next() {
+        let (_, out) = run_on_both_engines_io(
+            "let a = [42]\nlet i = a.iter()\nlet opt = i.next()\nmatch opt {\n\t.some(x) -> print(x),\n\t.none -> print(0)\n}",
+        );
+        assert_eq!(out, "42\n");
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_match_on_a_rebound_enum_param() {
+        let (_, out) = run_on_both_engines_io(
+            "enum Maybe<T> {\n\tcase some(T)\n\tcase none\n}\nfunc f(value: Maybe<Int>) -> Int {\n\tlet y = value\n\tmatch y {\n\t\t.some(x) -> x,\n\t\t.none -> 0\n\t}\n}\nprint(f(Maybe.some(42)))",
+        );
+        assert_eq!(out, "42\n");
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_negative_io_counts_pass_through() {
+        // A failed read's errno fed straight into the next write (the
+        // chat client's loop) must come back untouched, not trap.
+        let (value, _) = run_on_both_engines_io(
+            "let buf = _alloc<Byte>(16)\n_io_write(STDOUT_FD, buf, 0 - 91)",
+        );
+        assert_eq!(value, Value::I64(-91));
+        let (value, _) = run_on_both_engines_io(
+            "let buf = _alloc<Byte>(16)\n_io_read(STDIN_FD, buf, 0 - 91)",
+        );
+        assert_eq!(value, Value::I64(-91));
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_read_loop_with_split_writes() {
+        // Two separate writes (prefix + buffer) read back through a loop
+        // — the chat client's segment-splitting pattern.
+        let (_, out) = run_on_both_engines_io(
+            "let fd = _io_socket(AF_INET, SOCK_STREAM, 0)\nlet msg = \"hello\"\n_io_write(fd, msg.base, msg.length)\nlet buf = _alloc<Byte>(1024)\nlet n = _io_read(fd, buf, 1024)\nlet echo = \"echo: \"\n_io_write(fd, echo.base, echo.length)\n_io_write(fd, buf, n)\nlet rbuf = _alloc<Byte>(1024)\nloop {\n\tlet chunk = _io_read(fd, rbuf, 1024)\n\tif chunk <= 0 { break }\n\t_io_write(STDOUT_FD, rbuf, chunk)\n}",
+        );
+        assert_eq!(out, "echo: hello");
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_echo_loop_over_two_connections() {
+        // The ChatServer loop body twice over: greeting, read-back, echo.
+        let (_, out) = run_on_both_engines_io(
+            "let server = _io_socket(AF_INET, SOCK_STREAM, 0)\nlet i = 0\nloop {\n\tif i >= 2 { break }\n\tlet client = _io_accept(server)\n\tlet msg = \"hello\"\n\t_io_write(client, msg.base, msg.length)\n\tlet buf = _alloc<Byte>(1024)\n\tlet n = _io_read(client, buf, 1024)\n\t_io_write(STDOUT_FD, buf, n)\n\t_io_close(client)\n\ti = i + 1\n}",
+        );
+        assert_eq!(out, "hellohello");
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_binding_surviving_an_early_return_branch() {
+        let (_, out) = run_on_both_engines_io(
+            "func test(x: Float) -> String {\n\tlet s = x.show()\n\tif x == 0.0 { return s + \"!\" }\n\ts + \"?\"\n}\nprint_raw(test(1.5))",
+        );
+        assert_eq!(out, "1.5?");
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_array_show_through_conditional_conformance() {
+        let (_, out) = run_on_both_engines_io(
+            "func printy<T: Showable>(showable: T) {\n\tprint_raw(showable.show())\n\tprint_raw(\"\\n\")\n}\nprinty([1, 2, 3])",
+        );
+        assert_eq!(out, "[1, 2, 3]\n");
+    }
+
+    // ----- The HTTP server's request handling, scripted (no sockets) ------
+
+    #[test]
+    fn vm_matches_evaluator_on_http_handle_for_a_registered_route() {
+        let (_, out) = run_on_both_engines_io(
+            "let http = HTTP.Server()\nhttp.get(\"/\", func() { \"root\" })\nlet wire = http.handle(\"GET / HTTP/1.1\\r\\nHost: localhost\\r\\n\\r\\n\")\nprint(wire)",
+        );
+        assert!(out.contains("HTTP/1.1 200 OK\r\n"), "{out:?}");
+        assert!(
+            out.contains("Content-Type: text/plain; charset=utf-8\r\n"),
+            "{out:?}"
+        );
+        assert!(out.contains("Content-Length: 4\r\n"), "{out:?}");
+        assert!(out.contains("\r\n\r\nroot"), "{out:?}");
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_http_handle_for_an_unknown_route() {
+        let (_, out) = run_on_both_engines_io(
+            "let http = HTTP.Server()\nhttp.get(\"/\", func() { \"root\" })\nlet wire = http.handle(\"GET /missing HTTP/1.1\\r\\nHost: localhost\\r\\n\\r\\n\")\nprint(wire)",
+        );
+        assert!(out.contains("HTTP/1.1 404 Not Found\r\n"), "{out:?}");
+        assert!(out.contains("Content-Length: 9\r\n"), "{out:?}");
+        assert!(out.contains("\r\n\r\nNot Found"), "{out:?}");
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_http_handle_rejecting_non_get() {
+        let (_, out) = run_on_both_engines_io(
+            "let http = HTTP.Server()\nhttp.get(\"/\", func() { \"root\" })\nlet wire = http.handle(\"POST / HTTP/1.1\\r\\nHost: localhost\\r\\n\\r\\n\")\nprint(wire)",
+        );
+        assert!(out.contains("HTTP/1.1 404 Not Found\r\n"), "{out:?}");
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_http_handler_running_per_request() {
+        let (_, out) = run_on_both_engines_io(
+            "let http = HTTP.Server()\nhttp.get(\"/\", func() {\n\tprint(\"HIT\")\n\t\"root\"\n})\nhttp.handle(\"GET / HTTP/1.1\\r\\nHost: localhost\\r\\n\\r\\n\")\nhttp.handle(\"GET / HTTP/1.1\\r\\nHost: localhost\\r\\n\\r\\n\")",
+        );
+        assert_eq!(out, "HIT\nHIT\n");
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_http_handle_with_multiple_routes() {
+        let (_, out) = run_on_both_engines_io(
+            "let http = HTTP.Server()\nhttp.get(\"/\", func() { \"root\" })\nhttp.get(\"/health\", func() { \"ok\" })\nlet wire = http.handle(\"GET /health HTTP/1.1\\r\\nHost: localhost\\r\\n\\r\\n\")\nprint(wire)",
+        );
+        assert!(out.contains("HTTP/1.1 200 OK\r\n"), "{out:?}");
+        assert!(out.contains("Content-Length: 2\r\n"), "{out:?}");
+        assert!(out.contains("\r\n\r\nok"), "{out:?}");
+    }
+
+
+    /// Real libc descriptors (StdioIO): heap bytes round-trip through an
+    /// actual Unix socketpair, bypassing CaptureIO's simulated loopback —
+    /// the byte-level check on the host io marshaling.
+    #[test]
+    #[cfg(unix)]
+    fn vm_round_trips_heap_bytes_through_a_real_socketpair() {
+        use crate::vm::io::{IO, StdioIO};
+
+        struct Guard([i32; 2]);
+        impl Drop for Guard {
+            fn drop(&mut self) {
+                unsafe {
+                    libc::close(self.0[0]);
+                    libc::close(self.0[1]);
+                }
+            }
+        }
+        let mut fds: [i32; 2] = [0; 2];
+        let ret =
+            unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, fds.as_mut_ptr()) };
+        assert_eq!(ret, 0, "socketpair failed");
+        let _guard = Guard(fds);
+        let (read_fd, write_fd) = (fds[0] as i64, fds[1] as i64);
+
+        let mut io = StdioIO;
+        let written = io.write(write_fd, b"Hello from Talk!\n");
+        assert_eq!(written, 17);
+
+        let code = format!(
+            "let buf = _alloc<Byte>(1024)\nlet n = _io_read({read_fd}, buf, 1024)\n_io_write({write_fd}, buf, n)\nn"
+        );
+        let driver = Driver::new(
+            vec![Source::from(code.as_str())],
+            DriverConfig::new("SocketPairTest"),
+        );
+        let typed = driver
+            .parse()
+            .expect("parse")
+            .resolve_names()
+            .expect("resolve")
+            .type_check();
+        assert!(!typed.has_errors(), "type errors: {:?}", typed.diagnostics());
+        let mut lowered = typed.lower();
+        assert!(
+            lowered.phase.diagnostics.is_empty(),
+            "lowering: {:?}",
+            lowered.phase.diagnostics
+        );
+        // run_vm executes against the host (StdioIO).
+        let value = lowered.run_vm().expect("vm");
+        assert_eq!(value, Value::I64(17));
+
+        let mut buf = vec![0u8; 1024];
+        let n = io.read(read_fd, &mut buf);
+        assert_eq!(n, 17);
+        assert_eq!(&buf[..17], b"Hello from Talk!\n");
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_generic_methods() {
+        // A method's own generics instantiate per call site; each
+        // instantiation monomorphizes separately.
+        let (value, _) = run_on_both_engines_io(
+            "struct Person {\n\tfunc getAge<T>(t: T) -> T { t }\n}\nlet a = Person().getAge(123)\nlet b = Person().getAge(1.5)\n(a, b)",
+        );
+        assert_eq!(
+            value,
+            Value::Tuple(std::rc::Rc::new(vec![Value::I64(123), Value::F64(1.5)]))
+        );
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_enum_methods() {
+        // Methods on enums dispatch like struct methods; self matches
+        // its own variants.
+        let (value, _) = run_on_both_engines_io(
+            "enum Fizz<T> {\n\tcase foo(T)\n\tcase bar(T)\n\n\tfunc unwrap() -> T {\n\t\tmatch self {\n\t\t\t.foo(t) -> t,\n\t\t\t.bar(t) -> t\n\t\t}\n\t}\n}\nlet a = Fizz.foo(123).unwrap()\nlet b = Fizz.bar(1.5).unwrap()\n(a, b)",
+        );
+        assert_eq!(
+            value,
+            Value::Tuple(std::rc::Rc::new(vec![Value::I64(123), Value::F64(1.5)]))
+        );
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_row_polymorphic_projections() {
+        // One function, two row instantiations: each call's concrete row
+        // splices into the signature at monomorphization, so the field
+        // index is computed per specialization.
+        let (value, _) = run_on_both_engines_io(
+            "func fstA(r) { r.a }\nlet x = fstA({ a: 1 })\nlet y = fstA({ a: 2, b: true })\nx + y",
+        );
+        assert_eq!(value, Value::I64(3));
+        let (value, _) = run_on_both_engines_io(
+            "func second(r) { r.z }\nlet x = second({ y: 123, z: 40 })\nlet f = second({ a: true, z: 2 })\nx + f",
+        );
+        assert_eq!(value, Value::I64(42));
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_member_constrained_functions() {
+        // A function generalized over a member constraint: each call
+        // site's specialization resolves its own method.
+        let (value, _) = run_on_both_engines_io(
+            "struct A {\n\tfunc go() -> Int { 1 }\n}\nstruct B {\n\tfunc go() -> Int { 2 }\n}\nfunc call_go(x) {\n\tx.go()\n}\nlet a = call_go(A())\nlet b = call_go(B())\na + b",
+        );
+        assert_eq!(value, Value::I64(3));
+        // The same shape over a FIELD — and the constraint is structural,
+        // so an anonymous record with the field discharges it too.
+        let (value, _) = run_on_both_engines_io(
+            "struct P {\n\tlet n: Int\n}\nstruct Q {\n\tlet n: Int\n\tlet extra: Bool\n}\nfunc get_n(x) {\n\tx.n\n}\nlet p = get_n(P(n: 40))\nlet q = get_n(Q(n: 2, extra: true))\nlet r = get_n({n: 100})\np + q + r",
+        );
+        assert_eq!(value, Value::I64(142));
+    }
+
+    #[test]
+    fn vm_matches_evaluator_on_protocol_static_disambiguation() {
+        // Both protocols give Int an `m`; the protocol-static call names
+        // which witness runs, so the sum proves each call hit its own.
+        let (value, _) = run_on_both_engines_io(
+            "protocol Aa {\n\tfunc m() -> Int\n}\nprotocol Bb {\n\tfunc m() -> Int\n}\nextend Int: Aa {\n\tfunc m() -> Int { 1 }\n}\nextend Int: Bb {\n\tfunc m() -> Int { 2 }\n}\nAa.m(5) + Bb.m(5)",
+        );
+        assert_eq!(value, Value::I64(3));
     }
 
     #[test]

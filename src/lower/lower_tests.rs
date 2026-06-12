@@ -29,6 +29,36 @@ pub mod tests {
     }
 
     #[test]
+    fn generic_effect_handlers_are_diagnosed() {
+        // The checker accepts generic effects (instantiated per perform);
+        // the backend needs per-instantiation capabilities and rejects
+        // them loudly until it has them.
+        let driver = Driver::new(
+            vec![Source::from(
+                "effect 'state<T>(value: T) -> T\n@handle 'state { v in\n\tcontinue v\n}\nlet r = 'state(42)\nprint(r)",
+            )],
+            DriverConfig::new("LowerTest"),
+        );
+        let typed = driver
+            .parse()
+            .expect("parse")
+            .resolve_names()
+            .expect("resolve")
+            .type_check();
+        assert!(!typed.has_errors(), "type errors: {:?}", typed.diagnostics());
+        let lowered = typed.lower();
+        assert!(
+            lowered
+                .phase
+                .diagnostics
+                .iter()
+                .any(|d| d.contains("generic effect")),
+            "expected a generic-effect diagnostic, got {:?}",
+            lowered.phase.diagnostics
+        );
+    }
+
+    #[test]
     fn arithmetic_through_operator_witnesses() {
         // 2 + 3 * 3: operators desugar to protocol-static calls; lowering
         // resolves them to Int's conformance witnesses, whose bodies are

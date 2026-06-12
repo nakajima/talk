@@ -1,6 +1,6 @@
 // no-core
-import { _alloc } from ./Memory.tlk
-import { Comparable, Equatable } from ./Operators.tlk
+import { _alloc, _copy } from ./Memory.tlk
+import { Add, Comparable, Equatable } from ./Operators.tlk
 import { String } from ./String.tlk
 import { Showable } from ./Showable.tlk
 
@@ -74,11 +74,13 @@ public func _io_open(path: RawPtr, flags: Int, mode: Int) 'io -> Int {
 	'io(.open(path, flags, mode))
 }
 
-// High-level open for Talk strings. This passes the full String value to the
-// interpreter so it can use the string's explicit length instead of scanning
-// memory for a terminator.
-public func open_path(path: String, flags: Int, mode: Int) -> Int {
-	@_ir(path, flags, mode) { %? = io_open $0 $1 $2 }
+// High-level open for Talk strings: copy the path into fresh memory with
+// a NUL terminator (allocations are zero-filled, so the terminator comes
+// free) and open through the C-string path.
+public func open_path(path: String, flags: Int, mode: Int) 'io -> Int {
+	let buf = _alloc<Byte>(path.length + 1)
+	_copy(path.base, buf, path.length)
+	_io_open(buf, flags, mode)
 }
 
 public func _io_read(fd: Int, buf: RawPtr, count: Int) 'io -> Int {

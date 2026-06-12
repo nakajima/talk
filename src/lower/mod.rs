@@ -108,6 +108,10 @@ pub struct Lowering<'a> {
     /// Installed handlers: handler symbol → its capability closure and
     /// the value type its scope's Ret chain carries.
     handler_caps: FxHashMap<Symbol, HandlerCap>,
+    /// Cells of mutable top-level bindings: functions that read or assign
+    /// them reference the cell directly (a free variable of main; the
+    /// closure machinery carries it, exactly like handler capabilities).
+    top_level_cells: FxHashMap<Symbol, ExprId>,
     pub diagnostics: Vec<String>,
     fresh: u32,
 }
@@ -173,6 +177,13 @@ struct Ctx {
     /// parameter. `continue v` tail-transfers into it. Cleared in
     /// nested function values (they cannot resume).
     resume_k: Option<ExprId>,
+    /// Lowering main's top-level statements: cellable lets register in
+    /// `top_level_cells` so functions can capture them.
+    top_level: bool,
+    /// Handlers installed within the current function context: performs
+    /// routed to them never escape this frame, so they are safe even in
+    /// plain-shaped functions. Cleared in function values.
+    local_handlers: FxHashSet<Symbol>,
     /// The current λ_G function's parameter extracts (for %n in @_ir).
     params: Vec<ExprId>,
     /// Enclosing loops: (header continuation, exit continuation).
@@ -210,6 +221,7 @@ pub fn lower_program<'a>(units: Vec<LowerUnit<'a>>, entry: usize) -> LoweredProg
         escaping: FxHashSet::default(),
         abortable: FxHashMap::default(),
         handler_caps: FxHashMap::default(),
+        top_level_cells: FxHashMap::default(),
         diagnostics: vec![],
         fresh: 0,
     };
@@ -274,7 +286,9 @@ impl<'a> Lowering<'a> {
                     }
                 }
             }
-            DeclKind::Struct { body, .. } | DeclKind::Protocol { body, .. } => {
+            DeclKind::Struct { body, .. }
+            | DeclKind::Enum { body, .. }
+            | DeclKind::Protocol { body, .. } => {
                 for member in &body.decls {
                     self.index_decl(unit, member);
                 }
@@ -333,12 +347,27 @@ impl<'a> Lowering<'a> {
     /// superset of calls; a spurious mark only costs a function the
     /// abort-capable calling convention, never correctness.
     fn collect_abortable(&mut self) {
+        // A handler defined inside the binder itself contains its aborts:
+        // they never escape the function, so neither the binder nor its
+        // callers need the abort-capable convention for them.
+        let mut contained: FxHashMap<Symbol, FxHashSet<Symbol>> = FxHashMap::default();
+        for unit in &self.units {
+            for (&binder, handlers) in &unit.types.handlers_defined {
+                contained.entry(binder).or_default().extend(handlers);
+            }
+        }
+        let escapes = |binder: Symbol, handler: Symbol, contained: &FxHashMap<Symbol, FxHashSet<Symbol>>| {
+            !contained
+                .get(&binder)
+                .is_some_and(|defined| defined.contains(&handler))
+        };
+
         let mut reached: FxHashMap<Symbol, Vec<Symbol>> = FxHashMap::default();
         for unit in &self.units {
             for (&binder, handlers) in &unit.types.performs_into {
                 let owned = reached.entry(binder).or_default();
                 for &handler in handlers {
-                    if !owned.contains(&handler) {
+                    if escapes(binder, handler, &contained) && !owned.contains(&handler) {
                         owned.push(handler);
                     }
                 }
@@ -354,7 +383,7 @@ impl<'a> Lowering<'a> {
                         };
                         let owned = reached.entry(binder).or_default();
                         for handler in handlers {
-                            if !owned.contains(&handler) {
+                            if escapes(binder, handler, &contained) && !owned.contains(&handler) {
                                 owned.push(handler);
                                 changed = true;
                             }
@@ -366,6 +395,7 @@ impl<'a> Lowering<'a> {
                 break;
             }
         }
+        reached.retain(|_, handlers| !handlers.is_empty());
         // Deterministic handler order (abort_scope_ty takes the first).
         for handlers in reached.values_mut() {
             handlers.sort();
@@ -547,6 +577,8 @@ impl<'a> Lowering<'a> {
             normal_k: None,
             abort_ok: false,
             resume_k: None,
+            top_level: false,
+            local_handlers: FxHashSet::default(),
             params,
             loops: vec![],
             cellable,
@@ -714,6 +746,9 @@ impl<'a> Lowering<'a> {
         let bind = self.p.func("cell", cell_ty, bot);
         let cell_var = self.p.var(bind);
         ctx.env.insert(*symbol, Binding::Cell(cell_var));
+        if ctx.top_level {
+            self.top_level_cells.insert(*symbol, cell_var);
+        }
         let body = self.with_cells(rest, ctx, finish);
         self.p.set_body(bind, body);
         let bind_ref = self.p.func_ref(bind);
@@ -816,10 +851,12 @@ impl<'a> Lowering<'a> {
             }
             StmtKind::Assignment(lhs, rhs) => {
                 // What the new value flows into once evaluated: the cell
-                // itself, or a field of the record held in the cell
-                // (functional SetField, then store — value semantics).
+                // itself, or a field path into the record held in the cell
+                // (functional SetField at each level, then one store —
+                // value semantics; `a.b.c = v` rebuilds b with c's slot
+                // replaced, then a with b's).
                 let target = self.assignment_target(lhs, ctx);
-                let Some((cell, field)) = target else {
+                let Some((cell, path)) = target else {
                     return self.continue_after(rest, is_last, ctx, k);
                 };
                 // rhs → set the cell → continue (one effect per step keeps
@@ -834,18 +871,29 @@ impl<'a> Lowering<'a> {
                 let rhs_ty = self.expr_lambda_ty(rhs, ctx);
                 let setter = self.p.func("set", rhs_ty, bot);
                 let value = self.p.var(setter);
-                let stored = match field {
-                    None => value,
-                    Some(index) => {
-                        let TyKind::Cell(record_ty) =
-                            *self.p.ty_kind(self.p.expr_ty(cell))
-                        else {
-                            unreachable!("assignment target is not a cell");
-                        };
-                        let current = self.p.primop(Op::CellGet, &[cell], record_ty);
-                        self.p
-                            .primop(Op::SetField(index), &[current, value], record_ty)
+                let stored = if path.is_empty() {
+                    value
+                } else {
+                    // Read down the path, then rebuild back up from the
+                    // leaf: levels[k] is the record indexed at step k.
+                    let TyKind::Cell(root_ty) = *self.p.ty_kind(self.p.expr_ty(cell)) else {
+                        unreachable!("assignment target is not a cell");
+                    };
+                    let mut levels = Vec::with_capacity(path.len());
+                    levels.push(self.p.primop(Op::CellGet, &[cell], root_ty));
+                    for step in 1..path.len() {
+                        let (index, _) = path[step - 1];
+                        let (_, level_ty) = path[step];
+                        let prev = levels[step - 1];
+                        levels.push(self.field_get(prev, index, level_ty));
                     }
+                    let mut stored = value;
+                    for step in (0..path.len()).rev() {
+                        let (index, _) = path[step];
+                        let level_ty = if step == 0 { root_ty } else { path[step].1 };
+                        stored = self.field_set(levels[step], index, stored, level_ty);
+                    }
+                    stored
                 };
                 let cell_set = self.p.primop(Op::CellSet, &[cell, stored], void_ty);
                 let setter_body = self.p.app(after_ref, cell_set);
@@ -947,62 +995,106 @@ impl<'a> Lowering<'a> {
         }
     }
 
-    /// Resolve an assignment lhs to (cell, optional field index): a plain
-    /// mutable variable, or `receiver.field` where the receiver is
-    /// cell-bound.
-    fn assignment_target(&mut self, lhs: &Expr, ctx: &Ctx) -> Option<(ExprId, Option<u32>)> {
+    /// Resolve an assignment lhs to its root cell and the field path down
+    /// to the assigned location: `a.b.c = …` walks Member receivers to
+    /// the cell-bound variable, collecting per level the field index and
+    /// the record's λ_G type (structs by declared order; anonymous
+    /// records by the row's canonical label-sorted order, matching
+    /// map_ty's layout).
+    fn assignment_target(&mut self, lhs: &Expr, ctx: &Ctx) -> Option<(ExprId, Vec<(u32, TyId)>)> {
         match &lhs.kind {
             ExprKind::Variable(name) => {
-                let Some(Binding::Cell(cell)) =
-                    name.symbol().ok().and_then(|s| ctx.env.get(&s).copied())
-                else {
-                    self.diagnostics
-                        .push("lowering: assignment to a non-cell binding".into());
-                    return None;
-                };
-                Some((cell, None))
+                let symbol = name.symbol().ok();
+                if let Some(Binding::Cell(cell)) =
+                    symbol.and_then(|s| ctx.env.get(&s).copied())
+                {
+                    return Some((cell, vec![]));
+                }
+                // A mutable top-level binding assigned from inside a
+                // function: its registered cell (captured like any value).
+                if let Some(cell) =
+                    symbol.and_then(|s| self.top_level_cells.get(&s).copied())
+                {
+                    return Some((cell, vec![]));
+                }
+                self.diagnostics
+                    .push("lowering: assignment to a non-cell binding".into());
+                None
             }
             ExprKind::Member(Some(receiver), label, _) => {
-                let ExprKind::Variable(name) = &receiver.kind else {
-                    self.diagnostics.push(
-                        "lowering: field assignment through a non-variable receiver (not yet supported)"
-                            .into(),
-                    );
-                    return None;
-                };
-                let Some(Binding::Cell(cell)) =
-                    name.symbol().ok().and_then(|s| ctx.env.get(&s).copied())
-                else {
-                    self.diagnostics
-                        .push("lowering: field assignment to a non-cell receiver".into());
-                    return None;
-                };
-                let resolution = self.units[ctx.unit]
-                    .types
-                    .member_resolutions
-                    .get(&lhs.id)
-                    .cloned();
-                let Some(crate::types::output::MemberResolution::Direct(property)) = resolution
-                else {
-                    self.diagnostics.push(format!(
-                        "lowering: unresolved field '{label}' in assignment"
-                    ));
-                    return None;
-                };
+                let (cell, mut path) = self.assignment_target(receiver, ctx)?;
                 let head = self.checker_ty(receiver, ctx);
-                let Some(index) = self.field_index(&head, property) else {
+                let index = match &head {
+                    CheckTy::Record(row) if row.tail.is_none() => row
+                        .fields
+                        .iter()
+                        .position(|(name, _)| name.to_string() == label.to_string())
+                        .map(|i| i as u32),
+                    _ => {
+                        let resolution = self.units[ctx.unit]
+                            .types
+                            .member_resolutions
+                            .get(&lhs.id)
+                            .cloned();
+                        match resolution {
+                            Some(crate::types::output::MemberResolution::Direct(property)) => {
+                                self.field_index(&head, property)
+                            }
+                            _ => None,
+                        }
+                    }
+                };
+                let Some(index) = index else {
                     self.diagnostics.push(format!(
                         "lowering: '{label}' is not a stored field of {head:?}"
                     ));
                     return None;
                 };
-                Some((cell, Some(index)))
+                let record_ty = self.map_ty(&head);
+                path.push((index, record_ty));
+                Some((cell, path))
             }
             _ => {
                 self.diagnostics
                     .push("lowering: assignment target not yet supported".into());
                 None
             }
+        }
+    }
+
+    /// One field read for the assignment path: structs (boxed records)
+    /// use GetField; anonymous records are tuples, so extract.
+    fn field_get(&mut self, record: ExprId, index: u32, field_ty: TyId) -> ExprId {
+        match self.p.ty_kind(self.p.expr_ty(record)) {
+            TyKind::Tuple(_) => self.p.extract(record, index),
+            _ => self.p.primop(Op::GetField(index), &[record], field_ty),
+        }
+    }
+
+    /// One functional field replacement for the assignment path: structs
+    /// use SetField (CoW); anonymous records rebuild the tuple with the
+    /// slot replaced.
+    fn field_set(&mut self, record: ExprId, index: u32, value: ExprId, record_ty: TyId) -> ExprId {
+        let items = match self.p.ty_kind(record_ty) {
+            TyKind::Tuple(items) => Some(items.clone()),
+            _ => None,
+        };
+        match items {
+            Some(items) => {
+                let rebuilt: Vec<ExprId> = (0..items.len() as u32)
+                    .map(|slot| {
+                        if slot == index {
+                            value
+                        } else {
+                            self.p.extract(record, slot)
+                        }
+                    })
+                    .collect();
+                self.p.tuple(&rebuilt)
+            }
+            None => self
+                .p
+                .primop(Op::SetField(index), &[record, value], record_ty),
         }
     }
 
@@ -1168,8 +1260,7 @@ impl<'a> Lowering<'a> {
                         self.diagnostics.push(format!(
                             "lowering: member '{label}' is not a stored field (not yet supported)"
                         ));
-                        let void = self.p.void();
-                        self.p.app(k, void)
+                        self.dead_end("member_not_a_stored_field")
                     }
                 };
                 self.p.set_body(cont, body);
@@ -1387,6 +1478,14 @@ impl<'a> Lowering<'a> {
                         }
                     });
                 }
+                // A mutable top-level binding: read its registered cell
+                // (a free variable of main; closure conversion carries it).
+                if let Some(&cell) = self.top_level_cells.get(&symbol) {
+                    let TyKind::Cell(inner) = *self.p.ty_kind(self.p.expr_ty(cell)) else {
+                        return None;
+                    };
+                    return Some(self.p.primop(Op::CellGet, &[cell], inner));
+                }
                 // A function-typed global used as a value: demand its
                 // specialization (instantiation recorded at this node).
                 if self.sources.contains_key(&symbol) {
@@ -1414,6 +1513,8 @@ impl<'a> Lowering<'a> {
                         normal_k: None,
                         abort_ok: false,
                         resume_k: None,
+                        top_level: false,
+                        local_handlers: FxHashSet::default(),
                         params: vec![],
                         loops: vec![],
                         cellable: FxHashSet::default(),
@@ -1487,13 +1588,25 @@ impl<'a> Lowering<'a> {
         receiver_value: ExprId,
         ctx: &Ctx,
     ) -> Option<ExprId> {
+        // Anonymous records are label-sorted tuples (map_ty), so a field
+        // read is an extract at the label's canonical position.
+        let head = self.checker_ty(receiver, ctx);
+        if let CheckTy::Record(row) = &head
+            && row.tail.is_none()
+            && let ExprKind::Member(_, label, _) = &expr.kind
+            && let Some(index) = row
+                .fields
+                .iter()
+                .position(|(name, _)| name.to_string() == label.to_string())
+        {
+            return Some(self.p.extract(receiver_value, index as u32));
+        }
         let resolution = self.units[ctx.unit]
             .types
             .member_resolutions
             .get(&expr.id)
             .cloned();
         if let Some(crate::types::output::MemberResolution::Direct(property)) = resolution {
-            let head = self.checker_ty(receiver, ctx);
             let index = self.field_index(&head, property)?;
             let field_check_ty = self.checker_ty(expr, ctx);
             let field_ty = self.map_ty(&field_check_ty);
@@ -1755,6 +1868,8 @@ impl<'a> Lowering<'a> {
         // it cannot resume an enclosing handler).
         inner.abort_ok = false;
         inner.resume_k = None;
+        inner.top_level = false;
+        inner.local_handlers = FxHashSet::default();
         let body_block = &func.body;
         let body = self.with_cells(&prologue, &mut inner, |this, inner| {
             let ret_k = inner.ret_k;
@@ -1764,32 +1879,77 @@ impl<'a> Lowering<'a> {
         Some(self.p.func_ref(label))
     }
 
-    /// A trailing block: a zero-parameter closure over the enclosing
-    /// environment (parametered trailing blocks await checker-recorded
-    /// block signatures).
-    fn lower_block_closure(&mut self, block: &Block, ctx: &Ctx) -> ExprId {
-        if !block.args.is_empty() {
-            self.diagnostics.push(
-                "lowering: trailing blocks with parameters not yet supported".into(),
-            );
+    /// The callee's final declared parameter type (where a trailing block
+    /// lands): for `Fn([params…, trailing, ret_k], ⊥)`, the
+    /// second-to-last domain item.
+    fn final_param_ty(&self, callee_ty: TyId) -> Option<TyId> {
+        let TyKind::Fn(dom, _) = *self.p.ty_kind(callee_ty) else {
+            return None;
+        };
+        match self.p.ty_kind(dom) {
+            TyKind::Tuple(items) if items.len() >= 2 => Some(items[items.len() - 2]),
+            _ => None,
         }
-        let ret_ty = block_value_ty(self, block, ctx);
+    }
+
+    /// A trailing block: a closure over the enclosing environment. Its
+    /// shape comes from the callee's declared parameter type (`expected`,
+    /// a λ_G Fn type) — the checker already typed the block's arguments
+    /// against it; without one (no parameters), the block's value type
+    /// suffices.
+    fn lower_block_closure(&mut self, block: &Block, expected: Option<TyId>, ctx: &Ctx) -> ExprId {
         let bot = self.p.ty_bot();
-        let ret_k_ty = self.p.ty_fn(ret_ty, bot);
-        let dom = self.p.ty_tuple(&[ret_k_ty]);
+        let expected_dom = expected.and_then(|ty| match *self.p.ty_kind(ty) {
+            TyKind::Fn(dom, _) => Some(dom),
+            _ => None,
+        });
+        let dom = match expected_dom {
+            Some(dom) => dom,
+            _ => {
+                if !block.args.is_empty() {
+                    self.diagnostics.push(
+                        "lowering: a parametered trailing block without a known callee parameter type"
+                            .into(),
+                    );
+                }
+                let ret_ty = block_value_ty(self, block, ctx);
+                let ret_k_ty = self.p.ty_fn(ret_ty, bot);
+                self.p.ty_tuple(&[ret_k_ty])
+            }
+        };
+        let n_params = match self.p.ty_kind(dom) {
+            TyKind::Tuple(items) => items.len().saturating_sub(1),
+            _ => 0,
+        };
         let label = self.p.func("trailing", dom, bot);
         self.escaping.insert(label);
         let self_var = self.p.var(label);
         let mut inner = ctx.clone();
         inner.loops = vec![];
-        inner.params = vec![];
-        inner.ret_k = self.p.extract(self_var, 0);
+        let mut params = Vec::with_capacity(n_params);
+        let mut celled: Vec<(Symbol, ExprId)> = vec![];
+        for (i, arg) in block.args.iter().enumerate().take(n_params) {
+            let extract = self.p.extract(self_var, i as u32);
+            params.push(extract);
+            let Ok(symbol) = arg.name.symbol() else { continue };
+            if inner.cellable.contains(&symbol) {
+                celled.push((symbol, extract));
+            } else {
+                inner.env.insert(symbol, Binding::Value(extract));
+            }
+        }
+        inner.params = params;
+        inner.ret_k = self.p.extract(self_var, n_params as u32);
         inner.raw_ret_k = inner.ret_k;
         inner.normal_k = None;
         inner.abort_ok = false;
         inner.resume_k = None;
-        let ret_k = inner.ret_k;
-        let body = self.lower_block(block, &inner, ret_k);
+        inner.top_level = false;
+        inner.local_handlers = FxHashSet::default();
+        let body = self.with_cells(&celled, &mut inner, |this, inner| {
+            let ret_k = inner.ret_k;
+            this.lower_block(block, inner, ret_k)
+        });
         self.p.set_body(label, body);
         self.p.func_ref(label)
     }
@@ -1805,14 +1965,16 @@ impl<'a> Lowering<'a> {
         ctx: &Ctx,
         k: ExprId,
     ) -> ExprId {
-        let trailing_value = trailing_block.map(|b| self.lower_block_closure(b, ctx));
         let Some(callee_value) = self.try_pure(callee, ctx) else {
             self.diagnostics.push(
                 "lowering: computed callee expressions not yet supported".into(),
             );
-            let void = self.p.void();
-            return self.p.app(k, void);
+            return self.dead_end("computed_callee");
         };
+        let trailing_value = trailing_block.map(|b| {
+            let expected = self.final_param_ty(self.p.expr_ty(callee_value));
+            self.lower_block_closure(b, expected, ctx)
+        });
         let arg_exprs: Vec<&Expr> = args.iter().map(|a| &a.value).collect();
         self.lower_args(&arg_exprs, ctx, vec![], &mut |this, mut values| {
             if let Some(trailing) = trailing_value {
@@ -1845,22 +2007,27 @@ impl<'a> Lowering<'a> {
         if is_value_callee {
             return self.lower_value_call(callee, args, trailing_block, ctx, k);
         }
-        let trailing_value = trailing_block.map(|b| self.lower_block_closure(b, ctx));
 
         // Resolve the target specialization.
         let target = self.resolve_callee(expr, callee, args, ctx);
         let Some((label, symbol, prefix)) = target else {
-            let void = self.p.void();
-            return self.p.app(k, void);
+            return self.dead_end("unresolved_callee");
         };
+        let trailing_value = trailing_block.map(|b| {
+            let bot = self.p.ty_bot();
+            let callee_ty = self.p.ty_fn(self.p.dom(label), bot);
+            let expected = self.final_param_ty(callee_ty);
+            self.lower_block_closure(b, expected, ctx)
+        });
         // Abort-capable calls are handled on the statement spine
-        // (try_abortable_call); reaching one here means it sits in an
+        // (try_effect_split); reaching one here means it sits in an
         // expression position the abort linkage cannot thread through yet.
         if self.abort_shape(symbol) {
             self.diagnostics.push(
                 "lowering: a call that can abort in expression position (not yet supported)"
                     .into(),
             );
+            return self.dead_end("abort_call_in_expression");
         }
 
         let mut arg_exprs: Vec<&Expr> = vec![];
@@ -2059,6 +2226,70 @@ impl<'a> Lowering<'a> {
                         Some((self.demand(member, theta), member, prefix))
                     }
                     None => {
+                        // No resolution at this node: the member use rode
+                        // its binder's scheme (qualified types — Jones
+                        // 1994) and the checker discharged it per call
+                        // site. The θ-substituted head is concrete here,
+                        // so resolve the label the way the solver's
+                        // try_member does: the type's own methods first,
+                        // then protocol witnesses.
+                        if let Some(CheckTy::Nominal(symbol, _)) = &head_ty {
+                            let label_str = label.to_string();
+                            let catalog = &self.units[self.entry].types.catalog;
+                            let method = catalog
+                                .structs
+                                .get(symbol)
+                                .and_then(|i| i.methods.get(&label_str))
+                                .or_else(|| {
+                                    catalog
+                                        .enums
+                                        .get(symbol)
+                                        .and_then(|i| i.methods.get(&label_str))
+                                })
+                                .copied();
+                            if let Some(member) = method {
+                                let head = head_ty.clone()?;
+                                let mut theta = self.call_theta(member, callee.id, ctx);
+                                self.owner_theta(member, &head, &mut theta);
+                                return Some((self.demand(member, theta), member, prefix));
+                            }
+                            let protocols: Vec<Symbol> = catalog
+                                .member_owners
+                                .get(&label_str)
+                                .into_iter()
+                                .flatten()
+                                .filter_map(|owner| match owner {
+                                    crate::types::catalog::MemberOwner::Protocol(p) => Some(*p),
+                                    _ => None,
+                                })
+                                .filter(|p| {
+                                    catalog.conformances.contains_key(&(*symbol, *p))
+                                        || self
+                                            .units
+                                            .iter()
+                                            .any(|u| u.types.catalog.derivable.contains(p))
+                                })
+                                .collect();
+                            for protocol in protocols {
+                                let Some((_, requirement)) = self.units[self.entry]
+                                    .types
+                                    .catalog
+                                    .requirement_in(protocol, &label_str)
+                                else {
+                                    continue;
+                                };
+                                let witness = requirement.symbol;
+                                let head = head_ty.clone()?;
+                                if let Some((target, target_symbol)) = self.resolve_witness(
+                                    protocol,
+                                    witness,
+                                    label_str.clone(),
+                                    &head,
+                                ) {
+                                    return Some((target, target_symbol, prefix));
+                                }
+                            }
+                        }
                         self.diagnostics.push(format!(
                             "lowering: unresolved member call '{label}' at {:?}",
                             expr.id
@@ -2339,6 +2570,14 @@ impl<'a> Lowering<'a> {
                 .push("lowering: @handle of an undeclared effect".into());
             return self.dead_end("undeclared_effect");
         };
+        if !sig.generics.is_empty() {
+            // Each instantiation would need its own capability closure
+            // (the same monomorphization the worklist does for functions).
+            self.diagnostics.push(
+                "lowering: handlers for generic effects (not yet supported)".into(),
+            );
+            return self.dead_end("generic_effect_handler");
+        }
         // Payload types: the checker's zonked record for this handler
         // (unannotated effect parameters were inferred from the perform
         // sites that unified with them).
@@ -2425,7 +2664,11 @@ impl<'a> Lowering<'a> {
         );
 
         // The handled scope: the rest of the block, lowered in place.
-        self.lower_nodes(rest, ctx, k)
+        // The handler is local here: performs routed to it terminate in
+        // this frame, so they are safe regardless of the function's shape.
+        let mut scope_ctx = ctx.clone();
+        scope_ctx.local_handlers.insert(handler_sym);
+        self.lower_nodes(rest, &scope_ctx, k)
     }
 
     /// A perform routed to a lexical handler: call the capability with
@@ -2440,7 +2683,7 @@ impl<'a> Lowering<'a> {
         ctx: &Ctx,
         k: ExprId,
     ) -> ExprId {
-        if !ctx.abort_ok {
+        if !ctx.abort_ok && !ctx.local_handlers.contains(&handler_sym) {
             self.diagnostics.push(
                 "lowering: perform inside a function value (not yet supported)".into(),
             );
@@ -2513,7 +2756,9 @@ impl<'a> Lowering<'a> {
             && let Some(cap) = self.handler_caps.get(&handler_sym).copied()
             && let Some(pair_ty) = cap.resume_pair_ty
         {
-            if !ctx.abort_ok || k != ctx.ret_k {
+            let handler_reachable =
+                ctx.abort_ok || ctx.local_handlers.contains(&handler_sym);
+            if !handler_reachable || k != ctx.ret_k {
                 self.diagnostics.push(
                     "lowering: a resumable perform outside the enclosing function's statement spine (not yet supported)"
                         .into(),
@@ -2875,6 +3120,14 @@ impl<'a> Lowering<'a> {
                     return;
                 }
             }
+            if let Some(info) = catalog.enums.get(head_symbol)
+                && info.methods.values().any(|s| *s == member)
+            {
+                for (param, arg) in info.params.iter().zip(args) {
+                    theta.entry(*param).or_insert_with(|| arg.clone());
+                }
+                return;
+            }
             if let Some(members) = catalog.extend_members.get(head_symbol)
                 && let Some(m) = members.values().find(|m| m.symbol == member)
             {
@@ -2988,53 +3241,50 @@ impl<'a> Lowering<'a> {
 
     /// The synthetic `main`: top-level statements of the entry unit in
     /// source order; its return continuation receives the value of the
-    /// final top-level expression (the program/REPL value).
+    /// final top-level expression (the program/REPL value). When the
+    /// program defines an explicit `func main`, it runs *after* the
+    /// top-level statements and its value is the program's value.
     fn lower_main(&mut self) -> (Label, TyId) {
         let unit = self.entry;
         let mut nodes: Vec<Node> = vec![];
+        let mut explicit_main: Option<Symbol> = None;
         for ast in self.units[unit].asts.values() {
             for root in &ast.roots {
                 match root {
                     Node::Stmt(_) => nodes.push(root.clone()),
                     Node::Decl(decl) => {
                         // Non-func top-level lets execute in main, in order.
-                        if let DeclKind::Let { rhs: Some(rhs), .. } = &decl.kind
-                            && !matches!(rhs.kind, ExprKind::Func(_))
+                        if let DeclKind::Let {
+                            lhs,
+                            rhs: Some(rhs),
+                            ..
+                        } = &decl.kind
                         {
-                            nodes.push(root.clone());
+                            if !matches!(rhs.kind, ExprKind::Func(_)) {
+                                nodes.push(root.clone());
+                            } else if let PatternKind::Bind(name) = &lhs.kind
+                                && name.name_str() == "main"
+                                && let Ok(symbol) = name.symbol()
+                            {
+                                explicit_main = Some(symbol);
+                            }
                         }
                     }
                     _ => {}
                 }
             }
         }
+        if let Some(symbol) = explicit_main {
+            return self.lower_main_with_entry(unit, symbol, nodes);
+        }
 
-        // The program value type: the final top-level expression's type.
-        let result_check_ty = nodes
-            .iter()
-            .rev()
-            .find_map(|node| match node {
-                Node::Stmt(Stmt {
-                    kind: StmtKind::Expr(expr),
-                    ..
-                }) => self.units[unit].types.node_types.get(&expr.id).cloned(),
-                // A final if/else statement is valued (the checker's
-                // block-final rule): its type is its branch value's.
-                Node::Stmt(Stmt {
-                    kind: StmtKind::If(_, then_block, Some(_)),
-                    ..
-                }) => then_block.body.iter().rev().find_map(|n| match n {
-                    Node::Stmt(Stmt {
-                        kind: StmtKind::Expr(e),
-                        ..
-                    })
-                    | Node::Expr(e) => {
-                        self.units[unit].types.node_types.get(&e.id).cloned()
-                    }
-                    _ => None,
-                }),
-                _ => None,
-            })
+        // The program value type: the FINAL node's value — an expression
+        // statement's type, a block-final if/else's branch type, and Void
+        // for everything else (a trailing loop or declaration yields
+        // nothing; scanning past it to an earlier expression mistypes
+        // main's return).
+        let result_check_ty = self
+            .top_level_value_ty(unit, nodes.last())
             .unwrap_or(CheckTy::Nominal(Symbol::Void, vec![]));
         let result_ty = self.map_ty(&result_check_ty);
 
@@ -3063,6 +3313,8 @@ impl<'a> Lowering<'a> {
             // Performs directly in main abort straight to its return.
             abort_ok: true,
             resume_k: None,
+            top_level: true,
+            local_handlers: FxHashSet::default(),
             params: vec![],
             loops: vec![],
             cellable,
@@ -3076,19 +3328,124 @@ impl<'a> Lowering<'a> {
     fn lower_main_nodes(&mut self, nodes: &[Node], ctx: &Ctx, k: ExprId) -> ExprId {
         self.lower_nodes(nodes, ctx, k)
     }
+
+    /// The checker type of a top-level block's final value: the last
+    /// node's expression type (or the branch type of a block-final
+    /// if/else); None for statements that yield nothing.
+    fn top_level_value_ty(&self, unit: usize, last: Option<&Node>) -> Option<CheckTy> {
+        match last? {
+            Node::Stmt(Stmt {
+                kind: StmtKind::Expr(expr),
+                ..
+            }) => self.units[unit].types.node_types.get(&expr.id).cloned(),
+            Node::Stmt(Stmt {
+                kind: StmtKind::If(_, then_block, Some(_)),
+                ..
+            }) => then_block.body.iter().next_back().and_then(|n| match n {
+                Node::Stmt(Stmt {
+                    kind: StmtKind::Expr(e),
+                    ..
+                })
+                | Node::Expr(e) => self.units[unit].types.node_types.get(&e.id).cloned(),
+                _ => None,
+            }),
+            _ => None,
+        }
+    }
+
+    /// An explicit `func main` entrypoint: top-level statements run in
+    /// source order (initialization), then main is called; its value is
+    /// the program's value.
+    fn lower_main_with_entry(
+        &mut self,
+        unit: usize,
+        symbol: Symbol,
+        nodes: Vec<Node>,
+    ) -> (Label, TyId) {
+        let entry_label = self.demand(symbol, Theta::default());
+        if self.abort_shape(symbol) {
+            self.diagnostics.push(
+                "lowering: main performing into a lexical handler (not yet supported)".into(),
+            );
+        }
+        let result_ty = match self.signature_of(symbol, &Theta::default()) {
+            Some(CheckTy::Func(params, ret, _)) => {
+                if !params.is_empty() {
+                    self.diagnostics
+                        .push("lowering: main must take no parameters".into());
+                }
+                self.map_ty(&ret)
+            }
+            _ => {
+                self.diagnostics
+                    .push("lowering: main is not a function".into());
+                self.p.ty_void()
+            }
+        };
+
+        let bot = self.p.ty_bot();
+        let ret_k_ty = self.p.ty_fn(result_ty, bot);
+        let dom = self.p.ty_tuple(&[ret_k_ty]);
+        let main = self.p.func("main", dom, bot);
+        let main_var = self.p.var(main);
+        let ret_k = self.p.extract(main_var, 0);
+
+        let mut cellable: FxHashSet<Symbol> = FxHashSet::default();
+        cellable.extend(self.units[unit].resolved.mutated_symbols.iter().copied());
+        for node in &nodes {
+            cellable.extend(self.cellable_symbols(unit, node));
+        }
+        let ctx = Ctx {
+            unit,
+            theta: Theta::default(),
+            env: FxHashMap::default(),
+            ret_k,
+            raw_ret_k: ret_k,
+            normal_k: None,
+            abort_ok: true,
+            resume_k: None,
+            top_level: true,
+            local_handlers: FxHashSet::default(),
+            params: vec![],
+            loops: vec![],
+            cellable,
+        };
+
+        // call_main: the top-level statements' value is discarded, then
+        // main delivers the program value.
+        let void_ty = self.p.ty_void();
+        let call_main = self.p.func("call_main", void_ty, bot);
+        let entry_ref = self.p.func_ref(entry_label);
+        let args = self.p.tuple(&[ret_k]);
+        let call = self.p.app(entry_ref, args);
+        self.p.set_body(call_main, call);
+        let call_main_ref = self.p.func_ref(call_main);
+
+        let setup_value_ty = self
+            .top_level_value_ty(unit, nodes.last())
+            .map(|ty| self.map_ty(&ty))
+            .unwrap_or(void_ty);
+        let k = self.discarding_cont(setup_value_ty, call_main_ref);
+        let body = self.lower_main_nodes(&nodes, &ctx, k);
+        self.p.set_body(main, body);
+        (main, result_ty)
+    }
 }
 
 /// The λ_G type of a block's value, from the checker's view of its final
 /// expression (Void when the block ends in a non-expression).
 fn block_value_ty(lowering: &mut Lowering, block: &Block, ctx: &Ctx) -> TyId {
-    let last_expr = block.body.iter().rev().find_map(|node| match node {
-        Node::Stmt(Stmt {
+    // Only the FINAL node carries the block's value: a trailing
+    // statement (assignment, loop, declaration) yields Void — scanning
+    // past it to an earlier expression mistypes the continuation.
+    let last_expr = match block.body.last() {
+        Some(Node::Stmt(Stmt {
             kind: StmtKind::Expr(e),
             ..
-        }) => Some(e),
-        Node::Expr(e) => Some(e),
+        }))
+        | Some(Node::Expr(e)) => Some(e),
         _ => None,
-    });
+    };
     match last_expr {
         Some(e) => lowering.expr_lambda_ty(e, ctx),
         None => lowering.p.ty_void(),

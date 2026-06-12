@@ -48,4 +48,11 @@ pub struct TypeOutput {
     /// parameters are inferred from the perform sites that unified with
     /// them): handler symbol → parameter types.
     pub handler_payload_tys: FxHashMap<Symbol, Vec<Ty>>,
+    /// Handlers defined inside each binder's body — a perform routed to
+    /// a handler in the same function never escapes it, so the abort
+    /// analysis subtracts these per binder.
+    pub handlers_defined: FxHashMap<Symbol, FxHashSet<Symbol>>,
+    /// Imported + local symbol names, merged — what diagnostics rendered
+    /// with during checking, so hover and the REPL show the same names.
+    pub display_names: FxHashMap<Symbol, String>,
 }

@@ -51,6 +51,25 @@ struct Frame {
 const MAX_FRAMES: usize = 1 << 20;
 
 pub fn run(module: &Module, io: &mut dyn IO) -> Result<Value, String> {
+    Ok(run_machine(module, io)?.0)
+}
+
+/// Run and render the program value Talk-style while the machine is
+/// still alive (strings point into its byte memory).
+pub fn run_displayed(
+    module: &Module,
+    io: &mut dyn IO,
+    names: &ValueNames,
+) -> Result<(Value, String), String> {
+    let (value, machine) = run_machine(module, io)?;
+    let display = render_value(&machine, names, &value);
+    Ok((value, display))
+}
+
+fn run_machine<'io>(
+    module: &Module,
+    io: &'io mut dyn IO,
+) -> Result<(Value, Machine<'io>), String> {
     let entry = chunk(module, module.entry)?;
     let empty_env: Rc<Vec<Value>> = Rc::new(vec![]);
     let mut frames = vec![Frame {
@@ -149,7 +168,7 @@ pub fn run(module: &Module, io: &mut dyn IO) -> Result<Value, String> {
                 frames.pop();
                 match frames.last_mut() {
                     Some(caller) => caller.regs[dest as usize] = value,
-                    None => return Ok(value),
+                    None => return Ok((value, machine)),
                 }
             }
             Insn::Trap { message } => {
@@ -162,6 +181,117 @@ pub fn run(module: &Module, io: &mut dyn IO) -> Result<Value, String> {
             local => exec_local(module, &mut frames[frame_index], &mut machine, local)?,
         }
     }
+}
+
+/// Display names for rendering values Talk-style — built upstream from
+/// the checker's catalog (the machine itself only has symbols).
+#[derive(Default)]
+pub struct ValueNames {
+    /// Struct/enum symbol → display name.
+    pub types: rustc_hash::FxHashMap<Symbol, String>,
+    /// Struct symbol → field names in declaration order.
+    pub fields: rustc_hash::FxHashMap<Symbol, Vec<String>>,
+    /// Enum symbol → case names in tag (declaration) order.
+    pub cases: rustc_hash::FxHashMap<Symbol, Vec<String>>,
+    /// The core String struct: its values render as quoted text read
+    /// from byte memory.
+    pub string_struct: Option<Symbol>,
+}
+
+/// Talk-style rendering, matching the derived-show formats:
+/// `2`, `1.5`, `true`, `"hi"`, `(1, true)`, `Name(field: v…)`,
+/// `Enum.case(payload…)`.
+fn render_value(machine: &Machine, names: &ValueNames, value: &Value) -> String {
+    match value {
+        Value::I64(v) => v.to_string(),
+        Value::F64(v) => {
+            let rendered = v.to_string();
+            if rendered.contains('.') || rendered.contains('e') || !v.is_finite() {
+                rendered
+            } else {
+                format!("{rendered}.0")
+            }
+        }
+        Value::Bool(v) => v.to_string(),
+        Value::Byte(v) => v.to_string(),
+        Value::Void => "()".to_string(),
+        Value::Ptr(addr) => format!("RawPtr({addr})"),
+        Value::Tuple(items) => {
+            let items: Vec<String> = items
+                .iter()
+                .map(|item| render_value(machine, names, item))
+                .collect();
+            format!("({})", items.join(", "))
+        }
+        Value::Record(symbol, field_values) => {
+            if names.string_struct == Some(*symbol)
+                && let [Value::Ptr(base), Value::I64(len), ..] = field_values.as_slice()
+            {
+                let start = *base as usize;
+                let end = start + *len as usize;
+                if let Some(bytes) = machine.mem.get(start..end) {
+                    return format!("\"{}\"", escape_string(&String::from_utf8_lossy(bytes)));
+                }
+            }
+            let name = names
+                .types
+                .get(symbol)
+                .cloned()
+                .unwrap_or_else(|| symbol.to_string());
+            let field_names = names.fields.get(symbol);
+            let rendered: Vec<String> = field_values
+                .iter()
+                .enumerate()
+                .map(|(index, field)| {
+                    let value = render_value(machine, names, field);
+                    match field_names.and_then(|fields| fields.get(index)) {
+                        Some(field_name) => format!("{field_name}: {value}"),
+                        None => value,
+                    }
+                })
+                .collect();
+            format!("{name}({})", rendered.join(", "))
+        }
+        Value::Variant(symbol, tag, payloads) => {
+            let name = names
+                .types
+                .get(symbol)
+                .cloned()
+                .unwrap_or_else(|| symbol.to_string());
+            let case = names
+                .cases
+                .get(symbol)
+                .and_then(|cases| cases.get(*tag as usize))
+                .cloned()
+                .unwrap_or_else(|| format!("case{tag}"));
+            if payloads.is_empty() {
+                format!("{name}.{case}")
+            } else {
+                let payloads: Vec<String> = payloads
+                    .iter()
+                    .map(|payload| render_value(machine, names, payload))
+                    .collect();
+                format!("{name}.{case}({})", payloads.join(", "))
+            }
+        }
+        Value::Closure(..) => "<func>".to_string(),
+        Value::Cell(_) => "<cell>".to_string(),
+    }
+}
+
+fn escape_string(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for ch in text.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            '\r' => out.push_str("\\r"),
+            other => out.push(other),
+        }
+    }
+    out
 }
 
 /// Machine state outside the frames: the cell arena, byte memory, and the
@@ -226,7 +356,14 @@ fn run_io(
     };
     Ok(match op {
         IoOp::Write => {
-            let (fd, start, len) = (int(a)?, ptr(b)?, int(c)? as usize);
+            let (fd, count) = (int(a)?, int(c)?);
+            // A negative count passes through untouched: callers feed a
+            // failed read's errno straight into the next write (the chat
+            // client's read/echo loop).
+            if count < 0 {
+                return Ok(count);
+            }
+            let (start, len) = (ptr(b)?, count as usize);
             let bytes = machine
                 .mem
                 .get(start..start + len)
@@ -234,7 +371,11 @@ fn run_io(
             machine.io.write(fd, bytes)
         }
         IoOp::Read => {
-            let (fd, start, len) = (int(a)?, ptr(b)?, int(c)? as usize);
+            let (fd, count) = (int(a)?, int(c)?);
+            if count < 0 {
+                return Ok(count);
+            }
+            let (start, len) = (ptr(b)?, count as usize);
             let buf = machine
                 .mem
                 .get_mut(start..start + len)

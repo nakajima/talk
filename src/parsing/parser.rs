@@ -627,7 +627,13 @@ impl<'a> Parser<'a> {
 
         if self.did_match(TokenKind::Else)? {
             let else_body = self.block(BlockContext::If, true)?;
-            return self.desugar_let_else(tok, lhs, rhs, else_body);
+            return self.desugar_let_else(tok, lhs, type_annotation, rhs, Some(else_body));
+        }
+        // An or-pattern let takes the same desugaring road (a single-arm
+        // match, no else): alternatives bind the same names, and a miss
+        // is the match machinery's miss.
+        if pattern_contains_or(&lhs) {
+            return self.desugar_let_else(tok, lhs, type_annotation, rhs, None);
         }
 
         self.save_meta(tok, |id, span| Decl {
@@ -980,14 +986,24 @@ impl<'a> Parser<'a> {
         &mut self,
         tok: LocToken,
         pattern: Pattern,
+        type_annotation: Option<TypeAnnotation>,
         rhs: Option<Expr>,
-        else_body: Block,
+        else_body: Option<Block>,
     ) -> Result<Decl, ParserError> {
         let scrutinee = rhs.unwrap_or(Expr {
             id: self.next_id(),
             span: Span::SYNTHESIZED,
             kind: ExprKind::Tuple(vec![]),
         });
+        // A `let pattern: T = …` annotation pins the scrutinee.
+        let scrutinee = match type_annotation {
+            Some(annotation) => Expr {
+                id: self.next_id(),
+                span: Span::SYNTHESIZED,
+                kind: ExprKind::As(Box::new(scrutinee), annotation),
+            },
+            None => scrutinee,
+        };
 
         let binder_names = collect_pattern_binder_names(&pattern);
 
@@ -1034,22 +1050,27 @@ impl<'a> Parser<'a> {
             span: Span::SYNTHESIZED,
         };
 
-        let wildcard_pat_id = self.next_id();
-        let wildcard_arm = MatchArm {
-            id: self.next_id(),
-            pattern: Pattern {
-                id: wildcard_pat_id,
-                kind: PatternKind::Wildcard,
+        // With an else, a miss runs it (let-else); without one (or-pattern
+        // lets), a miss is the match machinery's miss.
+        let mut arms = vec![pattern_arm];
+        if let Some(else_body) = else_body {
+            let wildcard_pat_id = self.next_id();
+            arms.push(MatchArm {
+                id: self.next_id(),
+                pattern: Pattern {
+                    id: wildcard_pat_id,
+                    kind: PatternKind::Wildcard,
+                    span: Span::SYNTHESIZED,
+                },
+                body: else_body,
                 span: Span::SYNTHESIZED,
-            },
-            body: else_body,
-            span: Span::SYNTHESIZED,
-        };
+            });
+        }
 
         let match_expr = Expr {
             id: self.next_id(),
             span: Span::SYNTHESIZED,
-            kind: ExprKind::Match(Box::new(scrutinee), vec![pattern_arm, wildcard_arm]),
+            kind: ExprKind::Match(Box::new(scrutinee), arms),
         };
 
         // Build the outer let pattern for the binders
@@ -3263,6 +3284,22 @@ fn collect_pattern_binder_names(pattern: &Pattern) -> Vec<Name> {
     let mut names = vec![];
     collect_pattern_binder_names_inner(pattern, &mut names);
     names
+}
+
+/// Does the pattern contain alternatives anywhere? Or-pattern lets
+/// desugar to a single-arm match (see `desugar_let_else`).
+fn pattern_contains_or(pattern: &Pattern) -> bool {
+    match &pattern.kind {
+        PatternKind::Or(_) => true,
+        PatternKind::Tuple(patterns) | PatternKind::Variant { fields: patterns, .. } => {
+            patterns.iter().any(pattern_contains_or)
+        }
+        PatternKind::Record { fields } => fields.iter().any(|field| match &field.kind {
+            RecordFieldPatternKind::Equals { value, .. } => pattern_contains_or(value),
+            _ => false,
+        }),
+        _ => false,
+    }
 }
 
 fn collect_pattern_binder_names_inner(pattern: &Pattern, names: &mut Vec<Name>) {

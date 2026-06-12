@@ -161,17 +161,27 @@ impl Ty {
                     .collect(),
             ),
             Ty::Record(row) => {
-                let fields = row
+                let mut fields: Vec<(Label, Ty)> = row
                     .fields
                     .iter()
                     .map(|(l, t)| (l.clone(), t.substitute(tys, effs, rows)))
                     .collect();
                 let tail = match &row.tail {
-                    Some(RowTail::Param(sym)) => {
-                        Some(rows.get(sym).cloned().unwrap_or(RowTail::Param(*sym)))
-                    }
+                    // A row-parameter tail bound (in tys) to a concrete
+                    // record splices its fields in — how monomorphization
+                    // closes a row-polymorphic signature per call site.
+                    Some(RowTail::Param(sym)) => match tys.get(sym) {
+                        Some(Ty::Record(rest)) => {
+                            for (label, ty) in &rest.fields {
+                                fields.push((label.clone(), ty.substitute(tys, effs, rows)));
+                            }
+                            rest.tail.clone()
+                        }
+                        _ => Some(rows.get(sym).cloned().unwrap_or(RowTail::Param(*sym))),
+                    },
                     other => other.clone(),
                 };
+                fields.sort_by(|(a, _), (b, _)| a.cmp(b));
                 Ty::Record(Row { fields, tail })
             }
             Ty::Proj(base, protocol, assoc) => Ty::Proj(
@@ -299,6 +309,15 @@ impl Scheme {
                 .iter()
                 .map(|s| import_symbol(*s, target))
                 .collect(),
+            member_constraints: self
+                .member_constraints
+                .iter()
+                .map(|mc| MemberConstraint {
+                    receiver: mc.receiver.import_symbols(target),
+                    label: mc.label.clone(),
+                    member: mc.member.import_symbols(target),
+                })
+                .collect(),
             ty: self.ty.import_symbols(target),
         }
     }
@@ -381,13 +400,28 @@ pub struct Scheme {
     pub params: Vec<SchemeParam>,
     pub eff_params: Vec<Symbol>,
     pub row_params: Vec<Symbol>,
+    /// Member uses the body could not discharge (`func g(x) { x.go() }`):
+    /// qualified-type constraints over the scheme's parameters,
+    /// re-emitted at each instantiation and discharged against the call's
+    /// concrete receiver (Jones, *Qualified Types*, 1994).
+    pub member_constraints: Vec<MemberConstraint>,
     pub ty: Ty,
+}
+
+/// One scheme-carried member obligation: `receiver` has a member
+/// `label` of type `member` (types range over the scheme's parameters).
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub struct MemberConstraint {
+    pub receiver: Ty,
+    pub label: Label,
+    pub member: Ty,
 }
 
 impl Scheme {
     pub fn mono(ty: Ty) -> Self {
         Scheme {
             params: vec![],
+            member_constraints: vec![],
             eff_params: vec![],
             row_params: vec![],
             ty,
@@ -402,7 +436,22 @@ impl Scheme {
         for (i, param) in self.params.iter().enumerate() {
             names.insert(param.symbol, format!("T{i}"));
         }
-        let body = render_ty(&self.ty, &names);
+        let mut body = render_ty(&self.ty, &names);
+        if !self.member_constraints.is_empty() {
+            let constraints: Vec<String> = self
+                .member_constraints
+                .iter()
+                .map(|c| {
+                    format!(
+                        "{}.{}: {}",
+                        render_ty(&c.receiver, &names),
+                        c.label,
+                        render_ty(&c.member, &names)
+                    )
+                })
+                .collect();
+            body = format!("{body} where {}", constraints.join(", "));
+        }
         if self.params.is_empty() {
             body
         } else {

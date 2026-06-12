@@ -333,6 +333,12 @@ pub struct Solver<'s> {
     pub instantiations: &'s mut FxHashMap<NodeID, Vec<(Symbol, Ty)>>,
     pub member_resolutions: &'s mut FxHashMap<NodeID, MemberResolution>,
     pub level: Level,
+    /// True only in the final solve: committing a member constraint to its
+    /// single nominal owner is defaulting, sound only once no later group
+    /// can constrain the receiver further. Group solves hold such
+    /// constraints instead, so they ride the binder's scheme (qualified
+    /// types — Jones, *Qualified Types*, 1994).
+    pub defaulting: bool,
     /// In-flight auto-derived conformances, so recursive nominals resolve
     /// coinductively instead of looping.
     pub derived_seen: rustc_hash::FxHashSet<(Symbol, Symbol)>,
@@ -452,27 +458,18 @@ impl<'s> Solver<'s> {
                     member,
                     origin,
                 } => {
-                    let head = self.store.shallow(&receiver);
-                    if matches!(head, Ty::Var(_)) || stuck_projection(self.store, &head) {
-                        // An outer-level receiver may be solved by a later
-                        // group; the constraint floats out (OutsideIn's
-                        // floating of wanteds) for the final solve.
-                        residual.push(Constraint::HasMember {
-                            receiver,
-                            label,
-                            member,
-                            origin,
-                        });
-                    } else {
-                        let receiver = self.store.render(&receiver);
-                        self.errors.push((
-                            TypeError::UnknownMember {
-                                receiver,
-                                label: label.to_string(),
-                            },
-                            origin.node,
-                        ));
-                    }
+                    // Stuck member constraints float to the final solve: a
+                    // variable head may be solved by a later group, and a
+                    // concrete head only ends up here when the member's own
+                    // signature is still a variable (its group has not run
+                    // yet) — a genuinely unknown member errors inside
+                    // try_member directly.
+                    residual.push(Constraint::HasMember {
+                        receiver,
+                        label,
+                        member,
+                        origin,
+                    });
                 }
                 _ => {}
             }
@@ -702,6 +699,70 @@ impl<'s> Solver<'s> {
     }
 
     /// One step on a HasMember predicate against a known head.
+    /// Dispatch a member use through the protocols that could provide it.
+    /// Returns true when handled: exactly one distinct requirement binds
+    /// (instances with contexts — Hall et al., TOPLAS 1996); several emit
+    /// an ambiguity error naming the protocol-static forms (`P.m(x)`)
+    /// that pick one, since committing to any would make meaning depend
+    /// on table order (overlapping instances — Jones, *Qualified Types*,
+    /// 1994, §2.4). Zero candidates fall through to the caller.
+    #[allow(clippy::too_many_arguments)]
+    fn dispatch_member_through(
+        &mut self,
+        protocols: &[Symbol],
+        head: Option<Symbol>,
+        receiver: &Ty,
+        label: &str,
+        member: &Ty,
+        origin: CtOrigin,
+        queue: &mut Vec<Constraint>,
+    ) -> bool {
+        let mut candidates: Vec<(Symbol, Symbol, Requirement)> = vec![];
+        for &protocol in protocols {
+            let Some((owner, requirement)) = self.catalog.requirement_in(protocol, label) else {
+                continue;
+            };
+            // Two protocols inheriting one base share its requirement —
+            // that is one candidate, not an ambiguity.
+            if candidates.iter().any(|(_, _, r)| r.symbol == requirement.symbol) {
+                continue;
+            }
+            candidates.push((protocol, owner, requirement.clone()));
+        }
+        match candidates.as_slice() {
+            [] => false,
+            [(protocol, owner, requirement)] => {
+                let witness = head
+                    .and_then(|h| self.catalog.conformances.get(&(h, *protocol)))
+                    .and_then(|c| c.witnesses.get(label))
+                    .copied()
+                    .unwrap_or(requirement.symbol);
+                self.bind_requirement(
+                    *owner,
+                    requirement,
+                    receiver,
+                    member,
+                    origin,
+                    queue,
+                    witness,
+                );
+                true
+            }
+            many => {
+                let rendered = self.store.render(receiver);
+                self.errors.push((
+                    TypeError::AmbiguousMember {
+                        receiver: rendered,
+                        label: label.to_string(),
+                        candidates: many.iter().map(|(p, ..)| p.to_string()).collect(),
+                    },
+                    origin.node,
+                ));
+                true
+            }
+        }
+    }
+
     fn try_member(
         &mut self,
         receiver: Ty,
@@ -737,23 +798,10 @@ impl<'s> Solver<'s> {
                     .get(&assoc_symbol)
                     .cloned()
                     .unwrap_or_default();
-                for protocol in bounds {
-                    if let Some((owner, requirement)) =
-                        self.catalog.requirement_in(protocol, &label_str)
-                    {
-                        let requirement = requirement.clone();
-                        let witness = requirement.symbol;
-                        self.bind_requirement(
-                            owner,
-                            &requirement,
-                            &receiver,
-                            &member,
-                            origin,
-                            queue,
-                            witness,
-                        );
-                        return None;
-                    }
+                if self.dispatch_member_through(
+                    &bounds, None, &receiver, &label_str, &member, origin, queue,
+                ) {
+                    return None;
                 }
                 let rendered = self.store.render(&receiver);
                 self.errors.push((
@@ -784,23 +832,10 @@ impl<'s> Solver<'s> {
                     .get(&param)
                     .cloned()
                     .unwrap_or_default();
-                for protocol in bounds {
-                    if let Some((owner, requirement)) =
-                        self.catalog.requirement_in(protocol, &label_str)
-                    {
-                        let requirement = requirement.clone();
-                        let witness = requirement.symbol;
-                        self.bind_requirement(
-                            owner,
-                            &requirement,
-                            &receiver,
-                            &member,
-                            origin,
-                            queue,
-                            witness,
-                        );
-                        return None;
-                    }
+                if self.dispatch_member_through(
+                    &bounds, None, &receiver, &label_str, &member, origin, queue,
+                ) {
+                    return None;
                 }
                 let rendered = self.store.render(&receiver);
                 self.errors.push((
@@ -862,34 +897,65 @@ impl<'s> Solver<'s> {
                         };
                     }
                 }
+                // Methods on enums dispatch exactly like struct methods:
+                // instantiate the (possibly generic) scheme, pin self,
+                // and the member is the self-dropped signature.
+                if let Some(info) = self.catalog.enums.get(&symbol)
+                    && let Some(&method) = info.methods.get(&label_str)
+                {
+                    {
+                        let substitution: FxHashMap<Symbol, Ty> =
+                            info.params.iter().copied().zip(args.iter().cloned()).collect();
+                        let signature = self.symbol_ty(method, origin.node, queue);
+                        let signature = signature.substitute(
+                            &substitution,
+                            &Default::default(),
+                            &Default::default(),
+                        );
+                        return match self.store.shallow(&signature) {
+                            Ty::Func(params, ret, eff) if !params.is_empty() => {
+                                queue.push(Constraint::Eq(
+                                    params[0].clone(),
+                                    receiver.clone(),
+                                    origin,
+                                ));
+                                queue.push(Constraint::Eq(
+                                    member,
+                                    Ty::Func(params[1..].to_vec(), ret, eff),
+                                    origin,
+                                ));
+                                self.member_resolutions
+                                    .insert(origin.node, MemberResolution::Direct(method));
+                                None
+                            }
+                            // Signature still being checked in this group:
+                            // retry when it resolves.
+                            Ty::Var(_) => Some(Constraint::HasMember {
+                                receiver,
+                                label,
+                                member,
+                                origin,
+                            }),
+                            _ => None,
+                        };
+                    }
+                }
                 // Members provided through conformances (extend witnesses):
                 // type via the protocol requirement, which is always valid if
                 // the conformance is (the witness is checked against the
                 // requirement when the extend body is checked).
                 if let Some(protocols) = self.catalog.conformances_by_head.get(&symbol) {
-                    for protocol in protocols.clone() {
-                        if let Some((owner, requirement)) =
-                            self.catalog.requirement_in(protocol, &label_str)
-                        {
-                            let requirement = requirement.clone();
-                            let witness = self
-                                .catalog
-                                .conformances
-                                .get(&(symbol, protocol))
-                                .and_then(|c| c.witnesses.get(&label_str))
-                                .copied()
-                                .unwrap_or(requirement.symbol);
-                            self.bind_requirement(
-                                owner,
-                                &requirement,
-                                &receiver,
-                                &member,
-                                origin,
-                                queue,
-                                witness,
-                            );
-                            return None;
-                        }
+                    let protocols = protocols.clone();
+                    if self.dispatch_member_through(
+                        &protocols,
+                        Some(symbol),
+                        &receiver,
+                        &label_str,
+                        &member,
+                        origin,
+                        queue,
+                    ) {
+                        return None;
                     }
                 }
                 // Auto-derived protocol members (`optional.show()` without
@@ -1142,6 +1208,19 @@ impl<'s> Solver<'s> {
                     }
                 }
                 [MemberOwner::Nominal(symbol)] => {
+                    if !self.defaulting {
+                        // One nominal owner, but a record receiver could
+                        // also satisfy the use: hold the constraint on the
+                        // binder's scheme; the final solve commits if no
+                        // instantiation discharged it.
+                        remaining.push(Constraint::HasMember {
+                            receiver,
+                            label,
+                            member,
+                            origin,
+                        });
+                        continue;
+                    }
                     let params = self
                         .catalog
                         .structs
@@ -1166,30 +1245,33 @@ impl<'s> Solver<'s> {
                     improved = true;
                 }
                 [] => {
-                    self.errors.push((
-                        TypeError::UnknownMember {
-                            receiver: "<unknown type>".into(),
-                            label: label_str,
-                        },
-                        origin.node,
-                    ));
+                    // No nominal or protocol owns the label: the member
+                    // is a record projection — default the receiver to an
+                    // open record row (presence constraints become row
+                    // unification: Gaster & Jones, POPL 1996; Leijen,
+                    // Trends in FP 2005). The improvement gate above
+                    // already restricts this to variables this group
+                    // owns, so nominal information always wins, and the
+                    // row tail generalizes if it survives the group.
+                    let tail = self.store.fresh_row(self.level, origin.node);
+                    let probe = Ty::Record(Row {
+                        fields: vec![(label.clone(), member.clone())],
+                        tail: Some(RowTail::Var(tail)),
+                    });
+                    queue.push(Constraint::Eq(receiver, probe, origin));
                     improved = true;
                 }
-                many => {
-                    let candidates = many
-                        .iter()
-                        .map(|owner| match owner {
-                            MemberOwner::Protocol(s) | MemberOwner::Nominal(s) => format!("{s}"),
-                        })
-                        .collect();
-                    self.errors.push((
-                        TypeError::AmbiguousMember {
-                            label: label_str,
-                            candidates,
-                        },
-                        origin.node,
-                    ));
-                    improved = true;
+                _many => {
+                    // Several owners: the constraint stays open and rides
+                    // the binder's scheme (qualified types — Jones 1994);
+                    // each instantiation discharges it against a concrete
+                    // receiver.
+                    remaining.push(Constraint::HasMember {
+                        receiver,
+                        label,
+                        member,
+                        origin,
+                    });
                 }
             }
         }
@@ -1236,7 +1318,18 @@ impl<'s> Solver<'s> {
         }
         let mut rows = FxHashMap::default();
         for param in &scheme.row_params {
-            rows.insert(*param, RowTail::Var(self.store.fresh_row(self.level, node)));
+            let var = self.store.fresh_row(self.level, node);
+            // Recorded as an empty open record over the fresh variable
+            // (zonked to the call's concrete row at finalize) for the
+            // lowerer's per-call-site θ.
+            recorded.push((
+                *param,
+                Ty::Record(Row {
+                    fields: vec![],
+                    tail: Some(RowTail::Var(var)),
+                }),
+            ));
+            rows.insert(*param, RowTail::Var(var));
         }
         for param in &scheme.params {
             let fresh = tys[&param.symbol].clone();
@@ -1258,6 +1351,16 @@ impl<'s> Solver<'s> {
             .entry(node)
             .or_default()
             .extend(recorded);
+        // Scheme-carried member uses become fresh wanteds, discharged
+        // against this call's concrete receiver.
+        for constraint in &scheme.member_constraints {
+            queue.push(Constraint::HasMember {
+                receiver: constraint.receiver.substitute(&tys, &effs, &rows),
+                label: constraint.label.clone(),
+                member: constraint.member.substitute(&tys, &effs, &rows),
+                origin: CtOrigin::new(node, CtReason::Apply),
+            });
+        }
         scheme.ty.substitute(&tys, &effs, &rows)
     }
 
@@ -1714,6 +1817,7 @@ impl<'s> Generalizer<'s> {
             params: std::mem::take(&mut self.params),
             eff_params: std::mem::take(&mut self.eff_params),
             row_params: std::mem::take(&mut self.row_params),
+            member_constraints: vec![],
             ty,
         }
     }
@@ -1922,6 +2026,7 @@ mod tests {
                 instantiations: &mut self.instantiations,
                 member_resolutions: &mut self.member_resolutions,
                 level: Level(1),
+                defaulting: false,
                 derived_seen: Default::default(),
             };
             solver.solve(wanteds)
