@@ -41,6 +41,23 @@ pub enum TyKind {
     Cell(TyId),
 }
 
+impl TyKind {
+    /// Bytes one value of this type occupies in raw memory: unboxed
+    /// scalars in machine words (Leroy, *Unboxed objects and polymorphic
+    /// typing*, POPL 1992 — Bool is one word too; byte-packing is a later,
+    /// flagged optimization), aggregates as 8-byte handles into the boxed
+    /// arena (see eval.rs / interp.rs). `None`: the type never lives in
+    /// raw memory.
+    pub fn mem_size(&self) -> Option<u32> {
+        match self {
+            TyKind::Byte => Some(1),
+            TyKind::I64 | TyKind::F64 | TyKind::Bool | TyKind::Ptr => Some(8),
+            TyKind::Boxed(_) | TyKind::Variant(_) | TyKind::Tuple(_) => Some(8),
+            TyKind::Void | TyKind::Bot | TyKind::Fn(..) | TyKind::Cell(_) => None,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ExprId(pub u32);
 

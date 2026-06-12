@@ -199,7 +199,7 @@ public struct HttpServer {
 			}
 
 			let max_request_size = 8192
-			let buf = _alloc(max_request_size)
+			let buf = _alloc<Byte>(max_request_size)
 			let n = _io_read(client_fd, buf, max_request_size)
 
 			if n <= 0 {

@@ -45,6 +45,11 @@ petgraph = "0.8.2"
 sha2 = "0.10.9"
 ignore = { version = "0.4", optional = true }
 
+# POSIX io (StdioIO's file and socket operations); wasm builds use the
+# non-unix stubs in src/vm/io.rs instead.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [features]
 default = ["cli"]
 cli = [

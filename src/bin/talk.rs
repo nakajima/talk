@@ -112,7 +112,7 @@ async fn main() {
                 }
                 std::process::exit(1);
             }
-            let lowered = typed.lower();
+            let mut lowered = typed.lower();
             if !lowered.phase.diagnostics.is_empty() {
                 for diagnostic in &lowered.phase.diagnostics {
                     eprintln!("{diagnostic}");

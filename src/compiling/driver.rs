@@ -578,27 +578,29 @@ impl Driver<Lowered> {
             self.phase.main,
             self.phase.result_ty,
         )?;
-        Ok((value, String::from_utf8_lossy(&evaluator.out).into_owned()))
+        Ok((value, String::from_utf8_lossy(&evaluator.io.out).into_owned()))
     }
 
     /// Schedule to bytecode and execute on the VM against host stdio.
-    pub fn run_vm(&self) -> Result<crate::vm::interp::Value, String> {
+    /// (`&mut`: scheduling computes free-variable caches for closure
+    /// environments; the program's terms are untouched.)
+    pub fn run_vm(&mut self) -> Result<crate::vm::interp::Value, String> {
         let module = self.schedule()?;
         let mut io = crate::vm::io::StdioIO;
         crate::vm::interp::run(&module, &mut io)
     }
 
     /// VM run returning (value, captured stdout) — tests and the REPL.
-    pub fn run_vm_with_output(&self) -> Result<(crate::vm::interp::Value, String), String> {
+    pub fn run_vm_with_output(&mut self) -> Result<(crate::vm::interp::Value, String), String> {
         let module = self.schedule()?;
         let mut io = crate::vm::io::CaptureIO::default();
         let value = crate::vm::interp::run(&module, &mut io)?;
         Ok((value, String::from_utf8_lossy(&io.out).into_owned()))
     }
 
-    fn schedule(&self) -> Result<crate::vm::Module, String> {
+    fn schedule(&mut self) -> Result<crate::vm::Module, String> {
         crate::vm::schedule::schedule(
-            &self.phase.program,
+            &mut self.phase.program,
             self.phase.main,
             &self.phase.entry_funcs,
         )

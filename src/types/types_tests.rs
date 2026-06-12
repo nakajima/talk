@@ -442,6 +442,88 @@ pub mod tests {
     }
 
     #[test]
+    fn capability_tables_record_discharged_performs() {
+        // The discharge erases the effect from the row (the test above),
+        // so the lowerer's abort analysis reads the capability tables
+        // instead: performs_into written at the discharge, binder_refs at
+        // name lookup, handler payload types zonked from what the perform
+        // sites taught the unannotated parameter.
+        let t = check(
+            "// no-core\neffect 'oops(e) -> Never\n@handle 'oops { e in 0 }\nfunc safe() {\n\t'oops(1)\n\t2\n}\nfunc outer() {\n\tsafe()\n}",
+        );
+        assert_clean(&t);
+        let resolved = &t.phase.resolved_names;
+        let types = &t.phase.types;
+        let symbol_of = |name: &str| {
+            let mut candidates: Vec<_> = resolved
+                .symbol_names
+                .iter()
+                .filter(|(sym, n)| n.as_str() == name && types.schemes.contains_key(sym))
+                .map(|(sym, _)| *sym)
+                .collect();
+            candidates.sort();
+            *candidates.first().expect(name)
+        };
+        let handler = *resolved
+            .handler_symbols
+            .iter()
+            .next()
+            .expect("a handler symbol");
+
+        let safe = symbol_of("safe");
+        assert!(
+            types.performs_into[&safe].contains(&handler),
+            "safe's routed perform should be recorded: {:?}",
+            types.performs_into
+        );
+        let outer = symbol_of("outer");
+        assert!(
+            types.binder_refs[&outer].contains(&safe),
+            "outer's reference to safe should be recorded: {:?}",
+            types.binder_refs.get(&outer)
+        );
+        let payloads = &types.handler_payload_tys[&handler];
+        assert_eq!(payloads.len(), 1);
+        assert!(
+            matches!(
+                &payloads[0],
+                crate::types::ty::Ty::Nominal(sym, _)
+                    if *sym == crate::name_resolution::symbol::Symbol::Int
+            ),
+            "the perform site teaches the unannotated parameter Int: {payloads:?}"
+        );
+    }
+
+    #[test]
+    fn continue_payload_checks_against_the_effect_return() {
+        // `continue v` resumes the perform: v must have the effect's
+        // declared return type.
+        let t = check(
+            "// no-core\neffect 'ask(p: Int) -> Int\n@handle 'ask { p in\n\tcontinue true\n}\n'ask(1)",
+        );
+        let errors = type_errors(&t);
+        assert!(!errors.is_empty(), "expected a type error for continue true");
+    }
+
+    #[test]
+    fn continue_payload_outside_a_handler_is_rejected() {
+        let t = check("// no-core\nfunc f() -> Int {\n\tloop true {\n\t\tcontinue 5\n\t}\n\t0\n}");
+        let errors = type_errors(&t);
+        assert!(
+            !errors.is_empty(),
+            "expected an error for continue-with-value outside a handler"
+        );
+    }
+
+    #[test]
+    fn continue_payload_in_a_handler_checks_clean() {
+        let t = check(
+            "// no-core\neffect 'ask(p: Int) -> Int\n@handle 'ask { p in\n\tcontinue p\n}\n'ask(1)",
+        );
+        assert_clean(&t);
+    }
+
+    #[test]
     fn unhandled_effects_grow_the_latent_row() {
         let t = check(
             "// no-core\neffect 'oops(e) -> Never\nfunc risky() {\n\t'oops(1)\n\t2\n}",

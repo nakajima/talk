@@ -1,8 +1,12 @@
 // no-core
 public effect 'heap() -> ()
 
-public func _alloc(count: Int) 'heap -> RawPtr {
-	@_ir(count) { %? = alloc Byte $0 }
+public func _alloc<Element>(count: Int) 'heap -> RawPtr {
+	@_ir(count) { %? = alloc Element $0 }
+}
+
+public func _store<Element>(ptr: RawPtr, value: Element) 'heap -> Void {
+	@_ir(value, ptr) { store Element $0 $1 }
 }
 
 public func _load<Element>(ptr: RawPtr) 'heap -> Element {

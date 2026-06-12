@@ -1845,7 +1845,11 @@ impl<'s> Generalizer<'s> {
 /// One-way structural match binding rigid params in `pattern` to the
 /// corresponding pieces of `actual` (matching a conformance row's head
 /// application against a concrete type).
-fn bind_param_pattern(pattern: &Ty, actual: &Ty, bindings: &mut FxHashMap<Symbol, Ty>) {
+/// One-way structural matching of a declared pattern type (over rigid
+/// `Param`s) against a concrete actual: the binding a conformance row or
+/// member owner performs at discharge. Shared with the lowerer, which
+/// re-derives the same bindings when demanding specializations.
+pub(crate) fn bind_param_pattern(pattern: &Ty, actual: &Ty, bindings: &mut FxHashMap<Symbol, Ty>) {
     match (pattern, actual) {
         (Ty::Param(symbol), concrete) => {
             bindings.entry(*symbol).or_insert_with(|| concrete.clone());

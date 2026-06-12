@@ -15,6 +15,7 @@
 use crate::lambda_g::expr::{CmpOp, Const, ExprId, ExprKind, Op, TyKind};
 use crate::lambda_g::program::{Label, Program};
 use crate::name_resolution::symbol::Symbol;
+use crate::vm::io::IO;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum EvalValue {
@@ -28,6 +29,9 @@ pub enum EvalValue {
     Tuple(Vec<EvalValue>),
     Func(Label),
     Record(Symbol, Vec<EvalValue>),
+    /// A tagged enum value: the enum symbol, the variant's declaration
+    /// index, and its payloads (pure, like records).
+    Variant(Symbol, u16, Vec<EvalValue>),
     /// Index into the evaluator's slot store (a mutable cell).
     Cell(usize),
 }
@@ -48,7 +52,10 @@ pub enum EvalError {
 }
 
 pub struct Evaluator {
-    pub out: Vec<u8>,
+    /// The reference evaluator always runs against the captured IO —
+    /// the same simulated-descriptor semantics the VM's two-engine
+    /// tests use, so the engines agree on io by construction.
+    pub io: crate::vm::io::CaptureIO,
     steps: u64,
     limit: u64,
     /// Program memory: statics at the base, bump-allocated heap above
@@ -59,6 +66,10 @@ pub struct Evaluator {
     /// state; the term language sees only `Const::Slot` handles.
     slots: Vec<EvalValue>,
     slot_tys: Vec<crate::lambda_g::expr::TyId>,
+    /// Aggregates stored in raw memory live here; the memory cell holds an
+    /// 8-byte index into this arena (records stay boxed values — Leroy,
+    /// POPL 1992's mixed representation).
+    boxed: Vec<EvalValue>,
     /// The machine's initial continuation: applying it ends evaluation with
     /// its argument as the program value (the standard top-level
     /// continuation of a CPS machine).
@@ -74,12 +85,13 @@ impl Default for Evaluator {
 impl Evaluator {
     pub fn new() -> Self {
         Evaluator {
-            out: vec![],
+            io: crate::vm::io::CaptureIO::default(),
             steps: 0,
             limit: 50_000_000,
             mem: vec![],
             slots: vec![],
             slot_tys: vec![],
+            boxed: vec![],
             halt: None,
         }
     }
@@ -216,7 +228,7 @@ impl Evaluator {
                 EvalValue::Tuple(items) => Ok(items[index as usize].clone()),
                 _ => Err(EvalError::Unsupported("extract from non-tuple".into())),
             },
-            ExprKind::PrimOp(op, args, _) => self.primop(p, op, &args),
+            ExprKind::PrimOp(op, args, ty) => self.primop(p, op, &args, ty),
         }
     }
 
@@ -271,6 +283,13 @@ impl Evaluator {
                 let ty = p.ty(TyKind::Boxed(*symbol));
                 p.primop(Op::RecordNew(*symbol), &reified, ty)
             }
+            // Variants reify like records: `VariantNew` of reified
+            // payloads is a value form.
+            EvalValue::Variant(symbol, tag, payloads) => {
+                let reified: Vec<ExprId> = payloads.iter().map(|f| self.reify(p, f)).collect();
+                let ty = p.ty(TyKind::Variant(*symbol));
+                p.primop(Op::VariantNew(*symbol, *tag), &reified, ty)
+            }
             EvalValue::Cell(index) => {
                 let ty = self.slot_tys[*index];
                 p.constant(Const::Slot(*index as u32), ty)
@@ -278,7 +297,13 @@ impl Evaluator {
         }
     }
 
-    fn primop(&mut self, p: &mut Program, op: Op, args: &[ExprId]) -> Result<EvalValue, EvalError> {
+    fn primop(
+        &mut self,
+        p: &mut Program,
+        op: Op,
+        args: &[ExprId],
+        result_ty: crate::lambda_g::expr::TyId,
+    ) -> Result<EvalValue, EvalError> {
         match op {
             // br(cond, t, f): select a thunk and apply it to () (§2.2).
             Op::Br => {
@@ -325,12 +350,8 @@ impl Evaluator {
             },
             Op::CellNew => {
                 let init = self.eval_sub(p, args[0])?;
-                let ty = match p.expr(args[0]).ty {
-                    t => {
-                        let cell = p.ty_cell(t);
-                        cell
-                    }
-                };
+                let init_ty = p.expr(args[0]).ty;
+                let ty = p.ty_cell(init_ty);
                 self.slots.push(init);
                 self.slot_tys.push(ty);
                 Ok(EvalValue::Cell(self.slots.len() - 1))
@@ -367,6 +388,27 @@ impl Evaluator {
                     .ok_or_else(|| EvalError::Unsupported("field index out of range".into())),
                 _ => Err(EvalError::Unsupported("get_field on non-record".into())),
             },
+            // Variants mirror records: pure construction and projection;
+            // GetTag feeds Switch (the decision-tree dispatch — Maranget,
+            // ML 2008).
+            Op::VariantNew(symbol, tag) => {
+                let mut payloads = Vec::with_capacity(args.len());
+                for arg in args {
+                    payloads.push(self.eval_sub(p, *arg)?);
+                }
+                Ok(EvalValue::Variant(symbol, tag, payloads))
+            }
+            Op::GetTag => match self.eval_sub(p, args[0])? {
+                EvalValue::Variant(_, tag, _) => Ok(EvalValue::I64(tag as i64)),
+                _ => Err(EvalError::Unsupported("get_tag on non-variant".into())),
+            },
+            Op::GetPayload(index) => match self.eval_sub(p, args[0])? {
+                EvalValue::Variant(_, _, payloads) => payloads
+                    .get(index as usize)
+                    .cloned()
+                    .ok_or_else(|| EvalError::Unsupported("payload index out of range".into())),
+                _ => Err(EvalError::Unsupported("get_payload on non-variant".into())),
+            },
             Op::SetField(index) => {
                 let record = self.eval_sub(p, args[0])?;
                 let value = self.eval_sub(p, args[1])?;
@@ -391,19 +433,21 @@ impl Evaluator {
                 }
                 _ => Err(EvalError::Unsupported("alloc count".into())),
             },
+            // Width and representation come from the primop's λ_G type
+            // (see TyKind::mem_size).
             Op::Load => match self.eval_sub(p, args[0])? {
-                EvalValue::Ptr(addr) => {
-                    let byte = self
-                        .mem
-                        .get(addr as usize)
-                        .copied()
-                        .ok_or_else(|| EvalError::Unsupported("load out of bounds".into()))?;
-                    // Width comes from the primop's result type; only bytes
-                    // exist in memory until Array lands (M5).
-                    Ok(EvalValue::Byte(byte))
-                }
+                EvalValue::Ptr(addr) => self.load(p, addr, result_ty),
                 _ => Err(EvalError::Unsupported("load on non-pointer".into())),
             },
+            Op::Store => {
+                let ptr = self.eval_sub(p, args[0])?;
+                let value = self.eval_sub(p, args[1])?;
+                let EvalValue::Ptr(addr) = ptr else {
+                    return Err(EvalError::Unsupported("store on non-pointer".into()));
+                };
+                let value_ty = p.expr_ty(args[1]);
+                self.store(p, addr, value, value_ty)
+            }
             Op::Copy => {
                 let from = self.eval_sub(p, args[0])?;
                 let to = self.eval_sub(p, args[1])?;
@@ -420,29 +464,208 @@ impl Evaluator {
                 self.mem.copy_within(from..from + len, to);
                 Ok(EvalValue::Void)
             }
-            Op::IoWrite => {
-                let fd = self.eval_sub(p, args[0])?;
-                let buf = self.eval_sub(p, args[1])?;
-                let count = self.eval_sub(p, args[2])?;
-                let (EvalValue::I64(_fd), EvalValue::Ptr(off), EvalValue::I64(len)) =
-                    (fd, buf, count)
-                else {
-                    return Err(EvalError::Unsupported("io_write operands".into()));
-                };
-                let start = off as usize;
-                let end = start + len as usize;
-                if end > self.mem.len() {
-                    return Err(EvalError::Unsupported("io_write out of bounds".into()));
+            // The io dialect runs against the captured IO (simulated
+            // descriptors; sleeping is a no-op — the evaluator exists to
+            // be compared against, and tests must stay fast).
+            Op::IoRead
+            | Op::IoWrite
+            | Op::IoOpen
+            | Op::IoClose
+            | Op::IoSleep
+            | Op::IoPoll
+            | Op::IoCtl
+            | Op::IoSocket
+            | Op::IoBind
+            | Op::IoListen
+            | Op::IoConnect
+            | Op::IoAccept => {
+                let mut operands = [EvalValue::Void, EvalValue::Void, EvalValue::Void];
+                for (slot, &arg) in operands.iter_mut().zip(args.iter()) {
+                    *slot = self.eval_sub(p, arg)?;
                 }
-                // The reference evaluator always captures (it exists to be
-                // compared against); fd routing belongs to the VM's IO
-                // trait.
-                let bytes = self.mem[start..end].to_vec();
-                self.out.extend_from_slice(&bytes);
-                Ok(EvalValue::I64(len))
+                self.run_io(op, operands).map(EvalValue::I64)
             }
             other => Err(EvalError::Unsupported(format!("{other:?}"))),
         }
+    }
+
+    /// One io operation: marshal pointer operands against this
+    /// evaluator's byte memory and call through the captured IO — the
+    /// mirror of the VM's `run_io`, so the engines agree on io by
+    /// construction. POSIX return conventions.
+    fn run_io(&mut self, op: Op, operands: [EvalValue; 3]) -> Result<i64, EvalError> {
+        let int = |index: usize| -> Result<i64, EvalError> {
+            match operands[index] {
+                EvalValue::I64(v) => Ok(v),
+                ref other => Err(EvalError::Unsupported(format!(
+                    "io integer operand, got {other:?}"
+                ))),
+            }
+        };
+        let ptr = |index: usize| -> Result<usize, EvalError> {
+            match operands[index] {
+                EvalValue::Ptr(off) => Ok(off as usize),
+                ref other => Err(EvalError::Unsupported(format!(
+                    "io pointer operand, got {other:?}"
+                ))),
+            }
+        };
+        let oob = || EvalError::Unsupported("io access out of bounds".into());
+        Ok(match op {
+            Op::IoWrite => {
+                let (fd, start, len) = (int(0)?, ptr(1)?, int(2)? as usize);
+                let bytes = self.mem.get(start..start + len).ok_or_else(oob)?;
+                self.io.write(fd, bytes)
+            }
+            Op::IoRead => {
+                let (fd, start, len) = (int(0)?, ptr(1)?, int(2)? as usize);
+                let buf = self.mem.get_mut(start..start + len).ok_or_else(oob)?;
+                self.io.read(fd, buf)
+            }
+            Op::IoOpen => {
+                let start = ptr(0)?;
+                let tail = self.mem.get(start..).ok_or_else(oob)?;
+                let len = tail.iter().position(|&byte| byte == 0).unwrap_or(tail.len());
+                let path = tail[..len].to_vec();
+                self.io.open(&path, int(1)?, int(2)?)
+            }
+            Op::IoClose => self.io.close(int(0)?),
+            Op::IoSleep => self.io.sleep(int(0)?),
+            Op::IoCtl => self.io.ctl(int(0)?, int(1)?, int(2)?),
+            Op::IoPoll => {
+                let (start, count, timeout) = (ptr(0)?, int(1)? as usize, int(2)?);
+                let records = self.mem.get(start..start + count * 8).ok_or_else(oob)?;
+                let mut fds: Vec<(i32, i16, i16)> = records
+                    .chunks_exact(8)
+                    .map(|r| {
+                        (
+                            i32::from_le_bytes([r[0], r[1], r[2], r[3]]),
+                            i16::from_le_bytes([r[4], r[5]]),
+                            i16::from_le_bytes([r[6], r[7]]),
+                        )
+                    })
+                    .collect();
+                let result = self.io.poll(&mut fds, timeout);
+                for (index, (_, _, revents)) in fds.iter().enumerate() {
+                    let at = start + index * 8 + 6;
+                    let slot = self.mem.get_mut(at..at + 2).ok_or_else(oob)?;
+                    slot.copy_from_slice(&revents.to_le_bytes());
+                }
+                result
+            }
+            Op::IoSocket => self.io.socket(int(0)?, int(1)?, int(2)?),
+            Op::IoBind => self.io.bind(int(0)?, int(1)?, int(2)?),
+            Op::IoListen => self.io.listen(int(0)?, int(1)?),
+            Op::IoConnect => self.io.connect(int(0)?, int(1)?, int(2)?),
+            Op::IoAccept => self.io.accept(int(0)?),
+            other => {
+                return Err(EvalError::Unsupported(format!("not an io op: {other:?}")));
+            }
+        })
+    }
+
+    /// One sized read from raw memory. Scalars are little-endian machine
+    /// words (Byte is 1 byte); aggregates read an 8-byte handle into the
+    /// boxed arena.
+    fn load(
+        &mut self,
+        p: &Program,
+        addr: u32,
+        ty: crate::lambda_g::expr::TyId,
+    ) -> Result<EvalValue, EvalError> {
+        match p.ty_kind(ty) {
+            TyKind::Byte => self
+                .mem
+                .get(addr as usize)
+                .copied()
+                .map(EvalValue::Byte)
+                .ok_or_else(|| EvalError::Unsupported("load out of bounds".into())),
+            TyKind::I64 => Ok(EvalValue::I64(self.read_word(addr)? as i64)),
+            TyKind::F64 => Ok(EvalValue::F64(f64::from_bits(self.read_word(addr)?))),
+            TyKind::Bool => Ok(EvalValue::Bool(self.read_word(addr)? != 0)),
+            TyKind::Ptr => Ok(EvalValue::Ptr(self.read_word(addr)? as u32)),
+            TyKind::Boxed(_) | TyKind::Variant(_) | TyKind::Tuple(_) => {
+                let handle = self.read_word(addr)? as usize;
+                self.boxed
+                    .get(handle)
+                    .cloned()
+                    .ok_or_else(|| EvalError::Unsupported("load of a bad arena handle".into()))
+            }
+            other => Err(EvalError::Unsupported(format!("load of type {other:?}"))),
+        }
+    }
+
+    /// One sized write to raw memory; aggregates park in the boxed arena
+    /// and the cell holds the handle.
+    fn store(
+        &mut self,
+        p: &Program,
+        addr: u32,
+        value: EvalValue,
+        ty: crate::lambda_g::expr::TyId,
+    ) -> Result<EvalValue, EvalError> {
+        let word = match p.ty_kind(ty) {
+            TyKind::Byte => {
+                let EvalValue::Byte(byte) = value else {
+                    return Err(EvalError::Unsupported("store byte mismatch".into()));
+                };
+                let slot = self
+                    .mem
+                    .get_mut(addr as usize)
+                    .ok_or_else(|| EvalError::Unsupported("store out of bounds".into()))?;
+                *slot = byte;
+                return Ok(EvalValue::Void);
+            }
+            TyKind::I64 => {
+                let EvalValue::I64(v) = value else {
+                    return Err(EvalError::Unsupported("store int mismatch".into()));
+                };
+                v as u64
+            }
+            TyKind::F64 => {
+                let EvalValue::F64(v) = value else {
+                    return Err(EvalError::Unsupported("store float mismatch".into()));
+                };
+                v.to_bits()
+            }
+            TyKind::Bool => {
+                let EvalValue::Bool(v) = value else {
+                    return Err(EvalError::Unsupported("store bool mismatch".into()));
+                };
+                v as u64
+            }
+            TyKind::Ptr => {
+                let EvalValue::Ptr(v) = value else {
+                    return Err(EvalError::Unsupported("store pointer mismatch".into()));
+                };
+                v as u64
+            }
+            TyKind::Boxed(_) | TyKind::Variant(_) | TyKind::Tuple(_) => {
+                self.boxed.push(value);
+                (self.boxed.len() - 1) as u64
+            }
+            other => {
+                return Err(EvalError::Unsupported(format!("store of type {other:?}")));
+            }
+        };
+        let start = addr as usize;
+        let slot = self
+            .mem
+            .get_mut(start..start + 8)
+            .ok_or_else(|| EvalError::Unsupported("store out of bounds".into()))?;
+        slot.copy_from_slice(&word.to_le_bytes());
+        Ok(EvalValue::Void)
+    }
+
+    fn read_word(&self, addr: u32) -> Result<u64, EvalError> {
+        let start = addr as usize;
+        let bytes = self
+            .mem
+            .get(start..start + 8)
+            .ok_or_else(|| EvalError::Unsupported("load out of bounds".into()))?;
+        let mut buf = [0u8; 8];
+        buf.copy_from_slice(bytes);
+        Ok(u64::from_le_bytes(buf))
     }
 
     /// The unit argument for a thunk of type [] → R: an empty tuple.

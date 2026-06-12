@@ -34,7 +34,7 @@
 //! milestone 3 (Gaster & Jones 1996); today it errors.
 
 use indexmap::IndexMap;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::ast::{AST, NameResolved};
 use crate::compiling::driver::Source;
@@ -105,6 +105,11 @@ pub fn check_types(
         node_types: FxHashMap::default(),
         instantiations: FxHashMap::default(),
         member_resolutions: FxHashMap::default(),
+        binder_stack: vec![],
+        performs_into: FxHashMap::default(),
+        binder_refs: FxHashMap::default(),
+        handler_payload_tys: FxHashMap::default(),
+        handler_ret_stack: vec![],
         wanteds: vec![],
         ret_stack: vec![],
         eff_stack: vec![],
@@ -166,6 +171,23 @@ struct Checker<'a> {
     node_types: FxHashMap<NodeID, Ty>,
     instantiations: FxHashMap<NodeID, Vec<(Symbol, Ty)>>,
     member_resolutions: FxHashMap<NodeID, MemberResolution>,
+    /// The named binder whose body is being checked (top-level binder,
+    /// method, init, witness, protocol default) — attribution for the
+    /// capability tables below. Empty for top-level statements.
+    binder_stack: Vec<Symbol>,
+    /// Capability flow, recorded as it is discovered and exported for
+    /// the lowerer's abort analysis (see `TypeOutput`): binder → lexical
+    /// handlers its body performs into; binder → named symbols its body
+    /// references.
+    performs_into: FxHashMap<Symbol, FxHashSet<Symbol>>,
+    binder_refs: FxHashMap<Symbol, FxHashSet<Symbol>>,
+    /// `@handle` payload types (zonked at finalize): handler symbol →
+    /// the effect's parameter types as this module solved them.
+    handler_payload_tys: FxHashMap<Symbol, Vec<Ty>>,
+    /// The effect return type of the handler block being checked:
+    /// `continue v` resumes the perform, so v checks against it. Cleared
+    /// inside nested function literals (they cannot resume).
+    handler_ret_stack: Vec<Ty>,
     wanteds: Vec<Constraint>,
     ret_stack: Vec<Ty>,
     eff_stack: Vec<EffectRow>,
@@ -223,6 +245,7 @@ impl<'a> Checker<'a> {
         }
 
         let mut struct_decls: Vec<(Symbol, &'a Decl)> = vec![];
+        let mut destructuring_lets: Vec<&'a Decl> = vec![];
         for decl in &top_decls {
             match &decl.kind {
                 DeclKind::Struct { name, .. } => {
@@ -287,6 +310,10 @@ impl<'a> Checker<'a> {
                         );
                     }
                 }
+                // A destructuring let binds several symbols monomorphically
+                // (no scheme to enter a binding group with); it checks with
+                // the top-level statements, in source order.
+                DeclKind::Let { .. } => destructuring_lets.push(decl),
                 DeclKind::Extend { .. } => {
                     if let Some(work) = self.register_extend(decl, None) {
                         self.extends.push(work);
@@ -354,6 +381,9 @@ impl<'a> Checker<'a> {
         let top_ret = Ty::Var(self.store.fresh_ty(OUTER_LEVEL, NodeID::SYNTHESIZED));
         self.eff_stack.push(top_eff);
         self.ret_stack.push(top_ret);
+        for decl in destructuring_lets {
+            self.check_local_decl(decl);
+        }
         for stmt in stmts {
             self.infer_stmt(stmt);
         }
@@ -855,7 +885,7 @@ impl<'a> Checker<'a> {
             let Ok(method) = func.name.symbol() else {
                 continue;
             };
-            let ty = self.infer_func(func);
+            let ty = self.with_binder(method, |this| this.infer_func(func));
 
             // Witness ~ requirement (substituting Self and the conformance's
             // associated bindings).
@@ -939,7 +969,7 @@ impl<'a> Checker<'a> {
         self.ret_stack.push(group_ret);
         self.self_types.push(Ty::Param(protocol));
 
-        let inferred = self.infer_func(func);
+        let inferred = self.with_binder(requirement_symbol, |this| this.infer_func(func));
         let expected = self
             .catalog
             .protocols
@@ -1103,7 +1133,9 @@ impl<'a> Checker<'a> {
             {
                 if let Some(rhs) = rhs {
                     let expected = self.mono[binder].clone();
-                    self.check_expr(rhs, &expected, CtReason::Recursion);
+                    self.with_binder(*binder, |this| {
+                        this.check_expr(rhs, &expected, CtReason::Recursion)
+                    });
                 }
                 // Value restriction (Wright 1995): only syntactic values of
                 // unmutated binders generalize.
@@ -1139,12 +1171,12 @@ impl<'a> Checker<'a> {
         for (self_ty, members) in member_queue {
             self.self_types.push(self_ty);
             for (symbol, work) in members {
-                let ty = match work {
-                    MemberWork::Method(func) => self.infer_func(func),
+                let ty = self.with_binder(symbol, |this| match work {
+                    MemberWork::Method(func) => this.infer_func(func),
                     MemberWork::Init { params, body, node } => {
-                        self.infer_callable(params, None, body, node)
+                        this.infer_callable(params, None, body, node)
                     }
-                };
+                });
                 let skeleton = self.mono[&symbol].clone();
                 self.emit_eq(skeleton.clone(), ty, NodeID::SYNTHESIZED, CtReason::Recursion);
                 // Member bodies are function literals: always values.
@@ -1347,6 +1379,13 @@ impl<'a> Checker<'a> {
                 .collect();
             instantiations.insert(node, subst);
         }
+        // Handler payload types pick up everything the perform sites
+        // taught their (possibly unannotated) effect parameters.
+        let mut handler_payload_tys = FxHashMap::default();
+        for (handler, tys) in std::mem::take(&mut self.handler_payload_tys) {
+            let tys = tys.iter().map(|ty| self.store.zonk_ty(ty)).collect();
+            handler_payload_tys.insert(handler, tys);
+        }
 
         let diagnostics = self
             .errors
@@ -1367,6 +1406,9 @@ impl<'a> Checker<'a> {
                 schemes,
                 instantiations,
                 member_resolutions: self.member_resolutions,
+                performs_into: self.performs_into,
+                binder_refs: self.binder_refs,
+                handler_payload_tys,
             },
             diagnostics,
         )
@@ -1661,14 +1703,25 @@ impl<'a> Checker<'a> {
                 // A perform the resolver routed to a lexical handler is
                 // discharged right there — it never escapes into the
                 // function's latent row (handler discharge in the row
-                // reading, Leijen POPL 2017 §3).
-                if !self.resolved.effect_handlers.contains_key(&expr.id) {
-                    let tail = self.store.fresh_eff(self.level, expr.id);
-                    let performed = EffectRow {
-                        effects: [symbol].into(),
-                        tail: Some(EffTail::Var(tail)),
-                    };
-                    self.emit_eff_eq(performed, self.ambient_eff(), expr.id);
+                // reading, Leijen POPL 2017 §3). The discharge is still
+                // recorded in the capability tables: the lowerer needs to
+                // know which functions can abort, and the row no longer
+                // says (effects as capabilities — Brachthäuser et al.,
+                // OOPSLA 2020).
+                match self.resolved.effect_handlers.get(&expr.id) {
+                    Some(&handler) => {
+                        if let Some(&binder) = self.binder_stack.last() {
+                            self.performs_into.entry(binder).or_default().insert(handler);
+                        }
+                    }
+                    None => {
+                        let tail = self.store.fresh_eff(self.level, expr.id);
+                        let performed = EffectRow {
+                            effects: [symbol].into(),
+                            tail: Some(EffTail::Var(tail)),
+                        };
+                        self.emit_eff_eq(performed, self.ambient_eff(), expr.id);
+                    }
                 }
                 sig.ret
             }
@@ -2046,7 +2099,10 @@ impl<'a> Checker<'a> {
 
         self.ret_stack.push(ret.clone());
         self.eff_stack.push(eff.clone());
+        // A nested function cannot resume an enclosing handler.
+        let outer_handlers = std::mem::take(&mut self.handler_ret_stack);
         let body_ty = self.infer_block_value(body);
+        self.handler_ret_stack = outer_handlers;
         self.eff_stack.pop();
         self.ret_stack.pop();
 
@@ -2108,7 +2164,10 @@ impl<'a> Checker<'a> {
 
         self.ret_stack.push(ret.clone());
         self.eff_stack.push(expected_eff.clone());
+        // A nested function cannot resume an enclosing handler.
+        let outer_handlers = std::mem::take(&mut self.handler_ret_stack);
         let body_ty = self.infer_block_value(&func.body);
+        self.handler_ret_stack = outer_handlers;
         self.eff_stack.pop();
         self.ret_stack.pop();
 
@@ -2252,7 +2311,22 @@ impl<'a> Checker<'a> {
             }
 
             StmtKind::Break => StmtValue::Divergent,
-            StmtKind::Continue(_) => StmtValue::Divergent,
+            StmtKind::Continue(payload) => {
+                // A bare `continue` re-enters the enclosing loop; with a
+                // payload it resumes the enclosing handler's perform.
+                if let Some(expr) = payload {
+                    match self.handler_ret_stack.last().cloned() {
+                        Some(expected) => {
+                            self.check_expr(expr, &expected, CtReason::Apply);
+                        }
+                        None => self.unsupported(
+                            stmt.id,
+                            "continue with a value outside an effect handler",
+                        ),
+                    }
+                }
+                StmtValue::Divergent
+            }
 
             StmtKind::For { .. } => {
                 // for-loops are desugared by the name resolver; reaching one
@@ -2267,18 +2341,30 @@ impl<'a> Checker<'a> {
                 // Handler block parameters take the effect's declared
                 // parameter types (handler-site inference for unannotated
                 // effects refines this in milestone 5; row subtraction too).
-                let params = effect_name
+                let sig = effect_name
                     .symbol()
                     .ok()
                     .and_then(|symbol| self.catalog.effects.get(&symbol))
-                    .map(|sig| sig.params.clone())
-                    .unwrap_or_default();
+                    .cloned();
+                let params = sig.as_ref().map(|sig| sig.params.clone()).unwrap_or_default();
                 for (arg, param) in body.args.iter().zip(&params) {
                     if let Ok(symbol) = arg.name.symbol() {
                         self.mono.insert(symbol, param.clone());
                     }
                 }
+                // The payload types this handler receives — zonked at
+                // finalize, once the perform sites have taught the
+                // unannotated parameters their types — for the lowerer's
+                // capability closure.
+                if let Some(&handler) = self.resolved.effect_handler_definitions.get(&stmt.id) {
+                    self.handler_payload_tys.insert(handler, params.clone());
+                }
+                // `continue v` inside this block resumes the perform: v
+                // checks against the effect's return type.
+                let resume_ty = sig.map(|sig| sig.ret).unwrap_or(Ty::Error);
+                self.handler_ret_stack.push(resume_ty);
                 self.infer_block_value(body);
+                self.handler_ret_stack.pop();
                 StmtValue::Unit
             }
         }
@@ -2292,23 +2378,26 @@ impl<'a> Checker<'a> {
                 lhs,
                 type_annotation,
                 rhs,
-            } => match &lhs.kind {
-                PatternKind::Bind(name) => {
-                    let ty = match type_annotation {
-                        Some(annotation) => self.lower_annotation(annotation),
-                        None => Ty::Var(self.store.fresh_ty(self.level, decl.id)),
-                    };
-                    if let Some(rhs) = rhs {
-                        self.check_expr(rhs, &ty, CtReason::Annotation);
-                    }
-                    if let Ok(symbol) = name.symbol() {
-                        self.mono.insert(symbol, ty);
-                    }
+            } => {
+                let ty = match type_annotation {
+                    Some(annotation) => self.lower_annotation(annotation),
+                    None => Ty::Var(self.store.fresh_ty(self.level, decl.id)),
+                };
+                if let Some(rhs) = rhs {
+                    self.check_expr(rhs, &ty, CtReason::Annotation);
                 }
-                _ => {
-                    self.unsupported(decl.id, "destructuring let bindings");
+                match &lhs.kind {
+                    PatternKind::Bind(name) => {
+                        if let Ok(symbol) = name.symbol() {
+                            self.mono.insert(symbol, ty);
+                        }
+                    }
+                    // Destructuring let: the lhs is a pattern checked
+                    // against the rhs type; its binders enter the
+                    // monomorphic environment exactly like plain lets.
+                    _ => self.check_pattern(lhs, &ty),
                 }
-            },
+            }
             DeclKind::Import(_) => {}
             other => self.unsupported(decl.id, decl_kind_name(other)),
         }
@@ -2514,7 +2603,23 @@ impl<'a> Checker<'a> {
         self.lookup_symbol_ty(symbol, node)
     }
 
+    /// Check a body attributed to `binder` for the capability tables.
+    fn with_binder<R>(&mut self, binder: Symbol, check: impl FnOnce(&mut Self) -> R) -> R {
+        self.binder_stack.push(binder);
+        let result = check(self);
+        self.binder_stack.pop();
+        result
+    }
+
     fn lookup_symbol_ty(&mut self, symbol: Symbol, node: NodeID) -> Ty {
+        // A reference edge for the capability tables. Locals land here
+        // too; they are harmless noise (the consumer only chases
+        // abort-capable targets, and symbols are never reused).
+        if let Some(&binder) = self.binder_stack.last()
+            && binder != symbol
+        {
+            self.binder_refs.entry(binder).or_default().insert(symbol);
+        }
         if let Some(ty) = self.mono.get(&symbol) {
             return ty.clone();
         }

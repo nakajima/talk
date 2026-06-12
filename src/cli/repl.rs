@@ -328,8 +328,7 @@ impl ReplHelper {
     }
 
     fn highlight_repl_command(&self, line: &str) -> Option<String> {
-        if line.starts_with("/type ") {
-            let expr = &line["/type ".len()..];
+        if let Some(expr) = line.strip_prefix("/type ") {
             return Some(format!(
                 "\x1b[1;36m/type\x1b[0m {}",
                 self.highlight_line(expr)

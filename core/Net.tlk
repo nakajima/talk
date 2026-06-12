@@ -43,7 +43,7 @@ public struct TcpStream {
 	}
 
 	public func read_string(max: Int) -> String {
-		let buf = _alloc(max)
+		let buf = _alloc<Byte>(max)
 		let n = _io_read(self.fd, buf, max)
 		String(buf, n, max)
 	}

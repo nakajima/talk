@@ -1,0 +1,4 @@
+Optional.some(1)
+Optional.some(2)
+Optional.some(3)
+Optional.none

@@ -21,11 +21,11 @@
 use crate::lambda_g::expr::{Const, ExprId, ExprKind, Op, TyKind};
 use crate::lambda_g::program::{Label, Program};
 use crate::vm::interp::Value;
-use crate::vm::{Chunk, Insn, Module};
+use crate::vm::{Chunk, Insn, IoOp, Module};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 pub fn schedule(
-    p: &Program,
+    p: &mut Program,
     main: Label,
     entry_funcs: &FxHashSet<Label>,
 ) -> Result<Module, String> {
@@ -41,6 +41,18 @@ pub fn schedule(
         .map(|(i, l)| (*l, i as u32))
         .collect();
 
+    // Closure environments, precomputed: every chunk's free variables in
+    // sorted label order (flat closures — Cardelli 1984; the environment
+    // layout is shared by MakeClosure sites and the chunk's EnvGet reads,
+    // both derived from this one map).
+    let mut env_of: FxHashMap<Label, Vec<Label>> = FxHashMap::default();
+    for &label in chunk_of.keys() {
+        let fv = p.fv(label);
+        let mut captured = p.set_labels(fv);
+        captured.sort_by_key(|l| l.0);
+        env_of.insert(label, captured);
+    }
+
     let mut module = Module {
         statics: p.static_mem.clone(),
         ..Module::default()
@@ -48,12 +60,28 @@ pub fn schedule(
     let mut consts: FxHashMap<Const, u32> = FxHashMap::default();
     let mut claimed: FxHashSet<Label> = FxHashSet::default();
     for func in order {
-        let chunk = ChunkBuilder::new(p, func, &chunk_of, &mut module, &mut consts, &mut claimed)
-            .build()?;
+        let chunk = ChunkBuilder::new(
+            p,
+            func,
+            &chunk_of,
+            &env_of,
+            &mut module,
+            &mut consts,
+            &mut claimed,
+        )
+        .build()?;
         module.chunks.push(chunk);
     }
     module.entry = 0;
     Ok(module)
+}
+
+/// Where a reconstructed call transfers to: a statically-known chunk, or a
+/// closure value in a register.
+#[derive(Clone, Copy)]
+enum CallTarget {
+    Chunk(u32),
+    Closure(u16),
 }
 
 /// Builds one chunk: the function's body is block 0; each continuation it
@@ -65,6 +93,8 @@ struct ChunkBuilder<'a> {
     p: &'a Program,
     func: Label,
     chunk_of: &'a FxHashMap<Label, u32>,
+    /// Every chunk's captured labels in environment order (sorted).
+    env_of: &'a FxHashMap<Label, Vec<Label>>,
     module: &'a mut Module,
     consts: &'a mut FxHashMap<Const, u32>,
     claimed_global: &'a mut FxHashSet<Label>,
@@ -85,6 +115,7 @@ impl<'a> ChunkBuilder<'a> {
         p: &'a Program,
         func: Label,
         chunk_of: &'a FxHashMap<Label, u32>,
+        env_of: &'a FxHashMap<Label, Vec<Label>>,
         module: &'a mut Module,
         consts: &'a mut FxHashMap<Const, u32>,
         claimed_global: &'a mut FxHashSet<Label>,
@@ -99,6 +130,7 @@ impl<'a> ChunkBuilder<'a> {
             p,
             func,
             chunk_of,
+            env_of,
             module,
             consts,
             claimed_global,
@@ -146,6 +178,19 @@ impl<'a> ChunkBuilder<'a> {
                 } => {
                     *then_target = offsets[*then_target as usize];
                     *else_target = offsets[*else_target as usize];
+                }
+                // Each Switch owns its pool range exclusively, so patching
+                // through the instruction patches each entry exactly once.
+                Insn::Switch {
+                    targets_start,
+                    targets_len,
+                    ..
+                } => {
+                    let start = *targets_start as usize;
+                    let end = start + *targets_len as usize;
+                    for target in &mut self.module.switch_pool[start..end] {
+                        *target = offsets[*target as usize];
+                    }
                 }
                 _ => {}
             }
@@ -248,7 +293,15 @@ impl<'a> ChunkBuilder<'a> {
                 let (f, a) = (*f, *a);
                 match &self.p.expr(f).kind {
                     ExprKind::Func(label) if self.chunk_of.contains_key(label) => {
-                        self.emit_call(*label, a)
+                        let label = *label;
+                        // A chunk with captures is entered through a
+                        // closure so its environment rides along.
+                        if self.env_of.get(&label).is_some_and(|env| !env.is_empty()) {
+                            let callee = self.make_closure(label, f)?;
+                            self.emit_call_like(CallTarget::Closure(callee), a)
+                        } else {
+                            self.emit_call_like(CallTarget::Chunk(self.chunk_of[&label]), a)
+                        }
                     }
                     ExprKind::Func(label) if self.block_of.contains_key(label) => {
                         let label = *label;
@@ -267,13 +320,41 @@ impl<'a> ChunkBuilder<'a> {
                         self.code.push(Insn::Ret { src });
                         Ok(())
                     }
+                    // A computed callee: a closure value in a register
+                    // (CallIndirect — retires the M2 trap).
                     _ => {
-                        let trap =
-                            self.trap("vm: computed call target (arrives with M6 closures)".into());
-                        self.code.push(trap);
-                        Ok(())
+                        let callee = self.eval(f)?;
+                        self.emit_call_like(CallTarget::Closure(callee), a)
                     }
                 }
+            }
+            ExprKind::PrimOp(Op::Switch, args, _) => {
+                // switch(tag, k_0, …, k_n, default): a jump table over the
+                // tag (decision-tree dispatch — Maranget, ML 2008). All
+                // arms must be direct continuation references.
+                let (tag, targets) = (args[0], &args[1..]);
+                let tag = self.eval(tag)?;
+                let mut resolved = Vec::with_capacity(targets.len());
+                for &target in targets {
+                    match self.thunk_block(target)? {
+                        Some(block) => resolved.push(block),
+                        None => {
+                            let trap =
+                                self.trap("vm: switch arm is not a direct continuation".into());
+                            self.code.push(trap);
+                            return Ok(());
+                        }
+                    }
+                }
+                let targets_start = self.module.switch_pool.len() as u32;
+                let targets_len = resolved.len() as u16;
+                self.module.switch_pool.extend(resolved);
+                self.code.push(Insn::Switch {
+                    tag,
+                    targets_start,
+                    targets_len,
+                });
+                Ok(())
             }
             ExprKind::PrimOp(Op::Br, args, _) => {
                 let (cond, then_ref, else_ref) = (args[0], args[1], args[2]);
@@ -314,12 +395,13 @@ impl<'a> ChunkBuilder<'a> {
         }
     }
 
-    /// `App(Func(chunk), Tuple([args…, k]))`: evaluate the arguments, then
+    /// `App(callee, Tuple([args…, k]))`: evaluate the arguments, then
     /// reconstruct the call (Thorin CGO 2015): k = owned continuation →
-    /// `Call` into its parameter register and fall through to its block;
-    /// k = ret continuation → `Call` then `Ret` (a tail call; genuine TCO is
-    /// a later optimization, flagged).
-    fn emit_call(&mut self, callee: Label, arg: ExprId) -> Result<(), String> {
+    /// call into its parameter register and fall through to its block;
+    /// k = ret continuation → call then `Ret` (a tail call; genuine TCO is
+    /// a later optimization, flagged). The callee is a known chunk or a
+    /// closure value in a register (CallIndirect).
+    fn emit_call_like(&mut self, target: CallTarget, arg: ExprId) -> Result<(), String> {
         let items: Vec<ExprId> = match &self.p.expr(arg).kind {
             ExprKind::Tuple(items) => items.to_vec(),
             _ => {
@@ -341,17 +423,26 @@ impl<'a> ChunkBuilder<'a> {
         let args_start = self.module.arg_pool.len() as u32;
         let args_len = arg_regs.len() as u16;
         self.module.arg_pool.extend(arg_regs);
-        let chunk = self.chunk_of[&callee];
+
+        let call_insn = |dest: u16| match target {
+            CallTarget::Chunk(chunk) => Insn::Call {
+                dest,
+                chunk,
+                args_start,
+                args_len,
+            },
+            CallTarget::Closure(callee) => Insn::CallIndirect {
+                dest,
+                callee,
+                args_start,
+                args_len,
+            },
+        };
 
         match &self.p.expr(k).kind {
             ExprKind::Func(label) if self.block_of.contains_key(label) => {
                 let label = *label;
-                self.code.push(Insn::Call {
-                    dest: self.param_reg[&label],
-                    chunk,
-                    args_start,
-                    args_len,
-                });
+                self.code.push(call_insn(self.param_reg[&label]));
                 self.code.push(Insn::Jump {
                     target: self.block_of[&label],
                 });
@@ -359,12 +450,7 @@ impl<'a> ChunkBuilder<'a> {
             }
             _ if self.is_ret_k(k) => {
                 let dest = self.fresh();
-                self.code.push(Insn::Call {
-                    dest,
-                    chunk,
-                    args_start,
-                    args_len,
-                });
+                self.code.push(call_insn(dest));
                 self.code.push(Insn::Ret { src: dest });
                 Ok(())
             }
@@ -374,6 +460,72 @@ impl<'a> ChunkBuilder<'a> {
                 Ok(())
             }
         }
+    }
+
+    /// The environment index of a captured label in the CURRENT chunk.
+    fn env_index(&self, label: Label) -> Option<u16> {
+        self.env_of
+            .get(&self.func)?
+            .iter()
+            .position(|l| *l == label)
+            .map(|i| i as u16)
+    }
+
+    /// The register holding the value of `var ℓ` in the current chunk —
+    /// what a closure over ℓ must capture.
+    fn captured_value(&mut self, label: Label) -> Result<u16, String> {
+        // An owned continuation's parameter register.
+        if let Some(&reg) = self.param_reg.get(&label) {
+            return Ok(reg);
+        }
+        // Captured here too: forward from our own environment.
+        if let Some(index) = self.env_index(label) {
+            let dest = self.fresh();
+            self.code.push(Insn::EnvGet { dest, index });
+            return Ok(dest);
+        }
+        // The chunk function itself: materialize its parameter tuple (the
+        // closure body extracts params from it; its ret-continuation slot
+        // is deliberately absent — capturing a return continuation is M9).
+        if label == self.func {
+            let args_start = self.module.arg_pool.len() as u32;
+            let args_len = self.arity;
+            self.module.arg_pool.extend(0..self.arity);
+            let dest = self.fresh();
+            self.code.push(Insn::TupleNew {
+                dest,
+                args_start,
+                args_len,
+            });
+            return Ok(dest);
+        }
+        Err(format!(
+            "scheduling {}: capture of {} is not available in this chunk",
+            self.p.name(self.func),
+            self.p.name(label)
+        ))
+    }
+
+    /// MakeClosure for `label`, capturing its environment from the current
+    /// chunk's registers.
+    fn make_closure(&mut self, label: Label, e: ExprId) -> Result<u16, String> {
+        let captured = self.env_of.get(&label).cloned().unwrap_or_default();
+        let mut env_regs = Vec::with_capacity(captured.len());
+        for l in captured {
+            env_regs.push(self.captured_value(l)?);
+        }
+        let args_start = self.module.arg_pool.len() as u32;
+        let args_len = env_regs.len() as u16;
+        self.module.arg_pool.extend(env_regs);
+        let dest = self.fresh();
+        self.code.push(Insn::MakeClosure {
+            dest,
+            chunk: self.chunk_of[&label],
+            args_start,
+            args_len,
+        });
+        self.memo.insert(e, dest);
+        Ok(dest)
     }
 
     /// Is this expression the chunk's return continuation,
@@ -419,6 +571,14 @@ impl<'a> ChunkBuilder<'a> {
             ExprKind::Var(label) => {
                 if let Some(&reg) = self.param_reg.get(&label) {
                     reg
+                } else if let Some(index) = self.env_index(label) {
+                    // A captured variable: read it from the closure's
+                    // environment (immutable, so memoizable like any pure
+                    // value).
+                    let dest = self.fresh();
+                    self.code.push(Insn::EnvGet { dest, index });
+                    self.memo.insert(e, dest);
+                    dest
                 } else {
                     return self.eval_trap("vm: variable is not an owned continuation parameter");
                 }
@@ -450,8 +610,16 @@ impl<'a> ChunkBuilder<'a> {
                     dest
                 }
             }
-            ExprKind::Func(_) => {
-                return self.eval_trap("vm: first-class function value (arrives with M6)");
+            // A function value: build a flat closure over the target
+            // chunk's captured labels (env layout from `env_of` — the same
+            // order the chunk's own EnvGet reads use).
+            ExprKind::Func(label) => {
+                if !self.chunk_of.contains_key(&label) {
+                    return self.eval_trap(
+                        "vm: continuation used as a value (returnable continuations are M9)",
+                    );
+                }
+                return self.make_closure(label, e);
             }
             ExprKind::Tuple(items) => {
                 let mut arg_regs = Vec::with_capacity(items.len());
@@ -532,6 +700,44 @@ impl<'a> ChunkBuilder<'a> {
                 self.memo.insert(e, dest);
                 Ok(dest)
             }
+            // Variants are pure values exactly like records.
+            Op::VariantNew(symbol, tag) => {
+                let mut arg_regs = Vec::with_capacity(args.len());
+                for &a in args {
+                    arg_regs.push(self.eval(a)?);
+                }
+                let args_start = self.module.arg_pool.len() as u32;
+                let args_len = arg_regs.len() as u16;
+                self.module.arg_pool.extend(arg_regs);
+                let dest = self.fresh();
+                self.code.push(Insn::VariantNew {
+                    dest,
+                    symbol,
+                    tag,
+                    args_start,
+                    args_len,
+                });
+                self.memo.insert(e, dest);
+                Ok(dest)
+            }
+            Op::GetTag => {
+                let src = self.eval(args[0])?;
+                let dest = self.fresh();
+                self.code.push(Insn::GetTag { dest, src });
+                self.memo.insert(e, dest);
+                Ok(dest)
+            }
+            Op::GetPayload(index) => {
+                let src = self.eval(args[0])?;
+                let dest = self.fresh();
+                self.code.push(Insn::GetPayload {
+                    dest,
+                    src,
+                    index: index as u16,
+                });
+                self.memo.insert(e, dest);
+                Ok(dest)
+            }
             Op::GetField(index) => {
                 let rec = self.eval(args[0])?;
                 let dest = self.fresh();
@@ -566,12 +772,25 @@ impl<'a> ChunkBuilder<'a> {
                 Ok(dest)
             }
             Op::Load => {
-                if !matches!(self.p.ty_kind(self.p.expr(e).ty), TyKind::Byte) {
-                    return self.eval_trap("vm: non-byte load (arrives with M5 Array)");
-                }
+                let Some(kind) = crate::vm::MemKind::of(self.p.ty_kind(self.p.expr(e).ty)) else {
+                    return self.eval_trap("vm: load of a type that cannot live in memory");
+                };
                 let ptr = self.eval(args[0])?;
                 let dest = self.fresh();
-                self.code.push(Insn::LoadByte { dest, ptr });
+                self.code.push(Insn::Load { dest, ptr, kind });
+                Ok(dest)
+            }
+            Op::Store => {
+                let value_ty = self.p.expr_ty(args[1]);
+                let Some(kind) = crate::vm::MemKind::of(self.p.ty_kind(value_ty)) else {
+                    return self.eval_trap("vm: store of a type that cannot live in memory");
+                };
+                let ptr = self.eval(args[0])?;
+                let src = self.eval(args[1])?;
+                self.code.push(Insn::Store { ptr, src, kind });
+                let k = self.const_index(Const::Void, Value::Void);
+                let dest = self.fresh();
+                self.code.push(Insn::Const { dest, k });
                 Ok(dest)
             }
             Op::Copy => {
@@ -584,12 +803,46 @@ impl<'a> ChunkBuilder<'a> {
                 self.code.push(Insn::Const { dest, k });
                 Ok(dest)
             }
-            Op::IoWrite => {
-                let fd = self.eval(args[0])?;
-                let ptr = self.eval(args[1])?;
-                let len = self.eval(args[2])?;
+            // The io dialect: one parametric instruction; operands in
+            // IORequest order, unused slots 0.
+            Op::IoRead
+            | Op::IoWrite
+            | Op::IoOpen
+            | Op::IoClose
+            | Op::IoSleep
+            | Op::IoPoll
+            | Op::IoCtl
+            | Op::IoSocket
+            | Op::IoBind
+            | Op::IoListen
+            | Op::IoConnect
+            | Op::IoAccept => {
+                let io_op = match op {
+                    Op::IoRead => IoOp::Read,
+                    Op::IoWrite => IoOp::Write,
+                    Op::IoOpen => IoOp::Open,
+                    Op::IoClose => IoOp::Close,
+                    Op::IoSleep => IoOp::Sleep,
+                    Op::IoPoll => IoOp::Poll,
+                    Op::IoCtl => IoOp::Ctl,
+                    Op::IoSocket => IoOp::Socket,
+                    Op::IoBind => IoOp::Bind,
+                    Op::IoListen => IoOp::Listen,
+                    Op::IoConnect => IoOp::Connect,
+                    _ => IoOp::Accept,
+                };
+                let mut operands = [0u16; 3];
+                for (slot, &arg) in operands.iter_mut().zip(args.iter()) {
+                    *slot = self.eval(arg)?;
+                }
                 let dest = self.fresh();
-                self.code.push(Insn::IoWrite { dest, fd, ptr, len });
+                self.code.push(Insn::Io {
+                    dest,
+                    op: io_op,
+                    a: operands[0],
+                    b: operands[1],
+                    c: operands[2],
+                });
                 Ok(dest)
             }
             // Cell operations are effects too (the lowerer guarantees

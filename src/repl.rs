@@ -101,7 +101,7 @@ impl ReplSession {
                 .join("\n");
             return ReplEvalResult::Error(message);
         }
-        let lowered = typed.lower();
+        let mut lowered = typed.lower();
         if !lowered.phase.diagnostics.is_empty() {
             return ReplEvalResult::Error(format!(
                 "not yet supported by the backend: {}",
